@@ -196,9 +196,16 @@ impl ReadOutput {
     }
 
     /// `--ids` (CSV contract §3.1): prefix each stdout line with its row's key and a tab
-    /// (`header` for the header's lines, `-` for a line that is no doc line). Output that
-    /// isn't lines of the doc (`head -c`, `grep -c`/`-l`/`-q`) is a usage error.
-    pub(crate) fn with_ids(mut self, map: &crate::table::LineMap) -> Result<Self, ToolError> {
+    /// (`header` for the header's lines, `-` for a line that is no doc line). `text` is the
+    /// rendered file the output came from: a stdout line is a `\n` line of it, which may hold
+    /// several rows when the file has a lone CR, and then the prefix names each, in order,
+    /// joined by commas (`header,r1,r2`). Output that isn't lines of the doc (`head -c`,
+    /// `grep -c`/`-l`/`-q`) is a usage error.
+    pub(crate) fn with_ids(
+        mut self,
+        map: &crate::table::LineMap,
+        text: &str,
+    ) -> Result<Self, ToolError> {
         if self.stdout.is_empty() {
             return Ok(self);
         }
@@ -207,15 +214,40 @@ impl ReadOutput {
                 "--ids needs lines of the doc: not with byte counts, -c, -l, -L or -q",
             ));
         };
+        let bridge = crate::table::NlLines::of(text);
         let mut out = Vec::with_capacity(self.stdout.len() + self.stdout.len() / 4);
         for (k, line) in self.stdout.split_inclusive(|&b| b == b'\n').enumerate() {
-            match map.owner(src.at(k)) {
-                Some(crate::table::LineOwner::Row(key)) => {
-                    out.extend_from_slice(key.to_string().as_bytes())
+            let n = src.at(k);
+            #[cfg(any(test, feature = "differential"))]
+            let (first, last) = if crate::differential::line_mutant()
+                == Some(crate::differential::LineMutant::IdsCountNlLines)
+            {
+                (n, n)
+            } else {
+                bridge.span(n)
+            };
+            #[cfg(not(any(test, feature = "differential")))]
+            let (first, last) = bridge.span(n);
+            let mut owners: Vec<&crate::table::LineOwner> = Vec::new();
+            for o in (first..=last).filter_map(|l| map.owner(l)) {
+                if owners.last() != Some(&o) {
+                    owners.push(o);
                 }
-                Some(crate::table::LineOwner::Header) => out.extend_from_slice(b"header"),
-                Some(crate::table::LineOwner::Preamble) => out.extend_from_slice(b"preamble"),
-                None => out.push(b'-'),
+            }
+            if owners.is_empty() {
+                out.push(b'-');
+            }
+            for (i, o) in owners.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                match o {
+                    crate::table::LineOwner::Row(key) => {
+                        out.extend_from_slice(key.to_string().as_bytes())
+                    }
+                    crate::table::LineOwner::Header => out.extend_from_slice(b"header"),
+                    crate::table::LineOwner::Preamble => out.extend_from_slice(b"preamble"),
+                }
             }
             out.push(b'\t');
             out.extend_from_slice(line);
@@ -504,6 +536,16 @@ impl<'a> VerbCtx<'a> {
     pub(crate) fn positions_at(&self) -> Option<&'a crate::session::View> {
         self.at
     }
+    /// What the file [`VerbCtx::positions_view`] renders says about its line counts: `LN`
+    /// refuses unless they agree (`MPC-E176` on a lone CR, in a value or ending the records;
+    /// `MPC-E177` when it can't be rendered). One encode and one scan of the file.
+    pub(crate) fn positions_line_counts(&self) -> crate::table::LineCounts {
+        crate::table::LineCounts::of(
+            &self
+                .pack
+                .encode(&self.positions_view().content(), self.codec),
+        )
+    }
     /// [`VerbCtx::line_map`] of [`VerbCtx::positions_view`]: the rendered lines `LN` counts.
     pub fn positions_line_map(&self) -> Option<crate::table::LineMap> {
         self.pack.line_map(self.positions_view(), self.codec)
@@ -622,6 +664,8 @@ pub struct PackVerb {
     run: VerbFn,
     /// Its positional address in a call's arguments, if any ([`PackVerb::positional`]).
     positional: Option<FindPositional>,
+    /// The position units it declares, if it does ([`PackVerb::positions`]).
+    positions: Option<&'static [crate::parity::positions::PositionForm]>,
 }
 
 impl PackVerb {
@@ -643,6 +687,7 @@ impl PackVerb {
             exits,
             run: VerbFn::Text(parse),
             positional: None,
+            positions: None,
         }
     }
 
@@ -663,6 +708,7 @@ impl PackVerb {
             exits,
             run: VerbFn::StructEdit(parse),
             positional: None,
+            positions: None,
         }
     }
 
@@ -683,6 +729,7 @@ impl PackVerb {
             exits,
             run: VerbFn::StructRead(parse),
             positional: None,
+            positions: None,
         }
     }
 
@@ -695,6 +742,23 @@ impl PackVerb {
     pub const fn positional(mut self, find: FindPositional) -> Self {
         self.positional = Some(find);
         self
+    }
+
+    /// **Declare its position units** (K-ADDR-4): each flag that takes a position, or the place
+    /// it prints one, with its [`crate::parity::positions::Unit`]. `&[]` says it takes and
+    /// prints none. A verb that doesn't call this still runs, and `capabilities` shows it as
+    /// undeclared; [`crate::parity::positions::check`] is the test that refuses that.
+    pub const fn positions(
+        mut self,
+        forms: &'static [crate::parity::positions::PositionForm],
+    ) -> Self {
+        self.positions = Some(forms);
+        self
+    }
+
+    /// The position units it declares ([`PackVerb::positions`]); `None` if it declares nothing.
+    pub fn declared_positions(&self) -> Option<&'static [crate::parity::positions::PositionForm]> {
+        self.positions
     }
 
     /// The positional address in `args`, if the verb declares how to find one
@@ -959,6 +1023,22 @@ impl Tool {
             Inner::Pos(e) => e.positional(),
             Inner::Sed(s) if s.in_place => s.line_address().map(|n| format!("sed -i line {n}")),
             _ => None,
+        }
+    }
+
+    /// What works instead when this edit verb's result on a table mixes line endings: its text
+    /// ended lines in `\n` on a file whose records end otherwise. Each verb a refusal names here
+    /// is tested to apply on such a file (`tests/grid_lines.rs`).
+    pub(crate) fn mixed_endings_way_forward(&self) -> &'static str {
+        use edit::PosEdit::{Append, InsertAfter, InsertAt, InsertLine};
+        match &self.inner {
+            Inner::Pos(InsertLine(_) | InsertAfter(_) | InsertAt(_)) => {
+                "row insert works, or insert --at with text ending in the file's own line ending"
+            }
+            Inner::Pos(Append { .. }) => {
+                "row insert --end works, or append with text ending in the file's own line ending"
+            }
+            _ => "cell set, row insert and row delete work on this file",
         }
     }
 

@@ -24,16 +24,17 @@ use yrs::updates::encoder::Encode;
 use yrs::{Doc as YDoc, GetString, OffsetKind, Options, ReadTxn, Text, Transact, Update};
 
 use k2_mpc_base::errors::{capabilities, run_meta, Value};
-use k2_mpc_base::parity::positions::{self, UNITS, VERB_POSITIONS};
-use k2_mpc_base::parity::{Registry, Tier};
+use k2_mpc_base::parity::positions::{self, PositionForm, Unit, UNITS, VERB_POSITIONS};
+use k2_mpc_base::parity::{PersonAction, Registry, Source, Tier};
 use k2_mpc_base::session::position::{self as pos, LineCol};
 use k2_mpc_base::session::{
-    At, AuditEvent, Config, ConnId, CursorAtVersion, Host, Participant, ParticipantKind, Rights,
-    Session, SessionManager, Stay, TextFilePack,
+    At, AuditEvent, Config, ConnId, CursorAtVersion, Declined, Host, Pack, PackContent, PackError,
+    Participant, ParticipantKind, Rights, Session, SessionManager, Stay, TextFilePack,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
+use k2_mpc_base::table::verbs::VERBS as GRID_VERBS;
 use k2_mpc_base::text::diff::Hunk;
-use k2_mpc_base::tools::{exit, ToolOutput, ToolRunError};
+use k2_mpc_base::tools::{exit, PackEdit, PackVerb, ToolError, ToolOutput, ToolRunError};
 use k2_mpc_base::{Doc, Edit, Kind, Schema};
 
 const ROOT: &str = TextFilePack::ROOT;
@@ -104,7 +105,9 @@ fn capabilities_states_the_encoding() {
         let base = u.get("base").and_then(Value::as_u64);
         match str_of(u, "unit") {
             "utf8_bytes" | "utf16_code_units" => assert_eq!(base, Some(0)),
-            "lines" | "line_col" | "rendered_lines" | "ordinal" => assert_eq!(base, Some(1)),
+            "lines" | "line_col" | "rendered_lines" | "ordinal" | "pack_nth" => {
+                assert_eq!(base, Some(1))
+            }
             _ => assert_eq!(base, None, "{}", u.to_json()),
         }
     }
@@ -151,31 +154,13 @@ const POSITION_TOKENS: &[&str] = &[
     "[-n]",
     "-F N",
     "diff on stdin",
+    "--rect",
+    "X,Y",
 ];
 
 /// Verbs whose usage has a token above but that take no position: `-n N` there is a count of
 /// entries, `--by P` a participant.
 const COUNTS_ONLY: &[&str] = &["activity", "log"];
-
-/// Whether `usage` names flag `flag`: spelled out, or a letter in a `[-abc]` cluster.
-fn usage_names(usage: &str, flag: &str) -> bool {
-    if usage.contains(flag) {
-        return true;
-    }
-    let Some(letter) = flag.strip_prefix('-').filter(|l| l.len() == 1) else {
-        return false;
-    };
-    usage
-        .split('[')
-        .skip(1)
-        .filter_map(|s| s.split(']').next())
-        .any(|c| {
-            c.starts_with('-')
-                && !c.starts_with("--")
-                && !c.contains(' ')
-                && c[1..].contains(letter)
-        })
-}
 
 #[test]
 fn every_verb_with_positions_has_a_row() {
@@ -211,7 +196,7 @@ fn every_verb_with_positions_has_a_row() {
                 let at = str_of(f, "at");
                 if at.starts_with('-') {
                     assert!(
-                        usage_names(usage, at),
+                        positions::usage_names(usage, at),
                         "{name}: the row's {at} isn't in its usage {usage:?}"
                     );
                 } else {
@@ -224,6 +209,150 @@ fn every_verb_with_positions_has_a_row() {
     // no row is dead: each names a verb some registry serves
     for r in VERB_POSITIONS {
         assert!(listed.contains(r.verb), "row {} names no verb", r.verb);
+    }
+}
+
+// ---------------------------------------------------------------- pack verbs
+
+fn no_parse(_: &[String]) -> Result<PackEdit, ToolError> {
+    Err(ToolError::usage("not run here"))
+}
+
+/// A text pack with the verbs a test gives it.
+struct WithVerbs(&'static [PackVerb]);
+
+impl Pack for WithVerbs {
+    fn schema(&self) -> Schema {
+        MD.schema()
+    }
+    fn decode(&self, bytes: &[u8]) -> Result<PackContent, Declined> {
+        MD.decode(bytes)
+    }
+    fn encode(
+        &self,
+        content: &[(String, k2_mpc_base::Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, PackError> {
+        MD.encode(content, codec)
+    }
+    fn verbs(&self) -> &'static [PackVerb] {
+        self.0
+    }
+}
+
+const fn stitch() -> PackVerb {
+    PackVerb::edit(
+        "stitch",
+        "stitch --heading H [--nth K]",
+        &[PersonAction::Paste],
+        &[0],
+        no_parse,
+    )
+}
+
+/// `capabilities`' row for `verb`, and its line in the text form.
+fn row_and_line(reg: &Registry, verb: &str) -> (String, String) {
+    let cfg = Config::default();
+    let c = capabilities(&[reg], &cfg);
+    let p = c.get("positions").unwrap();
+    let row = list(p, "verbs")
+        .iter()
+        .find(|r| str_of(r, "verb") == verb)
+        .unwrap_or_else(|| panic!("no positions row for {verb}"))
+        .to_json();
+    let text = run_meta(&["capabilities".to_owned()], false, &[reg], &cfg).unwrap();
+    let text = String::from_utf8(text.stdout).unwrap();
+    let start = format!("    {verb}: ");
+    let line = text
+        .lines()
+        .find(|l| l.starts_with(&start))
+        .unwrap_or_else(|| panic!("no line for {verb} in {text}"))
+        .to_owned();
+    (row, line)
+}
+
+/// A verb that declares its units shows them, in the same vocabulary as the kit's table.
+#[test]
+fn a_declared_pack_verb_shows_its_units() {
+    static VERBS: &[PackVerb] = &[stitch().positions(&[PositionForm::new("--nth", Unit::PackNth)])];
+    let reg = Registry::for_pack(&WithVerbs(VERBS)).unwrap();
+    positions::check(&reg).unwrap();
+    assert_eq!(unit_of(&caps(&[&reg]), "stitch", "--nth"), "pack_nth");
+    assert_eq!(row_and_line(&reg, "stitch").1, "    stitch: --nth pack_nth");
+}
+
+/// `.positions(&[])` says the verb has none: it passes, with a line that says so.
+#[test]
+fn a_pack_verb_can_declare_it_has_no_positions() {
+    static VERBS: &[PackVerb] = &[stitch().positions(&[])];
+    let reg = Registry::for_pack(&WithVerbs(VERBS)).unwrap();
+    positions::check(&reg).unwrap();
+    let (row, line) = row_and_line(&reg, "stitch");
+    assert_eq!(row, r#"{"verb":"stitch","forms":[]}"#);
+    assert_eq!(line, "    stitch: takes and prints no positions");
+}
+
+/// The planted gap: a verb that declares nothing is not dropped from `capabilities`, it says
+/// so, and the check every pack runs fails on it.
+#[test]
+fn an_undeclared_pack_verb_shows_and_fails_the_check() {
+    static VERBS: &[PackVerb] = &[stitch()];
+    let reg = Registry::for_pack(&WithVerbs(VERBS)).unwrap();
+    let (row, line) = row_and_line(&reg, "stitch");
+    assert_eq!(row, r#"{"verb":"stitch","undeclared":true,"forms":[]}"#);
+    assert_eq!(
+        line,
+        "    stitch: undeclared (the pack states no position units)"
+    );
+    let e = positions::check(&reg).unwrap_err().0;
+    assert_eq!(
+        e,
+        [
+            "pack verb \"stitch\" declares no position units: add .positions(&[...]), or \
+          .positions(&[]) if it takes and prints none"
+        ]
+    );
+}
+
+/// A declared flag the verb's usage doesn't have is refused; so is a place that isn't one.
+#[test]
+fn a_declared_form_must_be_in_the_usage() {
+    static VERBS: &[PackVerb] = &[stitch().positions(&[
+        PositionForm::new("--line", Unit::Lines),
+        PositionForm::new("margin", Unit::Lines),
+        PositionForm::new("--nth", Unit::PackNth),
+    ])];
+    let reg = Registry::for_pack(&WithVerbs(VERBS)).unwrap();
+    let e = positions::check(&reg).unwrap_err().0;
+    assert_eq!(e.len(), 2, "{e:#?}");
+    assert!(e[0].contains("\"--line\""), "{e:#?}");
+    assert!(e[1].contains("\"margin\""), "{e:#?}");
+}
+
+/// Every grid verb, as the kit's reference grid pack serves it: it states its positions, by
+/// exactly one of the kit's table and its own declaration, and `capabilities` has its row.
+#[test]
+fn every_kit_grid_verb_states_its_positions() {
+    let reg = Registry::for_pack(&GridLite).unwrap();
+    positions::check(&reg).unwrap_or_else(|e| panic!("{e}"));
+    let c = caps(&[&reg]);
+    let p = c.get("positions").unwrap();
+    for v in GRID_VERBS {
+        let in_table = positions::of(v.name()).is_some();
+        assert!(
+            in_table != v.declared_positions().is_some(),
+            "{}: in the kit's table: {in_table}; declared: {:?}",
+            v.name(),
+            v.declared_positions()
+        );
+        assert_eq!(reg.get(v.name()).unwrap().source, Source::Pack);
+        assert!(
+            list(p, "verbs")
+                .iter()
+                .any(|r| str_of(r, "verb") == v.name() && r.get("undeclared").is_none()),
+            "{} has no declared row",
+            v.name()
+        );
     }
 }
 
@@ -578,4 +707,62 @@ fn a_yjs_client_counts_utf16_and_the_kit_converts() {
     assert_eq!(theirs, "é中🎉YWz\n");
     let w16 = theirs.encode_utf16().position(|u| u == 'W' as u16).unwrap();
     assert_eq!(w16, 5, "byte 10 is UTF-16 index 5");
+}
+
+/// A doc's own coordinates are positions, though the kit doesn't interpret them; and on a grid,
+/// `who` and `activity` report what the line map counts.
+#[test]
+fn presence_rows_state_what_they_take_and_print() {
+    let grid = Registry::for_pack(&GridLite).unwrap();
+    let c = caps(&[&grid]);
+    let p = c.get("positions").unwrap();
+    let forms = |verb: &str| -> Vec<(String, String, Option<String>)> {
+        let rows = list(p, "verbs");
+        let row = rows
+            .iter()
+            .find(|r| str_of(r, "verb") == verb)
+            .unwrap_or_else(|| panic!("no row for {verb}"));
+        list(row, "forms")
+            .iter()
+            .map(|f| {
+                (
+                    str_of(f, "at").to_owned(),
+                    str_of(f, "unit").to_owned(),
+                    f.get("tier").and_then(Value::as_str).map(str::to_owned),
+                )
+            })
+            .collect()
+    };
+    let form = |at: &str, unit: &str, tier: Option<&str>| {
+        (at.to_owned(), unit.to_owned(), tier.map(str::to_owned))
+    };
+    assert_eq!(forms("pointer"), [form("--at", "doc_coords", None)]);
+    assert_eq!(forms("viewport"), [form("--rect", "doc_coords", None)]);
+    assert!(
+        !list(p, "verbs")
+            .iter()
+            .any(|r| str_of(r, "verb") == "select"),
+        "select takes keys, which don't shift"
+    );
+    let who = forms("who");
+    let (text, grid_word) = ("text", "grid");
+    assert!(
+        who.contains(&form("stdout", "lines", Some(text))),
+        "{who:?}"
+    );
+    assert!(
+        who.contains(&form("stdout", "rendered_lines", Some(grid_word))),
+        "{who:?}"
+    );
+    assert!(
+        who.contains(&form("stdout", "doc_coords", Some(grid_word))),
+        "{who:?}"
+    );
+    assert_eq!(
+        forms("activity"),
+        [
+            form("stdout", "lines", Some(text)),
+            form("stdout", "rendered_lines", Some(grid_word)),
+        ]
+    );
 }

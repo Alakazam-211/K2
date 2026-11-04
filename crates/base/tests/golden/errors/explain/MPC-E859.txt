@@ -1,0 +1,21 @@
+MPC-E859 person_exists (structured and CSV)
+exit:     1
+message:  token {id} already names another person
+next:     The token you gave already names another person in this file (details.id is the token, details.theirs the person it names). Nothing was applied. Use another token, or leave the person op out and let the host mint one.
+rule:     board file: people
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, apply
+status:   live
+--- json
+{
+  "id": "MPC-E859",
+  "name": "person_exists",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "token {id} already names another person",
+  "next": "The token you gave already names another person in this file (details.id is the token, details.theirs the person it names). Nothing was applied. Use another token, or leave the person op out and let the host mint one.",
+  "rule": "board file: people",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "apply"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

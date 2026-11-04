@@ -1,0 +1,21 @@
+MPC-E845 board_invalid (structured and CSV)
+exit:     4
+message:  the board in the file isn't valid ({code})
+next:     The file opens, but the board it holds breaks the format (details.code says how, and where when it can). Nothing was read or changed. Restore the file from a good copy, or fix the board's data with the tool that wrote it.
+rule:     board file: the board's data
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, list, read, search, references, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E845",
+  "name": "board_invalid",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "the board in the file isn't valid ({code})",
+  "next": "The file opens, but the board it holds breaks the format (details.code says how, and where when it can). Nothing was read or changed. Restore the file from a good copy, or fix the board's data with the tool that wrote it.",
+  "rule": "board file: the board's data",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "list", "read", "search", "references", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

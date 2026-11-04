@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use grid_pack::GridLite;
-use k2_mpc_base::parity::PersonAction;
+use k2_mpc_base::parity::positions::{self, PositionForm, Unit};
+use k2_mpc_base::parity::{PersonAction, Registry};
 use k2_mpc_base::session::{
     AuditEvent, Config, ConnId, Host, Pack, Participant, ParticipantKind, Rights, Session,
     SessionManager, Stay, TextFilePack,
@@ -208,9 +209,7 @@ fn every_positional_form_counts_in_the_base() {
         "",
     );
     assert_eq!(live_rows(&f), ["r3", "r2"]);
-    // --to #1 moves to be the base's first (before r1), not before what is #1 now (an
-    // agent's `row insert --base` after another insert conflicts on the table's key
-    // counter, so the place form is exercised through `row move`)
+    // --to #1 moves to be the base's first (before r1), not before what is #1 now
     let f = grid(3);
     let base = agent_reads(&f);
     ok(&f, f.person, ROWS, "row insert --start --values n,n", "");
@@ -232,6 +231,140 @@ fn every_positional_form_counts_in_the_base() {
         "",
     );
     assert_eq!(cell(&f, &order[0], "c2"), "P");
+    // --at #2 inserts before the base's second (r2), not before what is #2 now (r1)
+    let f = grid(3);
+    let base = agent_reads(&f);
+    ok(&f, f.person, ROWS, "row insert --start --values n,n", "");
+    ok(
+        &f,
+        f.agent,
+        ROWS,
+        &format!("row insert --at #2 --values a,a --base {base}"),
+        "",
+    );
+    assert_eq!(live_rows(&f), ["r4", "r1", "r5", "r2", "r3"]);
+}
+
+// ---------- grids: the key counters aren't content (K-BR-12) ----------
+
+fn live_cols(f: &Fx) -> Vec<String> {
+    let o = ok(f, f.person, ROWS, "col list", "");
+    String::from_utf8(o.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| l.split('\t').next().unwrap().to_owned())
+        .collect()
+}
+
+/// An agent's insert with `--base` after someone else's insert: the only thing the two share
+/// is the table's key counter, which is bookkeeping, so it applies. `--at #2` counts in the
+/// base (R-1), so the new row goes before r2, the base's second.
+#[test]
+fn an_agents_row_insert_after_someone_elses_insert_applies() {
+    let f = grid(3);
+    let base = agent_reads(&f);
+    ok(&f, f.person, ROWS, "row insert --start --values n,n", "");
+    ok(
+        &f,
+        f.agent,
+        ROWS,
+        &format!("row insert --at #2 --values a,a --base {base}"),
+        "",
+    );
+    assert_eq!(live_rows(&f), ["r4", "r1", "r5", "r2", "r3"]);
+    assert_eq!(cell(&f, "r4", "c1"), "n");
+    assert_eq!(cell(&f, "r5", "c1"), "a");
+}
+
+/// The same on columns (the `next_col` counter).
+#[test]
+fn an_agents_col_insert_after_someone_elses_insert_applies() {
+    let f = grid(2);
+    let base = agent_reads(&f);
+    ok(&f, f.person, ROWS, "col insert --start --name n", "");
+    ok(
+        &f,
+        f.agent,
+        ROWS,
+        &format!("col insert --at #2 --name a --base {base}"),
+        "",
+    );
+    assert_eq!(live_cols(&f), ["c3", "c1", "c4", "c2"]);
+}
+
+/// Two agents insert with `--base` from the same read: both apply, under distinct keys.
+#[test]
+fn two_agents_inserting_from_the_same_read_both_apply() {
+    let f = grid(3);
+    let other =
+        f.s.join(
+            Participant::new("b", "b", "#123456", ParticipantKind::Agent, "cli"),
+            Stay::Held,
+        )
+        .unwrap()
+        .conn;
+    let base = agent_reads(&f);
+    assert_eq!(ok(&f, other, ROWS, "row list", "").version, base);
+    let key = |o: ToolOutput| String::from_utf8(o.stdout).unwrap().trim_end().to_owned();
+    let first = key(ok(
+        &f,
+        f.agent,
+        ROWS,
+        &format!("row insert --end --values a,a --base {base}"),
+        "",
+    ));
+    let second = key(ok(
+        &f,
+        other,
+        ROWS,
+        &format!("row insert --end --values b,b --base {base}"),
+        "",
+    ));
+    assert_ne!(first, second);
+    assert_eq!(cell(&f, &first, "c1"), "a");
+    assert_eq!(cell(&f, &second, "c1"), "b");
+    assert_eq!(
+        live_rows(&f),
+        ["r1", "r2", "r3", first.as_str(), second.as_str()]
+    );
+}
+
+/// A real conflict on an insert is still refused and applies nothing, with or without a
+/// counter write beside it: the anchor moved after the base is `MPC-E803`; the anchor deleted
+/// after the base is `MPC-E805`, as the verb resolves `--after` in the live table before any
+/// facet is checked.
+#[test]
+fn a_real_conflict_on_an_insert_is_still_refused() {
+    let insert = |base: u64| argv(&format!("row insert --after r2 --values a,a --base {base}"));
+    // r2 deleted since the base
+    let f = grid(3);
+    let base = agent_reads(&f);
+    ok(&f, f.person, ROWS, "row delete --row r2", "");
+    let v = version(&f);
+    let o = f.s.run_tool(f.agent, ROWS, &insert(base), b"").unwrap();
+    assert_eq!(o.exit, 4, "{o:?}");
+    assert_eq!(
+        o.refusal.as_ref().map(|r| r.id()),
+        Some("MPC-E805"),
+        "{o:?}"
+    );
+    assert_eq!(version(&f), v, "nothing applied");
+    assert_eq!(live_rows(&f), ["r1", "r3"]);
+    // r2 moved since the base, alone and with someone's insert moving the counter too
+    for insert_too in [false, true] {
+        let f = grid(3);
+        let base = agent_reads(&f);
+        ok(&f, f.person, ROWS, "row move --row r2 --start", "");
+        if insert_too {
+            ok(&f, f.person, ROWS, "row insert --end --values n,n", "");
+        }
+        let (v, rows) = (version(&f), live_rows(&f));
+        let e = f.s.run_tool(f.agent, ROWS, &insert(base), b"").unwrap_err();
+        assert_eq!((e.exit(), e.report().id()), (1, "MPC-E803"), "{e}");
+        assert!(e.to_string().contains("r2"), "{e}");
+        assert_eq!(version(&f), v, "nothing applied");
+        assert_eq!(live_rows(&f), rows, "nothing applied");
+    }
 }
 
 /// An element `#N` named at the base that is gone at live is refused (exit 4), never
@@ -440,7 +573,8 @@ static NTH_VERBS: &[PackVerb] = &[PackVerb::edit(
     &[0],
     pick,
 )
-.positional(nth_of)];
+.positional(nth_of)
+.positions(&[PositionForm::new("--nth", Unit::PackNth)])];
 
 impl Pack for NthPack {
     fn schema(&self) -> k2_mpc_base::Schema {
@@ -462,6 +596,11 @@ impl Pack for NthPack {
     fn verbs(&self) -> &'static [PackVerb] {
         NTH_VERBS
     }
+}
+
+#[test]
+fn the_nth_pack_declares_its_position_units() {
+    positions::check(&Registry::for_pack(&NthPack).unwrap()).unwrap_or_else(|e| panic!("{e}"));
 }
 
 #[test]

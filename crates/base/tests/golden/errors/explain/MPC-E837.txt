@@ -1,0 +1,27 @@
+MPC-E837 no_votes_left (structured and CSV)
+exit:     5
+message:  no votes left
+next:     You have used every vote this round allows. Nothing was applied. Take a vote back from another object (vote, with a negative delta) to move it, or wait for the next round.
+step:     vote; why: Every vote this round allows is used; take one back from another object to move it, or wait for the next round.
+rule:     board file: voting
+verbs:    a file type's own verbs (its host's file registry): vote
+status:   live
+--- json
+{
+  "id": "MPC-E837",
+  "name": "no_votes_left",
+  "area": "structured and CSV",
+  "exit": 5,
+  "message": "no votes left",
+  "next": "You have used every vote this round allows. Nothing was applied. Take a vote back from another object (vote, with a negative delta) to move it, or wait for the next round.",
+  "next_step": {
+    "verb": "vote",
+    "args": [],
+    "why": "Every vote this round allows is used; take one back from another object to move it, or wait for the next round."
+  },
+  "rule": "board file: voting",
+  "verbs": ["@file", "vote"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -556,6 +556,7 @@ impl Session {
     /// applies), and what it puts back records the roots it restores. A record written
     /// before store format 5, or of an outside edit, has no roots: it is reverted as in v1.7.
     pub fn revert(&self, conn: ConnId, change: Seq, partial: bool) -> Result<UndoOutcome> {
+        timed!(Revert);
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Revert, now)?;

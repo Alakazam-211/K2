@@ -69,6 +69,6 @@ pub use harness::{
     OBSERVER,
 };
 pub use registry::{
-    verb_form, Api, Registry, RegistryError, Source, Tier, VerbKind, VerbSpec, ALIASES, KIT_VERBS,
-    RUN_TOOL_VERBS,
+    verb_form, Api, FileVerb, Registry, RegistryError, Source, Tier, VerbKind, VerbSpec, ALIASES,
+    KIT_VERBS, RUN_TOOL_VERBS,
 };

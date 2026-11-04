@@ -31,16 +31,21 @@
 //! - **Hash key**: replaced, so every earlier keyed hash of this doc means nothing.
 //! - **Participant erasure**: the pid is replaced by the pseudonym in the log, changes,
 //!   revert records, approvals, versions' authors and the client table.
+//! - **Blob references** (`doc_blob_refs`): recomputed from what's left once the above is done.
+//!   A blob no record names any more loses the doc's row (a blob id is a digest of the content)
+//!   and its count; the session then removes it if nothing else references it.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
 
+use super::blob::PurgedBlob;
 use super::history::{
     dec_authored, dec_change, dec_pair, dec_record, enc_authored, enc_change, enc_pair, enc_record,
     enc_stats, stats_in, RevertRecord, CHANGES, REVERTS, REVERT_INDEX, REVERT_STATS,
 };
+use crate::blob::BlobId;
 use crate::elem::Value;
 
 use super::{
@@ -117,6 +122,12 @@ pub(crate) struct DocPurge<'a> {
     pub erase: Option<(&'a str, &'a str)>,
     /// Structured elements whose values are redacted whole everywhere.
     pub elems: Option<ElemPick>,
+    /// The roots whose values can name blobs ([`crate::session::Pack::blob_ref_roots`]).
+    pub ref_roots: &'static [&'static str],
+    /// The blobs the live doc names in them (the re-encoded state, hidden elements included).
+    pub live_refs: BTreeSet<BlobId>,
+    /// The host's clock: when a blob this purge released lost its last reference.
+    pub now: u64,
 }
 
 /// What a purge did (metadata only: counts and sizes, never content).
@@ -218,12 +229,18 @@ fn cut(text: &str, spans: &[Range<usize>], root: &str, red: &mut Vec<Redaction>)
 }
 
 impl DocStore {
-    /// Purge doc `id` as `p` says, in one durable transaction (module docs).
-    pub(crate) fn purge_doc(&self, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCounts, StoreError> {
+    /// Purge doc `id` as `p` says, in one durable transaction (module docs). Also returns the
+    /// blobs no record of the doc names any more, with the references each still has.
+    pub(crate) fn purge_doc(
+        &self,
+        id: DocId,
+        p: &DocPurge<'_>,
+    ) -> Result<(PurgeCounts, Vec<PurgedBlob>), StoreError> {
         let w = self.begin_write()?;
         let c = purge_in(&w, id, p)?;
+        let released = super::blob_refs::recompute_in(&w, id, p.ref_roots, &p.live_refs, p.now)?;
         w.commit()?;
-        Ok(c)
+        Ok((c, released))
     }
 }
 

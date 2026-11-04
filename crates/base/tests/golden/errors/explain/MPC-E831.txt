@@ -1,0 +1,27 @@
+MPC-E831 exists (structured and CSV)
+exit:     1
+message:  {target} is already in use
+next:     The id you gave is taken (details.target; the refusal carries what is there now). Nothing was applied. Read what is there, then give another id, or leave the id out so a free one is chosen.
+step:     read; why: The id is taken; read what is there, then give another id or let a free one be chosen.
+rule:     board file: unique ids
+verbs:    a file type's own verbs (its host's file registry): put-back, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E831",
+  "name": "exists",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "{target} is already in use",
+  "next": "The id you gave is taken (details.target; the refusal carries what is there now). Nothing was applied. Read what is there, then give another id, or leave the id out so a free one is chosen.",
+  "next_step": {
+    "verb": "read",
+    "args": [],
+    "why": "The id is taken; read what is there, then give another id or let a free one be chosen."
+  },
+  "rule": "board file: unique ids",
+  "verbs": ["@file", "put-back", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

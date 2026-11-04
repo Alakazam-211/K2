@@ -3,15 +3,22 @@
 //! the other build's `n1_producer` with `K2MB_N1_RESTORE`: a write, a named version, a
 //! revert, and a revert of that revert, so the store holds restored elements (provenance
 //! rows), change clocks and a revert record with roots. This build opens both stores, blames
-//! the restored line, reverts the other build's record, then writes, restores, blames and
-//! rewrites. It prints `N-1 OK`.
+//! the restored line, reverts the other build's record, then writes, restores, blames, has an
+//! agent join and write, rewrites, and deletes the doc (the last step: the kit's own build then
+//! reads what the delete left, `n1_kinds_after_delete`). It prints `N-1 OK`.
+//!
+//! After v0.10.2 the newer producer (`K2MB_N1_AGENTS`) also leaves `client_kinds` rows (an own
+//! replica's and an agent's). A build that doesn't know the table opens, reads and writes the
+//! store as any other, and refuses the rewrite before anything changes (`NewerData`, the
+//! table named): reported, and the store opened again after it. Its delete isn't refused, and
+//! it can't erase rows of a table it doesn't know.
 use std::sync::Arc;
 
 use k2_mpc_base::session::{
     AuditEvent, Config, Host, Participant, ParticipantKind, Rights, SessionManager, Stay,
     TextFilePack,
 };
-use k2_mpc_base::store::{DocKey, DocStore};
+use k2_mpc_base::store::{DocKey, DocStore, StoreError};
 
 struct H;
 impl Host for H {
@@ -71,10 +78,44 @@ fn main() {
         s.restore(c, v[0].id).unwrap();
         let b = s.blame(c, TextFilePack::ROOT, None).unwrap();
         println!("{file}: wrote, blamed, restored, blamed {} lines", b.lines.len());
+        let j = s
+            .join(
+                Participant::new("bot", "BOT", "#222222", ParticipantKind::Agent, "cli"),
+                Stay::Held,
+            )
+            .unwrap();
+        s.replace_text(j.conn, TextFilePack::ROOT, "one\nthree\nfour\n")
+            .unwrap();
+        println!("{file}: agent bot joined as client {} and wrote", j.client);
         mgr.release().unwrap();
         drop((s, mgr));
-        let r = store.rewrite_file().expect("no table this build doesn't know");
-        println!("{file}: rewrite_file ok ({r:?})");
+        let check = store.check_rewritable();
+        println!("{file}: check_rewritable: {check:?}");
+        match check {
+            // a newer kit's table (client_kinds, after v0.10.2) this build doesn't know
+            Err(StoreError::NewerData { table }) if table == "client_kinds" => {
+                println!("{file}: rewrite refused before any change (table {table:?})");
+            }
+            other => {
+                other.expect("rewritable");
+                let r = store.rewrite_file().expect("no table this build doesn't know");
+                println!("{file}: rewrite_file ok ({r:?})");
+            }
+        }
+        drop(store);
+        let store = DocStore::open(file).expect("the store opens again");
+        let id = store.find(&key).unwrap().expect("the doc");
+        println!(
+            "{file}: opened again, versions {}",
+            store.versions(id).unwrap().len()
+        );
+        let deleted = store.delete_doc(id, 3_000_000);
+        println!(
+            "{file}: delete_doc: {}; doc found after it: {}",
+            if deleted.is_ok() { "ok" } else { "refused" },
+            store.find(&key).unwrap().is_some()
+        );
+        deleted.expect("delete_doc");
     }
     println!("N-1 OK");
 }

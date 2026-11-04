@@ -170,6 +170,54 @@ fn audit_catches_a_silent_cell_overwrite() {
     assert!(rep.violations.contains(&AuditViolation::LogReplay));
 }
 
+/// A store reload takes out of a selection what the store doesn't hold. `MPC_STRUCT_MUTANT`
+/// `=selection-keeps-deleted` plants `SelectionMutant::KeepsDeleted` for this test. This file
+/// shares its binary with every unit test, so other values are left alone.
+#[test]
+fn a_store_reload_takes_an_element_the_store_does_not_hold_out_of_a_selection() {
+    use crate::differential::{with_selection_mutant, SelectionMutant};
+    use crate::session::ElemSelection;
+    let run = || {
+        let f = fx("reload-selection", "a\nb\nc\n");
+        let c = join(&f.s, "p", ParticipantKind::Person);
+        // an element in memory only, as a change that didn't land leaves one
+        f.s.lock()
+            .unwrap()
+            .doc
+            .edit_as(
+                7,
+                &[Edit::List {
+                    root: table::ROWS.into(),
+                    ops: vec![ListOp::Insert {
+                        key: k("r9"),
+                        at: Anchor::End,
+                        value: Value::Null,
+                    }],
+                }],
+            )
+            .unwrap();
+        f.s.set_selection(
+            c,
+            Some(ElemSelection::new(table::ROWS, vec![k("r1"), k("r9")])),
+        )
+        .unwrap();
+        {
+            let mut st = f.s.lock().unwrap();
+            f.s.recover(&mut st, "a store write failed");
+        }
+        let got = f.s.roster(c).unwrap().remove(0).selection;
+        assert_eq!(
+            got.map(|s| s.keys),
+            Some(vec![k("r1")]),
+            "after a store reload"
+        );
+    };
+    match std::env::var("MPC_STRUCT_MUTANT").as_deref() {
+        Ok("selection-keeps-deleted") => with_selection_mutant(SelectionMutant::KeepsDeleted, run),
+        _ => run(),
+    }
+}
+
 #[test]
 fn audit_catches_a_dropped_cell_write() {
     let f = fx("dropped", "a,b\nc,d\n");
@@ -306,6 +354,33 @@ fn a_write_with_no_identity_counts_as_someone_elses() {
     assert_eq!(cs[0].by.as_deref(), Some("agent-a"));
     assert_eq!(cs[0].change, mine.version);
     assert_eq!(crate::tools::session_exit(&e), crate::tools::exit::NO);
+}
+
+/// A table's two key counters leave the facets, and only they: another meta key, the same keys
+/// under another root, and the same root and keys in a schema that isn't a table all stay.
+#[test]
+fn only_a_tables_key_counters_leave_the_facets() {
+    let all = ["next_row", "next_col", "header", "shape"];
+    let keys = |root: &str, is_table: bool| {
+        let ops = all
+            .iter()
+            .map(|k| MapOp::Set {
+                key: (*k).to_owned(),
+                value: Value::str("9"),
+            })
+            .collect();
+        let edit = Edit::Map {
+            root: root.to_owned(),
+            ops,
+        };
+        grid::facets_of(&[edit], is_table)
+            .into_iter()
+            .map(|(_, k, _)| k)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(table::META, true), ["header", "shape"]);
+    assert_eq!(keys(table::CELLS, true), all);
+    assert_eq!(keys(table::META, false), all);
 }
 
 /// An entry with no recorded author isn't anyone's own: it keeps its audit event. An entry only

@@ -85,6 +85,18 @@ lint() {
   fi
   RUSTUP_HOME=$LINT_HOME/rustup CARGO_HOME=$LINT_HOME/cargo PATH=$LINT_HOME/cargo/bin:$PATH "$@"
 }
+# ran CMD...: a cargo test command that must run a test (`timed LABEL ran cargo test ... NAME`). A
+# filter or `--ignored` matching nothing exits 0 with "0 passed", so a renamed test or a removed
+# #[ignore] would pass in silence: here it fails, saying so.
+ran() {
+  ran_log=$(mktemp); ran_rc=$(mktemp)
+  { "$@" 2>&1; echo $? > "$ran_rc"; } | tee "$ran_log"
+  r=$(cat "$ran_rc")
+  n=$(sed -n 's/^test result: [A-Za-z]*\. \([0-9]*\) passed; \([0-9]*\) failed.*/\1 \2/p' "$ran_log" | awk '{ s += $1 + $2 } END { print s + 0 }')
+  rm -f "$ran_log" "$ran_rc"
+  [ "$r" = 0 ] || return "$r"
+  [ "$n" -gt 0 ] || { echo "ran: NO TESTS RAN (a filter or --ignored matched nothing): $*"; return 1; }
+}
 RC=0
 timed() { l=$1; shift; s=$(date +%s); set +e; "$@"; rc=$?; set -e; echo "=== $l: exit $rc, wall $(( $(date +%s) - s ))s"; [ $rc -eq 0 ] || RC=$rc; }
 . "$CMDS"

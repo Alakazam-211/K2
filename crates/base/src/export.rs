@@ -545,9 +545,9 @@ impl ExportRegistry {
             // the output limit, however the exporter passed the sink's refusal on
             Ok(Err(_)) if over => Err(ExportError::Limit("output bytes")),
             Ok(Err(err)) => Err(err),
-            Err(panic) => Err(ExportError::Internal {
+            Err(payload) => Err(ExportError::Internal {
                 exporter: e.id().to_owned(),
-                message: panic_text(&panic),
+                message: payload_text(&payload),
             }),
         }
     }
@@ -560,7 +560,7 @@ fn kind_text(k: &SourceKind) -> String {
     }
 }
 
-fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
+fn payload_text(p: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = p.downcast_ref::<&str>() {
         (*s).to_owned()
     } else if let Some(s) = p.downcast_ref::<String>() {

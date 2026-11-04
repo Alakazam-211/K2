@@ -77,11 +77,11 @@ fi
 # STRIP_DOCS=1 (v0.9.7, for a part that runs no doctests): every crate's sources travel with
 # their doc-comment lines (`///`, `//!`) blanked, not deleted, so every line number (a panic's,
 # a test's) is the repository's. The code is the same; only documentation stays behind.
-# tools/fuzz/strip-comments.py refuses (and the bundle with it) when such a line sits inside a
+# tools/strip-comments.py refuses (and the bundle with it) when such a line sits inside a
 # string literal.
 if [ "${STRIP_DOCS:-0}" = 1 ]; then
   for d in "$EXPORT"/crates/*/src "$EXPORT"/crates/*/tests; do
-    if [ -d "$d" ]; then python3 -I "$ROOT/tools/fuzz/strip-comments.py" --docs "$d"; fi
+    if [ -d "$d" ]; then python3 -I "$ROOT/tools/strip-comments.py" --docs "$d"; fi
   done
 fi
 # the workspace members that travel (when the workspace manifest does)

@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 mod at_base;
 mod blame;
+mod blob_refs;
 mod claims;
+mod elem_claims;
+mod elem_presence;
 mod grid;
 mod grid_presence;
 #[cfg(test)]
@@ -18,6 +21,9 @@ mod grid_tests;
 mod grid_undo;
 mod group;
 mod history;
+mod mint;
+#[cfg(test)]
+mod next_change_tests;
 mod purge;
 mod removed;
 mod tier0_history;
@@ -58,9 +64,9 @@ use crate::engine::{reads_stamp, ENGINE_FORMAT, ENGINE_NAME};
 use crate::hash::{file_hash, hex, hmac, legacy_matches};
 use crate::schema::{Kind, Schema};
 use crate::store::{
-    Approval, ApprovalState, ChangeInfo, ChangeKind, ClockSpan, DocId, DocKey, DocMeta, DocStore,
-    ElemCounts, ElemRoot, HunkRoots, LogEntry, NewChange, ProvRow, RecordHunk, RecordRoot,
-    RevertRecord, RootRuns, Seq, SyncState, Version, VersionReason,
+    Approval, ApprovalState, BlobRefScan, ChangeInfo, ChangeKind, ClockSpan, DocId, DocKey,
+    DocMeta, DocStore, ElemCounts, ElemRoot, HunkRoots, LogEntry, NewChange, ProvRow, RecordHunk,
+    RecordRoot, RevertRecord, RootRuns, Seq, SyncState, Version, VersionReason,
 };
 use crate::text::diff::{self, Hunk};
 use crate::text::lines;
@@ -350,6 +356,19 @@ pub(crate) struct Shown {
     pub view: Option<(usize, usize)>,
     /// The lines it looked at (notes, activity, `--for-edit`).
     pub touched: Option<(usize, usize)>,
+    /// The verb failed after the doc was read: the caller got nothing, so it isn't their read.
+    pub refused: bool,
+}
+
+/// Whether a read verb's failure counts ([`Shown::refused`]): a refused read moves nothing.
+fn refused_read(refused: bool) -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::line_mutant()
+        == Some(crate::differential::LineMutant::RefusedReadIsARead)
+    {
+        return false;
+    }
+    refused
 }
 
 /// The activity ring's verb for a change made through a direct API call.
@@ -586,9 +605,15 @@ struct Member {
     edited: Option<(String, usize, usize)>,
     /// On a grid: its caret, view and last edit by key (A10).
     grid: grid_presence::GridPresence,
+    /// Its element selection, pointer and viewport.
+    elem: elem_presence::ElemPresence,
     /// The host's label for this connection ([`JoinOptions::label`](field@JoinOptions::label)),
     /// cleaned.
     label: Option<String>,
+    /// Its client ID's owner and kind rows are in the store. Read for an own replica only: one
+    /// that can write keeps them whether or not it has landed a change
+    /// ([`Session::keep_own_replica_rows`]).
+    rows_kept: bool,
 }
 
 impl std::ops::Deref for Member {
@@ -672,8 +697,12 @@ struct State {
     /// reuse ([`Config::reuse_agent_clients`], v0.9.7). Built on first need, kept as clients
     /// join; `None` after a purge, which renames owners.
     owners: Option<HashMap<ClientId, String>>,
-    /// Client IDs a participant with its own replica held in this load: never reused.
-    replica_clients: std::collections::HashSet<ClientId>,
+    /// The agent client IDs reuse may take ([`Config::reuse_agent_clients`]): those the store
+    /// records as minted for an agent that edits through the session alone (its
+    /// `client_kinds`), read at load and kept as agents' IDs are minted. An own replica's ID
+    /// is never among them, nor an ID of unknown kind (an older kit's owner record): either
+    /// may still have a writer outside this session.
+    reusable_clients: std::collections::HashSet<ClientId>,
     hist: HashMap<String, History>,
     /// The version the session loaded (or reloaded) at: undo history before it was lost.
     loaded_seq: Seq,
@@ -724,7 +753,7 @@ struct State {
     /// to build, so built once per change, not once per flush; v0.10.0).
     grid_now: std::cell::RefCell<Option<GridNowCache>>,
     /// The change being committed goes on no undo stack (`rows drop-deleted`, spec v1.10
-    /// S11); taken by the commit.
+    /// S11); set right before the commit, which takes it.
     no_stack: bool,
     /// The rows the next change marks (a text's non-exact pairs, [`NewChange::row_marks`]).
     next_row_marks: Vec<crate::elem::Key>,
@@ -732,6 +761,8 @@ struct State {
     next_col_remap: bool,
     /// The waiting notes the next change leaves ([`NewChange::note_rows`]).
     next_note_rows: Vec<(String, Vec<u8>)>,
+    /// The edit about to commit came through [`Session::check_blob_refs`].
+    next_refs_strict: bool,
     /// Conformance only: outside saves record their writes with no identity, as a write
     /// merged in from elsewhere whose writer the engine doesn't report (KC7, Yrs only).
     #[cfg(feature = "conformance")]
@@ -926,7 +957,66 @@ fn identity_changed(streams: &[crate::elem::Applied]) -> bool {
     })
 }
 
-fn random_client() -> ClientId {
+/// A random client ID the kit may hand out: the one helper every client ID the kit mints
+/// comes from (participants, the import, the disk participant, a write-back replica's own).
+/// Random 53 bits, drawn again until in `2..=MAX_KIT_CLIENT` ([`crate::doc::MAX_KIT_CLIENT`]):
+/// never 0, never the session's own 1, never the engine's import agent
+/// ([`crate::doc::IMPORT_CLIENT`]). Resampled, never shifted.
+pub(super) fn mint_client_id() -> ClientId {
+    loop {
+        let c = client_draw();
+        if planted_shift_not_resample() {
+            return c.clamp(2, crate::doc::MAX_KIT_CLIENT);
+        }
+        if (2..=crate::doc::MAX_KIT_CLIENT).contains(&c) || planted_client_zero(c) {
+            return c;
+        }
+    }
+}
+
+/// The planted fault [`crate::differential::MintMutant::ClientIdZero`]: a draw of 0 is handed
+/// out. Without the `differential` feature there is no hook: `false`.
+#[cfg(any(test, feature = "differential"))]
+fn planted_client_zero(c: ClientId) -> bool {
+    c == 0
+        && crate::differential::mint_mutant() == Some(crate::differential::MintMutant::ClientIdZero)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_client_zero(_: ClientId) -> bool {
+    false
+}
+
+/// The planted faults [`crate::differential::MintMutant::ShiftNotResample`] (a draw outside the
+/// range is moved into it, as the old `.max(2)` did) and
+/// [`crate::differential::MintMutant::ReuseHeldClient`] (agent reuse ignores the IDs present
+/// connections hold). Without the `differential` feature there are no hooks.
+#[cfg(any(test, feature = "differential"))]
+fn planted_shift_not_resample() -> bool {
+    crate::differential::mint_mutant() == Some(crate::differential::MintMutant::ShiftNotResample)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_shift_not_resample() -> bool {
+    false
+}
+
+#[cfg(any(test, feature = "differential"))]
+fn planted_reuse_held() -> bool {
+    crate::differential::mint_mutant() == Some(crate::differential::MintMutant::ReuseHeldClient)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_reuse_held() -> bool {
+    false
+}
+
+/// One raw draw of 53 bits (any value, 0 and 2^53 - 1 included): [`mint_client_id`]'s source.
+fn client_draw() -> ClientId {
+    #[cfg(any(test, feature = "differential"))]
+    if let Some(c) = crate::differential::forced_client_draw() {
+        return c;
+    }
     #[cfg(any(test, feature = "differential"))]
     if let Some(c) = crate::differential::next_client() {
         return c;
@@ -941,15 +1031,45 @@ fn random_client() -> ClientId {
     h.finish() & MAX_CLIENT_ID
 }
 
-/// A fresh client ID: random 53 bits, never 0 or 1, never one this doc has used.
+/// The planted faults [`crate::differential::ClientMutant`]: the agent client IDs a load
+/// starts with as reusable. `ReuseAcrossReload`: every ID the store records (the kinds
+/// ignored); `NoReuseAfterReload`: none. Without the `differential`
+/// feature there is no hook: `None` (the recorded kinds).
+#[cfg(any(test, feature = "differential"))]
+fn planted_reusable_at_load(
+    store: &DocStore,
+    id: DocId,
+) -> Result<Option<std::collections::HashSet<ClientId>>> {
+    use crate::differential::{client_mutant, ClientMutant};
+    Ok(match client_mutant() {
+        Some(ClientMutant::ReuseAcrossReload) => {
+            Some(store.clients_of(id)?.into_iter().map(|(c, _)| c).collect())
+        }
+        Some(ClientMutant::NoReuseAfterReload) => Some(Default::default()),
+        // a store fault, planted in `DocStore::open`
+        Some(ClientMutant::NoOrphanSweep) | None => None,
+    })
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_reusable_at_load(
+    _: &DocStore,
+    _: DocId,
+) -> Result<Option<std::collections::HashSet<ClientId>>> {
+    Ok(None)
+}
+
+/// A fresh client ID ([`mint_client_id`]), never one `taken` names (a present connection's)
+/// and never one with an owner row in this doc. An ID that left without writing has no row and
+/// can be drawn again: the doc holds nothing of it.
 pub(super) fn fresh_client(
     store: &DocStore,
     id: DocId,
     taken: impl Fn(ClientId) -> bool,
 ) -> Result<ClientId> {
     loop {
-        let c = random_client();
-        if c > 1 && !taken(c) && store.client_owner(id, c)?.is_none() {
+        let c = mint_client_id();
+        if !taken(c) && store.client_owner(id, c)?.is_none() {
             return Ok(c);
         }
     }
@@ -1123,6 +1243,10 @@ impl Session {
         let texts = texts_of(&doc, &schema)?;
         let last_version_seq = store.last_version(doc_id)?.map_or(0, |(_, v)| v.seq);
         let hash_key = store.doc_key(doc_id)?;
+        let reusable_clients = match planted_reusable_at_load(&store, doc_id)? {
+            Some(planted) => planted,
+            None => store.reusable_clients(doc_id)?,
+        };
         Ok(Self {
             host,
             config,
@@ -1147,7 +1271,7 @@ impl Session {
                 members: Vec::new(),
                 joins: 0,
                 owners: None,
-                replica_clients: std::collections::HashSet::new(),
+                reusable_clients,
                 hist: HashMap::new(),
                 loaded_seq: loaded_version,
                 last_version_seq,
@@ -1175,6 +1299,7 @@ impl Session {
                 next_row_marks: Vec::new(),
                 next_col_remap: false,
                 next_note_rows: Vec::new(),
+                next_refs_strict: false,
                 #[cfg(feature = "conformance")]
                 outside_without_identity: false,
                 group_hint: None,
@@ -1190,6 +1315,7 @@ impl Session {
         store: Arc<DocStore>,
         doc_id: DocId,
     ) -> Result<Self> {
+        timed!(Load);
         let schema = pack.schema();
         let meta = store.meta(doc_id)?;
         if meta.pack != schema.name {
@@ -1199,7 +1325,10 @@ impl Session {
             });
         }
         check_engine(&meta)?;
-        let loaded = store.load(doc_id)?;
+        let loaded = {
+            timed!(LoadStoreRead);
+            store.load(doc_id)?
+        };
         let mut doc = Doc::from_store(schema, &loaded)?;
         doc.set_edit_check_every(config.edit_check_every);
         doc.set_edit_check_scale(config.edit_check_scale_units);
@@ -1221,6 +1350,7 @@ impl Session {
             authors.pop_front();
         }
         let now = host.now_ms();
+        blob_refs::heal_at_load(&store, doc_id, &doc, pack.blob_ref_roots(), now)?;
         let init = Init {
             doc_id,
             meta,
@@ -1252,12 +1382,7 @@ impl Session {
         doc.set_edit_check_every(config.edit_check_every);
         doc.set_edit_check_scale(config.edit_check_scale_units);
         doc.set_position_check_every(config.position_check_every);
-        let client = loop {
-            let c = random_client();
-            if c > 1 {
-                break c;
-            }
-        };
+        let client = mint_client_id();
         let edits = grid::import_edits(&ordered);
         let made = doc.edit_made(client, &edits)?;
         let (made, firsts) = (made.edited, made.firsts);
@@ -1363,6 +1488,7 @@ impl Session {
             row_marks: Vec::new(),
             col_remap: false,
             note_rows: Vec::new(),
+            blob_refs: BlobRefScan::of(pack.blob_ref_roots()),
         };
         let (doc_id, seq, _) = store.create_imported_synced(
             &meta,
@@ -1503,6 +1629,25 @@ impl Session {
         n
     }
 
+    /// `pid` has `granted` from the host: when that includes edit, write the owner and kind rows
+    /// of its own replicas that don't have them yet (it joined read-only). Such a replica can
+    /// write offline from now on, and a host may check the store for its owner when it comes
+    /// back, before it has landed anything.
+    fn keep_own_replica_rows(&self, st: &mut State, pid: &str, granted: Rights) -> Result<()> {
+        if !granted.edit {
+            return Ok(());
+        }
+        for k in 0..st.members.len() {
+            let m = &st.members[k];
+            if m.p.own_replica && !m.rows_kept && m.p.pid == pid {
+                self.store(st)?
+                    .set_client_kind(self.doc_id, m.client, pid, true)?;
+                st.members[k].rows_kept = true;
+            }
+        }
+        Ok(())
+    }
+
     /// Re-ask the host for the connection's pid's rights and admit the call, or refuse it
     /// (removing all of the pid's connections when read is gone).
     fn admit(
@@ -1516,11 +1661,13 @@ impl Session {
         self.roster_flush(st, now, false);
         let i = Self::member(st, conn)?;
         let watcher = st.members[i].watcher;
-        let rights = watched(self.host.rights(&st.members[i].p, &st.key), watcher);
+        let granted = self.host.rights(&st.members[i].p, &st.key);
+        let rights = watched(granted, watcher);
         let pid = st.members[i].p.pid.clone();
         for m in st.members.iter_mut().filter(|m| m.p.pid == pid) {
             m.rights = rights;
         }
+        self.keep_own_replica_rows(st, &pid, granted)?;
         if let Some(n) = presence::refusal(rights, need) {
             if watcher && n != Need::Read {
                 // past participants_max: read-only until the host promotes it (K11)
@@ -1627,6 +1774,7 @@ impl Session {
         prev: Option<ClientId>,
         label: Option<String>,
     ) -> Result<Joined> {
+        timed!(Join);
         let label = super::participant::device_label(label.as_deref());
         presence::check_participant(&p)?;
         let now = self.now();
@@ -1646,6 +1794,7 @@ impl Session {
         for m in st.members.iter_mut().filter(|m| m.p.pid == p.pid) {
             m.rights = watched(rights, m.watcher);
         }
+        self.keep_own_replica_rows(st, &p.pid, rights)?;
         if shared {
             if let Some(m) = st.members.iter_mut().find(|m| m.shares_with(&p)) {
                 m.p = p;
@@ -1664,21 +1813,29 @@ impl Session {
                 });
             }
         }
-        let client = match self.reusable_client(st, &p)? {
-            Some(c) => c,
+        let (client, rows_kept) = match self.reusable_client(st, &p)? {
+            Some(c) => (c, true),
             None => {
                 let store = self.store(st)?;
                 let c = fresh_client(store, self.doc_id, |c| {
                     st.members.iter().any(|m| m.client == c)
                 })?;
-                store.set_client(self.doc_id, c, &p.pid)?;
-                if p.own_replica {
-                    st.replica_clients.insert(c);
+                // what the ID was minted for goes with its owner, so a later load knows: an
+                // agent's that edits through the session alone may be reused, an own
+                // replica's never (its replica may still write as it). Only for a participant
+                // that can write: any other ID gets its owner row with its first change
+                // (`DocStore::commit_changes`), so a join that never writes leaves no row
+                let keep = rights.edit && (p.own_replica || p.kind == ParticipantKind::Agent);
+                if keep {
+                    store.set_client_kind(self.doc_id, c, &p.pid, p.own_replica)?;
+                    if !p.own_replica {
+                        st.reusable_clients.insert(c);
+                    }
+                    if let Some(o) = st.owners.as_mut() {
+                        o.insert(c, p.pid.clone());
+                    }
                 }
-                if let Some(o) = st.owners.as_mut() {
-                    o.insert(c, p.pid.clone());
-                }
-                c
+                (c, keep)
             }
         };
         st.joins += 1;
@@ -1722,7 +1879,9 @@ impl Session {
             view_ms: None,
             edited: None,
             grid: Default::default(),
+            elem: Default::default(),
             label,
+            rows_kept,
         });
         // join_replacing: the pid's connection holding `prev` closes as `leave` closes it,
         // after the new one is in (the pid stays present: no participant Left)
@@ -1751,7 +1910,10 @@ impl Session {
     /// (v0.9.7, [`Config::reuse_agent_clients`]): the lowest such, or `None` (mint one). The
     /// doc holds everything that client wrote (only this doc's sessions ever write as it,
     /// one connection at a time), so its edits continue its history: the one-writer
-    /// invariant holds as for a fresh ID.
+    /// invariant holds as for a fresh ID. Only an ID the store records as minted for an
+    /// agent that edits through the session alone (`reusable_clients`), in this load or an
+    /// earlier one: never an own replica's, whose replica may still write as it after the
+    /// session unloads, nor one of unknown kind (an older kit's owner record).
     fn reusable_client(&self, st: &mut State, p: &Participant) -> Result<Option<ClientId>> {
         if !self.config.reuse_agent_clients || p.own_replica || p.kind != ParticipantKind::Agent {
             return Ok(None);
@@ -1762,7 +1924,11 @@ impl Session {
         let held = |c: &ClientId| st.members.iter().any(|m| m.client == *c);
         Ok(owners
             .iter()
-            .filter(|(c, owner)| **owner == p.pid && !st.replica_clients.contains(c) && !held(c))
+            .filter(|(c, owner)| {
+                **owner == p.pid
+                    && st.reusable_clients.contains(c)
+                    && (!held(c) || planted_reuse_held())
+            })
             .map(|(c, _)| *c)
             .min())
     }
@@ -1921,6 +2087,9 @@ impl Session {
         } else {
             self.text_roster(st, &mut rows, now);
         }
+        for (conns, entry, _) in &mut rows {
+            elem_presence::fold(conns, entry);
+        }
         let rows = rows
             .into_iter()
             .map(|(conns, entry, joined)| (conns[0].rights, entry, joined))
@@ -1959,6 +2128,9 @@ impl Session {
                     client: m.client,
                     cursor: caret(m),
                     label: m.label.clone(),
+                    selection: None,
+                    pointer: None,
+                    viewport: None,
                 })
                 .collect();
             // the planted fault (test-only): every connection shows the most active one's caret
@@ -1984,7 +2156,12 @@ impl Session {
                 .claims
                 .iter()
                 .filter(|c| c.pid == entry.participant.pid)
-                .filter_map(|c| Some(c.info(text(&c.root)?, now)))
+                .filter_map(|c| {
+                    if c.elems.is_some() {
+                        return Some(Self::elem_claim_info(st, c, now));
+                    }
+                    Some(c.info(text(&c.root)?, now))
+                })
                 .collect();
         }
     }
@@ -2110,6 +2287,7 @@ impl Session {
             m.watcher = false;
             m.rights = rights;
         }
+        self.keep_own_replica_rows(st, &pid, rights)?;
         st.roster.record(
             RosterEvent::Joined {
                 who: Who::of(&pid),
@@ -2199,6 +2377,7 @@ impl Session {
             for m in st.members.iter_mut().filter(|m| m.p.pid == pid) {
                 m.rights = r;
             }
+            self.keep_own_replica_rows(st, &pid, r)?;
             if !r.read {
                 self.remove_pid(st, &pid, LeaveReason::RightsLost);
             } else {
@@ -2287,24 +2466,35 @@ impl Session {
             // a grid's read verbs see its rendered file (CSV contract §3.2)
             return match self.read_grid_with(&mut st, i, verb, for_edit, ids, now, f)? {
                 Ok(out) => Ok(out),
-                Err(panic) => {
+                Err(payload) => {
                     drop(st);
-                    resume_unwind(panic);
+                    resume_unwind(payload);
                 }
             };
         }
         self.text_of(&st, root)?;
-        let read = self.read_locked(&mut st, i, now)?;
-        let (r, Shown { view, touched }) = {
+        let read = self.read_unmarked(&st, i)?;
+        let (
+            r,
+            Shown {
+                view,
+                touched,
+                refused,
+            },
+        ) = {
             let text = self.text_of(&st, root)?.1;
             match catch_unwind(AssertUnwindSafe(|| f(&read, text, None))) {
                 Ok(r) => r,
-                Err(panic) => {
+                Err(payload) => {
                     drop(st);
-                    resume_unwind(panic);
+                    resume_unwind(payload);
                 }
             }
         };
+        if refused_read(refused) {
+            return Ok((read, r, Notes::default(), None));
+        }
+        self.mark_read(&mut st, i, read.version, now);
         if let Some((first, last)) = view {
             let text = self.text_of(&st, root)?.1;
             let count = position::line_count(text);
@@ -2333,8 +2523,15 @@ impl Session {
     }
 
     fn read_locked(&self, st: &mut State, i: usize, now: u64) -> Result<ReadResult> {
-        let pid = st.members[i].p.pid.clone();
-        let pid = pid.as_str();
+        let read = self.read_unmarked(st, i)?;
+        self.mark_read(st, i, read.version, now);
+        Ok(read)
+    }
+
+    /// The doc as a read gives it, and who changed it since the caller last read. Nothing moves
+    /// until [`Session::mark_read`], so a verb that then fails leaves no trace.
+    fn read_unmarked(&self, st: &State, i: usize) -> Result<ReadResult> {
+        let pid = st.members[i].p.pid.as_str();
         let since = st.hist.get(pid).and_then(|h| h.last_read);
         let mut contributors: Vec<String> = Vec::new();
         for (s, a) in &st.authors {
@@ -2347,10 +2544,8 @@ impl Session {
             }
         }
         let version = st.version;
-        st.hist.entry(pid.to_owned()).or_default().last_read = Some(version);
         let content = self.content(st)?;
         let bytes = self.pack.encode(&content, &st.codec)?;
-        self.record_read_base(st, now);
         Ok(ReadResult {
             bytes,
             text_by_root: content
@@ -2361,6 +2556,14 @@ impl Session {
             version,
             contributors_since_last_read: contributors,
         })
+    }
+
+    /// The caller has read the doc at `version`: the next read counts from here, and `version`
+    /// can be a base.
+    fn mark_read(&self, st: &mut State, i: usize, version: Seq, now: u64) {
+        let pid = st.members[i].p.pid.clone();
+        st.hist.entry(pid).or_default().last_read = Some(version);
+        self.record_read_base(st, now);
     }
 
     fn record_read_base(&self, st: &mut State, now: u64) {
@@ -2608,9 +2811,9 @@ impl Session {
             let live = self.text_of(&st, root)?.1;
             let computed = match catch_unwind(AssertUnwindSafe(|| f(live))) {
                 Ok(r) => r.map_err(EditWithError::Compute)?,
-                Err(panic) => {
+                Err(payload) => {
                     drop(st);
-                    resume_unwind(panic);
+                    resume_unwind(payload);
                 }
             };
             let new_text = self.pack.normalize_input(root, &computed);
@@ -2744,19 +2947,28 @@ impl Session {
         new_text: &str,
         policy: ClaimPolicy,
     ) -> Result<WriteReport> {
+        timed!(WriteBase);
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::WriteBase, now)?;
         self.check_backlog(st, i)?;
         let live = self.text_of(st, root)?.1.to_owned();
-        let Some(base_text) = self.base_text(st, root, base, now)? else {
+        let base_text = {
+            timed!(WriteBaseBaseText);
+            self.base_text(st, root, base, now)?
+        };
+        let Some(base_text) = base_text else {
             return Ok(WriteReport::of(WriteOutcome::BaseExpired));
         };
         let ours = self
             .pack
             .normalize_input(root, self.write_body(st, root, new_text));
-        match merge::merge3(&base_text, &ours, &live) {
+        let merged = {
+            timed!(WriteBaseMerge);
+            merge::merge3(&base_text, &ours, &live)
+        };
+        match merged {
             Merge::Conflicts(c) => {
                 self.expire_claims(st, now);
                 // each conflict's base range, carried onto the live text (through the
@@ -2853,6 +3065,7 @@ impl Session {
     }
 
     fn undo_redo(&self, conn: ConnId, req: &UndoRequest, origin: Origin) -> Result<UndoOutcome> {
+        timed!(Undo);
         let now = self.now();
         let mut st = self.lock()?;
         let action = if origin == Origin::Undo {
@@ -3208,10 +3421,11 @@ impl Session {
             restores,
             elem_restores: grid::ElemRestores::default(),
         };
-        let (res, mut done) = self.commit(st, i, vec![step], now, versions)?;
         // a structured change is reversed by its record: its stack entry has no regions
-        // (spec v1.10); `drop-deleted` goes on no stack (S11)
+        // (spec v1.10); `drop-deleted` goes on no stack (S11). Taken first, so a commit that
+        // fails leaves nothing for the next change
         let stack = !std::mem::take(&mut st.no_stack);
+        let (res, mut done) = self.commit(st, i, vec![step], now, versions)?;
         if let Some((seq, regions)) = done
             .pop()
             .flatten()
@@ -3279,10 +3493,21 @@ impl Session {
         mut versions: Vec<Version>,
     ) -> Result<(EditResult, Vec<Option<(Seq, Vec<Region>)>>)> {
         prof!("session.commit");
+        timed!(Commit);
+        // only the edit structured_guards just checked refuses a name with nothing behind it
+        let refs_strict = match blob_refs::planted_stale_strict() {
+            true => st.next_refs_strict,
+            false => std::mem::take(&mut st.next_refs_strict),
+        };
         let n_steps = steps.len();
         let verb = st.verb_hint.take().unwrap_or_else(|| {
             kind_verb(steps.first().map_or(ChangeKind::Edit, |s| s.kind)).to_owned()
         });
+        // what the caller set for this change, taken first: no exit below leaves it for someone
+        // else's change. The first step that applies gets it
+        let mut next_row_marks = std::mem::take(&mut st.next_row_marks);
+        let mut next_col_remap = std::mem::take(&mut st.next_col_remap);
+        let mut next_note_rows = std::mem::take(&mut st.next_note_rows);
         let agent_cut = n_steps == 1
             && steps[0].kind == ChangeKind::Edit
             && st.members[i].p.kind == ParticipantKind::Agent
@@ -3307,7 +3532,18 @@ impl Session {
         let mut applied: Vec<Applied> = Vec::new();
         let mut which: Vec<Option<usize>> = Vec::with_capacity(n_steps);
         for step in steps {
-            match self.apply_local(st, i, step.edits, step.restores, step.elem_restores) {
+            #[cfg(any(test, feature = "differential"))]
+            let refused = !applied.is_empty()
+                && crate::differential::apply_fault()
+                    == Some(crate::differential::ApplyFault::LaterStepRefused);
+            #[cfg(not(any(test, feature = "differential")))]
+            let refused = false;
+            let result = if refused {
+                Err(SessionError::BadEdit("a planted refusal".into()))
+            } else {
+                self.apply_local(st, i, step.edits, step.restores, step.elem_restores)
+            };
+            match result {
                 Ok(Some(mut a)) => {
                     a.kind = step.kind;
                     a.of = step.of;
@@ -3330,6 +3566,7 @@ impl Session {
             };
             return Ok((res, which.into_iter().map(|_| None).collect()));
         }
+        st.next_refs_strict = false;
         if agent_cut {
             let a = &applied[0];
             let c = &self.config;
@@ -3384,22 +3621,22 @@ impl Session {
             // the rows a text left on their keys by a non-exact pairing; and a marked row an
             // undo, redo, revert or restore changes is re-marked at its own version: a client
             // that read the text can't write to it either
-            let mut row_marks = std::mem::take(&mut st.next_row_marks);
-            let mut col_remap = std::mem::take(&mut st.next_col_remap);
+            let mut row_marks = std::mem::take(&mut next_row_marks);
+            let mut col_remap = std::mem::take(&mut next_col_remap);
             if matches!(
                 a.kind,
                 ChangeKind::Undo | ChangeKind::Redo | ChangeKind::Revert | ChangeKind::Restore
             ) {
-                let store = self.store(st)?;
-                for k in grid::rows_of_elems(&a.elems) {
-                    if store.row_mark(self.doc_id, k.as_str())?.is_some() {
-                        row_marks.push(k);
+                match self.marked_again(st, a) {
+                    Ok((rows, remap)) => {
+                        row_marks.extend(rows);
+                        col_remap |= remap;
                     }
-                }
-                if a.elems.iter().any(|r| r.root == crate::table::COLS)
-                    && store.col_remap(self.doc_id)?.is_some()
-                {
-                    col_remap = true;
+                    // the doc holds the change and it will never reach the store: reload
+                    Err(e) => {
+                        self.recover(st, &e.to_string());
+                        return Err(e);
+                    }
                 }
             }
             changes.push(NewChange {
@@ -3424,13 +3661,24 @@ impl Session {
                 authored: a.widened.then(|| a.roots.clone()),
                 row_marks,
                 col_remap,
-                note_rows: std::mem::take(&mut st.next_note_rows),
+                note_rows: std::mem::take(&mut next_note_rows),
+                blob_refs: BlobRefScan {
+                    roots: self.pack.blob_ref_roots(),
+                    strict: refs_strict,
+                },
             });
         }
         let appended = {
             prof!("commit.store");
-            self.store(st)
-                .and_then(|s| Ok(s.commit_changes(self.doc_id, &entries, &changes, &versions)?))
+            self.store(st).and_then(|s| {
+                #[cfg(any(test, feature = "differential"))]
+                if crate::differential::apply_fault()
+                    == Some(crate::differential::ApplyFault::StoreCommitFails)
+                {
+                    return Err(crate::store::StoreError::Db("a planted failure".into()).into());
+                }
+                Ok(s.commit_changes(self.doc_id, &entries, &changes, &versions)?)
+            })
         };
         let seqs = match appended {
             Ok(s) => s,
@@ -3439,6 +3687,10 @@ impl Session {
                 return Err(e);
             }
         };
+        // the change's owner row landed with it: D1's owners follow
+        if let Some(o) = st.owners.as_mut() {
+            o.entry(client).or_insert_with(|| pid.clone());
+        }
         if let Some(ix) = st.reverts.as_mut() {
             prof!("commit.bind_reverts");
             ix.bind(&seqs);
@@ -3519,12 +3771,24 @@ impl Session {
         st.version = *seqs.last().expect("one seq per entry");
         Self::mark_dirty(st, now);
         self.grid_presence_after(st, Some(i), &streams, now);
+        Self::elem_presence_after(st);
         // a grid change that re-identified elements (rows or columns inserted, deleted,
         // restored or dropped; a header switch) and left the doc rendering the synced bytes:
         // the replica becomes the doc now, so an outside save merged later, after more
         // unwritten edits, has a base with the live doc's identities (contract §2.9.1)
+        // The change is durable by now, so it has succeeded: a failed re-sync is reported, never
+        // returned, as a caller told it failed would make it again. The replica stays behind
+        // the doc (`synced_seq`), and an outside save or a write-back tries again first.
         if self.structured && identity_changed(&streams) {
-            self.resync_if_synced(st)?;
+            if let Err(e) = self.resync_if_synced(st) {
+                #[cfg(any(test, feature = "differential"))]
+                if crate::differential::resync_mutant()
+                    == Some(crate::differential::ResyncMutant::ReturnsTheError)
+                {
+                    return Err(e);
+                }
+                self.disk_error(st, "re-syncing the disk replica", e);
+            }
         }
         if n_steps > 1 {
             for (root, before) in &orig {
@@ -3585,6 +3849,21 @@ impl Session {
         ))
     }
 
+    /// The rows and the column mapping an undo, redo, revert or restore marks again: what it
+    /// changed that a text had marked.
+    fn marked_again(&self, st: &State, a: &Applied) -> Result<(Vec<crate::elem::Key>, bool)> {
+        let store = self.store(st)?;
+        let mut rows = Vec::new();
+        for k in grid::rows_of_elems(&a.elems) {
+            if store.row_mark(self.doc_id, k.as_str())?.is_some() {
+                rows.push(k);
+            }
+        }
+        let remap = a.elems.iter().any(|r| r.root == crate::table::COLS)
+            && store.col_remap(self.doc_id)?.is_some();
+        Ok((rows, remap))
+    }
+
     /// Put a batch on `pid`'s undo stack (an edit, a redo) or redo stack (an undo), within
     /// [`Config::undo_depth`] and [`Config::undo_max_bytes`] per pid (oldest first, U6). A
     /// new edit clears the redo stack (U7).
@@ -3626,7 +3905,8 @@ impl Session {
 
     /// Apply one change to the in-memory doc and carry every stored position through it.
     /// Hunks are validated and made canonical (touching hunks coalesced) first. Nothing is
-    /// logged here. `Ok(None)` when it changes nothing; an error changes nothing.
+    /// logged here. `Ok(None)` when it changes nothing; an error changes nothing (or reloads the
+    /// doc, when a structured change's bookkeeping fails after the doc took it).
     ///
     /// `restores` (an undo, redo or revert): per edit, per hunk, the roots of the elements it
     /// puts back (U23); every other insertion is fresh, its own root. The provenance map
@@ -3644,6 +3924,23 @@ impl Session {
         prof!("session.apply_local");
         if edits.iter().any(|e| !matches!(e, Edit::Text { .. })) {
             return self.apply_structured(st, i, edits, elem_restores);
+        }
+        #[cfg(any(test, feature = "differential"))]
+        if crate::differential::mark_mutant()
+            == Some(crate::differential::MarkMutant::TextMarkFirst)
+        {
+            let pid = st.members[i].p.pid.clone();
+            let named = |root: &str| edits.iter().any(|e| e.root() == root);
+            for c in st.aware.claims.iter_mut() {
+                if c.pid == pid && !c.hold && named(&c.root) {
+                    c.edited = true;
+                }
+            }
+            for r in st.aware.reservations.iter_mut() {
+                if r.pid == pid && named(&r.root) {
+                    r.edited = true;
+                }
+            }
         }
         let client = st.members[i].client;
         let pid = st.members[i].p.pid.clone();
@@ -3883,6 +4180,7 @@ impl Session {
     /// applies, its own and outside edits alike.
     fn prov<'a>(&self, st: &'a mut State) -> Result<&'a mut Prov> {
         if st.prov.is_none() {
+            timed!(ProvRebuild);
             st.prov = Some(self.rebuild_prov(st)?);
         }
         Ok(st.prov.as_mut().expect("just built"))
@@ -4157,6 +4455,7 @@ impl Session {
                 st.doc = doc;
                 st.texts = texts;
                 st.version = version;
+                Self::elem_presence_after(st);
                 st.log_entries = loaded.updates.len() as u64;
                 st.log_bytes = loaded
                     .updates
@@ -4169,7 +4468,14 @@ impl Session {
                     m.edited = None;
                     m.grid = Default::default();
                 }
-                self.end_all_claims(st, awareness::ClaimEnd::Reset);
+                #[cfg(any(test, feature = "differential"))]
+                let keep = crate::differential::mark_mutant()
+                    == Some(crate::differential::MarkMutant::RecoverKeepsClaims);
+                #[cfg(not(any(test, feature = "differential")))]
+                let keep = false;
+                if !keep {
+                    self.end_all_claims(st, awareness::ClaimEnd::Reset);
+                }
                 for h in st.hist.values_mut() {
                     h.undo.clear();
                     h.redo.clear();
@@ -4811,9 +5117,7 @@ impl Session {
             .disk
             .as_mut()
             .ok_or_else(|| SessionError::BadPath("this session has no file".into()))?;
-        d.replica
-            .get()?
-            .edit_applied(random_client().max(2), edits)?;
+        d.replica.get()?.edit_applied(mint_client_id(), edits)?;
         Ok(())
     }
 
@@ -4942,12 +5246,7 @@ impl Session {
             end: old.len(),
             insert: text.to_owned(),
         }];
-        let client = loop {
-            let c = random_client();
-            if c > 1 {
-                break c;
-            }
-        };
+        let client = mint_client_id();
         d.replica.get()?.edit_as(
             client,
             &[Edit::Text {
@@ -4974,12 +5273,7 @@ impl Session {
             .disk
             .as_mut()
             .ok_or_else(|| SessionError::BadPath("this session has no file".into()))?;
-        let client = loop {
-            let c = random_client();
-            if c > 1 {
-                break c;
-            }
-        };
+        let client = mint_client_id();
         d.replica.get()?.edit_as(client, edits)?;
         d.synced_seq = version.wrapping_add(1);
         Ok(())
@@ -5396,6 +5690,7 @@ impl Session {
         if self.structured {
             return self.ingest_structured(st, bytes, h, now);
         }
+        timed!(Ingest);
         let content = match self.pack.decode(bytes) {
             Ok(c) => c,
             Err(why) => return self.decline(st, why),
@@ -5424,23 +5719,33 @@ impl Session {
                 .replica
                 .get()?
                 .text(root)?;
-            let saved = diff::hunks(&synced, t);
+            let saved = {
+                timed!(IngestDiff);
+                diff::hunks(&synced, t)
+            };
             if saved.is_empty() {
                 continue;
             }
             let live = &st.texts.iter().find(|(r, _)| r == root).expect("a root").1;
-            let merged = merge::merge3_keep_both(&synced, t, live);
+            let merged = {
+                timed!(IngestMerge);
+                merge::merge3_keep_both(&synced, t, live)
+            };
             merge_sides.push((root.clone(), merged.hunks.clone()));
             // trimmed to the characters that change (v0.9.7): the merge's sides are whole
             // lines (Option B), a guarantee about the merged text; the change applied to the
             // doc is only what differs, so the elements a save keeps keep their authors (D1
             // then widens it to tokens, as for any diff-based change), and the text is the
             // same byte for byte
-            let trimmed = diff::trim_hunks(live, &merged.hunks);
-            // canonical (v0.9.7): what the engine is handed is exactly the change at element
-            // identity, and a root is part of the change iff its hunks are non-empty (its
-            // text may still read as before: text deleted and typed again elsewhere)
-            let hunks = canonical_hunks(live, &lines::align_insertions(live, trimmed));
+            let hunks = {
+                timed!(IngestCanon);
+                let trimmed = diff::trim_hunks(live, &merged.hunks);
+                // canonical (v0.9.7): what the engine is handed is exactly the change at
+                // element identity, and a root is part of the change iff its hunks are
+                // non-empty (its text may still read as before: text deleted and typed again
+                // elsewhere)
+                canonical_hunks(live, &lines::align_insertions(live, trimmed))
+            };
             if !hunks.is_empty() {
                 edits.push(Edit::Text {
                     root: root.clone(),
@@ -5487,7 +5792,7 @@ impl Session {
                     key: st.key.clone(),
                 });
             }
-            self.settle_dirty(st, now)?;
+            self.settle_saved(st, now)?;
             return Ok(DiskCheck::Unchanged);
         }
         let client = self.external_client(st)?;
@@ -5768,6 +6073,7 @@ impl Session {
             row_marks: Vec::new(),
             col_remap: false,
             note_rows: Vec::new(),
+            blob_refs: BlobRefScan::of(self.pack.blob_ref_roots()),
         };
         versions.push(Version {
             seq,
@@ -5871,9 +6177,26 @@ impl Session {
             seq,
         });
         self.finish_removals(st, removed, seq - 1, seq, now);
-        self.settle_dirty(st, now)?;
+        self.settle_saved(st, now)?;
         self.maybe_compact(st);
         Ok(DiskCheck::Ingested { version: seq })
+    }
+
+    /// [`Session::settle_dirty`] after an outside save the store has: the save has succeeded, so
+    /// a failure is reported, never returned. It can't tell whether the doc differs from the
+    /// file, so the doc counts as dirty, and the write-back looks again.
+    fn settle_saved(&self, st: &mut State, now: u64) -> Result<()> {
+        if let Err(e) = self.settle_dirty(st, now) {
+            #[cfg(any(test, feature = "differential"))]
+            if crate::differential::resync_mutant()
+                == Some(crate::differential::ResyncMutant::SettleReturnsTheError)
+            {
+                return Err(e);
+            }
+            Self::mark_dirty(st, now);
+            self.disk_error(st, "settling after an outside save", e);
+        }
+        Ok(())
     }
 
     /// After the sync point moved: dirty when the doc differs from the file, clean if not.
@@ -6016,8 +6339,8 @@ impl Session {
         d.catch_up = None;
         if !file_edits.is_empty() {
             let own = loop {
-                let c = random_client();
-                if c > 1 && st.doc.clock_of(c) == 0 && d.replica.get()?.clock_of(c) == 0 {
+                let c = mint_client_id();
+                if st.doc.clock_of(c) == 0 && d.replica.get()?.clock_of(c) == 0 {
                     break c;
                 }
             };
@@ -6033,6 +6356,7 @@ impl Session {
         if st.disk.is_none() || st.declined.is_some() {
             return Ok(false);
         }
+        timed!(WriteBack);
         // the file holds the synced content unless it holds an older write of ours
         let stale = match self.disk_check(st, now, true)? {
             DiskCheck::Missing | DiskCheck::Declined(_) => return Ok(false),
@@ -6090,6 +6414,7 @@ impl Session {
         };
         let written = {
             prof!("wb.atomic_write");
+            timed!(WriteBackFile);
             disk::atomic_write(&real, &bytes)
         };
         let stat = match written {

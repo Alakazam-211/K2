@@ -1,0 +1,21 @@
+MPC-E844 newer_format (structured and CSV)
+exit:     4
+message:  the file needs a newer reader (version {needs})
+next:     A newer build wrote this file, and it asks for a reader newer than this one. Nothing was read or changed. Open it with a build that reads that version.
+rule:     board file: format versions
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, list, read, search, references, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E844",
+  "name": "newer_format",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "the file needs a newer reader (version {needs})",
+  "next": "A newer build wrote this file, and it asks for a reader newer than this one. Nothing was read or changed. Open it with a build that reads that version.",
+  "rule": "board file: format versions",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "list", "read", "search", "references", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

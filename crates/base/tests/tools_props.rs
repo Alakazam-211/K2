@@ -3,7 +3,7 @@
 //! - `patch` of `diff -u(a, b)` applied to `a` gives `b`; `-R` takes it back.
 //! - `sed -n p` is `cat` (the doc text), and `sed ''` too.
 //! - Random argv, sed scripts, patterns and patches never panic and finish quickly
-//!   (`FUZZ_CASES`, ≥ 10^4 in CI; longer runs belong on a compute node).
+//!   (`TOOLS_FUZZ_CASES`, ≥ 10^4 in CI; longer runs belong on a compute node).
 
 use std::time::{Duration, Instant};
 

@@ -27,8 +27,6 @@ mod awareness;
 mod carry;
 mod config;
 mod disk;
-#[cfg(feature = "fuzzing")]
-pub(crate) use disk::fuzz_file_stat;
 mod error;
 mod foreign;
 mod handles;
@@ -62,15 +60,15 @@ pub(crate) use awareness::pair_text;
 pub use awareness::{
     ActivityEntry, ActivityKind, ClaimEnd, ClaimId, ClaimInfo, ClaimPolicy, ClaimSpan, ForEdit,
     Note, NoteKind, Notes, Overwrite, OverwriteCell, ReservationEnd, ReservationInfo, Waiting,
-    OVERWRITE_CELLS_MAX, OVERWRITE_DOC_TEXT_MAX, OVERWRITE_PENDING_MAX, OVERWRITE_TEXT_MAX,
-    OVERWRITE_VALUE_MAX,
+    CLAIM_KEYS_MAX, CLAIM_NOTE_MAX, OVERWRITE_CELLS_MAX, OVERWRITE_DOC_TEXT_MAX,
+    OVERWRITE_PENDING_MAX, OVERWRITE_TEXT_MAX, OVERWRITE_VALUE_MAX,
 };
 pub use config::{
     Config, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,
     DEFAULT_BLAME_CHECK_LARGE_AT,
 };
 pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
-pub use error::{DroppedBy, EditWithError, SessionError};
+pub use error::{DroppedBy, EditWithError, ElemsClaim, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope, Rights};
 #[cfg(feature = "conformance")]
 pub use live::CharBlame;
@@ -88,22 +86,27 @@ pub use live::{
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{
-    default_reconcile, Declined, Pack, PackContent, PackError, Reconciled, TextFilePack,
+    default_reconcile, elem_of_map_key, Declined, Pack, PackContent, PackError, Reconciled,
+    TextFilePack,
 };
 pub use participant::{
-    CellCursor, ConnId, CursorAt, Device, Participant, ParticipantKind, Role, RosterEntry, Stay,
-    DEVICE_LABEL_MAX, EXTERNAL_PID, IMPORT_PID, RESERVED_PID_PREFIX, UNKNOWN_PID,
+    CellCursor, ConnId, CursorAt, Device, ElemSelection, Participant, ParticipantKind, Point, Rect,
+    Role, RosterEntry, Stay, DEVICE_LABEL_MAX, ELEM_SELECTION_MAX, EXTERNAL_PID, IMPORT_PID,
+    RESERVED_PID_PREFIX, UNKNOWN_PID,
 };
 pub use position::{At, Cursor, LineCol, LineRange};
 pub use roster::{RosterEvent, RosterMember, Who};
 pub use tier0::{
     conflict_copy_name, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry, BlobLogKind,
     BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteResult, ConflictCopy,
-    LeaseInfo, Promoted, Promotion, MERGE_PID, REGION_MAX_BYTES,
+    LeaseInfo, NotRecorded, Promoted, Promotion, SaveTicket, MERGE_PID, REGION_MAX_BYTES,
+    SAVE_TICKETS_KEPT,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 pub use view::View;
 
+#[cfg(test)]
+mod blob_ref_tests;
 #[cfg(test)]
 mod disk_crash_tests;
 #[cfg(test)]

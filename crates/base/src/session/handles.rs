@@ -273,6 +273,10 @@ impl Lens<'_> {
                 remaining_ms,
                 note,
             },
+            SessionError::ElemsClaimed(mut c) => {
+                c.by = self.pid(&c.by);
+                SessionError::ElemsClaimed(c)
+            }
             SessionError::Leased {
                 holder,
                 name,
@@ -367,6 +371,33 @@ impl Lens<'_> {
                 cell,
                 version,
             },
+            RosterEvent::Selection {
+                who,
+                selection,
+                client,
+            } => RosterEvent::Selection {
+                who: self.who(who),
+                selection,
+                client,
+            },
+            RosterEvent::Pointer {
+                who,
+                pointer,
+                client,
+            } => RosterEvent::Pointer {
+                who: self.who(who),
+                pointer,
+                client,
+            },
+            RosterEvent::Viewport {
+                who,
+                viewport,
+                client,
+            } => RosterEvent::Viewport {
+                who: self.who(who),
+                viewport,
+                client,
+            },
             RosterEvent::ClaimStarted {
                 who,
                 claim,
@@ -383,6 +414,25 @@ impl Lens<'_> {
                 note,
                 hold,
                 for_edit,
+                expires_ms,
+                version,
+            },
+            RosterEvent::ClaimStartedElems {
+                who,
+                claim,
+                root,
+                keys,
+                note,
+                hold,
+                expires_ms,
+                version,
+            } => RosterEvent::ClaimStartedElems {
+                who: self.who(who),
+                claim,
+                root,
+                keys,
+                note,
+                hold,
                 expires_ms,
                 version,
             },

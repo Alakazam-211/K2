@@ -1,4 +1,4 @@
-k2-mpc-base 0.10.2
+k2-mpc-base 0.11.0
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -72,7 +72,7 @@ Verbs (after the doc path):
     usage:  claim --lines a,b | (grid) --rows R1..R2 | --cols C1..C2 | --cells R1,C1..R2,C2 [--ttl MS] [--note TEXT] [--hold] (someone else's claim there: exit 5)
     exits:  0
     serves: P8
-    errors: MPC-E114 MPC-E301 MPC-E304 MPC-E903 MPC-E904
+    errors: MPC-E114 MPC-E177 MPC-E301 MPC-E304 MPC-E903 MPC-E904
   claim --renew  [edit; text+grid; needs read+edit]
     usage:  claim --renew [--id ID] [--ttl MS] [--hold | --no-hold] (others waiting: exit 2; none: 4)
     exits:  0
@@ -97,52 +97,52 @@ Verbs (after the doc path):
     usage:  insert --line N | --after N | --at L:C [--if-version V] (text on stdin)
     exits:  0
     serves: P9 P15
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901 MPC-E902
   replace  [edit; text; needs read+edit]
     usage:  replace --lines a,b | --range L:C-L:C (text on stdin) | --old TEXT --new TEXT [--all] (exact; '-': that one from stdin; 1: no match or not unique, nothing applied) [--if-version V]
     exits:  0 1
     serves: P10 P12 P15
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E125 MPC-E126 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E125 MPC-E126 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901 MPC-E902
   delete  [edit; text; needs read+edit]
     usage:  delete --lines a,b | --range L:C-L:C [--if-version V]
     exits:  0
     serves: P11
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901 MPC-E902
   sed -i  [edit; text; needs read+edit]
     usage:  sed -i SCRIPT (s///, d, a, i, c, y...) [--if-version V]
     exits:  0
     serves: P11 P12 P15
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901 MPC-E902
   patch  [edit; text; needs read+edit]
     usage:  patch [-p N] [-R] [--dry-run] [-F N] [--partial] [--if-version V] (diff on stdin)
     exits:  0 1
     serves: P13
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901 MPC-E902
   apply  [edit; text; needs read+edit]
     usage:  apply: as patch
     exits:  0 1
     serves: P13
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901 MPC-E902
   append  [edit; text; needs read+edit]
     usage:  append [--ensure-newline] [--if-version V] (text on stdin)
     exits:  0
     serves: P13
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901 MPC-E902
   write  [edit; text+blob+grid; needs read+edit]
     usage:  write --base V | --base live (new text on stdin; a grid: --base V [--partial] [--respect-claims], merged by key)
     exits:  0 1 8
     serves: P14
-    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
   undo  [edit; text+grid; needs read+edit]
     usage:  undo [--steps N] [--for P]
     exits:  0 1
     serves: P16
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
   redo  [edit; text+grid; needs read+edit]
     usage:  redo [--steps N]
     exits:  0 1
     serves: P16
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
   undo --drop  [edit; text+grid; needs read+edit]
     usage:  undo --drop
     exits:  0
@@ -152,7 +152,7 @@ Verbs (after the doc path):
     usage:  undo --partial [--steps N] [--for P]
     exits:  0 1
     serves: P26
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E202 MPC-E203 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E202 MPC-E203 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
   status  [read; text+blob+grid; needs read]
     usage:  status
     exits:  0
@@ -212,7 +212,7 @@ Verbs (after the doc path):
     usage:  restore --version V
     exits:  0
     serves: P20
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E511 MPC-E602 MPC-E701 MPC-E704 MPC-E705 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E511 MPC-E602 MPC-E701 MPC-E704 MPC-E705 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
   version --name  [edit; text+blob+grid; needs read+edit]
     usage:  version --name NAME [--version V]
     exits:  0
@@ -247,7 +247,7 @@ Verbs (after the doc path):
     usage:  revert <change> [--partial] (too old: exit 8)
     exits:  0 1
     serves: P31
-    errors: MPC-E102 MPC-E105 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E202 MPC-E203 MPC-E204 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E105 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E202 MPC-E203 MPC-E204 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
   lease  [edit; blob; needs read+edit]
     usage:  lease [--ttl MS] (take it, or extend yours; someone else's: exit 5)
     exits:  0
@@ -388,6 +388,7 @@ Limits in effect:
   lease_default_ms = 300000
   lease_max_ms = 3600000
   lease_auto_ms = 120000
+  save_ticket_ms = 30000
   blob_merge_max_bytes = 33554432
   conflict_copy_keep_ms = 2592000000
   grid_max_cells = 25000
@@ -412,6 +413,8 @@ Positions (docs/POSITIONS.md):
     grid_col         no base: a column: a key (c3), #N (the Nth live column) or a header name
     grid_cell        no base: R,C: a row and a column
     ordinal          1-based: #N: the Nth live row or column
+    pack_nth         1-based: N: the Nth of a pack's own objects, which the verb's usage names
+    doc_coords       no base: X,Y or X,Y,W,H: a place or area in the doc's own coordinates, which the kit doesn't interpret
   verbs:
     cat: -n lines, -b lines
     wc: -l lines, -c file_bytes, -m file_chars
@@ -420,8 +423,8 @@ Positions (docs/POSITIONS.md):
     sed: script lines
     view: --lines lines
     grep: -n lines, -A lines, -B lines, -C lines
-    who: stdout line_col, stdout lines
-    activity: stdout lines
+    who: stdout line_col, stdout lines (text), stdout rendered_lines (grid), stdout doc_coords (grid)
+    activity: stdout lines (text), stdout rendered_lines (grid)
     claim: --lines lines, --rows grid_row (grid), --cols grid_col (grid), --cells grid_cell (grid)
     follow: stdout line_col
     cursor: --at line_col, --select line_col, --cell grid_cell (grid), --to grid_cell (grid)

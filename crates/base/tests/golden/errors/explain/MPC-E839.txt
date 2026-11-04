@@ -1,0 +1,27 @@
+MPC-E839 no_template (structured and CSV)
+exit:     4
+message:  no template {name}
+next:     No template has that name. Nothing was applied. List the templates and use a name shown.
+step:     templates; why: No template has that name; list the templates and use a name shown.
+rule:     board file: templates
+verbs:    a file type's own verbs (its host's file registry): template
+status:   live
+--- json
+{
+  "id": "MPC-E839",
+  "name": "no_template",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "no template {name}",
+  "next": "No template has that name. Nothing was applied. List the templates and use a name shown.",
+  "next_step": {
+    "verb": "templates",
+    "args": [],
+    "why": "No template has that name; list the templates and use a name shown."
+  },
+  "rule": "board file: templates",
+  "verbs": ["@file", "template"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

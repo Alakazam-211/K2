@@ -5,7 +5,22 @@ use super::host::Need;
 use super::pack::{Declined, PackError};
 use super::participant::ConnId;
 use crate::doc::DocError;
+use crate::elem::Key;
 use crate::store::{DocKey, Seq, StoreError};
+
+/// Who holds the elements an edit or a claim was refused on ([`SessionError::ElemsClaimed`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ElemsClaim {
+    pub id: ClaimId,
+    pub by: String,
+    pub name: String,
+    pub root: String,
+    /// The claim's keys, in key order.
+    pub keys: Vec<Key>,
+    pub remaining_ms: u64,
+    pub note: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -103,6 +118,18 @@ pub enum SessionError {
     /// write-back retries.
     #[error("disk: {0}")]
     Disk(String),
+    /// Tier 0, [`super::BlobSession::record_saved`]: the file doesn't hold the bytes the host
+    /// says it saved (`size` of them; `file_size` is what the file holds, `None` when there is
+    /// no file). Another program saved after the host, or the host's save didn't land.
+    /// Nothing was recorded and the file wasn't touched. Exit 1.
+    #[error("{}", save_mismatch_text(*size, *file_size))]
+    SaveMismatch { size: u64, file_size: Option<u64> },
+    /// Tier 0, [`super::BlobSession::record_saved`]: the ticket can't be recorded by this call:
+    /// it was already recorded (or refused), it is another connection's, or this doc never
+    /// issued it (or issued it so many tickets ago it is forgotten). A host bug; nothing was
+    /// recorded. Exit 2.
+    #[error("bad save ticket: a ticket is good for one record_saved, by the connection that asked for it, on its doc")]
+    SaveTicketInvalid,
     /// Tier 0: someone else holds the doc's lease (until `expires_ms`, host clock). Nothing
     /// was written. Suggested exit **5** (`leased`), printing the holder and expiry.
     #[error("leased by {name} ({holder}) until {expires_ms}")]
@@ -130,6 +157,15 @@ pub enum SessionError {
         remaining_ms: u64,
         note: Option<String>,
     },
+    /// [`SessionError::Claimed`] for a claim on elements ([`super::Session::claim_elems`]),
+    /// which has no lines: the same id and exit. Boxed, to keep `SessionError` small.
+    #[error("{} claimed by {} ({}){}; {} ms left",
+        crate::session::awareness::elems_text(&.0.root, &.0.keys),
+        .0.name,
+        .0.by,
+        .0.note.as_deref().map(|n| format!(" \"{}\"", crate::session::awareness::one_line(n))).unwrap_or_default(),
+        .0.remaining_ms)]
+    ElemsClaimed(Box<ElemsClaim>),
     /// No live claim by that id (it ended, or never existed here), or, with no id, the
     /// caller holds none. Exit 4.
     #[error("{}", match .0 { Some(id) => format!("no live claim {id}"), None => "you hold no claim here".to_owned() })]
@@ -143,9 +179,12 @@ pub enum SessionError {
         remaining_ms: u64,
     },
     /// A claim call the kit refuses: not your claim, waiting on your own claim, a zero TTL,
-    /// too many claims, several claims and no id. Exit 2.
+    /// too many claims, several claims and no id, a note that is too long. Exit 2.
     #[error("bad claim: {0}")]
     BadClaim(String),
+    /// An element selection with more keys than [`super::ELEM_SELECTION_MAX`]. Exit 2.
+    #[error("selection too large: {len} keys (the most is {max})")]
+    SelectionTooLarge { len: usize, max: usize },
     /// Tier 0: the blob store failed (or a blob is damaged; it is never served).
     #[error(transparent)]
     Blob(#[from] crate::blob::BlobError),
@@ -169,6 +208,35 @@ pub enum SessionError {
         /// What the change would have made it.
         would_be: usize,
     },
+    /// An insert into a root whose pack declares tagged keys ([`super::Pack::tagged_keys`])
+    /// names a key that isn't `<prefix><n>.<tag>` with a declared prefix and the inserting
+    /// connection's own writer tag `tag`. Nothing applied. Exit 2.
+    #[error("insert {key} on {root} doesn't carry your writer tag {tag}")]
+    KeyNotOwn {
+        root: String,
+        key: String,
+        tag: String,
+    },
+    /// A connection's edit writes a value naming a blob ([`crate::blob::BlobId::parse_ref`], in
+    /// a root of [`super::Pack::blob_ref_roots`]) that this doc's space doesn't hold. Nothing
+    /// applied. Exit 4.
+    #[error("no blob {blob} in this doc's space")]
+    BlobRefUnknown {
+        root: String,
+        key: String,
+        blob: String,
+    },
+    /// A line address (`LN`, `claim --lines`) on a file that can't be rendered now: it might hold
+    /// a lone CR, so the line number has no checked meaning. Nothing applied. Exit 2.
+    #[error(
+        "{address}: the file can't be rendered now, so its line numbers can't be checked; name \
+         the row by its key or #N"
+    )]
+    LinesUnknown { address: String },
+    /// [`super::Session::mint_key`]: no key `<prefix><n>.<tag>` fits a list key's 24 bytes
+    /// (or every number is taken). Nothing written. Exit 2.
+    #[error("no key fits 24 bytes for prefix {prefix} and tag {tag}")]
+    KeySpaceFull { prefix: String, tag: String },
     /// An agent's grid edit names no base (K-BR-12): exit 2, "read first and pass --base".
     #[error("an agent's grid edit needs a base: read first and pass --base")]
     NeedsBase,
@@ -211,6 +279,14 @@ pub enum EditWithError<E> {
 }
 
 /// [`SessionError::AtLimit`]'s message.
+fn save_mismatch_text(size: u64, file_size: Option<u64>) -> String {
+    let file = match file_size {
+        Some(n) => format!("{n} bytes on disk"),
+        None => "no file on disk".to_owned(),
+    };
+    format!("the file doesn't hold the bytes saved ({size} bytes given, {file}); nothing recorded")
+}
+
 fn at_limit(what: &str, limit: usize, would_be: usize) -> String {
     if what == "value bytes" {
         return format!("a value or name is {would_be} bytes; the limit is {limit} bytes");

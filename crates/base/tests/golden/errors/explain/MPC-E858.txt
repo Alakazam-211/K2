@@ -1,0 +1,27 @@
+MPC-E858 settings_conflict (structured and CSV)
+exit:     1
+message:  the settings changed since the rev you read
+next:     The settings changed since you read them (details.theirs holds what is there now). Nothing was applied. Read them again with meta, then redo your change on what is there now and pass the new rev.
+step:     meta; why: The settings changed since the rev you read; read them again, redo your change on what is there now, and pass the new rev.
+rule:     board file: settings revs
+verbs:    a file type's own verbs (its host's file registry): meta, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E858",
+  "name": "settings_conflict",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "the settings changed since the rev you read",
+  "next": "The settings changed since you read them (details.theirs holds what is there now). Nothing was applied. Read them again with meta, then redo your change on what is there now and pass the new rev.",
+  "next_step": {
+    "verb": "meta",
+    "args": [],
+    "why": "The settings changed since the rev you read; read them again, redo your change on what is there now, and pass the new rev."
+  },
+  "rule": "board file: settings revs",
+  "verbs": ["@file", "meta", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

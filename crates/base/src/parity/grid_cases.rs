@@ -17,6 +17,7 @@ use crate::session::{
     ClaimInfo, ClaimSpan, GridWrite, GridWriteOptions, GridWriteReport, LineRange, ParticipantKind,
     Rights, UndoMode,
 };
+use crate::session::{ElemSelection, Point, Rect};
 use crate::table::Table;
 use crate::tools::{self, session_exit};
 
@@ -251,6 +252,39 @@ fn g8_select_person(p: &mut Person<'_>) -> R {
 fn g8_select_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         a.verb(&["cursor", "--cell", "r1,c1", "--to", "r3,c2"], b"")?,
+        |_| Output::None,
+    )
+}
+
+fn g8_elems_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    let s = ElemSelection::new(crate::table::ROWS, vec![k("r1"), k("r3")]);
+    person_step(p.session().set_selection(c, Some(s)), |_| Output::None)
+}
+fn g8_elems_agent(a: &mut Agent<'_>) -> R {
+    agent_step(
+        a.verb(&["select", "--root", "rows", "--keys", "r1,r3"], b"")?,
+        |_| Output::None,
+    )
+}
+fn g8_pointer_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    let at = Point::new(12.5, -3.0).map_err(|e| e.to_string())?;
+    person_step(p.session().set_pointer(c, Some(at)), |_| Output::None)
+}
+fn g8_pointer_agent(a: &mut Agent<'_>) -> R {
+    agent_step(a.verb(&["pointer", "--at", "12.5,-3"], b"")?, |_| {
+        Output::None
+    })
+}
+fn g4_viewport_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    let r = Rect::new(0.0, 10.0, 640.0, 480.5).map_err(|e| e.to_string())?;
+    person_step(p.session().set_viewport(c, Some(r)), |_| Output::None)
+}
+fn g4_viewport_agent(a: &mut Agent<'_>) -> R {
+    agent_step(
+        a.verb(&["viewport", "--rect", "0,10,640,480.5"], b"")?,
         |_| Output::None,
     )
 }
@@ -833,6 +867,13 @@ pub fn kit_grid_cases(action: PersonAction) -> Vec<GridCase> {
             c(action, "sed", "lines 3-4", g4_sed_person, g4_sed_agent),
             c(
                 action,
+                "viewport",
+                "an area in the doc's coordinates",
+                g4_viewport_person,
+                g4_viewport_agent,
+            ),
+            c(
+                action,
                 "view",
                 "--for-edit: a view and a 30 s claim on the rows",
                 g4_for_edit_person,
@@ -868,6 +909,20 @@ pub fn kit_grid_cases(action: PersonAction) -> Vec<GridCase> {
                 "a selection of cells",
                 g8_select_person,
                 g8_select_agent,
+            ),
+            c(
+                action,
+                "select",
+                "two rows by key",
+                g8_elems_person,
+                g8_elems_agent,
+            ),
+            c(
+                action,
+                "pointer",
+                "a place in the doc's coordinates",
+                g8_pointer_person,
+                g8_pointer_agent,
             ),
             c(
                 action,

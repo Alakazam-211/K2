@@ -250,22 +250,23 @@ pub const KIT: &[IdKind] = &[
     },
     IdKind {
         kind: "row-key",
-        example: "r17",
+        example: "@k:r17 | r17 | key:r17",
         class: IdClass::Durable,
         scope: "a grid doc's rows",
         accepted_by: &ROW_KEY_VERBS,
         note: "minted once, never reused; follows moves and sorts; kept through outside saves \
                (the aligner re-matches rows, and a tie never pairs) and an engine migration; \
-               printed by `row insert` and `row list`; a deleted row is named by key only",
+               printed by `row insert` and `row list`; a deleted row is named by key only; `@k:` is \
+               the canonical spelling, `key:` the same, and a bare word is the key",
     },
     IdKind {
         kind: "col-key",
-        example: "c3 | key:c3",
+        example: "@k:c3 | c3 | key:c3",
         class: IdClass::Durable,
         scope: "a grid doc's columns",
         accepted_by: &COL_KEY_VERBS,
-        note: "as a row key; a bare word that is a known column key is the key, `key:` forces it; \
-               printed by `col insert` and `col list`",
+        note: "as a row key; a bare word that is a known column key is the key, `@k:` (canonical) \
+               or `key:` forces it; printed by `col insert` and `col list`",
     },
     IdKind {
         kind: "row-nth",

@@ -186,6 +186,329 @@ fn versions_and_the_named_guard() {
     assert_eq!(s.version(id, b), Err(StoreError::NoVersion(id, b)));
 }
 
+/// `client_kinds` (after v0.10.2, no format bump): created by the first
+/// [`DocStore::set_client_kind`], which writes the owner row with it; only an agent's ID is
+/// reusable; an owner row without a kind row (an older kit's, `set_client`), an own
+/// replica's, and a kind byte this kit doesn't know are not; a store without the table
+/// reads as empty; a delete erases the rows, a rewrite keeps them.
+#[test]
+fn client_kinds_mark_only_agent_ids_reusable() {
+    use redb::TableHandle;
+    let t = TmpDir::new("client-kinds");
+    let s = DocStore::open(t.db()).unwrap();
+    let (a, b) = (
+        s.create(&meta("a.md")).unwrap(),
+        s.create(&meta("b.md")).unwrap(),
+    );
+    let has = |s: &DocStore| {
+        let r = s.begin_read().unwrap();
+        let found = r
+            .list_tables()
+            .unwrap()
+            .any(|t| t.name() == CLIENT_KINDS.name());
+        found
+    };
+    let set = |v: &[u64]| {
+        v.iter()
+            .copied()
+            .collect::<std::collections::HashSet<u64>>()
+    };
+    // an owner row alone (as an older kit writes it): no table, nothing reusable
+    s.set_client(a, 10, "bot").unwrap();
+    assert!(!has(&s), "set_client creates no kind table");
+    assert!(s.reusable_clients(a).unwrap().is_empty());
+    // kinds: the owner row comes with them
+    s.set_client_kind(a, 11, "bot", false).unwrap();
+    s.set_client_kind(a, 12, "bot", true).unwrap();
+    s.set_client_kind(b, 13, "bot", false).unwrap();
+    assert!(has(&s));
+    assert_eq!(s.client_owner(a, 11).unwrap().as_deref(), Some("bot"));
+    assert_eq!(s.client_owner(a, 12).unwrap().as_deref(), Some("bot"));
+    assert_eq!(
+        s.reusable_clients(a).unwrap(),
+        set(&[11]),
+        "only the agent's ID: not the owner-only row, not the own replica's"
+    );
+    // a byte this kit doesn't know: never reusable
+    {
+        let w = s.begin_write().unwrap();
+        w.open_table(CLIENT_KINDS)
+            .unwrap()
+            .insert((a, 14), [9u8].as_slice())
+            .unwrap();
+        w.open_table(CLIENTS)
+            .unwrap()
+            .insert((a, 14), "bot")
+            .unwrap();
+        w.commit().unwrap();
+    }
+    assert_eq!(s.reusable_clients(a).unwrap(), set(&[11]));
+    // a rewrite keeps the rows; a delete erases the doc's, not another doc's
+    s.rewrite_file().unwrap();
+    assert_eq!(s.reusable_clients(a).unwrap(), set(&[11]));
+    assert!(s.tables_holding(a).unwrap().contains(&"client_kinds"));
+    s.delete_doc(a, 1).unwrap();
+    assert!(s.tables_holding(a).unwrap().is_empty());
+    assert!(s.reusable_clients(a).unwrap().is_empty());
+    assert_eq!(s.reusable_clients(b).unwrap(), set(&[13]));
+}
+
+/// One row of doc `id` in table `t`, whatever its key shape.
+fn plant_row(w: &redb::WriteTransaction, t: DocRows, id: DocId) {
+    let v: &[u8] = b"row";
+    match t {
+        DocRows::One(d) => {
+            w.open_table(d).unwrap().insert(id, v).unwrap();
+        }
+        DocRows::Pair(d) => {
+            w.open_table(d).unwrap().insert((id, 7u64), v).unwrap();
+        }
+        DocRows::Owner(d) => {
+            w.open_table(d).unwrap().insert((id, 7u64), "o").unwrap();
+        }
+        DocRows::Slot(d) => {
+            w.open_table(d).unwrap().insert((id, 1u8), v).unwrap();
+        }
+        DocRows::Clock(d) => {
+            w.open_table(d)
+                .unwrap()
+                .insert((id, 7u64, 8u64), v)
+                .unwrap();
+        }
+        DocRows::Elem(d) => {
+            w.open_table(d)
+                .unwrap()
+                .insert((id, "r", "k", 0u8), v)
+                .unwrap();
+        }
+        DocRows::Named(d) => {
+            w.open_table(d).unwrap().insert((id, "n"), v).unwrap();
+        }
+    }
+}
+
+/// The orphan sweep is one pass over a list of tables (K2 Cores' ruling, 11-02): a table on the
+/// list is swept with nothing else written for it. (a) A list with one table of every key
+/// shape, as a later additive table would register: only the deleted doc's rows go, past the
+/// doc in the middle of the key range. (b) The kit's own list through a real open: a row of a
+/// doc nobody has in `docs` goes, a live doc's stays, and every entry is also in [`DOC_TABLES`],
+/// so a delete and a rewrite reach it. `MPC_STRUCT_MUTANT=sweep-skips-table` plants
+/// `BlobRefMutant::SweepSkipsTable`, caught here.
+#[test]
+fn the_orphan_sweep_covers_every_table_on_its_list() {
+    use crate::differential::{with_blob_ref_mutant, BlobRefMutant};
+    use redb::TableDefinition as D;
+    use redb::TableHandle;
+    let m = std::env::var("MPC_STRUCT_MUTANT");
+    println!("MPC_STRUCT_MUTANT={}", m.as_deref().unwrap_or("(unset)"));
+    let run = || {
+        const SHAPES: &[Additive] = &[
+            Additive {
+                rows: DocRows::One(D::new("t_one")),
+                on_orphan: None,
+            },
+            Additive {
+                rows: DocRows::Pair(D::new("t_pair")),
+                on_orphan: None,
+            },
+            Additive {
+                rows: DocRows::Owner(D::new("t_owner")),
+                on_orphan: None,
+            },
+            Additive {
+                rows: DocRows::Slot(D::new("t_slot")),
+                on_orphan: None,
+            },
+            Additive {
+                rows: DocRows::Clock(D::new("t_clock")),
+                on_orphan: None,
+            },
+            Additive {
+                rows: DocRows::Elem(D::new("t_elem")),
+                on_orphan: None,
+            },
+            Additive {
+                rows: DocRows::Named(D::new("t_named")),
+                on_orphan: None,
+            },
+        ];
+        let d = TmpDir::new("sweep-shapes");
+        let s = DocStore::open(d.db()).unwrap();
+        let (a, c) = (
+            s.create(&meta("a.md")).unwrap(),
+            s.create(&meta("c.md")).unwrap(),
+        );
+        // the deleted doc sits between the two live ones
+        let gone = s.create(&meta("b.md")).unwrap();
+        let w = s.begin_write().unwrap();
+        w.open_table(DOCS).unwrap().remove(gone).unwrap();
+        for t in SHAPES {
+            for id in [a, gone, c] {
+                plant_row(&w, t.rows, id);
+            }
+        }
+        sweep_orphans(&w, SHAPES).unwrap();
+        w.commit().unwrap();
+        let r = s.begin_read().unwrap();
+        for t in SHAPES {
+            assert!(
+                !t.rows.holds(&r, gone).unwrap(),
+                "{} kept a deleted doc's row",
+                t.rows.name()
+            );
+            assert!(
+                t.rows.holds(&r, a).unwrap(),
+                "{} lost a live doc's row",
+                t.rows.name()
+            );
+            assert!(
+                t.rows.holds(&r, c).unwrap(),
+                "{} lost a live doc's row",
+                t.rows.name()
+            );
+        }
+        drop(r);
+        drop(s);
+
+        // the kit's own list, through an open
+        for t in ADDITIVE_TABLES {
+            assert!(
+                DOC_TABLES.iter().any(|(x, _)| x.name() == t.rows.name()),
+                "{} is swept but neither deleted nor rewritten",
+                t.rows.name()
+            );
+        }
+        let d = TmpDir::new("sweep-list");
+        let s = DocStore::open(d.db()).unwrap();
+        let live = s.create(&meta("live.md")).unwrap();
+        let w = s.begin_write().unwrap();
+        for t in ADDITIVE_TABLES {
+            for id in [live, live + 100] {
+                if t.rows.name() == blob_refs::DOC_BLOB_REFS.name() {
+                    // a hook reads its rows: a real one, with no count taken
+                    w.open_table(blob_refs::DOC_BLOB_REFS)
+                        .unwrap()
+                        .insert(
+                            (id, "ab".repeat(32).as_str()),
+                            blob_refs::enc_ref(0).as_slice(),
+                        )
+                        .unwrap();
+                } else {
+                    plant_row(&w, t.rows, id);
+                }
+            }
+        }
+        w.commit().unwrap();
+        drop(s);
+        let s = DocStore::open(d.db()).unwrap();
+        let r = s.begin_read().unwrap();
+        for t in ADDITIVE_TABLES {
+            assert!(
+                !t.rows.holds(&r, live + 100).unwrap(),
+                "an open left a deleted doc's row in {}",
+                t.rows.name()
+            );
+            assert!(
+                t.rows.holds(&r, live).unwrap(),
+                "an open took {}'s live row",
+                t.rows.name()
+            );
+        }
+    };
+    match m.as_deref() {
+        Ok("sweep-skips-table") => with_blob_ref_mutant(BlobRefMutant::SweepSkipsTable, run),
+        Ok(other) => panic!("MPC_STRUCT_MUTANT={other}: not a mutant this test plants"),
+        Err(_) => run(),
+    }
+}
+
+/// An older kit's doc delete erases the tables it knows, so it leaves `client_kinds` rows,
+/// which show which of a deleted doc's client IDs were own replicas'. Every open removes them;
+/// another doc's rows stay. A later downgrade is why every open sweeps: the second round
+/// comes after opens that already swept. A store without the table stays without it.
+/// `MPC_STRUCT_MUTANT=no-orphan-sweep` plants `ClientMutant::NoOrphanSweep`, caught here.
+#[test]
+fn an_open_removes_the_client_kinds_of_docs_an_older_kit_deleted() {
+    use crate::differential::{with_client_mutant, ClientMutant};
+    use redb::TableHandle;
+    let m = std::env::var("MPC_STRUCT_MUTANT");
+    println!("MPC_STRUCT_MUTANT={}", m.as_deref().unwrap_or("(unset)"));
+    let run = || {
+        // what an older kit's delete does: every table it knows, so not this one
+        let older_delete = |s: &DocStore, id: DocId, path: &str| {
+            let w = s.begin_write().unwrap();
+            for (t, how) in DOC_TABLES {
+                if *how == Erase::Range && t.name() != CLIENT_KINDS.name() {
+                    t.erase(&w, id).unwrap();
+                }
+            }
+            w.open_table(PATHS)
+                .unwrap()
+                .remove(key(path).index().as_str())
+                .unwrap();
+            w.commit().unwrap();
+        };
+        let rows = |s: &DocStore| -> Vec<(u64, u64)> {
+            let r = s.begin_read().unwrap();
+            let t = r.open_table(CLIENT_KINDS).unwrap();
+            let out = t.iter().unwrap().map(|kv| kv.unwrap().0.value()).collect();
+            out
+        };
+        let d = TmpDir::new("kinds-orphans");
+        let s = DocStore::open(d.db()).unwrap();
+        let (a, b, c) = (
+            s.create(&meta("a.md")).unwrap(),
+            s.create(&meta("b.md")).unwrap(),
+            s.create(&meta("c.md")).unwrap(),
+        );
+        for (id, plain, own) in [(a, 11, 12), (b, 13, 14), (c, 15, 16)] {
+            s.set_client_kind(id, plain, "bot", false).unwrap();
+            s.set_client_kind(id, own, "bot", true).unwrap();
+        }
+        let (ra, rb, rc) = (
+            vec![(a, 11), (a, 12)],
+            vec![(b, 13), (b, 14)],
+            vec![(c, 15), (c, 16)],
+        );
+        // the doc in the middle of the key range: the walk goes past it to the next
+        older_delete(&s, b, "b.md");
+        let all = [ra.clone(), rb.clone(), rc.clone()].concat();
+        assert_eq!(rows(&s), all, "the older delete leaves them");
+        drop(s);
+        let s = DocStore::open(d.db()).unwrap();
+        let kept = [ra.clone(), rc.clone()].concat();
+        assert_eq!(
+            rows(&s),
+            kept,
+            "the open removes the deleted doc's, and only those"
+        );
+        assert_eq!(s.reusable_clients(a).unwrap().len(), 1);
+        // a downgrade after opens that swept: the first doc, then the last
+        older_delete(&s, a, "a.md");
+        drop(s);
+        let s = DocStore::open(d.db()).unwrap();
+        assert_eq!(rows(&s), rc, "a later downgrade's are removed too");
+        older_delete(&s, c, "c.md");
+        drop(s);
+        let s = DocStore::open(d.db()).unwrap();
+        assert_eq!(rows(&s), vec![], "the last doc's too");
+        // a store without the table: an open doesn't create it
+        let d2 = TmpDir::new("kinds-orphans-none");
+        drop(DocStore::open(d2.db()).unwrap());
+        let s2 = DocStore::open(d2.db()).unwrap();
+        let r = s2.begin_read().unwrap();
+        assert!(!r
+            .list_tables()
+            .unwrap()
+            .any(|t| t.name() == CLIENT_KINDS.name()));
+    };
+    match m.as_deref() {
+        Ok("no-orphan-sweep") => with_client_mutant(ClientMutant::NoOrphanSweep, run),
+        Ok(other) => panic!("MPC_STRUCT_MUTANT={other}: not a mutant this test plants"),
+        Err(_) => run(),
+    }
+}
+
 #[test]
 fn client_attribution() {
     let t = TmpDir::new("clients");
@@ -819,6 +1142,7 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
         row_marks: Vec::new(),
         col_remap: false,
         note_rows: Vec::new(),
+        blob_refs: Default::default(),
     };
     s.commit_changes(id, &[entry], &[change], &[]).unwrap();
     let got = s
@@ -996,12 +1320,15 @@ fn every_table_is_listed_once() {
     listed.dedup();
     assert_eq!(listed.len(), n, "a table is listed twice");
     // `authored` comes with the first widened change; `elem_writes` with the first
-    // structured record (format 6's upgrade, C1)
+    // structured record (format 6's upgrade, C1); `client_kinds` with the first join that
+    // mints an agent's or an own replica's client ID; `doc_blob_refs` with the first name
     let lazy = [
         "authored".to_owned(),
         "elem_writes".to_owned(),
         "row_marks".to_owned(),
         "overwrite_notes".to_owned(),
+        "client_kinds".to_owned(),
+        "doc_blob_refs".to_owned(),
     ];
     let eager: Vec<String> = listed
         .iter()
@@ -1030,6 +1357,9 @@ fn every_table_is_listed_once() {
             key: [7; 32],
             erase: None,
             elems: None,
+            ref_roots: &[],
+            live_refs: Default::default(),
+            now: 0,
         },
     )
     .unwrap();
@@ -1098,6 +1428,7 @@ fn an_open_sweeps_what_an_older_kit_left_in_the_authored_table() {
         row_marks: Vec::new(),
         col_remap: false,
         note_rows: Vec::new(),
+        blob_refs: Default::default(),
     };
     let (sa, sb) = ("ALPHA-SECRET-QXJZ", "BRAVO-SECRET-VKWP");
     for (id, secret) in [(a, sa), (b, sb)] {
@@ -1338,6 +1669,7 @@ fn authored_hunks_side_table() {
         row_marks: Vec::new(),
         col_remap: false,
         note_rows: Vec::new(),
+        blob_refs: Default::default(),
     };
     let widened = record(&[(0, 5, "woRD-SECRET1", "wordX"), (6, 10, "SEED", "seed")]);
     let authored: RootHunks = vec![(
@@ -1410,6 +1742,9 @@ fn authored_hunks_side_table() {
         key: [7; 32],
         erase: None,
         elems: None,
+        ref_roots: &[],
+        live_refs: Default::default(),
+        now: 0,
     };
     s.purge_doc(id, &purge(Pick::None)).unwrap();
     let rec = s.revert_record(id, 1).unwrap().unwrap();
@@ -1490,4 +1825,206 @@ fn promote_written_sync_equals_promote_pending_sync() {
         s.promote_written_sync(b, &mb, &p),
         Err(StoreError::Corrupt(_))
     ));
+}
+
+/// One value-naming change, as a session makes it.
+fn ref_change(names: &[crate::blob::BlobId], strict: bool) -> NewChange {
+    let ops = names
+        .iter()
+        .enumerate()
+        .map(|(i, b)| structured::ElemOpRecord {
+            kind: structured::ElemOpKind::MapSet,
+            key: format!("i{i}"),
+            write: None,
+            effect: structured::StoredEffect::Visible,
+            left: Vec::new(),
+            value_before: None,
+            value_after: Some(crate::elem::Value::Str(b.to_ref())),
+            redacted: false,
+            prev: None,
+            restores: None,
+        })
+        .collect();
+    NewChange {
+        info: ChangeInfo::new(ChangeKind::Edit, "p", "cli", 1_000),
+        record: RevertRecord {
+            author: "p".into(),
+            on_behalf_of: None,
+            at_ms: 1_000,
+            roots: Vec::new(),
+            elems: vec![structured::ElemRoot {
+                root: "props".into(),
+                list: false,
+                ops,
+            }],
+        },
+        span: None,
+        provenance: Vec::new(),
+        authored: None,
+        row_marks: Vec::new(),
+        col_remap: false,
+        note_rows: Vec::new(),
+        blob_refs: BlobRefScan {
+            roots: &["props"],
+            strict,
+        },
+    }
+}
+
+/// The space of [`key`], with one indexed blob per byte in `seeds`.
+fn blobs_in(s: &DocStore, seeds: &[u8]) -> (u64, Vec<crate::blob::BlobId>) {
+    let k = s.blob_space_or_create(&key("a.md").space, [7; 32]).unwrap();
+    let ids = seeds
+        .iter()
+        .map(|b| {
+            let id = crate::blob::BlobId::from_slice(&[*b; 32]).unwrap();
+            s.blob_index(k.no, &id, 10, 1_000).unwrap();
+            id
+        })
+        .collect();
+    (k.no, ids)
+}
+
+/// Blob GC runs outside the session's lock, so a blob can go between the session's check and the
+/// change's commit. The change's own transaction finds that, for a connection's edit: nothing of
+/// it is stored, and the refusal is `MPC-E720`. Any other change is kept, with a row saying no
+/// count was taken.
+#[test]
+fn a_connections_change_naming_a_blob_gone_since_its_check_stores_nothing() {
+    let d = TmpDir::new("refs-gone");
+    let s = DocStore::open(d.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    let (no, ids) = blobs_in(&s, &[1]);
+    s.blob_remove_unreferenced(&[(no, ids[0], 10)]).unwrap();
+    let e = entry("p", 5, vec![1]);
+    let refused = s.commit_changes(id, std::slice::from_ref(&e), &[ref_change(&ids, true)], &[]);
+    assert_eq!(refused, Err(StoreError::BlobRefUnknown(ids[0].to_hex())));
+    assert_eq!(s.log_size(id).unwrap().0, 0, "the log entry went with it");
+    assert_eq!(s.blob_refs(id).unwrap(), Default::default());
+    s.commit_changes(
+        id,
+        std::slice::from_ref(&e),
+        &[ref_change(&ids, false)],
+        &[],
+    )
+    .unwrap();
+    let refs = s.blob_refs(id).unwrap();
+    assert_eq!(refs.missing, 1);
+    assert_eq!(refs.refs[0].state, crate::blob::BlobRefState::Missing);
+}
+
+/// An older kit's doc delete leaves the doc's rows and their counts, which an open gives back.
+/// The blob keeps its time: an open has no host clock, and nothing names it. Another doc's row
+/// and count stay, and a count an older delete left can't take a live doc's below its own.
+#[test]
+fn an_open_gives_back_the_references_of_a_doc_an_older_kit_deleted() {
+    use redb::TableHandle;
+    let d = TmpDir::new("refs-orphans");
+    let s = DocStore::open(d.db()).unwrap();
+    let (a, b) = (
+        s.create(&meta("a.md")).unwrap(),
+        s.create(&meta("b.md")).unwrap(),
+    );
+    let (no, ids) = blobs_in(&s, &[1, 2]);
+    let e = entry("p", 5, vec![1]);
+    s.commit_changes(a, std::slice::from_ref(&e), &[ref_change(&ids, true)], &[])
+        .unwrap();
+    s.commit_changes(
+        b,
+        std::slice::from_ref(&e),
+        &[ref_change(&ids[..1], true)],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(s.blob_row(no, &ids[0]).unwrap().unwrap().refs, 2);
+    assert_eq!(s.blob_row(no, &ids[1]).unwrap().unwrap().refs, 1);
+    // what an older kit's delete does: every table it knows, so not this one
+    let w = s.begin_write().unwrap();
+    for (t, how) in DOC_TABLES {
+        if *how == Erase::Range && t.name() != CLIENT_KINDS.name() {
+            t.erase(&w, a).unwrap();
+        }
+    }
+    w.open_table(PATHS)
+        .unwrap()
+        .remove(key("a.md").index().as_str())
+        .unwrap();
+    w.commit().unwrap();
+    assert_eq!(
+        s.blob_row(no, &ids[1]).unwrap().unwrap().refs,
+        1,
+        "it leaves the count"
+    );
+    drop(s);
+    let s = DocStore::open(d.db()).unwrap();
+    let r0 = s.blob_row(no, &ids[0]).unwrap().unwrap();
+    let r1 = s.blob_row(no, &ids[1]).unwrap().unwrap();
+    assert_eq!(r0.refs, 1, "the other doc's count stays");
+    assert_eq!(r1.refs, 0, "the open gave the count back");
+    assert_eq!(r1.since_ms, 1_000, "the blob keeps its time");
+    assert_eq!(
+        s.blob_refs(b).unwrap().refs.len(),
+        1,
+        "the other doc's row stays"
+    );
+    let r = s.begin_read().unwrap();
+    assert!(!blob_refs_holds(&r, a), "the deleted doc's rows went");
+}
+
+fn blob_refs_holds(r: &redb::ReadTransaction, id: DocId) -> bool {
+    DocRows::Named(blob_refs::DOC_BLOB_REFS)
+        .holds(r, id)
+        .unwrap()
+}
+
+/// A client ID's owner row is written by `commit_changes` in the change's own transaction: a
+/// commit that doesn't happen leaves neither, one that does leaves both. A row already there
+/// stays as it is (a participant purge may have renamed it).
+#[test]
+fn an_edit_and_its_row_land_together() {
+    let t = TmpDir::new("row-with-change");
+    let s = DocStore::open(t.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    let change = || NewChange {
+        info: ChangeInfo::new(ChangeKind::Edit, "ann", "cli", 5),
+        record: RevertRecord {
+            author: "ann".into(),
+            on_behalf_of: None,
+            at_ms: 5,
+            roots: Vec::new(),
+            elems: Vec::new(),
+        },
+        span: None,
+        provenance: Vec::new(),
+        authored: None,
+        row_marks: Vec::new(),
+        col_remap: false,
+        note_rows: Vec::new(),
+        blob_refs: Default::default(),
+    };
+    let e = entry("ann", 7, vec![1]);
+    INTERRUPT_COMMIT.with(|i| i.set(Some(CommitInterrupt::Before)));
+    let stopped = s.commit_changes(id, std::slice::from_ref(&e), &[change()], &[]);
+    INTERRUPT_COMMIT.with(|i| i.set(None));
+    assert!(stopped.is_err(), "the test's stop before the commit");
+    assert_eq!(s.client_owner(id, 7).unwrap(), None, "no change, no row");
+    assert!(s.load(id).unwrap().updates.is_empty(), "no change landed");
+
+    s.commit_changes(id, std::slice::from_ref(&e), &[change()], &[])
+        .unwrap();
+    assert_eq!(s.load(id).unwrap().updates.len(), 1, "the change landed");
+    assert_eq!(
+        s.client_owner(id, 7).unwrap().as_deref(),
+        Some("ann"),
+        "the change's row landed with it"
+    );
+
+    s.set_client(id, 8, "pseudonym").unwrap();
+    s.commit_changes(id, &[entry("ann", 8, vec![2])], &[change()], &[])
+        .unwrap();
+    assert_eq!(
+        s.client_owner(id, 8).unwrap().as_deref(),
+        Some("pseudonym"),
+        "a row already there stays as it is"
+    );
 }

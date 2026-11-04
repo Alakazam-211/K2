@@ -21,7 +21,8 @@
 #   - every vendor/mpce* directory except PUBLIC_ENGINE_CRATES (the engine's vendored source);
 #   - the crates in DROPPED_CRATES (whole: the conformance suite, which hard-depends on the
 #     engine's sync layer and core), and their workspace membership;
-#   - in every Cargo.toml outside vendor/ (the root, crates/*, fuzz/, tools/, any other):
+#   - the trees in DROPPED_TREES (whole: tooling no host builds or runs);
+#   - in every Cargo.toml outside vendor/ (the root, crates/*, tools/, any other):
 #     dependencies on non-public mpce-* crates in every dependency table ([dependencies],
 #     [dev-dependencies], [build-dependencies], their [target.'cfg(..)'.*] forms,
 #     [workspace.dependencies], [patch.*], and `[...dependencies.mpce-x]` tables), each with
@@ -44,6 +45,8 @@
 #     with its continuation lines, `${PART:?...}`'s), `-p <dropped crate>` arguments, and
 #     everything between `# public-cut: drop-begin` and `# public-cut: drop-end` lines
 #     (markers included; unbalanced markers stop the script);
+#   - in every .md and Cargo.toml outside vendor/: everything between `public-cut: drop-begin`
+#     and `public-cut: drop-end` lines (`# ...` in TOML, `<!-- ... -->` in Markdown; the same);
 #   - from Cargo.lock: see below.
 # Docs, CHANGELOGs and vendor/README.md may still NAME the engine and its tags: only source
 # goes. The root README.md gets one fixed paragraph saying what the cut leaves out.
@@ -64,7 +67,7 @@
 #
 # Checks: tools/check-public-cut.sh last (fail-closed allowlist: licence files, no engine
 # path, manifest, lock entry or identifier outside PUBLIC_ENGINE_CRATES, tooling, pinned
-# regressions, check-private). Any failure: non-zero exit and no commit.
+# regressions, check-private, check-windows-names). Any failure: non-zero exit and no commit.
 # POSIX sh, git, grep, sed and awk only (LC_ALL=C).
 set -eu
 export LC_ALL=C
@@ -122,6 +125,9 @@ DROPPKGS=
 for dc in $DROPPED_CRATES; do
   dpath=${dc%%:*}; DROPPKGS="$DROPPKGS ${dc#*:}"
   if [ -n "$(git ls-files "$dpath")" ]; then git rm -r -q -f -- "$dpath"; echo "  removed $dpath"; fi
+done
+for t in $DROPPED_TREES; do
+  if [ -n "$(git ls-files "$t")" ]; then git rm -r -q -f -- "$t"; echo "  removed $t"; fi
 done
 
 # ---- 2. manifests ---------------------------------------------------------------------------
@@ -491,6 +497,18 @@ for f in $(git ls-files 'tools/*.sh' 'scripts/*.sh' 'tools/**/*.sh' 'scripts/**/
   replace "$f" "$WORK/t"
 done
 
+# the marker blocks of Markdown files and manifests
+for f in $(git ls-files '*.md' '*Cargo.toml' | grep -v '^vendor/'); do
+  [ -f "$f" ] || continue
+  grep -qE '^[[:space:]]*(#|<!--) public-cut: drop-' "$f" || continue
+  awk -v f="$f" '
+    /^[ \t]*(#|<!--) public-cut: drop-begin/ { if (d) { print f ":" NR ": nested drop-begin" > "/dev/stderr"; bad = 1; exit 3 }; d = NR; next }
+    /^[ \t]*(#|<!--) public-cut: drop-end/ { if (!d) { print f ":" NR ": drop-end without drop-begin" > "/dev/stderr"; bad = 1; exit 3 }; d = 0; next }
+    !d { print }
+    END { if (bad) exit 3; if (d) { print f ":" d ": drop-begin without drop-end" > "/dev/stderr"; exit 3 } }' "$f" > "$WORK/t" || die "$f needs a decision by hand (above)"
+  replace "$f" "$WORK/t"
+done
+
 # ---- 5. the README paragraph -----------------------------------------------------------------
 NOTE='**Public cut.** This tree is a release'"'"'s public cut (`tools/public-cut.sh`): the native engine'"'"'s vendored source, the kit'"'"'s adapter to it (feature `native`) and the engine-generic conformance suite (`crates/conformance`) are not in it. Docs and the CHANGELOG may still name them.'
 if [ -f README.md ] && ! grep -qF '**Public cut.**' README.md; then
@@ -603,7 +621,8 @@ MSG=$WORK/msg
   echo
   echo "tools/public-cut.sh on $(git rev-parse --short HEAD): the engine's vendored source, the"
   echo "kit's native-engine adapter (features: $NATIVE_FEATURES) and the crates"
-  echo "$DROPPATHS removed; the lockfile pruned (packages removed, no version changed)."
+  echo "$DROPPATHS and the trees $DROPPED_TREES removed; the lockfile pruned (packages removed, no"
+  echo "version changed)."
   echo "Never merged into main."
   echo
   git diff --cached --stat | tail -1

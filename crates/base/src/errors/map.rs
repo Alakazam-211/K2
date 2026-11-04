@@ -88,6 +88,10 @@ impl Refusal for SessionError {
             S::RevertTooOld { seq } => rep(&r::REVERT_TOO_OLD, msg).with("seq", *seq),
             S::NoSuchChange(n) => rep(&r::NO_SUCH_CHANGE, msg).with("seq", *n),
             S::Disk(_) => rep(&r::DISK, msg),
+            S::SaveMismatch { size, file_size } => rep(&r::SAVE_MISMATCH, msg)
+                .with("size", *size)
+                .with("file_size", *file_size),
+            S::SaveTicketInvalid => rep(&r::SAVE_TICKET_INVALID, msg),
             S::UnknownElem { root, key, dropped } => {
                 let r = rep(&r::NO_ELEMENT, msg)
                     .with("verb", "edit")
@@ -123,6 +127,17 @@ impl Refusal for SessionError {
                 .with("lines", *lines)
                 .with("remaining_ms", *remaining_ms)
                 .with("note", note.clone()),
+            S::ElemsClaimed(c) => rep(&r::CLAIMED, msg)
+                .with("claim", c.id.to_string())
+                .with("by", &c.by)
+                .with("name", &c.name)
+                .with("root", &c.root)
+                .with(
+                    "keys",
+                    Value::List(c.keys.iter().map(|k| Value::from(k.as_str())).collect()),
+                )
+                .with("remaining_ms", c.remaining_ms)
+                .with("note", c.note.clone()),
             S::NoClaim(id) => rep(&r::NO_CLAIM, msg).with("claim", id.map(|i| i.to_string())),
             S::ClaimContended {
                 id,
@@ -133,6 +148,9 @@ impl Refusal for SessionError {
                 .with("waiters", *waiters)
                 .with("remaining_ms", *remaining_ms),
             S::BadClaim(m) => bad_claim(m, msg),
+            S::SelectionTooLarge { len, max } => rep(&r::SELECTION_TOO_LARGE, msg)
+                .with("len", *len as u64)
+                .with("max", *max as u64),
             S::Blob(e) => blob(e, msg),
             S::NoBlobStore => rep(&r::NO_BLOB_STORE, msg),
             S::Doc(e) => doc(e, msg),
@@ -144,6 +162,20 @@ impl Refusal for SessionError {
             S::Closed { reason } => rep(&r::CLOSED, msg).with("reason", *reason),
             S::Broken(_) => rep(&r::BROKEN, msg),
             S::NeedsBase => rep(&r::NEEDS_BASE, msg),
+            S::KeyNotOwn { root, key, tag } => rep(&r::KEY_NOT_OWN, msg)
+                .with("root", root)
+                .with("key", key)
+                .with("tag", tag),
+            S::BlobRefUnknown { root, key, blob } => rep(&r::BLOB_REF_UNKNOWN, msg)
+                .with("root", root)
+                .with("key", key)
+                .with("blob", blob),
+            S::LinesUnknown { address } => {
+                rep(&r::LINE_ADDRESS_UNKNOWN, msg).with("address", address)
+            }
+            S::KeySpaceFull { prefix, tag } => rep(&r::KEY_SPACE_FULL, msg)
+                .with("prefix", prefix)
+                .with("tag", tag),
             S::AtLimit {
                 what,
                 limit,
@@ -268,6 +300,7 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
             .with("found", *found),
         S::NoBlobSpace => rep(&r::NO_BLOB_SPACE, msg),
         S::NoBlob(b) => rep(&r::NO_BLOB, msg).with("blob", b),
+        S::BlobRefUnknown(b) => rep(&r::BLOB_REF_UNKNOWN, msg).with("blob", b),
         S::CurrentVersion(d, v) => rep(&r::PURGE_CURRENT, msg)
             .with("doc", *d)
             .with("version", *v),

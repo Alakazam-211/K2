@@ -22,15 +22,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
+use k2_mpc_base::elem::ListOp;
 use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
-    At, AuditEvent, ChangeEvent, Config, ConnId, CursorAt, EditOptions, Host, JoinOptions,
-    LeaveReason, LineRange, Overwrite, Participant, ParticipantKind, Rights, Role, RosterEvent,
-    RosterMember, Session, SessionManager, Stay, TextFilePack, Who, OVERWRITE_PENDING_MAX,
+    At, AuditEvent, ChangeEvent, ClaimSpan, Config, ConnId, CursorAt, EditOptions, ElemSelection,
+    Host, JoinOptions, LeaveReason, LineRange, Overwrite, Participant, ParticipantKind, Point,
+    Rect, Rights, Role, RosterEvent, RosterMember, Session, SessionManager, Stay, TextFilePack,
+    Who, OVERWRITE_PENDING_MAX,
 };
 use k2_mpc_base::store::{DocKey, DocStore, Seq};
 use k2_mpc_base::text::diff::Hunk;
 use k2_mpc_base::MAX_CLIENT_ID;
+use k2_mpc_base::{Edit, Key};
+
+#[path = "keyed_pack/mod.rs"]
+mod keyed_pack;
 
 const ROOT: &str = TextFilePack::ROOT;
 const DOC: &str = "# Notes\n\none\ntwo\nthree\n";
@@ -213,7 +219,9 @@ fn caret(c: &CursorAt, version: Seq) -> Value {
 
 /// `RosterMember` → the wire's `RosterEntry`. `devices` (v0.10.1) only when the kit gives
 /// some (a text doc): one `{client, cursor, label?}` a connection, `label` only when set.
-fn member(m: &RosterMember, version: Seq, st: &Stable) -> Value {
+/// `elem_claims` only when the member holds claims on elements (`ClaimSpan::Elems`), so a late
+/// subscriber sees who holds what.
+fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
     let p = &m.entry.participant;
     let mut fields = vec![
         ("handle", who(&m.who)),
@@ -246,6 +254,109 @@ fn member(m: &RosterMember, version: Seq, st: &Stable) -> Value {
             Value::obj(o)
         });
         fields.push(("devices", Value::List(devices.collect())));
+    }
+    elem_fields(
+        &mut fields,
+        &m.entry.selection,
+        &m.entry.pointer,
+        &m.entry.viewport,
+    );
+    if let Some(Value::List(devices)) = fields
+        .iter_mut()
+        .find(|(k, _)| *k == "devices")
+        .map(|(_, v)| v)
+    {
+        for (o, d) in devices.iter_mut().zip(&m.entry.devices) {
+            let Value::Obj(o) = o else { continue };
+            let mut more = Vec::new();
+            elem_fields(&mut more, &d.selection, &d.pointer, &d.viewport);
+            o.extend(more.into_iter().map(|(k, v)| (k.to_owned(), v)));
+        }
+    }
+    let elem_claims: Vec<Value> = m
+        .entry
+        .claims
+        .iter()
+        .filter_map(|c| match &c.span {
+            ClaimSpan::Elems { root, keys } => Some(Value::obj([
+                ("claim", Value::from(st.claim(c.id.get()))),
+                ("root", Value::from(root.as_str())),
+                ("keys", keys_value(keys)),
+                ("note", c.note.as_deref().map_or(Value::Null, Value::from)),
+                ("hold", Value::from(c.hold)),
+                ("expires_ms", Value::from(c.expires_ms)),
+            ])),
+            _ => None,
+        })
+        .collect();
+    if !elem_claims.is_empty() {
+        fields.push(("elem_claims", Value::List(elem_claims)));
+    }
+    Value::obj(fields)
+}
+
+fn keys_value(keys: &[k2_mpc_base::Key]) -> Value {
+    Value::List(keys.iter().map(|k| Value::from(k.as_str())).collect())
+}
+
+/// A coordinate: the scenarios use whole numbers, which `errors::Value` encodes as they are.
+fn coord(v: f64) -> Value {
+    assert_eq!(v.fract(), 0.0, "the golden scenarios use whole numbers");
+    Value::Int(v as i64)
+}
+
+fn selection(s: &ElemSelection) -> Value {
+    Value::obj([
+        ("root", Value::from(s.root.as_str())),
+        (
+            "keys",
+            Value::List(s.keys.iter().map(|k| Value::from(k.as_str())).collect()),
+        ),
+    ])
+}
+
+fn point(p: &Point) -> Value {
+    Value::obj([("x", coord(p.x())), ("y", coord(p.y()))])
+}
+
+fn rect(r: &Rect) -> Value {
+    Value::obj([
+        ("x", coord(r.x())),
+        ("y", coord(r.y())),
+        ("w", coord(r.w())),
+        ("h", coord(r.h())),
+    ])
+}
+
+/// The element presence fields of a roster entry or a device, each left out when `None`.
+fn elem_fields(
+    fields: &mut Vec<(&'static str, Value)>,
+    s: &Option<ElemSelection>,
+    p: &Option<Point>,
+    r: &Option<Rect>,
+) {
+    if let Some(s) = s {
+        fields.push(("selection", selection(s)));
+    }
+    if let Some(p) = p {
+        fields.push(("pointer", point(p)));
+    }
+    if let Some(r) = r {
+        fields.push(("viewport", rect(r)));
+    }
+}
+
+/// A `selection`, `pointer` or `viewport` roster event: `client` only when the event names one.
+fn elem_event(
+    kind: &'static str,
+    w: &Who,
+    value: Value,
+    client: &Option<u64>,
+    st: &Stable,
+) -> Value {
+    let mut fields = vec![("kind", Value::from(kind)), ("who", who(w)), (kind, value)];
+    if let Some(c) = client {
+        fields.push(("client", Value::from(st.client(*c))));
     }
     Value::obj(fields)
 }
@@ -396,6 +507,42 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             }
             Value::obj(fields)
         }
+        RosterEvent::Selection {
+            who: w,
+            selection: s,
+            client,
+            ..
+        } => elem_event(
+            "selection",
+            w,
+            s.as_ref().map_or(Value::Null, selection),
+            client,
+            st,
+        ),
+        RosterEvent::Pointer {
+            who: w,
+            pointer: p,
+            client,
+            ..
+        } => elem_event(
+            "pointer",
+            w,
+            p.as_ref().map_or(Value::Null, point),
+            client,
+            st,
+        ),
+        RosterEvent::Viewport {
+            who: w,
+            viewport: r,
+            client,
+            ..
+        } => elem_event(
+            "viewport",
+            w,
+            r.as_ref().map_or(Value::Null, rect),
+            client,
+            st,
+        ),
         RosterEvent::ClaimStarted {
             who: w,
             claim,
@@ -414,6 +561,27 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             ("note", note.as_deref().map_or(Value::Null, Value::from)),
             ("hold", Value::from(*hold)),
             ("for_edit", Value::from(*for_edit)),
+            ("expires_ms", Value::from(*expires_ms)),
+            ("version", Value::from(*version)),
+        ]),
+        RosterEvent::ClaimStartedElems {
+            who: w,
+            claim,
+            root,
+            keys,
+            note,
+            hold,
+            expires_ms,
+            version,
+            ..
+        } => Value::obj([
+            ("kind", Value::from("claim_started_elems")),
+            ("who", who(w)),
+            ("claim", Value::from(st.claim(claim.get()))),
+            ("root", Value::from(root.as_str())),
+            ("keys", keys_value(keys)),
+            ("note", note.as_deref().map_or(Value::Null, Value::from)),
+            ("hold", Value::from(*hold)),
             ("expires_ms", Value::from(*expires_ms)),
             ("version", Value::from(*version)),
         ]),
@@ -764,6 +932,7 @@ fn the_wire_json_is_golden() {
             RosterEvent::Away { .. } => "away",
             RosterEvent::Cursor { .. } => "cursor",
             RosterEvent::ClaimStarted { .. } => "claim_started",
+            RosterEvent::ClaimStartedElems { .. } => "claim_started_elems",
             RosterEvent::ClaimEnded { .. } => "claim_ended",
             RosterEvent::Note { .. } => "note",
             RosterEvent::Watching { .. } => "watching",
@@ -1534,4 +1703,403 @@ fn a_grid_docs_notes_are_golden() {
     );
     drop(s);
     let _ = mgr.release();
+}
+
+// ---------- element presence (selection, pointer, viewport) ----------
+
+/// A keyed doc (not a table) with `items` i1..i6, and the session's fixture.
+fn keyed_fx(tag: &str) -> (TmpDir, Arc<TestHost>, SessionManager, Arc<Session>) {
+    let dir = std::env::temp_dir().join(format!("k2mb-wire-golden-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(1_700_000_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    let mut config = Config::default();
+    config.edit_rate_per_s = 1_000_000;
+    config.edit_burst = 1_000_000;
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mgr = SessionManager::new(store, host.clone(), config);
+    let s = mgr
+        .open(
+            Arc::new(keyed_pack::Keyed),
+            &DocKey {
+                space: "ws".into(),
+                path: "doc.keyed".into(),
+            },
+            Some(b"i1\ni2\ni3\ni4\ni5\ni6\n"),
+        )
+        .unwrap();
+    (TmpDir(dir), host, mgr, s)
+}
+
+fn key_of(s: &str) -> Key {
+    Key::new(s).unwrap()
+}
+
+fn items(keys: &[&str]) -> Option<ElemSelection> {
+    Some(ElemSelection::new(
+        keyed_pack::ITEMS,
+        keys.iter().map(|k| key_of(k)).collect(),
+    ))
+}
+
+fn delete_item(s: &Session, c: ConnId, key: &str) {
+    s.edit_ops(
+        c,
+        vec![Edit::List {
+            root: keyed_pack::ITEMS.into(),
+            ops: vec![ListOp::Delete { key: key_of(key) }],
+        }],
+        &EditOptions::new(),
+    )
+    .unwrap();
+}
+
+/// One person on two connections and another person: each sets a selection, a pointer and a
+/// viewport; an element is deleted, so it leaves the selection; a connection leaves, so its
+/// values go (`null`), followed by the participant's own value with no `client`.
+///
+/// `roster_events_elem_presence.json`: `self`, `client`, the stream, and `final`, a later
+/// subscription's snapshot.
+#[test]
+fn element_presence_is_golden() {
+    let (_dir, host, mgr, s) = keyed_fx("elem");
+    let tick = || {
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let person = |pid: &str, name: &str, colour: &str| {
+        s.join(
+            Participant::new(pid, name, colour, ParticipantKind::Person, "tab"),
+            Stay::Held,
+        )
+        .unwrap()
+    };
+    let a1 = person("ada", "Ada", "#7c3aed");
+    let a2 = person("ada", "Ada", "#7c3aed");
+    let b = person("bob", "Bob", "#16a34a");
+    let mut st = Stable::default();
+    st.clients.insert(a1.client, 4);
+    st.clients.insert(a2.client, 5);
+    st.clients.insert(b.client, 6);
+    let roster = s.subscribe_roster(a1.conn).unwrap();
+    tick();
+
+    s.set_selection(a1.conn, items(&["i1", "i2"])).unwrap();
+    s.set_pointer(a1.conn, Some(Point::new(120.0, -40.0).unwrap()))
+        .unwrap();
+    s.set_viewport(a1.conn, Some(Rect::new(0.0, 0.0, 800.0, 600.0).unwrap()))
+        .unwrap();
+    tick();
+    host.now.fetch_add(10, Ordering::SeqCst);
+    s.set_selection(a2.conn, items(&["i3"])).unwrap();
+    s.set_pointer(a2.conn, Some(Point::new(5.0, 6.0).unwrap()))
+        .unwrap();
+    s.set_selection(b.conn, items(&["i2", "i4"])).unwrap();
+    tick();
+    // an element leaves every selection that held it
+    delete_item(&s, b.conn, "i2");
+    tick();
+    // a connection leaves with its values
+    s.leave(a2.conn).unwrap();
+    tick();
+    // cleared
+    s.set_viewport(a1.conn, None).unwrap();
+    s.set_pointer(a1.conn, None).unwrap();
+    tick();
+
+    let ros = drain(&roster);
+    let late = drain(&s.subscribe_roster(a1.conn).unwrap());
+    for k in ["selection", "pointer", "viewport"] {
+        assert!(
+            ros.iter().any(|e| matches!(
+                (k, e),
+                ("selection", RosterEvent::Selection { .. })
+                    | ("pointer", RosterEvent::Pointer { .. })
+                    | ("viewport", RosterEvent::Viewport { .. })
+            )),
+            "no {k} event in {ros:?}"
+        );
+    }
+    let me = self_in(&late[0], "Ada");
+    golden(
+        &golden_dir().join("roster_events_elem_presence.json"),
+        &file(Value::obj([
+            ("self", me.clone()),
+            ("client", Value::from(st.client(a1.client))),
+            (
+                "events",
+                Value::List(ros.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+        ])),
+    );
+}
+
+/// xorshift64*, as `client_vectors.rs`: the trace doesn't depend on a crate's generator.
+fn next(state: &mut u64) -> u64 {
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    state.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
+/// Seeded traces for the JS client: random selections, pointers, viewports, deletes, joins and
+/// leaves, flushed at random. `roster_trace_elem_presence.json`: per seed, the stream a
+/// subscriber got and `final`, a later subscription's snapshot. `client/test/presence-channel.test.ts`
+/// replays each over a network with latency: a `PresenceChannel` folds the stream to `final`.
+#[test]
+fn element_presence_traces_are_golden() {
+    let mut traces = Vec::new();
+    for seed in 1..=8u64 {
+        let (_dir, host, mgr, s) = keyed_fx(&format!("trace{seed}"));
+        let mut r = seed.wrapping_mul(0x2545_F491_4F6C_DD1D) | 1;
+        let mut st = Stable::default();
+        let mut next_client = 10u64;
+        let mut join = |pid: &str, st: &mut Stable| {
+            let j = s
+                .join(
+                    Participant::new(pid, pid, "#123456", ParticipantKind::Person, "tab"),
+                    Stay::Held,
+                )
+                .unwrap();
+            st.clients.insert(j.client, next_client);
+            next_client += 1;
+            j
+        };
+        let watcher = join("watcher", &mut st);
+        let roster = s.subscribe_roster(watcher.conn).unwrap();
+        let mut conns = vec![
+            join("ada", &mut st).conn,
+            join("ada", &mut st).conn,
+            join("bob", &mut st).conn,
+        ];
+        let mut live: Vec<&str> = vec!["i1", "i2", "i3", "i4", "i5", "i6"];
+        for _ in 0..60 {
+            host.now.fetch_add(next(&mut r) % 50, Ordering::SeqCst);
+            let c = conns[(next(&mut r) % conns.len() as u64) as usize];
+            match next(&mut r) % 12 {
+                0..=2 if !live.is_empty() => {
+                    let a = live[(next(&mut r) % live.len() as u64) as usize];
+                    let b = live[(next(&mut r) % live.len() as u64) as usize];
+                    s.set_selection(c, items(&[a, b])).unwrap();
+                }
+                3 => {
+                    s.set_selection(c, None).unwrap();
+                }
+                4..=6 => {
+                    let (x, y) = (next(&mut r) % 2000, next(&mut r) % 2000);
+                    let p = Point::new(x as f64 - 1000.0, y as f64).unwrap();
+                    s.set_pointer(c, Some(p)).unwrap();
+                }
+                7 => {
+                    s.set_pointer(c, None).unwrap();
+                }
+                8 => {
+                    let (x, w) = (next(&mut r) % 500, next(&mut r) % 500);
+                    let v = Rect::new(x as f64, 0.0, w as f64, 300.0).unwrap();
+                    s.set_viewport(c, Some(v)).unwrap();
+                }
+                9 if live.len() > 1 => {
+                    let k = live.remove((next(&mut r) % live.len() as u64) as usize);
+                    delete_item(&s, conns[conns.len() - 1], k);
+                }
+                10 if conns.len() > 1 => {
+                    s.leave(conns.remove(0)).unwrap();
+                }
+                _ => {
+                    host.now.fetch_add(300, Ordering::SeqCst);
+                    mgr.flush_rosters();
+                }
+            }
+        }
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+        let ros = drain(&roster);
+        let late = drain(&s.subscribe_roster(watcher.conn).unwrap());
+        let me = self_in(&late[0], "watcher");
+        traces.push(Value::obj([
+            ("seed", Value::from(seed)),
+            ("self", me.clone()),
+            (
+                "events",
+                Value::List(ros.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+        ]));
+    }
+    golden(
+        &golden_dir().join("roster_trace_elem_presence.json"),
+        &file(Value::obj([("traces", Value::List(traces))])),
+    );
+}
+
+// ---------- claims on elements ----------
+
+/// A keyed doc that isn't a table: a list `items` and a Map `props` declared composite on it.
+struct ItemsLite;
+const ITEMS_LITE: k2_mpc_base::schema::Schema = k2_mpc_base::schema::Schema {
+    name: "items-lite",
+    roots: &[
+        ("items", k2_mpc_base::schema::Kind::MovableList),
+        ("props", k2_mpc_base::schema::Kind::Map),
+    ],
+};
+
+impl k2_mpc_base::session::Pack for ItemsLite {
+    fn schema(&self) -> k2_mpc_base::schema::Schema {
+        ITEMS_LITE
+    }
+    fn composite(&self) -> &'static [(&'static str, &'static str)] {
+        &[("props", "items")]
+    }
+    fn decode(
+        &self,
+        b: &[u8],
+    ) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        use k2_mpc_base::doc::Neutral;
+        let items = std::str::from_utf8(b)
+            .unwrap()
+            .lines()
+            .map(|l| (k2_mpc_base::Key::new(l).unwrap(), k2_mpc_base::Value::Null))
+            .collect();
+        Ok(k2_mpc_base::session::PackContent {
+            roots: vec![
+                ("items".into(), Neutral::List(items)),
+                ("props".into(), Neutral::Map(Default::default())),
+            ],
+            codec: Vec::new(),
+        })
+    }
+    fn encode(
+        &self,
+        _: &[(String, k2_mpc_base::doc::Neutral)],
+        _: &[u8],
+    ) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        Ok(Vec::new())
+    }
+}
+
+/// Ada (a person) subscribes. An agent claims two items with a note, then one more with `hold`.
+/// Ada deletes the held item: that claim ends `deleted`. The agent releases the first claim and
+/// takes another, still live: a later subscription's snapshot names it (`elem_claims`), so a late
+/// subscriber sees who holds what.
+///
+/// `roster_events_claims_elems.json`: `about`, `self`, the stream, and `final`, that later
+/// snapshot. Only new kinds and fields: no other golden changes.
+#[test]
+fn element_claims_are_golden() {
+    let dir = std::env::temp_dir().join(format!("k2mb-wire-elems-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _dir = TmpDir(dir.clone());
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(1_700_000_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mgr = SessionManager::new(store, host.clone(), Config::default());
+    let s = mgr
+        .open(
+            Arc::new(ItemsLite),
+            &DocKey {
+                space: "ws".into(),
+                path: "a.items".into(),
+            },
+            Some(b"i1\ni2\ni3\ni4\n"),
+        )
+        .unwrap();
+    let tick = || {
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let keys = |v: &[&str]| -> Vec<k2_mpc_base::Key> {
+        v.iter()
+            .map(|k| k2_mpc_base::Key::new(*k).unwrap())
+            .collect()
+    };
+    let ada = s
+        .join(
+            Participant::new("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"),
+            Stay::Held,
+        )
+        .unwrap();
+    let bot = s
+        .join(
+            Participant::new("bot", "Bot", "#0891b2", ParticipantKind::Agent, "cli"),
+            Stay::Held,
+        )
+        .unwrap();
+    let mut st = Stable::default();
+    st.clients.insert(ada.client, MAX_CLIENT_ID);
+    st.clients.insert(bot.client, 5);
+    let roster = s.subscribe_roster(ada.conn).unwrap();
+    let first = s
+        .claim_elems(
+            bot.conn,
+            "items",
+            &keys(&["i2", "i1"]),
+            None,
+            Some("moving".into()),
+            false,
+        )
+        .unwrap();
+    tick();
+    s.claim_elems(bot.conn, "items", &keys(&["i3"]), Some(5_000), None, true)
+        .unwrap();
+    tick();
+    s.edit_ops(
+        ada.conn,
+        vec![k2_mpc_base::doc::Edit::List {
+            root: "items".into(),
+            ops: vec![k2_mpc_base::elem::ListOp::Delete {
+                key: keys(&["i3"]).remove(0),
+            }],
+        }],
+        &EditOptions::new(),
+    )
+    .unwrap();
+    tick();
+    s.release_claim(bot.conn, Some(first.id)).unwrap();
+    tick();
+    s.claim_elems(bot.conn, "items", &keys(&["i4"]), None, None, true)
+        .unwrap();
+    tick();
+    let ros = drain(&roster);
+    let late = drain(&s.subscribe_roster(ada.conn).unwrap());
+    let me = who(&Who::Pid("ada".into()));
+    golden(
+        &golden_dir().join("roster_events_claims_elems.json"),
+        &file(Value::obj([
+            (
+                "about",
+                Value::from(
+                    "Claims on elements: `claim_started_elems`, `claim_ended` with `how: deleted` \
+                     and `released`, and `final`, a later subscription's snapshot, whose entry \
+                     `elem_claims` names the claim still live.",
+                ),
+            ),
+            ("self", me.clone()),
+            (
+                "events",
+                Value::List(ros.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+        ])),
+    );
+    // the scenario did what the file says
+    let kinds: Vec<&str> = ros
+        .iter()
+        .filter_map(|e| match e {
+            RosterEvent::ClaimStartedElems { .. } => Some("started"),
+            RosterEvent::ClaimEnded { how, .. } => Some(how.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["started", "started", "deleted", "released", "started"]
+    );
 }

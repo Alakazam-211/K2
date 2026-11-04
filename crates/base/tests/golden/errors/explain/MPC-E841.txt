@@ -1,0 +1,27 @@
+MPC-E841 blob_missing (structured and CSV)
+exit:     4
+message:  picture bytes {hash} aren't in the file
+next:     A picture on the board names bytes the file doesn't hold, so it can't be saved as is. Nothing was written. Clear the pictures whose bytes are missing (clear-blob), or add the bytes again, then run your change again.
+step:     clear-blob; why: A picture's bytes are missing from the file; clear that picture, or add its bytes again, then run your change again.
+rule:     board file: pictures
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E841",
+  "name": "blob_missing",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "picture bytes {hash} aren't in the file",
+  "next": "A picture on the board names bytes the file doesn't hold, so it can't be saved as is. Nothing was written. Clear the pictures whose bytes are missing (clear-blob), or add the bytes again, then run your change again.",
+  "next_step": {
+    "verb": "clear-blob",
+    "args": [],
+    "why": "A picture's bytes are missing from the file; clear that picture, or add its bytes again, then run your change again."
+  },
+  "rule": "board file: pictures",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

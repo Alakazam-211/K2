@@ -129,6 +129,104 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   silently. The client re-sends its caret after any change that advances its version, its own
   or a remote one, throttled ([Carets](#carets)).
 
+## Presence frames
+
+Selection by element key, pointer and viewport (`PresenceChannel`, [PRESENCE.md](PRESENCE.md)).
+They sit outside the doc's numbering: none of them takes or moves a version.
+
+| `type` | Fields | Reply |
+|---|---|---|
+| `select` | `req`, `selection`: `{root, keys}` or `null` | only when refused |
+| `pointer` | `req`, `point`: `{x, y}` or `null` | only when refused |
+| `viewport` | `req`, `rect`: `{x, y, w, h}` or `null` | only when refused |
+
+| Frame | Session call |
+|---|---|
+| `select` | `set_selection(conn, selection)` |
+| `pointer` | `set_pointer(conn, point)`, from `Point::new(x, y)` |
+| `viewport` | `set_viewport(conn, rect)`, from `Rect::new(x, y, w, h)` |
+
+- `keys` are element keys of `root`, a MovableList root: at most 256 (`MPC-E310`), each live
+  (`MPC-E114`, which also covers a root that isn't a list). No keys means clear. Coordinates are
+  finite numbers in the doc's own space, which the kit doesn't interpret; `w` and `h` aren't
+  negative (`MPC-E114`).
+- All three need read. A reader may send them; a watcher is refused (`MPC-E305`).
+- A tier 0 doc (`BlobSession`) has none of the three calls, so a host lists no `"presence"` on a
+  connection to one.
+- The host answers a refused one with `presence_refused {req, error}` and changes nothing. It may
+  cross a deletion: a client that selects an element just as it goes gets `MPC-E114`, and the
+  selection stays as it was.
+- The client sends the pointer and the viewport at most once a frame, the latest value. The kit
+  keeps the latest and reports it at the next roster flush.
+- A connection's values end with the connection: a client sends them again after a reconnect.
+- **Outside the doc's numbering.** These frames and their roster kinds carry no `seq`, no
+  `version` and no `base`, take no number from the doc and write nothing to its log. Nothing that
+  counts down frames by `seq` counts them.
+
+**Request numbers: `req`, never `op`.** These frames carry no `op`, and their refusal is not a
+`refused` frame:
+
+- `req` is the channel's own counter, independent of `LiveText`'s `op`s: the same number on both
+  means nothing. Later frames of this channel number the same way.
+- **The two sides of a shared transport can't reach each other.** `LiveText` reads `op` replies
+  and ignores `presence_refused`, as any frame type it doesn't know. `PresenceChannel` reads
+  `presence_refused` and ignores `refused`, so an edit's refusal never reaches it.
+- **Why not `op`:** a host that doesn't know a frame type may refuse it as unreadable
+  (`MPC-E113`), by the frame's `op` when it has one. An `op` on these frames would reach
+  `LiveText` as the refusal of whichever edit has that number. Without one, that host answers
+  with an `error` frame, which refuses nothing.
+- **Sending:** a client sends these frames only on a connection whose `welcome.features` lists
+  `"presence"` ([Feature names](#feature-names)), so an older host sees none of them. Otherwise
+  the channel records its values and sends them if a later connection's `welcome` lists it.
+
+### Feature names
+
+`welcome.features` is an optional list of strings: the frame families this host takes.
+
+- A client sends a family's frames only when the host lists its name. No field, an empty list
+  and a list of only other names all mean the same: none of that family is sent.
+- A client ignores names it doesn't know. A host may list names this spec doesn't.
+- The name is checked per connection: a reconnect's `welcome` replaces the last one's list.
+
+| Name | Frames |
+|---|---|
+| `presence` | `select`, `pointer`, `viewport` |
+| `claims` | `claim`, `release` |
+
+## Claim frames
+
+Claims on elements of a list root (`Session::claim_elems`). They sit outside the doc's numbering:
+none of them takes or moves a version. They are the host's to route: the kit has the calls and
+this spec, no socket.
+
+| `type` | Fields | The kit's call | Reply |
+|---|---|---|---|
+| `claim` | `req`, `root`, `keys`, `ttl_ms?`, `note?`, `hold?` | `claim_elems(conn, root, keys, ttl_ms, note, hold)` | `claimed {req, claim}`, or `presence_refused {req, error}` |
+| `release` | `req`, `claim?` (none: all of this participant's here) | `release_claim(conn, claim)` | `released {req, claims}`, or `presence_refused {req, error}` |
+
+- **Refusals:** `MPC-E301` `claimed` (exit 5: `details` has `claim`, `by`, `name`, `root`, `keys`,
+  `remaining_ms`, `note`), `MPC-E303` `claim_contended`, `MPC-E304` `bad_claim` (no keys, more than
+  256, a `note` over 1024 bytes, a table doc, a zero TTL), `MPC-E114` `bad_position` (a key unknown
+  or deleted, a root that isn't a list), `MPC-E903` and `MPC-E904` (the caps). Nothing changes.
+- **`hold`:** without it a claim ends on its owner's first edit touching it (`how: "edited"`). A
+  client making several edits under one claim (a drag) sets it, and releases when done. A held
+  claim still runs out: `ttl_ms` is clamped to the host's most (`Config::claim_max_ms`).
+- **An edit a claim refuses** (`MPC-E301`, under `ClaimPolicy::Respect`, agents only) is refused
+  before anything applies: it takes no version and moves nothing.
+- **Who sees it:** everyone, by the roster kinds `claim_started_elems` and `claim_ended`; a later
+  subscriber by the snapshot entries' `elem_claims` ([The roster](#the-roster)).
+- **A claim doesn't outlive the connection that took it,** held or not: it ends `how: "left"` when
+  that connection closes. A new connection that names the old one (`join_replacing`) closes it at
+  once; one that doesn't leaves the claim live until the old one closes or its time runs out.
+  Unlike a selection, a client doesn't send a claim again after a reconnect: it claims again.
+- **Request numbers: `req`, never `op`,** from the same counter as the [presence frames](#presence-frames),
+  and for the same reason: a host that doesn't know a frame type may refuse it by the frame's `op`,
+  which would reach `LiveText` as the refusal of whichever in-flight edit has that number. Replies
+  route by frame type.
+- **Sending:** a client sends these frames only on a connection whose `welcome.features` lists
+  `"claims"` ([Feature names](#feature-names)), so an older host sees none of them.
+
+
 ## Host → client
 
 | `type` | Fields | When |
@@ -142,6 +240,9 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
 | `undone` | `op`, `steps`, `version`, `notice?` | the reply to `undo` / `redo`, after the `change` frames it made ([Undo and redo](#undo-and-redo)) |
 | `roster_event` | `event` | one roster change as the kit pushes it (`subscribe_roster`, K5): the client folds them |
 | `roster` | `entries` | the whole roster at once, for a host that folds the deltas itself |
+| `claimed` | `req`, `claim` | the reply to `claim` ([Claim frames](#claim-frames)) |
+| `released` | `req`, `claims` | the reply to `release` ([Claim frames](#claim-frames)) |
+| `presence_refused` | `req`, `error` | a presence or claim frame refused; nothing changed ([Presence frames](#presence-frames), [Claim frames](#claim-frames)) |
 | `error` | `error` | a client frame the host couldn't take that has no `op` to answer (over the cap, unreadable) |
 | `closed` | `reason`, `code?`, `path?`, `error?` | the last frame; then the host closes the socket ([Closing](#closing)) |
 
@@ -402,7 +503,10 @@ a frame over it, and the host refuses one cleanly:
   `overwritten` only when this subscriber has waiting notes, [below](#the-overwritten-event)), `joined {who,
   participant: {name, colour, kind, via}, rights}`, `left {who, reason}`, `rights {who,
   rights}`, `role {who, role}`, `away {who, away}`, `cursor {who, cursor, version, client?}`,
+  `selection {who, selection, client?}`, `pointer {who, pointer, client?}`, `viewport {who,
+  viewport, client?}` ([below](#selection-pointer-and-viewport-in-the-roster)),
   `claim_started {who, claim, lines, note, hold, for_edit, expires_ms, version}`,
+  `claim_started_elems {who, claim, root, keys, note, hold, expires_ms, version}`,
   `claim_ended {who, claim, how, lines, version}`, `note {to, from, note, lines, claim}`,
   `overwritten` ([below](#the-overwritten-event)), `watching {count}`, `closed {reason}` (the
   host closed the doc's live session, `SessionManager::close`: the last event, then the
@@ -431,6 +535,19 @@ a frame over it, and the host refuses one cleanly:
   the host puts it inside the caret object too. Without one, the client takes its own version
   when the frame arrives. The client maps it to its text through the changes between.
 
+### Selection, pointer and viewport in the roster
+
+- A roster entry and a `devices` element gain `selection`, `pointer` and `viewport`, each left out
+  when there is none. The entry's are the most active connection's that has one; a `devices`
+  element's are that connection's own.
+- A `selection`, `pointer` or `viewport` event carries the value or `null` (gone). The kit sends
+  one per connection per flush, the last value, by the rule for `cursor`: the connection's own
+  with its `client`; when the last of those isn't the participant's value (a connection left, or
+  cleared, while another still has one), one more with no `client` carrying the participant's.
+- A grid has no `devices`: its events carry no `client`, and there is one value a participant.
+- An element that stops being live leaves every selection (the event gives what is left; `null`
+  when nothing is). Bringing it back doesn't select it again.
+
 ## JSON encodings
 
 The kit has no serde: a host encodes these by hand. The golden files pin them, written from
@@ -449,13 +566,16 @@ the kit's own final roster.
 | `role` | `"editor"` / `"viewer"` (`Role`) |
 | `kind` | `ParticipantKind` in lower case: `person`, `agent`, `app`, `external`, `restore`, `import` |
 | `reason` (`left`) | `LeaveReason`: `left`, `idle`, `kicked`, `rights_lost` |
-| `how` (`claim_ended`) | `ClaimEnd::as_str`: `released`, `edited`, `expired`, `left`, `reset` |
+| `how` (`claim_ended`) | `ClaimEnd::as_str`: `released`, `edited`, `expired`, `left`, `reset`, `deleted` |
 | `note` (`note`) | `NoteKind::as_str` |
 | `claim` | `claim-N` (`ClaimId`'s `Display`) |
-| `lines` | `{root, first, last}`, 1-based, inclusive |
+| `lines` | `{root, first, last}`, 1-based, inclusive. For a claim on elements (`claim_ended`), the list root and the live positions of its first and last live elements (`1, 1` with none live), for display only |
 | a caret (`CursorAt`) | `{root, anchor, head, version, anchor_lc, head_lc}`: `anchor`/`head` bytes at `version`; `anchor_lc`/`head_lc` the kit's `LineCol` as `"line:col"`, both 1-based, the column counted in characters (Unicode scalar values), for display only |
-| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights`; then `devices` (v0.10.1) only when `entry.devices` isn't empty: one `{client, cursor, label}` per `Device`, `cursor` at the snapshot's version or `null`, `label` left out when `None` |
+| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights`; then `devices` (v0.10.1) only when `entry.devices` isn't empty: one `{client, cursor, label}` per `Device`, `cursor` at the snapshot's version or `null`, `label` left out when `None`; `selection`, `pointer` and `viewport`, on the entry and on each `Device`, left out when `None`; then `elem_claims` only when the member holds claims on elements (`ClaimSpan::Elems` in `entry.claims`): one `{claim, root, keys, note, hold, expires_ms}` a claim |
 | `RosterEvent::Cursor` → `cursor` | `{kind: "cursor", who, cursor, version}`, then `client` (v0.10.1) only when the event's `client` is `Some`: the connection's client ID |
+| `ElemSelection` | `{root, keys}`: `keys` as `Key`'s text, in the order given, no repeats |
+| `Point`, `Rect` | `{x, y}`, `{x, y, w, h}`, as JSON numbers (`Point::x()` and so on), never `-0`. Coordinates may have fractions. The golden files hold whole numbers only; parity cases and the client's tests cover fractions, and a host encodes them with its own writer or the kit's (`errors::Value::float`) |
+| `RosterEvent::Selection`, `Pointer`, `Viewport` | `{kind: "selection" \| "pointer" \| "viewport", who, <kind>: value or null}`, then `client` only when the event's `client` is `Some` |
 | `ErrorReport` | exactly `ErrorReport::to_json()`: `{id, exit, message, next, next_step, rule, details}`, `next_step` = `{verb, args, why}`, absent when there is nothing to run (and before kit v0.10.1). Clients key on `id`; `message`, `next` and `next_step` are for people (a host renders `next_step` in its own syntax) |
 | `RosterEvent::Overwritten {to, overwrite}` → `overwritten` | `{kind: "overwritten", to, change, version, restore_from, source, rule, row, line, cells, more, not_shown, withheld, no_history, message}`, every field always present: `to` = `to` (`Who`'s `Display`, the subscriber's own, since the kit sends it only to its author's subscriptions); `change`, `source`, `rule`, `more`, `not_shown`, `withheld`, `no_history` = the `Overwrite`'s fields of those names; `version`, `restore_from`, `row`, `line` = the `Overwrite`'s `Option`s, `null` when `None`; `cells` (below); `message` = the `Overwrite`'s `Display` (`to_string()`), which holds the person's text |
 | `cells` | in order: first `{region, col, yours, file, cut}` from the `Overwrite`'s own top-level `region`, `col`, `yours`, `file`, `cut` (its first place), then one `{region, col, yours, file, cut}` per entry of `also` (an `OverwriteCell`, same fields), in `also`'s order. `col` is `null` when `None`. A roll-up (`rule: "rollup"`, `Overwrite::is_rollup`) has no place: `cells: []` (its `region` is empty; don't send it) |

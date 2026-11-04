@@ -6,8 +6,9 @@
 # Two halves, so the build half runs on a build node and the other needs no cargo:
 #
 #   tools/n1/n1.sh layout <previous tag> <dir>   no cargo: <dir>/old is the previous release's
-#                                                kit (`git archive <tag>`, its own crates/base and
-#                                                vendor/yrs), <dir>/n1 the consumer
+#                                                kit (`git archive <tag>`, the whole tree: its
+#                                                own crates/base and every vendor/ dir its
+#                                                manifest names), <dir>/n1 the consumer
 #                                                (tools/n1/consumer with the old Cargo.lock)
 #   tools/n1/n1.sh node <dir>                    on a build node, from the repo root: writes
 #                                                text.redb and grid.redb with this build (the
@@ -34,21 +35,46 @@
 #                                                roots), writes text.redb and grid.redb for the
 #                                                other build's consumer, which opens both, blames
 #                                                the restored line, reverts the other build's
-#                                                record, writes, restores and rewrites
+#                                                record, writes, restores and rewrites; with
+#                                                K2MB_N1_AGENTS (after v0.10.2) the producer also
+#                                                has an own replica and an agent join, so the
+#                                                store holds `client_kinds`: a build that doesn't
+#                                                know it reports its rewrite refused (NewerData);
+#                                                the consumer then deletes the doc, and HEAD's
+#                                                build (`n1_kinds_after_delete`) reads the
+#                                                file as the delete left it, opens it, and fails
+#                                                if a deleted doc's client_kinds rows remain
+#
+# The blob references (after v0.10.2), both the case that holds and the documented limit:
+#
+#   tools/n1/n1.sh layout-refs <previous tag> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/refs the consumer
+#                                                (tools/n1/consumer-refs)
+#   tools/n1/n1.sh node-refs <dir>               on a build node, from the repo root: this
+#                                                build's `n1_refs_producer` writes a store whose
+#                                                docs hold references; the previous release's
+#                                                gc keeps those blobs (HELD), collects one named
+#                                                only by a value it wrote (LIMIT), refuses a
+#                                                rewrite and leaves rows on a delete; this
+#                                                build's `n1_refs_after` then opens it: the rows
+#                                                and the count go, and a load takes a hold on
+#                                                what's still there and reports what isn't.
+#                                                The last line is `N-1 REFS OK`.
 #
 # A previous release older than v0.10.1 has no K2MB_N1_RESTORE: `layout-both` adds the
 # revert of the revert to its copy of the producer (python3), and stops if it can't. Ship the
 # laid-out dir with the job (an untracked dir in the checkout: `--dirty`). The job prints
 # `N-1 OK` once per direction, then `N-1 BOTH OK`.
 set -eu
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | layout-refs <tag> <dir> | node-refs <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
     rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/n1"
-    git -C "$ROOT" archive "$TAG" Cargo.toml Cargo.lock crates/base/Cargo.toml crates/base/src \
-      vendor/yrs | tar -x -C "$OUT/old"
+    # the whole tree: cargo resolves every path dependency, optional ones too (vendor/mpce-*
+    # since the native engine's seam), so a list of dirs would miss the next one
+    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
     sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
     rm "$OUT/old/Cargo.toml.bak"
     cp -R "$ROOT/tools/n1/consumer/." "$OUT/n1/"
@@ -71,8 +97,9 @@ case $MODE in
     rm -rf "$OUT"; mkdir -p "$OUT/prev/kit" "$OUT/head/kit"
     for side in prev head; do
       REV=$TAG; [ "$side" = head ] && REV=HEAD
-      git -C "$ROOT" archive "$REV" Cargo.toml Cargo.lock .cargo crates/base vendor/yrs \
-        | tar -x -C "$OUT/$side/kit"
+      # the whole tree (as `layout`): every path dependency the kit's manifest names, optional
+      # ones too, whatever the release
+      git -C "$ROOT" archive "$REV" | tar -x -C "$OUT/$side/kit"
       sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/$side/kit/Cargo.toml"
       rm "$OUT/$side/kit/Cargo.toml.bak"
     done
@@ -111,12 +138,36 @@ PY
     for pair in "fwd head prev" "rev prev head"; do
       set -- $pair
       echo "== $1: the $2 build writes, the $3 build reads"
-      (cd "$OUT/$2/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_RESTORE=1 \
-        cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored)
+      (cd "$OUT/$2/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_RESTORE=1 K2MB_N1_AGENTS=1 \
+        cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored --nocapture)
       ls -l "$OUT/$1/text.redb" "$OUT/$1/grid.redb"
       (cd "$OUT/$1" && cargo run -q)
+      (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
+        cargo test -p k2-mpc-base --test grid_store n1_kinds_after_delete -- --ignored --nocapture)
     done
     echo "N-1 BOTH OK"
+    ;;
+  layout-refs)
+    TAG=${2:?previous release tag}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/refs"
+    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-refs/." "$OUT/refs/"
+    cp "$OUT/old/Cargo.lock" "$OUT/refs/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-refs)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build writes the references"
+    K2MB_N1_OUT="$OUT/refs" cargo test -p k2-mpc-base --test blob_refs n1_refs_producer -- --ignored --nocapture
+    echo "== the previous release"
+    (cd "$OUT/refs" && cargo run -q)
+    echo "== this build again"
+    K2MB_N1_OUT="$OUT/refs" cargo test -p k2-mpc-base --test blob_refs n1_refs_after -- --ignored --nocapture
+    echo "N-1 REFS OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;
 esac

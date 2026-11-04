@@ -1,0 +1,21 @@
+MPC-E848 board_limit (structured and CSV)
+exit:     2
+message:  the change would pass a limit ({code})
+next:     Your input, or the board after your change, would pass one of the limits this host works within (details.code says which). Nothing was applied or written. Make a smaller change, or remove objects first.
+rule:     board file: limits
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E848",
+  "name": "board_limit",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "the change would pass a limit ({code})",
+  "next": "Your input, or the board after your change, would pass one of the limits this host works within (details.code says which). Nothing was applied or written. Make a smaller change, or remove objects first.",
+  "rule": "board file: limits",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

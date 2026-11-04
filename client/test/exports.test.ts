@@ -28,8 +28,15 @@ import "./jsdom-shims";
 /** Values a host imports from the package root. */
 const VALUES = [
   "Bias",
+  "CLAIMS_FEATURE",
+  "CLAIM_KEYS_MAX",
+  "CLAIM_NOTE_MAX",
   "Carried",
+  "ClaimRejected",
+  "ELEM_SELECTION_MAX",
   "LiveText",
+  "PRESENCE_FEATURE",
+  "PresenceChannel",
   "apply",
   "byteToIndex",
   "canRetry",
@@ -44,6 +51,8 @@ const VALUES = [
 /** Types a host imports from the package root: each must resolve (a compile error if not). */
 export type HostTypes = [
   Lib.ChangeEvent,
+  Lib.ClaimOptions,
+  Lib.ClaimRejectedReason,
   Lib.ClientFrame,
   Lib.CloseEvent,
   Lib.CloseReason,
@@ -52,6 +61,7 @@ export type HostTypes = [
   Lib.Hunk,
   Lib.LiveText,
   Lib.LiveTransport,
+  Lib.PresenceChannel,
   Lib.Rejection,
   Lib.RemoteCaret,
   Lib.Rights,

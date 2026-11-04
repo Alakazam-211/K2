@@ -46,6 +46,14 @@ pub type ClientId = u64;
 /// Largest valid client ID (2^53 - 1).
 pub const MAX_CLIENT_ID: ClientId = (1 << 53) - 1;
 
+/// Reserved for the native engine's import agent: the kit never hands it out.
+pub const IMPORT_CLIENT: ClientId = MAX_CLIENT_ID;
+
+/// Largest client ID the kit mints (2^53 - 2). A session's client IDs are
+/// `2..=MAX_KIT_CLIENT`: never 0, never 1 (the session's own), never [`IMPORT_CLIENT`]; a
+/// random draw outside that range is drawn again, never shifted into it.
+pub const MAX_KIT_CLIENT: ClientId = MAX_CLIENT_ID - 1;
+
 /// How often [`Doc::edit_as`]'s runtime check samples an edit by default: one in 1,000.
 pub const DEFAULT_EDIT_CHECK_EVERY: u32 = 1000;
 
@@ -196,8 +204,10 @@ pub struct Doc {
     inner: Engine,
 }
 
+/// A writer's client ID: `2..=MAX_KIT_CLIENT`. Refused: 0 (no client), 1 (the session's own),
+/// [`IMPORT_CLIENT`] (2^53 - 1, the native engine's import agent) and anything past 53 bits.
 pub(crate) fn check_client(id: ClientId) -> Result<(), DocError> {
-    if id == 0 || id > MAX_CLIENT_ID || id == crate::engine::SESSION_CLIENT {
+    if id == 0 || id > MAX_KIT_CLIENT || id == crate::engine::SESSION_CLIENT {
         Err(DocError::BadClient(id))
     } else {
         Ok(())
@@ -258,6 +268,7 @@ impl Doc {
     /// Rebuild a doc from what the kit's store holds: the snapshot, then the log after it.
     /// Store bytes are trusted: the kit wrote them (see [`crate::store`]).
     pub fn from_store(schema: Schema, loaded: &crate::store::Loaded) -> Result<Self, DocError> {
+        timed!(LoadDoc);
         let mut d = match &loaded.snapshot {
             Some((_, state)) => Self::load(schema, state)?,
             None => Self::new(schema)?,
@@ -529,6 +540,8 @@ impl Doc {
         client: ClientId,
         edits: &[Edit],
     ) -> Result<crate::engine::Made, DocError> {
+        // every edit path's shared body (`edit_as`, `edit_applied`, the session's `edit_made`)
+        timed!(EditAs);
         check_client(client)?;
         let mut text = false;
         for e in edits {

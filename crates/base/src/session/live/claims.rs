@@ -5,7 +5,7 @@
 use super::*;
 use crate::session::awareness::{
     Claim, ClaimEnd, ClaimId, ClaimInfo, ForEdit, Note, NoteKind, Reservation, ReservationEnd,
-    ReservationInfo, Waiting,
+    ReservationInfo, Waiting, CLAIM_NOTE_MAX,
 };
 use crate::session::awareness::{
     Overwrite, OverwriteCell, OVERWRITE_CELLS_MAX, OVERWRITE_PENDING_MAX,
@@ -36,7 +36,8 @@ impl Session {
     /// caller's own overlapping claim that others wait for gives
     /// [`SessionError::ClaimContended`] (no getting around the queue by re-claiming); a bad
     /// range [`SessionError::BadPosition`]; limits ([`Config::claims_max`],
-    /// [`Config::claims_per_participant`]) [`SessionError::BadClaim`].
+    /// [`Config::claims_per_participant`]) or a note over [`CLAIM_NOTE_MAX`] bytes
+    /// [`SessionError::BadClaim`].
     pub fn claim(
         &self,
         conn: ConnId,
@@ -72,6 +73,7 @@ impl Session {
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Claim, now)?;
         self.expire_claims(st, now);
+        Self::check_claim_note(note.as_deref())?;
         let ttl = ttl_ms.unwrap_or(self.config.claim_default_ms);
         self.take_claim(
             st,
@@ -85,6 +87,18 @@ impl Session {
             "claim",
             now,
         )
+    }
+
+    /// A note over [`CLAIM_NOTE_MAX`] bytes is [`SessionError::BadClaim`]. The public claim calls
+    /// check it before taking anything; the kit's own `for_edit` claims carry no note.
+    pub(super) fn check_claim_note(note: Option<&str>) -> Result<()> {
+        match note {
+            Some(n) if n.len() > CLAIM_NOTE_MAX => Err(SessionError::BadClaim(format!(
+                "a note of {} bytes; at most {CLAIM_NOTE_MAX}",
+                n.len()
+            ))),
+            _ => Ok(()),
+        }
     }
 
     /// Extend a claim of the caller's pid to `now + ttl_ms` (as [`Session::claim`]), and set
@@ -481,6 +495,7 @@ impl Session {
             waiters,
             edited: false,
             grid: None,
+            elems: None,
         };
         let info = claim.info(text, now);
         st.aware.claims.push(claim);
@@ -524,7 +539,9 @@ impl Session {
     /// (a reservation).
     pub(super) fn end_claim(&self, st: &mut State, k: usize, how: ClaimEnd, now: u64, grant: bool) {
         let c = st.aware.claims.remove(k);
-        let lines = if c.grid.is_some() {
+        let lines = if let Some(e) = &c.elems {
+            Self::elem_lines(st, e)
+        } else if c.grid.is_some() {
             self.grid_claim_lines(st, &c)
         } else {
             self.lines_now(st, &c.root, c.s, c.e)
@@ -552,7 +569,16 @@ impl Session {
         });
         if grant {
             let span = (c.s, c.e);
-            self.grant_reservation(st, c.id, &c.root, span, c.grid.clone(), waiters.into(), now);
+            self.grant_reservation(
+                st,
+                c.id,
+                &c.root,
+                span,
+                c.grid.clone(),
+                c.elems.clone(),
+                waiters.into(),
+                now,
+            );
         }
         st.aware.push_activity(
             ActivityEntry {
@@ -577,7 +603,7 @@ impl Session {
     }
 
     /// Reserve `root`'s span `(s, e)` (claim `claim`'s, now ended; on a grid, its span by
-    /// key, `grid`) for the first waiter in `queue` still present, for
+    /// key, `grid`; for elements, its keys, `elems`) for the first waiter in `queue` still present, for
     /// [`Config::claim_handoff_ms`]. Off when that is 0.
     #[allow(clippy::too_many_arguments)]
     fn grant_reservation(
@@ -587,6 +613,7 @@ impl Session {
         root: &str,
         (s, e): (usize, usize),
         grid: Option<awareness::GridSpan>,
+        elems: Option<awareness::ElemSpan>,
         mut queue: VecDeque<(ConnId, String)>,
         now: u64,
     ) {
@@ -610,8 +637,11 @@ impl Session {
                 queue,
                 edited: false,
                 grid,
+                elems,
             };
-            let lines = if r.grid.is_some() {
+            let lines = if let Some(e) = &r.elems {
+                Self::elem_lines(st, e)
+            } else if r.grid.is_some() {
                 self.grid_reservation_lines(st, &r)
             } else {
                 match self.text_of(st, root) {
@@ -637,7 +667,9 @@ impl Session {
     /// next waiter.
     pub(super) fn end_reservation(&self, st: &mut State, k: usize, how: ReservationEnd, now: u64) {
         let r = st.aware.reservations.remove(k);
-        let lines = if r.grid.is_some() {
+        let lines = if let Some(e) = &r.elems {
+            Self::elem_lines(st, e)
+        } else if r.grid.is_some() {
             self.grid_reservation_lines(st, &r)
         } else {
             self.lines_now(st, &r.root, r.s, r.e)
@@ -656,7 +688,16 @@ impl Session {
             ReservationEnd::Claimed | ReservationEnd::Reset | ReservationEnd::Deleted
         );
         if passes {
-            self.grant_reservation(st, r.claim, &r.root, (r.s, r.e), r.grid, r.queue, now);
+            self.grant_reservation(
+                st,
+                r.claim,
+                &r.root,
+                (r.s, r.e),
+                r.grid,
+                r.elems,
+                r.queue,
+                now,
+            );
         }
     }
 

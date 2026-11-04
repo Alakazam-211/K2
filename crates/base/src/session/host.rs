@@ -557,4 +557,15 @@ pub enum AuditEvent {
         cols: usize,
         cells: usize,
     },
+    /// Overwrite notes were planned for `change`, for `authors` people, and the commit changed
+    /// nothing, so the doc stayed at `version`. An override is a real write, so this state isn't
+    /// expected. The kit goes on as it does without this report: the notes wait in memory until
+    /// the doc unloads, and nothing about them is stored. Metadata only. A bug in the kit: report
+    /// it.
+    NotesWithoutChange {
+        key: DocKey,
+        change: crate::store::Seq,
+        version: crate::store::Seq,
+        authors: usize,
+    },
 }

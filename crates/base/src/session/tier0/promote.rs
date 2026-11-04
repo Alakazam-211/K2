@@ -390,6 +390,7 @@ impl BlobSession {
                         row_marks: Vec::new(),
                         col_remap: false,
                         note_rows: Vec::new(),
+                        blob_refs: Default::default(),
                     });
                     entries.push(LogEntry {
                         author: v.author.clone(),

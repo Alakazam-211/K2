@@ -13,6 +13,15 @@ for f in "$t"/docs/bad_*.md; do
   n=$(basename "$f")
   if out=$("$PY" "$here/check.py" --runs "$t/runs" "$f"); then bad "$n must fail"; else ok "$n fails: $(echo "$out" | head -1 | sed 's/^[^:]*:[0-9]*: //')"; fi
 done
+# records that say a run ran nothing fail, cited or not; the acknowledged and the normal ones don't
+if out=$("$PY" "$here/check.py" --runs "$t/runs-notrun" "$t/docs/empty.md"); then bad "a run that didn't run must fail the check"; else
+  for w in r_error r_noresult r_zero_samples r_zero_states; do
+    case $out in *"ff000003/$w "*) ok "$w fails" ;; *) bad "$w must be named: $out" ;; esac
+  done
+  for w in r_known r_caught r_fine; do
+    case $out in *"ff000003/$w "*) bad "$w must not be named" ;; *) ok "$w passes" ;; esac
+  done
+fi
 got=$("$PY" "$here/collect.py" --print --log "$t/logs/sample.txt" --job ff000002 | "$PY" -c '
 import json, sys
 for r in json.load(sys.stdin):

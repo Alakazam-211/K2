@@ -94,6 +94,10 @@ host_main 'doc.apply_client_update(&[], 7)'
 timed host_plain_no_client_api no_api apply_client_update sh -c "cd '$HOST' && env -u RUSTFLAGS cargo check"
 host_main 'k2_mpc_base::conformance::replica::deliver_from(&mut doc, &[], 7)'
 timed host_plain_no_hook no_api replica sh -c "cd '$HOST' && env -u RUSTFLAGS cargo check"
+# no store commit in a plain build can skip its sync to disk: redb's Durability::None is set in
+# one place (DocStore::begin_write), behind the test-only unsynced_for_tests switch
+host_main 'k2_mpc_base::store::DocStore::open("guard.redb").unwrap().unsynced_for_tests()'
+timed host_plain_no_unsynced_switch no_api unsynced_for_tests sh -c "cd '$HOST' && env -u RUSTFLAGS cargo check"
 host_manifest ', features = ["conformance"]'
 host_main 'doc.apply_client_update(&[], 7)'
 timed host_conformance_no_client_api no_api apply_client_update sh -c "cd '$HOST' && env -u RUSTFLAGS cargo check"

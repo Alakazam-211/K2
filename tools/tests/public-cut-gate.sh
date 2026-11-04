@@ -8,7 +8,9 @@
 #                tools/tests/full.sh's parts, on the cut (evidence includes oss)
 #   licence      scripts/check-licences.sh, and no mpce crate in the kit's or the workspace's tree
 #   lockproof    cargo's own resolution (no --locked) leaves the cut's pruned Cargo.lock unchanged
-#   checker      tools/check-public-cut.sh: the cut is clean; planted copies of it are blocked
+#   checker      tools/check-public-cut.sh: the cut is clean; planted copies of it are blocked,
+#                the text rule's each at exactly its finding, with the node's awk (which gates)
+#                and every other awk the node has (informational; never fails the part)
 #   checker-precut  the pre-cut commit is blocked, naming what the cut removes; public-cut.sh on
 #                planted copies of it drops derived engine-only features and stops on a mixed one
 #   reproduce    public-cut.sh run here on the pre-cut commit makes exactly the cut's tree (the
@@ -19,7 +21,8 @@
 # repo gets --locked (a PATH shim; a caller passing --locked or --frozen itself gets nothing
 # added). Planted and reproduced trees are `git archive` copies in GATE_TMP (default: beside the
 # checkout, in the job's own directory), each with its own `git init` when the script needs one:
-# never the checkout or its repository. Env: PART; EXPECT (optional: the sha the job must be at).
+# never the checkout or its repository (a copy reads the repository's objects, through an alternate,
+# for the history the text rule needs). Env: PART; EXPECT (optional: the sha the job must be at).
 # The last line is `=== RESULT <part>: GREEN|RED`; the job fails with any step.
 echo "=== public-cut gate part ${PART:-none}"
 H=$(git rev-parse HEAD 2>/dev/null || echo none)
@@ -59,11 +62,17 @@ export PATH="$SHIM:$PATH"
 echo "target: ${CARGO_TARGET_DIR:-./target}"
 
 # copy COMMIT DIR [git]: COMMIT's tree into DIR (a git archive), with its own repository and one
-# commit on branch `gate` when the third argument is `git`
+# commit on branch `gate`, a child of COMMIT with the same tree, when the third argument is `git`.
+# COMMIT's history is read through an alternate, so check-public-cut.sh's text rule runs on it there
+# as it does at the cut. Nothing is written to the checkout's repository.
 copy() {
   mkdir -p "$2" && git archive "$1" | tar -x -C "$2" || { echo "SETUP FAILED: archive of $1"; return 1; }
   [ "${3:-}" = git ] || return 0
-  ( cd "$2" && git init -q -b gate && git add -A && git -c user.name=gate -c user.email=gate@invalid commit -qm "gate copy" ) \
+  par=$(git rev-parse --verify "$1^{commit}") && obj=$(cd "$(git rev-parse --git-path objects)" && pwd) \
+    || { echo "SETUP FAILED: $1 or the objects directory not found"; return 1; }
+  ( cd "$2" && git init -q -b gate && mkdir -p .git/objects/info && echo "$obj" > .git/objects/info/alternates && git add -A \
+      && c=$(git -c user.name=gate -c user.email=gate@invalid commit-tree "$(git write-tree)" -p "$par" -m "gate copy") \
+      && git update-ref HEAD "$c" ) \
     || { echo "SETUP FAILED: git init in $2"; return 1; }
   [ -z "$(cd "$2" && git status --porcelain)" ] || { echo "SETUP FAILED: $2 not clean"; return 1; }
 }
@@ -80,6 +89,162 @@ expect_block() {
 }
 # a plant under crates/base/Cargo.toml's [features] (lines separated by |)
 under_features() { awk -v ins="$1" '{ print } /^\[features\]/ { n = split(ins, L, "|"); for (i = 1; i <= n; i++) print L[i] }' "$2"; }
+
+# The text and dropped rules' plants. TP is a copy with its own base: commit X, then a commit recording X, so
+# the only added lines are a plant's and every plant's finding is the only one. The terms and trees
+# are read from the checker: this file must pass both rules too, so it doesn't spell them.
+# expect_text LABEL DIR EXIT LINE...: check-public-cut.sh on DIR exits EXIT, and its findings are
+# exactly the LINEs (whole lines); with EXIT 0, it says clean.
+expect_text() {
+  lbl=$1; d=$2; want=$3; shift 3
+  out=$(sh "$d/tools/check-public-cut.sh" "$d" 2>&1); r=$?
+  printf '%s\n' "$out" | sed "s|^|  [$lbl] |"
+  [ "$r" -eq "$want" ] || { echo "PLANT $lbl: exit $r, expected $want"; return 1; }
+  n=$(printf '%s\n' "$out" | grep '^check-public-cut: ' | grep -vc '^check-public-cut: \(BLOCKED\|clean\)')
+  [ "$n" -eq $# ] || { echo "PLANT $lbl: $n finding(s), expected $#"; return 1; }
+  for p in "$@"; do printf '%s\n' "$out" | grep -qxF -- "$p" || { echo "PLANT $lbl: no line: $p"; return 1; }; done
+  if [ "$want" -eq 0 ]; then printf '%s\n' "$out" | grep -q '^check-public-cut: clean' || { echo "PLANT $lbl: not clean"; return 1; }; fi
+  echo "PLANT $lbl: exit $r, exactly the expected finding(s)"
+}
+tp_commit() { ( cd "$D" && git add -A && git -c user.name=gate -c user.email=gate@invalid -c commit.gpgsign=false commit -qm "$1" ) || { echo "SETUP FAILED: commit in $D"; return 1; }; }
+tp_new() { D=$GATE_TMP/text-$1; rm -rf "$D"; cp -R "$TP" "$D" || { echo "SETUP FAILED: copy to $D"; return 1; }; }
+# tp_line FILE TEXT: append a line to FILE; L is its number
+tp_line() { printf '%s\n' "$2" >> "$D/$1" && L=$(wc -l < "$D/$1" | tr -d ' '); }
+tp_rebase() { printf '%s\n' "$(cd "$D" && git rev-parse HEAD)" > "$D/$TEXT_BASE"; }
+text_start() {
+  TP=$GATE_TMP/text-start; rm -rf "$TP"
+  copy HEAD "$TP" git || return 1
+  eval "$(sh "$TP/tools/check-public-cut.sh" --print-config)"
+  TA=$(printf '%s\n' "$TEXT_TERMS" | tr '|' '\n' | awk 'NF == 1' | sed -n 1p)
+  TB=$(printf '%s\n' "$TEXT_TERMS" | tr '|' '\n' | awk 'NF == 1' | sed -n 2p)
+  TM=$(printf '%s\n' "$TEXT_TERMS" | tr '|' '\n' | awk 'NF == 2' | sed -n 1p)
+  [ -n "$TA" ] && [ -n "$TB" ] && [ -n "$TM" ] || { echo "SETUP FAILED: terms not read from the checker"; return 1; }
+  T1=${DROPPED_TREES%% *}; T2=${DROPPED_TREES#* }
+  [ -n "$T1" ] && [ -n "$T2" ] && [ "$T1" != "$T2" ] || { echo "SETUP FAILED: two trees not read from the checker"; return 1; }
+  D=$TP
+  printf '# none\n' > "$D/$TEXT_EXCEPTIONS"
+  tp_commit "base" && tp_rebase && tp_commit "base recorded" || return 1
+  expect_text start "$D" 0
+}
+FIND="check-public-cut: text:"
+RECORD="record the previous host release's pre-cut commit (tools/README.md, \"The public cut\")"
+UPDATE="update it to the previous host release's pre-cut commit (tools/README.md, \"The public cut\")"
+tp_md() { tp_new md && tp_line docs/POSITIONS.md "A planted line with $TA in it." && tp_commit plant && expect_text md "$D" 1 "$FIND docs/POSITIONS.md:$L: $TA"; }
+tp_comment() { tp_new comment && tp_line crates/base/src/lib.rs "// a planted comment: $TB" && tp_commit plant && expect_text comment "$D" 1 "$FIND crates/base/src/lib.rs:$L: $TB"; }
+tp_test_name() { tp_new test-name && tp_line crates/base/src/lib.rs "fn $(printf '%s' "$TM" | tr ' ' _)_planted() {}" && tp_commit plant && expect_text test-name "$D" 1 "$FIND crates/base/src/lib.rs:$L: $TM"; }
+tp_wrap() {
+  tp_new wrap && tp_line docs/POSITIONS.md "A planted line ending ${TM%% *}" && tp_line docs/POSITIONS.md "${TM#* } and the next." && tp_commit plant \
+    && expect_text wrap "$D" 1 "$FIND docs/POSITIONS.md:$L: $TM"
+}
+# the same line is blocked while it is added, and passes once the base has it: a line beside it added
+tp_not_added() {
+  tp_new not-added && tp_line docs/POSITIONS.md "A planted line with $TA in it." && N=$L && tp_commit plant \
+    && expect_text not-added-while-added "$D" 1 "$FIND docs/POSITIONS.md:$N: $TA" \
+    && tp_rebase && tp_line docs/POSITIONS.md "A plain line beside it." && tp_commit "base moved" \
+    && [ "$(sed -n "${N}p" "$D/docs/POSITIONS.md")" = "A planted line with $TA in it." ] \
+    && expect_text not-added "$D" 0
+}
+# an entry passes its own line, and not another line of that file with the same term
+tp_exception() {
+  tp_new exception && tp_line docs/POSITIONS.md "The reviewed line: $TA." && tp_line docs/POSITIONS.md "Another line: $TA." \
+    && printf 'docs/POSITIONS.md: The reviewed line: %s.\n' "$TA" >> "$D/$TEXT_EXCEPTIONS" && tp_commit plant \
+    && expect_text exception-other-line "$D" 1 "$FIND docs/POSITIONS.md:$L: $TA" \
+    && sed '$d' "$D/docs/POSITIONS.md" > "$D/positions.tmp" && mv "$D/positions.tmp" "$D/docs/POSITIONS.md" && tp_commit "only the reviewed line" \
+    && expect_text exception-covered "$D" 0
+}
+tp_exception_stale() {
+  tp_new exception-stale && tp_line "$TEXT_EXCEPTIONS" "docs/POSITIONS.md: a line nobody added" && tp_commit plant \
+    && expect_text exception-stale "$D" 1 "$FIND $TEXT_EXCEPTIONS:$L: no added line with a term matches this entry"
+}
+tp_own_script() { tp_new own-script && tp_line tools/check-public-cut.sh "# a planted comment: $TA" && tp_commit plant && expect_text own-script "$D" 1 "$FIND tools/check-public-cut.sh:$L: $TA"; }
+tp_base_missing() { tp_new base-missing && rm -f "$D/$TEXT_BASE" && tp_commit plant && expect_text base-missing "$D" 1 "$FIND $TEXT_BASE: missing or not tracked: $RECORD"; }
+tp_base_short() { tp_new base-short && printf '%s\n' abc123 > "$D/$TEXT_BASE" && tp_commit plant && expect_text base-short "$D" 1 "$FIND $TEXT_BASE: not one full commit sha: $RECORD"; }
+# a commit of this repository that HEAD doesn't descend from
+tp_base_foreign() {
+  tp_new base-foreign && side=$(cd "$D" && git -c user.name=gate -c user.email=gate@invalid commit-tree 'HEAD^{tree}' -m side) && [ -n "$side" ] \
+    && printf '%s\n' "$side" > "$D/$TEXT_BASE" && tp_commit plant \
+    && expect_text base-foreign "$D" 1 "$FIND $TEXT_BASE: $side is not an ancestor of HEAD: $UPDATE"
+}
+# the removed trees: a file under each, and references to them, read from the checker's config
+tp_dropped_file() {
+  tp_new dropped-file && mkdir -p "$D/$T1" && tp_line "$T1/planted.rs" "// planted" && tp_commit plant \
+    && expect_text dropped-file "$D" 1 "check-public-cut: dropped: $T1/planted.rs (under $T1, which the cut removes)"
+}
+tp_dropped_file2() {
+  tp_new dropped-file2 && mkdir -p "$D/$T2" && tp_line "$T2/planted.sh" "# planted" && tp_commit plant \
+    && expect_text dropped-file2 "$D" 1 "check-public-cut: dropped: $T2/planted.sh (under $T2, which the cut removes)"
+}
+tp_dropped_untracked() {
+  tp_new dropped-untracked && mkdir -p "$D/$T1" && tp_line "$T1/planted.txt" "planted" \
+    && (cd "$D" && git status --porcelain --untracked-files=all | grep -q planted.txt) \
+    && expect_text dropped-untracked "$D" 1 "check-public-cut: dropped: $T1 exists (a tree the cut removes)"
+}
+tp_dropped_ref_doc() { tp_new dropped-ref-doc && tp_line docs/POSITIONS.md "Run sh $T1/planted.sh to see it." && tp_commit plant && expect_text dropped-ref-doc "$D" 1 "check-public-cut: dropped: docs/POSITIONS.md:$L: names a tree the cut removes"; }
+tp_dropped_ref_script() { tp_new dropped-ref-script && tp_line tools/test-bundle.sh "python3 \$ROOT/$T2/planted.py" && tp_commit plant && expect_text dropped-ref-script "$D" 1 "check-public-cut: dropped: tools/test-bundle.sh:$L: names a tree the cut removes"; }
+tp_dropped_ref_manifest() {
+  tp_new dropped-ref-manifest && awk -v t="$T1" '{ print } /^exclude = \[/ { print "  \"" t "\"," }' "$TP/Cargo.toml" > "$D/Cargo.toml" && tp_commit plant \
+    && L=$(grep -n "^  \"$T1\",\$" "$D/Cargo.toml" | cut -d: -f1) && [ -n "$L" ] \
+    && expect_text dropped-ref-manifest "$D" 1 "check-public-cut: dropped: Cargo.toml:$L: names a tree the cut removes"
+}
+tp_dropped_ref_changelog() { tp_new dropped-ref-changelog && tp_line CHANGELOG.md "A planted note on $T1/planted.rs." && tp_commit plant && expect_text dropped-ref-changelog "$D" 0; }
+tp_marker_left() {
+  m="<!-- public-cut: drop-""begin -->"
+  tp_new marker-left && tp_line docs/POSITIONS.md "$m" && tp_commit plant \
+    && expect_text marker-left "$D" 1 "check-public-cut: tooling: docs/POSITIONS.md:$L:$m (a marker the cut must drop)"
+}
+# the text rule reads prose: code tokens pass, their words in a comment, a string, a test name or a
+# .md block (TK, TO and TU are spelled in pieces, as this file must pass the rule too)
+TK=pan''ic; TO=over''flow; TU="us""ed to"; RSF=crates/base/src/lib.rs; TSF=client/src/hunk.ts
+tp_code_passes() {
+  tp_new code-passes && tp_line "$RSF" "fn planted_call() { $TK!(\"x\"); }" && tp_line "$RSF" "#[should_$TK]" && tp_line "$RSF" "fn planted_path() { let _ = std::$TK::catch_unwind(|| 1u8.${TO}ing_add(1)); }" \
+    && tp_line "$RSF" "// a planted comment" && tp_line "$TSF" "const planted = e.style.$TO;" && tp_commit plant && expect_text code-passes "$D" 0
+}
+tp_code_comment() {
+  tp_new code-comment && tp_line "$RSF" "// this $TU $TK" && tp_commit plant \
+    && expect_text code-comment "$D" 1 "$FIND $RSF:$L: $TU" "$FIND $RSF:$L: $TK"
+}
+# the macro's token goes, and what its string says still counts: not the term $TK, the other two
+tp_code_string() {
+  tp_new code-string && tp_line "$RSF" "fn planted_call() { $TK!(\"this $TU $TB\"); }" && tp_commit plant \
+    && expect_text code-string "$D" 1 "$FIND $RSF:$L: $TU" "$FIND $RSF:$L: $TB"
+}
+tp_code_string_token() { tp_new code-string-token && tp_line "$RSF" "const PLANTED: &str = \"see $TK!(\";" && tp_commit plant && expect_text code-string-token "$D" 1 "$FIND $RSF:$L: $TK"; }
+tp_code_ts_string() { tp_new code-ts-string && tp_line "$TSF" "const planted = 'a $TK!( here';" && tp_commit plant && expect_text code-ts-string "$D" 1 "$FIND $TSF:$L: $TK"; }
+tp_code_md() { tp_new code-md && tp_line docs/POSITIONS.md "$TK!(\"x\")" && tp_commit plant && expect_text code-md "$D" 1 "$FIND docs/POSITIONS.md:$L: $TK"; }
+tp_code_test_name() { tp_new code-test-name && tp_line "$RSF" "fn ${TK}s_on_planted() {}" && tp_commit plant && expect_text code-test-name "$D" 1 "$FIND $RSF:$L: $TK"; }
+tp_code_plain_word() { tp_new code-plain-word && tp_line "$RSF" "    and a $TO in a wrapped literal\"," && tp_commit plant && expect_text code-plain-word "$D" 1 "$FIND $RSF:$L: $TO"; }
+# text_plants STEP: every plant, each run by STEP LABEL CMD (timed gates, info_step doesn't)
+text_plants() {
+  "$1" plant_text_md tp_md; "$1" plant_text_comment tp_comment; "$1" plant_text_test_name tp_test_name; "$1" plant_text_wrap tp_wrap
+  "$1" plant_text_not_added tp_not_added; "$1" plant_text_exception tp_exception; "$1" plant_text_exception_stale tp_exception_stale
+  "$1" plant_text_own_script tp_own_script; "$1" plant_text_base_missing tp_base_missing; "$1" plant_text_base_short tp_base_short
+  "$1" plant_text_base_foreign tp_base_foreign
+  "$1" plant_dropped_file tp_dropped_file; "$1" plant_dropped_file2 tp_dropped_file2; "$1" plant_dropped_untracked tp_dropped_untracked
+  "$1" plant_dropped_ref_doc tp_dropped_ref_doc; "$1" plant_dropped_ref_script tp_dropped_ref_script; "$1" plant_dropped_ref_manifest tp_dropped_ref_manifest
+  "$1" plant_dropped_ref_changelog tp_dropped_ref_changelog; "$1" plant_marker_left tp_marker_left
+  "$1" plant_code_passes tp_code_passes; "$1" plant_code_comment tp_code_comment; "$1" plant_code_string tp_code_string
+  "$1" plant_code_string_token tp_code_string_token; "$1" plant_code_ts_string tp_code_ts_string; "$1" plant_code_md tp_code_md
+  "$1" plant_code_test_name tp_code_test_name; "$1" plant_code_plain_word tp_code_plain_word
+}
+info_step() {
+  l=$1; shift
+  o=$(set +e; "$@" 2>&1); r=$?
+  if [ "$r" -eq 0 ]; then INFO_OK=$((INFO_OK + 1)); else INFO_BAD=$((INFO_BAD + 1)); printf '%s\n' "$o" | tail -20; echo "INFO: $l: exit $r"; fi
+}
+# every other awk the node has, on the same plants; never gating, and never fatal (an || list
+# turns set -e off), one verdict line each
+info_text_awks() {
+  seen=" $(readlink -f "$(command -v awk)" 2>/dev/null) "
+  for alt in gawk mawk original-awk nawk; do
+    a=$(command -v "$alt" 2>/dev/null) || continue
+    t=$(readlink -f "$a" 2>/dev/null)
+    case $seen in *" $t "*) echo "INFO: $alt: $t, a binary already run: skipped"; continue ;; esac
+    seen="$seen$t "
+    B=$GATE_TMP/text-awk-$alt; rm -rf "$B"; mkdir -p "$B"; ln -s "$a" "$B/awk"
+    ( PATH="$B:$PATH"; export PATH; INFO_OK=0; INFO_BAD=0; text_plants info_step; echo "INFO: $alt: text plants: $INFO_OK as expected, $INFO_BAD not" )
+    rm -rf "$B"
+  done
+}
 
 case ${PART:-none} in
   base-a1|base-a2|base-b|base-c|base-d|errors|spec-undo|wire-guard|evidence|lint)
@@ -115,10 +280,18 @@ case ${PART:-none} in
       timed plant_engine_feature_ref expect_block engine-feature "$P-fea" "[features] planted-x: names mpce-core"
       cp -R "$P" "$P-der"; under_features 'foo = ["planted-shortcuts"]' "$P/crates/base/Cargo.toml" > "$P-der/crates/base/Cargo.toml"
       timed plant_derived_feature_left expect_block derived-feature "$P-der" "[features] foo: enables planted-shortcuts, which this manifest does not declare"
+      cp -R "$P" "$P-win"; printf 'x\n' > "$P-win/nul.txt"
+      timed plant_windows_name expect_block windows-name "$P-win" "windows-names: nul.txt: reserved name nul"
+      cp -R "$P" "$P-wmi"; rm -f "$P-wmi/tools/check-windows-names.sh"
+      timed plant_windows_check_missing expect_block windows-missing "$P-wmi" "windows-names: tools/check-windows-names.sh missing"
     else
       RC=1
     fi
-    rm -rf "$P"* ;;
+    rm -rf "$P"*
+    timed plant_text_start text_start
+    text_plants timed
+    info_text_awks || echo "INFO: the informational runs stopped early (rc $?); not gating"
+    rm -rf "$GATE_TMP"/text-* ;;
   checker-precut)
     # the pre-cut commit must be blocked, naming each engine vendor directory, the engine-only
     # feature and each engine package of its lockfile (all read from that commit)
@@ -130,11 +303,12 @@ case ${PART:-none} in
         n=${d##*/}; case " $PUBLIC_ENGINE_CRATES " in *" $n "*) continue ;; esac
         [ -d "$d" ] && set -- "$@" "paths: vendor/$n exists"
       done
-      for x in $NATIVE_FEATURES; do grep -qE "^$x[[:space:]]*=" "$P/crates/base/Cargo.toml" && set -- "$@" "[features] declares the engine-only feature $x"; done
+      for x in $NATIVE_FEATURES; do grep -qE "^$x[[:space:]]*=" "$P/crates/base/Cargo.toml" && set -- "$@" "[features] declares the cut-only feature $x"; done
       for n in $(sed -n 's/^name = "\(mpce[-_][A-Za-z0-9_-]*\)"$/\1/p' "$P/Cargo.lock"); do
         case " $PUBLIC_ENGINE_CRATES " in *" $n "*) continue ;; esac
         set -- "$@" "[[package]] name: names $n"
       done
+      for t in $DROPPED_TREES; do set -- "$@" "dropped: $(cd "$P" && find "$t" -type f | sort | sed -n 1p) (under $t, which the cut removes)"; done
       echo "expected findings: $#"
       [ $# -gt 0 ] || { echo "SETUP FAILED: no expectation read from the pre-cut commit"; RC=1; }
       timed checker_precut_blocks expect_block precut "$P" "$@"

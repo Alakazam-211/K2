@@ -92,7 +92,8 @@ It fails on any of these:
 - a `PARTIAL` run cited without `≥ N, partial (cap …)`, with the wrong N, or with the wrong cap;
 - a run of any other status cited;
 - a count-like number in an evidence table with no citation and no exemption. Count-like means 1,000 or more, written `12,345` or `12345`, and not followed by a unit (s, min, h, %, MB, GiB, M, k, ×, ...). Cells in Job / Commit columns are skipped.
-- a least depth backed by a run that is not a strict BFS (§4).
+- a least depth backed by a run that is not a strict BFS (§4);
+- a record, cited or not, that says its run ran nothing: status `ERROR`, `NO_RESULT` or `UNKNOWN`, or `COMPLETE` with `states`, `samples`, `traces`, `histories`, `walks` or `tests` at 0. A job's exit code doesn't show these. If it is known and fine, the record carries `not_run_ok` with the reason.
 
 Prose is not scanned for uncited counts, but every citation in it is checked.
 

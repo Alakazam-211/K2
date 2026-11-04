@@ -106,3 +106,85 @@ unsubscribe.
   - `(deliver) => deliver()`: immediate delivery, one callback a change (an agent, a Node tool);
   - any other function that runs `deliver` once, later.
 - After `close()` nothing is delivered.
+
+## Selection by element, pointer and viewport
+
+`PresenceChannel` is for docs made of keyed elements. It takes any `Transport` and the
+connection's `welcome`, can share them with a `LiveText`, and has no DOM.
+
+```ts
+const presence = new PresenceChannel(transport, welcome);
+presence.setSelection({ root: "items", keys: ["i1", "i2"] }); // null or no keys: clear
+presence.setPointer({ x: 120, y: -40 });                      // null: clear
+presence.setViewport({ x: 0, y: 0, w: 800, h: 600 });         // null: clear
+presence.onChange((peers) => draw(peers));
+presence.onRefused(({ frame, error }) => report(frame, error));
+presence.reconnected(nextWelcome);                            // after every reconnect
+```
+
+- **Frames go out only when the host takes them:** `presence.supported` is whether
+  `welcome.features` lists `"presence"`. Otherwise the setters only record the value, and
+  `reconnected` sends it if a later connection lists the feature.
+- **The pointer and the viewport are batched:** at most one frame per `schedule` call
+  (`PresenceChannelOptions.schedule`; the default as for `LiveText`), the latest value. A selection
+  goes at once.
+- **Refusals:** `onRefused` gets the frame's type and the error. The host refuses a key that isn't
+  live (`MPC-E114`), which can happen when a deletion crosses the frame. The channel refuses itself,
+  unsent, more than 256 keys (`MPC-E310`) and coordinates the host would refuse (`MPC-E114`). A
+  refused value isn't sent again on a reconnect.
+
+`peers()` is a snapshot, in roster order:
+
+| field | meaning |
+|---|---|
+| `handle`, `name`, `colour`, `kind`, `rawKind`, `away` | as on `Participant` above |
+| `client?` | the connection; absent on a participant's row with nothing to show, and on a grid (one row a participant) |
+| `isSelf`, `sameUser` | as on `Participant` above |
+| `selection` | `{root, keys}` or `null` |
+| `pointer` | `{x, y}` or `null`, in the doc's own coordinates |
+| `viewport` | `{x, y, w, h}` or `null`, in the doc's own coordinates |
+
+There is one row for each connection that has a value, one for a participant with none, and this
+connection's row. The self row holds what the host last reported, so it lags the setters: the host
+draws its own selection from its own state.
+
+## Claims on elements
+
+`PresenceChannel` also claims elements of a list root, so others know to keep off them while you
+work. A claim is advisory: it refuses an agent's edit only when the host asks for that, and never a
+person's.
+
+```ts
+if (presence.claimsSupported) {
+  const claim = await presence.claim("items", ["i1", "i2"], { hold: true, note: "moving these" });
+  // ... several edits ...
+  await presence.release(claim); // no id: all of this participant's in the doc
+}
+```
+
+- **Frames go out only when the host takes them:** `presence.claimsSupported` is whether
+  `welcome.features` lists `"claims"`, separately from `supported`. Otherwise `claim` and `release`
+  send nothing and reject with `unsupported`.
+- **`hold`:** without it, the claim ends on your first edit touching it. Set it to make several
+  edits under one claim, and release when done. It still runs out: `ttlMs` is clamped to the host's
+  most.
+- **Rejections:** both reject with a `ClaimRejected`, whose `reason` says why:
+
+| `reason` | meaning | the claim |
+|---|---|---|
+| `refused` | `error` says why: from the host (`MPC-E301` someone else's claim, `MPC-E114` a key that isn't live or a root that isn't a list, `MPC-E303`, `MPC-E903`, `MPC-E904`), or from the channel, unsent (`MPC-E304`: no keys, more than 256, a note over 1024 bytes, a bad `ttlMs`). `onRefused` hears these too | not taken |
+| `unsupported` | this connection's host doesn't list `"claims"`; nothing was sent | not taken |
+| `reconnected` | the connection changed before the host answered | unknown: see below |
+| `closed` | `close()` was called before the host answered | unknown: see below |
+
+- **A claim doesn't outlive the connection that took it,** held or not. So when a request is caught
+  by a reconnect, the claim may never have been taken, and if it was, it has ended or will end when
+  the old connection closes. Read the roster, and claim again if you still need it. The channel
+  never sends a claim again by itself.
+- **A host that never answers:** the request waits until `reconnected` or `close()`. Call `close()`
+  when the connection ends for good.
+- **Who holds what** comes from the roster: `claim_started_elems` and `claim_ended` through
+  `LiveText.onRosterEvent` or your own `roster_event` handling, and a snapshot's `elem_claims`.
+
+A selection is by key, so it needs no mapping through changes. A key whose element stops being live
+leaves it, for everyone, and doesn't come back if the element does.

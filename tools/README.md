@@ -2,14 +2,19 @@
 
 Jobs for compute nodes: the kit's heavy tests ([Test jobs](#test-jobs): the full suite, the
 32-participant soak, the live GNU parity), the undo spec's model check
-(`docs/MODEL-CHECK.md`) and the fuzz targets ([Fuzzing](#fuzzing)). Nothing here is shipped or needed to build the kit.
+(`docs/MODEL-CHECK.md`).
+Nothing here is shipped or needed to build the kit.
 
 **Build machines are the host's.** The jobs are self-contained shell scripts for any Linux
 runner; nothing here names a machine. The examples submit them with one compute CLI
-(`k2 compute run "$NODE" …`): set `NODE` (or `FUZZ_NODES` for the fuzz nightly) to your own
+(`k2 compute run "$NODE" …`): set `NODE` to your own
 runner. Any Linux box with a checkout runs a job the same way (`sh tools/job.sh <commands
 file>` at the repo root). Figures in the notes say "a build node" with the node's size where it matters.
 `tools/check-private.sh` keeps internal host names out of the tree.
+`tools/check-windows-names.sh` fails on any path Windows can't check out: a reserved name, a
+refused or control character, a trailing dot or space, or a case collision, in every path component,
+or a whole path over 200 bytes.
+`tools/test-windows-names.sh` is its self-test.
 `tools/oss-check.sh` (K-OSS-3) fails unless the repo carries its licence: `LICENSE-MIT` and
 `LICENSE-APACHE` at the root, `license = "MIT OR Apache-2.0"` and `publish = false` on every
 crate of ours, the same licence on every `package.json` of ours (and its lockfile's root entry),
@@ -95,7 +100,7 @@ tools/test-bundle.sh [--rev REV] [--env NAME=VALUE]... <commands file> <out dir>
   past the variables, over what one argument carries): every shipped crate's `src/` and
   `tests/` travel with their doc-comment lines (`///`, `//!`) **blanked, not deleted**, so
   every line number a panic or a test failure names is the repository's
-  (`tools/fuzz/strip-comments.py --docs`, which refuses when such a line sits in a string
+  (`tools/strip-comments.py --docs`, which refuses when such a line sits in a string
   literal). The code is unchanged; doctests are left behind, so use it only for a part that
   runs none (`spec-undo`, `conformance`, `base-c`), never `base-a1`.
 - **How it travels:** an xz tarball, base64, in chunks of at most `CHUNK` characters
@@ -131,6 +136,7 @@ gate.
 | `tests/soak.sh` | `tools/tests/full-paths.sh soak` | `SOAK_SECS` + build (default 10 min) | the 32-participant soak in release (`crates/base/tests/soak.rs`: progress every 30 s, a summary with peak memory), then its CI variant (`soak_short`), then the D1 replay regression (`soak_replay_seed_3_no_d1`: seed 3, 27,000 calls, no known D1 violation; about a minute) |
 | `tests/gnu-parity.sh` | `scripts/gnu-parity.py crates/base/tests/golden` | < 1 min | the golden corpus's `gnu: same` cases against the real GNU tools (K-PAR-7); needs python3 and the GNU tools, no Rust |
 | `n1/n1.sh <tag> <dir>` | `old` (the tag's kit) and `n1` (`n1/consumer` + two stores this build wrote) | < 2 min | store format 6's N−1 check (K-FMT-10 item 22): the previous release opens, reads, writes, reverts and rewrites a store this build used for text docs only, and refuses one holding a grid doc with one line (`N-1 OK`) |
+| `n1/n1.sh layout-refs <tag> <dir>`, then `node-refs <dir>` | `old` (the tag's kit) and `refs` (`n1/consumer-refs` + a store this build wrote) | < 3 min | the blob references' N−1 check: the previous release's gc keeps a blob this build took a reference on (`HELD`), collects one named only by a value it wrote (`LIMIT`, the documented limit), refuses a rewrite and leaves rows on a delete; this build's open gives those back and a load takes a hold on what's still there (`N-1 REFS OK`) |
 
 A run, **always with an explicit `--mem`**. Run cargo with the host's `K2_*`/`K2SO_*`
 variables unset (a subshell that runs only cargo); run the `k2` CLI with them **intact**:
@@ -202,8 +208,10 @@ merged into main:** main merges the pre-cut commit (`tag^`), which keeps everyth
 
 | Script | What it does |
 |---|---|
-| `public-cut.sh [--no-commit] [--lock FILE] [--trailer TEXT]...` | Run at the root of a clean checkout of the release branch (never main): removes every `vendor/mpce*` but the allowlist's, the crates the allowlist drops (the conformance suite), the engine-only features (`native`, and every feature derived from removed ones, to a fixed point), engine dependencies from every dependency table, the code under cfgs on removed features, the tooling's parts for them, and the lockfile's removed packages (removals only); then runs `check-public-cut.sh` and commits. Idempotent: on a cut tree it changes nothing and commits nothing. `--no-commit` is a dry run (allowed detached and on a dirty tree). Its header has the rules; a case it can't decide (a feature mixing engine parts with an optional dependency, an unknown cfg form) stops it, to decide by hand |
-| `check-public-cut.sh [ROOT]` | Fails closed (exit 1, naming every offending path or entry) unless the tree may be a public cut: both licence files; no engine path, manifest entry, lock entry or engine identifier outside `PUBLIC_ENGINE_CRATES`; no engine-only feature declared, requested or left enabled; every cfg names a declared feature; no dropped crate or engine feature in the tooling; every pinned regression present; `check-private.sh` clean. The allowlist (`PUBLIC_ENGINE_CRATES`, `NATIVE_FEATURES`, `DROPPED_CRATES`, `LICENCE_FILES`) is at its top, the one place to change it; `--print-config` prints it |
+| `public-cut.sh [--no-commit] [--lock FILE] [--trailer TEXT]...` | Run at the root of a clean checkout of the release branch (never main): removes every `vendor/mpce*` but the allowlist's, the crates the allowlist drops (the conformance suite), the engine-only features (`native`, and every feature derived from removed ones, to a fixed point), engine dependencies from every dependency table, the trees in `DROPPED_TREES` (tooling no host builds or runs), the code under cfgs on removed features, the tooling's parts for them, what `public-cut: drop` marker lines enclose in a Markdown file or a `Cargo.toml`, and the lockfile's removed packages (removals only); then runs `check-public-cut.sh` and commits. Idempotent: on a cut tree it changes nothing and commits nothing. `--no-commit` is a dry run (allowed detached and on a dirty tree). Its header has the rules; a case it can't decide (a feature mixing engine parts with an optional dependency, an unknown cfg form) stops it, to decide by hand |
+| `check-public-cut.sh [ROOT]` | Fails closed (exit 1, naming every offending path or entry) unless the tree may be a public cut: both licence files; no engine path, manifest entry, lock entry or engine identifier outside `PUBLIC_ENGINE_CRATES`; no engine-only feature declared, requested or left enabled; every cfg names a declared feature; no dropped crate or engine feature in the tooling; every pinned regression present; no file under `DROPPED_TREES` and no reference to one (`DROPPED_REFS`, in any kept text file but a CHANGELOG, `vendor/` or the two cut scripts); no line added since the previous host release uses a term in `TEXT_TERMS`, unless reviewed (below); `check-private.sh` clean. The allowlist (`PUBLIC_ENGINE_CRATES`, `NATIVE_FEATURES`, `DROPPED_CRATES`, `LICENCE_FILES`, `DROPPED_TREES`, `DROPPED_REFS`, `TEXT_TERMS`) is at its top, the one place to change it; `--print-config` prints it |
+| `public-text-base` | The text rule's base: the previous host release's pre-cut commit (`tag^`), one full sha. Missing, not tracked or not an ancestor of HEAD blocks the tag. A job's checkout has the history and no tags, so a sha it is |
+| `public-text-exceptions.txt` | The lines the text rule found and a person reviewed and kept, one `PATH: TEXT` each (the whole added line, trimmed). An entry covers that exact text in that file, so a changed line or another line of the file still blocks, and a moved one needs no update. Line numbers would go stale with each edit above them, and a hash would hide what was reviewed. An entry matching no added line blocks too, so none outlives its base |
 | `public-cut-regressions.txt` | The pinned regression tests of the host's earlier tags, which every cut must still carry (a hotfix line is cherry-picked, not an ancestor, so they are checked by name). One per line: `NAME` (a Rust `fn NAME` with a test attribute, not `#[ignore]`d) or `PATH IDENT` (the word in that file). **At each hotfix tag, append its regression tests** under a comment naming the tag and the fix |
 | `tests/public-cut-gate.sh` | The cut's gate: a commands file for `job.sh`, run at the cut commit, one part per job (`--env PART=`): `full.sh`'s parts on the cut (`lint`, `base-a1` to `base-d`, `errors`, `spec-undo`, `wire-guard`, `evidence` with oss), `licence`, `lockproof` (cargo's own resolution leaves the pruned lock unchanged), `checker` (the cut is clean; planted copies of it are blocked), `checker-precut` (the pre-cut commit is blocked; the script on planted copies drops derived features and stops on a mixed one) and `reproduce` (the script run on the node makes exactly the cut's tree: the node's awk gates, other awks are informational). Planted and reproduced trees are `git archive` copies beside the checkout, never a worktree of its repository. Each part ends with `=== RESULT <part>: GREEN` or `RED` |
 
@@ -211,14 +219,45 @@ The procedure for a release:
 
 ```sh
 # on the release branch, at the pre-cut release commit (the one main will merge)
-sh tools/public-cut.sh --trailer '...'          # makes `release: public cut`
+sh tools/public-cut.sh --trailer '...'          # makes `release: public cut`; a `text:` finding stops it
 sh tools/public-cut.sh                          # again: "nothing to cut" (idempotent)
 # the gate, every part, at the cut commit (a --repo job each; Test jobs above)
 k2 compute run <node> --repo <repo> --sha <cut> --needs rust@stable+clippy+rustfmt,cargo-nextest \
   --cpus 4 --mem 16G --env PART=reproduce -- sh tools/job.sh tools/tests/public-cut-gate.sh
 ```
 
-Then tag the cut, and merge `tag^` (never the tag) into main.
+Then tag the cut, and merge `tag^` (never the tag) into main. Then, in a commit on main, write
+`tag^`'s full sha in `tools/public-text-base` and clear the entries of
+`tools/public-text-exceptions.txt`: the next release's text rule scans from there. A release on an
+older line does the same on that line, with the `tag^` it starts from. Forgetting costs a longer
+scan, not a missed line.
+
+**The text rule** scans every tracked text file's added lines on the cut's tree: `.md`, code
+comments, test names and messages, `tools/` and the vendored trees that stay in the cut,
+which reach the public repo like the rest. Files the cut removes are out of its reach. Hits are
+expected, as the kit's own changes are described plainly in the CHANGELOG: read each one, and
+either reword it or add it to the exceptions, in the pre-cut commit (`git reset --hard` drops the
+stopped cut's staged edits), then cut again. Files git treats as binary aren't scanned. The rule
+reads prose, not code: in `.rs` and `.ts` files the tokens in `TEXT_CODE_TOKENS` (a macro call, a
+path, a member, a std name) are skipped, outside comments and string literals on that line, so a
+macro's message is still read. Test names and plain words in code still count, and nothing but
+those tokens is skipped, so a line misread by this one-line filter is only scanned more. The gate's
+`checker` part plants a copy for each case, each asserting its exact finding; a gate copy with its
+own `git init` reads the history through an alternate, so the rule runs on it too.
+
+## Timers check
+
+`tools/timers-check/` (crate `k2-mpc-timers-check`, its own workspace, never a member of the
+kit's) builds against the kit with no features, as a host builds it. It checks that the
+production timers (`docs/SESSIONS.md`, "Timers") are there, off by default and not built with
+the test-only hooks, and that once switched on they count a session's edits and join. The
+release run prints a `RUNREC` line with what a scope costs on the node (`calibrate`, off and
+on) and the store commit's p50.
+
+```sh
+k2 compute run "$NODE" --repo . --sha <rev> --needs rust@stable --cpus 4 --mem 8G \
+  --timeout 40m -- sh tools/job.sh tools/timers-check/job.sh
+```
 
 ## Build settings
 
@@ -415,48 +454,79 @@ kit's own code, byte for byte; the job skips the kit's other dependencies.
 In a `--repo` job the whole tree travels and the real kit is built: the same `text` module,
 with the kit's other dependencies.
 
-## Fuzzing
 
-`fuzz/` is a cargo-fuzz crate (libFuzzer, nightly Rust, Linux): its own workspace,
-excluded from the kit's, so a normal build never pulls it. It reaches the store's private
-record decoders through the kit's test-only feature `fuzzing` (`k2_mpc_base::fuzzing`, off
-by default, like `differential`). Every target asserts properties: **a violated property is
-a finding, like a panic.** Targets are built with debug assertions on (`-a`), so the kit's
-own `debug_assert!`s count too.
+## Performance harness
 
-| Target | Input | Properties |
-|---|---|---|
-| `text_merge` | base, ours, theirs: mostly a small vocabulary (repeats, `\n`, multi-byte, combining, empty), sometimes any UTF-8 | `diff::hunks` valid, canonical (no touching or no-op hunks), pure, and gives `new`; `align_insertions` keeps that. `merge3`'s identities; symmetric up to O5's append order; O5 only adds clean merges; a clean merge is exactly both sides' changes applied to the base in base order (insertions before replacements at one point, theirs' first); conflicts disjoint, in order and well formed; `merge3_hunks` on the diffs' hunks is `merge3_window` |
-| `store_records` | a record kind, then bytes | every store record decoder (doc key, sync state, meta, log entry, approval, version and its head, snapshot, change, revert record, carry and taint, provenance row, revert index and stats, the blob records, the file stat) refuses with `Corrupt` or decodes to a record whose encoding is a fixpoint; canonical records re-encode to the input. Allocation is bounded by `-malloc_limit_mb` (256). Engine bytes inside a record are carried, **never decoded**: no fuzzed byte reaches the engine |
-| `write_base` | line-shaped base, ours and theirs that share their start | `write --base`'s merge (`merge::merge3`), judged independently (`k2_mpc_base_fuzz::writebase`): a clean merge holds only whole lines of base, ours or theirs and passes the line-LCS rule; a conflict is fine |
-| `keep_both` | line-shaped base, ours and theirs (feature `merge-rule`) | the outside merge (`merge3_keep_both`) as a pure function, against independent oracles (`keepboth::check_outside`): aligned sides are whole lines of the closed texts; no merge splices or joins lines, loses a line or brings a deleted one back; a clean merge is `write --base`'s with the end merged on its own; a conflicting one keeps both sides by line |
-| `outside_edit` | a file's lines, then up to 24 steps | a file-backed session under two participants' edits, changes that move no byte (edit + undo, delete + retype, rewrite and back, restore, revert), `write --base`, ticks, flushes, restarts (a crash) and outside edits: an outside edit made while the doc is the file is the doc right after `file_changed` and the file after the write-back; a flush makes the file the doc and the session clean; a restart keeps the doc; `write --base` is `merge3` (applied with its text, refused exactly when it conflicts); and, once per process, its fixed regressions (`outside::regressions`, readable inputs: an outside delete and retype over unwritten edits never yields a line twice) |
+`tools/perf/` (crate `k2-mpc-perf`, its own workspace, never a member of the kit's): the kit's
+paths timed at 10k, 100k and 1M versions, p50/p95/p99 per path, two builds paired in one job.
 
-**One run:** `tools/fuzz/bundle.sh <repo> <rev> <out dir> <corpus root> <secs> <target>...`
-writes the job. **The code travels with the runner** (`FUZZ_SHIP=repo`, the default: the
-job is submitted from inside `<repo>`, a repo or worktree in the workspace, with `--sha
-<rev>`, unpushed commits too; [Test jobs](#test-jobs) says what that needs), and only the
-private corpus travels in the job's environment, cut to fit 60 pairs (a runner caps a job at
-64). `FUZZ_SHIP=env` is the fallback: the code travels in the job too (full-line comments
-blanked, line numbers kept: `strip-comments.py` refuses when that would change a string),
-and the bundler refuses when the code alone is over 60 pairs. The job runs every target at
-once for `<secs>`, then minimizes any crash (`cargo fuzz tmin`, `cargo fuzz fmt` renders it)
-and the corpus (`cmin`), and keeps `out/<target>.tgz`:
+- **The builds.** The plain build depends on the kit with **no features**, as a host builds
+  it: every row but one runs there. The kit's dev-dependency features (`differential`,
+  `conformance`) never reach it (`differential` changes hot paths: its profile scopes, the
+  engine's edit-path switch and the planted-fault checks). The `nosync` build adds
+  `conformance` for two things only: the `edit_nosync` row (the store's test-only `unsynced`
+  switch, redb's `Durability::None`) and the live-run count (`Session::char_blame`). It
+  refuses every other row. Both sides of a pair build with the same harness source, the
+  same flags and their own tree's `Cargo.lock`, and every record names its build and its
+  features.
+- **Fixtures** (generated in the job, never committed): `grow` grows one Markdown doc through
+  the public session API with `perf_kit.rs`'s seeded mix (4 people, 4 agents; edits, tools,
+  `edit_with`, undo/redo, reads, a tick every 25 calls and a write-back every 250). It copies
+  the store and file at each size. The text stays at about 200 lines, so only the history
+  grows. The large-doc fixture (`--lines 39000 --line-len 80`, about 3 MiB, under Markdown's
+  4 MiB live limit, at 10k versions) carries the content-scaled rows.
+- **Rows** (`--rows history`): `edit`, `edit_with`, `tool_replace`, `tool_sed`,
+  `doc_edit_as` (the engine doc alone, `Doc::edit_as`, loaded from the fixture's store),
+  `undo`, `revert` (by root), `blame_line`, `blame_doc`, `cat`, `events_500`, `store_probe`,
+  `write_base` (3 others' edits after the read), then `flush`, `tick`, `ingest` (an outside
+  save, `file_changed`) and `notes` (`take_notes` by the replaced line's author), then the
+  cold rows `open`, `join` and `first_edit`, and the memory rows (`mem_open_bytes`,
+  `mem_warm_bytes`: heap held after a reopen and after its first edit, from a counting
+  allocator; `mem_estimate_bytes`: the session's own estimate; `engine_doc_bytes`: one
+  engine doc loaded from the store). `--rows content` (the large doc): `edit`,
+  `doc_edit_as`, `blame_doc`, `flush`, the cold rows and memory. `--rows nosync`:
+  `edit_nosync`, `live_runs`, `prov_runs`.
+- **Samples:** each call is timed alone. A row stops at `--samples` (10,000) or at its timed
+  seconds per run (`--fast-cap-s` 900, `--slow-cap-s` 60, `--cold-cap-s` 60). Every record
+  has `samples` and `p99_indicative` (1 below 10,000 samples): such a p99 is written
+  "indicative (n=…)", never extrapolated. The fixture is copied back in after every
+  `--batch` mutating calls (default a tenth of the size, at least 1,000), so a run at 10k
+  stays near 10k (`version_max` in the run's record).
+- **The pair:** `tools/perf/pair-commit.sh A B` makes a local commit holding A's tree with
+  B's under `.perf-b/`. Submit that commit (never merged or pushed); a commit without
+  `.perf-b/` runs side A alone, or A/A with `PERF_AA=1`. The job builds both sides, grows
+  one fixture on side A (both sides read it; `PERF_OWN_FIXTURES=1`: each side grows its own
+  from the same seed, for a build that can't read A's store) and runs each size `PERF_RUNS` times per side,
+  interleaved A, B, A, B (plain rows, then the `nosync` rows, per run). `summarize`
+  prints the median per side (`perfh_med_*`), the B/A ratio of the medians
+  (`perfh_ratio_*`, ×1000), and growth from the smallest size to the largest
+  (`perfh_growth_*`). `fork(V)` and `changed_since(V)` have no Yrs path: the summary names
+  them as empty slots, never zeros.
 
 ```sh
-FLAGS="outside_edit=-len_control=0" MALLOC="store_records=256" \
-  tools/fuzz/bundle.sh . HEAD /tmp/fz "$FUZZ_HOME" 1800 text_merge store_records outside_edit
-(cd "$(cat /tmp/fz/run-from)" && k2 compute run <node> $(cat /tmp/fz/sha-args) \
-  --needs rust@nightly --artifact 'out/*.tgz' --cpus 3 --mem 8G --timeout 60m \
-  $(cat /tmp/fz/env-args) --detach -- sh -ec "$(cat /tmp/fz/job.sh)")
-k2 compute fetch <job> --out /tmp/fz-out
+SHA=$(tools/perf/pair-commit.sh <A> <B>)
+k2 compute run "$NODE" --repo . --sha "$SHA" --needs rust@stable --cpus 4 --mem 8G --timeout 2h \
+  --env PERF_SIZES=10000,100000 --artifact 'perf-out/samples.tsv' -- sh tools/job.sh tools/perf/pair.sh
 ```
 
-**A night:** `tools/fuzz/nightly.sh` runs the plan in `$FUZZ_HOME/plan` (one job per line:
-repo | rev | node or `auto` (the allowed node in `$FUZZ_NODES` that is free now), targets, `|` between fields), waits, merges each target's corpus and crashes into
-`$FUZZ_HOME/<target>/` and writes `$FUZZ_HOME/runs/<stamp>/report.txt`; `--dry-run` only
-bundles. `FUZZ_WINDOW` (e.g. `01-05`) keeps a run inside its hours: nothing is submitted outside them and no job starts too late to end in them; `FUZZ_TIMEOUT`, `FUZZ_MAX_JOBS` and `FUZZ_SUMMARY_DIR` cap and record a night. Nothing here schedules it: whoever runs it picks the night.
+**Known issue: same-seed fixtures aren't byte-identical.** The seed fixes the calls (same call
+count, same version, same content bytes), not the store file: 10k fixtures came out at about
+10.0, 13.2, 17.4 and 19.5 MB on one binary. `tools/perf/store-spread.sh` shows it is free space,
+not data: the data in those files is the same to about 30 bytes and the pages in use to about 3 in
+2,160; only the file's free space differs, and the file's length moves in steps. So `store_bytes`
+is the file's length, not the data's size: quote it with `store_data_bytes` (the `nosync` run's
+row, with `store_free_bytes`). Why the free space differs from run to run isn't established. A figure belongs to its
+fixture, so every record gives `store_bytes`. Between jobs, even on one binary with the timers
+off, `events_500`'s p99 at 100k moved about 50 %. So: compare builds on one shared fixture (the
+default); sides with their own fixtures compare the fixtures too; and read an absolute figure
+from one job as that fixture's, not as the kit's across fixtures.
 
-**The corpus and crashes are private:** they live in `$FUZZ_HOME`, outside every repo, and
-are never committed. A minimized crash becomes a plain regression test here only after its
-fix, written as a readable input.
+**Which binary was measured.** A target dir outlives a job, so a build that finds nothing to do would measure an earlier job's binary. `pair.sh` keeps a side's binary only if cargo compiled the harness, the kit and its vendored engine from that side's tree in this job (else `STALE BUILD`, nothing measured), prints `perfh_build_<side>-<kind>` with `bin_sha` and `src_sha` (the source by content: a binary embeds its paths), tags each run's `build` with its `bin=`, and fails on identical binaries or one source on a run with two trees (`TWO BUILDS EXPECTED`; `PERF_SAME_SOURCE=1` for a two-build floor). A/A is one binary by design, says so, and so its floor has no build-to-build difference in it. A cached fixture records its grower's source (`grown-src`), and another source reading it fails (`FIXTURE MISMATCH`).
+
+Give the node's class on every submit (`--env PERF_NODE_CLASS=...`, a disk and CPU class,
+never a host name): every record carries it as `node_class`. Absolute figures are the node's
+as much as the kit's (one durable commit, the `store_probe` row, differed about 30× between
+two classes of build node), so a baseline names its class, and each pair stays on one node.
+The job's knobs are at the top of `tools/perf/pair.sh`. The records are `perfh_*` (tool
+`perf_harness`, `tools/evidence/README.md`). Times are in ns (`unit: ns`), memory and
+counts as is (`unit: count`).

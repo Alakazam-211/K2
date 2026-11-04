@@ -1,0 +1,21 @@
+MPC-E846 board_too_large (structured and CSV)
+exit:     4
+message:  the file is over a limit ({code})
+next:     The file passes one of the limits this host reads boards within (details.code says which). Nothing was read or changed. Ask the host's operator about the limit, or split the board with the tool that wrote it.
+rule:     board file: limits
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, list, read, search, references, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E846",
+  "name": "board_too_large",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "the file is over a limit ({code})",
+  "next": "The file passes one of the limits this host reads boards within (details.code says which). Nothing was read or changed. Ask the host's operator about the limit, or split the board with the tool that wrote it.",
+  "rule": "board file: limits",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "list", "read", "search", "references", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

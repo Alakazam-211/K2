@@ -1,0 +1,21 @@
+MPC-E833 merge_conflict (structured and CSV)
+exit:     1
+message:  {count} thing(s) changed on both sides
+next:     Your copy and the file both changed the same things (settings, people, top-level fields or objects) since the copy was made (details lists each, with every side kept). Nothing was written. Read the board again and redo your changes to those things on what is there now.
+rule:     board file: three-way merge
+verbs:    a file type's own verbs (its host's file registry): a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E833",
+  "name": "merge_conflict",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "{count} thing(s) changed on both sides",
+  "next": "Your copy and the file both changed the same things (settings, people, top-level fields or objects) since the copy was made (details lists each, with every side kept). Nothing was written. Read the board again and redo your changes to those things on what is there now.",
+  "rule": "board file: three-way merge",
+  "verbs": ["@file", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

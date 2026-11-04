@@ -1,0 +1,21 @@
+MPCE-E568 cut_purge_pending (store)
+exit:     1
+message:  the engine didn't adopt a cut: a purge happened since its position, or a rewrite isn't finished
+next:     Nothing changed. Finish the rewrite, then cut again from a new fork.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E568",
+  "name": "cut_purge_pending",
+  "area": "store",
+  "exit": 1,
+  "message": "the engine didn't adopt a cut: a purge happened since its position, or a rewrite isn't finished",
+  "next": "Nothing changed. Finish the rewrite, then cut again from a new fork.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

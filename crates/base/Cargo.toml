@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.10.2"
+version = "0.11.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -35,9 +35,6 @@ planted-position-bugs = ["differential", "yrs/planted-position-bugs"]
 # shows the most active one's caret), to prove the per-connection caret tests bite (v0.10.1,
 # `tests/roster.rs`). Never in a build.
 planted-device-bugs = []
-# Test-only: the store's record decoders as entry points for the fuzz targets (`fuzz/`,
-# `k2_mpc_base::fuzzing`). Off by default; no host enables it.
-fuzzing = []
 
 [dependencies]
 # The engine is private to this crate: Yrs v0.28.0 plus the k2 patches (`Doc::transact_mut_as`,

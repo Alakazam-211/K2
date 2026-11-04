@@ -322,6 +322,7 @@ impl Session {
         is_table: bool,
         kind: ChangeKind,
     ) -> Result<StepPlan> {
+        timed!(GridUndoPlan);
         // S13: a row a text re-paired is a guess about identity: with later edits on it, no merge
         // by cell. An undo or redo conflicts; a revert is a whole rewrite (below)
         let rewritten = if is_table {
@@ -569,7 +570,6 @@ impl Session {
             let mut overridden = self.overridden(st, &t, &overrides)?;
             grid::drop_own(&mut overridden, &pid);
             let plan = self.plan_overrides(st, &overridden, "a revert", before, before + 1, now)?;
-            st.next_note_rows = plan.note_rows();
             if st.last_version_seq != st.version {
                 let snap = self.snapshot(st)?;
                 versions.push(Self::version_of(
@@ -581,6 +581,7 @@ impl Session {
                     now,
                 ));
             }
+            st.next_note_rows = plan.note_rows();
             finish = Some((overridden, plan));
         }
         let (result, done) = self.commit(st, i, steps, now, versions)?;

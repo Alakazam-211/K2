@@ -50,13 +50,8 @@ fn shout(args: &[String]) -> Result<PackEdit, ToolError> {
     }))
 }
 
-const VERBS: &[PackVerb] = &[PackVerb::edit(
-    "shout",
-    "shout",
-    &[PersonAction::Format],
-    &[0],
-    shout,
-)];
+const VERBS: &[PackVerb] =
+    &[PackVerb::edit("shout", "shout", &[PersonAction::Format], &[0], shout).positions(&[])];
 
 struct TestHost(AtomicU64);
 
@@ -145,6 +140,7 @@ fn argv(a: &[&str]) -> Vec<String> {
 #[test]
 fn every_flagged_verb_runs_through_run_tool() {
     let reg = Registry::for_pack(&P).unwrap();
+    k2_mpc_base::parity::positions::check(&reg).unwrap_or_else(|e| panic!("{e}"));
     let flagged: Vec<_> = reg
         .verbs()
         .iter()

@@ -961,6 +961,13 @@ fn num(s: &str) -> Result<u64, String> {
     s.parse().map_err(|_| format!("not a number: {s:?}"))
 }
 
+/// `1.5,-2`: numbers split by commas.
+fn coords(s: &str) -> Result<Vec<f64>, &'static str> {
+    s.split(',')
+        .map(|n| n.parse::<f64>().map_err(|_| "a number"))
+        .collect()
+}
+
 fn line_col(s: &str) -> Result<LineCol, String> {
     let (l, c) = s.split_once(':').ok_or_else(|| format!("not L:C: {s:?}"))?;
     Ok(LineCol {
@@ -1457,6 +1464,53 @@ impl Agent<'_> {
                 let c = self.join(Stay::UntilIdle, used)?;
                 used.push(Api::SetCursor);
                 s.set_cell_cursor(c, (&at.0, &at.1), (&to.0, &to.1))?;
+                some(VerbValue::None, 0)
+            }
+            "select" => {
+                let selection = if args.iter().any(|a| a == "--clear") {
+                    None
+                } else {
+                    let root = arg_after(args, "--root")?;
+                    let keys = arg_after(args, "--keys")?
+                        .split(',')
+                        .map(crate::elem::Key::new)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|_| "--keys K1,K2")?;
+                    Some(crate::session::ElemSelection::new(root, keys))
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::SetSelection);
+                s.set_selection(c, selection)?;
+                some(VerbValue::None, 0)
+            }
+            "pointer" => {
+                let point = if args.iter().any(|a| a == "--clear") {
+                    None
+                } else {
+                    let at = coords(&arg_after(args, "--at")?)?;
+                    let [x, y] = at[..] else {
+                        return Err("--at X,Y".into());
+                    };
+                    Some(crate::session::Point::new(x, y)?)
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::SetPointer);
+                s.set_pointer(c, point)?;
+                some(VerbValue::None, 0)
+            }
+            "viewport" => {
+                let rect = if args.iter().any(|a| a == "--clear") {
+                    None
+                } else {
+                    let r = coords(&arg_after(args, "--rect")?)?;
+                    let [x, y, w, h] = r[..] else {
+                        return Err("--rect X,Y,W,H".into());
+                    };
+                    Some(crate::session::Rect::new(x, y, w, h)?)
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::SetViewport);
+                s.set_viewport(c, rect)?;
                 some(VerbValue::None, 0)
             }
             "claim"
@@ -2090,8 +2144,16 @@ pub fn check_list(rows: &[ParityRow], registry: &Registry, extra: &[Case]) -> Ve
     .1
 }
 
-/// A failure when `registry` serves another tier than the harness runs.
+/// A failure when `registry` serves another tier than the harness runs, or is a file type's
+/// own verbs ([`Registry::for_file`]: the host's to test, not the kit's harness).
 pub(super) fn wrong_tier(registry: &Registry, tier: Tier) -> Option<Failure> {
+    if registry.is_file() {
+        return Some(Failure::Registry(
+            "this registry is a file type's own verbs (Registry::for_file): the kit's harness \
+             runs only the kit's tiers"
+                .to_owned(),
+        ));
+    }
     (registry.tier() != tier).then(|| {
         Failure::Registry(format!(
             "this harness runs {tier:?} docs; the registry is for {:?} docs",

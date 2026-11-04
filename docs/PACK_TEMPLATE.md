@@ -55,7 +55,9 @@ tier) and only checks rows of other tiers if the list has them.
   arguments before the doc is touched; the `PackEdit` it returns is a pure function of the
   live text (bounded, no I/O) returning `EditOutput::new(text, stdout, exit)`. The host
   routes the verb through `Session::run_tool`, and `Registry::for_pack` registers it. A
-  verb named like a kit verb is refused.
+  verb named like a kit verb is refused. Declare its position units with
+  `.positions(&[PositionForm::new("--nth", Unit::PackNth)])`, or `.positions(&[])` if it has
+  none, and run `parity::positions::check` on the registry in a test (`docs/POSITIONS.md`).
 - **`tests/agent_parity.rs`**: `parity::check(pack, &rows, &Registry::for_pack(&pack)?,
   &cases)`, where `cases` holds a `parity::Case` for every pack verb (the person path through
   `Person`, the agent path through `Agent::verb`). Include a negative control: the registry

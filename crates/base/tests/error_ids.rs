@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+mod board_verbs;
 mod grid_pack;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,8 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::errors::{
-    self, capabilities, errors_markdown, explain, explain_json, run_meta, ErrorReport, Reach,
-    Status, Value, KIT,
+    self, capabilities, errors_markdown, explain, explain_json, run_meta, Area, ErrorEntry,
+    ErrorReport, Reach, Status, Value, KIT,
 };
 use k2_mpc_base::parity::{PersonAction, Registry, Tier};
 use k2_mpc_base::session::{
@@ -208,6 +209,7 @@ fn capabilities_is_generated() {
     }
     // a pack's own verbs appear when the host passes its registry
     let reg = Registry::for_pack(&VerbPack).unwrap();
+    k2_mpc_base::parity::positions::check(&reg).unwrap_or_else(|e| panic!("{e}"));
     let v = capabilities(&[&reg], &cfg);
     let Some(Value::List(vs)) = v.get("verbs") else {
         panic!()
@@ -228,6 +230,257 @@ fn capabilities_is_generated() {
 
 fn s(x: &str) -> String {
     x.to_owned()
+}
+
+// ------------------------------------------------------------- a file type's own verbs
+
+/// The board file type's rows, as ruled (MPC-E830 to E859: id, name, exit). E822-E829 stay
+/// free for structured growth, and E860-E869 are kept for the board's live verbs.
+const BOARD_ROWS: &[(&str, &str, u8)] = &[
+    ("MPC-E830", "conflict", 1),
+    ("MPC-E831", "exists", 1),
+    ("MPC-E832", "busy", 1),
+    ("MPC-E833", "merge_conflict", 1),
+    ("MPC-E834", "board_conflict", 1),
+    ("MPC-E835", "locked", 5),
+    ("MPC-E836", "voting_off", 5),
+    ("MPC-E837", "no_votes_left", 5),
+    ("MPC-E838", "no_object", 4),
+    ("MPC-E839", "no_template", 4),
+    ("MPC-E840", "no_such_item", 4),
+    ("MPC-E841", "blob_missing", 4),
+    ("MPC-E842", "board_zip", 4),
+    ("MPC-E843", "board_manifest", 4),
+    ("MPC-E844", "newer_format", 4),
+    ("MPC-E845", "board_invalid", 4),
+    ("MPC-E846", "board_too_large", 4),
+    ("MPC-E847", "bad_field", 2),
+    ("MPC-E848", "board_limit", 2),
+    ("MPC-E849", "bad_ops", 2),
+    ("MPC-E850", "unknown_field", 2),
+    ("MPC-E851", "unknown_type", 2),
+    ("MPC-E852", "bad_value", 2),
+    ("MPC-E853", "wrong_type", 2),
+    ("MPC-E854", "too_few", 2),
+    ("MPC-E855", "needs_actor", 2),
+    ("MPC-E856", "no_free_id", 1),
+    ("MPC-E857", "board_io", 1),
+    ("MPC-E858", "settings_conflict", 1),
+    ("MPC-E859", "person_exists", 1),
+];
+
+/// The board's rows with nothing to run next (as ruled): conflicts whose details name every
+/// side and that no one verb resolves, a file every verb fails to read, a change too big for
+/// any one verb to shrink, a value only the same verb with another value fixes, the host's own
+/// faults, i/o, and a person's token already taken (another token, or none, fixes it).
+const BOARD_NO_STEP: &[&str] = &[
+    "MPC-E833", "MPC-E834", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848",
+    "MPC-E852", "MPC-E855", "MPC-E856", "MPC-E857", "MPC-E859",
+];
+
+/// The board's rows that only a host call returns (`(host)` alone: the host's merge and its
+/// held groups), as ruled; no board verb returns them.
+const BOARD_HOST_ONLY: &[&str] = &["MPC-E833", "MPC-E834"];
+
+/// The kit's rows for a file type's own verbs (`@file` first).
+fn file_rows() -> Vec<&'static ErrorEntry> {
+    KIT.iter()
+        .copied()
+        .filter(|e| e.verbs.first() == Some(&"@file"))
+        .collect()
+}
+
+/// The board's rows are the ruled table, in the structured area, live and reached through the
+/// host (no kit verb returns them); every verb a row names, and every row's next step, is a
+/// verb of a file registry built from the board's verb list (`board_verbs`).
+#[test]
+fn board_rows_name_the_boards_verbs() {
+    let reg = Registry::for_file(board_verbs::VERBS).unwrap();
+    assert_eq!(reg.verbs().len(), 43, "the board's 43 verbs");
+    let rows = file_rows();
+    let got: Vec<(&str, &str, u8)> = rows.iter().map(|e| (e.id, e.name, e.exit)).collect();
+    assert_eq!(got, BOARD_ROWS, "the board's rows are the ruled table");
+    for e in &rows {
+        assert_eq!(e.area, Area::Structured, "{}", e.id);
+        assert_eq!(e.status, Status::Live, "{}", e.id);
+        assert!(
+            matches!(e.reach, Reach::Indirect(_)),
+            "{}: the host's",
+            e.id
+        );
+        for v in e.verbs[1..].iter().filter(|v| **v != "(host)") {
+            assert!(
+                reg.get(v).is_some(),
+                "{} {}: {v:?} is no board verb",
+                e.id,
+                e.name
+            );
+        }
+        let Some(st) = e.step else {
+            assert!(
+                BOARD_NO_STEP.contains(&e.id),
+                "{} {}: no next step",
+                e.id,
+                e.name
+            );
+            continue;
+        };
+        assert!(
+            !BOARD_NO_STEP.contains(&e.id),
+            "{}: has a step after all",
+            e.id
+        );
+        assert!(
+            reg.get(st.verb).is_some(),
+            "{} {}: next step {:?} is no board verb",
+            e.id,
+            e.name,
+            st.verb
+        );
+    }
+    let host_only: Vec<&str> = rows
+        .iter()
+        .filter(|e| e.verbs.len() > 1 && e.verbs[1..].iter().all(|v| *v == "(host)"))
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(
+        host_only, BOARD_HOST_ONLY,
+        "the rows only a host call returns"
+    );
+    // the reserved and free ids hold nothing yet
+    for n in (822..=829).chain(860..=869) {
+        assert!(
+            errors::lookup(&n.to_string()).is_none(),
+            "MPC-E{n} is taken"
+        );
+    }
+}
+
+/// `capabilities` from a file registry: each file verb as data (`source` file, no kit tier, the
+/// host's parity rows by name), with the ids of the rows that name it and no other kit row;
+/// the kit's own verbs never list a file row, and a host serving both lists a kit verb and a
+/// file verb of one name apart.
+#[test]
+fn capabilities_lists_a_file_registry() {
+    let cfg = Config::default();
+    let reg = Registry::for_file(board_verbs::VERBS).unwrap();
+    let ids: BTreeSet<&str> = file_rows().iter().map(|e| e.id).collect();
+    let strs = |v: Option<&Value>| -> Vec<String> {
+        match v {
+            Some(Value::List(l)) => l
+                .iter()
+                .map(|x| x.as_str().map_or_else(|| x.to_json(), str::to_owned))
+                .collect(),
+            _ => panic!("not a list: {v:?}"),
+        }
+    };
+    let caps = capabilities(&[&reg], &cfg);
+    let Some(Value::List(vs)) = caps.get("verbs") else {
+        panic!("no verbs")
+    };
+    assert_eq!(vs.len(), board_verbs::VERBS.len());
+    for (row, f) in vs.iter().zip(board_verbs::VERBS) {
+        let name = row.get("name").and_then(Value::as_str);
+        assert_eq!(name, Some(f.name));
+        assert_eq!(
+            row.get("source").and_then(Value::as_str),
+            Some("file"),
+            "{}",
+            f.name
+        );
+        assert!(strs(row.get("tiers")).is_empty(), "{}", f.name);
+        assert_eq!(strs(row.get("serves")), f.serves, "{}", f.name);
+        let exits: Vec<String> = f.exits.iter().map(u8::to_string).collect();
+        assert_eq!(strs(row.get("exits")), exits, "{}", f.name);
+        assert_eq!(row.get("usage").and_then(Value::as_str), Some(f.usage));
+        assert_eq!(row.get("run_tool"), Some(&Value::from(false)), "{}", f.name);
+        let want: Vec<String> = file_rows()
+            .iter()
+            .filter(|e| e.status == Status::Live && e.verbs[1..].contains(&f.name))
+            .map(|e| e.id.to_owned())
+            .collect();
+        assert_eq!(strs(row.get("errors")), want, "{}: its rows' ids", f.name);
+    }
+    // every row is listed under a verb, but a host call's alone (as the kit's own `(host)`
+    // rows are under no verb), which is under none
+    let listed: BTreeSet<String> = vs.iter().flat_map(|r| strs(r.get("errors"))).collect();
+    for e in file_rows() {
+        let names = &e.verbs[1..];
+        let host_only = !names.is_empty() && names.iter().all(|v| *v == "(host)");
+        assert_eq!(
+            listed.contains(e.id),
+            !host_only,
+            "{}: {}",
+            e.id,
+            if host_only {
+                "only a host call returns it, yet it is under a verb"
+            } else {
+                "it is not a host call's alone, yet it is under no verb"
+            }
+        );
+    }
+    // the kit's verbs list no file row, alone or beside the file registry
+    let text = Registry::for_tier(Tier::Text);
+    for regs in [vec![], vec![&text, &reg]] {
+        let c = capabilities(&regs, &cfg);
+        let Some(Value::List(vs)) = c.get("verbs") else {
+            panic!()
+        };
+        for r in vs {
+            let file = r.get("source").and_then(Value::as_str) == Some("file");
+            for id in strs(r.get("errors")) {
+                assert_eq!(ids.contains(id.as_str()), file, "{:?}: {id}", r.get("name"));
+            }
+        }
+        if !regs.is_empty() {
+            let deletes = vs
+                .iter()
+                .filter(|r| r.get("name").and_then(Value::as_str) == Some("delete"))
+                .count();
+            assert_eq!(deletes, 2, "the kit's delete and the board's, apart");
+        }
+    }
+    // a file registry alone leaves out the kit's doc-level rows, parity, limits and positions,
+    // which describe the kit's verbs; the kit's page, and a kit and a file registry together,
+    // keep every one
+    const KIT_ONLY: [&str; 4] = ["errors_any_verb", "parity", "limits", "positions"];
+    const KIT_TEXT: [&str; 5] = [
+        "Verbs (after the doc path):",
+        "(any verb on a doc can also return:",
+        "\nParity (",
+        "\nLimits in effect:",
+        "\nPositions (",
+    ];
+    for k in KIT_ONLY {
+        assert!(caps.get(k).is_none(), "a file registry's page has {k}");
+    }
+    let text = run_meta(&[s("capabilities")], false, &[&reg], &cfg).unwrap();
+    let page = String::from_utf8(text.stdout.clone()).unwrap();
+    for t in KIT_TEXT {
+        assert!(!page.contains(t), "a file registry's page has {t:?}");
+    }
+    assert!(page.contains("\nVerbs (the file type's own, as its host serves them):\n"));
+    let text_reg = Registry::for_tier(Tier::Text);
+    for regs in [vec![], vec![&text_reg, &reg]] {
+        let c = capabilities(&regs, &cfg);
+        for k in KIT_ONLY {
+            assert!(c.get(k).is_some(), "{} registries: no {k}", regs.len());
+        }
+        let out = run_meta(&[s("capabilities")], false, &regs, &cfg).unwrap();
+        let page = String::from_utf8(out.stdout).unwrap();
+        for t in KIT_TEXT {
+            assert!(page.contains(t), "{} registries: no {t:?}", regs.len());
+        }
+    }
+    let json = run_meta(&[s("capabilities")], true, &[&reg], &cfg).unwrap();
+    golden(
+        &golden_dir().join("capabilities-file.txt"),
+        &String::from_utf8(text.stdout).unwrap(),
+    );
+    golden(
+        &golden_dir().join("capabilities-file.json"),
+        &String::from_utf8(json.stdout).unwrap(),
+    );
 }
 
 // ------------------------------------------------------------- a host for the walk
@@ -370,7 +623,8 @@ static VERBS: &[PackVerb] = &[PackVerb::edit(
     &[PersonAction::FindReplace],
     &[0, 1],
     replace_word,
-)];
+)
+.positions(&[])];
 
 impl Pack for VerbPack {
     fn schema(&self) -> k2_mpc_base::Schema {
@@ -394,7 +648,117 @@ impl Pack for VerbPack {
     }
 }
 
+/// A keyed pack whose one list takes writer-tagged keys (prefixes `i` and `abc`): the file is
+/// one key per line (the tagged-key ids, 82x).
+struct Items;
+
+impl Pack for Items {
+    fn schema(&self) -> k2_mpc_base::Schema {
+        k2_mpc_base::Schema {
+            name: "items",
+            roots: &[("items", k2_mpc_base::Kind::MovableList)],
+        }
+    }
+    fn decode(
+        &self,
+        bytes: &[u8],
+    ) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        let items = std::str::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|l| (k2_mpc_base::Key::new(l).unwrap(), k2_mpc_base::Value::Null))
+            .collect();
+        Ok(k2_mpc_base::session::PackContent {
+            roots: vec![("items".into(), k2_mpc_base::Neutral::List(items))],
+            codec: Vec::new(),
+        })
+    }
+    fn encode(
+        &self,
+        content: &[(String, k2_mpc_base::Neutral)],
+        _: &[u8],
+    ) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        let mut out = String::new();
+        if let Some((_, k2_mpc_base::Neutral::List(items))) = content.first() {
+            for (k, _) in items {
+                out.push_str(k.as_str());
+                out.push('\n');
+            }
+        }
+        Ok(out.into_bytes())
+    }
+    fn tagged_keys(&self) -> &'static [(&'static str, &'static [&'static str])] {
+        &[("items", &["i", "abc"])]
+    }
+}
+
+/// [`Items`] with its values declared as naming blobs, and no writer tags.
+struct RefItems;
+
+impl Pack for RefItems {
+    fn schema(&self) -> k2_mpc_base::Schema {
+        k2_mpc_base::Schema {
+            name: "ref-items",
+            roots: &[("items", k2_mpc_base::Kind::MovableList)],
+        }
+    }
+    fn decode(
+        &self,
+        b: &[u8],
+    ) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        Items.decode(b)
+    }
+    fn encode(
+        &self,
+        c: &[(String, k2_mpc_base::Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        Items.encode(c, codec)
+    }
+    fn blob_ref_roots(&self) -> &'static [&'static str] {
+        &["items"]
+    }
+}
+
+fn insert_item(key: &str) -> Vec<Edit> {
+    vec![Edit::List {
+        root: "items".into(),
+        ops: vec![k2_mpc_base::elem::ListOp::Insert {
+            key: k2_mpc_base::Key::new(key).unwrap(),
+            at: k2_mpc_base::elem::Anchor::End,
+            value: k2_mpc_base::Value::Null,
+        }],
+    }]
+}
+
 /// What the walk saw: each report with the exit the call itself gave.
+/// The grid test pack, whose file can't be rendered while the flag is on.
+struct NoRender(Arc<std::sync::atomic::AtomicBool>);
+impl Pack for NoRender {
+    fn schema(&self) -> k2_mpc_base::schema::Schema {
+        grid_pack::GridLite.schema()
+    }
+    fn decode(
+        &self,
+        b: &[u8],
+    ) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        grid_pack::GridLite.decode(b)
+    }
+    fn encode(
+        &self,
+        c: &[(String, k2_mpc_base::doc::Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        if self.0.load(Ordering::SeqCst) {
+            return Err(k2_mpc_base::session::PackError("no render".into()));
+        }
+        grid_pack::GridLite.encode(c, codec)
+    }
+    fn verbs(&self) -> &'static [PackVerb] {
+        grid_pack::GridLite.verbs()
+    }
+}
+
 #[derive(Default)]
 struct Seen(Vec<(ErrorReport, u8)>);
 
@@ -702,6 +1066,23 @@ fn walk() -> Seen {
         f.mgr
             .open_file(Arc::new(MD), &key("linked.md"), &one, &f.ws()),
     ); // E412
+
+    // a host's record of a save the file doesn't hold
+    let p = f.ws().join("saved.bin");
+    std::fs::write(&p, b"on disk").unwrap();
+    let b = f
+        .mgr
+        .open_blob_file(Arc::new(AnyFile), &key("saved.bin"), &p, &f.ws())
+        .unwrap();
+    f.grant("ed", Rights::editor());
+    let ed = b
+        .join(who("ed", ParticipantKind::Agent), Stay::Held)
+        .unwrap()
+        .conn;
+    let v = b.status().unwrap().version;
+    let t = b.expect_save(ed, v, b"not on disk").unwrap();
+    seen.res(b.record_saved(ed, t)); // E413
+    seen.res(b.record_saved(ed, t)); // E414: the refusal used the ticket
     let p = f.ws().join("off.md");
     std::fs::write(&p, b"text\n").unwrap();
     let s = f
@@ -793,6 +1174,14 @@ fn walk() -> Seen {
     let a = f.agent(&s, "ga", Rights::editor());
     let rows = k2_mpc_base::table::ROWS;
     let v0 = s.status().unwrap().version.to_string();
+    // a selection with too many keys
+    let keys = (0..257)
+        .map(|i| k2_mpc_base::Key::new(format!("r{i}")).unwrap())
+        .collect();
+    seen.res(s.set_selection(
+        p,
+        Some(k2_mpc_base::session::ElemSelection::new(rows, keys)),
+    ));
     // an agent's grid edit with no base
     seen.tool(s.run_tool(
         a,
@@ -876,6 +1265,41 @@ fn walk() -> Seen {
     }
     seen.tool(s.run_tool(p, rows, &argv(&["header", "on"]), b"")); // E807
 
+    // ---- tagged keys (82x): a keyed pack whose list takes writer-tagged keys
+    let s = f
+        .mgr
+        .open(Arc::new(Items), &key("k.items"), Some(b""))
+        .unwrap();
+    let p = f.person(&s, "kp", Rights::full());
+    // a key without the inserting connection's writer tag
+    seen.res(s.edit_ops(p, insert_item("i1"), &EditOptions::new())); // E820
+                                                                     // the longest key of prefix abc and this tag that fits: the next can't
+    let tag = s.writer_tag(p).unwrap().to_string();
+    let last = format!("abc{}.{tag}", "9".repeat(24 - 3 - 1 - tag.len()));
+    s.edit_ops(p, insert_item(&last), &EditOptions::new())
+        .unwrap();
+    seen.res(s.mint_key(p, "items", "abc")); // E821
+
+    // ---- a blob reference (E720): a value naming a blob this doc's space doesn't hold
+    let s = f
+        .mgr
+        .open(Arc::new(RefItems), &key("r.items"), Some(b""))
+        .unwrap();
+    let p = f.person(&s, "rp", Rights::full());
+    let unknown = k2_mpc_base::blob::BlobId::from_slice(&[9; 32]).unwrap();
+    seen.res(s.edit_ops(
+        p,
+        vec![Edit::List {
+            root: "items".into(),
+            ops: vec![k2_mpc_base::elem::ListOp::Insert {
+                key: k2_mpc_base::Key::new("i1").unwrap(),
+                at: k2_mpc_base::elem::Anchor::End,
+                value: k2_mpc_base::Value::Str(unknown.to_ref()),
+            }],
+        }],
+        &EditOptions::new(),
+    )); // E720
+
     // an address that names two columns (K-ADDR-2)
     let s = f
         .mgr
@@ -892,6 +1316,56 @@ fn walk() -> Seen {
         &argv(&["cell", "get", "--row", "#1", "--col", "city"]),
         b"",
     )); // E170
+
+    // an LN address on a grid holding a lone CR: its line numbers have no one meaning
+    let s = f
+        .mgr
+        .open(
+            Arc::new(grid_pack::GridLite),
+            &key("cr.csv"),
+            Some(b"id,city\nk1,a\rb\n"),
+        )
+        .unwrap();
+    let p = f.person(&s, "lp", Rights::full());
+    seen.tool(s.run_tool(
+        p,
+        rows,
+        &argv(&["cell", "get", "--row", "L2", "--col", "city"]),
+        b"",
+    )); // E176
+
+    // a line address on a file the pack can't render now: LN, and claim --lines
+    let no_render = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let s = f
+        .mgr
+        .open(
+            Arc::new(NoRender(no_render.clone())),
+            &key("nr.csv"),
+            Some(b"id,city\nk1,Oslo\n"),
+        )
+        .unwrap();
+    let p = f.person(&s, "np", Rights::full());
+    no_render.store(true, Ordering::SeqCst);
+    seen.tool(s.run_tool(
+        p,
+        rows,
+        &argv(&[
+            "cell", "set", "--row", "L2", "--col", "city", "--value", "x",
+        ]),
+        b"",
+    )); // E177
+    seen.res(s.claim(
+        p,
+        LineRange {
+            root: rows.to_owned(),
+            first: 2,
+            last: 2,
+        },
+        None,
+        None,
+        false,
+    )); // E177
+    no_render.store(false, Ordering::SeqCst);
 
     // an agent's edit by line with no version, where the host refuses it (K-ADDR-3)
     let s = f.open("pos.md", b"a\nb\n");
@@ -1054,4 +1528,46 @@ fn export_walk(seen: &mut Seen) {
         };
         seen.export(reg.export(&kind, src, target, &opts, &mut out, &ctl));
     }
+}
+
+/// Details with a fraction (`Value::Float`), as a board refusal's `x` and `y`. The golden pins
+/// what each prints as, `-0.0` as `-0` among them, so a change to the printer shows.
+#[test]
+fn float_details_print_as_json_numbers() {
+    let f = |x: f64| Value::float(x).expect("finite");
+    let v = Value::obj([
+        ("x", f(12.5)),
+        ("y", f(-0.25)),
+        ("whole", f(3.0)),
+        ("zero", f(0.0)),
+        ("negative_zero", f(-0.0)),
+        ("small", f(1e-7)),
+        ("large", f(1e21)),
+        ("list", Value::list([f(0.5), f(-0.0)])),
+    ]);
+    golden(
+        &golden_dir().join("float_values.txt"),
+        &format!("{}\n{}\n", v.to_json_pretty(), v.to_json()),
+    );
+
+    let entry = errors::lookup("MPC-E310").expect("MPC-E310");
+    let r = ErrorReport::new(entry, "a refusal with a place")
+        .with("x", f(12.5))
+        .with("y", f(-0.0));
+    let json = r.to_json();
+    assert!(json.ends_with(r#""details":{"x":12.5,"y":-0}}"#), "{json}");
+    assert_eq!(r.to_json_for("tab"), json);
+    let pretty = r.to_value().to_json_pretty();
+    assert!(
+        pretty.contains("\"x\": 12.5") && pretty.contains("\"y\": -0\n"),
+        "{pretty}"
+    );
+    assert_eq!(r.detail("x").and_then(Value::as_f64), Some(12.5));
+    assert_eq!(r.clone(), r);
+    assert_ne!(
+        r,
+        ErrorReport::new(entry, "a refusal with a place")
+            .with("x", f(12.5))
+            .with("y", f(0.0))
+    );
 }

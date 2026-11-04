@@ -10,8 +10,8 @@
 //!    theirs (no line spliced from pieces of two lines, no two lines joined into one, no
 //!    line merged from two changes);
 //! 2. **pass the line-LCS rule** over every longest-common-subsequence alignment of base
-//!    with each side: no deleted line back, no line lost (the rule of
-//!    `fuzz/src/keepboth.rs`' `check_lcs`, ported with its own LCS tables).
+//!    with each side: no deleted line back, no line lost (the fuzz oracle's `check_lcs` rule,
+//!    ported with its own LCS tables).
 //!
 //! A conflict (the write refused) always passes: refusing is safe. The cases are random
 //! lines that share their start ("p02:17", "p01:3 w4 w2"): each base line kept, deleted or

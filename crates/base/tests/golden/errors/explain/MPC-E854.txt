@@ -1,0 +1,27 @@
+MPC-E854 too_few (structured and CSV)
+exit:     2
+message:  {verb} needs at least {min} objects
+next:     The verb needs more objects than you named (two to group or align, three to distribute). Nothing was applied. List the objects and name enough of them.
+step:     list; why: The verb needs more objects than you named; list the objects and name enough of them.
+rule:     board file: arranging
+verbs:    a file type's own verbs (its host's file registry): group, align, distribute, tidy, paste
+status:   live
+--- json
+{
+  "id": "MPC-E854",
+  "name": "too_few",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "{verb} needs at least {min} objects",
+  "next": "The verb needs more objects than you named (two to group or align, three to distribute). Nothing was applied. List the objects and name enough of them.",
+  "next_step": {
+    "verb": "list",
+    "args": [],
+    "why": "The verb needs more objects than you named; list the objects and name enough of them."
+  },
+  "rule": "board file: arranging",
+  "verbs": ["@file", "group", "align", "distribute", "tidy", "paste"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

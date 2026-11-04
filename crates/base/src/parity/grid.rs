@@ -126,6 +126,9 @@ pub struct GridPresenceObs {
     pub last_edit: Option<(usize, usize)>,
     pub connections: usize,
     pub claims: Vec<GridClaimObs>,
+    pub selection: Option<crate::session::ElemSelection>,
+    pub pointer: Option<crate::session::Point>,
+    pub viewport: Option<crate::session::Rect>,
 }
 
 /// Everything compared after a grid path.
@@ -210,6 +213,9 @@ fn observe(stage: &Stage, m: &Mark, step: Step, via: &str) -> Result<GridObserva
             view: e.view.map(|v| (v.first, v.last)),
             last_edit: e.last_edit.map(|v| (v.first, v.last)),
             connections: e.connections,
+            selection: e.selection,
+            pointer: e.pointer,
+            viewport: e.viewport,
             claims: e
                 .claims
                 .iter()

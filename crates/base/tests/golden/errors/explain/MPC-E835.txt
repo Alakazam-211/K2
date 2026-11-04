@@ -1,0 +1,27 @@
+MPC-E835 locked (structured and CSV)
+exit:     5
+message:  {id} is locked
+next:     The object is locked, so no verb changes, moves or deletes it until it is unlocked. Nothing was applied. Read it to see its state, and ask whoever locked it; unlock it (lock) only if the lock is yours.
+step:     read; why: The object is locked; read it to see its state, ask whoever locked it, and unlock it only if the lock is yours.
+rule:     board file: locked objects
+verbs:    a file type's own verbs (its host's file registry): update, delete, reply, resolve, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, connected-copy, lock, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E835",
+  "name": "locked",
+  "area": "structured and CSV",
+  "exit": 5,
+  "message": "{id} is locked",
+  "next": "The object is locked, so no verb changes, moves or deletes it until it is unlocked. Nothing was applied. Read it to see its state, and ask whoever locked it; unlock it (lock) only if the lock is yours.",
+  "next_step": {
+    "verb": "read",
+    "args": [],
+    "why": "The object is locked; read it to see its state, ask whoever locked it, and unlock it only if the lock is yours."
+  },
+  "rule": "board file: locked objects",
+  "verbs": ["@file", "update", "delete", "reply", "resolve", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "connected-copy", "lock", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

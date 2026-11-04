@@ -53,6 +53,27 @@ root name that is empty, repeated, or holds `/`.
   `CharBlame.clock`, feature `conformance`; `docs/POSITIONS.md`). List elements are named by keys
   the caller chooses (they live in the values, so they survive an engine switch), and writes
   by opaque `WriteId`s.
+- **References to elements** (`refs`): a pack value that names a list element (a link's end,
+  a parent) is never moved or deleted silently. Its state (attached, suspect: kind changed,
+  container gone or cycle, orphaned) is computed from the converged doc, never stored, the
+  same on every replica; cycles of parents are cut at the smallest key.
+- **Keys: minting.** A pack that wants list keys two writers can never mint alike uses
+  `mint`: `<prefix><n>.<tag>`, the tag being the writer's client ID in base 36
+  (`mint::WriterTag`), and `n` one past the highest it can see, live, deleted or retired
+  (`mint::next_for`); no shared counter, so concurrent inserts share no facet. A pack opts a
+  root in with `Pack::tagged_keys`: a connection's inserts there must carry its own tag
+  (MPC-E820, checked in the session, never on stored records or imports), and
+  `Session::mint_key` makes one (MPC-E821 when none fits 24 bytes).
+- **Claims on elements.** `Session::claim_elems` claims named keys of a list root, for a keyed
+  doc that isn't a table (a table's claims stay rows, columns or cells). A pack declares which
+  Map roots belong to a list with `Pack::composite`: each key is `<element>\x1f<rest>`
+  (`session::elem_of_map_key`), so a write to it touches that element. Under
+  `ClaimPolicy::Respect` an agent's change touching another's claim is refused (MPC-E301).
+  The claim ends `deleted` when none of its elements is live.
+- **Values naming blobs.** A pack declares the roots with `Pack::blob_ref_roots`; a value there
+  that is exactly `blob:<64 hex>` holds that blob against GC while any record of the doc names it
+  (`Session::blob_refs`, `SESSIONS.md`, "Blob references"; MPC-E720 for a connection's edit naming
+  one the doc's space doesn't hold).
 - Every change reports what it did, op by op (`Doc::edit_applied`, the applied stream): for
   text its hunks, for lists and maps each op with its write, live indices and values before
   and after, and its effect (shown, hidden, or none, with the current winner).

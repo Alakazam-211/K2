@@ -1,0 +1,27 @@
+MPC-E851 unknown_type (structured and CSV)
+exit:     2
+message:  no object type {type}
+next:     The format has no type of object by that name. Nothing was applied. List the types and use one shown.
+step:     fields; why: The format has no type by that name; list the types and use one shown.
+rule:     board file: types
+verbs:    a file type's own verbs (its host's file registry): add, update
+status:   live
+--- json
+{
+  "id": "MPC-E851",
+  "name": "unknown_type",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "no object type {type}",
+  "next": "The format has no type of object by that name. Nothing was applied. List the types and use one shown.",
+  "next_step": {
+    "verb": "fields",
+    "args": [],
+    "why": "The format has no type by that name; list the types and use one shown."
+  },
+  "rule": "board file: types",
+  "verbs": ["@file", "add", "update"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

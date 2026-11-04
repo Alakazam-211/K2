@@ -1,0 +1,27 @@
+MPC-E847 bad_field (structured and CSV)
+exit:     2
+message:  a value you gave isn't valid ({code})
+next:     A field, id, type or number you gave doesn't fit the format (details.code says which). Nothing was applied. Check the fields that type takes, fix the value and run the verb again.
+step:     fields; why: A value you gave doesn't fit the format; check the fields each type takes, fix it and run the verb again.
+rule:     board file: fields
+verbs:    a file type's own verbs (its host's file registry): add, update, connect, comment, reply, check-add, check-set, check-remove, table-cell, mind-child, meta, react, paste, put-back, apply, inverse, fields
+status:   live
+--- json
+{
+  "id": "MPC-E847",
+  "name": "bad_field",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "a value you gave isn't valid ({code})",
+  "next": "A field, id, type or number you gave doesn't fit the format (details.code says which). Nothing was applied. Check the fields that type takes, fix the value and run the verb again.",
+  "next_step": {
+    "verb": "fields",
+    "args": [],
+    "why": "A value you gave doesn't fit the format; check the fields each type takes, fix it and run the verb again."
+  },
+  "rule": "board file: fields",
+  "verbs": ["@file", "add", "update", "connect", "comment", "reply", "check-add", "check-set", "check-remove", "table-cell", "mind-child", "meta", "react", "paste", "put-back", "apply", "inverse", "fields"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,27 @@
+MPC-E850 unknown_field (structured and CSV)
+exit:     2
+message:  {type} has no field {field}
+next:     That type of object has no field by that name. Nothing was applied. List the fields it takes and use one of those names.
+step:     fields; why: That type has no field by that name; list the fields it takes and use one of them.
+rule:     board file: fields
+verbs:    a file type's own verbs (its host's file registry): add, update
+status:   live
+--- json
+{
+  "id": "MPC-E850",
+  "name": "unknown_field",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "{type} has no field {field}",
+  "next": "That type of object has no field by that name. Nothing was applied. List the fields it takes and use one of those names.",
+  "next_step": {
+    "verb": "fields",
+    "args": [],
+    "why": "That type has no field by that name; list the fields it takes and use one of them."
+  },
+  "rule": "board file: fields",
+  "verbs": ["@file", "add", "update"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

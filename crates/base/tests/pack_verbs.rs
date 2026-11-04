@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use k2_mpc_base::doc::Neutral;
+use k2_mpc_base::parity::positions::{self, PositionForm, Unit};
 use k2_mpc_base::parity::{PersonAction, Registry, Source};
 use k2_mpc_base::session::{
     AuditEvent, Config, Declined, Host, Pack, PackContent, PackError, Participant, ParticipantKind,
@@ -82,7 +83,8 @@ const VERBS: &[PackVerb] = &[
         &[PersonAction::Format],
         &[0, 1],
         shout,
-    ),
+    )
+    .positions(&[PositionForm::new("--line", Unit::Lines)]),
     PackVerb::edit(
         "cat",
         "a pack verb named like a kit verb",
@@ -199,6 +201,7 @@ fn run_tool_routes_pack_verbs() {
 #[test]
 fn registry_takes_pack_verbs_and_refuses_clashes() {
     let r = Registry::for_pack(&Shouty(&VERBS[..1])).unwrap();
+    positions::check(&r).unwrap_or_else(|e| panic!("{e}"));
     let v = r.get("shout").expect("registered");
     assert_eq!(v.source, Source::Pack);
     assert_eq!(v.serves, &[PersonAction::Format]);

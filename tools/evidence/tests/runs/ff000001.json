@@ -43,7 +43,8 @@
    "states": 1,
    "depth": null,
    "queued": 1,
-   "cap_s": 60
+   "cap_s": 60,
+   "not_run_ok": "a fixture: bad_error_cited.md cites it"
   },
   {
    "job": "ff000001",

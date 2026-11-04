@@ -1,0 +1,21 @@
+MPCE-E567 checkpoint_mac (store)
+exit:     6
+message:  the engine refused a checkpoint record: it failed its keyed check
+next:     Nothing was loaded from it. Restore the doc from its log, or reload it.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E567",
+  "name": "checkpoint_mac",
+  "area": "store",
+  "exit": 6,
+  "message": "the engine refused a checkpoint record: it failed its keyed check",
+  "next": "Nothing was loaded from it. Restore the doc from its log, or reload it.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

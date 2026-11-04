@@ -1,0 +1,236 @@
+{
+  "self": "ada",
+  "client": 4,
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 1,
+      "members": [
+        {
+          "handle": "ada",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 4,
+              "cursor": null
+            },
+            {
+              "client": 5,
+              "cursor": null
+            }
+          ]
+        },
+        {
+          "handle": "bob",
+          "name": "Bob",
+          "colour": "#16a34a",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 6,
+              "cursor": null
+            }
+          ]
+        }
+      ],
+      "watching": 0
+    },
+    {
+      "kind": "role",
+      "who": "ada",
+      "role": "editor"
+    },
+    {
+      "kind": "selection",
+      "who": "ada",
+      "selection": {
+        "root": "items",
+        "keys": ["i1", "i2"]
+      },
+      "client": 4
+    },
+    {
+      "kind": "pointer",
+      "who": "ada",
+      "pointer": {
+        "x": 120,
+        "y": -40
+      },
+      "client": 4
+    },
+    {
+      "kind": "viewport",
+      "who": "ada",
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "w": 800,
+        "h": 600
+      },
+      "client": 4
+    },
+    {
+      "kind": "selection",
+      "who": "ada",
+      "selection": {
+        "root": "items",
+        "keys": ["i3"]
+      },
+      "client": 5
+    },
+    {
+      "kind": "pointer",
+      "who": "ada",
+      "pointer": {
+        "x": 5,
+        "y": 6
+      },
+      "client": 5
+    },
+    {
+      "kind": "role",
+      "who": "bob",
+      "role": "editor"
+    },
+    {
+      "kind": "selection",
+      "who": "bob",
+      "selection": {
+        "root": "items",
+        "keys": ["i2", "i4"]
+      },
+      "client": 6
+    },
+    {
+      "kind": "selection",
+      "who": "ada",
+      "selection": {
+        "root": "items",
+        "keys": ["i1"]
+      },
+      "client": 4
+    },
+    {
+      "kind": "selection",
+      "who": "ada",
+      "selection": {
+        "root": "items",
+        "keys": ["i3"]
+      }
+    },
+    {
+      "kind": "selection",
+      "who": "bob",
+      "selection": {
+        "root": "items",
+        "keys": ["i4"]
+      },
+      "client": 6
+    },
+    {
+      "kind": "selection",
+      "who": "ada",
+      "selection": null,
+      "client": 5
+    },
+    {
+      "kind": "selection",
+      "who": "ada",
+      "selection": {
+        "root": "items",
+        "keys": ["i1"]
+      }
+    },
+    {
+      "kind": "pointer",
+      "who": "ada",
+      "pointer": null,
+      "client": 5
+    },
+    {
+      "kind": "pointer",
+      "who": "ada",
+      "pointer": {
+        "x": 120,
+        "y": -40
+      }
+    },
+    {
+      "kind": "pointer",
+      "who": "ada",
+      "pointer": null,
+      "client": 4
+    },
+    {
+      "kind": "viewport",
+      "who": "ada",
+      "viewport": null,
+      "client": 4
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 2,
+    "members": [
+      {
+        "handle": "ada",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 4,
+            "cursor": null,
+            "selection": {
+              "root": "items",
+              "keys": ["i1"]
+            }
+          }
+        ],
+        "selection": {
+          "root": "items",
+          "keys": ["i1"]
+        }
+      },
+      {
+        "handle": "bob",
+        "name": "Bob",
+        "colour": "#16a34a",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 6,
+            "cursor": null,
+            "selection": {
+              "root": "items",
+              "keys": ["i4"]
+            }
+          }
+        ],
+        "selection": {
+          "root": "items",
+          "keys": ["i4"]
+        }
+      }
+    ],
+    "watching": 0
+  }
+}

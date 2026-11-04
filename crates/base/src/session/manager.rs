@@ -278,13 +278,18 @@ impl SessionManager {
     /// stat backup and due write-backs, and unloads idle sessions (writing back first).
     /// Time is [`super::Host::now_ms`], like every other timer in the kit.
     pub fn tick(&self) -> Result<TickReport> {
+        timed!(Tick);
         let mut rep = TickReport {
             left: self.expire_idle()?,
             ..TickReport::default()
         };
         self.flush_rosters();
         for (k, s) in self.loaded()? {
-            match s.history_tick() {
+            let history = {
+                timed!(TickHistory);
+                s.history_tick()
+            };
+            match history {
                 Ok(h) => {
                     if let Some(v) = h.cut {
                         rep.versions_cut.push((k.clone(), v));
@@ -295,7 +300,11 @@ impl SessionManager {
                 Err(SessionError::Unloaded | SessionError::Released) => {}
                 Err(e) => rep.errors.push((k.clone(), e)),
             }
-            match s.disk_tick() {
+            let disk = {
+                timed!(TickDisk);
+                s.disk_tick()
+            };
+            match disk {
                 Ok((check, written)) => {
                     if let Some(DiskCheck::Ingested { version }) = check {
                         rep.ingested.push((k.clone(), version));
@@ -907,6 +916,12 @@ impl SessionManager {
             }
         }
         Ok(idle.len() + idle_blobs.len())
+    }
+
+    /// The kit's production timers (process-wide, [`crate::timers`]): every path's count,
+    /// times and p50/p95/p99. Off by default: [`crate::timers::set_enabled`].
+    pub fn timers(&self) -> crate::timers::Snapshot {
+        crate::timers::snapshot()
     }
 
     /// Pool totals, for the host's doctor/status.

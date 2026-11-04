@@ -1,0 +1,2601 @@
+{
+  "traces": [
+    {
+      "seed": 1,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "ada",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i2"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i2"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 741,
+            "y": 472
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 416,
+            "y": 0,
+            "w": 302,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -130,
+            "y": 197
+          },
+          "client": 12
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -801,
+            "y": 1322
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i3"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -876,
+            "y": 1197
+          },
+          "client": 12
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 354,
+            "y": 0,
+            "w": 285,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -16,
+            "y": 1512
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i6", "i1"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -137,
+            "y": 1359
+          },
+          "client": 12
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -27,
+            "y": 1498
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": null,
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 63,
+            "y": 1980
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i6", "i3"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 488,
+            "y": 208
+          },
+          "client": 12
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i6"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -784,
+            "y": 778
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 306,
+            "y": 0,
+            "w": 260,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i6", "i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1"]
+          },
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 4,
+        "members": [
+          {
+            "handle": "ada",
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 12,
+                "cursor": null,
+                "selection": {
+                  "root": "items",
+                  "keys": ["i6", "i3"]
+                },
+                "pointer": {
+                  "x": 488,
+                  "y": 208
+                },
+                "viewport": {
+                  "x": 354,
+                  "y": 0,
+                  "w": 285,
+                  "h": 300
+                }
+              }
+            ],
+            "selection": {
+              "root": "items",
+              "keys": ["i6", "i3"]
+            },
+            "pointer": {
+              "x": 488,
+              "y": 208
+            },
+            "viewport": {
+              "x": 354,
+              "y": 0,
+              "w": 285,
+              "h": 300
+            }
+          },
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "selection": {
+                  "root": "items",
+                  "keys": ["i1"]
+                },
+                "pointer": {
+                  "x": -784,
+                  "y": 778
+                },
+                "viewport": {
+                  "x": 306,
+                  "y": 0,
+                  "w": 260,
+                  "h": 300
+                }
+              }
+            ],
+            "selection": {
+              "root": "items",
+              "keys": ["i1"]
+            },
+            "pointer": {
+              "x": -784,
+              "y": 778
+            },
+            "viewport": {
+              "x": 306,
+              "y": 0,
+              "w": 260,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    },
+    {
+      "seed": 2,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "ada",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i4", "i2"]
+          },
+          "client": 11
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1", "i4"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 375,
+            "y": 472
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 355,
+            "y": 0,
+            "w": 20,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "left",
+          "who": "ada",
+          "reason": "left"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -572,
+            "y": 902
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": null,
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i4", "i3"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 891,
+            "y": 793
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 282,
+            "y": 459
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 41,
+            "y": 1006
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 368,
+            "y": 0,
+            "w": 75,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": null,
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 6,
+        "members": [
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "viewport": {
+                  "x": 368,
+                  "y": 0,
+                  "w": 75,
+                  "h": 300
+                }
+              }
+            ],
+            "viewport": {
+              "x": 368,
+              "y": 0,
+              "w": 75,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    },
+    {
+      "seed": 3,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "ada",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i4"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 696,
+            "y": 1279
+          },
+          "client": 12
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i5"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "left",
+          "who": "ada",
+          "reason": "left"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 437,
+            "y": 995
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -468,
+            "y": 1979
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 185,
+            "y": 0,
+            "w": 99,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 448,
+            "y": 877
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 394,
+            "y": 0,
+            "w": 364,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 795,
+            "y": 460
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 499,
+            "y": 1169
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 190,
+            "y": 0,
+            "w": 337,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -587,
+            "y": 1820
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 732,
+            "y": 515
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1", "i4"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 973,
+            "y": 558
+          },
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 4,
+        "members": [
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "selection": {
+                  "root": "items",
+                  "keys": ["i1", "i4"]
+                },
+                "pointer": {
+                  "x": 973,
+                  "y": 558
+                },
+                "viewport": {
+                  "x": 190,
+                  "y": 0,
+                  "w": 337,
+                  "h": 300
+                }
+              }
+            ],
+            "selection": {
+              "root": "items",
+              "keys": ["i1", "i4"]
+            },
+            "pointer": {
+              "x": 973,
+              "y": 558
+            },
+            "viewport": {
+              "x": 190,
+              "y": 0,
+              "w": 337,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    },
+    {
+      "seed": 4,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "ada",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i4"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -297,
+            "y": 1447
+          },
+          "client": 12
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 91,
+            "y": 0,
+            "w": 208,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1", "i6"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 108,
+            "y": 0,
+            "w": 444,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i4"]
+          },
+          "client": 11
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -626,
+            "y": 1819
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -72,
+            "y": 429
+          },
+          "client": 11
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 140,
+            "y": 0,
+            "w": 136,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 415,
+            "y": 0,
+            "w": 435,
+            "h": 300
+          },
+          "client": 11
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -915,
+            "y": 484
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": null,
+          "client": 11
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": null,
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": null,
+          "client": 11
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": null,
+          "client": 12
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": null,
+          "client": 11
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 140,
+            "y": 0,
+            "w": 136,
+            "h": 300
+          }
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 222,
+            "y": 875
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 145,
+            "y": 0,
+            "w": 384,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -113,
+            "y": 27
+          },
+          "client": 13
+        },
+        {
+          "kind": "left",
+          "who": "ada",
+          "reason": "left"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i4", "i5"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -136,
+            "y": 1416
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i2", "i5"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 44,
+            "y": 272
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -254,
+            "y": 500
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i2"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -78,
+            "y": 1073
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i2", "i3"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 96,
+            "y": 1680
+          },
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 3,
+        "members": [
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "selection": {
+                  "root": "items",
+                  "keys": ["i2", "i3"]
+                },
+                "pointer": {
+                  "x": 96,
+                  "y": 1680
+                },
+                "viewport": {
+                  "x": 108,
+                  "y": 0,
+                  "w": 444,
+                  "h": 300
+                }
+              }
+            ],
+            "selection": {
+              "root": "items",
+              "keys": ["i2", "i3"]
+            },
+            "pointer": {
+              "x": 96,
+              "y": 1680
+            },
+            "viewport": {
+              "x": 108,
+              "y": 0,
+              "w": 444,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    },
+    {
+      "seed": 5,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 119,
+            "y": 0,
+            "w": 367,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i4"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 79,
+            "y": 739
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 453,
+            "y": 0,
+            "w": 252,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i2"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -291,
+            "y": 1642
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -253,
+            "y": 1246
+          },
+          "client": 12
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 333,
+            "y": 0,
+            "w": 63,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 908,
+            "y": 402
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -202,
+            "y": 1652
+          },
+          "client": 12
+        },
+        {
+          "kind": "left",
+          "who": "ada",
+          "reason": "left"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -189,
+            "y": 372
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i6"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -647,
+            "y": 1293
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i2"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": null,
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 102,
+            "y": 0,
+            "w": 396,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 450,
+            "y": 110
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": null,
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 6,
+        "members": [
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "selection": {
+                  "root": "items",
+                  "keys": ["i2"]
+                },
+                "viewport": {
+                  "x": 102,
+                  "y": 0,
+                  "w": 396,
+                  "h": 300
+                }
+              }
+            ],
+            "selection": {
+              "root": "items",
+              "keys": ["i2"]
+            },
+            "viewport": {
+              "x": 102,
+              "y": 0,
+              "w": 396,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    },
+    {
+      "seed": 6,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "ada",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i6", "i5"]
+          },
+          "client": 11
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i4", "i6"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -734,
+            "y": 685
+          },
+          "client": 11
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i6", "i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "left",
+          "who": "ada",
+          "reason": "left"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3", "i5"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 906,
+            "y": 879
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 249,
+            "y": 0,
+            "w": 355,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -100,
+            "y": 173
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 287,
+            "y": 0,
+            "w": 426,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -358,
+            "y": 952
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 56,
+            "y": 0,
+            "w": 138,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 749,
+            "y": 336
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 387,
+            "y": 0,
+            "w": 4,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i3"]
+          },
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 6,
+        "members": [
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "selection": {
+                  "root": "items",
+                  "keys": ["i3"]
+                },
+                "pointer": {
+                  "x": 749,
+                  "y": 336
+                },
+                "viewport": {
+                  "x": 387,
+                  "y": 0,
+                  "w": 4,
+                  "h": 300
+                }
+              }
+            ],
+            "selection": {
+              "root": "items",
+              "keys": ["i3"]
+            },
+            "pointer": {
+              "x": 749,
+              "y": 336
+            },
+            "viewport": {
+              "x": 387,
+              "y": 0,
+              "w": 4,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    },
+    {
+      "seed": 7,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "ada",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i1", "i6"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -302,
+            "y": 662
+          },
+          "client": 11
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 304,
+            "y": 1753
+          },
+          "client": 12
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 237,
+            "y": 0,
+            "w": 112,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i4"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": null,
+          "client": 11
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 304,
+            "y": 1753
+          }
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 485,
+            "y": 0,
+            "w": 437,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 384,
+            "y": 440
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 32,
+            "y": 0,
+            "w": 216,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "left",
+          "who": "ada",
+          "reason": "left"
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": null,
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 256,
+            "y": 0,
+            "w": 426,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 975,
+            "y": 1904
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i1"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 687,
+            "y": 1640
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -18,
+            "y": 1613
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 99,
+            "y": 0,
+            "w": 37,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -328,
+            "y": 170
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 597,
+            "y": 155
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 714,
+            "y": 1950
+          },
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 6,
+        "members": [
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "selection": {
+                  "root": "items",
+                  "keys": ["i1"]
+                },
+                "pointer": {
+                  "x": 714,
+                  "y": 1950
+                },
+                "viewport": {
+                  "x": 99,
+                  "y": 0,
+                  "w": 37,
+                  "h": 300
+                }
+              }
+            ],
+            "selection": {
+              "root": "items",
+              "keys": ["i1"]
+            },
+            "pointer": {
+              "x": 714,
+              "y": 1950
+            },
+            "viewport": {
+              "x": 99,
+              "y": 0,
+              "w": 37,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    },
+    {
+      "seed": 8,
+      "self": "watcher",
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "watcher",
+              "name": "watcher",
+              "colour": "#123456",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 10,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        },
+        {
+          "kind": "joined",
+          "who": "ada",
+          "participant": {
+            "name": "ada",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "joined",
+          "who": "bob",
+          "participant": {
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "via": "tab"
+          },
+          "rights": "edit"
+        },
+        {
+          "kind": "role",
+          "who": "bob",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i4"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -846,
+            "y": 534
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": -195,
+            "y": 1929
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 579,
+            "y": 1932
+          },
+          "client": 11
+        },
+        {
+          "kind": "role",
+          "who": "ada",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i2"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 841,
+            "y": 1204
+          },
+          "client": 12
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i4", "i2"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "ada",
+          "selection": {
+            "root": "items",
+            "keys": ["i2", "i4"]
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 14,
+            "y": 643
+          },
+          "client": 11
+        },
+        {
+          "kind": "pointer",
+          "who": "ada",
+          "pointer": {
+            "x": 841,
+            "y": 1204
+          }
+        },
+        {
+          "kind": "viewport",
+          "who": "ada",
+          "viewport": {
+            "x": 412,
+            "y": 0,
+            "w": 115,
+            "h": 300
+          },
+          "client": 12
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 132,
+            "y": 63
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 454,
+            "y": 0,
+            "w": 15,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "left",
+          "who": "ada",
+          "reason": "left"
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": {
+            "root": "items",
+            "keys": ["i2"]
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -316,
+            "y": 1743
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 282,
+            "y": 0,
+            "w": 349,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 589,
+            "y": 1362
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 67,
+            "y": 0,
+            "w": 363,
+            "h": 300
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": null,
+          "client": 13
+        },
+        {
+          "kind": "selection",
+          "who": "bob",
+          "selection": null,
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": 895,
+            "y": 2
+          },
+          "client": 13
+        },
+        {
+          "kind": "pointer",
+          "who": "bob",
+          "pointer": {
+            "x": -256,
+            "y": 1380
+          },
+          "client": 13
+        },
+        {
+          "kind": "viewport",
+          "who": "bob",
+          "viewport": {
+            "x": 168,
+            "y": 0,
+            "w": 407,
+            "h": 300
+          },
+          "client": 13
+        }
+      ],
+      "final": {
+        "kind": "snapshot",
+        "version": 6,
+        "members": [
+          {
+            "handle": "bob",
+            "name": "bob",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "editor",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 13,
+                "cursor": null,
+                "pointer": {
+                  "x": -256,
+                  "y": 1380
+                },
+                "viewport": {
+                  "x": 168,
+                  "y": 0,
+                  "w": 407,
+                  "h": 300
+                }
+              }
+            ],
+            "pointer": {
+              "x": -256,
+              "y": 1380
+            },
+            "viewport": {
+              "x": 168,
+              "y": 0,
+              "w": 407,
+              "h": 300
+            }
+          },
+          {
+            "handle": "watcher",
+            "name": "watcher",
+            "colour": "#123456",
+            "kind": "person",
+            "role": "viewer",
+            "away": false,
+            "cursor": null,
+            "rights": "edit",
+            "devices": [
+              {
+                "client": 10,
+                "cursor": null
+              }
+            ]
+          }
+        ],
+        "watching": 0
+      }
+    }
+  ]
+}

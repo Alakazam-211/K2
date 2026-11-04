@@ -1,13 +1,14 @@
 //! Deleting docs: every kit row of a doc (or of every doc in a space) in **one** transaction.
 //!
 //! Erased per doc: its `paths` entry and every table in [`super::DOC_TABLES`]: `docs`,
-//! `snapshots`, `updates`, `clients`, `versions`, `approvals`, `sync` (the disk replica),
-//! `doc_keys` (its hash key), the history tables (`changes`, `reverts`, `revert_index`,
+//! `snapshots`, `updates`, `clients`, `client_kinds`, `versions`, `approvals`, `sync` (the
+//! disk replica), `doc_keys` (its hash key), the history tables (`changes`, `reverts`, `revert_index`,
 //! `revert_carry`, `revert_stats`, `authored`, `change_clocks`, `provenance`) and the
-//! tier-0 tables (`blob_versions`, `blob_sync`, `blob_approvals`). A blob doc's versions
-//! each held a reference on their blob in `blobs`: those references are released (the
-//! blob's grace starts then), so [`crate::blob::BlobStore::gc`] removes a blob nothing else
-//! references once the grace runs out.
+//! tier-0 tables (`blob_versions`, `blob_sync`, `blob_approvals`), and `doc_blob_refs`. A blob
+//! doc's versions each held a reference on their blob in `blobs`, and a doc holds one on each
+//! blob its values name: those references are released (the blob's grace starts then), so
+//! [`crate::blob::BlobStore::gc`] removes a blob nothing else references once the grace runs
+//! out.
 //!
 //! Left alone: `meta` (doc ids are never reused), the host's table (`host`, opaque to the
 //! kit: erasing a deleted doc's or space's rows there is the host's job), and a space's blob
@@ -45,7 +46,7 @@ fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreE
             t.erase(w, id)?;
         }
     }
-    // the tier-0 tables: their blob references are released first
+    // the tier-0 tables and doc_blob_refs: their blob references are released first
     blob::delete_rows(w, id, &key.space, now)?;
     Ok(key)
 }

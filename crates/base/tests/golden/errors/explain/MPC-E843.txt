@@ -1,0 +1,21 @@
+MPC-E843 board_manifest (structured and CSV)
+exit:     4
+message:  the file's manifest or parts don't hold together ({code})
+next:     The file's manifest is missing or damaged, or its parts don't match it (details.code says which). Nothing was read or changed. Restore the file from a good copy; no board verb opens it as it is.
+rule:     board file: the manifest
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, list, read, search, references, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E843",
+  "name": "board_manifest",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "the file's manifest or parts don't hold together ({code})",
+  "next": "The file's manifest is missing or damaged, or its parts don't match it (details.code says which). Nothing was read or changed. Restore the file from a good copy; no board verb opens it as it is.",
+  "rule": "board file: the manifest",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "list", "read", "search", "references", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,8 @@
+# Lines the text rule found and a person reviewed and kept (tools/check-public-cut.sh), one per
+# line: PATH: TEXT, TEXT being the whole added line with its leading and trailing whitespace
+# trimmed. A changed line, or another line in the same file, is not covered. Cleared whenever
+# tools/public-text-base moves: an entry matching no added line blocks the tag.
+crates/base/src/differential.rs: /// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+crates/base/src/session/live/grid_presence.rs: // the caller releases the lock, then passes the panic on
+crates/base/tests/grid_lines.rs: /// (`k2_mpc_base::differential::LineMutant`). Unset, `f` runs as is. Any other value panics.
+crates/base/tests/golden/errors/capabilities-file.json: "name": "engine_panic",

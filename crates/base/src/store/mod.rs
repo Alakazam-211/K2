@@ -21,6 +21,7 @@
 //! process hand-offs (redb holds an exclusive lock while open).
 
 mod blob;
+mod blob_refs;
 mod delete;
 mod enc;
 mod history;
@@ -32,12 +33,15 @@ mod structured;
 
 pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
+pub(crate) use blob_refs::BlobRefScan;
 pub use history::Redaction;
 pub(crate) use history::{
     window_plan, Carry, ClockSpan, HunkRoots, NewChange, ProvRow, RecordHunk, RecordRoot,
     Retention, RevertRecord, RevertWindow, RootRuns, RootShape, SpanOf,
 };
 pub use history::{ChangeInfo, ChangeKind, RootHunks, VersionInfo};
+#[cfg(test)]
+pub(crate) use history::{CommitInterrupt, INTERRUPT_COMMIT};
 pub(crate) use promote::PromoteRows;
 #[cfg(test)]
 pub(crate) use promote::FAIL_BEFORE_COMMIT as FAIL_PROMOTE_BEFORE_COMMIT;
@@ -117,6 +121,21 @@ use enc::{R, W};
 ///   behind where v0.9.7 drops them (a doc delete, records leaving the window), and its
 ///   `rewrite_file`, and so a purge, refuses the table before changing anything
 ///   ([`StoreError::NewerData`], `MPC-E502`; never a silent drop).
+///
+///   After v0.10.2 one more table on the same terms, `client_kinds` (what each client ID an
+///   agent or an own-replica participant joined with was minted for),
+///   **without a format bump**: created lazily, by the first join that mints such an ID. A
+///   store without it (or without a client's row) reads as "kind unknown", and an ID of
+///   unknown kind is never reused, so an owner record an older kit wrote is safe. An older
+///   build reads and writes such a store as before (its joins add no rows, so their IDs are
+///   never reused here), and refuses a rewrite, and so a purge, before changing anything
+///   ([`StoreError::NewerData`], `MPC-E502`), as for `authored`: nothing is lost, and a build
+///   that knows the table rewrites the store again. Its doc delete isn't refused and can't
+///   erase rows of a table it doesn't know; every open here removes what it left.
+///
+///   One more on the same terms, `doc_blob_refs` (the blobs a doc's values name; `blob_refs.rs`),
+///   created lazily by the first name. Its counts are in `blobs`, so an older kit's blob GC
+///   honours them. An older kit's own writes take none (`docs/SESSIONS.md`, "Blob references").
 /// - 7: **forward-declared, never written by this build** (v0.10.1): the native engine's
 ///   store (its docs stamped by the native engine; tables this build doesn't know). This
 ///   build reads a format-7 store ([`STORE_FORMAT_READ`]) and serves the Yrs docs in it, but
@@ -154,6 +173,109 @@ const PATHS: TableDefinition<&str, u64> = TableDefinition::new("paths");
 const SNAPSHOTS: TableDefinition<u64, &[u8]> = TableDefinition::new("snapshots");
 const UPDATES: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("updates");
 const CLIENTS: TableDefinition<(u64, u64), &str> = TableDefinition::new("clients");
+/// `(doc, client)` → one byte, what the client ID was minted for (after v0.10.2, no format
+/// bump): [`KIND_AGENT`] (an agent that edits through the session alone: its ID may be
+/// handed to its next connection, `Config::reuse_agent_clients`) or [`KIND_OWN_REPLICA`] (a
+/// participant with its own replica, which may still write as the ID: never handed to
+/// another connection). Written with the client's owner row, in its transaction
+/// ([`DocStore::set_client_kind`]).
+///
+/// Reuse needs a positive proof: only an ID with a [`KIND_AGENT`] row is reused. An owner
+/// row without a kind row (an older kit's join, a person's, the outside editor's, a
+/// promotion's) is of unknown kind and never reused, which is what makes a store an older
+/// kit wrote (before or between this kit's opens) safe without a "complete since" record.
+///
+/// **Created lazily**, by the first join that mints such an ID: a store none reached has no
+/// such table. Every reader takes a missing table as empty. Rows of a doc an older kit deleted
+/// are removed at the next open ([`sweep_orphans`]).
+const CLIENT_KINDS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("client_kinds");
+/// [`CLIENT_KINDS`]: an agent editing through the session alone (reusable).
+const KIND_AGENT: u8 = 0;
+/// [`CLIENT_KINDS`]: a participant with its own replica (never reused).
+const KIND_OWN_REPLICA: u8 = 1;
+
+/// [`Additive::on_orphan`].
+pub(super) type OnOrphan = fn(&redb::WriteTransaction, DocId) -> Result<(), StoreError>;
+
+/// One additive per-doc table (added without a format bump): an older kit's doc delete erases
+/// the tables it knows, so it leaves this one's rows, and every open removes them
+/// ([`sweep_orphans`]). Every entry is in [`DOC_TABLES`] too.
+#[derive(Clone, Copy)]
+pub(super) struct Additive {
+    pub rows: DocRows,
+    /// What goes with a deleted doc's rows, run just before they are erased.
+    pub on_orphan: Option<OnOrphan>,
+}
+
+/// The tables [`sweep_orphans`] walks at every open. A new additive per-doc table registers
+/// here, with no sweep of its own.
+pub(super) const ADDITIVE_TABLES: &[Additive] = &[
+    Additive {
+        rows: DocRows::Pair(CLIENT_KINDS),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Named(blob_refs::DOC_BLOB_REFS),
+        on_orphan: Some(blob_refs::release_orphan),
+    },
+];
+
+/// Remove the rows of docs that have been deleted from each of `tables`. Run by **every** open,
+/// in its transaction, with no once-per-store marker: a marker set by one open says nothing
+/// about an older kit that runs after it (a downgrade, then this build again), and an older kit
+/// can't clear it. Cheap enough for that: per table, one seek and one doc lookup per doc holding
+/// rows, never a row of the docs' other tables or a read of every row. Leaves a missing table
+/// missing. As a delete does, it leaves the rows' old bytes in freed pages until they are
+/// reused.
+pub(super) fn sweep_orphans(
+    w: &redb::WriteTransaction,
+    tables: &[Additive],
+) -> Result<(), StoreError> {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::client_mutant()
+        == Some(crate::differential::ClientMutant::NoOrphanSweep)
+    {
+        return Ok(());
+    }
+    let walked = if planted_sweep_skips_table() {
+        &tables[..tables.len().saturating_sub(1)]
+    } else {
+        tables
+    };
+    for table in walked {
+        if !history::has_table(w, table.rows.name())? {
+            continue;
+        }
+        let mut from: u64 = 0;
+        while let Some(id) = table.rows.first_doc_from(w, from)? {
+            if w.open_table(DOCS)?.get(id)?.is_none() {
+                if let Some(f) = table.on_orphan {
+                    f(w, id)?;
+                }
+                table.rows.erase(w, id)?;
+            }
+            let Some(after) = id.checked_add(1) else {
+                break;
+            };
+            from = after;
+        }
+    }
+    Ok(())
+}
+
+/// The planted fault [`crate::differential::BlobRefMutant::SweepSkipsTable`]: the sweep leaves
+/// the last table on its list.
+#[cfg(any(test, feature = "differential"))]
+fn planted_sweep_skips_table() -> bool {
+    crate::differential::blob_ref_mutant()
+        == Some(crate::differential::BlobRefMutant::SweepSkipsTable)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_sweep_skips_table() -> bool {
+    false
+}
+
 const VERSIONS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("versions");
 const APPROVALS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("approvals");
 const HOST: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("host");
@@ -190,7 +312,7 @@ pub(super) enum Erase {
     /// The doc's key range, as is.
     Range,
     /// By `blob::delete_rows`, which first releases each blob version's reference on its
-    /// blob (tier 0).
+    /// blob (tier 0), and each reference the doc's values took (`doc_blob_refs`).
     Blob,
 }
 
@@ -204,6 +326,7 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::One(DOC_KEYS), Erase::Range),
     (DocRows::Pair(UPDATES), Erase::Range),
     (DocRows::Owner(CLIENTS), Erase::Range),
+    (DocRows::Pair(CLIENT_KINDS), Erase::Range),
     (DocRows::Pair(VERSIONS), Erase::Range),
     (DocRows::Pair(APPROVALS), Erase::Range),
     (DocRows::Slot(SYNC), Erase::Range),
@@ -221,6 +344,7 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Pair(blob::BLOB_VERSIONS), Erase::Blob),
     (DocRows::Slot(blob::BLOB_SYNC), Erase::Blob),
     (DocRows::Pair(blob::BLOB_APPROVALS), Erase::Blob),
+    (DocRows::Named(blob_refs::DOC_BLOB_REFS), Erase::Blob),
 ];
 
 /// The tables not keyed by doc id: `meta` (the store's own), `paths` (key → doc: a delete
@@ -243,7 +367,7 @@ impl DocRows {
     }
 
     /// Erase doc `id`'s rows in `w`. A table the store doesn't have (a lazily created one,
-    /// [`history::AUTHORED`]) has none, and stays absent.
+    /// [`history::AUTHORED`], [`CLIENT_KINDS`]) has none, and stays absent.
     pub(super) fn erase(self, w: &redb::WriteTransaction, id: DocId) -> Result<(), StoreError> {
         if !history::has_table(w, self.name())? {
             return Ok(());
@@ -272,6 +396,58 @@ impl DocRows {
                 .retain_in((id, "")..(id + 1, ""), |_, _| false)?,
         }
         Ok(())
+    }
+
+    /// The first doc at or after `from` holding a row here (one seek).
+    pub(super) fn first_doc_from(
+        self,
+        w: &redb::WriteTransaction,
+        from: DocId,
+    ) -> Result<Option<DocId>, StoreError> {
+        Ok(match self {
+            Self::One(t) => w
+                .open_table(t)?
+                .range(from..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value()),
+            Self::Pair(t) => w
+                .open_table(t)?
+                .range((from, 0u64)..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value().0),
+            Self::Owner(t) => w
+                .open_table(t)?
+                .range((from, 0u64)..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value().0),
+            Self::Slot(t) => w
+                .open_table(t)?
+                .range((from, 0u8)..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value().0),
+            Self::Clock(t) => w
+                .open_table(t)?
+                .range((from, 0u64, 0u64)..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value().0),
+            Self::Elem(t) => w
+                .open_table(t)?
+                .range((from, "", "", 0u8)..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value().0),
+            Self::Named(t) => w
+                .open_table(t)?
+                .range((from, "")..)?
+                .next()
+                .transpose()?
+                .map(|(k, _)| k.value().0),
+        })
     }
 
     /// Whether the table holds a row of doc `id` (the delete tests).
@@ -381,6 +557,11 @@ pub enum StoreError {
     /// Tier 0: no index row for this blob (hex id).
     #[error("no blob {0}")]
     NoBlob(String),
+    /// A connection's edit names a blob (hex id) the doc's space doesn't hold, found in the
+    /// change's own transaction: blob GC removed it after the session checked. Nothing is
+    /// stored. `MPC-E720` `blob_ref_unknown`. Exit 4.
+    #[error("no blob {0} in this doc's space")]
+    BlobRefUnknown(String),
     /// Tier 0: version {1} of blob doc {0} is its current content and can't be deleted.
     #[error("version {1} of doc {0} is its current content")]
     CurrentVersion(DocId, VersionId),
@@ -1157,6 +1338,7 @@ impl DocStore {
                 }
                 meta.insert(AUTHORED_SWEPT, 1)?;
             }
+            sweep_orphans(&w, ADDITIVE_TABLES)?;
         }
         w.commit()?;
         let s = Self {
@@ -1542,6 +1724,53 @@ impl DocStore {
         w.open_table(CLIENTS)?.insert((id, client), owner)?;
         w.commit()?;
         Ok(())
+    }
+
+    /// Record a client ID's owner (as [`Self::set_client`]) and what it was minted for (the
+    /// `client_kinds` table, created on first use), in one transaction: `own_replica` for a participant with its own
+    /// replica (never reused), otherwise an agent that edits through the session alone (its
+    /// ID is then in [`Self::reusable_clients`]).
+    pub fn set_client_kind(
+        &self,
+        id: DocId,
+        client: ClientId,
+        owner: &str,
+        own_replica: bool,
+    ) -> Result<(), StoreError> {
+        let kind = if own_replica {
+            KIND_OWN_REPLICA
+        } else {
+            KIND_AGENT
+        };
+        let w = self.begin_write()?;
+        w.open_table(CLIENTS)?.insert((id, client), owner)?;
+        w.open_table(CLIENT_KINDS)?
+            .insert((id, client), [kind].as_slice())?;
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The client IDs of doc `id` recorded (`client_kinds`) as an agent's that edits through
+    /// the session alone: the only IDs agent reuse may take. Empty without the table; a row
+    /// of another kind, or of a byte this kit doesn't know, is not listed (never reused).
+    pub fn reusable_clients(
+        &self,
+        id: DocId,
+    ) -> Result<std::collections::HashSet<ClientId>, StoreError> {
+        let r = self.begin_read()?;
+        let t = match r.open_table(CLIENT_KINDS) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Default::default()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut out = std::collections::HashSet::new();
+        for kv in t.range((id, 0)..=(id, u64::MAX))? {
+            let (k, v) = kv?;
+            if v.value() == [KIND_AGENT].as_slice() {
+                out.insert(k.value().1);
+            }
+        }
+        Ok(out)
     }
 
     /// Every client ID recorded for doc `id`, with its owner, in client order.
@@ -1963,73 +2192,6 @@ impl DocStore {
         w.commit()?;
         Ok(())
     }
-}
-
-/// The fuzz targets' entry point for the store's own record decoders (feature `fuzzing`):
-/// the names (one is the session's), and [`fuzz_record`]. Engine bytes inside a record (a snapshot's state, a log
-/// entry's update, a sync state) are carried, never decoded: no fuzzed byte reaches the
-/// engine.
-#[cfg(feature = "fuzzing")]
-pub(crate) const FUZZ_RECORDS: &[&str] = &[
-    "doc key",
-    "sync state",
-    "doc meta",
-    "log entry",
-    "approval",
-    "version",
-    "snapshot",
-    "change",
-    "change head",
-    "revert record",
-    "authored hunks",
-    "provenance row",
-    "revert index",
-    "revert carry",
-    "revert stats",
-    "carry taint",
-    "version head",
-    "blob space",
-    "blob row",
-    "blob version",
-    "blob sync",
-    // the session's (`session::disk`), routed by `crate::fuzzing`
-    "file stat",
-];
-
-/// Decode `b` as record `name` ([`FUZZ_RECORDS`]) and check the oracle
-/// ([`enc::fuzz_fixpoint`]); `None` for an unknown name. Panics on a violation.
-#[cfg(feature = "fuzzing")]
-pub(crate) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
-    use enc::fuzz_fixpoint as fx;
-    Some(match name {
-        "doc key" => fx(name, b, true, dec_doc_key, enc_doc_key),
-        "sync state" => fx(name, b, true, dec_sync, enc_sync),
-        "doc meta" => fx(name, b, false, dec_meta, enc_meta),
-        "log entry" => fx(name, b, false, dec_entry_full, |(e, red)| {
-            enc_entry_as(e, *red)
-        }),
-        "approval" => fx(name, b, false, dec_approval, enc_approval),
-        "version" => {
-            let ok = fx(name, b, false, dec_version_full, |(v, red)| {
-                enc_version_redacted(v, red)
-            });
-            // the version head reads the same header as the full record
-            if let Ok((v, red)) = dec_version_full(b) {
-                let h = history::fuzz_version_head(b)
-                    .unwrap_or_else(|e| panic!("version: the head refuses a record: {e:?}"));
-                assert_eq!(
-                    (h.seq, h.at_ms, h.reason, &h.name, &h.authors, &h.redacted),
-                    (v.seq, v.at_ms, v.reason, &v.name, &v.authors, &red),
-                    "version: the head differs from the full record"
-                );
-            }
-            ok
-        }
-        "snapshot" => fx(name, b, true, dec_snapshot, |(seq, st)| {
-            enc_snapshot(*seq, st)
-        }),
-        other => return history::fuzz_record(other, b).or_else(|| blob::fuzz_record(other, b)),
-    })
 }
 
 #[cfg(test)]

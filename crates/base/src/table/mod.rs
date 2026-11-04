@@ -828,14 +828,15 @@ impl Table {
 
 /// The lowest number `n` such that no key `<prefix><m>` or `<prefix><m>.<tag>` with `m >= n`
 /// is in `axis` (so minting from it never reuses a key, whatever the counter says).
+/// Read with [`crate::mint::KeyShape`], the loose grammar under [`crate::mint::TaggedKey`].
 fn next_free(axis: &Axis, prefix: char) -> u64 {
+    let mut buf = [0; 4];
+    let prefix = &*prefix.encode_utf8(&mut buf);
     axis.known
         .iter()
-        .filter_map(|k| {
-            let s = k.as_str().strip_prefix(prefix)?;
-            let n = s.split('.').next()?;
-            n.parse::<u64>().ok()
-        })
+        .filter_map(crate::mint::KeyShape::parse)
+        .filter(|s| s.prefix == prefix)
+        .map(|s| s.n)
         .max()
         .map_or(1, |m| m.saturating_add(1))
 }
@@ -855,17 +856,95 @@ pub(crate) fn lone_blank(records: &[Record]) -> bool {
     matches!(records, [only] if only.is_empty())
 }
 
-fn line_breaks(s: &str) -> usize {
-    let b = s.as_bytes();
-    let mut n = 0;
-    for (i, &c) in b.iter().enumerate() {
-        match c {
-            b'\n' => n += 1,
-            b'\r' if b.get(i + 1) != Some(&b'\n') => n += 1,
-            _ => {}
+/// The byte offsets of `b`'s lone CRs: CRs with no LF right after them. The two line counts on
+/// a grid differ exactly there: the verbs that mirror a real tool end a line at `\n` only, the
+/// line map at a lone CR too (docs/POSITIONS.md).
+pub(crate) fn lone_crs(b: &[u8]) -> impl Iterator<Item = usize> + '_ {
+    b.iter()
+        .enumerate()
+        .filter(|&(i, &c)| c == b'\r' && b.get(i + 1) != Some(&b'\n'))
+        .map(|(i, _)| i)
+}
+
+/// What a rendered file says about its two line counts ([`lone_crs`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineCounts {
+    /// No lone CR: a line number means one thing.
+    Agree,
+    /// A lone CR: `cat -n` and the line map number its lines differently.
+    Differ,
+    /// The file can't be rendered now, so nobody can tell: offer no line number.
+    Unknown,
+}
+
+impl LineCounts {
+    /// `rendered`: the file, or the reason it can't be rendered.
+    pub(crate) fn of<E>(rendered: &Result<Vec<u8>, E>) -> Self {
+        match rendered {
+            Ok(b) if lone_crs(b).next().is_some() => LineCounts::Differ,
+            Ok(_) => LineCounts::Agree,
+            Err(_) => LineCounts::Unknown,
         }
     }
-    n
+}
+
+fn line_breaks(s: &str) -> usize {
+    let b = s.as_bytes();
+    b.iter().filter(|&&c| c == b'\n').count() + lone_crs(b).count()
+}
+
+/// Where a rendered file's `\n` lines (what `cat -n` numbers) sit among its rendered lines (what
+/// a [`LineMap`] maps). The one bridge between the two counts: a line number that came from a
+/// mirror verb, or from a caller who read one, crosses here before it reaches a line map.
+/// Without a lone CR the two counts are the same and this is the identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NlLines {
+    /// One `(first, last)` of rendered lines (1-based, inclusive) per `\n` line; `None`: the
+    /// file holds no lone CR.
+    spans: Option<Vec<(usize, usize)>>,
+}
+
+impl NlLines {
+    pub(crate) fn of(text: &str) -> Self {
+        if lone_crs(text.as_bytes()).next().is_none() {
+            return NlLines { spans: None };
+        }
+        let mut next = 1;
+        let spans = text
+            .split_inclusive('\n')
+            .map(|piece| {
+                // a lone CR ends a rendered line; one at the very end of the file starts no
+                // new one
+                let crs = lone_crs(piece.as_bytes()).count();
+                let count = crs + 1 - usize::from(piece.ends_with('\r'));
+                let span = (next, next + count - 1);
+                next += count;
+                span
+            })
+            .collect();
+        NlLines { spans: Some(spans) }
+    }
+
+    /// The rendered lines `\n` line `n` (1-based) holds. A line past the end keeps its distance
+    /// from the end, so it stays past the end of the map; line 0 stays 0, which no map owns.
+    pub(crate) fn span(&self, n: usize) -> (usize, usize) {
+        let Some(spans) = &self.spans else {
+            return (n, n);
+        };
+        match n.checked_sub(1).map(|i| (i, spans.get(i))) {
+            None => (0, 0),
+            Some((_, Some(&s))) => s,
+            Some((i, None)) => {
+                let end = spans.last().map_or(0, |s| s.1) + i - spans.len() + 1;
+                (end, end)
+            }
+        }
+    }
+
+    /// The rendered lines `\n` lines `first..=last` hold.
+    pub(crate) fn rendered(&self, first: usize, last: usize) -> (usize, usize) {
+        (self.span(first).0, self.span(last).1)
+    }
 }
 
 /// Who a rendered line belongs to.

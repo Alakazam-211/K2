@@ -1,0 +1,27 @@
+MPC-E849 bad_ops (structured and CSV)
+exit:     2
+message:  the ops aren't valid ({code})
+next:     The ops you passed aren't valid JSON, or not in the shape the format takes (details.code says which). Nothing was applied. Check them against the fields each type takes, fix them and apply again.
+step:     fields; why: The ops don't fit the format; check them against the fields each type takes, fix them and apply again.
+rule:     board file: raw ops
+verbs:    a file type's own verbs (its host's file registry): apply
+status:   live
+--- json
+{
+  "id": "MPC-E849",
+  "name": "bad_ops",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "the ops aren't valid ({code})",
+  "next": "The ops you passed aren't valid JSON, or not in the shape the format takes (details.code says which). Nothing was applied. Check them against the fields each type takes, fix them and apply again.",
+  "next_step": {
+    "verb": "fields",
+    "args": [],
+    "why": "The ops don't fit the format; check them against the fields each type takes, fix them and apply again."
+  },
+  "rule": "board file: raw ops",
+  "verbs": ["@file", "apply"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

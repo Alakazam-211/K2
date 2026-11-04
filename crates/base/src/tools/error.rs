@@ -140,6 +140,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::Deleted
         | SessionError::NoClaim(_)
         | SessionError::UnknownElem { .. }
+        | SessionError::BlobRefUnknown { .. }
         | SessionError::Blob(BlobError::NotFound(_) | BlobError::TooLarge { .. }) => {
             exit::NOT_FOUND
         }
@@ -147,22 +148,30 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::RateLimited { .. }
         | SessionError::BadParticipant(_)
         | SessionError::BadPosition(_)
+        | SessionError::LinesUnknown { .. }
         | SessionError::BadEdit(_)
         | SessionError::BadApproval(_)
         | SessionError::BadPath(_)
+        | SessionError::SaveTicketInvalid
         | SessionError::NoLease
         | SessionError::BadClaim(_)
+        | SessionError::SelectionTooLarge { .. }
         | SessionError::AtLimit { .. }
         | SessionError::NeedsBase
+        | SessionError::KeyNotOwn { .. }
+        | SessionError::KeySpaceFull { .. }
         | SessionError::Doc(_) => exit::USAGE,
         SessionError::Held { .. } | SessionError::ClaimContended { .. } => exit::HELD,
-        SessionError::Leased { .. } | SessionError::Claimed { .. } => exit::LEASED,
+        SessionError::Leased { .. }
+        | SessionError::Claimed { .. }
+        | SessionError::ElemsClaimed(_) => exit::LEASED,
         SessionError::Store(e) | SessionError::Blob(BlobError::Store(e)) => store_exit(e),
         SessionError::EngineMismatch { .. } => exit::STORE,
         SessionError::RevertTooOld { .. } | SessionError::BaseExpired { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
         | SessionError::FacetConflict(_)
         | SessionError::Disk(_)
+        | SessionError::SaveMismatch { .. }
         | SessionError::Blob(_)
         | SessionError::Pack(_)
         | SessionError::Unloaded
@@ -184,6 +193,7 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         | S::NoApproval(..)
         | S::NoBlobSpace
         | S::NoBlob(_)
+        | S::BlobRefUnknown(_)
         | S::PurgedVersion(..) => exit::NOT_FOUND,
         S::CurrentVersion(..) => exit::USAGE,
         S::MarksLost(_) => exit::TOO_OLD,
@@ -331,6 +341,7 @@ mod tests {
             S::NoApproval(1, 2),
             S::NoBlobSpace,
             S::NoBlob("ab".into()),
+            S::BlobRefUnknown("ab".into()),
             S::PurgedVersion(1, 2),
         ];
         let failures = [

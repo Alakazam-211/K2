@@ -363,6 +363,13 @@ pub(super) fn space_in(w: &WriteTransaction, space: &str) -> Result<SpaceKey, St
     dec_space(v.value())
 }
 
+/// The number of `space`'s key, if it has one.
+pub(super) fn space_no(r: &redb::ReadTransaction, space: &str) -> Result<Option<u64>, StoreError> {
+    let t = r.open_table(BLOB_SPACES)?;
+    let v = t.get(space)?;
+    Ok(v.map(|v| dec_space(v.value())).transpose()?.map(|k| k.no))
+}
+
 /// Add `delta` references to a blob; the row must exist.
 pub(super) fn adjust_ref(
     w: &WriteTransaction,
@@ -391,9 +398,10 @@ pub(super) fn adjust_ref(
     Ok(())
 }
 
-/// Erase a blob doc's rows in `w` (deleting the doc), releasing the reference each of its
-/// versions held on its blob at `now`. A space whose key was purged has no blob rows left to
-/// release, and a missing row has nothing to release either: neither stops the delete.
+/// Erase a doc's tier-0 rows and blob references in `w` (deleting the doc), releasing the
+/// reference each of its versions, and each blob its values name, held at `now`. A space whose
+/// key was purged has no blob rows left to release, and a missing row has nothing to release
+/// either: neither stops the delete.
 pub(super) fn delete_rows(
     w: &WriteTransaction,
     id: DocId,
@@ -427,7 +435,7 @@ pub(super) fn delete_rows(
         .retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?;
     w.open_table(BLOB_APPROVALS)?
         .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
-    Ok(())
+    super::blob_refs::delete_rows(w, id, now)
 }
 
 pub(super) fn last_vid(w: &WriteTransaction, id: DocId) -> Result<VersionId, StoreError> {
@@ -565,11 +573,13 @@ impl DocStore {
     }
 
     /// Remove index rows that are still unreferenced (one transaction); returns those removed.
+    /// A blob a doc names with no count yet takes that count here instead, and stays.
     pub(crate) fn blob_remove_unreferenced(
         &self,
         rows: &[(u64, BlobId, u64)],
     ) -> Result<Vec<(u64, BlobId, u64)>, StoreError> {
         let w = self.begin_write()?;
+        super::blob_refs::claim_named(&w, rows)?;
         let mut gone = Vec::new();
         {
             let mut t = w.open_table(BLOBS)?;
@@ -972,17 +982,4 @@ impl DocStore {
         w.commit()?;
         Ok(())
     }
-}
-
-/// [`super::fuzz_record`] for the blob store's records (feature `fuzzing`).
-#[cfg(feature = "fuzzing")]
-pub(super) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
-    use super::enc::fuzz_fixpoint as fx;
-    Some(match name {
-        "blob space" => fx(name, b, true, dec_space, enc_space),
-        "blob row" => fx(name, b, true, dec_row, enc_row),
-        "blob version" => fx(name, b, false, dec_version, enc_version),
-        "blob sync" => fx(name, b, true, dec_sync, enc_sync),
-        _ => return None,
-    })
 }

@@ -109,9 +109,9 @@ impl PurgeRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum NotReached {
-    /// The doc's file wasn't rewritten (missing, declined, unwritable, or not attached to
-    /// this session): it, and the sync replica of it the kit keeps, still hold its text as
-    /// last written. Attach and flush the file, then purge again.
+    /// The doc's file wasn't rewritten (missing, declined, unwritable, not attached to this
+    /// session, or the pack couldn't render the doc): it, and the sync replica of it the kit
+    /// keeps, still hold its text as last written. Attach and flush the file, then purge again.
     File,
     /// This many targeted changes had already left the revert window: the text they changed
     /// is unknown, so copies of it elsewhere couldn't be found. Purge by text, or the whole
@@ -120,9 +120,13 @@ pub enum NotReached {
     /// Rewriting the store file failed: freed pages of it may still hold purged bytes. Run
     /// [`crate::store::DocStore::rewrite_file`].
     StoreFile,
-    /// Tier 0: this many purged blobs are still referenced elsewhere (another version or doc
-    /// with the same bytes, or a pack's retain): their bytes stay.
+    /// This many purged blobs are still referenced elsewhere (another version or doc with the
+    /// same bytes, another doc whose values name them, or a pack's retain): their bytes stay.
     SharedBlobs(u64),
+    /// This many blobs a purge released have no reference left, but this session has no blob
+    /// store to remove them with: their bytes stay until [`crate::blob::BlobStore::gc`] takes
+    /// them, past its grace.
+    LeftForBlobGc(u64),
     /// Tier 0: this many recorded conflict copies didn't match purged content (edited since,
     /// or holding the current content) and were left.
     ConflictCopies(u64),
@@ -177,6 +181,9 @@ impl NotReached {
             }
             NotReached::StoreFile => "freed pages of the store file (rewrite failed)",
             NotReached::SharedBlobs(_) => "blobs still used by other versions or docs",
+            NotReached::LeftForBlobGc(_) => {
+                "blobs nothing references, left for blob GC (no blob store on this session)"
+            }
             NotReached::ConflictCopies(_) => "conflict copies that don't match purged content",
             NotReached::Tier0History(_) => {
                 "non-text versions kept from before the doc read as text (purge_tier0)"
@@ -604,8 +611,18 @@ impl Session {
         if !file_holds_live {
             // the replica is kept below (re-encoded): if the doc still renders to the synced
             // bytes (the file missing, say), it must be the doc's elements, not an older copy
-            // of its text, before the new key leaves the sync point unknown (v0.9.4)
-            self.resync_if_synced(st)?;
+            // of its text, before the new key leaves the sync point unknown (v0.9.4). Failing
+            // that is reported and the purge goes on: an erasure doesn't depend on rendering a
+            // file, and `NotReached::File` below says what it leaves
+            if let Err(e) = self.resync_if_synced(st) {
+                #[cfg(any(test, feature = "differential"))]
+                if crate::differential::resync_mutant()
+                    == Some(crate::differential::ResyncMutant::PurgeStopsAtTheResync)
+                {
+                    return Err(e);
+                }
+                self.disk_error(st, "re-syncing the disk replica for a purge", e);
+            }
         }
         let key = fresh_key()?;
         let sync = if file_holds_live {
@@ -665,6 +682,9 @@ impl Session {
             key,
             erase: erase.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
             elems,
+            ref_roots: self.pack.blob_ref_roots(),
+            live_refs: blob_refs::live_names(&doc, self.pack.blob_ref_roots())?,
+            now,
         };
         // a grid doc's waiting notes hold capped values: a purge takes them all, keeping the
         // fact and the count, before the file is rewritten (in the store too; a text doc's are
@@ -681,7 +701,7 @@ impl Session {
                 .collect();
             store.set_overwrite_notes(self.doc_id, &rows)?;
         }
-        let mut counts = store.purge_doc(self.doc_id, &purge)?;
+        let (mut counts, released) = store.purge_doc(self.doc_id, &purge)?;
         counts.undo_batches = undo_batches;
         counts.read_bases = read_bases;
         // memory follows the store
@@ -709,6 +729,7 @@ impl Session {
         // a doc promoted from tier 0 (v0.9.2): the tier-0 versions it kept are history too
         let whole = matches!(req.scope, PurgeScope::History);
         self.purge_kept_tier0(st, &store, whole, now, &mut counts, &mut not_reached)?;
+        self.remove_released_refs(&released, &mut counts, &mut not_reached)?;
         let rewrite = match store.rewrite_file() {
             Ok(r) => Some(r),
             Err(_) => {

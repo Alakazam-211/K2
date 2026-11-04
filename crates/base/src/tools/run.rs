@@ -298,16 +298,23 @@ impl Session {
                             bytes: &r.bytes,
                         };
                         let out = tool.read(&doc, stdin).and_then(|o| match map {
-                            Some(m) if ids => o.with_ids(m),
+                            Some(m) if ids => o.with_ids(m, text),
                             _ if ids => Err(ToolError::usage(
                                 "--ids: the doc's format has no line map for its rows",
                             )),
                             _ => Ok(o),
                         });
-                        let shown = out.as_ref().map_or(Shown::default(), |o| Shown {
-                            view: o.view,
-                            touched: o.touched,
-                        });
+                        let shown = out.as_ref().map_or(
+                            Shown {
+                                refused: true,
+                                ..Shown::default()
+                            },
+                            |o| Shown {
+                                view: o.view,
+                                touched: o.touched,
+                                refused: false,
+                            },
+                        );
                         (out, shown)
                     })?;
                 let out = out?;
@@ -378,7 +385,8 @@ impl Session {
                         super::VerbCtx::new(view, stdin, pack.as_ref(), &codec).with_history(hist);
                     let out = f(&ctx);
                     let shown = out.as_ref().ok().and_then(|o| o.shown.clone());
-                    (out, shown)
+                    let refused = out.is_err();
+                    (out, shown, refused)
                 })?;
             let out = out?;
             if !out.edits.is_empty() {
@@ -512,8 +520,13 @@ impl Session {
                 return Ok(Vec::new());
             }
             let rec = pack.reconcile(view, new.as_bytes(), &codec).map_err(|d| {
+                let way_forward = if d.code == "mixed_line_endings" {
+                    format!("; {}", tool.mixed_endings_way_forward())
+                } else {
+                    String::new()
+                };
                 ToolError::usage(format!(
-                    "the result is not a valid table in the doc's format: {} ({}); nothing applied",
+                    "the result is not a valid table in the doc's format: {} ({}); nothing applied{way_forward}",
                     d.message, d.code
                 ))
             })?;

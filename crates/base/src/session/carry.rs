@@ -892,6 +892,7 @@ mod tests {
                 row_marks: Vec::new(),
                 col_remap: false,
                 note_rows: Vec::new(),
+                blob_refs: Default::default(),
             };
             let seqs = store.commit_changes(id, &[entry], &[change], &[]).unwrap();
             live.bind(&seqs);

@@ -33,7 +33,7 @@ mod meta;
 mod redact;
 pub(crate) mod registry;
 
-pub use json::Value;
+pub use json::{Finite, Value};
 pub use meta::{
     capabilities, errors_markdown, explain, explain_json, run_meta, MetaOutput, META_VERBS,
 };
@@ -203,7 +203,9 @@ pub struct ErrorEntry {
     /// The verbs that can return it (registry names), or a group: `*` (any verb on a doc),
     /// `@change` (every verb that changes the doc), `@history` (every history verb),
     /// `@run_tool` (every verb `run_tool` runs), `@pack` (a pack's own verbs), `(sync)` (an
-    /// editor's sync connection, no verb), `(host)` (a host call, no verb).
+    /// editor's sync connection, no verb), `(host)` (a host call, no verb). A file type's row
+    /// starts with `@file`, then names that file type's own verbs, which a host lists with
+    /// [`crate::parity::Registry::for_file`]: those names are file verbs only, never the kit's.
     pub verbs: &'static [&'static str],
     pub status: Status,
     pub reach: Reach,

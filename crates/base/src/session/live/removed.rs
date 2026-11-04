@@ -528,6 +528,8 @@ impl Session {
     pub(super) fn drain_notes(&self, st: &mut State, i: usize, now: u64) -> Vec<Note> {
         let pid = st.members[i].p.pid.clone();
         if self.structured {
+            // a grid's come from the store mirror: timed on every drain
+            timed!(NotesDeliver);
             let rights = self.host.rights(&st.members[i].p, &st.key);
             return self.drain_grid_notes(st, &pid, &rights, now);
         }
@@ -538,6 +540,8 @@ impl Session {
         if !rights.read {
             return Vec::new();
         }
+        // a text doc's: timed only when the member has notes waiting
+        timed!(NotesDeliver);
         let mut q = st.aware.pending.remove(&pid).unwrap_or_default();
         let keep = self.config.revert_keep_ms;
         q.retain(|n| {
@@ -559,6 +563,7 @@ impl Session {
     /// The notes waiting for member `conn`, delivered: a host's way to collect them for someone
     /// it showed the push to, or who runs no verb. Needs read.
     pub fn take_notes(&self, conn: ConnId) -> Result<Notes> {
+        timed!(Notes);
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;

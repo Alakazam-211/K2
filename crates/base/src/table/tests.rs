@@ -287,6 +287,28 @@ fn line_map_counts_line_breaks_in_values() {
     assert_eq!(m.owner(0), None);
 }
 
+/// A file's `\n` lines among its rendered lines: the identity with no lone CR.
+#[test]
+fn nl_lines_bridge_the_two_counts() {
+    use super::NlLines;
+    let spans = |t: &str, n: usize| (1..=n).map(|l| NlLines::of(t).span(l)).collect::<Vec<_>>();
+    // no lone CR: LF, CRLF, nothing at the end
+    assert_eq!(spans("a\nb\n", 3), [(1, 1), (2, 2), (3, 3)]);
+    assert_eq!(spans("a\r\nb", 2), [(1, 1), (2, 2)]);
+    assert_eq!(NlLines::of("a\nb").span(0), (0, 0), "no doc line");
+    // a lone CR inside the second line
+    assert_eq!(spans("a\nb\rc\nd\n", 3), [(1, 1), (2, 3), (4, 4)]);
+    // a CRLF is one break, and a lone CR beside it another
+    assert_eq!(spans("a\r\rb\r\nc", 2), [(1, 3), (4, 4)]);
+    // all CR: one `\n` line; a final CR starts no new rendered line
+    assert_eq!(spans("a\rb\rc\r", 1), [(1, 3)]);
+    assert_eq!(spans("a\rb\rc", 1), [(1, 3)]);
+    // past the end stays past the end
+    assert_eq!(NlLines::of("a\rb\r").span(2), (3, 3));
+    assert_eq!(NlLines::of("a\rb\r").span(4), (5, 5));
+    assert_eq!(NlLines::of("a\rb\n\nc\n").rendered(1, 2), (1, 3));
+}
+
 /// C1k (request 6): a codec's own line is the preamble's, no row's and no header's.
 #[test]
 fn a_preamble_line_belongs_to_no_row() {

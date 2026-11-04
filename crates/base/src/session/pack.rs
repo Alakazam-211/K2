@@ -6,6 +6,7 @@ use std::fmt;
 use super::view::View;
 use crate::codec::text_file::{self, Eol, FileFormat};
 use crate::doc::{Edit, Neutral};
+use crate::elem::Key;
 use crate::schema::{Kind, Schema};
 use crate::table::{self, LineMap, Table};
 
@@ -55,6 +56,21 @@ pub struct Reconciled {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("pack: {0}")]
 pub struct PackError(pub String);
+
+/// The element a key of a [composite](Pack::composite) Map root belongs to: its list root and
+/// the element's key, which is everything before the key's first
+/// [`crate::table::CELL_SEP`]. `None` when `map_root` isn't declared, the key has no separator,
+/// or what comes before it isn't a valid [`Key`]. It reads no doc: the element may be live,
+/// deleted or unknown.
+pub fn elem_of_map_key<'a>(
+    composites: &[(&'a str, &'a str)],
+    map_root: &str,
+    key: &str,
+) -> Option<(&'a str, Key)> {
+    let (_, list) = composites.iter().find(|(m, _)| *m == map_root)?;
+    let (elem, _) = key.split_once(crate::table::CELL_SEP)?;
+    Some((*list, Key::new(elem).ok()?))
+}
 
 /// A file type, as a session uses it. Implemented by each pack (Markdown, CSV...).
 pub trait Pack: Send + Sync {
@@ -162,6 +178,46 @@ pub trait Pack: Send + Sync {
     /// `w14:paraId`): the kit's (lines, `L:C`, grid keys, `#N`, versions...) are
     /// [`crate::ids::KIT`]. Default: none (a format with no IDs of its own, as plain text).
     fn ids(&self) -> &'static [crate::ids::IdKind] {
+        &[]
+    }
+
+    /// The MovableList roots whose keys are **tagged** ([`crate::mint`]), each with the key
+    /// prefixes it takes: `(root, prefixes)`. An insert arriving from a connection into such a
+    /// root must name `<prefix><n>.<tag>` with one of the prefixes and the connection's own
+    /// writer tag ([`super::SessionError::KeyNotOwn`], exit 2); [`super::Session::mint_key`]
+    /// makes one. Imports, outside saves and keys the list already knows are not checked.
+    /// Default: none.
+    fn tagged_keys(&self) -> &'static [(&'static str, &'static [&'static str])] {
+        &[]
+    }
+
+    /// The Map root that holds the retired marks of [`Pack::tagged_keys`]' roots
+    /// ([`crate::mint::mark_key`]). A change that drops tagged keys writes the dropper's own
+    /// marks there in the same change ([`crate::mint::marks_for_drops`]), and
+    /// [`super::Session::mint_key`] reads the max over every dropper's. `None` (the default):
+    /// [`super::Session::mint_key`] reads no marks.
+    fn mint_marks(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// The Map roots whose keys belong to list elements, as `(map_root, list_root)` pairs: each
+    /// key of `map_root` is an element key of `list_root`, then [`crate::table::CELL_SEP`], then
+    /// the rest (`<item>\x1f<field>`). So a write to such a key counts as touching its element
+    /// ([`elem_of_map_key`]; a claim on the element covers it). **It fails open:** a key that
+    /// maps to no element isn't covered by any claim (one with no separator, or whose start
+    /// isn't a valid [`Key`]), so a pack writes only keys of this shape to these roots. A map root
+    /// appears once: the first pair naming it is the one read. Default: none.
+    fn composite(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
+    /// The list and map roots whose values may name a blob ([`crate::blob::BlobId::parse_ref`]:
+    /// a value that is exactly `blob:<64 hex>`). The doc holds a reference on each blob such a
+    /// value names, so blob GC keeps it while any record of the doc names it; a connection's
+    /// edit naming a blob this doc's space doesn't hold is refused
+    /// ([`super::SessionError::BlobRefUnknown`], exit 4). A value in any other root is ordinary
+    /// text, whatever it spells. Default: none.
+    fn blob_ref_roots(&self) -> &'static [&'static str] {
         &[]
     }
 

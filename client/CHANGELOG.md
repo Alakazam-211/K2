@@ -3,25 +3,46 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
-## 0.12.1 (unreleased; kit tag v0.10.2.1)
+## 0.13.0 (kit tag v0.11.0)
 
-A fix to the order of undo and redo, client-side only: no wire change, no new dependency.
+The client for kit v0.11.0. Additive only: no export is removed or renamed, and a client talking
+to an older host sends none of the new frames (`welcome.features`).
 
-- **An undo or redo goes in order with the edits.** The server undoes the top of the
-  participant's stack when the request arrives, and `LiveText.undo()` / `redo()` sent theirs at
-  once, ahead of edits still queued behind the one in flight. Typing "c", then "d", then undo
-  sent c, undo, d: the server undid "c", and "d" then cleared the redo stack, so the person lost
-  the wrong step and could not redo it. Now a request made while edits are queued is held in the
-  queue after them and sent once every edit before it has gone (no ack is awaited: one socket
-  keeps the order); typing after it starts a new entry, never composed into the edit before it.
-  With nothing queued it goes at once. Held while disconnected, it goes on the new connection
-  in the same place. A held request is no pending change (`pending`). Hosts change nothing.
-- **Tests:** unit tests for undo and redo held behind the queue, typing after a held undo, and
-  `pending`; end-to-end over the fake host: "c", "d", undo ("d" undone, then redone); "c", undo,
-  "d", redo ("d" cleared the redo: nothing redone); held while disconnected, sent in its place on
-  the new connection. The fake host keeps undo and redo stacks per participant as the kit does
-  (an edit or redo onto the undo stack, an undo onto the redo stack, an edit clears the redo
-  stack); its `redo` answered `steps: 0` always.
+- **An undo or redo goes in order with the edits** (as client 0.12.1, kit v0.10.2.1). The server
+  undoes the top of the participant's stack when the request arrives; `undo()` / `redo()` made
+  while edits are queued are now held after them and sent once every edit before them has gone
+  (no ack awaited), so the server undoes the step the person meant, and the edit typed before a
+  redo clears it first, as in an editor. Typing after a held request starts a new entry. With
+  nothing queued it goes at once; held while disconnected, it goes on the new connection in the
+  same place; it is no pending change (`pending`). Hosts change nothing. Tests: unit and
+  end-to-end, and the fake host's undo and redo stacks per participant, as the kit's.
+- **`mint` helpers, new (structured live, slice 1):** `writerTag`, `parseTag`, `parseKey`,
+  `formatKey`, `nextFor`, `markKey` and `retiredMark`, with `MAX_CLIENT_ID`, `MAX_KIT_CLIENT`,
+  `MAX_KEY_LEN`, `MAX_PREFIX_LEN` and `MAX_TAG_LEN` and the types `TaggedKey` and `MintError`:
+  the kit's tagged keys (`n` as a `bigint`), checked against the kit's shared vectors
+  (`test/vectors/mint.json`).
+- **`refs` helpers, new (slice 2):** `resolveRef`, `resolveRefs` and `resolveParents`, with the
+  types `Ref`, `RefState` and `Lists`: a reference's state as the kit computes it, checked
+  against `test/vectors/refs.json`.
+- **`PresenceChannel.claim` and `release`:** claims on elements of a list root (`PRESENCE.md`).
+  They resolve on `claimed` and `released`, and reject with `ClaimRejected` on `presence_refused`,
+  `close()` or a reconnect; a request caught by the last two has an unknown fate, and a claim
+  doesn't outlive its connection. `claimsSupported` is whether the host lists `"claims"`, without
+  which nothing is sent.
+- **New frames:** `claim`, `claimed`, `release` and `released`, with `req` and refused by
+  `presence_refused` (`WIRE.md`, Claim frames). `PresenceFrameType` gains `claim` and `release`.
+- **New roster kind:** `claim_started_elems`, and `elem_claims` on `RosterEntry`, present only when
+  the member holds some. `claim_ended`'s `how` can be `deleted`.
+- **`PresenceChannel`:** selection by element key, pointer and viewport over any `Transport`, data
+  and events only (`PRESENCE.md`). It can share a transport with `LiveText`.
+- **New frames:** `select`, `pointer` and `viewport`, with `presence_refused`. They carry their own
+  request number, `req`, and sit outside the doc's numbering (`WIRE.md`, Presence frames).
+- **`welcome.features`:** the frame families a host takes. A client sends a family's frames only
+  when its name is listed, and ignores names it doesn't know.
+- **New roster kinds:** `selection`, `pointer` and `viewport`, with the same three fields on
+  `RosterEntry` and `Device`.
+- A tier 0 doc has none of the three calls. The golden files hold whole coordinates only; the
+  client's tests cover fractions.
 
 ## 0.12.0 (kit tag v0.10.2)
 

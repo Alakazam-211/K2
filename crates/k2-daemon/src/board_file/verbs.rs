@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(refused(&["update", "s-1", "--rev", "nope", "--text", "x"]), ("MPC-E122", 2));
         assert_eq!(refused(&["vote", "s-1", "--delta", "1.5"]), ("MPC-E122", 2));
         assert_eq!(refused(&["order", "s-1", "--to", "sideways"]), ("MPC-E122", 2));
-        assert_eq!(refused(&["add", "hologram"]), ("MPC-E122", 2));
+        assert_eq!(refused(&["add", "hologram"]), ("MPC-E851", 2), "a type the format lacks: its own row");
         assert_eq!(refused(&[]), ("MPC-E122", 2));
     }
 

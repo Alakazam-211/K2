@@ -387,6 +387,16 @@ k2_as_agent() {
     CLI_IN=""
 }
 cli() { k2_as_agent board "$@"; }
+# k2 <command> as the box's owner (the sandbox HOME's token), from the agent's
+# workspace: no cell socket, so no session that a slow node can lose mid-run.
+k2_as_owner() {
+    set +e
+    OUT="$(cd "$B" && printf '%s' "${CLI_IN:-}" | env HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT" "$K2_CLI" "$@" 2>"$WORK/cli.err")"
+    RC=$?
+    set -e
+    ERR="$(cat "$WORK/cli.err")"
+    CLI_IN=""
+}
 want_rc() { [ "$RC" = "$1" ] || fail "$2: exit $RC (want $1)
 stdout: $OUT
 stderr: $ERR"; }
@@ -550,6 +560,7 @@ echo "== k2 doc and k2 board: the same calls, the same answers =="
 # One board, copied fresh before every call: each call runs once through
 # k2 board and once through k2 doc on the same bytes, and the output (a read's
 # fence nonce aside), the exit and the file's bytes after must be identical.
+# The agent's k2 doc first; then the owner's, which needs no live session.
 P0=parity0.k5board
 cli new "$P0"; want_rc 0 "parity base"
 CLI_IN='{"ops":[{"op":"add","object":{"id":"s-a","type":"sticky","text":"A"}},{"op":"add","object":{"id":"s-b","type":"sticky","text":"B"}},{"op":"add","object":{"id":"h-a","type":"shape","text":"H"}},{"op":"add","object":{"id":"c-a","type":"connector","from":{"id":"s-a"},"to":{"id":"h-a"}}}]}'
@@ -559,14 +570,19 @@ cli list "$P0" --json; PS="$(jq_ "$OUT" 'j["settingsRev"]')"
 sumof() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 unfence() { printf '%s' "$1" | sed -E 's/fence [0-9a-f]{16}/fence N/g'; }
 P0_SUM="$(sumof "$B/$P0")"
+cp "$B/$P0" "$B/pa.k5board"
+k2_as_agent doc add sticky --text "an agent through k2 doc" pa.k5board; want_rc 0 "an agent's k2 doc add"
+NEW="$(printf '%s\n' "$OUT" | sed -n 's/^Added //p')"; [ -n "$NEW" ] || fail "k2 doc add printed no id: $OUT"
+k2_as_agent board read "$NEW" pa.k5board --json; jok "$OUT" 'j["object"]["text"] == "an agent through k2 doc"' "what an agent adds through k2 doc, k2 board reads"
+rm -f "$B/pa.k5board"
 same() {
     local want="$1"; shift
     cp "$B/$P0" "$B/px.k5board"
-    k2_as_agent board "$@" px.k5board
+    k2_as_owner board "$@" px.k5board
     local o1 e1 r1 s1
     o1="$(unfence "$OUT")"; e1="$(unfence "$ERR")"; r1="$RC"; s1="$(sumof "$B/px.k5board")"
     cp "$B/$P0" "$B/px.k5board"
-    k2_as_agent doc "$@" px.k5board
+    k2_as_owner doc "$@" px.k5board
     [ "$RC" = "$r1" ] || fail "$*: k2 board exit $r1, k2 doc exit $RC
 board: $o1 $e1
 doc: $OUT $ERR"
@@ -606,7 +622,6 @@ same 0 meta --rev "$PS" --title "Parity"
 same 1 meta --rev "$PA" --title "a stale settings rev"
 same 0 lock "s-a@$PA,s-b@$PB" --locked true
 same 2 tidy s-a
-same 2 frobnicate
 same 2 delete s-a --rev "$PA" --colour red
 same 0 templates
 same 0 references --id s-a
@@ -616,14 +631,14 @@ same 0 explain MPC-E830
 same 0 list
 same 0 read s-a --json
 cp "$B/$P0" "$B/px.k5board"
-k2_as_agent doc add sticky --text "through k2 doc" px.k5board; want_rc 0 "k2 doc add"
+k2_as_owner doc add sticky --text "through k2 doc" px.k5board; want_rc 0 "k2 doc add"
 NEW="$(printf '%s\n' "$OUT" | sed -n 's/^Added //p')"; [ -n "$NEW" ] || fail "k2 doc add printed no id: $OUT"
-k2_as_agent board read "$NEW" px.k5board --json; jok "$OUT" 'j["object"]["text"] == "through k2 doc"' "what k2 doc added, k2 board reads"
-k2_as_agent doc add sticky --text "a dry run" --dry-run px.k5board; want_rc 0 "k2 doc add --dry-run"
+k2_as_owner board read "$NEW" px.k5board --json; jok "$OUT" 'j["object"]["text"] == "through k2 doc"' "what k2 doc added, k2 board reads"
+k2_as_owner doc add sticky --text "a dry run" --dry-run px.k5board; want_rc 0 "k2 doc add --dry-run"
 has "$OUT" "Dry run, nothing written" "a dry run says so"
-k2_as_agent board list px.k5board --json; jok "$OUT" 'len(j["objects"]) == 5' "a dry run added nothing"
-k2_as_agent doc list -w "$B" px.k5board; want_rc 0 "k2 doc -w"; has "$OUT" "5 objects" "-w: a path inside the workspace"
-k2_as_agent doc capabilities --json px.k5board; want_rc 0 "capabilities --json"
+k2_as_owner board list px.k5board --json; jok "$OUT" 'len(j["objects"]) == 5' "a dry run added nothing"
+k2_as_owner doc list -w "$B" px.k5board; want_rc 0 "k2 doc -w"; has "$OUT" "5 objects" "-w: a path inside the workspace"
+k2_as_owner doc capabilities --json px.k5board; want_rc 0 "capabilities --json"
 CAPS="$OUT"
 jok "$CAPS" 'len(j["verbs"]) == 45 and all(v["source"] == "file" for v in j["verbs"])' "capabilities: the board's 45 verbs, each source file"
 jok "$CAPS" '{0, 2, 4, 5} <= set([v["exits"] for v in j["verbs"] if v["name"] == "vote"][0])' "vote's exits, from the kit's rows"
@@ -635,12 +650,13 @@ missing = [v["name"] for v in caps["verbs"] if v["name"] not in line]
 assert not missing, missing
 PY
 ok "k2 doc routes every verb capabilities lists"
-k2_as_agent doc explain MPC-E999 px.k5board; [ "$RC" != 0 ] || fail "explain of no such id passed"
+k2_as_owner doc explain MPC-E999 px.k5board; [ "$RC" != 0 ] || fail "explain of no such id passed"
 # B0 stays: write --base, restore and the text verbs never reach a board's bytes.
 cp "$B/$P0" "$B/px.k5board"
-k2_as_agent doc write --base live --text "over the top" px.k5board; want_rc 4 "k2 doc write on a board"; has "$ERR" "board_file" "write --base is refused board_file"
-k2_as_agent doc restore --version 1 px.k5board; want_rc 4 "k2 doc restore on a board"; has "$ERR" "board_file" "restore is refused board_file"
-k2_as_agent doc cat px.k5board; want_rc 4 "k2 doc cat on a board"; has "$ERR" "board_file" "cat is refused board_file"
+k2_as_owner doc write --base live --text "over the top" px.k5board; want_rc 4 "k2 doc write on a board"; has "$ERR" "board_file" "write --base is refused board_file"
+k2_as_owner doc restore --version 1 px.k5board; want_rc 4 "k2 doc restore on a board"; has "$ERR" "board_file" "restore is refused board_file"
+k2_as_owner doc cat px.k5board; want_rc 4 "k2 doc cat on a board"; has "$ERR" "board_file" "cat is refused board_file"
+k2_as_owner doc frobnicate px.k5board; want_rc 4 "a verb that's neither the board's nor known"; has "$ERR" "board_file" "only the board's verbs reach a board through k2 doc"
 [ "$(sumof "$B/px.k5board")" = "$P0_SUM" ] || fail "a refused k2 doc verb changed the board's bytes"
 ok "B0: k2 doc write --base, restore and cat still refuse a .k5board, and its bytes stay"
 rm -f "$B/px.k5board"

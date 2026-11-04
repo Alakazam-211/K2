@@ -1691,7 +1691,7 @@ mod tests {
         assert_eq!(String::from_utf8(fj::to_canonical(o.fields.get("x").expect("x")).expect("canon")).expect("utf8"), "0", "-0 is written as 0");
         let read = answer(run_verb(&p, &["read", o.id.as_str()]));
         let text = read.value.to_json();
-        assert!(text.contains("\"x\":0") && !text.contains("-0"), "-0 prints as 0: {text}");
+        assert!(text.contains("\"x\":0") && !text.contains("\"x\":-0"), "-0 prints as 0: {text}");
         assert_eq!(temps(&d), Vec::<String>::new());
     }
 

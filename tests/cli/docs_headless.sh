@@ -573,7 +573,7 @@ ok "no such file: exit 4"
 # raw bytes on disk past the format's codec. It's refused by name, whatever the
 # bytes, and the file's bytes stay exactly as they were.
 BOARD_BYTES='PK this is not a real board, and the refusal must not care'
-for name in plan.k5board PLAN2.K5BOARD Makefile.k5board .env.k5board; do
+for name in plan.k5board PLAN2.K5BOARD Makefile.k5board; do
     printf '%s' "$BOARD_BYTES" > "$B/$name"
     owner GET /cli/docs/read "" "workspace=$B&path=$name"; want 422 "$name read"; code_is board_file "$name read"
     owner POST /cli/docs/open "{\"workspace\":\"$B\",\"path\":\"$name\"}"; want 422 "$name open"; code_is board_file "$name open"
@@ -582,6 +582,10 @@ for name in plan.k5board PLAN2.K5BOARD Makefile.k5board .env.k5board; do
     owner GET /cli/docs/cores "" "path=$name"; want 200 "$name cores"
     jok "$BODY" 'j["file"]["core"] == "board" and j["file"]["liveView"] == False' "$name routes to the board row, with no Live view"
 done
+# A secret's name is refused first, for what it's named: its bytes stay too.
+printf '%s' "$BOARD_BYTES" > "$B/.env.k5board"
+owner GET /cli/docs/read "" "workspace=$B&path=.env.k5board"; want 422 ".env.k5board read"; code_is secret ".env.k5board read"
+[ "$(cat "$B/.env.k5board")" = "$BOARD_BYTES" ] || fail ".env.k5board: the bytes changed"
 cli agent "$B" doc cat plan.k5board
 want_rc 4 "k2 doc cat of a board"
 has "$ERR" "board_file" "k2 doc cat of a board"

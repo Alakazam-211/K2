@@ -439,6 +439,69 @@ fn a_card_value_never_reaches_the_request_rows_or_audit() {
     assert!(!audit.contains(PW));
 }
 
+fn self_grant(sel: Selector, to: Consumer, d: Delivery) -> GrantRequest {
+    GrantRequest { selector: sel, consumer: to, delivery: d, env_name: None, file_name: None, hosts_narrowed: None, expires_at: None, version: None }
+}
+
+/// A card says how the agent gets the value, and `agentCanSee` follows it. An
+/// agent can't get round that by making the name first with a readable ceiling
+/// and sharing it with itself: a person's Save drops every share above the
+/// card's delivery, in workspace and session scope, and the agent can't share
+/// it again without the owner. A share at or below the delivery stays.
+#[test]
+fn a_persons_save_drops_shares_above_what_the_card_says() {
+    let t = TestDir::new("ci-shares");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    for (card_id, name, scope, to, proposed) in [
+        ("card-share-ws-01234567", "SHARE_WS", Scope::workspace("ws1"), Consumer::workspace("ws1"), "workspace"),
+        ("card-share-se-01234567", "SHARE_SE", Scope::session("sess-1"), Consumer::session("sess-1"), "session"),
+    ] {
+        let sel = Selector::user(scope.clone(), name);
+        let mut r = PutRequest::new(Namespace::User, scope, name, Kind::Password);
+        r.hosts = vec!["robot-ws.your-server.de".into()];
+        r.default_delivery = Some(Delivery::Fetch);
+        r.delivery_ceiling = Some(Delivery::File);
+        if proposed == "session" {
+            r.expires_at = Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        }
+        v.put(r, SecretBytes::from_string("agent-placeholder".into()), &agent("ws1")).expect("the agent makes the name");
+        v.grant(self_grant(sel.clone(), to.clone(), Delivery::File), &agent("ws1")).expect("and shares it with itself");
+        v.grant(self_grant(sel.clone(), Consumer::workspace("ws-other"), Delivery::Fetch), &Actor::Owner).expect("a fetch share");
+        let mut c = card(card_id, name, None);
+        c.proposed_scope = proposed.into();
+        v.request_create(c).expect("a fetch-only card");
+        let out = v.request_answer(card_id, SecretBytes::from_string(PW.to_string()), &CardAnswer::default(), &Actor::Owner).expect("the owner saves");
+        assert!(!out.meta.agent_can_see(), "{name}");
+        let e = v.resolve(&Selector::Id(out.meta.id.clone()), Use::File, &me).err().unwrap_or_else(|| panic!("{name}: the agent read a fetch-only value"));
+        assert!(e.status == 403, "{name}: {e}");
+        let left = v.grants(&sel, &Actor::Owner).expect("grants");
+        assert_eq!(left.iter().map(|g| g.delivery).collect::<Vec<_>>(), vec![Delivery::Fetch], "{name}: the fetch share stays");
+        let again = v.grant(self_grant(sel.clone(), to, Delivery::File), &agent("ws1"));
+        assert!(again.is_err(), "{name}: the agent can't share a person's value with itself");
+    }
+
+    // A card that does say file keeps the file share, and says the agent can see it.
+    let sel = Selector::user(Scope::workspace("ws1"), "SHARE_FILE");
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "SHARE_FILE", Kind::Password);
+    r.default_delivery = Some(Delivery::Fetch);
+    r.hosts = vec!["robot-ws.your-server.de".into()];
+    r.delivery_ceiling = Some(Delivery::Env);
+    v.put(r, SecretBytes::from_string("agent-placeholder".into()), &agent("ws1")).expect("put");
+    v.grant(self_grant(sel.clone(), Consumer::workspace("ws1"), Delivery::File), &agent("ws1")).expect("file share");
+    v.grant(self_grant(sel.clone(), Consumer::workspace("ws-env"), Delivery::Env), &agent("ws1")).expect("env share");
+    let mut c = card("card-share-fi-01234567", "SHARE_FILE", None);
+    c.proposed_delivery = Delivery::File;
+    v.request_create(c).expect("card");
+    let ans = CardAnswer { readable_disclosed: true, ..Default::default() };
+    let out = v.request_answer("card-share-fi-01234567", SecretBytes::from_string(PW.to_string()), &ans, &Actor::Owner).expect("saved");
+    assert!(out.meta.agent_can_see());
+    let left = v.grants(&sel, &Actor::Owner).expect("grants");
+    assert_eq!(left.iter().map(|g| g.delivery).collect::<Vec<_>>(), vec![Delivery::File], "the env share is above the card");
+    assert_eq!(v.resolve(&sel, Use::File, &me).expect("file").value.expose(), PW.as_bytes());
+}
+
 /// A session-scope card binds to the session that asked: the passport id
 /// spawn, resolve and list compare. The Thread's conversation id is another
 /// id, and a secret bound to it reached nobody while the card said saved.

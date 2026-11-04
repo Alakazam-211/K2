@@ -1678,7 +1678,9 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
         let scope = vault.meta(&sel, &c.actor)?.scope.kind;
         session_self_grant(&c.actor, scope, session_workspace(&consumer.id))?;
     }
-    if consumer.kind == ConsumerKind::Session {
+    // Only for someone who may share at all (the share below refuses the
+    // rest, and audits it): this answer says which ids are running sessions.
+    if consumer.kind == ConsumerKind::Session && vault.may_grant(&sel, &consumer, delivery, &c.actor) {
         session_can_receive(c, &consumer.id)?;
     }
     if matches!(c.actor, Actor::Owner) && delivery.readable() {
@@ -1894,11 +1896,12 @@ fn revoke(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vau
         // Secret-env (SE28): a compute grant's running jobs keep what they
         // got; say which ones.
         let before = vault.grant_info(id);
+        let names = recall_names(vault, before.iter().map(|g| g.secret_id.as_str()));
         vault.revoke(id, &c.actor)?;
         let running: Vec<Value> = before.iter().flat_map(|g| crate::compute_secrets::running_with(&g.secret_id, &g.consumer)).collect();
         let mut out = revoked_json(&[id.to_string()], running);
         let secret_ids: Vec<String> = before.iter().map(|g| g.secret_id.clone()).collect();
-        recall_files(vault, &secret_ids, true, &mut out);
+        recall_files(vault, &secret_ids, &names, true, &mut out);
         return Ok(out);
     }
     let sel = selector(c, &b.sel)?;
@@ -1907,7 +1910,9 @@ fn revoke(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vau
     let mut done = vec![];
     let mut running = vec![];
     let mut secret_ids = vec![];
-    for g in vault.grants(&sel, &c.actor)? {
+    let grants = vault.grants(&sel, &c.actor)?;
+    let names = recall_names(vault, grants.iter().map(|g| g.secret_id.as_str()));
+    for g in grants {
         if g.consumer == consumer {
             vault.revoke(&g.id, &c.actor)?;
             running.extend(crate::compute_secrets::running_with(&g.secret_id, &g.consumer));
@@ -1919,8 +1924,25 @@ fn revoke(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vau
         return Err(VaultError::not_found("no share to remove"));
     }
     let mut out = revoked_json(&done, running);
-    recall_files(vault, &secret_ids, true, &mut out);
+    recall_files(vault, &secret_ids, &names, true, &mut out);
     Ok(out)
+}
+
+/// The file names a secret can have in a session's dir: its name, and any a
+/// share gave it. Read before the secret or the share goes.
+fn recall_names<'a>(vault: &LocalVault, ids: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let system = Actor::System("vault-recall".into());
+    let mut names = vec![];
+    for id in ids {
+        let sel = Selector::Id(id.to_string());
+        if let Ok(m) = vault.meta(&sel, &system) {
+            names.push(m.name);
+        }
+        if let Ok(grants) = vault.grants(&sel, &system) {
+            names.extend(grants.into_iter().filter_map(|g| g.file_name));
+        }
+    }
+    names
 }
 
 /// "1 running session", "2 running sessions".
@@ -1931,18 +1953,23 @@ fn running_sessions(n: usize) -> String {
 /// After a secret stopped reaching someone: take its file out of every live
 /// session that no longer gets it, and say what that did, what K2 couldn't
 /// check and what it can't do. It never says "no session had it" unless K2
-/// checked them all. `share_only`: a revoke, so other sessions may keep it.
-fn recall_files(vault: &LocalVault, secret_ids: &[String], share_only: bool, out: &mut Value) {
+/// checked every session that could have. Every count is about this secret:
+/// a session counts when its record or its files name it. `share_only`: a
+/// revoke, so other sessions may keep it.
+fn recall_files(vault: &LocalVault, secret_ids: &[String], names: &[String], share_only: bool, out: &mut Value) {
     let swept = crate::vault::spawn::sweep_live(vault);
     let of_this = |v: &[(String, String)]| v.iter().filter(|(_, id)| secret_ids.contains(id)).count();
     let removed = of_this(&swept.removed);
     let not_removed = of_this(&swept.not_removed);
-    let unchecked = swept.unchecked.len();
+    let unchecked_here: Vec<&String> = swept.unchecked.iter().filter(|(_, ids)| ids.iter().any(|i| secret_ids.contains(i))).map(|(code, _)| code).collect();
+    let unchecked = unchecked_here.len();
+    let untracked = swept.untracked.iter().filter(|files| files.iter().any(|f| names.contains(f))).count();
+    let jobs = crate::vault::spawn::job_runs_holding(secret_ids);
     let mut words: Vec<String> = vec![];
     if removed > 0 {
         let who = if share_only { " that no longer get it" } else { "" };
         words.push(format!("K2 removed its file from {}{who}.", running_sessions(removed)));
-    } else if not_removed + unchecked + swept.untracked == 0 {
+    } else if not_removed + unchecked + untracked + jobs == 0 {
         words.push(if share_only { "No file had to be removed from a running session." } else { "No running session had it as a file." }.to_string());
     }
     if not_removed > 0 {
@@ -1951,26 +1978,30 @@ fn recall_files(vault: &LocalVault, secret_ids: &[String], share_only: bool, out
             running_sessions(not_removed)
         ));
     }
-    if let Some(code) = swept.unchecked.first() {
+    if let Some(code) = unchecked_here.first() {
         words.push(format!(
             "K2 couldn't check {} ({code}), so its file may still be in $K2_SECRETS_DIR there. K2 tries again within a minute. To be sure now, delete the file there, or restart those sessions.",
             running_sessions(unchecked)
         ));
     }
-    if swept.untracked > 0 {
+    if untracked > 0 {
         words.push(format!(
             "K2 has no record of the files in {} (they started before this K2 update), so it left them alone. A file in $K2_SECRETS_DIR there named after this secret may be its copy: delete it, or restart those sessions.",
-            running_sessions(swept.untracked)
+            running_sessions(untracked)
         ));
+    }
+    if jobs > 0 {
+        words.push(format!("{jobs} running k2 job run{} keep{} its file until {} ended.", if jobs == 1 { "" } else { "s" }, if jobs == 1 { "s" } else { "" }, if jobs == 1 { "it has" } else { "they have" }));
     }
     if share_only {
         words.push("Sessions it is still shared with keep their file.".to_string());
     }
-    words.push("K2 can't take back a value a session already read or copied, or an environment variable in a running session (it stays until that session restarts). If the key may have leaked, change it at the provider.".to_string());
+    words.push("K2 can't take back a value a session already read or copied, or an environment variable in a running session (it stays until that session restarts). Copies made with k2 vault file or env-file can stay for up to an hour. If the key may have leaked, change it at the provider.".to_string());
     out["filesRemoved"] = json!(removed);
     out["filesNotRemoved"] = json!(not_removed);
     out["sessionsUnchecked"] = json!(unchecked);
-    out["sessionsUntracked"] = json!(swept.untracked);
+    out["sessionsUntracked"] = json!(untracked);
+    out["jobRunsHolding"] = json!(jobs);
     out["recall"] = json!(words.join(" "));
 }
 
@@ -2001,6 +2032,7 @@ fn status_change(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8]) -
     // Its id, before a destroy takes it. Only to count its files below: the
     // calls that follow make the caller's own checks.
     let secret_id = vault.meta(&sel, &Actor::System("vault-recall".into())).map(|m| m.id);
+    let names = recall_names(vault, secret_id.as_deref().into_iter());
     match path {
         DISABLE => vault.disable(&sel, &c.actor)?,
         ENABLE => {
@@ -2015,7 +2047,7 @@ fn status_change(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8]) -
         }
     }
     let mut out = json!({ "ok": true });
-    recall_files(vault, &secret_id.into_iter().collect::<Vec<_>>(), false, &mut out);
+    recall_files(vault, &secret_id.into_iter().collect::<Vec<_>>(), &names, false, &mut out);
     Ok(out)
 }
 

@@ -407,4 +407,19 @@ out="$(k2n vault grant --help)"
 printf '%s' "$out" | grep -Fq "not k2 whoami's" || fail "grant help warns about the whoami id: $out"
 ok "destroy and grant help say what they can't reach"
 
+# A session secret that shares a workspace secret's name is reached by asking
+# for it: --scope session goes on the request of all three.
+: > "$WORK/posts.log"
+k2s vault file --secret SAME --scope session >/dev/null 2>&1 || true
+k2s vault env-file --secret SAME --scope session >/dev/null 2>&1 || true
+k2s vault fetch --secret SAME --scope session https://h.example/x >/dev/null 2>&1 || true
+for route in file env-file fetch; do
+    grep -F "/cli/vault/$route {" "$WORK/posts.log" | grep -Fq '"scope": "session"' || fail "$route --scope session isn't sent: $(cat "$WORK/posts.log")"
+done
+set +e
+err_scope="$(k2s vault fetch --secret SAME --scope server https://h.example/x 2>&1)"; rc_scope=$?
+set -e
+[ "$rc_scope" = 2 ] || fail "fetch --scope takes session only: $rc_scope: $err_scope"
+ok "fetch, file and env-file send --scope session"
+
 echo "PASS: vault help ($pass checks)"

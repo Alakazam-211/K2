@@ -395,6 +395,8 @@ fn grant_mac_input(g: &Grant) -> Vec<u8> {
 struct CardTerms {
     meta: SecretMeta,
     loosens: bool,
+    /// Shares above the card's delivery, removed with the new value.
+    drop_grants: Vec<Grant>,
 }
 
 /// Sites as people read them: `https://robot-ws.your-server.de:443` →
@@ -516,6 +518,8 @@ pub struct CardResult {
     /// How the replaced secret was sent before, in words, when the card
     /// changed it ("as Authorization: Bearer ‹secret›").
     pub inject_was: Option<String>,
+    /// Shares above the card's delivery that went with the old value.
+    pub shares_removed: usize,
 }
 
 /// Pending recovery-key setup (phrase shown once, not yet confirmed).
@@ -1292,6 +1296,7 @@ impl LocalVault {
     fn rotate_row(&self, row: SecretRow, value: SecretBytes, actor: &Actor, idempotent: bool, trimmed: bool, version_by: Option<String>, terms: Option<CardTerms>) -> Result<PutOutcome> {
         let stamp = actor.stamp();
         let version_stamp = version_by.unwrap_or_else(|| stamp.clone());
+        let drop_grants = terms.as_ref().map(|t| t.drop_grants.clone()).unwrap_or_default();
         let policy_outcome = terms.as_ref().filter(|t| t.meta != row.meta).map(|t| if t.loosens { "ok:widened:card" } else { "ok:card" });
         let mut m = terms.map(|t| t.meta).unwrap_or_else(|| row.meta.clone());
         if m.status == SecretStatus::Destroyed {
@@ -1351,6 +1356,10 @@ impl LocalVault {
             let mut entries = Vec::with_capacity(2);
             if let Some(p) = policy_outcome {
                 entries.push(Entry::new("policy", &stamp, p).secret(&m2.id, None));
+            }
+            for g in &drop_grants {
+                tx.execute("DELETE FROM grants WHERE id = ?1", params![g.id])?;
+                entries.push(Entry::new("revoke", &stamp, "ok:card").secret(&m2.id, None).consumer(g.consumer.label()));
             }
             entries.push(Entry::new("rotate", &stamp, outcome).secret(&m2.id, Some(new_v)));
             Ok(((), entries))
@@ -1660,6 +1669,17 @@ impl LocalVault {
     }
 
     // ── grants ──────────────────────────────────────────────────────
+
+    /// Would policy let `actor` make this share? No audit line: the share
+    /// itself audits a refusal. For a caller that must not hear anything else
+    /// about the consumer unless it may share at all.
+    pub fn may_grant(&self, sel: &Selector, consumer: &Consumer, delivery: Delivery, actor: &Actor) -> bool {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let Ok(row) = self.find_row(&conn, &keys, sel) else { return false };
+        let Ok(f) = self.facts_for(&conn, &keys, &row.meta, actor) else { return false };
+        policy::can_grant(actor, &f, consumer, delivery, row.meta.default_delivery).is_ok()
+    }
 
     fn grant_inner(&self, g: GrantRequest, actor: &Actor) -> Result<Grant> {
         let stamp = actor.stamp();
@@ -3502,10 +3522,10 @@ impl LocalVault {
                 Err(e) => return Err(e),
             }
         };
-        let (out, replaced, inject_was) = match existing {
+        let (out, replaced, inject_was, shares_removed) = match existing {
             Some(row) => {
-                let (out, was) = self.card_replace(row, value, hosts, delivery, inject, guest, actor)?;
-                (out, true, was)
+                let (out, was, shares) = self.card_replace(row, value, hosts, delivery, inject, guest, actor)?;
+                (out, true, was, shares)
             }
             None => {
                 let mut put = PutRequest::new(Namespace::User, scope.clone(), req.name.clone(), req.kind);
@@ -3519,7 +3539,7 @@ impl LocalVault {
                 // above is refused, never rotated without the card's terms.
                 put.mode = PutMode::Create;
                 put.human_given_override = Some(true);
-                (self.put_inner(put, value, actor)?, false, None)
+                (self.put_inner(put, value, actor)?, false, None, 0)
             }
         };
         self.request_set_status(card_id, "set", Some(&actor.stamp()), Some(&out.meta.id), &actor.stamp())?;
@@ -3530,7 +3550,7 @@ impl LocalVault {
             version: None,
         }
         .render();
-        Ok(CardResult { meta: out.meta, reference, trimmed: out.trimmed, replaced, inject_was })
+        Ok(CardResult { meta: out.meta, reference, trimmed: out.trimmed, replaced, inject_was, shares_removed })
     }
 
     /// A secret card answered for a name that already exists (SC-A1). The
@@ -3542,7 +3562,12 @@ impl LocalVault {
     /// only ever replaces the value of matching terms. Nothing is written
     /// on a refusal. The value is then a person's (`human_given`), so an
     /// agent can't change how it is sent afterwards without the owner.
-    /// Returns how it was sent before, in words, when that changed.
+    ///
+    /// The card told the person how the value goes, so every share above its
+    /// delivery goes with the old value, whoever made it: otherwise an agent
+    /// could share a name with itself first and read what the card said it
+    /// couldn't. Returns the outcome, how it was sent before in words when
+    /// that changed, and the shares removed.
     #[allow(clippy::too_many_arguments)]
     fn card_replace(
         &self,
@@ -3553,10 +3578,15 @@ impl LocalVault {
         inject: Option<Inject>,
         guest: bool,
         actor: &Actor,
-    ) -> Result<(PutOutcome, Option<String>)> {
+    ) -> Result<(PutOutcome, Option<String>, usize)> {
         if *self.rollback.lock() {
             return Err(VaultError::new("vault_rollback", 409, "the vault looks rolled back; the owner must confirm in Settings → Vault"));
         }
+        let drop_grants: Vec<Grant> = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            self.grants_for(&conn, &keys, &row.meta.id)?.into_iter().filter(|g| g.delivery.level() > delivery.level()).collect()
+        };
         let (value, trimmed) = Self::prepare_value(row.meta.kind, value)?;
         if row.meta.kind == Kind::SshKey {
             crate::ssh_agent::check_ssh_key_value(value.expose())?;
@@ -3601,9 +3631,14 @@ impl LocalVault {
             .as_ref()
             .filter(|(m, _)| m.inject != old.inject)
             .map(|_| old.inject.as_ref().map(Inject::words).unwrap_or_else(|| "not added to calls".into()));
-        let terms = meta.map(|(meta, loosens)| CardTerms { meta, loosens });
+        let shares_removed = drop_grants.len();
+        let terms = match meta {
+            Some((meta, loosens)) => Some(CardTerms { meta, loosens, drop_grants }),
+            None if !drop_grants.is_empty() => Some(CardTerms { meta: old, loosens: false, drop_grants }),
+            None => None,
+        };
         let out = self.rotate_row(row, value, actor, false, trimmed, None, terms)?;
-        Ok((out, inject_was))
+        Ok((out, inject_was, shares_removed))
     }
 
     // ── proxy placeholders (§6.4, §9.3) ────────────────────────────

@@ -474,6 +474,11 @@ struct RunningChat {
 #[cfg(unix)]
 impl RunningChat {
     fn start(project_id: &str) -> RunningChat {
+        Self::start_as(project_id)
+    }
+
+    /// Registered under `key`: the workspace id, or a sidecar's `tab-…`.
+    fn start_as(project_id: &str) -> RunningChat {
         use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
         let shim = k2_core::test_env::AgentShim::install();
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
@@ -577,6 +582,210 @@ fn a_guests_save_reaches_the_chats_running_session() {
         let r = vault.resolve(&selector, Use::Fetch(&origin), &who).expect("the running session can use it");
         assert_eq!(r.value.expose(), SESSION_PW.as_bytes(), "{name}");
     }
+}
+
+fn guest_named(project_id: &str, name: &str) -> k2_core::skin::SkinPass {
+    let mut p = person_pass(&[project_id.to_string()]);
+    p.username = name.to_string();
+    p
+}
+
+fn guest_saves(handle: &str, project_id: &str, name: &str, id: &str) -> CliResponse {
+    with_request_skin(Some(guest_named(project_id, name)), || {
+        post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": handle, "id": id, "secret": SESSION_PW }))
+    })
+}
+
+/// A guest named like a person on this box is still stamped a guest, and
+/// Saving again and again wakes the agent at most once a minute, with the same
+/// refusal every time.
+#[cfg(unix)]
+#[test]
+fn a_refused_save_wakes_once_and_stamps_a_guest_as_a_guest() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlwk");
+    let name = format!("WAKE_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let posted = post_json(
+        "/cli/thread/secret",
+        &params_of(&[("cell_session_id", "gone-session")]),
+        serde_json::json!({ "addr": handle, "name": name, "for": "api.example.com", "from": "k2" }),
+    );
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let first = guest_saves(&handle, &project_id, "rosson", &id);
+    assert_error_code(&first, "409 Conflict", "card_session_gone");
+    for _ in 0..4 {
+        let again = guest_saves(&handle, &project_id, "rosson", &id);
+        assert_eq!((again.status, &again.body), (first.status, &first.body), "the same answer each time");
+    }
+    let lines: Vec<String> = recorded_injects().into_iter().filter(|l| l.contains(&format!("tried to save {name}"))).collect();
+    assert_eq!(lines.len(), 1, "one wake a minute for one card: {lines:?}");
+    assert!(lines[0].starts_with("[guest rosson"), "{}", lines[0]);
+    assert!(!lines[0].contains("[from rosson]"), "{}", lines[0]);
+}
+
+/// A wake can re-pin the chat: it moves the Thread with its cards to a new key
+/// (a provider that picks its own id), or starts a new conversation and leaves
+/// the card in the old Thread. Either way the same card saves on retry, for the
+/// running session.
+#[cfg(unix)]
+#[test]
+fn the_same_card_saves_after_a_wake_repins_the_chat() {
+    use k2_vault::{Requester, Selector, Use};
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let origin = k2_vault::hosts::Origin::parse_url("https://api.example.com/").expect("url").1;
+    for moved in [true, false] {
+        let (handle, project_id) = ws("ovlrp");
+        let old = pinned_chat_of(&project_id).expect("pinned");
+        let name = if moved { "REPIN_MOVED" } else { "REPIN_NEW" };
+        let posted = post_json(
+            "/cli/thread/secret",
+            &params_of(&[("cell_session_id", "gone-session")]),
+            serde_json::json!({ "addr": handle, "name": name, "for": "api.example.com", "from": "k2" }),
+        );
+        assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+        assert_error_code(&guest_saves(&handle, &project_id, "gail", &id), "409 Conflict", "card_session_gone");
+
+        let new = uuid::Uuid::new_v4().to_string();
+        if moved {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::overlay::move_conversation(&conn, &old, &new).expect("move").expect("moved");
+        }
+        pin(&project_id, &new);
+        let chat = RunningChat::start(&project_id);
+        let set = guest_saves(&handle, &project_id, "gail", &id);
+        assert_eq!(set.status, "200 OK", "moved={moved}: {}", set.body);
+        assert_eq!(vault.request_get(&id).expect("request").status, "set", "moved={moved}");
+        let who = Requester::Session { workspace_id: project_id.clone(), session_id: Some(chat.sid()) };
+        let sel = Selector::user(k2_vault::Scope::session(chat.sid()), name);
+        assert_eq!(vault.resolve(&sel, Use::Fetch(&origin), &who).expect("usable").value.expose(), SESSION_PW.as_bytes(), "moved={moved}");
+    }
+}
+
+/// Following a re-pin never reaches another chat: a sidecar's card can't be
+/// answered at the workspace's main address.
+#[test]
+fn a_sidecars_card_is_not_answered_at_the_main_address() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlsc");
+    let conv = uuid::Uuid::new_v4().to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+             VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch())",
+            rusqlite::params![project_id, format!("pane-{conv}"), format!("tab-pane-{conv}"), conv],
+        )
+        .expect("tab");
+    }
+    let posted = post_json("/cli/thread/secret", &HashMap::new(), serde_json::json!({ "addr": conv, "name": "SIDE_KEY", "for": "api.example.com", "from": "k2" }));
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    assert_ne!(json_body(&posted)["conversation_id"], pinned_chat_of(&project_id).expect("pinned").as_str());
+    let r = answer(&handle, &id, SESSION_PW, serde_json::json!({ "scope": "workspace" }));
+    assert_ne!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(vault.request_get(&id).expect("request").status, "pending");
+}
+
+/// A sidecar's Thread: its own running session, of this workspace, while its
+/// process lives. A dead child in the map receives nothing.
+#[cfg(unix)]
+#[test]
+fn a_sidecars_running_session_receives_while_it_lives() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (_handle, project_id) = ws("ovlsl");
+    let conv = uuid::Uuid::new_v4().to_string();
+    let chat = RunningChat::start_as(&format!("tab-{conv}"));
+    let resolved = ResolvedOverlay {
+        conversation_id: conv.clone(),
+        project_id: project_id.clone(),
+        addr: "x/side".into(),
+        requested_addr: "x/side".into(),
+        canonical_alias: false,
+    };
+    assert_eq!(chat_running_session(&resolved), None, "no passport of this workspace");
+    let mint = |ws: &str| {
+        crate::session_token::mint_session_token(
+            &chat.session.session_id,
+            &chat.sid(),
+            crate::session_token::HookPrincipal { workspace_uuid: ws.into(), agent_address: "side".into() },
+            crate::session_token::CredMode::default(),
+            crate::session_token::Provider::default(),
+        );
+    };
+    mint("another-workspace");
+    assert_eq!(chat_running_session(&resolved), None, "another workspace's session");
+    mint(&project_id);
+    assert_eq!(chat_running_session(&resolved), Some(chat.sid()));
+    chat.session.kill();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while chat.session.is_child_alive() {
+        assert!(std::time::Instant::now() < deadline, "the fake agent didn't die");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(chat_running_session(&resolved), None, "a dead child receives nothing");
+}
+
+/// The agent hears when a same-named workspace secret keeps the bare name, and
+/// a guest's own answer and Thread view don't carry the session's id.
+#[cfg(unix)]
+#[test]
+fn a_guests_save_tells_the_agent_about_the_name_and_shows_the_guest_no_session_id() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlgn");
+    {
+        use k2_vault::{Actor, Delivery, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let mut r = PutRequest::new(Namespace::User, Scope::workspace(project_id.clone()), "STRIPE_KEY", Kind::ApiKey);
+        r.hosts = vec!["api.example.com".into()];
+        r.default_delivery = Some(Delivery::Fetch);
+        vault.put(r, SecretBytes::from_string("OWNER".into()), &Actor::Owner).expect("put");
+    }
+    let chat = RunningChat::start(&project_id);
+    let posted = post_json("/cli/thread/secret", &HashMap::new(), serde_json::json!({ "addr": handle, "name": "STRIPE_KEY", "for": "api.example.com", "from": "k2" }));
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let set = guest_saves(&handle, &project_id, "gail", &id);
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    assert!(!set.body.contains(&chat.sid()), "{}", set.body);
+    assert!(json_body(&set).get("ref").is_none(), "{}", set.body);
+    let snap = with_request_skin(Some(guest_named(&project_id, "gail")), || dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET"));
+    assert!(!snap.body.contains(&chat.sid()), "the guest's Thread view: {}", snap.body);
+    let injects = recorded_injects();
+    let line = injects.iter().find(|l| l.contains("secret STRIPE_KEY set")).unwrap_or_else(|| panic!("{injects:?}"));
+    assert!(line.contains("workspace secret") && line.contains("--scope session"), "{line}");
+}
+
+/// A share with a session: someone who may not share at all gets that refusal,
+/// and learns nothing about which ids are running sessions.
+#[test]
+fn a_share_refused_on_permission_says_nothing_about_the_session() {
+    use k2_vault::{Actor, AgentActor, Delivery, Kind, Namespace, PutRequest, Scope, SecretBytes};
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (_handle, project_id) = ws("ovlsp");
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace(project_id.clone()), "PERSON_KEY", Kind::Generic);
+    r.default_delivery = Some(Delivery::Fetch);
+    r.hosts = vec!["api.example.com".into()];
+    r.delivery_ceiling = Some(Delivery::Env);
+    r.human_given_override = Some(true);
+    let id = vault.put(r, SecretBytes::from_slice(SESSION_PW.as_bytes()), &Actor::Owner).expect("put").meta.id;
+    let agent = crate::vault::actor::VaultCaller {
+        actor: Actor::Agent(AgentActor { workspace_id: project_id.clone(), session_id: Some("s-agent".into()), shell: false, vault_manage: false }),
+        channel: crate::vault::actor::Channel::Plain,
+        session_id: Some("s-agent".into()),
+    };
+    let body = serde_json::json!({ "id": id, "to": "session:never-ran", "as": "file" }).to_string();
+    let r = crate::vault_routes::handle_on(&vault, crate::vault_routes::GRANT, Ok(agent), body.as_bytes(), &HashMap::new(), "test", None);
+    assert!(r.status.starts_with("403"), "{}", r.body);
+    assert!(!r.body.contains("session_not_running"), "{}", r.body);
 }
 
 /// A person, too: asked by a session that has ended, Save reaches the chat's

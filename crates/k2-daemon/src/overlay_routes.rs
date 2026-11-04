@@ -2432,9 +2432,9 @@ fn session_card_refused_to_ask(session_id: Option<&str>, delivery: Option<&str>)
 /// sidecar's of this workspace.
 fn chat_running_session(resolved: &ResolvedOverlay) -> Option<String> {
     if pinned_chat_of(&resolved.project_id).as_deref() == Some(resolved.conversation_id.as_str()) {
-        return crate::session_lookup::lookup_any(&resolved.project_id).map(|live| live.session_id().to_string());
+        return crate::session_lookup::lookup_any(&resolved.project_id).filter(|live| live.is_child_alive()).map(|live| live.session_id().to_string());
     }
-    let sid = workspace_msg::lookup_live_for_conversation(&resolved.conversation_id)?.session_id().to_string();
+    let sid = workspace_msg::lookup_live_for_conversation(&resolved.conversation_id).filter(|live| live.is_child_alive())?.session_id().to_string();
     (crate::session_token::workspace_for_session(&sid).as_deref() == Some(resolved.project_id.as_str())).then_some(sid)
 }
 
@@ -2461,13 +2461,68 @@ fn session_card_refused_to_save(receiver: Option<&str>, delivery: k2_vault::Deli
     Some(error_json("409 Conflict", "card_session_gone", hint))
 }
 
+/// A wake can re-pin the main Chat to a new conversation that doesn't hold
+/// the card (the old Thread stays where it was). The card's own answer follows
+/// it there: only a secret card still open, of this workspace, at the main
+/// address, in a conversation no sidecar owns. Everything else stays as it was.
+fn follow_repinned_card(mut resolved: ResolvedOverlay, card_id: &str) -> ResolvedOverlay {
+    if !resolved.canonical_alias || overlay::card_is_secret(&resolved.conversation_id, card_id).is_ok() {
+        return resolved;
+    }
+    let Ok(vault) = crate::vault::get() else { return resolved };
+    let Ok(req) = vault.request_get(card_id) else { return resolved };
+    if req.status != "pending" || req.workspace_id != resolved.project_id || !overlay::card_is_secret(&req.conversation, card_id).unwrap_or(false) {
+        return resolved;
+    }
+    let owned_by_a_sidecar = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, &req.conversation).ok().flatten().is_some()
+            || conn
+                .query_row("SELECT 1 FROM workspace_session_handles WHERE conversation_key = ?1 LIMIT 1", rusqlite::params![req.conversation], |_| Ok(()))
+                .is_ok()
+    };
+    if !owned_by_a_sidecar {
+        resolved.conversation_id = req.conversation;
+    }
+    resolved
+}
+
+/// When the last wake for a card went out. A refused Save always answers the
+/// same; only the wake is held back.
+static CARD_WAKES: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, std::time::Instant>>> = std::sync::LazyLock::new(Default::default);
+const CARD_WAKE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// True at most once a minute for one card.
+fn card_wake_due(card_id: &str) -> bool {
+    let now = std::time::Instant::now();
+    let mut wakes = CARD_WAKES.lock();
+    wakes.retain(|_, at| now.duration_since(*at) < CARD_WAKE_EVERY);
+    if wakes.contains_key(card_id) {
+        return false;
+    }
+    wakes.insert(card_id.to_string(), now);
+    true
+}
+
 /// Save was refused because nothing is running: wake the agent, so the person
-/// can save again, and tell it not to wait for an answer that never came.
-fn wake_for_card(params: &HashMap<String, String>, resolved: &ResolvedOverlay, name: &str, session_author: &str) {
-    let from = card_actor_from(params, resolved, session_author);
+/// can save again, and tell it not to wait for an answer that never came. A
+/// guest is stamped a guest, as on any line a guest causes.
+fn wake_for_card(params: &HashMap<String, String>, resolved: &ResolvedOverlay, card_id: &str, name: &str, session_author: &str) {
+    if !card_wake_due(card_id) {
+        return;
+    }
     let line = format!(
-        "A person tried to save {name} on your secret card, but no session of yours was running, so nothing was saved. The card is still open and they were told to try Save again, and you get a line when it is saved. Ask again only if they tell you it failed. If it saves, it is kept for this session."
+        "A person tried to save {name} on your secret card, but no session of yours was running, so nothing was saved. The card is still open and they were told to try Save again, and you get a line when it is saved. Ask again only if they tell you it failed. If it saves, only this running session can use it."
     );
+    if let Some(pass) = request_skin() {
+        let label = guest_stamp(&pass);
+        let payload = format!("[thread:{}] {}", resolved.addr, workspace_msg::quote_guest_lines(&line));
+        record_test_inject(&workspace_msg::format_sender(workspace_msg::Sender::Guest(&label), &payload, ""));
+        deliver_thread_later(ThreadDeliveryJob::new(resolved, payload, &label, "thread", "", None).from_guest());
+        return;
+    }
+    let from = card_actor_from(params, resolved, session_author);
     record_test_inject(&format_thread_compose_pty_line(&from, &resolved.addr, &line));
     let payload = format!("[thread:{}] {line}", resolved.addr);
     deliver_thread_later(ThreadDeliveryJob::new(resolved, payload, &from, "thread", "", None));
@@ -2612,7 +2667,10 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         Ok(r) => r,
         Err(e) => return vault_error(&e),
     };
-    if req.workspace_id != resolved.project_id || req.conversation != resolved.conversation_id {
+    // The Thread moved with its cards (a provider picked its own id) when the
+    // card is in this Thread under another key: it is this chat's card.
+    let in_this_thread = req.conversation == resolved.conversation_id || overlay::card_is_secret(&resolved.conversation_id, card_id).unwrap_or(false);
+    if req.workspace_id != resolved.project_id || !in_this_thread {
         return forbidden("that card belongs to another chat");
     }
     let Some(value) = opt_param(params, "secret").or_else(|| opt_param(params, "value")) else {
@@ -2637,7 +2695,10 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         Ok(i) => i,
         Err(e) => return vault_error(&e),
     };
-    let receiver = card_receiver(&req, resolved);
+    // The chat as it answers now: a card followed from before a re-pin is
+    // still received by the session running today.
+    let chat_now = resolve_thread_addr(&resolved.requested_addr).unwrap_or_else(|_| resolved.clone());
+    let receiver = card_receiver(&req, &chat_now);
     let ans = k2_vault::vault::CardAnswer {
         session_id: receiver.clone(),
         scope: opt_param(params, "scope"),
@@ -2656,7 +2717,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     if req.status == "pending" && scope_word == "session" && !(guest && delivery_word != k2_vault::Delivery::Fetch) {
         if let Some(r) = session_card_refused_to_save(receiver.as_deref(), delivery_word, guest) {
             if receiver.is_none() {
-                wake_for_card(params, resolved, &req.name, session_author);
+                wake_for_card(params, &chat_now, card_id, &req.name, session_author);
             }
             return r;
         }
@@ -2694,11 +2755,24 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     };
     let file_delivery = card_file_delivery(&vault, receiver.as_deref(), &req.workspace_id, m);
     let session_only = if m.scope.kind == k2_vault::ScopeKind::Session {
-        " Kept for this running session only: it's gone if the session restarts, even with --resume. Ask with --scope workspace to keep it."
+        " Only this running session can use it: after a restart, even with --resume, the new session can't. The encrypted value stays in the vault until it expires. To keep using it after a restart, ask again: k2 thread secret --scope workspace."
     } else {
         ""
     };
-    let told = format!("{}{}", file_delivery.as_ref().map_or("", |(_, words)| words.as_str()), session_only);
+    let same_name = if m.scope.kind == k2_vault::ScopeKind::Session
+        && !crate::vault_use_routes::session_secret_may_shadow(m)
+        && vault.user_secret_exists(&k2_vault::Scope::workspace(req.workspace_id.clone()), &m.name)
+    {
+        format!(" A workspace secret named {0} also exists, and k2 vault fetch, file and env-file keep using it. To use the one just saved, pass --scope session. First check who gave it: k2 vault show {0} --scope session.", m.name)
+    } else {
+        String::new()
+    };
+    let shares = match result.shares_removed {
+        0 => String::new(),
+        1 => " K2 removed 1 share that could read more than this card says.".to_string(),
+        n => format!(" K2 removed {n} shares that could read more than this card says."),
+    };
+    let told = format!("{}{}{}{}", file_delivery.as_ref().map_or("", |(_, words)| words.as_str()), session_only, same_name, shares);
     let inject_line = format!(
         "secret {} set → {} ({}{}{}). Use: {}{}{}{}",
         m.name,
@@ -2712,7 +2786,9 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         replaced,
         told,
     );
-    let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", Some(reference.clone()), inject_line, card_actor_author(params, session_author)) {
+    // Everyone on the Thread reads the card: a session's id stays off it.
+    let card_reference = (m.scope.kind != k2_vault::ScopeKind::Session).then(|| reference.clone());
+    let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", card_reference, inject_line, card_actor_author(params, session_author)) {
         Ok(cb) => cb,
         Err(e) => return error_json("409 Conflict", "card_not_pending", e),
     };
@@ -2730,11 +2806,17 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         "trimmed": result.trimmed,
         "replaced": result.replaced,
         "agentCanSee": m.agent_can_see(),
+        "sharesRemoved": result.shares_removed,
         "conversation_id": resolved.conversation_id,
         "addr": resolved.addr,
     });
     if let Some((delivered, _)) = &file_delivery {
         answer["fileDelivered"] = serde_json::json!(delivered);
+    }
+    if guest {
+        if let Some(o) = answer.as_object_mut() {
+            o.remove("ref");
+        }
     }
     CliResponse::ok_json(answer.to_string())
 }
@@ -2749,7 +2831,7 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
         return usage("missing card id");
     }
     let resolved = match resolve_thread_addr(&addr) {
-        Ok(r) => r,
+        Ok(r) => follow_repinned_card(r, &card_id),
         Err(e) => return e,
     };
     if let Some(r) = refuse_if_imported(&resolved, Some(&card_id)) {

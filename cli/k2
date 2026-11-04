@@ -21753,9 +21753,11 @@ WHERE IT GOES
   --scope workspace|server|session  who keeps it (default workspace). session: one
                              running K2 session, with fetch or file (env never
                              arrives): the one that asks, or this chat's running
-                             session if that one ended before Save. It ends if
-                             that session restarts, even with --resume; workspace
-                             survives that.
+                             session if that one ended before Save. After a restart,
+                             even with --resume, the new session can't use it;
+                             workspace survives that. If a guest or Member saves it
+                             and a workspace secret has the same name, a bare name
+                             keeps the workspace one: use it with --scope session.
   --kind api_key|password|generic|…  what it is, so the card names it (default
                              api_key; password for a password)
   --ttl 24h                  session scope: how long it lasts
@@ -30935,10 +30937,11 @@ _vault_confirm_token() {
 # creator said; you never see the value. Echoes come back as [k2v:NAME].
 _vault_fetch() {
     local url="" method="" max_bytes="" timeout="" include=0 out="" body_inline="" body_file="" ctype="" as_json=0
-    local secrets=() headers=() dst="" fmt=""
+    local secrets=() headers=() dst="" fmt="" use_scope=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --secret|-s) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; secrets+=("$2"); shift 2 ;;
+            --scope) [ "${2:-}" = "session" ] || { echo "usage: --scope session (this session's own secret of that name)" >&2; exit 2; }; use_scope="session"; shift 2 ;;
             -X|--method) [ -n "${2:-}" ] || { echo "usage: -X METHOD" >&2; exit 2; }; method="$2"; shift 2 ;;
             -H|--header) [ -n "${2:-}" ] || { echo "usage: -H 'Name: value'" >&2; exit 2; }; headers+=("$2"); shift 2 ;;
             -d|--data)
@@ -30958,7 +30961,7 @@ _vault_fetch() {
             --json-out) as_json=1; shift ;;
             --help|-h)
                 cat <<'EOF'
-k2 vault fetch --secret NAME [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file]
+k2 vault fetch --secret NAME [--scope session] [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file]
                [--max-bytes N] [--timeout S] [--include-headers] [-o file] [--json-out] URL
 
 K2 makes the call and adds the secret (header and format fixed by whoever
@@ -30996,8 +30999,8 @@ EOF
     [ -z "$body_file" ] || body_file="$(cli_abs_path "$body_file")"
     [ -z "$out" ] || out="$(cli_abs_path "$out")"
     local req
-    req="$(printf '%s' "$body_inline" | python3 -c '
-import base64, json, sys
+    req="$(printf '%s' "$body_inline" | V_USE_SCOPE="$use_scope" python3 -c '
+import base64, json, os, sys
 url, method, mb, to, inc, out, bfile, dst, fmt = sys.argv[1:10]
 rest = sys.argv[10:]
 i = rest.index("--")
@@ -31007,6 +31010,7 @@ for s in secrets:
     e = {"name": s}
     if dst: e["dst"] = dst
     if fmt: e["fmt"] = fmt
+    if os.environ.get("V_USE_SCOPE"): e["scope"] = os.environ["V_USE_SCOPE"]
     o["secrets"].append(e)
 for h in headers:
     if ":" not in h:
@@ -31692,7 +31696,7 @@ Example: k2 vault doctor
 EOF
             ;;
         env-file) cat <<'EOF'
-k2 vault env-file --secret NAME [--secret NAME2 …] [--ttl <secs>]
+k2 vault env-file --secret NAME [--secret NAME2 …] [--scope session] [--ttl <secs>]
 k2 vault env-file --done <path>
 
 From a K2 terminal: a short-lived 0600 file of NAME=value lines for
@@ -31705,7 +31709,7 @@ Example: docker run --env-file "$(k2 vault env-file --secret DATABASE_URL)" myap
 EOF
             ;;
         file) cat <<'EOF'
-k2 vault file --secret NAME [--ttl <secs>] [--json]
+k2 vault file --secret NAME [--scope session] [--ttl <secs>] [--json]
 k2 vault file --done <path>
 
 From a K2 terminal: the value of NAME, as is, in a short-lived 0600 file
@@ -33208,7 +33212,7 @@ if sys.argv[1]: o["done"]=sys.argv[1]
 if sys.argv[2]: o["ttlSecs"]=int(sys.argv[2])
 o["secrets"]=[x for x in sys.argv[3:] if x]
 print(json.dumps(o))' "$done_path" "$ttl" "${use_secrets[@]+"${use_secrets[@]}"}")"
-            _vault_call POST env-file "$ej"
+            _vault_call POST env-file "$(_vault_merge "$ej" "$sj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
             ;;
@@ -33225,7 +33229,7 @@ if sys.argv[1]: o["done"]=sys.argv[1]
 if sys.argv[2]: o["ttlSecs"]=int(sys.argv[2])
 if sys.argv[3] and not sys.argv[1]: o["secret"]=sys.argv[3]
 print(json.dumps(o))' "$done_path" "$ttl" "$fsecret")"
-            _vault_call POST file "$fj"
+            _vault_call POST file "$(_vault_merge "$fj" "$sj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
             ;;

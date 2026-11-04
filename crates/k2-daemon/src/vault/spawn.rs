@@ -147,6 +147,11 @@ fn items_for(vault: &k2_vault::LocalVault, who: &Requester) -> Result<Vec<k2_vau
 
 static LIVE: LazyLock<Mutex<HashMap<String, LiveSession>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Running `k2 job` runs' files: (the run's dir, file name, secret id). They
+/// aren't sessions (a job runner owns its dir), so taking back doesn't reach
+/// them; [`job_runs_holding`] lets the answer say so.
+static JOB_FILES: Mutex<Vec<(PathBuf, String, String)>> = Mutex::new(Vec::new());
+
 /// Live delivery and session end take turns: a session that ends while
 /// its files are topped up never gets its dir made again.
 static TOPUP: Mutex<()> = Mutex::new(());
@@ -414,12 +419,29 @@ pub fn materialize_job(env: &mut HashMap<String, String>, workspace_id: &str, jo
     let Ok(vault) = super::get() else { return out };
     let who = Requester::Job { workspace_id: workspace_id.to_string(), job_id: job_id.to_string(), name: job_name.to_string() };
     deliver_items(&vault, env, &who, run_sid, false, &mut out);
+    if let Some(d) = &out.dir {
+        JOB_FILES.lock().extend(out.file_secrets.iter().map(|(f, id)| (d.clone(), f.clone(), id.clone())));
+    }
     out
+}
+
+/// How many running `k2 job` runs still have a file of one of these secrets.
+pub fn job_runs_holding(secret_ids: &[String]) -> usize {
+    let mut dirs: Vec<PathBuf> = JOB_FILES
+        .lock()
+        .iter()
+        .filter(|(d, f, id)| secret_ids.contains(id) && std::fs::symlink_metadata(d.join(f)).is_ok())
+        .map(|(d, _, _)| d.clone())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs.len()
 }
 
 /// A job run ended: its secrets dir (files, and its agent socket) goes.
 pub fn job_ended(m: &Materialized) {
     if let Some(d) = &m.dir {
+        JOB_FILES.lock().retain(|(dir, _, _)| dir != d);
         remove_dir(d);
     }
 }
@@ -624,14 +646,28 @@ pub fn session_ended(session_id: &str) {
 fn remove_dir(d: &Path) {
     // Item 3: the agent stops before its socket and dir go.
     super::ssh_agent::stop_dir(d);
-    if let Ok(rd) = std::fs::read_dir(d) {
-        for e in rd.flatten() {
-            wipe_entry(&e.path());
+    if dir_is_safe_to_empty(d) {
+        if let Ok(rd) = std::fs::read_dir(d) {
+            for e in rd.flatten() {
+                wipe_entry(&e.path());
+            }
         }
+        let _ = std::fs::remove_dir(d);
+    } else {
+        // A link swapped in for the dir: the link goes, what it points at stays.
+        let _ = std::fs::remove_file(d);
     }
-    let _ = std::fs::remove_dir(d);
     if let Some(p) = delivered_path(d) {
         let _ = std::fs::remove_file(&p);
+    }
+}
+
+/// The dir is really a dir (never a link to one, `lstat`), or isn't there.
+/// Any same-user process can swap it, so removal looks before it reaches in.
+fn dir_is_safe_to_empty(d: &Path) -> bool {
+    match std::fs::symlink_metadata(d) {
+        Ok(m) => m.is_dir() && !m.file_type().is_symlink() && private_fs::owned_by_me(d, &m),
+        Err(_) => true,
     }
 }
 
@@ -805,11 +841,13 @@ pub struct LiveSweep {
     pub removed: Vec<(String, String)>,
     /// One `(file name, secret id)` per session a file wouldn't come out of.
     pub not_removed: Vec<(String, String)>,
-    /// Sessions the vault couldn't check, by error code.
-    pub unchecked: Vec<String>,
-    /// Sessions holding files K2 has no record of: from before the record
-    /// existed, or with no workspace known. K2 can't tell whose they are.
-    pub untracked: usize,
+    /// One per session the vault couldn't check: the error code, and the
+    /// secrets on that session's record.
+    pub unchecked: Vec<(String, Vec<String>)>,
+    /// One per session holding files K2 has no record of (from before the
+    /// record existed, or with no workspace known): those file names. K2
+    /// can't tell whose they are.
+    pub untracked: Vec<Vec<String>>,
 }
 
 /// Live delivery for one session: the caller's own (`k2 vault sync`).
@@ -829,11 +867,17 @@ pub fn top_up(vault: &k2_vault::LocalVault, session_id: &str, workspace_id: &str
     }
 }
 
-/// Regular files in `dir` K2 has no record of.
-fn unrecorded_files(dir: &Path, d: &Delivered) -> bool {
-    std::fs::read_dir(dir).is_ok_and(|rd| {
-        rd.flatten().any(|e| e.file_type().is_ok_and(|t| t.is_file()) && e.file_name().to_str().is_none_or(|n| !d.files.contains_key(n)))
-    })
+/// Regular files in `dir` K2 has no record of. Never through a swapped link.
+fn unrecorded_files(dir: &Path, d: &Delivered) -> Vec<String> {
+    if !dir_is_safe_to_empty(dir) {
+        return Vec::new();
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    rd.flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| !d.files.contains_key(n))
+        .collect()
 }
 
 /// Live delivery for every live session with a dir (after a grant or a
@@ -854,15 +898,22 @@ pub fn sweep_live(vault: &k2_vault::LocalVault) -> LiveSweep {
         let mut live = LIVE.lock();
         let Some(r) = live.get_mut(&sid) else {
             drop(live);
-            if unrecorded_files(&dir, &Delivered::default()) {
-                out.untracked += 1;
+            let names = unrecorded_files(&dir, &Delivered::default());
+            if !names.is_empty() {
+                out.untracked.push(names);
             }
             continue;
         };
         let ws = r.workspace_id.clone();
         let t = top_up_one(vault, &sid, &ws, Some(&dir), r.env_names.as_deref(), &mut r.failed, &mut r.delivered, false);
-        if !r.delivered.complete && unrecorded_files(&dir, &r.delivered) {
-            out.untracked += 1;
+        if !r.delivered.complete {
+            let names = unrecorded_files(&dir, &r.delivered);
+            if !names.is_empty() {
+                out.untracked.push(names);
+            }
+        }
+        if let Some(code) = &t.unchecked {
+            out.unchecked.push((code.clone(), r.delivered.files.values().cloned().collect()));
         }
         drop(live);
         if !t.delivered.is_empty() || !t.skipped.is_empty() || !t.removed.is_empty() || !t.not_removed.is_empty() {
@@ -878,7 +929,6 @@ pub fn sweep_live(vault: &k2_vault::LocalVault) -> LiveSweep {
         out.written += t.delivered.len();
         out.removed.extend(t.removed);
         out.not_removed.extend(t.not_removed);
-        out.unchecked.extend(t.unchecked);
     }
     out
 }
@@ -914,8 +964,13 @@ fn top_up_one(
     // it still gets at another delivery (a grant moved it to env) keeps the
     // file. One that won't come out stays on the record for the next pass.
     if let Some(d) = dir {
+        let safe = dir_is_safe_to_empty(d);
         delivered.files.retain(|fname, id| {
             if items.iter().any(|it| it.secret_id == *id) {
+                return true;
+            }
+            if !safe {
+                out.not_removed.push((fname.clone(), id.clone()));
                 return true;
             }
             let p = d.join(fname.as_str());
@@ -2043,6 +2098,84 @@ mod tests {
         std::thread::sleep(Duration::from_millis(3200));
         top_up_all(&v);
         assert!(!dir.join("BRIEF_FILE").exists(), "gone once the grant ran out");
+        session_ended(&sid);
+    }
+
+    /// The session's dir is writable by anything running as the same user. A
+    /// link swapped in for it never turns a removal on another folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_swapped_secrets_dir_never_turns_removal_on_another_folder() {
+        let (_env, t, _over, v, ws, other) = late_grant_setup("spawn-swap", &[("SWAP_TARGET", Delivery::File, "value-1")]);
+        grant_to_ws(&v, &other, &ws, "SWAP_TARGET", Delivery::File);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        assert!(dir.join("SWAP_TARGET").exists());
+        let victim = t.path().join("victim");
+        std::fs::create_dir_all(&victim).expect("victim");
+        std::fs::write(victim.join("SWAP_TARGET"), b"precious").expect("write");
+        std::fs::write(victim.join("other.txt"), b"precious too").expect("write");
+        std::fs::rename(&dir, t.path().join("moved")).expect("move the real dir");
+        std::os::unix::fs::symlink(&victim, &dir).expect("swap in a link");
+
+        let a = destroy_as_owner(&v, &secret_id(&v, &other, "SWAP_TARGET"));
+        assert_eq!(std::fs::read(victim.join("SWAP_TARGET")).expect("still there"), b"precious", "{a}");
+        assert_eq!(a["filesNotRemoved"], 1, "{a}");
+        assert!(a["recall"].as_str().expect("words").contains("couldn't remove"), "{a}");
+
+        session_ended(&sid);
+        assert_eq!(std::fs::read(victim.join("SWAP_TARGET")).expect("still there"), b"precious");
+        assert_eq!(std::fs::read(victim.join("other.txt")).expect("still there"), b"precious too");
+        assert!(std::fs::symlink_metadata(&dir).is_err(), "the link itself goes");
+    }
+
+    /// A running `k2 job` keeps its file until the run ends, so the answer
+    /// never says nothing has it, and it names the copies that stay a while.
+    #[test]
+    fn destroy_says_when_a_running_job_still_holds_the_file() {
+        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-job", &[("JOB_FILE", Delivery::File, "value-1")]);
+        let job_id = uuid::Uuid::new_v4().to_string();
+        v.grant(
+            k2_vault::GrantRequest {
+                selector: k2_vault::Selector::user(k2_vault::Scope::workspace(other.clone()), "JOB_FILE"),
+                consumer: k2_vault::Consumer::job(&ws, &job_id),
+                delivery: Delivery::File,
+                env_name: None,
+                file_name: None,
+                hosts_narrowed: None,
+                expires_at: None,
+                version: None,
+            },
+            &k2_vault::Actor::Owner,
+        )
+        .expect("grant");
+        let run = format!("job-{}", uuid::Uuid::new_v4());
+        let m = materialize_job(&mut HashMap::new(), &ws, &job_id, "nightly", &run);
+        assert!(m.dir.as_ref().expect("job dir").join("JOB_FILE").exists(), "{m:?}");
+        let id = secret_id(&v, &other, "JOB_FILE");
+        let a = destroy_as_owner(&v, &id);
+        let words = a["recall"].as_str().expect("words");
+        assert!(!words.contains("No running session"), "{words}");
+        assert!(words.contains("1 running k2 job"), "{words}");
+        assert!(words.contains("k2 vault file"), "{words}");
+        job_ended(&m);
+    }
+
+    /// What the answer counts is about this secret: other sessions on the
+    /// server, with files K2 can't place, aren't this secret's business.
+    #[test]
+    fn recall_counts_are_about_this_secret() {
+        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-scope", &[("SCOPED_A", Delivery::File, "value-a"), ("SCOPED_B", Delivery::File, "value-b")]);
+        grant_to_ws(&v, &other, &ws, "SCOPED_A", Delivery::File);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        std::fs::remove_file(delivered_path(&dir).expect("path")).expect("rm record");
+        daemon_restarted(&sid, &ws, &dir);
+        let a = destroy_as_owner(&v, &secret_id(&v, &other, "SCOPED_B"));
+        assert_eq!(a["sessionsUntracked"], 0, "{a}");
+        assert!(a["recall"].as_str().expect("words").starts_with("No running session had it as a file."), "{a}");
+        let a = destroy_as_owner(&v, &secret_id(&v, &other, "SCOPED_A"));
+        assert_eq!(a["sessionsUntracked"], 1, "{a}");
         session_ended(&sid);
     }
 }

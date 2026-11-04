@@ -150,17 +150,31 @@ pub fn jailed_path(workspace_root: &Path, rel: &str) -> Result<PathBuf, VaultErr
     Ok(parent.join(name))
 }
 
+/// A session secret a guest or a Member gave must not take over a workspace
+/// secret of the same name: the agent's calls would run on whoever's key that
+/// is. The owner's or an Admin's may, and so may one the agent made itself.
+pub(crate) fn session_secret_may_shadow(m: &k2_vault::SecretMeta) -> bool {
+    use k2_core::connect_users::Role as R;
+    if !m.human_given || m.created_by == "owner" {
+        return true;
+    }
+    m.created_by.strip_prefix("connect:").is_some_and(|u| matches!(k2_core::connect_users::role_for_user(u), Some(R::Owner | R::Admin)))
+}
+
 /// The secret a bare NAME means for an agent's own use (fetch, file,
-/// env-file, which take no `--scope`): its session's own secret of that
-/// name, else what [`selector`] finds. A session-scope card tells the agent
-/// `k2 vault fetch --secret NAME`, so a bare name has to reach it.
+/// env-file): its session's own secret of that name, else what [`selector`]
+/// finds. A session-scope card tells the agent `k2 vault fetch --secret NAME`,
+/// so a bare name has to reach it, unless that would quietly replace a
+/// workspace secret ([`session_secret_may_shadow`]): then `--scope session`.
 fn use_selector(vault: &LocalVault, c: &VaultCaller, s: &Sel) -> Result<Selector, VaultError> {
     let sel = selector(c, s)?;
     let bare = s.scope.as_deref().is_none_or(str::is_empty) && s.workspace.is_none();
-    if let (true, Selector::Name { namespace: Namespace::User, name, .. }, Some(sid)) = (bare, &sel, c.session_id.as_deref()) {
-        let own = Scope::session(sid);
-        if vault.user_secret_exists(&own, name) {
-            return Ok(Selector::user(own, name.clone()));
+    if let (true, Selector::Name { namespace: Namespace::User, name, scope }, Some(sid)) = (bare, &sel, c.session_id.as_deref()) {
+        let own = Selector::user(Scope::session(sid), name.clone());
+        if let Ok(m) = vault.meta(&own, &c.actor) {
+            if m.status != k2_vault::SecretStatus::Destroyed && (session_secret_may_shadow(&m) || !vault.user_secret_exists(scope, name)) {
+                return Ok(own);
+            }
         }
     }
     Ok(sel)
@@ -294,6 +308,8 @@ fn write_no_follow(p: &Path, bytes: &[u8]) -> Result<(), VaultError> {
 struct EnvFileBody {
     #[serde(default)]
     secrets: Vec<String>,
+    /// `session`: this session's own secret of that name.
+    scope: Option<String>,
     ttl_secs: Option<u64>,
     /// Remove a file made earlier.
     done: Option<String>,
@@ -328,7 +344,7 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     let who = c.requester()?;
     let mut lines = String::new();
     for n in &b.secrets {
-        let sel = use_selector(vault, c, &Sel { name: Some(n.clone()), ..Default::default() })?;
+        let sel = use_selector(vault, c, &Sel { name: Some(n.clone()), scope: b.scope.clone(), ..Default::default() })?;
         let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::Env))?;
         k2_vault::delivery::validate_env_file_value(r.value.expose())?;
         let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
@@ -479,6 +495,8 @@ pub(crate) fn what_works(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::Se
 #[serde(rename_all = "camelCase")]
 struct FileBody {
     secret: Option<String>,
+    /// `session`: this session's own secret of that name.
+    scope: Option<String>,
     ttl_secs: Option<u64>,
     /// Remove a file made earlier.
     done: Option<String>,
@@ -513,7 +531,7 @@ fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     }
     let n = b.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("secret_required", "name the secret: --secret NAME"))?;
     let who = c.requester()?;
-    let sel = use_selector(vault, c, &Sel { name: Some(n.to_string()), ..Default::default() })?;
+    let sel = use_selector(vault, c, &Sel { name: Some(n.to_string()), scope: b.scope.clone(), ..Default::default() })?;
     let r = vault.resolve(&sel, Use::File, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File))?;
     let tag: String = r.meta.name.chars().filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')).take(40).collect();
     let file = format!("{}-{tag}", k2_vault::crypto::base62(16));
@@ -1569,6 +1587,99 @@ mod tests {
                 assert!(r.status.starts_with("403"), "{name}: {}", r.body);
                 assert!(r.body.contains("inject_not_allowed"), "{name}: {}", r.body);
             }
+        });
+    }
+
+    /// A card a guest or a Member saves for one session can't silently take
+    /// over a workspace secret of the same name: the agent's work would go to
+    /// whoever's key that is. A bare name keeps the workspace secret, and
+    /// `--scope session` reaches the other one. With no workspace secret of
+    /// that name, or a session secret the owner gave, the bare name finds it.
+    #[test]
+    fn a_guests_key_never_replaces_the_workspace_key_by_name() {
+        use crate::vault::actor::{Channel, VaultCaller};
+        use k2_vault::confirm::KdfCost;
+        use k2_vault::keystore::fake::FakeKeyStore;
+        use k2_vault::vault::{CardAnswer, SecretRequest};
+        use k2_vault::{AgentActor, Delivery, KeyStore, Kind, Namespace, OpenOptions, PutRequest, SecretBytes};
+        crate::test_support::with_temp_home(|| {
+            let t = k2_vault::fsutil::TestDir::new("guest-shadow");
+            let ks: Arc<dyn KeyStore> = Arc::new(FakeKeyStore::new());
+            let v = Arc::new(LocalVault::open(t.path().join("vault"), ks, OpenOptions { kdf: KdfCost::Floor }).expect("open"));
+            let (ws, sid) = ("ws-sh", "sess-sh");
+            let card = |id: &str, name: &str, delivery: Delivery| SecretRequest {
+                card_id: id.into(),
+                conversation: "conv".into(),
+                session_id: Some(sid.into()),
+                workspace_id: ws.into(),
+                requested_by: "k2".into(),
+                name: name.into(),
+                kind: Kind::ApiKey,
+                proposed_scope: "session".into(),
+                proposed_hosts: if delivery == Delivery::Fetch { vec!["api.example.com".into()] } else { vec![] },
+                proposed_delivery: delivery,
+                prompt: String::new(),
+                ttl_secs: None,
+                status: String::new(),
+                answered_by: None,
+                secret_id: None,
+                created_at: String::new(),
+                answered_at: None,
+                inject: None,
+            };
+            let workspace_secret = |name: &str, delivery: Delivery| {
+                let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws), name, Kind::ApiKey);
+                if delivery == Delivery::Fetch {
+                    r.hosts = vec!["api.example.com".into()];
+                }
+                r.default_delivery = Some(delivery);
+                r.delivery_ceiling = Some(Delivery::Env);
+                v.put(r, SecretBytes::from_string("OWNER-VALUE".into()), &Actor::Owner).expect("owner secret");
+            };
+            let ans = CardAnswer { session_id: Some(sid.into()), readable_disclosed: true, ..Default::default() };
+            let c = VaultCaller {
+                actor: Actor::Agent(AgentActor { workspace_id: ws.into(), session_id: Some(sid.into()), shell: false, vault_manage: false }),
+                channel: Channel::Plain,
+                session_id: Some(sid.into()),
+            };
+            let origin = k2_vault::hosts::Origin::parse_url("https://api.example.com/").expect("url").1;
+            let who = c.requester().expect("who");
+            let value_by = |s: &Sel| v.resolve(&use_selector(&v, &c, s).expect("selector"), Use::Fetch(&origin), &who).expect("resolve").value.expose().to_vec();
+            let bare = |n: &str| Sel { name: Some(n.into()), ..Default::default() };
+            let scoped = |n: &str| Sel { name: Some(n.into()), scope: Some("session".into()), ..Default::default() };
+            let guest = Actor::Guest { username: "gail".into(), workspace_id: ws.into() };
+
+            // A guest's key, with a workspace key of that name.
+            workspace_secret("SHADOWED", Delivery::Fetch);
+            v.request_create(card("card-sh-1-0123456789ab", "SHADOWED", Delivery::Fetch)).expect("card");
+            v.request_answer("card-sh-1-0123456789ab", SecretBytes::from_string("GUEST-VALUE".into()), &ans, &guest).expect("guest saves");
+            assert_eq!(value_by(&bare("SHADOWED")), b"OWNER-VALUE", "a bare name keeps the workspace secret");
+            assert_eq!(value_by(&scoped("SHADOWED")), b"GUEST-VALUE", "--scope session reaches the guest's");
+
+            // A guest's key with no workspace key of that name: nothing to replace.
+            v.request_create(card("card-sh-2-0123456789ab", "ONLY_GUEST", Delivery::Fetch)).expect("card");
+            v.request_answer("card-sh-2-0123456789ab", SecretBytes::from_string("GUEST-VALUE".into()), &ans, &guest).expect("guest saves");
+            assert_eq!(value_by(&bare("ONLY_GUEST")), b"GUEST-VALUE");
+
+            // The owner's own session secret: the owner chose it.
+            workspace_secret("OWNER_SESSION", Delivery::Fetch);
+            v.request_create(card("card-sh-3-0123456789ab", "OWNER_SESSION", Delivery::Fetch)).expect("card");
+            v.request_answer("card-sh-3-0123456789ab", SecretBytes::from_string("OWNER-SESSION".into()), &ans, &Actor::Owner).expect("owner saves");
+            assert_eq!(value_by(&bare("OWNER_SESSION")), b"OWNER-SESSION");
+
+            // A Member's: `k2 vault file` by name and with --scope session.
+            let member = Actor::Login { username: "mia".into(), role: k2_vault::Role::Member };
+            workspace_secret("MEMBER_FILE", Delivery::File);
+            v.request_create(card("card-sh-4-0123456789ab", "MEMBER_FILE", Delivery::File)).expect("card");
+            v.request_answer("card-sh-4-0123456789ab", SecretBytes::from_string("MEMBER-VALUE".into()), &ans, &member).expect("member saves");
+            let file_of = |body: Value| {
+                let r = handle(&v, FILE, &c, body.to_string().as_bytes(), &HashMap::new(), "test", None);
+                assert_eq!(r.status, "200 OK", "{}", r.body);
+                let path = serde_json::from_str::<Value>(&r.body).expect("json")["path"].as_str().expect("path").to_string();
+                std::fs::read(path).expect("file")
+            };
+            assert_eq!(file_of(json!({ "secret": "MEMBER_FILE" })), b"OWNER-VALUE");
+            assert_eq!(file_of(json!({ "secret": "MEMBER_FILE", "scope": "session" })), b"MEMBER-VALUE");
         });
     }
 

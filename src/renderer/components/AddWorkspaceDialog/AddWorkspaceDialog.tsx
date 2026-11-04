@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Callout, DialogScrim } from '@/components/ui'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
+import { ADD_WORKSPACE_Z } from '@/lib/overlay-layers'
 
 // The Skip / Start-Fresh / Adopt consent picker was removed with the
 // canonical-agents PRD (§7 Removal Catalog): harness fan-out is now off by
@@ -57,7 +58,7 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
 
   return (
     <DialogScrim
-      zIndex={50}
+      zIndex={ADD_WORKSPACE_Z}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
       onClick={isPending ? undefined : close}

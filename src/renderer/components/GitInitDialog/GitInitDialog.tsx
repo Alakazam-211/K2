@@ -11,6 +11,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { Callout, DialogScrim } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
+import { ADD_WORKSPACE_Z } from '@/lib/overlay-layers'
 
 export default function GitInitDialog(): React.JSX.Element | null {
   const isOpen = useGitInitDialogStore((s) => s.isOpen)
@@ -144,7 +145,7 @@ export default function GitInitDialog(): React.JSX.Element | null {
 
   return (
     <DialogScrim
-      zIndex={50}
+      zIndex={ADD_WORKSPACE_Z}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
       onClick={isPending ? undefined : close}

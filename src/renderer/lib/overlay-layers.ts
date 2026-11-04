@@ -21,3 +21,10 @@ export const HOST_PICKER_Z = 1000
  *  sidebar and from Settings → Workspaces (0.46.7), so above Settings and
  *  below toasts. */
 export const REMOVE_WORKSPACE_Z = 1000
+
+/** Add Workspace and Initialize git (AddWorkspaceDialog, GitInitDialog):
+ *  opened after the folder picker (HOST_PICKER_Z) from Settings → Workspaces,
+ *  Home (⌘O) and the sidebar, so above Settings (200) and Home (150). At 50
+ *  they opened hidden under Settings/Home and a new folder seemed to do
+ *  nothing (Rosson 2026-11-04). */
+export const ADD_WORKSPACE_Z = 1000

@@ -50,6 +50,9 @@ const TAMPER_NOTES_MAX: usize = 256;
 pub const VERSION_RETENTION_DAYS: i64 = 30;
 pub const REQUEST_EXPIRY_DAYS: i64 = 7;
 pub const GUEST_TTL_MAX_SECS: i64 = 24 * 3600;
+/// The longest a person's session-scope card secret lasts (`--ttl`; default
+/// 24 h, as for a guest).
+pub const SESSION_CARD_TTL_MAX_SECS: i64 = 7 * 24 * 3600;
 pub const GUEST_PENDING_MAX: usize = 3;
 
 fn now() -> DateTime<Utc> {
@@ -3504,7 +3507,7 @@ impl LocalVault {
             }
         }
         let expires_at = if scope.kind == ScopeKind::Session {
-            let ttl = req.ttl_secs.unwrap_or(GUEST_TTL_MAX_SECS).clamp(60, if guest { GUEST_TTL_MAX_SECS } else { 30 * 24 * 3600 });
+            let ttl = req.ttl_secs.unwrap_or(GUEST_TTL_MAX_SECS).clamp(60, if guest { GUEST_TTL_MAX_SECS } else { SESSION_CARD_TTL_MAX_SECS });
             Some(ts(now() + chrono::Duration::seconds(ttl)))
         } else {
             None

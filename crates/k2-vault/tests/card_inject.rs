@@ -563,3 +563,39 @@ fn a_session_card_binds_to_the_session_that_asked() {
     assert_eq!(e.code, "session_env_unreachable");
     assert_eq!(v.request_get("card-sessenv-012345678").expect("request").status, "pending");
 }
+
+/// A person's session card lasts what `--ttl` asks, 24 h by default and at
+/// most 7 days; a guest's at most 24 h.
+#[test]
+fn a_session_card_lasts_at_most_seven_days() {
+    let t = TestDir::new("ci-ttl");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let readable = CardAnswer { readable_disclosed: true, ..Default::default() };
+    let hours_left = |m: &SecretMeta| {
+        let at = chrono::DateTime::parse_from_rfc3339(m.expires_at.as_deref().expect("expires")).expect("rfc3339");
+        (at.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_minutes() as f64 / 60.0
+    };
+    let save = |id: &str, name: &str, ttl: Option<i64>, who: &Actor, delivery: Delivery| {
+        let mut c = card(id, name, None);
+        c.proposed_scope = "session".into();
+        c.ttl_secs = ttl;
+        c.proposed_delivery = delivery;
+        if delivery != Delivery::Fetch {
+            c.proposed_hosts = vec![];
+        }
+        v.request_create(c).expect("card");
+        v.request_answer(id, SecretBytes::from_string(PW.to_string()), &readable, who).expect("saved").meta
+    };
+    let guest = Actor::Guest { username: "gail".into(), workspace_id: "ws1".into() };
+    let cases = [
+        ("card-ttl-def-012345678", "TTL_DEFAULT", None, Actor::Owner, Delivery::File, 24.0),
+        ("card-ttl-3d-0123456789", "TTL_THREE", Some(3 * 86400), Actor::Owner, Delivery::File, 72.0),
+        ("card-ttl-30d-012345678", "TTL_THIRTY", Some(30 * 86400), Actor::Owner, Delivery::File, 168.0),
+        ("card-ttl-gst-012345678", "TTL_GUEST", Some(7 * 86400), guest, Delivery::Fetch, 24.0),
+    ];
+    for (id, name, ttl, who, delivery, want) in cases {
+        let got = hours_left(&save(id, name, ttl, &who, delivery));
+        assert!((got - want).abs() < 0.1, "{name}: {got} h left, want {want}");
+    }
+}

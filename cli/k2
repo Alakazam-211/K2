@@ -21760,7 +21760,9 @@ WHERE IT GOES
                              keeps the workspace one: use it with --scope session.
   --kind api_key|password|generic|…  what it is, so the card names it (default
                              api_key; password for a password)
-  --ttl 24h                  session scope: how long it lasts
+  --ttl 24h                  session scope only: how long it lasts. Default 24h;
+                             longer than 7d is cut to 7d, and to 24h when a guest
+                             answers. Other scopes ignore it.
   --prompt "…"               your note, shown on the card beside its sentence
                              (at most 200 characters)
 

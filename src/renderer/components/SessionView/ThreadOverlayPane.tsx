@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
+import { lazy, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { FileLinkProvider, scopeFileLinkTransport, type FileLinkOpen } from '@/components/common/file-links'
 import { findThreadAttachment, openThreadAttachment, openThreadFileLink } from '@/lib/thread-file-link-open'
 import { ThreadFileActionsProvider, type ThreadFileActions } from '@/components/Thread/ThreadFileObjects'
@@ -41,6 +41,15 @@ import {
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import {
+  ThreadSenderAvatarContext,
+  sameSenderSlot,
+  threadSender,
+  threadSenderSlots,
+  useThreadSenderAnchor,
+  type ThreadSenderSlot,
+} from '@/components/Thread/threadSenders'
+import { useReducedMotion } from '@/hooks/useReducedMotion'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 import { scopeMayWrite } from '@/kessel/server-scope'
@@ -48,6 +57,12 @@ import { scopeMayWrite } from '@/kessel/server-scope'
 // The choice card lives in its own file; Zen and Grok Bots import it from here.
 import { CloneProposalsBanner } from '@/components/CloneToDialog/CloneProposalsBanner'
 export { ChoiceCard, choiceLetter } from './ChoiceCard'
+
+// Sender pictures read the projects, presence and Home avatar stores: loaded
+// on first use, so the pane's own module graph stays as it was.
+const ThreadSenderPicture = lazy(() =>
+  import('@/components/Thread/ThreadSenderAvatars').then((m) => ({ default: m.ThreadSenderPicture })),
+)
 
 // 2026-10-16 (Rosson: "update the thread UI in K2 to match what we have in
 // mobile/the zen garden"): the desktop Thread draws the Zen Thread widget's
@@ -297,6 +312,30 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     },
   })
 
+  // Sender pictures (Rosson 2026-11-04): more than two people among the
+  // drawn rows (the window, not the scroll position inside it) puts each
+  // other sender's picture on their left. Recomputed when the rows or the
+  // window move, never per keystroke or frame.
+  const reducedMotion = useReducedMotion()
+  const senderHost = roomScope.isPrimary ? null : roomScope.hostKey
+  const senders = useMemo(() => {
+    const rows = visible.slice(win.lo, win.hi).map((it) => ({
+      id: it.id,
+      sender: threadSender(it.doc, currentAddr, pastAddresses),
+      // A pending bubble is always this window's own send (as ThreadItemRow).
+      mine: it.pending ? true : threadAuthorLabel(it.doc, viewer, currentAddr, pastAddresses).mine,
+    }))
+    return threadSenderSlots(rows, { motion: !reducedMotion, host: senderHost })
+  }, [visible, win.lo, win.hi, viewer, currentAddr, pastAddresses, reducedMotion, senderHost])
+  useThreadSenderAnchor(
+    senders.on,
+    () => listRef.current,
+    () => pinBottomRef.current,
+    (top) => {
+      savedScrollTopRef.current = top
+    },
+  )
+
   function requestOlder(): void {
     const el = listRef.current
     if (!el || !listScrollLive(el)) return
@@ -358,6 +397,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
           </div>
         )}
         <ThreadAttachmentSourceProvider value={attachmentSource}>
+        <ThreadSenderAvatarContext.Provider value={ThreadSenderPicture}>
         <ThreadFileActionsProvider value={fileActions}>
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
@@ -385,12 +425,14 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
                 onHandoffDecide={handoffDecide}
                 handoffRemoteHost={handoffRemoteHost}
                 still={win.wasDrawn(it.id) || wasPendingBubble(it.id)}
+                sender={senders.slots.get(it.id) ?? null}
               />
             ))}
             <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
           </ThreadMessageColumn>
         </FileLinkProvider>
         </ThreadFileActionsProvider>
+        </ThreadSenderAvatarContext.Provider>
         </ThreadAttachmentSourceProvider>
       </div>
       {/* TW12: live only, never stored (TW13). With a message box the
@@ -439,6 +481,7 @@ interface OverlayRowProps {
   onHandoffDecide: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
   handoffRemoteHost: string | null
   still: boolean
+  sender: ThreadSenderSlot | null
 }
 
 /** One Thread row, memoized (0.46.2): a keystroke, an activity frame, a
@@ -463,7 +506,8 @@ const OverlayRow = memo(
     a.cardContext === b.cardContext &&
     a.onHandoffDecide === b.onHandoffDecide &&
     a.handoffRemoteHost === b.handoffRemoteHost &&
-    a.still === b.still,
+    a.still === b.still &&
+    sameSenderSlot(a.sender, b.sender),
 )
 
 export function ThreadItemRow({
@@ -478,6 +522,7 @@ export function ThreadItemRow({
   onHandoffDecide,
   handoffRemoteHost = null,
   still,
+  sender = null,
 }: {
   item: OverlayThreadItem
   /** Who is looking (`useThreadViewer` on the room's server). Defaults to
@@ -498,6 +543,8 @@ export function ThreadItemRow({
   handoffRemoteHost?: string | null
   /** Drawn again by the render window: no message-in animation. */
   still?: boolean
+  /** The sender column (more than two people in the Thread). */
+  sender?: ThreadSenderSlot | null
 }): JSX.Element {
   const { label: author, mine } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
   const now = nowSec ?? Math.floor(Date.now() / 1000)
@@ -521,6 +568,7 @@ export function ThreadItemRow({
       onHandoffDecide={onHandoffDecide}
       handoffRemoteHost={handoffRemoteHost}
       still={still}
+      sender={sender}
       pending={pending?.state}
       footer={pending?.state === 'failed' ? <PendingSendActions clientMsgId={pending.clientMsgId} error={pending.error} /> : undefined}
     />

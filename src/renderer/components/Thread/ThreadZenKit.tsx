@@ -28,6 +28,7 @@ import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { ThreadContextLine } from './ThreadContextChip'
 import { ThreadFileObjects } from './ThreadFileObjects'
+import { THREAD_SENDER_CSS, ThreadSenderFrame, sameSenderSlot, threadSenderRootProps, type ThreadSenderSlot } from './threadSenders'
 import { useThreadAttachmentSource } from './ThreadImageObjects'
 import {
   permissionCardActions,
@@ -294,7 +295,7 @@ export function ThreadFooterFade({ top }: { top?: number | null }): JSX.Element 
 }
 
 export function ThreadZenStyles(): JSX.Element {
-  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_FOOTER_FADE_CSS}</style>
+  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS}</style>
 }
 
 /** The message list's padding and the space between messages (the
@@ -386,6 +387,9 @@ export interface ThreadBubbleProps {
    *  Fix 3): `sending` draws a little faded, `failed` as usual (its footer
    *  says what to do). No message menu on either. */
   pending?: 'sending' | 'failed'
+  /** The sender column (threadSenders, more than two people in the
+   *  Thread): another sender's picture on the left. Absent: none. */
+  sender?: ThreadSenderSlot | null
 }
 
 function shallowSame(a: object | null | undefined, b: object | null | undefined): boolean {
@@ -421,6 +425,7 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     a.handoffRemoteHost === b.handoffRemoteHost &&
     a.still === b.still &&
     a.pending === b.pending &&
+    sameSenderSlot(a.sender, b.sender) &&
     shallowSame(a.secret, b.secret) &&
     sameChatNode(a.footer, b.footer)
   )
@@ -442,6 +447,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   footer,
   still = false,
   pending,
+  sender = null,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -492,6 +498,8 @@ export const ThreadBubble = memo(function ThreadBubble({
     [menuArgs],
   )
   const gestures = useThreadMessageGestures(bubbleRef, menuOn ? openMenu : null)
+  const maxWidth = threadBubbleMaxWidth(narrow)
+  const column = threadSenderRootProps(mine ? null : sender, maxWidth, narrow)
   return (
     <div
       data-zen-message={item.id}
@@ -502,15 +510,18 @@ export const ThreadBubble = memo(function ThreadBubble({
       data-mine={mine ? '' : undefined}
       data-zen-message-still={still ? '' : undefined}
       data-pending={pending}
-      className="flex flex-col"
+      {...column.attrs}
+      className={column.className ? `flex flex-col ${column.className}` : 'flex flex-col'}
       style={{
         alignSelf: mine ? 'flex-end' : 'flex-start',
-        maxWidth: threadBubbleMaxWidth(narrow),
+        maxWidth,
         minWidth: 0,
         gap: 3,
         ...(pending === 'sending' ? { opacity: 0.6 } : {}),
+        ...column.style,
       }}
     >
+      {!mine && sender ? <ThreadSenderFrame slot={sender} /> : null}
       {bubble && <div
         ref={bubbleRef}
         className="selectable-copy"

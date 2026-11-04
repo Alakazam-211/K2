@@ -327,6 +327,33 @@ describe('tab bar plus menu', () => {
     post.mockRestore()
   })
 
+  it('the Board row is in the first list, not only after a repaint: a second open with the changes state cached keeps it', async () => {
+    // Rosson 2026-11-04: no Board in the + menu. The first `show` left the row
+    // out and only a repaint (Option, or the git probe moving the changes
+    // state) added it, so once the state was cached it never came back.
+    // git/info answers the same each time (a clean repo), so the second open
+    // starts from the cached 'clean' and the probe moves nothing: no repaint.
+    const get = vi.spyOn(daemonCli, 'daemonCliGet').mockImplementation((async (_scope: unknown, route: string) => {
+      if (route === 'git/info') return { isRepo: true, gitAvailable: true, changedFiles: 0, untrackedFiles: 0 }
+      return {}
+    }) as never)
+    usePresetsStore.setState({ presets: [] })
+    seedTabs(0, 1)
+    renderBar(0)
+    noteServerVersion(LOCAL_HOME_HOST, null, ['board-file-v1'])
+    await openPlus()
+    await waitFor(() => expect(get.mock.calls.some((c) => c[1] === 'git/info')).toBe(true))
+    expect(useContextMenuStore.getState().items.map((i) => i.label)).toContain('Board')
+    await act(async () => useContextMenuStore.getState().close())
+    get.mockClear()
+    await openPlus()
+    await waitFor(() => expect(get.mock.calls.some((c) => c[1] === 'git/info')).toBe(true))
+    await act(async () => {})
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    expect(useContextMenuStore.getState().items.map((i) => i.label)).toContain('Board')
+    get.mockRestore()
+  })
+
   it('a refused create opens no tab and names the folder and the reason', async () => {
     noteServerVersion(LOCAL_HOME_HOST, null, ['board-file-v1'])
     const post = vi.spyOn(daemonCli, 'daemonCliPost').mockRejectedValue(new Error('this folder is read only'))

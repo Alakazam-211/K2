@@ -543,7 +543,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile, board)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {

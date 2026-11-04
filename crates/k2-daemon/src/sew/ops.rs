@@ -1602,11 +1602,13 @@ pub mod fake {
             if method == "POST" && path == "/cert" {
                 let b = body.expect("cert body");
                 if b["mode"] == "turn-tunnel" {
-                    // K2 Web 11-01: the bare confirmed label, no token key.
+                    // The bare confirmed label, plus the relay's required
+                    // `token` field, empty as the direct tier sends it (the
+                    // relay's CertRequest 400s without it; T4 11-04).
                     let confirmed = self.confirmed.lock().unwrap().clone().unwrap_or_default();
                     assert_eq!(b["subdomain"], confirmed.as_str(), "the bare label, not the host");
-                    assert!(b.get("token").is_none(), "{b}");
-                    assert_eq!(b.as_object().unwrap().len(), 3, "exactly subdomain, mode, csr: {b}");
+                    assert_eq!(b["token"], "", "the relay requires a token field: {b}");
+                    assert_eq!(b.as_object().unwrap().len(), 4, "exactly subdomain, mode, csr, token: {b}");
                     return Ok(json!({"cert": self.sign_csr(b["csr"].as_str().unwrap())}));
                 }
                 assert_eq!(b["mode"], "turn");

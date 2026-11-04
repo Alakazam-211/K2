@@ -190,7 +190,11 @@ pub fn issue(env: &Env, label: &str, st: &mut VoiceState) -> R<(String, String)>
         voice::save(env, st);
     }
     let csr = voice::turn_csr_for(&h, &key).map_err(|e| no("turn_failed", 500, format!("CSR: {e}")))?;
-    let body = json!({"subdomain": label, "mode": CERT_MODE, "csr": csr});
+    // `token` is a required field in the relay's CertRequest (k2-connect
+    // control-plane cert.rs): without it the relay answers 400 before any
+    // auth. Send it empty, as the direct tier does (voice.rs); the relay
+    // authenticates this mode by the tunnel's own identity (K2 Web, T4 11-04).
+    let body = json!({"subdomain": label, "mode": CERT_MODE, "csr": csr, "token": ""});
     let v = env.ops.cp("POST", "/cert", Some(&body)).map_err(|e| voice::cp_fail("TURN certificate", &e))?;
     let chain = v
         .get("cert")

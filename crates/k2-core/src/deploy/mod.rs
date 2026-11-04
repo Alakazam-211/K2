@@ -344,6 +344,9 @@ pub const RESERVED_APP_IDS: &[&str] = &[
     "links",
     // 0.46.7: `k2 app updates` (the update feed).
     "updates",
+    // 0.46.9 (one-click suite Apps, vs-live A16): `k2 app catalog` and
+    // `k2 app address`.
+    "catalog", "address",
 ];
 
 /// Core `k2` nouns an App id can't take either (§8.4).

@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "kind": "sew-app-seeds",
+  "commit": "1111111111111111111111111111111111111111",
+  "sourceDateEpoch": 1793800000,
+  "contract": { "sewCore": "e49e088d00000000000000000000000000000000" },
+  "seeds": [
+    {
+      "name": "hearth-0.2.4.tar.gz", "app": "hearth", "variant": "standalone", "sewIdentity": "standalone",
+      "manifestId": "hearth", "version": "0.2.4",
+      "sha256": "aa00000000000000000000000000000000000000000000000000000000000001", "size": 1600000,
+      "content": "cc00000000000000000000000000000000000000000000000000000000000001",
+      "commit": "1111111111111111111111111111111111111111",
+      "requires": { "k2": ">=0.46.3", "sew": ">=0.2.0", "voice": true },
+      "minSew": "0.2.0", "minK2": "0.46.3", "node": ">=22.13.0",
+      "contract": { "sewCore": "e49e088d00000000000000000000000000000000" },
+      "caps": [],
+      "boxServices": [ { "name": "sew-api", "required": true, "reason": "chat" }, { "name": "sew-signal", "required": false, "reason": "voice" } ],
+      "engine": "guarded",
+      "env": { "required": ["K2_APP_ORIGIN", "K2_BOX_SEW_API"], "optional": [], "fromManifest": {}, "secretFiles": [], "neverSet": [] },
+      "health": { "live": "/healthz", "ready": "/readyz", "timeoutSecs": 120, "reports": ["app", "version", "variant", "commit"] },
+      "data": { "files": ["hearth-sessions.sqlite"], "sessionSchema": 1 },
+      "sewSetup": [],
+      "source": { "name": "hearth-0.2.4-src.tar.gz", "sha256": "5500000000000000000000000000000000000000000000000000000000000001", "size": 900000 }
+    },
+    {
+      "name": "hearth-k2-0.2.4.tar.gz", "app": "hearth", "variant": "k2", "sewIdentity": "k2",
+      "manifestId": "hearth", "version": "0.2.4",
+      "sha256": "aa00000000000000000000000000000000000000000000000000000000000002", "size": 1600001,
+      "content": "cc00000000000000000000000000000000000000000000000000000000000002",
+      "commit": "1111111111111111111111111111111111111111",
+      "requires": { "k2": ">=0.46.3", "sew": ">=0.2.0", "voice": true },
+      "minSew": "0.2.0", "minK2": "0.46.3", "node": ">=22.13.0",
+      "contract": { "sewCore": "e49e088d00000000000000000000000000000000" },
+      "caps": ["chat:read", "chat:post", "voice:join", "voice:video"],
+      "boxServices": [ { "name": "sew-api", "required": true, "reason": "chat" }, { "name": "sew-signal", "required": false, "reason": "voice" } ],
+      "engine": "guarded",
+      "env": { "required": ["K2_APP_ORIGIN", "K2_BOX_SEW_API", "K2_APP_ID", "K2_GATEWAY_URL", "K2_PASS_FILE"], "optional": [], "fromManifest": {}, "secretFiles": [], "neverSet": [] },
+      "health": { "live": "/healthz", "ready": "/readyz", "timeoutSecs": 120, "reports": ["app", "version", "variant", "commit"] },
+      "data": { "files": ["hearth-sessions.sqlite"], "sessionSchema": 1 },
+      "sewSetup": [],
+      "source": { "name": "hearth-0.2.4-src.tar.gz", "sha256": "5500000000000000000000000000000000000000000000000000000000000001", "size": 900000 }
+    },
+    {
+      "name": "meet-k2-0.2.4.tar.gz", "app": "meet", "variant": "k2", "sewIdentity": "k2",
+      "manifestId": "meet", "version": "0.2.4",
+      "sha256": "aa00000000000000000000000000000000000000000000000000000000000004", "size": 1600003,
+      "commit": "1111111111111111111111111111111111111111",
+      "requires": { "k2": ">=0.46.3", "sew": ">=0.3.0", "voice": true },
+      "node": ">=22.13.0",
+      "caps": ["chat:read", "chat:post", "voice:join", "voice:video"],
+      "boxServices": [ { "name": "sew-api", "required": true, "reason": "chat" }, { "name": "sew-signal", "required": false, "reason": "voice" } ],
+      "engine": "guarded",
+      "health": { "live": "/healthz", "ready": "/readyz", "timeoutSecs": 120, "reports": ["app", "version", "variant", "commit"] },
+      "data": { "files": ["hearth-sessions.sqlite"], "sessionSchema": 1 },
+      "sewSetup": [
+        { "step": "meet-init", "mgmt": { "method": "POST", "path": "/mgmt/v1/meet/init", "body": { "app_id": "<the installed App id>" } }, "idempotent": true },
+        { "step": "meetings-enabled", "mgmt": { "method": "POST", "path": "/mgmt/v1/policies", "body": { "changes": { "meetings.enabled": true } } }, "idempotent": true }
+      ],
+      "source": { "name": "meet-0.2.4-src.tar.gz", "sha256": "5500000000000000000000000000000000000000000000000000000000000002", "size": 910000 }
+    }
+  ]
+}

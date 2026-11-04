@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "note": "K2's compiled-in suite App catalog (prd-one-click-suite-apps-v1 R25/R28, vs-live A12). Its trust root is K2's own release signature. A version enters only on pin day (R28): download it from sew-releases, check the sha256s, unpack, validate, store it as a Seed and record its seedHash (k2_core::suite::seeds_json::pin_release). `versions` stays empty until Sew publishes seeds-0.2.4.",
+  "entries": [
+    {
+      "entry": "sew/hearth",
+      "name": "Hearth",
+      "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-web" },
+      "summary": "Chat and voice for your community, on this box's Sew.",
+      "explain": [
+        "Runs a web App on this box, in K2's guarded wall",
+        "Uses this box's chat server, and reads and posts as whoever is signed in",
+        "Joins voice and video calls",
+        "Keeps sign-in sessions in one file on this box"
+      ],
+      "family": "chat",
+      "defaultLabel": "chat",
+      "altLabel": null,
+      "onePerBox": false,
+      "installId": "hearth",
+      "app": "hearth",
+      "license": "MIT OR Apache-2.0",
+      "stable": null,
+      "versions": []
+    },
+    {
+      "entry": "sew/meet",
+      "name": "Meet",
+      "publisher": { "id": "sew", "name": "Sew", "source": "https://github.com/Alakazam-211/sew-web" },
+      "summary": "Video meetings with guest links, on this box's Sew.",
+      "explain": [
+        "Runs a web App on this box, in K2's guarded wall",
+        "Uses this box's chat server for meeting chat and the lobby",
+        "Joins voice and video calls",
+        "Keeps sign-in sessions in one file on this box",
+        "Binds Sew's Meetings Space to this App and turns meetings on"
+      ],
+      "family": "meet",
+      "defaultLabel": "meet",
+      "altLabel": null,
+      "onePerBox": true,
+      "installId": "sew-meet",
+      "app": "meet",
+      "license": "MIT OR Apache-2.0",
+      "stable": null,
+      "versions": []
+    }
+  ]
+}

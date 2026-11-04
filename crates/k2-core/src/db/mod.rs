@@ -1988,6 +1988,11 @@ const MIGRATIONS_BY_HAND: &[(&str, &str)] = &[
         ("0302_project_group_member_view", include_str!("../../drizzle_sql/0302_project_group_member_view.sql")),
         // 0303 — signed approvals S1 (prd-signed-approvals-v1); store: `crate::approve_requests`.
         ("0303_approval_requests", include_str!("../../drizzle_sql/0303_approval_requests.sql")),
+        // 0304 — one-click suite Apps (prd-one-click-suite-apps-v1):
+        // three new tables, the install jobs, each suite App's lineage and
+        // the suite-label records. Renumber freely on a slip (and edit the
+        // migration-order tests). The store is `crate::suite::jobs`.
+        ("0304_suite_apps", include_str!("../../drizzle_sql/0304_suite_apps.sql")),
         // 0305 — Home groups: a Home's icon and "Most recent at the top", a
         // row's pin and last send (0.46.13); store: `crate::homes_sync`.
         ("0305_home_groups", include_str!("../../drizzle_sql/0305_home_groups.sql")),
@@ -2955,6 +2960,8 @@ mod tests {
                 // 0.46.13: one agent's own view on a project.
                 "0302_project_group_member_view",
                 "0303_approval_requests",
+                // 0.46.13: one-click suite Apps.
+                "0304_suite_apps",
                 // 0.46.13: Home groups (icon, recent first, pins).
                 "0305_home_groups",
             ],
@@ -3157,6 +3164,8 @@ mod tests {
                 // 0.46.13: one agent's own view on a project.
                 "0302_project_group_member_view",
                 "0303_approval_requests",
+                // 0.46.13: one-click suite Apps.
+                "0304_suite_apps",
                 // 0.46.13: Home groups (icon, recent first, pins).
                 "0305_home_groups",
             ],
@@ -3518,10 +3527,11 @@ mod tests {
                 "0301_desktop_agents",
                 "0302_project_group_member_view",
                 "0303_approval_requests",
+                "0304_suite_apps",
                 // 0.46.13: Home groups (icon, recent first, pins).
                 "0305_home_groups",
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then 0305)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then suite Apps' 0304, then 0305)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4367,7 +4377,10 @@ mod tests {
             // 0302 in the list): its record goes (its column re-add is
             // skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0301_desktop_agents'", []).unwrap();
-            // 0303 (signed approvals) is the newest: its record goes (its
+            // 0304 (suite Apps) came before 0305: its record goes (its
+            // tables and indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0304_suite_apps'", []).unwrap();
+            // 0303 (signed approvals) came before it: its record goes (its
             // tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0303_approval_requests'", []).unwrap();
             // 0305 (Home groups) is the newest: its record goes (0193's

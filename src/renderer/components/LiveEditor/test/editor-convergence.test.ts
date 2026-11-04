@@ -32,17 +32,23 @@ const FIXED_SEEDS: Fixed[] = [
   // 9,10,13,34,39,43; slow no-rule 7000-7300, the first six: 7003,7023,7039,7044,7059,7062).
   // The faults and their shapes are the ones the earlier seeds were found for (77 and 213;
   // 688, 1231 and 1381, job bcc38413; 10, 85, slow 7014 and 7008, jobs f5166c71 and 1bb87d8b).
+  // Client 0.12.1 holds an undo or redo behind the edits still pending, so runs with one change
+  // schedule from there; picked again the same way on the 0.12.1 tree (jobs 4f7d1268, 64af327c,
+  // b281e675): region-placement 1-600, the first six: 7,8,10,15,24,25 (unchanged); hunk-only
+  // 1-4000: 1752,3196 (1163 no longer fails under its fault; 2001-3000 had none); no-rule 1-400,
+  // the first six: 9,10,13,20,23,34; slow no-rule 7000-7300, the first six:
+  // 7017,7028,7039,7059,7100,7106 (7003 and 7023 no longer fail under their fault).
   // the multi-hunk race: a lost change with two hunks, placed by the server's rule
   { seed: 7, opts: { reapplyAll: true }, fault: "region-placement" },
   { seed: 8, opts: { reapplyAll: true }, fault: "region-placement" },
   // LiveText taking someone else's identical change for its own
-  { seed: 1163, fault: "hunk-only" },
   { seed: 1752, fault: "hunk-only" },
+  { seed: 3196, fault: "hunk-only" },
   // the race on a host without the rule
   { seed: 9, fault: "no-presence-check" },
   { seed: 10, fault: "no-presence-check" },
-  { seed: 7003, opts: SLOW, fault: "no-presence-check" },
-  { seed: 7023, opts: SLOW, fault: "no-presence-check" },
+  { seed: 7017, opts: SLOW, fault: "no-presence-check" },
+  { seed: 7028, opts: SLOW, fault: "no-presence-check" },
 ];
 
 describe("mounted editors converge (jsdom)", () => {

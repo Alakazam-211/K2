@@ -56,6 +56,9 @@ export interface DocCore {
 
 export interface DocCores {
   canChange: boolean
+  /** `.k5board` files open in a Board tab on this server (the preview switch);
+   *  null on a server from before Board files, which has no such switch. */
+  boardFilePreview: boolean | null
   /** Cores still to come, plain words ("CSV grid", "Word"). */
   later: string[]
   cores: DocCore[]
@@ -129,6 +132,7 @@ export function parseDocCores(body: unknown): DocCores {
   if (!Array.isArray(o.cores)) throw new Error('docs/cores: "cores" is not a list')
   return {
     canChange: bool(o, 'canChange', 'the answer'),
+    boardFilePreview: o.boardFilePreview === undefined ? null : bool(o, 'boardFilePreview', 'the answer'),
     later: o.later === undefined ? [] : strings(o.later, '"later"'),
     cores: o.cores.map((c, i) => {
       const what = `cores[${i}]`
@@ -158,6 +162,12 @@ export async function fetchDocCores(scope: ServerScope = primaryScope()): Promis
  *  refusal (403 for a Member, 400 for bad input). */
 export async function setDocCore(id: string, on: boolean, scope: ServerScope = primaryScope()): Promise<void> {
   await daemonCliPost<unknown>(scope, 'settings/update', { multiplayerCores: { [id]: on } })
+}
+
+/** Board files in a tab on or off: `{"boardFilePreview": <on>}`. The owner's;
+ *  the daemon refuses anyone else. */
+export async function setBoardFilePreview(on: boolean, scope: ServerScope = primaryScope()): Promise<void> {
+  await daemonCliPost<unknown>(scope, 'settings/update', { boardFilePreview: on })
 }
 
 // ── Plain words ─────────────────────────────────────────────────────

@@ -7,16 +7,18 @@
 // `doc_cores_changed`. Turning a core off while files are open live asks
 // first. A Member sees the switches disabled.
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { onDocCoresChanged } from '@/stores/session-events'
+import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { errorMessage } from '@/lib/daemon-http-error'
 import { isHostSwitchedError } from '@/lib/daemon-cli'
 import {
   failedWriteBackLine,
   fetchDocCores,
+  setBoardFilePreview,
   openNowLine,
   setDocCore,
   turnOffMessage,
@@ -36,6 +38,9 @@ export const MULTIPLAYER_MEMBER_LINE = "Only the server's owner or an Admin can 
 export const MULTIPLAYER_BETA_LINE = 'Beta: keep your work in git while multiplayer is new.'
 /** A core that opens as a Garden (the Board): its own Beta line. */
 export const MULTIPLAYER_GARDEN_BETA_LINE = "Beta: export a board now and then (its ⋯ menu) to keep a copy while it's new."
+export const BOARD_FILE_PREVIEW_LABEL = 'Open .k5board files in a Board tab (Beta)'
+export const BOARD_FILE_PREVIEW_LINE =
+  'A board file in a workspace opens in its own tab, and agents work on it with k2 board. Off: it shows a card instead. Single-person for now.'
 
 
 export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
@@ -43,8 +48,8 @@ export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
     id: 'multiplayer.cores',
     section: 'multiplayer',
     label: 'Multiplayer',
-    description: 'Turn each multiplayer core on or off for this server: Markdown, Text and code, Any other file.',
-    keywords: ['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing'],
+    description: 'Turn each multiplayer core on or off for this server: Markdown, Text and code, Any other file, Board. And open .k5board files in a Board tab.',
+    keywords: ['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard'],
   },
 ]
 
@@ -73,6 +78,29 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
 
   // Another person (or `k2 doc cores`) flipped a core on this server.
   useEffect(() => onDocCoresChanged(scope, () => void load()), [scope, load])
+  // The board preview is a setting: another window's change comes as the
+  // settings refetch every window gets.
+  const settingsPreview = useSettingsStore((s) => s.boardFilePreview)
+  const seenPreview = useRef(settingsPreview)
+  useEffect(() => {
+    if (seenPreview.current === settingsPreview) return
+    seenPreview.current = settingsPreview
+    void load()
+  }, [settingsPreview, load])
+
+  const flipPreview = useCallback(async () => {
+    if (!data?.canChange || busy) return
+    setBusy('board-file-preview')
+    setRowErrors(({ 'board-file-preview': _gone, ...rest }) => rest)
+    try {
+      await setBoardFilePreview(!data.boardFilePreview, scope)
+    } catch (err) {
+      setRowErrors((prev) => ({ ...prev, 'board-file-preview': errorMessage(err) }))
+    } finally {
+      setBusy(null)
+    }
+    await load()
+  }, [busy, data, load, scope])
 
   const flip = useCallback(
     async (core: DocCore) => {
@@ -131,6 +159,15 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
               onFlip={() => void flip(core)}
             />
           ))}
+          {data.boardFilePreview === null ? null : (
+          <PreviewRow
+            on={data.boardFilePreview}
+            canChange={data.canChange}
+            busy={busy === 'board-file-preview'}
+            error={rowErrors['board-file-preview'] ?? null}
+            onFlip={() => void flipPreview()}
+          />
+          )}
         </div>
       ) : null}
       {later.length > 0 ? (
@@ -138,6 +175,51 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
           Coming later: {later.join(', ')}.
         </p>
       ) : null}
+    </div>
+  )
+}
+
+function PreviewRow({
+  on,
+  canChange,
+  busy,
+  error,
+  onFlip,
+}: {
+  on: boolean
+  canChange: boolean
+  busy: boolean
+  error: string | null
+  onFlip: () => void
+}): React.JSX.Element {
+  return (
+    <div className="border border-[var(--color-border)] p-3" data-settings-id="multiplayer.board-file-preview">
+      <div className="flex items-start gap-3">
+        <button
+          type="button"
+          onClick={onFlip}
+          role="switch"
+          aria-checked={on}
+          aria-label={BOARD_FILE_PREVIEW_LABEL}
+          disabled={!canChange || busy}
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-default ${
+            on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">{BOARD_FILE_PREVIEW_LABEL}</div>
+          <div className={`text-[10px] ${muted} mt-0.5 leading-relaxed`}>{BOARD_FILE_PREVIEW_LINE}</div>
+          {error ? (
+            <div role="alert" className="text-[10px] text-[var(--color-status-error-soft)] mt-1">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
     </div>
   )
 }

@@ -256,6 +256,8 @@ interface SettingsState {
   // while it's on, even when the server can't host (it says why). DEFAULTS
   // OFF; the owner sets it (`k2 settings set voiceRoomsPreview true`).
   voiceRoomsPreview: boolean
+  /** Board files in a tab (the `board_file_preview` setting). Off by default. */
+  boardFilePreview: boolean
 
   // Apps (beta) on the focused server (Settings → Apps → This server).
   // Owner-only server-side, default ON since 0.46.3. While off every
@@ -555,6 +557,7 @@ async function persistAndApply(
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
+      boardFilePreview: result.boardFilePreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -606,6 +609,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   federationEnabled: false,
   computePreview: false,
   voiceRoomsPreview: false,
+  boardFilePreview: false,
   apps: true,
   apiEnabled: false,
   useLlmHitlDetection: false,
@@ -1029,6 +1033,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
+      boardFilePreview: result.boardFilePreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -1098,6 +1103,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
+      boardFilePreview: result.boardFilePreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,

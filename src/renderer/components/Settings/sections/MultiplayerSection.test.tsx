@@ -56,7 +56,8 @@ vi.mock('@/stores/session-events', async (orig) => ({
 
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
-import { MultiplayerSection, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE } from './MultiplayerSection'
+import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE } from './MultiplayerSection'
+import { useSettingsStore } from '@/stores/settings'
 import { failedWriteBackLine, openNowLine, parseDocCores, turnOffMessage, turnOffTitle } from './multiplayer-cores-api'
 import { searchManifest, SECTION_LABELS } from '../searchManifest'
 
@@ -297,8 +298,8 @@ describe('Settings → Cores → Multiplayer', () => {
   it('search finds "Multiplayer" by name and keywords', () => {
     expect(SECTION_LABELS.multiplayer).toBe('Multiplayer')
     expect(MULTIPLAYER_MANIFEST.map((e) => [e.id, e.section, e.label])).toEqual([['multiplayer.cores', 'multiplayer', 'Multiplayer']])
-    expect(MULTIPLAYER_MANIFEST[0].keywords).toEqual(['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing'])
-    for (const q of ['Multiplayer', 'live docs', 'live editing', 'markdown', 'co-editing']) {
+    expect(MULTIPLAYER_MANIFEST[0].keywords).toEqual(['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard'])
+    for (const q of ['Multiplayer', 'live docs', 'live editing', 'markdown', 'co-editing', 'board', 'k5board']) {
       expect(searchManifest(MULTIPLAYER_MANIFEST, q).map((e) => e.id)).toEqual(['multiplayer.cores'])
     }
   })
@@ -312,5 +313,53 @@ describe('core names in a sentence', () => {
       "a.txt couldn't be written when the Text and code core was turned off (no space left on the disk). " +
         "Its last changes are kept in K2's history; turning the Text and code core on again writes them.",
     )
+  })
+})
+
+describe('Settings → Cores → Multiplayer: Board files in a tab', () => {
+  async function mountWith(n: number): Promise<void> {
+    render(<MultiplayerSection />)
+    await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(n))
+  }
+
+  it('shows the switch with the server value, posts the setting, and reads it back', async () => {
+    h.cores = answer({ boardFilePreview: false })
+    await mountWith(4)
+    expect(sw(BOARD_FILE_PREVIEW_LABEL).getAttribute('aria-checked')).toBe('false')
+    h.cores = answer({ boardFilePreview: true })
+    fireEvent.click(sw(BOARD_FILE_PREVIEW_LABEL))
+    await waitFor(() => expect(sw(BOARD_FILE_PREVIEW_LABEL).getAttribute('aria-checked')).toBe('true'))
+    expect(h.posts).toEqual([{ route: 'settings/update', body: { boardFilePreview: true } }])
+  })
+
+  it('is disabled for a Member, as the core switches are', async () => {
+    h.cores = answer({ canChange: false, boardFilePreview: true })
+    await mountWith(4)
+    expect(sw(BOARD_FILE_PREVIEW_LABEL).disabled).toBe(true)
+    fireEvent.click(sw(BOARD_FILE_PREVIEW_LABEL))
+    await settle()
+    expect(h.posts).toEqual([])
+  })
+
+  it('follows another window: the settings refetch every window gets reads it again', async () => {
+    h.cores = answer({ boardFilePreview: false })
+    await mountWith(4)
+    const before = h.gets.length
+    h.cores = answer({ boardFilePreview: true })
+    act(() => useSettingsStore.setState({ boardFilePreview: true }))
+    await waitFor(() => expect(sw(BOARD_FILE_PREVIEW_LABEL).getAttribute('aria-checked')).toBe('true'))
+    expect(h.gets.length).toBe(before + 1)
+  })
+
+  it('has no switch on a server from before Board files', async () => {
+    h.cores = answer()
+    await mountWith(3)
+    expect(screen.queryByRole('switch', { name: BOARD_FILE_PREVIEW_LABEL })).toBeNull()
+  })
+
+  it('is found by searching for Board', () => {
+    const e = MULTIPLAYER_MANIFEST[0]
+    expect(e.description).toContain('Board')
+    expect(e.keywords).toContain('Board')
   })
 })

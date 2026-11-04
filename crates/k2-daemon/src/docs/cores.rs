@@ -541,6 +541,8 @@ pub fn cores_route(caller: &DocCaller) -> CliResponse {
         "canChange": can_change(caller),
         "cores": rows,
         "later": docs_cores::LATER,
+        // Board files in a tab (the preview switch beside the Board row).
+        "boardFilePreview": k2_core::board_preview::enabled(),
     }))
 }
 

@@ -883,6 +883,23 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sew/server/rotate-master",
         // Voice (K13) and standalone users (K14): Manage Sew in the handler.
         "/cli/sew/server/config",
+        // Voice rooms (preview, lane C): every `/cli/voice/*` route, so a
+        // passport gets the handler's answer (agents read rooms and status;
+        // join, moderation and changes answer agents_not_in_voice /
+        // agents_cannot_moderate / owner_or_admin_only), never the cell's
+        // bare 403. `voice::routes::ROUTES` must stay this list (a test).
+        "/cli/voice/rooms",
+        "/cli/voice/status",
+        "/cli/voice/settings",
+        "/cli/voice/rooms/rename",
+        "/cli/voice/rooms/close",
+        "/cli/voice/join",
+        "/cli/voice/session/leave",
+        "/cli/voice/session/state",
+        "/cli/voice/session/stats",
+        "/cli/voice/session/keys/key_packages",
+        "/cli/voice/session/keys/join",
+        "/cli/voice/moderate",
         "/cli/sew/media/preflight",
         "/cli/sew/media/install",
         "/cli/sew/media/url",
@@ -2101,6 +2118,13 @@ mod tests {
         assert!(is_agent_verb("/cli/git-tools/recheck"));
         assert!(!is_agent_verb("/cli/git-tools/install"));
         assert!(!is_agent_verb("/cli/git-tools/installx"));
+    }
+
+    #[test]
+    fn every_voice_route_is_an_agent_verb() {
+        for p in crate::voice::routes::GET_ROUTES.iter().chain(crate::voice::routes::POST_ROUTES) {
+            assert!(is_agent_verb(p), "{p}");
+        }
     }
 
     #[test]

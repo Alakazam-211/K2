@@ -999,6 +999,15 @@ mod unix_impl {
                 let who = crate::sources_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::sources_routes::handle(p, who, body, params))
             }
+            // Voice rooms (preview): a passport is an agent. The handler
+            // answers dark, reads, or the agent refusals; it never needs the
+            // owner token for a passport (every path that would refuses first).
+            p if crate::voice::routes::is_route(p) => {
+                if body.len() > crate::voice::routes::MAX_BODY {
+                    return from_cli(crate::voice::routes::too_large());
+                }
+                from_cli(crate::voice::routes::handle(p, crate::voice::routes::Caller::Passport, "", is_post, body))
+            }
             // Sew chat S30: EVERY `/cli/sew/chat/*` (incl. `manage/`),
             // `/cli/sew/approvals*` and `/cli/sew/admin/*` path for THIS
             // cell's session (agent or K2 shell tab — both agent-level,

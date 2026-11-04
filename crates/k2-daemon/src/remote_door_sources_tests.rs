@@ -90,6 +90,25 @@ fn changes(fx: &Fx, since: &str) -> J {
     ok_of(SOURCES_CHANGES, &fx.phone, &[("garden", &fx.d.garden), ("placement", "b1"), ("hash", &hash), ("since", since)], J::Null)
 }
 
+/// A source for the samples: its card view, fixed values.
+pub(super) fn seed_for_samples() {
+    use k2_core::sources::extract::{ProjectedItem, Projection};
+    let spec = json!({ "name": "fleet", "label": "Fleet", "everySecs": 60, "fetch": { "url": "https://fleet.example.com/status" }, "extract": { "fields": { "version": "/version" } } });
+    let r = crate::sources_routes::handle("/cli/sources/add", crate::compute_routes::Who::Owner, spec.to_string().as_bytes(), &HashMap::new());
+    assert!(r.status.starts_with('2'), "add: {}", r.body);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let row = k2_core::sources::store::get_by_name(&conn, "fleet").expect("db").expect("row");
+    let (mut st, _) = k2_core::sources::store::load_state(&conn, &row.id).expect("db").expect("state");
+    st.phase = k2_core::sources::Phase::Live;
+    st.health = k2_core::sources::Health::Ok;
+    let p = Projection {
+        fields: [("version".to_string(), json!("1.2.3"))].into(),
+        items: vec![ProjectedItem { key: "a".into(), fields: [("state".to_string(), json!("READY"))].into(), list: None }],
+    };
+    k2_core::sources::store::save_state(&conn, &st, Some(&p)).expect("save state");
+}
+
 // ── reads ───────────────────────────────────────────────────────────
 
 /// What a widget gets is the catalog's `SourceView`: its keys and nothing else.

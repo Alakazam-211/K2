@@ -1,7 +1,7 @@
 //! Rows only the phone door answers: the page they read, which addresses a
 //! placement binds, and a card view as a frame gets it. The door's own tests
 //! (who gets in, every refusal, no secret reaches a phone) are in
-//! `zen_remote_routes_sources_tests.rs`. Fail loudly.
+//! `remote_door_sources_tests.rs`. Fail loudly.
 
 use super::*;
 use crate::garden_data::call::door_tests::door;

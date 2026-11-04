@@ -626,7 +626,7 @@ fn samples() -> BTreeMap<String, String> {
     )
     .expect("cards manifest");
     std::fs::write(&garden2, "schema = 1\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n[[widget]]\nid = \"c1\"\nkind = \"custom\"\nwidget = \"cards\"\ncolumn = 0\n[widget.props.config]\nsources = \"fleet, far::elsewhere.example.com\"\n").expect("Garden 2 with cards");
-    sources_samples_seed();
+    door_card_rows::seed_for_samples();
     let hc = fx.d.f.garden_widget_status(&g2, "cards").hash().to_string();
     assert_eq!(hc.len(), 64, "cards bundles clean");
     let cards = |verb: &str, args: J| json!({ "garden": g2, "placement": "c1", "hash": hc, "verb": verb, "args": args });
@@ -679,25 +679,6 @@ fn samples() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// A source for the samples: its card view, fixed values.
-fn sources_samples_seed() {
-    use k2_core::sources::extract::{ProjectedItem, Projection};
-    let spec = json!({ "name": "fleet", "label": "Fleet", "everySecs": 60, "fetch": { "url": "https://fleet.example.com/status" }, "extract": { "fields": { "version": "/version" } } });
-    let r = crate::sources_routes::handle("/cli/sources/add", crate::compute_routes::Who::Owner, spec.to_string().as_bytes(), &HashMap::new());
-    assert!(r.status.starts_with('2'), "add: {}", r.body);
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let row = k2_core::sources::store::get_by_name(&conn, "fleet").expect("db").expect("row");
-    let (mut st, _) = k2_core::sources::store::load_state(&conn, &row.id).expect("db").expect("state");
-    st.phase = k2_core::sources::Phase::Live;
-    st.health = k2_core::sources::Health::Ok;
-    let p = Projection {
-        fields: [("version".to_string(), json!("1.2.3"))].into(),
-        items: vec![ProjectedItem { key: "a".into(), fields: [("state".to_string(), json!("READY"))].into(), list: None }],
-    };
-    k2_core::sources::store::save_state(&conn, &st, Some(&p)).expect("save state");
-}
-
 #[test]
 fn golden_samples_are_what_the_daemon_writes() {
     let fresh = samples();
@@ -742,5 +723,5 @@ fn golden_samples_are_what_the_daemon_writes() {
 #[path = "zen_remote_routes_phone_tests.rs"]
 mod phone_layout;
 
-#[path = "zen_remote_routes_sources_tests.rs"]
-mod sources_rows;
+#[path = "remote_door_sources_tests.rs"]
+mod door_card_rows;

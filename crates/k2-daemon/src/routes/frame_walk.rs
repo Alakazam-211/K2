@@ -19,6 +19,11 @@ const FRAME_MARKERS: &[&str] = &["frame_policy::", "frame_lines", "X-Frame-Optio
 /// (relative to the crate `src/`) and enclosing function name.
 const EXEMPT: &[(&str, &str, &str)] = &[
     (
+        "k2-daemon/src/voice/sew_lane.rs",
+        "relay_gateway",
+        "a check of Sew's own handshake reply (starts_with \"HTTP/1.1 101\"), relayed as is; K2's own answers go through answer(), which carries the frame lines",
+    ),
+    (
         "k2-daemon/src/routes/http.rs",
         "send_cors_preflight",
         "204 CORS preflight, no body",

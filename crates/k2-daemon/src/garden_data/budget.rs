@@ -24,6 +24,9 @@ pub enum BudgetKey {
     Placement { garden: String, placement: String },
     Agent { project_id: String, space: String },
     Delegate { project_id: String },
+    /// A phone at the remote door, for what no placement pays for: a call
+    /// refused before it reaches a placement (contract rev 2 §F).
+    Device { login: String, device: String },
 }
 
 /// What is being spent.

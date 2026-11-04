@@ -446,6 +446,37 @@ fn no_token_secret_name_url_or_header_reaches_a_phone() {
     assert!(!audit.contains(URL_MARK) && !audit.contains(SECRET_NAME), "{audit}");
 }
 
+// ── the audit log ───────────────────────────────────────────────────
+
+fn audit_text() -> String {
+    std::fs::read_to_string(k2_core::auth_audit::path()).expect("audit log")
+}
+
+/// A refresh that queues is a real fetch, so each logs; one refused logs its code.
+#[test]
+fn a_refresh_that_queues_always_logs() {
+    let fx = fx(CAPS);
+    add(plain("fleet"));
+    write_page(&fx, &page("source = \"fleet\"", ""));
+    for _ in 0..3 {
+        call_ok(&fx, "sources.refresh", json!(["fleet"]));
+    }
+    let queued = audit_text().lines().filter(|l| l.contains("verb=sources.refresh queued")).count();
+    assert_eq!(queued, 3, "every one, unthinned");
+    call_no(&fx, "sources.refresh", json!(["private"]));
+    assert!(audit_text().contains("verb=sources.refresh refused code=not_bound"), "{}", audit_text());
+    assert!(!audit_text().contains("private"), "its args never go in the log");
+}
+
+#[test]
+fn a_refused_sources_changes_logs_its_code() {
+    let fx = fx(CAPS);
+    let g = fx.d.garden.clone();
+    let stale = "0".repeat(64);
+    assert_eq!(refused(SOURCES_CHANGES, &fx.phone, &[("garden", &g), ("placement", "b1"), ("hash", &stale)], J::Null), (409, "stale_widget".into()));
+    assert!(audit_text().lines().any(|l| l.contains("zen.remote.sources_changes") && l.contains("refused code=stale_widget")), "{}", audit_text());
+}
+
 // ── sources-changes (§G) ────────────────────────────────────────────
 
 #[test]

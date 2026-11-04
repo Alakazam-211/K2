@@ -1179,7 +1179,10 @@ them. `sources.subscribe` is `host`: on `sources_changed` the phone calls
   too. The person's view: a `shape` source's values are shown and audited
   (`unmasked_read`), as on the desktop.
 - **Audit:** a read through the door writes one line per device, placement and
-  verb per minute; writes always log.
+  verb per minute, its `n=` the requests it stands for; writes always log, and
+  so does a refresh that queues. A verb the catalog doesn't know is `<unknown>`
+  on the line and in the key, and a call refused before any placement pays
+  spends the device's read budget.
 
 ### A Garden's mobile layout (`page.phone`, 0.46.8)
 

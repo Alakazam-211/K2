@@ -36,9 +36,14 @@
 //! **Audit** (GP-A22): every request writes one `zen.remote.*` line with
 //! `client=phone` (or `owner-token`), the login and the device id; never
 //! args or values. A data **read** through [`CALL`] is thinned to one line per
-//! device, placement and verb per minute ([`audit_thinned`]): a live card reads
-//! once or twice a second, and the log rotates at 5 MiB, so unthinned reads
-//! would push login history out within hours. Writes always log.
+//! device, placement and verb per minute ([`audit_thinned`], its `n=` counting
+//! what the line stands for): a live card reads once or twice a second, and the
+//! log rotates at 5 MiB, so unthinned reads would push login history out within
+//! hours. Writes always log, and so does a refresh that queues (a real fetch,
+//! with the source's secret, on the server). Nothing a widget can vary reaches
+//! a line or a thinning key: a verb the catalog doesn't know is `<unknown>`, and
+//! ids are cut to [`AUDIT_ID_CHARS`]. A refused call also spends the device's
+//! read budget, because no placement pays for it.
 //!
 //! **No secrets**: no answer carries a credential, a path or any of the
 //! catalog's `bannedFields`; the page drops `sources` (file names); the
@@ -61,6 +66,7 @@ use k2_core::zen::widget_shot::{self, Scheme};
 use k2_core::zen::{phone as garden_phone, ZenError, ZenFiles};
 
 use crate::cli_response::CliResponse;
+use crate::garden_data::budget::{BudgetKey, Spend};
 use crate::garden_data::call::{CallBody, Device};
 
 pub const GARDENS: &str = "/cli/zen/remote/gardens";
@@ -255,8 +261,9 @@ fn zen_err(e: ZenError) -> CliResponse {
 }
 
 /// One audit line per request (GP-A22): who, from where; never args or
-/// values.
+/// values. At most [`AUDIT_OUTCOME_CHARS`] of `outcome`, whatever a caller built.
 fn audit(event: &str, p: &Person, outcome: String) {
+    let outcome: String = outcome.chars().take(AUDIT_OUTCOME_CHARS).collect();
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
         event,
         &p.login,
@@ -267,40 +274,65 @@ fn audit(event: &str, p: &Person, outcome: String) {
     ));
 }
 
+/// How much of a request's own ids an audit line or a thinning key takes.
+const AUDIT_ID_CHARS: usize = 64;
+/// The most of an `outcome` one audit line keeps.
+const AUDIT_OUTCOME_CHARS: usize = 512;
+
+/// A request's id as an audit line takes it: id characters only, and short.
+fn audit_id(s: &str) -> String {
+    s.chars().filter(|c| c.is_ascii_alphanumeric() || "-_.:@~".contains(*c)).take(AUDIT_ID_CHARS).collect()
+}
+
 /// At most one line per this long for one device, placement, verb and outcome.
 const THIN_AUDIT_SECS: u64 = 60;
 /// Keys kept before the old ones go, so a widget can't grow this without end.
 const THIN_AUDIT_MAX_KEYS: usize = 4096;
 
-/// May this request write its audit line now? False when one with the same
-/// `key` did inside [`THIN_AUDIT_SECS`].
-fn thin_audit_allows(key: String) -> bool {
+/// May this request write its audit line at `now`? `None` when one with the same
+/// `key` did inside [`THIN_AUDIT_SECS`]. `Some(n)`: the line stands for `n`
+/// requests, itself and the ones thinned since the last line, so volume isn't
+/// lost. (What's thinned after a key's last line is counted by no line.)
+fn thin_audit_at(key: String, now: std::time::Instant) -> Option<u64> {
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
-    static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    static LAST: OnceLock<Mutex<HashMap<String, (Instant, u64)>>> = OnceLock::new();
     let window = Duration::from_secs(THIN_AUDIT_SECS);
-    let now = Instant::now();
     let mut last = LAST.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|p| p.into_inner());
-    if last.get(&key).is_some_and(|at| now.duration_since(*at) < window) {
-        return false;
-    }
+    let thinned = match last.get_mut(&key) {
+        Some((at, thinned)) if now.duration_since(*at) < window => {
+            *thinned += 1;
+            return None;
+        }
+        Some((_, thinned)) => *thinned,
+        None => 0,
+    };
     if last.len() >= THIN_AUDIT_MAX_KEYS {
-        last.retain(|_, at| now.duration_since(*at) < window);
+        last.retain(|_, (at, _)| now.duration_since(*at) < window);
         // All live: forget them rather than grow. A line too many beats a
         // line lost, and each is bounded by the phone's own call budget.
         if last.len() >= THIN_AUDIT_MAX_KEYS {
             last.clear();
         }
     }
-    last.insert(key, now);
-    true
+    last.insert(key, (now, 0));
+    Some(thinned + 1)
 }
 
 /// [`audit`] for a read: at most one line per device, placement, verb and
-/// outcome per minute. The line still says who and what; only repeats go.
+/// outcome per minute, with `n=` the requests it stands for.
 fn audit_thinned(event: &str, p: &Person, what: &str, outcome: String) {
-    if thin_audit_allows(format!("{event}|{}|{}|{what}", p.login, p.device)) {
-        audit(event, p, outcome);
+    if let Some(n) = thin_audit_at(format!("{event}|{}|{}|{what}", p.login, p.device), std::time::Instant::now()) {
+        audit(event, p, format!("{outcome} n={n}"));
+    }
+}
+
+/// A refusal's own line: its code, never its args. Thinned, so a widget can't
+/// flood the log with refusals.
+fn audit_refusal(event: &str, p: &Person, what: &str, r: &CliResponse) {
+    if !r.status.starts_with('2') {
+        let code = serde_json::from_str::<J>(&r.body).ok().and_then(|v| v["error"]["code"].as_str().map(str::to_string)).unwrap_or_default();
+        audit_thinned(event, p, &format!("{what} code={code}"), format!("{what} refused code={code}"));
     }
 }
 
@@ -757,7 +789,7 @@ fn call(p: &Person, body: &[u8]) -> CliResponse {
     };
     let c = catalog();
     let refusal = match (c.verb(&b.verb), phone::phone_of(c, &b.verb)) {
-        (None, _) => Some(refuse("400 Bad Request", "unknown_verb", format!("no verb {}", b.verb))),
+        (None, _) => Some(refuse("400 Bad Request", "unknown_verb", format!("no verb {}", audit_id(&b.verb)))),
         (Some(_), None) | (Some(_), Some(Phone::Never)) => {
             Some(refuse("403 Forbidden", "not_exposed", format!("{} isn't available to a widget on a phone", b.verb)))
         }
@@ -778,17 +810,30 @@ fn call(p: &Person, body: &[u8]) -> CliResponse {
         )),
         (Some(_), Some(Phone::Door)) => None,
     };
-    let what = format!("{}/{} verb={}", b.garden, b.placement, b.verb);
+    // A widget chooses the verb: one the catalog doesn't know is never written
+    // down or used as a key, or made-up verbs would rotate login history away.
+    let verb_label = if c.verb(&b.verb).is_some() { b.verb.as_str() } else { "<unknown>" };
+    let what = format!("{}/{} verb={verb_label}", audit_id(&b.garden), audit_id(&b.placement));
     if let Some(r) = refusal {
         audit_thinned("zen.remote.call", p, &format!("{what} refused"), format!("{what} refused"));
+        // No placement pays for a call refused here: the device does.
+        let device = BudgetKey::Device { login: p.login.clone(), device: p.device.clone() };
+        if let Err(e) = crate::garden_data::budget::spend(&device, Spend::Read) {
+            return call_envelope(crate::garden_data::response(&e));
+        }
         return r;
     }
-    // A write always logs; a read is thinned.
+    // A write always logs, and so does a refresh that queues: `effect: read` in
+    // the catalog, but a real fetch with the source's secret. Any other read is
+    // thinned.
+    let refreshes = b.verb == "sources.refresh";
     let reads = c.verb(&b.verb).is_some_and(|row| row.effect == Effect::Read);
-    if reads {
-        audit_thinned("zen.remote.call", p, &what, what.clone());
-    } else {
-        audit("zen.remote.call", p, what.clone());
+    if !refreshes {
+        if reads {
+            audit_thinned("zen.remote.call", p, &what, what.clone());
+        } else {
+            audit("zen.remote.call", p, what.clone());
+        }
     }
     let door_row = crate::garden_data::phone_rows::is_verb(&b.verb);
     let cb = CallBody { garden: b.garden, placement: b.placement, hash: b.hash, verb: b.verb, args: b.args, confirm_token: None };
@@ -798,10 +843,11 @@ fn call(p: &Person, body: &[u8]) -> CliResponse {
         crate::garden_data::call::run_call_on(&cb, Device::Phone)
     };
     let r = call_envelope(r);
-    if door_row && !r.status.starts_with('2') {
-        // A refused door row names its code, never its args.
-        let code = serde_json::from_str::<J>(&r.body).ok().and_then(|v| v["error"]["code"].as_str().map(str::to_string)).unwrap_or_default();
-        audit_thinned("zen.remote.call", p, &format!("{what} code={code}"), format!("{what} refused code={code}"));
+    if door_row {
+        audit_refusal("zen.remote.call", p, &what, &r);
+    }
+    if refreshes && r.status.starts_with('2') {
+        audit("zen.remote.call", p, format!("{what} queued"));
     }
     r
 }
@@ -818,10 +864,12 @@ fn sources_changes(p: &Person, params: &HashMap<String, String>) -> CliResponse 
         (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r,
     };
     let since = param(params, "since").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-    let what = format!("{garden}/{placement}");
+    let what = format!("{}/{}", audit_id(&garden), audit_id(&placement));
     audit_thinned("zen.remote.sources_changes", p, &what, what.clone());
     let cb = CallBody { garden, placement, hash, verb: "sources.read".into(), args: Vec::new(), confirm_token: None };
-    call_envelope(crate::garden_data::phone_rows::sources_changes(&cb, since, &source_who(p)))
+    let r = call_envelope(crate::garden_data::phone_rows::sources_changes(&cb, since, &source_who(p)));
+    audit_refusal("zen.remote.sources_changes", p, &what, &r);
+    r
 }
 
 // ── blobs ───────────────────────────────────────────────────────────

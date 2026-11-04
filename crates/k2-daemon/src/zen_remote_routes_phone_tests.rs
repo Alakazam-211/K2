@@ -460,11 +460,83 @@ fn reads_are_thinned_and_writes_always_log() {
 /// The key table can't grow without end, and a line is never lost to it.
 #[test]
 fn the_thin_table_is_bounded() {
+    let now = std::time::Instant::now();
     let key = format!("bounded-{}", uuid::Uuid::new_v4());
-    assert!(thin_audit_allows(key.clone()));
-    assert!(!thin_audit_allows(key.clone()), "a repeat inside the minute");
+    assert_eq!(thin_audit_at(key.clone(), now), Some(1));
+    assert_eq!(thin_audit_at(key.clone(), now), None, "a repeat inside the minute");
     for i in 0..(THIN_AUDIT_MAX_KEYS + 10) {
-        assert!(thin_audit_allows(format!("{key}-{i}")), "a new key always logs");
+        assert_eq!(thin_audit_at(format!("{key}-{i}"), now), Some(1), "a new key always logs");
     }
-    assert!(thin_audit_allows(key), "the table was forgotten rather than grown");
+    assert_eq!(thin_audit_at(key, now), Some(1), "the table was forgotten rather than grown");
+}
+
+/// A thinned line says how many requests it stands for, so volume isn't lost.
+#[test]
+fn a_thinned_line_counts_what_it_stands_for() {
+    use std::time::Duration;
+    let start = std::time::Instant::now();
+    let key = format!("counted-{}", uuid::Uuid::new_v4());
+    assert_eq!(thin_audit_at(key.clone(), start), Some(1));
+    for i in 1..=3 {
+        assert_eq!(thin_audit_at(key.clone(), start + Duration::from_secs(i)), None);
+    }
+    assert_eq!(thin_audit_at(key.clone(), start + Duration::from_secs(61)), Some(4), "itself and the three thinned");
+    assert_eq!(thin_audit_at(key, start + Duration::from_secs(122)), Some(1), "and it starts again");
+}
+
+/// A widget chooses the verb. Made-up ones must not rotate login history away
+/// (one big line each) or grow the thinning table (a new key each).
+#[test]
+fn made_up_verbs_can_t_flood_the_audit_log() {
+    let fx = fx(&["store:read", "store:write"]);
+    let log = k2_core::auth_audit::path();
+    let before = std::fs::metadata(&log).map_or(0, |m| m.len());
+    let huge = "x".repeat(60_000);
+    let (s, v) = req(CALL, &fx.phone, &[], call_body(&fx, &huge, json!([])));
+    assert_eq!((s, v["error"]["code"].as_str()), (400, Some("unknown_verb")), "{}", &v.to_string()[..200]);
+    assert!(v.to_string().len() < 400, "the hint doesn't echo it back either");
+    for i in 0..60 {
+        let (s, v) = req(CALL, &fx.phone, &[], call_body(&fx, &format!("made.up.{i}"), json!([])));
+        assert_eq!((s, v["error"]["code"].as_str()), (400, Some("unknown_verb")), "{v}");
+    }
+    let text = std::fs::read_to_string(&log).expect("audit");
+    assert!(!text.contains("xxxxxxxx") && !text.contains("made.up"), "the raw verb never goes in the log");
+    assert_eq!(audit_lines("zen.remote.call", "verb=<unknown> refused"), 1, "one line, however many verbs");
+    let grew = std::fs::metadata(&log).map_or(0, |m| m.len()) - before;
+    assert!(grew < 2_000, "the log grew {grew} bytes for 61 made-up verbs");
+}
+
+/// A call refused before any placement pays spends the device's own budget.
+#[test]
+fn a_refused_call_spends_the_device_s_budget() {
+    use crate::garden_data::budget::{self, BudgetKey, Spend};
+    let fx = fx(&["store:read", "store:write"]);
+    let key = BudgetKey::Device { login: "rosphone".into(), device: "ios-rosson-1".into() };
+    let mut drained = false;
+    for _ in 0..1000 {
+        if budget::spend(&key, Spend::Read).is_err() {
+            drained = true;
+            break;
+        }
+    }
+    assert!(drained, "the bucket has a bottom");
+    let (s, v) = req(CALL, &fx.phone, &[], call_body(&fx, "no.such.verb", json!([])));
+    assert_eq!((s, v["error"]["code"].as_str()), (429, Some("rate_limited")), "{v}");
+    let (s, v) = req(CALL, &fx.phone, &[], call_body(&fx, "thread.post", json!([])));
+    assert_eq!((s, v["error"]["code"].as_str()), (429, Some("rate_limited")), "a refused known verb too: {v}");
+    // Another phone has its own.
+    let second = pair("rosphone", "ios-rosson-2");
+    let (s, v) = req(CALL, &second, &[], call_body(&fx, "no.such.verb", json!([])));
+    assert_eq!((s, v["error"]["code"].as_str()), (400, Some("unknown_verb")), "{v}");
+    // A call a placement pays for doesn't touch it.
+    ok_of(CALL, &fx.phone, &[], call_body(&fx, "viewer.get", json!([])));
+}
+
+/// Ids the phone sends are cut, and nothing a request says splits a line.
+#[test]
+fn an_audit_line_takes_only_id_characters() {
+    assert_eq!(audit_id("g-3f9a12c0"), "g-3f9a12c0");
+    assert_eq!(audit_id("a b\nc\"d/e"), "abcde");
+    assert_eq!(audit_id(&"z".repeat(500)).len(), AUDIT_ID_CHARS);
+    assert_eq!(audit_id("k2:board@1"), "k2:board@1");
 }

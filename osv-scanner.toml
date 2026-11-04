@@ -545,6 +545,12 @@ id = "RUSTSEC-2026-0369"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Advisories are in ZipArchive::extract()/ZipStreamReader::extract(); K2 never calls them (own extractor fs_extract.rs masks modes to 0o777 since 0.46.3; tauri-plugin-updater's zip 4.6 is Windows-installer only). Fix: zip 9."
 
+# zip 2.4.2, zip 4.6.1
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0429"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "DoS only (abort on a symlink entry with a huge declared size), in ZipArchive::extract(). K2's own zip readers (k2-core fs_extract.rs extract_entries, sim/android/sdk.rs extract, jscheck/inspect.rs load_zip, sim/android/apk.rs read) walk by_index/by_name and read the bytes; none calls extract(). The one extract() caller is tauri-plugin-updater 2.13 extract_zip (Windows only), and src-tauri commands/updater.rs app_update_install passes it only bytes already verified with k2_release_keys. Fix: zip 9 (k2-core direct dep; tauri-plugin-updater 2.14.1, whose install() changes need their own updater test)."
+
 # zod 3.25.76
 [[IgnoredVulns]]
 id = "GHSA-mrhx-c7xc-m3w5"

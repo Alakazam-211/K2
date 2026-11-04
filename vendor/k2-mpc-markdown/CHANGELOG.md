@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.7.12 (2026-11-04): pairs with kit v0.11.0
+
+**Requires `k2-mpc-base` v0.11.0** (the tag at its public cut 386ccd77; release commit
+49e94018). The kit's positional default stays warn in this release.
+
+- **`replace-section` declares its position units and its positional address.**
+  `.positions(&[PositionForm::new("--nth", Unit::PackNth)])`: `--nth K` is the Kth matching
+  section, so a host's `capabilities` shows the verb's row (`--nth`, `pack_nth`) instead of
+  "undeclared". `.positional(...)`: the kit finds `--nth K` (or `--nth=K`) in a call, so an
+  agent's `replace-section --nth K` with no `--if-version` gets the kit's positional rule:
+  applied with a `note: ` warning naming `positional_needs_version` (MPC-E171) in the kit's
+  warn mode, refused in its refuse mode. A person's edit, an edit with `--if-version`, and
+  one without `--nth` are as before.
+- Tests (`tests/agent_parity.rs`): `parity::positions::check` on the pack's registry and the
+  declared form; the positional finder (`--nth 2`, `--nth=3`, none, and a `--heading` value
+  spelled `--nth`); and, through the parity harness, an agent's `--nth 2` without a version
+  applies with the one warning while the same verb without `--nth` gets none.
+- `Cargo.lock`: k2-mpc-base 0.11.0 (only the kit's crate version moves; no `mpce` entry); the
+  crate version.
+- `scripts/check-windows-names.sh` and its self-test, in `scripts/check.sh`: every path must be one Windows can
+  check out.
+
 ## v0.7.11 (2026-11-02): pairs with kit v0.10.2
 
 **Requires `k2-mpc-base` v0.10.2** (the first host release after v0.10.0.3; it keeps the

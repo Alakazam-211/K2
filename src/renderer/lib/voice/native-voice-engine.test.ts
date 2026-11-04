@@ -114,18 +114,26 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
 
   it('a window opened mid-call reads the snapshot and K2 room record', async () => {
     const f = fakeBridge({
-      [`${PLUGIN_COMMAND_PREFIX}state`]: contract.snapshots.live,
-      voice_native_status: { available: true, call: { target: 'host-1', room: 'room-1' } },
+      [`${PLUGIN_COMMAND_PREFIX}state`]: { ...contract.snapshots.live, target: 'host-1', room: 'room-1' },
     })
     expect(await new NativeVoiceEngine(f.bridge).snapshot()).toEqual({
-      state: { state: 'reconnecting', attempt: 1 },
+      state: { state: 'reconnecting', attempt: 1, target: 'host-1', room: 'room-1' },
       participants: [],
       callId: 'r_x',
       target: 'host-1',
       room: 'room-1',
     })
-    const idle = fakeBridge({ [`${PLUGIN_COMMAND_PREFIX}state`]: contract.snapshots.idle, voice_native_status: { available: true, call: null } })
+    const idle = fakeBridge({ [`${PLUGIN_COMMAND_PREFIX}state`]: contract.snapshots.idle })
     expect(await new NativeVoiceEngine(idle.bridge).snapshot()).toMatchObject({ state: { state: 'idle' }, callId: null, target: null, room: null })
+  })
+})
+
+describe("Sew's 0.7.2 additions", () => {
+  const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
+
+  it('reads target and room on a state, and a move', () => {
+    expect(parseCallState(sew.moved.payload)).toEqual({ state: 'connected', target: 'k2:acme', room: '48831765147549710' })
+    expect(parseCallState(sew.ended.sew_reasons[0].payload)).toEqual({ state: 'ended', reason: 'perms_lost', target: 'k2:acme', room: '48831765147549698' })
   })
 })
 

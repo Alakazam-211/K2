@@ -49,6 +49,8 @@ export interface VoiceRoom {
    *  changes, unlike the name. */
   id: string
   name: string
+  /** Sew's channel id: what the native engine reports after a moderator's move. */
+  channelId?: string
   /** At most this many people (§4.3 "count against its limit"). */
   limit: number | null
   occupants: VoiceOccupant[]
@@ -116,7 +118,8 @@ function parseRoom(raw: unknown): VoiceRoom | null {
     ? r.occupants.map(parseOccupant).filter((o): o is VoiceOccupant => o !== null)
     : []
   const closesAt = typeof r.closesAt === 'number' && Number.isFinite(r.closesAt) ? r.closesAt : null
-  return { id, name, limit, occupants, closing: r.closing === true, closesAt, unavailable: str(r.unavailable) }
+  const channelId = str(r.channelId)
+  return { id, name, ...(channelId ? { channelId } : {}), limit, occupants, closing: r.closing === true, closesAt, unavailable: str(r.unavailable) }
 }
 
 /** `GET /cli/voice/rooms`. Throws when the body is not a rooms list. */
@@ -360,6 +363,9 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
   }
 }
 
+/** The system refused the mic: the person stays in the call and can listen. */
+export const MIC_DENIED_LINE = "Your microphone is blocked, so no one can hear you. You can still listen."
+
 /** Why this person's mic is off and not theirs to turn on (live access §11). */
 export function micBlockedText(why: 'speak_denied' | 'server_muted', roomName: string): string {
   return why === 'speak_denied' ? `You can't speak in ${roomName}. You can still listen.` : `A moderator muted you in ${roomName}.`
@@ -370,7 +376,7 @@ export function micBlockedText(why: 'speak_denied' | 'server_muted', roomName: s
 export function engineErrorText(code: string, serverLabel: string): { line: string; kind: 'error' | 'info' } | null {
   switch (code) {
     case 'mic_denied':
-      return { line: "K2 can't use your microphone, so no one can hear you. Allow it in your system's privacy settings.", kind: 'error' }
+      return { line: MIC_DENIED_LINE, kind: 'error' }
     case 'mic_unavailable':
       return { line: "K2 can't open your microphone. Check that one is connected and that no other app is holding it.", kind: 'error' }
     case 'device_lost':

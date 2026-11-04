@@ -29,8 +29,8 @@ const person = (member_id: string, is_self: boolean, over: Partial<{ muted: bool
 })
 
 const occupant = (user: string, memberId: string) => ({ user, name: null, memberId, role: null, color: null, muted: false, deafened: false, speaking: false })
-const room1: VoiceRoom = { id: 'room-1', name: 'Standup', limit: 25, occupants: [occupant('ada', ME), occupant('grace', '7')], closing: false, closesAt: null, unavailable: null }
-const room2: VoiceRoom = { id: 'room-2', name: 'Room 2', limit: 25, occupants: [], closing: false, closesAt: null, unavailable: null }
+const room1: VoiceRoom = { id: 'room-1', name: 'Standup', channelId: '48831765147549698', limit: 25, occupants: [occupant('ada', ME), occupant('grace', '7')], closing: false, closesAt: null, unavailable: null }
+const room2: VoiceRoom = { id: 'room-2', name: 'Room 2', channelId: '48831765147549710', limit: 25, occupants: [], closing: false, closesAt: null, unavailable: null }
 const list: VoiceRoomsList = { hosting: { state: 'ok', line: null, detail: null }, rooms: [room1, room2], rev: 1, canManage: false, feedLive: true }
 
 function entry(hostKey: string): HostEntry {
@@ -73,9 +73,9 @@ function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
       calls.push([command, args])
       switch (command) {
         case 'voice_native_status':
-          return { available: true, call: plugin.call } as T
+          return { available: true } as T
         case `${P}state`:
-          return plugin.state as T
+          return (plugin.call ? { ...(plugin.state as object), ...plugin.call } : plugin.state) as T
         case `${P}join`:
           if (plugin.joinError) throw plugin.joinError
           return plugin.joinResult as T
@@ -109,7 +109,7 @@ function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
     }),
   }
   const authFns: Array<(k: string, a: 'signin-required') => void> = []
-  const openMicSettings = vi.fn()
+  const openMicSettings = vi.fn(async () => true)
   const entries: Record<string, HostEntry> = { [SEW]: entry(SEW) }
   const ctl = createVoiceController({
     keys: () => ['local', SEW],
@@ -137,13 +137,14 @@ function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
     openMicSettings,
     loadNative: async () => new NativeVoiceEngine(bridge),
     targetFor: (k) => (k === SEW ? 'host-1' : null),
-    hostKeyForTarget: (t) => (t === 'host-1' ? SEW : null),
-    micPreflight: async () => 'granted',
+    hostKeyForTarget: (t) => (t === 'host-1' || t === 'k2:acme' ? SEW : null),
     ...over,
   })
   ctl.recompute()
   return { ctl, api, calls, fire, toasts, plugin, openMicSettings, authFns, joins: () => calls.filter(([c]) => c === `${P}join`) }
 }
+
+const setupStart = (ctl: { start(): () => void }): (() => void) => ctl.start()
 
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 20; i += 1) await Promise.resolve()
@@ -254,16 +255,44 @@ describe('native join', () => {
 })
 
 describe('microphone', () => {
-  it('mic_denied at preflight: no join, the §4.6 line, the privacy pane opens', async () => {
-    const s = setup({ micPreflight: async () => 'denied' })
-    await s.ctl.join(SEW, room1)
-    expect(s.joins()).toEqual([])
-    expect(s.ctl.store.getState().call).toBeNull()
-    expect(s.ctl.store.getState().notice?.text).toContain("K2 can't use your microphone")
+  it('denied still joins: the call is up, they see why they are muted, and nothing opens until they click', async () => {
+    const s = setup()
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x', target: 'host-1', room: 'room-1' }
+    const joining = s.ctl.join(SEW, room1)
+    await settle()
+    s.fire('errors', { code: 'mic_denied', detail: { audio: 'no_permission' } })
+    await joining
+    expect(s.joins()).toHaveLength(1)
+    expect(s.ctl.store.getState().call).toMatchObject({ phase: 'connected', callId: 'r_x', micDenied: true })
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: "Your microphone is blocked, so no one can hear you. You can still listen.", kind: 'error', micSettings: true })
+    expect(s.toasts.filter((t) => t.includes('microphone'))).toHaveLength(1)
+    expect(s.openMicSettings).not.toHaveBeenCalled()
+    await s.ctl.openMicSettings()
     expect(s.openMicSettings).toHaveBeenCalledTimes(1)
   })
 
-  it('mic_denied from the engine at join: the join answer explains it once, not the events too', async () => {
+  it('mic_denied mid-call: says so once, the call stays', async () => {
+    const s = await inCall()
+    s.fire('errors', { code: 'mic_denied', detail: { audio: 'no_permission' } })
+    s.fire('errors', { code: 'mic_denied', detail: { audio: 'no_permission' } })
+    expect(s.ctl.store.getState().call).toMatchObject({ phase: 'connected', micDenied: true })
+    expect(s.toasts.filter((t) => t.includes('microphone'))).toHaveLength(1)
+    expect(s.openMicSettings).not.toHaveBeenCalled()
+  })
+
+  it('sound from their own mic means it was allowed: the warning goes, in the same call', async () => {
+    const s = await inCall()
+    s.fire('participants', [person(ME, true)])
+    s.fire('errors', { code: 'mic_denied', detail: null })
+    s.fire('speaking', [{ member_id: '7', level: 0.9 }])
+    expect(s.ctl.store.getState().call?.micDenied).toBe(true)
+    s.fire('speaking', [{ member_id: ME, level: 0.2 }])
+    expect(s.ctl.store.getState().call).toMatchObject({ micDenied: false, callId: 'r_x' })
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: 'Your microphone is working again.', kind: 'info' })
+    expect(s.joins()).toHaveLength(1)
+  })
+
+  it('an engine that refuses the join over the mic explains it once, with the button, and opens nothing', async () => {
     const s = setup({ plugin: { joinError: { code: 'mic_denied', detail: null } } })
     const joining = s.ctl.join(SEW, room1)
     await settle()
@@ -272,16 +301,14 @@ describe('microphone', () => {
     await joining
     expect(s.toasts.filter((t) => t.includes('microphone'))).toHaveLength(1)
     expect(s.ctl.store.getState().call).toBeNull()
-    expect(s.openMicSettings).toHaveBeenCalledTimes(1)
+    expect(s.ctl.store.getState().notice?.micSettings).toBe(true)
+    expect(s.openMicSettings).not.toHaveBeenCalled()
   })
 
-  it('mic_denied mid-call: says so and opens the pane, and the call stays', async () => {
-    const s = await inCall()
-    s.fire('errors', { code: 'mic_denied', detail: { audio: 'no_permission' } })
-    expect(s.ctl.store.getState().notice).toMatchObject({ kind: 'error' })
-    expect(s.ctl.store.getState().notice?.text).toContain("K2 can't use your microphone")
-    expect(s.openMicSettings).toHaveBeenCalledTimes(1)
-    expect(s.ctl.store.getState().call?.phase).toBe('connected')
+  it('a system with no privacy page says so when they click', async () => {
+    const s = setup({ openMicSettings: async () => false })
+    await s.ctl.openMicSettings()
+    expect(s.ctl.store.getState().notice?.text).toContain("K2 couldn't open your settings")
   })
 
   it('device_lost mid-call: an info line, the call stays', async () => {
@@ -396,13 +423,30 @@ describe('the call', () => {
     expect(s.ctl.store.getState().call?.phase).toBe('connected')
   })
 
-  it('a moderator moved me: the list says where, the call follows', async () => {
+  it("a moderator's move (Sew's exact event): the call follows, by channel id, with no re-join", async () => {
     const s = await inCall()
-    s.fire('participants', [person(ME, true)])
     s.ctl.store.setState({ servers: [{ kind: 'live', hostKey: SEW, label: 'sewlab', isWindow: false }] as never })
-    s.api.rooms.mockImplementation(async () => ({ ...list, rooms: [{ ...room1, occupants: [] }, { ...room2, occupants: [occupant('ada', ME)] }] }))
     await s.ctl.refreshRooms(SEW)
-    expect(s.ctl.store.getState().call).toMatchObject({ roomId: 'room-2', roomName: 'Room 2', phase: 'connected' })
+    s.fire('state', sewContract.moved.payload)
+    expect(s.ctl.store.getState().call).toMatchObject({ roomId: 'room-2', roomName: 'Room 2', phase: 'connected', callId: 'r_x' })
+    expect(s.joins()).toHaveLength(1)
+  })
+
+  it('moved to a room the list we hold lacks: the next read names it', async () => {
+    const s = await inCall()
+    s.ctl.store.setState({ servers: [{ kind: 'live', hostKey: SEW, label: 'sewlab', isWindow: false }] as never })
+    s.fire('state', { state: 'connected', target: 'host-1', room: '48831765147549710' })
+    await settle()
+    expect(s.ctl.store.getState().call).toMatchObject({ roomId: 'room-2', roomName: 'Room 2' })
+  })
+
+  it('a window opened after a move reads the room from the snapshot', async () => {
+    const s = setup({ plugin: { state: sewContract.state_snapshot.moved } })
+    s.ctl.store.setState({ rooms: { [SEW]: { list, error: null, loading: false, at: 1 } } })
+    const stop = setupStart(s.ctl)
+    await settle()
+    expect(s.ctl.store.getState().call).toMatchObject({ roomId: 'room-2', roomName: 'Room 2', callId: 'r_fakeroomfakeroomfakeroomfa' })
+    stop()
   })
 })
 
@@ -418,11 +462,11 @@ describe('devices', () => {
     expect(s.calls).toContainEqual([`${P}set_device`, { input: 'in:2' }])
   })
 
-  it('"System default" picks the device the OS calls default', async () => {
+  it('"System default" sends Sew\'s default, which follows later changes', async () => {
     const s = await inCall()
     s.ctl.setPrefs({ outputDeviceId: null })
     await settle()
-    expect(s.calls).toContainEqual([`${P}set_device`, { output: 'out:1' }])
+    expect(s.calls).toContainEqual([`${P}set_device`, { output: 'default' }])
   })
 })
 

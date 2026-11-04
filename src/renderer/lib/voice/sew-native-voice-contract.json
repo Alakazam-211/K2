@@ -1,5 +1,5 @@
 {
-  "about": "Sew 0.7.2 (LA1): the exact JSON tauri-plugin-sew-voice emits for a call that Sew ends and for SPEAK lost and given back. tests/contract.rs pins every payload to the wire types; tests/service.rs drives the fake engine (fake::FakeCall::end, fake::FakeCall::set_speak_denied) and checks the plugin emits these. Member ids are the tests' (self 48831765147549699, remote 48831765147549700).",
+  "about": "Sew 0.7.2: the exact JSON tauri-plugin-sew-voice emits for a call that Sew ends and for SPEAK lost and given back. tests/contract.rs pins every payload to the wire types; tests/service.rs drives the fake engine (fake::FakeCall::end, fake::FakeCall::set_speak_denied) and checks the plugin emits these. Member ids are the tests' (self 48831765147549699, remote 48831765147549700); target and room are the tests' join arguments (k2:acme, 48831765147549698). Since 0.7.2 the state event and the state snapshot carry the call's target and room (absent while idle), and a moderator move sends a state event with the destination room (moved).",
   "sew": "0.7.2",
   "ended": {
     "event": "sew-voice://state",
@@ -7,59 +7,59 @@
       {
         "reason": "perms_lost",
         "cause": "CONNECT or VIEW lost: a role, an overwrite, or a member sync that took the person out",
-        "payload": { "state": "ended", "reason": "perms_lost" }
+        "payload": { "state": "ended", "reason": "perms_lost", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "removed_from_space",
         "cause": "left or removed from the Space",
-        "payload": { "state": "ended", "reason": "removed_from_space" }
+        "payload": { "state": "ended", "reason": "removed_from_space", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "timed_out",
         "cause": "timed out in the Space",
-        "payload": { "state": "ended", "reason": "timed_out" }
+        "payload": { "state": "ended", "reason": "timed_out", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "channel_archived",
         "cause": "the voice channel was archived",
-        "payload": { "state": "ended", "reason": "channel_archived" }
+        "payload": { "state": "ended", "reason": "channel_archived", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "account_removed",
         "cause": "the account was deprovisioned",
-        "payload": { "state": "ended", "reason": "account_removed" }
+        "payload": { "state": "ended", "reason": "account_removed", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "removed_by_moderator",
         "cause": "a moderator disconnected the member",
-        "payload": { "state": "ended", "reason": "removed_by_moderator" }
+        "payload": { "state": "ended", "reason": "removed_by_moderator", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "session_revoked",
         "cause": "the login was revoked (a sign-out, K2's sessions/revoke): the call socket's 4011",
-        "payload": { "state": "ended", "reason": "session_revoked" }
+        "payload": { "state": "ended", "reason": "session_revoked", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "device_revoked",
         "cause": "the device was revoked",
-        "payload": { "state": "ended", "reason": "device_revoked" }
+        "payload": { "state": "ended", "reason": "device_revoked", "target": "k2:acme", "room": "48831765147549698" }
       }
     ],
     "fallbacks": [
       {
         "reason": "kicked",
-        "cause": "the engine removed the participant and Sew gave no reason within 1.5 s (or a Sew older than 0.7.2)",
-        "payload": { "state": "ended", "reason": "kicked" }
+        "cause": "the engine removed the participant and Sew gave no reason within 1.5 s (or a Sew older than 0.7.1)",
+        "payload": { "state": "ended", "reason": "kicked", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "room_closed",
         "cause": "the engine closed or deleted the room and Sew gave no reason within 1.5 s",
-        "payload": { "state": "ended", "reason": "room_closed" }
+        "payload": { "state": "ended", "reason": "room_closed", "target": "k2:acme", "room": "48831765147549698" }
       },
       {
         "reason": "credential_lost",
         "cause": "another device of the member took the call over (Sew's replaced)",
-        "payload": { "state": "ended", "reason": "credential_lost" }
+        "payload": { "state": "ended", "reason": "credential_lost", "target": "k2:acme", "room": "48831765147549698" }
       }
     ]
   },
@@ -92,7 +92,23 @@
       "participants": [
         { "member_id": "48831765147549699", "is_self": true, "muted": true, "deafened": false, "server_muted": false, "server_deafened": false, "speak_denied": true }
       ],
-      "call_id": "r_fakeroomfakeroomfakeroomfa"
+      "call_id": "r_fakeroomfakeroomfakeroomfa",
+      "target": "k2:acme",
+      "room": "48831765147549698"
+    },
+    "moved": {
+      "state": "connected",
+      "participants": [
+        { "member_id": "48831765147549699", "is_self": true, "muted": false, "deafened": false, "server_muted": false, "server_deafened": false }
+      ],
+      "call_id": "r_fakeroomfakeroomfakeroomfa",
+      "target": "k2:acme",
+      "room": "48831765147549710"
     }
+  },
+  "moved": {
+    "event": "sew-voice://state",
+    "cause": "a moderator moved the member (Sew's voice_server_updated): the call goes on in the destination; room is the destination voice channel's id (the DM call's id when the destination is a call), target is unchanged, the state may be unchanged",
+    "payload": { "state": "connected", "target": "k2:acme", "room": "48831765147549710" }
   }
 }

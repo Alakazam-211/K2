@@ -85,25 +85,6 @@ function hostKeyForTarget(target: string): string | null {
   return host ? homeHostKey(host) : null
 }
 
-/** How long a join waits for the person to answer the OS's mic prompt. */
-const MIC_PROMPT_WAIT_MS = 60_000
-
-/** §14.6: on macOS the first call raises the OS prompt, and the join waits for
- *  the answer. Windows and Linux have no prompt: the engine reports a refusal. */
-async function micPreflight(): Promise<'granted' | 'denied'> {
-  const state = (): Promise<string> => invoke<string>('permissions_microphone_state')
-  let now = await state()
-  if (now === 'undetermined') {
-    await invoke('permissions_request_microphone')
-    const until = Date.now() + MIC_PROMPT_WAIT_MS
-    while (now === 'undetermined' && Date.now() < until) {
-      await new Promise((r) => setTimeout(r, 300))
-      now = await state()
-    }
-  }
-  return now === 'granted' ? 'granted' : 'denied'
-}
-
 export const voice = createVoiceController({
   keys: knownKeys,
   windowKey,
@@ -146,13 +127,10 @@ export const voice = createVoiceController({
   loadPrefs: () => ({ ...DEFAULT_PREFS, ...readJson<Partial<VoicePrefs>>(PREFS_KEY, {}) }),
   savePrefs: (p) => writeJson(PREFS_KEY, p),
   now: () => Date.now(),
-  openMicSettings: () => {
-    void invoke('permissions_open_microphone_settings').catch((err: unknown) => console.warn('[voice] privacy settings:', err))
-  },
+  openMicSettings: () => invoke<boolean>('permissions_open_microphone_settings'),
   loadNative,
   targetFor,
   hostKeyForTarget,
-  micPreflight,
 })
 
 // vs-live V36: installing an update restarts the app, which ends a call.

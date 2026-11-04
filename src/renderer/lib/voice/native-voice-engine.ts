@@ -22,12 +22,24 @@ export interface NativeVoiceBridge {
 export const PLUGIN_COMMAND_PREFIX = 'plugin:sew-voice|'
 export const EVENT_PREFIX = 'sew-voice://'
 
-export type NativeCallState =
-  | { state: 'idle' }
-  | { state: 'connecting' }
-  | { state: 'connected' }
-  | { state: 'reconnecting'; attempt: number }
-  | { state: 'ended'; reason: string }
+/** What `set_device` takes for the OS default: it follows later changes too. */
+export const DEFAULT_DEVICE = 'default'
+
+/** Which server and room the call is on (Sew 0.7.2): absent while idle. After a
+ *  moderator's move `room` is Sew's decimal channel id, even for a join by slug. */
+export interface NativeCallPlace {
+  target?: string
+  room?: string
+}
+
+export type NativeCallState = NativeCallPlace &
+  (
+    | { state: 'idle' }
+    | { state: 'connecting' }
+    | { state: 'connected' }
+    | { state: 'reconnecting'; attempt: number }
+    | { state: 'ended'; reason: string }
+  )
 
 /** No names here: the media token and call keys carry none (the rooms list does). */
 export interface NativeParticipant {
@@ -63,7 +75,6 @@ export interface NativeSnapshot {
   state: NativeCallState
   participants: NativeParticipant[]
   callId: string | null
-  /** The live call's server and room (K2's Rust side keeps them). */
   target: string | null
   room: string | null
 }
@@ -99,16 +110,20 @@ function badShape(what: string, v: unknown): Error {
 
 export function parseCallState(v: unknown): NativeCallState {
   const r = record(v)
+  const place: NativeCallPlace = {
+    ...(typeof r?.target === 'string' ? { target: r.target } : {}),
+    ...(typeof r?.room === 'string' ? { room: r.room } : {}),
+  }
   switch (r?.state) {
     case 'idle':
     case 'connecting':
     case 'connected':
-      return { state: r.state }
+      return { state: r.state, ...place }
     case 'reconnecting':
-      if (typeof r.attempt === 'number') return { state: 'reconnecting', attempt: r.attempt }
+      if (typeof r.attempt === 'number') return { state: 'reconnecting', attempt: r.attempt, ...place }
       break
     case 'ended':
-      if (typeof r.reason === 'string') return { state: 'ended', reason: r.reason }
+      if (typeof r.reason === 'string') return { state: 'ended', reason: r.reason, ...place }
       break
   }
   throw badShape('state', v)
@@ -173,7 +188,6 @@ function toError(err: unknown): NativeVoiceError {
 
 export interface NativeStatus {
   available: boolean
-  call: { target: string; room: string } | null
 }
 
 export class NativeVoiceEngine {
@@ -211,17 +225,17 @@ export class NativeVoiceEngine {
     this.unlisten = []
   }
 
-  /** What a window opened mid-call needs: `state` plus K2's record of the room. */
+  /** What a window opened mid-call needs. */
   async snapshot(): Promise<NativeSnapshot> {
-    const [raw, status] = await Promise.all([this.command<unknown>('state'), this.bridge.invoke<NativeStatus>('voice_native_status')])
+    const raw = await this.command<unknown>('state')
     const r = record(raw)
     if (!r) throw badShape('state snapshot', raw)
     return {
       state: parseCallState(r),
       participants: parseParticipants(r.participants),
       callId: typeof r.call_id === 'string' ? r.call_id : null,
-      target: status.call?.target ?? null,
-      room: status.call?.room ?? null,
+      target: typeof r.target === 'string' ? r.target : null,
+      room: typeof r.room === 'string' ? r.room : null,
     }
   }
 

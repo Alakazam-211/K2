@@ -24,16 +24,16 @@ export function headsetState(
 ): HeadsetState {
   if (call) {
     if (call.phase === 'joining' || call.phase === 'connecting') {
-      return { look: 'connecting', tooltip: `Connecting to ${call.roomName}…`, muted: call.muted }
+      return { look: 'connecting', tooltip: `Connecting to ${call.roomName}…`, muted: call.muted || call.micDenied }
     }
     if (call.phase === 'reconnecting') {
-      return { look: 'connecting', tooltip: `Reconnecting to ${call.roomName}…`, muted: call.muted }
+      return { look: 'connecting', tooltip: `Reconnecting to ${call.roomName}…`, muted: call.muted || call.micDenied }
     }
     const n = Math.max(1, call.participants.length)
     return {
       look: 'in-call',
       tooltip: `In ${call.roomName} · ${call.serverLabel}, ${n} ${n === 1 ? 'person' : 'people'}`,
-      muted: call.muted,
+      muted: call.muted || call.micDenied,
     }
   }
   let people = 0

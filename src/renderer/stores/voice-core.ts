@@ -23,6 +23,7 @@ import type { VoiceEngine, EngineParticipant } from '@/lib/voice/voice-engine'
 import { EngineError } from '@/lib/voice/voice-engine'
 import {
   callEndedText,
+  MIC_DENIED_LINE,
   engineErrorText,
   joinErrorText,
   micBlockedText,
@@ -36,6 +37,7 @@ import { reportsVoice, voiceServers, type VoiceServer } from '@/lib/voice/voice-
 import { canonicalHostKey } from '@/lib/host-key'
 import { VoiceRequestError, voiceCodeOfError, type JoinOptions } from '@/lib/voice/voice-api'
 import {
+  DEFAULT_DEVICE,
   NativeVoiceError,
   type NativeCallState,
   type NativeDevices,
@@ -82,6 +84,8 @@ export interface VoiceCall {
   speakDenied: boolean
   /** Native: a moderator muted this person. */
   serverMuted: boolean
+  /** Native: the system refused the microphone. They're in the call and can listen. */
+  micDenied: boolean
   relayOnly: boolean
   /** When media came up (the call timer). */
   connectedAt: number | null
@@ -100,7 +104,7 @@ export interface VoiceState {
   rooms: Record<string, ServerRooms>
   call: VoiceCall | null
   /** The last one-line reason a join failed or a call ended. */
-  notice: { text: string; at: number; kind: 'error' | 'info' } | null
+  notice: { text: string; at: number; kind: 'error' | 'info'; micSettings?: boolean } | null
   popoverOpen: boolean
   prefs: VoicePrefs
   /** `native` once this app's native engine is attached; else the seat only. */
@@ -139,8 +143,8 @@ export interface VoiceDeps {
   loadPrefs: () => VoicePrefs
   savePrefs: (p: VoicePrefs) => void
   now: () => number
-  /** "Opens the OS privacy pane" on `mic_denied` (§4.6). */
-  openMicSettings?: () => void
+  /** Opens the OS privacy pane, when the person asks (§4.6). False: this OS has none. */
+  openMicSettings?: () => Promise<boolean>
   /** The app's native engine, when this build has one. Null: seats only. */
   loadNative?: () => Promise<NativeVoiceEngine | null>
   /** The plugin's `target` for a server: its saved host's id. Null: this client
@@ -148,9 +152,6 @@ export interface VoiceDeps {
   targetFor?: (hostKey: string) => string | null
   /** The way back, for a window opened mid-call. */
   hostKeyForTarget?: (target: string) => string | null
-  /** Before a native join: may the mic be used? Runs the OS prompt if it hasn't
-   *  been answered yet (macOS). */
-  micPreflight?: () => Promise<'granted' | 'denied'>
 }
 
 export interface VoiceController {
@@ -176,6 +177,8 @@ export interface VoiceController {
   engine(): VoiceEngine | null
   /** Read the audio devices for the call panel (`state.devices`). */
   loadDevices(): Promise<void>
+  /** The person's click on "Open privacy settings". */
+  openMicSettings(): Promise<void>
   /** Start the discovery and refresh timers; returns the stop. */
   start(): () => void
 }
@@ -301,7 +304,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       const list = await deps.api.rooms(deps.scopeFor(hostKey))
       setRooms(hostKey, { list, error: null, loading: false, at: deps.now() })
       checkSeat(hostKey, list)
-      followNativeRoom(hostKey, list)
+      nameNativeRoom(hostKey, list)
       drawNativeParticipants()
     } catch (err) {
       setRooms(hostKey, { error: err instanceof Error ? err.message : String(err), loading: false })
@@ -357,8 +360,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     await refreshRooms()
   }
 
-  const notice = (text: string, kind: 'error' | 'info'): void => {
-    store.setState({ notice: { text, at: deps.now(), kind } })
+  const notice = (text: string, kind: 'error' | 'info', micSettings = false): void => {
+    store.setState({ notice: { text, at: deps.now(), kind, ...(micSettings ? { micSettings } : {}) } })
     deps.toast(text, kind)
   }
 
@@ -397,8 +400,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     engine = null
     store.setState({ call: null })
     if (e) void e.disconnect().catch(() => undefined)
-    notice(joinErrorText(code, room.name, label, room.limit, hint), 'error')
-    if (code === 'mic_denied') deps.openMicSettings?.()
+    notice(joinErrorText(code, room.name, label, room.limit, hint), 'error', code === 'mic_denied')
   }
 
   // ── the native engine ────────────────────────────────────────────
@@ -445,14 +447,32 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (serverMuted && !c.serverMuted && !speakDenied) notice(micBlockedText('server_muted', c.roomName), 'error')
   }
 
-  /** A moderator can move someone to another room with no break in the call
-   *  (the state stays `connected`). The server's list says where they are. */
-  const followNativeRoom = (hostKey: string, list: VoiceRoomsList): void => {
+  /** A room as the engine reports it: the slug K2 joined by, or Sew's decimal
+   *  channel id after a moderator's move. */
+  const roomOnList = (hostKey: string, room: string): VoiceRoom | null =>
+    store.getState().rooms[hostKey]?.list?.rooms.find((r) => r.id === room || r.channelId === room) ?? null
+
+  /** Sew 0.7.2: a `state` event names the room, and a moderator's move changes it
+   *  with no break in the call. */
+  const followNativeRoom = (room: string | undefined): void => {
     const c = store.getState().call
-    const me = nativePeople.find((p) => p.isSelf)
-    if (!native || !c || !me || canon(c.hostKey) !== canon(hostKey) || !list.feedLive) return
-    const at = list.rooms.find((r) => r.occupants.some((o) => o.memberId === me.memberId))
-    if (at && at.id !== c.roomId) store.setState({ call: { ...c, roomId: at.id, roomName: at.name } })
+    if (!room || !c || c.roomId === room) return
+    const known = roomOnList(c.hostKey, room)
+    if (known) {
+      if (known.id !== c.roomId) store.setState({ call: { ...c, roomId: known.id, roomName: known.name } })
+      return
+    }
+    // Not on the list we hold: the next read names it.
+    store.setState({ call: { ...c, roomId: room } })
+    void refreshRooms(c.hostKey)
+  }
+
+  /** A list came in: a call still shown by channel id gets its room's slug and name. */
+  const nameNativeRoom = (hostKey: string, list: VoiceRoomsList): void => {
+    const c = store.getState().call
+    if (!native || !c || canon(c.hostKey) !== canon(hostKey)) return
+    const known = list.rooms.find((r) => r.channelId === c.roomId)
+    if (known) store.setState({ call: { ...c, roomId: known.id, roomName: known.name } })
   }
 
   /** A call this window didn't start: another window's, or one from before a
@@ -470,7 +490,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       console.warn('[voice] the live call is on a server this window has no entry for')
       return
     }
-    const roomName = store.getState().rooms[hostKey]?.list?.rooms.find((r) => r.id === snap.room)?.name ?? snap.room
+    const onList = roomOnList(hostKey, snap.room)
+    const roomId = onList?.id ?? snap.room
+    const roomName = onList?.name ?? snap.room
     nativePeople = snap.participants
     const self = snap.participants.find((p) => p.isSelf)
     callGen += 1
@@ -478,7 +500,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       call: {
         hostKey,
         serverLabel: deps.labelOf(hostKey),
-        roomId: snap.room,
+        roomId,
         roomName,
         callId: snap.callId,
         phase,
@@ -486,6 +508,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         deafened: self?.deafened ?? false,
         speakDenied: self?.speakDenied ?? false,
         serverMuted: self?.serverMuted ?? false,
+        micDenied: false,
         relayOnly: false,
         connectedAt: phase === 'connected' ? deps.now() : null,
         participants: [],
@@ -515,9 +538,11 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       void adoptNativeCall().catch((err: unknown) => console.warn('[voice] reading the live call failed:', err))
       return
     }
-    if (s.state === 'connected') store.setState({ call: { ...c, phase: 'connected', connectedAt: c.connectedAt ?? deps.now() } })
-    else if (s.state === 'reconnecting') store.setState({ call: { ...c, phase: 'reconnecting' } })
-    else if (c.phase !== 'joining') store.setState({ call: { ...c, phase: 'connecting' } })
+    followNativeRoom(s.room)
+    const now = store.getState().call ?? c
+    if (s.state === 'connected') store.setState({ call: { ...now, phase: 'connected', connectedAt: now.connectedAt ?? deps.now() } })
+    else if (s.state === 'reconnecting') store.setState({ call: { ...now, phase: 'reconnecting' } })
+    else if (now.phase !== 'joining') store.setState({ call: { ...now, phase: 'connecting' } })
   }
 
   const onNativeParticipants = (list: NativeParticipant[]): void => {
@@ -530,6 +555,14 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   }
 
   const onNativeSpeaking = (levels: NativeLevel[]): void => {
+    // Sound from this device's own mic: the person allowed it, and the engine
+    // opened it by itself.
+    const c = store.getState().call
+    const self = nativePeople.find((p) => p.isSelf)
+    if (c?.micDenied && self && levels.some((l) => l.memberId === self.memberId && l.level > 0)) {
+      store.setState({ call: { ...c, micDenied: false } })
+      notice('Your microphone is working again.', 'info')
+    }
     const next = new Set(levels.filter((l) => l.level > SPEAKING_LEVEL).map((l) => l.memberId))
     if (next.size === nativeSpeaking.size && [...next].every((m) => nativeSpeaking.has(m))) return
     nativeSpeaking = next
@@ -538,12 +571,19 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
 
   const onNativeError = (code: string): void => {
     const c = store.getState().call
+    // The call goes on without the mic. The call panel keeps saying why, with a
+    // button to the privacy pane.
+    if (code === 'mic_denied' && c) {
+      if (c.micDenied) return
+      store.setState({ call: { ...c, micDenied: true } })
+      if (!nativeJoining) notice(MIC_DENIED_LINE, 'error', true)
+      return
+    }
     // A failed join says this itself; with no call there's nothing to explain.
     if (nativeJoining || !c) return
     const text = engineErrorText(code, c.serverLabel)
     if (text) notice(text.line, text.kind)
     else console.warn(`[voice] engine says: ${code}`)
-    if (code === 'mic_denied') deps.openMicSettings?.()
   }
 
   const nativeEvents: NativeEvents = {
@@ -642,6 +682,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         deafened: false,
         speakDenied: false,
         serverMuted: false,
+        micDenied: false,
         relayOnly: false,
         connectedAt: null,
         participants: [],
@@ -654,11 +695,6 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     }
     nativeJoining = true
     try {
-      if ((await deps.micPreflight?.()) === 'denied') {
-        failJoin(gen, 'mic_denied', room, label)
-        return
-      }
-      if (gen !== callGen) return
       // Saved picks apply to the next call. A pick that's gone is no reason to
       // refuse the call: it runs on the default device.
       if (prefs.inputDeviceId || prefs.outputDeviceId) {
@@ -667,7 +703,6 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
           .catch((err: unknown) => console.warn('[voice] saved audio device not applied:', err))
       }
       const { callId } = await n.join({ target, room: room.id, muted: prefs.joinMuted })
-      nativeJoining = false
       if (gen !== callGen) return
       const phase = (await n.snapshot()).state.state
       if (gen !== callGen) return
@@ -689,6 +724,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         },
       })
       drawNativeParticipants()
+      if (store.getState().call?.micDenied) notice(MIC_DENIED_LINE, 'error', true)
       void refreshRooms(hostKey)
     } catch (err) {
       failNativeJoin(gen, err, room, label, hostKey)
@@ -719,6 +755,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         deafened: false,
         speakDenied: false,
         serverMuted: false,
+        micDenied: false,
         relayOnly: false,
         connectedAt: null,
         participants: [],
@@ -842,14 +879,11 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (patch.outputDeviceId !== undefined) void engine?.setOutputDevice(patch.outputDeviceId)
   }
 
-  /** "System default" (`null`): `set_device` takes only an id, so it means the
-   *  device the OS calls default right now. */
+  /** "System default" (`null`) follows the OS's default from then on. */
   const applyNativeDevice = async (n: NativeVoiceEngine, patch: Partial<VoicePrefs>): Promise<void> => {
-    const list = patch.inputDeviceId === null || patch.outputDeviceId === null ? await n.devices() : null
-    const pick = (id: string | null | undefined, rows: NativeDevices['inputs'] | undefined): string | undefined =>
-      id === undefined ? undefined : (id ?? rows?.find((d) => d.isDefault)?.id)
-    const input = pick(patch.inputDeviceId, list?.inputs)
-    const output = pick(patch.outputDeviceId, list?.outputs)
+    const pick = (id: string | null | undefined): string | undefined => (id === undefined ? undefined : (id ?? DEFAULT_DEVICE))
+    const input = pick(patch.inputDeviceId)
+    const output = pick(patch.outputDeviceId)
     if (input === undefined && output === undefined) return
     await n.setDevice({ ...(input !== undefined ? { input } : {}), ...(output !== undefined ? { output } : {}) })
   }
@@ -860,6 +894,16 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       return
     }
     if (engine) store.setState({ devices: await engine.listDevices() })
+  }
+
+  const openMicSettings = async (): Promise<void> => {
+    let opened = false
+    try {
+      opened = (await deps.openMicSettings?.()) === true
+    } catch (err) {
+      console.warn('[voice] opening the privacy settings failed:', err)
+    }
+    if (!opened) notice("K2 couldn't open your settings. Open your system's sound settings and allow K2.", 'error')
   }
 
   // §4.4: signed out, kicked or removed on the call's server ends the call.
@@ -888,6 +932,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     setPrefs,
     engine: () => engine,
     loadDevices,
+    openMicSettings,
     start() {
       started = true
       void loadNativeEngine()

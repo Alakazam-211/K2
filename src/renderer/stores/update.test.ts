@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
@@ -7,7 +7,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
 import { setConnectedAirgap } from '@/lib/airgap'
 import { useToastStore } from '@/stores/toast'
-import { useUpdateStore } from '@/stores/update'
+import { setUpdateInstallGuard, useUpdateStore } from '@/stores/update'
 
 const ZST =
   'https://github.com/Alakazam-211/K2/releases/download/v9.9.9/k2-9.9.9-x86_64.pkg.tar.zst'
@@ -378,5 +378,23 @@ describe('desktop app update through Rust (SS4: K2 update keys, not the plugin k
     expect(state.error).toBe("the update isn't downloaded and verified yet")
     const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
     expect(cmds).not.toContain('relaunch_via_open')
+  })
+})
+
+// A call in progress asks first (voice rooms, vs-live V36). `restoreOffer` puts an
+// earlier check's offer on show, and the guard must hold for that one too.
+describe('the install guard', () => {
+  afterEach(() => setUpdateInstallGuard(null))
+
+  it('a restored Linux offer asks before installing, and no means nothing runs', async () => {
+    useUpdateStore.setState({ status: 'idle', version: null, linuxCanInstall: false, linuxInstalling: false, archDownloadUrl: null })
+    expect(useUpdateStore.getState().restoreOffer({ version: '9.9.9', notes: null, downloadUrl: ZST, canInstall: true })).toBe(true)
+    vi.mocked(invoke).mockClear()
+    const guard = vi.fn(async () => false)
+    setUpdateInstallGuard(guard)
+    await useUpdateStore.getState().openAvailableDownload()
+    expect(guard).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
+    expect(useUpdateStore.getState().linuxInstalling).toBe(false)
   })
 })

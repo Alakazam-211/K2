@@ -11,7 +11,7 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { useSettingsStore } from '@/stores/settings'
 import { useVoice, voice } from '@/stores/voice'
 import type { VoiceCall, ServerRooms } from '@/stores/voice-core'
-import { hostingStateText, isLaneReconnecting, micBlockedText, type VoiceOccupant, type VoiceRoom } from '@/lib/voice/voice-wire'
+import { MIC_DENIED_LINE, hostingStateText, isLaneReconnecting, micBlockedText, type VoiceOccupant, type VoiceRoom } from '@/lib/voice/voice-wire'
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
 import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
@@ -82,6 +82,14 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
           {isWebClient() ? 'You can see this room here, but not talk. Use the K2 desktop app to talk.' : 'No call audio in this version: you hold a seat in the room.'}
         </p>
       ) : null}
+      {call.micDenied ? (
+        <p data-testid="voice-mic-denied" className="mt-1 text-[11px] text-[var(--color-status-error-soft)]">
+          {MIC_DENIED_LINE}{' '}
+          <button type="button" data-testid="voice-mic-settings" className="underline hover:text-[var(--color-text-primary)]" onClick={() => void voice.openMicSettings()}>
+            Open privacy settings
+          </button>
+        </p>
+      ) : null}
       {call.participants.length > 0 ? (
         <div className="mt-1">
           <Occupants
@@ -92,7 +100,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
       ) : null}
       <div className="mt-2 flex items-center gap-1">
         <button type="button" data-testid="voice-mute" disabled={busy || micBlocked !== null} title={micBlocked ?? undefined} className={SMALL_BTN} onClick={() => voice.setMuted(!call.muted)}>
-          {call.muted ? 'Unmute' : 'Mute'}
+          {call.muted || call.micDenied ? 'Unmute' : 'Mute'}
         </button>
         <button type="button" data-testid="voice-deafen" disabled={busy} className={SMALL_BTN} onClick={() => voice.setDeafened(!call.deafened)}>
           {call.deafened ? 'Undeafen' : 'Deafen'}
@@ -306,6 +314,14 @@ export default function VoicePopover(): React.JSX.Element {
       {notice ? (
         <p data-testid="voice-notice" data-kind={notice.kind} className={`mb-1 text-[11px] ${notice.kind === 'error' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-secondary)]'}`}>
           {notice.text}
+          {notice.micSettings && !call?.micDenied ? (
+            <>
+              {' '}
+              <button type="button" data-testid="voice-mic-settings" className="underline hover:text-[var(--color-text-primary)]" onClick={() => void voice.openMicSettings()}>
+                Open privacy settings
+              </button>
+            </>
+          ) : null}
         </p>
       ) : null}
       {confirm ? (

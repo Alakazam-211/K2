@@ -65,6 +65,10 @@ pub enum SaveFail {
     Busy,
     /// The temp file didn't read back as what was written.
     WriteFailed(String),
+    /// A verb's own refusal, or its args: a stable code.
+    Verb { code: &'static str, message: String },
+    /// A merge met conflicts: nothing was written, and every side is kept here.
+    Merge(Value),
 }
 
 /// The name of an I/O error, for the wire.
@@ -108,6 +112,8 @@ pub struct SaveAnswer {
     pub refused: Vec<Value>,
     /// How many groups applied.
     pub applied: usize,
+    /// A verb's own answer: new ids, what a delete took, what it left alone.
+    pub planned: Value,
 }
 
 impl SaveAnswer {
@@ -475,6 +481,9 @@ pub struct SaveInput<'a> {
     /// A blob this caller staged: `(media type, bytes)`. A save may name only
     /// these, or parts of this file.
     pub staged: &'a dyn Fn(&Sha256) -> Option<(String, Vec<u8>)>,
+    /// A friendly verb instead of `groups`: planned against the file as it is
+    /// under the lock, each try. Gives the group and what the caller should know.
+    pub plan: Option<&'a dyn Fn(&Board) -> Result<(Group, Value), SaveFail>>,
 }
 
 /// §5.3. Holds the writer lock for the whole of it.
@@ -502,6 +511,28 @@ fn try_save(path: &Path, input: &SaveInput) -> Result<Option<SaveAnswer>, SaveFa
     let mut fresh: Vec<Remembered> = Vec::new();
     let mut changed_ids: Vec<Id> = Vec::new();
     let mut touched = false;
+    if let Some(plan) = input.plan {
+        // A verb: no hold (an agent has its command), never remembered.
+        let (group, planned) = plan(&board)?;
+        a.planned = planned;
+        match apply_group(&mut board, &group) {
+            Ok(report) => {
+                a.applied += 1;
+                touched |= !report.is_noop();
+                changed_ids.extend(report.added.iter().cloned());
+                changed_ids.extend(report.changed.iter().cloned());
+                for m in &report.moved {
+                    a.moved.push(json!({ "id": m.id.as_str(), "exact": m.exact }));
+                }
+            }
+            Err(Conflict::Refused(r)) => a.refused.push(refused_entry(&group.id, &r)),
+            Err(c) => {
+                if let Some(h) = held_entry(&group.id, &c) {
+                    a.held.push(h);
+                }
+            }
+        }
+    }
     for g in input.groups {
         let gid = g.get("id").and_then(Value::as_str).unwrap_or("");
         // A retry gets its first answer. A daemon restart forgets, and the
@@ -794,6 +825,85 @@ pub fn rescue_to(to: &Path, body: &Value, staged: &dyn Fn(&Sha256) -> Option<(St
     Ok((out, Copied { hash: written.package_guard.to_string(), dropped: missing }))
 }
 
+// ---------- merge ----------
+
+fn open_board(p: &Path) -> Result<Package<BufReader<File>>, SaveFail> {
+    Ok(Package::open(BufReader::new(File::open(p).map_err(io_fail)?), &Limits::V1)?)
+}
+
+fn conflicts_json(c: &k2_mpc_board::MergeConflicts) -> Value {
+    let side = |o: &Option<Object>| o.as_ref().map(object_json);
+    json!({
+        "objects": c.objects.iter().map(|o| json!({ "id": o.id.as_str(), "why": o.kind.as_str(), "base": side(&o.base), "copy": side(&o.ours), "file": side(&o.theirs) })).collect::<Vec<_>>(),
+        "settings": c.settings.is_some(), "people": c.people.len(), "extra": c.extra.len(),
+        "totals": { "objects": c.totals.objects, "settings": c.totals.settings, "people": c.totals.people, "extra": c.totals.extra },
+    })
+}
+
+/// Merges `copy` into `target` from the board they both started from, `base`
+/// (prd-board-tab-v1; the pack's `merge3`, whole objects). Under `target`'s
+/// writer lock, written like any save: temp, read-back, guard compare, rename.
+/// `base` and `copy` are only read. A conflict writes nothing.
+pub fn merge_into(target: &Path, base: &Path, copy: &Path) -> Result<Value, SaveFail> {
+    let base_board = open_board(base)?.into_board();
+    let mut copy_pkg = open_board(copy)?;
+    let copy_board = copy_pkg.board().clone();
+    with_writer_lock(target, || {
+        for _ in 0..MAX_TRIES {
+            let mut pkg = open_board(target)?;
+            let guard = pkg.package_guard();
+            let merged = match k2_mpc_board::merge3(&base_board, &copy_board, pkg.board()) {
+                Ok(m) => m,
+                Err(k2_mpc_board::MergeError::Conflicts(c)) => return Err(SaveFail::Merge(conflicts_json(&c))),
+                Err(k2_mpc_board::MergeError::Refused(r)) => return Err(SaveFail::Refused(r)),
+            };
+            let answer = json!({
+                "fromCopy": merged.from_ours.iter().map(Id::as_str).collect::<Vec<_>>(),
+                "fromFile": merged.from_theirs.iter().map(Id::as_str).collect::<Vec<_>>(),
+                "deleted": merged.deleted.iter().map(Id::as_str).collect::<Vec<_>>(),
+                "orphans": merged.orphans.len(),
+            });
+            if merged.board == *pkg.board() {
+                let mut a = answer;
+                a["hash"] = json!(guard.to_string());
+                a["wrote"] = json!(false);
+                return Ok(a);
+            }
+            let listed: Vec<Sha256> = pkg.manifest().parts.iter().map(|p| p.sha256).collect();
+            let mut add = Vec::new();
+            for h in merged.board.blob_refs() {
+                if !listed.contains(&h) {
+                    // A picture only the copy had: from the copy, checked against its name.
+                    if let Ok(b) = copy_pkg.read_blob(&h) {
+                        add.push((b.media_type, b.bytes));
+                    }
+                }
+            }
+            let meta = pkg.manifest().write_meta();
+            let board_bytes = pkg.manifest().parts.iter().find(|p| p.role == "board").map_or(0, |p| p.bytes);
+            let (temp, written, new_hashes) = {
+                let mut overlay = Overlay::new(&mut pkg);
+                let mut new_hashes = Vec::new();
+                for (m, b) in add {
+                    new_hashes.push(overlay.add_blob(&m, b));
+                }
+                let (temp, written) = write_temp(target, &meta, &merged.board, &mut overlay)?;
+                (temp, written, new_hashes)
+            };
+            let temp_path = temp.0.clone().ok_or_else(|| bad("no temp file"))?;
+            read_back(&temp_path, &written, &new_hashes, board_bytes)?;
+            drop(pkg);
+            if replace_if_current(target, temp, Some(&guard))? {
+                let mut a = answer;
+                a["hash"] = json!(written.package_guard.to_string());
+                a["wrote"] = json!(true);
+                return Ok(a);
+            }
+        }
+        Err(SaveFail::Busy)
+    })
+}
+
 // ---------- fault injection ----------
 
 /// Where a test can step in.
@@ -887,7 +997,7 @@ mod tests {
 
     fn run(p: &Path, base: Option<&str>, groups: Vec<Value>) -> Result<SaveAnswer, SaveFail> {
         let me = me();
-        save(p, &SaveInput { base_hash: base, groups: &groups, me: &me, at: AT, staged: &no_staged })
+        save(p, &SaveInput { base_hash: base, groups: &groups, me: &me, at: AT, staged: &no_staged, plan: None })
     }
 
     fn set_text(p: &Path, id: &str, text: &str, gid: &str) -> Value {
@@ -1230,7 +1340,7 @@ mod tests {
         let me = me();
         let groups = vec![json!({ "id": "g2", "ops": add["ops"].clone() })];
         let staged = |x: &Sha256| (*x == h).then(|| ("image/png".to_string(), bytes.clone()));
-        let a = save(&p, &SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &staged }).expect("save");
+        let a = save(&p, &SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &staged, plan: None }).expect("save");
         assert!(a.wrote);
         let mut pkg = Package::open(BufReader::new(File::open(&p).expect("open")), &Limits::V1).expect("package");
         assert_eq!(pkg.read_blob(&h).expect("blob").bytes, bytes);
@@ -1269,7 +1379,7 @@ mod tests {
         let p = file_with(&d, doc(), &[]);
         let me = me();
         let groups = vec![set_text(&p, "s-1", "in the copy", "c1")];
-        let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &no_staged };
+        let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &no_staged, plan: None };
         let to = elsewhere.join("copy.k5board");
         let (out, c) = copy_to(&p, &to, &inp, false).expect("copy");
         assert_eq!(out, to);
@@ -1336,7 +1446,7 @@ mod tests {
         let p = file_with(&d, doc(), &[]);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).expect("chmod");
         let me = me();
-        let inp = SaveInput { base_hash: None, groups: &[], me: &me, at: AT, staged: &no_staged };
+        let inp = SaveInput { base_hash: None, groups: &[], me: &me, at: AT, staged: &no_staged, plan: None };
         let r = copy_to(&p, &locked.join("x.k5board"), &inp, false);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).expect("chmod back");
         match r {
@@ -1397,6 +1507,42 @@ mod tests {
         assert_eq!(b.file_name().and_then(|n| n.to_str()), Some("plan (1).k5board"));
         assert_eq!(guard(&p), h, "the first is untouched");
         assert_eq!(temps(&d), Vec::<String>::new());
+    }
+
+    fn run_verb(p: &Path, name: &str, args: Value) -> Result<SaveAnswer, SaveFail> {
+        let me = me();
+        let plan = |board: &Board| -> Result<(Group, Value), SaveFail> {
+            let v = super::super::verbs::verb_of(name, &args, board).map_err(|e| SaveFail::Verb { code: e.code, message: e.message })?;
+            let pack_me = k2_mpc_board::verbs::Me { token: me.token.clone(), new: (!board.people.contains_key(&me.token)).then(|| me.person.clone()) };
+            let mut rnd = || [5u8; 8];
+            let mut cx = k2_mpc_board::verbs::Ctx { group_id: "v1".into(), by: Some(pack_me), at: Some(AT.into()), random: &mut rnd };
+            let planned = k2_mpc_board::verbs::plan(board, &mut cx, &v).map_err(|e| {
+                let (code, message) = super::super::verbs::refusal_of(&e);
+                SaveFail::Verb { code, message }
+            })?;
+            Ok((planned.group, Value::Null))
+        };
+        save(p, &SaveInput { base_hash: None, groups: &[], me: &me, at: AT, staged: &no_staged, plan: Some(&plan) })
+    }
+
+    /// A verb saves through the guard: an update lands, and the same rev again
+    /// is a conflict, never a quiet no-op.
+    #[test]
+    fn a_verb_update_lands_and_a_stale_rev_conflicts() {
+        let d = dir();
+        let p = file_with(&d, doc(), &[]);
+        let r = rev(&p, "s-1");
+        let a = run_verb(&p, "update", json!({ "id": "s-1", "rev": r, "set": { "text": "Friday" } })).expect("update");
+        assert!(a.wrote, "{a:?}");
+        assert_eq!(text_of(&p, "s-1"), json!("Friday"));
+        let a = run_verb(&p, "update", json!({ "id": "s-1", "rev": r, "set": { "text": "stale" } })).expect("answers");
+        assert!(!a.wrote && a.held.len() == 1, "a stale rev conflicts: {a:?}");
+        assert_eq!(text_of(&p, "s-1"), json!("Friday"));
+        let a = run_verb(&p, "add", json!({ "kind": "sticky", "fields": { "text": "new", "x": "-0" } })).expect("add");
+        assert!(a.wrote, "{a:?}");
+        let b = read_board(&p);
+        let added = b.objects.iter().find(|o| o.fields.get("text") == Some(&fj::Value::Str("new".into()))).expect("added");
+        assert_eq!(String::from_utf8(fj::to_canonical(added.fields.get("x").expect("x")).expect("canon")).expect("utf8"), "0", "-0 is written as 0");
     }
 
     #[test]

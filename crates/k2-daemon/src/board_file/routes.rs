@@ -36,9 +36,11 @@ pub const FIELDS: &str = "/cli/board/file/fields";
 pub const HELD_RESOLVE: &str = "/cli/board/file/held/resolve";
 pub const HELD_MINE: &str = "/cli/board/file/held/mine";
 pub const LIST: &str = "/cli/board/file/list";
+pub const VERB: &str = "/cli/board/file/verb";
+pub const MERGE: &str = "/cli/board/file/merge";
 
 /// Every route, for the dispatcher and the tests.
-pub const ROUTES: &[&str] = &[INFO, READ, CREATE, START, SAVE, BLOB, BLOB_PUT, COPY, COPY_RESCUE, FIELDS, HELD_RESOLVE, HELD_MINE, LIST];
+pub const ROUTES: &[&str] = &[INFO, READ, CREATE, START, SAVE, BLOB, BLOB_PUT, COPY, COPY_RESCUE, FIELDS, HELD_RESOLVE, HELD_MINE, LIST, VERB, MERGE];
 
 /// The most a `save` may carry (as `k2 doc write`), and a `blob/put` chunk in base64.
 const MAX_BODY: usize = 12 * 1024 * 1024;
@@ -102,6 +104,12 @@ fn failed(f: &SaveFail) -> CliResponse {
         SaveFail::Io { code, message } => refusal("503 Service Unavailable", code, message.clone()),
         SaveFail::Busy => refusal("409 Conflict", "busy", "the file kept changing; try again, your changes are kept"),
         SaveFail::WriteFailed(m) => refusal("500 Internal Server Error", "write_failed", m.clone()),
+        SaveFail::Verb { code: "board_conflict", message } => refusal("409 Conflict", "board_conflict", message.clone()),
+        SaveFail::Verb { code, message } => refusal("400 Bad Request", code, message.clone()),
+        SaveFail::Merge(conflicts) => with_status(
+            "409 Conflict",
+            json!({ "ok": false, "error": { "code": "board_conflict", "hint": "the copy and the file both changed the same things: nothing was written" }, "conflicts": conflicts }),
+        ),
     }
 }
 
@@ -261,7 +269,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     }
     let is_post = method.eq_ignore_ascii_case("POST");
     // Mutating routes are POST only (feedback_post_only_route_guards).
-    if matches!(path, CREATE | START | SAVE | BLOB_PUT | COPY | COPY_RESCUE | HELD_RESOLVE | HELD_MINE) && !is_post {
+    if matches!(path, CREATE | START | SAVE | BLOB_PUT | COPY | COPY_RESCUE | HELD_RESOLVE | HELD_MINE | VERB | MERGE) && !is_post {
         return CliResponse { status: "405 Method Not Allowed", content_type: "application/json", body: r#"{"error":"POST only"}"#.to_string() };
     }
     if !is_post && !method.eq_ignore_ascii_case("GET") {
@@ -292,6 +300,8 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         HELD_RESOLVE => held_resolve(&input, caller),
         HELD_MINE => held_mine(&input, caller),
         LIST => list(caller),
+        VERB => verb(&input, caller),
+        MERGE => merge(&input, caller),
         _ => return CliResponse::not_found(),
     };
     match r {
@@ -505,7 +515,7 @@ fn save_route(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliRespo
     let staged = |h: &Sha256| stage::get(&owner, h);
     let at = now();
     let base = input.str("baseHash");
-    let a = save::save(&t.abs, &SaveInput { base_hash: base.as_deref(), groups: &groups, me: &me, at: &at, staged: &staged }).map_err(|f| failed(&f))?;
+    let a = save::save(&t.abs, &SaveInput { base_hash: base.as_deref(), groups: &groups, me: &me, at: &at, staged: &staged, plan: None }).map_err(|f| failed(&f))?;
     if a.wrote {
         emit_changed(&t, &a.hash, caller);
     }
@@ -593,6 +603,99 @@ fn list(caller: &DocCaller) -> Result<CliResponse, CliResponse> {
         }
     }
     Ok(ok(json!({ "boards": boards, "truncated": truncated })))
+}
+
+/// What every file answer says about itself (Rosson 11-03).
+fn named(path: &Path, hash: &str) -> Value {
+    json!({ "kind": "file", "path": path.to_string_lossy(), "version": hash, "mode": "single-player" })
+}
+
+/// `POST verb {path, verb, args}`: one friendly verb (`board_file::verbs`),
+/// planned against the file under its writer lock and saved through the guard.
+fn verb(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliResponse> {
+    let t = input.target(caller)?;
+    need_edit(rights(caller, &t, input.str("workspace").as_deref())?)?;
+    let name = input.str("verb").ok_or_else(|| bad("verb is required"))?;
+    let args = input.body.get("args").cloned().unwrap_or_else(|| json!({}));
+    let me = me_for_write(&t.abs, caller)?;
+    let owner = stage::owner_of(&caller.pid());
+    let staged = |h: &Sha256| stage::get(&owner, h);
+    let at = now();
+    let group_id = format!("verb-{}", uuid::Uuid::new_v4().simple());
+    let plan = |board: &Board| -> Result<(k2_mpc_board::Group, Value), SaveFail> {
+        let v = super::verbs::verb_of(&name, &args, board).map_err(|e| SaveFail::Verb { code: e.code, message: e.message })?;
+        let pack_me = k2_mpc_board::verbs::Me { token: me.token.clone(), new: (!board.people.contains_key(&me.token)).then(|| me.person.clone()) };
+        let mut rnd = || {
+            let b = random16();
+            let mut out = [0u8; 8];
+            out.copy_from_slice(&b[..8]);
+            out
+        };
+        let mut cx = k2_mpc_board::verbs::Ctx { group_id: group_id.clone(), by: Some(pack_me), at: Some(at.clone()), random: &mut rnd };
+        let p = k2_mpc_board::verbs::plan(board, &mut cx, &v).map_err(|e| {
+            let (code, message) = super::verbs::refusal_of(&e);
+            SaveFail::Verb { code, message }
+        })?;
+        let extra = json!({
+            "ids": p.ids.iter().map(Id::as_str).collect::<Vec<_>>(),
+            "removedLocked": p.removed_locked.iter().map(Id::as_str).collect::<Vec<_>>(),
+            "removed": p.removed.iter().map(|r| r.object.id.as_str()).collect::<Vec<_>>(),
+            "orphans": p.orphans.len(),
+            "skipped": p.skipped.iter().map(Id::as_str).collect::<Vec<_>>(),
+        });
+        Ok((p.group, extra))
+    };
+    let a = save::save(&t.abs, &SaveInput { base_hash: None, groups: &[], me: &me, at: &at, staged: &staged, plan: Some(&plan) }).map_err(|f| failed(&f))?;
+    if a.wrote {
+        emit_changed(&t, &a.hash, caller);
+    }
+    let mut body = named(&t.abs, &a.hash);
+    let ans = a.to_json(&me.token);
+    for (k, v) in ans.as_object().into_iter().flatten() {
+        body[k] = v.clone();
+    }
+    body["verb"] = json!(name);
+    body["planned"] = a.planned.clone();
+    if !a.held.is_empty() {
+        body["error"] = json!({ "code": "board_conflict", "hint": "it changed since you read it: read it again, then use the new rev" });
+        return Ok(with_status("409 Conflict", body));
+    }
+    if let Some(r) = a.refused.first() {
+        let code = r.get("code").and_then(Value::as_str).unwrap_or("refused").to_string();
+        body["error"] = json!({ "code": code, "hint": r.get("hint") });
+        return Ok(with_status("422 Unprocessable Entity", body));
+    }
+    Ok(ok(body))
+}
+
+/// `POST merge {path, base, copy}`: merge `copy` into `path` from `base`. Only
+/// `path` is written; `base` and `copy` are read and never changed.
+fn merge(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliResponse> {
+    let t = input.target(caller)?;
+    need_edit(rights(caller, &t, input.str("workspace").as_deref())?)?;
+    let side = |k: &str| -> Result<Target, CliResponse> {
+        let p = input.str(k).ok_or_else(|| bad(format!("{k} is required: a .k5board file")))?;
+        let s = target::resolve_board(input.str("workspace").as_deref(), &p, caller.default_workspace()).map_err(|r| match r.code {
+            "file_not_found" => refusal("404 Not Found", "not_found", r.message),
+            _ => refusal(r.status, r.code, r.message),
+        })?;
+        need_read(rights(caller, &s, input.str("workspace").as_deref())?)?;
+        Ok(s)
+    };
+    let (base, copy) = (side("base")?, side("copy")?);
+    if base.abs == t.abs || copy.abs == t.abs {
+        return Err(bad("the base and the copy are other files than the one merged into"));
+    }
+    let a = save::merge_into(&t.abs, &base.abs, &copy.abs).map_err(|f| failed(&f))?;
+    let hash = a.get("hash").and_then(Value::as_str).unwrap_or("").to_string();
+    if a.get("wrote") == Some(&json!(true)) {
+        emit_changed(&t, &hash, caller);
+    }
+    let mut body = named(&t.abs, &hash);
+    for (k, v) in a.as_object().into_iter().flatten() {
+        body[k] = v.clone();
+    }
+    Ok(ok(body))
 }
 
 /// A person in a tab keeps a held edit. An agent or a K2 terminal has its command.
@@ -817,7 +920,7 @@ fn copy(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliResponse> {
     let owner = stage::owner_of(&caller.pid());
     let staged = |h: &Sha256| stage::get(&owner, h);
     let at = now();
-    let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: &at, staged: &staged };
+    let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: &at, staged: &staged, plan: None };
     match save::copy_to(&t.abs, &to, &inp, input.flag("dropMissing")) {
         Ok((p, a)) => Ok(copied(&p, &a)),
         Err(save::CopyFail::Missing(list)) => Err(missing_answer(&list)),

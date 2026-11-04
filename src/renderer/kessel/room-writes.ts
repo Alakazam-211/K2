@@ -82,6 +82,8 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'board/file/copy/rescue': 'Save a copy on B of a board whose file is gone',
   'board/file/held/resolve': 'a person lets a held edit go, or takes the other side',
   'board/file/held/mine': 'a held edit of a deleted object keeps the whole object on B',
+  'board/file/verb': 'one friendly board verb on a .k5board on B, as an agent sends it',
+  'board/file/merge': 'merging a returned copy into a .k5board on B',
   'fs/upload-binary': 'a file dropped on B’s terminal is uploaded to B',
   'fs/upload-chunk': 'a large file dropped on B’s terminal is uploaded to B',
   'fs/compress': 'compress in B’s workspace',

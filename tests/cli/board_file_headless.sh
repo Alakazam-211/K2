@@ -162,7 +162,7 @@ for _ in $(seq 1 1200); do grep -q '^K2_HOOK_SOCK=.' "$SB/claude.env" 2>/dev/nul
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
 SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
 for _ in $(seq 1 1200); do [ -S "$SOCK" ] && break; sleep 0.05; done
-[ -S "$SOCK" ] || fail "no cell socket at '$SOCK' after a minute"
+[ -S "$SOCK" ] || fail "no cell socket at '$SOCK' after a minute; the harness saw: $(grep -E '^K2_(HOOK|CELL|PROJECT)' "$SB/claude.env" | sed 's/TOKEN=.*/TOKEN=<set>/' | tr '\n' ' ')"
 ok "workspaces registered, beta's passport + cell socket"
 
 body() { python3 -c 'import json,sys; print(json.dumps(eval(sys.argv[1])))' "$1"; }
@@ -427,8 +427,8 @@ cli --file gone.k5board list; want_rc 4 "no such file"
 printf 'junk' > "$B/junk.k5board"
 cli --file junk.k5board list; want_rc 4 "a corrupt file"
 cli --file plan.txt list; want_rc 2 "not a board"
-cli --file plan.k5board frobnicate; want_rc 2 "an unknown verb"; has "$ERR" "new, list, read, search, fields or apply" "an unknown verb teaches"
-cli --file plan.k5board connect a b; want_rc 2 "a Garden verb on a file"; has "$ERR" "apply does the rest" "a Garden verb on a file points at apply"
+cli --file plan.k5board frobnicate; want_rc 2 "an unknown verb"; has "$ERR" "add, update, delete" "an unknown verb lists the verbs"
+cli --file plan.k5board tidy s-1; want_rc 2 "a verb that waits for the next K2"; has "$ERR" "use apply" "a verb not there yet for files points at apply"
 cli --file plan.k5board fields sticky; want_rc 0 "fields"; has "$OUT" '"fontSize"' "fields sticky"
 cli --file plan.k5board fields nope; want_rc 4 "fields of no such type"
 cli --file plan.k5board --board b1 list; want_rc 2 "two targets"; has "$ERR" "two_targets" "two targets"
@@ -471,6 +471,76 @@ agent GET /cli/board/file/list; want 200 "agent list"
 jok "$BODY" "j['boards'] and all(b['workspace'] == '$B' for b in j['boards'])" "an agent sees only what it may read: its own workspace's boards"
 agent GET /cli/board/file/read "" "path=$F"; want 403 "the listing doesn't widen reach"
 ok "the cross-workspace view never widens an agent's reach"
+
+echo "== the friendly verbs (pack v0.1.0) and merge =="
+VF=verbs.k5board
+cli new "$VF"; want_rc 0 "new"
+revof() { cli read "$1" "$VF" --json; jq_ "$OUT" 'j["rev"]'; }
+cli add sticky --text "Ship it" --x -0 --y 1.25 "$VF"; want_rc 0 "add"
+S1="$(printf '%s\n' "$OUT" | sed -n 's/^Added //p')"; [ -n "$S1" ] || fail "add printed no id: $OUT"
+has "$OUT" "kind file" "add names its kind"
+cli add shape --text Box "$VF"; want_rc 0 "add a shape"; H1="$(printf '%s\n' "$OUT" | sed -n 's/^Added //p')"
+cli read "$S1" "$VF" --json; want_rc 0 "read"
+jok "$OUT" 'j["object"]["x"] == 0 and str(j["object"]["x"]) == "0" and j["object"]["y"] == 1.25 and j["object"]["text"] == "Ship it"' "a -0 coordinate reads as 0, and 1.25 isn't rounded"
+cli read "$S1" "$VF"; case "$OUT" in *'"x": -0'*) fail "k2 board printed -0: $OUT" ;; esac
+python3 - "$B/$VF" <<'PY' || fail "-0 in the file"
+import sys, zipfile
+raw = zipfile.ZipFile(sys.argv[1]).read("board.json").decode()
+assert '"x":-0' not in raw and '"x":0' in raw, raw
+PY
+ok "-0 prints as 0 in k2 board's output and in the file"
+R="$(revof "$S1")"
+cli update "$S1" --rev "$R" --text "Ship it Friday" "$VF"; want_rc 0 "update"
+cli update "$S1" --rev "$R" --text "stale" "$VF"; want_rc 1 "a stale rev"
+cli read "$S1" "$VF" --json; jok "$OUT" 'j["object"]["text"] == "Ship it Friday"' "a stale update changed nothing"
+cli update "$S1" --rev "$(revof "$S1")" --colour red "$VF"; want_rc 2 "an unknown field"
+cli update nope --rev "$R" --text x "$VF"; want_rc 4 "no such object"
+cli connect "$S1" "$H1" --toAnchor left --label next "$VF"; want_rc 0 "connect"; C1="$(printf '%s\n' "$OUT" | sed -n 's/^Added //p')"
+cli comment "$H1" "why this?" "$VF"; want_rc 0 "comment"; Q1="$(printf '%s\n' "$OUT" | sed -n 's/^Added //p')"
+cli comment --point 5,5 "a note here" "$VF"; want_rc 0 "comment at a point"
+cli react "$S1" 👍 "$VF"; want_rc 0 "react"
+cli read "$S1" "$VF" --json; jok "$OUT" 'len(j["object"]["reactions"]["👍"]) == 1' "the reaction is mine, by token"
+cli vote "$S1" "$VF"; want_rc 5 "vote with voting off"
+cli list "$VF" --json; SR="$(jq_ "$OUT" 'j["settingsRev"]')"
+cli meta --rev "$SR" --title "Q4 plan" --voting '{"active":true,"perPerson":2}' "$VF"; want_rc 0 "meta"
+cli meta --rev "$SR" --title "stale" "$VF"; want_rc 1 "a stale settings rev"
+cli vote "$S1" "$VF"; want_rc 0 "vote"
+cli order "$S1" --to back "$VF"; want_rc 0 "order"
+cli list "$VF" --json; jok "$OUT" "j['objects'][0]['object']['id'] == '$S1' and j['settings']['title'] == 'Q4 plan'" "order put it at the back; meta set the title"
+cli move "$S1" "$H1" --rev "$(revof "$S1"),$(revof "$H1")" --dx 40 --dy 0 "$VF"; want_rc 0 "move"
+cli read "$S1" "$VF" --json; jok "$OUT" 'j["object"]["x"] == 40' "move by an offset"
+cli move "$S1" --rev "$(revof "$S1"),extra" --dx 1 --dy 1 "$VF"; want_rc 2 "one rev per id"
+cli delete "$H1" --rev "$(revof "$H1")" "$VF"; want_rc 0 "delete"
+has "$OUT" "$C1" "the delete names the connector it took"
+has "$OUT" "$Q1" "and the comment pinned to it"
+cli read "$C1" "$VF"; want_rc 4 "the connector went with it"
+cli tidy "$S1" "$VF"; want_rc 2 "a verb that waits for the next K2"; has "$ERR" "use apply" "it says what to use"
+ok "add, update, delete (cascade), connect, comment, react, vote, meta, move, order: names and exits as agreed"
+
+M0=base.k5board
+cli new "$M0"; want_rc 0 "merge base"
+CLI_IN='{"ops":[{"op":"add","object":{"id":"s-a","type":"sticky","text":"A"}},{"op":"add","object":{"id":"s-b","type":"sticky","text":"B"}}]}'
+cli apply - "$M0"; want_rc 0 "base objects"
+cp "$B/$M0" "$B/copy.k5board"; cp "$B/$M0" "$B/target.k5board"
+VF=copy.k5board; RA="$(revof s-a)"
+cli update s-a --rev "$RA" --text "A from the copy" copy.k5board; want_rc 0 "the copy changes A"
+VF=target.k5board; RB="$(revof s-b)"
+cli update s-b --rev "$RB" --text "B in the file" target.k5board; want_rc 0 "the file changes B"
+BASE_SUM="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$B/$M0")"
+COPY_SUM="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$B/copy.k5board")"
+cli merge "$M0" copy.k5board target.k5board; want_rc 0 "merge"; has "$OUT" "From the copy: s-a" "merge says what came from the copy"
+cli read s-a target.k5board --json; jok "$OUT" 'j["object"]["text"] == "A from the copy"' "the copy's change is in"
+cli read s-b target.k5board --json; jok "$OUT" 'j["object"]["text"] == "B in the file"' "the file's change stays"
+VF=copy.k5board; cli update s-b --rev "$(revof s-b)" --text "B from the copy" copy.k5board; want_rc 0 "the copy changes B too"
+COPY_SUM="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$B/copy.k5board")"
+TGT_SUM="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$B/target.k5board")"
+cli merge "$M0" copy.k5board target.k5board; want_rc 1 "both changed B"; has "$OUT" "s-b: both_changed" "the conflict names the object and why"
+for f in "$M0:$BASE_SUM" "copy.k5board:$COPY_SUM" "target.k5board:$TGT_SUM"; do
+    n="${f%%:*}"; want="${f##*:}"
+    got="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$B/$n")"
+    [ "$got" = "$want" ] || fail "$n changed on a merge conflict"
+done
+ok "merge: the copy's changes come in, a conflict writes nothing, and base and copy are never written"
 
 # Last, because it restarts the daemon: every agent check above uses the first
 # passport, and a restarted pinned chat may not be back in time on a slow node.

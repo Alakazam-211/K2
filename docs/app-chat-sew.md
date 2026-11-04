@@ -13,7 +13,7 @@ them), never by version numbers:
 | `app_scoped_sessions` | Sew keeps an App's sessions to that App's own Spaces. Until then an App can't give chat itself, and an App holding a person's chat session can see all chat that person can |
 | `home_client` | the owner's home client and "App-only" marks reach Sew |
 | `app_origin` | K2 sends each App's `wss://` signalling origin: **voice and calls for a custom App** (expected with Sew 0.4.1) |
-| `app_origins` | Not in Sew 0.7.1 (it comes with 0.7.2). K2 sends **every** live `wss://` origin of an App, primary first. Until then Sew holds only the primary, so calls work from that one host: mark a custom name primary with `k2 app domain primary <app> <host>` |
+| `app_origins` | Sew 0.7.2. K2 sends **every** live `wss://` origin of an App, primary first; Sew keeps them sorted. The kit's `behindK2Front` names the browser's host on a join (`422 origin_not_listed` if Sew doesn't list it). On an older Sew, or without `behindK2Front`, joins answer on the primary, so calls work from that one host: mark a custom name primary with `k2 app domain primary <app> <host>` |
 | `k2_managed_avatar` | K2's picture replaces one a member set in Sew |
 | `app_governed_spaces` | Sew 0.6.0: the **chat key** and App-governed Spaces (below). `k2 app chat <app>` says whether this box's Sew has it |
 

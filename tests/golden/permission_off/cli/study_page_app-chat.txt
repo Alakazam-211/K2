@@ -126,12 +126,15 @@ before it shows. Then: the owner turns voice on (k2 hostchat media
 install), you add voice:join (voice:video) to the manifest and the role,
 and requires {voice: true}. K2 tells Sew your App's own wss:// origin
 itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
-CALLS WORK ON ONE HOST TODAY: Sew holds one origin per App, your primary
-(a custom name you mark with k2 app domain primary <app> <host> once it is
-live, else the App's label), and answers joins with that host. A person on
-another host of your App can't connect to it. If people use a custom name,
-mark it primary. Once Sew reports app_origins ("every App origin" in
-k2 hostchat home), K2 sends all your live hosts.
+CALLS WORK ON EVERY LIVE HOST with Sew 0.7.2 ("every App origin" in k2
+hostchat home). K2 tells Sew all your live hosts on its sweep, up to 10
+minutes after a bind. Your server names the person's host: behindK2Front:
+true in Sew's kit BFF config does it for joins, from the host the browser
+reached. Without it joins answer on your primary (a custom name you mark
+with k2 app domain primary <app> <host> once it is live, else the App's
+label), and a person on another host can't connect. A host Sew doesn't list
+yet answers 422 invalid_state, reason origin_not_listed, and joins nothing:
+see .apps[] in k2 hostchat home --json (origins, delivered), then retry.
 
 YOUR SERVER (never the browser):
   chat.member({principal})  GET /cli/sew/app/member → memberId (DMs, calls,

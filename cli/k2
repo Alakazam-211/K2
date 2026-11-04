@@ -11017,12 +11017,15 @@ before it shows. Then: the owner turns voice on (k2 hostchat media
 install), you add voice:join (voice:video) to the manifest and the role,
 and requires {voice: true}. K2 tells Sew your App's own wss:// origin
 itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
-CALLS WORK ON ONE HOST TODAY: Sew holds one origin per App, your primary
-(a custom name you mark with k2 app domain primary <app> <host> once it is
-live, else the App's label), and answers joins with that host. A person on
-another host of your App can't connect to it. If people use a custom name,
-mark it primary. Once Sew reports app_origins ("every App origin" in
-k2 hostchat home), K2 sends all your live hosts.
+CALLS WORK ON EVERY LIVE HOST with Sew 0.7.2 ("every App origin" in k2
+hostchat home). K2 tells Sew all your live hosts on its sweep, up to 10
+minutes after a bind. Your server names the person's host: behindK2Front:
+true in Sew's kit BFF config does it for joins, from the host the browser
+reached. Without it joins answer on your primary (a custom name you mark
+with k2 app domain primary <app> <host> once it is live, else the App's
+label), and a person on another host can't connect. A host Sew doesn't list
+yet answers 422 invalid_state, reason origin_not_listed, and joins nothing:
+see .apps[] in k2 hostchat home --json (origins, delivered), then retry.
 
 YOUR SERVER (never the browser):
   chat.member({principal})  GET /cli/sew/app/member → memberId (DMs, calls,
@@ -11117,7 +11120,7 @@ _study_page_chat_voice() {
 k2 study chat-voice — Voice rooms and channels in your App: the setup
 
 Chat / Voice Hosting is this box's chat and voice core (core id sew),
-powered by Sew; this K2 pins Sew 0.7.1. Your App gets ONE Space, bound to
+powered by Sew; this K2 pins Sew 0.7.2. Your App gets ONE Space, bound to
 it. There your server keeps static rooms (say, two voice meeting rooms)
 and makes a text and a voice channel per project; calls are end-to-end
 encrypted. Hearth (Sew's own client) is optional: nothing here needs it;
@@ -11309,7 +11312,7 @@ LIMITS (Sew 0.5.0). 5,000 channels per Space, archived included (about
 default channels · 100 members per create or add · names 1–100 characters
 · no delete, no public↔private, no type change. K2 sets no App quotas.
 K2's door: request heads over 64 KiB → 431; 120 writes a minute per
-visitor per App (the Owner: k2 firewall guard). Sew 0.7.1, this K2's
+visitor per App (the Owner: k2 firewall guard). Sew 0.7.2, this K2's
 pin, carries 0.5.1's fixes for the quota gaps (call limits on moves and
 DM calls, upload and message-rate quotas) and the unbound-Space gaps.
 
@@ -11368,7 +11371,8 @@ member id from k2 voice rooms --json.
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is
 down) · voice_member_pending / chat_member_pending (retry in 2 s) ·
-owner_or_admin_only · moderator_only · not_in_room.
+owner_or_admin_only · moderator_only · not_in_room · origin_not_listed
+(a join body named a host: voice rooms take none).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

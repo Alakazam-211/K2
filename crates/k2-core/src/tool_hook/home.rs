@@ -32,8 +32,8 @@
 //! **Every origin (0.46.8):** `origin` is one host, the App's primary, so a
 //! person on any other host of the App gets a signalling URL on the wrong
 //! host. K2 keeps the whole list (`origins`, primary first) and sends it only
-//! once Sew reports `app_origins`. Sew 0.7.1 doesn't (that is 0.7.2): its request
-//! type denies unknown fields, so until then only `origin` goes.
+//! once Sew reports `app_origins` (0.7.2). An older Sew's request type denies
+//! unknown fields, so there only `origin` goes.
 //!
 //! **The chat key (App-governed Spaces S1, Sew 0.6.0 I7):** an App's
 //! `max_level` (`member | moderator | admin`) and `uploads` (bool) come
@@ -130,7 +130,8 @@ pub fn set_app_origin(conn: &Connection, app_id: &str, origin: Option<&str>, dis
 /// The most origins K2 sends Sew for one App, primary first.
 pub const APP_ORIGINS_MAX: usize = 32;
 
-/// Is `s` an origin Sew takes (`is_app_origin`, sew-proto 0.6.1):
+/// Is `s` an origin Sew takes (`is_app_origin`, sew-proto 0.7.2, for `origin`
+/// and each of `origins`):
 /// `wss://<host>[:port]`, lower case, no path? One odd name must not block
 /// the App's whole settings row.
 pub fn is_sew_origin(s: &str) -> bool {
@@ -234,7 +235,7 @@ pub fn sendable(subject: &str, body: &Map<String, Value>, flags: &[String]) -> O
                 out.insert("display_name".into(), v.clone());
             }
         }
-        // Never before the flag: Sew 0.7.1 refuses the whole body over it.
+        // Never before the flag: an older Sew refuses the whole body over it.
         if has(features::APP_ORIGINS) {
             if let Some(v) = body.get("origins").filter(|v| v.is_array()) {
                 out.insert("origins".into(), v.clone());
@@ -432,7 +433,7 @@ mod tests {
             Some(json!({"display_name": "Jobs", "origin": null})),
             "a null origin clears in Sew"
         );
-        // 0.46.8: the whole list waits for its own flag (Sew 0.7.1 reports
+        // 0.46.8: the whole list waits for its own flag (a Sew before 0.7.2 reports
         // app_origin and denies unknown fields).
         let many = obj(json!({"display_name": "Jobs", "origin": "wss://a.example.com", "origins": ["wss://a.example.com", "wss://b.example.com"]}));
         assert_eq!(

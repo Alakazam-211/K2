@@ -50,7 +50,8 @@ member id from k2 voice rooms --json.
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is
 down) · voice_member_pending / chat_member_pending (retry in 2 s) ·
-owner_or_admin_only · moderator_only · not_in_room.
+owner_or_admin_only · moderator_only · not_in_room · origin_not_listed
+(a join body named a host: voice rooms take none).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr

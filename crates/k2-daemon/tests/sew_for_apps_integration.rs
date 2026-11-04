@@ -319,13 +319,13 @@ async fn home_settings_follow_sews_feature_flags_never_its_version() {
 }
 
 /// 0.46.8: every live origin of an App reaches Sew, but only a Sew that
-/// reports `app_origins`. Sew 0.7.1 denies unknown fields, so sending it the
-/// list early would get the App's whole settings row refused.
+/// reports `app_origins` (0.7.2). An older Sew denies unknown fields, so sending
+/// it the list would get the App's whole settings row refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_origin_goes_only_once_sew_takes_the_list() {
     let env = setup().await;
-    // The pinned Sew's flags: origin yes, the list no. The fake refuses an
-    // unknown field the way Sew's request type does.
+    // A Sew before 0.7.2: origin yes, the list no. The fake refuses an unknown
+    // field the way Sew's request type does.
     env.sew.set_features(&["app_origin", "home_client"]);
     let jobs = uuid::Uuid::new_v4().to_string();
     let list = vec!["wss://jobs.example.com".to_string(), "wss://jobs.box.k2.dev".to_string()];
@@ -336,7 +336,7 @@ async fn every_origin_goes_only_once_sew_takes_the_list() {
     drain(&env).await;
     let held = env.sew.app_settings(&jobs).unwrap();
     assert_eq!(held["origin"], serde_json::json!("wss://jobs.example.com"));
-    assert_eq!(held.get("origins"), None, "Sew 0.7.1 never sees the field: {held}");
+    assert_eq!(held.get("origins"), None, "an older Sew never sees the field: {held}");
     assert!(hook::home_settings().unwrap().iter().all(|s| s.delivered), "and nothing is blocked over it");
     env.sew.assert_clean();
 
@@ -354,7 +354,20 @@ async fn every_origin_goes_only_once_sew_takes_the_list() {
     drain(&env).await;
     let held = env.sew.app_settings(&jobs).unwrap();
     assert_eq!(held["origin"], serde_json::json!("wss://jobs.example.com"));
-    assert_eq!(held["origins"], serde_json::json!(list), "{}", env.sew.log());
+    let mut sorted = list.clone();
+    sorted.sort();
+    assert_eq!(held["origins"], serde_json::json!(sorted), "Sew keeps them sorted: {}", env.sew.log());
+    assert!(hook::home_settings().unwrap().iter().all(|s| s.delivered));
+
+    // More than Sew takes, and a name it would refuse: K2 sends 32 good ones,
+    // and the row stays deliverable.
+    let mut many = vec!["wss://NOT-LOWER.example.com".to_string()];
+    many.extend((0..40).map(|i| format!("wss://h{i}.example.com")));
+    hook::note_app_origin_lists(&[(jobs.clone(), many)]).unwrap();
+    worker::reconcile_once().await.expect("sweep, a long list");
+    drain(&env).await;
+    let held = env.sew.app_settings(&jobs).unwrap();
+    assert_eq!(held["origins"].as_array().map(Vec::len), Some(32), "{held}");
     assert!(hook::home_settings().unwrap().iter().all(|s| s.delivered));
 
     // No public URL any more: an empty list clears it, with the origin.
@@ -363,7 +376,8 @@ async fn every_origin_goes_only_once_sew_takes_the_list() {
     worker::reconcile_once().await.expect("sweep, no URL");
     drain(&env).await;
     let held = env.sew.app_settings(&jobs).unwrap();
-    assert_eq!((held["origin"].clone(), held["origins"].clone()), (serde_json::Value::Null, serde_json::json!([])), "{held}");
+    assert_eq!(held["origin"], serde_json::Value::Null, "{held}");
+    assert_eq!(held.get("origins"), None, "an empty list clears it: {held}");
     env.sew.assert_clean();
 }
 

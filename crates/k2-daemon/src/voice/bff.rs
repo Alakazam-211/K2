@@ -111,6 +111,12 @@ pub fn sew_refusal(a: &SewAnswer) -> Refusal {
     if is("channel_closing") {
         return Refusal::new(409, "room_closing", "this room is closing: the people in it stay, no one new joins");
     }
+    // Sew 0.7.2: a join's `origin` must be the session App's. K2's voice rooms
+    // have no App, so a body naming one always lands here; K2's clients send none.
+    if is("origin_not_listed") {
+        return Refusal::new(422, "origin_not_listed", "voice rooms take no origin: leave it out of the join")
+            .details(json!({ "sew": a.body.get("error").cloned().unwrap_or(Value::Null) }));
+    }
     if is("channel_full") {
         return Refusal::new(409, "room_full", if hint.is_empty() { "this room is full".to_string() } else { hint });
     }

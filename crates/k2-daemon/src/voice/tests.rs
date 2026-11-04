@@ -481,6 +481,8 @@ fn sew_refusals_map_to_the_clients_codes() {
     assert_eq!(r(422, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": "channel_full"}}})).code, "room_full");
     assert_eq!(r(422, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": "not_space_member"}}})).code, "voice_member_pending");
     assert_eq!(r(403, json!({"error": {"code": "agents_not_in_voice", "hint": ""}})).code, "agents_not_in_voice");
+    let origin = r(422, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": "origin_not_listed", "field": "origin"}}}));
+    assert_eq!((origin.status, origin.code.as_str()), (422, "origin_not_listed"), "Sew 0.7.2");
     let other = r(403, json!({"error": {"code": "missing_permission", "hint": "no", "details": {"reason": "x"}}}));
     assert_eq!((other.status, other.code.as_str()), (403, "missing_permission"));
     assert_eq!(other.details.unwrap()["sew"]["code"], "missing_permission");

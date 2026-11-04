@@ -6,7 +6,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.46.8
 
 ### When you update
-- **Going back to Sew 0.6.1 after upgrading to 0.7.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.7.1 changes Sew's data.
+- **Going back to your earlier Sew after upgrading to 0.7.2 needs `k2 hostchat rollback --accept-data-loss`,** because 0.7.2 changes Sew's data.
 - **Outside mail forwards still waiting for a confirm:** K2 no longer asks for one. Those set in the 7 days before you update turn on by themselves over a few minutes, and each address gets an email first with a link to stop it. Older ones stay off and send nothing until someone sets them again (`k2 hostmail forward add`). You get one notice listing both, and `k2 hostmail forward list` shows them.
 - **Access changes reach signed-in people at their next request.** A role, room or cap you changed sometimes waited until the person signed in again. Now adding and removing both apply at once, so the `--apply-tokens` flag on `k2 app user rooms` is gone.
 - **`guests-rooms` approvals you already gave still don't open those rooms to logins an agent set up.** Those logins keep their App's own room until the person uses a reset link on K2's own page. You don't need to do anything.
@@ -35,7 +35,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Apps
 - **An App can set how many devices one person keeps signed in:** `k2 app login settings <app> --max-devices 5` (1 to 20, default 20). Past it, a new device ends that person's least recently used ones until it fits. Lowering it signs nobody out until their next new device.
-- **K2 is ready to tell Sew every live host of an App,** so calls can work on all of them. It starts once Sew supports it; until then calls work on the App's primary host (`k2 app domain primary <app> <host>`).
+- **Calls can work on every live host of an App.** K2 now tells Sew all of them. Set `behindK2Front: true` in Sew's kit BFF config so a join uses the host the person reached. Without it, calls work on the App's primary host (`k2 app domain primary <app> <host>`).
 - **A Tauri shell over a server App you already run:** `k2 app init --template tauri --app <app>` wires the updater to that App's host, with the download host as a second endpoint, and writes no web manifest.
 - **`k2 app init --template tauri --voice` adds the mic and camera keys for calls** on macOS and iOS, and prints the Android lines.
 - **An App's server can ask K2 for its own chat Space and channel ids:** `k2.asApp().chat.space()`, feature key `app-chat-space-v1`.
@@ -46,7 +46,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Chat and voice (Sew)
 - **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
-- **K2 now installs and upgrades to Sew 0.7.1,** with chat connection and encrypted call fixes and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.7.1.
+- **K2 now installs and upgrades to Sew 0.7.2,** with chat connection and encrypted call fixes. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.7.2.
 - **Sew's App kit filters microphone noise by default.** Run `k2 app sdk add <app-folder> --sew` again to get it, then the `npm i` line it prints. It falls back to the browser's own filter if it can't load.
 - **Renaming, archiving or bringing back a channel in an App-governed Space works now.** K2 sent Sew a field it refuses on those three changes, so they failed.
 - **An agent with Manage Chat / Voice Hosting on now gets its own chat account,** so it can create and run a Space without a second ask. An agent without the switch can ask for an account on a permission card.

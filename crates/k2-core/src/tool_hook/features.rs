@@ -16,7 +16,7 @@
 //! | [`SERVER_GOVERNED_SPACE`], [`MGMT_VOICE_STATES`], [`VOICE_CHANNEL_CLOSING`], [`TURN_RELAY_ONLY`], [`VOICE_MEDIA_PATH`], [`IMPORT_IDENTITY_MAP`] | Sew 0.7.0 (K2 voice rooms, sew-56): read together as [`VoiceFeatures`] (`tool_hook::sew_voice_features()`), one read of the list the last status refresh recorded |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //!
-//! The pin (Sew 0.7.1) reports twenty-eight flags. Up to 0.6.1 they are 0.5.0's
+//! The pin (Sew 0.7.2) reports twenty-nine flags. Up to 0.6.1 they are 0.5.0's
 //! twelve, 0.5.1's `app_session_member_role`, `app_voice_channel_create`,
 //! `home_client_owner_approval` and `k2_managed_guard`, and 0.6.0's
 //! `app_controls`, `app_governed_spaces`, `app_member_channels` and
@@ -28,7 +28,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 pub const APP_SCOPED_SESSIONS: &str = "app_scoped_sessions";
 pub const HOME_CLIENT: &str = "home_client";
 pub const APP_ORIGIN: &str = "app_origin";
-/// Not in Sew 0.7.1 (Sew 0.7.2, for 0.46.8): `origins` in the App settings,
+/// Sew 0.7.2 (not 0.7.1 or older): `origins` in the App settings,
 /// every public `wss://` origin of an App. Sew's request type denies unknown
 /// fields, so the list goes only once Sew reports this flag.
 pub const APP_ORIGINS: &str = "app_origins";
@@ -210,12 +210,12 @@ mod tests {
         assert!(!has(&conn, "chat", "not_a_sew_flag").unwrap());
     }
 
-    /// The pin, Sew 0.7.1: exactly `sew_proto::mgmt::FEATURES` at the v0.7.1 tag
-    /// (`77c5e1f8…`, its `features_071.rs`): 0.6.1's twenty, 0.7.0's six, 0.7.1's
-    /// two. Every voice gate opens (only the preview keeps them dark), and it
-    /// doesn't report `app_origins`, so K2 still sends one origin.
+    /// The pin, Sew 0.7.2: exactly `sew_proto::mgmt::FEATURES` at the v0.7.2 tag
+    /// (`e49e088d…`, its `features_072.rs`): 0.6.1's twenty, 0.7.0's six, 0.7.1's
+    /// two, 0.7.2's `app_origins`. Every voice gate opens (only the preview keeps
+    /// them dark), and K2 sends every origin of an App.
     #[test]
-    fn sew_0_7_1_flags_open_the_voice_gates_and_keep_one_origin() {
+    fn sew_0_7_2_flags_open_the_voice_gates_and_take_every_origin() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
         let mut reported: Vec<String> = SEW_0_6_0.iter().map(|s| s.to_string()).collect();
@@ -228,14 +228,14 @@ mod tests {
             "turn_relay_only",
             "call_credential",
             "call_stats_native",
+            "app_origins",
         ] {
             reported.push(f.to_string());
         }
         assert!(note(&conn, "chat", &reported, 1).unwrap());
-        assert_eq!(list(&conn, "chat").unwrap().len(), 28, "kept whole");
+        assert_eq!(list(&conn, "chat").unwrap().len(), 29, "kept whole");
         assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
-        assert!(!has(&conn, "chat", APP_ORIGINS).unwrap(), "that is Sew 0.7.2");
-        for flag in [APP_ORIGIN, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, "k2_managed_guard"] {
+        for flag in [APP_ORIGIN, APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, "k2_managed_guard"] {
             assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
         }
     }

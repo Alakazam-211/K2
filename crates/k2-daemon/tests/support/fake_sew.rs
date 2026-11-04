@@ -27,7 +27,8 @@
 //!   without the flag refuses the field like an older Sew (400, recorded in
 //!   `bad_bodies`).
 //! - App settings (decision 13 + Sew 0.6.0 I7): `hidden_from_home`,
-//!   `display_name`, `origin`; with `app_origins` (not in Sew 0.7.1) also
+//!   `display_name`, `origin`; with `app_origins` (Sew 0.7.2: at most 32, stored
+//!   sorted and unique, absent when none) also
 //!   `origins`; with `app_governed_spaces` also `max_level`
 //!   (`member | moderator | admin`) and `uploads` (bool). `max_level` on the
 //!   home-client App → 409 `conflict` reason `home_client_cannot_govern`.
@@ -1292,15 +1293,20 @@ fn app_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
     if governed {
         known.extend(["max_level", "uploads"]);
     }
-    // Sew's request type denies unknown fields (sew-proto 0.6.1 has no
-    // `origins`): the field K2 asks Sew for goes only with its flag.
+    // Sew's request type denies unknown fields (before 0.7.2 it has no
+    // `origins`): the field goes only with its flag.
     if s.features.iter().any(|f| f == "app_origins") {
         known.push("origins");
     }
     let ok_keys = v.as_object().is_some_and(|o| !o.is_empty() && o.keys().all(|k| known.contains(&k.as_str())));
     let ok_types = v.get("hidden_from_home").is_none_or(Value::is_boolean)
-        && v.get("origin").is_none_or(|o| o.is_null() || o.as_str().is_some_and(|o| o.starts_with("wss://")))
-        && v.get("origins").is_none_or(|l| l.as_array().is_some_and(|a| a.iter().all(|o| o.as_str().is_some_and(|o| o.starts_with("wss://")))))
+        && v.get("origin").is_none_or(|o| o.is_null() || o.as_str().is_some_and(k2_core::tool_hook::home::is_sew_origin))
+        && v.get("origins").is_none_or(|l| {
+            l.is_null()
+                || l.as_array().is_some_and(|a| {
+                    a.len() <= 32 && a.iter().all(|o| o.as_str().is_some_and(k2_core::tool_hook::home::is_sew_origin))
+                })
+        })
         && v.get("max_level").is_none_or(|l| matches!(l.as_str(), Some("member" | "moderator" | "admin")))
         && v.get("uploads").is_none_or(Value::is_boolean);
     if app.is_empty() || !ok_keys || !ok_types {
@@ -1311,6 +1317,20 @@ fn app_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
     }
     let entry = s.app_settings.entry(app.clone()).or_insert_with(|| json!({}));
     for (k, x) in v.as_object().cloned().unwrap_or_default() {
+        if k == "origins" {
+            // Sew 0.7.2 keeps them sorted and unique; `null` or `[]` clears.
+            let mut list: Vec<String> = x.as_array().into_iter().flatten().filter_map(|o| o.as_str().map(str::to_string)).collect();
+            list.sort_unstable();
+            list.dedup();
+            if list.is_empty() {
+                if let Some(o) = entry.as_object_mut() {
+                    o.remove("origins");
+                }
+            } else {
+                entry[k] = json!(list);
+            }
+            continue;
+        }
         entry[k] = x;
     }
     (200, json!({"app_id": app, "applied": true}).to_string())

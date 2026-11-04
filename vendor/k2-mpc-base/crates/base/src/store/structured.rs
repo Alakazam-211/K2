@@ -647,6 +647,14 @@ impl DocStore {
         Ok(())
     }
 
+    /// Test-only: lose the row marks table, so reading a mark fails ([`StoreError::MarksLost`]).
+    #[cfg(test)]
+    pub(crate) fn lose_row_marks(&self) {
+        let w = self.begin_write().unwrap();
+        w.delete_table(ROW_MARKS).unwrap();
+        w.commit().unwrap();
+    }
+
     /// The latest change that remapped the columns ([`COL_REMAP`]).
     pub(crate) fn col_remap(&self, id: DocId) -> Result<Option<Seq>, StoreError> {
         self.row_mark(id, COL_REMAP)

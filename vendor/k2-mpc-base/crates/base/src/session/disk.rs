@@ -392,23 +392,6 @@ pub(crate) fn atomic_write_with(
     }
 }
 
-/// The fuzz targets' oracle for a stored file stat (feature `fuzzing`): refused, or it
-/// re-encodes to `b` itself. Panics on a violation; returns whether `b` decoded.
-#[cfg(feature = "fuzzing")]
-pub(crate) fn fuzz_file_stat(b: &[u8]) -> bool {
-    match FileStat::from_bytes(b) {
-        None => false,
-        Some(s) => {
-            assert_eq!(
-                s.to_bytes(),
-                b,
-                "file stat: decoded, but re-encodes to other bytes"
-            );
-            true
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

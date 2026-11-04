@@ -15,6 +15,7 @@ mod grid_pack;
 use std::path::{Path, PathBuf};
 
 use grid_pack::{render, GridLite};
+use k2_mpc_base::addr::{self, Addr, Forms};
 use k2_mpc_base::doc::Neutral;
 use k2_mpc_base::elem::{Anchor, Key};
 use k2_mpc_base::ids::churn::{judge, ChurnKind, ChurnReport, Saved, Unit};
@@ -26,6 +27,7 @@ use k2_mpc_base::session::{
 };
 use k2_mpc_base::table::{self, verbs, Table};
 use k2_mpc_base::text::diff;
+use k2_mpc_base::tools::VerbCtx;
 use k2_mpc_base::Edit;
 
 fn bless() -> bool {
@@ -97,9 +99,13 @@ fn grid_examples_parse_as_their_kind() {
     assert_eq!(parse_row(ex("row-nth")[0]).unwrap(), RowAt::Nth(3));
     assert_eq!(parse_row(ex("rendered-line")[0]).unwrap(), RowAt::Line(5));
     assert_eq!(parse_col(ex("col-nth")[0]).unwrap(), ColAt::Nth(2));
-    let [word, forced] = ex("col-key")[..] else {
-        panic!("col-key: two forms")
+    let [canonical, word, forced] = ex("col-key")[..] else {
+        panic!("col-key: three forms")
     };
+    assert_eq!(
+        parse_col(canonical).unwrap(),
+        ColAt::Key(Key::new("c3").unwrap())
+    );
     assert_eq!(parse_col(word).unwrap(), ColAt::Word("c3".into()));
     assert_eq!(
         parse_col(forced).unwrap(),
@@ -125,6 +131,71 @@ fn grid_examples_parse_as_their_kind() {
     for k in ["col-name", "where", "exact-text"] {
         assert_eq!(class(k), IdClass::UniqueName, "{k}");
     }
+}
+
+/// `row-key` and `col-key` list the spellings the parser reads, the canonical one first, and
+/// each names the same element of a real grid. `@k:` and `key:` parse to [`Addr::Key`]; the
+/// bare word parses to [`Addr::Word`], which a grid reads as the key.
+#[test]
+fn key_spellings_parse_and_name_the_same_element() {
+    let content = GridLite.decode(b"name,qty\napple,1\npear,2\n").unwrap();
+    let view = View::of_content(&content.roots);
+    let t = view.table().unwrap();
+    let (rows, cols) = (t.live_rows(), t.live_cols());
+    let cell_get = |row: &str, col: &str| {
+        let verb = verbs::VERBS
+            .iter()
+            .find(|v| v.name() == "cell get")
+            .unwrap();
+        let args = ["--row", row, "--col", col].map(str::to_owned);
+        let run = verb
+            .parse_structured(&args)
+            .unwrap_or_else(|e| panic!("{row},{col}: {e:?}"));
+        let ctx = VerbCtx::new(&view, b"", &GridLite, &content.codec);
+        let out = run(&ctx).unwrap_or_else(|e| panic!("{row},{col}: {e:?}"));
+        assert_eq!(out.exit, 0, "{row},{col}");
+        out.stdout
+    };
+    let spellings = |kind: &str| -> Vec<&'static str> {
+        let k = KIT.iter().find(|k| k.kind == kind).unwrap();
+        assert_eq!(k.class, IdClass::Durable, "{kind}");
+        k.example.split(" | ").collect()
+    };
+    for (kind, key) in [("row-key", "r17"), ("col-key", "c3")] {
+        let listed = spellings(kind);
+        // the canonical spelling comes first: it is what the parser prints back
+        let first = addr::parse(listed[0], Forms::none()).unwrap();
+        assert_eq!(first.to_string(), listed[0], "{kind}");
+        assert_eq!(
+            listed,
+            [format!("@k:{key}"), key.to_owned(), format!("key:{key}")],
+            "{kind}"
+        );
+        assert_eq!(
+            addr::parse(listed[0], Forms::none()).unwrap(),
+            Addr::Key(key.into())
+        );
+        assert_eq!(
+            addr::parse(listed[1], Forms::none()).unwrap(),
+            Addr::Word(key.into())
+        );
+        assert_eq!(
+            addr::parse(listed[2], Forms::none()).unwrap(),
+            Addr::Key(key.into())
+        );
+    }
+    // on a real grid: each spelling of a row and a column names the same cell
+    let (row, col) = (rows[1].as_str(), cols[1].as_str());
+    let want = cell_get(row, col);
+    assert_eq!(want, b"2\n");
+    for r in spellings("row-key") {
+        for c in spellings("col-key") {
+            let (r, c) = (r.replace("r17", row), c.replace("c3", col));
+            assert_eq!(cell_get(&r, &c), want, "{r},{c}");
+        }
+    }
+    // the control: another row's key names another cell, so the agreement above means something
+    assert_ne!(cell_get(&format!("@k:{}", rows[0].as_str()), col), want);
 }
 
 /// `ids::check` refuses a table that doesn't fit its registry (the negative control for

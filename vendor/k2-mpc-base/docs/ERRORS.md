@@ -29,6 +29,8 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 **Verb groups** in the tables: `*` any verb on a doc; `@change` every verb that changes the doc; `@history` every history verb; `@run_tool` every verb `run_tool` runs; `@pack` a pack's own verbs; `(sync)` an editor's sync connection; `(host)` a host call with no verb.
 
+**File verbs**: a row whose verbs start with `@file` is a refusal of a file type's own verbs, which its host runs on the file and lists in `capabilities` from a file registry (`Registry::for_file`); the names after `@file` are those verbs (`(host)`: a host call on the file, no verb). The host maps the file type's refusals to these rows; a format refusal's exact code is in `details.code`.
+
 ## 0xx: exports
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -118,7 +120,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E111` | `write_conflict` | 1 | K-BR-2, K-BR-3 (O1–O5) | `write` | live |
 | `MPC-E112` | `base_expired` | 8 | K-BR-4, K-EXIT-1 | `write`, `@pack` | live |
 | `MPC-E113` | `bad_edit` | 2 | K-SCH-2 | `@change` | live |
-| `MPC-E114` | `bad_position` | 2 | K-PRES-6 | `cursor`, `view`, `claim`, `blame` | live |
+| `MPC-E114` | `bad_position` | 2 | K-PRES-6 | `cursor`, `view`, `claim`, `blame`, `select`, `pointer`, `viewport` | live |
 | `MPC-E115` | `bad_participant` | 2 | K-PRES-9 | `(host)` | live |
 | `MPC-E120` | `tool_unsupported` | 2 | K-PAR-7 | `@run_tool` | live |
 | `MPC-E121` | `tool_refused` | 2 | K-PAR-7, K-SEC-6 | `@run_tool` | live |
@@ -152,6 +154,8 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E171` | `positional_needs_version` | 2 | K-ADDR-3 | `@change` | live |
 | `MPC-E172` | `address_not_found` | 4 | K-READ-1, K-READ-3 | `@pack` | reserved |
 | `MPC-E173` | `stale_cursor` | 1 | K-READ-2 | `@pack` | reserved |
+| `MPC-E176` | `line_address_unreliable` | 2 | K-ADDR-4, K-PAR-7 | `@pack` | live |
+| `MPC-E177` | `line_address_unknown` | 2 | K-ADDR-4 | `claim`, `@pack` | live |
 
 ### MPC-E101 `forbidden_read`
 
@@ -255,8 +259,8 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 ### MPC-E114 `bad_position`
 
 - **Message:** `bad position: {reason}`
-- **Next:** A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.
-- **Next step:** `wc` with `-l`. A line or position is outside the doc; read its length and pass lines inside it.
+- **Next:** A line, position or element isn't in the doc (the message says which). Read the doc and pass one that is.
+- **Next step:** `cat`. A line, position or element isn't in the doc; read the doc and pass one that is.
 - **Rule:** K-PRES-6
 - **Exit:** 2
 
@@ -518,6 +522,22 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Exit:** 1
 - **Status:** reserved for read budgets and cursors (K-READ-2); nothing returns it yet
 
+### MPC-E176 `line_address_unreliable`
+
+- **Message:** `{address}: this file holds a lone CR, so its line numbers have no one meaning; name the row by its key or #N (row list shows both)`
+- **Next:** A lone CR (a carriage return with no line feed after it, inside a value or ending the records) ends a line for the table's rendered lines but not for the tools that read like cat -n, so an LN address could name a row other than the one you read. Nothing was read or applied. Name the row by its key (r17) or its #N: row list shows both for every row.
+- **Next step:** `row list`. Line numbers have no one meaning in this file, so list the rows to get each one's key and position, then address the row by one of those.
+- **Rule:** K-ADDR-4, K-PAR-7
+- **Exit:** 2
+
+### MPC-E177 `line_address_unknown`
+
+- **Message:** `{address}: the file can't be rendered now, so its line numbers can't be checked; name the row by its key or #N`
+- **Next:** The pack can't render the file at the moment, so the kit can't tell whether it holds a lone CR, and a line number might name a row other than the one you read. Nothing was read or applied. Name the row by its key (r17) or its #N, which don't depend on rendering; blame --structure lists both. A line number works again once the file renders.
+- **Next step:** `blame --structure`. Line numbers can't be checked while the file can't be rendered, so list the rows to get each one's key and position, then address the row by one of those.
+- **Rule:** K-ADDR-4
+- **Exit:** 2
+
 ## 2xx: history and undo
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -595,6 +615,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E303` | `claim_contended` | 2 | A13 (claims) | `claim --renew` | live |
 | `MPC-E304` | `bad_claim` | 2 | A13 (claims) | `claim`, `claim --renew`, `claim --release` | live |
 | `MPC-E305` | `watching` | 3 | K11 (participants_max) | `@change` | live |
+| `MPC-E310` | `selection_too_large` | 2 | K-PRES-6 | `select` | live |
 
 ### MPC-E301 `claimed`
 
@@ -636,6 +657,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** K11 (participants_max)
 - **Exit:** 3
 
+### MPC-E310 `selection_too_large`
+
+- **Message:** `selection too large: {len} keys (the most is {max})`
+- **Next:** A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).
+- **Next step:** `select` with `--clear`. A selection holds at most 256 elements; clear it, then select fewer.
+- **Rule:** K-PRES-6
+- **Exit:** 2
+
 ## 4xx: disk and outside edits
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -650,6 +679,8 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E410` | `disk` | 1 | K-DISK-2, K-DISK-10 | `flush`, `mv`, `(host)` | live |
 | `MPC-E411` | `bad_path` | 2 | K-SEC-6, K-DISK-14 | `mv`, `(host)` | live |
 | `MPC-E412` | `declined_hard_linked` | 4 | K-DISK-14 (K9) | `(host)` | live |
+| `MPC-E413` | `save_mismatch` | 1 | K-T0-5, K-DISK-2 | `(host)` | live |
+| `MPC-E414` | `save_ticket_invalid` | 2 | K-T0-5 | `(host)` | live |
 
 ### MPC-E401 `declined_too_large`
 
@@ -725,6 +756,20 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** The file has more than one name (a hard link), so edits made live through one name would change the others unseen. It opens the ordinary way: edit it with ordinary file tools, or give it a single name (copy it, remove the extra link) and open it again.
 - **Rule:** K-DISK-14 (K9)
 - **Exit:** 4
+
+### MPC-E413 `save_mismatch`
+
+- **Message:** `the file doesn't hold the bytes saved ({size} bytes given, {file_size} on disk); nothing recorded`
+- **Next:** The host recorded a save it made, but the file holds other bytes (details.file_size: what it holds, null when there is no file): another program saved after it, or the save didn't land. Nothing was recorded and the file wasn't touched. Let the file's own change be taken in as an outside save, or save again and record that.
+- **Rule:** K-T0-5, K-DISK-2
+- **Exit:** 1
+
+### MPC-E414 `save_ticket_invalid`
+
+- **Message:** `bad save ticket: a ticket is good for one record_saved, by the connection that asked for it, on its doc`
+- **Next:** A host bug: a save ticket is good for one record_saved, by the connection that asked for it, on the doc that issued it. This one was already recorded (or refused), is another connection's, or isn't this doc's (or is too old to be remembered). Nothing was recorded. A lapsed, replaced or reloaded ticket is not this: it returns with not_recorded set.
+- **Rule:** K-T0-5
+- **Exit:** 2
 
 ## 5xx: store
 
@@ -947,6 +992,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E708` | `no_blob_store` | 4 | K-T0-1 | `(host)` | live |
 | `MPC-E709` | `no_blob_space` | 4 | K-T0-4, K-PURGE-13 | `*` | live |
 | `MPC-E710` | `no_blob` | 4 | K-T0-1 | `*` | live |
+| `MPC-E720` | `blob_ref_unknown` | 4 | structured live, slice 5 | `@pack`, `(host)` | live |
 
 ### MPC-E701 `leased`
 
@@ -1029,7 +1075,15 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Exit:** 4
 - **Reached by:** a blob index row removed under a version
 
+### MPC-E720 `blob_ref_unknown`
+
+- **Message:** `no blob {blob} in this doc's space`
+- **Next:** The value names a blob this doc's space doesn't hold: it was never stored here, it was collected, or it belongs to another space. Nothing was applied. Store the bytes in this doc's space, then send the change again with the id that returned.
+- **Rule:** structured live, slice 5
+- **Exit:** 4
+
 ## 8xx: structured and CSV
+It covers structured file types too, a board's own verbs included (MPC-E830 to E859; E860 to E869 are kept for the board's live verbs).
 
 | Id | Name | Exit | Rule | Verbs | Status |
 |---|---|---|---|---|---|
@@ -1040,6 +1094,38 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E805` | `no_element` | 4 | CSV contract §3.3 (C1) | `@pack` | live |
 | `MPC-E806` | `header_names_unrendered` | 2 | CSV contract §1.4 (C1) | `@pack` | live |
 | `MPC-E807` | `header_only_row_blank` | 2 | CSV contract §1.4 (C1) | `@pack` | live |
+| `MPC-E820` | `key_not_own` | 2 | structured live, slice 1 | `@change` | live |
+| `MPC-E821` | `key_space_full` | 2 | structured live, slice 1 | `(host)` | live |
+| `MPC-E830` | `conflict` | 1 | board file: object revs | `@file`, `update`, `delete`, `resolve`, `lock`, `check-set`, `check-remove`, `table-cell`, `table-remove-row`, `table-remove-column`, `move`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `apply`, `inverse` | live |
+| `MPC-E831` | `exists` | 1 | board file: unique ids | `@file`, `put-back`, `apply`, `inverse` | live |
+| `MPC-E832` | `busy` | 1 | board file: the save guard | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `apply`, `inverse` | live |
+| `MPC-E833` | `merge_conflict` | 1 | board file: three-way merge | `@file`, `(host)` | live |
+| `MPC-E834` | `board_conflict` | 1 | board file: groups apply whole | `@file`, `(host)` | live |
+| `MPC-E835` | `locked` | 5 | board file: locked objects | `@file`, `update`, `delete`, `reply`, `resolve`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `connected-copy`, `lock`, `apply`, `inverse` | live |
+| `MPC-E836` | `voting_off` | 5 | board file: voting | `@file`, `vote` | live |
+| `MPC-E837` | `no_votes_left` | 5 | board file: voting | `@file`, `vote` | live |
+| `MPC-E838` | `no_object` | 4 | board file: object ids | `@file`, `read`, `update`, `delete`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `connected-copy`, `mind-child`, `apply`, `inverse` | live |
+| `MPC-E839` | `no_template` | 4 | board file: templates | `@file`, `template` | live |
+| `MPC-E840` | `no_such_item` | 4 | board file: item ids | `@file`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column` | live |
+| `MPC-E841` | `blob_missing` | 4 | board file: pictures | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `apply`, `inverse` | live |
+| `MPC-E842` | `board_zip` | 4 | board file: the package | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `list`, `read`, `search`, `references`, `apply`, `inverse` | live |
+| `MPC-E843` | `board_manifest` | 4 | board file: the manifest | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `list`, `read`, `search`, `references`, `apply`, `inverse` | live |
+| `MPC-E844` | `newer_format` | 4 | board file: format versions | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `list`, `read`, `search`, `references`, `apply`, `inverse` | live |
+| `MPC-E845` | `board_invalid` | 4 | board file: the board's data | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `list`, `read`, `search`, `references`, `apply`, `inverse` | live |
+| `MPC-E846` | `board_too_large` | 4 | board file: limits | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `list`, `read`, `search`, `references`, `apply`, `inverse` | live |
+| `MPC-E847` | `bad_field` | 2 | board file: fields | `@file`, `add`, `update`, `connect`, `comment`, `reply`, `check-add`, `check-set`, `check-remove`, `table-cell`, `mind-child`, `meta`, `react`, `paste`, `put-back`, `apply`, `inverse`, `fields` | live |
+| `MPC-E848` | `board_limit` | 2 | board file: limits | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `apply`, `inverse` | live |
+| `MPC-E849` | `bad_ops` | 2 | board file: raw ops | `@file`, `apply` | live |
+| `MPC-E850` | `unknown_field` | 2 | board file: fields | `@file`, `add`, `update` | live |
+| `MPC-E851` | `unknown_type` | 2 | board file: types | `@file`, `add`, `update` | live |
+| `MPC-E852` | `bad_value` | 2 | board file: verb values | `@file`, `vote`, `comment` | live |
+| `MPC-E853` | `wrong_type` | 2 | board file: types | `@file`, `reply`, `resolve`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `align`, `distribute`, `mind-child`, `connected-copy` | live |
+| `MPC-E854` | `too_few` | 2 | board file: arranging | `@file`, `group`, `align`, `distribute`, `tidy`, `paste` | live |
+| `MPC-E855` | `needs_actor` | 2 | board file: who acts | `@file`, `react`, `vote`, `reply` | live |
+| `MPC-E856` | `no_free_id` | 1 | board file: unique ids | `@file`, `add`, `connect`, `comment`, `reply`, `check-add`, `table-add-row`, `table-add-column`, `group`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `apply` | live |
+| `MPC-E857` | `board_io` | 1 | board file: reading and writing | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `list`, `read`, `search`, `references`, `apply`, `inverse` | live |
+| `MPC-E858` | `settings_conflict` | 1 | board file: settings revs | `@file`, `meta`, `apply`, `inverse` | live |
+| `MPC-E859` | `person_exists` | 1 | board file: people | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `apply` | live |
 
 ### MPC-E801 `needs_base`
 
@@ -1097,6 +1183,277 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** CSV contract §1.4 (C1)
 - **Exit:** 2
 
+### MPC-E820 `key_not_own`
+
+- **Message:** `insert {key} on {root} doesn't carry your writer tag {tag}`
+- **Next:** This list's keys carry their writer: an insert must name <prefix><n>.<tag> with one of the list's prefixes and your own writer tag (details.tag). Nothing was applied. Insert through a verb or Session::mint_key, which mints a key with your own writer tag; never reuse another writer's tag.
+- **Rule:** structured live, slice 1
+- **Exit:** 2
+
+### MPC-E821 `key_space_full`
+
+- **Message:** `no key fits 24 bytes for prefix {prefix} and tag {tag}`
+- **Next:** Every key of this prefix and writer tag that fits a list key's 24 bytes is taken. Nothing was written. The pack's key prefix is too long for a tagged key: use a shorter prefix (the pack's fix).
+- **Rule:** structured live, slice 1
+- **Exit:** 2
+
+### MPC-E830 `conflict`
+
+- **Message:** `{target} changed since the rev you read`
+- **Next:** Someone changed it after you read it (details.target says what; the refusal carries what is there now). Nothing was applied. Read it again, redo your change on what is there now, and pass the new rev.
+- **Next step:** `read`. It changed since the rev you read; read it again, redo your change on what is there now, and pass the new rev.
+- **Rule:** board file: object revs
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E831 `exists`
+
+- **Message:** `{target} is already in use`
+- **Next:** The id you gave is taken (details.target; the refusal carries what is there now). Nothing was applied. Read what is there, then give another id, or leave the id out so a free one is chosen.
+- **Next step:** `read`. The id is taken; read what is there, then give another id or let a free one be chosen.
+- **Rule:** board file: unique ids
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E832 `busy`
+
+- **Message:** `the file changed on disk since it was read, and again on each of the host's retries`
+- **Next:** Someone else saved the file between your read and your save. The host already retried the save, and the file changed again each time. Nothing was written. Read what you are changing again, then run your change again on what is there now.
+- **Next step:** `read`. The board changed while saving; read it again, then retry your change on what is there now.
+- **Rule:** board file: the save guard
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E833 `merge_conflict`
+
+- **Message:** `{count} thing(s) changed on both sides`
+- **Next:** Your copy and the file both changed the same things (settings, people, top-level fields or objects) since the copy was made (details lists each, with every side kept). Nothing was written. Read the board again and redo your changes to those things on what is there now.
+- **Rule:** board file: three-way merge
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E834 `board_conflict`
+
+- **Message:** `{count} group(s) held: what they change moved since they were made`
+- **Next:** Some groups of edits didn't apply, because what they change moved since they were made (details lists each held group and why). Each held group changed nothing and is kept whole; the others applied. Read the board again and make the held changes again on what is there now.
+- **Rule:** board file: groups apply whole
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E835 `locked`
+
+- **Message:** `{id} is locked`
+- **Next:** The object is locked, so no verb changes, moves or deletes it until it is unlocked. Nothing was applied. Read it to see its state, and ask whoever locked it; unlock it (lock) only if the lock is yours.
+- **Next step:** `read`. The object is locked; read it to see its state, ask whoever locked it, and unlock it only if the lock is yours.
+- **Rule:** board file: locked objects
+- **Exit:** 5
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E836 `voting_off`
+
+- **Message:** `voting is off on this board`
+- **Next:** Votes count only while voting is on, and a person running the session usually starts it. Nothing was applied. Ask for voting to be started (meta turns it on), then vote again.
+- **Next step:** `meta`. Voting is off; it is turned on in the board's settings, usually by the person running the session.
+- **Rule:** board file: voting
+- **Exit:** 5
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E837 `no_votes_left`
+
+- **Message:** `no votes left`
+- **Next:** You have used every vote this round allows. Nothing was applied. Take a vote back from another object (vote, with a negative delta) to move it, or wait for the next round.
+- **Next step:** `vote`. Every vote this round allows is used; take one back from another object to move it, or wait for the next round.
+- **Rule:** board file: voting
+- **Exit:** 5
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E838 `no_object`
+
+- **Message:** `no object {id}`
+- **Next:** The board has no object with that id: it was deleted, or the id is mistyped. Nothing was applied. List the objects and use an id shown; a deleted one comes back with put-back, from what its delete returned.
+- **Next step:** `list`. No object has that id; list the objects and use an id shown.
+- **Rule:** board file: object ids
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E839 `no_template`
+
+- **Message:** `no template {name}`
+- **Next:** No template has that name. Nothing was applied. List the templates and use a name shown.
+- **Next step:** `templates`. No template has that name; list the templates and use a name shown.
+- **Rule:** board file: templates
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E840 `no_such_item`
+
+- **Message:** `{id} has no item {item}`
+- **Next:** The object has no check item, row or column with that id. Nothing was applied. Read the object to see its items and use an id shown.
+- **Next step:** `read`. The object has no item with that id; read the object to see its items and use an id shown.
+- **Rule:** board file: item ids
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E841 `blob_missing`
+
+- **Message:** `picture bytes {hash} aren't in the file`
+- **Next:** A picture on the board names bytes the file doesn't hold, so it can't be saved as is. Nothing was written. Clear the pictures whose bytes are missing (clear-blob), or add the bytes again, then run your change again.
+- **Next step:** `clear-blob`. A picture's bytes are missing from the file; clear that picture, or add its bytes again, then run your change again.
+- **Rule:** board file: pictures
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E842 `board_zip`
+
+- **Message:** `the file isn't a package this build reads ({code})`
+- **Next:** The file's container is damaged, or uses something the format doesn't allow (details.code says which). Nothing was read or changed. Restore the file from a good copy; no board verb opens it as it is.
+- **Rule:** board file: the package
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E843 `board_manifest`
+
+- **Message:** `the file's manifest or parts don't hold together ({code})`
+- **Next:** The file's manifest is missing or damaged, or its parts don't match it (details.code says which). Nothing was read or changed. Restore the file from a good copy; no board verb opens it as it is.
+- **Rule:** board file: the manifest
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E844 `newer_format`
+
+- **Message:** `the file needs a newer reader (version {needs})`
+- **Next:** A newer build wrote this file, and it asks for a reader newer than this one. Nothing was read or changed. Open it with a build that reads that version.
+- **Rule:** board file: format versions
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E845 `board_invalid`
+
+- **Message:** `the board in the file isn't valid ({code})`
+- **Next:** The file opens, but the board it holds breaks the format (details.code says how, and where when it can). Nothing was read or changed. Restore the file from a good copy, or fix the board's data with the tool that wrote it.
+- **Rule:** board file: the board's data
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E846 `board_too_large`
+
+- **Message:** `the file is over a limit ({code})`
+- **Next:** The file passes one of the limits this host reads boards within (details.code says which). Nothing was read or changed. Ask the host's operator about the limit, or split the board with the tool that wrote it.
+- **Rule:** board file: limits
+- **Exit:** 4
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E847 `bad_field`
+
+- **Message:** `a value you gave isn't valid ({code})`
+- **Next:** A field, id, type or number you gave doesn't fit the format (details.code says which). Nothing was applied. Check the fields that type takes, fix the value and run the verb again.
+- **Next step:** `fields`. A value you gave doesn't fit the format; check the fields each type takes, fix it and run the verb again.
+- **Rule:** board file: fields
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E848 `board_limit`
+
+- **Message:** `the change would pass a limit ({code})`
+- **Next:** Your input, or the board after your change, would pass one of the limits this host works within (details.code says which). Nothing was applied or written. Make a smaller change, or remove objects first.
+- **Rule:** board file: limits
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E849 `bad_ops`
+
+- **Message:** `the ops aren't valid ({code})`
+- **Next:** The ops you passed aren't valid JSON, or not in the shape the format takes (details.code says which). Nothing was applied. Check them against the fields each type takes, fix them and apply again.
+- **Next step:** `fields`. The ops don't fit the format; check them against the fields each type takes, fix them and apply again.
+- **Rule:** board file: raw ops
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E850 `unknown_field`
+
+- **Message:** `{type} has no field {field}`
+- **Next:** That type of object has no field by that name. Nothing was applied. List the fields it takes and use one of those names.
+- **Next step:** `fields`. That type has no field by that name; list the fields it takes and use one of them.
+- **Rule:** board file: fields
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E851 `unknown_type`
+
+- **Message:** `no object type {type}`
+- **Next:** The format has no type of object by that name. Nothing was applied. List the types and use one shown.
+- **Next step:** `fields`. The format has no type by that name; list the types and use one shown.
+- **Rule:** board file: types
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E852 `bad_value`
+
+- **Message:** `{verb} can't use that value: {reason}`
+- **Next:** The verb can't use a value you gave (a vote of 0, a comment with no text). Nothing was applied. Run it again with a value it can use.
+- **Rule:** board file: verb values
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E853 `wrong_type`
+
+- **Message:** `{verb} doesn't apply to {id}, a {type}`
+- **Next:** That verb works on other types of object (a reply on a comment, a check item on a card, a row on a table). Nothing was applied. Read the object to see its type, then pick the object or the verb that fits.
+- **Next step:** `read`. The verb doesn't work on that type of object; read it to see its type, then pick the object or the verb that fits.
+- **Rule:** board file: types
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E854 `too_few`
+
+- **Message:** `{verb} needs at least {min} objects`
+- **Next:** The verb needs more objects than you named (two to group or align, three to distribute). Nothing was applied. List the objects and name enough of them.
+- **Next step:** `list`. The verb needs more objects than you named; list the objects and name enough of them.
+- **Rule:** board file: arranging
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E855 `needs_actor`
+
+- **Message:** `{verb} needs to know who is acting`
+- **Next:** This verb records who acted, and the host didn't say. Nothing was applied. This is the host's to fix, not the caller's.
+- **Rule:** board file: who acts
+- **Exit:** 2
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E856 `no_free_id`
+
+- **Message:** `no free id: the host's random ids keep landing on ids in use`
+- **Next:** Every new id the host's randomness gave was already in use. Nothing was applied. A try with fresh random bytes can succeed, and the host makes it itself; if this keeps coming back, report it to the host's operator.
+- **Rule:** board file: unique ids
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E857 `board_io`
+
+- **Message:** `reading or writing the file failed: {reason}`
+- **Next:** The file couldn't be read or written (the reason says why). Nothing was changed. Check the disk (space, permissions), then run the verb again.
+- **Rule:** board file: reading and writing
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E858 `settings_conflict`
+
+- **Message:** `the settings changed since the rev you read`
+- **Next:** The settings changed since you read them (details.theirs holds what is there now). Nothing was applied. Read them again with meta, then redo your change on what is there now and pass the new rev.
+- **Next step:** `meta`. The settings changed since the rev you read; read them again, redo your change on what is there now, and pass the new rev.
+- **Rule:** board file: settings revs
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
+### MPC-E859 `person_exists`
+
+- **Message:** `token {id} already names another person`
+- **Next:** The token you gave already names another person in this file (details.id is the token, details.theirs the person it names). Nothing was applied. Use another token, or leave the person op out and let the host mint one.
+- **Rule:** board file: people
+- **Exit:** 1
+- **Reached by:** a board file verb, through its host's bridge (the board's refusal, by id)
+
 ## 9xx: limits
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -1152,3 +1509,6 @@ Reserved for the engine, which allocates its ranges (decode, admission and secur
 
 - `MPCE-E199` `ref_not_in_past`
 - `MPCE-E980` `change_too_large`
+- `MPCE-E566` `store_secret_missing`
+- `MPCE-E567` `checkpoint_mac`
+- `MPCE-E568` `cut_purge_pending`

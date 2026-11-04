@@ -152,7 +152,12 @@ impl Verbs {
         };
         for r in regs {
             for v in r.verbs() {
-                if !all.iter().any(|a| a.name == v.name) {
+                // a file verb may share a kit verb's name: it is listed apart
+                let file = v.source == Source::File;
+                if !all
+                    .iter()
+                    .any(|a| a.name == v.name && (a.source == Source::File) == file)
+                {
                     all.push(*v);
                 }
             }
@@ -160,21 +165,39 @@ impl Verbs {
         Verbs { all }
     }
 
-    /// Whether `entry` can come from verb `v`.
+    /// Whether `entry` can come from verb `v`. A row marked `@file` names file verbs
+    /// ([`Source::File`]) and only those; any other row names kit and pack verbs, and its
+    /// groups but `*` hold no file verb.
     fn returns(&self, entry: &ErrorEntry, v: &VerbSpec) -> bool {
+        let file_row = entry.verbs.contains(&"@file");
+        let file_verb = v.source == Source::File;
         entry.verbs.iter().any(|g| match *g {
             "*" => true,
-            "@change" => v.source == Source::Pack || CHANGE_VERBS.contains(&v.name),
-            "@history" => v.kind == VerbKind::History,
+            "@file" => false,
+            "@change" => !file_verb && (v.source == Source::Pack || CHANGE_VERBS.contains(&v.name)),
+            "@history" => !file_verb && v.kind == VerbKind::History,
             "@run_tool" => v.runs_through_run_tool(),
             "@pack" => v.source == Source::Pack,
-            name => name == v.name,
+            name => name == v.name && file_row == file_verb,
         })
     }
 }
 
 /// An entry's verbs as words: groups spelled out.
 fn verbs_text(e: &ErrorEntry) -> String {
+    if e.verbs.first() == Some(&"@file") {
+        let names: Vec<&str> = e.verbs[1..]
+            .iter()
+            .map(|v| match *v {
+                "(host)" => "a host call (no verb)",
+                v => v,
+            })
+            .collect();
+        return format!(
+            "a file type's own verbs (its host's file registry): {}",
+            names.join(", ")
+        );
+    }
     e.verbs
         .iter()
         .map(|g| match *g {
@@ -417,6 +440,9 @@ fn kind_word(k: VerbKind) -> &'static str {
 /// `registries` as for [`run_meta`].
 pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
     let verbs = Verbs::new(registries);
+    // a file type's own registry alone: its verbs are its host's, so the kit's doc-level rows,
+    // parity, limits and positions don't describe them and are left out
+    let file_only = !registries.is_empty() && verbs.all.iter().all(|v| v.source == Source::File);
     let live: Vec<&ErrorEntry> = KIT
         .iter()
         .copied()
@@ -435,13 +461,19 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
             ("exits", Value::list(v.exits.iter().copied())),
             (
                 "serves",
-                Value::list(v.serves.iter().map(|a| format!("P{}", a.number()))),
+                Value::list(
+                    v.serves
+                        .iter()
+                        .map(|a| format!("P{}", a.number()))
+                        .chain(v.serves_named.iter().map(|n| (*n).to_owned())),
+                ),
             ),
             (
                 "source",
                 Value::from(match v.source {
                     Source::Kit => "kit",
                     Source::Pack => "pack",
+                    Source::File => "file",
                 }),
             ),
             ("run_tool", Value::from(v.runs_through_run_tool())),
@@ -485,7 +517,7 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
         "tool_output_max_bytes".into(),
         Value::from(crate::tools::MAX_OUTPUT_BYTES),
     ));
-    Value::obj([
+    let mut out = vec![
         ("kit", Value::from(env!("CARGO_PKG_NAME"))),
         ("version", Value::from(env!("CARGO_PKG_VERSION"))),
         (
@@ -557,8 +589,16 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
                     .collect(),
             ),
         ),
-    ])
+    ];
+    if file_only {
+        out.retain(|(k, _)| !FILE_ONLY_LEFT_OUT.contains(k));
+    }
+    Value::obj(out)
 }
+
+/// The sections a file type's own registry alone leaves out of `capabilities` (the kit's
+/// doc-level rows, parity, limits and positions): they describe the kit's verbs, not its.
+const FILE_ONLY_LEFT_OUT: [&str; 4] = ["errors_any_verb", "parity", "limits", "positions"];
 
 /// `capabilities`' `positions` (K-ADDR-4): each surface's unit, every unit, and the
 /// position forms of each verb served, from [`crate::parity::positions`]'s one table.
@@ -572,13 +612,27 @@ fn positions(verbs: &Verbs) -> Value {
         ])
     });
     let rows = verbs.all.iter().filter_map(|v| {
-        let r = p::of(v.name)?;
+        // a file verb's positions are its host's: the kit states none
+        if v.source == Source::File {
+            return None;
+        }
+        let forms = match p::stated(v) {
+            p::Stated::NoRow => return None,
+            p::Stated::Undeclared => {
+                return Some(Value::obj([
+                    ("verb", Value::from(v.name)),
+                    ("undeclared", Value::from(true)),
+                    ("forms", Value::List(Vec::new())),
+                ]))
+            }
+            p::Stated::Forms(forms) => forms,
+        };
         Some(Value::obj([
-            ("verb", Value::from(r.verb)),
+            ("verb", Value::from(v.name)),
             (
                 "forms",
                 Value::List(
-                    r.forms
+                    forms
                         .iter()
                         .map(|f| {
                             Value::obj([
@@ -639,21 +693,36 @@ fn capabilities_text(c: &Value) -> String {
             ));
         }
     }
-    o.push_str("\nVerbs (after the doc path):\n");
+    // a file type's own registry alone ([`FILE_ONLY_LEFT_OUT`]): every verb is the file's
+    let file_only = match c.get("verbs") {
+        Some(Value::List(l)) => !l.is_empty() && l.iter().all(|v| s(v, "source") == "file"),
+        _ => false,
+    };
+    o.push_str(if file_only {
+        "\nVerbs (the file type's own, as its host serves them):\n"
+    } else {
+        "\nVerbs (after the doc path):\n"
+    });
     if let Some(Value::List(l)) = c.get("verbs") {
         for v in l {
             o.push_str(&format!(
                 "  {}  [{}; {}; needs {}]\n    usage:  {}\n    exits:  {}\n    serves: {}\n    errors: {}\n",
                 s(v, "name"),
                 s(v, "kind"),
-                strs(v.get("tiers")).join("+"),
+                // only a file verb works on no kit tier
+                match strs(v.get("tiers")).join("+") {
+                    t if t.is_empty() => "file".to_owned(),
+                    t => t,
+                },
                 strs(v.get("needs")).join("+"),
                 s(v, "usage"),
                 strs(v.get("exits")).join(" "),
                 strs(v.get("serves")).join(" "),
                 {
                     let e = strs(v.get("errors"));
-                    if e.is_empty() {
+                    if e.is_empty() && file_only {
+                        "(none listed)".to_owned()
+                    } else if e.is_empty() {
                         "(only the ones any verb can return)".to_owned()
                     } else {
                         e.join(" ")
@@ -662,18 +731,20 @@ fn capabilities_text(c: &Value) -> String {
             ));
         }
     }
-    o.push_str(&format!(
-        "  (any verb on a doc can also return: {})\n",
-        strs(c.get("errors_any_verb")).join(" ")
-    ));
+    if c.get("errors_any_verb").is_some() {
+        o.push_str(&format!(
+            "  (any verb on a doc can also return: {})\n",
+            strs(c.get("errors_any_verb")).join(" ")
+        ));
+    }
     o.push_str("\nVerbs with no doc:\n");
     if let Some(Value::List(l)) = c.get("meta_verbs") {
         for v in l {
             o.push_str(&format!("  {}\n", s(v, "usage")));
         }
     }
-    o.push_str("\nParity (each thing a person can do, and the verbs that do it):\n");
     if let Some(Value::List(l)) = c.get("parity") {
+        o.push_str("\nParity (each thing a person can do, and the verbs that do it):\n");
         for p in l {
             let vs = strs(p.get("verbs"));
             o.push_str(&format!(
@@ -689,8 +760,8 @@ fn capabilities_text(c: &Value) -> String {
             ));
         }
     }
-    o.push_str("\nLimits in effect:\n");
     if let Some(Value::Obj(m)) = c.get("limits") {
+        o.push_str("\nLimits in effect:\n");
         for (k, v) in m {
             o.push_str(&format!("  {k} = {}\n", v.to_json()));
         }
@@ -731,12 +802,31 @@ fn capabilities_text(c: &Value) -> String {
                         .collect(),
                     _ => Vec::new(),
                 };
-                o.push_str(&format!("    {}: {}\n", s(v, "verb"), forms.join(", ")));
+                let stated = if v.get("undeclared").is_some() {
+                    "undeclared (the pack states no position units)".to_owned()
+                } else if forms.is_empty() {
+                    "takes and prints no positions".to_owned()
+                } else {
+                    forms.join(", ")
+                };
+                o.push_str(&format!("    {}: {stated}\n", s(v, "verb")));
             }
         }
     }
     o.push_str("\nError ids: run explain for the list, explain <ID> for one.\n");
     o
+}
+
+/// An area's note in `docs/ERRORS.md`, a line under its heading, when its title doesn't say
+/// all it holds.
+fn area_note(a: Area) -> Option<&'static str> {
+    match a {
+        Area::Structured => Some(
+            "It covers structured file types too, a board's own verbs included (MPC-E830 to \
+             E859; E860 to E869 are kept for the board's live verbs).",
+        ),
+        _ => None,
+    }
 }
 
 /// `docs/ERRORS.md`, generated (a test holds the committed file to this).
@@ -776,7 +866,13 @@ pub fn errors_markdown() -> String {
         "\n**Verb groups** in the tables: `*` any verb on a doc; `@change` every verb that \
          changes the doc; `@history` every history verb; `@run_tool` every verb `run_tool` \
          runs; `@pack` a pack's own verbs; `(sync)` an editor's sync connection; `(host)` a \
-         host call with no verb.\n",
+         host call with no verb.\n\n\
+         **File verbs**: a row whose verbs start with `@file` is a refusal of a file type's own \
+         verbs, which its host runs on the file and lists in `capabilities` from a file \
+         registry (`Registry::for_file`); the names after `@file` are those verbs (`(host)`: a \
+         host call on the file, no verb). The host maps \
+         the file type's refusals to these rows; a format refusal's exact code is in \
+         `details.code`.\n",
     );
     for a in Area::ALL {
         let mine: Vec<&ErrorEntry> = KIT.iter().copied().filter(|e| e.area == *a).collect();
@@ -784,9 +880,10 @@ pub fn errors_markdown() -> String {
             continue;
         }
         o.push_str(&format!(
-            "\n## {}xx: {}\n\n| Id | Name | Exit | Rule | Verbs | Status |\n|---|---|---|---|---|---|\n",
+            "\n## {}xx: {}\n{}\n| Id | Name | Exit | Rule | Verbs | Status |\n|---|---|---|---|---|---|\n",
             a.digit(),
-            a.title()
+            a.title(),
+            area_note(*a).map_or(String::new(), |n| format!("{n}\n"))
         ));
         for e in &mine {
             o.push_str(&format!(

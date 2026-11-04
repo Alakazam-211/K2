@@ -1105,6 +1105,10 @@ fn n1_producer() {
             .lock()
             .unwrap()
             .insert("p".into(), Rights::full().with_owner(true));
+        host.rights
+            .lock()
+            .unwrap()
+            .insert("bot".into(), Rights::full());
         let store = Arc::new(DocStore::open(&path).unwrap());
         let mgr = SessionManager::new(store.clone(), host.clone(), config());
         let s = mgr
@@ -1122,6 +1126,38 @@ fn n1_producer() {
         if std::env::var("K2MB_N1_RESTORE").is_ok() {
             let last = s.read(c).unwrap().version;
             s.revert(c, last, false).unwrap();
+        }
+        // tools/n1 `layout-both` (after v0.10.2): an own replica and an agent join, so the store
+        // holds `client_kinds` rows (a table a build before it doesn't know) for the other
+        // build to open, write and refuse to rewrite
+        if std::env::var("K2MB_N1_AGENTS").is_ok() {
+            let r = s
+                .join(
+                    participant("bot", ParticipantKind::Agent).own_replica(),
+                    Stay::Held,
+                )
+                .unwrap();
+            let a = s
+                .join(participant("bot", ParticipantKind::Agent), Stay::Held)
+                .unwrap();
+            let id = store.find(&key("a.md")).unwrap().unwrap();
+            let want: std::collections::HashSet<u64> = [a.client].into_iter().collect();
+            assert_eq!(store.reusable_clients(id).unwrap(), want);
+            println!(
+                "{name}: client_kinds holds own replica {} and agent {}",
+                r.client, a.client
+            );
+            // a second doc with both kinds: the consumer deletes a.md, this one stays
+            let k = mgr
+                .open(Arc::new(MD), &key("keep.md"), Some(b"keep\n"))
+                .unwrap();
+            k.join(
+                participant("bot", ParticipantKind::Agent).own_replica(),
+                Stay::Held,
+            )
+            .unwrap();
+            k.join(participant("bot", ParticipantKind::Agent), Stay::Held)
+                .unwrap();
         }
         if grid {
             let g = mgr
@@ -1143,6 +1179,66 @@ fn n1_producer() {
                 STORE_FORMAT_BASE
             }
         );
+    }
+}
+
+/// `client_kinds` rows as `(doc, client)`.
+type KindRows = Vec<(u64, u64)>;
+
+/// `client_kinds` as the file holds it, read without opening a `DocStore` (an open may change
+/// it): (rows of deleted docs, rows of docs that exist).
+fn raw_kinds(store: &std::path::Path) -> (KindRows, KindRows) {
+    use redb::{Database, TableDefinition};
+    const DOCS: TableDefinition<u64, &[u8]> = TableDefinition::new("docs");
+    const KINDS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("client_kinds");
+    let d = Database::open(store).unwrap();
+    let r = d.begin_read().unwrap();
+    let docs = r.open_table(DOCS).unwrap();
+    let kinds = match r.open_table(KINDS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return (Vec::new(), Vec::new()),
+        Err(e) => panic!("{e}"),
+    };
+    let (mut gone, mut live) = (Vec::new(), Vec::new());
+    for kv in redb::ReadableTable::iter(&kinds).unwrap() {
+        let (k, _) = kv.unwrap();
+        if docs.get(k.value().0).unwrap().is_some() {
+            live.push(k.value());
+        } else {
+            gone.push(k.value());
+        }
+    }
+    (gone, live)
+}
+
+/// tools/n1 `node-both`, after the other build's consumer deleted a doc in the stores of
+/// `K2MB_N1_OUT`: this build reads the file as that delete left it, then opens the store. No
+/// row of a deleted doc may be left after this build's open, and no other doc's row taken.
+#[test]
+#[ignore = "tools/n1: reads the stores another build's consumer left"]
+fn n1_kinds_after_delete() {
+    let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
+    for name in ["text.redb", "grid.redb"] {
+        let path = out.join(name);
+        let (gone, live) = raw_kinds(&path);
+        println!(
+            "{name}: as the delete left it: client_kinds rows of deleted docs {}, of live docs {}",
+            gone.len(),
+            live.len()
+        );
+        drop(DocStore::open(&path).unwrap());
+        let (gone_after, live_after) = raw_kinds(&path);
+        println!(
+            "{name}: after this build's open: client_kinds rows of deleted docs {}, of live docs {}",
+            gone_after.len(),
+            live_after.len()
+        );
+        assert_eq!(
+            gone_after,
+            vec![],
+            "{name}: a deleted doc's rows survive an open"
+        );
+        assert_eq!(live_after, live, "{name}: a live doc's rows changed");
     }
 }
 
@@ -2400,6 +2496,26 @@ mod outside_merge {
         s.flush(p1).unwrap();
         assert_eq!(f.bytes(), "a,b\nc,LIVE\ne,f\n");
         assert!(s.audit().unwrap().is_clean(), "{:?}", s.audit());
+    }
+
+    /// An outside save's notes belong to the change it just made: `AuditEvent::NotesWithoutChange`
+    /// stays quiet.
+    #[test]
+    fn an_outside_save_with_a_note_reports_no_notes_without_a_change() {
+        let f = Fix::new();
+        std::fs::write(f.file(), "a,b\nc,d\n").unwrap();
+        let s = f.open();
+        let p1 = f.join(&s, "p1");
+        set(&s, p1, "r2", "c2", "LIVE");
+        f.save(&s, "a,b\nc,FILE\n");
+        assert_eq!(overwritten(&s.take_notes(p1).unwrap()).len(), 1, "the note");
+        let events = f.host.events.lock().unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AuditEvent::NotesWithoutChange { .. })),
+            "{events:?}"
+        );
     }
 
     /// A row deleted in the file, edited live: the delete wins; the row stays restorable with
@@ -8438,4 +8554,218 @@ fn import_edits_builds_the_doc_an_import_makes() {
 
 fn keys_of(v: &[Key]) -> String {
     v.iter().map(Key::as_str).collect::<Vec<_>>().join(" ")
+}
+
+/// `write --base live` (`Session::write_live_grid`) refused after its reconcile: the column remap
+/// it would have made stays with it. Nothing landed, so the next change, by anyone, is not a remap.
+mod refused_live_write {
+    use super::*;
+    use k2_mpc_base::session::{default_reconcile, ClaimPolicy, ClaimSpan, Reconciled};
+
+    /// Maps onto the doc `c,d` by content, so not exactly: two columns swap and one is new.
+    const REMAP: &str = "d,c,N\n";
+    /// [`REMAP`] with a value over the limit of 4 the tests below set.
+    const REMAP_TOO_LONG: &str = "d,c,NNNNN\n";
+
+    fn four_byte_values() -> Fx {
+        let mut c = config();
+        c.grid_max_value_len = 4;
+        fx_with("refused-live", c)
+    }
+
+    /// A keyed write as of `old`, on a cell nobody has written since.
+    fn stale_write(s: &Session, bot: ConnId, old: u64) -> Result<u64, SessionError> {
+        op(s, bot, &EditOptions::new().base(old), |t| {
+            t.set_cell(&k("r1"), &k("c1"), "BOT")
+        })
+    }
+
+    fn unrelated_edit(s: &Session, p: ConnId) {
+        person_set(s, p, "r1", "c2", "P");
+    }
+
+    fn refused_by_the_limit(s: &Session, bot: ConnId, old: u64) {
+        let e = s
+            .write_live_grid(
+                bot,
+                old,
+                REMAP_TOO_LONG.as_bytes(),
+                &GridWriteOptions::default(),
+            )
+            .expect_err("the write is refused");
+        assert!(
+            matches!(
+                e,
+                SessionError::AtLimit {
+                    what: "value bytes",
+                    ..
+                }
+            ),
+            "refused at the value limit: {e:?}"
+        );
+        assert_eq!(s.read(bot).unwrap().version, old, "nothing applied");
+    }
+
+    /// With no refused write, the stale write lands.
+    #[test]
+    fn with_no_refused_write_a_stale_keyed_write_lands() {
+        let f = fx("live-control-stale");
+        let s = f.open("t.csv", "c,d\n");
+        let p = f.person(&s, "p");
+        let bot = f.agent(&s, "bot");
+        let old = s.read(bot).unwrap().version;
+        unrelated_edit(&s, p);
+        let r = stale_write(&s, bot, old);
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    /// The body is a remap when it lands, so the tests below refuse a write that would be one.
+    #[test]
+    fn the_body_remaps_the_columns_when_it_lands() {
+        let f = fx("live-control-remap");
+        let s = f.open("t.csv", "c,d\n");
+        let bot = f.agent(&s, "bot");
+        let old = s.read(bot).unwrap().version;
+        let r = s
+            .write_live_grid(bot, old, REMAP.as_bytes(), &GridWriteOptions::default())
+            .unwrap();
+        assert!(matches!(r.outcome, GridWrite::Applied(_)), "{r:?}");
+        let r = stale_write(&s, bot, old);
+        assert!(
+            matches!(
+                &r,
+                Err(SessionError::FacetConflict(c))
+                    if c.iter().any(|c| c.rewritten_row && c.root == table::COLS)
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn a_write_refused_at_the_limit_does_not_mark_the_next_change() {
+        let f = four_byte_values();
+        let s = f.open("t.csv", "c,d\n");
+        let p = f.person(&s, "p");
+        let bot = f.agent(&s, "bot");
+        let old = s.read(bot).unwrap().version;
+        refused_by_the_limit(&s, bot, old);
+        unrelated_edit(&s, p);
+        let r = stale_write(&s, bot, old);
+        assert!(
+            r.is_ok(),
+            "the next change was marked a column remap: {r:?}"
+        );
+    }
+
+    #[test]
+    fn a_write_refused_by_a_claim_does_not_mark_the_next_change() {
+        let f = fx("live-claim");
+        let s = f.open("t.csv", "c,d\n");
+        let p = f.person(&s, "p");
+        let bot = f.agent(&s, "bot");
+        let other = f.agent(&s, "other");
+        s.claim_span(
+            other,
+            ClaimSpan::Rows {
+                first: k("r1"),
+                last: k("r1"),
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let old = s.read(bot).unwrap().version;
+        let mut respect = GridWriteOptions::default();
+        respect.policy = ClaimPolicy::Respect;
+        let e = s
+            .write_live_grid(bot, old, REMAP.as_bytes(), &respect)
+            .expect_err("the write is refused");
+        assert!(matches!(e, SessionError::Claimed { .. }), "{e:?}");
+        assert_eq!(s.read(bot).unwrap().version, old, "nothing applied");
+        unrelated_edit(&s, p);
+        let r = stale_write(&s, bot, old);
+        assert!(
+            r.is_ok(),
+            "the next change was marked a column remap: {r:?}"
+        );
+    }
+
+    /// A table pack with a `reconcile` of its own that leaves `cols_exact` at its default, the
+    /// strict reading ([`Reconciled::cols_exact`]): every write through it is a remap if it lands.
+    struct NeverExact;
+    impl Pack for NeverExact {
+        fn schema(&self) -> Schema {
+            Lite.schema()
+        }
+        fn decode(&self, b: &[u8]) -> Result<PackContent, Declined> {
+            Lite.decode(b)
+        }
+        fn encode(&self, c: &[(String, Neutral)], codec: &[u8]) -> Result<Vec<u8>, PackError> {
+            Lite.encode(c, codec)
+        }
+        fn reconcile(&self, synced: &View, b: &[u8], _: &[u8]) -> Result<Reconciled, Declined> {
+            let r = default_reconcile(self, synced, b)?;
+            Ok(Reconciled {
+                edits: r.edits,
+                codec: r.codec,
+                ..Reconciled::default()
+            })
+        }
+    }
+
+    /// The `edits.is_empty()` return: the call succeeds and commits nothing, so a flag set before
+    /// it reaches the next change, however `commit` treats its flags.
+    #[test]
+    fn a_write_that_changes_nothing_does_not_mark_the_next_change() {
+        let f = fx("live-noop");
+        let s = f
+            .mgr
+            .open(Arc::new(NeverExact), &key("t.csv"), Some(b"c,d\n"))
+            .unwrap();
+        let p = f.person(&s, "p");
+        let bot = f.agent(&s, "bot");
+        let old = s.read(bot).unwrap().version;
+        let r = s
+            .write_live_grid(bot, old, b"c,d\n", &GridWriteOptions::default())
+            .unwrap();
+        assert!(
+            matches!(&r.outcome, GridWrite::Applied(res) if res.version == old),
+            "the write changes nothing: {r:?}"
+        );
+        unrelated_edit(&s, p);
+        let r = stale_write(&s, bot, old);
+        assert!(
+            r.is_ok(),
+            "the next change was marked a column remap: {r:?}"
+        );
+    }
+
+    /// `p`'s edit, then `q`'s write in the same row: undo reads a remap as `p`'s own change
+    /// (`rows_rewritten_since`, spec S13) and refuses it.
+    fn undo_of_the_next_change(f: &Fx, refuse_first: bool) {
+        let s = f.open("t.csv", "c,d\n");
+        let p = f.person(&s, "p");
+        let q = f.person(&s, "q");
+        let bot = f.agent(&s, "bot");
+        if refuse_first {
+            let old = s.read(bot).unwrap().version;
+            refused_by_the_limit(&s, bot, old);
+        }
+        unrelated_edit(&s, p);
+        person_set(&s, q, "r1", "c1", "Q");
+        let u = s.undo(p, 1);
+        assert!(matches!(&u, Ok(UndoOutcome::Applied { .. })), "{u:?}");
+        assert_eq!(text(&s, p), "Q,d\n", "{u:?}");
+    }
+
+    #[test]
+    fn with_no_refused_write_the_next_change_can_be_undone() {
+        undo_of_the_next_change(&four_byte_values(), false);
+    }
+
+    #[test]
+    fn a_refused_write_does_not_block_undo_of_the_next_change() {
+        undo_of_the_next_change(&four_byte_values(), true);
+    }
 }

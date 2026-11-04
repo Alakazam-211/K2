@@ -83,6 +83,40 @@ export interface LineSpan {
   last: number;
 }
 
+/** Elements selected by identity: keys of one list root. Keys, not positions, so a selection
+ * follows moves with no mapping and carries no version. */
+export interface ElemSelection {
+  root: string;
+  /** At most 256, no repeats (more is refused, `MPC-E310`). */
+  keys: string[];
+}
+
+/** A place in the doc's own coordinates; finite numbers. The kit doesn't interpret them. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** An area in the doc's own coordinates: finite numbers, `w` and `h` not negative. */
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A live claim on elements of a list root, as a roster entry names it (`elem_claims`). */
+export interface ElemClaim {
+  /** `claim-N`. */
+  claim: string;
+  root: string;
+  /** In key order, at most 256. */
+  keys: string[];
+  note: string | null;
+  hold: boolean;
+  expires_ms: number;
+}
+
 /**
  * One roster change, mirroring the kit's `RosterEvent` (K5): a snapshot first, then deltas.
  * `who` is the participant's id or opaque handle (`Who::Pid` / `Who::Handle`) as a string.
@@ -110,7 +144,26 @@ export type RosterEvent =
    * an older host, and on the participant's own caret (`RosterEntry.cursor`), which a host
    * sends without it when the last per-connection event wasn't that caret. */
   | { kind: "cursor"; who: Handle; cursor: CaretAt | null; version?: number; client?: number }
+  /** A connection's selection, pointer or viewport (`null`: gone), coalesced to the last value
+   * per flush. `client`: the connection (a `Device.client`), as for `cursor`. Outside the doc's
+   * numbering: none of these takes or moves a version. */
+  | { kind: "selection"; who: Handle; selection: ElemSelection | null; client?: number }
+  | { kind: "pointer"; who: Handle; pointer: Point | null; client?: number }
+  | { kind: "viewport"; who: Handle; viewport: Rect | null; client?: number }
   | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; version: number; [k: string]: unknown }
+  /** A claim on elements of a list root: it has no lines, so it has its own kind. It ends with
+   * `claim_ended` (`how: "deleted"` when none of its elements is live). */
+  | {
+      kind: "claim_started_elems";
+      who: Handle;
+      claim: string;
+      root: string;
+      keys: string[];
+      note: string | null;
+      hold: boolean;
+      expires_ms: number;
+      version: number;
+    }
   | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; [k: string]: unknown }
   | { kind: "note"; to: Handle; from: Handle; [k: string]: unknown }
   | {
@@ -153,6 +206,10 @@ export interface Device {
   cursor: CaretAt | null;
   /** The host's label for the connection ("another tab"), when it gave one. Never doc text. */
   label?: string;
+  /** This connection's selection, pointer and viewport; absent or `null` when it has none. */
+  selection?: ElemSelection | null;
+  pointer?: Point | null;
+  viewport?: Rect | null;
 }
 
 /** One participant as the host shows them (from the kit's `RosterMember`). */
@@ -172,6 +229,14 @@ export interface RosterEntry {
   /** Each of the participant's connections with its own caret (kit v0.10.1, text docs). Absent
    * from an older host: then `cursor` is the participant's only caret. */
   devices?: Device[];
+  /** The most active connection's selection, pointer and viewport that has one; absent from an
+   * older host. */
+  selection?: ElemSelection | null;
+  pointer?: Point | null;
+  viewport?: Rect | null;
+  /** The participant's live claims on elements, so a late subscriber sees who holds what.
+   * Present only when they hold some. */
+  elem_claims?: ElemClaim[];
   /** `RosterMember.rights`, when the host sends it. */
   rights?: Rights;
   /** This connection itself. */
@@ -221,6 +286,11 @@ export interface Welcome {
   /** This participant as the roster names them (pid, or handle for an App viewer). */
   self: Handle;
   rights: Rights;
+  /** The frame families this host takes, by name (`"presence"`: `select`, `pointer`, `viewport`;
+   * `"claims"`: `claim`, `release`). A client sends a family's frames only when its name is listed
+   * and ignores names it doesn't know. Absent from an older host, which takes none (WIRE.md,
+   * Feature names). */
+  features?: string[];
 }
 
 /** Frames the client sends. */
@@ -241,7 +311,19 @@ export type ClientFrame =
   /** Whether this connection's view is in front (`Session::set_visible`). No reply. */
   | { type: "visible"; visible: boolean }
   /** The lines this connection shows (`Session::set_view`), 1-based inclusive. No reply. */
-  | { type: "view"; root?: string; first: number; last: number };
+  | { type: "view"; root?: string; first: number; last: number }
+  /** This connection's selection, pointer or viewport (`null`: clear). `req` is the presence
+   * channel's own request number, never an `op` (WIRE.md, Presence frames). Answered only when
+   * refused (`presence_refused`). */
+  | { type: "select"; req: number; selection: ElemSelection | null }
+  | { type: "pointer"; req: number; point: Point | null }
+  | { type: "viewport"; req: number; rect: Rect | null }
+  /** Claim elements of a list root (`Session::claim_elems`). `req` is the channel's own request
+   * number, never an `op` (WIRE.md, Claim frames). Answered by `claimed` or `presence_refused`. */
+  | { type: "claim"; req: number; root: string; keys: string[]; ttl_ms?: number; note?: string; hold?: boolean }
+  /** Release this participant's claim, or all of them here with no `claim`
+   * (`Session::release_claim`). Answered by `released` or `presence_refused`. */
+  | { type: "release"; req: number; claim?: string };
 
 /** Frames the host sends. */
 export type ServerFrame =
@@ -263,6 +345,13 @@ export type ServerFrame =
    * nothing to undo or redo), the doc now at `version`. `notice`: why there was nothing, when
    * the kit says (`MPC-E206` history lost, `MPC-E207` cleared by a purge). */
   | { type: "undone"; op: number; steps: number; version: number; notice?: ErrorReport }
+  /** The reply to `claim`: the claim's id, `claim-N`. */
+  | { type: "claimed"; req: number; claim: string }
+  /** The reply to `release`: the claims released (none when none was live and yours). */
+  | { type: "released"; req: number; claims: string[] }
+  /** A presence or claim frame refused, by its `req`; nothing changed. Only the presence channel
+   * reads it, and it never reads `refused` (WIRE.md, Presence frames). */
+  | { type: "presence_refused"; req: number; error: ErrorReport }
   /** The whole roster (for hosts that fold the deltas themselves). */
   | { type: "roster"; entries: RosterEntry[] }
   /** One roster change as the kit pushes it (`subscribe_roster`): the client folds them. */
@@ -287,6 +376,8 @@ export const ERR = {
   BASE_EXPIRED: "MPC-E112",
   BAD_EDIT: "MPC-E113",
   BAD_POSITION: "MPC-E114",
+  BAD_CLAIM: "MPC-E304",
+  SELECTION_TOO_LARGE: "MPC-E310",
   BAD_HUNK: "MPC-E151",
   HISTORY_LOST: "MPC-E206",
   CLEARED_BY_PURGE: "MPC-E207",

@@ -39,11 +39,21 @@ fn row(a: PersonAction) -> ParityRow {
         P::Open => ParityRow::live(a, &["open"]),
         P::Close => ParityRow::live(a, &["leave"]),
         P::ReadAll => ParityRow::live(a, &["cat", "wc", "cell get", "row list", "col list"]),
-        P::ViewRange => ParityRow::live(a, &["head", "tail", "sed", "view"]),
+        P::ViewRange => ParityRow::live(a, &["head", "tail", "sed", "view", "viewport"]),
         P::Find => ParityRow::live(a, &["grep"]),
         P::Who => ParityRow::live(a, &["who", "activity"]),
         P::Follow => ParityRow::live(a, &["follow"]),
-        P::Caret => ParityRow::live(a, &["cursor", "claim", "claim --renew", "claim --release"]),
+        P::Caret => ParityRow::live(
+            a,
+            &[
+                "cursor",
+                "select",
+                "pointer",
+                "claim",
+                "claim --renew",
+                "claim --release",
+            ],
+        ),
         // the text edit verbs on a rendered grid come with reconcile (C1i)
         P::Type => ParityRow::live_but(a, &["cell set"], &["insert"]),
         P::TypeOver => ParityRow::live_but(a, &["cell set"], &["replace"]),

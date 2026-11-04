@@ -135,7 +135,10 @@ opened by a text pack is still `PackMismatch`.
 - **One pid, many connections.** A person may have two tabs, or run a CLI call while a
   `watch` runs. Each connection gets its own fresh, random 53-bit client ID. It is never 0
   or 1, and never one this doc has used before (the store's client table is checked).
-  - The client ID is recorded durably as the pid's (`store.set_client`).
+  - The client ID is recorded durably as the pid's with its first change, in the change's own
+    transaction, so a join that never writes leaves no row. An agent or an own replica with
+    edit rights has its owner and kind rows from its join; an own replica that joined read-only
+    has them from the first call that sees its edit rights.
   - Two tabs never share a client ID, which a Yjs doc requires.
 - Every change is logged with `author = pid`, the connection's client ID, `at_ms`, `via` and
   `on_behalf_of`. Blame reads the client ID→pid mapping, so all of a pid's connections
@@ -578,6 +581,20 @@ Carets and views (per connection):
   of the doc's) / `Dropped(CursorDrop::PastWindow)` (the changes since can't be read): nothing
   set, not an error.
 - `set_view(conn, LineRange)` needs read. Readers use this instead of a caret.
+- `set_selection(conn, Option<ElemSelection>)`, `set_pointer(conn, Option<Point>)` and
+  `set_viewport(conn, Option<Rect>)` need read, for a doc's elements and its own coordinates.
+  - A selection names keys of one MovableList root, at most `ELEM_SELECTION_MAX` (256,
+    `MPC-E310`), each live (`MPC-E114`, which also covers a root that isn't a list). A refusal
+    leaves it as it was; no keys clears it; a repeated key counts once.
+  - It follows moves. After any change, a key whose element isn't live leaves every selection, and
+    a selection left with none is gone. Bringing the element back doesn't select it again.
+  - `Point::new` and `Rect::new` refuse numbers that aren't finite, and a negative size
+    (`MPC-E114`).
+  - A watcher is refused (`MPC-E305`). A selection counts as editing intent, as a caret does; a
+    pointer and a viewport don't.
+  - They take no version, write nothing to the store and leave no event in the live window. The
+    roster carries them (`RosterEvent::Selection`, `Pointer`, `Viewport`), one per connection per
+    flush, the last value, by the rule for `Cursor`.
 - Stored positions are byte offsets carried through every change by
   `position::transform`:
   - before a hunk: unchanged;
@@ -768,7 +785,9 @@ ClaimInfo` needs edit. "I'm working on lines 40–60."
   `SessionError::Claimed { id, by, name, lines: (first, last), remaining_ms, note }`
   (the claim's lines now), **exit 5** (as `Leased`: someone else holds it for now). Adjacent lines don't overlap. The caller's own
   claims may overlap, except one that others wait for (`ClaimContended`, below).
-- **Limits:** `claims_max` (256) per doc, `claims_per_participant` (16): `BadClaim`.
+- **Limits:** `claims_max` (256) per doc, `claims_per_participant` (16): `BadClaim`. A `note`
+  over `CLAIM_NOTE_MAX` (1024 bytes, not characters) is `BadClaim` too (`MPC-E304`), on text, on a
+  table and on elements, and nothing is taken.
 - **Ends**, each one `AuditEvent::ClaimEnded`:
   - `Edited`: by default, when the claimant's (pid's) own change touching it lands (any edit
     path, undo, redo, revert, restore). With `hold`, it survives its owner's edits;
@@ -957,7 +976,10 @@ change, and `restore` of the version replaces it.
 (`Snapshot.overwritten` for a late one); the next verb that returns `Notes`, whatever its lines,
 the interval or the batch size; `Session::take_notes(conn)`. A push doesn't consume a note. No read
 right: nothing, not even a count, until they can read again. `AuditEvent::OutsideOverride { key,
-change, rule, region, by, version }` has line numbers only.
+change, rule, region, by, version }` has line numbers only. `AuditEvent::NotesWithoutChange { key,
+change, version, authors }` says notes were planned for a commit that changed nothing: not expected, as
+an override is a real write. The notes wait in memory until the doc unloads and nothing about them is
+stored; report it as a kit bug.
 
 **Bounds.** 16 KiB of text a note (`OVERWRITE_TEXT_MAX`); 32 places (`OVERWRITE_CELLS_MAX`), the rest
 counted; 64 waiting notes per person per doc (`OVERWRITE_PENDING_MAX`), then a roll-up with no text;
@@ -1026,7 +1048,10 @@ change, on `flush(conn)`, on unload, and on `release()`. Each write:
    K-AUD-1, not for correctness. The marker is the doc's change counter (v0.9.5; O(1)): the
    replica was synced at version `synced_seq`, stored with it, and any change moves the
    version past it, a delete-only one included (v0.9.4's state vectors missed those). A
-   re-sync is one full encode, stored as the synced state;
+   re-sync is one full encode, stored as the synced state. A grid change that re-identifies
+   elements re-syncs too, after its store commit; if that fails the change stands (`Ok`, on
+   the undo stack), the failure is an `AuditEvent::DiskError`, and an outside save or a
+   write-back re-syncs first;
 3. is **atomic**: a temp file beside it (`.<name>.~mp<pid>-<n>.tmp`; `is_write_temp(name)`
    tells a watcher to ignore it), the old file's permissions, fsync, rename over, fsync the
    folder. Symlinks are resolved, so a link stays a link and its target is written. Temp files
@@ -1310,7 +1335,9 @@ A pack's verbs build it with `addr::ambiguous(message, what, given, &candidates)
 `ToolError::address(report)`; `addr::unique` is the one-or-refuse lookup. The other address
 ids are allocated now and returned from the releases that need them: `MPC-E171
 positional_needs_version` (K-ADDR-3), `MPC-E172 address_not_found` (`node`, K-READ-1) and
-`MPC-E173 stale_cursor` (K-READ-2, exit 1).
+`MPC-E173 stale_cursor` (K-READ-2, exit 1). `MPC-E176 line_address_unreliable` refuses `LN` on a
+grid whose file holds a lone CR, and `MPC-E177 line_address_unknown` refuses `LN` and `claim
+--lines` on one that can't be rendered now (`docs/POSITIONS.md`, "A grid's two line counts").
 
 ### Positions are bound to a version (K-ADDR-3, R-1, R-2)
 
@@ -1355,6 +1382,86 @@ one version, so an **agent's** edit that uses one names that version:
   a file) × `memory_factor` (20). The host exposes `memory_budget_bytes` (256 MiB) as its
   knob.
 
+## Timers (v0.10.1)
+
+The kit's production timers (`k2_mpc_base::timers`) count calls and time them on a fixed list
+of paths. They are in **every build** (no feature, no test-only hook) and **off by default**.
+
+- **Switching:** `timers::set_enabled(true)` or `set_enabled(false)`, at any time,
+  process-wide. A call already running when the switch flips is timed by the state it
+  started with.
+- **Cost:**
+  - Off, a timed path costs one relaxed atomic load and a branch: no clock read, no
+    allocation, no store.
+  - On, it costs two clock reads and four relaxed atomic adds.
+  - `timers::calibrate(rounds)` measures both on the machine it runs on, on a private
+    histogram.
+- **Process-wide:** one registry per process, shared by every manager, store and doc in it.
+  A host runs one manager; a process with several sees their sum.
+- **Reading:**
+  - `timers::read(path) -> (count, total_ns)` doesn't allocate. Read it before and after one
+    call (single-threaded), and the difference is that call's exact time on the path. That is
+    how a harness takes the durable commit (`store.txn_commit`) out of an edit, as E-PERF-29
+    asks.
+  - `timers::snapshot()` (or `SessionManager::timers()`) returns per path: count, total, the
+    longest call, p50/p95/p99 and the non-empty buckets.
+  - `timers::reset()` sets everything back to zero.
+  - `timers::HOOKS` says whether the build has the test-only hooks (`differential`,
+    `conformance`); every snapshot carries it.
+- **Precision:** the histogram has 16 buckets per power of two. A percentile is the midpoint
+  of its bucket, within about 3% of the true value. Below 16 ns, each nanosecond has its own
+  bucket. Calls of 2^36 ns (about 69 s) or more share the last bucket, which reports the
+  longest seen.
+- **Where they sit:** at the kit's seam, never inside the engine, so every engine is
+  measured at the same points. A path's name never changes once released; the list grows.
+- **`prof!`:** the test-only `prof!` scopes (`differential::profile_take`, the soak's
+  profile) are a separate, finer developer profile, and stay as they were.
+
+| Path | Where | What it times | Row |
+|---|---|---|---|
+| `edit_as` | `Doc::edit_made`, the body `Doc::edit_as`, `Doc::edit_applied` and the session share | one change applied to an engine doc: the session's, a disk replica's or a bare doc's | E-PERF-30 |
+| `commit` | `Session::commit` | a change's commit: store, then bookkeeping (every mutating verb's tail) | |
+| `store.txn_commit` | `DocStore::commit_changes` | the durable transaction commit alone (left out of E-PERF-29's ratios) | E-PERF-29 |
+| `blame` | `Session::blame` | blame of a line range or the whole doc | E-PERF-31 |
+| `prov.lookup` | `undo::plan`, per region | undo's and revert's provenance lookups for one region: the window's roots and the region's revert, which asks which roots are live. One block, because a single lookup (about 160 ns, release) costs about what a running timer does | E-PERF-32 |
+| `prov.rebuild` | `Session::prov` | the provenance map built from scratch (the first need after a load) | |
+| `write_back` | `Session::write_back` | a write-back of a doc with a file (render, replica, file), whether or not it writes | E-PERF-33 |
+| `write_back.file` | `Session::write_back` | its atomic file write alone | E-PERF-33 |
+| `write_base` | `Session::write_base_with` | `write --base` on a text root | |
+| `write_base.base_text` | `Session::write_base_with` | the text at the base version (Yrs' stand-in for `changed_since`) | E-PERF-34 |
+| `write_base.merge` | `Session::write_base_with` | the three-way merge | E-PERF-34 |
+| `load` | `Session::load` | a stored doc loaded into a session | E-PERF-36, -47 |
+| `load.store_read` | `Session::load` | its store read (snapshot and log) | E-PERF-36 |
+| `load.doc` | `Doc::from_store` | an engine doc built from the store's bytes (a load's, or any caller's) | E-PERF-36 |
+| `join` | `Session::join`, `join_shared`, `join_replacing` | a connection joining | E-PERF-47 |
+| `ingest` | `Session::ingest` | an outside save merged into a text doc | E-PERF-41 |
+| `ingest.diff` | `Session::ingest` | per root: the save's diff against the synced text | E-PERF-41 |
+| `ingest.merge` | `Session::ingest` | per root: the three-way merge with the live text | E-PERF-41 |
+| `ingest.canon` | `Session::ingest` | per root: the merge trimmed and made canonical | E-PERF-41 |
+| `tick` | `SessionManager::tick` | the host's tick | E-PERF-42 |
+| `tick.history` | `SessionManager::tick` | per loaded session: history work | E-PERF-42 |
+| `tick.disk` | `SessionManager::tick` | per loaded session: the stat backup and a due write-back | E-PERF-42 |
+| `undo.plan` | `undo::plan` | undo, redo and revert planning on text roots | E-PERF-43 |
+| `undo` | `Session::undo_with`, `redo_with` | an undo or redo | E-PERF-43 |
+| `revert` | `Session::revert` | a revert by change | E-PERF-43 |
+| `notes.deliver` | `Session::drain_notes` | notes delivered to a member, by `take_notes` or on any verb's reply. A text doc's are timed only when the member has notes waiting; a grid's on every drain (its store mirror) | E-PERF-44 |
+| `notes` | `Session::take_notes` | `take_notes` | E-PERF-44 |
+| `events_since` | `Session::events_since` | the Live editor's catch-up | E-PERF-46 |
+| `events_since.window` | `Session::events_since` | its window, read from the store | E-PERF-46 |
+| `grid.write_base` | `Session::write_base_grid` | `write --base` on a grid | E-PERF-45 |
+| `grid.ingest` | `Session::ingest_structured` | an outside save merged into a grid (reconcile) | E-PERF-45 |
+| `grid.undo.plan` | `Session::plan_step` (grids) | undo planning on a grid, per step | E-PERF-45 |
+
+**Not timed here:**
+- `fork(V)` and `changed_since(V)`: no Yrs path; the native engine adds them at the seam.
+- Memory (E-PERF-37..39): the performance harness's counting allocator and
+  `SessionManager::stats()`.
+
+**Tests:**
+- `tests/timers.rs`: each path counts exactly once per call that reaches it (`prov.lookup`
+  once per region, so at least once). A path without a row there fails the test. Nothing counts while off.
+- `tools/timers-check`: the timers in a host's build, with no features.
+
 ## Closing a doc's live session (the host)
 
 `SessionManager::close(key, reason)` closes the doc's live session now, text or tier 0, **even
@@ -1389,11 +1496,14 @@ for good:
    still holds fails with `SessionError::Deleted` (exit 4).
 2. Then **one store transaction** per call erases every kit row of those docs
    (`DocStore::delete_doc(id, now_ms)` / `delete_space(space, now_ms)`, also callable
-   directly): `paths`, `docs`, `snapshots`, `updates`, `clients`, `versions`, `approvals`,
-   `sync` (the disk replica), `doc_keys`, `changes`, `reverts`, `revert_index`, `revert_carry`,
-   `revert_stats`, `blob_versions`, `blob_sync`, `blob_approvals`. A blob doc's versions **release** their blob
-   references (the blob's grace starts then), so `BlobStore::gc` removes a blob nothing else
-   references once `gc_grace_ms` has passed; a blob another doc still uses stays.
+   directly): `paths`, `docs`, `snapshots`, `updates`, `clients`, `client_kinds` (what each
+   agent's or own replica's client ID was minted for), `versions`, `approvals`, `sync` (the
+   disk replica), `doc_keys`, `changes`, `reverts`, `revert_index`, `revert_carry`,
+   `revert_stats`, `blob_versions`, `blob_sync`, `blob_approvals`, `doc_blob_refs`. A blob
+   doc's versions, and a doc whose values name blobs ([Blob references](#blob-references)),
+   **release** their blob references (the blob's grace starts then), so `BlobStore::gc` removes a
+   blob nothing else references once `gc_grace_ms` has passed; a blob another doc still uses
+   stays.
 
 Left alone: the file on disk (the host's: the kit neither writes it back nor removes it), the
 host's table (`host`: the kit never erases it), the store's `meta` (doc ids are never reused)
@@ -1503,10 +1613,11 @@ owner to **rotate the secret** (K-PURGE-10).
 A store upgraded from format 2 keeps a doc's plain SHA-256 sync hash until that doc is next
 opened with its file (the hash is re-keyed when the file is read) or purged.
 
-If the file can't be written back (missing, declined, or this session has no file), it still
-holds the text as last written, and so does the sync replica the kit keeps of it (re-encoded,
-its hash re-keyed or blanked): `NotReached::File`. Attach and flush the file, then purge
-again. Targeted changes whose records already left the revert window can't be identified:
+If the file can't be written back (missing, declined, this session has no file, or the pack
+can't render the doc: an `AuditEvent::DiskError`, and the purge goes on), it still holds the
+text as last written, and so does the sync replica the kit keeps of it (re-encoded, its hash
+re-keyed or blanked): `NotReached::File`. Attach and flush the file, then purge again: the
+write-back replaces the replica, and the purge's rewrite takes the freed pages that held it. Targeted changes whose records already left the revert window can't be identified:
 `NotReached::ChangesOutsideWindow(n)` (purge by text, or `History`).
 
 ### Participant erasure (K-PURGE-7, U20)
@@ -1656,11 +1767,14 @@ Every error below, and every refusal outcome, has a stable id (`MPC-Ennn`; amend
 | `BadApproval` | already settled the other way | 2 |
 | `BadPath` | `open_file` / `file_moved`: not a regular file inside the root | 2 |
 | `Disk(_)` | reading or writing the file failed; nothing lost, write-back retries | 1 |
+| `SaveMismatch { size, file_size }` | tier 0, `record_saved`: the file doesn't hold the ticket's bytes (`file_size: None`: no file); nothing recorded, the file untouched. `MPC-E413` `save_mismatch` | 1 |
+| `SaveTicketInvalid` | tier 0, `record_saved`: a host bug, the ticket already recorded, another connection's, or not this doc's; nothing recorded. `MPC-E414` `save_ticket_invalid` | 2 |
 | `Store(_)` | store failure; nothing acked. A store error naming something that doesn't exist (`NoDoc`, `NoVersion`, `NoApproval`, `NoBlob`, `NoBlobSpace`, `PurgedVersion`) is **4**; `CurrentVersion` (purge) is 2 | 6 |
 | `Pack(_)` | pack bug or damaged codec settings | 1 |
 | `Deleted` | the doc was deleted while this session was loaded | 4 |
 | `Unloaded` / `Released` / `Broken` | stale handle: open again | retry |
 | `Leased` / `NoLease` / `Blob(_)` / `NoBlobStore` | tier 0: see [Tier 0](#tier-0-any-file) | 5 / 2 / 1 (`TooLarge`, `NotFound` 4; `Store(e)` as `Store(e)`) / 4 |
+| `BlobRefUnknown { root, key, blob }` | a connection's edit names a blob the doc's space doesn't hold: see [Blob references](#blob-references); nothing applied | 4 |
 | `Claimed { id, by, name, lines: (first, last), remaining_ms, note }` | someone else's live claim, or a hand-off reservation held for someone else (an agent's claim or `Respect` edit): nothing applied | 5 (as `Leased`) |
 | `NoClaim(Option<ClaimId>)` | no live claim by that id (or, no id: you hold none) | 4 |
 | `UnknownElem { root, key, dropped }` | a table's raw keyed cell write (`edit_ops`) names a row or column the table doesn't know: dropped (`dropped`: the drop's change and who ran it, while its record is in the revert window) or never in it; the whole edit is refused, nothing applied. `MPC-E805 no_element`, as the grid verbs' unknown key. A deleted key the table knows stays a hidden write | 4 |
@@ -1769,7 +1883,7 @@ editor, an agent can do through a verb, with the same effect.
 | P5 | `grep` | `run_tool` (`grep`) |
 | P6 | `who`, `activity` | `roster` (one entry per pid, with a connection count, claims, last edit); `activity` |
 | P7 | `follow` | `roster` (`CursorAt` line:col; an agent's caret is at its last edit) |
-| P8 | `cursor --at L:C` / `--select`; `claim`, `claim --renew`, `claim --release` (K-PRES-12) | `set_cursor(At::Line(..))`; readers: `set_view`; `claim` / `renew_claim` / `release_claim` |
+| P8 | `cursor --at L:C` / `--select`; `claim`, `claim --renew`, `claim --release` (K-PRES-12); on a grid also `select`, `pointer` | `set_cursor(At::Line(..))`; readers: `set_view`; `claim` / `renew_claim` / `release_claim`; `set_selection`, `set_pointer` |
 | P9–P11 | `insert`, `replace`, `delete` | `run_tool` (inside `edit_with`) |
 | P12 | `replace --old/--new [--all]`, `sed -i` | `run_tool` (inside `edit_with`) |
 | P13 | `patch`, `apply`, `append`, `replace-section` | `run_tool` (inside `edit_with`); `replace-section` is the Markdown pack's (`Pack::verbs`) |
@@ -1861,8 +1975,9 @@ doc never open as each other (`PackMismatch`; blob docs are stored with pack `ki
 - **Streaming:** `put(space, &mut dyn Read)`, `id_of`, `reader`, `copy_to` use 64 KiB
   buffers. A 50 MB file imports, reads, and is replaced and written back in under 100 KB of
   heap (`tests/tier0_large.rs`).
-- **References and GC:** blob-doc versions hold references (and `retain`/`release`, for a
-  pack's own uses). `gc()` removes a blob only after it has been unreferenced for
+- **References and GC:** blob-doc versions hold references, a doc holds one on each blob its
+  values name ([Blob references](#blob-references)), and `retain`/`release` are for a pack's
+  other uses. `gc()` removes a blob only after it has been unreferenced for
   `BlobConfig::gc_grace_ms` (1 h, host clock), so a writer's upload is never collected before
   it commits; it also sweeps files without an index row (a crash between storing and
   indexing) and purged spaces' folders. `BlobConfig::max_blob_bytes` (4 GiB) caps a blob.
@@ -1967,6 +2082,74 @@ holder has `holds_lease` and shows as an editor. Alone, the roster lists only yo
    stat recorded after. A failed write-back leaves the version recorded and the disk `Dirty`;
    `tick` retries. Returns `BlobWriteResult { version, blob, size, changed, written }`.
 
+### Recording a save the host made
+
+A host that writes the file itself (its own guarded temp write and rename) records the save
+in two steps, so its own watcher firing between the rename and the record is harmless. The
+kit **never writes the file** here.
+
+1. **`expect_save(conn, base, &[u8]) -> SaveTicket`**, before the host writes. It checks
+   what a write checks: edit rights; the lease (someone else's gives `Leased`; with none
+   held, the ticket takes one for its own length, `auto`, so nobody else writes, restores or
+   takes a ticket meanwhile); a current `base` (else `Stale`). It stores the bytes in the
+   blob store and opens the ticket. A doc with no file gives `BadPath`.
+2. The host writes and renames.
+3. **`record_saved(conn, ticket) -> BlobWriteResult`** commits. It takes `conn` too: the
+   ticket is that connection's, and edit rights are asked again, as a write asks again at
+   commit. The kit hashes the file (no stat shortcut) and records only if it holds exactly
+   the ticket's bytes, as a version by the participant: pid, name, `via`, `on_behalf_of`
+   (an assistant's save on someone's behalf records a `Pending` approval in the same
+   transaction), reason `Write`, the file's mtime. The file's sync state commits with it, and
+   the bytes join the kit's recent own writes, as a write-back's do, so an app saving them
+   again later (a stale buffer) is an echo (`OwnWrite`) exactly as after a write. Bytes equal
+   to the current version's record nothing (`changed: false`); `written` is always false.
+   The ticket's own lease ends.
+
+**While a ticket is open**, a `file_changed`, `check_disk` or `tick` that finds the file
+holding **exactly** the ticket's bytes waits for it (`Unchanged`, nothing recorded); other
+bytes are an outside save as always (a conflict, since the ticket holds the lease). The kit's
+own write-back waits too, so it never writes over the host's save; `tick` retries it after.
+
+**The ticket** (`SaveTicket`) is opaque: an id unique in the process, the doc and the load
+of the doc that issued it, and `expires_ms()`. Its rules:
+
+- **One per doc.** Someone else can't take one while it is open (the lease rule: `Leased`).
+  The same participant's new ticket replaces it.
+- **It ends** when recorded or refused, when replaced, after `Config::save_ticket_ms` (30 s,
+  host clock), and on unload (tickets are in memory only). A ticket that ends unrecorded
+  stops holding its bytes back: if the host wrote them, they come in as an outside save
+  (`kit:external`) at the next look at the file: `file_changed`, or `tick`'s stat poll
+  (every `disk_poll_ms` while anyone is in the doc), or the next open after an unload.
+  Nothing is lost; the save just isn't attributed to the person.
+- **Its connection:** a ticket is the connection's that asked for it. If that connection
+  leaves, the ticket can't be recorded (`NotJoined`) and lapses at its expiry.
+- **The base moving** while it is open (an outside save of other bytes taken in, or another
+  connection of the same participant writing) makes `record_saved` `Stale`.
+
+**A good ticket that recorded nothing is information, not an error.** `record_saved`
+returns `Ok` with `changed: false` and `BlobWriteResult::not_recorded` saying why
+(`NotRecorded`, non-exhaustive): `Lapsed` (open past `save_ticket_ms`), `Replaced` (the same
+participant took a newer one), `Reloaded` (the ticket is from an earlier load of the doc: it
+unloaded, or the process restarted). The file's bytes come in as an outside save; a host may
+show "saved, not credited". `not_recorded` is `None` on every other result.
+
+How the kit tells these apart: each load of a doc has its own value, carried by its tickets
+(from the wall clock and a counter, so it differs across loads and processes in practice);
+a ticket from another load of the same doc reads as `Reloaded`, whatever happened to it
+before. Within a load, the doc remembers how its last `SAVE_TICKETS_KEPT` (1,024) ended
+tickets ended; one that ended longer ago than that reads as invalid.
+
+| Refusal at `record_saved` | Meaning | Exit |
+|---|---|---|
+| `SaveTicketInvalid` (`MPC-E414` `save_ticket_invalid`) | a host bug: the ticket was already recorded (or refused), is another connection's, or isn't this doc's (or is too old to be remembered). An open ticket stays its own connection's | 2 |
+| `Stale { expected, actual }` | the doc moved past the ticket's base | 1 |
+| `SaveMismatch { size, file_size }` (`MPC-E413` `save_mismatch`) | the file doesn't hold the ticket's bytes (`file_size: None`: no file) | 1 |
+| `Forbidden { need: Edit }` | the connection lost edit rights since the ticket | 3 |
+
+Each records nothing. `Stale`, `SaveMismatch` and `Forbidden` end the ticket.
+If `expect_save` refuses (a lease, a stale base),
+the host shouldn't write; if it writes anyway, its bytes come in as an outside save.
+
 ### Disk: outside saves, conflicts, merges
 
 As for text docs, the kit reads and writes the file but never watches: the host calls
@@ -2035,6 +2218,7 @@ loaded blob docs only (as text retention does).
 |---|---|---|
 | `lease_default_ms` / `lease_max_ms` | 5 min / 1 h | lease length when not given / the cap |
 | `lease_auto_ms` | 2 min | a write's own lease, if the writer dies mid-upload |
+| `save_ticket_ms` | 30 s | how long a host's save ticket (`expect_save`) stays open, and its own lease |
 | `blob_merge_max_bytes` | 32 MiB | tier-0.5 merges are tried only below this |
 | `conflict_copy_keep_ms` | 30 days | conflict copies older than this are cleaned up on `tick` |
 
@@ -2042,6 +2226,8 @@ loaded blob docs only (as text retention does).
 |---|---|---|
 | `Leased { holder, name, expires_ms }` | someone else holds the lease; nothing written | **5** |
 | `Stale { expected, actual }` | `write` from an old base; nothing written | 1 |
+| `SaveMismatch { size, file_size }` | `record_saved`: the file doesn't hold the ticket's bytes; nothing recorded | 1 |
+| `SaveTicketInvalid` | `record_saved`: the ticket already recorded, another connection's, or not this doc's | 2 |
 | `NoLease` | renewing when nobody holds it | 2 |
 | `Forbidden { need: Owner }` | breaking a lease without `Rights::owner` | 3 |
 | `Blob(BlobError)` | `TooLarge`, `NotFound` (4); `Store(e)` as `Store(e)` (4 for a missing thing, else 6); `Damaged`/`Io` (1) | 1, 4 or 6 |
@@ -2175,7 +2361,9 @@ like a text pack. What differs (`session/live/grid.rs`, `store/structured.rs`):
   nothing applied) only when a facet the edit touches (per op: a key's value; an insert's
   anchor; a moved, deleted or restored element's position and existence; a row delete's
   hidden cells) was written after V by someone else, judged by **write identity** from
-  `elem_writes`; a write with no identity counts as someone else's (KC7). People need no
+  `elem_writes`; a write with no identity counts as someone else's (KC7). A table's key
+  counters (`meta.next_row`, `next_col`) are no facet: they are bookkeeping, and minting never
+  reuses a key whatever they say, so two inserts don't conflict on them. People need no
   base. Facets a verb wants checked beyond its ops (a sort's every row) are the verb's to
   add (C1i).
 - **Size limits** (K-CSV-7, KC4; `Config::grid_max_cells` 25,000 present cells, live or
@@ -2294,6 +2482,94 @@ Reviewed at the C1 merge with v0.9.7:
   and the CHANGELOG's grid gap rule,
   5c64fc6). Both are deterministic; the grid's order is the one the kit's model and the G1
   grid model use.
+- **A known limit of grid undo:** an undo of a row or column delete doesn't check for another writer's delete of the same element: it restores the element unless it is already live, and says nothing. Slice 6L of the structured-live work changes this: such an undo will leave the element hidden and report a conflict note. No host runs grids today.
+
+## Blob references
+
+A structured doc can name a blob in a value, and the blob stays while any record of the doc
+names it (`store/blob_refs.rs`, `session/live/blob_refs.rs`). Generic and engine-neutral: nothing
+here reads the engine's state or writes to the wire.
+
+- **What counts.** A pack declares the roots: `Pack::blob_ref_roots()`, default none. In them, a
+  list or map value that is **exactly** `blob:<64 lowercase hex>` (`BlobId::to_ref`,
+  `BlobId::parse_ref`) names that blob of the doc's space. A value that merely contains that text,
+  another case, or a value in any other root is ordinary text. A pack that declares none has no
+  rows and no table.
+- **Where the reference is taken.** In the transaction of the change that names it
+  (`put_changes`, from the change's stored op values, so every path that records a change is
+  covered). One row in `doc_blob_refs`, `(doc, blob hex)` → the space number, and **one count on
+  the blob's `blobs.refs`** per doc and blob, however many values name it.
+- **How long it holds.** While any record names the blob: the live doc (hidden elements too), a
+  version, a revert record. Overwriting a value or a record leaving retention releases nothing.
+  **Known growth:** a blob replaced many times stays until a purge or the doc's delete, even once
+  thinning has dropped the last version naming it. Only those two release.
+- **Purge.** Recomputed in the purge's transaction, from the versions and records left and the
+  live doc, so a record an older kit wrote counts as any other. A blob nothing names loses its row
+  (the id is a digest of the content, and the rewrite then leaves no byte of it) and the doc's
+  count. Nothing else referencing it, its bytes go **at once**, as a tier-0 version's do
+  (`counts.blobs_removed`). Another doc or `retain` still holding it, it stays and is reported
+  (`NotReached::SharedBlobs(n)`). A session with no blob store can't remove it: that's
+  `NotReached::LeftForBlobGc(n)`, and `gc()` takes it after its grace.
+- **Delete.** A doc delete gives every count back and erases the rows
+  ([Deleting docs](#deleting-docs)). A rewrite copies them.
+- **Refused.** A connection's edit (`edit_ops`, `edit_ops_with`, a pack's structured verb) writing
+  a value that names a blob the doc's space doesn't hold: `SessionError::BlobRefUnknown`,
+  `MPC-E720` `blob_ref_unknown`, exit 4, nothing applied. Checked before anything applies, and
+  again in the change's transaction, since blob GC runs outside the session's lock. Overwriting or
+  deleting such a value isn't refused.
+- **Never refused, and visible.** An import, an outside save, an undo, a redo, a revert or a
+  version restore can bring in a name with no blob behind it, and a value stays as it is. The doc
+  gets a row with no count, and a doc read doesn't report it (it shows the value as it is).
+  **`blob_refs` is how a host finds them:**
+  - `Session::blob_refs(conn)` (needs read) returns `BlobRefs { refs: Vec<BlobRef { blob, state
+    }>, missing }`, `state` being `BlobRefState::Present` or `Missing`, and `missing` how many of
+    those `refs` are `Missing`. **It depends on the history right,** since a blob's id says the
+    bytes were once in the doc. With it: every name on record, including those only a version, a
+    revert record or a deleted element holds. Without it: only what `ReadResult::content` shows
+    (a list's live elements and a map's values), and `missing` counts those alone.
+    `DocStore::blob_refs(id)` is the host's: every name on record, with no rights check.
+  - `Session::blob_refs_at(conn, version)` (needs read and history;
+    `DocStore::blob_refs_at(id, version, roots)`): the same for what that stored version names. A
+    purged value names nothing.
+
+  `state` says whether the blob's index row is there now, so it also shows a blob whose space key
+  was destroyed. Reading the bytes of a missing blob is `BlobError::NotFound`, as ever.
+- **A blob that arrives after its name** reads `Present`, and is **never collected here while the
+  row names it**: the doc's next load, purge or change naming it takes the count, and so does
+  `gc()`, or a purge's removal, that would otherwise take the blob, in the removing transaction.
+  One read of the table per removal with something to remove. A row names a blob only in its
+  doc's own space, since ids are keyed per space.
+- **Load.** A session's load takes what's missing for the blobs the live doc names, in its own
+  transaction, and writes nothing when there's nothing to take.
+
+### Older kits (N−1)
+
+The table is additive, with no format bump, created by the first name.
+
+- **Reading and writing:** an older kit opens, reads and writes the store as before.
+- **Its blob GC honours this kit's references,** because they're counted in `blobs.refs`, which
+  every kit's GC reads. It doesn't read `doc_blob_refs`.
+- **Store-file rewrite (and so purge):** refused before anything changes
+  (`StoreError::NewerData`, `MPC-E502`), table named, as for `authored` and `client_kinds`.
+  Routine history compaction is unaffected.
+- **Doc delete:** not refused, and it can't erase a table it doesn't know, so the rows and their
+  counts outlive the doc and its blobs stay. Every open here gives them back
+  (`sweep_orphans`), keeping each blob's time: an open has no host clock, and nothing names the
+  blob.
+- **The limit.** An older kit takes no reference for a value it writes, and its GC doesn't read
+  `doc_blob_refs`. **A name written on an older kit is unprotected until this kit's next load of
+  that doc:** with no other reference, the older kit's GC collects the blob past its grace while
+  the doc still names it, and **a blob already collected can't come back**. The same goes for a
+  blob that arrives after its name while an older kit is running. After the upgrade such a name
+  reads `Missing`, and a blob still there gets its hold at the load. One more case needs an older
+  kit in the loop: a name it wrote in one doc has no row until that doc loads, so if another doc
+  holds the blob and lets go first, `gc()` here can collect it. **The load's heal reads the live
+  doc only:** a name an older kit wrote that only a version or a revert record now holds stays
+  unprotected until a purge's recompute, and restoring that version after its blob was collected
+  reports it `Missing`. With no older kit, every name has its row in the change's transaction, and
+  none of this arises. A pack that needs more on an older
+  kit uses `BlobStore::retain`. `tools/n1/n1.sh node-refs` pins both the case that holds and this
+  limit.
 
 ## Store: the host's table
 

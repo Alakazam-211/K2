@@ -175,6 +175,67 @@ pub struct BlobWriteResult {
     /// Whether the file was written back (false without a file, when it is missing, or when
     /// the write-back failed: it retries on `tick`).
     pub written: bool,
+    /// [`BlobSession::record_saved`]: why nothing was recorded although the ticket was a good
+    /// one (`changed` is then false). A host may show "saved, not credited": the file's bytes
+    /// come in as an outside save. `None` everywhere else.
+    pub not_recorded: Option<NotRecorded>,
+}
+
+/// Why [`BlobSession::record_saved`] recorded nothing for a ticket it issued
+/// ([`BlobWriteResult::not_recorded`]). Information, not an error: the host did nothing wrong,
+/// and the save comes in as an outside save instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NotRecorded {
+    /// The ticket was open longer than [`super::Config::save_ticket_ms`].
+    Lapsed,
+    /// The same participant took a newer ticket on the doc.
+    Replaced,
+    /// The ticket is from an earlier load of the doc (it unloaded, or the process restarted).
+    Reloaded,
+}
+
+/// A host's announcement of a save it is about to make ([`BlobSession::expect_save`]), handed
+/// back to [`BlobSession::record_saved`]. Opaque: it names one open expectation of one
+/// connection on one doc, and is never reused (ids are unique in the process).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveTicket {
+    id: u64,
+    doc: DocId,
+    /// The load of the doc that issued it ([`BlobSession`]'s `load`).
+    load: u64,
+    expires_ms: u64,
+}
+
+impl SaveTicket {
+    /// When it lapses (host clock): [`super::Config::save_ticket_ms`] after `expect_save`.
+    pub fn expires_ms(&self) -> u64 {
+        self.expires_ms
+    }
+}
+
+/// How a ticket ended, for telling a late `record_saved` what happened to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Lapsed,
+    Replaced,
+    /// Recorded, or refused at its record: a second record is a host bug.
+    Used,
+}
+
+/// How many ended tickets a doc remembers (per load); an older one reads as invalid.
+pub const SAVE_TICKETS_KEPT: usize = 1024;
+
+/// The doc's open save ticket (at most one).
+#[derive(Debug, Clone)]
+struct Expected {
+    id: u64,
+    conn: ConnId,
+    pid: String,
+    base: VersionId,
+    blob: BlobId,
+    size: u64,
+    expires_ms: u64,
 }
 
 /// Returned by [`BlobSession::set_approval`]: the version's approval record and, when it was
@@ -387,6 +448,12 @@ struct BState {
     copies_edited: HashMap<PathBuf, disk::Seen>,
     /// When the conflict-copy cleanup last ran (host clock).
     last_cleanup_ms: Option<u64>,
+    /// The open save ticket ([`BlobSession::expect_save`]); in memory only, so an unload
+    /// drops it.
+    expected: Option<Expected>,
+    /// Tickets that ended this load, newest last, at most [`SAVE_TICKETS_KEPT`]: (id,
+    /// connection, how).
+    ended: VecDeque<(u64, ConnId, Ended)>,
 }
 
 const OWN_WRITES_KEPT: usize = 8;
@@ -484,8 +551,27 @@ pub struct BlobSession {
     blobs: Arc<BlobStore>,
     pack: Arc<dyn BlobPack>,
     doc_id: DocId,
+    /// This load of the doc, unique across loads and processes (in practice): a ticket from
+    /// an earlier load reads as [`NotRecorded::Reloaded`].
+    load: u64,
     state: Mutex<BState>,
     last_used_ms: AtomicU64,
+}
+
+/// A value no other load of any doc has had: a per-process base from the wall clock, plus a
+/// counter.
+fn next_load() -> u64 {
+    static BASE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    static N: AtomicU64 = AtomicU64::new(0);
+    let base = *BASE.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.as_nanos() as u64)
+    });
+    base.wrapping_add(
+        N.fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    )
 }
 
 /// Copy a verified read to `out`, to its clean end (where the blob's check completes).
@@ -538,6 +624,7 @@ impl BlobSession {
             blobs,
             pack,
             doc_id,
+            load: next_load(),
             last_used_ms: AtomicU64::new(now),
             state: Mutex::new(BState {
                 key,
@@ -554,6 +641,8 @@ impl BlobSession {
                 copies_edited: HashMap::new(),
                 handles: Default::default(),
                 last_cleanup_ms: None,
+                expected: None,
+                ended: VecDeque::new(),
             }),
         }
     }
@@ -1432,6 +1521,7 @@ impl BlobSession {
                 size: info.size,
                 changed: false,
                 written: false,
+                not_recorded: None,
             });
         }
         let p = &st.members[i].p;
@@ -1476,7 +1566,293 @@ impl BlobSession {
             size: st.cur.size,
             changed: true,
             written,
+            not_recorded: None,
         })
+    }
+
+    /// A save the host is about to make itself (a guarded temp write and rename), step one
+    /// of two: checks what [`BlobSession::write_bytes`] checks, stores `bytes` in the blob
+    /// store, and opens a [`SaveTicket`]. The host then writes the file and calls
+    /// [`BlobSession::record_saved`]. **The kit never writes the file for it.** Needs edit, and:
+    /// - **the lease**, as for a write: someone else holding it gives [`SessionError::Leased`].
+    ///   With no lease held, the ticket takes one for its length (`auto`), so nobody else
+    ///   writes, restores or opens a ticket meanwhile;
+    /// - **a current base**: else [`SessionError::Stale`].
+    ///
+    /// One ticket per doc: a new one replaces the open one (only the same participant can
+    /// take one: the lease rule). A doc with no file gives [`SessionError::BadPath`].
+    ///
+    /// While the ticket is open, a `file_changed`, `check_disk` or `tick` that finds the file
+    /// holding **exactly** `bytes` waits for it (`Unchanged`, nothing recorded); other bytes are
+    /// an outside save as always (a conflict: the ticket's lease is held). The kit's own
+    /// write-back waits too, so it never writes over the host's save. The ticket lapses after
+    /// [`super::Config::save_ticket_ms`] (host clock), when it is recorded, refused or
+    /// replaced, and on unload (it is in memory only); bytes it was holding back then come in
+    /// as an outside save at the next check (`file_changed`, or `tick`'s stat poll).
+    pub fn expect_save(&self, conn: ConnId, base: VersionId, bytes: &[u8]) -> Result<SaveTicket> {
+        let out = self.expect_save_inner(conn, base, bytes);
+        self.for_viewer(conn, out, |_, v| v)
+    }
+
+    fn expect_save_inner(&self, conn: ConnId, base: VersionId, bytes: &[u8]) -> Result<SaveTicket> {
+        static IDS: AtomicU64 = AtomicU64::new(1);
+        let now = self.now();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        self.expire_ticket(st, now);
+        let i = self.admit_write(st, conn, Action::WriteBase, now)?;
+        let pid = st.members[i].p.pid.clone();
+        self.check_lease(st, &pid, now)?;
+        if base != st.vid {
+            return Err(SessionError::Stale {
+                expected: base,
+                actual: st.vid,
+            });
+        }
+        if st.disk.is_none() {
+            return Err(SessionError::BadPath("this session has no file".into()));
+        }
+        let info = self.blobs.put_bytes(&st.key.space, bytes)?;
+        let ttl = self.config.save_ticket_ms.max(1);
+        if st.lease.as_ref().map_or(true, |l| l.auto) {
+            self.grant(st, i, ttl, now, true);
+        }
+        let t = Expected {
+            id: IDS.fetch_add(1, Ordering::Relaxed),
+            conn,
+            pid,
+            base,
+            blob: info.id,
+            size: info.size,
+            expires_ms: now.saturating_add(ttl),
+        };
+        let ticket = SaveTicket {
+            id: t.id,
+            doc: self.doc_id,
+            load: self.load,
+            expires_ms: t.expires_ms,
+        };
+        if let Some(old) = st.expected.replace(t) {
+            Self::remember(st, &old, Ended::Replaced);
+        }
+        Ok(ticket)
+    }
+
+    /// Step two of a save the host made itself ([`BlobSession::expect_save`]): the host has
+    /// written the file; record it as a version by `conn`'s participant, as `write_bytes`
+    /// would have. **It never writes the file.** `conn` must be the connection that took the
+    /// ticket, still joined and still with edit rights (asked again, as a write asks again at
+    /// commit).
+    ///
+    /// **A good ticket that records nothing** returns `Ok` with `changed: false` and
+    /// [`BlobWriteResult::not_recorded`] saying why: it lapsed, the same participant took a
+    /// newer one, or it is from an earlier load of the doc ([`NotRecorded`]). The file's bytes
+    /// come in as an outside save; a host may show "saved, not credited". The doc remembers
+    /// its last [`SAVE_TICKETS_KEPT`] ended tickets per load; an older one reads as invalid.
+    ///
+    /// **Refusals** record nothing:
+    /// - [`SessionError::SaveTicketInvalid`] (`MPC-E414`, exit 2), a host bug: the ticket was
+    ///   already recorded (or refused), is another connection's, or isn't this doc's. An open
+    ///   ticket stays open for its own connection.
+    ///
+    /// These end the ticket (the file's bytes then come in as an outside save), as does
+    /// [`SessionError::Forbidden`] when the connection lost edit rights:
+    /// - [`SessionError::Stale`]: the doc moved past the ticket's base (an outside save of other
+    ///   bytes taken in meanwhile, or another connection of the same participant writing);
+    /// - [`SessionError::SaveMismatch`] (`MPC-E413`, exit 1): the file doesn't hold the
+    ///   ticket's bytes (hashed, no stat shortcut; keyed ids compared), no file included.
+    ///
+    /// The version is attributed as a write's: the participant's pid, name, `via` and
+    /// `on_behalf_of` (an assistant's save on someone's behalf records a `Pending` approval),
+    /// [`BlobReason::Write`], with the file's mtime. The file's sync state (these bytes, at the
+    /// stat just read) commits in the same transaction, and the bytes join the kit's recent own
+    /// writes, as a write-back's do. Bytes equal to the current version's record nothing
+    /// (`changed: false`). `written` is always false: the kit wrote nothing. The ticket's own
+    /// lease, if it took one, ends.
+    pub fn record_saved(&self, conn: ConnId, ticket: SaveTicket) -> Result<BlobWriteResult> {
+        let out = self.record_saved_inner(conn, ticket);
+        let out = self.shown(out);
+        self.for_viewer(conn, out, |_, v| v)
+    }
+
+    fn record_saved_inner(&self, conn: ConnId, ticket: SaveTicket) -> Result<BlobWriteResult> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        self.expire_ticket(st, now);
+        if ticket.doc != self.doc_id {
+            return Err(SessionError::SaveTicketInvalid);
+        }
+        if ticket.load != self.load {
+            return Ok(Self::not_recorded(st, NotRecorded::Reloaded));
+        }
+        self.admit(st, conn, Need::Read, Action::WriteBase, now)?;
+        match st.expected.clone() {
+            Some(t) if t.id == ticket.id => {
+                if t.conn != conn {
+                    return Err(SessionError::SaveTicketInvalid);
+                }
+                let out = self.record_ticket(st, conn, &t, now);
+                self.end_ticket(st, &t, Ended::Used);
+                out
+            }
+            _ => match st.ended.iter().find(|(id, _, _)| *id == ticket.id) {
+                Some((_, c, Ended::Lapsed)) if *c == conn => {
+                    Ok(Self::not_recorded(st, NotRecorded::Lapsed))
+                }
+                Some((_, c, Ended::Replaced)) if *c == conn => {
+                    Ok(Self::not_recorded(st, NotRecorded::Replaced))
+                }
+                _ => Err(SessionError::SaveTicketInvalid),
+            },
+        }
+    }
+
+    /// A good ticket that recorded nothing: the doc as it is, and why.
+    fn not_recorded(st: &BState, why: NotRecorded) -> BlobWriteResult {
+        BlobWriteResult {
+            version: st.vid,
+            blob: st.cur.blob,
+            size: st.cur.size,
+            changed: false,
+            written: false,
+            not_recorded: Some(why),
+        }
+    }
+
+    /// Remember how ticket `t` ended, for a later `record_saved` (at most
+    /// [`SAVE_TICKETS_KEPT`]).
+    fn remember(st: &mut BState, t: &Expected, how: Ended) {
+        st.ended.push_back((t.id, t.conn, how));
+        while st.ended.len() > SAVE_TICKETS_KEPT {
+            st.ended.pop_front();
+        }
+    }
+
+    fn record_ticket(
+        &self,
+        st: &mut BState,
+        conn: ConnId,
+        t: &Expected,
+        now: u64,
+    ) -> Result<BlobWriteResult> {
+        let i = self.admit(st, conn, Need::Edit, Action::WriteBase, now)?;
+        if t.base != st.vid {
+            return Err(SessionError::Stale {
+                expected: t.base,
+                actual: st.vid,
+            });
+        }
+        let d = st.disk.as_ref().expect("a ticket needs a file");
+        let (path, root) = (d.path.clone(), d.root.clone());
+        let space = st.key.space.clone();
+        let size = t.size;
+        // the file as it is now, hashed as an outside save is
+        let on_disk = match disk::probe(&path, &root) {
+            Ok(Probe::File { real, .. }) => {
+                let hashed = File::open(&real).and_then(|mut f| {
+                    let stat = FileStat::of(&f.metadata()?);
+                    let (fid, fsize) = self.blobs.id_of(&space, &mut f).map_err(blob_io)?;
+                    Ok((fid, fsize, stat))
+                });
+                match hashed {
+                    Ok(v) => Some(v),
+                    Err(e) => return Err(self.disk_error(st, &real.display().to_string(), e)),
+                }
+            }
+            Ok(_) => None,
+            Err(e) => return Err(self.disk_error(st, &path.display().to_string(), e)),
+        };
+        let stat = match on_disk {
+            Some((fid, _, stat)) if fid == t.blob => stat,
+            other => {
+                return Err(SessionError::SaveMismatch {
+                    size,
+                    file_size: other.map(|(_, n, _)| n),
+                })
+            }
+        };
+        if t.blob == st.cur.blob {
+            return Ok(BlobWriteResult {
+                version: st.vid,
+                blob: t.blob,
+                size,
+                changed: false,
+                written: false,
+                not_recorded: None,
+            });
+        }
+        let p = &st.members[i].p;
+        let mut v = BlobVersion::new(
+            t.blob,
+            size,
+            now,
+            p.pid.clone(),
+            p.name.clone(),
+            p.via.clone(),
+            BlobReason::Write,
+        );
+        v.on_behalf_of = p.on_behalf_of.clone();
+        v.mtime_ms = stat.mtime_ms();
+        let seen = disk::Seen::now(stat);
+        let sync = BlobSync {
+            blob: t.blob,
+            stat: seen.persisted(),
+        };
+        let vid = Self::store(st)?.commit_blob_versions(
+            self.doc_id,
+            &space,
+            st.vid,
+            std::slice::from_ref(&v),
+            Some(&sync),
+        )?[0];
+        st.vid = vid;
+        st.cur = v;
+        st.members[i].last_edit_ms = Some(now);
+        // the file holds these bytes, and they are the kit's own, as write_back records its
+        // own writes: the save's change event, also one that comes in after a later version
+        // the file lacks, is the kit's content
+        let d = st.disk.as_mut().expect("has disk");
+        d.synced = t.blob;
+        d.stat = Some(seen);
+        d.own.push_back(t.blob);
+        while d.own.len() > OWN_WRITES_KEPT {
+            d.own.pop_front();
+        }
+        d.dirty_since = None;
+        Ok(BlobWriteResult {
+            version: vid,
+            blob: t.blob,
+            size,
+            changed: true,
+            written: false,
+            not_recorded: None,
+        })
+    }
+
+    /// Close ticket `t` (recorded, refused or lapsed): its own lease ends with it.
+    fn end_ticket(&self, st: &mut BState, t: &Expected, how: Ended) {
+        if st.expected.as_ref().is_some_and(|x| x.id == t.id) {
+            st.expected = None;
+        }
+        Self::remember(st, t, how);
+        if st.lease.as_ref().is_some_and(|l| l.auto && l.pid == t.pid) {
+            self.end_lease(st, LeaseEnd::Released);
+        }
+    }
+
+    /// Let the open ticket lapse if its time is up (host clock).
+    fn expire_ticket(&self, st: &mut BState, now: u64) {
+        if let Some(t) = st.expected.clone().filter(|t| now >= t.expires_ms) {
+            self.end_ticket(st, &t, Ended::Lapsed);
+        }
+    }
+
+    /// The open ticket expects the file to hold `id`.
+    fn expects(st: &BState, id: &BlobId, now: u64) -> bool {
+        st.expected
+            .as_ref()
+            .is_some_and(|t| now < t.expires_ms && t.blob == *id)
     }
 
     /// `restore --version V`: make version `vid`'s content current again, as a **new**
@@ -1507,6 +1883,7 @@ impl BlobSession {
                 size: old.size,
                 changed: false,
                 written: false,
+                not_recorded: None,
             });
         }
         if self.blobs.info(&st.key.space, &old.blob)?.is_none() {
@@ -2322,6 +2699,7 @@ impl BlobSession {
     /// Look at the file; hash it when forced or when its stat changed; record an outside
     /// save. Never writes the file (a conflict copy is a new file beside it).
     fn disk_check(&self, st: &mut BState, now: u64, force: bool) -> Result<DiskCheck> {
+        self.expire_ticket(st, now);
         let Some(d) = st.disk.as_mut() else {
             return Ok(DiskCheck::Unchanged);
         };
@@ -2383,6 +2761,13 @@ impl BlobSession {
             }
             return Ok(DiskCheck::Unchanged);
         }
+        if Self::expects(st, &id, now) {
+            // the host's announced save: it waits for record_saved. The stat is not kept, so
+            // once the ticket lapses the next look hashes the file again and takes it in
+            st.disk.as_mut().expect("has disk").stat = None;
+            return Ok(DiskCheck::Unchanged);
+        }
+        let d = st.disk.as_mut().expect("has disk");
         if d.own.contains(&id) {
             // an older write of ours is back (an app saved a stale buffer, or a late echo):
             // its content is a version already; the file holds it now, and the next
@@ -2649,6 +3034,11 @@ impl BlobSession {
     /// the write in flight before the rename so a crash is recognised on the next open.
     fn write_back(&self, st: &mut BState, now: u64) -> Result<bool> {
         if st.disk.as_ref().map_or(true, |d| d.declined.is_some()) {
+            return Ok(false);
+        }
+        // the host is writing the file itself: never write over its save (retried on tick)
+        self.expire_ticket(st, now);
+        if st.expected.is_some() {
             return Ok(false);
         }
         let stale = match self.disk_check(st, now, false)? {

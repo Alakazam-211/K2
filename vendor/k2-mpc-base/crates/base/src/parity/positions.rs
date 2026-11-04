@@ -16,12 +16,20 @@
 //!   engine's, and may differ between engines.
 //!
 //! [`VERB_POSITIONS`] lists every verb (the kit's, and the grid verbs of
-//! [`crate::table::verbs::VERBS`]) that takes or prints positions, each form with its
-//! [`Unit`]. A test holds it to the verbs' usage lines.
+//! [`crate::table::verbs::VERBS`]) that takes positions, each form with its [`Unit`], and what
+//! some of them print. A test holds it to the verbs' usage lines. No row means the verb takes
+//! none; some verbs with no row still print them (`docs/POSITIONS.md`, "What a row says").
+//!
+//! **A pack's own verbs** declare theirs ([`crate::tools::PackVerb::positions`]). One that
+//! declares nothing still runs, and `capabilities` shows it as undeclared; [`check`] is the
+//! test a pack runs to refuse that.
 
-use super::Tier;
+use std::fmt;
+
+use super::{Registry, Source, Tier, VerbSpec};
 use Unit::{
-    FileBytes, FileChars, GridCell, GridCol, GridRow, LineCol, Lines, Ordinal, RenderedLines,
+    DocCoords, FileBytes, FileChars, GridCell, GridCol, GridRow, LineCol, Lines, Ordinal,
+    RenderedLines,
 };
 
 /// A unit positions (or position counts) are in.
@@ -58,6 +66,11 @@ pub enum Unit {
     GridCell,
     /// On a grid: `#N`, the Nth live row or column (1-based), as an insert or move target.
     Ordinal,
+    /// The Nth of a pack's own objects (1-based), which the verb's usage names.
+    PackNth,
+    /// A place or an area in the doc's own coordinates, which the kit stores and doesn't
+    /// interpret: `X,Y` or `X,Y,W,H`, finite numbers.
+    DocCoords,
 }
 
 /// Every unit, in the order `capabilities` lists them.
@@ -73,6 +86,8 @@ pub const UNITS: &[Unit] = &[
     Unit::GridCol,
     Unit::GridCell,
     Unit::Ordinal,
+    Unit::PackNth,
+    Unit::DocCoords,
 ];
 
 impl Unit {
@@ -90,6 +105,8 @@ impl Unit {
             Unit::GridCol => "grid_col",
             Unit::GridCell => "grid_cell",
             Unit::Ordinal => "ordinal",
+            Unit::PackNth => "pack_nth",
+            Unit::DocCoords => "doc_coords",
         }
     }
 
@@ -98,10 +115,15 @@ impl Unit {
     pub fn base(self) -> Option<u8> {
         match self {
             Unit::TextBytes | Unit::Utf16 => Some(0),
-            Unit::Lines | Unit::LineCol | Unit::RenderedLines | Unit::Ordinal => Some(1),
-            Unit::FileBytes | Unit::FileChars | Unit::GridRow | Unit::GridCol | Unit::GridCell => {
-                None
+            Unit::Lines | Unit::LineCol | Unit::RenderedLines | Unit::Ordinal | Unit::PackNth => {
+                Some(1)
             }
+            Unit::FileBytes
+            | Unit::FileChars
+            | Unit::GridRow
+            | Unit::GridCol
+            | Unit::GridCell
+            | Unit::DocCoords => None,
         }
     }
 
@@ -137,6 +159,11 @@ impl Unit {
             Unit::GridCol => "a column: a key (c3), #N (the Nth live column) or a header name",
             Unit::GridCell => "R,C: a row and a column",
             Unit::Ordinal => "#N: the Nth live row or column",
+            Unit::PackNth => "N: the Nth of a pack's own objects, which the verb's usage names",
+            Unit::DocCoords => {
+                "X,Y or X,Y,W,H: a place or area in the doc's own coordinates, which the kit \
+                 doesn't interpret"
+            }
         }
     }
 }
@@ -152,6 +179,14 @@ pub struct PositionForm {
     /// The tier this form is for, when the verb counts differently on another; `None`: every
     /// tier the verb works on.
     pub tier: Option<Tier>,
+}
+
+impl PositionForm {
+    /// A form a pack verb declares ([`crate::tools::PackVerb::positions`]), for every tier
+    /// the verb works on.
+    pub const fn new(at: &'static str, unit: Unit) -> Self {
+        f(at, unit)
+    }
 }
 
 /// The positions one verb takes or prints.
@@ -196,7 +231,7 @@ const fn v(verb: &'static str, forms: &'static [PositionForm]) -> VerbPositions 
     VerbPositions { verb, forms }
 }
 
-/// Every verb that takes or prints positions, with each form's unit. `capabilities` lists
+/// Every verb that takes positions, with each form's unit. `capabilities` lists
 /// the rows of the verbs a host serves; the grid verbs' rows appear with a grid pack's
 /// registry.
 pub const VERB_POSITIONS: &[VerbPositions] = &[
@@ -221,8 +256,24 @@ pub const VERB_POSITIONS: &[VerbPositions] = &[
     ),
     v("diff", &[f("-U", Lines), f("stdout", Lines)]),
     // presence
-    v("who", &[f("stdout", LineCol), f("stdout", Lines)]),
-    v("activity", &[f("stdout", Lines)]),
+    v(
+        "who",
+        &[
+            f("stdout", LineCol),
+            on("stdout", Lines, Tier::Text),
+            on("stdout", RenderedLines, Tier::Grid),
+            on("stdout", DocCoords, Tier::Grid),
+        ],
+    ),
+    v(
+        "activity",
+        &[
+            on("stdout", Lines, Tier::Text),
+            on("stdout", RenderedLines, Tier::Grid),
+        ],
+    ),
+    v("pointer", &[f("--at", DocCoords)]),
+    v("viewport", &[f("--rect", DocCoords)]),
     v(
         "claim",
         &[
@@ -288,7 +339,15 @@ pub const VERB_POSITIONS: &[VerbPositions] = &[
     ),
     v("row delete", &[f("--row", GridRow)]),
     v("row restore", &[f("--row", GridRow)]),
-    v("row list", &[f("--cols", GridCol), f("--where", GridCol)]),
+    v(
+        "row list",
+        &[
+            f("--cols", GridCol),
+            f("--where", GridCol),
+            f("stdout", Ordinal),
+            f("stdout", RenderedLines),
+        ],
+    ),
     v(
         "col insert",
         &[
@@ -309,12 +368,110 @@ pub const VERB_POSITIONS: &[VerbPositions] = &[
     v("col delete", &[f("--col", GridCol)]),
     v("col restore", &[f("--col", GridCol)]),
     v("col rename", &[f("--col", GridCol)]),
+    v("col list", &[f("stdout", Ordinal)]),
     v("sort", &[f("--by", GridCol), f("--then", GridCol)]),
 ];
 
 /// `verb`'s row, if it takes or prints positions.
 pub fn of(verb: &str) -> Option<&'static VerbPositions> {
     VERB_POSITIONS.iter().find(|r| r.verb == verb)
+}
+
+/// What `capabilities` states about a served verb's positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stated {
+    /// Its forms: a pack verb's declaration, else its row in [`VERB_POSITIONS`]. Empty: a
+    /// pack verb that declares it takes and prints none.
+    Forms(&'static [PositionForm]),
+    /// A kit verb with no row: it takes no position, and has no line. It may still print some
+    /// (`docs/POSITIONS.md`, "What a row says").
+    NoRow,
+    /// A pack verb that declares nothing and has no row, or a file verb ([`Source::File`]):
+    /// its units are unknown.
+    Undeclared,
+}
+
+/// What `capabilities` states about `verb`.
+pub fn stated(verb: &VerbSpec) -> Stated {
+    if let Some(forms) = verb.positions {
+        return Stated::Forms(forms);
+    }
+    match (of(verb.name), verb.source) {
+        // a file verb is the host's: the kit's table never names it, whatever its name
+        (_, Source::File) => Stated::Undeclared,
+        (Some(r), _) => Stated::Forms(r.forms),
+        (None, Source::Kit) => Stated::NoRow,
+        (None, Source::Pack) => Stated::Undeclared,
+    }
+}
+
+/// Whether `usage` names flag `flag`: spelled out, or a letter in a `[-abc]` cluster.
+pub fn usage_names(usage: &str, flag: &str) -> bool {
+    if usage.contains(flag) {
+        return true;
+    }
+    let Some(letter) = flag.strip_prefix('-').filter(|l| l.len() == 1) else {
+        return false;
+    };
+    usage
+        .split('[')
+        .skip(1)
+        .filter_map(|s| s.split(']').next())
+        .any(|c| {
+            c.starts_with('-')
+                && !c.starts_with("--")
+                && !c.contains(' ')
+                && c[1..].contains(letter)
+        })
+}
+
+/// Why a registry's pack verbs don't state their positions: one line per problem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PositionProblems(pub Vec<String>);
+
+impl fmt::Display for PositionProblems {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "positions: {}", self.0.join("; "))
+    }
+}
+
+impl std::error::Error for PositionProblems {}
+
+/// Check that every pack verb in `registry` states its positions, and that each form it
+/// states is a flag in its usage or one of [`NON_FLAG_PLACES`]. A pack's test runs it on
+/// `Registry::for_pack(&pack)?`.
+pub fn check(registry: &Registry) -> Result<(), PositionProblems> {
+    let mut bad = Vec::new();
+    for v in registry.verbs().iter().filter(|v| v.source == Source::Pack) {
+        match stated(v) {
+            Stated::Forms(forms) => {
+                for p in forms {
+                    let named = if p.at.starts_with('-') {
+                        usage_names(v.usage, p.at)
+                    } else {
+                        NON_FLAG_PLACES.contains(&p.at)
+                    };
+                    if !named {
+                        bad.push(format!(
+                            "pack verb {:?}: {:?} is neither in its usage nor one of \
+                             {NON_FLAG_PLACES:?}",
+                            v.name, p.at
+                        ));
+                    }
+                }
+            }
+            Stated::NoRow | Stated::Undeclared => bad.push(format!(
+                "pack verb {:?} declares no position units: add .positions(&[...]), or \
+                 .positions(&[]) if it takes and prints none",
+                v.name
+            )),
+        }
+    }
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        Err(PositionProblems(bad))
+    }
 }
 
 #[cfg(test)]

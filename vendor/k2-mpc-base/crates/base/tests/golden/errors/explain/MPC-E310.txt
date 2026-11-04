@@ -1,0 +1,27 @@
+MPC-E310 selection_too_large (presence and claims)
+exit:     2
+message:  selection too large: {len} keys (the most is {max})
+next:     A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).
+step:     select; args: --clear; why: A selection holds at most 256 elements; clear it, then select fewer.
+rule:     K-PRES-6
+verbs:    select
+status:   live
+--- json
+{
+  "id": "MPC-E310",
+  "name": "selection_too_large",
+  "area": "presence and claims",
+  "exit": 2,
+  "message": "selection too large: {len} keys (the most is {max})",
+  "next": "A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).",
+  "next_step": {
+    "verb": "select",
+    "args": ["--clear"],
+    "why": "A selection holds at most 256 elements; clear it, then select fewer."
+  },
+  "rule": "K-PRES-6",
+  "verbs": ["select"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

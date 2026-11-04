@@ -53,6 +53,11 @@ AUTO = re.compile(r"workers\s+auto", re.I)
 HEADING = re.compile(r"^(#{1,6})\s")
 
 
+# A run's status that means it didn't run; the counts that, at 0 on a COMPLETE run, say the same.
+NOT_RUN = ("ERROR", "NO_RESULT", "UNKNOWN")
+RAN_COUNTS = ("states", "samples", "traces", "histories", "walks", "tests")
+
+
 def load_runs(d):
     runs = {}
     for p in sorted(glob.glob(os.path.join(d, "*.json"))):
@@ -64,6 +69,23 @@ def load_runs(d):
         job = doc.get("job") or os.path.basename(p)[:-5]
         runs[job] = {r["run"]: r for r in doc.get("runs", [])}
     return runs
+
+
+def check_records(runs):
+    """Records that say a run ran nothing, cited or not: a job's exit code doesn't show them."""
+    probs = []
+    for job, recs in sorted(runs.items()):
+        for name, r in sorted(recs.items()):
+            if r.get("not_run_ok"):
+                continue
+            st = r.get("status")
+            if st in NOT_RUN:
+                probs.append("%s/%s has status %s: it didn't run (give the record `not_run_ok` with the reason if that is known and fine)" % (job, name, st))
+            if st == "COMPLETE":
+                for k in RAN_COUNTS:
+                    if r.get(k) == 0:
+                        probs.append("%s/%s is COMPLETE with %s 0: it ran nothing" % (job, name, k))
+    return probs
 
 
 def cap_matches(text, cap):
@@ -232,7 +254,7 @@ def main(argv):
     if not files:
         files = sorted(glob.glob("docs/evidence/*.md"))
     runs = load_runs(runs_dir)
-    probs = []
+    probs = check_records(runs)
     for f in files:
         probs += check_file(f, runs)
     for p in probs:

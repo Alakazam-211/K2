@@ -1,0 +1,27 @@
+MPC-E176 line_address_unreliable (sessions and edits)
+exit:     2
+message:  {address}: this file holds a lone CR, so its line numbers have no one meaning; name the row by its key or #N (row list shows both)
+next:     A lone CR (a carriage return with no line feed after it, inside a value or ending the records) ends a line for the table's rendered lines but not for the tools that read like cat -n, so an LN address could name a row other than the one you read. Nothing was read or applied. Name the row by its key (r17) or its #N: row list shows both for every row.
+step:     row list; why: Line numbers have no one meaning in this file, so list the rows to get each one's key and position, then address the row by one of those.
+rule:     K-ADDR-4, K-PAR-7
+verbs:    a pack's own verbs
+status:   live
+--- json
+{
+  "id": "MPC-E176",
+  "name": "line_address_unreliable",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{address}: this file holds a lone CR, so its line numbers have no one meaning; name the row by its key or #N (row list shows both)",
+  "next": "A lone CR (a carriage return with no line feed after it, inside a value or ending the records) ends a line for the table's rendered lines but not for the tools that read like cat -n, so an LN address could name a row other than the one you read. Nothing was read or applied. Name the row by its key (r17) or its #N: row list shows both for every row.",
+  "next_step": {
+    "verb": "row list",
+    "args": [],
+    "why": "Line numbers have no one meaning in this file, so list the rows to get each one's key and position, then address the row by one of those."
+  },
+  "rule": "K-ADDR-4, K-PAR-7",
+  "verbs": ["@pack"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -13,6 +13,10 @@
 //! - [`table`]: tables (the CSV grid) as plain data over the structured kinds: the six roots,
 //!   render rules, key minting, grid ops, the aligner (`reconcile`), the grid three-way merge,
 //!   and the hidden-cell-writes report. Engine-free and codec-free.
+//! - [`mint`]: tagged-key minting (`<prefix><n>.<writer tag>`): list keys two writers never
+//!   mint alike, and the next number from the keys a writer can see.
+//! - [`refs`]: references to list elements and their state (attached, suspect, orphaned),
+//!   computed from the doc and never stored: a reference is never moved or deleted silently.
 //! - [`store`]: persistence (snapshot + update log + attribution + engine-neutral versions),
 //!   with erasure: redacted records, the file rewrite and the byte scan.
 //! - [`codec`]: reusable file codecs (plain text with BOM/EOL round trip).
@@ -34,6 +38,8 @@
 //! - [`ids`]: the ID table (K-ID-13): every ID and address kind the kit's verbs take or
 //!   print, with its durability class, scope and verbs (`docs/IDS.md`); packs add theirs
 //!   ([`session::Pack::ids`]); the ID-churn judge for packs' tests (feature `test-support`).
+//! - [`timers`]: production timers (v0.10.1): per-path counts, times and p50/p95/p99, off
+//!   by default, in every build (`docs/SESSIONS.md`, "Timers").
 //! - [`parity`]: the agent-parity framework: person actions, the verb registry, and the
 //!   harness that runs each action the person's way and the agent's way and compares.
 //!
@@ -49,6 +55,15 @@ macro_rules! prof {
     ($name:literal) => {
         #[cfg(any(test, feature = "differential"))]
         let _prof = $crate::differential::ProfScope::new($name);
+    };
+}
+
+/// A production timer scope (v0.10.1, [`timers`]): times the rest of the enclosing block
+/// under [`timers::Path`]`::$path` when the timers are on; one relaxed load and a branch
+/// when they are off. In every build.
+macro_rules! timed {
+    ($path:ident) => {
+        let _timed = $crate::timers::Scope::new($crate::timers::Path::$path);
     };
 }
 
@@ -74,17 +89,17 @@ pub mod elem;
 mod engine;
 pub mod errors;
 pub mod export;
-#[cfg(feature = "fuzzing")]
-#[doc(hidden)]
-pub mod fuzzing;
 mod hash;
 pub mod ids;
+pub mod mint;
 pub mod parity;
+pub mod refs;
 pub mod schema;
 pub mod session;
 pub mod store;
 pub mod table;
 pub mod text;
+pub mod timers;
 pub mod tools;
 
 pub use doc::{ClientId, Doc, DocError, Edit, Neutral, UpdateInfo, MAX_CLIENT_ID};

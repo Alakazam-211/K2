@@ -209,6 +209,115 @@ impl std::fmt::Display for CellCursor {
     }
 }
 
+/// At most this many keys in one [`ElemSelection`]; more is refused
+/// ([`super::SessionError::SelectionTooLarge`]).
+pub const ELEM_SELECTION_MAX: usize = 256;
+
+/// Elements selected by identity: keys of one MovableList root. It follows moves with no
+/// mapping, and a key whose element stops being live leaves it
+/// ([`super::Session::set_selection`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ElemSelection {
+    pub root: String,
+    pub keys: Vec<crate::elem::Key>,
+}
+
+impl ElemSelection {
+    pub fn new(root: impl Into<String>, keys: Vec<crate::elem::Key>) -> Self {
+        Self {
+            root: root.into(),
+            keys,
+        }
+    }
+}
+
+/// A place in the doc's own coordinates, which the kit doesn't interpret. Always finite, and
+/// never `-0.0`, so it compares and encodes one way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Eq for Point {}
+
+/// `-0.0` as `0.0`; a number that isn't finite is refused.
+fn coordinate(what: &str, v: f64) -> super::error::Result<f64> {
+    if v.is_finite() {
+        Ok(v + 0.0)
+    } else {
+        Err(super::error::SessionError::BadPosition(format!(
+            "{what} is not a finite number"
+        )))
+    }
+}
+
+impl Point {
+    /// [`super::SessionError::BadPosition`] unless both are finite.
+    pub fn new(x: f64, y: f64) -> super::error::Result<Self> {
+        Ok(Self {
+            x: coordinate("x", x)?,
+            y: coordinate("y", y)?,
+        })
+    }
+
+    pub fn x(&self) -> f64 {
+        self.x
+    }
+
+    pub fn y(&self) -> f64 {
+        self.y
+    }
+}
+
+/// An area in the doc's own coordinates, which the kit doesn't interpret: `(x, y)` and a size.
+/// Always finite, never `-0.0`, and the size is never negative.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl Eq for Rect {}
+
+impl Rect {
+    /// [`super::SessionError::BadPosition`] unless all four are finite and `w` and `h` aren't
+    /// negative.
+    pub fn new(x: f64, y: f64, w: f64, h: f64) -> super::error::Result<Self> {
+        let (w, h) = (coordinate("w", w)?, coordinate("h", h)?);
+        if w < 0.0 || h < 0.0 {
+            return Err(super::error::SessionError::BadPosition(format!(
+                "a size of {w} by {h} is negative"
+            )));
+        }
+        Ok(Self {
+            x: coordinate("x", x)?,
+            y: coordinate("y", y)?,
+            w,
+            h,
+        })
+    }
+
+    pub fn x(&self) -> f64 {
+        self.x
+    }
+
+    pub fn y(&self) -> f64 {
+        self.y
+    }
+
+    pub fn w(&self) -> f64 {
+        self.w
+    }
+
+    pub fn h(&self) -> f64 {
+        self.h
+    }
+}
+
 /// One row of [`super::Session::roster`]: one participant (pid), however many connections
 /// they have. Per-connection state is folded in: role, caret and view come from the most
 /// active connection; away only when every connection is away.
@@ -249,6 +358,13 @@ pub struct RosterEntry {
     /// most active connection's caret, for hosts and clients that show one caret a person.
     /// Empty on a grid (its carets are [`RosterEntry::cell`], per participant) and for tier 0.
     pub devices: Vec<Device>,
+    /// The most active connection's element selection that has one
+    /// ([`super::Session::set_selection`]).
+    pub selection: Option<ElemSelection>,
+    /// The most active connection's pointer that has one ([`super::Session::set_pointer`]).
+    pub pointer: Option<Point>,
+    /// The most active connection's viewport that has one ([`super::Session::set_viewport`]).
+    pub viewport: Option<Rect>,
 }
 
 /// One connection of a participant, on a text doc's roster ([`RosterEntry::devices`]): the
@@ -266,6 +382,12 @@ pub struct Device {
     /// ([`JoinOptions::label`](field@super::JoinOptions::label)):
     /// "another tab", "Chrome on Mac". Never doc text; `None` when the host gave none.
     pub label: Option<String>,
+    /// This connection's element selection, if it has one.
+    pub selection: Option<ElemSelection>,
+    /// This connection's pointer, if it has one.
+    pub pointer: Option<Point>,
+    /// This connection's viewport, if it has one.
+    pub viewport: Option<Rect>,
 }
 
 /// At most this many characters of a connection's label

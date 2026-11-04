@@ -13,8 +13,9 @@ use std::sync::{Arc, Mutex};
 use k2_mpc_base::blob::{BlobConfig, BlobError, BlobStore};
 use k2_mpc_base::session::{
     Action, AnyFile, Approval, ApprovalState, AuditEvent, BlobLogEntry, BlobLogKind, BlobMerge,
-    BlobPack, BlobSession, Config, ConnId, DiskCheck, DiskState, Host, LeaseEnd, Need, Participant,
-    ParticipantKind, Rights, Role, SessionError, SessionManager, Stay, TextFilePack, EXTERNAL_PID,
+    BlobPack, BlobSession, BlobWriteResult, Config, ConnId, DiskCheck, DiskState, Host, LeaseEnd,
+    Need, NotRecorded, Participant, ParticipantKind, Rights, Role, SessionError, SessionManager,
+    Stay, TextFilePack, EXTERNAL_PID, SAVE_TICKETS_KEPT,
 };
 use k2_mpc_base::store::{BlobReason, DocKey, DocStore, StoreError};
 
@@ -2348,4 +2349,791 @@ fn racy_a_copy_edited_back_inside_the_tick_is_the_kits_again() {
         [(key("x.bin"), copy.clone())],
         "edited back to its version: the kit's copy again"
     );
+}
+
+// ---------- a save the host made itself (expect_save, then record_saved)
+
+/// The file's mtime in ms, as the kit records it (`FileStat`'s nanoseconds, truncated).
+fn mtime_ms(path: &Path) -> u64 {
+    let d = fs::metadata(path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    (d.as_nanos() / 1_000_000) as u64
+}
+
+/// The file's bytes, mtime (ns) and inode: a write by anyone (in place or by rename) moves
+/// the mtime off the old value set here, or the inode.
+fn file_state(path: &Path) -> (Vec<u8>, std::time::SystemTime, u64) {
+    use std::os::unix::fs::MetadataExt;
+    let m = fs::metadata(path).unwrap();
+    (fs::read(path).unwrap(), m.modified().unwrap(), m.ino())
+}
+
+/// A file the host wrote: its bytes saved by temp write and rename, then its mtime set an
+/// hour back, so any later write of it shows.
+fn host_save(path: &Path, bytes: &[u8]) {
+    app_save(path, bytes);
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+}
+
+/// The whole save: a ticket, the host's write, the record.
+fn host_saves(s: &BlobSession, c: ConnId, base: u64, path: &Path, bytes: &[u8]) -> BlobWriteResult {
+    let t = s.expect_save(c, base, bytes).unwrap();
+    host_save(path, bytes);
+    s.record_saved(c, t).unwrap()
+}
+
+/// The version is the participant's, as a write's: pid, name, `via`, kind `Write`, the host
+/// clock, and the file's mtime (its content came from disk). Nothing is written.
+#[test]
+fn record_saved_records_the_author_and_via() {
+    let f = fx("rs-author");
+    let path = f.path("plan.bin");
+    fs::write(&path, b"one").unwrap();
+    f.grant("bot", Rights::full());
+    f.grant("alice", Rights::full());
+    let s = f.open("plan.bin");
+    let g = f.join(&s, agent("bot"));
+    let a = f.join(&s, person("alice", "Alice"));
+    let v1 = s.status().unwrap().version;
+    f.advance(1_000);
+    let r = host_saves(&s, g, v1, &path, b"two");
+    let e = s.log(a).unwrap().pop().unwrap();
+    assert_eq!(
+        (
+            e.id,
+            e.kind,
+            e.author.as_str(),
+            e.author_name.as_str(),
+            e.via.as_str(),
+            e.at_ms
+        ),
+        (r.version, BlobLogKind::Write, "bot", "bot", "cli", f.now()),
+        "the agent's version, through its surface"
+    );
+    assert_eq!(e.on_behalf_of, None);
+    assert_eq!(e.mtime_ms, Some(mtime_ms(&path)));
+    assert!(r.changed && !r.written, "{r:?}");
+    assert_eq!(s.status().unwrap().version, r.version);
+    assert_eq!(read_all(&s, a), b"two");
+    // a person's, through the tab
+    f.advance(1_000);
+    let r2 = host_saves(&s, a, r.version, &path, b"three");
+    let e = s.log(a).unwrap().pop().unwrap();
+    assert_eq!(
+        (
+            e.id,
+            e.author.as_str(),
+            e.author_name.as_str(),
+            e.via.as_str()
+        ),
+        (r2.version, "alice", "Alice", "tab")
+    );
+    assert_eq!(s.blame(a).unwrap().current.author, "alice");
+    assert_eq!(s.status().unwrap().disk, Some(DiskState::Clean));
+}
+
+/// The base must be current when the ticket is taken (`Stale`, no ticket), and still when it
+/// is recorded: an outside save of other bytes taken in meanwhile makes it `Stale`, nothing
+/// recorded of the host's save.
+#[test]
+fn record_saved_from_a_stale_base_is_refused() {
+    let f = fx("rs-stale");
+    let path = f.path("img.png");
+    fs::write(&path, b"\x89PNG one").unwrap();
+    f.grant("alice", Rights::full());
+    f.grant("bot", Rights::editor());
+    let s = f.open("img.png");
+    let (a, g) = (
+        f.join(&s, person("alice", "Alice")),
+        f.join(&s, agent("bot")),
+    );
+    let v1 = s.status().unwrap().version;
+    let w = s.write_bytes(a, b"\x89PNG two", v1).unwrap();
+    let n = s.versions(a).unwrap().len();
+    assert_eq!(
+        s.expect_save(g, v1, b"\x89PNG bot"),
+        Err(SessionError::Stale {
+            expected: v1,
+            actual: w.version
+        })
+    );
+    assert_eq!(s.versions(a).unwrap().len(), n, "nothing recorded");
+    // a ticket on the current version; another program's save lands first and is taken in
+    let t = s.expect_save(g, w.version, b"\x89PNG bot").unwrap();
+    app_save(&path, b"\x89PNG desktop");
+    assert!(matches!(
+        s.file_changed().unwrap(),
+        DiskCheck::Conflict { .. } | DiskCheck::Ingested { .. }
+    ));
+    let now = s.status().unwrap().version;
+    host_save(&path, b"\x89PNG bot");
+    assert_eq!(
+        s.record_saved(g, t),
+        Err(SessionError::Stale {
+            expected: w.version,
+            actual: now
+        })
+    );
+    assert_eq!(s.status().unwrap().version, now, "nothing recorded");
+}
+
+/// The file must hold exactly the ticket's bytes (by keyed id): other bytes, or no file, is
+/// `SaveMismatch` (`MPC-E413`, exit 1), nothing recorded or written, and the ticket ends.
+#[test]
+fn record_saved_refuses_a_file_that_holds_other_bytes() {
+    let f = fx("rs-mismatch");
+    let path = f.path("deck.bin");
+    fs::write(&path, b"deck-1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("deck.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let v1 = s.status().unwrap().version;
+    let t = s.expect_save(a, v1, b"deck-2").unwrap();
+    // another program saved after the host
+    host_save(&path, b"someone else's");
+    let before = file_state(&path);
+    let out = s.record_saved(a, t);
+    assert_eq!(
+        out,
+        Err(SessionError::SaveMismatch {
+            size: 6,
+            file_size: Some(14)
+        })
+    );
+    let rep = out.unwrap_err().report();
+    assert_eq!((rep.id(), rep.exit()), ("MPC-E413", 1), "{}", rep.to_json());
+    assert_eq!(s.versions(a).unwrap().len(), 1, "nothing recorded");
+    assert_eq!(file_state(&path), before, "the file untouched");
+    let again = s.record_saved(a, t);
+    assert_eq!(
+        again,
+        Err(SessionError::SaveTicketInvalid),
+        "the refusal used it"
+    );
+    let rep = again.unwrap_err().report();
+    assert_eq!((rep.id(), rep.exit()), ("MPC-E414", 2));
+    // the same size, other bytes: still refused (a hash, not a length)
+    let t = s.expect_save(a, v1, b"deck-2").unwrap();
+    host_save(&path, b"deck-3");
+    assert_eq!(
+        s.record_saved(a, t),
+        Err(SessionError::SaveMismatch {
+            size: 6,
+            file_size: Some(6)
+        })
+    );
+    // no file at all
+    let t = s.expect_save(a, v1, b"deck-2").unwrap();
+    fs::remove_file(&path).unwrap();
+    assert_eq!(
+        s.record_saved(a, t),
+        Err(SessionError::SaveMismatch {
+            size: 6,
+            file_size: None
+        })
+    );
+    assert_eq!(s.versions(a).unwrap().len(), 1, "nothing recorded");
+    assert!(!path.exists(), "nothing written");
+    // a doc with no file has nothing to record from
+    let nf = f
+        .mgr
+        .open_blob(Arc::new(AnyFile), &key("nofile.bin"), Some(&mut &b"x"[..]))
+        .unwrap();
+    let c = f.join(&nf, person("alice", "Alice"));
+    let v = nf.status().unwrap().version;
+    assert!(matches!(
+        nf.expect_save(c, v, b"y"),
+        Err(SessionError::BadPath(_))
+    ));
+}
+
+/// The host's own watcher fires between its rename and `record_saved`: the file holding
+/// exactly the ticket's bytes waits for the record, so the save is one version, the person's.
+#[test]
+fn record_saved_waits_for_the_watcher_in_between() {
+    let f = fx("rs-between");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let t = s.expect_save(a, 1, b"alice's save").unwrap();
+    host_save(&path, b"alice's save");
+    assert_eq!(s.file_changed().unwrap(), DiskCheck::Unchanged);
+    f.advance(3_000);
+    assert!(f.mgr.tick().unwrap().ingested.is_empty());
+    assert_eq!(s.check_disk().unwrap(), DiskCheck::Unchanged);
+    assert_eq!(s.versions(a).unwrap().len(), 1, "nothing yet");
+    let r = s.record_saved(a, t).unwrap();
+    let log = s.log(a).unwrap();
+    assert_eq!(
+        log.iter()
+            .map(|e| (e.kind, e.author.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (BlobLogKind::Import, "kit:import"),
+            (BlobLogKind::Write, "alice")
+        ],
+        "one version, by the person"
+    );
+    assert_eq!(s.lease().unwrap(), None, "the ticket's lease ended with it");
+    assert!(r.changed);
+    assert_eq!(s.file_changed().unwrap(), DiskCheck::Unchanged);
+}
+
+/// Under the person's lease: the watcher in between makes no conflict and no conflict copy,
+/// and the lease stays theirs.
+#[test]
+fn record_saved_under_a_lease_makes_no_conflict_copy() {
+    let f = fx("rs-leased");
+    let path = f.path("report.pdf");
+    fs::write(&path, PDF1).unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("report.pdf");
+    let a = f.join(&s, person("alice", "Alice"));
+    s.acquire_lease(a, None).unwrap();
+    let t = s.expect_save(a, 1, PDF2).unwrap();
+    host_save(&path, PDF2);
+    let seen = s.file_changed().unwrap();
+    let rec = s.record_saved(a, t);
+    assert_eq!(names_in(&f.ws), ["report.pdf"], "no conflict copy");
+    assert_eq!(seen, DiskCheck::Unchanged);
+    assert!(rec.is_ok(), "{rec:?}");
+    assert!(!f
+        .events()
+        .iter()
+        .any(|e| matches!(e, AuditEvent::BlobConflict { .. })));
+    assert_eq!(
+        s.log(a).unwrap().iter().map(|e| e.kind).collect::<Vec<_>>(),
+        [BlobLogKind::Import, BlobLogKind::Write]
+    );
+    assert_eq!(s.lease().unwrap().map(|l| l.pid), Some("alice".to_owned()));
+}
+
+/// While a ticket is open, other bytes are still an outside save (here a conflict: the
+/// ticket holds the lease, so a conflict copy keeps what it replaced).
+#[test]
+fn record_saved_other_bytes_during_a_ticket_are_an_outside_save() {
+    let f = fx("rs-other");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let _t = s.expect_save(a, 1, b"alice's save").unwrap();
+    app_save(&path, b"someone else's");
+    let out = s.file_changed().unwrap();
+    assert!(
+        matches!(out, DiskCheck::Conflict { .. } | DiskCheck::Ingested { .. }),
+        "{out:?}"
+    );
+    assert_eq!(s.status().unwrap().current.author, EXTERNAL_PID);
+    assert_eq!(read_all(&s, a), b"someone else's");
+}
+
+/// A ticket lapses after `save_ticket_ms` (host clock): the bytes it held back come in as an
+/// outside save at the next tick's stat poll, and recording it is `Ok` with nothing recorded,
+/// `not_recorded: Lapsed`.
+#[test]
+fn record_saved_after_the_ticket_lapsed_is_an_outside_save() {
+    let f = fx("rs-lapsed");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let t = s.expect_save(a, 1, b"alice's save").unwrap();
+    assert_eq!(t.expires_ms(), f.now() + Config::default().save_ticket_ms);
+    host_save(&path, b"alice's save");
+    assert_eq!(s.file_changed().unwrap(), DiskCheck::Unchanged);
+    f.advance(Config::default().save_ticket_ms + 1);
+    let ticked = f.mgr.tick().unwrap();
+    assert_eq!(ticked.ingested.len(), 1, "{ticked:?}");
+    assert!(ticked.conflicts.is_empty(), "{ticked:?}");
+    assert_eq!(s.status().unwrap().current.author, EXTERNAL_PID);
+    assert_eq!(
+        s.record_saved(a, t).map(|r| (r.changed, r.not_recorded)),
+        Ok((false, Some(NotRecorded::Lapsed)))
+    );
+    assert_eq!(s.versions(a).unwrap().len(), 2, "the save is kept, once");
+}
+
+/// A ticket is in memory only: after an unload its bytes come in as an outside save when the
+/// doc opens again, and recording the old ticket is `Ok` with `not_recorded: Reloaded`.
+#[test]
+fn record_saved_after_an_unload_is_an_outside_save() {
+    let f = fx("rs-unload");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let t = {
+        let s = f.open("a.bin");
+        let a = f.join(&s, person("alice", "Alice"));
+        let t = s.expect_save(a, 1, b"alice's save").unwrap();
+        host_save(&path, b"alice's save");
+        t
+    };
+    let f = restart(f);
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    assert_eq!(s.status().unwrap().current.author, EXTERNAL_PID);
+    assert_eq!(
+        s.record_saved(a, t).map(|r| (r.changed, r.not_recorded)),
+        Ok((false, Some(NotRecorded::Reloaded)))
+    );
+    assert_eq!(read_all(&s, a), b"alice's save");
+}
+
+/// Two tickets: someone else can't take one while one is open (the ticket holds the lease:
+/// `Leased`); the same participant's new ticket replaces the open one (recording the old one is
+/// `Ok`, `not_recorded: Replaced`), and the newer one still records.
+#[test]
+fn record_saved_two_tickets() {
+    let f = fx("rs-two");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    f.grant("bob", Rights::editor());
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let b = f.join(&s, agent("bob"));
+    let t1 = s.expect_save(a, 1, b"first").unwrap();
+    let other = s.expect_save(b, 1, b"bob's");
+    assert!(
+        matches!(&other, Err(SessionError::Leased { holder, .. }) if holder == "alice"),
+        "{other:?}"
+    );
+    let t2 = s.expect_save(a, 1, b"second").unwrap();
+    host_save(&path, b"second");
+    assert_eq!(
+        s.record_saved(a, t1).map(|r| (r.changed, r.not_recorded)),
+        Ok((false, Some(NotRecorded::Replaced)))
+    );
+    let r = s.record_saved(a, t2).unwrap();
+    assert!(r.changed);
+    assert_eq!(r.not_recorded, None);
+    assert_eq!(read_all(&s, a), b"second");
+    assert_eq!(s.versions(a).unwrap().len(), 2);
+}
+
+/// A host bug is a refusal (`SaveTicketInvalid`, `MPC-E414`, exit 2), nothing recorded: a
+/// ticket recorded twice, another connection's ticket, and a ticket this doc never issued.
+/// The open ticket stays its own connection's.
+#[test]
+fn record_saved_misuse_is_refused() {
+    let f = fx("rs-misuse");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    fs::write(f.path("b.bin"), b"b1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("a.bin");
+    let other = f.open("b.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let a2 = f.join(&s, person("alice", "Alice"));
+    let ob = f.join(&other, person("alice", "Alice"));
+    // another connection's ticket, even the same participant's
+    let t = s.expect_save(a, 1, b"v2").unwrap();
+    host_save(&path, b"v2");
+    assert_eq!(s.record_saved(a2, t), Err(SessionError::SaveTicketInvalid));
+    // recorded twice
+    let r = s.record_saved(a, t).unwrap();
+    assert!(r.changed);
+    assert_eq!(s.record_saved(a, t), Err(SessionError::SaveTicketInvalid));
+    // never issued by this doc
+    let tb = other.expect_save(ob, 1, b"b2").unwrap();
+    assert_eq!(s.record_saved(a, tb), Err(SessionError::SaveTicketInvalid));
+    assert_eq!(
+        s.versions(a).unwrap().len(),
+        2,
+        "one version, the good record's"
+    );
+}
+
+/// The doc remembers its last `SAVE_TICKETS_KEPT` ended tickets: one replaced that long ago
+/// reads as invalid, one inside the window as `Replaced`.
+#[test]
+fn record_saved_remembers_a_bounded_number_of_tickets() {
+    let f = fx("rs-ring");
+    fs::write(f.path("a.bin"), b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let first = s.expect_save(a, 1, b"v2").unwrap();
+    let mut second = None;
+    for i in 0..=SAVE_TICKETS_KEPT {
+        let t = s.expect_save(a, 1, b"v2").unwrap();
+        if i == 0 {
+            second = Some(t);
+        }
+    }
+    // `first` is the (KEPT + 1)th from the end: forgotten; `second` is the KEPT-th: kept
+    assert_eq!(
+        s.record_saved(a, first),
+        Err(SessionError::SaveTicketInvalid)
+    );
+    assert_eq!(
+        s.record_saved(a, second.unwrap()).map(|r| r.not_recorded),
+        Ok(Some(NotRecorded::Replaced))
+    );
+}
+
+/// The host saved alice's bytes and recorded them, and before the save's change event comes
+/// in, bob writes a version the file can't get yet (the folder is left read-only). Returns
+/// the session, alice's connection and bob's version; the doc then has [`AFTER_BOB`]
+/// versions.
+fn recorded_then_a_write_the_file_lacks(f: &Fx, name: &str) -> (Arc<BlobSession>, ConnId, u64) {
+    let path = f.path(name);
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    f.grant("bob", Rights::full());
+    let s = f.open(name);
+    let a = f.join(&s, person("alice", "Alice"));
+    let b = f.join(&s, agent("bob"));
+    let r = host_saves(&s, a, 1, &path, b"alice's save");
+    assert!(r.changed);
+    fs::set_permissions(&f.ws, fs::Permissions::from_mode(0o555)).unwrap();
+    let w = s.write_bytes(b, b"bob's", r.version).unwrap();
+    assert!(w.changed && !w.written, "{w:?}");
+    (s, a, w.version)
+}
+
+/// v1, the host's save, bob's write.
+const AFTER_BOB: usize = 3;
+
+/// The save's own change events after the record: the kit's content, nothing recorded.
+#[test]
+fn record_saved_its_own_change_events_record_nothing() {
+    let f = fx("rs-echo-now");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let r = host_saves(&s, a, 1, &path, b"alice's save");
+    assert_eq!(s.file_changed().unwrap(), DiskCheck::Unchanged);
+    f.advance(3_000);
+    assert_eq!(s.check_disk().unwrap(), DiskCheck::Unchanged);
+    f.advance(3_000);
+    assert!(f.mgr.tick().unwrap().ingested.is_empty());
+    assert_eq!(s.versions(a).unwrap().len(), 2, "recorded once");
+    assert_eq!(s.status().unwrap().version, r.version);
+}
+
+/// No second record through the watcher when the save's change event comes late, after the
+/// doc has moved past the recorded bytes before the file has (bob's version not written back
+/// yet): the file holding the host's save is the kit's own content, not an outside save over
+/// bob's.
+#[test]
+fn record_saved_is_not_taken_in_again_by_file_changed() {
+    let f = fx("rs-echo-fc");
+    let (s, a, w) = recorded_then_a_write_the_file_lacks(&f, "a.bin");
+    let out = s.file_changed();
+    fs::set_permissions(&f.ws, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        matches!(out, Ok(DiskCheck::Unchanged | DiskCheck::OwnWrite)),
+        "{out:?}"
+    );
+    assert_eq!(
+        s.versions(a).unwrap().len(),
+        AFTER_BOB,
+        "the host's save is recorded once"
+    );
+    assert_eq!(s.status().unwrap().version, w, "bob's version is current");
+    assert!(!f.events().iter().any(|e| matches!(
+        e,
+        AuditEvent::ExternalEdit { .. } | AuditEvent::BlobConflict { .. }
+    )));
+    // and bob's version reaches the file
+    s.flush(a).unwrap();
+    assert_eq!(fs::read(f.path("a.bin")).unwrap(), b"bob's");
+}
+
+/// The same through the stat backup (`check_disk`, and `tick`).
+#[test]
+fn record_saved_is_not_taken_in_again_by_check_disk() {
+    let f = fx("rs-echo-cd");
+    let (s, a, w) = recorded_then_a_write_the_file_lacks(&f, "a.bin");
+    f.advance(3_000);
+    let out = s.check_disk();
+    f.advance(3_000);
+    let ticked = f.mgr.tick();
+    fs::set_permissions(&f.ws, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        matches!(out, Ok(DiskCheck::Unchanged | DiskCheck::OwnWrite)),
+        "{out:?}"
+    );
+    let ticked = ticked.unwrap();
+    assert!(
+        ticked.ingested.is_empty() && ticked.conflicts.is_empty(),
+        "{ticked:?}"
+    );
+    assert_eq!(
+        s.versions(a).unwrap().len(),
+        AFTER_BOB,
+        "the host's save is recorded once"
+    );
+    assert_eq!(s.status().unwrap().version, w, "bob's version is current");
+    assert!(!f.events().iter().any(|e| matches!(
+        e,
+        AuditEvent::ExternalEdit { .. } | AuditEvent::BlobConflict { .. }
+    )));
+}
+
+/// The same after a reopen, where no disk check ran in between: the sync record committed
+/// with the version is what the reopened doc reads. Here alice records her save, opens a
+/// second ticket, and her other connection writes a version meanwhile (its write-back waits
+/// for the ticket); the doc then unloads with the file still holding the recorded save.
+#[test]
+fn record_saved_is_not_taken_in_again_after_a_reopen() {
+    let f = fx("rs-echo-reopen");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let w = {
+        let s = f.open("a.bin");
+        let a = f.join(&s, person("alice", "Alice"));
+        let a2 = f.join(&s, person("alice", "Alice"));
+        let r = host_saves(&s, a, 1, &path, b"alice's save");
+        let _t2 = s.expect_save(a, r.version, b"alice's next").unwrap();
+        let w = s.write_bytes(a2, b"from the tab", r.version).unwrap();
+        assert!(w.changed && !w.written, "{w:?}");
+        w.version
+    };
+    let f = restart(f);
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    assert_eq!(
+        s.versions(a).unwrap().len(),
+        3,
+        "the host's save is recorded once"
+    );
+    assert_eq!(
+        s.status().unwrap().version,
+        w,
+        "the tab's version is current"
+    );
+    s.flush(a).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"from the tab");
+}
+
+/// The control for the waits above: the same bytes on disk with no ticket are an outside
+/// save, by the watcher and by the stat backup, so "nothing recorded" there is the ticket and
+/// the sync state, not a watcher that sees nothing.
+#[test]
+fn record_saved_control_unrecorded_bytes_are_an_outside_save() {
+    for via_watcher in [true, false] {
+        let f = fx("rs-control");
+        let path = f.path("a.bin");
+        fs::write(&path, b"v1").unwrap();
+        f.grant("alice", Rights::full());
+        let s = f.open("a.bin");
+        let a = f.join(&s, person("alice", "Alice"));
+        host_save(&path, b"alice's save");
+        if via_watcher {
+            assert!(matches!(
+                s.file_changed().unwrap(),
+                DiskCheck::Ingested { .. }
+            ));
+        } else {
+            f.advance(3_000);
+            assert_eq!(f.mgr.tick().unwrap().ingested.len(), 1);
+        }
+        assert_eq!(s.versions(a).unwrap().len(), 2);
+        assert_eq!(s.status().unwrap().current.author, EXTERNAL_PID);
+        // and a ticket now is from an old base
+        assert!(matches!(
+            s.expect_save(a, 1, b"alice's save"),
+            Err(SessionError::Stale { .. })
+        ));
+    }
+}
+
+/// A doc whose current version never reached the file (a write-back that failed): the
+/// kit's write-back waits while the host's ticket is open, so it never writes over the
+/// host's save, and once the save is recorded the file is clean.
+#[test]
+fn record_saved_leaves_the_file_clean() {
+    let f = fx("rs-clean");
+    let path = f.path("x.bin");
+    fs::write(&path, b"x1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("x.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    fs::set_permissions(&f.ws, fs::Permissions::from_mode(0o555)).unwrap();
+    let w = s.write_bytes(a, b"x2", 1).unwrap();
+    assert!(w.changed && !w.written, "{w:?}");
+    assert!(matches!(
+        s.status().unwrap().disk,
+        Some(DiskState::Dirty { .. })
+    ));
+    let t = s.expect_save(a, w.version, b"x3").unwrap();
+    // the host saves over it in place (the file itself is writable)
+    fs::write(&path, b"x3").unwrap();
+    fs::set_permissions(&f.ws, fs::Permissions::from_mode(0o755)).unwrap();
+    f.advance(3_000);
+    f.mgr.tick().unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"x3", "the write-back waited");
+    let r = s.record_saved(a, t).unwrap();
+    assert_eq!(s.status().unwrap().disk, Some(DiskState::Clean));
+    assert!(r.changed);
+}
+
+/// The recorded bytes are one of the kit's recent own writes, as a write-back's are: an app
+/// saving them again after a later version (a stale buffer) is an echo, not an outside save,
+/// exactly as after `write_bytes`.
+#[test]
+fn record_saved_a_later_same_bytes_save_is_an_echo_as_after_a_write_back() {
+    for recorded in [true, false] {
+        let f = fx("rs-own");
+        let path = f.path("a.bin");
+        fs::write(&path, b"v1").unwrap();
+        f.grant("alice", Rights::full());
+        f.grant("bob", Rights::full());
+        let s = f.open("a.bin");
+        let a = f.join(&s, person("alice", "Alice"));
+        let b = f.join(&s, agent("bob"));
+        let v2 = if recorded {
+            host_saves(&s, a, 1, &path, b"v2").version
+        } else {
+            s.write_bytes(a, b"v2", 1).unwrap().version
+        };
+        let w = s.write_bytes(b, b"v3", v2).unwrap();
+        assert!(w.written);
+        let n = s.versions(a).unwrap().len();
+        app_save(&path, b"v2");
+        assert_eq!(
+            s.file_changed().unwrap(),
+            DiskCheck::OwnWrite,
+            "recorded: {recorded}"
+        );
+        assert_eq!(s.versions(a).unwrap().len(), n, "no version for an echo");
+    }
+}
+
+/// It never writes the file: its bytes, mtime and inode are as the host left them, and no
+/// temp file is left beside it.
+#[test]
+fn record_saved_never_writes_the_file() {
+    let f = fx("rs-untouched");
+    let path = f.path("cad.bin");
+    fs::write(&path, b"cad-1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("cad.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let t = s.expect_save(a, 1, b"cad-2").unwrap();
+    host_save(&path, b"cad-2");
+    let before = file_state(&path);
+    let r = s.record_saved(a, t).unwrap();
+    assert_eq!(
+        file_state(&path),
+        before,
+        "bytes, mtime and inode unchanged"
+    );
+    assert_eq!(names_in(&f.ws), ["cad.bin"]);
+    assert!(r.changed && !r.written);
+    // nor does its watcher event
+    assert_eq!(s.file_changed().unwrap(), DiskCheck::Unchanged);
+    assert_eq!(file_state(&path), before);
+}
+
+/// The lease, as for a write: someone else's refuses the ticket (`Leased`, nothing
+/// recorded); the caller's own lease is kept.
+#[test]
+fn record_saved_respects_the_lease() {
+    let f = fx("rs-lease");
+    let path = f.path("model.bin");
+    fs::write(&path, b"m1").unwrap();
+    f.grant("alice", Rights::full());
+    f.grant("bob", Rights::editor());
+    let s = f.open("model.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let b = f.join(&s, agent("bob"));
+    s.acquire_lease(b, None).unwrap();
+    let out = s.expect_save(a, 1, b"m2");
+    assert!(
+        matches!(&out, Err(SessionError::Leased { holder, .. }) if holder == "bob"),
+        "{out:?}"
+    );
+    assert_eq!(s.versions(a).unwrap().len(), 1, "nothing recorded");
+    // alice's own lease: recorded, and the lease stays hers
+    s.release_lease(b).unwrap();
+    s.acquire_lease(a, None).unwrap();
+    let r = host_saves(&s, a, 1, &path, b"m2");
+    assert!(r.changed);
+    assert_eq!(s.lease().unwrap().map(|l| l.pid), Some("alice".to_owned()));
+}
+
+/// An assistant's save on a person's behalf records `on_behalf_of` and a `Pending` approval,
+/// as its write would; the person's own save records none.
+#[test]
+fn record_saved_on_behalf_records_a_pending_approval() {
+    let f = approval_fx("rs-obo", "a.pdf");
+    let path = f.path("a.pdf");
+    let s = f.open("a.pdf");
+    let a = f.join(&s, person("alice", "Alice"));
+    let g = f.join(&s, aide());
+    let r = host_saves(&s, g, 1, &path, PDF2);
+    let e = s.log(a).unwrap().pop().unwrap();
+    assert_eq!(
+        (e.author.as_str(), e.on_behalf_of.as_deref(), e.approval),
+        ("aide", Some("alice"), Some(ApprovalState::Pending))
+    );
+    assert_eq!(
+        s.approval(a, r.version).unwrap(),
+        Some(Approval::pending("aide", "alice"))
+    );
+    assert!(r.changed);
+    // alice's own save: no approval
+    let mine = host_saves(&s, a, r.version, &path, PDF3);
+    assert_eq!(s.approval(a, mine.version).unwrap(), None);
+}
+
+/// Bytes equal to the current version's record nothing: `changed: false`, as a write's.
+#[test]
+fn record_saved_equal_bytes_record_nothing() {
+    let f = fx("rs-equal");
+    let path = f.path("same.bin");
+    fs::write(&path, b"same").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("same.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let r = host_saves(&s, a, 1, &path, b"same");
+    assert_eq!((r.version, r.changed, r.written), (1, false, false));
+    assert_eq!(s.versions(a).unwrap().len(), 1);
+}
+
+/// It needs edit, as a write does: to take the ticket, and still at the record.
+#[test]
+fn record_saved_needs_edit() {
+    let f = fx("rs-rights");
+    let path = f.path("r.bin");
+    fs::write(&path, b"r1").unwrap();
+    f.grant("alice", Rights::full());
+    f.grant("reader", Rights::read_only());
+    let s = f.open("r.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let r = f.join(&s, person("reader", "Reader"));
+    assert_eq!(
+        s.expect_save(r, 1, b"r2"),
+        Err(SessionError::Forbidden { need: Need::Edit })
+    );
+    let t = s.expect_save(a, 1, b"r2").unwrap();
+    host_save(&path, b"r2");
+    f.grant("alice", Rights::read_only());
+    assert_eq!(
+        s.record_saved(a, t),
+        Err(SessionError::Forbidden { need: Need::Edit })
+    );
+    f.grant("alice", Rights::full());
+    assert_eq!(s.versions(a).unwrap().len(), 1, "nothing recorded");
 }

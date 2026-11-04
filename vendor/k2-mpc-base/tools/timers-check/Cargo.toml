@@ -1,0 +1,16 @@
+[package]
+name = "k2-mpc-timers-check"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+description = "Checks that the kit's production timers are in a host's build of the kit (no features): tools/README.md, Timers check."
+
+# Its own workspace: never a member of the kit's, so the kit's dev-dependency features
+# (`differential`, `conformance`, ...) never reach this build. The job copies the kit's
+# Cargo.lock in before it builds (tools/timers-check/job.sh).
+[workspace]
+
+[dependencies]
+# No features: a host's build of the kit.
+k2-mpc-base = { path = "../../crates/base", default-features = false }

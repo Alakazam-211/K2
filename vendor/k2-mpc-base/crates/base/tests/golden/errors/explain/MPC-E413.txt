@@ -1,0 +1,21 @@
+MPC-E413 save_mismatch (disk and outside edits)
+exit:     1
+message:  the file doesn't hold the bytes saved ({size} bytes given, {file_size} on disk); nothing recorded
+next:     The host recorded a save it made, but the file holds other bytes (details.file_size: what it holds, null when there is no file): another program saved after it, or the save didn't land. Nothing was recorded and the file wasn't touched. Let the file's own change be taken in as an outside save, or save again and record that.
+rule:     K-T0-5, K-DISK-2
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E413",
+  "name": "save_mismatch",
+  "area": "disk and outside edits",
+  "exit": 1,
+  "message": "the file doesn't hold the bytes saved ({size} bytes given, {file_size} on disk); nothing recorded",
+  "next": "The host recorded a save it made, but the file holds other bytes (details.file_size: what it holds, null when there is no file): another program saved after it, or the save didn't land. Nothing was recorded and the file wasn't touched. Let the file's own change be taken in as an outside save, or save again and record that.",
+  "rule": "K-T0-5, K-DISK-2",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

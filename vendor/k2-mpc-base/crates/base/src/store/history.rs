@@ -387,6 +387,9 @@ pub(crate) struct NewChange {
     /// The participants' waiting notes this change leaves (`(pid, encoded)`, whole; empty
     /// bytes: none left), in its transaction ([`super::structured::OVERWRITE_NOTES`]).
     pub note_rows: Vec<(String, Vec<u8>)>,
+    /// Which of this change's values name blobs, for the references it takes in its
+    /// transaction ([`super::blob_refs`]).
+    pub blob_refs: super::blob_refs::BlobRefScan,
 }
 
 /// The carried bounds of one record, as of log position `carried_to`.
@@ -885,6 +888,34 @@ pub(super) fn stats_in(
         .map(Option::unwrap_or_default)
 }
 
+/// Where a test stops [`DocStore::commit_changes`], as an interrupted process would: before the
+/// commit the dropped transaction leaves nothing, after it nothing more is written.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommitInterrupt {
+    Before,
+    After,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static INTERRUPT_COMMIT: std::cell::Cell<Option<CommitInterrupt>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The planted fault [`crate::differential::BlobRefMutant::RefAfterCommit`]: a change's blob
+/// references are taken in a second transaction, after its own commit.
+#[cfg(any(test, feature = "differential"))]
+fn planted_ref_after_commit() -> bool {
+    crate::differential::blob_ref_mutant()
+        == Some(crate::differential::BlobRefMutant::RefAfterCommit)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_ref_after_commit() -> bool {
+    false
+}
+
 /// Write `changes` (positions `seqs`) and their revert records in `w`, updating the stats.
 pub(super) fn put_changes(
     w: &redb::WriteTransaction,
@@ -919,6 +950,9 @@ pub(super) fn put_changes(
         };
         structured::put_row_marks(w, id, seq, &c.row_marks, c.col_remap)?;
         structured::put_note_rows(w, id, &c.note_rows)?;
+        if !planted_ref_after_commit() {
+            super::blob_refs::take_for_change(w, id, c)?;
+        }
         let shape = c.record.shape();
         ct.insert((id, seq), enc_change(&c.info, &shape).as_slice())?;
         if let Some(k) = c.span.filter(|k| k.end > k.start) {
@@ -1055,7 +1089,9 @@ pub(crate) fn window_plan(
 
 impl DocStore {
     /// Append `entries` with their change summaries and revert records (`changes`, one per
-    /// entry), and store `versions`, in **one** durable transaction. Returns the positions.
+    /// entry), and store `versions`, in **one** durable transaction. Returns the positions. An
+    /// entry whose client ID has no owner row gets one here, so a change and its row land
+    /// together; a row already there stays (a participant purge may have renamed it).
     pub(crate) fn commit_changes(
         &self,
         id: DocId,
@@ -1074,6 +1110,14 @@ impl DocStore {
             self.append_in(&w, id, entries)?
         };
         {
+            let mut owners = w.open_table(super::CLIENTS)?;
+            for e in entries {
+                if owners.get((id, e.client))?.is_none() {
+                    owners.insert((id, e.client), e.author.as_str())?;
+                }
+            }
+        }
+        {
             prof!("store.put_changes");
             put_changes(&w, id, &seqs, changes)?;
         }
@@ -1081,11 +1125,38 @@ impl DocStore {
             prof!("store.put_versions");
             super::put_versions(&w, id, versions)?;
         }
+        #[cfg(test)]
+        if INTERRUPT_COMMIT.with(std::cell::Cell::get) == Some(CommitInterrupt::Before) {
+            return Err(StoreError::Corrupt("test: interrupted before the commit"));
+        }
         {
             prof!("store.txn_commit");
+            timed!(StoreTxnCommit);
+            w.commit()?;
+        }
+        #[cfg(test)]
+        if INTERRUPT_COMMIT.with(std::cell::Cell::get) == Some(CommitInterrupt::After) {
+            return Err(StoreError::Corrupt("test: interrupted after the commit"));
+        }
+        if planted_ref_after_commit() {
+            let w = self.begin_write()?;
+            for c in changes {
+                super::blob_refs::take_for_change(&w, id, c)?;
+            }
             w.commit()?;
         }
         Ok(seqs)
+    }
+
+    /// Test-only: damage change `seq`'s record, as a bad disk would.
+    #[cfg(test)]
+    pub(crate) fn damage_change(&self, id: DocId, seq: Seq) {
+        let w = self.begin_write().unwrap();
+        {
+            let mut t = w.open_table(CHANGES).unwrap();
+            t.insert((id, seq), [0xffu8].as_slice()).unwrap();
+        }
+        w.commit().unwrap();
     }
 
     /// The summary of change `seq`, if this store recorded one.
@@ -1493,60 +1564,6 @@ impl DocStore {
     }
 }
 
-/// [`super::fuzz_record`] for this module's records (feature `fuzzing`).
-#[cfg(feature = "fuzzing")]
-pub(super) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
-    use super::enc::fuzz_fixpoint as fx;
-    Some(match name {
-        "change" => fx(
-            name,
-            b,
-            false,
-            |b| dec_change(7, b, true),
-            |(c, shape)| enc_change(c, shape),
-        ),
-        "change head" => fx(
-            name,
-            b,
-            false,
-            |b| dec_change(7, b, false),
-            |(c, _)| enc_change(c, &[]),
-        ),
-        "revert record" => fx(name, b, false, dec_record, |r| {
-            enc_record(r).expect("a decoded record's runs fit u32")
-        }),
-        "authored hunks" => fx(name, b, true, dec_authored, |a| enc_authored(a)),
-        "provenance row" => fx(name, b, true, dec_prov, |&(end, root)| {
-            enc_prov(end, root).to_vec()
-        }),
-        "revert index" => fx(name, b, true, dec_pair, |&(a, c)| enc_pair(a, c).to_vec()),
-        "revert carry" => fx(name, b, false, dec_carry, enc_carry),
-        "revert stats" => fx(name, b, true, dec_stats, enc_stats),
-        "carry taint" => fx(
-            name,
-            b,
-            false,
-            |b| match b {
-                [x] => dec_taint(*x),
-                _ => Err(StoreError::Corrupt("carry taint")),
-            },
-            |&(s, e)| vec![enc_taint(s, e)],
-        ),
-        "version head" => match fuzz_version_head(b) {
-            Ok(_) => true,
-            Err(StoreError::Corrupt(_)) => false,
-            Err(e) => panic!("version head: refused with an error other than Corrupt: {e:?}"),
-        },
-        _ => return None,
-    })
-}
-
-/// A version record's head (feature `fuzzing`).
-#[cfg(feature = "fuzzing")]
-pub(super) fn fuzz_version_head(b: &[u8]) -> Result<VersionInfo, StoreError> {
-    dec_version_head(1, b)
-}
-
 /// Clock rows written raw, as a damaged store holds them (tests only).
 #[cfg(test)]
 impl DocStore {
@@ -1825,6 +1842,7 @@ mod tests {
                     row_marks: Vec::new(),
                     col_remap: false,
                     note_rows: Vec::new(),
+                    blob_refs: Default::default(),
                 },
             )
         };
@@ -1933,6 +1951,7 @@ mod tests {
                     row_marks: Vec::new(),
                     col_remap: false,
                     note_rows: Vec::new(),
+                    blob_refs: Default::default(),
                 },
             )
         };

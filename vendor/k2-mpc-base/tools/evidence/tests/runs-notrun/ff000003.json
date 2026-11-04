@@ -1,0 +1,55 @@
+{
+ "job": "ff000003",
+ "collected": "2026-11-03",
+ "from": "fixture",
+ "runs": [
+  {
+   "job": "ff000003",
+   "run": "r_error",
+   "tool": "tlc",
+   "status": "ERROR",
+   "exit": 0
+  },
+  {
+   "job": "ff000003",
+   "run": "r_noresult",
+   "tool": "tlc",
+   "status": "NO_RESULT"
+  },
+  {
+   "job": "ff000003",
+   "run": "r_zero_samples",
+   "tool": "perf_harness",
+   "status": "COMPLETE",
+   "samples": 0
+  },
+  {
+   "job": "ff000003",
+   "run": "r_zero_states",
+   "tool": "tlc",
+   "status": "COMPLETE",
+   "states": 0
+  },
+  {
+   "job": "ff000003",
+   "run": "r_known",
+   "tool": "tlc",
+   "status": "ERROR",
+   "not_run_ok": "a known failure"
+  },
+  {
+   "job": "ff000003",
+   "run": "r_caught",
+   "tool": "spec-undo",
+   "status": "CAUGHT",
+   "traces": 0
+  },
+  {
+   "job": "ff000003",
+   "run": "r_fine",
+   "tool": "perf_harness",
+   "status": "COMPLETE",
+   "samples": 3
+  }
+ ]
+}

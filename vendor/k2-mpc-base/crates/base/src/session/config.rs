@@ -198,12 +198,17 @@ pub struct Config {
 
     /// Reuse an agent's client ID across its connections (v0.9.7): an agent's join takes a
     /// client ID it used before in this doc, when no present connection holds it, instead of
-    /// minting one. Every client ID stays in the doc's state for good, and the engine's
-    /// per-transaction work grows with their number, so a long-lived doc many agent
+    /// minting one, after the doc's session unloads and loads again too (a host's close, an
+    /// idle unload, a restart). Every client ID stays in the doc's state for good, and the
+    /// engine's per-transaction work grows with their number, so a long-lived doc many agent
     /// sessions join kept getting slower. Only agents ([`super::ParticipantKind::Agent`])
     /// that edit through the session alone; never a participant with
     /// [`super::Participant::own_replica`], whose stale replica could write as an old ID.
-    /// Default true.
+    /// The store records what each ID was minted for with its owner (its `client_kinds`
+    /// table, after v0.10.2; for a participant that can write), so an own replica's ID is
+    /// never reused after a reload either;
+    /// an ID of unknown kind (one a kit before that recorded) is never reused: the agent
+    /// draws one fresh ID, reused from then on. Default true.
     pub reuse_agent_clients: bool,
 
     /// The file write-back's sampled check (v0.9.7): the disk replica is kept in step by
@@ -267,6 +272,10 @@ pub struct Config {
     /// length of the write (upload included), released when it commits; this bounds it if
     /// the writer dies mid-upload. Default 2 min.
     pub lease_auto_ms: u64,
+    /// Tier 0: how long a save ticket ([`super::BlobSession::expect_save`]) stays open for
+    /// the host's write and its `record_saved`; past it the ticket lapses and the bytes, if
+    /// they landed, come in as an outside save. Default 30 s.
+    pub save_ticket_ms: u64,
     /// Tier 0.5: a pack's `merge3_bytes` is only tried when base, ours and theirs are each
     /// at most this big (they are read into memory). Default 32 MiB.
     pub blob_merge_max_bytes: u64,
@@ -362,6 +371,7 @@ impl Config {
             lease_default_ms,
             lease_max_ms,
             lease_auto_ms,
+            save_ticket_ms,
             blob_merge_max_bytes,
             conflict_copy_keep_ms,
             grid_max_cells,
@@ -439,6 +449,7 @@ impl Config {
             ("lease_default_ms", *lease_default_ms),
             ("lease_max_ms", *lease_max_ms),
             ("lease_auto_ms", *lease_auto_ms),
+            ("save_ticket_ms", *save_ticket_ms),
             ("blob_merge_max_bytes", *blob_merge_max_bytes),
             ("conflict_copy_keep_ms", *conflict_copy_keep_ms),
             ("grid_max_cells", *grid_max_cells as u64),
@@ -530,6 +541,7 @@ impl Default for Config {
             lease_default_ms: 5 * 60_000,
             lease_max_ms: 60 * 60_000,
             lease_auto_ms: 2 * 60_000,
+            save_ticket_ms: 30_000,
             blob_merge_max_bytes: 32 << 20,
             conflict_copy_keep_ms: 30 * DAY,
             grid_max_cells: 25_000,

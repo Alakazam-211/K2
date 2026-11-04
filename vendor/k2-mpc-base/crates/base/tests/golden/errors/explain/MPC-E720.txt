@@ -1,0 +1,21 @@
+MPC-E720 blob_ref_unknown (tier 0 and blobs)
+exit:     4
+message:  no blob {blob} in this doc's space
+next:     The value names a blob this doc's space doesn't hold: it was never stored here, it was collected, or it belongs to another space. Nothing was applied. Store the bytes in this doc's space, then send the change again with the id that returned.
+rule:     structured live, slice 5
+verbs:    a pack's own verbs; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E720",
+  "name": "blob_ref_unknown",
+  "area": "tier 0 and blobs",
+  "exit": 4,
+  "message": "no blob {blob} in this doc's space",
+  "next": "The value names a blob this doc's space doesn't hold: it was never stored here, it was collected, or it belongs to another space. Nothing was applied. Store the bytes in this doc's space, then send the change again with the id that returned.",
+  "rule": "structured live, slice 5",
+  "verbs": ["@pack", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

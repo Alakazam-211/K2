@@ -158,10 +158,11 @@ impl Fx {
     }
 }
 
-const TEXT_TABLES: [&str; 15] = [
+const TEXT_TABLES: [&str; 16] = [
     "approvals",
     "change_clocks",
     "changes",
+    "client_kinds",
     "clients",
     "doc_keys",
     "docs",
@@ -301,6 +302,13 @@ fn delete_doc_erases_every_table_and_closes_its_session() {
     let (s, ka, p) = f.full_text_doc();
     let rx = s.subscribe(p).unwrap();
     let ida = f.id(&ka);
+    // client_kinds holds both kinds for it: the fixture's agent, and an own replica
+    let own = |pid: &str| {
+        Participant::new(pid, pid, "#000000", ParticipantKind::Agent, "cli").own_replica()
+    };
+    let r = s.join(own("rep"), Stay::Held).unwrap();
+    assert!(s.leave(r.conn).unwrap());
+    assert_eq!(f.store.reusable_clients(ida).unwrap().len(), 1, "asst's");
     // the fixture really fills every per-doc text table (or the check below means nothing)
     assert_eq!(f.store.tables_holding(ida).unwrap(), TEXT_TABLES.to_vec());
     // neighbours: another doc of the space, loaded, and one of another space, not loaded
@@ -308,9 +316,24 @@ fn delete_doc_erases_every_table_and_closes_its_session() {
     let c = f.text(&kc, "c\n");
     let cc = c.join(person("q"), Stay::Held).unwrap().conn;
     c.replace_text(cc, "source", "c2\n").unwrap();
+    // c's client_kinds rows (an agent's and an own replica's) stay
+    let ca = c
+        .join(
+            Participant::new("ag", "ag", "#000000", ParticipantKind::Agent, "cli"),
+            Stay::Held,
+        )
+        .unwrap()
+        .client;
+    let cr = c.join(own("rep"), Stay::Held).unwrap().conn;
+    assert!(c.leave(cr).unwrap());
     let kd = key("other", "d.md");
     drop(f.text(&kd, "d\n"));
     let (idc, idd) = (f.id(&kc), f.id(&kd));
+    assert!(f
+        .store
+        .tables_holding(idc)
+        .unwrap()
+        .contains(&"client_kinds"));
     let before = (
         f.store.tables_holding(idc).unwrap(),
         f.store.tables_holding(idd).unwrap(),
@@ -321,6 +344,7 @@ fn delete_doc_erases_every_table_and_closes_its_session() {
 
     // nothing of it is left, anywhere
     assert_eq!(f.store.tables_holding(ida).unwrap(), Vec::<&str>::new());
+    assert!(f.store.reusable_clients(ida).unwrap().is_empty());
     assert_eq!(f.store.find(&ka).unwrap(), None);
     assert!(f.store.meta(ida).is_err());
     // its session closed, typed: participants are told, handles fail, subscriptions end
@@ -358,6 +382,11 @@ fn delete_doc_erases_every_table_and_closes_its_session() {
         before
     );
     assert_eq!(c.read(cc).unwrap().text_by_root[0].1, "c2\n");
+    assert_eq!(
+        f.store.reusable_clients(idc).unwrap(),
+        [ca].into_iter().collect::<std::collections::HashSet<_>>(),
+        "c's kinds kept: its agent's ID still reusable, its own replica's still not"
+    );
     // a new doc can take the key; deleting nothing is NotFound
     f.mgr.delete_doc(&ka).unwrap_err();
     assert_eq!(

@@ -1,0 +1,21 @@
+MPC-E852 bad_value (structured and CSV)
+exit:     2
+message:  {verb} can't use that value: {reason}
+next:     The verb can't use a value you gave (a vote of 0, a comment with no text). Nothing was applied. Run it again with a value it can use.
+rule:     board file: verb values
+verbs:    a file type's own verbs (its host's file registry): vote, comment
+status:   live
+--- json
+{
+  "id": "MPC-E852",
+  "name": "bad_value",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "{verb} can't use that value: {reason}",
+  "next": "The verb can't use a value you gave (a vote of 0, a comment with no text). Nothing was applied. Run it again with a value it can use.",
+  "rule": "board file: verb values",
+  "verbs": ["@file", "vote", "comment"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

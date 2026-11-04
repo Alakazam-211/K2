@@ -1,0 +1,156 @@
+{
+  "about": "Claims on elements: `claim_started_elems`, `claim_ended` with `how: deleted` and `released`, and `final`, a later subscription's snapshot, whose entry `elem_claims` names the claim still live.",
+  "self": "ada",
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 1,
+      "members": [
+        {
+          "handle": "ada",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 9007199254740991,
+              "cursor": null
+            }
+          ]
+        },
+        {
+          "handle": "bot",
+          "name": "Bot",
+          "colour": "#0891b2",
+          "kind": "agent",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 5,
+              "cursor": null
+            }
+          ]
+        }
+      ],
+      "watching": 0
+    },
+    {
+      "kind": "claim_started_elems",
+      "who": "bot",
+      "claim": "claim-1",
+      "root": "items",
+      "keys": ["i1", "i2"],
+      "note": "moving",
+      "hold": false,
+      "expires_ms": 1700000030000,
+      "version": 1
+    },
+    {
+      "kind": "claim_started_elems",
+      "who": "bot",
+      "claim": "claim-2",
+      "root": "items",
+      "keys": ["i3"],
+      "note": null,
+      "hold": true,
+      "expires_ms": 1700000005300,
+      "version": 1
+    },
+    {
+      "kind": "claim_ended",
+      "who": "bot",
+      "claim": "claim-2",
+      "how": "deleted",
+      "lines": {
+        "root": "items",
+        "first": 1,
+        "last": 1
+      },
+      "version": 2
+    },
+    {
+      "kind": "role",
+      "who": "ada",
+      "role": "editor"
+    },
+    {
+      "kind": "claim_ended",
+      "who": "bot",
+      "claim": "claim-1",
+      "how": "released",
+      "lines": {
+        "root": "items",
+        "first": 1,
+        "last": 2
+      },
+      "version": 2
+    },
+    {
+      "kind": "claim_started_elems",
+      "who": "bot",
+      "claim": "claim-3",
+      "root": "items",
+      "keys": ["i4"],
+      "note": null,
+      "hold": true,
+      "expires_ms": 1700000031200,
+      "version": 2
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 2,
+    "members": [
+      {
+        "handle": "ada",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 9007199254740991,
+            "cursor": null
+          }
+        ]
+      },
+      {
+        "handle": "bot",
+        "name": "Bot",
+        "colour": "#0891b2",
+        "kind": "agent",
+        "role": "viewer",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 5,
+            "cursor": null
+          }
+        ],
+        "elem_claims": [
+          {
+            "claim": "claim-3",
+            "root": "items",
+            "keys": ["i4"],
+            "note": null,
+            "hold": true,
+            "expires_ms": 1700000031200
+          }
+        ]
+      }
+    ],
+    "watching": 0
+  }
+}

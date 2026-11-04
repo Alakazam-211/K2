@@ -6,7 +6,8 @@
 //! An edit as a client is safe only on a doc that holds everything that client ever wrote.
 //!
 //! In the kit, the writers are: each connection's client (minted fresh per join, recorded
-//! in the store's client table, edits made on the live doc under the session lock); the
+//! in the store's client table with its first change, or at once for an agent or own replica
+//! that can write; edits made on the live doc under the session lock); the
 //! import client (recorded with the doc); the outside-edit client (one per doc, recorded;
 //! since v0.9.5 its edits are made on the live doc, a three-way merge of the save); and the
 //! disk replica's own clients (v0.9.5: an outside save the doc holds more than is made on

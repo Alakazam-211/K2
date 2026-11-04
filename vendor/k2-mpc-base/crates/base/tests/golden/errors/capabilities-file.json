@@ -1,0 +1,1614 @@
+{
+  "kit": "k2-mpc-base",
+  "version": "0.11.0",
+  "error_ids": {
+    "kit": "MPC-E",
+    "engine": "MPCE-E",
+    "explain": "explain <ID> [--json]",
+    "json_shape": ["id", "exit", "message", "next", "next_step", "rule", "details"]
+  },
+  "exit_codes": [
+    {
+      "code": 0,
+      "name": "ok",
+      "meaning": "success (diff, grep: no difference, a match)"
+    },
+    {
+      "code": 1,
+      "name": "no",
+      "meaning": "the tool's own no: grep found nothing, diff found differences, a conflict, a patch that didn't apply; nothing applied unless the message says otherwise"
+    },
+    {
+      "code": 2,
+      "name": "usage_or_held",
+      "meaning": "bad usage or an unsupported flag (fix the command), or held for now (MPC-E130: don't retry in a loop)"
+    },
+    {
+      "code": 3,
+      "name": "refused",
+      "meaning": "the caller lacks a right; don't retry"
+    },
+    {
+      "code": 4,
+      "name": "not_found",
+      "meaning": "no such doc, version, change or claim; or live editing is off"
+    },
+    {
+      "code": 5,
+      "name": "leased",
+      "meaning": "someone else holds it for now (a lease or a claim); retry after the time left"
+    },
+    {
+      "code": 6,
+      "name": "store_unavailable",
+      "meaning": "the store failed; nothing acknowledged"
+    },
+    {
+      "code": 7,
+      "name": "link_lost",
+      "meaning": "the link dropped mid-verb (the host's)"
+    },
+    {
+      "code": 8,
+      "name": "too_old",
+      "meaning": "too old (revert, an expired base); never retry the same request"
+    }
+  ],
+  "verbs": [
+    {
+      "name": "add",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "add <kind> <fields> <at>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["add-sticky", "add-text", "add-shape", "draw-pen", "add-frame", "add-card", "add-table", "add-mind-node", "add-image", "paste-text"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E850", "MPC-E851", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "update",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "update <id> <rev> <set> <unset>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["edit-fields", "resize", "rotate", "reattach-connector"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E850", "MPC-E851", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "delete",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "delete <id> <rev> <cascade>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["delete", "erase-stroke", "cut", "delete-comment"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "put-back",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "put-back <removed>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["restore-deleted"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E831", "MPC-E832", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "connect",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "connect <from> <to> <fields>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["draw-connector"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "react",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "react <id> <emoji> [on]",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["react", "stamp"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E855", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "vote",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "vote <id> <delta>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["vote", "take-back-vote"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E836", "MPC-E837", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E852", "MPC-E855", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "comment",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "comment [target] <text> [point]",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["comment"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E852", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "reply",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "reply <id> <text>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["reply"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E853", "MPC-E855", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "resolve",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "resolve <id> <rev> <resolved>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["resolve"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "meta",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "meta <rev> <set> <unset>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["start-voting", "rename-board"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E857", "MPC-E858", "MPC-E859"]
+    },
+    {
+      "name": "lock",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "lock <ids> <locked>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["lock", "unlock"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "check-add",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "check-add <id> <text>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["add-check"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E853", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "check-set",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "check-set <id> <rev> <item> [text] [done]",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["tick-check"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E853", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "check-remove",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "check-remove <id> <rev> <item>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["remove-check"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E853", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "table-cell",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "table-cell <id> <rev> <row> <column> <text>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["edit-cell"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E853", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "table-add-row",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "table-add-row <id> [after]",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["add-row"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E835", "MPC-E838", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "table-remove-row",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "table-remove-row <id> <rev> <row>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["remove-row"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "table-add-column",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "table-add-column <id> [after] [width]",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["add-column"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E835", "MPC-E838", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "table-remove-column",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "table-remove-column <id> <rev> <column>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["remove-column"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "move",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "move <ids> <dx> <dy>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["move-objects"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "order",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "order <ids> <to>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["bring-to-front", "send-to-back", "bring-forward", "send-backward"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "frame-order",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "frame-order <id> <to>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["reorder-frames"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "group",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "group <ids>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["group"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E854", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "ungroup",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "ungroup <ids>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["ungroup"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "align",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "align <ids> <to>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["align"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E854", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "distribute",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "distribute <ids> <axis>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["distribute"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E854", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "tidy",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "tidy <ids>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["tidy"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E854", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "copy-style",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "copy-style <from> <to>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["copy-style"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "duplicate",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "duplicate <ids> <dx> <dy>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["duplicate"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "paste",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "paste <objects> <x> <y>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["copy"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E854", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "connected-copy",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "connected-copy <id> <side>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["connected-copy"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E853", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "mind-child",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "mind-child <parent> <text>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["mind-child", "mind-sibling"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E853", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "template",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "template <name> <x> <y>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["use-template"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E839", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E856", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "clear-blob",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "clear-blob <hash>",
+      "exits": [0, 1, 2, 3, 4],
+      "serves": ["clear-missing-picture"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E832", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E848", "MPC-E857", "MPC-E859"]
+    },
+    {
+      "name": "list",
+      "kind": "read",
+      "tiers": [],
+      "needs": ["read"],
+      "usage": "list [kind]",
+      "exits": [0, 1, 3, 4],
+      "serves": ["cut", "copy", "read-board"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E857"]
+    },
+    {
+      "name": "read",
+      "kind": "read",
+      "tiers": [],
+      "needs": ["read"],
+      "usage": "read <id>",
+      "exits": [0, 1, 3, 4],
+      "serves": ["read-board", "see-author"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E838", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E857"]
+    },
+    {
+      "name": "search",
+      "kind": "read",
+      "tiers": [],
+      "needs": ["read"],
+      "usage": "search <text>",
+      "exits": [0, 1, 3, 4],
+      "serves": ["search"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E857"]
+    },
+    {
+      "name": "fields",
+      "kind": "read",
+      "tiers": [],
+      "needs": ["read"],
+      "usage": "fields [type]",
+      "exits": [0, 2, 3],
+      "serves": ["read-board"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E847"]
+    },
+    {
+      "name": "templates",
+      "kind": "read",
+      "tiers": [],
+      "needs": ["read"],
+      "usage": "templates",
+      "exits": [0, 3],
+      "serves": ["use-template"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": []
+    },
+    {
+      "name": "references",
+      "kind": "read",
+      "tiers": [],
+      "needs": ["read"],
+      "usage": "references [id]",
+      "exits": [0, 1, 3, 4],
+      "serves": ["read-board"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E857"]
+    },
+    {
+      "name": "apply",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "apply <ops>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["paste-text", "paste-many"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E831", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E849", "MPC-E856", "MPC-E857", "MPC-E858", "MPC-E859"]
+    },
+    {
+      "name": "inverse",
+      "kind": "edit",
+      "tiers": [],
+      "needs": ["read", "edit"],
+      "usage": "inverse <before> <after> <group_id>",
+      "exits": [0, 1, 2, 3, 4, 5],
+      "serves": ["undo", "redo"],
+      "source": "file",
+      "run_tool": false,
+      "alias_of": null,
+      "errors": ["MPC-E830", "MPC-E831", "MPC-E832", "MPC-E835", "MPC-E838", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846", "MPC-E847", "MPC-E848", "MPC-E857", "MPC-E858"]
+    }
+  ],
+  "meta_verbs": [
+    {
+      "name": "explain",
+      "usage": "explain [ID] [--json] (an error id: what happened, what to do next, the rule; no id: every id)"
+    },
+    {
+      "name": "capabilities",
+      "usage": "capabilities [--json] (verbs, flags, parity rows, the error ids each verb can return, limits, the kit version)"
+    }
+  ],
+  "errors": [
+    {
+      "id": "MPC-E000",
+      "name": "not_applied",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E001",
+      "name": "export_unsupported",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E002",
+      "name": "export_declined",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E003",
+      "name": "export_limit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E004",
+      "name": "export_cancelled",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E005",
+      "name": "export_decode",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E006",
+      "name": "export_io",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E007",
+      "name": "export_internal",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E101",
+      "name": "forbidden_read",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E102",
+      "name": "forbidden_edit",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E103",
+      "name": "forbidden_history",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E104",
+      "name": "forbidden_approver",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E105",
+      "name": "forbidden_author_or_owner",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E106",
+      "name": "forbidden_owner",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E107",
+      "name": "not_joined",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E108",
+      "name": "no_doc",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E109",
+      "name": "pack_mismatch",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E110",
+      "name": "stale",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E111",
+      "name": "write_conflict",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E112",
+      "name": "base_expired",
+      "exit": 8,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E113",
+      "name": "bad_edit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E114",
+      "name": "bad_position",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E115",
+      "name": "bad_participant",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E120",
+      "name": "tool_unsupported",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E121",
+      "name": "tool_refused",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E122",
+      "name": "tool_usage",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E123",
+      "name": "patch_failed",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E124",
+      "name": "patch_rejects",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E125",
+      "name": "replace_no_match",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E126",
+      "name": "replace_not_unique",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E127",
+      "name": "pack_verb_no",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E130",
+      "name": "held_backlog",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E131",
+      "name": "no_approval",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E132",
+      "name": "bad_approval",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E140",
+      "name": "decode",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E141",
+      "name": "foreign_client",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E142",
+      "name": "missing_deps",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E143",
+      "name": "pending_deps",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E144",
+      "name": "apply_failed",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E145",
+      "name": "engine_panic",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E146",
+      "name": "load_failed",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E147",
+      "name": "bad_client",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E148",
+      "name": "no_root",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E149",
+      "name": "wrong_kind",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E150",
+      "name": "unsupported_kind",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E151",
+      "name": "bad_hunk",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E152",
+      "name": "unaccepted",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E153",
+      "name": "bad_root_name",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E154",
+      "name": "malformed_doc",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E160",
+      "name": "unknown_error_id",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E161",
+      "name": "engine_unlisted",
+      "exit": 2,
+      "status": "reserved"
+    },
+    {
+      "id": "MPC-E170",
+      "name": "ambiguous_address",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E171",
+      "name": "positional_needs_version",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E172",
+      "name": "address_not_found",
+      "exit": 4,
+      "status": "reserved"
+    },
+    {
+      "id": "MPC-E173",
+      "name": "stale_cursor",
+      "exit": 1,
+      "status": "reserved"
+    },
+    {
+      "id": "MPC-E176",
+      "name": "line_address_unreliable",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E177",
+      "name": "line_address_unknown",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E201",
+      "name": "undo_conflict",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E202",
+      "name": "undo_blocked",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E203",
+      "name": "undo_skipped",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E204",
+      "name": "revert_too_old",
+      "exit": 8,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E205",
+      "name": "no_such_change",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E206",
+      "name": "history_lost",
+      "exit": 0,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E207",
+      "name": "cleared_by_purge",
+      "exit": 0,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E301",
+      "name": "claimed",
+      "exit": 5,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E302",
+      "name": "no_claim",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E303",
+      "name": "claim_contended",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E304",
+      "name": "bad_claim",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E305",
+      "name": "watching",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E310",
+      "name": "selection_too_large",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E401",
+      "name": "declined_too_large",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E402",
+      "name": "declined_not_utf8",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E403",
+      "name": "declined_binary",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E404",
+      "name": "declined_mixed_line_endings",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E405",
+      "name": "declined_off",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E406",
+      "name": "declined_unreadable",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E407",
+      "name": "declined_pack",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E410",
+      "name": "disk",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E411",
+      "name": "bad_path",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E412",
+      "name": "declined_hard_linked",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E413",
+      "name": "save_mismatch",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E414",
+      "name": "save_ticket_invalid",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E501",
+      "name": "store_failed",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E502",
+      "name": "store_newer",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E503",
+      "name": "store_corrupt",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E504",
+      "name": "path_taken",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E505",
+      "name": "store_locked",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E506",
+      "name": "named_version",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E507",
+      "name": "key_change",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E508",
+      "name": "log_moved",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E509",
+      "name": "no_random",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E510",
+      "name": "store_no_doc",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E511",
+      "name": "store_no_version",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E512",
+      "name": "store_no_approval",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E513",
+      "name": "unloaded",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E514",
+      "name": "released",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E515",
+      "name": "broken",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E516",
+      "name": "deleted",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E517",
+      "name": "pack_error",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E518",
+      "name": "quarantined",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E519",
+      "name": "closed",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E520",
+      "name": "engine_mismatch",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E601",
+      "name": "purge_current_version",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E602",
+      "name": "purged_version",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E701",
+      "name": "leased",
+      "exit": 5,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E702",
+      "name": "no_lease",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E703",
+      "name": "blob_too_large",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E704",
+      "name": "blob_not_found",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E705",
+      "name": "blob_damaged",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E706",
+      "name": "blob_io",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E707",
+      "name": "blob_no_random",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E708",
+      "name": "no_blob_store",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E709",
+      "name": "no_blob_space",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E710",
+      "name": "no_blob",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E720",
+      "name": "blob_ref_unknown",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E801",
+      "name": "needs_base",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E802",
+      "name": "at_limit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E803",
+      "name": "facet_conflict",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E804",
+      "name": "op_refused",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E805",
+      "name": "no_element",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E806",
+      "name": "header_names_unrendered",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E807",
+      "name": "header_only_row_blank",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E820",
+      "name": "key_not_own",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E821",
+      "name": "key_space_full",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E830",
+      "name": "conflict",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E831",
+      "name": "exists",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E832",
+      "name": "busy",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E833",
+      "name": "merge_conflict",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E834",
+      "name": "board_conflict",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E835",
+      "name": "locked",
+      "exit": 5,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E836",
+      "name": "voting_off",
+      "exit": 5,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E837",
+      "name": "no_votes_left",
+      "exit": 5,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E838",
+      "name": "no_object",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E839",
+      "name": "no_template",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E840",
+      "name": "no_such_item",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E841",
+      "name": "blob_missing",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E842",
+      "name": "board_zip",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E843",
+      "name": "board_manifest",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E844",
+      "name": "newer_format",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E845",
+      "name": "board_invalid",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E846",
+      "name": "board_too_large",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E847",
+      "name": "bad_field",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E848",
+      "name": "board_limit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E849",
+      "name": "bad_ops",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E850",
+      "name": "unknown_field",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E851",
+      "name": "unknown_type",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E852",
+      "name": "bad_value",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E853",
+      "name": "wrong_type",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E854",
+      "name": "too_few",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E855",
+      "name": "needs_actor",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E856",
+      "name": "no_free_id",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E857",
+      "name": "board_io",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E858",
+      "name": "settings_conflict",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E859",
+      "name": "person_exists",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E901",
+      "name": "rate_limited",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E902",
+      "name": "tool_limit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E903",
+      "name": "claims_doc_cap",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E904",
+      "name": "claims_participant_cap",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E905",
+      "name": "claim_waiters_cap",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E199",
+      "name": "ref_not_in_past",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E980",
+      "name": "change_too_large",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E566",
+      "name": "store_secret_missing",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E567",
+      "name": "checkpoint_mac",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E568",
+      "name": "cut_purge_pending",
+      "exit": 1,
+      "status": "live"
+    }
+  ]
+}

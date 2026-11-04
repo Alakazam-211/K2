@@ -162,7 +162,8 @@ pub const VERBS: &[PackVerb] = &[
         EDIT_EXITS,
         header,
     )
-    .positional(positional),
+    .positional(positional)
+    .positions(&[]),
 ];
 
 // ---------- addressing ----------
@@ -233,6 +234,39 @@ fn ambiguous(what: &str, given: &str, axis: &Axis, many: &[Key], message: String
             given,
             &candidates,
         ))),
+        ..refusal(2, message)
+    }
+}
+
+/// `LN` on a file holding a lone CR (`MPC-E176`): the line map and `cat -n` count its lines
+/// differently, so a line number has no one meaning there.
+fn unreliable_line(n: usize) -> Refusal {
+    let address = format!("L{n}");
+    let message = format!(
+        "{address}: this file holds a lone CR, so its line numbers have no one meaning; name the \
+         row by its key or #N (row list shows both)"
+    );
+    Refusal {
+        report: Some(Box::new(
+            crate::errors::ErrorReport::new(
+                &crate::errors::ids::LINE_ADDRESS_UNRELIABLE,
+                message.clone(),
+            )
+            .with("address", address.as_str()),
+        )),
+        ..refusal(2, message)
+    }
+}
+
+/// `LN` on a file that can't be rendered now (`MPC-E177`): it might hold a lone CR, so a line
+/// number has no checked meaning, and the line map doesn't get to answer.
+fn unknown_line(n: usize) -> Refusal {
+    let e = crate::session::SessionError::LinesUnknown {
+        address: format!("L{n}"),
+    };
+    let message = e.to_string();
+    Refusal {
+        report: Some(Box::new(e.report())),
         ..refusal(2, message)
     }
 }
@@ -412,6 +446,11 @@ fn resolve_row(t: &Table, row: &RowAt, want: Want, pos: &Pos<'_, '_>) -> Result<
             ),
         },
         RowAt::Line(n) => {
+            match pos.line_counts() {
+                super::LineCounts::Agree => {}
+                super::LineCounts::Differ => return Err(unreliable_line(*n)),
+                super::LineCounts::Unknown => return Err(unknown_line(*n)),
+            }
             let map = pos.line_map(t);
             match map.owner(*n) {
                 Some(LineOwner::Row(k)) => pos.live(t, ROWS, k, want),
@@ -656,12 +695,35 @@ struct Pos<'c, 'a> {
     ctx: &'c VerbCtx<'a>,
     /// The base version's table, when positions count there.
     base: Option<Table>,
+    /// What the file positions count in says of its line counts, once a verb's first `LN` asked.
+    line_counts: std::cell::Cell<Option<super::LineCounts>>,
 }
 
 impl Pos<'_, '_> {
     /// The table positions count in.
     fn table<'t>(&'t self, live: &'t Table) -> &'t Table {
         self.base.as_ref().unwrap_or(live)
+    }
+
+    /// What `LN` means here, asked once a verb.
+    fn line_counts(&self) -> super::LineCounts {
+        let counts = self
+            .line_counts
+            .get()
+            .unwrap_or_else(|| self.ctx.positions_line_counts());
+        self.line_counts.set(Some(counts));
+        #[cfg(any(test, feature = "differential"))]
+        {
+            use crate::differential::{line_mutant, LineMutant};
+            match (line_mutant(), counts) {
+                (Some(LineMutant::LnKeepsLineMap), super::LineCounts::Differ)
+                | (Some(LineMutant::LnGoesOnUnrendered), super::LineCounts::Unknown) => {
+                    return super::LineCounts::Agree
+                }
+                _ => {}
+            }
+        }
+        counts
     }
 
     /// The rendered lines `LN` counts in.
@@ -687,7 +749,11 @@ fn lines_of<'c, 'a>(ctx: &'c VerbCtx<'a>) -> Result<Pos<'c, 'a>, Refusal> {
         Some(v) => Some(v.table().map_err(|e| refusal(2, e.to_string()))?),
         None => None,
     };
-    Ok(Pos { ctx, base })
+    Ok(Pos {
+        ctx,
+        base,
+        line_counts: std::cell::Cell::new(None),
+    })
 }
 
 /// A grid verb's positional address (K-ADDR-3; [`PackVerb::positional`]): the first `#N`
@@ -965,7 +1031,22 @@ fn row_list(args: &[String]) -> Result<StructEdit, ToolError> {
             Some(RowAt::Where(c, v)) => Some((resolve_col(t, c, Want::Live, &lines)?, v.clone())),
             _ => None,
         };
-        let map = ctx.line_map().unwrap_or_else(|| t.line_map());
+        // unless the two counts agree, `-` in the line column: on a file holding a lone CR its
+        // rendered lines aren't the lines `cat -n` numbers, and given to `--lines` one would hit
+        // another row; on a file that can't be rendered, nobody can tell
+        let blank = {
+            #[cfg(any(test, feature = "differential"))]
+            let kept = crate::differential::line_mutant()
+                == Some(crate::differential::LineMutant::RowListKeepsLines);
+            #[cfg(not(any(test, feature = "differential")))]
+            let kept = false;
+            !kept && ctx.positions_line_counts() != super::LineCounts::Agree
+        };
+        let map = if blank {
+            super::LineMap::default()
+        } else {
+            ctx.line_map().unwrap_or_else(|| t.line_map())
+        };
         let filter = filter.as_ref().map(|(c, v)| (c, v.as_str()));
         let (out, n) = row_listing(t, &map, &cols, filter, limit);
         if n == 0 && filter.is_some() {

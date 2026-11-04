@@ -14,7 +14,7 @@
 //! near-empty range on the first keystroke at its edge). Where two participants' claims
 //! meet, text typed there joins only one of them ([`claim_fates`]): claims never overlap.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -91,8 +91,8 @@ pub enum ClaimEnd {
     Left,
     /// A store write failed mid-edit and the session reloaded (positions can't be trusted).
     Reset,
-    /// Every row (or column) it covered was deleted (a grid claim, A10, K-PRES-6), so the
-    /// claimant knows why.
+    /// Every row (or column) it covered was deleted (a grid claim, A10, K-PRES-6), or none of
+    /// its elements is live (an element claim), so the claimant knows why.
     Deleted,
 }
 
@@ -117,6 +117,10 @@ impl ClaimEnd {
 /// a row inserted right at one of its ends joins it (anchors expand, as a text claim's do).
 /// A deleted end still marks its place (where a restore would show it); the claim ends with
 /// [`ClaimEnd::Deleted`] when nothing it covers is live.
+///
+/// On a keyed doc that isn't a table, a claim covers named elements of a list root
+/// ([`ClaimSpan::Elems`]): those keys and no others. It never grows, and a map key of a
+/// [composite](super::Pack::composite) root counts as its element.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClaimSpan {
@@ -129,10 +133,31 @@ pub enum ClaimSpan {
     /// The cells of rows `rows.0..rows.1` and columns `cols.0..cols.1` (`claim --cells
     /// R1,C1..R2,C2`).
     Cells { rows: (Key, Key), cols: (Key, Key) },
+    /// Elements of a MovableList root by key, in key order, at most [`CLAIM_KEYS_MAX`]
+    /// ([`super::Session::claim_elems`]).
+    Elems { root: String, keys: Vec<Key> },
 }
 
+/// The most elements one claim names ([`ClaimSpan::Elems`]).
+pub const CLAIM_KEYS_MAX: usize = 256;
+
+/// `items i1`, `items i1, i2`, `items i1, i2 (+3)`.
+pub(crate) fn elems_text(root: &str, keys: &[Key]) -> String {
+    let shown: Vec<&str> = keys.iter().take(2).map(Key::as_str).collect();
+    let more = keys.len().saturating_sub(2);
+    if more == 0 {
+        format!("{root} {}", shown.join(", "))
+    } else {
+        format!("{root} {} (+{more})", shown.join(", "))
+    }
+}
+
+/// The longest note any claim carries, in bytes: it comes from the host or off the wire, and every
+/// roster subscriber is told it ([`super::Session::claim`], [`super::Session::claim_elems`]).
+pub const CLAIM_NOTE_MAX: usize = 1024;
+
 impl fmt::Display for ClaimSpan {
-    /// `lines 3–5`, `rows r12–r40`, `cols c2`, `cells r1/c1–r4/c3`.
+    /// `lines 3–5`, `rows r12–r40`, `cols c2`, `cells r1/c1–r4/c3`, `items i1, i2 (+3)`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let pair = |a: &Key, b: &Key| {
             if a == b {
@@ -158,6 +183,7 @@ impl fmt::Display for ClaimSpan {
                     write!(f, "cells {}/{}–{}/{}", rows.0, cols.0, rows.1, cols.1)
                 }
             }
+            ClaimSpan::Elems { root, keys } => f.write_str(&elems_text(root, keys)),
         }
     }
 }
@@ -177,12 +203,15 @@ pub struct ClaimInfo {
     /// The connection that took it (it ends when that connection leaves).
     pub conn: ConnId,
     /// The lines it covers now (1-based, inclusive). On a grid: the rendered lines of the
-    /// rows it covers (root [`crate::table::ROWS`]; a column claim covers every line).
+    /// rows it covers (root [`crate::table::ROWS`]; a column claim covers every line). An
+    /// element claim has no lines: this is the list root and the 1-based live positions of its
+    /// first and last live elements (`1, 1` with none live), for display only; `span` says
+    /// what it covers.
     pub lines: LineRange,
     /// What it covers: [`ClaimSpan::Lines`] (the same as `lines`) on a text doc; on a grid,
-    /// its rows, columns or cells by key (A10).
+    /// its rows, columns or cells by key (A10); on other keyed docs, [`ClaimSpan::Elems`].
     pub span: ClaimSpan,
-    /// Its byte span in the root's text now (`start <= end`; 0 on a grid).
+    /// Its byte span in the root's text now (`start <= end`; 0 on a grid or for elements).
     pub start: usize,
     pub end: usize,
     /// When it was taken (host clock).
@@ -227,7 +256,8 @@ pub enum ReservationEnd {
     Left,
     /// A reload after a failed write, or the session closing: nothing passes on.
     Reset,
-    /// Every row (or column) it held was deleted (a grid reservation): nothing passes on.
+    /// Every row (or column) it held was deleted (a grid reservation), or none of its elements
+    /// is live: nothing passes on.
     Deleted,
 }
 
@@ -259,12 +289,13 @@ pub struct ReservationInfo {
     pub pid: String,
     pub name: String,
     pub conn: ConnId,
-    /// Its range now (anchored, expanding). On a grid: the rendered lines of its rows.
+    /// Its range now (anchored, expanding). On a grid: the rendered lines of its rows. For
+    /// elements: as [`ClaimInfo::lines`].
     pub lines: LineRange,
     /// What it holds: [`ClaimSpan::Lines`] (as `lines`) on a text doc; on a grid, the ended
-    /// claim's rows, columns or cells by key.
+    /// claim's rows, columns or cells by key; for elements, [`ClaimSpan::Elems`].
     pub span: ClaimSpan,
-    /// Its byte span in the root's text now (0 on a grid).
+    /// Its byte span in the root's text now (0 on a grid or for elements).
     pub start: usize,
     pub end: usize,
     pub until_ms: u64,
@@ -1077,6 +1108,29 @@ pub(crate) struct Claim {
     /// A grid claim (A10): its rows and/or columns by key (`root` is
     /// [`crate::table::CELLS`], `s`/`e` unused).
     pub grid: Option<GridSpan>,
+    /// An element claim: its list root's keys (`root` is that list, `s`/`e` unused).
+    pub elems: Option<ElemSpan>,
+}
+
+/// An element claim's keys in one list root. A key stays when its element is deleted: a restore
+/// brings it back under the claim, and the claim ends only when none is live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ElemSpan {
+    pub root: String,
+    pub keys: BTreeSet<Key>,
+}
+
+impl ElemSpan {
+    pub fn overlaps(&self, other: &ElemSpan) -> bool {
+        self.root == other.root && !self.keys.is_disjoint(&other.keys)
+    }
+
+    pub fn span(&self) -> ClaimSpan {
+        ClaimSpan::Elems {
+            root: self.root.clone(),
+            keys: self.keys.iter().cloned().collect(),
+        }
+    }
 }
 
 /// A grid claim's ends by key, per axis (`None`: the whole axis).
@@ -1089,7 +1143,7 @@ pub(crate) struct GridSpan {
 impl GridSpan {
     pub fn of(span: &ClaimSpan) -> Option<Self> {
         Some(match span {
-            ClaimSpan::Lines(_) => return None,
+            ClaimSpan::Lines(_) | ClaimSpan::Elems { .. } => return None,
             ClaimSpan::Rows { first, last } => GridSpan {
                 rows: Some((first.clone(), last.clone())),
                 cols: None,
@@ -1185,6 +1239,8 @@ pub(crate) struct Reservation {
     /// A grid reservation: the ended claim's span by key (`root` is
     /// [`crate::table::CELLS`], `s`/`e` unused).
     pub grid: Option<GridSpan>,
+    /// An element reservation: the ended claim's keys (`root` is the list, `s`/`e` unused).
+    pub elems: Option<ElemSpan>,
 }
 
 impl Reservation {

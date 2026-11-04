@@ -1,0 +1,27 @@
+MPC-E840 no_such_item (structured and CSV)
+exit:     4
+message:  {id} has no item {item}
+next:     The object has no check item, row or column with that id. Nothing was applied. Read the object to see its items and use an id shown.
+step:     read; why: The object has no item with that id; read the object to see its items and use an id shown.
+rule:     board file: item ids
+verbs:    a file type's own verbs (its host's file registry): check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column
+status:   live
+--- json
+{
+  "id": "MPC-E840",
+  "name": "no_such_item",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "{id} has no item {item}",
+  "next": "The object has no check item, row or column with that id. Nothing was applied. Read the object to see its items and use an id shown.",
+  "next_step": {
+    "verb": "read",
+    "args": [],
+    "why": "The object has no item with that id; read the object to see its items and use an id shown."
+  },
+  "rule": "board file: item ids",
+  "verbs": ["@file", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

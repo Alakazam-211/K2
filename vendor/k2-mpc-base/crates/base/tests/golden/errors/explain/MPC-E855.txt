@@ -1,0 +1,21 @@
+MPC-E855 needs_actor (structured and CSV)
+exit:     2
+message:  {verb} needs to know who is acting
+next:     This verb records who acted, and the host didn't say. Nothing was applied. This is the host's to fix, not the caller's.
+rule:     board file: who acts
+verbs:    a file type's own verbs (its host's file registry): react, vote, reply
+status:   live
+--- json
+{
+  "id": "MPC-E855",
+  "name": "needs_actor",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "{verb} needs to know who is acting",
+  "next": "This verb records who acted, and the host didn't say. Nothing was applied. This is the host's to fix, not the caller's.",
+  "rule": "board file: who acts",
+  "verbs": ["@file", "react", "vote", "reply"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

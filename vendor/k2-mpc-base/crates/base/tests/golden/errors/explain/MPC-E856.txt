@@ -1,0 +1,21 @@
+MPC-E856 no_free_id (structured and CSV)
+exit:     1
+message:  no free id: the host's random ids keep landing on ids in use
+next:     Every new id the host's randomness gave was already in use. Nothing was applied. A try with fresh random bytes can succeed, and the host makes it itself; if this keeps coming back, report it to the host's operator.
+rule:     board file: unique ids
+verbs:    a file type's own verbs (its host's file registry): add, connect, comment, reply, check-add, table-add-row, table-add-column, group, duplicate, paste, connected-copy, mind-child, template, apply
+status:   live
+--- json
+{
+  "id": "MPC-E856",
+  "name": "no_free_id",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "no free id: the host's random ids keep landing on ids in use",
+  "next": "Every new id the host's randomness gave was already in use. Nothing was applied. A try with fresh random bytes can succeed, and the host makes it itself; if this keeps coming back, report it to the host's operator.",
+  "rule": "board file: unique ids",
+  "verbs": ["@file", "add", "connect", "comment", "reply", "check-add", "table-add-row", "table-add-column", "group", "duplicate", "paste", "connected-copy", "mind-child", "template", "apply"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

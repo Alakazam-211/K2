@@ -16,9 +16,10 @@ use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::parity::{PersonAction, Registry};
 use k2_mpc_base::session::{
-    ActivityKind, AuditEvent, ClaimEnd, ClaimId, ClaimPolicy, Config, ConnId, EditWithError,
-    ForEdit, Host, LineRange, NoteKind, Notes, Participant, ParticipantKind, Rights, Session,
-    SessionError, SessionManager, Stay, TextFilePack, WriteOutcome,
+    ActivityKind, AuditEvent, ClaimEnd, ClaimId, ClaimPolicy, ClaimSpan, Config, ConnId,
+    EditWithError, ForEdit, Host, LineRange, NoteKind, Notes, Participant, ParticipantKind, Rights,
+    RosterEvent, Session, SessionError, SessionManager, Stay, TextFilePack, WriteOutcome,
+    CLAIM_NOTE_MAX,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_base::tools::{self, exit, ToolOptions, ToolRunError};
@@ -1569,12 +1570,116 @@ fn shared_edge_the_policy_and_edited_ends_follow_the_claim_that_takes_the_text()
     assert_eq!(span(&f, c, ia), (0, nl));
 }
 
+// ---------- the size of a claim's note ----------
+
+/// `CLAIM_NOTE_MAX` counts bytes: a note of exactly that many is taken, whatever its characters,
+/// and one byte more is `MPC-E304`, even at fewer characters than the limit. A refused claim
+/// leaves no claim, no audit event and nothing for a roster subscriber, on both public calls.
+#[test]
+fn claim_note_cap_counts_bytes() {
+    assert_eq!(CLAIM_NOTE_MAX, 1024);
+    let f = fx("note-cap");
+    let a = f.agent("a");
+    let obs = f.person("obs");
+    let rx = f.s.subscribe_roster(obs).unwrap();
+    let drain = || std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(!drain().is_empty(), "the snapshot comes first");
+    let taken = || {
+        f.host
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, AuditEvent::ClaimTaken { .. }))
+            .count()
+    };
+
+    let over = [
+        "x".repeat(1025),
+        // 1024 characters, 1025 bytes: the limit falls inside the last character
+        format!("{}é", "x".repeat(1023)),
+        format!("{}😀", "x".repeat(1021)),
+        "😀".repeat(257),
+        "é".repeat(600),
+    ];
+    for note in &over {
+        assert!(note.len() > CLAIM_NOTE_MAX);
+        let calls = [
+            f.s.claim(a, lines(1, 2), None, Some(note.clone()), false),
+            f.s.claim_span(
+                a,
+                ClaimSpan::Lines(lines(1, 2)),
+                None,
+                Some(note.clone()),
+                false,
+            ),
+        ];
+        for r in calls {
+            let Err(e) = r else {
+                panic!(
+                    "a note of {} bytes ({} characters) was taken",
+                    note.len(),
+                    note.chars().count()
+                );
+            };
+            assert!(matches!(e, SessionError::BadClaim(_)), "{e:?}");
+            assert_eq!(
+                e.to_string(),
+                format!("bad claim: a note of {} bytes; at most 1024", note.len())
+            );
+            let report = e.report();
+            assert_eq!(report.id(), "MPC-E304");
+            assert_eq!(report.exit(), exit::USAGE);
+        }
+        assert_eq!(
+            f.s.claims(a).unwrap().len(),
+            0,
+            "a refused claim leaves none"
+        );
+    }
+    assert_eq!(taken(), 0, "a refused claim is not audited as taken");
+    f.advance(1_000);
+    f.mgr.flush_rosters();
+    let quiet = drain();
+    assert!(
+        quiet.is_empty(),
+        "a refused claim told the roster: {quiet:?}"
+    );
+
+    // the limit itself is taken, and a subscriber hears it: this test can see an event
+    let at_limit = [
+        "x".repeat(1024),
+        format!("{}é", "x".repeat(1022)),
+        "é".repeat(512),
+        "😀".repeat(256),
+    ];
+    for note in &at_limit {
+        assert_eq!(note.len(), CLAIM_NOTE_MAX);
+        let c =
+            f.s.claim(a, lines(1, 2), None, Some(note.clone()), false)
+                .unwrap();
+        assert_eq!(c.note.as_deref(), Some(note.as_str()));
+        f.s.release_claim(a, Some(c.id)).unwrap();
+    }
+    assert_eq!(taken(), at_limit.len());
+    f.advance(1_000);
+    f.mgr.flush_rosters();
+    let heard: Vec<_> = drain()
+        .into_iter()
+        .filter_map(|e| match e {
+            RosterEvent::ClaimStarted { note, .. } => note,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heard, at_limit);
+}
+
 // ---------- grids (A10) ----------
 
 mod grid {
     use super::*;
     use k2_mpc_base::elem::{Anchor, Key};
-    use k2_mpc_base::session::{ClaimSpan, EditOptions, GridWrite, GridWriteOptions, View};
+    use k2_mpc_base::session::{EditOptions, GridWrite, GridWriteOptions, View};
     use k2_mpc_base::table::{Table, TableError, CELLS, ROWS};
     use k2_mpc_base::Edit;
 
@@ -2039,6 +2144,50 @@ mod grid {
             .unwrap();
         g.op(other, |t| t.delete_col(&k("c2"))).unwrap();
         assert_eq!(g.cell_of(other, "p1"), None);
+    }
+
+    /// A table takes the same cap on both public calls: `claim` on rendered lines and
+    /// `claim_span` on keys.
+    #[test]
+    fn claim_note_cap_on_a_table() {
+        let g = gx("note-cap");
+        let a = g.join("bot", ParticipantKind::Agent);
+        let at_limit = "é".repeat(512);
+        let over = format!("{at_limit}x");
+        let calls = [
+            (
+                "claim",
+                g.s.claim(a, lines(2, 3), None, Some(over.clone()), false),
+            ),
+            (
+                "claim_span",
+                g.s.claim_span(a, rows("r1", "r2"), None, Some(over.clone()), false),
+            ),
+        ];
+        for (call, r) in calls {
+            let Err(e) = r else {
+                panic!("{call} took a note of {} bytes", over.len());
+            };
+            assert_eq!(e.report().id(), "MPC-E304", "{call}: {e:?}");
+        }
+        assert_eq!(
+            g.s.claims(a).unwrap().len(),
+            0,
+            "a refused claim leaves none"
+        );
+        assert!(
+            !g.host
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, AuditEvent::ClaimTaken { .. })),
+            "a refused claim is not audited as taken"
+        );
+        let c =
+            g.s.claim_span(a, rows("r1", "r2"), None, Some(at_limit.clone()), false)
+                .unwrap();
+        assert_eq!(c.note.as_deref(), Some(at_limit.as_str()));
     }
 
     /// IT `presence::claim_ends_deleted` (K-PRES-6): a claim whose rows are all deleted ends

@@ -172,6 +172,453 @@ pub fn with_merge_mutant<R>(mutant: MergeMutant, f: impl FnOnce() -> R) -> R {
     let _back = Back(MERGE_MUTANT.with(|m| m.replace(Some(mutant))));
     f()
 }
+/// A fault planted at the seams between a grid's two line counts (docs/POSITIONS.md), so
+/// `tests/grid_lines.rs` can show it catches each one. Installed per thread by
+/// [`with_line_mutant`]; selected in the tests by `MPC_LINE_MUTANT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineMutant {
+    /// `LN` stops refusing on a grid holding a lone CR, and counts the line map as before.
+    LnKeepsLineMap,
+    /// `--ids` reads a printed line's `\n` number as a rendered line, as before.
+    IdsCountNlLines,
+    /// The lines a read reports (views, `--for-edit`, notes) and `claim --lines` reach the
+    /// line map as they are, `\n` numbers read as rendered lines, as before.
+    TouchedCountNlLines,
+    /// `LN` goes on to the line map on a file that can't be rendered.
+    LnGoesOnUnrendered,
+    /// `claim --lines` reads the caller's numbers as rendered lines on a file that can't be
+    /// rendered.
+    ClaimLinesGoOnUnrendered,
+    /// A conflict report gives rendered line numbers on a file that can't be rendered.
+    ConflictLinesFallBack,
+    /// `row list` prints rendered line numbers on a file holding a lone CR, as before.
+    RowListKeepsLines,
+    /// A conflict report gives rendered line numbers on a file holding a lone CR, as before.
+    ConflictKeepsLines,
+    /// A read verb that fails after the doc was read still counts as the caller's read, as
+    /// before: it logs activity, and their next read loses who changed the doc.
+    RefusedReadIsARead,
+}
+
+thread_local! {
+    static LINE_MUTANT: std::cell::Cell<Option<LineMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The line fault planted on this thread, if any.
+pub fn line_mutant() -> Option<LineMutant> {
+    LINE_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+pub fn with_line_mutant<R>(mutant: LineMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<LineMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            LINE_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(LINE_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault in element presence ([`crate::session::Session::set_selection`]), so its tests can
+/// show they catch it (selected by `MPC_STRUCT_MUTANT` in `tests/elem_presence.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SelectionMutant {
+    /// A selection keeps the keys of elements that stopped being live.
+    KeepsDeleted,
+}
+
+thread_local! {
+    static SELECTION_MUTANT: std::cell::Cell<Option<SelectionMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The selection fault planted on this thread, if any.
+pub fn selection_mutant() -> Option<SelectionMutant> {
+    SELECTION_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_selection_mutant<R>(mutant: SelectionMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<SelectionMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            SELECTION_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(SELECTION_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted at the apply of a structured change (`apply_structured`, inside `commit`), so
+/// the tests of what a change leaves behind can drive an exit no public call reaches
+/// (`session/live/next_change_tests.rs`). Installed per thread by [`with_apply_fault`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ApplyFault {
+    /// The apply refuses the change, and the doc stays trusted.
+    Refused,
+    /// The apply fails with an error that poisons the doc, so `commit` reloads it (`recover`).
+    Poisoned,
+    /// The apply reports that the change changed nothing, so `commit` returns `Ok`.
+    NoChange,
+    /// In `commit`, a step after one that applied is refused, so `commit` reloads the doc.
+    LaterStepRefused,
+    /// `commit`'s store transaction fails, without damaging the store, so `commit` reloads the doc
+    /// and the session goes on.
+    StoreCommitFails,
+    /// The bookkeeping of the structured change this many changes on fails, after the doc took it.
+    BookkeepingFailsAfter(u32),
+}
+
+thread_local! {
+    static APPLY_FAULT: std::cell::Cell<Option<ApplyFault>> = const { std::cell::Cell::new(None) };
+}
+
+/// The apply fault planted on this thread, if any.
+pub fn apply_fault() -> Option<ApplyFault> {
+    APPLY_FAULT.with(|m| m.get())
+}
+
+/// Whether the bookkeeping of this structured change fails ([`ApplyFault::BookkeepingFailsAfter`]);
+/// one change closer to it otherwise.
+pub(crate) fn take_bookkeeping_fault() -> bool {
+    APPLY_FAULT.with(|m| match m.get() {
+        Some(ApplyFault::BookkeepingFailsAfter(0)) => true,
+        Some(ApplyFault::BookkeepingFailsAfter(n)) => {
+            m.set(Some(ApplyFault::BookkeepingFailsAfter(n - 1)));
+            false
+        }
+        _ => false,
+    })
+}
+
+/// Run `f` with `fault` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_apply_fault<R>(fault: ApplyFault, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ApplyFault>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            APPLY_FAULT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(APPLY_FAULT.with(|m| m.replace(Some(fault))));
+    f()
+}
+
+/// A fault planted in when a claim is marked as edited (`tests/claim_marks.rs`, selected by
+/// `MPC_STRUCT_MUTANT`). Installed per thread by [`with_mark_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MarkMutant {
+    /// A grid claim is marked from what a change names, before it applies.
+    GridMarkBeforeLanding,
+    /// Every text claim and reservation of the member on a root the change names is marked first
+    /// thing, whatever the change does.
+    TextMarkFirst,
+    /// A reload after a failed change leaves the claims in place, marks and all.
+    RecoverKeepsClaims,
+}
+
+thread_local! {
+    static MARK_MUTANT: std::cell::Cell<Option<MarkMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The claim mark fault planted on this thread, if any.
+pub fn mark_mutant() -> Option<MarkMutant> {
+    MARK_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_mark_mutant<R>(mutant: MarkMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<MarkMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            MARK_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(MARK_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in what follows a failed render or re-sync of the disk replica
+/// (`tests/resync_failure.rs`, selected by `MPC_STRUCT_MUTANT`). Installed per thread by
+/// [`with_resync_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResyncMutant {
+    /// The change's commit returns the error, though the change is in the store.
+    ReturnsTheError,
+    /// A purge stops at its re-sync, with the live removal landed and the history not erased.
+    PurgeStopsAtTheResync,
+    /// A failure after the doc took an outside save leaves the doc holding it, unlogged.
+    IngestKeepsTheDoc,
+    /// A failure settling after an outside save returns the error, though the save is in the
+    /// store.
+    SettleReturnsTheError,
+}
+
+thread_local! {
+    static RESYNC_MUTANT: std::cell::Cell<Option<ResyncMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The re-sync fault planted on this thread, if any.
+pub fn resync_mutant() -> Option<ResyncMutant> {
+    RESYNC_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_resync_mutant<R>(mutant: ResyncMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ResyncMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            RESYNC_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(RESYNC_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in client-ID handling in sessions, so its tests can show they catch it.
+/// Installed per thread by [`with_client_mutant`]; selected in the tests by
+/// `MPC_STRUCT_MUTANT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClientMutant {
+    /// Agent reuse ignores the kinds the store records (`client_kinds`): every ID from before
+    /// the session's load counts as reusable (an own replica's and an older kit's included),
+    /// whatever its kind (caught by `tests/client_reuse.rs`'s own-replica and N−1 tests).
+    ReuseAcrossReload,
+    /// Agent reuse reads no recorded kinds at load: only IDs minted in this load are reused,
+    /// so a plain agent draws a new ID after every reload (caught by
+    /// `tests/client_reuse.rs`'s plain-agent test).
+    NoReuseAfterReload,
+    /// An open leaves the `client_kinds` rows of docs that have been deleted (caught by
+    /// `store::tests::an_open_removes_the_client_kinds_of_docs_an_older_kit_deleted` and
+    /// tools/n1's `n1_kinds_after_delete`).
+    NoOrphanSweep,
+}
+
+thread_local! {
+    static CLIENT_MUTANT: std::cell::Cell<Option<ClientMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The client-ID fault planted on this thread, if any.
+pub fn client_mutant() -> Option<ClientMutant> {
+    CLIENT_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_client_mutant<R>(mutant: ClientMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ClientMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            CLIENT_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(CLIENT_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in tagged-key minting ([`crate::mint`]), so the minting tests can show they
+/// catch it. Installed per thread by [`with_mint_mutant`]; selected in the tests by
+/// `MPC_STRUCT_MUTANT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MintMutant {
+    /// [`crate::mint::next_for`] ignores the retired high-water mark, so a key a drop forgot
+    /// is minted again (caught by "drop, then mint").
+    IgnoreRetired,
+    /// The session's writer-tag rule takes any writer's tag, not only the inserting
+    /// connection's own (caught by "an insert with another's tag is refused").
+    AnyWriterTag,
+    /// [`crate::mint::mark_key`] is one shared key per prefix and tag, not one per dropper:
+    /// last writer wins, so of two concurrent drops the lower mark can win (caught by the
+    /// two-concurrent-drops convergence test).
+    SingleLwwMark,
+    /// The session's client-ID helper hands out a draw of 0 instead of drawing again (caught
+    /// by the client-ID resampling test).
+    ClientIdZero,
+    /// The client-ID helper moves a draw outside `2..=MAX_KIT_CLIENT` into it (the old
+    /// `.max(2)`), so several draws map onto one ID (caught by "a draw of 0 then 7 gives 7").
+    ShiftNotResample,
+    /// Agent-ID reuse ignores the IDs present connections hold, so two live connections share
+    /// one (caught by the join-and-leave churn test).
+    ReuseHeldClient,
+}
+
+thread_local! {
+    static CLIENT_DRAWS: RefCell<std::collections::VecDeque<ClientId>> =
+        const { RefCell::new(std::collections::VecDeque::new()) };
+}
+
+/// Run `f` with the session's next raw client-ID draws forced to `draws`, in order (any
+/// values, 0 and 2^53 - 1 included), so a test can show which the kit draws again; the usual
+/// source takes over when they run out, and any left are discarded afterwards.
+pub fn with_client_draws<R>(draws: impl IntoIterator<Item = ClientId>, f: impl FnOnce() -> R) -> R {
+    struct Back;
+    impl Drop for Back {
+        fn drop(&mut self) {
+            CLIENT_DRAWS.with(|d| d.borrow_mut().clear());
+        }
+    }
+    CLIENT_DRAWS.with(|d| {
+        let mut d = d.borrow_mut();
+        d.clear();
+        d.extend(draws);
+    });
+    let _back = Back;
+    f()
+}
+
+/// The next forced raw client-ID draw on this thread ([`with_client_draws`]), if any.
+pub(crate) fn forced_client_draw() -> Option<ClientId> {
+    CLIENT_DRAWS.with(|d| d.borrow_mut().pop_front())
+}
+
+thread_local! {
+    static MINT_MUTANT: std::cell::Cell<Option<MintMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The minting fault planted on this thread, if any.
+pub fn mint_mutant() -> Option<MintMutant> {
+    MINT_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_mint_mutant<R>(mutant: MintMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<MintMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            MINT_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(MINT_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in element claims, so their tests can show they catch it. Installed per
+/// thread by [`with_claim_mutant`]; selected in the tests by `MPC_STRUCT_MUTANT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClaimMutant {
+    /// The claim policy reads a change's list ops only: a map write isn't mapped to its element
+    /// through [`crate::session::Pack::composite`], so it passes a claim on that element (caught
+    /// by "a write to a claimed element's map key is refused").
+    MapKeysUnmapped,
+    /// An element claim is marked from what a change names, before it applies, so a change that
+    /// lands nothing leaves the mark, and the next change by anyone ends the claim (caught by "a
+    /// change that doesn't land leaves the claim alone").
+    MarkBeforeApply,
+}
+
+thread_local! {
+    static CLAIM_MUTANT: std::cell::Cell<Option<ClaimMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The element-claim fault planted on this thread, if any.
+pub fn claim_mutant() -> Option<ClaimMutant> {
+    CLAIM_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, however `f` ends.
+pub fn with_claim_mutant<R>(mutant: ClaimMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ClaimMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            CLAIM_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(CLAIM_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in the reference-state helper ([`crate::refs`]), so its tests can show they
+/// catch it. Installed per thread by [`with_ref_mutant`]; selected in the tests by
+/// `MPC_STRUCT_MUTANT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RefMutant {
+    /// [`crate::refs::resolve_all`] leaves orphaned references out (caught by "every link
+    /// keeps its entry").
+    OrphanDropsLink,
+    /// [`crate::refs::resolve_parents`] cuts a cycle at its first element in the list's order,
+    /// not its smallest key (caught by "the same parents in another order cut the same way").
+    CycleByOrder,
+}
+
+thread_local! {
+    static REF_MUTANT: std::cell::Cell<Option<RefMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The reference-state fault planted on this thread, if any.
+pub fn ref_mutant() -> Option<RefMutant> {
+    REF_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_ref_mutant<R>(mutant: RefMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<RefMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            REF_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(REF_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in the doc's blob references (`store/blob_refs.rs`), so the tests that should
+/// catch it can show they do. Installed per thread by [`with_blob_ref_mutant`]; selected in the
+/// tests by `MPC_STRUCT_MUTANT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlobRefMutant {
+    /// The open's orphan sweep leaves the last table on its list (caught by
+    /// `store::tests::the_orphan_sweep_covers_every_table_on_its_list`).
+    SweepSkipsTable,
+    /// A change's references are taken in a second transaction after its own commit, so an
+    /// interrupted write leaves a value naming a blob with no reference (caught by
+    /// `session::blob_ref_tests::an_interrupted_write_leaves_the_change_and_its_reference_together`).
+    RefAfterCommit,
+    /// A load takes no references for the live doc (caught by
+    /// `session::blob_ref_tests::a_load_takes_a_hold_for_a_name_an_older_kit_wrote`).
+    NoHealAtLoad,
+    /// Blob GC ignores a name on record with no count taken, so a blob that arrives after its
+    /// name is collected while the doc names it (caught by
+    /// `session::blob_ref_tests::a_blob_that_arrives_after_its_name_is_never_collected`).
+    GcIgnoresNames,
+    /// An edit checked for a name, refused once it reaches the engine, leaves its strictness for
+    /// the next change, so an undo or restore naming a missing blob is refused (caught by
+    /// `session::blob_ref_tests::a_strict_edit_leaves_nothing_behind_for_the_next_change`).
+    StaleStrictFlag,
+    /// `Session::blob_refs` returns every row whatever the caller's rights (caught by
+    /// `session::blob_ref_tests::without_the_history_right_blob_refs_shows_what_a_read_shows`).
+    RefsIgnoreRights,
+}
+
+thread_local! {
+    static BLOB_REF_MUTANT: std::cell::Cell<Option<BlobRefMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The blob-reference fault planted on this thread, if any.
+pub fn blob_ref_mutant() -> Option<BlobRefMutant> {
+    BLOB_REF_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_blob_ref_mutant<R>(mutant: BlobRefMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<BlobRefMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            BLOB_REF_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(BLOB_REF_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// How an edit becomes an engine change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]

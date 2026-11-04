@@ -457,6 +457,7 @@ impl Session {
     /// computes it on demand: the blame gutter, the verb). Works the same after a reload:
     /// roots are in the store (provenance rows, store format 5).
     pub fn blame(&self, conn: ConnId, root: &str, lines: Option<LineRange>) -> Result<Blame> {
+        timed!(Blame);
         let out = self.blame_inner(conn, root, lines);
         self.for_viewer(conn, out, |l, b| l.blame(b))
     }

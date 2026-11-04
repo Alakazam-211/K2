@@ -1,0 +1,27 @@
+MPC-E830 conflict (structured and CSV)
+exit:     1
+message:  {target} changed since the rev you read
+next:     Someone changed it after you read it (details.target says what; the refusal carries what is there now). Nothing was applied. Read it again, redo your change on what is there now, and pass the new rev.
+step:     read; why: It changed since the rev you read; read it again, redo your change on what is there now, and pass the new rev.
+rule:     board file: object revs
+verbs:    a file type's own verbs (its host's file registry): update, delete, resolve, lock, check-set, check-remove, table-cell, table-remove-row, table-remove-column, move, group, ungroup, align, distribute, tidy, copy-style, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E830",
+  "name": "conflict",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "{target} changed since the rev you read",
+  "next": "Someone changed it after you read it (details.target says what; the refusal carries what is there now). Nothing was applied. Read it again, redo your change on what is there now, and pass the new rev.",
+  "next_step": {
+    "verb": "read",
+    "args": [],
+    "why": "It changed since the rev you read; read it again, redo your change on what is there now, and pass the new rev."
+  },
+  "rule": "board file: object revs",
+  "verbs": ["@file", "update", "delete", "resolve", "lock", "check-set", "check-remove", "table-cell", "table-remove-row", "table-remove-column", "move", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

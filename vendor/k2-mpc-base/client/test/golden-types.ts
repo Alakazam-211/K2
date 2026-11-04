@@ -16,13 +16,16 @@ import changeEventsApp from "./golden/change_events_app.json";
 import errors from "./golden/errors.json";
 import rosterEvents from "./golden/roster_events.json";
 import rosterEventsApp from "./golden/roster_events_app.json";
+import rosterEventsClaimsElems from "./golden/roster_events_claims_elems.json";
 import rosterEventsClosed from "./golden/roster_events_closed.json";
 import rosterEventsClosedApp from "./golden/roster_events_closed_app.json";
 import rosterEventsDevices from "./golden/roster_events_devices.json";
+import rosterEventsElemPresence from "./golden/roster_events_elem_presence.json";
 import rosterEventsOverwritten from "./golden/roster_events_overwritten.json";
 import rosterEventsOverwrittenApp from "./golden/roster_events_overwritten_app.json";
 import rosterEventsOverwrittenGrid from "./golden/roster_events_overwritten_grid.json";
 import rosterEventsRollup from "./golden/roster_events_rollup.json";
+import rosterTraceElemPresence from "./golden/roster_trace_elem_presence.json";
 
 /** `T` as tsc infers it from JSON: string literal types widened to `string`. */
 type W<T> = T extends string
@@ -52,3 +55,6 @@ rosterEventsOverwrittenApp satisfies W<RosterGolden>;
 rosterEventsOverwrittenGrid satisfies W<RosterGolden & { about: string }>;
 rosterEventsRollup satisfies W<RollupGolden>;
 rosterEventsDevices satisfies W<DevicesGolden>;
+rosterEventsElemPresence satisfies W<DevicesGolden>;
+rosterEventsClaimsElems satisfies W<RosterGolden & { about: string }>;
+rosterTraceElemPresence satisfies W<{ traces: (RosterGolden & { seed: number })[] }>;

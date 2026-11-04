@@ -2,9 +2,11 @@
 resolver = "2"
 members = ["crates/base", "crates/spec-undo"]
 # vendor/: copies of other repos by git subtree (vendor/README.md). Excluded so they never
-# become members (no lints, fmt or tests of ours run on them). fuzz/: the cargo-fuzz targets,
-# their own workspace (nightly and libFuzzer, never in a normal build; tools/README.md).
-exclude = ["spike", "vendor", "fuzz"]
+# become members (no lints, fmt or tests of ours run on them).
+exclude = [
+  "spike",
+  "vendor",
+]
 
 [workspace.package]
 edition = "2021"

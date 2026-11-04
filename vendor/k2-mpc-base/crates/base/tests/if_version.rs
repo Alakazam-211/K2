@@ -64,13 +64,14 @@ fn shout(args: &[String]) -> Result<PackEdit, ToolError> {
     }))
 }
 
-const VERBS: &[PackVerb] = &[PackVerb::edit(
-    "shout",
-    "shout",
-    &[PersonAction::Format],
-    &[0],
-    shout,
-)];
+const VERBS: &[PackVerb] =
+    &[PackVerb::edit("shout", "shout", &[PersonAction::Format], &[0], shout).positions(&[])];
+
+#[test]
+fn the_shout_pack_declares_its_position_units() {
+    let reg = Registry::for_pack(&P).unwrap();
+    k2_mpc_base::parity::positions::check(&reg).unwrap_or_else(|e| panic!("{e}"));
+}
 
 // ---------- the host: rights, a clock, and a hook on the clock ----------
 

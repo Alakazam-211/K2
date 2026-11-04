@@ -19,9 +19,12 @@ use std::sync::mpsc::{SyncSender, TrySendError};
 use super::awareness::{ClaimEnd, ClaimId, NoteKind, Overwrite};
 use super::handles::Handles;
 use super::host::{LeaveReason, Rights};
-use super::participant::{CellCursor, ConnId, CursorAt, Participant, Role, RosterEntry};
+use super::participant::{
+    CellCursor, ConnId, CursorAt, ElemSelection, Participant, Point, Rect, Role, RosterEntry,
+};
 use super::position::LineRange;
 use crate::doc::ClientId;
+use crate::elem::Key;
 use crate::store::Seq;
 
 /// Who an event is about: the host's participant id, or, for a viewer whose participant
@@ -151,6 +154,28 @@ pub enum RosterEvent {
         /// The doc's version its position (`at`, `lines`) was read at.
         version: Seq,
     },
+    /// Their element selection ([`RosterEntry::selection`]), or gone. Coalesced: one per
+    /// connection per flush, the last value. Outside the doc's numbering, so it carries no
+    /// version. `client` is as on [`RosterEvent::Cursor`]: the connection, or `None` for the
+    /// participant's own value when the last connection's isn't it (and on a grid, which has no
+    /// [`RosterEntry::devices`]).
+    Selection {
+        who: Who,
+        selection: Option<ElemSelection>,
+        client: Option<ClientId>,
+    },
+    /// Their pointer ([`RosterEntry::pointer`]), or gone. As [`RosterEvent::Selection`].
+    Pointer {
+        who: Who,
+        pointer: Option<Point>,
+        client: Option<ClientId>,
+    },
+    /// Their viewport ([`RosterEntry::viewport`]), or gone. As [`RosterEvent::Selection`].
+    Viewport {
+        who: Who,
+        viewport: Option<Rect>,
+        client: Option<ClientId>,
+    },
     /// A claim was taken (explicitly or by a read's `--for-edit`). Never coalesced.
     ClaimStarted {
         who: Who,
@@ -159,6 +184,20 @@ pub enum RosterEvent {
         note: Option<String>,
         hold: bool,
         for_edit: bool,
+        expires_ms: u64,
+        /// The doc's version when it was taken.
+        version: Seq,
+    },
+    /// A claim on elements of a list root was taken ([`super::Session::claim_elems`]). Its own
+    /// kind, because it has no lines. Never coalesced. It ends with [`RosterEvent::ClaimEnded`].
+    ClaimStartedElems {
+        who: Who,
+        claim: ClaimId,
+        root: String,
+        /// In key order.
+        keys: Vec<Key>,
+        note: Option<String>,
+        hold: bool,
         expires_ms: u64,
         /// The doc's version when it was taken.
         version: Seq,
@@ -209,6 +248,26 @@ struct Told {
     cell: Option<CellCursor>,
     /// Each connection's caret as last told (a text doc's [`RosterEntry::devices`]).
     devices: Vec<(ClientId, Option<CursorAt>)>,
+    selection: ToldKind<ElemSelection>,
+    pointer: ToldKind<Point>,
+    viewport: ToldKind<Rect>,
+}
+
+/// One presence kind as subscribers were last told it: the participant's value (what a consumer
+/// that keeps one a participant holds), and each connection's.
+#[derive(Clone)]
+struct ToldKind<T> {
+    top: Option<T>,
+    conns: Vec<(ClientId, Option<T>)>,
+}
+
+impl<T> Default for ToldKind<T> {
+    fn default() -> Self {
+        Self {
+            top: None,
+            conns: Vec::new(),
+        }
+    }
 }
 
 struct Sub {
@@ -382,6 +441,9 @@ impl RosterHub {
                             cursor: None,
                             cell: None,
                             devices: Vec::new(),
+                            selection: ToldKind::default(),
+                            pointer: ToldKind::default(),
+                            viewport: ToldKind::default(),
                         });
                     }
                     RosterEvent::Left { who, .. } => self.told.retain(|t| &t.who != who),
@@ -409,6 +471,9 @@ impl RosterHub {
                             cursor: None,
                             cell: None,
                             devices: Vec::new(),
+                            selection: ToldKind::default(),
+                            pointer: ToldKind::default(),
+                            viewport: ToldKind::default(),
                         });
                         self.told.len() - 1
                     }
@@ -436,6 +501,7 @@ impl RosterHub {
                     });
                 }
                 cursor_events(t, &who, &r.entry, version, &mut batch);
+                elem_events(t, &who, &r.entry, &mut batch);
                 if t.cell != r.entry.cell {
                     t.cell = r.entry.cell.clone();
                     batch.push(RosterEvent::CellCursor {
@@ -506,7 +572,93 @@ fn told(r: &Row) -> Told {
         cursor: r.entry.cursor.clone(),
         cell: r.entry.cell.clone(),
         devices: devices(&r.entry),
+        selection: ToldKind {
+            top: r.entry.selection.clone(),
+            conns: selections(&r.entry),
+        },
+        pointer: ToldKind {
+            top: r.entry.pointer,
+            conns: pointers(&r.entry),
+        },
+        viewport: ToldKind {
+            top: r.entry.viewport,
+            conns: viewports(&r.entry),
+        },
     }
+}
+
+fn selections(e: &RosterEntry) -> Vec<(ClientId, Option<ElemSelection>)> {
+    e.devices
+        .iter()
+        .map(|d| (d.client, d.selection.clone()))
+        .collect()
+}
+
+fn pointers(e: &RosterEntry) -> Vec<(ClientId, Option<Point>)> {
+    e.devices.iter().map(|d| (d.client, d.pointer)).collect()
+}
+
+fn viewports(e: &RosterEntry) -> Vec<(ClientId, Option<Rect>)> {
+    e.devices.iter().map(|d| (d.client, d.viewport)).collect()
+}
+
+/// One presence kind's events for a flush, by [`cursor_events`]' rule: one per connection whose
+/// value changed since `t` (a connection gone with a value: `None`), the ones holding the
+/// participant's value last; then, if the last value told isn't the participant's, one with no
+/// connection that is. `push` gets the value and the connection.
+fn kind_events<T: Clone + PartialEq>(
+    t: &mut ToldKind<T>,
+    top: &Option<T>,
+    conns: Vec<(ClientId, Option<T>)>,
+    mut push: impl FnMut(Option<T>, Option<ClientId>),
+) {
+    let mut moved: Vec<(ClientId, Option<T>)> = t
+        .conns
+        .iter()
+        .filter(|(c, x)| x.is_some() && !conns.iter().any(|(k, _)| k == c))
+        .map(|(c, _)| (*c, None))
+        .collect();
+    for (c, x) in &conns {
+        let was = t.conns.iter().find(|(k, _)| k == c).map(|(_, x)| x);
+        if was.cloned().flatten() != *x {
+            moved.push((*c, x.clone()));
+        }
+    }
+    moved.sort_by_key(|(_, x)| x == top);
+    t.conns = conns;
+    for (c, x) in moved {
+        t.top = x.clone();
+        push(x, Some(c));
+    }
+    if t.top != *top {
+        t.top = top.clone();
+        push(top.clone(), None);
+    }
+}
+
+/// One participant's `Selection`, `Pointer` and `Viewport` events for a flush.
+fn elem_events(t: &mut Told, who: &Who, e: &RosterEntry, batch: &mut Vec<RosterEvent>) {
+    kind_events(&mut t.selection, &e.selection, selections(e), |x, c| {
+        batch.push(RosterEvent::Selection {
+            who: who.clone(),
+            selection: x,
+            client: c,
+        })
+    });
+    kind_events(&mut t.pointer, &e.pointer, pointers(e), |x, c| {
+        batch.push(RosterEvent::Pointer {
+            who: who.clone(),
+            pointer: x,
+            client: c,
+        })
+    });
+    kind_events(&mut t.viewport, &e.viewport, viewports(e), |x, c| {
+        batch.push(RosterEvent::Viewport {
+            who: who.clone(),
+            viewport: x,
+            client: c,
+        })
+    });
 }
 
 fn devices(e: &RosterEntry) -> Vec<(ClientId, Option<CursorAt>)> {

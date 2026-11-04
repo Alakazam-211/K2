@@ -1,0 +1,21 @@
+MPC-E414 save_ticket_invalid (disk and outside edits)
+exit:     2
+message:  bad save ticket: a ticket is good for one record_saved, by the connection that asked for it, on its doc
+next:     A host bug: a save ticket is good for one record_saved, by the connection that asked for it, on the doc that issued it. This one was already recorded (or refused), is another connection's, or isn't this doc's (or is too old to be remembered). Nothing was recorded. A lapsed, replaced or reloaded ticket is not this: it returns with not_recorded set.
+rule:     K-T0-5
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E414",
+  "name": "save_ticket_invalid",
+  "area": "disk and outside edits",
+  "exit": 2,
+  "message": "bad save ticket: a ticket is good for one record_saved, by the connection that asked for it, on its doc",
+  "next": "A host bug: a save ticket is good for one record_saved, by the connection that asked for it, on the doc that issued it. This one was already recorded (or refused), is another connection's, or isn't this doc's (or is too old to be remembered). Nothing was recorded. A lapsed, replaced or reloaded ticket is not this: it returns with not_recorded set.",
+  "rule": "K-T0-5",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

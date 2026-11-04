@@ -1,0 +1,27 @@
+MPC-E838 no_object (structured and CSV)
+exit:     4
+message:  no object {id}
+next:     The board has no object with that id: it was deleted, or the id is mistyped. Nothing was applied. List the objects and use an id shown; a deleted one comes back with put-back, from what its delete returned.
+step:     list; why: No object has that id; list the objects and use an id shown.
+rule:     board file: object ids
+verbs:    a file type's own verbs (its host's file registry): read, update, delete, connect, react, vote, comment, reply, resolve, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, connected-copy, mind-child, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E838",
+  "name": "no_object",
+  "area": "structured and CSV",
+  "exit": 4,
+  "message": "no object {id}",
+  "next": "The board has no object with that id: it was deleted, or the id is mistyped. Nothing was applied. List the objects and use an id shown; a deleted one comes back with put-back, from what its delete returned.",
+  "next_step": {
+    "verb": "list",
+    "args": [],
+    "why": "No object has that id; list the objects and use an id shown."
+  },
+  "rule": "board file: object ids",
+  "verbs": ["@file", "read", "update", "delete", "connect", "react", "vote", "comment", "reply", "resolve", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "connected-copy", "mind-child", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

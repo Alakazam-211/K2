@@ -1,0 +1,21 @@
+MPC-E834 board_conflict (structured and CSV)
+exit:     1
+message:  {count} group(s) held: what they change moved since they were made
+next:     Some groups of edits didn't apply, because what they change moved since they were made (details lists each held group and why). Each held group changed nothing and is kept whole; the others applied. Read the board again and make the held changes again on what is there now.
+rule:     board file: groups apply whole
+verbs:    a file type's own verbs (its host's file registry): a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E834",
+  "name": "board_conflict",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "{count} group(s) held: what they change moved since they were made",
+  "next": "Some groups of edits didn't apply, because what they change moved since they were made (details lists each held group and why). Each held group changed nothing and is kept whole; the others applied. Read the board again and make the held changes again on what is there now.",
+  "rule": "board file: groups apply whole",
+  "verbs": ["@file", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

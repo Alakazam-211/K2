@@ -47,16 +47,23 @@ dev-dependency) for the planted tracker mutants. Nothing else depends on them.
 
 - From: the engine repo (`k2-mpc-engine`), prefixes `crates/mpce-sync`, `crates/mpce-core`,
   `crates/mpce-codec`; path dependencies among themselves (`../mpce-core`, `../mpce-codec`).
-- Tag: **`mpce-g2a-m2.4.5`** (hardening), commit
-  `c184284953b7844458929a3cea4e83d22983bb93`, for all three crates (one commit, so the set is
+- Tag: **`mpce-g2a-m3.1`** (hardening), commit
+  `2fa1f2a5a53a1fad4b586077f2c56ead08c5e3af`, for all three crates (one commit, so the set is
   consistent). Subtree splits: mpce-sync `fe10ddd` (`fe10ddd19d1f4b7f23929a2a552d350308a3852a`),
-  mpce-core `a91c187` (`a91c18770d3b72a186655c620b141c6e27dd1cdd`), mpce-codec `bdb3379`
-  (`bdb33799ece3f60b691bfc1572619e1832ddb7a9`). The copies are byte-for-byte the tag's
-  (checked against `git archive` of the tag). Against `mpce-g2a-m2.4.4`: mpce-core only.
-  Hardening. Its manifest gains one test-only feature,
-  `planted-shortcuts` (off by default, no new dependency, so the lockfile is unchanged), for
-  dependents' mutant checks. No new refusal code.
-- Earlier: `mpce-g2a-m2.4.4` (commit `40f7825665c273151fc801a4987ad6fc960f6afe`; mpce-core split
+  mpce-core `6ea9cb3` (`6ea9cb344d423436b98d6693322cac804d085c33`), mpce-codec `5b74a92`
+  (`5b74a9275484db8ad108fde6bb377a64209318ce`). The copies are byte-for-byte the tag's
+  (checked against `git archive` of the tag). Against `mpce-g2a-m3`: mpce-core only. Hardening,
+  with one new refusal code (listed in the kit's error table); no manifest changed, so the
+  lockfile didn't. `mpce-model` keeps its own tag (above).
+- Earlier: `mpce-g2a-m3` (commit `6101d66456b5d9de2897d08dab33675377bb934f`; mpce-core split
+  `8f20e02`, mpce-codec split `5b74a92`: hardening and performance), on main at kit `3e5c7cb6`.
+  `mpce-g2a-m2.4.7` (commit `26765a8c94fdd86fd23b65feedad4aae82fead26`; mpce-core split
+  `92cf3e9`, mpce-codec split `af206a1`: hardening), on main at kit `55957c66`.
+  `mpce-g2a-m2.4.6` (commit `2dd1cede4c14175f98aad7885db34beab0bf1eab`; mpce-core split
+  `1c7651f`: test-only additions; mpce-codec split `bdb3379`), on main at kit `270598c5`.
+  `mpce-g2a-m2.4.5` (commit `c184284953b7844458929a3cea4e83d22983bb93`; mpce-core split
+  `a91c187`: hardening; the `planted-shortcuts` feature), on main at kit `085db90f`.
+  `mpce-g2a-m2.4.4` (commit `40f7825665c273151fc801a4987ad6fc960f6afe`; mpce-core split
   `0c2070e`: hardening; the `verify-shortcuts` feature),
   vendored at kit `82900e12` and landing with m2.4.5. `mpce-g2a-m2.4.3` (commit
   `e68e1c22a4d1ca91204bb22166c7b61864010f7c`; mpce-core split `4ba497c`: hardening), on main at kit `8b9b1418`.
@@ -107,7 +114,7 @@ dev-dependency) for the planted tracker mutants. Nothing else depends on them.
 Bump to a new tag (do not edit files here by hand):
 
 ```sh
-# in a clone of the engine repo (<tag>: the engine tag K2 Engine names, e.g. mpce-g2a-m2.4.5)
+# in a clone of the engine repo (<tag>: the engine tag K2 Engine names, e.g. mpce-g2a-m3.1)
 for c in mpce-sync mpce-core mpce-codec; do
   git subtree split --prefix crates/$c <tag>                  # prints <split sha> per crate
 done
@@ -126,8 +133,9 @@ and `scripts/check-licences.sh`.
 The kit's engine: Yrs v0.28.0 (MIT, https://github.com/y-crdt/y-crdt) plus the k2 patches,
 from the private repo `k2-yrs`.
 
-- Tag: **`k2-yrs-0.28.0-k2.6.3`** (commit `8fa90bd`; v0.9.7): what it changes is listed in
-  `docs/YRS-FORK.md` and `yrs/NOTICE`. Before it: `k2-yrs-0.28.0-k2.2` (commit `44922a9`,
+- Tag: **`k2-yrs-0.28.0-k2.6.5`** (commit `b37f49b`; v0.9.8): what it changes is listed in
+  `docs/YRS-FORK.md` and `yrs/NOTICE`. Before it: `k2-yrs-0.28.0-k2.6.4` (commit `76c73df`),
+  `k2-yrs-0.28.0-k2.6.3` (commit `8fa90bd`, v0.9.7) and `k2-yrs-0.28.0-k2.2` (commit `44922a9`,
   v0.9.3); earlier tags were never vendored (the kit used crates.io's 0.28.0).
 - Copied by `tools/vendor-yrs.sh` (not by subtree): the tag's `yrs/` crate, its `LICENSE` and
   `NOTICE`, without the engine's own tests (`yrs/tests/`: they run in k2-yrs); `VENDORED` records the tag, commit and

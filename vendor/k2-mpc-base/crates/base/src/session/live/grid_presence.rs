@@ -182,6 +182,9 @@ impl AxisNow {
     }
 }
 
+/// The grid claims and the grid reservations a change touches, by index.
+pub(super) type GridTouched = (Vec<usize>, Vec<usize>);
+
 /// What a change does to a table, by key: the elements its ops name, per root.
 #[derive(Debug, Default)]
 pub(super) struct GridTouch {
@@ -517,6 +520,9 @@ impl Session {
     /// Claim `k`'s info, a text claim or a grid one.
     pub(super) fn any_claim_info(&self, st: &State, k: usize, now: u64) -> Result<ClaimInfo> {
         let c = &st.aware.claims[k];
+        if c.elems.is_some() {
+            return Ok(Self::elem_claim_info(st, c, now));
+        }
         if c.grid.is_some() {
             let g = self.grid_now(st)?;
             return Ok(Self::grid_claim_info(&g, c, now));
@@ -551,6 +557,9 @@ impl Session {
         now: u64,
     ) -> Result<ReservationInfo> {
         let r = &st.aware.reservations[k];
+        if r.elems.is_some() {
+            return Ok(Self::elem_reservation_info(st, r, now));
+        }
         if r.grid.is_some() {
             let g = self.grid_now(st)?;
             return Ok(Self::grid_reservation_info(&g, r, now));
@@ -810,6 +819,7 @@ impl Session {
             waiters,
             edited: false,
             grid: Some(span),
+            elems: None,
         };
         let info = Self::grid_claim_info(&g, &claim, now);
         st.aware.claims.push(claim);
@@ -854,8 +864,9 @@ impl Session {
     /// ends on the claimant's own edit touching it (unless `hold`), on release, time or
     /// leave, and, on a grid, with [`ClaimEnd::Deleted`] once nothing it covers is live. On
     /// a grid, [`ClaimSpan::Lines`] is mapped to the rows on those rendered lines. On a text
-    /// doc only [`ClaimSpan::Lines`] applies. Needs edit. Errors as [`Session::claim`]; an
-    /// unknown or deleted end is [`SessionError::BadPosition`].
+    /// doc only [`ClaimSpan::Lines`] applies. [`ClaimSpan::Elems`] is
+    /// [`Session::claim_elems`]. Needs edit. Errors as [`Session::claim`]; an unknown or deleted
+    /// end is [`SessionError::BadPosition`].
     pub fn claim_span(
         &self,
         conn: ConnId,
@@ -879,6 +890,9 @@ impl Session {
         note: Option<String>,
         hold: bool,
     ) -> Result<ClaimInfo> {
+        if let ClaimSpan::Elems { root, keys } = &span {
+            return self.claim_elems_inner(conn, root, keys, ttl_ms, note, hold);
+        }
         if !self.is_grid() {
             return match span {
                 ClaimSpan::Lines(l) => self.claim_inner(conn, l, ttl_ms, note, hold),
@@ -892,17 +906,36 @@ impl Session {
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Claim, now)?;
         self.expire_claims(st, now);
+        Self::check_claim_note(note.as_deref())?;
         let gs = match &span {
             ClaimSpan::Lines(l) => {
                 let g = self.grid_now(st)?;
-                let rows = self
-                    .grid_rows_of_lines(&g, l.first.max(1), l.last.max(l.first))
-                    .ok_or_else(|| {
-                        SessionError::BadPosition(format!(
-                            "lines {}..{} hold no row of the table",
-                            l.first, l.last
-                        ))
-                    })?;
+                // `claim --lines` names the lines `cat -n` printed; the rows are the map's
+                let text = match self.pack.encode(&self.content(st)?, &st.codec) {
+                    Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+                    // it can't tell which line the caller means: no claim by line
+                    Err(_) => {
+                        #[cfg(any(test, feature = "differential"))]
+                        let goes_on = crate::differential::line_mutant()
+                            == Some(crate::differential::LineMutant::ClaimLinesGoOnUnrendered);
+                        #[cfg(not(any(test, feature = "differential")))]
+                        let goes_on = false;
+                        if !goes_on {
+                            return Err(SessionError::LinesUnknown {
+                                address: format!("lines {}..{}", l.first, l.last),
+                            });
+                        }
+                        String::new()
+                    }
+                };
+                let bridge = table::NlLines::of(&text);
+                let (first, last) = nl_to_rendered(&bridge, (l.first.max(1), l.last.max(l.first)));
+                let rows = self.grid_rows_of_lines(&g, first, last).ok_or_else(|| {
+                    SessionError::BadPosition(format!(
+                        "lines {}..{} hold no row of the table",
+                        l.first, l.last
+                    ))
+                })?;
                 GridSpan {
                     rows: Some(rows),
                     cols: None,
@@ -919,24 +952,55 @@ impl Session {
     /// The grid claims, and the grid reservations, a structured change by member `i`
     /// (`edits`, not applied yet) touches (contract §6), by index. Both expand with their
     /// anchors.
-    fn grid_touched(
-        &self,
-        st: &State,
-        i: usize,
-        edits: &[Edit],
-    ) -> Result<(Vec<usize>, Vec<usize>)> {
+    pub(super) fn grid_touched(&self, st: &State, i: usize, edits: &[Edit]) -> Result<GridTouched> {
+        Ok(match self.touch_axes(st)? {
+            Some(axes) => self.touched_by(st, i, &GridTouch::of_edits(edits), edits, &axes),
+            None => GridTouched::default(),
+        })
+    }
+
+    /// The rows and columns before a change, for [`Session::grid_landed`]: `None` when no grid
+    /// span could be touched.
+    pub(super) fn touch_axes(&self, st: &State) -> Result<Option<(AxisNow, AxisNow)>> {
         let any = st.aware.claims.iter().any(|c| c.grid.is_some())
             || st.aware.reservations.iter().any(|r| r.grid.is_some());
         if !self.is_grid() || !any {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(None);
         }
-        let t = GridTouch::of_edits(edits);
+        Ok(Some((
+            AxisNow::of(&st.doc, table::ROWS)?,
+            AxisNow::of(&st.doc, table::COLS)?,
+        )))
+    }
+
+    /// [`Session::grid_touched`] for a change that has landed in the doc, from what it did
+    /// (`stream`): an op with no effect touches nothing. `axes`: as they were before it.
+    pub(super) fn grid_landed(
+        &self,
+        st: &State,
+        i: usize,
+        stream: &[ElemApplied],
+        edits: &[Edit],
+        axes: Option<&(AxisNow, AxisNow)>,
+    ) -> GridTouched {
+        match axes {
+            Some(axes) => self.touched_by(st, i, &GridTouch::of_stream(stream), edits, axes),
+            None => GridTouched::default(),
+        }
+    }
+
+    fn touched_by(
+        &self,
+        st: &State,
+        i: usize,
+        t: &GridTouch,
+        edits: &[Edit],
+        (rows, cols): &(AxisNow, AxisNow),
+    ) -> GridTouched {
         if t.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return GridTouched::default();
         }
         let pid = st.members[i].p.pid.clone();
-        let rows = AxisNow::of(&st.doc, table::ROWS)?;
-        let cols = AxisNow::of(&st.doc, table::COLS)?;
         let ops = |root: &str| -> Vec<&ListOp> {
             edits
                 .iter()
@@ -954,7 +1018,7 @@ impl Session {
         let after = expanded(&plain, &rows2, &cols2, &t.ins_rows, &t.ins_cols, Some(&pid));
         let (mut claims, mut reservations) = (Vec::new(), Vec::new());
         for ((k, res, c), a) in spans.iter().zip(&after) {
-            if touches(&t, &c.2, a, (&rows, &cols), (&rows2, &cols2)) {
+            if touches(t, &c.2, a, (rows, cols), (&rows2, &cols2)) {
                 if *res {
                     reservations.push(*k);
                 } else {
@@ -962,14 +1026,14 @@ impl Session {
                 }
             }
         }
-        Ok((claims, reservations))
+        (claims, reservations)
     }
 
     /// The claim policy on a structured change by member `i` (A10): under
     /// [`ClaimPolicy::Respect`], an **agent's** change touching another participant's live
-    /// grid claim, or a grid reservation handed to someone else, is refused
-    /// ([`SessionError::Claimed`], exit 5) before anything applies. A person (or any other
-    /// kind) is never refused.
+    /// grid claim or element claim, or a reservation of either handed to someone else, is
+    /// refused ([`SessionError::Claimed`], [`SessionError::ElemsClaimed`], exit 5) before
+    /// anything applies. A person (or any other kind) is never refused.
     pub(super) fn check_grid_claims(
         &self,
         st: &mut State,
@@ -982,6 +1046,7 @@ impl Session {
         if policy == ClaimPolicy::Ignore || st.members[i].p.kind != ParticipantKind::Agent {
             return Ok(());
         }
+        self.check_elem_claims(st, i, edits, now)?;
         let pid = st.members[i].p.pid.clone();
         let (touched, reserved) = self.grid_touched(st, i, edits)?;
         // a reservation handed to someone else
@@ -1017,26 +1082,26 @@ impl Session {
         })
     }
 
-    /// Before a structured change by member `i` applies: its own grid claims it touches end
-    /// once it is durable ([`ClaimEnd::Edited`]), unless held, and a grid reservation handed
-    /// to it that it touches is used ([`ReservationEnd::Edited`], passed to the next waiter).
-    pub(super) fn mark_grid_claims(&self, st: &mut State, i: usize, edits: &[Edit]) -> Result<()> {
+    /// A structured change by member `i` has landed in the doc: its own grid claims in `touched`
+    /// ([`Session::grid_touched`], read before it applied) end once it is durable
+    /// ([`ClaimEnd::Edited`]), unless held, and a grid reservation handed to it there is used
+    /// ([`ReservationEnd::Edited`], passed to the next waiter). A commit that fails after this
+    /// reloads the doc, which ends every claim as [`ClaimEnd::Reset`].
+    pub(super) fn mark_grid_claims(&self, st: &mut State, i: usize, touched: &GridTouched) {
         let pid = st.members[i].p.pid.clone();
-        let (claims, reserved) = self.grid_touched(st, i, edits)?;
-        for k in claims {
+        for &k in &touched.0 {
             let c = &mut st.aware.claims[k];
             if c.pid == pid && !c.hold {
                 c.edited = true;
             }
         }
         // the reserved waiter's own edit there uses its reservation (it passes on)
-        for k in reserved {
+        for &k in &touched.1 {
             let r = &mut st.aware.reservations[k];
             if r.pid == pid {
                 r.edited = true;
             }
         }
-        Ok(())
     }
 
     /// After a structured change (`stream`, applied and logged; `actor`: the member who made
@@ -1051,6 +1116,7 @@ impl Session {
         stream: &[ElemApplied],
         now: u64,
     ) {
+        self.elem_claims_after(st, stream, now);
         if !self.is_grid() || stream.is_empty() {
             return;
         }
@@ -1378,7 +1444,7 @@ impl Session {
         now: u64,
         f: impl FnOnce(&ReadResult, &str, Option<&table::LineMap>) -> (R, Shown),
     ) -> Result<GridRead<R>> {
-        let read = self.read_locked(st, i, now)?;
+        let read = self.read_unmarked(st, i)?;
         let text = String::from_utf8_lossy(&read.bytes).into_owned();
         // --ids: the rendering's line -> row map, from the same state as `read.bytes`
         let map = if ids {
@@ -1387,12 +1453,26 @@ impl Session {
         } else {
             None
         };
-        let (r, Shown { view, touched }) =
-            match catch_unwind(AssertUnwindSafe(|| f(&read, &text, map.as_ref()))) {
-                Ok(x) => x,
-                // the caller releases the lock, then passes the panic on
-                Err(panic) => return Ok(Err(panic)),
-            };
+        let (
+            r,
+            Shown {
+                view,
+                touched,
+                refused,
+            },
+        ) = match catch_unwind(AssertUnwindSafe(|| f(&read, &text, map.as_ref()))) {
+            Ok(x) => x,
+            // the caller releases the lock, then passes the panic on
+            Err(payload) => return Ok(Err(payload)),
+        };
+        if refused_read(refused) {
+            return Ok(Ok((read, r, Notes::default(), None)));
+        }
+        self.mark_read(st, i, read.version, now);
+        // the verbs count `\n` lines; views, notes and claims go by the line map
+        let bridge = table::NlLines::of(&text);
+        let view = view.map(|v| nl_to_rendered(&bridge, v));
+        let touched = touched.map(|t| nl_to_rendered(&bridge, t));
         if let Some((first, last)) = view {
             self.set_grid_view(st, i, first, last, now);
         }
@@ -1540,6 +1620,17 @@ impl Session {
         }
         out
     }
+}
+
+/// `\n` lines `(first, last)` as the rendered lines they hold ([`table::NlLines`]).
+fn nl_to_rendered(bridge: &table::NlLines, (first, last): (usize, usize)) -> (usize, usize) {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::line_mutant()
+        == Some(crate::differential::LineMutant::TouchedCountNlLines)
+    {
+        return (first, last);
+    }
+    bridge.rendered(first, last)
 }
 
 #[cfg(test)]

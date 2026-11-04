@@ -24,7 +24,8 @@
 //! **Streaming.** `put` and every read go through 64 KiB buffers: memory doesn't grow with
 //! the blob's size.
 //!
-//! **GC.** A blob is referenced by blob-doc versions (or [`BlobStore::retain`]). An
+//! **GC.** A blob is referenced by blob-doc versions, by a doc whose values name it
+//! ([`BlobId::parse_ref`], `DocStore::blob_refs`), or by [`BlobStore::retain`]. An
 //! unreferenced blob is removed by [`BlobStore::gc`] once it has been unreferenced for
 //! [`BlobConfig::gc_grace_ms`], so a blob just put and about to be referenced is never
 //! collected under its writer.
@@ -71,6 +72,69 @@ impl BlobId {
             *o = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
         }
         Some(Self(out))
+    }
+}
+
+/// What starts a blob reference ([`BlobId::parse_ref`]).
+const REF_PREFIX: &str = "blob:";
+
+impl BlobId {
+    /// This blob as a doc value: `blob:<64 lowercase hex>` ([`BlobId::parse_ref`]).
+    pub fn to_ref(&self) -> String {
+        format!("{REF_PREFIX}{}", self.to_hex())
+    }
+
+    /// The blob a doc value names, if the value is **exactly** a reference: `blob:` and 64
+    /// lowercase hex digits, the spelling [`BlobId::to_ref`] makes, and nothing else. A value
+    /// that merely contains one, with another case or anything around it, is ordinary text.
+    /// One spelling per blob, so every reader and client agrees on what a value names.
+    pub fn parse_ref(value: &str) -> Option<Self> {
+        let hex = value.strip_prefix(REF_PREFIX)?;
+        let digit = |b: &u8| b.is_ascii_digit() || (b'a'..=b'f').contains(b);
+        if hex.len() != 64 || !hex.as_bytes().iter().all(digit) {
+            return None;
+        }
+        Self::from_hex(hex)
+    }
+}
+
+/// Whether the bytes behind a doc's reference are in the blob store now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlobRefState {
+    /// The blob is in the store's index.
+    Present,
+    /// The doc names it and the store has no such blob: never stored here, collected before
+    /// this kit's reference was taken, or its space was purged. The value stays as it is, and a
+    /// read of the bytes fails ([`BlobError::NotFound`]).
+    Missing,
+}
+
+/// One blob a doc names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobRef {
+    pub blob: BlobId,
+    pub state: BlobRefState,
+}
+
+/// The blobs a doc (or one of its versions) names, by id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobRefs {
+    pub refs: Vec<BlobRef>,
+    /// How many of `refs` are [`BlobRefState::Missing`].
+    pub missing: u64,
+}
+
+impl FromIterator<BlobRef> for BlobRefs {
+    fn from_iter<I: IntoIterator<Item = BlobRef>>(it: I) -> Self {
+        let refs: Vec<BlobRef> = it.into_iter().collect();
+        let missing = refs
+            .iter()
+            .filter(|r| r.state == BlobRefState::Missing)
+            .count() as u64;
+        Self { refs, missing }
     }
 }
 
@@ -404,8 +468,9 @@ impl BlobStore {
         }
     }
 
-    /// Take a reference on a blob for something other than a blob-doc version (a pack's
-    /// embedded image, say), so GC keeps it. One durable transaction.
+    /// Take a reference on a blob for something other than a blob-doc version or a doc value
+    /// a pack declares ([`crate::session::Pack::blob_ref_roots`]), so GC keeps it. One durable
+    /// transaction.
     pub fn retain(&self, space: &str, id: &BlobId) -> Result<(), BlobError> {
         Ok(self.docs.blob_adjust_ref(space, id, 1, (self.clock)())?)
     }
@@ -618,5 +683,37 @@ mod tests {
         assert_eq!(BlobId::from_hex(&id.to_hex()), Some(id));
         assert_eq!(BlobId::from_hex("zz"), None);
         assert_eq!(BlobId::from_hex(&"g".repeat(64)), None);
+    }
+
+    /// A reference is exactly `blob:` and 64 lowercase hex digits: text around it, another
+    /// case, a sign the hex parser would take, or a wrong length is ordinary text.
+    #[test]
+    fn only_the_exact_spelling_is_a_reference() {
+        let id = BlobId([0xab; 32]);
+        let good = id.to_ref();
+        assert_eq!(good, format!("blob:{}", "ab".repeat(32)));
+        assert_eq!(BlobId::parse_ref(&good), Some(id));
+        let not_refs = [
+            format!("see {good}"),
+            format!("{good} "),
+            format!(" {good}"),
+            format!("{good}\n"),
+            format!("{good}{good}"),
+            good.to_uppercase(),
+            format!("blob:{}", "AB".repeat(32)),
+            format!("BLOB:{}", "ab".repeat(32)),
+            format!("blob:{}", "ab".repeat(31)),
+            format!("blob:{}a", "ab".repeat(32)),
+            format!("blob:+a{}", "ab".repeat(31)),
+            format!("blob:{}gg", "ab".repeat(31)),
+            "ab".repeat(32),
+            "blob:".to_owned(),
+            String::new(),
+        ];
+        for v in &not_refs {
+            assert_eq!(BlobId::parse_ref(v), None, "{v:?} is not a reference");
+        }
+        // what the from_hex underneath would take on its own
+        assert!(BlobId::from_hex(&format!("+a{}", "ab".repeat(31))).is_some());
     }
 }

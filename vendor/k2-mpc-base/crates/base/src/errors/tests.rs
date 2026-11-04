@@ -51,6 +51,7 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
         S::LogMoved(1, 2, 3),
         S::NoBlobSpace,
         S::NoBlob("ab".into()),
+        S::BlobRefUnknown("ab".into()),
         S::CurrentVersion(1, 2),
         S::NoRandom(x.into()),
         S::PurgedVersion(1, 2),
@@ -143,6 +144,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         },
         S::BadParticipant(x.into()),
         S::BadPosition(x.into()),
+        S::LinesUnknown { address: x.into() },
         S::BadEdit(x.into()),
         S::NoApproval { seq: 3 },
         S::BadApproval(x.into()),
@@ -153,6 +155,15 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::RevertTooOld { seq: 3 },
         S::NoSuchChange(3),
         S::Disk(x.into()),
+        S::SaveMismatch {
+            size: 3,
+            file_size: Some(4),
+        },
+        S::SaveMismatch {
+            size: 3,
+            file_size: None,
+        },
+        S::SaveTicketInvalid,
         S::Leased {
             holder: "h".into(),
             name: "H".into(),
@@ -167,6 +178,18 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             remaining_ms: 900,
             note: Some("tables".into()),
         },
+        S::ElemsClaimed(Box::new(crate::session::ElemsClaim {
+            id: ClaimId::new(1),
+            by: "b".into(),
+            name: "B".into(),
+            root: "items".into(),
+            keys: vec![
+                crate::Key::new("i1").unwrap(),
+                crate::Key::new("i2").unwrap(),
+            ],
+            remaining_ms: 900,
+            note: None,
+        })),
         S::NoClaim(None),
         S::NoClaim(Some(ClaimId::new(2))),
         S::ClaimContended {
@@ -179,6 +202,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::BadClaim("this doc has 256 live claims (the most)".into()),
         S::BadClaim("you hold 16 claims here (the most); release one".into()),
         S::BadClaim("64 already waiting for claim-3".into()),
+        S::SelectionTooLarge { len: 257, max: 256 },
         S::Blob(BlobError::TooLarge { limit: 10 }),
         S::Blob(BlobError::NotFound("ab".into())),
         S::Blob(BlobError::Damaged("ab".into())),
@@ -192,6 +216,20 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::Closed { reason: "core_off" },
         S::Broken(x.into()),
         S::NeedsBase,
+        S::KeyNotOwn {
+            root: "items".into(),
+            key: "i1".into(),
+            tag: "2s".into(),
+        },
+        S::BlobRefUnknown {
+            root: "props".into(),
+            key: "i1".into(),
+            blob: "ab".into(),
+        },
+        S::KeySpaceFull {
+            prefix: "abc".into(),
+            tag: "2gosa7pa2gv".into(),
+        },
         S::UnknownElem {
             root: "rows",
             key: "r2".into(),
@@ -388,17 +426,34 @@ fn ids_names_and_areas_are_well_formed() {
     assert_eq!(lookup("MPC-E999"), None);
 }
 
-/// Every verb an entry names is a verb (either tier), a meta verb, or a group.
+/// Every verb an entry names is a verb (any tier), a meta verb, or a group. A file type's
+/// row (`@file` first, then no group but `(host)`) names that file type's verbs: the integration test
+/// `error_ids` holds them to a file registry built from the file type's verb list.
 #[test]
 fn entries_name_real_verbs() {
     let kit = [
         Registry::for_tier(Tier::Text),
         Registry::for_tier(Tier::Blob),
+        Registry::for_tier(Tier::Grid),
     ];
     // host verbs the kit serves through its API but doesn't register (purge: deferred, P28),
     // and the CSV verbs the reserved ids name
     let other = ["purge", "cell set"];
+    let mut file_rows = 0;
     for e in entries() {
+        if e.verbs.contains(&"@file") {
+            file_rows += 1;
+            assert_eq!(e.verbs[0], "@file", "{}: @file comes first", e.id);
+            assert!(e.verbs.len() > 1, "{}: name the file verbs", e.id);
+            for v in &e.verbs[1..] {
+                assert!(
+                    *v == "(host)" || !(v.starts_with('@') || v.starts_with('(') || *v == "*"),
+                    "{}: a file row names file verbs (or a host call), no group: {v:?}",
+                    e.id
+                );
+            }
+            continue;
+        }
         for v in e.verbs {
             let ok = matches!(
                 *v,
@@ -409,6 +464,7 @@ fn entries_name_real_verbs() {
             assert!(ok, "{}: {v:?} is not a verb", e.id);
         }
     }
+    assert!(file_rows >= 28, "only {file_rows} file rows");
 }
 
 /// K-EXIT-1 and condition 2: an id never changes an exit code. Every variant maps to a live
@@ -495,6 +551,14 @@ fn every_live_id_has_a_path() {
     seen.insert("MPC-E806");
     // a refused header switch (the only row blank): the header verb on a table
     seen.insert("MPC-E807");
+    // an LN address on a grid holding a lone CR: a grid verb's refusal on a table
+    // (tests/grid_lines.rs)
+    seen.insert("MPC-E176");
+    // a file type's own verbs (`@file`): the host maps the file type's refusals to these rows
+    // by id, as it does here; no kit error returns them
+    for e in KIT.iter().filter(|e| e.verbs.first() == Some(&"@file")) {
+        seen.insert(ErrorReport::new(lookup(e.id).unwrap(), "m").id());
+    }
     for e in KIT.iter() {
         match e.status {
             Status::Live => assert!(seen.contains(e.id), "{} {} has no path", e.id, e.name),
@@ -693,7 +757,9 @@ fn host_text(s: &str) -> Option<&'static str> {
 }
 
 /// K-PAR-10, over every entry: its step is absent (nothing to run), or valid: the verb is a
-/// kit verb by its registry name (flags in `args`), with a reason.
+/// kit verb by its registry name (flags in `args`), with a reason. A file type's row (`@file`)
+/// names one of that file type's verbs: the integration test `error_ids` holds it to a file
+/// registry built from the file type's verb list.
 #[test]
 fn every_next_step_names_a_kit_verb_and_a_reason() {
     let verbs = kit_verb_names();
@@ -707,7 +773,7 @@ fn every_next_step_names_a_kit_verb_and_a_reason() {
         };
         with += 1;
         assert!(
-            verbs.contains(st.verb),
+            e.verbs.first() == Some(&"@file") || verbs.contains(st.verb),
             "{}: {:?} is not a kit verb",
             e.id,
             st.verb

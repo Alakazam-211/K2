@@ -1,0 +1,27 @@
+MPC-E836 voting_off (structured and CSV)
+exit:     5
+message:  voting is off on this board
+next:     Votes count only while voting is on, and a person running the session usually starts it. Nothing was applied. Ask for voting to be started (meta turns it on), then vote again.
+step:     meta; why: Voting is off; it is turned on in the board's settings, usually by the person running the session.
+rule:     board file: voting
+verbs:    a file type's own verbs (its host's file registry): vote
+status:   live
+--- json
+{
+  "id": "MPC-E836",
+  "name": "voting_off",
+  "area": "structured and CSV",
+  "exit": 5,
+  "message": "voting is off on this board",
+  "next": "Votes count only while voting is on, and a person running the session usually starts it. Nothing was applied. Ask for voting to be started (meta turns it on), then vote again.",
+  "next_step": {
+    "verb": "meta",
+    "args": [],
+    "why": "Voting is off; it is turned on in the board's settings, usually by the person running the session."
+  },
+  "rule": "board file: voting",
+  "verbs": ["@file", "vote"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

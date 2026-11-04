@@ -1,0 +1,27 @@
+MPC-E177 line_address_unknown (sessions and edits)
+exit:     2
+message:  {address}: the file can't be rendered now, so its line numbers can't be checked; name the row by its key or #N
+next:     The pack can't render the file at the moment, so the kit can't tell whether it holds a lone CR, and a line number might name a row other than the one you read. Nothing was read or applied. Name the row by its key (r17) or its #N, which don't depend on rendering; blame --structure lists both. A line number works again once the file renders.
+step:     blame --structure; why: Line numbers can't be checked while the file can't be rendered, so list the rows to get each one's key and position, then address the row by one of those.
+rule:     K-ADDR-4
+verbs:    claim; a pack's own verbs
+status:   live
+--- json
+{
+  "id": "MPC-E177",
+  "name": "line_address_unknown",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{address}: the file can't be rendered now, so its line numbers can't be checked; name the row by its key or #N",
+  "next": "The pack can't render the file at the moment, so the kit can't tell whether it holds a lone CR, and a line number might name a row other than the one you read. Nothing was read or applied. Name the row by its key (r17) or its #N, which don't depend on rendering; blame --structure lists both. A line number works again once the file renders.",
+  "next_step": {
+    "verb": "blame --structure",
+    "args": [],
+    "why": "Line numbers can't be checked while the file can't be rendered, so list the rows to get each one's key and position, then address the row by one of those."
+  },
+  "rule": "K-ADDR-4",
+  "verbs": ["claim", "@pack"],
+  "returned_by": ["claim"],
+  "status": "live",
+  "since_or_until": null
+}

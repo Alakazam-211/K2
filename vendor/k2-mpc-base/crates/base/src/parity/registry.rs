@@ -56,6 +56,9 @@ pub enum Api {
     Roster,
     SetCursor,
     SetView,
+    SetSelection,
+    SetPointer,
+    SetViewport,
     WriteBase,
     ReplaceText,
     UndoWith,
@@ -108,17 +111,28 @@ pub enum Api {
 }
 
 /// Where a verb comes from.
+///
+/// `non_exhaustive`: another crate's `match` on it needs a wildcard arm, so a later source is
+/// not a breaking change; `==` reads it as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Source {
     /// The kit's verbs (every text pack has them).
     Kit,
     /// A pack's own verb ([`crate::session::Pack::verbs`]).
     Pack,
+    /// A file type's own verb, from data its host fills in ([`FileVerb`],
+    /// [`Registry::for_file`]): the host runs it on the file itself, not through a kit
+    /// session, so it makes no session call and is in no kit group (`@change`, `@pack`...).
+    File,
 }
 
 /// One verb: its name (the CLI form, e.g. `undo --partial`), kind, rights, the session
 /// calls it makes, the person actions it serves, its flags and its exit codes.
+///
+/// `non_exhaustive`: the kit builds these; other crates read the fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct VerbSpec {
     /// The form an agent types after `<host> doc`: a verb, or a verb and the flag that makes
     /// it a different row (`undo --partial`, `log --pending`, `sed -i`). See [`verb_form`].
@@ -139,6 +153,13 @@ pub struct VerbSpec {
     /// The kinds of doc it works on: text docs, blob docs (tier 0), or both. A pack's own
     /// verbs are text verbs.
     pub tiers: &'static [Tier],
+    /// The position forms a pack verb declares ([`crate::tools::PackVerb::positions`]); `None`
+    /// for a kit verb and a pack verb that declares nothing. Read through
+    /// [`super::positions::stated`], which also knows the kit's table.
+    pub positions: Option<&'static [super::positions::PositionForm]>,
+    /// The host's own parity rows a file verb serves, by the host's names ([`FileVerb::serves`]);
+    /// empty for a kit or pack verb, whose rows are [`VerbSpec::serves`].
+    pub serves_named: &'static [&'static str],
 }
 
 impl VerbSpec {
@@ -157,12 +178,19 @@ impl VerbSpec {
     /// ([`VerbSpec::api`]). On a blob doc no verb runs through `run_tool` (`cat` there is
     /// `BlobSession::read`).
     pub fn runs_through_run_tool(&self) -> bool {
-        self.source == Source::Pack || RUN_TOOL_VERBS.contains(&self.name)
+        match self.source {
+            Source::Pack => true,
+            Source::Kit => RUN_TOOL_VERBS.contains(&self.name),
+            Source::File => false,
+        }
     }
 
     /// The verb this one is another name for ([`ALIASES`]), if any: the same row, the same
     /// binding, under a host-neutral name.
     pub fn alias_of(&self) -> Option<&'static str> {
+        if self.source == Source::File {
+            return None;
+        }
         ALIASES
             .iter()
             .find(|(a, _)| *a == self.name)
@@ -220,6 +248,8 @@ const fn kit(
         exits,
         source: Source::Kit,
         tiers: TEXT,
+        positions: None,
+        serves_named: &[],
     }
 }
 
@@ -374,6 +404,36 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK0,
     )
     .on(TG),
+    kit(
+        "select",
+        R,
+        NR,
+        &[A::SetSelection],
+        &[P::Caret],
+        "select --root ROOT --keys K1,K2 | --clear (at most 256; unknown or deleted: exit 2)",
+        OK0,
+    )
+    .on(GRID),
+    kit(
+        "pointer",
+        R,
+        NR,
+        &[A::SetPointer],
+        &[P::Caret],
+        "pointer --at X,Y | --clear (the doc's own coordinates)",
+        OK0,
+    )
+    .on(GRID),
+    kit(
+        "viewport",
+        R,
+        NR,
+        &[A::SetViewport],
+        &[P::ViewRange],
+        "viewport --rect X,Y,W,H | --clear (the doc's own coordinates)",
+        OK0,
+    )
+    .on(GRID),
     kit(
         "insert",
         E,
@@ -810,12 +870,58 @@ impl fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
+/// **A file type's own verb, as data its host fills in** ([`Registry::for_file`]): for a file
+/// the kit doesn't hold as a doc, whose verbs a format crate defines and the host runs on the
+/// file itself. `capabilities` then lists them as it lists the kit's, and the error rows that
+/// name them (`@file`, then the verbs: [`crate::errors::ErrorEntry::verbs`]) as the ids they
+/// can return.
+///
+/// `non_exhaustive`: build one with [`FileVerb::new`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FileVerb {
+    /// Its name as the host's command line spells it after the file type: one or two words of
+    /// lowercase letters, digits and `-`. It may share a kit verb's name: it is listed
+    /// apart, as a file verb.
+    pub name: &'static str,
+    /// Whether it reads the file or changes it ([`VerbKind::Read`], [`VerbKind::Edit`]); the
+    /// rights it needs follow from it.
+    pub kind: VerbKind,
+    /// Its arguments and flags, one line.
+    pub usage: &'static str,
+    /// Every exit code it can end with (the kit's table, [`crate::tools::exit`]).
+    pub exits: &'static [u8],
+    /// The host's own parity rows it serves, by the host's names (at least one). They aren't
+    /// the kit's [`PersonAction`]s: a file type's person actions are its own list.
+    pub serves: &'static [&'static str],
+}
+
+impl FileVerb {
+    pub const fn new(
+        name: &'static str,
+        kind: VerbKind,
+        usage: &'static str,
+        exits: &'static [u8],
+        serves: &'static [&'static str],
+    ) -> Self {
+        FileVerb {
+            name,
+            kind,
+            usage,
+            exits,
+            serves,
+        }
+    }
+}
+
 /// The verbs of one tier: the kit's ([`KIT_VERBS`] that apply to it), plus a text pack's
-/// own.
+/// own; or a file type's own verbs ([`Registry::for_file`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registry {
     verbs: Vec<VerbSpec>,
     tier: Tier,
+    /// Built by [`Registry::for_file`]: the kit's parity harnesses refuse it.
+    file: bool,
 }
 
 impl Registry {
@@ -834,11 +940,87 @@ impl Registry {
                 .copied()
                 .collect(),
             tier,
+            file: false,
         }
     }
 
+    /// **A file type's own verbs, from its host's data** ([`FileVerb`]), and no kit verb: what
+    /// `capabilities` lists for that file type ([`crate::errors::run_meta`] with this registry),
+    /// each verb with the error ids whose rows name it (`@file`).
+    ///
+    /// - Each verb is [`Source::File`]: its rights follow from its kind (a read needs Read, an
+    ///   edit Read and Edit, a history read Read and History), it makes no kit session call
+    ///   ([`VerbSpec::api`] empty), it works on no kit tier ([`VerbSpec::tiers`] empty), and
+    ///   it serves the host's own parity rows by name ([`VerbSpec::serves_named`]), no
+    ///   [`PersonAction`].
+    /// - [`Registry::tier`] is [`Tier::Blob`]: to the kit, the file is any file (tier 0). The
+    ///   kit's parity harnesses refuse a file registry: its verbs are the host's to test.
+    ///
+    /// Refused: a name that isn't one or two words of lowercase letters, digits or `-`, a name
+    /// twice, a verb serving no row (or a blank row name), and an exit outside the kit's
+    /// table (0 to 8) or none.
+    pub fn for_file(verbs: &[FileVerb]) -> Result<Self, RegistryError> {
+        let mut r = Registry {
+            verbs: Vec::with_capacity(verbs.len()),
+            tier: Tier::Blob,
+            file: true,
+        };
+        for v in verbs {
+            let name = v.name;
+            let words: Vec<&str> = name.split(' ').collect();
+            let word_ok = |w: &str| {
+                !w.is_empty()
+                    && !w.starts_with('-')
+                    && w.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            };
+            if words.len() > 2 || !words.iter().all(|w| word_ok(w)) {
+                return Err(RegistryError(format!(
+                    "file verb {name:?}: one or two lowercase word(s)"
+                )));
+            }
+            if r.get(name).is_some() {
+                return Err(RegistryError(format!("file verb {name:?} twice")));
+            }
+            if v.serves.is_empty() || v.serves.iter().any(|s| s.trim().is_empty()) {
+                return Err(RegistryError(format!(
+                    "file verb {name:?} serves no parity row"
+                )));
+            }
+            if v.exits.is_empty() || v.exits.iter().any(|x| *x > TOO_OLD) {
+                return Err(RegistryError(format!(
+                    "file verb {name:?}: its exits must be from the kit's table (0 to {TOO_OLD})"
+                )));
+            }
+            r.verbs.push(VerbSpec {
+                name,
+                kind: v.kind,
+                needs: match v.kind {
+                    VerbKind::Read => NR,
+                    VerbKind::Edit => NE,
+                    VerbKind::History => NH,
+                },
+                api: &[],
+                serves: &[],
+                usage: v.usage,
+                exits: v.exits,
+                source: Source::File,
+                tiers: &[],
+                positions: None,
+                serves_named: v.serves,
+            });
+        }
+        Ok(r)
+    }
+
+    /// Whether [`Registry::for_file`] built it.
+    pub(crate) fn is_file(&self) -> bool {
+        self.file
+    }
+
     /// The tier its verbs serve: what [`super::check`] (text) and [`super::check_blob`]
-    /// (blob) run.
+    /// (blob) run. A file registry ([`Registry::for_file`]) says [`Tier::Blob`], and the
+    /// harnesses refuse it.
     pub fn tier(&self) -> Tier {
         self.tier
     }
@@ -917,6 +1099,8 @@ impl Registry {
                 exits: v.exits(),
                 source: Source::Pack,
                 tiers: if grid { GRID } else { TEXT },
+                positions: v.declared_positions(),
+                serves_named: &[],
             });
         }
         Ok(r)
@@ -1249,5 +1433,58 @@ mod tests {
             r.form_of(&argv(&["rows", "drop-deleted"])),
             "rows drop-deleted"
         );
+    }
+
+    /// A file registry ([`Registry::for_file`]) holds the host's data as given, as file verbs
+    /// only, and refuses what a host's command line couldn't name or capabilities couldn't
+    /// state.
+    #[test]
+    fn a_file_registry_is_the_hosts_data() {
+        const S: &[&str] = &["row-a"];
+        let ok = [
+            FileVerb::new("add", VerbKind::Edit, "add <kind>", &[OK, NO], S),
+            FileVerb::new("read", VerbKind::Read, "read <id>", &[OK], S),
+            FileVerb::new(
+                "table add-row",
+                VerbKind::Edit,
+                "table add-row <id>",
+                &[OK],
+                S,
+            ),
+        ];
+        let r = Registry::for_file(&ok).unwrap();
+        assert_eq!(r.verbs().len(), 3);
+        assert!(r.is_file() && !Registry::kit().is_file());
+        for (v, f) in r.verbs().iter().zip(&ok) {
+            assert_eq!(
+                (v.name, v.kind, v.usage, v.exits),
+                (f.name, f.kind, f.usage, f.exits)
+            );
+            assert_eq!(v.source, Source::File);
+            assert_eq!(v.serves_named, S);
+            assert!(v.serves.is_empty() && v.api.is_empty() && v.tiers.is_empty());
+            assert!(!v.runs_through_run_tool() && v.alias_of().is_none());
+            assert_eq!(v.needs, if v.kind == VerbKind::Read { NR } else { NE });
+        }
+        // a kit verb's name is a file verb here, never the kit's
+        assert!(r.get("cat").is_none());
+        assert_eq!(r.get("read").map(|v| v.source), Some(Source::File));
+        // the kit's harnesses run no file registry
+        assert!(matches!(
+            super::super::check_list(&[], &r, &[]).as_slice(),
+            [super::super::Failure::Registry(m)] if m.contains("file type's own verbs")
+        ));
+        let bad = |v: FileVerb| Registry::for_file(&[ok[0], v]).unwrap_err().0;
+        assert!(bad(FileVerb::new("Add", VerbKind::Edit, "", &[OK], S)).contains("lowercase"));
+        assert!(bad(FileVerb::new("a b c", VerbKind::Edit, "", &[OK], S)).contains("lowercase"));
+        assert!(bad(FileVerb::new("--x", VerbKind::Edit, "", &[OK], S)).contains("lowercase"));
+        assert!(bad(FileVerb::new("", VerbKind::Edit, "", &[OK], S)).contains("lowercase"));
+        assert!(bad(ok[0]).contains("twice"));
+        assert!(bad(FileVerb::new("x", VerbKind::Edit, "", &[OK], &[])).contains("no parity row"));
+        assert!(
+            bad(FileVerb::new("x", VerbKind::Edit, "", &[OK], &[" "])).contains("no parity row")
+        );
+        assert!(bad(FileVerb::new("x", VerbKind::Edit, "", &[], S)).contains("kit's table"));
+        assert!(bad(FileVerb::new("x", VerbKind::Edit, "", &[9], S)).contains("kit's table"));
     }
 }

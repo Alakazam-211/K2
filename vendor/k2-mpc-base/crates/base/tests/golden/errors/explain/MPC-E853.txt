@@ -1,0 +1,27 @@
+MPC-E853 wrong_type (structured and CSV)
+exit:     2
+message:  {verb} doesn't apply to {id}, a {type}
+next:     That verb works on other types of object (a reply on a comment, a check item on a card, a row on a table). Nothing was applied. Read the object to see its type, then pick the object or the verb that fits.
+step:     read; why: The verb doesn't work on that type of object; read it to see its type, then pick the object or the verb that fits.
+rule:     board file: types
+verbs:    a file type's own verbs (its host's file registry): reply, resolve, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, align, distribute, mind-child, connected-copy
+status:   live
+--- json
+{
+  "id": "MPC-E853",
+  "name": "wrong_type",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "{verb} doesn't apply to {id}, a {type}",
+  "next": "That verb works on other types of object (a reply on a comment, a check item on a card, a row on a table). Nothing was applied. Read the object to see its type, then pick the object or the verb that fits.",
+  "next_step": {
+    "verb": "read",
+    "args": [],
+    "why": "The verb doesn't work on that type of object; read it to see its type, then pick the object or the verb that fits."
+  },
+  "rule": "board file: types",
+  "verbs": ["@file", "reply", "resolve", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "align", "distribute", "mind-child", "connected-copy"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,37 @@
+[package]
+name = "k2-mpc-perf"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "The kit's performance harness at 10k-1M versions: p50/p95/p99 per path, paired A/B runs (tools/README.md: Performance harness)."
+
+# Its own workspace: never a member of the kit's, so the kit's dev-dependency features
+# (`differential`, `conformance`, ...) never reach the measured build. The job copies the
+# kit's Cargo.lock in before it builds (tools/perf/pair.sh), so the kit's dependency
+# versions are the measured ones.
+[workspace]
+
+[dependencies]
+# No default features: the plain build is a host's build of the kit. No other dependency
+# (the RNG, the counting allocator and the arguments are written here).
+k2-mpc-base = { path = "../../crates/base", default-features = false }
+
+[features]
+# The `edit_nosync` row and the live-run count only: the store's test-only `unsynced`
+# switch and `Session::char_blame` need `conformance`, which also adds a branch to every
+# store commit. That build measures those two rows and nothing else.
+nosync = ["k2-mpc-base/conformance"]
+# Label-only (calibration): the kit's test hooks on, as its integration tests and the soak
+# build it (dev-dependencies: `differential`, `conformance`). Runs the plain build's rows on
+# the same fixture, to measure the gap between this harness and the hooked figures quoted
+# before it. Never a side of a pair.
+hooks = ["k2-mpc-base/differential", "k2-mpc-base/conformance"]
+# The kit's own timers (`k2_mpc_base::timers`, a kit from v0.10.1): no kit feature, only the
+# harness's code that reads them (`--timers on`, the `<row>.<timer>` rows, `timers-check`).
+# pair.sh turns it on for a side whose tree has crates/base/src/timers.rs.
+kit-timers = []
+
+[profile.release]
+# file:line in a backtrace; the code is unchanged
+debug = "line-tables-only"

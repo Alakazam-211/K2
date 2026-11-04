@@ -1,0 +1,21 @@
+MPC-E857 board_io (structured and CSV)
+exit:     1
+message:  reading or writing the file failed: {reason}
+next:     The file couldn't be read or written (the reason says why). Nothing was changed. Check the disk (space, permissions), then run the verb again.
+rule:     board file: reading and writing
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, list, read, search, references, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E857",
+  "name": "board_io",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "reading or writing the file failed: {reason}",
+  "next": "The file couldn't be read or written (the reason says why). Nothing was changed. Check the disk (space, permissions), then run the verb again.",
+  "rule": "board file: reading and writing",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "list", "read", "search", "references", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

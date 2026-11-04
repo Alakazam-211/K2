@@ -816,6 +816,7 @@ pub(crate) fn plan(
     mut batches: Vec<Batch>,
     mode: Mode,
 ) -> Plan {
+    timed!(UndoPlan);
     let mut scratch: Vec<(&str, String)> = texts
         .iter()
         .filter(|(r, _)| {
@@ -840,17 +841,26 @@ pub(crate) fn plan(
             let Some((_, live)) = scratch.iter().find(|(n, _)| *n == r.root) else {
                 continue; // a root the schema no longer has: nothing to undo there
             };
-            // the window's live roots (also for an unknown region: its redo region's roots)
-            let wroots =
-                (sprov.has(&r.root) && r.start <= r.end && live.get(r.start..r.end).is_some())
-                    .then(|| sprov.roots(&r.root, live, r.start, r.end));
-            let live_root = |x: &IdRun| sprov.any_live(x) || planned.iter().any(|p| meets(p, x));
-            let res = r.revert(
-                u,
-                live,
-                wroots.as_ref().filter(|_| r.roots.is_some()),
-                &live_root,
-            );
+            // the region's provenance lookups, timed as one block (a lookup alone is about
+            // the cost of a running timer): the window's roots, and the revert that asks
+            // which runs' roots are live
+            let (wroots, res) = {
+                timed!(ProvLookup);
+                // the window's live roots (also for an unknown region: its redo region's
+                // roots)
+                let wroots =
+                    (sprov.has(&r.root) && r.start <= r.end && live.get(r.start..r.end).is_some())
+                        .then(|| sprov.roots(&r.root, live, r.start, r.end));
+                let live_root =
+                    |x: &IdRun| sprov.any_live(x) || planned.iter().any(|p| meets(p, x));
+                let res = r.revert(
+                    u,
+                    live,
+                    wroots.as_ref().filter(|_| r.roots.is_some()),
+                    &live_root,
+                );
+                (wroots, res)
+            };
             if let Ok(Merged {
                 roots: Some(rs), ..
             }) = &res

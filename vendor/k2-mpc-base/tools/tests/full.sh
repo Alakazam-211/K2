@@ -9,7 +9,8 @@
 #   base-a1      the kit: unit tests and doctests
 #   base-a2      the kit: every other integration test but tier 0's, base-c's, base-d's and errors' (client_vectors among them)
 #   evidence     the evidence tools' self-test and check (tools/evidence/; Python, no cargo),
-#                tools/check-private.sh on what the part ships, and tools/oss-check.sh with its
+#                tools/check-private.sh and tools/check-windows-names.sh (with its self-test)
+#                on what the part ships, and tools/oss-check.sh with its
 #                self-test (K-OSS-3: both licence files, "MIT OR Apache-2.0" on our crates and
 #                package.json files)
 #   base-c       the kit: soak (CI variant), edit_paths, edit_cost, history, presence, sessions, roster, app_view, overflow
@@ -44,6 +45,8 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
   evidence) timed evidence_selftest sh tools/evidence/test.sh
           timed evidence_check python3 tools/evidence/check.py
           timed private sh tools/check-private.sh .
+          timed windows_names_selftest sh tools/test-windows-names.sh
+          timed windows_names sh tools/check-windows-names.sh .
           timed oss_selftest sh tools/test-oss-check.sh
           timed oss sh tools/oss-check.sh . ;;
   base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run

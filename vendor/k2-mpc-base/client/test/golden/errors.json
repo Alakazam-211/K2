@@ -59,11 +59,11 @@
     "id": "MPC-E114",
     "exit": 2,
     "message": "bad position: Byte(39) is not in \"source\"",
-    "next": "A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.",
+    "next": "A line, position or element isn't in the doc (the message says which). Read the doc and pass one that is.",
     "next_step": {
-      "verb": "wc",
-      "args": ["-l"],
-      "why": "A line or position is outside the doc; read its length and pass lines inside it."
+      "verb": "cat",
+      "args": [],
+      "why": "A line, position or element isn't in the doc; read the doc and pass one that is."
     },
     "rule": "K-PRES-6",
     "details": {}

@@ -734,7 +734,7 @@ pub(super) fn check_import_size(
 /// insert its anchor's position and existence; a move the element's position and
 /// existence; a delete its existence and position; a restore its existence; a set its
 /// value. A table row's (column's) delete also touches the cells it hides (added by the
-/// caller, who knows the cells).
+/// caller, who knows the cells). A table's key counters are no facet: see [`facets_of`].
 /// Every row key `edits` name, once: the row a list op acts on, its anchor, a cell's row, a
 /// quote exception's row.
 fn rows_named(edits: &[Edit]) -> Vec<Key> {
@@ -802,13 +802,20 @@ pub(super) fn rows_of_elems(elems: &[crate::store::ElemRoot]) -> Vec<Key> {
     out
 }
 
-fn facets_of(edits: &[Edit]) -> Vec<(String, String, Facet)> {
+/// The facets `edits` touch (the table above). In a table (`is_table`), `meta.next_row` and
+/// `meta.next_col` are left out: they are bookkeeping, not content. Minting skips every key
+/// the axis knows, whatever the counter says, and a merge takes the higher one, so a counter
+/// written after the base can't make an edit wrong.
+pub(super) fn facets_of(edits: &[Edit], is_table: bool) -> Vec<(String, String, Facet)> {
     let mut out = Vec::new();
     for e in edits {
         match e {
             Edit::Text { .. } => {}
             Edit::Map { root, ops } => {
                 for o in ops {
+                    if is_table && root == table::META && counter(o.key()) {
+                        continue;
+                    }
                     out.push((root.clone(), o.key().to_owned(), Facet::Value));
                 }
             }
@@ -1110,16 +1117,41 @@ impl Session {
         edits: Vec<Edit>,
         restores: ElemRestores,
     ) -> Result<Option<Applied>> {
+        #[cfg(any(test, feature = "differential"))]
+        {
+            use crate::differential::ApplyFault;
+            match crate::differential::apply_fault() {
+                Some(ApplyFault::Refused) => {
+                    return Err(SessionError::BadEdit("a planted refusal".into()))
+                }
+                Some(ApplyFault::Poisoned) => {
+                    return Err(crate::doc::DocError::Pending.into());
+                }
+                Some(ApplyFault::NoChange) => return Ok(None),
+                _ => {}
+            }
+        }
         let client = st.members[i].client;
-        // its owner's own change touching a grid claim ends it once durable (A10)
-        self.mark_grid_claims(st, i, &edits)?;
+        // the axes as they were, for what it touches; its owner's own change ends a grid claim
+        // (A10), marked below, only once it has landed
+        let axes = self.touch_axes(st)?;
+        #[cfg(any(test, feature = "differential"))]
+        if crate::differential::mark_mutant()
+            == Some(crate::differential::MarkMutant::GridMarkBeforeLanding)
+        {
+            let named = self.grid_touched(st, i, &edits)?;
+            self.mark_grid_claims(st, i, &named);
+        }
+        self.planted_early_elem_marks(st, i, &edits);
         let befores = befores_of(&st.doc, &edits)?;
         let made = st.doc.edit_applied(client, &edits)?;
         let Some(update) = made.update else {
             return Ok(None);
         };
+        let touched = self.grid_landed(st, i, &made.applied, &edits, axes.as_ref());
+        let landed = self.elems_landed(st, &made.applied);
         let writer = st.members[i].p.pid.clone();
-        Ok(Some(self.structured_applied(
+        let applied = self.structured_applied(
             st,
             Made {
                 writer: &writer,
@@ -1129,7 +1161,27 @@ impl Session {
             &edits,
             &befores,
             &restores,
-        )?))
+        );
+        #[cfg(any(test, feature = "differential"))]
+        let applied = if crate::differential::take_bookkeeping_fault() {
+            Err(crate::store::StoreError::Db("a planted failure".into()).into())
+        } else {
+            applied
+        };
+        let applied = match applied {
+            Ok(a) => a,
+            // the doc holds the change and it will never reach the store: reload
+            Err(e) => {
+                self.recover(st, &e.to_string());
+                return Err(e);
+            }
+        };
+        self.mark_grid_claims(st, i, &touched);
+        // the element claims it touched end once it is durable, marked only now it has landed; a
+        // grid claim and an element claim are never the same claim, and a table takes no element
+        // claims
+        self.mark_elem_claims(st, i, &landed);
+        Ok(Some(applied))
     }
 
     /// The bookkeeping of a structured change the doc has applied.
@@ -1381,7 +1433,7 @@ impl Session {
     /// written after V by anyone but the caller, judged by write identity: a write with no
     /// identity (a merged restore or delete on this engine) counts as someone else's (KC7).
     fn check_base(&self, st: &State, i: usize, edits: &[Edit], base: Seq) -> Result<()> {
-        let mut facets = facets_of(edits);
+        let mut facets = facets_of(edits, table::is_table(&self.schema));
         // a row's (column's) delete also touches the values of the cells it hides: a row's
         // cells from the index by key prefix (O(its cells)); a column's from the doc
         let store = self.store(st)?;
@@ -1521,8 +1573,10 @@ impl Session {
     }
 
     /// The structured edit's checks, in order, before anything applies: an agent names a
-    /// base (K-BR-12), the base per facet, the size limits (K-CSV-7), the claim policy on
-    /// grid claims (A10).
+    /// base (K-BR-12), inserts into a tagged root carry the writer's own tag
+    /// ([`Pack::tagged_keys`]), the base per facet, the size limits (K-CSV-7), the claim policy on
+    /// grid claims (A10) and element claims, and a value naming a blob names one the doc's space
+    /// holds ([`Pack::blob_ref_roots`]).
     fn structured_guards(
         &self,
         st: &mut State,
@@ -1537,6 +1591,7 @@ impl Session {
         {
             return Err(SessionError::NeedsBase);
         }
+        self.check_tagged_keys(st, i, edits)?;
         self.check_cell_keys(st, edits)?;
         if let Some(b) = opts.base {
             self.check_marks(st, edits, b)?;
@@ -1546,7 +1601,8 @@ impl Session {
             self.check_marks(st, edits, s)?;
         }
         self.check_limits(st, edits)?;
-        self.check_grid_claims(st, i, edits, opts.policy, now)
+        self.check_grid_claims(st, i, edits, opts.policy, now)?;
+        self.check_blob_refs(st, edits)
     }
 
     /// A table's cell writes name rows and columns it knows (live or deleted), or ones the
@@ -1718,9 +1774,9 @@ impl Session {
         let hist = LockedHistory::new(self, st, i);
         let edits = match catch_unwind(AssertUnwindSafe(|| f(&view, at.as_deref(), &hist))) {
             Ok(r) => r,
-            Err(panic) => {
+            Err(payload) => {
                 drop(guard);
-                resume_unwind(panic);
+                resume_unwind(payload);
             }
         };
         if let Some(h) = hist.handles() {
@@ -1761,27 +1817,31 @@ impl Session {
         conn: ConnId,
         verb: &str,
         for_edit: Option<Option<u64>>,
-        f: impl FnOnce(&View, &dyn VerbHistory) -> (R, Option<ClaimSpan>),
+        f: impl FnOnce(&View, &dyn VerbHistory) -> (R, Option<ClaimSpan>, bool),
     ) -> Result<(ReadResult, R, Notes, Option<awareness::ForEdit>)> {
         let now = self.now();
         let mut guard = self.lock()?;
         let st = &mut *guard;
         let i = self.admit(st, conn, Need::Read, Action::Read, now)?;
-        let read = self.read_locked(st, i, now)?;
+        let read = self.read_unmarked(st, i)?;
         let view = View::new(st.doc.keyed_state()?)
             .with_codec(&st.codec)
             .with_max_value(self.config.grid_max_value_len);
         let hist = LockedHistory::new(self, st, i);
-        let (r, shown) = match catch_unwind(AssertUnwindSafe(|| f(&view, &hist))) {
+        let (r, shown, refused) = match catch_unwind(AssertUnwindSafe(|| f(&view, &hist))) {
             Ok(r) => r,
-            Err(panic) => {
+            Err(payload) => {
                 drop(guard);
-                resume_unwind(panic);
+                resume_unwind(payload);
             }
         };
         if let Some(h) = hist.handles() {
             st.handles = h;
         }
+        if refused_read(refused) {
+            return Ok((read, r, Notes::default(), None));
+        }
+        self.mark_read(st, i, read.version, now);
         self.expire_claims(st, now);
         // the rows or cells shown, by key: --for-edit's claim, and the notes about those rows
         let span = if self.is_grid() {
@@ -1889,9 +1949,6 @@ impl Session {
             });
         }
         let cells = before - t.cells.len();
-        st.verb_hint = Some("rows drop-deleted".to_owned());
-        // on no stack (spec v1.10 S4, S11): a dropped element can't be undone
-        st.no_stack = true;
         let pid = st.members[i].p.pid.clone();
         // one entry per cell, so each author's note holds the values they wrote; then one per
         // element and author again
@@ -1934,7 +1991,6 @@ impl Session {
             before_seq + 1,
             now,
         )?;
-        st.next_note_rows = plan.note_rows();
         // the version before the drop holds the dropped elements' cells in its cell map (their
         // content stays in history; restoring an element from it arrives in v0.10.1)
         let snap = self.snapshot(st)?;
@@ -1946,6 +2002,10 @@ impl Session {
             snap,
             now,
         )];
+        st.verb_hint = Some("rows drop-deleted".to_owned());
+        // on no stack (spec v1.10 S4, S11): a dropped element can't be undone
+        st.no_stack = true;
+        st.next_note_rows = plan.note_rows();
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, versions)?;
         // (its audit event is DroppedDeleted, below: not an override per row)
         self.finish_overrides(st, Vec::new(), plan, before_seq, before_seq + 1)?;
@@ -2002,6 +2062,7 @@ impl Session {
         body: &[u8],
         opts: &GridWriteOptions,
     ) -> Result<GridWriteReport> {
+        timed!(GridWriteBase);
         let out = self.write_base_grid_inner(conn, base, body, opts);
         // an App viewer (K5) sees the others by handle
         self.for_viewer(conn, out, |l, r| l.grid_write(r))
@@ -2151,7 +2212,6 @@ impl Session {
             let base = live.table().map_err(bad)?;
             let mut ours = base.clone();
             ours.apply(&rec.edits).map_err(bad)?;
-            st.next_col_remap = !rec.cols_exact;
             kept_not_exact(&base, &ours, &rec.exact_rows, rec.cols_exact)
         };
         let edits = self.normalize(rec.edits)?;
@@ -2170,6 +2230,7 @@ impl Session {
         self.check_grid_claims(st, i, &edits, opts.policy, now)?;
         st.verb_hint = Some("write --base live".to_owned());
         st.next_row_marks = marks;
+        st.next_col_remap = !rec.cols_exact;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         Ok(report(GridWrite::Applied(res)))
     }
@@ -2222,9 +2283,6 @@ impl Session {
         drop_own(&mut overridden, &pid);
         let before = st.version;
         let plan = self.plan_overrides(st, &overridden, "a write", before, before + 1, now)?;
-        st.next_note_rows = plan.note_rows();
-        st.next_row_marks = kept_not_exact(&base_t, &ours_t, &rec.exact_rows, rec.cols_exact);
-        st.next_col_remap = !rec.cols_exact;
         let mut versions = Vec::new();
         if !overridden.is_empty() && st.last_version_seq != st.version {
             let snap = self.snapshot(st)?;
@@ -2238,6 +2296,9 @@ impl Session {
             ));
         }
         st.verb_hint = Some("write --base live".to_owned());
+        st.next_note_rows = plan.note_rows();
+        st.next_row_marks = kept_not_exact(&base_t, &ours_t, &rec.exact_rows, rec.cols_exact);
+        st.next_col_remap = !rec.cols_exact;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, versions)?;
         self.finish_overrides(st, overridden, plan, before, before + 1)?;
         Ok(GridWriteReport {
@@ -2245,6 +2306,30 @@ impl Session {
             skipped: Vec::new(),
             rekeyed: m.rekeyed,
         })
+    }
+
+    /// The line map a conflict report names lines by, or none unless the two line counts agree:
+    /// on a file holding a lone CR its rendered lines aren't the lines `cat -n` numbers, and given
+    /// to `--lines` one would hit another row; on a file that can't be rendered, nobody can tell.
+    /// A report without lines still names the row by key. It returns no error, so a report can't
+    /// fail a save.
+    fn conflict_lines(&self, view: &View, codec: &[u8]) -> Option<table::LineMap> {
+        let counts = table::LineCounts::of(&self.pack.encode(&view.content(), codec));
+        #[cfg(any(test, feature = "differential"))]
+        let counts = {
+            use crate::differential::{line_mutant, LineMutant};
+            match (line_mutant(), counts) {
+                (Some(LineMutant::ConflictKeepsLines), table::LineCounts::Differ)
+                | (Some(LineMutant::ConflictLinesFallBack), table::LineCounts::Unknown) => {
+                    table::LineCounts::Agree
+                }
+                _ => counts,
+            }
+        };
+        match counts {
+            table::LineCounts::Agree => self.pack.line_map(view, codec),
+            table::LineCounts::Differ | table::LineCounts::Unknown => None,
+        }
     }
 
     /// The session's context for each merge conflict: who last wrote the region, its index
@@ -2263,7 +2348,7 @@ impl Session {
             return Ok(Vec::new());
         }
         let store = self.store(st)?;
-        let lines = self.pack.line_map(live, &st.codec);
+        let lines = self.conflict_lines(live, &st.codec);
         let now_g = self.grid_now(st)?;
         let mut out = Vec::with_capacity(conflicts.len());
         for c in conflicts {
@@ -2510,7 +2595,7 @@ impl Session {
         }
         let store = self.store(st)?;
         let view = View::new(live.clone());
-        let lines = self.pack.line_map(&view, &st.codec);
+        let lines = self.conflict_lines(&view, &st.codec);
         let mut out = Vec::new();
         for (root, key, why, w) in conflicts {
             let row = match root.as_str() {
@@ -3116,6 +3201,7 @@ impl Session {
         h: Vec<u8>,
         now: u64,
     ) -> Result<DiskCheck> {
+        timed!(GridIngest);
         let is_table = table::is_table(&self.schema);
         // when the doc renders the synced bytes, the replica is the doc (counter marker)
         self.resync_if_synced(st)?;
@@ -3129,8 +3215,8 @@ impl Session {
             let edits = rt.reidentify_onto(&live_t).map_err(bad)?;
             if !edits.is_empty() {
                 let own = loop {
-                    let c = random_client();
-                    if c > 1 && st.doc.clock_of(c) == 0 && d.replica.get()?.clock_of(c) == 0 {
+                    let c = mint_client_id();
+                    if st.doc.clock_of(c) == 0 && d.replica.get()?.clock_of(c) == 0 {
                         break c;
                     }
                 };
@@ -3290,7 +3376,7 @@ impl Session {
                     },
                 );
             }
-            self.settle_dirty(st, now)?;
+            self.settle_saved(st, now)?;
             return Ok(DiskCheck::Unchanged);
         }
         if self.check_limits(st, &edits).is_err() {
@@ -3326,7 +3412,10 @@ impl Session {
                 return Err(e.into());
             }
         };
-        let held = self.holds_file(st, bytes, &rec.codec)?;
+        // from here to the store commit the doc holds a save the store hasn't got: every failure
+        // reloads it, so the save stays in the file for the next check
+        let held = self.holds_file(st, bytes, &rec.codec);
+        let held = self.reload_on_failure(st, held)?;
         let replica_state = match self.grid_replica_to_file(st, held, &file_edits) {
             Ok(s) => s,
             Err(e) => {
@@ -3338,8 +3427,7 @@ impl Session {
             return Ok(DiskCheck::Unchanged);
         };
         let seq = st.version + 1;
-        #[allow(unused_mut)]
-        let mut a = self.structured_applied(
+        let a = self.structured_applied(
             st,
             Made {
                 writer: EXTERNAL_PID,
@@ -3349,7 +3437,15 @@ impl Session {
             &edits,
             &befores,
             &ElemRestores::new(),
-        )?;
+        );
+        #[cfg(any(test, feature = "differential"))]
+        let a = if crate::differential::take_bookkeeping_fault() {
+            Err(crate::store::StoreError::Db("a planted failure".into()).into())
+        } else {
+            a
+        };
+        #[allow(unused_mut)]
+        let mut a = self.reload_on_failure(st, a)?;
         #[cfg(feature = "conformance")]
         if st.outside_without_identity {
             for o in a.elems.iter_mut().flat_map(|r| r.ops.iter_mut()) {
@@ -3370,7 +3466,8 @@ impl Session {
         let mut info = ChangeInfo::new(ChangeKind::External, EXTERNAL_PID, "disk", now);
         info.elems = a.counts.clone();
         let note_plan =
-            self.plan_overrides(st, &overridden, "an outside save", before_seq, seq, now)?;
+            self.plan_overrides(st, &overridden, "an outside save", before_seq, seq, now);
+        let note_plan = self.reload_on_failure(st, note_plan)?;
         let change = NewChange {
             info,
             record: RevertRecord {
@@ -3386,9 +3483,11 @@ impl Session {
             row_marks,
             col_remap,
             note_rows: note_plan.rows.clone(),
+            blob_refs: BlobRefScan::of(self.pack.blob_ref_roots()),
         };
         st.codec = rec.codec;
-        let (content, _) = self.snapshot(st)?;
+        let snap = self.snapshot(st);
+        let (content, _) = self.reload_on_failure(st, snap)?;
         versions.push(Version {
             seq,
             at_ms: now,
@@ -3451,6 +3550,7 @@ impl Session {
         st.last_change_ms = now;
         st.version = seq;
         self.grid_presence_after(st, None, &a.stream, now);
+        Self::elem_presence_after(st);
         st.log_entries += 1;
         st.log_bytes += entry.update.len() as u64;
         st.state_bytes += entry.update.len() as u64;
@@ -3499,9 +3599,24 @@ impl Session {
                 version: None,
             });
         }
-        self.settle_dirty(st, now)?;
+        self.settle_saved(st, now)?;
         self.maybe_compact(st);
         Ok(DiskCheck::Ingested { version: seq })
+    }
+
+    /// `r`, reloading the doc first if it failed: the doc took an outside save that won't reach
+    /// the store, so it can't keep it.
+    fn reload_on_failure<T>(&self, st: &mut State, r: Result<T>) -> Result<T> {
+        if let Err(e) = &r {
+            #[cfg(any(test, feature = "differential"))]
+            if crate::differential::resync_mutant()
+                == Some(crate::differential::ResyncMutant::IngestKeepsTheDoc)
+            {
+                return r;
+            }
+            self.recover(st, &e.to_string());
+        }
+        r
     }
 
     /// Whether the live doc, rendered with `codec`, is the file's `bytes`.
@@ -3531,8 +3646,8 @@ impl Session {
         let d = st.disk.as_mut().expect("has disk");
         if !file_edits.is_empty() {
             let own = loop {
-                let c = random_client();
-                if c > 1 && st.doc.clock_of(c) == 0 && d.replica.get()?.clock_of(c) == 0 {
+                let c = mint_client_id();
+                if st.doc.clock_of(c) == 0 && d.replica.get()?.clock_of(c) == 0 {
                     break c;
                 }
             };
@@ -3557,9 +3672,11 @@ impl Session {
         overrides: &[table::Conflict],
     ) -> Result<Vec<Overridden>> {
         let store = self.store(st)?;
-        let lines = self
-            .pack
-            .line_map(&View::new(st.doc.keyed_state()?), &st.codec);
+        // nothing to report asks nothing of the pack: an outside save's check renders no more
+        if overrides.is_empty() {
+            return Ok(Vec::new());
+        }
+        let lines = self.conflict_lines(&View::new(st.doc.keyed_state()?), &st.codec);
         let author = |root: &str, key: &str, f: ElemFacet| -> Result<Option<String>> {
             Ok(match store.elem_write(self.doc_id, root, key, f)? {
                 Some(w) => store.change(self.doc_id, resolved(&w).0)?.map(|c| c.author),
@@ -3758,6 +3875,15 @@ impl Session {
         before: Seq,
         change: Seq,
     ) -> Result<()> {
+        // notes for a change that didn't land: a commit that changed nothing. Reported only.
+        if st.version < change && !plan.rows.is_empty() {
+            self.emit(AuditEvent::NotesWithoutChange {
+                key: st.key.clone(),
+                change,
+                version: st.version,
+                authors: plan.rows.len(),
+            });
+        }
         let version = self.version_before(self.store(st)?, before);
         for (pid, q) in &plan.queues {
             for o in q.iter().filter_map(|n| n.overwrite.as_ref()) {

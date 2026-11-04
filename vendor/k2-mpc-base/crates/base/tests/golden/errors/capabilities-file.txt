@@ -1,0 +1,236 @@
+k2-mpc-base 0.11.0
+Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
+
+Exit codes (never change):
+  0  ok                success (diff, grep: no difference, a match)
+  1  no                the tool's own no: grep found nothing, diff found differences, a conflict, a patch that didn't apply; nothing applied unless the message says otherwise
+  2  usage_or_held     bad usage or an unsupported flag (fix the command), or held for now (MPC-E130: don't retry in a loop)
+  3  refused           the caller lacks a right; don't retry
+  4  not_found         no such doc, version, change or claim; or live editing is off
+  5  leased            someone else holds it for now (a lease or a claim); retry after the time left
+  6  store_unavailable the store failed; nothing acknowledged
+  7  link_lost         the link dropped mid-verb (the host's)
+  8  too_old           too old (revert, an expired base); never retry the same request
+
+Verbs (the file type's own, as its host serves them):
+  add  [edit; file; needs read+edit]
+    usage:  add <kind> <fields> <at>
+    exits:  0 1 2 3 4
+    serves: add-sticky add-text add-shape draw-pen add-frame add-card add-table add-mind-node add-image paste-text
+    errors: MPC-E832 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E850 MPC-E851 MPC-E856 MPC-E857 MPC-E859
+  update  [edit; file; needs read+edit]
+    usage:  update <id> <rev> <set> <unset>
+    exits:  0 1 2 3 4 5
+    serves: edit-fields resize rotate reattach-connector
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E850 MPC-E851 MPC-E857 MPC-E859
+  delete  [edit; file; needs read+edit]
+    usage:  delete <id> <rev> <cascade>
+    exits:  0 1 2 3 4 5
+    serves: delete erase-stroke cut delete-comment
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E857 MPC-E859
+  put-back  [edit; file; needs read+edit]
+    usage:  put-back <removed>
+    exits:  0 1 2 3 4
+    serves: restore-deleted
+    errors: MPC-E831 MPC-E832 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E857 MPC-E859
+  connect  [edit; file; needs read+edit]
+    usage:  connect <from> <to> <fields>
+    exits:  0 1 2 3 4
+    serves: draw-connector
+    errors: MPC-E832 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E856 MPC-E857 MPC-E859
+  react  [edit; file; needs read+edit]
+    usage:  react <id> <emoji> [on]
+    exits:  0 1 2 3 4
+    serves: react stamp
+    errors: MPC-E832 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E855 MPC-E857 MPC-E859
+  vote  [edit; file; needs read+edit]
+    usage:  vote <id> <delta>
+    exits:  0 1 2 3 4 5
+    serves: vote take-back-vote
+    errors: MPC-E832 MPC-E836 MPC-E837 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E852 MPC-E855 MPC-E857 MPC-E859
+  comment  [edit; file; needs read+edit]
+    usage:  comment [target] <text> [point]
+    exits:  0 1 2 3 4
+    serves: comment
+    errors: MPC-E832 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E852 MPC-E856 MPC-E857 MPC-E859
+  reply  [edit; file; needs read+edit]
+    usage:  reply <id> <text>
+    exits:  0 1 2 3 4 5
+    serves: reply
+    errors: MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E853 MPC-E855 MPC-E856 MPC-E857 MPC-E859
+  resolve  [edit; file; needs read+edit]
+    usage:  resolve <id> <rev> <resolved>
+    exits:  0 1 2 3 4 5
+    serves: resolve
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E857 MPC-E859
+  meta  [edit; file; needs read+edit]
+    usage:  meta <rev> <set> <unset>
+    exits:  0 1 2 3 4
+    serves: start-voting rename-board
+    errors: MPC-E832 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E857 MPC-E858 MPC-E859
+  lock  [edit; file; needs read+edit]
+    usage:  lock <ids> <locked>
+    exits:  0 1 2 3 4 5
+    serves: lock unlock
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E857 MPC-E859
+  check-add  [edit; file; needs read+edit]
+    usage:  check-add <id> <text>
+    exits:  0 1 2 3 4 5
+    serves: add-check
+    errors: MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E853 MPC-E856 MPC-E857 MPC-E859
+  check-set  [edit; file; needs read+edit]
+    usage:  check-set <id> <rev> <item> [text] [done]
+    exits:  0 1 2 3 4 5
+    serves: tick-check
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E840 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E853 MPC-E857 MPC-E859
+  check-remove  [edit; file; needs read+edit]
+    usage:  check-remove <id> <rev> <item>
+    exits:  0 1 2 3 4 5
+    serves: remove-check
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E840 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E853 MPC-E857 MPC-E859
+  table-cell  [edit; file; needs read+edit]
+    usage:  table-cell <id> <rev> <row> <column> <text>
+    exits:  0 1 2 3 4 5
+    serves: edit-cell
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E840 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E853 MPC-E857 MPC-E859
+  table-add-row  [edit; file; needs read+edit]
+    usage:  table-add-row <id> [after]
+    exits:  0 1 2 3 4 5
+    serves: add-row
+    errors: MPC-E832 MPC-E835 MPC-E838 MPC-E840 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E856 MPC-E857 MPC-E859
+  table-remove-row  [edit; file; needs read+edit]
+    usage:  table-remove-row <id> <rev> <row>
+    exits:  0 1 2 3 4 5
+    serves: remove-row
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E840 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E857 MPC-E859
+  table-add-column  [edit; file; needs read+edit]
+    usage:  table-add-column <id> [after] [width]
+    exits:  0 1 2 3 4 5
+    serves: add-column
+    errors: MPC-E832 MPC-E835 MPC-E838 MPC-E840 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E856 MPC-E857 MPC-E859
+  table-remove-column  [edit; file; needs read+edit]
+    usage:  table-remove-column <id> <rev> <column>
+    exits:  0 1 2 3 4 5
+    serves: remove-column
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E840 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E857 MPC-E859
+  move  [edit; file; needs read+edit]
+    usage:  move <ids> <dx> <dy>
+    exits:  0 1 2 3 4 5
+    serves: move-objects
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E857 MPC-E859
+  order  [edit; file; needs read+edit]
+    usage:  order <ids> <to>
+    exits:  0 1 2 3 4 5
+    serves: bring-to-front send-to-back bring-forward send-backward
+    errors: MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E857 MPC-E859
+  frame-order  [edit; file; needs read+edit]
+    usage:  frame-order <id> <to>
+    exits:  0 1 2 3 4 5
+    serves: reorder-frames
+    errors: MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E857 MPC-E859
+  group  [edit; file; needs read+edit]
+    usage:  group <ids>
+    exits:  0 1 2 3 4 5
+    serves: group
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E854 MPC-E856 MPC-E857 MPC-E859
+  ungroup  [edit; file; needs read+edit]
+    usage:  ungroup <ids>
+    exits:  0 1 2 3 4 5
+    serves: ungroup
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E857 MPC-E859
+  align  [edit; file; needs read+edit]
+    usage:  align <ids> <to>
+    exits:  0 1 2 3 4 5
+    serves: align
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E854 MPC-E857 MPC-E859
+  distribute  [edit; file; needs read+edit]
+    usage:  distribute <ids> <axis>
+    exits:  0 1 2 3 4 5
+    serves: distribute
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E854 MPC-E857 MPC-E859
+  tidy  [edit; file; needs read+edit]
+    usage:  tidy <ids>
+    exits:  0 1 2 3 4 5
+    serves: tidy
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E854 MPC-E857 MPC-E859
+  copy-style  [edit; file; needs read+edit]
+    usage:  copy-style <from> <to>
+    exits:  0 1 2 3 4 5
+    serves: copy-style
+    errors: MPC-E830 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E857 MPC-E859
+  duplicate  [edit; file; needs read+edit]
+    usage:  duplicate <ids> <dx> <dy>
+    exits:  0 1 2 3 4
+    serves: duplicate
+    errors: MPC-E832 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E856 MPC-E857 MPC-E859
+  paste  [edit; file; needs read+edit]
+    usage:  paste <objects> <x> <y>
+    exits:  0 1 2 3 4
+    serves: copy
+    errors: MPC-E832 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E854 MPC-E856 MPC-E857 MPC-E859
+  connected-copy  [edit; file; needs read+edit]
+    usage:  connected-copy <id> <side>
+    exits:  0 1 2 3 4 5
+    serves: connected-copy
+    errors: MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E853 MPC-E856 MPC-E857 MPC-E859
+  mind-child  [edit; file; needs read+edit]
+    usage:  mind-child <parent> <text>
+    exits:  0 1 2 3 4
+    serves: mind-child mind-sibling
+    errors: MPC-E832 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E853 MPC-E856 MPC-E857 MPC-E859
+  template  [edit; file; needs read+edit]
+    usage:  template <name> <x> <y>
+    exits:  0 1 2 3 4
+    serves: use-template
+    errors: MPC-E832 MPC-E839 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E856 MPC-E857 MPC-E859
+  clear-blob  [edit; file; needs read+edit]
+    usage:  clear-blob <hash>
+    exits:  0 1 2 3 4
+    serves: clear-missing-picture
+    errors: MPC-E832 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E848 MPC-E857 MPC-E859
+  list  [read; file; needs read]
+    usage:  list [kind]
+    exits:  0 1 3 4
+    serves: cut copy read-board
+    errors: MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E857
+  read  [read; file; needs read]
+    usage:  read <id>
+    exits:  0 1 3 4
+    serves: read-board see-author
+    errors: MPC-E838 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E857
+  search  [read; file; needs read]
+    usage:  search <text>
+    exits:  0 1 3 4
+    serves: search
+    errors: MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E857
+  fields  [read; file; needs read]
+    usage:  fields [type]
+    exits:  0 2 3
+    serves: read-board
+    errors: MPC-E847
+  templates  [read; file; needs read]
+    usage:  templates
+    exits:  0 3
+    serves: use-template
+    errors: (none listed)
+  references  [read; file; needs read]
+    usage:  references [id]
+    exits:  0 1 3 4
+    serves: read-board
+    errors: MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E857
+  apply  [edit; file; needs read+edit]
+    usage:  apply <ops>
+    exits:  0 1 2 3 4 5
+    serves: paste-text paste-many
+    errors: MPC-E830 MPC-E831 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E849 MPC-E856 MPC-E857 MPC-E858 MPC-E859
+  inverse  [edit; file; needs read+edit]
+    usage:  inverse <before> <after> <group_id>
+    exits:  0 1 2 3 4 5
+    serves: undo redo
+    errors: MPC-E830 MPC-E831 MPC-E832 MPC-E835 MPC-E838 MPC-E841 MPC-E842 MPC-E843 MPC-E844 MPC-E845 MPC-E846 MPC-E847 MPC-E848 MPC-E857 MPC-E858
+
+Verbs with no doc:
+  explain [ID] [--json] (an error id: what happened, what to do next, the rule; no id: every id)
+  capabilities [--json] (verbs, flags, parity rows, the error ids each verb can return, limits, the kit version)
+
+Error ids: run explain for the list, explain <ID> for one.

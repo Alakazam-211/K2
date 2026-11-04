@@ -7,6 +7,7 @@
 import { vi } from "vitest";
 import { coalesce, type Hunk } from "../src/hunk";
 import { LiveText } from "../src/live";
+import { PresenceChannel } from "../src/presence";
 import { Carried, rebaseOurs } from "../src/rebase";
 import type { ChangeEvent } from "../src/wire";
 import type { FakeServer } from "./fake-server";
@@ -129,6 +130,28 @@ export async function withKindsAs<T>(fault: KindFault, f: () => Promise<T>): Pro
   });
   try {
     return await f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `f` with the claims feature check planted out: a `PresenceChannel` sends `claim` and
+ * `release` to a host that didn't list `"claims"`. */
+export function withClaimsSentAnyway<T>(f: () => T): T {
+  const spy = vi.spyOn(PresenceChannel.prototype, "claimsSupported", "get").mockReturnValue(true);
+  try {
+    return f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `f` with the feature check planted out: a `PresenceChannel` sends its frames to a host
+ * that didn't list `"presence"` (the fault `welcome.features` prevents). */
+export function withPresenceSentAnyway<T>(f: () => T): T {
+  const spy = vi.spyOn(PresenceChannel.prototype, "supported", "get").mockReturnValue(true);
+  try {
+    return f();
   } finally {
     spy.mockRestore();
   }

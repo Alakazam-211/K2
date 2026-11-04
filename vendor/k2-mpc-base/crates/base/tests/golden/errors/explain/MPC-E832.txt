@@ -1,0 +1,27 @@
+MPC-E832 busy (structured and CSV)
+exit:     1
+message:  the file changed on disk since it was read, and again on each of the host's retries
+next:     Someone else saved the file between your read and your save. The host already retried the save, and the file changed again each time. Nothing was written. Read what you are changing again, then run your change again on what is there now.
+step:     read; why: The board changed while saving; read it again, then retry your change on what is there now.
+rule:     board file: the save guard
+verbs:    a file type's own verbs (its host's file registry): add, update, delete, put-back, connect, react, vote, comment, reply, resolve, meta, lock, check-add, check-set, check-remove, table-cell, table-add-row, table-remove-row, table-add-column, table-remove-column, move, order, frame-order, group, ungroup, align, distribute, tidy, copy-style, duplicate, paste, connected-copy, mind-child, template, clear-blob, apply, inverse
+status:   live
+--- json
+{
+  "id": "MPC-E832",
+  "name": "busy",
+  "area": "structured and CSV",
+  "exit": 1,
+  "message": "the file changed on disk since it was read, and again on each of the host's retries",
+  "next": "Someone else saved the file between your read and your save. The host already retried the save, and the file changed again each time. Nothing was written. Read what you are changing again, then run your change again on what is there now.",
+  "next_step": {
+    "verb": "read",
+    "args": [],
+    "why": "The board changed while saving; read it again, then retry your change on what is there now."
+  },
+  "rule": "board file: the save guard",
+  "verbs": ["@file", "add", "update", "delete", "put-back", "connect", "react", "vote", "comment", "reply", "resolve", "meta", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row", "table-remove-row", "table-add-column", "table-remove-column", "move", "order", "frame-order", "group", "ungroup", "align", "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob", "apply", "inverse"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

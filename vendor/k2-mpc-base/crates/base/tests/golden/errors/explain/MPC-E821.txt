@@ -1,0 +1,21 @@
+MPC-E821 key_space_full (structured and CSV)
+exit:     2
+message:  no key fits 24 bytes for prefix {prefix} and tag {tag}
+next:     Every key of this prefix and writer tag that fits a list key's 24 bytes is taken. Nothing was written. The pack's key prefix is too long for a tagged key: use a shorter prefix (the pack's fix).
+rule:     structured live, slice 1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E821",
+  "name": "key_space_full",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "no key fits 24 bytes for prefix {prefix} and tag {tag}",
+  "next": "Every key of this prefix and writer tag that fits a list key's 24 bytes is taken. Nothing was written. The pack's key prefix is too long for a tagged key: use a shorter prefix (the pack's fix).",
+  "rule": "structured live, slice 1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

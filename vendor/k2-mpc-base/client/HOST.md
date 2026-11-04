@@ -33,6 +33,41 @@ with `utf8Len`, `byteToIndex` and `indexToByte`.
 | `disconnected()` / `reconnected(welcome)` | Around every reconnect (below). |
 | `setVisible(v)`, `resync()`, `close()` | The view is (not) in front; the host suspects lost frames; the tab closed. |
 
+## Selection, pointer and viewport
+
+For a doc made of keyed elements. `PRESENCE.md` has `PresenceChannel`'s calls, `WIRE.md` its frames.
+
+- **Say the host takes them:** list `"presence"` in `welcome.features`. A client sends none of the
+  frames otherwise. A tier 0 doc (`BlobSession`) has none of the three calls, so don't list it on a
+  connection to one.
+- **Coordinates may have fractions:** the golden files hold whole numbers only. Encode them with
+  your own writer, or the kit's (`errors::Value::float`, which takes finite numbers only).
+- **Route the frames:** `select`, `pointer` and `viewport` to `Session::set_selection`,
+  `set_pointer` and `set_viewport`. Answer a refusal with `presence_refused {req, error}`, and
+  nothing on success. Never answer one with `refused` or an `error` frame.
+- **Carry the roster kinds:** `selection`, `pointer` and `viewport` as `roster_event`, and the new
+  fields on roster entries and devices.
+- **Size your inbound queue for them:** a client sends at most one pointer frame and one viewport
+  frame per animation frame, per connection.
+
+
+## Claims on elements
+
+For a doc made of keyed elements. `PRESENCE.md` has the calls, `WIRE.md` the frames.
+
+- **Say the host takes them:** list `"claims"` in `welcome.features`, separately from `"presence"`,
+  and only once everything below is done. A client sends none of the frames otherwise.
+- **Route the frames:** `claim` to `Session::claim_elems`, answering `claimed {req, claim}`, and
+  `release` to `Session::release_claim`, answering `released {req, claims}`. Answer a refusal with
+  `presence_refused {req, error}`, never `refused`.
+- **Encode the roster:** `claim_started_elems` as a `roster_event`, and on a snapshot's entries
+  `elem_claims`, which no Rust type carries: build it from `entry.claims` where `span` is
+  `ClaimSpan::Elems`. `claim_ended` is unchanged. Encode `RosterEvent`'s other kinds as before.
+- **Choose the policy:** an edit honours claims only under `ClaimPolicy::Respect`, on the edit's
+  options, and it binds agents only.
+- **Declare the composite roots:** `Pack::composite` names the Map roots whose keys belong to list
+  elements. A key that maps to no element isn't covered by any claim.
+
 ## The rules a host editor keeps
 
 - **No local undo history.** The server owns undo: an editor history would take changes out by

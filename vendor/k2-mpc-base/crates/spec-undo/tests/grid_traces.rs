@@ -1443,6 +1443,12 @@ fn run_classes(
     let only: Option<Vec<String>> = std::env::var("GRID_CLASSES")
         .ok()
         .map(|s| s.split(',').map(str::to_owned).collect());
+    // a stale name would run nothing for that class, and a shard skips the coverage floors
+    if let Some(o) = &only {
+        for x in o {
+            assert!(CLASSES.contains(&x.as_str()), "GRID_CLASSES: no class {x}");
+        }
+    }
     let jobs: Vec<(&'static str, u64)> = CLASSES
         .iter()
         .filter(|c| only.as_ref().map_or(true, |o| o.iter().any(|x| x == *c)))

@@ -92,6 +92,16 @@ An unknown id exits 4 with `MPC-E160` (printed as any refusal). Print `stdout` a
 - `config`: the `Config` the daemon's `SessionManager` runs with, so the limits printed are
   the ones in effect.
 - Optional: `k2 doc capabilities <path>` with only that path's pack and tier.
+- A file type whose verbs the host runs on the file itself, not through a kit session (the
+  board file type's): `Registry::for_file(&[FileVerb])`, from the host's data for each verb
+  (its name, kind, usage, exits, and the file type's own parity rows it serves, by name).
+  `capabilities` lists them with `source` `file`, no kit tier, and the ids of the kit's rows
+  that name them (a row whose verbs start with `@file`: MPC-E830 to E859 for the board).
+  Those rows are the kit's: the host maps the file type's refusals to them by id
+  (`errors::lookup`), with a format refusal's exact code in `details.code`. Passed alone, a
+  file registry's page leaves out what describes the kit's own verbs: `errors_any_verb`,
+  `parity`, `limits` and `positions` (and their sections in the text form). Passed beside a
+  kit registry, the page has them all.
 
 It prints the kit version, the exit codes, every verb (kind, tiers, needs, usage, exits, the
 person actions it serves, the ids it can return; `errors_any_verb` lists the ones every verb

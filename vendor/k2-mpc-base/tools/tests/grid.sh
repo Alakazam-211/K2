@@ -16,21 +16,21 @@ GB="own_later_write_off_stack,own_cell_clear_then_undo,already_by_value,drop_bet
 case ${PART:?PART: grid-a, grid-b, grid-m, pt, measure, nobyte, gridident or gerasure} in
   grid-a|grid-b) C=$( [ "$PART" = grid-a ] && echo "$GA" || echo "$GB" )
         timed build cargo test --release -p k2-mpc-spec-undo --test grid_traces --no-run
-        timed grid_traces env GRID_TRACES=10000 GRID_CLASSES="$C" cargo test --release -p k2-mpc-spec-undo --test grid_traces grid_traces_model -- --nocapture
-        timed grid_mutants env GRID_MUTANT_TRACES=200 GRID_CLASSES="$C" cargo test --release -p k2-mpc-spec-undo --test grid_traces grid_mutants -- --nocapture ;;
+        timed grid_traces ran env GRID_TRACES=10000 GRID_CLASSES="$C" cargo test --release -p k2-mpc-spec-undo --test grid_traces grid_traces_model -- --nocapture
+        timed grid_mutants ran env GRID_MUTANT_TRACES=200 GRID_CLASSES="$C" cargo test --release -p k2-mpc-spec-undo --test grid_traces grid_mutants -- --nocapture ;;
   grid-m) timed build cargo test --release -p k2-mpc-spec-undo --test grid_traces --no-run
-        timed grid_mutants_all env GRID_MUTANT_TRACES=300 cargo test --release -p k2-mpc-spec-undo --test grid_traces grid_mutants -- --nocapture ;;
+        timed grid_mutants_all ran env GRID_MUTANT_TRACES=300 cargo test --release -p k2-mpc-spec-undo --test grid_traces grid_mutants -- --nocapture ;;
   pt) timed build cargo test --release -p k2-mpc-base --test table --no-run
-      timed table_pt_10k env PROPTEST_CASES=10000 cargo test --release -p k2-mpc-base --test table -- --nocapture ;;
+      timed table_pt_10k ran env PROPTEST_CASES=10000 cargo test --release -p k2-mpc-base --test table -- --nocapture ;;
   measure) timed build cargo test --release -p k2-mpc-base --test structured_mem --test grid_cost --no-run
-        timed cell_set_at_cap cargo test --release -p k2-mpc-base --test structured_mem measure_cell_set_latency_at_the_cap -- --ignored --nocapture --test-threads 1
-        timed grid_cost cargo test --release -p k2-mpc-base --test grid_cost -- --ignored --nocapture ;;
+        timed cell_set_at_cap ran cargo test --release -p k2-mpc-base --test structured_mem measure_cell_set_latency_at_the_cap -- --ignored --nocapture --test-threads 1
+        timed grid_cost ran cargo test --release -p k2-mpc-base --test grid_cost -- --ignored --nocapture ;;
   nobyte) timed build cargo test --release -p k2-mpc-base --test grid_store --no-run
-        timed nobyte_grid env NO_BYTE_CASES=10000 cargo test --release -p k2-mpc-base --test grid_store no_byte -- --nocapture ;;
+        timed nobyte_grid ran env NO_BYTE_CASES=10000 cargo test --release -p k2-mpc-base --test grid_store no_byte -- --nocapture ;;
   gridident) timed build cargo test --release -p k2-mpc-base --test grid_store --no-run
-        timed grid_ident_1k env GRID_IDENT_CASES=1000 cargo test --release -p k2-mpc-base --test grid_store grid_outside_save_after_reidentification -- --nocapture
-        timed grid_outside_1k env GRID_OUTSIDE_CASES=1000 cargo test --release -p k2-mpc-base --test grid_store grid_an_outside_save_amid_any_mix -- --nocapture ;;
+        timed grid_ident_1k ran env GRID_IDENT_CASES=1000 cargo test --release -p k2-mpc-base --test grid_store grid_outside_save_after_reidentification -- --nocapture
+        timed grid_outside_1k ran env GRID_OUTSIDE_CASES=1000 cargo test --release -p k2-mpc-base --test grid_store grid_an_outside_save_amid_any_mix -- --nocapture ;;
   gerasure) timed build cargo test --release -p k2-mpc-base --test grid_erasure --no-run
-        timed grid_erasure_1000 env GRID_ERASURE_CASES=1000 cargo test --release -p k2-mpc-base --test grid_erasure -- --nocapture ;;
+        timed grid_erasure_1000 ran env GRID_ERASURE_CASES=1000 cargo test --release -p k2-mpc-base --test grid_erasure -- --nocapture ;;
   *) echo "unknown PART $PART" >&2; exit 2 ;;
 esac

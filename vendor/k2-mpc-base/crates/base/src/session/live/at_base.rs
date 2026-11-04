@@ -236,12 +236,17 @@ impl Session {
         conn: ConnId,
         version: Seq,
     ) -> std::result::Result<Vec<ChangeEvent>, ErrorReport> {
+        timed!(EventsSince);
         let now = self.now();
         let mut st = self.lock().map_err(rep)?;
         let i = self
             .admit(&mut st, conn, Need::Read, Action::Read, now)
             .map_err(rep)?;
-        let events = self.window(&st, version)?.into_iter().map(|w| w.event);
+        let window = {
+            timed!(EventsSinceWindow);
+            self.window(&st, version)?
+        };
+        let events = window.into_iter().map(|w| w.event);
         // an App viewer sees handles, never pids (K5)
         Ok(match Self::app_viewer(&st, i) {
             Some(v) => {

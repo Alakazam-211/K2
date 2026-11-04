@@ -89,6 +89,7 @@ An agent can now look after its App's people from start to finish, and App scree
 - **Voice rooms stay open when K2 restarts on a Pro server.**
 
 ### Threads
+- **A copy button beside links, if you want it:** Settings → General → **Show a copy button beside links on hover** (off by default, set on each computer). Right-click a link → Copy link works either way.
 - **Posting to a Thread or project chat answers at once.** You no longer wait while it's typed into a sleeping agent's terminal; the agent gets it right after, in order.
 - **What you send shows straight away as "Sending…".** If it fails it stays as "Not sent", with Retry and Discard, and a retry never posts twice.
 - **Your own Thread messages stay blue, on another server too.** One could turn grey, as if someone else sent it, when K2 couldn't tell who you were. The server now says which posts are yours; it needs to be on 0.46.8.

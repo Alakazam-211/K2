@@ -836,3 +836,66 @@ fn rescue(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliResponse>
         Err(save::CopyFail::Fail(f)) => Err(failed(&f)),
     }
 }
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos();
+        let d = std::env::temp_dir().join(format!("k2-board-list-{tag}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&d).expect("scratch dir");
+        d.canonicalize().expect("canonical scratch dir")
+    }
+    fn touch(root: &Path, rel: &str) {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(&p, b"{}").expect("write");
+    }
+    fn found(root: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        walk_boards(root, root, 0, &mut out);
+        out.iter().map(|p| p.strip_prefix(root).expect("under root").to_string_lossy().replace('\\', "/")).collect()
+    }
+
+    /// The Boards Garden lists what this walk finds: every `.k5board` a person keeps, in name order, and nothing
+    /// from build output, dependencies, git, worktrees or K2's own state.
+    #[test]
+    fn the_listing_walk_finds_a_persons_boards_and_skips_the_rest() {
+        let root = scratch("walk");
+        for rel in [
+            "Plan.k5board",
+            "docs/Roadmap.K5BOARD",
+            ".k2/wiki/Map.k5board",
+            ".k2/prds/Flow.k5board",
+            "notes.md",
+            "node_modules/pkg/Dep.k5board",
+            "target/debug/Built.k5board",
+            ".git/Old.k5board",
+            ".worktrees/agent/Copy.k5board",
+            ".k2/board-held/Held.k5board",
+            "a/b/c/d/e/f/Six.k5board",
+            "a/b/c/d/e/f/g/Seven.k5board",
+        ] {
+            touch(&root, rel);
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("docs"), root.join("linked")).expect("symlink");
+        assert_eq!(
+            found(&root),
+            [".k2/prds/Flow.k5board", ".k2/wiki/Map.k5board", "Plan.k5board", "a/b/c/d/e/f/Six.k5board", "docs/Roadmap.K5BOARD"]
+        );
+        fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// It stops at LIST_MAX files, so a huge tree can't make the listing slow.
+    #[test]
+    fn the_listing_walk_stops_at_its_cap() {
+        let root = scratch("cap");
+        for i in 0..(LIST_MAX + 5) {
+            touch(&root, &format!("many/b{i:05}.k5board"));
+        }
+        assert_eq!(found(&root).len(), LIST_MAX);
+        fs::remove_dir_all(&root).expect("clean up");
+    }
+}

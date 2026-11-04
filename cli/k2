@@ -25045,24 +25045,38 @@ print(json.dumps(out))
 
 # 2h / 90m / 300s / 300 → seconds.
 _compute_secs() {
-    local v="$1"
-    case "$v" in
-        *h) echo $(( ${v%h} * 3600 )) ;;
-        *m) echo $(( ${v%m} * 60 )) ;;
-        *s) echo "${v%s}" ;;
-        ''|*[!0-9]*) echo "usage: bad duration '$v' (use 2h, 90m, 300s)" >&2; exit 2 ;;
-        *) echo "$v" ;;
-    esac
+    # Plain seconds, or <n>h / <n>m / <n>s parts in any mix (1h30m). Only
+    # digits ever reach $(( )): anything else is the usage error, never
+    # arithmetic on the raw value.
+    local v="$1" rest total=0 n
+    if [[ "$v" =~ ^[0-9]+$ ]]; then echo "$((10#$v))"; return; fi
+    if [[ ! "$v" =~ ^([0-9]+[hms])+$ ]]; then
+        echo "usage: bad duration '$v' (use 2h, 90m, 1h30m, 300s)" >&2; exit 2
+    fi
+    rest="$v"
+    while [[ "$rest" =~ ^([0-9]+)([hms])(.*)$ ]]; do
+        n=$((10#${BASH_REMATCH[1]}))
+        case "${BASH_REMATCH[2]}" in
+            h) total=$((total + n * 3600)) ;;
+            m) total=$((total + n * 60)) ;;
+            s) total=$((total + n)) ;;
+        esac
+        rest="${BASH_REMATCH[3]}"
+    done
+    echo "$total"
 }
 
 # 16G / 512M / bytes → bytes.
 _compute_bytes() {
     local v="$1"
-    case "$v" in
-        *G|*g) echo $(( ${v%?} * 1073741824 )) ;;
-        *M|*m) echo $(( ${v%?} * 1048576 )) ;;
-        ''|*[!0-9]*) echo "usage: bad size '$v' (use 16G or 512M)" >&2; exit 2 ;;
-        *) echo "$v" ;;
+    if [[ ! "$v" =~ ^([0-9]+)([GgMm]?)$ ]]; then
+        echo "usage: bad size '$v' (use 16G or 512M)" >&2; exit 2
+    fi
+    local n=$((10#${BASH_REMATCH[1]}))
+    case "${BASH_REMATCH[2]}" in
+        G|g) echo $((n * 1073741824)) ;;
+        M|m) echo $((n * 1048576)) ;;
+        *) echo "$n" ;;
     esac
 }
 

@@ -551,6 +551,18 @@ id = "RUSTSEC-2026-0429"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "DoS only (abort on a symlink entry with a huge declared size), in ZipArchive::extract(). K2's own zip readers (k2-core fs_extract.rs extract_entries, sim/android/sdk.rs extract, jscheck/inspect.rs load_zip, sim/android/apk.rs read) walk by_index/by_name and read the bytes; none calls extract(). The one extract() caller is tauri-plugin-updater 2.13 extract_zip (Windows only), and src-tauri commands/updater.rs app_update_install passes it only bytes already verified with k2_release_keys. Fix: zip 9 (k2-core direct dep; tauri-plugin-updater 2.14.1, whose install() changes need their own updater test)."
 
+# zip 2.4.2, zip 4.6.1
+[[IgnoredVulns]]
+id = "GHSA-8hxf-qr8p-62x4"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "AES (AE-x) entry HMAC bypass on the password read paths (by_index_decrypt, by_name_decrypt, by_index_with_options with a password). Neither zip build has the aes-crypto feature (k2-core: default-features = false, deflate only; the updater's zip 4.6.1 has no aes/hmac deps in Cargo.lock), and K2 never decrypts: fs_extract.rs refuses encrypted entries. Fix: zip 9."
+
+# zip 2.4.2, zip 4.6.1
+[[IgnoredVulns]]
+id = "GHSA-m665-v7pm-7grj"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "Parser differential: ZipStreamReader trusts the local headers, ZipArchive the central directory. K2 never uses ZipStreamReader: every reader (k2-core fs_extract.rs list + extract, jscheck/inspect.rs, sim/android sdk.rs + apk.rs, the updater's Windows extract_zip) is ZipArchive, so what K2 lists is what it extracts. The 9.0.5 fix is an opt-in header check; turn it on for k2 zen inspect (.k2garden) with the zip 9 bump. Fix: zip 9.0.5."
+
 # zod 3.25.76
 [[IgnoredVulns]]
 id = "GHSA-mrhx-c7xc-m3w5"

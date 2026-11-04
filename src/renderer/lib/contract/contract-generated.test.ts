@@ -175,6 +175,13 @@ describe('TUWA5: the generated tables', () => {
       'layout.subscribe': { cap: null, reach: 'local', kind: 'subscribe' },
       // Catalog v21 (0.46.4): k2.open(url), answered by the custom layer.
       'links.open': { cap: 'links:open', reach: 'local', kind: 'call' },
+      // A .k5board's tab only (prd-board-tab-v1): every Garden frame gets verb_unavailable.
+      'boardFile.open': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'boardFile.submit': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'boardFile.hold': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'boardFile.flush': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'boardFile.key': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'boardFile.events': { cap: 'store:read', reach: 'local', kind: 'subscribe' },
       // 0.46.5 (prd-garden-board-needs-v1): files and downloads.
       'blobs.put': { cap: 'store:write', reach: 'local', kind: 'call' },
       'blobs.get': { cap: 'store:read', reach: 'local', kind: 'call' },

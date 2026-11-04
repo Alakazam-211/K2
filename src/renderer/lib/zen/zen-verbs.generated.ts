@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 46
+export const ZEN_CATALOG_VERSION = 47
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -146,6 +146,9 @@ export const ZEN_CUSTOM_VERBS = {
   'blobs.info': { cap: 'store:read', reach: 'local', kind: 'call' },
   'blobs.list': { cap: 'store:read', reach: 'local', kind: 'call' },
   'store.grantees': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'boardFile.open': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'boardFile.key': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'boardFile.events': { cap: 'store:read', reach: 'local', kind: 'subscribe' },
   'store.put': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.patch': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.delete': { cap: 'store:write', reach: 'local', kind: 'call' },
@@ -157,6 +160,9 @@ export const ZEN_CUSTOM_VERBS = {
   'store.restore': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.snapshot': { cap: 'store:write', reach: 'local', kind: 'call' },
   'blobs.put': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'boardFile.submit': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'boardFile.hold': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'boardFile.flush': { cap: 'store:write', reach: 'local', kind: 'call' },
   'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
   'guests.list': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },

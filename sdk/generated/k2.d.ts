@@ -1210,6 +1210,24 @@ export interface StoreGrantees {
   readonly items: StoreGrantee[]
 }
 
+export interface BoardFileOpen {
+  /** This person's key in the file. */
+  readonly me: string
+  readonly meta: unknown
+  /** The file's name, without .k5board. */
+  readonly name: string
+  /** Back to front, in the widget's shape, with this tab's unsaved edits. */
+  readonly objects: unknown[]
+  readonly people: unknown
+  /** Why edits can't be made here now, or null. */
+  readonly readOnly: string | null
+  readonly status: unknown
+}
+
+export interface BoardFileOk {
+  readonly ok: boolean
+}
+
 export interface StoreRev {
   readonly rev: number
 }
@@ -1783,6 +1801,9 @@ export interface K2Verbs {
   'blobs.info': { args: [ref: string]; value: BlobDetail }
   'blobs.list': { args: [opts?: { after?: string; limit?: number }]; value: BlobList }
   'store.grantees': { args: []; value: StoreGrantees }
+  'boardFile.open': { args: []; value: BoardFileOpen }
+  'boardFile.key': { args: [key: { code: string; ctrl: boolean; key: string; meta: boolean; shift: boolean }]; value: BoardFileOk }
+  'boardFile.events': { args: []; value: unknown }
   'store.put': { args: [key: string, value: unknown, opts?: { ifRev?: number }]; value: StoreRev }
   'store.patch': { args: [key: string, partial: unknown, opts?: { ifRev?: number }]; value: StorePatched }
   'store.delete': { args: [key: string, opts?: { ifRev?: number }]; value: StoreDeleted }
@@ -1794,6 +1815,9 @@ export interface K2Verbs {
   'store.restore': { args: [opts: { at?: number; dryRun?: boolean; except?: string[]; prefixes?: string[]; snapshot?: string; toRev?: number }]; value: StoreRestored }
   'store.snapshot': { args: [opts?: { except?: string[]; label?: string; prefixes?: string[] }]; value: StoreSnapshot }
   'blobs.put': { args: [data: unknown, opts?: { mime?: string; name?: string }]; value: BlobInfo }
+  'boardFile.submit': { args: [part: { byAll: boolean; gesture: string; kind: 'edit' | 'undo' | 'redo'; last: boolean; part: number; text: string }]; value: BoardFileOk }
+  'boardFile.hold': { args: [on: boolean]; value: BoardFileOk }
+  'boardFile.flush': { args: []; value: BoardFileOk }
   'guests.rooms': { args: [args: { app?: string; username: string }]; value: AppGuestRooms }
   'guests.setRooms': { args: [args: { app?: string; rooms: string[]; username: string }]; value: AppGuestRooms }
   'guests.list': { args: [args?: { app?: string; cursor?: string; limit?: number }]; value: AppGuestList }
@@ -1813,8 +1837,8 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
-export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'thread.onActivity'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'boardFile.open' | 'boardFile.key' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'boardFile.submit' | 'boardFile.hold' | 'boardFile.flush' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
+export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'boardFile.events' | 'thread.onActivity'
 
 export interface K2 {
   readonly gardens: {
@@ -2072,6 +2096,22 @@ export interface K2 {
     url(ref: string, opts?: { px?: 256 | 512 }): Promise<string>
     /** Is this string a blob ref (`k2blob:sha256-<64 hex>`)? */
     isRef(s: unknown): boolean
+  }
+  readonly boardFile: {
+    /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. The board this tab shows, as the person sees it. cap store:read · local · board-file-v1. e.g. `const board = await k2.boardFile.open()` */
+    open(): Promise<BoardFileOpen>
+    /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. Hand one of K2's own tab keys back to the window (a sealed frame keeps every key it sees). Any other key is ignored. cap store:read · local · board-file-v1. e.g. `await k2.boardFile.key({key: 't', code: 'KeyT', meta: true, ctrl: false, shift: false})` */
+    key(key: { code: string; ctrl: boolean; key: string; meta: boolean; shift: boolean }): Promise<BoardFileOk>
+    /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. What changes in this tab's file, and what became of each gesture. cap store:read · local · board-file-v1. e.g. `const stop = k2.boardFile.events((e) => draw(e))` */
+    events(cb: (value: unknown) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    events(handlers: K2Handlers<unknown>): () => void
+    /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. One gesture's ops, for the tab to queue and save. The tab answers before the save; events say what became of it. cap store:write · local · board-file-v1. e.g. `await k2.boardFile.submit({gesture, kind: 'edit', byAll: false, part: 0, last: true, text})` */
+    submit(part: { byAll: boolean; gesture: string; kind: 'edit' | 'undo' | 'redo'; last: boolean; part: number; text: string }): Promise<BoardFileOk>
+    /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. Hold saves while the person is typing. cap store:write · local · board-file-v1. e.g. `await k2.boardFile.hold(true)` */
+    hold(on: boolean): Promise<BoardFileOk>
+    /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. Save what's queued now (Cmd+S), and wait for the answer. cap store:write · local · board-file-v1. e.g. `await k2.boardFile.flush()` */
+    flush(): Promise<BoardFileOk>
   }
   readonly guests: {
     /** One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's). This computer only. cap guests:rooms · portable · guests-rooms-v1. e.g. `const g = await k2.asApp().guests.rooms({username: 'dana'})` */

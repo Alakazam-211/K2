@@ -224,6 +224,9 @@ export interface ZenCustomLayerDeps {
    *  (the daemon's widget door). Without it `blobs.put` / `blobs.get`
    *  answer `verb_unavailable`. */
   blobs?: ZenCustomBlobs
+  /** A board file's tab. Without it (every Garden) `boardFile.*` answer
+   *  `verb_unavailable`. */
+  boardFile?: ZenCustomBoardFile
   /** GS1–GS7: K2's own download path. Without it `downloads.*` answer
    *  `verb_unavailable` (the widget preview, a headless daemon). */
   downloads?: ZenCustomDownloads
@@ -251,6 +254,16 @@ export interface ZenUploadedFile {
   name: string
   size: number
   mime: string
+}
+
+/** One `.k5board` in a K2 tab (prd-board-tab-v1 BT-18): its queue and truth are outside the frame. */
+export interface ZenCustomBoardFile {
+  open(): unknown
+  submit(part: { gesture: string; kind: 'edit' | 'undo' | 'redo'; byAll: boolean; part: number; last: boolean; text: string }): void
+  hold(on: boolean): void
+  flush(): Promise<void>
+  key(k: { key: string; code: string; meta: boolean; ctrl: boolean; shift: boolean }): void
+  events(push: (e: unknown) => void): () => void
 }
 
 /** What the layer needs for `uploads.*` (`k2.pick`, `k2.onDrop`). */
@@ -861,7 +874,40 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
 
   // ── calls ────────────────────────────────────────────────────────────────
 
+  const needBoardFile = (verb: string): ZenCustomBoardFile => {
+    if (!deps.boardFile) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    return deps.boardFile!
+  }
+
   const calls: Record<string, (args: unknown[], bytes?: ArrayBuffer) => unknown> = {
+    'boardFile.open': () => needBoardFile('boardFile.open').open(),
+    'boardFile.submit': (args) => {
+      const b = needBoardFile('boardFile.submit')
+      const p = args[0]
+      if (!isObj(p) || typeof p.gesture !== 'string' || typeof p.text !== 'string' || typeof p.part !== 'number' || typeof p.last !== 'boolean') {
+        refuse('bad_args', 'boardFile.submit takes {gesture, kind, byAll, part, last, text}')
+      }
+      const q = p as Record<string, unknown>
+      if (q.kind !== 'edit' && q.kind !== 'undo' && q.kind !== 'redo') refuse('bad_args', 'boardFile.submit: kind is edit, undo or redo')
+      b.submit({ gesture: q.gesture as string, kind: q.kind as 'edit' | 'undo' | 'redo', byAll: q.byAll === true, part: q.part as number, last: q.last as boolean, text: q.text as string })
+      return { ok: true }
+    },
+    'boardFile.hold': (args) => {
+      needBoardFile('boardFile.hold').hold(args[0] === true)
+      return { ok: true }
+    },
+    'boardFile.flush': async () => {
+      await needBoardFile('boardFile.flush').flush()
+      return { ok: true }
+    },
+    'boardFile.key': (args) => {
+      const b = needBoardFile('boardFile.key')
+      const k = args[0]
+      if (!isObj(k) || typeof k.key !== 'string' || typeof k.code !== 'string') refuse('bad_args', 'boardFile.key takes {key, code, meta, ctrl, shift}')
+      const q = k as Record<string, unknown>
+      b.key({ key: q.key as string, code: q.code as string, meta: q.meta === true, ctrl: q.ctrl === true, shift: q.shift === true })
+      return { ok: true }
+    },
     // prd-garden-board-needs-v1 §5 (0.46.6): K2's picker.
     'uploads.pick': (args) => pickFiles(args),
     // prd-garden-board-needs-v1: files in this widget's data, and downloads.
@@ -1257,6 +1303,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     (args: unknown[], push: (v: unknown) => void, fail: (error: CatalogWireError) => void) => () => void
   > = {
     'theme.changed': (_args, push) => deps.onThemeChange(() => push(deps.theme())),
+    'boardFile.events': (_args, push) => needBoardFile('boardFile.events').events(push),
     // GP4 (0.46.6): files dropped on this frame, already in its data (the
     // drop is the gesture). Only a frame that listens takes drops.
     'uploads.dropped': (_args, push) => {

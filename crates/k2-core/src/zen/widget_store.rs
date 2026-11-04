@@ -1064,6 +1064,11 @@ impl ZenFiles {
             // Only what the file itself declares is the file's finding; a
             // template's widget shows its own state on the page.
             let Some(i) = index_of(id) else { continue };
+            if let Some(message) = builtin_widgets::tab_only_refusal(widget) {
+                let (line, col) = at(format!("page.widget.{i}.widget"));
+                out.push(Diagnostic { suggestion: None, file: file.to_string(), line, col, message });
+                continue;
+            }
             // A locked Garden's frozen copy keeps running when the folder
             // is gone.
             let frozen = garden.is_some_and(|g| self.frozen_widget(g, widget).is_some());

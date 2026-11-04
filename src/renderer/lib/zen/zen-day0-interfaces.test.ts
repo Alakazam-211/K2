@@ -64,6 +64,11 @@ describe('day-0: verb tables', () => {
         continue
       }
       // Catalog v21 (0.46.4): k2.open(url), answered by the custom layer only.
+      // A .k5board's tab only (prd-board-tab-v1): frame-only, on the store caps; a Garden frame has no implementation.
+      if (verb.startsWith('boardFile.')) {
+        expect(['store:read', 'store:write']).toContain(row.cap)
+        continue
+      }
       if (verb === 'links.open') {
         expect(row).toEqual({ cap: 'links:open', reach: 'local', kind: 'call' })
         expect(verb in ZEN_VERBS, verb).toBe(false)

@@ -1,6 +1,6 @@
 {
   "generatedBy": "contract-gen",
-  "catalogVersion": 46,
+  "catalogVersion": 47,
   "verbs": [
     {"cap":"activity:read","feature":"app-api-v1","phone":"door","verb":"activity.snapshot"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.list"},
@@ -18,6 +18,12 @@
     {"cap":"store:read","feature":"garden-blobs-v1","phone":"door","verb":"blobs.info"},
     {"cap":"store:read","feature":"garden-blobs-v1","phone":"door","verb":"blobs.list"},
     {"cap":"store:write","feature":"garden-blobs-v1","phone":"door","verb":"blobs.put"},
+    {"cap":"store:read","feature":"board-file-v1","phone":"host","verb":"boardFile.events"},
+    {"cap":"store:write","feature":"board-file-v1","phone":"host","verb":"boardFile.flush"},
+    {"cap":"store:write","feature":"board-file-v1","phone":"host","verb":"boardFile.hold"},
+    {"cap":"store:read","feature":"board-file-v1","phone":"host","verb":"boardFile.key"},
+    {"cap":"store:read","feature":"board-file-v1","phone":"host","verb":"boardFile.open"},
+    {"cap":"store:write","feature":"board-file-v1","phone":"host","verb":"boardFile.submit"},
     {"cap":null,"feature":"zen-widgets-v1","phone":"host","verb":"canvas.setHitRegions"},
     {"cap":"thread:post","feature":"zen-v1","phone":"later","verb":"compose.draft"},
     {"cap":"compute:read","feature":"workbench-v1","phone":"door","verb":"compute.jobs"},

@@ -710,6 +710,12 @@ fn is_comment_line(line: &str) -> bool {
 // ── k2 zen guide api ─────────────────────────────────────────────────────
 
 /// The guide page text (no shell wrapping).
+/// A verb only K2's own tab frame answers (a `.k5board`): every widget gets `verb_unavailable`, so the guide an agent
+/// writes widgets from leaves it out.
+fn tab_frame_only(v: &VerbRow) -> bool {
+    v.feature == "board-file-v1"
+}
+
 pub fn guide_api_page(c: &Catalog) -> String {
     let mut s = String::new();
     s.push_str("k2 zen guide api — the k2 object in a custom widget\n\n");
@@ -728,7 +734,10 @@ for at once (no review). From K2's verb catalog, version {}.\n\n",
         "\nEVERY HELPER, BY CAP (portable: the same call works in an App later;\n\
 local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
     );
-    let groups = widget_groups(c);
+    let groups: Vec<_> = widget_groups(c)
+        .into_iter()
+        .map(|(cap, rows)| (cap, rows.into_iter().filter(|v| !tab_frame_only(v)).collect::<Vec<_>>()))
+        .collect();
     let w_sig = groups.iter().flat_map(|(_, r)| r.iter()).map(|v| signature(v).len()).max().unwrap_or(0) + 3;
     let w_feat = groups.iter().flat_map(|(_, r)| r.iter()).map(|v| v.feature.len()).max().unwrap_or(0);
     for (cap, rows) in &groups {
@@ -861,12 +870,12 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            99,
+            105,
             "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus catalog v29's thread.onActivity (the 0.46.5 activity SDK), plus catalog v30's Garden files rows blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v40's Workbench: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle and agents.openTerminal (0.46.7), plus catalog v43's store.grantees (the Board Garden)"
         );
         assert_eq!(
             catalog().verbs_exposed_to(Exposure::Widget).len(),
-            45,
+            51,
             "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open; 0.46.5's thread.onActivity, blobs.put/get and downloads.begin/save; 0.46.6's uploads.pick and uploads.dropped; catalog v40's agents.openTerminal)"
         );
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
@@ -891,7 +900,8 @@ mod tests {
         let n = page.lines().count();
         assert!(n <= GUIDE_MAX_LINES, "guide api is {n} lines (max {GUIDE_MAX_LINES})");
         assert!(page.starts_with("k2 zen guide api —"));
-        for v in catalog().widget_callable_verbs() {
+        assert!(!page.contains("boardFile"), "no widget can call these");
+        for v in catalog().widget_callable_verbs().into_iter().filter(|v| !tab_frame_only(v)) {
             let line = page
                 .lines()
                 .find(|l| l.starts_with(&format!("  k2.{} ", signature(v))))

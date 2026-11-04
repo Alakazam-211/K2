@@ -77,6 +77,15 @@ pub const REVIEW_WIDGET: &str = "k2:review@1";
 /// (`data:k2:board`), which agents change through `k2 board`. A Beta behind
 /// the Board core: `board-1.toml` places it beside K2's Conversation.
 pub const BOARD_WIDGET: &str = "k2:board@1";
+/// A `.k5board` in a K2 tab (prd-board-tab-v1 BT-17). Dark behind `board_file_preview`.
+pub const BOARD_FILE_WIDGET: &str = "k2:board-file@1";
+
+/// What a Garden placing a built-in that only runs in K2's own tab frame is told, or None for any other widget. Its
+/// `boardFile.*` verbs answer `verb_unavailable` in a Garden frame, so a placement could only ever show a broken card.
+pub fn tab_only_refusal(widget: &str) -> Option<String> {
+    (widget == BOARD_FILE_WIDGET || widget == "k2:board-file")
+        .then(|| format!("'{widget}' runs only in a board file's tab; a Garden places Board as {BOARD_WIDGET}"))
+}
 
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
@@ -445,6 +454,27 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("ui.js", include_str!("board-1/ui.js")),
         ],
     },
+    // A .k5board in a K2 tab (prd-board-tab-v1 BT-17): Board's canvas with a host and a store of its own, a separate
+    // copy until `@2` folds the two together. Runs only in a tab's own frame: a Garden can't place it.
+    BuiltinWidget {
+        name: "board-file",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("board-file-1/manifest.json")),
+            ("index.html", include_str!("board-file-1/index.html")),
+            ("board.css", include_str!("board-file-1/board.css")),
+            ("schema.js", include_str!("board-file-1/schema.js")),
+            ("host.js", include_str!("board-file-1/host.js")),
+            ("store.js", include_str!("board-file-1/store.js")),
+            ("model.js", include_str!("board-file-1/model.js")),
+            ("geom.js", include_str!("board-file-1/geom.js")),
+            ("icons.js", include_str!("board-file-1/icons.js")),
+            ("render.js", include_str!("board-file-1/render.js")),
+            ("app.js", include_str!("board-file-1/app.js")),
+            ("export.js", include_str!("board-file-1/export.js")),
+            ("ui.js", include_str!("board-file-1/ui.js")),
+        ],
+    },
 ];
 
 /// The data-source cards and the presets each pairs with (contract
@@ -489,6 +519,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:review@1", "dd1271c39589a392358e8e8a39ceadd025ceef55776e44015615d055609d6b34"),
     ("k2:work-inbox@1", "85deffe31c8a76db2410d7756e64193a2101d31c4518e7b1ebf57e8ab3a68143"),
     ("k2:board@1", "6ac24f08f0c8f0edc987d0bf4313fbc6abc56cb14fc43c8a0f51d456153afe32"),
+    ("k2:board-file@1", "310db4a193a9e0e347ce257cb3cfdd8f6e2a3bf91492ae32f173aba080ae057c"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -1352,6 +1383,66 @@ mod tests {
 
     /// The Board (plan-board-garden-v1 S6; Rosson 2026-11-01): a clean
     /// custom widget in readable source, loaded in its build order; only the
+    /// prd-board-tab-v1 BT-17: the tab's Board is as clean as the Garden's. Only host.js and store.js call `k2.*`, only
+    /// catalog verbs or runtime members; the frame never sees a file's bytes and never saves a whole board.
+    #[test]
+    fn the_board_file_is_a_clean_readable_widget() {
+        let w = builtin_widget(&parse_widget_ref(BOARD_FILE_WIDGET).expect("parses")).expect("k2:board-file@1 ships");
+        let files: std::collections::BTreeMap<String, Vec<u8>> =
+            w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
+        let c = crate::zen::widgets::check_files("k2", "board-file-1", &files);
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        assert!(c.bundle.is_some(), "it bundles");
+        assert!(!c.warnings.iter().any(|d| d.message.starts_with("this widget is large")), "{:?}", c.warnings);
+        let m = c.manifest.as_ref().expect("a manifest");
+        assert_eq!(m.caps, ["store:read", "store:write", "links:open", "downloads:save", "uploads:pick"]);
+        let manifest: serde_json::Value = serde_json::from_str(file(w, "manifest.json")).expect("manifest is JSON");
+        assert_eq!(manifest["requires"]["libs"], serde_json::json!(["k2-png@1"]));
+        let order = ["schema.js", "host.js", "store.js", "model.js", "geom.js", "icons.js", "render.js", "app.js", "export.js", "ui.js"];
+        let scripts: Vec<&str> = w.files.iter().map(|(n, _)| *n).filter(|n| n.ends_with(".js")).collect();
+        assert_eq!(scripts, order);
+        let html = file(w, "index.html");
+        for s in order {
+            assert!(html.contains(&format!("<script src=\"{s}\"></script>")), "index.html loads {s}");
+        }
+        let cat = crate::contract::catalog();
+        let verbs: Vec<String> = cat.verbs_exposed_to(crate::contract::Exposure::Widget).iter().map(|v| v.verb.clone()).collect();
+        for name in order {
+            let js = file(w, name);
+            for bad in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "fetch(", "XMLHttpRequest", "WebSocket", "EventSource"] {
+                assert!(!js.contains(bad), "{name} uses {bad}");
+            }
+            let calls: Vec<String> = js
+                .match_indices("k2.")
+                .filter(|(i, _)| !js[..*i].chars().last().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'))
+                .map(|(i, _)| js[i + 3..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect::<String>())
+                .map(|c| c.trim_end_matches('.').to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            if name != "host.js" && name != "store.js" {
+                assert!(calls.is_empty(), "{name} calls k2.{:?}: only host.js and store.js talk to K2", calls.first());
+                continue;
+            }
+            for call in calls {
+                let head = call.split('.').next().unwrap_or(&call).to_string();
+                let ok = verbs.iter().any(|v| *v == call)
+                    || crate::contract::gen::RUNTIME_MEMBERS.contains(&call.as_str())
+                    || crate::contract::gen::RUNTIME_MEMBERS.contains(&head.as_str())
+                    || ["blobs.url", "theme.changed", "boardFile"].contains(&call.as_str());
+                assert!(ok, "{name} calls k2.{call}, which isn't a widget helper");
+            }
+        }
+        let store = file(w, "store.js");
+        for gone in ["k2.store.", "k2.blobs.put(new", "k2.conversation", "k2.agents", "exportJson"] {
+            assert!(!store.contains(gone), "store.js has {gone}");
+        }
+        for needed in ["k2.boardFile.submit(", "k2.boardFile.open()", "k2.boardFile.events(", "k2.boardFile.hold(", "k2.boardFile.flush()"] {
+            assert!(store.contains(needed), "store.js lost {needed}");
+        }
+        assert_eq!(tab_only_refusal(BOARD_WIDGET), None);
+        assert!(tab_only_refusal(BOARD_FILE_WIDGET).is_some(), "a Garden can't place it");
+    }
+
     /// two adapters (host.js, store.js) call `k2.*`, and only catalog verbs,
     /// runtime members or SDK helpers; no Thread save path, keeper, access
     /// panel or internal names; images as blobs.

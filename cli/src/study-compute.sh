@@ -690,7 +690,13 @@ TOOLCHAINS (what the job needs installed)
   0.46.9 node; placement prefers nodes that have them). rust@stable+minimal
   leaves them out (a small node). Add components with +:
   rust@stable+clippy+rustfmt, rust@1.95.0+rust-src+llvm-tools.
-  Compile targets join the same way (a comma starts the next need):
+  Anything else is refused before the job starts (tool_unsupported,
+  exit 2), never silently skipped; for the long tail name a mise backend:
+  aqua:owner/repo@1, ubi:owner/repo@1, npm:pkg@1, pipx:pkg@1, cargo:crate@1.
+  After installing, the node checks the tool's command exists (cmake →
+  `cmake`); if not, the job fails with tool_install_failed.
+  Compile targets join the Rust need the same way as components (a comma
+  starts the next need):
     rust@1.95.0+target:wasm32-unknown-unknown
     rust@stable+clippy+target:wasm32-wasip1+target:aarch64-unknown-linux-gnu
   The node adds them with rustup before the job starts (don't run rustup
@@ -700,11 +706,6 @@ TOOLCHAINS (what the job needs installed)
   package; naming one of those refuses the job (node_upgrade_required /
   rust_target_unsupported, exit 3). --plan shows each need ready or to
   install on the node it would pick.
-  Anything else is refused before the job starts (tool_unsupported,
-  exit 2), never silently skipped; for the long tail name a mise backend:
-  aqua:owner/repo@1, ubi:owner/repo@1, npm:pkg@1, pipx:pkg@1, cargo:crate@1.
-  After installing, the node checks the tool's command exists (cmake →
-  `cmake`); if not, the job fails with tool_install_failed.
   The repo's own files count too (best effort; unsupported tools there
   are skipped with a note in the log):
   mise.toml, .tool-versions, .nvmrc, .node-version, .python-version,

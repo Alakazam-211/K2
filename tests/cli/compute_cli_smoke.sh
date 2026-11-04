@@ -228,7 +228,7 @@ for want in "k2 compute wait <job>..." "[--workspace WS]" "cancel <job> [--force
     expect_has "--help lists $want" "$help" "$want"
 done
 study="$(k2 study compute)"
-for want in "K2_COMPUTE_JOB=<job id>" "CANCEL" "WORKTREES" "k2 compute wait <id>" "sh -ec"; do
+for want in "K2_COMPUTE_JOB=<job id>" "CANCEL" "WORKTREES" "k2 compute wait <id>" "sh -ec" "rust@1.95.0+target:wasm32-unknown-unknown" "rust_target_unsupported"; do
     expect_has "study compute covers $want" "$study" "$want"
 done
 set +e

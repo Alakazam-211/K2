@@ -8,6 +8,9 @@
 //     means the bridge object is visible and the app must drop what it
 //     receives (K2's wry patch UW34 on iOS): look in the app's log for the
 //     probe message, which must not arrive.
+//     Last, the frame tries to navigate itself. If this page disappears or
+//     another site's page shows here, that way out is OPEN: a frame could
+//     carry a value out in a URL.
 //   - Canvas: WebKit's toDataURL / toBlob come back empty in a sealed frame
 //     (K2's U0 finding); getImageData works. Recorded, not judged.
 //   - Mobile layout (contract rev 2 §B, §I): k2.view, k2.viewport, k2.setHeight
@@ -224,6 +227,23 @@
     show()
   }
 
+  // Run last: if the host's frame-src fails, this page is gone. Reaching the
+  // row means the frame survived the try.
+  function selfNavigate(name, url) {
+    return new Promise((resolve) => {
+      try {
+        location.replace(url)
+      } catch (e) {
+        row(escapes, name, 'blocked', (e && e.name) || 'threw')
+        return resolve()
+      }
+      setTimeout(() => {
+        row(escapes, name, 'blocked', 'still on this page after 1500 ms')
+        resolve()
+      }, 1500)
+    })
+  }
+
   k2.connected.then(async () => {
     k2.ready()
     checkLayout()
@@ -231,6 +251,8 @@
     await checkVerbs()
     await checkEscapes()
     await checkCanvas()
+    await selfNavigate('self-navigation (other site)', 'https://example.com/?k2probe=self-nav')
+    await selfNavigate('self-navigation (this app)', new URL('/?k2probe=self-nav', document.baseURI).href)
     summary.textContent = failed === 0 ? 'All ' + passed + ' checks pass.' : failed + ' FAILED, ' + passed + ' passed.'
     summary.className = failed === 0 ? 'pass' : 'fail'
   })

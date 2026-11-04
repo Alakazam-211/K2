@@ -201,8 +201,12 @@ sudo -u "$K2_RUN_USER" env \
 if [ -f "$SCRIPT_DIR/../cli/k2" ]; then
 	install -m 0755 "$SCRIPT_DIR/../cli/k2" /usr/local/bin/k2
 else
-	log "fetching k2 CLI from the repo"
-	curl -fsSL "$RAW_BASE/cli/k2" -o /usr/local/bin/k2
+	# The CLI from the same release as the daemon, not main: a release daemon
+	# with main's CLI is a mix no release was tested as.
+	log "fetching k2 CLI for v$K2_VERSION"
+	curl -fsSL --retry 3 --retry-delay 2 \
+		"https://raw.githubusercontent.com/Alakazam-211/K2/v$K2_VERSION/cli/k2" -o /usr/local/bin/k2 \
+		|| die "could not fetch the k2 CLI for v$K2_VERSION"
 	chmod 0755 /usr/local/bin/k2
 fi
 # The daemon self-stages the CLI at every boot (cli_stage, 0.40.41+) so

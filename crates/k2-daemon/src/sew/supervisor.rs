@@ -453,7 +453,10 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         c.push(check(
             "postgres",
             "ok",
-            format!("PostgreSQL {want} binaries missing: K2 installs them through the root helper, with no second cluster"),
+            format!(
+                "PostgreSQL {want} binaries missing: K2 installs them through the root helper, with no second cluster \
+                 ({PG_SOURCE_WORDS})"
+            ),
             "",
         ));
     } else {
@@ -461,9 +464,9 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         // so a person never runs it: the way on is a helper K2 can ask, or apt.
         let by_hand = format!(
             "Sew needs the postgresql-{want} package (/usr/lib/postgresql/{want}/bin/postgres, initdb, pg_dump, pg_restore) \
-             without a second cluster: as root, install postgresql-{want} and postgresql-client-{want} from \
-             apt.postgresql.org with create_main_cluster = false in /etc/postgresql-common/createcluster.conf, then run \
-             this again. Keep it installed while Sew is"
+             without a second cluster: as root, install postgresql-{want} and postgresql-client-{want} ({PG_SOURCE_WORDS}) \
+             with create_main_cluster = false in /etc/postgresql-common/createcluster.conf, then run this again. Keep it \
+             installed while Sew is"
         );
         c.push(check(
             "postgres",
@@ -801,6 +804,11 @@ fn step(env: &Env, name: &'static str) {
     save_enable(env, |r| set_current(&mut r.enable_progress, Some(name)));
 }
 
+/// Where `pg add-major 16` takes Sew's Postgres from: the distro's own package
+/// where the distro's major is 16 (`k2_root_proto::pg_major::CODENAMES`: Ubuntu
+/// 24.04), else apt.postgresql.org with K2's pinned key. A test holds it to the table.
+pub const PG_SOURCE_WORDS: &str = "Ubuntu 24.04's own package; on Ubuntu 22.04 and Debian, apt.postgresql.org";
+
 /// The helper serves `pg add-major`: protocol 9 AND `namespaces.pgmajor`.
 fn helper_adds_pg_majors(env: &Env) -> bool {
     let st = env.ops.helper_state();
@@ -809,7 +817,8 @@ fn helper_adds_pg_majors(env: &Env) -> bool {
 }
 
 /// A first install on a box without Sew's Postgres binaries: the helper installs
-/// the major (its pinned apt source; it never makes a cluster). Nothing is asked
+/// the major (the distro's own package where that is the major, else
+/// apt.postgresql.org with K2's pinned key; it never makes a cluster). Nothing is asked
 /// of a box that has them, and the binaries themselves are the answer.
 fn ensure_pg_major(env: &Env) -> Result<(), String> {
     let want = pin::SEW_PG_MAJOR;

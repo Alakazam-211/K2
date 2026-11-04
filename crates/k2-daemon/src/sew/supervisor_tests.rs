@@ -2383,6 +2383,27 @@ fn fresh() -> T {
     t()
 }
 
+/// U0a (11-04): on Ubuntu 24.04 `pg add-major 16` installs the distro's own
+/// postgresql-16, not PGDG's. The words say so, and match the helper's table.
+#[test]
+fn the_postgres_words_name_where_the_helper_takes_it_from() {
+    use k2_root_proto::pg_major::{distro_major, CODENAMES};
+    let own: Vec<&str> = CODENAMES.iter().filter(|(_, m)| *m == pin::SEW_PG_MAJOR).map(|(c, _)| *c).collect();
+    assert_eq!(own, ["noble"], "PG_SOURCE_WORDS names Ubuntu 24.04 as the one distro carrying Sew's major");
+    for c in ["jammy", "bookworm", "trixie"] {
+        assert_ne!(distro_major(c), Some(pin::SEW_PG_MAJOR), "{c} takes it from apt.postgresql.org");
+    }
+    let t = t();
+    helper_adds_majors(&t);
+    *t.ops.pg.lock().unwrap() = vec![];
+    let c = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "postgres").expect("postgres check");
+    assert!(c["detail"].as_str().unwrap().contains(PG_SOURCE_WORDS), "{c}");
+    let t = t2_running_on_17();
+    *t.ops.pg.lock().unwrap() = vec![];
+    let c = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "postgres").expect("postgres check");
+    assert!(c["hint"].as_str().unwrap().contains(PG_SOURCE_WORDS), "{c}");
+}
+
 /// An install K2 enabled that now runs on Postgres 17 alone, status `error`.
 fn t2_running_on_17() -> T {
     let t = fresh();

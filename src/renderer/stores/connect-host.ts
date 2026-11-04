@@ -922,6 +922,19 @@ export async function loginToHost(
   return { ok: true, token: body.token, mustChangePassword }
 }
 
+// Resolves once `hydrateFromDisk` has put the remembered tokens in memory
+// (at once on the web client, which has no keychain). Until then the host
+// list holds no tokens, which is not the same as "not signed in".
+let markConnectHostsLoaded: () => void = () => {}
+const connectHostsLoadedPromise = new Promise<void>((resolve) => {
+  markConnectHostsLoaded = resolve
+})
+
+/** Resolves once the saved hosts' remembered tokens are in memory. */
+export function connectHostsLoaded(): Promise<void> {
+  return connectHostsLoadedPromise
+}
+
 export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   // Dev-only Home P1.5 spike: a `#room=<hostId>` frame boots on that host.
   activeHost: devRoomFrameHost<ConnectHost>() ?? 'local',
@@ -1276,48 +1289,68 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     // from window.location + session/local storage. The Tauri
     // connect_hosts_read shim returns `[]`, which would wipe that seed —
     // so skip disk/keychain hydration entirely on web.
-    if (isWebClient()) return
-
-    // 1. Load the durable host list. Falls back to whatever the
-    //    constructor already loaded from localStorage on failure.
-    let fileHosts: ConnectHost[] | null = null
-    try {
-      const raw = await invoke<string>('connect_hosts_read')
-      const parsed = JSON.parse(raw) as unknown
-      if (Array.isArray(parsed)) {
-        fileHosts = parsed
-          .filter((h): h is PersistedHost => isPersistedHost(h))
-          .map((h) => ({ ...h, secure: h.secure ?? false, token: '' }))
-      }
-    } catch {
-      /* non-Tauri / read failure — keep the localStorage-seeded list */
+    if (isWebClient()) {
+      markConnectHostsLoaded()
+      return
     }
-
-    const base = fileHosts ?? get().hosts
-
-    // 2. Resolve remembered tokens from the keychain into memory.
-    const resolved = await Promise.all(
-      base.map(async (h) => {
-        if (!h.remember) return h
-        const token = await resolveToken(h.id)
-        return token ? { ...h, token } : h
-      }),
-    )
-
-    // 3. Mirror any resolved tokens into connect-tokens.json so CLI tray
-    //    file send works after upgrade without forcing re-sign-in (GH #60).
-    //    Hosts must be in the store first for forget/remember id→hostname.
-    persistHosts(resolved)
-    set({ hosts: resolved })
-    await Promise.all(
-      resolved.map(async (h) => {
-        if (h.token && h.hostname) {
-          await mirrorCliConnectToken(h.hostname, h.token)
-        }
-      }),
-    )
+    try {
+      await hydrateHostsFromDisk(set, get)
+    } finally {
+      markConnectHostsLoaded()
+    }
   },
 }))
+
+async function hydrateHostsFromDisk(
+  set: (partial: Partial<ConnectHostState>) => void,
+  get: () => ConnectHostState,
+): Promise<void> {
+  // 1. Load the durable host list. Falls back to whatever the
+  //    constructor already loaded from localStorage on failure.
+  let fileHosts: ConnectHost[] | null = null
+  try {
+    const raw = await invoke<string>('connect_hosts_read')
+    const parsed = JSON.parse(raw) as unknown
+    if (Array.isArray(parsed)) {
+      fileHosts = parsed
+        .filter((h): h is PersistedHost => isPersistedHost(h))
+        .map((h) => ({ ...h, secure: h.secure ?? false, token: '' }))
+    }
+  } catch {
+    /* non-Tauri / read failure — keep the localStorage-seeded list */
+  }
+
+  const base = fileHosts ?? get().hosts
+
+  // 2. Resolve remembered tokens from the keychain into memory.
+  const resolved = await Promise.all(
+    base.map(async (h) => {
+      if (!h.remember) return h
+      const token = await resolveToken(h.id)
+      return token ? { ...h, token } : h
+    }),
+  )
+
+  // 3. Mirror any resolved tokens into connect-tokens.json so CLI tray
+  //    file send works after upgrade without forcing re-sign-in (GH #60).
+  //    Hosts must be in the store first for forget/remember id→hostname.
+  //    A login that landed while the keychain answered (a click, another
+  //    window's broadcast) is newer than the keychain copy: keep it.
+  const merged = resolved.map((h) => {
+    const live = get().hosts.find((x) => x.id === h.id)
+    return live && live.token.length > 0 ? { ...h, token: live.token } : h
+  })
+  persistHosts(merged)
+  set({ hosts: merged })
+  markConnectHostsLoaded()
+  await Promise.all(
+    merged.map(async (h) => {
+      if (h.token && h.hostname) {
+        await mirrorCliConnectToken(h.hostname, h.token)
+      }
+    }),
+  )
+}
 
 /** Test-only: reset the store to defaults and clear persisted hosts.
  *  Mirrors the `__reset*ForTests` hooks other stores expose. */

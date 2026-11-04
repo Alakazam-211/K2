@@ -25,6 +25,7 @@ import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-ret
 import { noteServerId } from '@/lib/server-ids'
 import { bootStatusUrl, shouldRetryWithoutToken } from '@/lib/boot-status-view'
 import {
+  connectHostsLoaded,
   forgetToken,
   hostBaseUrl,
   loginToHost,
@@ -35,6 +36,12 @@ import {
 } from '@/stores/connect-host'
 
 const REQUEST_TIMEOUT_MS = 5_000
+/** How long a check of another server waits for the keychain tokens at
+ *  boot before it goes on with what it has (a webview without the gate
+ *  never hydrates). */
+const LOGINS_READY_CAP_MS = 5_000
+
+let loginsReady: Promise<void> | null = null
 
 function windowHostKey(): string {
   return homeHostKey(useConnectHostStore.getState().activeHost)
@@ -92,6 +99,13 @@ export const hostPool: HostPool = createHostPool({
   resolvePassword,
   login: (host, password) => loginToHost(host, password),
   dropSessionInMemory: (hostId) => useConnectHostStore.getState().dropSessionInMemory(hostId),
+  // Boot: no check reads a saved server's login before the keychain tokens
+  // are in memory (else it reads "Sign in" or posts a needless login).
+  loginsReady: () =>
+    (loginsReady ??= Promise.race([
+      connectHostsLoaded(),
+      new Promise<void>((resolve) => setTimeout(resolve, LOGINS_READY_CAP_MS)),
+    ])),
   coord: loginCoordinator,
   noteVersion: noteServerVersion,
   // MS39: on THAT server's scope, so its cap, its login and its one

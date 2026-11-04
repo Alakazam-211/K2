@@ -285,7 +285,7 @@ function Shell(): React.JSX.Element {
   )
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubGlobal('fetch', fetchMock)
   // S5: the connected server's daemon says Cortana's workspace is working.
   __seedActivityForTests(primaryScope(), {
@@ -301,6 +301,9 @@ beforeEach(() => {
   })
   __resetConnectHostStoreForTests()
   useConnectHostStore.setState({ hosts: [boxB, boxC], connectionStatus: 'connected' })
+  // Boot as the app does (ConnectionGate): the pool reads no saved login
+  // before the keychain pass.
+  await useConnectHostStore.getState().hydrateFromDisk()
   clearHostSelect()
   __resetHostPoolForTests()
   __resetAddPickerListingsForTests()

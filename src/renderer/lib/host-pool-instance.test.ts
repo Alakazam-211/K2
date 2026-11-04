@@ -78,7 +78,7 @@ function json(status: number, body: unknown): Response {
 let loginPosts = 0
 let validTokens: Set<string>
 
-beforeEach(() => {
+beforeEach(async () => {
   h.mem.clear()
   h.keychain.clear()
   h.invokes.length = 0
@@ -89,6 +89,9 @@ beforeEach(() => {
   __resetHostPoolForTests()
   useConnectHostStore.getState().addHost(B)
   h.keychain.set(`${K2_CONNECT_KEYCHAIN_SERVICE}:id-b`, 'tok-old')
+  // Boot as the app does (ConnectionGate): the pool's checks wait for it.
+  await useConnectHostStore.getState().hydrateFromDisk()
+  h.invokes.length = 0
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {

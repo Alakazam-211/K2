@@ -142,7 +142,14 @@ function hostFor(base: string, over: Partial<ConnectHost> = {}): ConnectHost {
   }
 }
 
-function makeWindow(id: string, savedHosts: ConnectHost[]): FakeWindow {
+interface WindowOpts {
+  /** This computer's daemon (a fake at this base, owner token `tok-0`). */
+  localBase?: string
+  /** The app's keychain hydration gate. */
+  loginsReady?: () => Promise<void>
+}
+
+function makeWindow(id: string, savedHosts: ConnectHost[], opts: WindowOpts = {}): FakeWindow {
   const w: FakeWindow = {
     id,
     hosts: savedHosts.map((h) => ({ ...h })),
@@ -176,6 +183,7 @@ function makeWindow(id: string, savedHosts: ConnectHost[]): FakeWindow {
     hosts: () => w.hosts,
     windowHostKey: () => w.primaryKey,
     localCreds: async () => {
+      if (opts.localBase) return { base: opts.localBase, token: 'tok-0' }
       throw new Error('no local daemon in this test')
     },
     http: async (_key, url, init) => serve(url, init),
@@ -190,6 +198,7 @@ function makeWindow(id: string, savedHosts: ConnectHost[]): FakeWindow {
     resolvePassword: async (hostId) => passwords.get(hostId) ?? null,
     login,
     dropSessionInMemory: (hostId) => setToken(hostId, ''),
+    ...(opts.loginsReady ? { loginsReady: opts.loginsReady } : {}),
     coord,
     noteVersion: (hostKey, version, features) => void noted.push({ hostKey, version, features }),
     activate: async () => {
@@ -326,6 +335,94 @@ describe('pool state transitions', () => {
     await w.pool.check('b.k2.dev')
     await w.pool.check('c.k2.dev')
     expect(heard).toEqual([`b.k2.dev:inst-${B_BASE}->inst-b-2`])
+  })
+
+  it('app start: a boot-only check in flight (voice) does not answer the full check (Home) — a saved login reads ok', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE), hostFor(C_BASE)])
+    // Voice's discovery sweep and Home's first poll start in the same commit.
+    const voiceB = w.pool.check('b.k2.dev', { bootOnly: true })
+    const voiceC = w.pool.check('c.k2.dev', { bootOnly: true })
+    const homeB = w.pool.check('b.k2.dev')
+    const homeC = w.pool.check('c.k2.dev')
+    const [vb, vc, hb, hc] = await Promise.all([voiceB, voiceC, homeB, homeC])
+    expect(vb.reach).toBe('live')
+    expect(vc.reach).toBe('live')
+    expect(hb.auth).toBe('ok')
+    expect(hb.role).toBe('member')
+    expect(hc.auth).toBe('ok')
+    expect(entryOf(w, 'b.k2.dev').auth).toBe('ok')
+    expect(entryOf(w, 'c.k2.dev').auth).toBe('ok')
+    // The saved token was enough: no login POST.
+    expect(B().loginPosts).toBe(0)
+  })
+
+  it('a full check in flight answers a boot-only one (no second request)', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE)])
+    const full = w.pool.check('b.k2.dev')
+    const bootOnly = w.pool.check('b.k2.dev', { bootOnly: true })
+    expect(bootOnly).toBe(full)
+    expect((await bootOnly).auth).toBe('ok')
+    expect(B().bootUrls).toHaveLength(1)
+  })
+
+  it('a full check begun with no token does not answer one asked after the token arrived', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE, { token: '' }), hostFor(C_BASE)])
+    const before = w.pool.check('b.k2.dev')
+    // Another window's login lands here (or the keychain answers).
+    w.hosts = w.hosts.map((h) => ({ ...h, token: 'tok-0' }))
+    const after = w.pool.check('b.k2.dev')
+    await before
+    const e = await after
+    expect(e.auth).toBe('ok')
+    expect(entryOf(w, 'b.k2.dev').auth).toBe('ok')
+    expect(B().loginPosts).toBe(0)
+  })
+
+  it('app start: no check reads a saved login before the keychain tokens are in memory', async () => {
+    let loaded!: () => void
+    const ready = new Promise<void>((resolve) => {
+      loaded = resolve
+    })
+    // Boot: the address book is loaded, the keychain hasn't answered yet.
+    const w = makeWindow('w1', [hostFor(B_BASE, { token: '' })], { loginsReady: () => ready })
+    passwords.set('id-b.k2.dev', 'pw')
+    const home = w.pool.check('b.k2.dev')
+    await Promise.resolve()
+    // hydrateFromDisk lands the remembered token.
+    w.hosts = w.hosts.map((h) => ({ ...h, token: 'tok-0' }))
+    loaded()
+    const e = await home
+    expect(e.auth).toBe('ok')
+    // The remembered token was enough: no password login at boot.
+    expect(B().loginPosts).toBe(0)
+  })
+
+  it('a saved login nobody has read yet never reads Sign in: a boot-only check says Signing in', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE), hostFor(C_BASE, { token: '', remember: false })])
+    expect((await w.pool.check('b.k2.dev', { bootOnly: true })).auth).toBe('signing-in')
+    // No login held or remembered: that one is Sign in.
+    expect((await w.pool.check('c.k2.dev', { bootOnly: true })).auth).toBe('signin-required')
+    // A login the server refused stays Sign in through later boot-only checks.
+    B().tokens.clear()
+    expect((await w.pool.check('b.k2.dev')).auth).toBe('signin-required')
+    expect((await w.pool.check('b.k2.dev', { bootOnly: true })).auth).toBe('signin-required')
+  })
+
+  it('switching the window away from this computer: its row is signed in at once, never Sign in', async () => {
+    const LOCAL_BASE = 'https://local.test'
+    daemons.set(LOCAL_BASE, daemon(LOCAL_BASE))
+    const w = makeWindow('w1', [hostFor(B_BASE)], { localBase: LOCAL_BASE })
+    // The window is on this computer: Home (and voice) read only its boot status.
+    expect((await w.pool.check('local', { bootOnly: true })).auth).toBe('signing-in')
+    // A boot-only check is still in flight when the window switches to B and
+    // Home asks for this computer's full check.
+    const stillBootOnly = w.pool.check('local', { bootOnly: true })
+    w.primaryKey = 'b.k2.dev'
+    const full = w.pool.check('local')
+    expect((await stillBootOnly).auth).not.toBe('signin-required')
+    const e = await full
+    expect(e.auth).toBe('ok')
+    expect(e.role).toBe('member')
   })
 
   it('no login and no remembered password → signin-required, and no login POST', async () => {

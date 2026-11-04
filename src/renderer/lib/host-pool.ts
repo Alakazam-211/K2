@@ -197,6 +197,11 @@ export interface HostPoolDeps {
   login: (host: ConnectHost, password: string) => Promise<LoginResult>
   /** MS36/MS59: forget a dead token in MEMORY only. */
   dropSessionInMemory: (hostId: string) => void
+  /** Resolves once the saved logins are in memory (the app: the keychain
+   *  tokens, `hydrateFromDisk`). A check of another server waits for it, so
+   *  it never reads "no login held" from a list the keychain hasn't filled
+   *  yet. Omitted: the list is already complete. */
+  loginsReady?: () => Promise<void>
   coord: LoginCoordinator
   /** What `/boot-status` said: the version, and its `features` list (an
    *  older daemon without one reports `[]`). */
@@ -282,7 +287,10 @@ export interface HostPool {
   entry(hostKey: string): HostEntry | undefined
   /** The status check: `/boot-status`, then whoami (role) and the presence
    *  summary with that server's own login. `bootOnly` skips the login half
-   *  (the window's own server). Never throws. Single-flight per server. */
+   *  (the window's own server). Never throws. Single-flight per server: a
+   *  request shares the check in flight only when that check covers it (a
+   *  full check started with the same saved token covers either kind);
+   *  otherwise it runs right after it. */
   check(hostKey: string, opts?: { bootOnly?: boolean }): Promise<HostEntry>
   /** One revive for a server whose login was refused (MS10). */
   revive(hostKey: string): Promise<ReviveResult>
@@ -354,7 +362,11 @@ function baseOf(h: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>): string {
 
 export function createHostPool(deps: HostPoolDeps): HostPool {
   const store = createStore<{ entries: Record<string, HostEntry> }>(() => ({ entries: {} }))
-  const checking = new Map<string, Promise<HostEntry>>()
+  /** The check in flight per server: what kind it is, and the saved token
+   *  it started with ('' for none, and for this computer). */
+  const checking = new Map<string, { p: Promise<HostEntry>; bootOnly: boolean; token: string }>()
+  const tokenFor = (hostKey: string): string =>
+    hostKey === LOCAL_HOME_HOST ? '' : savedHostForKey(deps.hosts(), hostKey)?.token ?? ''
   const reviving = new Map<string, Promise<ReviveResult>>()
   const closes = new Map<string, Array<{ code: number; at: number }>>()
   const restartListeners = new Set<(k: string, a: string, b: string) => void>()
@@ -371,7 +383,20 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
 
   const read = (hostKey: string): HostEntry => store.getState().entries[hostKey] ?? blankEntry(hostKey)
 
-  const write = (hostKey: string, patch: Partial<HostEntry>): HostEntry => {
+  /** Servers whose login state was actually read (whoami, a login, a
+   *  sign-out, a kick...). Until then an entry's `auth` is provisional. */
+  const authRead = new Set<string>()
+
+  /** `auth` for an entry whose login hasn't been read yet: this computer
+   *  and a server we hold (or remember) a login for are being signed in,
+   *  not signed out. "Sign in" waits for a check that says so. */
+  const pendingAuth = (hostKey: string, saved: ConnectHost | null): PoolAuth =>
+    hostKey === LOCAL_HOME_HOST || (saved !== null && (saved.token.length > 0 || saved.remember))
+      ? 'signing-in'
+      : 'signin-required'
+
+  const write = (hostKey: string, patch: Partial<HostEntry>, opts?: { provisional?: boolean }): HostEntry => {
+    if ('auth' in patch && opts?.provisional !== true) authRead.add(hostKey)
     const prev = read(hostKey)
     const next: HostEntry = { ...prev, ...patch, hostKey }
     // Home 0.43.2: the summary's activity fields live and die with
@@ -615,6 +640,10 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
         return write(hostKey, { saved: true, reach: 'offline', offlineStreak: prev.offlineStreak + 1, checkedAt: deps.now() })
       }
     } else {
+      // A remembered login with no token in memory may only mean the
+      // keychain hasn't answered yet (boot): wait for it before reading.
+      const early = savedHostForKey(deps.hosts(), hostKey)
+      if (deps.loginsReady && early && early.remember && early.token.length === 0) await deps.loginsReady()
       saved = savedHostForKey(deps.hosts(), hostKey)
       if (!saved) return write(hostKey, { saved: false, hostId: null, reach: 'unknown', presence: null })
       base = baseOf(saved)
@@ -626,7 +655,8 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
       if (prev.hostId !== null && prev.hostId !== saved.id) {
         write(hostKey, { hostId: saved.id, role: null, presence: null, ...signedOutState(hostKey) })
       } else if (prev.hostId === null) {
-        write(hostKey, { hostId: saved.id, saved: true })
+        const pending = authRead.has(hostKey) ? {} : { auth: pendingAuth(hostKey, saved) }
+        write(hostKey, { hostId: saved.id, saved: true, ...pending }, { provisional: true })
       }
     }
 
@@ -652,7 +682,14 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
         }
       : parsed
     if (!partial || parsed.version !== null) deps.noteVersion(hostKey, boot.version, boot.features)
-    write(hostKey, { boot, reach: boot.ready ? 'live' : 'starting', offlineStreak: 0, checkedAt: at })
+    // A login nobody has read yet (a boot-only check, or before the login
+    // half answers) reads as being signed in, never as "Sign in".
+    const pending = authRead.has(hostKey) ? {} : { auth: pendingAuth(hostKey, saved) }
+    write(
+      hostKey,
+      { boot, reach: boot.ready ? 'live' : 'starting', offlineStreak: 0, checkedAt: at, ...pending },
+      { provisional: true },
+    )
     // MS29: a new instanceId means this server restarted. Only its own
     // listeners hear about it.
     if (prevBoot?.instanceId && boot.instanceId && prevBoot.instanceId !== boot.instanceId) {
@@ -686,12 +723,22 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
     store,
     entry: (hostKey) => store.getState().entries[hostKey],
     check(hostKey, opts) {
+      const bootOnly = opts?.bootOnly === true
+      const token = tokenFor(hostKey)
       const existing = checking.get(hostKey)
-      if (existing) return existing
-      const p = doCheck(hostKey, opts?.bootOnly === true).finally(() => {
-        checking.delete(hostKey)
+      // A check in flight answers this one only when it covers it: a full
+      // check covers a boot-only one, and a full check covers another full
+      // one when it started with the login held now. Otherwise this check
+      // runs after it. (Voice's boot-only sweep at app start used to answer
+      // Home's first full check, so every saved server read Sign in until
+      // a login landed; a check begun before the keychain tokens arrived
+      // did the same.)
+      if (existing && (bootOnly || (!existing.bootOnly && existing.token === token))) return existing.p
+      const run = (): Promise<HostEntry> => doCheck(hostKey, bootOnly)
+      const p: Promise<HostEntry> = (existing ? existing.p.then(run, run) : run()).finally(() => {
+        if (checking.get(hostKey)?.p === p) checking.delete(hostKey)
       })
-      checking.set(hostKey, p)
+      checking.set(hostKey, { p, bootOnly, token })
       return p
     },
     revive,
@@ -738,6 +785,7 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
     },
     forget(hostKey) {
       closes.delete(hostKey)
+      authRead.delete(hostKey)
       clearKeepAlive(hostKey)
       store.setState((s) => {
         if (!(hostKey in s.entries)) return s

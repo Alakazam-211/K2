@@ -75,6 +75,9 @@ export function resolveSetiIconId(
   if (byName) return byName
 
   const lowerBase = base.toLowerCase()
+  // A Board file (K2's own type, so not in Seti's data): a picture's icon. Before the name rules, as `Makefile.k5board`
+  // is a board.
+  if (lowerBase.endsWith('.k5board')) return scheme === 'light' ? '_image_light' : '_image'
   const extless = EXTENSIONLESS_BASENAMES[lowerBase]
   if (extless) {
     // Prefer scheme-specific id when present in defs

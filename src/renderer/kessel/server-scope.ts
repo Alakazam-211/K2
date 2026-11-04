@@ -190,7 +190,7 @@ export function noteServerVersion(hostKey: string, version: string | null, featu
   if (features !== undefined) knownFeatures.set(key, new Set(features))
 }
 
-function reportedSupports(hostKey: string, feature: ReportedFeatureKey): boolean {
+export function reportedSupports(hostKey: string, feature: ReportedFeatureKey): boolean {
   return knownFeatures.get(canonicalHostKey(hostKey))?.has(feature) ?? false
 }
 

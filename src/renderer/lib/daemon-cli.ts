@@ -642,8 +642,10 @@ function httpError(res: Response, text: string): DaemonHttpError {
   let msg = text
   let code: string | null = null
   let details: Record<string, unknown> | null = null
+  let body: unknown = null
   try {
     const parsed = JSON.parse(text)
+    body = parsed
     if (parsed && typeof parsed.error === 'string') msg = parsed.error
     if (parsed && typeof parsed.code === 'string' && parsed.code !== '') code = parsed.code
     // The `{ok:false, error:{code, hint}}` shape (notify, homes-sync routes).
@@ -655,7 +657,7 @@ function httpError(res: Response, text: string): DaemonHttpError {
   } catch {
     /* fall through with raw text */
   }
-  return new DaemonHttpError(msg || `daemon ${route(res.url)} ${res.status}`, res.status, code, details)
+  return new DaemonHttpError(msg || `daemon ${route(res.url)} ${res.status}`, res.status, code, details, body)
 }
 
 function route(url: string): string {

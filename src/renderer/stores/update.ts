@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { isAirgap } from '@/lib/airgap'
+import { askBeforeBoardFileLoss } from '@/lib/board-file/board-file-tabs'
 import {
   rememberUpdateCheckResult,
   rememberUpdateCheckStarted,
@@ -259,6 +260,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       return
     }
     set({ status: 'ready', progress: 100 })
+    if (!(await askBeforeBoardFileLoss('update'))) {
+      set({ status: 'error', error: 'The update is waiting: a board file has edits that aren’t saved.' })
+      return
+    }
     try {
       // Exits this process; the helper starts the packaged launcher.
       await invoke('relaunch_after_linux_package_update')
@@ -301,6 +306,11 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     // or the unknown bundle type falls through to an AppImage install.
     if (!pendingUpdate) return
     if (installGuard && !(await installGuard())) return
+    // A board file's edit that isn't in the file yet stays only in this window: an update never discards one silently.
+    if (!(await askBeforeBoardFileLoss('update'))) {
+      set({ status: 'error', error: 'The update is waiting: a board file has edits that aren’t saved.' })
+      return
+    }
     try {
       // Unlock k2-daemon.exe so NSIS can replace it (Windows file lock).
       await invoke('stop_bundled_daemon_for_update').catch((e) => {

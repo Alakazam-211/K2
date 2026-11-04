@@ -817,6 +817,22 @@ pub fn relaunch_via_open(_app: AppHandle) {
     std::process::exit(0);
 }
 
+/// A board file holds an edit that isn't in the file yet (prd-board-tab-v1; K2 Cores' condition on
+/// held edits): Quit asks in the page instead of exiting.
+pub static BOARD_FILE_UNSAVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn set_board_file_unsaved(unsaved: bool) {
+    BOARD_FILE_UNSAVED.store(unsaved, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The person answered Quit without saving.
+#[tauri::command]
+pub fn board_file_quit_now(app: AppHandle) {
+    BOARD_FILE_UNSAVED.store(false, std::sync::atomic::Ordering::Relaxed);
+    app.exit(0);
+}
+
 /// Set the macOS window close button dot (document edited indicator).
 #[tauri::command]
 #[allow(unexpected_cfgs)]

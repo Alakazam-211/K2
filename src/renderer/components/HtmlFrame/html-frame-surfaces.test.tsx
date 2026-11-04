@@ -41,6 +41,8 @@ const SURFACES: ReadonlyArray<{ file: string; profile: 'scripted' | 'inert' | 'w
   { file: 'components/Feedback/BriefFrame.tsx', profile: 'inert' },
   // prd-zen-user-widgets-v2 TUW3.1: agent-written Garden widgets, sealed.
   { file: 'components/Zen/widgets/ZenCustomFrame.tsx', profile: 'widget' },
+  // prd-board-tab-v1 BT-17: a `.k5board` can come from anyone.
+  { file: 'components/FileViewerPane/BoardFilePane.tsx', profile: 'widget' },
 ]
 
 const FRAME_PATTERNS: ReadonlyArray<[string, RegExp]> = [

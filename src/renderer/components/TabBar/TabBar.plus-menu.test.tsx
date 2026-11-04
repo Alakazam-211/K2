@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { LOCAL_HOME_HOST } from '@/lib/host-key'
+import { __resetServerScopesForTests, noteServerVersion } from '@/kessel/server-scope'
+import * as daemonCli from '@/lib/daemon-cli'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
@@ -141,6 +144,8 @@ async function openPlus(): Promise<HTMLButtonElement> {
 
 describe('tab bar plus menu', () => {
   beforeEach(() => {
+    // A server with a device lane, and with `board_file_preview` off (the Board row is its own test).
+    noteServerVersion(LOCAL_HOME_HOST, null, ['mobile-sim-v1'])
     localStorage.clear()
     resetTabs()
     usePresetsStore.setState({
@@ -154,6 +159,7 @@ describe('tab bar plus menu', () => {
   })
 
   afterEach(() => {
+    __resetServerScopesForTests()
     cleanup()
     useContextMenuStore.getState().close()
     resetTabs()
@@ -291,6 +297,50 @@ describe('tab bar plus menu', () => {
     expect(useTabsStore.getState().tabs.map((t) => t.title)).not.toContain('Claude')
     expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toContain('Claude')
     expect(useTabsStore.getState().activeGroupIndex).toBe(0)
+  })
+
+  it('the Board row: only on a server with the feature; it creates in the bar’s folder and opens what comes back', async () => {
+    const post = vi.spyOn(daemonCli, 'daemonCliPost').mockResolvedValue({ path: '/tmp/k2-plus-menu/Untitled-2.k5board', name: 'Untitled-2.k5board', hash: 'sha256-x' } as never)
+    usePresetsStore.setState({ presets: [] })
+    seedTabs(0, 1)
+    renderBar(0)
+    await openPlus()
+    expect(useContextMenuStore.getState().items.map((i) => i.label)).not.toContain('Board')
+    await act(async () => useContextMenuStore.getState().close())
+
+    noteServerVersion(LOCAL_HOME_HOST, null, ['mobile-sim-v1', 'board-file-v1'])
+    await openPlus()
+    const items = useContextMenuStore.getState().items
+    expect(items.map((i) => i.label)).toEqual(['Terminal', 'New File', 'Browser', 'Design', 'Board', 'Mobile', 'Changes'])
+    expect(items.find((i) => i.id === 'board')?.badge).toBe('Beta')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Board/ }))
+    })
+    await waitFor(() => expect(post).toHaveBeenCalled())
+    const [, route, body] = post.mock.calls[0]
+    expect(route).toBe('board/file/create')
+    expect(Object.keys(body as object)).toEqual(['dir'])
+    await waitFor(() => {
+      const paths = useTabsStore.getState().tabs.flatMap((t) => [...t.paneGroups.values()].flatMap((pg) => pg.items.map((it) => (it.data as { filePath?: string } | undefined)?.filePath)))
+      expect(paths).toContain('/tmp/k2-plus-menu/Untitled-2.k5board')
+    })
+    post.mockRestore()
+  })
+
+  it('a refused create opens no tab and names the folder and the reason', async () => {
+    noteServerVersion(LOCAL_HOME_HOST, null, ['board-file-v1'])
+    const post = vi.spyOn(daemonCli, 'daemonCliPost').mockRejectedValue(new Error('this folder is read only'))
+    seedTabs(0, 1)
+    const tabsBefore = useTabsStore.getState().tabs.length
+    renderBar(0)
+    await openPlus()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Board/ }))
+    })
+    await waitFor(() => expect(post).toHaveBeenCalled())
+    await waitFor(() => expect(useToastStore.getState().toasts.some((t) => /read only/.test(t.message) && /Couldn’t make a board/.test(t.message))).toBe(true))
+    expect(useTabsStore.getState().tabs.length).toBe(tabsBefore)
+    post.mockRestore()
   })
 
   it('omits the separator when no preset is enabled', async () => {

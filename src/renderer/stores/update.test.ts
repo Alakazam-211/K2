@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
+const boardFileAsk = vi.hoisted(() => vi.fn(async () => true))
+vi.mock('@/lib/board-file/board-file-tabs', () => ({ askBeforeBoardFileLoss: boardFileAsk }))
 
 import { invoke } from '@tauri-apps/api/core'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
@@ -338,6 +340,22 @@ describe('desktop app update through Rust (SS4: K2 update keys, not the plugin k
       throw new Error(`unexpected invoke ${cmd}`)
     })
   }
+
+  it('a board file’s unsaved edit: the update asks, and No installs nothing and says why', async () => {
+    mockApp('ABCDEF0123456789')
+    await useUpdateStore.getState().checkForUpdate()
+    await useUpdateStore.getState().startDownload()
+    boardFileAsk.mockResolvedValueOnce(false)
+    await useUpdateStore.getState().installAndRelaunch()
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(boardFileAsk).toHaveBeenCalledWith('update')
+    expect(cmds).not.toContain('stop_bundled_daemon_for_update')
+    expect(cmds).not.toContain('app_update_install')
+    expect(cmds).not.toContain('relaunch_via_open')
+    expect(useUpdateStore.getState().error).toMatch(/board file has edits/)
+    await useUpdateStore.getState().installAndRelaunch()
+    expect(vi.mocked(invoke).mock.calls.map((call) => call[0])).toContain('relaunch_via_open')
+  })
 
   it('check, download (verified in Rust), then install and relaunch', async () => {
     mockApp('ABCDEF0123456789')

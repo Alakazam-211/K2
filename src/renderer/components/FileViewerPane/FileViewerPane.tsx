@@ -218,6 +218,20 @@ class EditorErrorBoundary extends React.Component<
 
 // ── Component ────────────────────────────────────────────────────────────
 
+const BoardFilePane = lazy(() => import('./BoardFilePane').then((m) => ({ default: m.BoardFilePane })))
+
+/** A server with the Board tab draws it (dark behind `board_file_preview`, which lists the feature); anything else, or
+ *  an older server, gets the card that reads and writes nothing. */
+function BoardFileRoute(props: { filePath: string; paneId?: string; paneGroupId?: string; tabId?: string }): React.JSX.Element {
+  const room = useRoom()
+  if (!room.scope.serverSupports('board-file-v1')) return <BoardFileCard filePath={props.filePath} />
+  return (
+    <Suspense fallback={null}>
+      <BoardFilePane {...props} />
+    </Suspense>
+  )
+}
+
 export function FileViewerPane(props: FileViewerPaneProps): React.JSX.Element {
   const { filePath, mode, paneId, paneGroupId, tabId, initialScrollTop, initialCursorPos, onClose, commandRef, onDirtyChange } = props
   // Diff mode — render DiffViewer instead of editor
@@ -227,7 +241,7 @@ export function FileViewerPane(props: FileViewerPaneProps): React.JSX.Element {
   // One routing point for every door that opens a file: a Board file never
   // reaches the text read, poll, save or Live view below.
   if (getFileCategory(filePath) === 'board') {
-    return <BoardFileCard filePath={filePath} />
+    return <BoardFileRoute key={filePath} filePath={filePath} paneId={paneId} paneGroupId={paneGroupId} tabId={tabId} />
   }
 
   return (

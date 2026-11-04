@@ -55,4 +55,9 @@ describe('resolveSetiIcon', () => {
       resolveSetiIcon('nope.zzzzunknown', 'dark').code,
     )
   })
+  it('a Board file gets a picture’s icon, whatever its stem', () => {
+    expect(resolveSetiIconId('Plan.k5board')).toBe('_image')
+    expect(resolveSetiIconId('Plan.K5BOARD', 'light')).toBe('_image_light')
+    expect(resolveSetiIconId('Makefile.k5board')).toBe('_image')
+  })
 })

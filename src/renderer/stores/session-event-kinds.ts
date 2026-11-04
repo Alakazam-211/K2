@@ -129,10 +129,8 @@ export const SESSION_EVENT_ROUTES = {
     ignored: 'Owner audit of a refused remote drive; no client surface shows it yet.',
   },
   fs_changed: { class: 'app', app: true, carried: true },
-  board_file_changed: {
-    class: 'app',
-    ignored: 'A .k5board file was saved; the Board tab (B3) and the Boards listing will re-read on it. No client surface uses it yet.',
-  },
+  // A .k5board was saved through K2: an open Board tab re-reads it (read?ifHash).
+  board_file_changed: { class: 'app', app: true },
   // Changes tab v1 (prd-changes-tab-v1): the Changes tab refetches its
   // snapshot on it. Carried, so a pinned room's tab stays live too.
   git_changed: { class: 'app', app: true, carried: true },

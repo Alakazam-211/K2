@@ -1957,6 +1957,8 @@ pub fn run() {
             commands::settings::cli_install,
             commands::settings::cli_uninstall,
             commands::settings::set_document_edited,
+            commands::settings::set_board_file_unsaved,
+            commands::settings::board_file_quit_now,
             commands::settings::set_relaunch_mode,
             commands::settings::stop_bundled_daemon_for_update,
             commands::settings::relaunch_via_open,

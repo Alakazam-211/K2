@@ -25,12 +25,16 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
+import { LOCAL_HOME_HOST } from '@/lib/host-key'
+import { noteServerVersion } from '@/kessel/server-scope'
 import { FileViewerPane, type FileViewerHandle } from './FileViewerPane'
 
 const CARD = 'This is a Board file. Update K2 to open it.'
 const allCalls = (): string[] => [...daemonCliGet.mock.calls, ...daemonCliPost.mock.calls].map(([, route]) => String(route))
 
 beforeEach(() => {
+  // A server that hasn't turned the Board tab on (`board_file_preview` off): BoardFilePane.test.tsx has the rest.
+  noteServerVersion(LOCAL_HOME_HOST, null, [])
   daemonCliGet.mockReset()
   daemonCliPost.mockReset()
   daemonCliGet.mockImplementation(async (_scope: unknown, route: string) => {

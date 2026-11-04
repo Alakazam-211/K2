@@ -662,9 +662,8 @@ export interface FsChangedEvent {
   paths: string[]
 }
 
-/** APP-LEVEL: a `.k5board` file changed through K2 (a tab or an agent's
- *  `k2 board --file`). A client with that file open re-reads with `ifHash`.
- *  `workspace` is the absolute root, `rel` the path in it, `by` the pid. */
+/** APP-LEVEL: a save through K2 changed a `.k5board` (prd-board-tab-v1 §5.3).
+ *  `hash` is the file's guard; a tab that has it ignores this. */
 export interface BoardFileChangedEvent {
   kind: 'board_file_changed'
   workspace: string
@@ -1490,6 +1489,7 @@ type FederationPeersChangedHandler = (e: FederationPeersChangedEvent) => void
 type NotifyPrefsChangedHandler = () => void
 // 0.46.8 — people's pictures (`lib/person-pictures.ts`).
 type PersonPictureChangedHandler = (e: PersonPictureChangedEvent) => void
+type BoardFileChangedHandler = (e: BoardFileChangedEvent) => void
 // thread-read-v1 — the unread store's live state (`thread_read` /
 // `project_read`, the whole frame).
 export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) => void
@@ -1542,6 +1542,7 @@ interface AppBusHandlers {
   llmAccountsChanged: Set<LlmAccountsChangedHandler>
   subscriptionUsageChanged: Set<SubscriptionUsageChangedHandler>
   fsChanged: Set<FsChangedHandler>
+  boardFileChanged: Set<BoardFileChangedHandler>
   gitChanged: Set<GitChangedHandler>
   gitNotesChanged: Set<GitNotesChangedHandler>
   openChanges: Set<OpenChangesHandler>
@@ -1605,6 +1606,7 @@ function createBusState(scopeId: string): BusState {
       llmAccountsChanged: new Set(),
       subscriptionUsageChanged: new Set(),
       fsChanged: new Set(),
+      boardFileChanged: new Set(),
       gitChanged: new Set(),
       gitNotesChanged: new Set(),
       openChanges: new Set(),
@@ -1910,6 +1912,11 @@ export function onFsChanged(scope: ServerScope, fn: FsChangedHandler): Unsubscri
   return addHandler(busFor(scope).handlers.fsChanged, fn)
 }
 
+/** A save through K2 changed a board file (filter on `workspace` + `rel`). */
+export function onBoardFileChanged(scope: ServerScope, fn: BoardFileChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.boardFileChanged, fn)
+}
+
 /** Changes tab v1 — subscribe to APP-LEVEL `git_changed` on `scope`'s
  *  server. Filter on `workspacePath`; refetch the snapshot when `rev`
  *  differs from the one you hold. */
@@ -2176,6 +2183,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   fs_changed: (h, m) => {
     for (const fn of h.fsChanged) fn(m)
+  },
+  board_file_changed: (h, m) => {
+    for (const fn of h.boardFileChanged) fn(m)
   },
   git_changed: (h, m) => {
     for (const fn of h.gitChanged) fn(m)

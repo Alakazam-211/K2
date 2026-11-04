@@ -115,6 +115,9 @@ export async function handleAppMenuAction(id: AppMenuActionId): Promise<void> {
       await win.close()
       return
     case 'quit': {
+      // A board file's edit that isn't in the file yet: quitting asks first.
+      const { askBeforeBoardFileLoss } = await import('@/lib/board-file/board-file-tabs')
+      if (!(await askBeforeBoardFileLoss('quit'))) return
       const { exit } = await import('@tauri-apps/plugin-process')
       await exit(0)
       return

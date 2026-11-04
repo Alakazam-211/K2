@@ -34,6 +34,13 @@ pub fn zen_menu_label(in_zen: bool) -> &'static str {
 pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error> {
     let menu = Menu::new(handle)?;
 
+    // Quit asks about a board file's unsaved edit only with `board_file_preview` on; otherwise the predefined item,
+    // exactly as ever (the feature is dark). A Dock or logout quit still goes straight out: the tab says so on reopen.
+    let quit_custom = MenuItem::with_id(handle, "board-file-quit", "Quit K2", true, Some("CmdOrCtrl+Q"))?;
+    let quit_predefined = PredefinedMenuItem::quit(handle, None)?;
+    let quit_item: &dyn tauri::menu::IsMenuItem<tauri::Wry> =
+        if k2_client::app_settings_view::load().board_file_preview { &quit_custom } else { &quit_predefined };
+
     // App submenu (macOS)
     let app_menu = Submenu::with_items(
         handle,
@@ -51,7 +58,7 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
             &PredefinedMenuItem::hide_others(handle, None)?,
             &PredefinedMenuItem::show_all(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
-            &PredefinedMenuItem::quit(handle, None)?,
+            quit_item,
         ],
     )?;
 
@@ -184,6 +191,15 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         // ⌘, : the accelerator consumes the keystroke, so this event is the
         // only way Settings opens from the keyboard. Sent from the app
         // handle, never through a window lookup (see `main_webview`).
+        // Only with `board_file_preview` on (see `app_menu`): Quit has to be able to ask about a board file's edit
+        // that isn't saved, which the predefined item (NSApplication terminate:) can't.
+        "board-file-quit" => {
+            if crate::commands::settings::BOARD_FILE_UNSAVED.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = app.emit("board-file:quit-requested", ());
+            } else {
+                app.exit(0);
+            }
+        }
         "settings" => {
             let _ = app.emit("menu:open-settings", ());
         }

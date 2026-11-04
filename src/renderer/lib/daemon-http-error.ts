@@ -12,11 +12,15 @@ export class DaemonHttpError extends Error {
   /** The body's `error` object when it is one (`{code, hint, …}`): the
    *  refusal's own fields, e.g. the Apps an uninstall would cost. */
   readonly details: Record<string, unknown> | null
-  constructor(message: string, status: number, code: string | null, details: Record<string, unknown> | null = null) {
+  /** The whole parsed body, when a refusal carries more than its error (a
+   *  board file's 409 is the save's full answer). */
+  readonly body: unknown
+  constructor(message: string, status: number, code: string | null, details: Record<string, unknown> | null = null, body: unknown = null) {
     super(message)
     this.status = status
     this.code = code
     this.details = details
+    this.body = body
   }
 }
 

@@ -56,6 +56,10 @@ export const REPORTED_FEATURES = {
   /** Local Grok Bots (0.45.7): `/cli/grokbots/*` and `grokbots_changed`.
    *  A server without the key shows no Grok Bot rows and no Settings page. */
   'grokbots-v1': 'grokbots-v1',
+  /** prd-board-tab-v1: `/cli/board/file/*`. Listed only while the server's
+   *  `board_file_preview` is on; without it a `.k5board` shows its card and
+   *  the + menu has no Board row. */
+  'board-file-v1': 'board-file-v1',
   /** plan-agent-status-unify-v1 D1/D2 (0.46.0): activity rollups carry
    *  `live` (live PTYs, 0 = reaped) and `busy` (mid-turn or subagents
    *  running), and `presence/summary` `agentActivity` carries `heartbeat`,

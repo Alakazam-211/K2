@@ -21,6 +21,7 @@ import ConfirmDialog from './components/ConfirmDialog/ConfirmDialog'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
 import OwnerAccountPrompt from './components/OwnerAccountPrompt/OwnerAccountPrompt'
 import { UnsavedChangesModalHost } from './components/UnsavedChangesModal/UnsavedChangesModal'
+import { askBeforeBoardFileLoss } from './lib/board-file/board-file-tabs'
 import MemoryWatcher from './components/MemoryWatcher/MemoryWatcher'
 import HeartbeatScheduleDialog from './components/HeartbeatScheduleDialog/HeartbeatScheduleDialog'
 import MergeDialog from './components/MergeDialog/MergeDialog'
@@ -993,10 +994,18 @@ function AppRoot(): React.JSX.Element {
     window.addEventListener('beforeunload', handleBeforeUnload)
 
     let unlisten: (() => void) | undefined
+    let unlistenBoardQuit: (() => void) | undefined
     import('@tauri-apps/api/event').then(({ listen }) => {
+      // Quit K2 while a board file holds an edit that isn't saved: the shell asks here instead of exiting.
+      listen('board-file:quit-requested', async () => {
+        if (await askBeforeBoardFileLoss('quit')) await invoke('board_file_quit_now')
+      }).then((fn) => { unlistenBoardQuit = fn }).catch((e) => console.warn('[app]', e))
       listen('tauri://close-requested', async (event) => {
         // Always prevent default so we can save before closing
         ;(event as any).preventDefault?.()
+
+        // A board file's edit that isn't in the file yet: closing asks first.
+        if (!(await askBeforeBoardFileLoss('quit'))) return
 
         // Auto-stop timer silently before closing
         const timerState = useTimerStore.getState()
@@ -1026,6 +1035,7 @@ function AppRoot(): React.JSX.Element {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
       unlisten?.()
+      unlistenBoardQuit?.()
     }
   }, [])
 

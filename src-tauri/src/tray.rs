@@ -41,7 +41,7 @@ use parking_lot::Mutex;
 use tauri::image::Image;
 use tauri::menu::{IconMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Emitter, Wry};
 
 /// Menubar icon bytes — embedded at compile time so there's no
 /// runtime file-path dependency (works regardless of where the
@@ -545,7 +545,12 @@ fn handle_menu_event(app: &AppHandle<Wry>, id: &str) {
             // Honors the "keep daemon running when K2SO quits" setting
             // via the RunEvent::ExitRequested handler in lib.rs. No
             // tray-local override — one quit path, one policy.
-            app.exit(0);
+            // A board file's unsaved edit asks first, in the page (never set while the feature is dark).
+            if crate::commands::settings::BOARD_FILE_UNSAVED.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = app.emit("board-file:quit-requested", ());
+            } else {
+                app.exit(0);
+            }
         }
         _ => {}
     }

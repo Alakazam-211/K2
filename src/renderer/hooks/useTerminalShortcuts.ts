@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { askBeforeBoardFileLoss, unsavedBoardSessionsInTab } from '@/lib/board-file/board-file-tabs'
 import { invoke } from '@tauri-apps/api/core'
 import { usePresetsStore } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
@@ -114,7 +115,16 @@ export function useTerminalShortcuts(room: Room, cwd: string): void {
           if (e.shiftKey || e.altKey) return
           e.preventDefault()
           if (state.activeTabId) {
-            state.removeTab(state.activeTabId)
+            const tabId = state.activeTabId
+            // A board file's edit that isn't in the file yet: ask first, or it goes with the tab.
+            const boards = unsavedBoardSessionsInTab(state.tabs.find((t) => t.id === tabId), room.scope.connectionKey)
+            if (boards.length > 0) {
+              void askBeforeBoardFileLoss('close', boards).then((go) => {
+                if (go) room.tabs.getState().removeTab(tabId)
+              })
+              break
+            }
+            state.removeTab(tabId)
           }
           break
         }

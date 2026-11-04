@@ -29,6 +29,9 @@ pub struct AppSettingsView {
     pub keep_daemon_on_quit: bool,
     #[serde(default)]
     pub airgap: bool,
+    /// The dark Board tab (prd-board-tab-v1): the shell's Quit asks about a board file's unsaved edit only while on.
+    #[serde(default)]
+    pub board_file_preview: bool,
     #[serde(default)]
     pub wake_scheduler: WakeSchedulerView,
 }
@@ -62,7 +65,7 @@ impl Default for WakeSchedulerView {
 
 impl Default for AppSettingsView {
     fn default() -> Self {
-        Self { keep_daemon_on_quit: true, airgap: false, wake_scheduler: WakeSchedulerView::default() }
+        Self { keep_daemon_on_quit: true, airgap: false, board_file_preview: false, wake_scheduler: WakeSchedulerView::default() }
     }
 }
 

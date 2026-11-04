@@ -2,7 +2,7 @@ import { useCallback, useState, useRef, useEffect, useLayoutEffect, useMemo, typ
 import type { BrowserItemData, TerminalItemData } from '@/stores/tabs'
 import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import { workingAgentsInTab } from '@/lib/room-close-guard'
-import { scopeMayWrite } from '@/kessel/server-scope'
+import { reportedSupports, scopeMayWrite } from '@/kessel/server-scope'
 import { roomActiveProject, roomProjectForCwd, type Room } from '@/stores/room'
 import { readProjectDefaultAgent, resolveAgentPreset } from '@/lib/agent-resolve'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
@@ -58,6 +58,9 @@ import { writePinnedTab } from '@/components/Settings/pinned-tab-settings'
 import { openTabsSettings } from '@/components/Settings/open-tabs-settings'
 import { patchWindowProjects } from '@/components/Settings/PinnedTabSettingRows'
 import { useToastStore } from '@/stores/toast'
+import { isWebClient } from '@/lib/is-web'
+import { isRemoteMacTmpPath } from '@/lib/remote-mac-tmp'
+import { askBeforeBoardFileLoss, unsavedBoardSessionsInTab } from '@/lib/board-file/board-file-tabs'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import { effectiveKeybinding } from '@shared/hotkeys'
 import { isMacPlatform } from '@/lib/desktop-chrome'
@@ -115,6 +118,7 @@ export function buildPlusMenuItems(
   sandboxHint: boolean,
   changes: ChangesMenuState = 'checking',
   mobile = false,
+  board = false,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
@@ -123,6 +127,8 @@ export function buildPlusMenuItems(
     { id: 'browser', label: 'Browser', icon: <BrowserGlobe className="w-3.5 h-3.5" /> },
   ]
   items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
+  // prd-board-tab-v1 BT-1: a new `.k5board` in this bar's folder, while the server lists the feature.
+  if (board) items.push({ id: 'board', label: 'Board', badge: 'Beta', icon: <PaletteIcon size={14} /> })
   if (mobile) {
     const combo = effectiveKeybinding(useSettingsStore.getState().keybindings, 'openMobile', isMacPlatform())
     items.push({
@@ -463,6 +469,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // Mobile shows only when the room's server can run a device (M-A13):
     // a box with no lane never shows a dead tab.
     const mobile = room.scope.serverSupports('mobile-sim-v1')
+    // The Board row: a server that lists the feature (never a guess while its list isn't known: the feature is dark
+    // behind `board_file_preview`), where this login may create, and not the web client (no frame there).
+    const board = !isWebClient() && reportedSupports(room.scope.hostKey, 'board-file-v1') && scopeMayWrite(room.scope, 'board/file/create')
     // Snapshot Option. selectItem resolves an id only, so the click and Enter
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
@@ -480,7 +489,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       shown = optionHeld
       shownChanges = changesState
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile, board),
       )
     }
     probeChangesMenuState(room.scope, barCwd).then(
@@ -552,6 +561,22 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       if (picked === 'design') {
         // Always a new Design tab (DD3: many are allowed).
         room.tabs.getState().openDesignTab(group)
+        return
+      }
+      if (picked === 'board') {
+        // The daemon names it (Untitled.k5board, Untitled-2.k5board, …) by a disk check, and the first bytes on disk
+        // are a whole file; the name comes back. A refused create opens no tab, so there's nothing to lose.
+        if (room.scope.isRemote && isRemoteMacTmpPath(barCwd)) {
+          useToastStore.getState().addToast(`Couldn’t make a board in ${barCwd}: that’s a temporary folder on this computer, not on the server.`, 'error')
+          return
+        }
+        try {
+          const made = await daemonCliPost<{ path: string; name: string }>(room.scope, 'board/file/create', { dir: barCwd })
+          room.tabs.getState().setActiveGroup(group)
+          room.tabs.getState().openFileAsTab(made.path)
+        } catch (err) {
+          useToastStore.getState().addToast(`Couldn’t make a board in ${barCwd}: ${err instanceof Error ? err.message : String(err)}`, 'error')
+        }
         return
       }
       if (picked === 'mobile') {
@@ -791,6 +816,16 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       if (agents.length > 0) {
         setPendingClose({ tabId, agents })
       } else {
+        // A board file's edit that isn't in the file yet: ask first, or it goes with the tab.
+        const state = room.tabs.getState()
+        const tab = (groupIndex === 0 ? state.tabs : state.extraGroups[groupIndex - 1]?.tabs ?? []).find((t) => t.id === tabId)
+        const boards = unsavedBoardSessionsInTab(tab, room.scope.connectionKey)
+        if (boards.length > 0) {
+          void askBeforeBoardFileLoss('close', boards).then((go) => {
+            if (go) removeTabFromGroup(groupIndex, tabId)
+          })
+          return
+        }
         removeTabFromGroup(groupIndex, tabId)
       }
     },

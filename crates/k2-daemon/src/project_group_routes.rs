@@ -3944,7 +3944,8 @@ mod tests {
 
         // Member-agent post: exactly one push, content-free.
         let mark = crate::push_routes::test_push_capture::mark();
-        ok_json(msg_as(&gid, Some(&member_name), "progress: secret details inside"));
+        let posted = ok_json(msg_as(&gid, Some(&member_name), "progress: secret details inside"));
+        let seq = posted["seq"].as_i64().unwrap_or_else(|| panic!("the post has a seq: {posted}"));
         let pushes = pushes_since(mark);
         assert_eq!(pushes.len(), 1, "agent post pushes exactly once: {pushes:?}");
         let e = &pushes[0];
@@ -3956,10 +3957,11 @@ mod tests {
             e.body()
         );
         // The owner read up to their own kickoff (own post advances the
-        // cursor): the agent line is their one unread.
+        // cursor): the agent line is their one unread. The alert names that
+        // line's seq, so a phone can clear it by seq (0.46.8).
         assert_eq!(
             e.data(),
-            serde_json::json!({ "kind": "project", "groupId": gid, "unreadTotal": "1", "waitingTotal": "0" })
+            serde_json::json!({ "kind": "project", "groupId": gid, "seq": seq.to_string(), "unreadTotal": "1", "waitingTotal": "0" })
         );
 
         // The PoC's own post is still an agent post → pushes too

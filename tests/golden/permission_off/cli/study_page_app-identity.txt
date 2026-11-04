@@ -42,7 +42,8 @@ EVENTS
     ← {"kind":"rooms_changed"}
   sent when an agent in any room of your pass changes name, color,
   picture or handle (an owner change too). No data: refetch
-  GET /cli/skin/agents (or /cli/agent/identity).
+  GET /cli/skin/agents (or /cli/agent/identity). It's about an agent's look.
+  What this pass may do is access_changed: k2 study apps, ACCESS CHANGES.
 
 ERRORS
   400 usage | nothing_to_change | bad_name | bad_color | not_data_url |

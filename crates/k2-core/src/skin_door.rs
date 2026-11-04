@@ -374,6 +374,9 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);
     push_handle(out, "/cli/skin/agents", daemon);
+    // Live access: a page on this door reads who it is and hears when that changes.
+    push_handle(out, "/cli/skin/me", daemon);
+    push_handle(out, "/cli/skin/me/events*", daemon);
     // Files cut: exact matchers only. Never `/cli/fs/*` (would punch
     // open-finder / delete / info through Direct).
     push_handle(out, "/cli/fs/events*", daemon);
@@ -1302,6 +1305,7 @@ mod tests {
         assert!(file.contains("/cli/thread"), "{file}");
         assert!(file.contains("/cli/overlay/events"), "{file}");
         assert!(file.contains("/cli/skin/agents"), "{file}");
+        assert!(file.contains("/cli/skin/me/events*"), "live access: a page on this door hears: {file}");
         assert!(file.contains("/cli/fs/events"), "{file}");
         assert!(file.contains("/cli/fs/read-dir"), "{file}");
         assert!(file.contains("/cli/fs/read-file"), "{file}");

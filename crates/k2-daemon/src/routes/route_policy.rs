@@ -1735,6 +1735,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/logout", Public),
     // Room-scope R6 (0.46.1): a pass reads its own view; no login uses it.
     get("/cli/skin/me", NoLogin),
+    get("/cli/skin/me/events", NoLogin),
     // Room-scope R9/R16 (0.46.1): room.members, app.self, app.usage for a
     // pass (the handler checks rooms, caps and the link).
     get("/cli/skin/members", NoLogin),

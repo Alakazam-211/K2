@@ -23,20 +23,28 @@
 //! The hub is an accelerator for the sockets that also check on a tick and before
 //! a frame (`socket_access`). With `K2_ACCESS_HUB=off` those checks are what's left:
 //! slower, still safe. [`PassWatch::changed`] then never fires.
+//!
+//! `WS /cli/skin/me/events?scope=me` (`me.events`, S3) is the one socket that exists
+//! only for this: it sends `{"kind":"access_changed"}`, no details, and the client
+//! reads `me.get`. Closes and narrowing go out in the walk, whatever its size. Only
+//! those frames are paced ([`pace`]), because each one causes a `me.get`.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
 use k2_core::skin::SkinPass;
 use parking_lot::Mutex;
-use tokio::sync::watch;
+use tokio::net::TcpStream;
+use tokio::sync::{watch, Notify};
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::apps::gateway::LinkCtx;
+use crate::cli_response::CliResponse;
 use crate::socket_access::RoomAccess;
 
 /// The daemon environment switch; `off` (or `0`/`false`/`no`) = no hub, no
@@ -92,6 +100,15 @@ struct Entry {
     expires_at: AtomicI64,
     tx: watch::Sender<Answer>,
     holders: AtomicU64,
+    /// This pass's open `me.events` sockets.
+    me: Mutex<Vec<Weak<MeSlot>>>,
+}
+
+/// One `me.events` socket's place in the pacer's queue.
+struct MeSlot {
+    owed: Notify,
+    /// In a queue already: a second change while it waits is the same frame.
+    queued: AtomicBool,
 }
 
 /// `(link id or "", raw pass)`.
@@ -197,7 +214,8 @@ enum Which {
     Expired,
 }
 
-/// Compare the entries `which` names, one resolve at a time.
+/// Compare the entries `which` names, one resolve at a time. Sockets narrow or close
+/// as the walk goes. The frames it owes are paced once it's done.
 fn walk(which: Which) {
     let now = chrono::Utc::now().timestamp();
     let entries: Vec<Arc<Entry>> = with_entries(|m| {
@@ -224,28 +242,42 @@ fn walk(which: Which) {
             return;
         }
     };
+    let mut owed: HashMap<DoorKey, Vec<Owed>> = HashMap::new();
     for e in entries {
-        compare(&e, &world);
+        if compare(&e, &world) {
+            let door = door_of(e.link.as_deref());
+            let mut me = e.me.lock();
+            me.retain(|w| w.strong_count() > 0);
+            owed.entry(door).or_default().extend(me.iter().filter_map(Weak::upgrade).map(Owed::Me));
+        }
     }
+    pace(owed);
 }
 
-fn compare(e: &Entry, world: &World) {
+/// `true`: the answer changed, and the pass is still alive.
+fn compare(e: &Entry, world: &World) -> bool {
     let generation = k2_core::skin::write_generation();
     match crate::socket_access::live_pass(e.link.as_deref(), &e.raw) {
         // The database couldn't say, which is no answer about the pass.
-        Err(err) => k2_core::log_debug!("[access_live] a pass couldn't be read: {err}"),
+        Err(err) => {
+            k2_core::log_debug!("[access_live] a pass couldn't be read: {err}");
+            false
+        }
         Ok(None) => {
             e.expires_at.store(0, Ordering::SeqCst);
             e.fingerprint.store(GONE, Ordering::SeqCst);
             e.tx.send_replace(Answer::Gone);
+            false
         }
         Ok(Some(pass)) => {
             let fp = fingerprint(&pass, world);
             e.expires_at.store(pass.expires_at.unwrap_or(0), Ordering::SeqCst);
             let old = e.fingerprint.swap(fp, Ordering::SeqCst);
-            if old != fp && old != UNREAD {
-                e.tx.send_replace(Answer::Live { pass: Arc::new(pass), generation });
+            if old == fp || old == UNREAD {
+                return false;
             }
+            e.tx.send_replace(Answer::Live { pass: Arc::new(pass), generation });
+            true
         }
     }
 }
@@ -313,17 +345,254 @@ pub(crate) fn fingerprint(pass: &SkinPass, world: &World) -> u64 {
     }
 }
 
+// ── pacing ───────────────────────────────────────────────────────────
+
+/// Where a frame's `me.get` will land: a link has its own request budget.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum DoorKey {
+    /// The main port and the App helper.
+    Main,
+    /// `(link id, App id)`.
+    Link(String, String),
+}
+
+fn door_of(link: Option<&LinkCtx>) -> DoorKey {
+    match link {
+        Some(l) => DoorKey::Link(l.link_id.clone(), l.app_id.clone()),
+        None => DoorKey::Main,
+    }
+}
+
+/// One frame the pacer owes.
+enum Owed {
+    Me(Arc<MeSlot>),
+}
+
+/// A bucket for one door.
+struct Door {
+    queue: VecDeque<Owed>,
+    tokens: f64,
+    last: Instant,
+}
+
+/// How often the pacer spends a door's budget, give or take [`PACE_JITTER_MS`].
+const PACE_TICK_MS: u64 = 100;
+const PACE_JITTER_MS: u64 = 20;
+/// Frames a second through the main port and the helper. Chosen so 5,000 open
+/// sessions hear within 30 s; `S5` (`live_access_fanout`) measures it.
+const MAIN_PACE: f64 = 200.0;
+
+/// Frames a second through a door. On a link, half the App's request rate, because
+/// each frame costs it a `me.get` and it has its own work to do.
+fn rate_of(door: &DoorKey) -> f64 {
+    match door {
+        DoorKey::Main => std::env::var("K2_ACCESS_PACE").ok().and_then(|v| v.parse::<f64>().ok()).filter(|r| *r >= 1.0).unwrap_or(MAIN_PACE),
+        DoorKey::Link(_, app) => (crate::apps::quotas::quotas_for(app).rps as f64 / 2.0).max(1.0),
+    }
+}
+
+/// What one tick may spend: a change that fits goes out at once.
+fn burst_of(rate: f64) -> f64 {
+    (rate * PACE_TICK_MS as f64 / 1000.0).ceil().max(1.0)
+}
+
+static DOORS: Mutex<Option<HashMap<DoorKey, Door>>> = Mutex::new(None);
+static PACER: OnceLock<Thread> = OnceLock::new();
+
+/// A little randomness, for the order and the tick. Nothing depends on its quality.
+fn rough_random(below: usize) -> usize {
+    (uuid::Uuid::new_v4().as_u128() % below.max(1) as u128) as usize
+}
+
+/// Hand a walk's frames to the pacer, in a shuffled order so nobody's always first
+/// and a whole box doesn't re-read in the order it signed in.
+fn pace(owed: HashMap<DoorKey, Vec<Owed>>) {
+    if owed.is_empty() {
+        return;
+    }
+    {
+        let mut guard = DOORS.lock();
+        let doors = guard.get_or_insert_with(HashMap::new);
+        for (key, mut items) in owed {
+            for i in (1..items.len()).rev() {
+                items.swap(i, rough_random(i + 1));
+            }
+            let burst = burst_of(rate_of(&key));
+            let door = doors.entry(key).or_insert_with(|| Door { queue: VecDeque::new(), tokens: burst, last: Instant::now() });
+            for item in items {
+                let fresh = match &item {
+                    Owed::Me(s) => !s.queued.swap(true, Ordering::SeqCst),
+                };
+                if fresh {
+                    door.queue.push_back(item);
+                }
+            }
+        }
+    }
+    PACER
+        .get_or_init(|| std::thread::Builder::new().name("k2-access-pacer".into()).spawn(run_pacer).expect("spawn the access pacer").thread().clone())
+        .unpark();
+}
+
+fn run_pacer() {
+    loop {
+        if spend() {
+            let wait = PACE_TICK_MS - PACE_JITTER_MS + rough_random(2 * PACE_JITTER_MS as usize + 1) as u64;
+            std::thread::sleep(Duration::from_millis(wait));
+        } else {
+            std::thread::park();
+        }
+    }
+}
+
+/// Send what each door can afford now. `true`: frames are still waiting.
+fn spend() -> bool {
+    let mut guard = DOORS.lock();
+    let doors = guard.get_or_insert_with(HashMap::new);
+    let now = Instant::now();
+    let mut waiting = false;
+    for (key, door) in doors.iter_mut() {
+        let rate = rate_of(key);
+        door.tokens = (door.tokens + now.duration_since(door.last).as_secs_f64() * rate).min(burst_of(rate));
+        door.last = now;
+        while door.tokens >= 1.0 {
+            let Some(item) = door.queue.pop_front() else { break };
+            match item {
+                Owed::Me(slot) => {
+                    slot.queued.store(false, Ordering::SeqCst);
+                    slot.owed.notify_one();
+                }
+            }
+            door.tokens -= 1.0;
+        }
+        waiting |= !door.queue.is_empty();
+    }
+    waiting
+}
+
+// ── me.events ────────────────────────────────────────────────────────
+
+/// `me.events`' socket.
+pub const ME_EVENTS_PATH: &str = "/cli/skin/me/events";
+/// The whole frame, ever: read `me.get` again.
+const ACCESS_CHANGED: &str = r#"{"kind":"access_changed"}"#;
+/// On the main port nothing else bounds these (V20): each takes a task and a slot.
+const MAX_ME_SOCKETS_PER_PASS: usize = 16;
+
+fn refusal(status: &'static str, code: &str, hint: &str) -> CliResponse {
+    CliResponse { status, content_type: "application/json", body: serde_json::json!({ "ok": false, "error": { "code": code, "hint": hint } }).to_string() }
+}
+
+async fn refuse(stream: &mut TcpStream, r: CliResponse) {
+    let resp = format!(
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
+        r.status,
+        r.content_type,
+        r.body.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES,
+        r.body
+    );
+    crate::routes::http::refuse_upgrade(stream, &resp).await;
+}
+
+/// A credential that isn't an App pass: never an owner or login socket.
+pub fn me_events_forbidden() -> CliResponse {
+    refusal("403 Forbidden", "skin_token", "me.events is for a live app or guest pass (k2skn_)")
+}
+
+/// With the hub off this socket isn't there, like the feature key.
+pub fn me_events_off() -> CliResponse {
+    refusal("404 Not Found", "not_found", "this server has no me.events: read me.get on open, and on each request's refusal")
+}
+
+/// `WS /cli/skin/me/events?scope=me`, for a live pass. The hub holds the pass
+/// **before** the upgrade, so a read after the socket opens can't miss a change: a
+/// commit before that read is in the read, and a commit after it moves the
+/// fingerprint taken here.
+pub async fn serve_me_events(stream: &mut TcpStream, params: HashMap<String, String>, raw: String) {
+    if params.get("scope").map(String::as_str) != Some("me") {
+        refuse(stream, refusal("400 Bad Request", "usage", "name the scope: scope=me")).await;
+        return;
+    }
+    let link = crate::apps::gateway::current();
+    let mut access = PassWatch::open(link, raw).await;
+    let Some(entry) = access.entry.as_ref().map(|(_, e)| e.clone()) else {
+        let r = if access.unreadable { CliResponse::internal_error("the pass couldn't be read; try again".to_string()) } else { crate::skin_routes::revoked_skin_response() };
+        refuse(stream, r).await;
+        return;
+    };
+    let slot = Arc::new(MeSlot { owed: Notify::new(), queued: AtomicBool::new(false) });
+    let room_for_it = {
+        let mut me = entry.me.lock();
+        me.retain(|w| w.strong_count() > 0);
+        let room = me.len() < MAX_ME_SOCKETS_PER_PASS;
+        if room {
+            me.push(Arc::downgrade(&slot));
+        }
+        room
+    };
+    if !room_for_it {
+        refuse(stream, refusal("429 Too Many Requests", "rate_limited", "this pass holds too many me.events sockets; one per page is plenty")).await;
+        return;
+    }
+    let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            k2_core::log_debug!("[access_live] handshake failed: {e}");
+            return;
+        }
+    };
+    use futures_util::{SinkExt, StreamExt};
+    let (mut write, mut read) = ws.split();
+    // Idle by design, so a dead peer is only noticed by a failed ping (V19).
+    let mut keepalive = tokio::time::interval(crate::overlay_ws::ping_interval());
+    keepalive.tick().await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = keepalive.tick() => {
+                if write.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+            }
+            _ = access.changed() => {
+                // Closes don't wait for the pacer. A live answer's frame is paced.
+                if matches!(access.answer(), Answer::Gone) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
+            }
+            _ = slot.owed.notified() => {
+                if write.send(Message::Text(ACCESS_CHANGED.to_string())).await.is_err() {
+                    break;
+                }
+            }
+            incoming = read.next() => match incoming {
+                Some(Ok(Message::Ping(p))) => {
+                    if write.send(Message::Pong(p)).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+}
+
 /// One open socket's view of its pass. Off when the hub is off, or when the pass
 /// couldn't be read at the moment it opened: [`Self::changed`] then never fires,
 /// and the socket's tick and frame check are what's left.
 pub struct PassWatch {
     rx: Option<watch::Receiver<Answer>>,
     entry: Option<(Key, Arc<Entry>)>,
+    /// The database couldn't say, which is no answer about the pass.
+    unreadable: bool,
 }
 
 impl PassWatch {
     pub fn off() -> Self {
-        Self { rx: None, entry: None }
+        Self { rx: None, entry: None, unreadable: false }
     }
 
     /// Hold `raw` open on `link`, and hear when its answer changes. Reads skin.db:
@@ -342,7 +611,7 @@ impl PassWatch {
             })
         });
         if let Some(found) = found {
-            return Self { rx: Some(found.tx.subscribe()), entry: Some((key, found)) };
+            return Self { rx: Some(found.tx.subscribe()), entry: Some((key, found)), unreadable: false };
         }
         // Before the read: a write that lands after it wakes a compare below.
         let generation = k2_core::skin::write_generation();
@@ -351,7 +620,7 @@ impl PassWatch {
             Ok(None) => return Self::off(),
             Err(e) => {
                 k2_core::log_debug!("[access_live] a pass couldn't be read: {e}");
-                return Self::off();
+                return Self { rx: None, entry: None, unreadable: true };
             }
         };
         let fp = match World::load() {
@@ -374,6 +643,7 @@ impl PassWatch {
             expires_at: AtomicI64::new(pass.expires_at.unwrap_or(0)),
             tx,
             holders: AtomicU64::new(0),
+            me: Mutex::new(Vec::new()),
         });
         let held = with_entries(|m| {
             let e = m.entry(key.clone()).or_insert(fresh);
@@ -389,7 +659,7 @@ impl PassWatch {
             // It may need to wake at this pass's expiry.
             t.unpark();
         }
-        Self { rx: Some(held.tx.subscribe()), entry: Some((key, held)) }
+        Self { rx: Some(held.tx.subscribe()), entry: Some((key, held)), unreadable: false }
     }
 
     /// [`Self::open_blocking`] off the async worker.
@@ -499,6 +769,13 @@ mod tests {
         let mut app = base.clone();
         app.app = "svc".into();
         assert_ne!(fingerprint(&app, &w), same, "the App");
+    }
+
+    #[test]
+    fn a_small_change_goes_at_once_and_a_big_one_is_paced() {
+        assert_eq!(burst_of(200.0), 20.0, "one tick's budget on the main port");
+        assert_eq!(burst_of(25.0), 3.0, "a link at the default 50 rps");
+        assert_eq!(burst_of(0.5), 1.0, "never nothing");
     }
 
     #[test]

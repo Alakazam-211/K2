@@ -10920,6 +10920,8 @@ EOF
 _study_page_app_chat() {
     cat <<'EOF'
 k2 study app-chat — Chat, voice and calls in your App (Chat / Voice Hosting)
+(K2 tells you rooms and whether chat is on: me.get, and me.onAccessChanged when it
+changes (k2 study apps). Sew tells you channels and voice, on its own socket.)
 
 Chat / Voice Hosting is this box's chat and voice core (core id sew), powered by
 Sew. k2 hostchat manages it; k2 chat is how agents use it.
@@ -46739,6 +46741,15 @@ ROOM WORKING (is anything running in a room, any session)
   use     a busy badge on a room tile
   never   that the Thread's agent is working on your message (that is the THREAD TURN)
 
+MY ACCESS (what this person may do now: rooms, caps, folders, chat)
+  tells   a nudge to read again, with no details; me.get is the answer
+  cap     App none · Garden —
+  read    App me.get · Garden —
+  live    App me.events (on open: me.get) · Garden —
+  ready   App: k2.asGuest(pass).me.onAccessChanged(cb)
+  use     close a room's screen the moment access goes · show a new room with no refresh
+  never   read access from the event (it has none), or keep a room's screen open after its 4013
+
 AGENTS (the agents a widget shows, with their look)
   tells   name, colour, picture, working, needs you
   cap     App none · Garden agents:read
@@ -46844,7 +46855,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 45.
+From K2's verb catalog, version 46.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -46873,6 +46884,7 @@ THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
   me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.
+  me.events                WS   /cli/skin/me/events?scope=                    This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too.
   roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.
   app.rooms                GET  /cli/skin/app-rooms (server only)             This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).
@@ -49528,7 +49540,8 @@ EVENTS
     ← {"kind":"rooms_changed"}
   sent when an agent in any room of your pass changes name, color,
   picture or handle (an owner change too). No data: refetch
-  GET /cli/skin/agents (or /cli/agent/identity).
+  GET /cli/skin/agents (or /cli/agent/identity). It's about an agent's look.
+  What this pass may do is access_changed: k2 study apps, ACCESS CHANGES.
 
 ERRORS
   400 usage | nothing_to_change | bad_name | bad_color | not_data_url |
@@ -50188,7 +50201,9 @@ FILES (0.46.4, App only; k2 app role paths, k2 study apps)
 
 WHEN ACCESS CHANGES ON AN OPEN SOCKET (0.46.8; every App socket)
   K2 rechecks an open socket. From the moment access is gone no more frames
-  leave it, and it closes within about 5 s, even with nothing to send.
+  leave it, and it closes within about a second, idle or not (5 s without the
+  live-access-v1 feature in me.get). me.events tells you too, and says when access
+  arrives (k2 study apps, ACCESS CHANGES).
   What keeps each one open, in its room: /cli/overlay/events and project chat
   thread:read; /cli/fs/events files:read; /cli/activity/events any one of
   activity:read, heartbeats:read, tickets:read, room:members (lose one of
@@ -50198,13 +50213,13 @@ WHEN ACCESS CHANGES ON AN OPEN SOCKET (0.46.8; every App socket)
     4013   access_lost. The pass works; this socket's room or caps are gone.
            Don't reopen it. Read me.get and redraw. Open it again only if
            me.get shows them again.
-    4003   K2 says the pass is dead. Read me.get first: 401 means sign them in
-           again; if it answers, reopen. Your server's own pass rotates: read
-           K2_PASS_FILE, then reopen.
+    4003   The pass stopped working, or it expired and has been replaced. Read
+           me.get first: 401 means sign them in again; if it answers, reopen. Your
+           server's own pass rotates: read K2_PASS_FILE, then reopen.
     other  A drop, or a close code lost on the way. A browser reports a refused
            socket as 1006 too, so read me.get before each reopen:
              401                   signed out. Stop.
-             200, room still there reopen, with a growing wait. After 6 refusals
+             200, room and caps there  reopen, with a growing wait. After 6 refusals
                                    in a row (about 30 s), stop: the App may be
                                    out of sockets (its owner: k2 app quota), or
                                    on thread.events the room's Chat moved (find
@@ -50223,6 +50238,9 @@ WHEN ACCESS CHANGES ON AN OPEN SOCKET (0.46.8; every App socket)
   failed with status 0 is refused sockets (read me.get, then subscribe again if
   the room is there).
 
+EVENTS (WS /cli/skin/me/events?scope=me; any live pass. k2 study apps, ACCESS CHANGES)
+  {"kind":"access_changed"}  this pass's access changed: read me.get. No details.
+  (rooms_changed, on /cli/activity/events, only means an agent's look changed.)
 EVENTS (WS /cli/activity/events?workspace=<handle>; room:members opens it)
   {"kind":"room_members_changed","workspace":"<handle>"}  refetch members
   {"kind":"app_deployed","workspace":"<handle>","app":"<id>"}  to the App's
@@ -50606,6 +50624,71 @@ BYO BFF (not --skin)
   from login JSON). Username in the GUC errors, it does not degrade.
   Hygiene true means the GUC is empty now — not anti-spoof (Keep 128:
   the BFF LOGIN can still SET another uuid). Do not CREATE ROLE skin_*.
+
+ACCESS CHANGES (0.46.8; me.get's features lists live-access-v1)
+  Access is read live: an owner or agent changes a role, room, folder or chat
+  grant and the person's next request has it, with no sign-out. An open screen
+  hears at once, so it can redraw with no refresh, in a page or a Tauri app.
+  The answer is always me.get (GET /cli/skin/me: {rooms:[{room,handle,caps,folders?}],
+  agents:[...], chat:true|false, features:[...], ...}), never the event:
+  {"kind":"access_changed"} carries no details, and K2 replays nothing.
+  Your server (one socket per guest):
+    import {fromEnv} from '@k2/server'
+    const k2 = fromEnv()
+    const off = k2.asGuest(pass).me.onAccessChanged(({me, ended}) => {
+      if (ended) return showSignedOut()   // this pass is refused
+      render(me)                          // rooms, caps, folders, chat: replace all
+    }, {onError: (e) => log(e)})
+    It reads me.get after every open and after every event, and coalesces. A
+    rotated App pass reconnects quietly. onError: a read failed and it keeps
+    listening; or (code failed, status 0) the socket stopped, so call it again later.
+  A page through the App helper (no SDK, same origin, cookie):
+    async function reread() {             // 401: signed out. No answer: keep showing
+      const r = await fetch('/cli/skin/me').catch(() => null)
+      if (r?.status === 401) { signedOut = true; ws.close(); showSignedOut() }
+      else if (r?.ok) render(await r.json())
+    }
+    function connect() {
+      ws = new WebSocket(location.origin.replace(/^http/, 'ws') +
+        '/cli/skin/me/events?scope=me')
+      ws.onopen = reread                  // every open: a change while away
+      ws.onmessage = reread
+      ws.onclose = async () => {          // a close code can be lost: always ask
+        await reread()
+        if (!signedOut) setTimeout(connect, wait())  // a growing wait; never give up:
+      }                                   // any live pass may open this socket
+    }
+  Socket down: keep showing what you have, marked as reconnecting. Any request K2
+  refuses still wins. A refused re-dial looks like a drop; the read tells them apart.
+  Your other sockets close 4013 when their room or caps go (k2 study app-surfaces):
+  don't reopen them. On a big change that can come a few seconds before me.events:
+  redraw from me.get on whichever comes first.
+  Tauri: the same socket and the same reads. A page loaded from your App's host has
+  its cookie. A bundled page has no cookie and another origin, so do both from your
+  Rust side with Authorization: Bearer <pass>, and hand the page what me.get says.
+  If the OS suspends the webview the socket drops: on resume (visibilitychange, or
+  your app's resume event) reread and reconnect. A device login's pass expires, so
+  before showing signed out, try guests.refresh (k2 study app-api) and reopen with
+  the new pass; if that fails too, they're signed out.
+  A big server: one socket per person costs one of your link's 64 connections (K2
+  refuses past that: too_many_sockets; HTTP calls in flight count too), so it stops
+  near 60 guests. Pages through the helper don't use the link. So hold one socket
+  for all your guests:
+    const off = k2.asApp().me.onGuestAccessChanged(({principalId}) => {
+      // one of YOUR guests changed, or a session of theirs ended. Read me.get with
+      // each pass you hold for them; 401 means that session is over.
+      for (const pass of passesOf(principalId)) reread(pass)
+    }, {onOpen: rereadEveryone, onError: log})   // nothing is replayed after a reconnect
+    Raw: /cli/skin/me/events?scope=guests with the App's own pass; frames
+    {"kind":"access_changed","principalId":"..."}. It only ever names this App's
+    own guests. Run about 10 reads at a time at most: they use the same 64.
+  The owner can raise the quota: k2 app quota <app> --sockets 1024 --subscriptions 4096.
+  A big change reaches everyone over some seconds, so re-reads don't arrive together.
+  Chat and voice: K2 tells you rooms and whether chat is on (me.get's chat); Sew
+  tells you channels and voice on its own socket, and chat.pass opens it: k2 study
+  app-chat. Draw each from its own source and never join them to decide anything:
+  for a moment one can be ahead of the other. chat: true doesn't mean chat.pass works
+  this instant; retry per its answer (k2 study app-chat).
 
 PASSWORD RESET
   Three exact POST paths (never a /cli/skin/password glob):
@@ -81082,7 +81165,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 45.
+for at once (no review). From K2's verb catalog, version 46.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope

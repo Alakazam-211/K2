@@ -1,21 +1,21 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 45,
-  "catalogSha256": "4c03b8acf7aa9c2bf02ae481303d091e4216e6a35cf831c82c991be79ced4c13",
+  "catalogVersion": 46,
+  "catalogSha256": "276f921313c262b37d88de11238c7f9099ba3ead06168bd813f4df31e934860a",
   "runtimeSha256": "92df683d1130bee4e59d32c9d1937728993a75d6fd590b56314529ebc68f8ab5",
   "files": {
-    "cli/k2": "4eb0beb936a58b253bcb21d025d7476472262c0f25c0c53c6d631ca4901f14ae",
-    "cli/k2#refusals": "b26af93076186114824ddc5692db6216a404b775c1df46e66f658191d72a0d83",
-    "cli/k2#study app-api": "2b57a21ebf5bb06897a8e8bb6bd20d339d9c6af01e0b502cf23cefe782b9032b",
-    "cli/k2#study live": "9d8f1fbe777a2686adb42d1a3a762a0c9457d1da6236222db7e3d0aa0084f572",
+    "cli/k2": "01146252ac0418087c86edd920c0676312129208c41dd872e01a730a9cd4bab9",
+    "cli/k2#refusals": "f7357db465494d2a0eecff28f58e6c2c6f57b24056207decfedb41ee440d772f",
+    "cli/k2#study app-api": "a513c4479facbffa317ee76903611a3e0a3520aae049b3e3998584dec7a1eccc",
+    "cli/k2#study live": "7f314f6dcdbee2c019329bbfaf2e35ed524f9e067d738c44addc18b4ec91487e",
     "cli/k2#zen guide libs": "ea77dde3c861537256ffc9b08b63531755f98ed42296077269edf6cde4a12d93",
-    "crates/k2-core/src/app_surface.rs": "037c5697604781a579200909343e07aee955c24a04fa33c11961fa53be2d9259",
-    "sdk/generated/k2-frame.js": "1c229619890a52efeebefbd6421d0bf55c9b33a2ca2b7851263eea4a46f7b3eb",
-    "sdk/generated/k2.d.ts": "08e5555c8d547eef8eb26a84f93965d89ea478c9b6981db75802f9425e40e511",
-    "sdk/generated/phone-verbs.json": "6f6d21275b3623d85a0967231ee8740f5c7eacf4fd71dfe97dc9718902bed498",
-    "sdk/server/src/generated/verbs.ts": "7c325fd90df3127596f57454b445ea669493feee31976b81362bb993a1d608fe",
-    "src/renderer/lib/k2-caps.generated.ts": "ebb5f6656238c34019b223d6f0a45f1d8fe45c8882417ec5ff4a8368b98c63dc",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "f4024f65ad6041e8409ede8a8a2d3e8aa632840e6ea0049db943d6f4ce7ed65a"
+    "crates/k2-core/src/app_surface.rs": "4188ee4f57ad0211283a36dd68b57f4e156753cc8870b3343c861e1be6d32f5d",
+    "sdk/generated/k2-frame.js": "cdd835b8644e10ee2b08770506e667885ef0096346f6d3a7c4347c30f4678e38",
+    "sdk/generated/k2.d.ts": "8612dce33599405f35afcdcc738130cd0fab914eebc3576b879aabf56bbcd360",
+    "sdk/generated/phone-verbs.json": "896119c53ad96173ff9a59f5bb3eda4466428a164d1ac4c8cd44e84744f97864",
+    "sdk/server/src/generated/verbs.ts": "92c22a7ecb0408e7973de06d3eea569b62ac3a7cfe28d956e48b5617be793822",
+    "src/renderer/lib/k2-caps.generated.ts": "70e2bb2b19c3614b7f58c6d4c4cb2abc1e1b402582953745172f50a021fa6df1",
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "e7c36acba6d61a3f068c1e98c385cb7b8c518c59aef98b378205383d7a454d93"
   }
 }

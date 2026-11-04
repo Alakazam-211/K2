@@ -2755,6 +2755,33 @@ async fn handle_one_request(
             crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, skin_raw, viewer_login, login).await;
             return DispatchOutcome::Done;
         }
+        // Live access (0.46.8): `me.events`, "this pass's access changed, read
+        // me.get again". Any live pass, a roomless one too. Never an owner or
+        // login socket.
+        p if p == crate::access_live::ME_EVENTS_PATH => {
+            if !crate::access_live::enabled() {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::access_live::me_events_off();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let token = super::http::extract_token(&query).filter(|t| k2_core::skin::is_skin_token(t)).map(str::to_string);
+            let Some(token) = token else {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::access_live::me_events_forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            if crate::apps::gateway::resolve_pass(&token).is_none() {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::skin_routes::revoked_skin_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            crate::access_live::serve_me_events(stream, params, token).await;
+            return DispatchOutcome::Done;
+        }
         // 0.46.3 App project chat: `project.events`, one project's live
         // lines for a pass (the handler checks the project before the
         // upgrade and on every frame). Never an owner or login socket:

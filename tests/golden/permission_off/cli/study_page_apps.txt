@@ -243,6 +243,71 @@ BYO BFF (not --skin)
   Hygiene true means the GUC is empty now — not anti-spoof (Keep 128:
   the BFF LOGIN can still SET another uuid). Do not CREATE ROLE skin_*.
 
+ACCESS CHANGES (0.46.8; me.get's features lists live-access-v1)
+  Access is read live: an owner or agent changes a role, room, folder or chat
+  grant and the person's next request has it, with no sign-out. An open screen
+  hears at once, so it can redraw with no refresh, in a page or a Tauri app.
+  The answer is always me.get (GET /cli/skin/me: {rooms:[{room,handle,caps,folders?}],
+  agents:[...], chat:true|false, features:[...], ...}), never the event:
+  {"kind":"access_changed"} carries no details, and K2 replays nothing.
+  Your server (one socket per guest):
+    import {fromEnv} from '@k2/server'
+    const k2 = fromEnv()
+    const off = k2.asGuest(pass).me.onAccessChanged(({me, ended}) => {
+      if (ended) return showSignedOut()   // this pass is refused
+      render(me)                          // rooms, caps, folders, chat: replace all
+    }, {onError: (e) => log(e)})
+    It reads me.get after every open and after every event, and coalesces. A
+    rotated App pass reconnects quietly. onError: a read failed and it keeps
+    listening; or (code failed, status 0) the socket stopped, so call it again later.
+  A page through the App helper (no SDK, same origin, cookie):
+    async function reread() {             // 401: signed out. No answer: keep showing
+      const r = await fetch('/cli/skin/me').catch(() => null)
+      if (r?.status === 401) { signedOut = true; ws.close(); showSignedOut() }
+      else if (r?.ok) render(await r.json())
+    }
+    function connect() {
+      ws = new WebSocket(location.origin.replace(/^http/, 'ws') +
+        '/cli/skin/me/events?scope=me')
+      ws.onopen = reread                  // every open: a change while away
+      ws.onmessage = reread
+      ws.onclose = async () => {          // a close code can be lost: always ask
+        await reread()
+        if (!signedOut) setTimeout(connect, wait())  // a growing wait; never give up:
+      }                                   // any live pass may open this socket
+    }
+  Socket down: keep showing what you have, marked as reconnecting. Any request K2
+  refuses still wins. A refused re-dial looks like a drop; the read tells them apart.
+  Your other sockets close 4013 when their room or caps go (k2 study app-surfaces):
+  don't reopen them. On a big change that can come a few seconds before me.events:
+  redraw from me.get on whichever comes first.
+  Tauri: the same socket and the same reads. A page loaded from your App's host has
+  its cookie. A bundled page has no cookie and another origin, so do both from your
+  Rust side with Authorization: Bearer <pass>, and hand the page what me.get says.
+  If the OS suspends the webview the socket drops: on resume (visibilitychange, or
+  your app's resume event) reread and reconnect. A device login's pass expires, so
+  before showing signed out, try guests.refresh (k2 study app-api) and reopen with
+  the new pass; if that fails too, they're signed out.
+  A big server: one socket per person costs one of your link's 64 connections (K2
+  refuses past that: too_many_sockets; HTTP calls in flight count too), so it stops
+  near 60 guests. Pages through the helper don't use the link. So hold one socket
+  for all your guests:
+    const off = k2.asApp().me.onGuestAccessChanged(({principalId}) => {
+      // one of YOUR guests changed, or a session of theirs ended. Read me.get with
+      // each pass you hold for them; 401 means that session is over.
+      for (const pass of passesOf(principalId)) reread(pass)
+    }, {onOpen: rereadEveryone, onError: log})   // nothing is replayed after a reconnect
+    Raw: /cli/skin/me/events?scope=guests with the App's own pass; frames
+    {"kind":"access_changed","principalId":"..."}. It only ever names this App's
+    own guests. Run about 10 reads at a time at most: they use the same 64.
+  The owner can raise the quota: k2 app quota <app> --sockets 1024 --subscriptions 4096.
+  A big change reaches everyone over some seconds, so re-reads don't arrive together.
+  Chat and voice: K2 tells you rooms and whether chat is on (me.get's chat); Sew
+  tells you channels and voice on its own socket, and chat.pass opens it: k2 study
+  app-chat. Draw each from its own source and never join them to decide anything:
+  for a moment one can be ahead of the other. chat: true doesn't mean chat.pass works
+  this instant; retry per its answer (k2 study app-chat).
+
 PASSWORD RESET
   Three exact POST paths (never a /cli/skin/password glob):
     POST /cli/skin/password/forgot  {"username":"…"}

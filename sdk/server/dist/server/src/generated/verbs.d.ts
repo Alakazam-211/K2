@@ -1,6 +1,6 @@
 import type { K2Error } from '../errors.ts';
 /** The catalog version this table was generated from. */
-export declare const CATALOG_VERSION = 45;
+export declare const CATALOG_VERSION = 46;
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = {
     readonly [key: string]: unknown;
@@ -176,6 +176,9 @@ export declare const APP_VERBS: {
                 readonly catalogVersion: {
                     readonly type: "integer";
                 };
+                readonly chat: {
+                    readonly type: "boolean";
+                };
                 readonly features: {
                     readonly items: {
                         readonly type: "string";
@@ -255,6 +258,34 @@ export declare const APP_VERBS: {
                     readonly type: readonly ["string", "null"];
                 };
                 readonly username: {
+                    readonly type: "string";
+                };
+            };
+            readonly type: "object";
+        };
+    };
+    readonly 'me.events': {
+        readonly cap: null;
+        readonly effect: "read";
+        readonly kind: "subscribe";
+        readonly feature: "live-access-v1";
+        readonly door: "both";
+        readonly http: null;
+        readonly socket: {
+            readonly path: "/cli/skin/me/events";
+            readonly param: "scope";
+            readonly frame: "access_changed";
+            readonly refetch: "me.get";
+            readonly query: {};
+        };
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly kind: {
+                    readonly enum: readonly ["access_changed"];
+                };
+                readonly principalId: {
                     readonly type: "string";
                 };
             };
@@ -9299,6 +9330,8 @@ export interface AppMe {
     /** host, or the App's service id this login belongs to ('' for a platform pass). */
     readonly app: string;
     readonly catalogVersion: number;
+    /** This login has an enabled chat grant, so chat.pass may work (it may still answer pending). K2 says whether chat is on; Sew says which channels. false for an App's own pass and a platform pass. */
+    readonly chat: boolean;
     /** This server's /boot-status feature keys. */
     readonly features: string[];
     /** Changes when the server restarts. */
@@ -9313,6 +9346,11 @@ export interface AppMe {
     /** This server's stable id (key rows across servers by serverId + room). */
     readonly serverId: string | null;
     readonly username: string;
+}
+export interface AppAccessFrame {
+    readonly kind: 'access_changed';
+    /** scope=guests only: which of this App's own guests. Read me.get with that guest's pass. */
+    readonly principalId?: string;
 }
 export interface AppRoomAgent {
     /** #rrggbb. */
@@ -11235,6 +11273,12 @@ export interface AppVerbs {
         args: Record<string, never>;
         value: AppMe;
     };
+    'me.events': {
+        args: {
+            scope: 'me' | 'guests';
+        };
+        value: AppAccessFrame;
+    };
     'roomAgents.list': {
         args: Record<string, never>;
         value: AppRoomAgents;
@@ -12217,12 +12261,16 @@ export interface AppVerbs {
     };
 }
 export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
-export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events';
+export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events';
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
     readonly me: {
         /** Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features. no cap · GET /cli/skin/me. e.g. `const me = await k2.asGuest(pass).me.get()` */
         get(args?: Record<string, never>): Promise<AppMe>;
+        /** This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too. no cap · WS /cli/skin/me/events?scope=. e.g. `const off = k2.asGuest(pass).me.onAccessChanged(({me, ended}) => ended ? showSignedOut() : render(me))` */
+        events(args: {
+            scope: 'me' | 'guests';
+        }, onFrame: (frame: AppAccessFrame) => void, onError?: (error: K2Error) => void): () => void;
     };
     readonly roomAgents: {
         /** The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow. no cap · GET /cli/skin/agents. e.g. `const {agents} = await k2.roomAgents.list()` */

@@ -121,6 +121,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Handing over an App.** The rooms the owner approved stay with the App and carry to the new agent, and the handover card says so. `k2 app handover status <app> --detail` shows the card's list and its id.
 - **`k2 app chat` shows what it's waiting on.** The App's own agent sees the current step toward Sew and Sew's last answer, including a blocked one, not only "sending to Sew".
 - **Signing out from any App's server.** Logout on an App's link now takes any valid session the caller presents and ends only that one. It no longer answers `pass_wrong_link`.
+- **Access changes reach open screens.** When a person's rooms, role, folders or chat access change, an open App hears at once and redraws, with no sign-out and no refresh, in a page or a Tauri app. App servers use `k2.asGuest(pass).me.onAccessChanged`, or one socket for all their guests with `k2.asApp().me.onGuestAccessChanged`; pages open `/cli/skin/me/events?scope=me`, feature key `live-access-v1`. See `k2 study apps`. `me.get` now says whether this login has chat. Set `K2_ACCESS_HUB=off` on the daemon to go without; open connections then still close, within about 5 seconds.
 
 ## 0.46.7 — Apps run their own chat
 

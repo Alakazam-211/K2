@@ -392,6 +392,7 @@ mod tests {
             // 0.46.3 lanes folded in at r4: App project chat's socket, the
             // App room stream and the read-state arm.
             ("crate::apps::project_chat::EVENTS_WS_PATH", vec![crate::apps::project_chat::EVENTS_WS_PATH]),
+            ("crate::access_live::ME_EVENTS_PATH", vec![crate::access_live::ME_EVENTS_PATH]),
             ("crate::room_stream_ws::ROOM_STREAM_WS_PATH", vec![crate::room_stream_ws::ROOM_STREAM_WS_PATH]),
             (
                 "crate::read_routes::is_read_route",

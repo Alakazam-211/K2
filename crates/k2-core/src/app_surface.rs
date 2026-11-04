@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 45;
+pub const CATALOG_VERSION: u32 = 46;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -333,6 +333,7 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
 /// The one table of App-facing sockets (helper and link), and the query
 /// parameter each one must carry (GA1).
 pub const WS_ALLOWLIST: &[(&str, &str)] = &[
+    ("/cli/skin/me/events", "scope"),
     ("/cli/overlay/events", "conversation"),
     ("/cli/thread/stream", "rooms"),
     ("/cli/fs/events", "workspace"),
@@ -479,6 +480,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/skin/projects/messages", "project.read", "both"),
     ("POST", "/cli/skin/projects/post", "project.post", "both"),
     ("POST", "/cli/skin/projects/read", "project.markRead", "both"),
+    ("WS", "/cli/skin/me/events", "me.events", "both"),
     ("WS", "/cli/overlay/events", "thread.events", "both"),
     ("WS", "/cli/thread/stream", "thread.stream", "both"),
     ("WS", "/cli/fs/events", "files.events", "both"),

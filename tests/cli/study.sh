@@ -199,6 +199,16 @@ assert_contains "ensure-pinned-chat" "$skins_out" "/cli/workspace/ensure-pinned-
 assert_contains "files events workspace" "$skins_out" "/cli/fs/events?workspace="
 assert_contains "never fs glob" "$skins_out" "Never /cli/fs/*"
 assert_contains "never owner BFF" "$skins_out" "Never owner BFF"
+assert_contains "live access" "$skins_out" "ACCESS CHANGES (0.46.8; me.get's features lists live-access-v1)"
+assert_contains "live access: the SDK" "$skins_out" "me.onAccessChanged"
+assert_contains "live access: a page" "$skins_out" "/cli/skin/me/events?scope=me"
+assert_contains "live access: one socket per App" "$skins_out" "me.onGuestAccessChanged"
+assert_contains "live access: the link's real limit" "$skins_out" "64 connections"
+live_out="$("$K2" study live)"
+assert_contains "study live: my access" "$live_out" "MY ACCESS"
+assert_contains "app-chat: who tells you what" "$("$K2" study app-chat)" "Sew tells you channels and voice"
+assert_contains "study live: the SDK" "$live_out" "me.onAccessChanged"
+assert_contains "app-identity: rooms_changed isn't access" "$("$K2" study app-identity)" "access_changed"
 assert_contains "has_cap_in_room doors" "$skins_out" "has_cap_in_room"
 assert_contains "static dir is public" "$skins_out" "GET / and /assets/* are PUBLIC"
 assert_contains "platform mint --name" "$skins_out" "k2 app token create --name"
@@ -687,11 +697,11 @@ assert_contains "title" "$as_out" "k2 study app-surfaces"
 for needle in "room.members, cap room:members" "admins of this box" "GET /cli/skin/members?workspace=" \
     "GET /cli/skin/self" "GET /cli/skin/usage?hours=N" "k2.widget.self()" "k2 app room-names <room> hide|show" \
     "room_members_changed" "app_deployed" "not_exposed" \
-    "WHEN ACCESS CHANGES ON AN OPEN SOCKET" "4013   access_lost" "4003   K2 says the pass is dead" "code failed with status 401"; do
+    "WHEN ACCESS CHANGES ON AN OPEN SOCKET" "4013   access_lost" "4003   The pass stopped working" "code failed with status 401"; do
     assert_contains "app-surfaces: $needle" "$as_out" "$needle"
 done
 as_lines="$(printf '%s\n' "$as_out" | wc -l | tr -d ' ')"
-if [ "$as_lines" -le 115 ]; then echo "  PASS: app-surfaces is bounded ($as_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-surfaces is $as_lines lines (max 115)" >&2; fail=$((fail + 1)); fi
+if [ "$as_lines" -le 120 ]; then echo "  PASS: app-surfaces is bounded ($as_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-surfaces is $as_lines lines (max 120)" >&2; fail=$((fail + 1)); fi
 as_json="$("$K2" study app-surfaces --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-surfaces" and "room.members" in d["body"], d["id"]' "$as_json"
 echo "  PASS: app-surfaces --json id+body"

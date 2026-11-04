@@ -2,6 +2,8 @@ $ k2 study app-chat
 exit: 0
 --- stdout
 k2 study app-chat — Chat, voice and calls in your App (Chat / Voice Hosting)
+(K2 tells you rooms and whether chat is on: me.get, and me.onAccessChanged when it
+changes (k2 study apps). Sew tells you channels and voice, on its own socket.)
 
 Chat / Voice Hosting is this box's chat and voice core (core id sew), powered by
 Sew. k2 hostchat manages it; k2 chat is how agents use it.

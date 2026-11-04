@@ -1158,6 +1158,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_APP_CHAT);
     out.push(FEATURE_APP_CHAT_SPACE);
+    if crate::access_live::enabled() {
+        out.push(FEATURE_LIVE_ACCESS);
+    }
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     out.push(FEATURE_PUBLISH_DEV);
     out.push(FEATURE_SITE_VISIBILITY);
@@ -1250,6 +1253,9 @@ pub const FEATURE_BOOT_STATUS_VIEWS: &str = "boot-status-views-v1";
 /// ready, Pro, at least one room; `voice::occupancy::hosts_rooms`). The
 /// client shows its headset button only for servers that list it.
 pub const FEATURE_VOICE_ROOMS: &str = "voice-rooms-v1";
+/// `me.events` and `me.get.chat`: an open App screen hears when its person's
+/// access changes (`K2_ACCESS_HUB`, default on).
+pub const FEATURE_LIVE_ACCESS: &str = "live-access-v1";
 /// `k2 publish run --dev` (prd-publish-visibility-and-dev-mode-v1).
 pub const FEATURE_PUBLISH_DEV: &str = "publish-dev-v1";
 /// Who may open a published site: private, PIN or public, with
@@ -1342,6 +1348,7 @@ mod tests {
                 "email-notifications-v1",
                 "app-chat-v1",
                 "app-chat-space-v1",
+                "live-access-v1",
                 "activity-live-busy",
                 "publish-dev-v1",
                 "site-visibility-v1",

@@ -25,6 +25,8 @@
 //!   0.46.4 (agent-unread-tickets-v1, [`agent_counts`]): `unread`,
 //!   `waiting`, `muted` with `thread:read` in the room and
 //!   `ticketsWaiting` with `tickets:read` there.
+//! - `chat` (live-access-v1, 0.46.8): this login has an enabled chat grant, so
+//!   `chat.pass` may work. K2 says whether chat is on; Sew says which channels.
 //! - `features`: this server's `/boot-status` keys
 //!   (`boot_status::features()`), so an App can tell what the server has
 //!   without the owner-only `/boot-status`.
@@ -179,6 +181,7 @@ pub fn view(pass: &SkinPass, on_link: bool) -> serde_json::Value {
         "app": pass.app,
         "principalId": pass.principal_id,
         "rooms": rooms,
+        "chat": pass.chat,
         "agents": agents,
         "serverId": crate::boot_status::server_id(),
         "publicHost": crate::boot_status::public_host(),
@@ -232,6 +235,15 @@ mod tests {
         assert_eq!(kind_of(&pass(true), true), "guest", "a guest session stays a guest on a link");
         assert_eq!(kind_of(&pass(false), true), "app");
         assert_eq!(kind_of(&pass(false), false), "token");
+    }
+
+    #[test]
+    fn me_events_is_an_app_socket_on_both_doors() {
+        let v = k2_core::contract::catalog().verb("me.events").expect("me.events row");
+        let socket = v.bindings.socket.as_ref().expect("a socket");
+        assert_eq!(socket.path, crate::access_live::ME_EVENTS_PATH);
+        assert_eq!(k2_core::app_surface::ws_param(crate::access_live::ME_EVENTS_PATH), Some("scope"), "GA1: the socket names its parameter");
+        assert!(crate::skin_gateway::allowlisted_ws(crate::access_live::ME_EVENTS_PATH), "the App helper forwards it");
     }
 
     #[test]

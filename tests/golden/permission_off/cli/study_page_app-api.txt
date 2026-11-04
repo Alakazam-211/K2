@@ -13,7 +13,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 45.
+From K2's verb catalog, version 46.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -42,6 +42,7 @@ THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
   me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.
+  me.events                WS   /cli/skin/me/events?scope=                    This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too.
   roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.
   app.rooms                GET  /cli/skin/app-rooms (server only)             This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).

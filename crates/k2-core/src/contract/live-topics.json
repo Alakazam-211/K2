@@ -22,6 +22,15 @@
       "never": "that the Thread's agent is working on your message (that is the THREAD TURN)"
     },
     {
+      "topic": "my-access",
+      "title": "MY ACCESS",
+      "what": "what this person may do now: rooms, caps, folders, chat",
+      "tells": "a nudge to read again, with no details; me.get is the answer",
+      "ready": ["App: k2.asGuest(pass).me.onAccessChanged(cb)"],
+      "use": ["close a room's screen the moment access goes", "show a new room with no refresh"],
+      "never": "read access from the event (it has none), or keep a room's screen open after its 4013"
+    },
+    {
       "topic": "agents",
       "title": "AGENTS",
       "what": "the agents a widget shows, with their look",

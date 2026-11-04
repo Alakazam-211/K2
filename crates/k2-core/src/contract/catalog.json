@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 45,
+  "catalogVersion": 46,
   "caps": [
     {
       "name": "agents:read",
@@ -6388,6 +6388,10 @@
               "additionalProperties": false
             }
           },
+          "chat": {
+            "type": "boolean",
+            "description": "This login has an enabled chat grant, so chat.pass may work (it may still answer pending). K2 says whether chat is on; Sew says which channels. false for an App's own pass and a platform pass."
+          },
           "features": {
             "type": "array",
             "items": {
@@ -6593,7 +6597,8 @@
           "agents",
           "serverId",
           "publicHost",
-          "instanceId"
+          "instanceId",
+          "chat"
         ],
         "additionalProperties": false
       },
@@ -6605,7 +6610,42 @@
       ],
       "doc": "Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.",
       "example": "const me = await k2.asGuest(pass).me.get()",
-      "live": {"topic": "unread", "role": "read"}
+      "live": {"topic": "unread", "alsoTopics": ["my-access"], "role": "read"}
+    },
+    {
+      "verb": "me.events",
+      "cap": null,
+      "exposure": ["app"],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "live-access-v1",
+      "bindings": {"socket": {"path": "/cli/skin/me/events", "frame": "access_changed", "param": "scope", "refetch": "me.get"}},
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "scope": {"enum": ["me", "guests"], "description": "me: this pass's own access. guests: every guest of this App, one socket, with the App's own pass only."}
+          },
+          "required": ["scope"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppAccessFrame",
+        "type": "object",
+        "properties": {
+          "kind": {"enum": ["access_changed"]},
+          "principalId": {"type": "string", "description": "scope=guests only: which of this App's own guests. Read me.get with that guest's pass."}
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "app_pass_required", "usage", "rate_limited", "failed"],
+      "doc": "This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too.",
+      "example": "const off = k2.asGuest(pass).me.onAccessChanged(({me, ended}) => ended ? showSignedOut() : render(me))",
+      "live": {"topic": "my-access", "role": "subscribe", "pairs": ["me.get"]}
     },
     {
       "verb": "roomAgents.list",

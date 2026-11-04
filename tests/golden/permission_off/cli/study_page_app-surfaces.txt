@@ -65,7 +65,9 @@ FILES (0.46.4, App only; k2 app role paths, k2 study apps)
 
 WHEN ACCESS CHANGES ON AN OPEN SOCKET (0.46.8; every App socket)
   K2 rechecks an open socket. From the moment access is gone no more frames
-  leave it, and it closes within about 5 s, even with nothing to send.
+  leave it, and it closes within about a second, idle or not (5 s without the
+  live-access-v1 feature in me.get). me.events tells you too, and says when access
+  arrives (k2 study apps, ACCESS CHANGES).
   What keeps each one open, in its room: /cli/overlay/events and project chat
   thread:read; /cli/fs/events files:read; /cli/activity/events any one of
   activity:read, heartbeats:read, tickets:read, room:members (lose one of
@@ -75,13 +77,13 @@ WHEN ACCESS CHANGES ON AN OPEN SOCKET (0.46.8; every App socket)
     4013   access_lost. The pass works; this socket's room or caps are gone.
            Don't reopen it. Read me.get and redraw. Open it again only if
            me.get shows them again.
-    4003   K2 says the pass is dead. Read me.get first: 401 means sign them in
-           again; if it answers, reopen. Your server's own pass rotates: read
-           K2_PASS_FILE, then reopen.
+    4003   The pass stopped working, or it expired and has been replaced. Read
+           me.get first: 401 means sign them in again; if it answers, reopen. Your
+           server's own pass rotates: read K2_PASS_FILE, then reopen.
     other  A drop, or a close code lost on the way. A browser reports a refused
            socket as 1006 too, so read me.get before each reopen:
              401                   signed out. Stop.
-             200, room still there reopen, with a growing wait. After 6 refusals
+             200, room and caps there  reopen, with a growing wait. After 6 refusals
                                    in a row (about 30 s), stop: the App may be
                                    out of sockets (its owner: k2 app quota), or
                                    on thread.events the room's Chat moved (find
@@ -100,6 +102,9 @@ WHEN ACCESS CHANGES ON AN OPEN SOCKET (0.46.8; every App socket)
   failed with status 0 is refused sockets (read me.get, then subscribe again if
   the room is there).
 
+EVENTS (WS /cli/skin/me/events?scope=me; any live pass. k2 study apps, ACCESS CHANGES)
+  {"kind":"access_changed"}  this pass's access changed: read me.get. No details.
+  (rooms_changed, on /cli/activity/events, only means an agent's look changed.)
 EVENTS (WS /cli/activity/events?workspace=<handle>; room:members opens it)
   {"kind":"room_members_changed","workspace":"<handle>"}  refetch members
   {"kind":"app_deployed","workspace":"<handle>","app":"<id>"}  to the App's

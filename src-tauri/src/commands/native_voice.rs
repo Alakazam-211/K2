@@ -5,34 +5,14 @@
 use serde::Serialize;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct NativeVoiceCall {
-    /// The saved host's id, as `join` took it.
-    pub target: String,
-    /// The room's slug.
-    pub room: String,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct NativeVoiceStatus {
     /// This build has the native engine.
     pub available: bool,
-    /// The live call's server and room, if there is one.
-    pub call: Option<NativeVoiceCall>,
 }
 
-#[cfg(feature = "native-voice")]
-#[tauri::command]
-pub fn voice_native_status(app: tauri::AppHandle) -> NativeVoiceStatus {
-    NativeVoiceStatus {
-        available: true,
-        call: crate::native_voice::live_call(&app).map(|c| NativeVoiceCall { target: c.target, room: c.room }),
-    }
-}
-
-#[cfg(not(feature = "native-voice"))]
 #[tauri::command]
 pub fn voice_native_status() -> NativeVoiceStatus {
-    NativeVoiceStatus { available: false, call: None }
+    NativeVoiceStatus { available: cfg!(feature = "native-voice") }
 }
 
 /// Quit with a call up: leave it, bounded. Nothing to do without the feature.
@@ -52,6 +32,6 @@ mod tests {
     /// of native voice is in the build.
     #[test]
     fn a_build_without_the_feature_says_so() {
-        assert_eq!(voice_native_status(), NativeVoiceStatus { available: false, call: None });
+        assert_eq!(voice_native_status(), NativeVoiceStatus { available: false });
     }
 }

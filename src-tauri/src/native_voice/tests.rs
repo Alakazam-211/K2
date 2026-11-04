@@ -9,17 +9,15 @@ use std::sync::{Arc, Mutex};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use tauri_plugin_sew_voice::fake::{FakeEngine, RecordingSink};
 use tauri_plugin_sew_voice::wire::{EVENT_NAMES, EVENT_PREFIX};
 use tauri_plugin_sew_voice::{
     CallEvent, CallState, DeviceList, EngineError, ErrorInfo, JoinArgs, JoinProvider, JoinRequest, JoinResult, MuteArgs, Participant, ProviderError, RejoinReason,
-    SetDeviceArgs, Spawn, Speaking, StateSnapshot, VoiceEngine, VoiceService, COMMANDS, PLUGIN_NAME,
+    SetDeviceArgs, Spawn, Speaking, StateEvent, StateSnapshot, VoiceService, COMMANDS, DEFAULT_DEVICE, PLUGIN_NAME,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use super::lazy::LazyEngine;
 use super::provider::{answer_from, api_base, find_host, host_base_url, join_body, K2Provider, Login, LoginSource, LOCAL_TARGET};
 
 const LOGIN_TOKEN: &str = "k2-login-token-for-tests";
@@ -28,6 +26,26 @@ const CALL_CRED: &str = "sewcc_sel.secret-for-tests";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("repo root").to_path_buf()
+}
+
+/// A file of one of Sew's crates, from the pinned commit cargo checked out (the
+/// root Cargo.toml's rev). Offline: this build already fetched it.
+fn sew_crate_file(krate: &str, rel: &str) -> Vec<u8> {
+    let root_manifest = std::fs::read_to_string(repo_root().join("Cargo.toml")).expect("root Cargo.toml");
+    let rev = root_manifest.split("sew-crates\", rev = \"").nth(1).expect("the root Cargo.toml pins sew-crates by rev");
+    let short = &rev[..7];
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| dirs::home_dir().expect("home").join(".cargo"));
+    let checkouts = cargo_home.join("git/checkouts");
+    for entry in std::fs::read_dir(&checkouts).unwrap_or_else(|e| panic!("read {}: {e}", checkouts.display())) {
+        let dir = entry.expect("entry").path();
+        if dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("sew-crates-")) {
+            let path = dir.join(short).join(krate).join(rel);
+            if path.exists() {
+                return std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            }
+        }
+    }
+    panic!("{krate}/{rel} at {short} isn't under {}", checkouts.display())
 }
 
 fn fixture() -> Value {
@@ -51,6 +69,7 @@ fn the_renderers_contract_file_matches_the_plugin() {
     assert_eq!(f["eventPrefix"], EVENT_PREFIX);
     assert_eq!(f["events"], json!(EVENT_NAMES));
     assert_eq!(f["commands"], json!(COMMANDS));
+    assert_eq!(DEFAULT_DEVICE, "default", "the renderer sends this for System default");
     assert_eq!(exact::<CallState>(&f["states"]["idle"]), CallState::Idle);
     assert_eq!(exact::<CallState>(&f["states"]["connecting"]), CallState::Connecting);
     assert_eq!(exact::<CallState>(&f["states"]["connected"]), CallState::Connected);
@@ -77,21 +96,23 @@ fn the_renderers_contract_file_matches_the_plugin() {
     assert_eq!(f["rejoinReasons"], json!([RejoinReason::AdmitLost, RejoinReason::CredentialExpired]));
 }
 
-/// Sew's own contract file: the renderer's copy is byte for byte the vendored
-/// one, and every payload parses to the plugin's real types and back.
+/// Sew's own contract file: the renderer's copy is byte for byte the one at the
+/// pinned commit, and every payload parses to the plugin's real types and back.
 #[test]
-fn sews_live_access_contract_matches_the_plugin_and_the_renderers_copy() {
-    let root = repo_root();
-    let vendored = std::fs::read(root.join("third_party/sew-crates/tauri-plugin-sew-voice/tests/native-voice-contract.json")).expect("Sew's file");
-    let copy = std::fs::read(root.join("src/renderer/lib/voice/sew-native-voice-contract.json")).expect("the renderer's copy");
-    assert_eq!(copy, vendored, "the renderer's copy of Sew's contract is stale");
-    let f: Value = serde_json::from_slice(&vendored).expect("JSON");
+fn sews_contract_matches_the_plugin_and_the_renderers_copy() {
+    let pinned = sew_crate_file("tauri-plugin-sew-voice", "tests/native-voice-contract.json");
+    let copy = std::fs::read(repo_root().join("src/renderer/lib/voice/sew-native-voice-contract.json")).expect("the renderer's copy");
+    assert_eq!(copy, pinned, "the renderer's copy of Sew's contract is stale");
+    let f: Value = serde_json::from_slice(&pinned).expect("JSON");
     for group in ["sew_reasons", "fallbacks"] {
         for r in f["ended"][group].as_array().expect(group) {
             let want = CallState::Ended { reason: r["reason"].as_str().expect("reason").into() };
-            assert_eq!(exact::<CallState>(&r["payload"]), want);
+            assert_eq!(exact::<StateEvent>(&r["payload"]).state, want);
         }
     }
+    let moved = exact::<StateEvent>(&f["moved"]["payload"]);
+    assert_eq!(moved.state, CallState::Connected);
+    assert_eq!(moved.room.as_deref(), Some("48831765147549710"));
     for (name, list) in f["participants"].as_object().expect("participants") {
         if name != "event" {
             let _: Vec<Participant> = exact(list);
@@ -100,6 +121,7 @@ fn sews_live_access_contract_matches_the_plugin_and_the_renderers_copy() {
     let denied: Vec<Participant> = serde_json::from_value(f["participants"]["self_speak_denied"].clone()).expect("list");
     assert!(denied[0].speak_denied && denied[0].muted && !denied[0].server_muted);
     assert_eq!(exact::<StateSnapshot>(&f["state_snapshot"]["speak_denied"]).participants.len(), 1);
+    assert_eq!(exact::<StateSnapshot>(&f["state_snapshot"]["moved"]).room.as_deref(), Some("48831765147549710"));
 }
 
 /// Lane C's `POST /cli/voice/join` answer around Sew's `VoiceJoinResponse`.
@@ -302,8 +324,6 @@ async fn join_posts_to_the_bff_with_the_saved_login() {
     let body = got.split("\r\n\r\n").nth(1).expect("body");
     let v: Value = serde_json::from_str(body).expect("json");
     assert_eq!(v, json!({"room": "room-1", "join": {"call_credential": true, "self_mute": true, "self_deaf": false}}));
-    let last = p.last_target().expect("the provider knows the room");
-    assert_eq!((last.target.as_str(), last.room.as_str()), ("host-1", "room-1"));
 }
 
 /// Both reasons Sew can re-join for: it goes back through the login, and each
@@ -343,7 +363,6 @@ async fn the_local_target_and_unknown_hosts_never_send_anything() {
     req.target = "not-saved".into();
     assert_eq!(p.join(req).await.err(), Some(ProviderError::SigninRequired));
     assert!(seen.try_recv().is_err(), "nothing was sent");
-    assert!(p.last_target().is_none());
 }
 
 #[tokio::test]
@@ -398,7 +417,7 @@ async fn a_call_through_k2s_provider_puts_no_token_in_any_event() {
     let w = world(Arc::new(provider_for(&base)));
     let r = w.svc.join(join_args()).await.expect("join");
     assert_eq!(r.call_id, "r_fakeroomfakeroomfakeroomfa");
-    assert!(w.sink.of("state").contains(&json!({"state": "connected"})), "{:?}", w.sink.of("state"));
+    assert!(w.sink.of("state").contains(&json!({"state": "connected", "target": "host-1", "room": "room-1"})), "{:?}", w.sink.of("state"));
     let events = all_events(&w.sink);
     for secret in [LOGIN_TOKEN, MEDIA_TOKEN, CALL_CRED, "sewcc_"] {
         assert!(!events.contains(secret), "{secret} reached an event: {events}");
@@ -415,7 +434,7 @@ async fn mic_denied_at_join_rejects_the_command_ends_the_call_and_says_so() {
     let e = w.svc.join(join_args()).await.err().expect("the join fails");
     assert_eq!(e.code, "mic_denied");
     assert!(w.sink.of("errors").contains(&json!({"code": "mic_denied", "detail": null})), "{:?}", w.sink.of("errors"));
-    assert!(w.sink.of("state").contains(&json!({"state": "ended", "reason": "mic_denied"})), "{:?}", w.sink.of("state"));
+    assert!(w.sink.of("state").contains(&json!({"state": "ended", "reason": "mic_denied", "target": "host-1", "room": "room-1"})), "{:?}", w.sink.of("state"));
     assert!(seen.try_recv().is_err(), "the fake failed before the provider");
 }
 
@@ -440,7 +459,7 @@ async fn a_refused_login_ends_the_call_signin_required() {
     let w = world(Arc::new(provider_for(&base)));
     let e = w.svc.join(join_args()).await.err().expect("the join fails");
     assert_eq!(e.code, "signin_required");
-    assert!(w.sink.of("state").contains(&json!({"state": "ended", "reason": "signin_required"})));
+    assert!(w.sink.of("state").contains(&json!({"state": "ended", "reason": "signin_required", "target": "host-1", "room": "room-1"})));
 }
 
 #[tokio::test]
@@ -452,76 +471,15 @@ async fn a_server_refusal_reaches_the_window_as_given() {
     assert_eq!(e.detail, json!({"hint": "full", "details": {"limit": 5}}));
 }
 
-// ── the lazy engine ──────────────────────────────────────────────────
-
-#[tokio::test]
-async fn nothing_starts_until_something_needs_the_engine() {
-    let made = Arc::new(Mutex::new(0));
-    let fake = Arc::new(FakeEngine::with_demo_devices());
-    let (m, f) = (Arc::clone(&made), Arc::clone(&fake));
-    let lazy = LazyEngine::new(move || {
-        *m.lock().expect("count") += 1;
-        Arc::clone(&f) as Arc<dyn VoiceEngine>
-    });
-    // What the plugin does at app start.
-    let mut events = lazy.device_events();
-    assert!(!lazy.started());
-    assert_eq!(*made.lock().expect("count"), 0, "nothing made at start");
-
-    assert_eq!(lazy.devices().unwrap_or_else(|e| panic!("{e}")).inputs.len(), 2);
-    assert!(lazy.started());
-    lazy.devices().unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(*made.lock().expect("count"), 1, "made once");
-
-    // Hot-plug after that reaches a receiver taken before the engine existed.
-    fake.set_devices(DeviceList::default());
-    let got = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv()).await.expect("in time").expect("a list");
-    assert_eq!(got, DeviceList::default());
-}
-
-// ── what ships with it ───────────────────────────────────────────────
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    for e in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
-        let p = e.expect("entry").path();
-        if p.is_dir() {
-            walk(&p, out);
-        } else {
-            out.push(p);
-        }
-    }
-}
-
-/// Every vendored file is what SEW-CRATES-VENDOR.txt pinned: nothing changed, missing or
-/// extra, the plugin's build script's output included.
-#[test]
-fn vendor_manifest_matches_the_tree() {
-    let root = repo_root().join("third_party/sew-crates");
-    let text = std::fs::read_to_string(repo_root().join("third_party/SEW-CRATES-VENDOR.txt")).expect("SEW-CRATES-VENDOR.txt");
-    let manifest = text.split("# manifest\n").nth(1).expect("a manifest section");
-    let want: HashMap<&str, &str> = manifest.lines().map(|l| l.split_once("  ").map(|(h, p)| (p, h)).expect("sha  path")).collect();
-    let mut files = Vec::new();
-    walk(&root, &mut files);
-    let mut seen = 0;
-    for f in &files {
-        let rel = f.strip_prefix(&root).expect("under root").to_string_lossy().replace('\\', "/");
-        let bytes = std::fs::read(f).unwrap_or_else(|e| panic!("read {rel}: {e}"));
-        let have = format!("{:x}", Sha256::digest(&bytes));
-        let pinned = want.get(rel.as_str()).unwrap_or_else(|| panic!("{rel} isn't in the manifest"));
-        assert_eq!(&have, pinned, "{rel} changed");
-        seen += 1;
-    }
-    assert_eq!(seen, want.len(), "a pinned file is missing");
-}
+// ── what ships with it ──
 
 #[test]
-fn the_app_ships_the_notices_the_licences_ask_for() {
+fn the_app_ships_each_crates_notice() {
     let root = repo_root();
     let conf = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json")).expect("conf");
-    for krate in ["sew-lk-compat", "sew-mls-crypto"] {
+    for krate in ["sew-call-client", "sew-e2ee", "sew-lk-compat", "sew-lkproto", "sew-mls-crypto", "sew-proto", "tauri-plugin-sew-voice"] {
         let shipped = std::fs::read(root.join(format!("resources/notices/{krate}-NOTICE"))).expect("the copy");
-        let vendored = std::fs::read(root.join(format!("third_party/sew-crates/{krate}/NOTICE"))).expect("Sew's");
-        assert_eq!(shipped, vendored, "{krate}");
+        assert_eq!(shipped, sew_crate_file(krate, "NOTICE"), "{krate}'s copy is stale");
         assert!(conf.contains(&format!("../resources/notices/{krate}-NOTICE")), "{krate} isn't in bundle.resources");
     }
 }

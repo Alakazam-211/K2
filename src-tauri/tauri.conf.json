@@ -71,7 +71,7 @@
         "applicationFolderPosition": { "x": 480, "y": 170 }
       }
     },
-    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs", "../resources/notices/sew-lk-compat-NOTICE", "../resources/notices/sew-mls-crypto-NOTICE"],
+    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs", "../resources/notices/sew-call-client-NOTICE", "../resources/notices/sew-e2ee-NOTICE", "../resources/notices/sew-lk-compat-NOTICE", "../resources/notices/sew-lkproto-NOTICE", "../resources/notices/sew-mls-crypto-NOTICE", "../resources/notices/sew-proto-NOTICE", "../resources/notices/tauri-plugin-sew-voice-NOTICE"],
     "externalBin": ["binaries/frpc"]
   },
   "plugins": {

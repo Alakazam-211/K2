@@ -1,0 +1,15 @@
+sew-call-client
+Copyright 2026 Alakazam Labs
+
+Licensed under either of the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT license
+(LICENSE-MIT), at your option.
+
+This crate contains no code derived from LiveKit. It depends on sew-lk-compat (Apache-2.0),
+which holds code ported from livekit/client-sdk-js (Copyright 2021 LiveKit, Inc.), and on
+sew-lkproto (Apache-2.0), which holds code generated from livekit/protocol (Copyright 2023
+LiveKit, Inc.); both carry LiveKit's NOTICE text. Through sew-e2ee it also depends on
+sew-mls-crypto (MIT OR Apache-2.0), which holds code derived from openmls_rust_crypto (part of
+OpenMLS, MIT) and carries OpenMLS's MIT licence text. A binary that includes sew-call-client
+includes all three and must carry their NOTICE files.
+
+Not affiliated with or endorsed by LiveKit, Inc.

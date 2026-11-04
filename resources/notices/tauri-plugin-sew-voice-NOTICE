@@ -1,0 +1,15 @@
+tauri-plugin-sew-voice
+Copyright 2026 Alakazam Labs
+
+Licensed under either of the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT license
+(LICENSE-MIT), at your option.
+
+This crate contains no code derived from LiveKit. It depends on sew-call-client (MIT OR
+Apache-2.0), which depends on sew-lk-compat and sew-lkproto (Apache-2.0); those two hold code
+ported from livekit/client-sdk-js and generated from livekit/protocol (Copyright LiveKit, Inc.)
+with LiveKit's NOTICE text; and, through sew-e2ee, on sew-mls-crypto (MIT OR Apache-2.0), which
+holds code derived from openmls_rust_crypto (part of OpenMLS, MIT) with OpenMLS's MIT licence
+text. A binary or app that includes this plugin includes all three and must carry their NOTICE
+files.
+
+Not affiliated with or endorsed by LiveKit, Inc.

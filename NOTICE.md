@@ -133,14 +133,14 @@ the macOS app. crates.io 0.57.0 still unwraps those.
 
 ## Third-party: Sew native voice crates (MIT OR Apache-2.0; Apache-2.0)
 
-K2's desktop app can carry voice calls with Sew's client crates (the `native-voice` build feature), vendored under `third_party/sew-crates`. Each crate's licence and notice stays in its folder; `third_party/SEW-CRATES-VENDOR.txt` pins the source commit and every file.
+K2's desktop app can carry voice calls with Sew's client crates (the `native-voice` build feature), from Sew's public mirror, [Alakazam-211/sew-crates](https://github.com/Alakazam-211/sew-crates), pinned by commit in the root `Cargo.toml`.
 
 | | |
 |--|--|
-| **What** | `tauri-plugin-sew-voice`, `sew-call-client`, `sew-mls-crypto` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto`, `sew-proto`, `sew-e2ee` (Apache-2.0) |
+| **What** | `tauri-plugin-sew-voice`, `sew-call-client`, `sew-mls-crypto`, `sew-e2ee`, `sew-proto` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto` (Apache-2.0) |
 | **Upstream** | Alakazam Labs, Sew |
-| **Notice** | `sew-lk-compat` holds code ported from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). Its NOTICE ships in the app as `resources/notices/sew-lk-compat-NOTICE`. Not affiliated with or endorsed by LiveKit, Inc. `sew-mls-crypto` holds code derived from openmls_rust_crypto (MIT, Copyright OpenMLS Authors); its NOTICE ships as `resources/notices/sew-mls-crypto-NOTICE`. |
-| **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crates do **not** relicense the product. |
+| **Notice** | `sew-lk-compat` and `sew-lkproto` hold code ported from or generated from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). `sew-mls-crypto` holds code derived from openmls_rust_crypto (MIT, Copyright OpenMLS Authors). Each crate's NOTICE ships in the app under `resources/notices/`. Not affiliated with or endorsed by LiveKit, Inc. |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. These crates do **not** relicense the product. |
 
 ## Third-party: objc2 (MIT)
 

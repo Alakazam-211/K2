@@ -4,33 +4,36 @@ Copyright 2026 Alakazam Labs
 Licensed under either of the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT license
 (LICENSE-MIT), at your option.
 
-src/crypto.rs is derived from openmls_rust_crypto 0.6.0 (src/provider.rs and src/hmac.rs),
-part of OpenMLS (https://crates.io/crates/openmls_rust_crypto), modified by Alakazam Labs. Its
-licence:
+src/crypto.rs is derived from openmls_rust_crypto 0.6.0 (src/provider.rs and src/hmac.rs), and
+src/lib.rs (MlsProvider and its OpenMlsProvider impl) from openmls_rust_crypto 0.6.0's
+src/lib.rs, part of OpenMLS (https://github.com/openmls/openmls), modified by Alakazam Labs.
+openmls_rust_crypto is licensed under the MIT license. Its package on crates.io carries no
+licence file; the text below is OpenMLS's LICENSE file at the commit that package was built
+from (3a3e35de3feeca8f6605143c464d5452ae584d43), unchanged:
 
-    MIT License
+    Copyright (c) 2020 OpenMLS Authors
 
-    Copyright (c) OpenMLS Authors
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
 
-    Permission is hereby granted, free of charge, to any person obtaining a copy of this
-    software and associated documentation files (the "Software"), to deal in the Software
-    without restriction, including without limitation the rights to use, copy, modify, merge,
-    publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
-    to whom the Software is furnished to do so, subject to the following conditions:
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
 
-    The above copyright notice and this permission notice shall be included in all copies or
-    substantial portions of the Software.
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
 
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-    INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-    PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
-    FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-    OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-    DEALINGS IN THE SOFTWARE.
-
-tests/vectors/rfc9180.json is a subset of the RFC 9180 test vectors (the base-mode vectors of
-the suites this crate supports), as published with RFC 9180 and carried by the hpke crate
-(MIT OR Apache-2.0).
+tests/vectors/rfc9180.json (in Sew's repository; not in the published package) is a subset of
+the RFC 9180 test vectors (the base-mode vectors of the suites this crate supports), as
+published with RFC 9180 and carried by the hpke crate (MIT OR Apache-2.0).
 
 HPKE is done by the hpke crate (rozbb/rust-hpke, MIT OR Apache-2.0); no code of hpke-rs
 (MPL-2.0) is used or derived from.

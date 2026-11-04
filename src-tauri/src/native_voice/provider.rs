@@ -11,7 +11,6 @@
 //! here logs them, and no error or refusal carries them: errors are fixed text
 //! and a refusal's detail is what the server said, dropped if it quotes a token.
 
-use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -45,29 +44,15 @@ pub trait LoginSource: Send + Sync + 'static {
     fn login(&self, target: &str) -> Result<Login, ProviderError>;
 }
 
-/// The room a call is in, as the renderer named it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CallTarget {
-    pub target: String,
-    pub room: String,
-}
-
 pub struct K2Provider<L: LoginSource> {
     logins: std::sync::Arc<L>,
     http: reqwest::Client,
-    current: Mutex<Option<CallTarget>>,
 }
 
 impl<L: LoginSource> K2Provider<L> {
     pub fn new(logins: L) -> Result<Self, reqwest::Error> {
         let http = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).timeout(JOIN_TIMEOUT).build()?;
-        Ok(Self { logins: std::sync::Arc::new(logins), http, current: Mutex::new(None) })
-    }
-
-    /// The last room this provider joined: a window opened mid-call asks it
-    /// which server and room the live call is (the plugin's `state` doesn't say).
-    pub fn last_target(&self) -> Option<CallTarget> {
-        self.current.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        Ok(Self { logins: std::sync::Arc::new(logins), http })
     }
 
     async fn join_inner(&self, req: JoinRequest) -> Result<JoinAnswer, ProviderError> {
@@ -95,9 +80,7 @@ impl<L: LoginSource> K2Provider<L> {
             Err(e) if e.is_timeout() => return Err(refused("join_timeout", "the server didn't answer in time")),
             Err(_) => return Err(ProviderError::Unavailable { retry_after_ms: None }),
         };
-        let answer = answer_from(status, retry_after, &bytes, &login)?;
-        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(CallTarget { target: req.target, room: req.room });
-        Ok(answer)
+        answer_from(status, retry_after, &bytes, &login)
     }
 }
 

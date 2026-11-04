@@ -19,8 +19,7 @@ use std::path::{Path, PathBuf};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use serde_json::{json, Value};
-use sew_e2ee::{Id, StoredDevice};
-use tauri_plugin_sew_voice::{DeviceError, DeviceKeyId, DeviceKeyRecord, DeviceKeyStore};
+use tauri_plugin_sew_voice::{DeviceError, DeviceKeyId, DeviceKeyRecord, DeviceKeyStore, StoredDevice};
 use zeroize::Zeroizing;
 
 /// The keychain service every entry goes under.
@@ -158,8 +157,8 @@ fn record_json(d: &StoredDevice) -> Value {
 fn record_from(v: &Value) -> Option<StoredDevice> {
     Some(StoredDevice {
         install_id: v.get("install_id")?.as_u64()?,
-        member_id: v.get("member_id")?.as_str()?.parse::<Id>().ok()?,
-        device_id: v.get("device_id")?.as_str()?.parse::<Id>().ok()?,
+        member_id: v.get("member_id")?.as_str()?.parse().ok()?,
+        device_id: v.get("device_id")?.as_str()?.parse().ok()?,
         pubkey: B64.decode(v.get("pubkey")?.as_str()?).ok()?.try_into().ok()?,
         cert: B64.decode(v.get("cert")?.as_str()?).ok()?,
     })

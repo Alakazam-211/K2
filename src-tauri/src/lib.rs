@@ -1198,7 +1198,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init());
     #[cfg(feature = "native-voice")]
-    let builder = builder.plugin(native_voice::plugin("dev.k2.app"));
+    let builder = builder.plugin(native_voice::plugin());
 
     // App menu bar is macOS-only. Win/Linux use the in-app "Menu" button
     // (frameless chrome). Tray menu is installed separately and stays.
@@ -1938,7 +1938,6 @@ pub fn run() {
             commands::permissions::permissions_request_full_disk_access,
             commands::permissions::permissions_request_accessibility,
             commands::permissions::permissions_request_microphone,
-            commands::permissions::permissions_microphone_state,
             commands::permissions::permissions_open_microphone_settings,
             commands::native_voice::voice_native_status,
             commands::permissions::permissions_request_apple_events,

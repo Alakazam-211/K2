@@ -96,14 +96,12 @@ parking_lot = "0.12"
 
 # Native voice calls (prd-k2-voice-rooms-v1 §14), behind the `native-voice`
 # feature below. Named by version; the root Cargo.toml's [patch.crates-io] says
-# where they come from. sew-e2ee is here only to name `StoredDevice`
-# for K2's device key store; the plugin doesn't re-export it yet. They bring cpal,
-# str0m and openmls, which is why they are optional (the 0.46.4 rule above;
-# vs-live V40). K2 leaves the plugin's `keyring-store` feature off: its Linux
-# Secret Service backend can't build beside K2's `sync-secret-service`, and K2
-# passes its own store over its own keyring instead.
-tauri-plugin-sew-voice = { version = "=0.1.0-alpha.0", optional = true }
-sew-e2ee = { version = "0.7.0", optional = true }
+# where it comes from. It brings cpal, str0m and openmls, which is why it is
+# optional (the 0.46.4 rule above; vs-live V40). K2 leaves the plugin's
+# `keyring-store` feature off: its Linux Secret Service backend can't build beside
+# K2's `sync-secret-service`, and K2 passes its own store over its own keyring.
+# zeroize: the device key K2's store handles.
+tauri-plugin-sew-voice = { version = "=0.1.0", optional = true }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over
@@ -206,7 +204,7 @@ browser-pane = ["tauri/unstable"]
 # Native voice calls: Sew's Tauri plugin (engine, audio devices, E2EE) in this
 # process. Off until the per-OS calls pass (N3); `cargo check -p k2` and the
 # builders don't need ALSA headers until then.
-native-voice = ["dep:tauri-plugin-sew-voice", "dep:sew-e2ee", "dep:zeroize"]
+native-voice = ["dep:tauri-plugin-sew-voice", "dep:zeroize"]
 
 [dev-dependencies]
 # Benchmark framework for src-tauri/benches/*.rs. Dev-only; never ships in
@@ -228,9 +226,6 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Sandbox dirs for the worktree command's path-safety unit tests.
 tempfile = "3"
-
-# native_voice::vendor: recomputes the vendored crates' manifest.
-sha2 = "0.10"
 
 # benches/perf.rs only (grid-hash and file-walk baselines). Were normal
 # deps until 0.46.4; no src-tauri source uses them.

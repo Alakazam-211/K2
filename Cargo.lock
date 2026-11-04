@@ -3578,7 +3578,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry 0.5.3",
+ "windows-registry 0.6.1",
 ]
 
 [[package]]
@@ -3659,7 +3659,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.56.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -4268,9 +4268,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.106"
+version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7883d941dae510fb2d978fc3fe018c71c9e2892fd38854de3e8b92c2e5ad9cc5"
+checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -4350,8 +4350,6 @@ dependencies = [
  "security-framework 3.7.0",
  "serde",
  "serde_json",
- "sew-e2ee",
- "sha2 0.10.9",
  "tao",
  "tauri",
  "tauri-build",
@@ -6112,7 +6110,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7161,7 +7159,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -7181,7 +7179,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -7200,7 +7198,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7213,7 +7211,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -8604,7 +8602,8 @@ dependencies = [
 
 [[package]]
 name = "sew-call-client"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=cefc646a6c9477e753c779403b4d8b1f94c67d08#cefc646a6c9477e753c779403b4d8b1f94c67d08"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -8622,7 +8621,7 @@ dependencies = [
  "sew-e2ee",
  "sew-lk-compat",
  "sew-lkproto",
- "sew-proto 0.7.0",
+ "sew-proto 0.7.2",
  "str0m",
  "thiserror 2.0.18",
  "tokio",
@@ -8658,7 +8657,8 @@ dependencies = [
 
 [[package]]
 name = "sew-e2ee"
-version = "0.7.0"
+version = "0.7.2"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=cefc646a6c9477e753c779403b4d8b1f94c67d08#cefc646a6c9477e753c779403b4d8b1f94c67d08"
 dependencies = [
  "aes-gcm",
  "ed25519-dalek",
@@ -8673,7 +8673,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sew-mls-crypto",
- "sew-proto 0.7.0",
+ "sew-proto 0.7.2",
  "sha2 0.10.9",
  "subtle",
  "thiserror 2.0.18",
@@ -8684,7 +8684,8 @@ dependencies = [
 
 [[package]]
 name = "sew-lk-compat"
-version = "0.7.0"
+version = "0.7.2"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=cefc646a6c9477e753c779403b4d8b1f94c67d08#cefc646a6c9477e753c779403b4d8b1f94c67d08"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -8701,7 +8702,8 @@ dependencies = [
 
 [[package]]
 name = "sew-lkproto"
-version = "0.7.0"
+version = "0.7.2"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=cefc646a6c9477e753c779403b4d8b1f94c67d08#cefc646a6c9477e753c779403b4d8b1f94c67d08"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -8711,7 +8713,8 @@ dependencies = [
 
 [[package]]
 name = "sew-mls-crypto"
-version = "0.7.0"
+version = "0.7.2"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=cefc646a6c9477e753c779403b4d8b1f94c67d08#cefc646a6c9477e753c779403b4d8b1f94c67d08"
 dependencies = [
  "aes-gcm",
  "chacha20poly1305",
@@ -8742,7 +8745,8 @@ dependencies = [
 
 [[package]]
 name = "sew-proto"
-version = "0.7.0"
+version = "0.7.2"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=cefc646a6c9477e753c779403b4d8b1f94c67d08#cefc646a6c9477e753c779403b4d8b1f94c67d08"
 dependencies = [
  "chrono",
  "schemars 1.2.1",
@@ -9767,13 +9771,14 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-sew-voice"
-version = "0.1.0-alpha.0"
+version = "0.1.0"
+source = "git+https://github.com/Alakazam-211/sew-crates?rev=cefc646a6c9477e753c779403b4d8b1f94c67d08#cefc646a6c9477e753c779403b4d8b1f94c67d08"
 dependencies = [
  "cpal",
  "serde",
  "serde_json",
  "sew-call-client",
- "sew-proto 0.7.0",
+ "sew-proto 0.7.2",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",
@@ -9948,7 +9953,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -10847,12 +10852,11 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bb54f33acc68fd454578d9820b0bde1a1a3d17aa17bb7b6595806d02886d409"
+checksum = "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
 dependencies = [
  "cfg-if",
- "once_cell",
  "rustversion",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
@@ -10860,9 +10864,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.79"
+version = "0.4.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbab34de2d982e9b48e18d216d04c4a6f641066ff19ffb699980f591ee3610e"
+checksum = "5e14e0327cb5368ad60ccb22d04a9827a693c95a926d8d125e9fa39e0baec501"
 dependencies = [
  "js-sys",
  "tokio",
@@ -10871,9 +10875,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e29d0c35b16e224a7eeb5cd2d25e3e1968fbd65604117b44d3b789d00ee8535"
+checksum = "6e931a02a39abdbf66966fc35902b5ed58344750a70885bed4ebb3d8eaf28ed9"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -10881,9 +10885,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f501a8bc3719dba86ef8ae4728879c08001bea749eb1333ac5b91e040e2a6b7"
+checksum = "2ca4b54280e455bd831e33a6b8e734baf432fe63fbc35c42ac14ce67a043a53a"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -10894,9 +10898,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
+checksum = "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e"
 dependencies = [
  "unicode-ident",
 ]
@@ -10986,9 +10990,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.106"
+version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+checksum = "d7d179596ff5ec0f6de4db64d54011bde6289cc49603d3a6e4ce3f329207ab88"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -11190,7 +11194,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

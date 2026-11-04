@@ -100,37 +100,6 @@ fn check_accessibility() -> bool { true }
 #[cfg(not(target_os = "macos"))]
 fn check_microphone() -> bool { true }
 
-/// `granted`, `denied` or `undetermined` (the OS hasn't asked yet). A call's
-/// preflight (prd-k2-voice-rooms-v1 §14.6): only macOS has a prompt to wait for.
-/// On Windows and Linux the engine reports a refusal itself, as `mic_denied`.
-#[tauri::command]
-#[allow(deprecated)]
-pub fn permissions_microphone_state() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        use objc::runtime::Class;
-        use objc::{msg_send, sel, sel_impl};
-        unsafe {
-            let Some(cls) = Class::get("AVCaptureDevice") else {
-                return "denied";
-            };
-            use cocoa::base::nil;
-            use cocoa::foundation::NSString;
-            let media_type: cocoa::base::id = NSString::alloc(nil).init_str("soun");
-            let status: i64 = msg_send![cls, authorizationStatusForMediaType: media_type];
-            match status {
-                0 => "undetermined",
-                3 => "granted",
-                _ => "denied",
-            }
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "granted"
-    }
-}
-
 /// Open the OS's microphone privacy page (§4.6, vs-live V37). `false`: this OS
 /// has none (Linux has no permission to grant).
 #[tauri::command]

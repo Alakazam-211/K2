@@ -9,7 +9,7 @@ This crate contains code ported from LiveKit, modified by Alakazam Labs:
   (in src/e2ee/lkgcm.rs and src/compat.rs)
 - livekit/livekit (test/client/client.go, test/integration_helpers.go) @ 8d11efd,
   Copyright 2023 LiveKit, Inc. (src/session/ and src/signal/ were ported from these and
-  have since been rewritten by Alakazam Labs from a written behaviour specification)
+  have since been rewritten from a written behaviour specification)
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,5 +24,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 Each ported file keeps its "Ported from ... (Apache-2.0, (c) LiveKit, Inc.)" header and a
-"Modified by Alakazam Labs, 2026" line. The other files are Alakazam Labs' own. No
-livekit/rust-sdks code is used. This crate is not affiliated with or endorsed by LiveKit, Inc.
+"Modified by Alakazam Labs, 2026" line. src/session/ and src/signal/ were rewritten from a
+written behaviour specification (above). The other files (src/lib.rs, src/e2ee/mod.rs) are
+Alakazam Labs' own. No livekit/rust-sdks code is used. This crate is not affiliated with or
+endorsed by LiveKit, Inc.

@@ -7,26 +7,20 @@
 //! both say. Tokens and the call credential stay in Rust memory.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
-use serde::Serialize;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_sew_voice::real::CallClientEngine;
-use tauri_plugin_sew_voice::sew_call_client::ClientConfig;
-use tauri_plugin_sew_voice::{Builder, DeviceKeyStore, VoiceEngine, VoiceService};
+use tauri_plugin_sew_voice::{Builder, VoiceService};
 
 pub mod device_keys;
-pub mod lazy;
 pub mod provider;
 
 use provider::{K2Provider, SavedLogins};
 
 /// The most quitting waits for Sew's leave (vs-live V36).
 pub const QUIT_LEAVE_BOUND: Duration = Duration::from_secs(1);
-
-static PROVIDER: OnceLock<Arc<K2Provider<SavedLogins>>> = OnceLock::new();
 
 fn k2_dir() -> PathBuf {
     k2_client::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2")
@@ -43,39 +37,16 @@ fn device_keys_dir() -> PathBuf {
     k2_dir().join("voice-device-keys")
 }
 
-/// The plugin. The engine is made on first use ([`lazy`]), so a person who never
-/// joins a call has nothing running, and nothing here can stop the app starting.
-pub fn plugin<R: Runtime>(app_identifier: &str) -> TauriPlugin<R> {
-    let provider = PROVIDER.get_or_init(|| {
-        // reqwest's client only fails to build when TLS can't initialise, which
-        // already stops every other request this app makes.
-        Arc::new(K2Provider::new(SavedLogins).expect("native voice: HTTP client"))
-    });
-    let app_id = app_identifier.to_string();
-    let engine = lazy::LazyEngine::new(move || {
-        let dir = device_dir();
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            log_debug!("[native-voice] can't create {}: {e}", dir.display());
-        }
-        let keys: Arc<dyn DeviceKeyStore> = Arc::new(device_keys::K2DeviceKeys::for_app(device_keys_dir()));
-        Arc::new(CallClientEngine::with_mls(ClientConfig::new(&app_id, dir).with_device_key_store(keys))) as Arc<dyn VoiceEngine>
-    });
-    Builder::with_provider(Arc::clone(provider) as Arc<dyn tauri_plugin_sew_voice::JoinProvider>).engine(Arc::new(engine)).build()
-}
-
-/// Which server and room the live call is in, for a window opened mid-call.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct LiveCall {
-    pub target: String,
-    pub room: String,
-}
-
-pub fn live_call<R: Runtime>(app: &AppHandle<R>) -> Option<LiveCall> {
-    let service = app.try_state::<VoiceService>()?;
-    if !service.snapshot().state.is_live() {
-        return None;
-    }
-    PROVIDER.get()?.last_target().map(|t| LiveCall { target: t.target, room: t.room })
+/// The plugin. Nothing runs until someone uses it: Sew's engine lists no audio
+/// devices at launch (the first `devices`, `set_device` or `join` does).
+pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
+    // reqwest's client only fails to build when TLS can't initialise, which
+    // already stops every other request this app makes.
+    let provider = K2Provider::new(SavedLogins).expect("native voice: HTTP client");
+    Builder::new(provider)
+        .data_dir(device_dir())
+        .device_key_store(Arc::new(device_keys::K2DeviceKeys::for_app(device_keys_dir())))
+        .build()
 }
 
 /// Quit: tell Sew now, so the seat frees at once, but never hold the app up.

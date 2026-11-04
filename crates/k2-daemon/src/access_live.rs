@@ -65,8 +65,13 @@ const WALK_FLOOR: Duration = Duration::from_millis(250);
 
 /// How often every open pass is compared whatever happened. A test sets it short.
 fn sweep_every() -> Duration {
-    let ms = std::env::var("K2_ACCESS_SWEEP_MS").ok().and_then(|v| v.parse::<u64>().ok()).filter(|m| *m > 0).unwrap_or(30_000);
-    Duration::from_millis(ms)
+    Duration::from_millis(sweep_ms(std::env::var("K2_ACCESS_SWEEP_MS").ok().as_deref()))
+}
+
+/// 100 ms to 5 minutes, whatever the environment says: a sweep is a whole walk, and
+/// it's the bound on what no write shows.
+fn sweep_ms(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(30_000).clamp(100, 300_000)
 }
 
 /// A pass as the hub last read it.
@@ -145,13 +150,38 @@ fn on_write() {
 fn start_once() {
     THREAD.get_or_init(|| {
         k2_core::skin::access_live::set_listener(on_write);
-        std::thread::Builder::new().name("k2-access-hub".into()).spawn(run).expect("spawn the access hub").thread().clone()
+        std::thread::Builder::new().name("k2-access-hub".into()).spawn(run_guarded).expect("spawn the access hub").thread().clone()
     });
+}
+
+/// Runs `body`. `true`: it panicked (logged). `me.events` and a feed have no tick of
+/// their own, so a dead thread would leave them silently stale.
+fn survived_panic(what: &str, body: impl FnOnce()) -> bool {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(()) => false,
+        Err(_) => {
+            k2_core::log_debug!("[access_live] the {what} panicked; restarting it");
+            true
+        }
+    }
+}
+
+fn run_guarded() {
+    loop {
+        if survived_panic("hub", run) {
+            // What it was doing is lost: compare everything, after a breath.
+            std::thread::sleep(Duration::from_secs(1));
+            FORCE_FULL.store(true, Ordering::SeqCst);
+            WAKE.store(true, Ordering::SeqCst);
+        }
+    }
 }
 
 fn run() {
     let mut last_end = Instant::now();
     let mut last_sweep = Instant::now();
+    // How long the last whole walk took: see [`full_walk_floor`].
+    let mut last_full = Duration::ZERO;
     loop {
         let sweep = sweep_every();
         let now = Instant::now();
@@ -162,29 +192,31 @@ fn run() {
         }
         if WAKE.swap(false, Ordering::SeqCst) {
             std::thread::sleep(DEBOUNCE);
-            let floor = last_end + WALK_FLOOR;
+            let wake = k2_core::skin::access_live::take_wake();
+            let force = FORCE_FULL.swap(false, Ordering::SeqCst);
+            let full = force || wake == k2_core::skin::access_live::Wake::Full;
+            let floor = last_end + if full { full_walk_floor(last_full) } else { WALK_FLOOR };
             let now = Instant::now();
             if now < floor {
                 std::thread::sleep(floor - now);
             }
-            let wake = k2_core::skin::access_live::take_wake();
-            let force = FORCE_FULL.swap(false, Ordering::SeqCst);
-            match wake {
-                _ if force => walk_all(),
-                k2_core::skin::access_live::Wake::Full => walk_all(),
-                k2_core::skin::access_live::Wake::Tokens(rows) => {
-                    walk(Which::Rows(rows.into_iter().collect()));
-                    let mut owed = HashMap::new();
-                    feeds_hear_ended_sessions(&mut owed);
-                    pace(owed);
-                }
-                k2_core::skin::access_live::Wake::Nothing => {}
+            if full {
+                let t0 = Instant::now();
+                walk_all();
+                last_full = t0.elapsed();
+            } else if let k2_core::skin::access_live::Wake::Tokens(rows) = wake {
+                walk(Which::Rows(rows.into_iter().collect()));
+                let mut owed = HashMap::new();
+                feeds_hear_ended_sessions(&mut owed);
+                pace(owed);
             }
             last_end = Instant::now();
         }
         let now = Instant::now();
         if now >= last_sweep + sweep {
+            let t0 = Instant::now();
             walk_all();
+            last_full = t0.elapsed();
             last_end = Instant::now();
             last_sweep = last_end;
         } else if any_expired() {
@@ -192,6 +224,12 @@ fn run() {
             last_end = Instant::now();
         }
     }
+}
+
+/// A whole walk takes the skin mutex once per open pass, so a write loop on a big box
+/// gets at most a fifth of the mutex. Sockets still check before each frame meanwhile.
+fn full_walk_floor(last_full: Duration) -> Duration {
+    WALK_FLOOR.max(last_full * 4)
 }
 
 fn any_expired() -> bool {
@@ -306,7 +344,8 @@ fn compare(e: &Entry, world: &World) -> bool {
             e.tx.send_replace(Answer::Gone);
             false
         }
-        Ok(Some(pass)) => {
+        Ok(Some(mut pass)) => {
+            world.drop_gone_rooms(&mut pass);
             let fp = fingerprint(&pass, world);
             e.expires_at.store(pass.expires_at.unwrap_or(0), Ordering::SeqCst);
             let old = e.fingerprint.swap(fp, Ordering::SeqCst);
@@ -342,6 +381,14 @@ impl World {
         };
         let projects = crate::apps::project_chat::all_projects()?;
         Ok(Self { rooms, projects })
+    }
+
+    /// A role can go on naming a room whose agent is gone. That room isn't held any
+    /// more: a socket on it must close, not sit on a folder that may come back under
+    /// a new id this pass has no rights in (security review A1).
+    fn drop_gone_rooms(&self, pass: &mut SkinPass) {
+        pass.room_policy.retain(|room, _| self.rooms.contains(room));
+        pass.rooms.retain(|room| self.rooms.contains(room));
     }
 }
 
@@ -425,9 +472,14 @@ const MAIN_PACE: f64 = 200.0;
 /// each frame costs it a `me.get` and it has its own work to do.
 fn rate_of(door: &DoorKey) -> f64 {
     match door {
-        DoorKey::Main => std::env::var("K2_ACCESS_PACE").ok().and_then(|v| v.parse::<f64>().ok()).filter(|r| *r >= 1.0).unwrap_or(MAIN_PACE),
+        DoorKey::Main => main_pace(std::env::var("K2_ACCESS_PACE").ok().as_deref()),
         DoorKey::Link(_, app) => (crate::apps::quotas::quotas_for(app).rps as f64 / 2.0).max(1.0),
     }
+}
+
+/// 1 to 10,000 frames a second. Not a number, or not finite: the default.
+fn main_pace(raw: Option<&str>) -> f64 {
+    raw.and_then(|v| v.trim().parse::<f64>().ok()).filter(|r| r.is_finite()).unwrap_or(MAIN_PACE).clamp(1.0, 10_000.0)
 }
 
 /// What one tick may spend: a change that fits goes out at once.
@@ -476,6 +528,14 @@ fn pace(owed: HashMap<DoorKey, Vec<Owed>>) {
 
 fn run_pacer() {
     loop {
+        if survived_panic("pacer", pacer_body) {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+}
+
+fn pacer_body() {
+    loop {
         if spend() {
             let wait = PACE_TICK_MS - PACE_JITTER_MS + rough_random(2 * PACE_JITTER_MS as usize + 1) as u64;
             std::thread::sleep(Duration::from_millis(wait));
@@ -504,7 +564,7 @@ fn spend() -> bool {
                 }
                 Owed::Guest(sock, who) => {
                     sock.queued.lock().remove(&who);
-                    sock.ready.lock().push_back(who);
+                    sock.ready.lock().insert(who);
                     sock.owed.notify_one();
                 }
             }
@@ -535,8 +595,9 @@ struct FeedSocket {
     owed: Notify,
     /// Named and waiting in the pacer's queue: a second change is the same frame.
     queued: Mutex<HashSet<String>>,
-    /// Paid for by the pacer, ready to send.
-    ready: Mutex<VecDeque<String>>,
+    /// Paid for by the pacer, ready to send. A set, so a client that stops reading
+    /// costs at most one entry per guest.
+    ready: Mutex<HashSet<String>>,
 }
 
 static FEEDS: Mutex<Option<HashMap<String, Arc<Feed>>>> = Mutex::new(None);
@@ -630,7 +691,7 @@ fn feeds_hear_ended_sessions(owed: &mut HashMap<DoorKey, Vec<Owed>>) {
 /// Open `service_id`'s feed for one more socket. Reads skin.db. The socket joins
 /// under the map's lock, so a feed can't be dropped as a socket joins it.
 fn join_feed(service_id: &str, door: DoorKey) -> Result<(Arc<Feed>, Arc<FeedSocket>), String> {
-    let sock = Arc::new(FeedSocket { door, owed: Notify::new(), queued: Mutex::new(HashSet::new()), ready: Mutex::new(VecDeque::new()) });
+    let sock = Arc::new(FeedSocket { door, owed: Notify::new(), queued: Mutex::new(HashSet::new()), ready: Mutex::new(HashSet::new()) });
     let join = |f: &Arc<Feed>| f.sockets.lock().push(Arc::downgrade(&sock));
     let found = with_feeds(|m| {
         m.get(service_id).map(|f| {
@@ -698,6 +759,11 @@ async fn refuse(stream: &mut TcpStream, r: CliResponse) {
     crate::routes::http::refuse_upgrade(stream, &resp).await;
 }
 
+/// The database couldn't say. An App's pass gets no detail: the log has it.
+fn unreadable_refusal() -> CliResponse {
+    refusal("500 Internal Server Error", "failed", "K2 couldn't read this just now; try again")
+}
+
 /// A credential that isn't an App pass: never an owner or login socket.
 pub fn me_events_forbidden() -> CliResponse {
     refusal("403 Forbidden", "skin_token", "me.events is for a live app or guest pass (k2skn_)")
@@ -706,6 +772,19 @@ pub fn me_events_forbidden() -> CliResponse {
 /// With the hub off this socket isn't there, like the feature key.
 pub fn me_events_off() -> CliResponse {
     refusal("404 Not Found", "not_found", "this server has no me.events: read me.get on open, and on each request's refusal")
+}
+
+/// A client that stops reading fills its socket, and a send then waits forever. It
+/// gets this long, then the socket ends and the client re-reads when it comes back.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `true`: sent in time.
+async fn send_within<S>(write: &mut S, frame: Message, limit: Duration) -> bool
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    use futures_util::SinkExt;
+    matches!(tokio::time::timeout(limit, write.send(frame)).await, Ok(Ok(())))
 }
 
 /// `WS /cli/skin/me/events?scope=me`, for a live pass, or `?scope=guests`, for an
@@ -727,7 +806,7 @@ pub async fn serve_me_events(stream: &mut TcpStream, params: HashMap<String, Str
     let link = crate::apps::gateway::current();
     let mut access = PassWatch::open(link, raw).await;
     let Some(entry) = access.entry.as_ref().map(|(_, e)| e.clone()) else {
-        let r = if access.unreadable { CliResponse::internal_error("the pass couldn't be read; try again".to_string()) } else { crate::skin_routes::revoked_skin_response() };
+        let r = if access.unreadable { unreadable_refusal() } else { crate::skin_routes::revoked_skin_response() };
         refuse(stream, r).await;
         return;
     };
@@ -752,7 +831,7 @@ pub async fn serve_me_events(stream: &mut TcpStream, params: HashMap<String, Str
             return;
         }
     };
-    use futures_util::{SinkExt, StreamExt};
+    use futures_util::StreamExt;
     let (mut write, mut read) = ws.split();
     // Idle by design, so a dead peer is only noticed by a failed ping (V19).
     let mut keepalive = tokio::time::interval(crate::overlay_ws::ping_interval());
@@ -761,25 +840,25 @@ pub async fn serve_me_events(stream: &mut TcpStream, params: HashMap<String, Str
         tokio::select! {
             biased;
             _ = keepalive.tick() => {
-                if write.send(Message::Ping(Vec::new())).await.is_err() {
+                if !send_within(&mut write, Message::Ping(Vec::new()), WRITE_TIMEOUT).await {
                     break;
                 }
             }
             _ = access.changed() => {
                 // Closes don't wait for the pacer. A live answer's frame is paced.
                 if matches!(access.answer(), Answer::Gone) {
-                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    let _ = send_within(&mut write, crate::presence::session_revoked_close_message(), WRITE_TIMEOUT).await;
                     break;
                 }
             }
             _ = slot.owed.notified() => {
-                if write.send(Message::Text(ACCESS_CHANGED.to_string())).await.is_err() {
+                if !send_within(&mut write, Message::Text(ACCESS_CHANGED.to_string()), WRITE_TIMEOUT).await {
                     break;
                 }
             }
             incoming = read.next() => match incoming {
                 Some(Ok(Message::Ping(p))) => {
-                    if write.send(Message::Pong(p)).await.is_err() {
+                    if !send_within(&mut write, Message::Pong(p), WRITE_TIMEOUT).await {
                         break;
                     }
                 }
@@ -800,9 +879,10 @@ async fn serve_guest_feed(stream: &mut TcpStream, pass: SkinPass, raw: String) {
     };
     let link = crate::apps::gateway::current();
     let door = door_of(link.as_deref());
-    let mut access = PassWatch::open(link, raw).await;
+    let mut gate = crate::socket_access::SkinGate::default();
+    let mut access = PassWatch::open(link.clone(), raw.clone()).await;
     if access.entry.is_none() {
-        let r = if access.unreadable { CliResponse::internal_error("the pass couldn't be read; try again".to_string()) } else { crate::skin_routes::revoked_skin_response() };
+        let r = if access.unreadable { unreadable_refusal() } else { crate::skin_routes::revoked_skin_response() };
         refuse(stream, r).await;
         return;
     }
@@ -813,11 +893,13 @@ async fn serve_guest_feed(stream: &mut TcpStream, pass: SkinPass, raw: String) {
     let (feed, sock) = match joined {
         Ok(Ok(j)) => j,
         Ok(Err(e)) => {
-            refuse(stream, CliResponse::internal_error(e)).await;
+            k2_core::log_debug!("[access_live] an App's guests couldn't be read: {e}");
+            refuse(stream, unreadable_refusal()).await;
             return;
         }
         Err(e) => {
-            refuse(stream, CliResponse::internal_error(e.to_string())).await;
+            k2_core::log_debug!("[access_live] an App's feed failed to open: {e}");
+            refuse(stream, unreadable_refusal()).await;
             return;
         }
     };
@@ -840,7 +922,7 @@ async fn serve_guest_feed(stream: &mut TcpStream, pass: SkinPass, raw: String) {
             return;
         }
     };
-    use futures_util::{SinkExt, StreamExt};
+    use futures_util::StreamExt;
     let (mut write, mut read) = ws.split();
     let mut keepalive = tokio::time::interval(crate::overlay_ws::ping_interval());
     keepalive.tick().await;
@@ -848,29 +930,47 @@ async fn serve_guest_feed(stream: &mut TcpStream, pass: SkinPass, raw: String) {
         tokio::select! {
             biased;
             _ = keepalive.tick() => {
-                if write.send(Message::Ping(Vec::new())).await.is_err() {
+                if !send_within(&mut write, Message::Ping(Vec::new()), WRITE_TIMEOUT).await {
                     break;
                 }
             }
             _ = access.changed() => {
                 // The App's own pass: it rotates, or the App was suspended.
                 if matches!(access.answer(), Answer::Gone) {
-                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    let _ = send_within(&mut write, crate::presence::session_revoked_close_message(), WRITE_TIMEOUT).await;
                     break;
                 }
             }
             _ = sock.owed.notified() => {
-                let ready: Vec<String> = sock.ready.lock().drain(..).collect();
+                // This frame names a guest, so the App's own pass is asked first once
+                // any access was written, the same gate as the room sockets.
+                if gate.due() {
+                    let generation = gate.generation();
+                    let (l, r) = (link.clone(), raw.clone());
+                    match tokio::task::spawn_blocking(move || crate::socket_access::live_pass_or_close(l.as_deref(), &r)).await {
+                        Ok(Ok(_)) => gate.settled(generation),
+                        Ok(Err(close)) => {
+                            let _ = send_within(&mut write, close, WRITE_TIMEOUT).await;
+                            break;
+                        }
+                        Err(e) => {
+                            k2_core::log_debug!("[access_live] a feed's check panicked: {e}");
+                            let _ = send_within(&mut write, Message::Close(None), WRITE_TIMEOUT).await;
+                            break;
+                        }
+                    }
+                }
+                let ready: Vec<String> = sock.ready.lock().drain().collect();
                 for who in ready {
                     let frame = serde_json::json!({ "kind": "access_changed", "principalId": who }).to_string();
-                    if write.send(Message::Text(frame)).await.is_err() {
+                    if !send_within(&mut write, Message::Text(frame), WRITE_TIMEOUT).await {
                         break 'socket;
                     }
                 }
             }
             incoming = read.next() => match incoming {
                 Some(Ok(Message::Ping(p))) => {
-                    if write.send(Message::Pong(p)).await.is_err() {
+                    if !send_within(&mut write, Message::Pong(p), WRITE_TIMEOUT).await {
                         break;
                     }
                 }
@@ -926,17 +1026,25 @@ impl PassWatch {
                 return Self { rx: None, entry: None, unreadable: true };
             }
         };
-        let fp = match World::load() {
-            Ok(world) => fingerprint(&pass, &world),
+        let world = match World::load() {
+            Ok(world) => Some(world),
             Err(e) => {
                 k2_core::log_debug!("[access_live] the rooms and projects couldn't be read: {e}");
-                UNREAD
+                None
             }
         };
         let rowid = k2_core::skin::access_live::token_rowid(raw).unwrap_or_else(|e| {
             k2_core::log_debug!("[access_live] token row: {e}");
             None
         });
+        let mut pass = pass;
+        if let Some(world) = world.as_ref() {
+            world.drop_gone_rooms(&mut pass);
+        }
+        let fp = match world.as_ref() {
+            Some(world) => fingerprint(&pass, world),
+            None => UNREAD,
+        };
         let (tx, _) = watch::channel(Answer::Live { pass: Arc::new(pass.clone()), generation });
         let fresh = Arc::new(Entry {
             link,
@@ -1072,6 +1180,78 @@ mod tests {
         let mut app = base.clone();
         app.app = "svc".into();
         assert_ne!(fingerprint(&app, &w), same, "the App");
+    }
+
+    #[test]
+    fn a_removed_room_leaves_the_pass_and_the_answer() {
+        let w = world(&["a"], &[]);
+        let mut session = pass(&[("a", &["files:read"]), ("gone", &["files:read"])]);
+        w.drop_gone_rooms(&mut session);
+        let answer = Answer::Live { pass: Arc::new(session), generation: 1 };
+        assert!(matches!(answer.room_access("a", &["files:read"]).0, RoomAccess::Still(_)));
+        assert!(matches!(answer.room_access("gone", &["files:read"]).0, RoomAccess::Lost), "the role still names it; the room is gone");
+        let mut platform = pass(&[]);
+        platform.session = false;
+        platform.caps = vec!["files:read".into()];
+        platform.rooms = vec!["a".into(), "gone".into()];
+        w.drop_gone_rooms(&mut platform);
+        let answer = Answer::Live { pass: Arc::new(platform), generation: 1 };
+        assert!(matches!(answer.room_access("gone", &["files:read"]).0, RoomAccess::Lost), "a platform pass too");
+        assert!(matches!(answer.room_access("a", &["files:read"]).0, RoomAccess::Still(_)));
+    }
+
+    #[test]
+    fn the_environment_cant_turn_the_hub_into_a_busy_loop_or_stop_it() {
+        assert_eq!(sweep_ms(None), 30_000);
+        assert_eq!(sweep_ms(Some("400")), 400);
+        assert_eq!(sweep_ms(Some("0")), 100);
+        assert_eq!(sweep_ms(Some("99999999999")), 300_000);
+        assert_eq!(sweep_ms(Some("nope")), 30_000);
+        assert_eq!(main_pace(None), MAIN_PACE);
+        assert_eq!(main_pace(Some("50")), 50.0);
+        assert_eq!(main_pace(Some("0")), 1.0);
+        assert_eq!(main_pace(Some("1e12")), 10_000.0);
+        for bad in ["NaN", "inf", "-inf", "nope"] {
+            assert_eq!(main_pace(Some(bad)), MAIN_PACE, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_whole_walk_waits_four_times_as_long_as_the_last_one_took() {
+        assert_eq!(full_walk_floor(Duration::ZERO), WALK_FLOOR);
+        assert_eq!(full_walk_floor(Duration::from_millis(50)), WALK_FLOOR);
+        assert_eq!(full_walk_floor(Duration::from_millis(740)), Duration::from_millis(2_960));
+    }
+
+    #[test]
+    fn a_panic_is_survived_and_reported() {
+        assert!(!survived_panic("test", || {}));
+        assert!(survived_panic("test", || panic!("on purpose")));
+    }
+
+    /// A sink that never has room, like a client that stopped reading.
+    struct Stuck;
+    impl futures_util::Sink<Message> for Stuck {
+        type Error = std::io::Error;
+        fn poll_ready(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Pending
+        }
+        fn start_send(self: std::pin::Pin<&mut Self>, _: Message) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn poll_flush(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Pending
+        }
+        fn poll_close(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    #[tokio::test]
+    async fn a_client_that_stops_reading_doesnt_hold_its_socket_open() {
+        let t0 = Instant::now();
+        assert!(!send_within(&mut Stuck, Message::Text("x".into()), Duration::from_millis(50)).await);
+        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
     }
 
     #[test]

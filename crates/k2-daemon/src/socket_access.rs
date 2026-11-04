@@ -172,13 +172,29 @@ impl RoomAccess {
 pub(crate) fn room_access(link: Option<&LinkCtx>, raw: &str, room: &str, caps: &[&str]) -> RoomAccess {
     match live_pass(link, raw) {
         Ok(None) => RoomAccess::PassGone,
-        Ok(Some(p)) if p.has_any_cap_in_room(room, caps) => RoomAccess::Still(p),
+        Ok(Some(p)) if p.has_any_cap_in_room(room, caps) => match room_exists(room) {
+            Ok(true) => RoomAccess::Still(p),
+            // A role can go on naming a room whose agent is gone: not held any more.
+            Ok(false) => RoomAccess::Lost,
+            Err(e) => {
+                k2_core::log_debug!("[socket_access] a room couldn't be read: {e}");
+                RoomAccess::Failed
+            }
+        },
         Ok(Some(_)) => RoomAccess::Lost,
         Err(e) => {
             k2_core::log_debug!("[socket_access] a pass couldn't be read: {e}");
             RoomAccess::Failed
         }
     }
+}
+
+/// Is this room's agent still here? Files and activity frames match a room by its
+/// folder, and the same folder can come back under a new id (security review A1).
+fn room_exists(room: &str) -> Result<bool, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT EXISTS (SELECT 1 FROM projects WHERE id = ?1)", [room], |r| r.get(0)).map_err(|e| format!("room lookup: {e}"))
 }
 
 /// [`room_access`] off the async worker. A long-lived socket captures its link

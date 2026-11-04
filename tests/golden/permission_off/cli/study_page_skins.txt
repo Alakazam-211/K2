@@ -261,7 +261,11 @@ ACCESS CHANGES (0.46.8; me.get's features lists live-access-v1)
     }, {onError: (e) => log(e)})
     It reads me.get after every open and after every event, and coalesces. A
     rotated App pass reconnects quietly. onError: a read failed and it keeps
-    listening; or (code failed, status 0) the socket stopped, so call it again later.
+    listening; or (code failed, status 0) the socket stopped, so call it again later:
+      let off
+      const watch = () => { off = k2.asGuest(pass).me.onAccessChanged(cb, {onError(e) {
+        log(e); if (e.code === 'failed' && e.status === 0) setTimeout(watch, 30000)
+      }}) }
   A page through the App helper (no SDK, same origin, cookie):
     async function reread() {             // 401: signed out. No answer: keep showing
       const r = await fetch('/cli/skin/me').catch(() => null)
@@ -302,8 +306,15 @@ ACCESS CHANGES (0.46.8; me.get's features lists live-access-v1)
     Raw: /cli/skin/me/events?scope=guests with the App's own pass; frames
     {"kind":"access_changed","principalId":"..."}. It only ever names this App's
     own guests. Run about 10 reads at a time at most: they use the same 64.
+    Keep the passes behind passesOf in memory only, never in a file or a log.
+    An App sees its own guests' opaque ids and when they arrive, with no names and
+    with no guests:rooms grant needed. Names stay behind guests.list.
   The owner can raise the quota: k2 app quota <app> --sockets 1024 --subscriptions 4096.
   A big change reaches everyone over some seconds, so re-reads don't arrive together.
+  So a frame can lag by tens of seconds: this redraws a screen, it doesn't guard
+  anything. Never decide who may see your own data from a me you cached: K2 enforces
+  its own doors at each request, and your server must ask K2 before it answers from
+  its own store.
   Chat and voice: K2 tells you rooms and whether chat is on (me.get's chat); Sew
   tells you channels and voice on its own socket, and chat.pass opens it: k2 study
   app-chat. Draw each from its own source and never join them to decide anything:

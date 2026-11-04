@@ -184,3 +184,42 @@ async fn with_the_hub_off_the_tick_still_closes_it() {
     let seen = watch(&mut s, CLOSE_WITHIN_MS).await;
     assert_eq!(seen.close, Some(4013), "{seen:?}");
 }
+
+/// Security review A1, on the tick and frame path, with no hub to help. A guest's
+/// files socket sits on a room; the room goes while the role still names it; the same
+/// folder comes back under a new id. That folder's changes must not reach this pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_the_hub_off_a_removed_rooms_socket_closes_and_a_new_room_in_its_folder_stays_dark() {
+    let env = setup(&[("K2_ACCESS_HUB", "off")]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "hubretire");
+    let (_, pass) = guest_in(port, &ws, "hubretireguest", ALL_CAPS).await;
+    let quiet = seed_ws(&env, "hubretirequiet");
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": "role-hubretireguest", "handle": quiet.handle, "caps": ALL_CAPS })).await;
+    let mut idle = open(port, &format!("/cli/fs/events?workspace={}&token={}", quiet.handle, enc(&pass))).await;
+    let mut busy = open(port, &format!("/cli/fs/events?workspace={}&token={}", ws.handle, enc(&pass))).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    file_changed(&ws, "before.txt");
+    let b = watch(&mut busy, 1_000).await;
+    assert!(b.has("before.txt"), "rig: {b:?}");
+
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::Project::delete(&conn, &ws.id).expect("delete");
+        k2_core::db::schema::Project::delete(&conn, &quiet.id).expect("delete");
+    }
+    let again = seed_ws(&env, "hubretire");
+    assert_ne!(again.id, ws.id, "rig: a new id");
+    assert_eq!(again.path, ws.path, "rig: the same folder");
+
+    // The next frame is checked first: no file name, and the close.
+    file_changed(&again, "after-secret.txt");
+    let seen = watch(&mut busy, CLOSE_WITHIN_MS).await;
+    assert!(!seen.has("after-secret.txt"), "a new room's file name reached a pass with no rights there: {seen:?}");
+    assert_eq!(seen.close, Some(4013), "{seen:?}");
+    // A socket with nothing to send, on another removed room: the tick closes it.
+    let seen = watch(&mut idle, CLOSE_WITHIN_MS).await;
+    assert_eq!(seen.close, Some(4013), "{seen:?}");
+}

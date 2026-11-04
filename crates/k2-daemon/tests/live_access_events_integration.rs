@@ -268,8 +268,11 @@ async fn every_trigger_reaches_an_open_screen() {
     let doomed = seed_ws(&env, "medoomed");
     let (_, pass) = guest_in(port, &ws, "metdoom", &["thread:read"]).await;
     let role = "role-metdoom";
-    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role, "handle": doomed.handle, "caps": ["thread:read"] })).await;
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role, "handle": doomed.handle, "caps": ["thread:read", "files:read", "activity:read"] })).await;
     let mut s = me_socket(port, &pass).await;
+    let mut doomed_files = open(port, &format!("/cli/fs/events?workspace={}&token={}", doomed.handle, enc(&pass))).await;
+    let mut doomed_activity = open(port, &format!("/cli/activity/events?workspace={}&token={}", doomed.handle, enc(&pass))).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(holds(&me(port, &pass).await, &doomed.id), "rig");
     {
         let db = k2_core::db::shared();
@@ -278,6 +281,10 @@ async fn every_trigger_reaches_an_open_screen() {
     }
     hears(&mut s, "a room's agent removed").await;
     assert!(!holds(&me(port, &pass).await, &doomed.id));
+    // The role still names the room, and its sockets go anyway: the same folder could
+    // come back under a new id, and this pass has no rights there.
+    closes(&mut doomed_files, 4013, "a removed room's files socket").await;
+    closes(&mut doomed_activity, 4013, "a removed room's activity socket").await;
     drop(s);
 
     // A project's members, also in the main database (V11).

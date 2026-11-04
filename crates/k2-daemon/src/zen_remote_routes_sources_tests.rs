@@ -381,6 +381,48 @@ fn reads_spend_the_placement_s_budget() {
     assert_eq!((s, e["code"].as_str()), (429, Some("rate_limited")), "{e}");
 }
 
+/// A paused placement fetches nothing, as it writes nothing.
+#[test]
+fn a_paused_placement_can_t_refresh() {
+    let fx = fx(CAPS);
+    add(plain("fleet"));
+    write_page(&fx, &page("source = \"fleet\"", ""));
+    let g = fx.d.garden.clone();
+    ok_of(PAUSE, &fx.phone, &[], json!({ "garden": g, "placement": "b1", "reason": "runaway" }));
+    let (s, e) = call_no(&fx, "sources.refresh", json!(["fleet"]));
+    assert_eq!((s, e["code"].as_str()), (423, Some("paused")), "{e}");
+    call_ok(&fx, "sources.read", json!(["fleet"]));
+    ok_of(RESUME, &fx.phone, &[], json!({ "garden": g, "placement": "b1" }));
+    assert_eq!(call_ok(&fx, "sources.refresh", json!(["fleet"]))["queued"], true);
+}
+
+/// A refresh is a real fetch: one placement gets 20 an hour of one source. Its
+/// other sources, and another placement, have their own.
+#[test]
+fn refreshes_are_capped_per_placement_and_source() {
+    use crate::garden_data::phone_rows::REFRESHES_PER_HOUR;
+    let fx = fx(CAPS);
+    add(plain("fleet"));
+    add(plain("other"));
+    let two = format!(
+        "{}[[widget]]\nid = \"b2\"\nkind = \"custom\"\nwidget = \"board\"\ncolumn = 0\n[widget.props.config]\nsource = \"fleet\"\n",
+        page("sources = \"fleet, other\"", "")
+    );
+    write_page(&fx, &two);
+    for i in 0..REFRESHES_PER_HOUR {
+        assert_eq!(call_ok(&fx, "sources.refresh", json!(["fleet"]))["queued"], true, "refresh {i}");
+    }
+    let (s, e) = call_no(&fx, "sources.refresh", json!(["fleet"]));
+    assert_eq!((s, e["code"].as_str()), (429, Some("rate_limited")), "{e}");
+    let wait = e["retryAfterSecs"].as_u64().unwrap_or_else(|| panic!("how long: {e}"));
+    assert!((3000..=3600).contains(&wait), "about an hour: {wait}");
+    // A refused one isn't counted against anyone, and reads go on.
+    call_ok(&fx, "sources.read", json!(["fleet"]));
+    assert_eq!(call_ok(&fx, "sources.refresh", json!(["other"]))["queued"], true, "another source isn't starved");
+    let body = json!({ "garden": fx.d.garden, "placement": "b2", "hash": fx.d.hash(), "verb": "sources.refresh", "args": ["fleet"] });
+    assert_eq!(ok_of(CALL, &fx.phone, &[], body)["result"]["queued"], true, "b2 has its own");
+}
+
 /// Only the door answers these rows. A desktop frame's bridge is the renderer's,
 /// and the local door still refuses them, so nothing widened.
 #[test]

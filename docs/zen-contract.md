@@ -1171,7 +1171,9 @@ them. `sources.subscribe` is `host`: on `sources_changed` the phone calls
   live hash (`stale_widget`), `sources:read` (`cap_not_granted`), the signer
   gate (`needs_editor`), the placement's read budget (`rate_limited`), and a
   source's `viewers` floor for the phone's login (`cap_not_granted`). `refresh`
-  is once per 15 s per source (429 `rate_limited`, `retryAfterSecs`).
+  is once per 15 s per source and 20 an hour per placement and source (429
+  `rate_limited`, `retryAfterSecs`), and refused while the placement is paused
+  (423 `paused`).
 - **What a phone gets:** the stored card view (`sources::view::build`), `address`
   and `reach` added, `fields` as scalars. Never `/cli/sources/show`, `list` or
   `export`: no token, secret name, fetch URL or header reaches a phone. K2 can't

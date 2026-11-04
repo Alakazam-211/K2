@@ -19,7 +19,9 @@
 //! phone. Other servers answer `server_not_saved`: this daemon holds no logins
 //! for them (plan Q2). The subscribe is the phone's: event, then re-read.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value as J};
 
@@ -63,12 +65,57 @@ fn run(b: &CallBody, who: &Who) -> Result<J, CliResponse> {
         }
         "sources.refresh" => {
             let s = local_source(b, &bound).map_err(refusal)?;
+            if crate::zen_routes::placement_pause(&w.garden, &w.placement).is_some() {
+                return Err(SourceErr::new("paused", 423, "this widget is paused: too many writes. The person can Resume it on the widget").response());
+            }
+            refreshes_left(&w, &s.name, Instant::now()).map_err(refusal)?;
             let body = json!({ "name": s.name }).to_string();
             let v = routes::refresh(who, body.as_bytes()).map_err(refusal)?;
+            refresh_spent(&w, &s.name, Instant::now());
             Ok(json!({ "queued": v["queued"], "nextAt": v["nextAt"] }))
         }
         other => Err(crate::garden_data::response(&crate::garden_data::refused("unknown_verb", 400, format!("no verb {other}")))),
     }
+}
+
+/// A refresh is a real fetch, with the source's secret, on the server: a source
+/// may sit behind a paid API. So one placement gets this many an hour of one
+/// source, on top of each source's 15 s limit. Per source, so a card bound to a
+/// dozen isn't starved.
+pub(crate) const REFRESHES_PER_HOUR: usize = 20;
+const REFRESH_WINDOW: Duration = Duration::from_secs(3600);
+
+/// `(garden, placement, source)` → when it refreshed.
+type RefreshLog = Mutex<HashMap<(String, String, String), VecDeque<Instant>>>;
+
+fn refresh_log() -> &'static RefreshLog {
+    static LOG: OnceLock<RefreshLog> = OnceLock::new();
+    LOG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `rate_limited`, with how long until one comes free, when this placement has
+/// used its refreshes of this source this hour. A refresh another limit refuses
+/// isn't counted.
+fn refreshes_left(w: &Placed, source: &str, now: Instant) -> Result<(), SourceErr> {
+    let mut log = refresh_log().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(q) = log.get_mut(&(w.garden.clone(), w.placement.clone(), source.to_string())) else { return Ok(()) };
+    while q.front().is_some_and(|at| now.duration_since(*at) >= REFRESH_WINDOW) {
+        q.pop_front();
+    }
+    match q.front() {
+        Some(oldest) if q.len() >= REFRESHES_PER_HOUR => {
+            let wait = (REFRESH_WINDOW - now.duration_since(*oldest)).as_secs().max(1);
+            Err(SourceErr::new("rate_limited", 429, format!("a widget refreshes one source at most {REFRESHES_PER_HOUR} times an hour")).with("retryAfterSecs", wait))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn refresh_spent(w: &Placed, source: &str, now: Instant) {
+    let mut log = refresh_log().lock().unwrap_or_else(|e| e.into_inner());
+    // Bounded: only sources a placement binds, each holding the hour's refreshes.
+    log.retain(|_, q| q.back().is_some_and(|at| now.duration_since(*at) < REFRESH_WINDOW));
+    log.entry((w.garden.clone(), w.placement.clone(), source.to_string())).or_default().push_back(now);
 }
 
 /// Who a `shape` source's audit line names (GV47): this door, this placement.

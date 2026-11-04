@@ -21,6 +21,7 @@ An agent can now look after its App's people from start to finish, and App scree
 - **`k2 board` without naming a board still works, with a warning.** From the next release it's refused: pass `--board <id|name>`.
 - **Going back to Sew 0.7.1 or older after upgrading to 0.7.3 needs `k2 hostchat rollback --accept-data-loss`,** because 0.7.2 changed Sew's data. From 0.7.2, a plain `k2 hostchat rollback` works.
 - **Windows: the installer is back, unsigned.** SmartScreen warns when you run it: choose **More info → Run anyway**.
+- **Live docs now run on version 0.11.0 of the multiplayer kit.** Once a box has run this release, going back to an earlier K2 still opens, reads and edits your docs. Purging a doc's history or text stays refused (MPC-E502, store_newer) until you upgrade again.
 
 ### Your agents run their Apps' people
 - **With "Let this agent manage its Apps' users" on, an agent needs no owner step** to add logins, give them roles and rooms, and list or end their sessions (`k2 app user sessions`).
@@ -54,8 +55,7 @@ An agent can now look after its App's people from start to finish, and App scree
 - **Scheduled mail follows the rules in force when it sends.** Sending turned off or moved to approval since then now applies.
 - **Settings and `k2 mail sending` say plainly what sending `on` means:** an agent that reads a malicious email can be talked into sending mail and files onward. Use **approval** for any agent that reads outside mail.
 - **An agent can ask on a card for its workspace's sending to be turned off.**
-
-- **Link your Microsoft 365 or Outlook.com mailbox** as a linked inbox for an agent: `k2 mail link add you@company.com --provider microsoft --workspace <ws>` signs you in with a code on Microsoft's page, then the agent reads and drafts as it does for a linked Gmail. [CONFIRM: the release build carries K2's Microsoft app ID]
+- **Link your Microsoft 365 or Outlook.com mailbox** as a linked inbox for an agent: `k2 mail link add you@company.com --provider microsoft --workspace <ws>` signs you in with a code on Microsoft's page, then the agent reads and drafts as it does for a linked Gmail.
 
 ### Mail: safety and your mail server
 - **Sender checks come only from your own mail server's verdict.** Under sending `on`, an agent's reply is refused unless the message passed DMARC, its domain has no DMARC policy, or it came from a mailbox on this server.
@@ -66,7 +66,7 @@ An agent can now look after its App's people from start to finish, and App scree
 - **`k2 hostmail ptr set` takes effect at once,** instead of at the mail server's next restart, and makes the new name's certificate the default if it has one. A domain whose MX still points at another mail host of this server stays Verified while you move it.
 
 ### Your own domain on an App
-- **Your App's own domain can go through K2 Connect (Pro).** Add a CNAME to `<app>.<box>.k2.dev` and the TXT record K2 shows. No sudo or port 443, and your server's address stays hidden, so it works behind a router, on a Mac or Windows computer, or where another web server holds port 443. Up to 20 names per server. On a public Linux server with K2's port 443 front on, K2 still points names straight at the server. [CONFIRM: K2's relays take these names for every Pro server at the cut, and a certificate issued through the relay works; one real name passed on a test server, with a DNS certificate.]
+- **Your App's own domain can go through K2 Connect (Pro).** `k2 app domain add <app> <name>` prints a CNAME to `<app>.<box>.k2.dev` and a TXT record to set. No sudo or port 443, and your server's address stays hidden, so it suits a server behind a router, a Mac or Windows computer, or one where another web server holds port 443. Up to 20 names per server. `k2 app domains <app>` says whether K2 Connect has this open for your server yet. On a public Linux server with K2's port 443 front on, you can still point names straight at the server.
 - **People who type `http://` reach your site.** K2 holds port 80 when it's free and sends them to `https://`. `k2 front http off` turns it off; on a server whose front was already on, run `k2 front http on`.
 - **"Open in app" links work as soon as a custom domain goes live,** not at the next deploy.
 
@@ -79,20 +79,20 @@ An agent can now look after its App's people from start to finish, and App scree
 - **`k2 app suspend` is for you, an Admin or the App's own agent, and its help says so.** A `k2 app` or `k2 compute` command your role can't run says which role it needs.
 
 ### Chat and calls (Sew)
-- **K2 installs and upgrades to Sew 0.7.3,** with chat connection and encrypted-call fixes and a security fix: Sew now checks the App's scope on its recording, notification-setting and consent routes. `k2 hostchat upgrade`. `k2 hostchat rollback` now puts the voice engine back too; if it can't, it prints the one command to run, and you don't run the rollback again. [CONFIRM: Sew tested upgrades to 0.7.3 from 0.7.2, 0.7.1 and 0.6.1; check a 0.3.1 server before saying it can go straight there.]
+- **K2 installs and upgrades to Sew 0.7.3,** with chat connection and encrypted-call fixes and a security fix: Sew now checks the App's scope on its recording, notification-setting and consent routes. `k2 hostchat upgrade`. `k2 hostchat rollback` now puts the voice engine back too; if it can't, it prints the one command to run, and you don't run the rollback again. Upgrades to 0.7.3 were tested from Sew 0.6 or newer.
 - **`k2 hostchat enable` installs the PostgreSQL version Sew needs** if it's missing, from your distribution where it carries that version, otherwise from PostgreSQL's own repository, and says why if that fails. The setup wizard shows it as a step.
 - **Handing a Space to your App works now.** If one got stuck, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row.
 - **Renaming, archiving and bringing back channels in an App's Space work now.**
 - **Calls can work on every live host of an App.** Set `behindK2Front: true` in Sew's kit config; without it, calls use the App's primary host.
-- **Sew's App kit filters microphone noise.** Run `k2 app sdk add <app-folder> --sew` again to get it. [CONFIRM: add "by default" only after the noise decision.]
+- **Sew's App kit filters microphone noise by default.** Each person can switch it to Standard or the computer's own voice isolation, and if the filter can't load, the call falls back to the browser's own. Run `k2 app sdk add <app-folder> --sew` again to get it.
 - **An agent with Manage Chat / Voice Hosting on gets its own chat account,** so it can create and run a Space. Without the switch, it can ask on a card.
-- [CONFIRM: only if voice rooms are on at the cut; the bug never reached a release] **Voice rooms stay open when K2 restarts on a Pro server.**
+- **Voice rooms stay open when K2 restarts on a Pro server.**
 
 ### Threads
 - **Posting to a Thread or project chat answers at once.** You no longer wait while it's typed into a sleeping agent's terminal; the agent gets it right after, in order.
 - **What you send shows straight away as "Sending…".** If it fails it stays as "Not sent", with Retry and Discard, and a retry never posts twice.
-- **Your own messages look like yours on another server too.** They could show as someone else's when K2 couldn't tell who you were; a server on 0.46.8 now says which are yours.
-- **Pictures beside messages once more than two people are talking,** in the desktop Thread.
+- **Your own Thread messages stay blue, on another server too.** One could turn grey, as if someone else sent it, when K2 couldn't tell who you were. The server now says which posts are yours; it needs to be on 0.46.8.
+- **Sender pictures once more than two people are talking.** In the desktop Thread, each other sender's picture sits beside their messages.
 - **A Thread on another server opens faster,** with its last messages at once.
 - **Links in chat have no copy button.** Right-click one for **Copy link**.
 
@@ -103,21 +103,21 @@ An agent can now look after its App's people from start to finish, and App scree
 - **Clear stopped sidecars:** `k2 sidecar archive <name>` or `--all-stopped`. `k2 sidecar new <name>` resumes the conversation.
 
 ### Secrets
-- **A secret card "for this chat only" now reaches the agent:** the session that asked, or that chat's running session if that one ended, and the agent is told whether it arrived. It ends with that session, even with `--resume`, and lasts at most 7 days (24 hours by default). If the agent isn't running, nothing is saved: K2 wakes it and you Save again.
+- **A secret card "for this chat only" now reaches the agent:** the session that asked, or that chat's running session if that one ended, and the agent is told whether it arrived. It ends with that session, even with `--resume`, and lasts at most 7 days, down from 30 (24 hours by default). If the agent isn't running, nothing is saved: K2 wakes it and you Save again.
 - **A guest's or Member's one-chat secret can't take over a workspace secret of the same name** unless the agent asks with `--scope session`.
 - **Saving a card keeps to what it says:** if the agent mustn't see a value, shares that could read it are removed.
 - **Destroying a secret takes its file back.** `k2 vault destroy`, `disable` and `revoke` remove it from every running session and say what K2 can't undo: a value already read, or an environment variable in a running session.
 - **`k2 vault grant --to session:<id>` refuses an id no running session has,** such as the chat id `k2 whoami` shows.
 
 ### People and signing in
-- **Profile pictures for your server's people.** Add yours in your profile (the person icon, top right); Owners and Admins can set others' in Settings → Admin Access. Each server keeps its own.
+- **Profile pictures for your server's people.** Add, change or remove yours in your profile (the person icon in the top bar); Owners and Admins can set others' in Settings → Admin Access. They show in place of initials in Settings → Admin Access, Home, the top bar and the Thread. Each server keeps its own, and agents can't set them.
 - **A login someone else makes starts with a temporary password.** When an owner or Admin adds someone who signs in to K2 itself, or resets their password, that person chooses their own at first sign-in. To keep yours, untick **Temporary password**, or pass `--keep-password` to `k2 users add` or the new `k2 users set-password`.
 - **The agent list no longer comes up empty** after signing in with a temporary password.
 - **Your profile is in the web version too.**
 - **A sign-in link can no longer send someone to another site.**
 
 ### On your phone
-- **Read a chat on your computer and its notifications leave your iPhone,** even with the app closed, usually within seconds. iOS decides the timing, and sends nothing to an app you've force-quit. Needs K2 Companion 4.1.6. [CONFIRM: 4.1.6 is in the stores at the cut; if not, say "the next K2 Companion".]
+- **Read a chat on your computer and its notifications leave your iPhone,** even with the app closed, usually within seconds. iOS decides the timing, and sends nothing to an app you've force-quit. Needs the next K2 Companion update.
 - **No more "2 new messages" for messages you've read,** and the badge no longer stays one too high after a project chat or card.
 - **Encrypted notifications never go out unencrypted.** If the relay refuses one, it's dropped; the message is still in the Thread.
 - **The Mobile tab and `k2 sim status` show the owner's answer at once,** with install progress.
@@ -127,13 +127,13 @@ An agent can now look after its App's people from start to finish, and App scree
 - **Phone widgets read this server's data sources live.** A source's token, address and headers never reach the phone.
 - **Board Garden (Beta):** a whiteboard you and your agent share, beside your Conversation. Add it from New Garden, which turns on the Board core after one confirm. Agents use `k2 board`; `k2 study board` explains it.
 - **`.k5board` files are boards, not text.** `k2 doc` refuses them, and a tab shows a card instead of raw bytes.
-- [PENDING] **Board tab (Beta, behind a preview switch):** open, edit and save a `.k5board` file in a tab, or **Save a copy**. If someone changed the same thing, your edit is held, even across a restart, until you pick **Use mine** or **Use theirs**. Agents use `k2 board <verb> <file>` (path last, as with `k2 doc`, or `--file`) and `k2 board merge <base> <copy> <target>`. Exits: 1 a conflict, 2 bad input, 4 a bad file or a newer format, 5 locks and voting.
-- [PENDING] **Boards Garden:** the `.k5board` files in every workspace you can read, by name. A click opens the tab.
-- [PENDING] **Compute Garden:** your compute nodes at a glance (jobs running and queued, free CPU and memory, whose jobs) beside an Agents list that opens any agent's Thread. Each part is a tile you show or hide. Add it from New Garden.
+- **Board tab (Beta):** turn on **Open .k5board files in a Board tab (Beta)** in Settings → Multiplayer, and a `.k5board` file in a workspace opens in its own tab, where you edit and save it, or **Save a copy**. If someone changed the same thing, your edit is held, even across a restart, until you pick **Use mine** or **Use theirs**.
+- **Agents work on board files too:** `k2 board <verb> <file>` (path last, as with `k2 doc`, or `--file`) to read, search, add, update, delete, connect, react, vote, comment and move objects, and `k2 board merge <base> <copy> <target>`. Exits: 1 a conflict, 2 bad input, 4 a bad file or a newer format, 5 locks and voting. `k2 study board` explains it.
+- **Board files in the Board Garden:** with the same switch on, its list of boards gains a Board files folder: the `.k5board` files in the workspaces you can read, by name and workspace, found by search too. A click opens the file's tab.
 
 ### Live docs
 - **See your own carets from your other tabs and devices,** marked "You · other tab".
-- **Undo and redo land in the right order,** after typing that's still on its way.
+- **Type fast, then press Ctrl+Z (Cmd+Z on a Mac), and it undoes the right step,** even while your typing is still on its way to the server. Redo follows the same order.
 - **Carets no longer vanish when someone else types.**
 - **Re-apply after a dropped connection knows what went in.**
 - **Agents editing by line number without reading the doc first** get a note that a later release will refuse it.
@@ -143,11 +143,12 @@ An agent can now look after its App's people from start to finish, and App scree
 - **Keep a job off a node** with `--avoid <node>` on `run`, `test` or `move --auto`, retries included.
 - **Status shows which queued jobs are pinned and which K2 places,** and a job sent to a busy node names one that could start it.
 - **A burst of jobs while every node is busy spreads out** instead of piling onto one node.
+- **A job run without `--cpus` says what it reserves on the node,** and status marks such running jobs.
 - **Give a workspace its own node list:** `k2 compute allow-nodes <node>,<node>`. An agent can narrow its list; widening or clearing it needs a person or a card.
 - **Jobs that package a large repository no longer fail,** and a tenant's macOS jobs can read their parent folders, once the node's `k2-node` is updated.
 
 ### Windows (Alpha)
-- **The Windows installer is back,** unsigned until Microsoft's identity review is done. 0.46.7 had none, so this is the first to bring its Windows changes: no console windows popping up, Gardens, a working tray, terminal copy and paste, and editor menus. Agents still stop when the daemon restarts. [CONFIRM: the release runs with `K2_SKIP_WINDOWS_NSIS=0`.]
+- **The Windows installer is back,** unsigned until Microsoft's identity review is done. 0.46.7 had none, so this is the first to bring its Windows changes: no console windows popping up, Gardens, a working tray, terminal copy and paste, and editor menus. Agents still stop when the daemon restarts.
 
 ### Fixes
 - **A new file never takes an existing file's name.** Cmd+N and New File skip any `Untitled` already in the folder or open in a tab.
@@ -157,7 +158,8 @@ An agent can now look after its App's people from start to finish, and App scree
 - **A malformed link inside the desktop app can no longer crash it.**
 - **Scrolling a remote Claude Code session is steadier.**
 - **Claude Max 20x shows as Ultra,** Anthropic's new name for the plan.
-- **The stash bookmark left of Send is no longer short and stubby.**
+- **The stash bookmark next to Send is taller,** as tall as the "/" beside it, not short and stubby.
+- **A security update to a compression library K2 uses** (libz-sys).
 
 ## 0.46.7 — Apps run their own chat
 

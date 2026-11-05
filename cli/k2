@@ -57786,22 +57786,25 @@ WORKSPACE MODE
                             manager: the workspace coordinates other workspaces
                             k2: K2's own agent (k2so is accepted too)
 
-SERVER SWITCHES (the owner only, from a terminal outside K2)
-  k2 settings set <key> <true|false>      on and off work too
+SERVER SWITCHES (the owner only)
+  k2 settings set <key> <true|false>      on and off work too; nothing else
     voiceRoomsPreview       voice rooms on this server (k2 voice, the
                             top-bar headset, Settings → Voice Rooms)
     voiceTunnelPreview      voice through K2's tunnel
                             (k2 hostchat media tier tunnel)
     computePreview          compute nodes (same as k2 compute preview on|off)
     boardFilePreview        board files open in a tab
-  These are the only keys it takes; any other key is refused with this
-  list. Agents, Admins and Members are refused: the daemon checks that the
-  caller is the owner. An agent asks its human (k2 thread). The change
-  applies at once, with no restart.
+  Run it as the owner in a plain terminal on the server (not a K2 tab): the
+  CLI picks up the owner's credential there by itself. These are the only
+  keys it takes: any other key, or a value that isn't true/false/on/off,
+  exits 2 with this list and sends nothing. Agents, Admins and Members get
+  exit 3: the daemon checks that the caller is the owner. An agent asks
+  its human (k2 thread). The change applies at once, with no restart.
 
 EXIT
-  0 ok · 1 no usable answer · 2 bad usage or an unknown key ·
-  3 the daemon refused (owner/admin)
+  0 ok · 1 no usable answer · 2 bad usage, an unknown key or a bad value
+  (checked first, before anything is sent) · 3 the daemon refused you
+  (set: only the owner; --mode: the owner or an admin)
 
 EXAMPLES
   k2 settings

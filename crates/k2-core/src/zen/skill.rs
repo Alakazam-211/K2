@@ -453,6 +453,27 @@ says `answeredBy`: who answered or dismissed it, `{kind, login, name}` with\n\
 `null`); `null` while pending or when the agent answered itself. And\n\
 `expiresAt`: Unix seconds when a pending card expires (K2 closes it as\n\
 `expired`), or `null` when it never does.\n\n\
+**Secret cards** (`doc.kind` `secret`) say only `doc.secret = {status, expiresAt}`\n\
+(`pending`, `answered` or `expired`): never the value, its name, the prompt or where\n\
+it goes. To let the person answer one, call `k2.thread.answer(address, card.id)` with\n\
+no choice from a click in your widget: K2 opens its own sheet outside the widget, the\n\
+person types the value there, and your widget never sees it. It answers `null` when\n\
+the sheet closes; the new status comes with the next Thread view. A choice or value\n\
+passed along is `bad_args`, and a widget never sends a secret itself.\n\n\
+**Saving a Thread file:** `k2.thread.download(address, item.id, n)` (caps\n\
+`downloads:save` and `thread:read`), from a click, saves attachment `n` to the\n\
+person's Downloads as it is (its own name and type, any size, audio too). K2 copies\n\
+it from the agent's server; no bytes pass through your widget. It answers `{saved,\n\
+name}`; `saved` is false when the person said no. Show the button only when the\n\
+attachment's `canDownload` is `true`. Refusals by name: `not_granted`,\n\
+`attachment_secret` (the file looks like a secret now), `not_found`.\n\n\
+**Ending and archiving a sidecar** (cap `agents:start`, this computer only), from a\n\
+click: `k2.agents.end({address})` ends a running sidecar's process after K2's own\n\
+sheet asks the person (an asleep one answers `{ended: false}` at once; someone with it\n\
+open in a tab is `sidecar_attached`). `k2.agents.archive({address})` takes a stopped one\n\
+off the list, and `k2 sidecar new <name>` brings it back. Only sidecars\n\
+(`ws/name::local`): a main agent or a heartbeat session is `bad_args`. `sidecar_live`\n\
+means end it first; `worktree_sidecar` means retire it with `k2.agents.settle`.\n\n\
 Built-in widgets get their caps from K2. A custom widget asks for caps in its\n\
 manifest and gets every one it asks for at once: widgets in your own Gardens\n\
 need no permissions.\n\n",
@@ -997,7 +1018,8 @@ k2.connected.then(() => {\n\
   })\n\
 })\n\
 ```\n\n\
-It has K2's Thread behaviour: bubbles with author and time, choice cards, Enter sends\n\
+It has K2's Thread behaviour: bubbles with author and time, choice cards, secret cards\n\
+(an \"Enter it in K2\" button that opens K2's own sheet), Enter sends\n\
 (Shift+Enter is a new line; the text stays if K2 refuses), the working tab (the\n\
 agent's Thread turn in K2's words, with `activity:read`; no tab without it, never a\n\
 guess), stick-to-bottom scrolling with a \"N new messages ↓\" pill,\n\
@@ -1687,6 +1709,28 @@ mod tests {
         // the human to a review, a grant or a sending switch.
         for gone in ["click Review", "click **Review**", "K2 draws its own review card", "zen-grant.key", "widget revoke", "Sending is on", "human grants"] {
             assert!(!body.contains(gone), "skill v12 must not say {gone:?}");
+        }
+    }
+
+    /// v49 (catalog v50): secret cards open K2's own sheet, thread.download
+    /// saves the original, and agents.end / agents.archive end and archive
+    /// sidecars.
+    #[test]
+    fn secret_cards_downloads_and_ending_sidecars_are_taught() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 49, "catalog v50's verbs need a new skill version");
+        let body = generate_k2_zen_skill_for(false);
+        for want in [
+            "`k2.thread.answer(address, card.id)` with\nno choice",
+            "your widget never sees it",
+            "`k2.thread.download(address, item.id, n)`",
+            "no bytes pass through your widget",
+            "`canDownload` is `true`",
+            "`k2.agents.end({address})`",
+            "`k2.agents.archive({address})`",
+            "`worktree_sidecar` means retire it with `k2.agents.settle`",
+            "\"Enter it in K2\"",
+        ] {
+            assert!(body.contains(want), "the k2-zen skill teaches {want:?}");
         }
     }
 

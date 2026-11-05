@@ -984,6 +984,46 @@ So in K2's macOS and Linux webviews (WebKit), make the PNG from
 Chrome, WebView2). Still to measure by hand: WKWebView in a signed build,
 WebKitGTK, WebView2.
 
+### Thread files, secret cards, ending agents (catalog v50, 0.46.9)
+
+Three additions a client asked for while building a chat Garden.
+
+**`thread.download(address, docId, n)`** (`downloads:save` + `thread:read`).
+K2 saves a message's attachment from the agent's server into Downloads,
+through the desktop Thread's own save (transfer card, Cancel, toast). No
+bytes pass through the frame, so it keeps the original name and type, has
+no size cap and takes audio. It always saves quarantined (macOS asks before
+it opens). The `downloads.*` rules apply: a press in the frame within 5 s,
+once every 2 s, 10 a minute, one at a time, K2's first-time card and the
+hourly budget. The daemon still decides who may save. Its refusals come
+back by name: `not_granted` (the agent's server says no, an App guest
+without `files:download`), `attachment_secret` (the file looks like a
+secret now), `not_found` (it's gone). Answers `{saved, name?}`. The
+widget's `ThreadFile` now carries `canDownload`: hide the button when it
+isn't `true`.
+
+**Secret cards.** A widget sees a secret card as `doc.kind: "secret"` with
+`doc.secret = {status, expiresAt}` (`pending`, `answered` or `expired`).
+Never the value, name, prompt, sites or how K2 sends it.
+`thread.answer(address, cardId)` on a pending one opens K2's own sheet
+outside the frame (the permission-card pattern): the compact SecretCard,
+saved through the window's own answer path with no widget origin. Only
+just after a press in the widget (focus isn't enough), one sheet at a time.
+The widget hears `null`; the new status arrives with the Thread's next
+view. A choice or value passed along is `bad_args`. The old refusals stay:
+a widget never answers with a secret (UW50), and the daemon refuses a
+widget-origin answer that carries one. Handoff cards stay refused.
+
+**`agents.end({address})` and `agents.archive({address})`** (garden-local,
+`agents:start`, Workbench rows through `/cli/zen/call`, as the person on
+this computer). End is `k2 sidecar stop`: K2's sheet first (it stops a
+running process mid-turn), an asleep agent answers `{ended: false}` at once,
+and someone with it open in a tab is `sidecar_attached`. Archive is
+`k2 sidecar archive`: a press is enough, since `k2 sidecar new <name>`
+brings it back. A running agent is `sidecar_live`, one in its own worktree
+is `worktree_sidecar` (retire it with `agents.settle`). Both take only
+sidecars: a workspace's main agent and a heartbeat session are `bad_args`.
+
 ### Events
 
 No new event kind: a widget save, a pause and a resume each emit exactly

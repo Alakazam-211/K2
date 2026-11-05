@@ -231,7 +231,13 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v48 = the Compute Garden (Rosson 2026-11-03): `k2:canvas@1`, its Tiles,
 /// and the garden-local `compute.nodes` (cap `compute:nodes`, catalog v49).
 /// (Integrator: renumber if another held branch took 48.)
-pub const SKILL_VERSION_ZEN: u32 = 48;
+/// v49 = catalog v50 (0.46.9): secret cards in a Garden open K2's own sheet
+/// (`k2.thread.answer(address, cardId)`, `doc.secret` is status and expiry
+/// only), `k2.thread.download` (K2 saves the original Thread file, no bytes
+/// through the widget, `canDownload`), and `k2.agents.end` /
+/// `k2.agents.archive` for sidecars.
+/// (Integrator: renumber if another held branch took 49.)
+pub const SKILL_VERSION_ZEN: u32 = 49;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

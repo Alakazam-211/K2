@@ -340,10 +340,11 @@ describe('updateHostConfirmCopy — unmistakable remote targeting (P4)', () => {
 })
 
 describe('403 handling', () => {
-  it('updateForbiddenCopy NAMES the host + says owner/admin only', () => {
+  it('updateForbiddenCopy NAMES the host and both causes of the 403 (expired sign-in, or not owner/admin)', () => {
     const copy = updateForbiddenCopy('Hetzner box')
-    expect(copy).toContain('Hetzner box')
-    expect(copy).toMatch(/owner|admin/i)
+    expect(copy).toBe(
+      "Hetzner box turned down the update. Your sign-in there may have expired (sign in again), or your login isn't the host owner or an admin.",
+    )
   })
 
   it('isForbiddenError matches 403 / forbidden / token messages', () => {

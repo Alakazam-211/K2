@@ -29,6 +29,8 @@ import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { forgetAllUpdateJobsForTests } from './update-host'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { RecoveringError } from '@/lib/daemon-cli'
 
 const HOST: ConnectHost = {
   id: 'id-rosson',
@@ -347,5 +349,243 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     const btn = await screen.findByRole('button', { name: 'Check for updates' })
     await waitFor(() => expect(cliGet).toHaveBeenCalledWith(expect.anything(), 'auth/whoami'))
     expect((btn as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+// ── The role gate and Install & restart (Rosson 2026-11-05) ────────────
+// "It often leaves the button greyed out and says you need to be an owner
+// or an admin, even though I am logged in as an owner or an admin … when I
+// click Install and restart after the download is done … it doesn't
+// actually perform the update." The role used to be read ONCE at mount; a
+// failed read greyed the row for good with the owner/admin copy.
+describe('Settings → General → Update: who may update, and Install & restart', () => {
+  const OWNER = { username: 'rosson', owner: false, role: 'owner' }
+  const B: ConnectHost = { ...HOST, id: 'id-z3', label: 'z3', hostname: 'z3.k2.dev', token: '' }
+
+  function checkButton(): HTMLButtonElement {
+    return screen.getByRole('button', { name: 'Check for updates' }) as HTMLButtonElement
+  }
+
+  function toastText(): string {
+    return useToastStore
+      .getState()
+      .toasts.map((t) => t.message)
+      .join('\n')
+  }
+
+  /** Route GETs: whoami via `who`, update status as a staged job. */
+  function routeGets(who: () => unknown): void {
+    cliGet.mockImplementation(async (_scope: unknown, route: string) => {
+      if (route === 'auth/whoami') return who()
+      if (route === 'daemon/update/status') return { phase: 'staged', progress: 1 }
+      throw new Error(`unexpected GET ${route}`)
+    })
+  }
+
+  beforeEach(() => {
+    useConnectHostStore.setState({ recovery: { kind: 'connected' }, sessionEpoch: 0 })
+  })
+
+  it('after boot: the read during recovery is never a refusal, and the role lands once connected', async () => {
+    useConnectHostStore.setState({ recovery: { kind: 'reconnecting', bootPhase: null } })
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    // The real request gate: no request while the window's host recovers.
+    routeGets(() => {
+      const s = useConnectHostStore.getState()
+      if (s.recovery.kind !== 'connected') throw new RecoveringError('Rosson', s.recovery.kind)
+      return OWNER
+    })
+    render(<UpdateHostRow />)
+    await waitFor(() => expect(cliGet).toHaveBeenCalledWith(expect.anything(), 'auth/whoami'))
+    expect(checkButton().disabled).toBe(true)
+    expect(checkButton().title).toBe('Checking your access on Rosson…')
+    expect(row().textContent).not.toMatch(/owner or an admin/i)
+
+    act(() => {
+      useConnectHostStore.setState({ recovery: { kind: 'connected' } })
+    })
+    await waitFor(() => expect(checkButton().disabled).toBe(false))
+    expect(row().textContent).not.toMatch(/owner or an admin/i)
+  })
+
+  it('after a reload: a whoami that fails once is read again, and the owner is enabled', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    let fails = 1
+    routeGets(() => {
+      if (fails > 0) {
+        fails -= 1
+        throw new TypeError('Load failed')
+      }
+      return OWNER
+    })
+    render(<UpdateHostRow />)
+    // While it can't be read the button stays usable (the host decides),
+    // with a note, never the owner/admin refusal.
+    await screen.findByText("Couldn't read your access on Rosson (Load failed). Still checking…")
+    expect(row().textContent).not.toMatch(/owner or an admin/i)
+    await waitFor(() => expect(screen.queryByText(/Couldn't read your access/)).toBeNull(), { timeout: 4000 })
+    expect(checkButton().disabled).toBe(false)
+    expect(cliGet.mock.calls.filter((c) => c[1] === 'auth/whoami').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('after a server switch: the new server is read with its own login once the token lands', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    const askedWith: string[] = []
+    routeGets(() => {
+      const active = useConnectHostStore.getState().activeHost
+      if (active === 'local') throw new Error('whoami sent to this computer')
+      askedWith.push(`${active.id}:${active.token}`)
+      // No token in memory yet (the keychain pass is still running): the
+      // host refuses the login.
+      if (!active.token) throw new DaemonHttpError('invalid or missing token', 403, null)
+      return OWNER
+    })
+    render(<UpdateHostRow />)
+    await waitFor(() => expect(checkButton().disabled).toBe(false))
+
+    act(() => {
+      useConnectHostStore.setState({ activeHost: B, hosts: [HOST, B] })
+    })
+    await screen.findByText('Your sign-in to z3 has expired. Sign in to z3 again to update it.')
+    expect(checkButton().disabled).toBe(true)
+
+    const signedIn = { ...B, token: 'tok-z3' }
+    act(() => {
+      useConnectHostStore.setState({ activeHost: signedIn, hosts: [HOST, signedIn] })
+    })
+    await waitFor(() => expect(checkButton().disabled).toBe(false))
+    expect(screen.queryByText(/Your sign-in to z3/)).toBeNull()
+    expect(askedWith).toContain('id-z3:')
+    expect(askedWith[askedWith.length - 1]).toBe('id-z3:tok-z3')
+  })
+
+  it('a Member: the row says why, and nothing is sent', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    routeGets(() => ({ username: 'm', owner: false, role: 'member' }))
+    render(<UpdateHostRow />)
+    await screen.findByText("You're signed in to Rosson as a Member. Only the host owner or an admin can update it.")
+    expect(checkButton().disabled).toBe(true)
+    expect(cliPost).not.toHaveBeenCalled()
+  })
+
+  it('a 403 from the update route while whoami says owner: never "only the owner or an admin"', async () => {
+    routeGets(() => OWNER)
+    cliPost.mockImplementation(async (_s: unknown, route: string) => {
+      if (route === 'daemon/update/check') throw new DaemonHttpError('invalid or missing token', 403, null)
+      throw new Error(`unexpected POST ${route}`)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await waitFor(() => expect(toastText()).toContain("although you're the owner there"))
+    expect(toastText()).not.toMatch(/Only the host owner or an admin/)
+  })
+
+  it('a 403 while whoami also refuses the login: sign in again', async () => {
+    let refuse = false
+    routeGets(() => {
+      if (refuse) throw new DaemonHttpError('invalid or missing token', 403, null)
+      return OWNER
+    })
+    cliPost.mockImplementation(async (_s: unknown, route: string) => {
+      if (route === 'daemon/update/check') {
+        refuse = true // the session expired on the host
+        throw new DaemonHttpError('invalid or missing token', 403, null)
+      }
+      throw new Error(`unexpected POST ${route}`)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await waitFor(() =>
+      expect(toastText()).toContain('Your sign-in to Rosson has expired. Sign in to Rosson again to update it.'),
+    )
+  })
+
+  it('Install & restart sends apply for this job, to the host the row names', async () => {
+    remote.ghost = false
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    const post = cliPost.getMockImplementation()!
+    const applies: Array<{ host: string; body: unknown }> = []
+    cliPost.mockImplementation(async (scope: unknown, route: string, body: unknown) => {
+      if (route === 'daemon/update/apply') {
+        const s = scope as { hostKey: string; isRemote: boolean }
+        applies.push({ host: s.isRemote ? s.hostKey : 'LOCAL', body })
+      }
+      return post(scope, route, body)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await clickButton('Download')
+    await clickButton('Install & restart Rosson')
+    await screen.findByText('Updated Rosson to v0.46.3.', undefined, { timeout: 5000 })
+    expect(applies).toEqual([{ host: 'rosson.k2.dev', body: { job_id: 'job-1' } }])
+  })
+
+  it('an apply the host refuses is on the row at once, and Install & restart comes back', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    const post = cliPost.getMockImplementation()!
+    cliPost.mockImplementation(async (scope: unknown, route: string, body: unknown) => {
+      if (route === 'daemon/update/apply') {
+        throw new DaemonHttpError('swap binary: Permission denied (os error 13)', 500, null)
+      }
+      return post(scope, route, body)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await clickButton('Download')
+    await clickButton('Install & restart Rosson')
+    await screen.findByText("Couldn't install the update on Rosson: swap binary: Permission denied (os error 13)")
+    expect(screen.queryByText('Updating Rosson… reconnecting…')).toBeNull()
+    await screen.findByRole('button', { name: 'Install & restart Rosson' })
+  })
+
+  it('apply answers "unknown job_id" from the same daemon: nothing installed, said at once (no 10-minute wait)', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    const post = cliPost.getMockImplementation()!
+    let applied = false
+    cliPost.mockImplementation(async (scope: unknown, route: string, body: unknown) => {
+      if (route === 'daemon/update/apply') {
+        applied = true
+        throw new DaemonHttpError('unknown job_id job-1', 400, null)
+      }
+      return post(scope, route, body)
+    })
+    cliGet.mockImplementation(async (_s: unknown, route: string) => {
+      if (route === 'auth/whoami') return OWNER
+      if (route === 'daemon/update/status') {
+        if (applied) throw new DaemonHttpError('not found', 404, null)
+        return { phase: 'staged', progress: 1 }
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await clickButton('Download')
+    await clickButton('Install & restart Rosson')
+    await screen.findByText(
+      'Rosson no longer has the downloaded update (it restarted), so nothing was installed. Check for updates to download it again.',
+    )
+    expect(screen.queryByText('Updating Rosson… reconnecting…')).toBeNull()
+    expect(checkButton()).toBeTruthy()
+  })
+
+  it('a 403 on the status poll for an owner keeps the downloaded job (Install & restart still comes)', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    let refusals = 1
+    cliGet.mockImplementation(async (_s: unknown, route: string) => {
+      if (route === 'auth/whoami') return OWNER
+      if (route === 'daemon/update/status') {
+        if (refusals > 0) {
+          refusals -= 1
+          throw new DaemonHttpError('invalid or missing token', 403, null)
+        }
+        return { phase: 'staged', progress: 1 }
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await clickButton('Download')
+    await screen.findByRole('button', { name: 'Install & restart Rosson' }, { timeout: 5000 })
+    expect(toastText()).not.toMatch(/Only the host owner or an admin/)
   })
 })

@@ -7,9 +7,10 @@ import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { Toggle } from '@/components/ui'
-import { restartHostVisibility, restartHostConfirmCopy, type RestartRole } from './restart-host'
+import { restartHostConfirmCopy } from './restart-host'
+import { hostActionGate, refusalCopy } from './host-role'
+import { useActiveHostRole } from './useActiveHostRole'
 import {
-  updateHostVisibility,
   updateHostConfirmCopy,
   updateAvailableCopy,
   hostVersionCopy,
@@ -22,9 +23,10 @@ import {
   updateFailedCopy,
   updateUnconfirmedCopy,
   isAmbiguousApplyError,
+  isJobStateRefusal,
+  settleApplyRefusal,
   pollErrorMeansRestart,
   watchUpdateComeback,
-  updateForbiddenCopy,
   isForbiddenError,
   isStaged,
   isTerminalPhase,
@@ -38,7 +40,6 @@ import {
   forgetUpdateJob,
   updateJobGoneCopy,
   updateStatusUnreadableCopy,
-  type UpdateRole,
   type UpdateCheckResult,
   type UpdateStatusResult,
   type UpdatePhase,
@@ -1049,7 +1050,9 @@ function RestartHostRow(): React.JSX.Element | null {
   const confirm = useConfirmDialogStore((s) => s.confirm)
   const addToast = useToastStore((s) => s.addToast)
 
-  const [role, setRole] = useState<RestartRole | null>(null)
+  // The viewer's role there, read again until known (host-role.ts): an
+  // unread role is "checking", never "owner or admin only".
+  const { role, recheck } = useActiveHostRole()
   const [restarting, setRestarting] = useState(false)
 
   const isRemote = activeHost !== 'local'
@@ -1057,43 +1060,13 @@ function RestartHostRow(): React.JSX.Element | null {
   // hostname so the dialog is never blank.
   const hostLabel = isRemote ? (activeHost.label?.trim() || activeHost.hostname) : ''
   const hostname = isRemote ? activeHost.hostname : ''
-  const hostId = isRemote ? activeHost.id : ''
-
-  // Resolve the viewer's role on the ACTIVE remote host (host-aware
-  // whoami). Owner/Admin may restart; a Member can't (the route 403s).
-  // Re-runs whenever the active remote changes.
-  useEffect(() => {
-    if (!isRemote) {
-      setRole(null)
-      return
-    }
-    let cancelled = false
-    void (async () => {
-      try {
-        const data = await daemonCliGet<{ role?: string; owner?: boolean }>(primaryScope(), 'auth/whoami')
-        if (cancelled) return
-        const resolved: RestartRole | null =
-          data.role === 'owner' || data.role === 'admin' || data.role === 'member'
-            ? data.role
-            : data.owner
-              ? 'owner'
-              : null
-        setRole(resolved)
-      } catch {
-        if (!cancelled) setRole(null)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [isRemote, hostId])
 
   // UNMISTAKABLE: never render for the local Mac (DaemonRow owns that),
-  // hide for an older remote without the route, and hide for Members who
-  // can't restart. Pure decision lives in restartHostVisibility() so it's
-  // unit-tested without rendering.
-  const { show, canRestart } = restartHostVisibility({ isRemote, supportsRestart, role })
-  if (!show) return null
+  // hide for an older remote without the route. A Member sees why it is
+  // off; a role not read yet is "checking". Pure decision: hostActionGate.
+  const gate = hostActionGate({ isRemote, supported: supportsRestart, role, hostLabel, action: 'restart' })
+  const canRestart = gate.enabled
+  if (!gate.show) return null
 
   const handleRestart = async (): Promise<void> => {
     const copy = restartHostConfirmCopy(hostLabel, hostname)
@@ -1110,14 +1083,10 @@ function RestartHostRow(): React.JSX.Element | null {
       addToast(`Restarting ${hostLabel}… it'll reconnect automatically.`, 'info', 8000)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      // The route is owner-token-gated: a non-owner session 403s. Surface
-      // a clear, host-named error rather than a silent failure.
-      if (/403|forbidden|invalid or missing token/i.test(msg)) {
-        addToast(
-          `You don't have permission to restart ${hostLabel}. Only the host owner can restart it.`,
-          'error',
-          8000,
-        )
+      // The route's 403 body is the same for a Member and for a login the
+      // host no longer knows: ask whoami which it was, and say that.
+      if (isForbiddenError(msg)) {
+        addToast(refusalCopy(hostLabel, 'restart', msg, await recheck()), 'error', 8000)
       } else {
         addToast(`Couldn't restart ${hostLabel}: ${msg}`, 'error', 8000)
       }
@@ -1157,7 +1126,7 @@ function RestartHostRow(): React.JSX.Element | null {
             <button
               onClick={() => void handleRestart()}
               disabled={!canRestart}
-              title={canRestart ? undefined : 'Only the host owner or an admin can restart this host'}
+              title={gate.title}
               className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Restart {hostLabel}
@@ -1165,6 +1134,9 @@ function RestartHostRow(): React.JSX.Element | null {
           )}
         </div>
       </div>
+      {gate.note && (
+        <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">{gate.note}</div>
+      )}
     </div>
   )
 }
@@ -1210,7 +1182,8 @@ export function UpdateHostRow(): React.JSX.Element | null {
   const confirm = useConfirmDialogStore((s) => s.confirm)
   const addToast = useToastStore((s) => s.addToast)
 
-  const [role, setRole] = useState<UpdateRole | null>(null)
+  // The viewer's role there, read again until known (host-role.ts).
+  const { role, recheck } = useActiveHostRole()
   const [checking, setChecking] = useState(false)
   const [check, setCheck] = useState<UpdateCheckResult | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -1245,13 +1218,11 @@ export function UpdateHostRow(): React.JSX.Element | null {
   const hostname = isRemote ? activeHost.hostname : ''
   const hostId = isRemote ? activeHost.id : ''
 
-  // Resolve the viewer's role on the ACTIVE remote host (host-aware
-  // whoami). Owner/Admin may update; a Member can't (the route 403s).
-  // Re-runs whenever the active remote changes. Also resets any in-flight
-  // check/job state so a host switch never shows a stale update — except a
-  // job this window started on THIS host (kept across leaving the page):
-  // the row picks it up, so a downloaded update still reaches Install &
-  // restart (z3.k2.dev, 2026-11-05).
+  // A host switch resets any in-flight check/job state so it never shows a
+  // stale update — except a job this window started on THIS host (kept
+  // across leaving the page): the row picks it up, so a downloaded update
+  // still reaches Install & restart (z3.k2.dev, 2026-11-05). The role is
+  // useActiveHostRole's.
   useEffect(() => {
     const kept = isRemote ? keptUpdateJob(hostId) : null
     setCheck(kept?.check ?? null)
@@ -1263,29 +1234,6 @@ export function UpdateHostRow(): React.JSX.Element | null {
     setComeback(null)
     applySentRef.current = kept?.applySent ?? false
     startInstanceRef.current = undefined
-    if (!isRemote) {
-      setRole(null)
-      return
-    }
-    let cancelled = false
-    void (async () => {
-      try {
-        const data = await daemonCliGet<{ role?: string; owner?: boolean }>(primaryScope(), 'auth/whoami')
-        if (cancelled) return
-        const resolved: UpdateRole | null =
-          data.role === 'owner' || data.role === 'admin' || data.role === 'member'
-            ? data.role
-            : data.owner
-              ? 'owner'
-              : null
-        setRole(resolved)
-      } catch {
-        if (!cancelled) setRole(null)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
   }, [isRemote, hostId])
 
   const phase: UpdatePhase | null = status?.phase ?? null
@@ -1322,10 +1270,21 @@ export function UpdateHostRow(): React.JSX.Element | null {
           setJobNote(updateStatusUnreadableCopy(msg))
           return
         }
+        // The host's token-gate 403 is the same for a Member and for a
+        // login it no longer knows (a stale token mid-revival). Only a
+        // Member loses the job; otherwise it is kept (the downloaded update
+        // still reaches Install & restart once the login is back) and the
+        // row says why it can't read it right now.
         if (isForbiddenError(msg)) {
-          addToast(updateForbiddenCopy(hostLabel), 'error', 8000)
-          forgetUpdateJob(hostId)
-          setJobId(null)
+          const now = await recheck()
+          if (cancelled) return
+          if (now.kind === 'known' && now.role === 'member') {
+            addToast(refusalCopy(hostLabel, 'update', msg, now), 'error', 8000)
+            forgetUpdateJob(hostId)
+            setJobId(null)
+            return
+          }
+          setJobNote(refusalCopy(hostLabel, 'update', msg, now))
           return
         }
         // The host forgot the job before Install & restart (it restarted):
@@ -1353,7 +1312,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [jobId, phase, hostGoneInstalling, installKind, hostLabel, hostId, addToast])
+  }, [jobId, phase, hostGoneInstalling, installKind, hostLabel, hostId, addToast, recheck])
 
   // Surface a failure phase once, as a host-named toast with the reason.
   useEffect(() => {
@@ -1436,16 +1395,24 @@ export function UpdateHostRow(): React.JSX.Element | null {
     // captured at start by design (they must not drift mid-watch).
   }, [hostGoneInstalling, isRemote, hostId])
 
-  const { show, canUpdate } = updateHostVisibility({ isRemote, supportsUpdate, role })
-  if (!show) return null
+  // Only a role the host REPORTED below Admin refuses; a role not read yet
+  // is "checking" (host-role.ts), never "owner or admin only".
+  const gate = hostActionGate({ isRemote, supported: supportsUpdate, role, hostLabel, action: 'update' })
+  const canUpdate = gate.enabled
+  if (!gate.show) return null
 
-  const reportError = (e: unknown): void => {
+  /** The line for a failed update call. The routes' 403 body is the same
+   *  for a Member and for a login the host no longer knows, so whoami is
+   *  read again to say which. */
+  const errorLine = async (e: unknown, lead: string): Promise<string> => {
     const msg = e instanceof Error ? e.message : String(e)
-    if (isForbiddenError(msg)) {
-      addToast(updateForbiddenCopy(hostLabel), 'error', 8000)
-    } else {
-      addToast(`Couldn't update ${hostLabel}: ${msg}`, 'error', 8000)
+    if (!(e instanceof UpdateReplyError) && isForbiddenError(msg)) {
+      return refusalCopy(hostLabel, 'update', msg, await recheck())
     }
+    return `${lead}: ${msg}`
+  }
+  const reportError = async (e: unknown): Promise<void> => {
+    addToast(await errorLine(e, `Couldn't update ${hostLabel}`), 'error', 8000)
   }
 
   // Read the host's instanceId right before triggering a restart, so the
@@ -1492,9 +1459,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
         }
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      if (!(e instanceof UpdateReplyError) && isForbiddenError(msg)) reportError(e)
-      else addToast(`Couldn't check ${hostLabel} for updates: ${msg}`, 'error', 8000)
+      addToast(await errorLine(e, `Couldn't check ${hostLabel} for updates`), 'error', 8000)
     } finally {
       setChecking(false)
     }
@@ -1517,7 +1482,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
       setStatus({ phase: 'downloading' })
       setJobId(job_id)
     } catch (e) {
-      reportError(e)
+      await reportError(e)
     }
   }
 
@@ -1535,22 +1500,64 @@ export function UpdateHostRow(): React.JSX.Element | null {
     await captureInstanceId()
     applySentRef.current = true
     if (check) keepUpdateJob(hostId, { jobId, check, applySent: true })
+    setJobNote(null)
+    const notApplied = (line: string): void => {
+      applySentRef.current = false
+      if (check) keepUpdateJob(hostId, { jobId, check, applySent: false })
+      // On the row as well as a toast: the person must see why nothing
+      // happened (Rosson 2026-11-05).
+      setJobNote(line)
+      addToast(line, 'error', 10000)
+      setApplying(false)
+    }
     try {
       await daemonCliPost(primaryScope(), 'daemon/update/apply', { job_id: jobId })
       // The host now installs + restarts; the watcher confirms the version.
       setStatus({ phase: 'restarting' })
     } catch (e) {
-      // The daemon restarting (or its tunnel going) mid-answer, or a retry
-      // that reached the NEW daemon, is the update going ahead — not a
-      // failure. Watch the host come back and decide from its version.
+      // "unknown job_id" / "not 'staged'": went ahead only if the host
+      // restarted or the job moved on; the same daemon with the job still
+      // staged (or gone) means nothing was installed — say so now instead
+      // of waiting ten minutes for a restart that never comes.
+      if (isJobStateRefusal(e)) {
+        const verdict = await settleApplyRefusal({
+          hostLabel,
+          err: e,
+          startInstanceId: startInstanceRef.current,
+          bootStatus: () => (isRemote ? hostBootStatus(remoteCreds(activeHost)) : Promise.resolve(null)),
+          jobStatus: async () => {
+            try {
+              return readUpdateStatus(
+                hostLabel,
+                await daemonCliGet<unknown>(primaryScope(), 'daemon/update/status', { job_id: jobId }),
+              )
+            } catch (err) {
+              return (err as { status?: unknown } | null)?.status === 404 ? 'unknown' : null
+            }
+          },
+        })
+        if (verdict.kind === 'went-ahead') {
+          setStatus({ phase: 'restarting' })
+          return
+        }
+        notApplied(verdict.message)
+        if (verdict.jobGone) {
+          // The job is gone on the host: start over from a fresh check.
+          forgetUpdateJob(hostId)
+          setJobId(null)
+          setStatus(null)
+          setCheck(null)
+        }
+        return
+      }
+      // The daemon restarting (or its tunnel going) mid-answer is the update
+      // going ahead — not a failure. Watch the host come back and decide
+      // from its version.
       if (isAmbiguousApplyError(e)) {
         setStatus({ phase: 'restarting' })
         return
       }
-      applySentRef.current = false
-      if (check) keepUpdateJob(hostId, { jobId, check, applySent: false })
-      reportError(e)
-      setApplying(false)
+      notApplied(await errorLine(e, `Couldn't install the update on ${hostLabel}`))
     }
   }
 
@@ -1595,7 +1602,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
               <button
                 onClick={() => void handleDownload()}
                 disabled={!canUpdate}
-                title={canUpdate ? undefined : 'Only the host owner or an admin can update this host'}
+                title={gate.title}
                 className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {/* Bundled-app hosts (Shape A) update in one shot — the Tauri
@@ -1609,7 +1616,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
               <button
                 onClick={() => void handleCheck()}
                 disabled={!canUpdate || checking}
-                title={canUpdate ? undefined : 'Only the host owner or an admin can update this host'}
+                title={gate.title}
                 className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {checking ? 'Checking…' : 'Check for updates'}
@@ -1624,6 +1631,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
               <button
                 onClick={() => void handleApply()}
                 disabled={!canUpdate}
+                title={gate.title}
                 className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Install & restart {hostLabel}
@@ -1632,6 +1640,13 @@ export function UpdateHostRow(): React.JSX.Element | null {
           )}
         </div>
       </div>
+
+      {/* Why the buttons are off (a Member, an expired sign-in) or that the
+          role couldn't be read yet — never "owner or admin" for an unread
+          role (Rosson 2026-11-05). */}
+      {gate.note && (
+        <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">{gate.note}</div>
+      )}
 
       {/* B1: persistent host-version line — shown after ANY successful check,
           for BOTH up-to-date and update-available states, so the remote

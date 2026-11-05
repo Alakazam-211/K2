@@ -1249,7 +1249,7 @@ pub fn handle_status(job_id: &str) -> CliResponse {
 /// Outcome of [`prepare_apply`] — everything the (live) detached helper
 /// needs, computed + validated on the HTTP thread so a bad request is
 /// rejected with a clean error BEFORE any process work.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ApplyPlan {
     pub job_id: String,
     pub target_version: String,
@@ -1414,7 +1414,14 @@ pub fn handle_apply(
         // hand-off (this daemon keeps serving or restarts plainly) and the
         // crash-loop rollback still applies.
         if crate::handoff::capable().is_ok() {
-            match crate::handoff::start(plan.running_path.clone(), Some(tx.clone())) {
+            // A successor that never takes over leaves THIS (old) daemon
+            // serving: put the old binary back and fail the job with the
+            // reason, so the client says so instead of waiting for a restart
+            // that never comes (Rosson 2026-11-05).
+            let undo = plan.clone();
+            let on_untouched: crate::handoff::OnUntouched =
+                Box::new(move |why| undo_swap_after_failed_handoff(&undo, &why));
+            match crate::handoff::start_with(plan.running_path.clone(), Some(tx.clone()), Some(on_untouched)) {
                 Ok(()) => {
                     set_phase(&plan.job_id, Phase::Restarting);
                     k2_core::log_debug!("[daemon] P3 update/apply — handing off to the new binary");
@@ -1562,13 +1569,19 @@ fn clear_pending_update() -> std::io::Result<()> {
 /// may live on a different mount).
 #[cfg(target_os = "linux")]
 fn swap_in_place(plan: &ApplyPlan) -> std::io::Result<()> {
-    let dir = plan
-        .running_path
+    replace_binary(&plan.staged_path, &plan.running_path)
+}
+
+/// Copy `src` over `dst` atomically: an executable temp copy in `dst`'s own
+/// directory, then `rename(2)`. A failure leaves `dst` as it was.
+#[cfg(target_os = "linux")]
+fn replace_binary(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let dir = dst
         .parent()
         .ok_or_else(|| std::io::Error::other("running binary has no parent dir"))?;
     let tmp = dir.join(format!(".k2-daemon.new.{}", std::process::id()));
 
-    std::fs::copy(&plan.staged_path, &tmp)?;
+    std::fs::copy(src, &tmp)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1576,11 +1589,42 @@ fn swap_in_place(plan: &ApplyPlan) -> std::io::Result<()> {
     }
     // Atomic: after this the path points at the new binary. A failure here
     // leaves the OLD binary intact (the caller reports and stays staged).
-    if let Err(e) = std::fs::rename(&tmp, &plan.running_path) {
+    if let Err(e) = std::fs::rename(&tmp, dst) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
     Ok(())
+}
+
+/// The hand-off to the swapped-in binary failed before it took anything
+/// over (it never said HELLO: it crashed, couldn't load, or took longer than
+/// the hand-off waits), so THIS daemon — still the old version — keeps
+/// serving. Before (Rosson 2026-11-05) nothing else happened: the job sat at
+/// `restarting`, the client waited ten minutes for a restart that never
+/// came, and the next restart (any time later) would quietly start the
+/// binary that had just failed to. Now: put the old binary back at the boot
+/// path, disarm the boot verifier, and fail the job with the reason, which
+/// the client shows. If the old binary can't be put back, the verifier stays
+/// armed (the next restart tries the new one, and rolls back if it
+/// crash-loops) and the job says so.
+#[cfg(target_os = "linux")]
+fn undo_swap_after_failed_handoff(plan: &ApplyPlan, why: &str) {
+    let from = current_version();
+    let target = &plan.target_version;
+    let error = match replace_binary(&plan.backup_path, &plan.running_path) {
+        Ok(()) => {
+            if let Err(e) = clear_pending_update() {
+                k2_core::log_debug!("[daemon] P3 update/apply — could not disarm the update verifier: {e}");
+            }
+            format!("v{target} did not start ({why}); K2 stays on v{from}")
+        }
+        Err(e) => format!(
+            "v{target} did not start ({why}), and v{from} could not be put back ({e}); \
+             the next restart tries v{target} again and rolls back if it can't start"
+        ),
+    };
+    fail_job(&plan.job_id, error);
+    persist_job(&plan.job_id);
 }
 
 /// Boot-time half of the Linux update path. Called EARLY in daemon startup
@@ -3190,6 +3234,90 @@ mod tests {
             !pending_update_path().exists(),
             "marker cleared after rollback"
         );
+    }
+
+    // ── A hand-off that never took over (Rosson 2026-11-05) ─────────
+    // "Install & restart … doesn't actually perform the update": the
+    // successor never said HELLO, the old daemon kept serving, and the job
+    // sat at `restarting` with the new binary on disk. The undo puts the old
+    // binary back and fails the job with the reason the client shows.
+
+    #[cfg(target_os = "linux")]
+    fn swapped_and_handing_off(home: &Path, with_backup: bool) -> ApplyPlan {
+        let running = home.join("k2-daemon");
+        let backup = home.join("backup");
+        std::fs::write(&running, b"NEW-NEVER-STARTED").expect("seed running");
+        if with_backup {
+            std::fs::write(&backup, b"OLD-GOOD").expect("seed backup");
+        }
+        let id = create_job("9.9.9");
+        set_phase(&id, Phase::Restarting);
+        persist_job(&id);
+        let plan = ApplyPlan {
+            job_id: id,
+            target_version: "9.9.9".into(),
+            staged_path: home.join("staged"),
+            running_path: running,
+            backup_path: backup,
+        };
+        write_pending_update(&plan).expect("arm");
+        plan
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_handoff_puts_the_old_binary_back_and_fails_the_job_with_the_reason() {
+        let home = crate::test_support::TempHome::new();
+        let _guard = clear_jobs_for_test();
+        let plan = swapped_and_handing_off(home.path(), true);
+
+        undo_swap_after_failed_handoff(&plan, "waiting for HELLO: connection closed");
+
+        assert_eq!(std::fs::read(&plan.running_path).unwrap(), b"OLD-GOOD", "the old binary is back at the boot path");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&plan.running_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "the restored binary stays executable");
+        assert!(!pending_update_path().exists(), "the boot verifier is disarmed");
+
+        let want = format!(
+            "v9.9.9 did not start (waiting for HELLO: connection closed); K2 stays on v{}",
+            current_version()
+        );
+        let job = get_job(&plan.job_id).expect("job still served");
+        assert_eq!(job.phase, Phase::Failed);
+        assert_eq!(job.error.as_deref(), Some(want.as_str()));
+        // The status route answers it (what the client's watcher reads).
+        let r = handle_status(&plan.job_id);
+        assert!(r.status.starts_with("200"), "status={}", r.status);
+        let body: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(body["phase"], "failed");
+        assert_eq!(body["error"], want.as_str());
+        // And it survives a restart.
+        let rec = read_persisted_job().expect("persisted");
+        assert_eq!(rec.job_id, plan.job_id);
+        assert_eq!(rec.phase, "failed");
+        assert_eq!(rec.error.as_deref(), Some(want.as_str()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_handoff_without_a_backup_keeps_the_verifier_armed_and_says_so() {
+        let home = crate::test_support::TempHome::new();
+        let _guard = clear_jobs_for_test();
+        let plan = swapped_and_handing_off(home.path(), false);
+
+        undo_swap_after_failed_handoff(&plan, "spawn successor: Exec format error");
+
+        assert_eq!(std::fs::read(&plan.running_path).unwrap(), b"NEW-NEVER-STARTED");
+        assert!(pending_update_path().exists(), "the verifier settles it at the next restart");
+        let job = get_job(&plan.job_id).expect("job");
+        assert_eq!(job.phase, Phase::Failed);
+        let err = job.error.expect("error");
+        assert!(
+            err.starts_with("v9.9.9 did not start (spawn successor: Exec format error), and v"),
+            "error={err}"
+        );
+        assert!(err.contains("could not be put back"), "error={err}");
     }
 
     // ── swap helper script shape (no spawn) ─────────────────────────

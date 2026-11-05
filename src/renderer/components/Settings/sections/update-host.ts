@@ -208,10 +208,10 @@ export function updateStatusUnreadableCopy(message: string): string {
 }
 
 /**
- * Visibility/enablement decision for the Update-host control. Mirrors
- * EXACTLY the render guards in UpdateHostRow — the unmistakable
- * remote-targeting requirement, made a pure function (identical rules to
- * restartHostVisibility):
+ * Visibility/enablement decision for the Update-host control by a resolved
+ * role (identical rules to restartHostVisibility). Settings → General now
+ * gates on `hostActionGate` (host-role.ts), which also handles a role that
+ * is not read yet; this stays for the older role-only callers/tests:
  *   - LOCAL active host → never shown (the local-Mac update is the Tauri
  *     auto-updater "App Version" area).
  *   - remote without the route (serverSupports=false) → hidden.
@@ -452,6 +452,70 @@ export function isAmbiguousApplyError(err: unknown): boolean {
     return /not 'staged'|unknown job_id/i.test(errorText(err))
   }
   return false
+}
+
+/** A 400 from `apply` saying the job is unknown or no longer `staged`. Only
+ *  a RETRIED apply that reached the new daemon makes that the install going
+ *  ahead; a first answer from the same daemon means nothing was installed.
+ *  `settleApplyRefusal` tells the two apart. */
+export function isJobStateRefusal(err: unknown): boolean {
+  const status = errorStatus(err)
+  if (status !== 400 && status !== undefined) return false
+  return /not 'staged'|unknown job_id/i.test(errorText(err))
+}
+
+export type ApplyRefusalVerdict =
+  /** The host is installing (or did): watch it come back. */
+  | { kind: 'went-ahead' }
+  /** The same daemon is still up and the job never left `staged` (or is
+   *  gone): nothing was installed. */
+  | { kind: 'refused'; message: string; jobGone: boolean }
+
+const STARTED_PHASES: ReadonlySet<string> = new Set([
+  'applying',
+  'restarting',
+  'done',
+  'failed',
+  'rolled-back',
+])
+
+/**
+ * `apply` answered 400 "unknown job_id …" or "… not 'staged'". Settings →
+ * General used to treat that as the install going ahead and waited up to
+ * ten minutes for a restart that never came (Rosson 2026-11-05: "Install &
+ * restart … doesn't actually perform the update"). Decide from what the
+ * host reports now:
+ *   - unreachable, or a different daemon instance than before `apply`
+ *     → it restarted: went ahead;
+ *   - the job says applying / restarting / done / failed / rolled-back
+ *     → went ahead (the comeback watcher reports the verdict);
+ *   - the job is still downloading / verifying / staged → refused;
+ *   - the job is unknown on the SAME instance → refused (the host restarted
+ *     after the download and lost it); with no instance ids to compare it
+ *     can't be proved, so it is watched as before.
+ */
+export async function settleApplyRefusal(deps: {
+  hostLabel: string
+  err: unknown
+  /** `/boot-status` instanceId read just before `apply`. */
+  startInstanceId: string | undefined
+  bootStatus: () => Promise<{ instanceId?: string } | null>
+  /** The job now: its status, `'unknown'` for a 404, null when unreadable. */
+  jobStatus: () => Promise<UpdateStatusResult | 'unknown' | null>
+}): Promise<ApplyRefusalVerdict> {
+  const boot = await deps.bootStatus()
+  if (boot === null) return { kind: 'went-ahead' }
+  const idsComparable = !!deps.startInstanceId && !!boot.instanceId
+  if (idsComparable && boot.instanceId !== deps.startInstanceId) return { kind: 'went-ahead' }
+  const job = await deps.jobStatus()
+  const notInstalled = `${deps.hostLabel} did not install the update: ${errorText(deps.err)}`
+  if (job !== null && job !== 'unknown') {
+    if (STARTED_PHASES.has(job.phase)) return { kind: 'went-ahead' }
+    return { kind: 'refused', message: notInstalled, jobGone: false }
+  }
+  if (!idsComparable) return { kind: 'went-ahead' }
+  if (job === 'unknown') return { kind: 'refused', message: updateJobGoneCopy(deps.hostLabel), jobGone: true }
+  return { kind: 'refused', message: notInstalled, jobGone: false }
 }
 
 /**
@@ -804,10 +868,12 @@ export function updateHostConfirmCopy(
   }
 }
 
-/** A clear, host-named message for a 403 from any of the owner-gated update
- *  routes (mirrors the restart-host 403 copy). */
+/** A host-named message for a 403 from the update routes when the role
+ *  can't be read again (Settings → Connections). The daemon's 403 body is
+ *  the same for a Member and for a login it no longer knows, so it names
+ *  both; Settings → General reads whoami and says which (`refusalCopy`). */
 export function updateForbiddenCopy(hostLabel: string): string {
-  return `You don't have permission to update ${hostLabel}. Only the host owner or an admin can update it.`
+  return `${hostLabel} turned down the update. Your sign-in there may have expired (sign in again), or your login isn't the host owner or an admin.`
 }
 
 /** True when an error message looks like a 403/forbidden from the

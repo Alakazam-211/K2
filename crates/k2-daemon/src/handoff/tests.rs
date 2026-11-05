@@ -208,3 +208,59 @@ fn app_listeners_cross_in_messages_of_eight() {
     }
     assert!(take_inherited_app("r19-never-sent", AppKind::Front).is_none());
 }
+
+// ── After the hand-off (Rosson 2026-11-05) ─────────────────────────────
+// A self-update hands off to the binary it just swapped in. A successor
+// that never says HELLO used to leave the old daemon serving with nothing
+// told: the update sat at `restarting`. `settle` runs the caller's
+// after-failure step then, and only then.
+
+fn settle_rt() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime")
+}
+
+type Seen = (OnUntouched, std::sync::mpsc::Receiver<String>);
+
+fn after_failure_step() -> Seen {
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel::<String>();
+    (Box::new(move |why| seen_tx.send(why).expect("send")), seen_rx)
+}
+
+#[test]
+fn an_untouched_failure_runs_the_after_failure_step_with_the_reason_and_keeps_serving() {
+    let rt = settle_rt();
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
+    let (step, seen) = after_failure_step();
+    IN_PROGRESS.store(true, Ordering::SeqCst);
+    rt.block_on(settle(
+        Err(Failed::Untouched("waiting for HELLO: connection closed".into())),
+        Some(tx),
+        Some(step),
+    ));
+    assert_eq!(
+        seen.try_recv().expect("the after-failure step ran"),
+        "waiting for HELLO: connection closed"
+    );
+    assert!(rx.try_recv().is_err(), "an untouched failure never shuts this daemon down");
+    assert!(!IN_PROGRESS.load(Ordering::SeqCst), "a new hand-off may start");
+}
+
+#[test]
+fn a_failure_after_quiesce_restarts_plainly_and_never_runs_the_after_failure_step() {
+    let rt = settle_rt();
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
+    let (step, seen) = after_failure_step();
+    rt.block_on(settle(Err(Failed::Quiesced("send TAKE: broken pipe".into())), Some(tx), Some(step)));
+    assert!(rx.try_recv().is_ok(), "quiesced: exit for the supervisor's restart");
+    assert!(seen.try_recv().is_err(), "the swapped binary stays: the restart runs it");
+}
+
+#[test]
+fn a_successful_hand_off_shuts_down_and_never_runs_the_after_failure_step() {
+    let rt = settle_rt();
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
+    let (step, seen) = after_failure_step();
+    rt.block_on(settle(Ok(4242), Some(tx), Some(step)));
+    assert!(rx.try_recv().is_ok(), "drain + exit after the successor took over");
+    assert!(seen.try_recv().is_err());
+}

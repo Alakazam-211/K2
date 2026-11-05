@@ -755,6 +755,24 @@ pub enum Failed {
 /// drain mode; on a failure after quiesce, a plain shutdown (the
 /// supervisor restarts it).
 pub fn start(exe: PathBuf, shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>) -> Result<(), String> {
+    start_with(exe, shutdown_tx, None)
+}
+
+/// Run when a hand-off fails before taking anything over and this daemon
+/// keeps serving; gets the reason. Runs on the blocking pool.
+pub type OnUntouched = Box<dyn FnOnce(String) + Send + 'static>;
+
+/// [`start`], plus `on_untouched`. The self-update needs it: the binary at
+/// the boot path is already the new one when it hands off, so a successor
+/// that never says HELLO (it crashed, couldn't load, or was slower than
+/// `HELLO_TIMEOUT`) left the OLD daemon serving, the new binary on disk and
+/// the update job at `restarting` with nothing to finish it — "Install &
+/// restart doesn't actually perform the update" (Rosson 2026-11-05).
+pub fn start_with(
+    exe: PathBuf,
+    shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+    on_untouched: Option<OnUntouched>,
+) -> Result<(), String> {
     capable()?;
     if IN_PROGRESS.swap(true, Ordering::SeqCst) {
         return Err("a hand-off is already in progress".into());
@@ -765,33 +783,47 @@ pub fn start(exe: PathBuf, shutdown_tx: Option<tokio::sync::broadcast::Sender<()
             Ok(r) => r,
             Err(e) => Err(Failed::Untouched(format!("hand-off task: {e}"))),
         };
-        match res {
-            Ok(pid) => {
-                log_debug!(
-                    "[daemon/handoff] successor pid {pid} owns the front door; draining {} live \
-                     splice(s)",
-                    live_splices()
-                );
-                if let Some(tx) = shutdown_tx {
-                    let _ = tx.send(());
-                }
+        settle(res, shutdown_tx, on_untouched).await;
+    });
+    Ok(())
+}
+
+/// What the predecessor does with the hand-off's outcome.
+async fn settle(
+    res: Result<u32, Failed>,
+    shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+    on_untouched: Option<OnUntouched>,
+) {
+    match res {
+        Ok(pid) => {
+            log_debug!(
+                "[daemon/handoff] successor pid {pid} owns the front door; draining {} live \
+                 splice(s)",
+                live_splices()
+            );
+            if let Some(tx) = shutdown_tx {
+                let _ = tx.send(());
             }
-            Err(Failed::Untouched(e)) => {
-                log_debug!("[daemon/handoff] FAILED before taking anything over — still serving: {e}");
-                IN_PROGRESS.store(false, Ordering::SeqCst);
-            }
-            Err(Failed::Quiesced(e)) => {
-                log_debug!(
-                    "[daemon/handoff] FAILED after quiescing — exiting for a plain supervisor \
-                     restart: {e}"
-                );
-                if let Some(tx) = shutdown_tx {
-                    let _ = tx.send(());
+        }
+        Err(Failed::Untouched(e)) => {
+            log_debug!("[daemon/handoff] FAILED before taking anything over — still serving: {e}");
+            IN_PROGRESS.store(false, Ordering::SeqCst);
+            if let Some(f) = on_untouched {
+                if let Err(join) = tokio::task::spawn_blocking(move || f(e)).await {
+                    log_debug!("[daemon/handoff] after-failure step panicked: {join}");
                 }
             }
         }
-    });
-    Ok(())
+        Err(Failed::Quiesced(e)) => {
+            log_debug!(
+                "[daemon/handoff] FAILED after quiescing — exiting for a plain supervisor \
+                 restart: {e}"
+            );
+            if let Some(tx) = shutdown_tx {
+                let _ = tx.send(());
+            }
+        }
+    }
 }
 
 #[cfg(not(unix))]

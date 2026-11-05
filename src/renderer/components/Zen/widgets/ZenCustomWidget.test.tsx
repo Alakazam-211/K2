@@ -263,13 +263,15 @@ describe('TUW3.1: the sealed frame', () => {
 })
 
 describe('paused start and broken', () => {
-  it('TUW4.4: a paused start (this Garden froze while starting) mounts no frame until Run them', () => {
+  it('TUW4.4: a paused start (it froze again right after K2 relaunched it) mounts no frame until Run them', () => {
     resetZenPausedStartForTests()
-    const kv = new Map<string, string>([[zenWidgetsRunningKey('main'), JSON.stringify({ garden: 'g-test0001', at: 1, beats: 0 })]])
+    const kv = new Map<string, string>([[zenWidgetsRunningKey('main'), JSON.stringify({ garden: 'g-test0001', at: 1_000, beats: 0, autoAt: 1_000 })]])
     const storage = { getItem: (k: string) => kv.get(k) ?? null, setItem: (k: string, v: string) => void kv.set(k, v), removeItem: (k: string) => void kv.delete(k) }
-    expect(takeZenPausedAtBoot(null, { label: 'main', storage })).toEqual({ garden: 'g-test0001', reason: 'starting' })
+    expect(takeZenPausedAtBoot(null, { label: 'main', storage, now: 5_000 })).toEqual({ garden: 'g-test0001', reason: 'starting' })
     mount(payload())
-    expect(q('[data-zen-custom-card="paused"]').textContent).toContain('They’re paused.')
+    expect(q('[data-zen-custom-card="paused"]').textContent).toContain(
+      'K2 restarted again right after relaunching this Garden’s widgets. They’re paused.',
+    )
     expect(document.querySelector('[data-zen-custom-frame-slot]')).toBeNull()
     act(() => void fireEvent.click(q('[data-zen-custom-action="run-them"]')))
     expect(document.querySelector('[data-zen-custom-frame-slot]')).not.toBeNull()

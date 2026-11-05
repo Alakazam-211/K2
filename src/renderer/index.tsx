@@ -9,7 +9,7 @@ import { installExternalLinkHandler } from './lib/external-link-handler'
 import { installRandomUUIDPolyfill } from './lib/random-uuid'
 import { desktopOsFromNavigator } from './lib/desktop-chrome'
 import { bootWebHostIfNeeded } from './web/boot-host'
-import { bootZenPausedStart, noteZenWidgetsHeartbeat } from './lib/zen/zen-widgets-running'
+import { bootZenPausedStart, noteZenWidgetsHeartbeat, noteZenWidgetsVisibility } from './lib/zen/zen-widgets-running'
 
 // Hosted web over plain HTTP (LAN IP / remote vite:dev:web) is not a
 // secure context — crypto.randomUUID is missing and toast/tabs/transfer
@@ -43,6 +43,9 @@ const beat = (): void => {
 }
 beat()
 setInterval(beat, 3000)
+// A hidden window's timers are throttled: a watchdog reload then is not a
+// widget freeze, and the widgets relaunch (zen-widgets-running.ts).
+document.addEventListener('visibilitychange', () => noteZenWidgetsVisibility())
 void bootZenPausedStart(() => invoke<number | null>('watchdog_take_reload_note'))
 
 // NOTE: do NOT statically import `./App` here. ConnectionGate uses

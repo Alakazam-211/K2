@@ -174,7 +174,8 @@ export const ZEN_WIDGET_PAUSED_POSTING_TEXT = 'Paused: too many posts.'
 /** Garden data's runaway guard (the daemon's, `PauseReason::Writes`). */
 export const ZEN_WIDGET_PAUSED_WRITES_TEXT = 'Paused: too many writes.'
 
-export const ZEN_WIDGETS_PAUSED_TEXT = 'K2 restarted while this Garden’s widgets were running. They’re paused.'
+/** UW32: shown only when K2's own relaunch after a restart froze again. */
+export const ZEN_WIDGETS_PAUSED_TEXT = 'K2 restarted again right after relaunching this Garden’s widgets. They’re paused.'
 
 /** Tests only. */
 export function __resetZenCustomRunForTests(): void {

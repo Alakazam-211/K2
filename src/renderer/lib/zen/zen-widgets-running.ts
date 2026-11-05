@@ -23,11 +23,28 @@
 //     running. They're paused. [Run them]" while `zenPausedStart()` names
 //     its Garden; **Run them** calls `resumeZenPausedStart()`.
 //
+// Relaunch first (Rosson 2026-11-05: "If K2 restarts while widgets are
+// running ..., relaunch the widgets after the restart is done"). A restart
+// that looks like a freeze no longer pauses at once:
+//   - a window that was hidden when it went quiet (`hidden` on the marker,
+//     kept by `noteZenWidgetsVisibility` on every visibilitychange) runs its
+//     widgets: a hidden webview's timers are throttled, so its watchdog
+//     reload is not a freeze anyone saw (on z3mbp the watchdog log holds
+//     thousands of such reloads);
+//   - otherwise K2 relaunches them once on its own (`autoAt` on the next
+//     marker), and pauses only when that relaunch is followed by another
+//     freeze within `ZEN_WIDGETS_AUTO_RELAUNCH_WINDOW_MS`: a widget stuck in
+//     `while (true) {}` costs one more reload, never a loop.
+//
 // Storage is per window (the label), wrapped in try/catch: a window with no
 // storage never pauses (and never loops worse than before this feature).
 
 /** Healthy heartbeats after which a mount counts as having started fine. */
 export const ZEN_WIDGETS_HEALTHY_BEATS = 3
+
+/** After K2 relaunched a Garden's widgets on its own, another freeze within
+ *  this long pauses them (the freeze is theirs). */
+export const ZEN_WIDGETS_AUTO_RELAUNCH_WINDOW_MS = 10 * 60_000
 
 export interface ZenWidgetsRunning {
   garden: string
@@ -35,6 +52,11 @@ export interface ZenWidgetsRunning {
   at: number
   /** Healthy renderer heartbeats since. */
   beats: number
+  /** The window was hidden at the last visibility change (its timers are
+   *  throttled; a watchdog reload then isn't a freeze). Absent: visible. */
+  hidden?: boolean
+  /** This mount is K2's automatic relaunch after a freeze (unix ms). */
+  autoAt?: number
 }
 
 export interface ZenPausedStart {
@@ -74,7 +96,10 @@ export function readZenWidgetsRunning(label: string, storage: StorageLike | null
     if (!raw) return null
     const v = JSON.parse(raw) as Partial<ZenWidgetsRunning>
     if (typeof v.garden !== 'string' || !v.garden || typeof v.at !== 'number' || typeof v.beats !== 'number') return null
-    return { garden: v.garden, at: v.at, beats: v.beats }
+    const out: ZenWidgetsRunning = { garden: v.garden, at: v.at, beats: v.beats }
+    if (v.hidden === true) out.hidden = true
+    if (typeof v.autoAt === 'number') out.autoAt = v.autoAt
+    return out
   } catch {
     return null
   }
@@ -90,13 +115,41 @@ function write(label: string, v: ZenWidgetsRunning | null, storage: StorageLike 
   }
 }
 
-/** Before a Garden mounts its custom widgets. */
+function documentHidden(): boolean {
+  try {
+    return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  } catch {
+    return false
+  }
+}
+
+/** Before a Garden mounts its custom widgets. A mount that is this boot's
+ *  automatic relaunch of the same Garden carries `autoAt`. */
 export function markZenWidgetsRunning(
   garden: string,
-  opts: { label?: string; now?: number; storage?: StorageLike | null } = {},
+  opts: { label?: string; now?: number; storage?: StorageLike | null; hidden?: boolean } = {},
 ): void {
   const storage = opts.storage === undefined ? defaultStorage() : opts.storage
-  write(opts.label ?? currentLabel(), { garden, at: opts.now ?? Date.now(), beats: 0 }, storage)
+  const m: ZenWidgetsRunning = { garden, at: opts.now ?? Date.now(), beats: 0 }
+  if (opts.hidden ?? documentHidden()) m.hidden = true
+  if (autoAtBoot && autoAtBoot.garden === garden) m.autoAt = autoAtBoot.at
+  write(opts.label ?? currentLabel(), m, storage)
+}
+
+/** On every visibilitychange (index.tsx): keep `hidden` on a live marker. */
+export function noteZenWidgetsVisibility(
+  opts: { label?: string; storage?: StorageLike | null; hidden?: boolean } = {},
+): void {
+  const storage = opts.storage === undefined ? defaultStorage() : opts.storage
+  const label = opts.label ?? currentLabel()
+  const m = readZenWidgetsRunning(label, storage)
+  if (!m) return
+  const hidden = opts.hidden ?? documentHidden()
+  if ((m.hidden === true) === hidden) return
+  const next: ZenWidgetsRunning = { ...m }
+  if (hidden) next.hidden = true
+  else delete next.hidden
+  write(label, next, storage)
 }
 
 /** When the Garden's custom widgets unmount. */
@@ -117,18 +170,40 @@ export function noteZenWidgetsHeartbeat(opts: { label?: string; storage?: Storag
   write(label, { ...m, beats: m.beats + 1 }, storage)
 }
 
-/** The boot decision (pure): paused, or null to run as usual. */
-export function zenPausedStartDecision(
-  marker: ZenWidgetsRunning | null,
-  watchdogReloadedAt: number | null,
-): ZenPausedStart | null {
+/** Did the last run's widgets look frozen: the watchdog reloaded the window
+ *  after they mounted, or they never lived three healthy beats? */
+export function zenWidgetsFroze(marker: ZenWidgetsRunning | null, watchdogReloadedAt: number | null): ZenPausedStart | null {
   if (!marker) return null
   if (watchdogReloadedAt !== null && watchdogReloadedAt >= marker.at) return { garden: marker.garden, reason: 'watchdog' }
   if (marker.beats < ZEN_WIDGETS_HEALTHY_BEATS) return { garden: marker.garden, reason: 'starting' }
   return null
 }
 
+/** The boot decision (pure): paused, or null to run. A freeze pauses only
+ *  when the window was visible and K2 already relaunched these widgets on
+ *  its own within `ZEN_WIDGETS_AUTO_RELAUNCH_WINDOW_MS`; otherwise they run
+ *  (the first time: K2's automatic relaunch, `zenAutoRelaunch`). */
+export function zenPausedStartDecision(
+  marker: ZenWidgetsRunning | null,
+  watchdogReloadedAt: number | null,
+  now: number = Date.now(),
+): ZenPausedStart | null {
+  const froze = zenWidgetsFroze(marker, watchdogReloadedAt)
+  if (!froze || !marker || marker.hidden) return null
+  if (marker.autoAt !== undefined && now - marker.autoAt < ZEN_WIDGETS_AUTO_RELAUNCH_WINDOW_MS) return froze
+  return null
+}
+
+/** Does this boot relaunch a frozen-looking Garden on its own (visible,
+ *  not paused)? Then its next marker carries `autoAt`. */
+function zenAutoRelaunch(marker: ZenWidgetsRunning | null, watchdogReloadedAt: number | null, now: number): { garden: string; at: number } | null {
+  if (!marker || marker.hidden || !zenWidgetsFroze(marker, watchdogReloadedAt)) return null
+  if (zenPausedStartDecision(marker, watchdogReloadedAt, now)) return null
+  return { garden: marker.garden, at: now }
+}
+
 let pausedAtBoot: ZenPausedStart | null = null
+let autoAtBoot: { garden: string; at: number } | null = null
 let bootTaken = false
 let resolveReady: () => void = () => {}
 const ready = new Promise<void>((r) => {
@@ -150,11 +225,15 @@ export function zenPausedStartReady(): Promise<void> {
  */
 export function takeZenPausedAtBoot(
   reloadNote: number | null,
-  opts: { label?: string; storage?: StorageLike | null } = {},
+  opts: { label?: string; storage?: StorageLike | null; now?: number } = {},
 ): ZenPausedStart | null {
   const storage = opts.storage === undefined ? defaultStorage() : opts.storage
   const label = opts.label ?? currentLabel()
-  pausedAtBoot = zenPausedStartDecision(readZenWidgetsRunning(label, storage), reloadNote)
+  const now = opts.now ?? Date.now()
+  const marker = readZenWidgetsRunning(label, storage)
+  pausedAtBoot = zenPausedStartDecision(marker, reloadNote, now)
+  autoAtBoot = zenAutoRelaunch(marker, reloadNote, now)
+  if (autoAtBoot) console.info(`[zen] K2 restarted while ${autoAtBoot.garden}'s widgets were running: relaunching them`)
   write(label, null, storage)
   bootTaken = true
   resolveReady()
@@ -178,6 +257,7 @@ export async function bootZenPausedStart(takeReloadNote: () => Promise<number | 
 /** Tests only: forget the boot decision. */
 export function resetZenPausedStartForTests(): void {
   pausedAtBoot = null
+  autoAtBoot = null
   bootTaken = false
   listeners.clear()
 }

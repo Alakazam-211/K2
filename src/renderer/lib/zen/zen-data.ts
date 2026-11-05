@@ -1523,6 +1523,20 @@ function syncFeeds(): void {
   if (!same) zenThreadFeeds.setState({ feeds })
 }
 
+/** `hostKey`'s daemon restarted (`zen-relaunch.ts`): remount the Thread
+ *  feed of every ready conversation on it, so its subscription starts over
+ *  against the new daemon. Returns how many. */
+export function restartZenFeedsOn(hostKey: string): number {
+  let n = 0
+  for (const [address, c] of conversations) {
+    if (c.hostKey !== hostKey || c.phase !== 'ready') continue
+    conversations.set(address, { ...c, generation: ++generation })
+    n += 1
+  }
+  if (n > 0) syncFeeds()
+  return n
+}
+
 /** `conversation.open(address, {where?})` (Z35, Z37, Z43) in `view`. */
 export async function openZenConversation(
   view: ZenView,

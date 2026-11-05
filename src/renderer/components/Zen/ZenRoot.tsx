@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { loadZenPage, useZenConfigStore, watchLocalZenChanged, type ZenLoadFailure } from '@/lib/zen/zen-api'
+import { installZenRelaunchOnRestart } from '@/lib/zen/zen-relaunch'
 import { currentZenGardenId, loadZenGardens, useCurrentZenGarden } from '@/lib/zen/zen-gardens'
 import { BUILTIN_TEXTING_PAGE, type ZenResolvedPage, type ZenThemeScope } from '@/lib/zen/zen-page'
 import { exitZen, useZenViewStore, type ZenSafeCause } from '@/lib/zen/zen-view'
@@ -90,6 +91,23 @@ async function loadCurrentPage(): Promise<void> {
     return
   }
   if (currentZenGardenId() === id) useZenViewStore.getState().enterSafeMode(safeCauseFor(result.failure))
+}
+
+/** What `zen_changed` does, also run after a daemon restart: safe mode
+ *  ends (the page re-reads and remounts), else re-read the list and the
+ *  page. */
+async function reloadListAndPage(): Promise<void> {
+  const st = useZenViewStore.getState()
+  if (st.safe) {
+    st.clearSafeMode()
+    return
+  }
+  const result = await loadZenGardens()
+  if (result.status === 'failed' && result.failure) {
+    useZenViewStore.getState().enterSafeMode(safeCauseFor(result.failure))
+    return
+  }
+  await loadCurrentPage()
 }
 
 /** `[background] fit` as CSS (the daemon's `cover|contain|tile|center`). */
@@ -333,23 +351,11 @@ export function ZenRoot(): React.JSX.Element {
 
   // `zen_changed` from this computer's daemon: re-read the list and the
   // page (G15); it also ends safe mode (Z29).
-  useEffect(
-    () =>
-      watchLocalZenChanged(() => {
-        const st = useZenViewStore.getState()
-        if (st.safe) st.clearSafeMode()
-        else {
-          void loadZenGardens().then((result) => {
-            if (result.status === 'failed' && result.failure) {
-              useZenViewStore.getState().enterSafeMode(safeCauseFor(result.failure))
-              return
-            }
-            return loadCurrentPage()
-          })
-        }
-      }),
-    [],
-  )
+  useEffect(() => watchLocalZenChanged(() => void reloadListAndPage()), [])
+
+  // Rosson 2026-11-05: a daemon restart (a new instance id) relaunches the
+  // Garden's widgets once that daemon is ready again (`zen-relaunch.ts`).
+  useEffect(() => installZenRelaunchOnRestart({ reloadPage: reloadListAndPage }), [])
 
   // The control check must stay clear of the stoplights / K2's cluster.
   const reservedRect = area.rect

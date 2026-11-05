@@ -283,6 +283,8 @@ vi.mock('@/lib/host-pool-instance', async () => {
     hostPool: {
       store,
       onAuth: () => () => {},
+      // ZenRoot's restart watch (zen-relaunch.ts) listens; no restart here.
+      onRestart: () => () => {},
       entry: (k: string) => store.getState().entries[k],
       check: vi.fn(async (k: string) => store.getState().entries[k]),
       keepRoomAlive: vi.fn(async (hostKey: string, projectId: string) => {

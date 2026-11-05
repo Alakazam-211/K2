@@ -88,6 +88,30 @@ export function reloadZenWidget(key: string): void {
   })
 }
 
+/** A daemon restart (`zen-relaunch.ts`): clear each placement's stop and,
+ *  where `remount`, remount its frame, in one store update. `clearGarden`
+ *  also clears every other stop on that Garden. The runaway posting pause
+ *  stays: only the person's Resume lifts it. */
+export function relaunchZenWidgets(
+  items: ReadonlyArray<{ key: string; remount: boolean }>,
+  opts: { clearGarden?: string } = {},
+): void {
+  if (items.length === 0 && !opts.clearGarden) return
+  useZenCustomRunStore.setState((s) => {
+    const stopped = { ...s.stopped }
+    const generation = { ...s.generation }
+    if (opts.clearGarden) {
+      const prefix = `${opts.clearGarden}/`
+      for (const key of Object.keys(stopped)) if (key.startsWith(prefix)) delete stopped[key]
+    }
+    for (const it of items) {
+      delete stopped[it.key]
+      if (it.remount) generation[it.key] = (generation[it.key] ?? 0) + 1
+    }
+    return { stopped, generation }
+  })
+}
+
 /** Whether a Garden's custom frames may mount in this window (UW32):
  *  `waiting` until the boot decision, `paused` while it names this Garden. */
 export type ZenWidgetsGate = 'waiting' | 'paused' | 'run'

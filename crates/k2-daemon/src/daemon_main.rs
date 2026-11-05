@@ -75,7 +75,7 @@ mod early_cli_tests {
 pub fn run() {
     // ── Early CLI short-circuit (MUST be absolute first) ────────────
     //
-    // Live-fire footgun (scout 2026-08, luzz before that): any probe of
+    // Live-fire footgun (scout 2026-08, a customer box before that): any probe of
     // `k2-daemon --version` used to fall through into a FULL daemon boot
     // — second process, second port claim (ephemeral fallback), second
     // frpc, and worst of all DUPLICATE claude --resume peers on the same

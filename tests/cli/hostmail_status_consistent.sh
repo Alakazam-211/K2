@@ -114,7 +114,7 @@ LAST_ERR="systemd reports the stalwart unit is 'inactive'"
 
 echo "== consistent:false → state + warning + lastError, exit ≠ 0 =="
 cat >"$WORKDIR/status.json" <<JSON
-{"ok":true,"consistent":false,"supported":true,"state":"stopped","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":"$LAST_ERR","health":null}
+{"ok":true,"consistent":false,"supported":true,"state":"stopped","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lumon.io","portPlan":"tls-alpn","enableProgress":null,"lastError":"$LAST_ERR","health":null}
 JSON
 run_status
 assert_exit "inconsistent status exit" 1 "$rc"
@@ -123,7 +123,7 @@ assert_contains "inconsistent warning" "$out" "WARNING"
 assert_contains "inconsistent warning names disagreement" "$out" "status and systemd disagree"
 assert_contains "inconsistent lastError" "$out" "$LAST_ERR"
 assert_contains "inconsistent ground truth" "$out" "systemctl is-active stalwart"
-assert_contains "hostname still printed" "$out" "hostname : mail.lztek.io"
+assert_contains "hostname still printed" "$out" "hostname : mail.lumon.io"
 assert_absent "not unexpected daemon response" "$out" "unexpected daemon response"
 if ! grep -q '^/cli/mail/status' "$WORKDIR/requests.log"; then
     echo "  FAIL: CLI never called GET /cli/mail/status: $(cat "$WORKDIR/requests.log")" >&2
@@ -151,7 +151,7 @@ assert_contains "json lastError" "$parsed" "lastError=$LAST_ERR"
 
 echo "== consistent:true state=disabled → no warning, exit ≠ 0 =="
 cat >"$WORKDIR/status.json" <<'JSON'
-{"ok":true,"consistent":true,"supported":true,"state":"disabled","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"health":null}
+{"ok":true,"consistent":true,"supported":true,"state":"disabled","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lumon.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"health":null}
 JSON
 run_status
 assert_exit "consistent disabled exit" 1 "$rc"
@@ -160,7 +160,7 @@ assert_absent "consistent no warning" "$out" "WARNING"
 
 echo "== running + consistent → exit 0 =="
 cat >"$WORKDIR/status.json" <<'JSON'
-{"ok":true,"consistent":true,"supported":true,"state":"running","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"health":null}
+{"ok":true,"consistent":true,"supported":true,"state":"running","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lumon.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"health":null}
 JSON
 run_status
 assert_exit "running status exit" 0 "$rc"
@@ -168,7 +168,7 @@ assert_contains "running state" "$out" "server   : running"
 
 echo "== fb449bc1-shaped daemon (ok:false carries the verdict) → still printed =="
 cat >"$WORKDIR/status.json" <<JSON
-{"ok":false,"supported":true,"state":"stopped","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":null,"enableProgress":null,"lastError":"$LAST_ERR","health":null}
+{"ok":false,"supported":true,"state":"stopped","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lumon.io","portPlan":null,"enableProgress":null,"lastError":"$LAST_ERR","health":null}
 JSON
 run_status
 assert_exit "legacy ok:false status exit" 1 "$rc"
@@ -214,7 +214,7 @@ assert_contains "fix names the command" "$out" "$FIX"
 
 echo "== helper installed → helper line, no fix =="
 cat >"$WORKDIR/status.json" <<'JSON'
-{"ok":true,"consistent":true,"supported":true,"state":"running","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"helper":"installed"}
+{"ok":true,"consistent":true,"supported":true,"state":"running","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lumon.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"helper":"installed"}
 JSON
 run_status
 assert_exit "helper installed status exit" 0 "$rc"
@@ -226,7 +226,7 @@ cat >"$WORKDIR/enable.json" <<JSON
 {"ok":false,"error":{"code":"mail_helper_missing","hint":"mail helper not installed (/usr/local/libexec/k2-mail-helper is missing) — run as root: $FIX"},"helper":"missing"}
 JSON
 set +e
-out="$("${K2_STUB[@]}" "$K2_CLI" hostmail enable --hostname mail.lztek.io 2>&1)"
+out="$("${K2_STUB[@]}" "$K2_CLI" hostmail enable --hostname mail.lumon.io 2>&1)"
 rc=$?
 set -e
 assert_exit "enable without helper exit" 1 "$rc"

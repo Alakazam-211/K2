@@ -97,7 +97,7 @@ pub struct SrvAnswer {
 ///
 /// [`Self::public`] talks to 8.8.8.8 / 1.1.1.1 instead — use that for
 /// PTR/FCrDNS so a local stub cache cannot fail doctor after the
-/// internet already agrees (lztek 2026-09-18).
+/// internet already agrees (field report 2026-09-18).
 pub struct SystemResolver {
     inner: hickory_resolver::Resolver,
 }

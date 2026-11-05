@@ -212,7 +212,7 @@ fi
 # The daemon self-stages the CLI at every boot (cli_stage, 0.40.41+) so
 # updates carry it forward — that only works if the DAEMON USER can write
 # this file. Root-owned k2 = CLI silently frozen at provision-day version
-# (bit acme + rpmavs, 2026-07-15).
+# (bit two customer boxes, 2026-07-15).
 chown "$K2_RUN_USER:$K2_RUN_USER" /usr/local/bin/k2
 
 # ── 6. tunnel.json (before first daemon start, so boot auto-dials) ───
@@ -463,7 +463,7 @@ fi
 # namespace (7a): no k2-pg-helper copy and no second sudoers line any more
 # (RH11). User=k2 never apt-gets and never holds a superuser password.
 # Mail stays GitHub-tarball at enable; db is bake-apt.
-# A box that ALREADY has a Postgres cluster (dtl, edf: postgresql@16 set
+# A box that ALREADY has a Postgres cluster (two customer boxes: postgresql@16 set
 # up another way, no k2-pg-helper) is ADOPTED as is: no apt, no initdb, no
 # listen_addresses rewrite, no RAM fence (those change a running database
 # someone else sized). The daemon's db verbs reach it through the root

@@ -200,8 +200,8 @@ describe('several Homes', () => {
 describe('remote servers', () => {
   const remote: ConnectHost = {
     id: 'x',
-    label: 'DTL',
-    hostname: 'DTL.k2.dev',
+    label: 'DHARMA',
+    hostname: 'DHARMA.k2.dev',
     username: 'rosson',
     port: 443,
     secure: true,
@@ -214,8 +214,8 @@ describe('remote servers', () => {
   it('one Home: the row keeps the remote host key', () => {
     setHomes([{ id: 'h1', name: 'Home', rows: [] }])
     addAgentToHomeFromMenu(activeHomeHostKey(remote), atlas)
-    expect(rowsOf('h1')).toEqual(['atlas::dtl.k2.dev'])
-    expect(av.putHomeAvatarOnAdd).toHaveBeenCalledWith('dtl.k2.dev', 'atlas::dtl.k2.dev', atlas)
+    expect(rowsOf('h1')).toEqual(['atlas::dharma.k2.dev'])
+    expect(av.putHomeAvatarOnAdd).toHaveBeenCalledWith('dharma.k2.dev', 'atlas::dharma.k2.dev', atlas)
   })
 
   it('the same handle on this computer and on a remote are two rows, not a duplicate', () => {

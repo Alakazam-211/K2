@@ -378,13 +378,13 @@ fn fleet_ops_fixture_through_the_scheduler() {
         move |_| {
             let t = *ts2.lock().unwrap();
             ok_body(json!({"ts": t, "target_version": "0.46.0", "boxes": [
-                {"name": "akzm", "version": "0.46.0"}, {"name": "ohana", "version": "0.44.4"}, {"name": "luzz", "version": "0.45.9"}]}))
+                {"name": "akzm", "version": "0.46.0"}, {"name": "ohana", "version": "0.44.4"}, {"name": "larkspur", "version": "0.45.9"}]}))
         },
         T0,
     );
     warm(&mut h, &conn);
     let (st, proj) = store::load_state(&conn, &row.id).unwrap().unwrap();
-    assert_eq!(st.items["luzz"].health, Health::Warn, "behind target warns on the first check");
+    assert_eq!(st.items["larkspur"].health, Health::Warn, "behind target warns on the first check");
     assert_eq!((st.items["ohana"].health, st.items["ohana"].soft_health), (Health::Warn, Some(Health::Crit)), "soft crit 1/3");
     assert_eq!(st.items["akzm"].health, Health::Ok);
     assert_eq!(proj.as_ref().unwrap().fields["behind"], json!(2));
@@ -401,7 +401,7 @@ fn fleet_ops_fixture_through_the_scheduler() {
     assert_eq!(st.items["ohana"].health, Health::Crit, "crit after 3 checks, re-checked every 60 s");
     let ev = store::events(&conn, &row.id, 50).unwrap();
     assert!(ev.iter().any(|e| e.kind == "went_crit" && e.item_key.as_deref() == Some("ohana")));
-    assert!(ev.iter().any(|e| e.kind == "went_warn" && e.item_key.as_deref() == Some("luzz")));
+    assert!(ev.iter().any(|e| e.kind == "went_warn" && e.item_key.as_deref() == Some("larkspur")));
     // The block's ts goes old while still served.
     *ts.lock().unwrap() = T0 - 10_000;
     h.advance(400);

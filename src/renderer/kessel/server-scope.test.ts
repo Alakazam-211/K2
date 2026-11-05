@@ -102,18 +102,18 @@ describe('primaryScope — the window active host at call time', () => {
 describe('host keys are canonical (MS60)', () => {
   it('one https server has one key however it is spelled', () => {
     for (const spelling of [
-      'dtl.k2.dev',
-      'DTL.k2.dev',
-      ' dtl.k2.dev ',
-      'dtl.k2.dev:443',
-      'https://dtl.k2.dev',
-      'https://dtl.k2.dev/',
-      'https://DTL.k2.dev:443',
-      'wss://dtl.k2.dev',
+      'dharma.k2.dev',
+      'DHARMA.k2.dev',
+      ' dharma.k2.dev ',
+      'dharma.k2.dev:443',
+      'https://dharma.k2.dev',
+      'https://dharma.k2.dev/',
+      'https://DHARMA.k2.dev:443',
+      'wss://dharma.k2.dev',
     ]) {
-      expect(canonicalHostKey(spelling)).toBe('dtl.k2.dev')
+      expect(canonicalHostKey(spelling)).toBe('dharma.k2.dev')
     }
-    expect(scopeForHost('https://dtl.k2.dev')).toBe(scopeForHost('dtl.k2.dev:443'))
+    expect(scopeForHost('https://dharma.k2.dev')).toBe(scopeForHost('dharma.k2.dev:443'))
   })
 
   it('plain http keeps its port, :80 included, so http and https never share a key', () => {
@@ -135,7 +135,7 @@ describe('host keys are canonical (MS60)', () => {
   })
 
   it('anything that is not a server address throws', () => {
-    for (const bad of ['', 'https://', 'dtl.k2.dev/cli/x', 'user@dtl.k2.dev', 'dtl.k2.dev:0', 'dtl.k2.dev:99999', 'a b', 'dtl.k2.dev:abc', '[::1']) {
+    for (const bad of ['', 'https://', 'dharma.k2.dev/cli/x', 'user@dharma.k2.dev', 'dharma.k2.dev:0', 'dharma.k2.dev:99999', 'a b', 'dharma.k2.dev:abc', '[::1']) {
       expect(() => canonicalHostKey(bad)).toThrow('not a host key')
     }
   })

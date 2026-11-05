@@ -565,7 +565,7 @@ export function ConnectionsSection(): React.JSX.Element {
 /** When the active host is a REMOTE cloud, list THAT daemon's federation
  *  peers (not this Mac's address book). Pair-from-this-Mac uses local
  *  saved hosts only for the Pair action — no per-tile settings/get probes
- *  (those caused CORS storms against offline rpm tiles while on iascm). */
+ *  (those caused CORS storms against offline rpm tiles while on a customer box). */
 function ActiveHostPeersPanel({
   hostLabel,
   refreshKey,

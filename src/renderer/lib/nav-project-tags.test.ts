@@ -8,7 +8,7 @@ import {
 const groups = [
   { id: 'sales', name: 'Sales', color: '#f00' },
   { id: 'ops', name: 'Ops', color: null },
-  { id: 'rpm', name: 'RPMAVS', color: '#0af' },
+  { id: 'rpm', name: 'REKALL', color: '#0af' },
 ]
 
 describe('buildTagsByWorkspaceId', () => {
@@ -18,7 +18,7 @@ describe('buildTagsByWorkspaceId', () => {
       sales: ['cortana', 'sarah'],
       ops: ['k2-dev-web'],
     })
-    expect(index.cortana.map((t) => t.name)).toEqual(['RPMAVS', 'Sales'])
+    expect(index.cortana.map((t) => t.name)).toEqual(['REKALL', 'Sales'])
     expect(index.sarah.map((t) => t.id)).toEqual(['sales'])
     expect(index['k2-dev-web'][0].name).toBe('Ops')
     expect(index.nobody).toBeUndefined()
@@ -43,7 +43,7 @@ describe('packNavTags', () => {
   it('collapses the rest into overflow for a +N chip', () => {
     const packed = packNavTags(tags)
     expect(packed.visible.map((t) => t.name)).toEqual(['Sales', 'Ops'])
-    expect(packed.overflow.map((t) => t.name)).toEqual(['RPMAVS'])
+    expect(packed.overflow.map((t) => t.name)).toEqual(['REKALL'])
   })
 })
 

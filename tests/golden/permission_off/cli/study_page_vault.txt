@@ -106,7 +106,7 @@ MOVING TO ANOTHER BOX
 GIVING A SECRET TO ANOTHER AGENT
   Never paste it into k2 msg (K2 now redacts known values there anyway).
   Send it by name: k2 vault send STRIPE_KEY --to ops --note "refund job"
-  (or --to ops::luzz.k2.dev on another server; or k2 msg ops "…" --secret
+  (or --to ops::larkspur.k2.dev on another server; or k2 msg ops "…" --secret
   STRIPE_KEY). You never handle the value; it moves vault to vault, sealed
   to the other server's vault across servers.
   It arrives pending: a person there accepts it (k2 vault incoming), unless

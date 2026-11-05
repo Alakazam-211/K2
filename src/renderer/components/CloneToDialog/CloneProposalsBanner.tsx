@@ -26,7 +26,7 @@ export function proposalWorkspaceOf(addr: string): string | null {
   return a.split('/')[0] || null
 }
 
-/** The proposal's target among this window's Connect hosts (`luzz.k2.dev`
+/** The proposal's target among this window's Connect hosts (`larkspur.k2.dev`
  *  or `host:port`), or null. */
 export function hostForTarget(hosts: readonly ConnectHost[], target: string): ConnectHost | null {
   const t = target.trim().toLowerCase()

@@ -83,7 +83,7 @@ describe('AgentHandoffAcceptFrom', () => {
     const typedAdd = screen.getByTestId('handoff-accept-typed-add') as HTMLButtonElement
     fireEvent.change(screen.getByTestId('handoff-accept-typed'), { target: { value: '*' } })
     expect(typedAdd.disabled).toBe(true)
-    fireEvent.change(screen.getByTestId('handoff-accept-typed'), { target: { value: 'ci::luzz.k2.dev' } })
+    fireEvent.change(screen.getByTestId('handoff-accept-typed'), { target: { value: 'ci::larkspur.k2.dev' } })
     fireEvent.click(typedAdd)
     await waitFor(() => expect(screen.getAllByTestId('handoff-accept-entry')).toHaveLength(3))
     const sales = screen.getAllByTestId('handoff-accept-entry').find((e) => e.getAttribute('data-sender') === 'ws:p-sales')!
@@ -91,7 +91,7 @@ describe('AgentHandoffAcceptFrom', () => {
     await waitFor(() => expect(screen.getAllByTestId('handoff-accept-entry')).toHaveLength(2))
     expect(posts).toEqual([
       { route: 'vault/accept-from', body: { workspace: 'p-ops', sender: 'ws:p-billing', action: 'add' } },
-      { route: 'vault/accept-from', body: { workspace: 'p-ops', sender: 'ci::luzz.k2.dev', action: 'add' } },
+      { route: 'vault/accept-from', body: { workspace: 'p-ops', sender: 'ci::larkspur.k2.dev', action: 'add' } },
       { route: 'vault/accept-from', body: { workspace: 'p-ops', sender: 'ws:p-sales', action: 'remove' } },
     ])
     // Never the agent-access toggle route.

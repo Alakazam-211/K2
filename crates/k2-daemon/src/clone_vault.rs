@@ -95,7 +95,7 @@ pub struct VaultTarget {
     pub recipient: String,
     /// The destination vault id the carry is bound to.
     pub vault_id: String,
-    /// What people call the destination ("luzz.k2.dev", "this computer"):
+    /// What people call the destination ("larkspur.k2.dev", "this computer"):
     /// shown in the confirm reason, part of the digest.
     #[serde(default)]
     pub label: Option<String>,

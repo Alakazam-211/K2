@@ -608,7 +608,7 @@ fn dane_rule_table() {
     assert_eq!(p.marks.len(), 2);
     assert!(p.writes.iter().all(|w| w.body.get("id").is_none() && w.body.get("name").is_none()));
     assert_eq!(p.writes[1].body["startTls"], "optional", "the rest of the object is written back");
-    // 0.16.10 + disable by hand → nothing, no marker (noir).
+    // 0.16.10 + disable by hand → nothing, no marker (a customer box).
     let hand = vec![tls("a", "invalid-tls", "disable"), tls("b", "default", "disable")];
     let p = plan_dane(&hand, &[], v("0.16.10"), 9);
     assert!(p.writes.is_empty() && p.marks.is_empty());
@@ -623,7 +623,7 @@ fn dane_rule_table() {
     // 0.16.20 + optional → nothing.
     let p = plan_dane(&default_tls(), &[], v("0.16.20"), 9);
     assert!(p.writes.is_empty() && p.marks.is_empty());
-    // 0.16.20 + disable by hand → never flipped (noir after its upgrade).
+    // 0.16.20 + disable by hand → never flipped (the same box after its upgrade).
     let p = plan_dane(&hand, &[], v("0.16.20"), 9);
     assert!(p.writes.is_empty());
     // 0.16.20 + disable by K2 → back to optional, markers gone.
@@ -802,10 +802,10 @@ fn live_cert_order_guards() {
 
 // ── The reconcile ───────────────────────────────────────────────────────
 
-/// quillify: 0.16.10, v3.0.2 rules, defaults everywhere. A4 lands before
+/// A customer box: 0.16.10, v3.0.2 rules, defaults everywhere. A4 lands before
 /// A1, then exactly one reload.
 #[test]
-fn reconcile_heals_a_quillify_shaped_box_in_order_with_one_reload() {
+fn reconcile_heals_a_quahog_shaped_box_in_order_with_one_reload() {
     let api = Fake::new();
     *api.dnsbl.borrow_mut() = dnsbl_from("v3.0.2");
     let (out, restarts) = run(&api, &Inputs::stalwart(), "0.16.10", Some(Markers::default()), true);
@@ -838,7 +838,7 @@ fn reconcile_heals_a_quillify_shaped_box_in_order_with_one_reload() {
     assert_eq!(out2.markers, out.markers);
 }
 
-/// noir after Sterling's hand fix: v4Only + DANE disable by hand, v3.0.1
+/// A customer box after a hand fix: v4Only + DANE disable by hand, v3.0.1
 /// rules. No A1/A4 writes; it stays off after the 0.16.20 upgrade.
 #[test]
 fn reconcile_never_undoes_a_hand_fix() {
@@ -991,7 +991,7 @@ fn last_error_falls_back_to_the_acme_task() {
     assert!(last_error_fallback(None, "missing", &serde_json::json!({ "lastTask": null })).is_none());
 }
 
-/// 0.46.1 (partii on luzz): `cert renew` issued the real certificate and
+/// 0.46.1 (partii on a customer box): `cert renew` issued the real certificate and
 /// the older Pending task stayed listed. A task older than the served
 /// certificate reads `unknown` (Stalwart's word kept in `staleState`);
 /// a newer one, or any task while the cert is not issued, is untouched.

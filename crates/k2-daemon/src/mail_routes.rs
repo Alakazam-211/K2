@@ -805,8 +805,8 @@ pub fn owner_only_response() -> crate::cli_response::CliResponse {
 /// Teaching response for M5 hostmail manage when a valid scoped hook
 /// hits a workspace whose hosted-mail toggle is OFF. 0.46.1: it names
 /// the workspace K2 checked — the toggle is per workspace, and a human
-/// who turned it on for another workspace could not tell (partii on
-/// luzz). `workspace_path` None = the passport's workspace is not
+/// who turned it on for another workspace could not tell (partii on a
+/// customer box). `workspace_path` None = the passport's workspace is not
 /// registered here. The checked workspace also rides `error.workspace`.
 pub fn owner_only_manage_response_for(
     workspace_path: Option<&str>,

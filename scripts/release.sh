@@ -220,7 +220,7 @@ source "$PROJECT_DIR/scripts/lib/wait-progress.sh"
 # Step 10.6: the Linux SHA256SUMS check, and saying so when Arch fails.
 # shellcheck source=scripts/lib/linux-sums-step.sh
 source "$PROJECT_DIR/scripts/lib/linux-sums-step.sh"
-# Gmail is required OOTB (DTL invalid_client). MS is optional unless set above.
+# Gmail is required OOTB (a customer box hit invalid_client). MS is optional unless set above.
 require_mail_oauth_build_env
 
 # The update-signing key is read only inside scripts/lib/sign-updater.sh,

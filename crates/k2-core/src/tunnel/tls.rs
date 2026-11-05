@@ -433,9 +433,9 @@ fn load_or_provision_broker(subdomain: &str) -> Result<(String, String), String>
         }
         // Reuse only if it's a real cert that (a) COVERS this subdomain's
         // SANs and (b) isn't near expiry. (a) is the subdomain-rename case:
-        // after cfed → rpmavs the installed cfed cert was fresh for months,
+        // after a subdomain rename the installed old-name cert was fresh for months,
         // so an expiry-only check kept serving it under the new name and
-        // every browser flagged the site (live bug, rpmavs.k2.dev
+        // every browser flagged the site (live bug on a customer box,
         // 2026-07-07). Wrong-name or unparseable falls through to a fresh
         // broker request, same as near-expiry.
         if !super::cert_broker::cert_covers(&cert_pem, &sans_for(subdomain)) {
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(sans, vec!["rosson.k2.dev", "*.rosson.k2.dev"]);
     }
 
-    // The rpmavs.k2.dev rename bug: a fresh, valid cert for the OLD
+    // The subdomain rename bug (a customer box): a fresh, valid cert for the OLD
     // subdomain must NOT satisfy the reuse check for the new one.
     #[test]
     fn cert_for_old_subdomain_does_not_cover_renamed_one() {
@@ -591,8 +591,8 @@ mod tests {
                 "a cert must cover its own subdomain"
             );
             assert!(
-                !crate::tunnel::cert_broker::cert_covers(&cert, &sans_for("rpmavs")),
-                "the cfed cert must NOT cover rpmavs after a rename"
+                !crate::tunnel::cert_broker::cert_covers(&cert, &sans_for("rekall")),
+                "the cfed cert must NOT cover rekall after a rename"
             );
         });
     }

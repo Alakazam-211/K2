@@ -386,7 +386,7 @@ async fn cross_server_send_seals_to_the_peer_vault_and_never_sends_plaintext() {
     let (_d, receiver) = other_vault("fed-stub-recv");
     let peer_key = Arc::new(rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap());
     let mut store = PeerStore::load().unwrap_or_default();
-    let fp = store.upsert(FederationPeer::pin("luzz", "luzz", peer_key.public_key_pem()).unwrap());
+    let fp = store.upsert(FederationPeer::pin("larkspur", "larkspur", peer_key.public_key_pem()).unwrap());
     store.set_trust(&fp, PeerTrust::Trusted);
     store.grant(&fp, "inbound");
     store.save().unwrap();
@@ -399,7 +399,7 @@ async fn cross_server_send_seals_to_the_peer_vault_and_never_sends_plaintext() {
     let owner = VaultCaller { actor: Actor::Owner, channel: Channel::Plain, session_id: None };
     let v2 = v.clone();
     let (st, j, raw) = tokio::task::spawn_blocking(move || {
-        send(&v2, &owner, json!({ "name": "STRIPE_KEY", "scope": "workspace", "workspace": label, "to": "bob::luzz", "note": "for refunds" }))
+        send(&v2, &owner, json!({ "name": "STRIPE_KEY", "scope": "workspace", "workspace": label, "to": "bob::larkspur", "note": "for refunds" }))
     })
     .await
     .unwrap();

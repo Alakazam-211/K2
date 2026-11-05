@@ -3369,7 +3369,7 @@ mod tests {
         ));
         assert!(
             !host_is_skin_front_door(
-                "GET /cli/thread HTTP/1.1\r\nHost: agents.dtl.k2.dev\r\n\r\n"
+                "GET /cli/thread HTTP/1.1\r\nHost: agents.dharma.k2.dev\r\n\r\n"
             ),
             "nested label without a Caddy target is not the front door"
         );

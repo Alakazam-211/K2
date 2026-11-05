@@ -79,7 +79,7 @@ export interface K2Subdomain {
 
 /**
  * True when `label` is a tunnelable apex purchase (single DNS label under
- * `k2.dev`). Nested names (`api.z3thon`, `rosson.rpmavs`) are **not**
+ * `k2.dev`). Nested names (`api.z3thon`, `rosson.rekall`) are **not**
  * tunnel roots — they are routes under an apex tunnel.
  */
 export function isApexTunnelLabel(label: string): boolean {

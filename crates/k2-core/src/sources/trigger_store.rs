@@ -562,7 +562,7 @@ mod tests {
         };
         let f1 = insert_fire(&conn, &fire("i1", Some("ohana"), 1000, "pending")).unwrap().expect("first fire");
         assert_eq!(insert_fire(&conn, &fire("i1", Some("ohana"), 1001, "pending")).unwrap(), None, "deduped");
-        assert!(insert_fire(&conn, &fire("i1", Some("luzz"), 1002, "pending")).unwrap().is_some(), "per item");
+        assert!(insert_fire(&conn, &fire("i1", Some("larkspur"), 1002, "pending")).unwrap().is_some(), "per item");
         assert!(insert_fire(&conn, &fire("i1", Some("ohana"), 1003, "suppressed")).unwrap().is_some(), "suppressions log freely");
         assert!(incident_fired(&conn, &t.id, "i1", Some("ohana")).unwrap());
         assert!(!incident_fired(&conn, &t.id, "i1", None).unwrap());
@@ -579,7 +579,7 @@ mod tests {
         assert_eq!(rows[0].at, 1003, "newest first");
         let f1r = get_fire(&conn, &f1).unwrap().unwrap();
         assert_eq!((f1r.outcome.as_str(), f1r.woke, f1r.note_bytes), ("delivered", Some(true), Some(120)));
-        assert_eq!(pending_before(&conn, 5000).unwrap().len(), 1, "luzz is still pending");
+        assert_eq!(pending_before(&conn, 5000).unwrap().len(), 1, "larkspur is still pending");
         let (p, ..) = pending_before(&conn, 5000).unwrap().remove(0);
         mark_coalesced(&conn, &p, &f1).unwrap();
         assert_eq!(get_fire(&conn, &p).unwrap().unwrap().outcome, "coalesced");

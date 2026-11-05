@@ -233,11 +233,11 @@ describe('Clone dialog opened from a proposal', () => {
     const p = parseProposal({
       id: 'cp_1',
       proposedBy: 'agent:sales/s1',
-      target: 'luzz.k2.dev',
+      target: 'larkspur.k2.dev',
       options: { threads: true, secrets: { STRIPE_KEY: 'copy' }, allHistory: true },
       why: 'move to the new box',
       status: 'open',
-      summary: 'clone sales to luzz.k2.dev',
+      summary: 'clone sales to larkspur.k2.dev',
     })
     if (!p) throw new Error('parse')
     useCloneToDialogStore.getState().start({ projectPath: '/w/sales', projectName: 'sales', host: null, onConfirm: vi.fn(), proposal: p })

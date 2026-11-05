@@ -343,7 +343,7 @@ mod tests {
         let (conn, pid) = conn_with_project();
         let p = create(
             &conn,
-            NewProposal { project_id: &pid, proposed_by: "agent:sales", target: "luzz.k2.dev", options: opts(&["STRIPE_KEY"]), why: Some("move") },
+            NewProposal { project_id: &pid, proposed_by: "agent:sales", target: "larkspur.k2.dev", options: opts(&["STRIPE_KEY"]), why: Some("move") },
             1000,
         )
         .expect("create");
@@ -382,7 +382,7 @@ mod tests {
         assert!(bad.validated().is_err());
         assert!(CloneOptions { dest: Some("relative/dir".into()), ..opts(&[]) }.validated().is_err());
         assert!(!valid_target("bad host"));
-        assert!(valid_target("luzz.k2.dev"));
+        assert!(valid_target("larkspur.k2.dev"));
         assert!(valid_target("here"));
         // Unknown keys in stored JSON are dropped on the next read: the
         // options struct is the only shape that is ever written.

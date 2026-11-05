@@ -112,14 +112,14 @@ PY
 echo "== federated --inbox-wake --title/--body =="
 : >"$WORK/requests.log"
 set +e
-run_k2 msg chris::claimchaser.k2.dev --inbox-wake --title "Numbers" --body "a to z" \
+run_k2 msg chris::cyberdyne.k2.dev --inbox-wake --title "Numbers" --body "a to z" \
     >"$WORK/out" 2>"$WORK/err"
 rc=$?
 set -e
 [ "$rc" = "0" ] || fail "exit $rc; out=$(cat "$WORK/out") err=$(cat "$WORK/err")"
 ok "exit 0"
 log="$(seen)"
-printf '%s\n' "$log" | grep -Fxq "/cli/inbox/compose true wake chris::claimchaser.k2.dev" \
+printf '%s\n' "$log" | grep -Fxq "/cli/inbox/compose true wake chris::cyberdyne.k2.dev" \
     || fail "compose must carry wake=true&mode=wake for the peer; saw: $log"
 ok "compose carries wake=true, mode=wake"
 if printf '%s\n' "$log" | grep -q "^/cli/workspace/msg "; then
@@ -136,10 +136,10 @@ ok "no 'wake notify failed' note"
 
 echo "== federated --inbox-silent --title =="
 : >"$WORK/requests.log"
-run_k2 msg chris::claimchaser.k2.dev --inbox-silent --title "Quiet" >"$WORK/out" 2>"$WORK/err" \
+run_k2 msg chris::cyberdyne.k2.dev --inbox-silent --title "Quiet" >"$WORK/out" 2>"$WORK/err" \
     || fail "silent exit non-zero: $(cat "$WORK/err")"
 log="$(seen)"
-printf '%s\n' "$log" | grep -Fxq "/cli/inbox/compose false silent chris::claimchaser.k2.dev" \
+printf '%s\n' "$log" | grep -Fxq "/cli/inbox/compose false silent chris::cyberdyne.k2.dev" \
     || fail "silent compose must carry wake=false; saw: $log"
 if printf '%s\n' "$log" | grep -q "^/cli/workspace/msg "; then
     fail "silent must not knock anything; saw: $log"

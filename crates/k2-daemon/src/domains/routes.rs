@@ -686,7 +686,7 @@ pub fn handle_issue(params: &HashMap<String, String>) -> CliResponse {
                 .flatten()
                 .map(|n| n.role)
                 .unwrap_or_else(|| "other".into());
-            // Inventory PEM, not live TLS — a CNAME to mail.lztek.io
+            // Inventory PEM, not live TLS — a CNAME to mail.lumon.io
             // presents mail.discover-nocode.com (scratch-le3 false reuse).
             let cert = crate::domains::status::from_pem_file(&hostname)
                 .map(|p| p.to_json())

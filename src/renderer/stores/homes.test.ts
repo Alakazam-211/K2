@@ -211,15 +211,15 @@ describe('homes store — windows', () => {
     const target = new EventTarget()
     const detach = attachHomesStorageSync(w2, target, local)
 
-    w1.getState().addRow('h1', row('anna::dtl.k2.dev', 'p2', 'Anna'))
+    w1.getState().addRow('h1', row('anna::dharma.k2.dev', 'p2', 'Anna'))
     expect(w2.getState().homes[0].rows).toEqual([]) // not yet delivered
     target.dispatchEvent(storageEvent(HOMES_STORAGE_KEY, local.getItem(HOMES_STORAGE_KEY)))
-    expect(w2.getState().homes[0].rows).toEqual([row('anna::dtl.k2.dev', 'p2', 'Anna')])
+    expect(w2.getState().homes[0].rows).toEqual([row('anna::dharma.k2.dev', 'p2', 'Anna')])
 
     // Unrelated keys are ignored; garbage never replaces good state.
     target.dispatchEvent(storageEvent('k2.connect-hosts.v1', '[]'))
     target.dispatchEvent(storageEvent(HOMES_STORAGE_KEY, '{not json'))
-    expect(w2.getState().homes[0].rows).toEqual([row('anna::dtl.k2.dev', 'p2', 'Anna')])
+    expect(w2.getState().homes[0].rows).toEqual([row('anna::dharma.k2.dev', 'p2', 'Anna')])
 
     // The other window deletes the Home w2 has selected → w2 falls back.
     const two = w1.getState().createHome('Two') as string

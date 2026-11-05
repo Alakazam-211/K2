@@ -22,7 +22,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 
 const SCOPE = 'source' as unknown as ServerScope
-const TARGET = { recipient: 'age1dest', vault_id: 'vault-d', label: 'luzz.k2.dev' }
+const TARGET = { recipient: 'age1dest', vault_id: 'vault-d', label: 'larkspur.k2.dev' }
 
 function preview(callerCanCopySecrets: boolean): ClonePreview {
   return normalizePreview({

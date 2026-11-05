@@ -180,7 +180,7 @@ fn installed_status_carries_owner_target_mirror_and_ship() {
 #[test]
 fn app_url_validation_table() {
     for (raw, want) in [
-        ("https://hearth.lztek.k2.dev", Some("https://hearth.lztek.k2.dev")),
+        ("https://hearth.lumon.k2.dev", Some("https://hearth.lumon.k2.dev")),
         ("https://Hearth.Example.com:8443/app/", Some("https://hearth.example.com:8443/app")),
         ("http://127.0.0.1:5173", Some("http://127.0.0.1:5173")),
         ("http://localhost/x", Some("http://localhost/x")),
@@ -212,15 +212,15 @@ fn app_url_validation_table() {
 #[test]
 fn app_url_sets_clears_and_shows_in_status() {
     let t = t();
-    let (st, v) = t.call(&Who::Owner, APP_URL, json!({"url": "https://hearth.lztek.k2.dev/"}));
+    let (st, v) = t.call(&Who::Owner, APP_URL, json!({"url": "https://hearth.lumon.k2.dev/"}));
     assert_eq!((st.as_str(), code(&v)), ("404 Not Found", "not_installed"), "{v}");
     t.enable();
     let _ = take_emitted();
-    let (st, v) = t.call(&agent("w-it"), APP_URL, json!({"url": "https://hearth.lztek.k2.dev/"}));
+    let (st, v) = t.call(&agent("w-it"), APP_URL, json!({"url": "https://hearth.lumon.k2.dev/"}));
     assert_eq!(st, "200 OK", "{v}");
     assert_eq!(take_emitted(), vec!["app-url"], "K26: one refetch signal");
-    assert_eq!(v["appUrl"], "https://hearth.lztek.k2.dev");
-    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["appUrl"], "https://hearth.lztek.k2.dev");
+    assert_eq!(v["appUrl"], "https://hearth.lumon.k2.dev");
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["appUrl"], "https://hearth.lumon.k2.dev");
     let (_, v) = t.call(&Who::Owner, APP_URL, json!({"url": ""}));
     assert_eq!(v["appUrl"], Value::Null);
     assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["appUrl"], Value::Null);

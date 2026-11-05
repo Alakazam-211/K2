@@ -163,7 +163,7 @@ pub trait BootstrapApi: Send {
         username: &str,
         password: &str,
     ) -> Result<(), String>;
-    /// Bearer session with the minted ApiKey. iascm: basic auth can
+    /// Bearer session with the minted ApiKey. Field report: basic auth can
     /// be gone (provisioned admin missing, recovery secret deleted)
     /// while the api-key from setup still opens :8080.
     fn authenticate_bearer(&mut self, base_url: &str, api_key: &str) -> Result<(), String>;
@@ -585,14 +585,14 @@ pub fn is_already_enabled() -> bool {
     if unit.trim() != "active" {
         return false;
     }
-    // C19 + iascm: sqlite running / config.json is NOT enough —
+    // C19 + a field report: sqlite running / config.json is NOT enough —
     // recovery-off can still be pending (401 on :8080) with ports up.
     // Healthy no-op only after the final restart step.
     is_store_initialized() && step_is_done("restart")
 }
 
 /// Guided setup wrote config.json but the final restart step is not
-/// done (iascm: recovery-off 401, ports already up). Resume must skip
+/// done (a customer box: recovery-off 401, ports already up). Resume must skip
 /// preflight — "no MTA on :25" would hard-stop our own listeners.
 pub fn is_enable_resume() -> bool {
     is_store_initialized() && !step_is_done("restart")
@@ -1263,7 +1263,7 @@ pub fn run_enable(
     ensure_installing_row(hostname, port_plan)?;
     let default_domain = default_domain_for(hostname);
 
-    // iascm: bootstrap/:8080 left sqlite running and progress.steps
+    // A customer box: bootstrap/:8080 left sqlite running and progress.steps
     // marked bootstrap/server-config without writing config.json.
     // Resume must re-run guided setup. Keep dirs/unit/start.
     if !ops.path_exists(STALWART_CONFIG) {
@@ -1285,7 +1285,7 @@ pub fn run_enable(
         emit_state_change("installing", "error", Some(&msg));
         // C20: strip STALWART_RECOVERY_ADMIN only after guided setup
         // wrote config.json. During bootstrap a fail rewrite was
-        // leaving Stalwart on a self-minted password (iascm 401).
+        // leaving Stalwart on a self-minted password (a customer box's 401).
         // A failed recovery-off must not strip either: the success
         // path strips after auth. Stripping here drops the env from
         // the unit while the process still has it.
@@ -1356,7 +1356,7 @@ pub fn run_enable(
     }
     if !step_is_done("config") {
         set_current("config");
-        // C19: never delete an existing config.json (that was the noir
+        // C19: never delete an existing config.json (that was a customer box's
         // wipe). Bootstrap requires the file ABSENT only on a true
         // first install — skip the rm when a store already exists.
         let store_ready = ops.path_exists(STALWART_CONFIG)
@@ -1428,7 +1428,7 @@ pub fn run_enable(
                         format!("secret ref {sref} missing from the mail secret store"),
                     )
                 })?;
-            // iascm: unit started without STALWART_RECOVERY_ADMIN so
+            // A customer box: unit started without STALWART_RECOVERY_ADMIN so
             // Stalwart minted its own bootstrap password. Resume had
             // unit+start marked and did not restart. Rewrite + restart
             // with the vaulted secret, then auth.
@@ -1559,14 +1559,14 @@ pub fn run_enable(
     if !step_is_done("recovery-off") {
         set_current("recovery-off");
         (|| -> Result<(), String> {
-            // iascm 2026-09-22: server-config auth.success for
+            // Customer box, 2026-09-22: server-config auth.success for
             // admin@domain at 18:03:02, no rotation in the log,
             // recoveryAdminRef still present, same vaulted secret
             // 401s later. Log in as recovery `admin` on that 401.
             // A hard 401 is not "still starting" — do not retry it.
             // The steps just above already POSTed as this client.
             // Replacing it with a fresh GET /jmap/session can 401 the
-            // next management call (iascm from-zero, 20:46Z).
+            // next management call (the same box from zero, 20:46Z).
             if !api.has_session() {
                 authenticate_saved_admin(ops, api, secrets, &default_domain)?;
             }
@@ -1672,7 +1672,7 @@ pub fn rotate_leftover_admins(
 ) -> Result<RotateAdminReport, String> {
     // Bootstrap principal (not admin@domain). Fail loud if Stalwart
     // has no such account — leftover boxes still have it.
-    // iascm 19:06:26: this rotate succeeded, the old vault key was
+    // Customer box, 19:06:26: this rotate succeeded, the old vault key was
     // deleted, admin@domain was not an account, and the new password
     // was never stored. Save the new principal password first.
     let old_recovery_ref = progress_extra("recoveryAdminRef");
@@ -1713,7 +1713,7 @@ pub fn rotate_leftover_admins(
                 username
             }
             Err(e) if e.contains("not found") => {
-                // noir/iascm: Bootstrap stored admin@domain; Stalwart
+                // Two customer boxes: Bootstrap stored admin@domain; Stalwart
                 // only has principal `admin`. Keep that password.
                 set_row_field("admin_secret_ref", &held);
                 if let Some(old) = &old_recovery_ref {
@@ -1736,7 +1736,7 @@ pub fn rotate_leftover_admins(
 /// running server over the loopback ApiKey (same as doctor/domains).
 /// Does not wipe the store. Rotates leftover principal `admin` when
 /// present. Stored `adminUsername` (`admin@domain`) is rotated only if
-/// that account exists — noir 0.40.149 stored the name from Bootstrap
+/// that account exists — a customer box on 0.40.149 stored the name from Bootstrap
 /// but Stalwart only has `admin` + `k2-daemon`. Missing provisioned
 /// name is a skip, not 502 after already rotating `admin`.
 pub fn rotate_leftover_admins_live() -> Result<RotateAdminReport, String> {
@@ -1798,7 +1798,7 @@ fn is_auth_rejected(err: &str) -> bool {
 }
 
 /// Provisioned `admin@domain`, then leftover recovery principal `admin`.
-/// iascm: the provisioned secret 401s after a successful login on the
+/// Field report: the provisioned secret 401s after a successful login on the
 /// same process, and `recoveryAdminRef` is still in progress.
 fn authenticate_saved_admin(
     ops: &dyn SystemOps,
@@ -2274,9 +2274,9 @@ mod tests {
         fail_on: Option<&'static str>,
         /// URLs authenticate() must refuse (post-restart resume story).
         refuse_urls: Vec<&'static str>,
-        /// Usernames that answer HTTP 401 (iascm provisioned-admin reject).
+        /// Usernames that answer HTTP 401 (the field report's provisioned-admin reject).
         refuse_users: Vec<&'static str>,
-        /// Usernames Stalwart does not have (iascm: no admin@domain).
+        /// Usernames Stalwart does not have (field report: no admin@domain).
         missing_accounts: Vec<&'static str>,
         /// First rotate returns 401 until authenticate_bearer succeeds.
         fail_rotate_until_bearer: bool,
@@ -2733,7 +2733,7 @@ mod tests {
         clean_row();
     }
 
-    /// iascm: server-config already logged in as admin@domain, then the
+    /// Field report: server-config already logged in as admin@domain, then the
     /// same vaulted secret 401s. recoveryAdminRef is still present and
     /// Stalwart did not rotate. Resume must log in as recovery `admin`
     /// and must not hammer the 401.
@@ -2820,7 +2820,7 @@ mod tests {
         clean_row();
     }
 
-    /// iascm 19:06: principal `admin` was rotated and the vault key
+    /// Field report, 19:06: principal `admin` was rotated and the vault key
     /// deleted; `admin@domain` is not an account; the minted api-key
     /// still opens :8080. Finish recovery-off on that key, keep the
     /// new principal password, and do not fail the step.
@@ -2908,7 +2908,7 @@ mod tests {
         clean_row();
     }
 
-    /// iascm from-zero 20:46Z: api-key was minted, then recovery-off's
+    /// Field report, from zero, 20:46Z: api-key was minted, then recovery-off's
     /// first management POST 401'd. Retry that rotate with the api-key.
     #[test]
     fn recovery_off_retries_rotate_with_api_key_after_post_401() {
@@ -3038,7 +3038,7 @@ mod tests {
         clean_row();
     }
 
-    /// The akzm / mail.quillify.ai failure: no helper on the box. Enable
+    /// The akzm / customer-box failure: no helper on the box. Enable
     /// stops before the row flips, before the download, before any
     /// extract or write — with the install command, not EACCES.
     #[test]
@@ -3347,7 +3347,7 @@ mod tests {
         assert_eq!(
             error_active.last_error.as_deref(),
             Some("bootstrap failed"),
-            "iascm: keep the bootstrap: 401, do not overlay systemd mismatch"
+            "field report: keep the bootstrap: 401, do not overlay systemd mismatch"
         );
 
         let stopped_inactive = reconcile_reported_status("stopped", None, "inactive");
@@ -3432,7 +3432,7 @@ mod tests {
             let conn = db.lock();
             conn.execute(
                 "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
-                 VALUES (1, 'running', 'test', 'mail.iascm.com', 1)",
+                 VALUES (1, 'running', 'test', 'mail.ironwood.com', 1)",
                 [],
             )
             .expect("seed running row");
@@ -3441,7 +3441,7 @@ mod tests {
         let _unit = with_test_unit_state("active");
         assert!(
             !is_already_enabled(),
-            "iascm: sqlite running + unit active + no config.json must resume enable"
+            "field report: sqlite running + unit active + no config.json must resume enable"
         );
         set_test_store_ready(None);
         clean_row();
@@ -3762,7 +3762,7 @@ mod tests {
             &mut api,
             &secrets,
             &art,
-            "mail.lztek.k2.dev",
+            "mail.lumon.k2.dev",
             "http-01",
         )
         .expect("first enable");
@@ -3775,7 +3775,7 @@ mod tests {
             !step_is_done("start"),
             "disable must clear the start resume mark (H4)"
         );
-        assert_eq!(row_field("hostname").as_deref(), Some("mail.lztek.k2.dev"));
+        assert_eq!(row_field("hostname").as_deref(), Some("mail.lumon.k2.dev"));
 
         let ops2 = FakeSystemOps {
             download_body: FAKE_BINARY.to_vec(),
@@ -3783,7 +3783,7 @@ mod tests {
             ..FakeSystemOps::default()
         };
         let mut api2 = FakeApi::default();
-        run_enable(&ops2, &mut api2, &secrets, &art, "mail.lztek.io", "http-01")
+        run_enable(&ops2, &mut api2, &secrets, &art, "mail.lumon.io", "http-01")
             .expect("re-enable after disable");
         let lines = ops2.recorded();
         assert!(
@@ -3804,7 +3804,7 @@ mod tests {
         );
         assert_eq!(
             row_field("hostname").as_deref(),
-            Some("mail.lztek.io"),
+            Some("mail.lumon.io"),
             "H5: enable --hostname after disable persists the new hostname"
         );
         assert_eq!(current_status().as_deref(), Some("running"));
@@ -3967,7 +3967,7 @@ mod tests {
         assert_eq!(v["selfSigned"], false, "{v}");
     }
 
-    /// 0.46.1 field report (partii on luzz): 443 answered with a real
+    /// 0.46.1 field report (partii on a customer box): 443 answered with a real
     /// certificate while 465 and 993 — Stalwart's own listeners — served
     /// the rcgen fallback. The worst port decides; each port is listed.
     #[test]

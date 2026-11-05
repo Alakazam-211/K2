@@ -523,8 +523,8 @@ struct WorkspaceSetBody {
 /// `not_found` code plus a did-you-mean hint so the CLI can exit 4 with
 /// the contract's `{error:{code, hint}}` stderr JSON.
 ///
-/// 0.46.6 (hatlab-manager on 0.46.5: "no agent/workspace named
-/// 'hatlab-manager' — did you mean 'hatlab-manager'?"): callers collapse
+/// 0.46.6 (a `<name>-manager` agent on 0.46.5: "no agent/workspace named
+/// '<name>-manager' — did you mean '<name>-manager'?"): callers collapse
 /// every unresolved token to this 404, but the resolver can fail for
 /// reasons a name-similarity guess can't see. The token is resolved again
 /// here to say which:

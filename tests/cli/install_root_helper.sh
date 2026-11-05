@@ -320,7 +320,7 @@ run "$D5" --version 0.45.5 --retire-legacy-mail
 [ ! -e "$D5/usr/local/libexec/k2-pg-helper" ] || fail "pg retired with the door ok"
 ok "the old --retire-legacy-mail flag is accepted (retirement is the default)"
 
-echo "== k2-mail-sidecar sudoers (akzm, lztek): retired only when K2 wrote it =="
+echo "== k2-mail-sidecar sudoers (akzm and another fleet box): retired only when K2 wrote it =="
 D8="$WORK/box8"
 mkdir -p "$D8/etc/sudoers.d"
 printf '# K2 hosted mail\nk2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /bin/systemctl start stalwart.service, /usr/local/libexec/k2-mail-sidecar\nDefaults:k2 !requiretty\n' \
@@ -333,14 +333,14 @@ cmp -s "$WORK/sidecar.orig" "$(ls -d "$D8"/var/backups/k2-root-helper/*/ | head 
 printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "sidecar summary: $out"
 ok "a K2-written k2-mail-sidecar is backed up and retired"
 
-# The exact line the 2026-09 mail-sidecar provisioning wrote on akzm and lztek.
+# The exact line the 2026-09 mail-sidecar provisioning wrote on akzm and another fleet box.
 legacy "$D8"
 printf 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd\n' >"$D8/etc/sudoers.d/k2-mail-sidecar"
 run "$D8" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "fleet sidecar install: $out"
 [ ! -e "$D8/etc/sudoers.d/k2-mail-sidecar" ] || fail "the 2026-09 fleet k2-mail-sidecar line must be retired"
 printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "fleet sidecar summary: $out"
-ok "the 2026-09 fleet k2-mail-sidecar line (akzm, lztek) is retired"
+ok "the 2026-09 fleet k2-mail-sidecar line (akzm and another fleet box) is retired"
 for body in 'k2 ALL=(ALL) NOPASSWD: ALL' 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /bin/bash' 'admin ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart' '%sudo ALL=(ALL) ALL'; do
 	printf '%s\n' "$body" >"$D8/etc/sudoers.d/k2-mail-sidecar"
 	run "$D8" --version 0.45.5
@@ -354,7 +354,7 @@ echo "== the sidecar's /usr/local/bin PATH shims go with the line, or nothing go
 FLEET_LINE='k2 ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd'
 SHIM_NAMES="k2-if-k2-sudo systemctl chown useradd"
 plant_shims() {
-	# plant_shims <root>: the four files exactly as akzm/lztek have them.
+	# plant_shims <root>: the four files exactly as akzm and another fleet box have them.
 	local b="$1/usr/local/bin"
 	mkdir -p "$b"
 	printf '#!/bin/sh\nREAL="$1"; shift\nif [ "$(id -un)" = k2 ]; then\n  exec sudo -n "$REAL" "$@"\nfi\nexec "$REAL" "$@"\n' >"$b/k2-if-k2-sudo"
@@ -471,7 +471,7 @@ run "$D17" --version 0.45.5 --user bob
 printf '%s' "$out" | grep -q "path-shims  : retired: (none)" || fail "--user bob without shims report: $out"
 ok "--user bob: k2-form shims count as unknown and hold the line; without shims the line retires"
 
-echo "== daemon older than 0.45.4: refuse, change nothing (iascm 0.41.3) =="
+echo "== daemon older than 0.45.4: refuse, change nothing (ironwood 0.41.3) =="
 D9="$WORK/box9"
 legacy "$D9"
 run "$D9" --version 0.41.3
@@ -507,7 +507,7 @@ K2_TEST_BOOT_STATUS_FILE="$BOOT" run "$D9C" --version 0.45.5
 printf '%s' "$out" | grep -q "could not read the running daemon's version" || fail "no top-level version must warn: $out"
 ok "boot-status: top-level version read past a nested ops.version; none at top level warns"
 
-echo "== a box with no prior helpers at all (iascm shape) =="
+echo "== a box with no prior helpers at all (ironwood shape) =="
 D10="$WORK/box10"
 run "$D10" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "bare box: $out"

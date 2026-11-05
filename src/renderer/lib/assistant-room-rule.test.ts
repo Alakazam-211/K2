@@ -17,23 +17,23 @@ import { testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 
 const LOCAL = { hostKey: 'local', label: 'This computer' }
-const DTL = { hostKey: 'dtl.k2.dev', label: 'dtl' }
+const DHARMA = { hostKey: 'dharma.k2.dev', label: 'dharma' }
 
 describe('assistantActionRefusal (pure)', () => {
   it('a room on the window’s server: may act, no refusal', () => {
     expect(assistantMayActOnServer(LOCAL, LOCAL)).toBe(true)
     expect(assistantActionRefusal(LOCAL, LOCAL)).toBeNull()
-    expect(assistantActionRefusal(DTL, DTL)).toBeNull()
+    expect(assistantActionRefusal(DHARMA, DHARMA)).toBeNull()
   })
 
   it('a room on another server: refuses, names both servers, says it still chats', () => {
-    expect(assistantMayActOnServer(DTL, LOCAL)).toBe(false)
-    expect(assistantActionRefusal(DTL, LOCAL)).toBe(
-      'This agent is on dtl. The assistant only changes tabs and terminals for agents on This computer, ' +
-        'the server this window is connected to. Switch this window to dtl to let it act here. You can still chat with it.',
+    expect(assistantMayActOnServer(DHARMA, LOCAL)).toBe(false)
+    expect(assistantActionRefusal(DHARMA, LOCAL)).toBe(
+      'This agent is on dharma. The assistant only changes tabs and terminals for agents on This computer, ' +
+        'the server this window is connected to. Switch this window to dharma to let it act here. You can still chat with it.',
     )
-    // The rule follows the switcher: on dtl, a This-computer room is refused.
-    expect(assistantActionRefusal(LOCAL, DTL)).toContain('This agent is on This computer.')
+    // The rule follows the switcher: on dharma, a This-computer room is refused.
+    expect(assistantActionRefusal(LOCAL, DHARMA)).toContain('This agent is on This computer.')
   })
 })
 
@@ -47,9 +47,9 @@ describe('the workspace:* router uses it (Q4)', () => {
   it('a focused room on another server: no op reaches its tabs, and the toast explains', () => {
     const ops: string[] = []
     const tabs = { room: { applyWorkspaceOp: (op: { kind: string }) => ops.push(op.kind) } }
-    const remote = testRoom({ key: 'dtl.k2.dev|p:w', tabs, scope: fakeScope('dtl.k2.dev'), isPrimary: false })
+    const remote = testRoom({ key: 'dharma.k2.dev|p:w', tabs, scope: fakeScope('dharma.k2.dev'), isPrimary: false })
     roomShown(remote)
-    expect(assistantRefusalFor(remote)).toContain('This agent is on dtl.k2.dev.')
+    expect(assistantRefusalFor(remote)).toContain('This agent is on dharma.k2.dev.')
     routeWorkspaceOp({ kind: 'new-tab', payload: { cwd: '/x' } } as Parameters<typeof routeWorkspaceOp>[0])
     expect(ops).toEqual([])
     const toasts = useToastStore.getState().toasts

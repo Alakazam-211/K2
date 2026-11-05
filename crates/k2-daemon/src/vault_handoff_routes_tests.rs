@@ -273,9 +273,9 @@ fn local_gate_and_never_sendable_refusals() {
         let (st, _, _) = call(&v, SEND, &agent(&sales), json!({ "name": "SERVER_WIDE", "to": ops.name }));
         assert_eq!(st, 404);
         // --stdin is a person's, cross server only (H15).
-        let (st, j, _) = call(&v, SEND, &agent(&sales), json!({ "name": "X", "to": "ops::luzz.k2.dev", "valueB64": "c2VjcmV0dmFsdWU=" }));
+        let (st, j, _) = call(&v, SEND, &agent(&sales), json!({ "name": "X", "to": "ops::larkspur.k2.dev", "valueB64": "c2VjcmV0dmFsdWU=" }));
         assert_eq!((st, code(&j)), (422, "send_by_name_only"));
-        let (st, j, _) = call(&v, SEND, &owner(), json!({ "name": "X", "to": "ops::luzz.k2.dev", "valueB64": "c2VjcmV0dmFsdWU=" }));
+        let (st, j, _) = call(&v, SEND, &owner(), json!({ "name": "X", "to": "ops::larkspur.k2.dev", "valueB64": "c2VjcmV0dmFsdWU=" }));
         assert_eq!((st, code(&j)), (422, "send_by_name_only"), "the owner token over TCP isn't the person channel");
         let (st, j, _) = call(&v, SEND, &owner_tty(), json!({ "name": "X", "to": ops.name, "valueB64": "c2VjcmV0dmFsdWU=" }));
         assert_eq!((st, code(&j)), (422, "use_vault_set"));

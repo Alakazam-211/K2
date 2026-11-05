@@ -403,7 +403,7 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
     // Fresh preflight, synchronously: failures return the report and
     // nothing installs (§5.1 hard stops). Resume after a partial
     // enable (config.json, ports already ours) skips this — :25 in
-    // use is our Stalwart, not a foreign MTA (iascm fcc320d9).
+    // use is our Stalwart, not a foreign MTA (customer ticket fcc320d9).
     let (port_plan, preflight_json) = if supervisor::is_enable_resume() {
         let plan = supervisor::stored_port_plan().unwrap_or_else(|| "tls-alpn".to_string());
         (plan, serde_json::json!({ "ok": true, "resumed": true }))
@@ -516,7 +516,7 @@ pub fn handle_server_disable(_body: &[u8]) -> CliResponse {
 
 /// POST `/cli/mail/server/rotate-admin` — L12: rotate leftover bootstrap
 /// principal `admin` and the provisioned admin password. For boxes
-/// already past enable (noir ticket 4bdbb533). Does not wipe the store,
+/// already past enable (customer ticket 4bdbb533). Does not wipe the store,
 /// SIGTERM, or re-enable. enable no-op is not rotate; disable is not
 /// a wipe.
 pub fn handle_server_rotate_admin(_body: &[u8]) -> CliResponse {

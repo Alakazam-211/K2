@@ -74,7 +74,7 @@ function openAddForm(): HTMLElement {
 
 describe('TunnelUrlsPanel — who sees the controls', () => {
   it('a remote host shows no add / change / remove, even with canManage', () => {
-    h.activeHost = { id: 'r1', label: 'iascm', hostname: 'iascm.k2.dev' }
+    h.activeHost = { id: 'r1', label: 'ironwood', hostname: 'ironwood.k2.dev' }
     render(<TunnelUrlsPanel canManage />)
     expect(screen.getByText('localhost:3000')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Add published subdomain' })).toBeNull()

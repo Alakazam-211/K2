@@ -601,7 +601,7 @@ impl StalwartClient {
     /// mta-sts, ua-auto-config, autoconfig, autodiscover, the server
     /// name and every in-zone MX/service host" in ONE ACME order (v0.16
     /// `acme/order.rs` `build_domains`). One name that does not point
-    /// at the box fails the whole order, and mail gets no cert (noir).
+    /// at the box fails the whole order, and mail gets no cert (a customer box).
     /// Lock the list to exactly `[host]`, keeping `acmeProviderId`.
     ///
     /// Idempotent: an already-locked Domain is not written. A `Manual`
@@ -1669,7 +1669,7 @@ impl StalwartClient {
     /// `x:MailingList/query`. Empty ids is not an error.
     ///
     /// 0.16 docs: filter is **free text or tenant**, not `emailAddress` /
-    /// `domainId` (those 502 `unsupportedFilter` on lztek). Omit `filter`
+    /// `domainId` (those 502 `unsupportedFilter` on a fleet box). Omit `filter`
     /// to enumerate.
     pub fn mailing_list_query(
         &self,
@@ -6734,7 +6734,7 @@ pub(crate) mod tests {
         let (port, rx) = spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), set_reply]);
         let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
         client
-            .set_server_hostname("mail.lztek.io")
+            .set_server_hostname("mail.lumon.io")
             .expect("set hostname");
         let _sess = rx.recv().expect("session");
         let req = rx.recv().expect("set");
@@ -6743,7 +6743,7 @@ pub(crate) mod tests {
         assert_eq!(v["methodCalls"][0][0], "x:SystemSettings/set");
         assert_ne!(v["methodCalls"][0][0], "x:Bootstrap/set");
         let args = &v["methodCalls"][0][1];
-        assert_eq!(args["update"]["singleton"]["defaultHostname"], "mail.lztek.io");
+        assert_eq!(args["update"]["singleton"]["defaultHostname"], "mail.lumon.io");
         assert!(
             args["update"]["singleton"].get("serverHostname").is_none(),
             "normal-mode field is defaultHostname, not Bootstrap serverHostname: {args}"

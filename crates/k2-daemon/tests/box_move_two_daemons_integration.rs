@@ -1,6 +1,6 @@
 //! prd-box-move-carry-v1 S5, headless: two real daemons in scratch HOMEs
 //! (each vault on a file key there, never the Keychain or a root helper's
-//! keeper) and the real `cli/k2`. The acv case end to end:
+//! keeper) and the real `cli/k2`. The customer box-move case end to end:
 //!
 //! - the new box booted on a /home copy of the old vault.db WITHOUT its key:
 //!   its vault is closed (`vault_key_missing`) and `tunnel status` says the
@@ -193,7 +193,7 @@ async fn a_box_move_carries_the_vault_and_the_tunnel_token_to_a_box_stuck_on_vau
     assert!(tunnel_json.contains("\"tokenHome\": \"vault\""), "the marker says where it went: {tunnel_json}");
     let old_id = old.get("/cli/vault/status")["vaultId"].as_str().expect("vault id").to_string();
 
-    // ── the new box: a /home copy of the old one WITHOUT the key (the acv
+    // ── the new box: a /home copy of the old one WITHOUT the key (the customer
     // move). Its vault can't open, and the tunnel token is locked in it.
     let new_home = scratch_home("new");
     std::fs::create_dir_all(new_home.join(".k2/vault")).expect("mkdir");

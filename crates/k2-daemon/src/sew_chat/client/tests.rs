@@ -27,7 +27,7 @@ const WS: &str = "aaaaaaaa-0000-4000-8000-0000000000a1";
 fn vendored_sew_crates_match_the_manifest() {
     let third = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party");
     let manifest = std::fs::read_to_string(third.join("SEW-VENDOR.txt")).expect("third_party/SEW-VENDOR.txt");
-    // The pin: Sew's canonical tarballs (packed on lztek, GNU tar 1.35) at the
+    // The pin: Sew's canonical tarballs (packed on a fleet box, GNU tar 1.35) at the
     // private tags sew-proto-v0.3.0 / sew-client-v0.3.0, both @ 8252db23.
     let head = manifest.split("# manifest\n").next().expect("a header");
     for pin in [

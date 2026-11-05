@@ -1,7 +1,7 @@
 //! On-box ACME for custom-domain hostnames (C6/C17/C18).
 //!
 //! Proof order: DNS-01 if `dns_write`; else HTTP-01 on :80 **unless the
-//! hostname is a CNAME** (LE follows it; `mail` → `mail.lztek.io:80` is
+//! hostname is a CNAME** (LE follows it; `mail` → `mail.lumon.io:80` is
 //! often closed / tls-alpn); else TLS-ALPN if this box can bind :443.
 //! DNS-01 plants `_acme-challenge.<host>` TXT (a different owner name
 //! than the `mail` CNAME). Never cert.k2.dev. Never silent rcgen.
@@ -625,7 +625,7 @@ pub(crate) async fn live_issue_async(
                 // Hickory's default Resolver starts a tokio runtime.
                 // live_issue already block_on's one — nested Runtime::new
                 // panics "Cannot start a runtime from within a runtime"
-                // (lztek scratch-le1). Wait on a blocking thread.
+                // (scratch-le1 field test). Wait on a blocking thread.
                 let binding_c = binding.clone();
                 let hostname_c = hostname.to_string();
                 let txt_c = txt.clone();
@@ -978,15 +978,15 @@ mod tests {
     #[test]
     fn relative_txt_name_for_mail_and_apex() {
         assert_eq!(
-            acme_txt_relative_name("lztek.io", "lztek.io"),
+            acme_txt_relative_name("lumon.io", "lumon.io"),
             "_acme-challenge"
         );
         assert_eq!(
-            acme_txt_relative_name("mail.lztek.io", "lztek.io"),
+            acme_txt_relative_name("mail.lumon.io", "lumon.io"),
             "_acme-challenge.mail"
         );
         assert_eq!(
-            acme_txt_relative_name("a.b.lztek.io", "lztek.io"),
+            acme_txt_relative_name("a.b.lumon.io", "lumon.io"),
             "_acme-challenge.a.b"
         );
         assert_eq!(
@@ -994,8 +994,8 @@ mod tests {
             "_acme-challenge.scratch-acme.discover-nocode.com"
         );
         assert_eq!(
-            acme_txt_fqdn("lztek.io", "lztek.io"),
-            "_acme-challenge.lztek.io"
+            acme_txt_fqdn("lumon.io", "lumon.io"),
+            "_acme-challenge.lumon.io"
         );
     }
 
@@ -1015,7 +1015,7 @@ mod tests {
     #[test]
     fn k2_dev_names_are_rejected() {
         assert!(reject_k2_dev("rosson.k2.dev").is_err());
-        assert!(reject_k2_dev("mail.lztek.io").is_ok());
+        assert!(reject_k2_dev("mail.lumon.io").is_ok());
     }
 
     #[test]

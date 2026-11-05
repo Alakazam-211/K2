@@ -3035,7 +3035,7 @@ mod tests {
         with_temp_home(|| {
             k2_core::db::init_for_tests();
             let u = uniq();
-            let handle = format!("quillify-website-{u}");
+            let handle = format!("quahog-website-{u}");
             let display = format!("Seoca Press {u}");
             let alias = format!("seoca.old.{u}");
             let persona_name = format!("seoca-{u}");
@@ -4080,7 +4080,7 @@ mod tests {
 
     // ── 0.45.6: federated `--inbox-wake --title/--body` wakes on the PEER ──
     //
-    // appa 2026-10-11..13: `k2 msg chris::claimchaser.k2.dev --inbox-wake
+    // appa 2026-10-11..13: `k2 msg chris::<box>.k2.dev --inbox-wake
     // --title … --body …` landed the package but the wake always answered
     // `workspace_not_found`. The compose route forced `wake=false` into the
     // tray, and the CLI then knocked THIS box's `/cli/workspace/msg` with the
@@ -4106,10 +4106,10 @@ mod tests {
             },
         );
         let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
-        let _fp = pin_trusted_peer_for_send("claimchaser");
+        let _fp = pin_trusted_peer_for_send("cyberdyne");
 
         let mut params = std::collections::HashMap::new();
-        params.insert("workspace".to_string(), "chris::claimchaser.k2.dev".to_string());
+        params.insert("workspace".to_string(), "chris::cyberdyne.k2.dev".to_string());
         params.insert("title".to_string(), "Numbers".to_string());
         params.insert("body".to_string(), "a to z numbers".to_string());
         params.insert("wake".to_string(), "true".to_string());
@@ -4159,10 +4159,10 @@ mod tests {
             },
         );
         let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
-        let _fp = pin_trusted_peer_for_send("claimchaser");
+        let _fp = pin_trusted_peer_for_send("cyberdyne");
 
         let mut params = std::collections::HashMap::new();
-        params.insert("workspace".to_string(), "chris::claimchaser.k2.dev".to_string());
+        params.insert("workspace".to_string(), "chris::cyberdyne.k2.dev".to_string());
         params.insert("title".to_string(), "Quiet".to_string());
         let resp = tokio::task::spawn_blocking(move || {
             crate::inbox_routes::handle_compose_post(&params)
@@ -4671,7 +4671,7 @@ mod tests {
         let x = uuid::Uuid::new_v4().to_string();
         let stub = spawn_peer_stub(
             Some(roster_json(&[
-                (&w, "quillify-website", "Seoca", &[]),
+                (&w, "quahog-website", "Seoca", &[]),
                 (&x, "other-site", "Other", &[]),
             ])),
             r#"{"delivered":true,"mode":"live"}"#,
@@ -4683,7 +4683,7 @@ mod tests {
         k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
             .expect("add remote connection");
 
-        let resp = send_as_agent(&src_uuid, format!("{fp}::{w}::quillify-website"), "by handle").await;
+        let resp = send_as_agent(&src_uuid, format!("{fp}::{w}::quahog-website"), "by handle").await;
         assert_eq!(resp.status, "200 OK", "handle must pass the gate: {}", resp.body);
         assert_eq!(send_status(&resp), "sent", "{}", resp.body);
         assert_eq!(
@@ -4694,7 +4694,7 @@ mod tests {
         let rows = remote_rows(&src_uuid);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].remote_workspace_id.as_deref(), Some(w.as_str()), "bound to W");
-        assert_eq!(rows[0].remote_handle.as_deref(), Some("quillify-website"));
+        assert_eq!(rows[0].remote_handle.as_deref(), Some("quahog-website"));
         assert_eq!(rows[0].remote_display_name.as_deref(), Some("Seoca"));
         assert_eq!(rows[0].agent, "seoca", "a display-name bind keeps the typed name");
         assert_eq!(rows[0].peer_fingerprint.as_deref(), Some(fp.as_str()));
@@ -4724,7 +4724,7 @@ mod tests {
         let seen = delivered.clone();
         let stub = spawn_peer_stub(
             Some(roster_json(&[
-                (&w, "quillify-website", "Seoca", &[]),
+                (&w, "quahog-website", "Seoca", &[]),
                 (&x, "other-site", "Other", &[]),
             ])),
             r#"{"delivered":true,"mode":"live"}"#,
@@ -4744,7 +4744,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         let hint = v["error"]["hint"].as_str().unwrap();
         assert!(
-            hint.contains(&format!("quillify-website::{host}")) && hint.contains("different workspace"),
+            hint.contains(&format!("quahog-website::{host}")) && hint.contains("different workspace"),
             "hint names the connection that exists: {hint}"
         );
         assert_eq!(
@@ -4828,7 +4828,7 @@ mod tests {
     async fn a7_from_is_stamped_with_handle_and_project_id() {
         let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
-        let handle = format!("quillify-website-{}", uniq());
+        let handle = format!("quahog-website-{}", uniq());
         let (src_uuid, src_path) = register_agent_ws("Seoca", &handle, Exposure::ConnectionsOnly);
         let persona = k2_core::workspace::agent_identity::workspace_agent_md_path(&src_path);
         std::fs::create_dir_all(persona.parent().unwrap()).unwrap();
@@ -4885,13 +4885,13 @@ mod tests {
         let w_old = uuid::Uuid::new_v4().to_string();
         let w_new = uuid::Uuid::new_v4().to_string();
         let first = spawn_peer_stub(
-            Some(roster_json(&[(&w_old, "quillify-website", "Seoca", &[])])),
+            Some(roster_json(&[(&w_old, "quahog-website", "Seoca", &[])])),
             "{}",
             |_| {},
         );
         // Every stub of this test answers under one host: the base env
         // var decides where the dial goes, the row's host stays the same.
-        let host = "quillify.example.test";
+        let host = "quahog.example.test";
         let fp = pin_trusted_peer_for_send(host);
         k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
             .expect("add remote connection");
@@ -4912,7 +4912,7 @@ mod tests {
         let delivered = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let seen = delivered.clone();
         let second = spawn_peer_stub(
-            Some(roster_json(&[(&w_new, "quillify-website", "Seoca", &[])])),
+            Some(roster_json(&[(&w_new, "quahog-website", "Seoca", &[])])),
             r#"{"delivered":true,"mode":"live"}"#,
             move |_| {
                 seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -4935,7 +4935,7 @@ mod tests {
             );
             assert!(row.remote_workspace_gone_at.is_some(), "marked gone: {row:?}");
 
-            for typed in ["seoca", "quillify-website"] {
+            for typed in ["seoca", "quahog-website"] {
                 let resp =
                     send_as_agent(&src_uuid, format!("{fp}::{w_new}::{typed}"), "hello").await;
                 assert_eq!(resp.status, "410 Gone", "{typed}: {}", resp.body);
@@ -5021,7 +5021,7 @@ mod tests {
         let (src_path, src_uuid) = register_src_workspace("a7-online");
         let w = uuid::Uuid::new_v4().to_string();
         let stub = spawn_peer_stub(
-            Some(roster_json(&[(&w, "quillify-website", "Seoca", &[])])),
+            Some(roster_json(&[(&w, "quahog-website", "Seoca", &[])])),
             "{}",
             |_| {},
         );
@@ -5062,7 +5062,7 @@ mod tests {
         let (src_path, src_uuid) = register_src_workspace("a7-add");
         let w = uuid::Uuid::new_v4().to_string();
         let stub = spawn_peer_stub(
-            Some(roster_json(&[(&w, "quillify-website", "Seoca", &["quillify"])])),
+            Some(roster_json(&[(&w, "quahog-website", "Seoca", &["quahog"])])),
             "{}",
             |_| {},
         );
@@ -5086,10 +5086,10 @@ mod tests {
             assert_eq!(out["bound"], want_bound, "{target}: {out}");
             if want_bound {
                 assert_eq!(out["remoteWorkspaceId"], w.as_str(), "{out}");
-                assert_eq!(out["handle"], "quillify-website", "{out}");
+                assert_eq!(out["handle"], "quahog-website", "{out}");
             } else {
                 let warn = out["bindWarning"].as_str().unwrap();
-                assert!(warn.contains("quillify-website"), "lists the roster's names: {warn}");
+                assert!(warn.contains("quahog-website"), "lists the roster's names: {warn}");
             }
         }
         assert_eq!(remote_rows(&src_uuid).len(), 2, "both rows stored");
@@ -5122,7 +5122,7 @@ mod tests {
         k2_core::db::init_for_tests();
         let (src_path, src_uuid) = register_src_workspace("resolve");
         let w = uuid::Uuid::new_v4().to_string();
-        let stub = spawn_peer_stub(Some(roster_json(&[(&w, "quillify-website", "Seoca", &["quillify"])])), "{}", |_| {});
+        let stub = spawn_peer_stub(Some(roster_json(&[(&w, "quahog-website", "Seoca", &["quahog"])])), "{}", |_| {});
         let host = format!("127.0.0.1:{}", stub.port);
         let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
         let _fp = pin_trusted_peer_for_send(&host);
@@ -5134,20 +5134,20 @@ mod tests {
         let member = |t: String| async move { tokio::task::spawn_blocking(move || connections_resolve(&t, false)).await.unwrap() };
 
         // Federation off: a remote target can't be reached.
-        let r = run(format!("quillify::{host}")).await;
+        let r = run(format!("quahog::{host}")).await;
         assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
         assert!(r.body.contains("federation is off"), "{}", r.body);
 
         let _fed = k2_core::test_env::EnvVar::set("K2_FEDERATION", "1");
-        let r = run(format!("quillify::{host}")).await;
+        let r = run(format!("quahog::{host}")).await;
         assert_eq!(r.status, "200 OK", "an alias on the roster: {}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
-        assert_eq!((v["kind"].as_str(), v["onRoster"].as_bool(), v["handle"].as_str()), (Some("remote"), Some(true), Some("quillify-website")), "{v}");
+        assert_eq!((v["kind"].as_str(), v["onRoster"].as_bool(), v["handle"].as_str()), (Some("remote"), Some(true), Some("quahog-website")), "{v}");
         let r = run(format!("Seoca::{host}")).await;
         assert_eq!(r.status, "200 OK", "the display name: {}", r.body);
         let r = run(format!("nobody::{host}")).await;
         assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
-        assert!(r.body.contains("quillify-website"), "names the roster: {}", r.body);
+        assert!(r.body.contains("quahog-website"), "names the roster: {}", r.body);
         let r = run("k2::nowhere.k2.dev".into()).await;
         assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
         assert!(r.body.contains("no paired server"), "{}", r.body);
@@ -5167,7 +5167,7 @@ mod tests {
         // workspace, only found / not found.
         let r = member(format!("nobody::{host}")).await;
         assert_eq!(code(&r), ("403 Forbidden".into(), "owner_only".into()), "{}", r.body);
-        assert!(!r.body.contains("quillify-website"), "no roster names: {}", r.body);
+        assert!(!r.body.contains("quahog-website"), "no roster names: {}", r.body);
         let r = member(src_path.clone()).await;
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
@@ -5179,7 +5179,7 @@ mod tests {
         // Offline peer: found, with a warning.
         drop(_base);
         let _offline = InboundBase::set("http://127.0.0.1:1");
-        let r = run(format!("quillify::{host}")).await;
+        let r = run(format!("quahog::{host}")).await;
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
         assert!(v["onRoster"].is_null() && v["warning"].as_str().unwrap().contains("couldn't reach"), "{v}");
@@ -5195,7 +5195,7 @@ mod tests {
         let (src_path, src_uuid) = register_src_workspace("a7-remove");
         let w = uuid::Uuid::new_v4().to_string();
         let stub = spawn_peer_stub(
-            Some(roster_json(&[(&w, "quillify-website", "Seoca", &[])])),
+            Some(roster_json(&[(&w, "quahog-website", "Seoca", &[])])),
             "{}",
             |_| {},
         );
@@ -5203,7 +5203,7 @@ mod tests {
         let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
         let fp = pin_trusted_peer_for_send("peer");
 
-        for remove_as in ["seoca", "quillify-website"] {
+        for remove_as in ["seoca", "quahog-website"] {
             k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
                 .expect("add remote connection");
             let r = tokio::task::spawn_blocking({

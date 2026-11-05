@@ -2386,7 +2386,7 @@ fn wait_for_exit(
 
 /// Periodic localPort desync / E2E-listener-death probe. Returns true when
 /// the frozen port is unreachable and we obtained a **reachable** live E2E
-/// port (possibly after the daemon hook re-bound a dead listener — luzz
+/// port (possibly after the daemon hook re-bound a dead listener — a customer box,
 /// 2026-07-29 listeners=0 class). Never invents free ports.
 fn probe_local_desync(
     ticks_since_probe: &mut u32,
@@ -2429,7 +2429,7 @@ fn probe_local_desync(
 
 /// Before respawning frpc after an exit, ensure the E2E listener is still
 /// up (or re-bound) and rewrite frpc.toml if the live port moved. Closes
-/// the luzz gap: frpc exit → restart while E2E sockets are gone and the
+/// the customer-box gap: frpc exit → restart while E2E sockets are gone and the
 /// old localPort is frozen dead.
 fn ensure_live_local_port_before_respawn(
     e2e: bool,
@@ -2829,7 +2829,7 @@ fn spawn_supervised(
                         );
                         std::thread::sleep(backoff);
                         backoff = (backoff * 2).min(max_backoff);
-                        // luzz class: E2E listener can die in the same cascade
+                        // Field-report class: E2E listener can die in the same cascade
                         // that killed frpc. Re-ensure + rewrite BEFORE respawn
                         // so we never point a new frpc at listeners=0.
                         ensure_live_local_port_before_respawn(
@@ -5515,7 +5515,7 @@ mod tests {
         // Happy path: live == published == frpc == frozen.
         tunnel_port_invariant_ok(true, Some(44407), Some(44407), Some(44407), Some(44407))
             .expect("aligned ports must pass");
-        // luzz class: live 44407 vs frpc/file 42265.
+        // Field-report class: live 44407 vs frpc/file 42265.
         let err = tunnel_port_invariant_ok(
             true,
             Some(44407),

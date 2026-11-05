@@ -64,7 +64,7 @@ const ITEMS = [
   {
     seq: 3, id: 'm3',
     doc: { id: 'm3', kind: 'choice', from: 'ada', to: null, created_at: now - 120, body: null, via: null,
-      choice: { prompt: 'luzz and ohana. Roll them now?', options: [{ label: 'Roll now' }, { label: 'Tonight' }], allow_custom: false, status: 'pending', answer: null, answeredBy: null, expiresAt: null } },
+      choice: { prompt: 'larkspur and ohana. Roll them now?', options: [{ label: 'Roll now' }, { label: 'Tonight' }], allow_custom: false, status: 'pending', answer: null, answeredBy: null, expiresAt: null } },
   },
 ]
 
@@ -76,7 +76,7 @@ k2.connected.then(function () {
   head.appendChild(K2Help.tip('Talk to Ada here. Enter sends; Shift+Enter is a new line.', { label: 'this panel', key: 'h' }))
   window.__panel = K2Thread.mount(document.getElementById('t'), { look: ${JSON.stringify(look)}, address: ${JSON.stringify(AGENT)}, label: 'Ada' })
   var ta = document.querySelector('.k2t-field textarea')
-  ta.value = 'Roll luzz first'
+  ta.value = 'Roll larkspur first'
   ta.dispatchEvent(new Event('input', { bubbles: true }))
   k2.ready()
 })`

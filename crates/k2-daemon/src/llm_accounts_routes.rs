@@ -217,7 +217,7 @@ fn usage_for_at(e: &Entry, now: chrono::DateTime<chrono::Utc>) -> Value {
 }
 
 /// Windows of `e`'s last reading that are used up and not reset yet:
-/// "lztek is at 100% of Weekly until 2026-10-16T00:00:00Z".
+/// "lumon is at 100% of Weekly until 2026-10-16T00:00:00Z".
 fn exhausted_warnings(e: &Entry) -> Vec<String> {
     let Some(u) = e.usage_json.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()) else {
         return Vec::new();

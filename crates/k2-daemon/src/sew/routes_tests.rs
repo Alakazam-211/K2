@@ -154,7 +154,7 @@ fn person_only_steps_refuse_every_passport_and_need_the_owner_and_a_confirm() {
     let t = t();
     t.enable();
     let vault = crate::vault::ensure_test_vault();
-    let purge = json!({"purge": true, "confirmHostname": "lztek"});
+    let purge = json!({"purge": true, "confirmHostname": "lumon"});
     for who in [agent("w-it"), shell("w-it")] {
         for (path, body) in [
             ("/cli/sew/server/uninstall", purge.clone()),
@@ -202,7 +202,7 @@ fn purge_needs_the_confirm_and_the_hostname_and_then_removes_everything() {
     assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "confirm_hostname_mismatch"));
     assert!(t.ops.effects().is_empty());
     let tok = vault.confirm.mint(CONFIRM_PURGE, Some(INSTALL_ID), "owner", "vault-password");
-    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/uninstall", json!({"purge": true, "confirmToken": tok, "confirmHostname": "lztek"}));
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/uninstall", json!({"purge": true, "confirmToken": tok, "confirmHostname": "lumon"}));
     assert_eq!(st, "200 OK", "{v}");
     assert_eq!(v["purged"], true);
     assert_eq!(v["confirmedBy"], "vault-password");
@@ -223,7 +223,7 @@ fn admin_with_a_confirm_may_drop_prev_but_never_purge_or_reveal_the_launch_key()
     let admin = login(Role::Admin);
     // Purge: owner only, even with an admin's own confirm. Nothing ran.
     let tok = vault.confirm.mint(CONFIRM_PURGE, Some(INSTALL_ID), "connect:ana", "connect-password");
-    let (st, v) = t.call(&admin, "/cli/sew/server/uninstall", json!({"purge": true, "confirmToken": tok, "confirmHostname": "lztek"}));
+    let (st, v) = t.call(&admin, "/cli/sew/server/uninstall", json!({"purge": true, "confirmToken": tok, "confirmHostname": "lumon"}));
     assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "owner_only"), "{v}");
     assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
     assert!(crate::sew::store::load().is_some(), "purge refused: the install stays");
@@ -420,11 +420,11 @@ fn voice_and_users_routes_sit_behind_manage_sew() {
     let t = t();
     for (path, body) in [
         ("/cli/sew/media/install", json!({})),
-        ("/cli/sew/media/url", json!({"publicUrl": "wss://hearth.lztek.k2.dev"})),
+        ("/cli/sew/media/url", json!({"publicUrl": "wss://hearth.lumon.k2.dev"})),
         ("/cli/sew/media/renew", json!({})),
         ("/cli/sew/media/probe", json!({"udp": "ok", "tcp": "ok", "turnTls": "ok"})),
         ("/cli/sew/media/uninstall", json!({})),
-        ("/cli/sew/server/config", json!({"publicUrl": "https://hearth.lztek.k2.dev"})),
+        ("/cli/sew/server/config", json!({"publicUrl": "https://hearth.lumon.k2.dev"})),
         ("/cli/sew/meet/bind", json!({"app": "meetdemo"})),
         ("/cli/sew/meet/unbind", json!({})),
         ("/cli/sew/users/invite", json!({"user": "bob"})),
@@ -484,7 +484,7 @@ fn the_meet_label_binds_to_an_apps_front_port_and_unbinds() {
     }
     let (st, v) = t.call(&agent("w-it"), "/cli/sew/meet/bind", json!({"app": "MeetDemo"}));
     assert_eq!(st, "200 OK", "{v}");
-    assert_eq!(v["url"], "https://meet.lztek.k2.dev");
+    assert_eq!(v["url"], "https://meet.lumon.k2.dev");
     assert_eq!(v["frontPort"], 38701);
     assert!(v["hint"].as_str().unwrap().contains("k2 app restart meetdemo"), "{v}");
     assert_eq!(t.ops.nested.lock().unwrap().last().cloned(), Some(("meet".to_string(), Some("127.0.0.1:38701".to_string()))));
@@ -552,29 +552,29 @@ fn enable_takes_an_explicit_standalone_identity_and_voice_in_one_call() {
         &agent("w-it"),
         "/cli/sew/server/enable",
         json!({"tarballPath": TARBALL, "identity": "standalone",
-               "voice": {"publicUrl": "wss://hearth.lztek.k2.dev", "mediaTarballPath": MEDIA}}),
+               "voice": {"publicUrl": "wss://hearth.lumon.k2.dev", "mediaTarballPath": MEDIA}}),
     );
     assert_eq!(st, "200 OK", "{v}");
     assert_eq!(v["state"], "running");
-    assert_eq!(v["publicUrl"], "wss://hearth.lztek.k2.dev");
-    assert_eq!(v["turnHost"], "turn-lztek.k2.dev");
+    assert_eq!(v["publicUrl"], "wss://hearth.lumon.k2.dev");
+    assert_eq!(v["turnHost"], "turn-lumon.k2.dev");
     let s = t.get(&Who::Owner, "/cli/sew/status").1;
     assert_eq!(s["identityProvider"], "standalone");
-    assert_eq!(s["voice"]["publicUrl"], "wss://hearth.lztek.k2.dev");
+    assert_eq!(s["voice"]["publicUrl"], "wss://hearth.lumon.k2.dev");
     // Voice URL later, and setup links on the App.
-    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"publicUrl": "https://hearth.lumon.k2.dev"}));
     assert_eq!(st, "200 OK", "{v}");
-    assert_eq!(v["setupLinks"], "https://hearth.lztek.k2.dev/setup");
-    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"setupUrl": "https://hearth.lztek.k2.dev/setup"}));
+    assert_eq!(v["setupLinks"], "https://hearth.lumon.k2.dev/setup");
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"setupUrl": "https://hearth.lumon.k2.dev/setup"}));
     assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "bad_request"), "setupUrl is never sent: {v}");
     // Users: the setup link comes back to the caller.
     t.ops.mgmt_answers.lock().unwrap().entry("POST /mgmt/v1/local/users".into()).or_default().push_back(Ok(json!({
         "member_id": "5", "username": "bob", "install_role": "member", "deactivated": false, "created": true,
         "reactivated": false, "changed": true,
-        "setup_link": {"url": "https://hearth.lztek.k2.dev/setup#token=sewpw_x", "expires_at": "2026-10-17T00:00:00Z"}})));
+        "setup_link": {"url": "https://hearth.lumon.k2.dev/setup#token=sewpw_x", "expires_at": "2026-10-17T00:00:00Z"}})));
     let (st, v) = t.call(&agent("w-it"), "/cli/sew/users/invite", json!({"user": "bob", "role": "member"}));
     assert_eq!(st, "200 OK", "{v}");
-    assert_eq!(v["setupLink"]["url"], "https://hearth.lztek.k2.dev/setup#token=sewpw_x");
+    assert_eq!(v["setupLink"]["url"], "https://hearth.lumon.k2.dev/setup#token=sewpw_x");
     let _ = INSTALL_ID;
 }
 

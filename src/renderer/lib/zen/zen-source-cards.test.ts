@@ -115,7 +115,7 @@ function healthy(card: Card): ZenSourceView {
       return view({
         items: [
           fixtureItem('ohana', { fields: { version: '0.45.6', phase: 'ready', relay: 'k2e-01', up: true } }),
-          fixtureItem('luzz', { fields: { version: '0.45.6', phase: 'ready', relay: 'k2e-02', up: true } }),
+          fixtureItem('larkspur', { fields: { version: '0.45.6', phase: 'ready', relay: 'k2e-02', up: true } }),
         ],
       })
     case 'deploys-1':
@@ -239,7 +239,7 @@ describe('@3 (0.46.4): no Ask an agent', () => {
       display: 'crit',
       items: [
         fixtureItem('ohana', { health: 'crit', reason: 'timeout', fields: { version: null, phase: null, relay: 'k2e-01', up: false } }),
-        fixtureItem('luzz', { health: 'unknown', fields: { relay: 'k2e-02' } }),
+        fixtureItem('larkspur', { health: 'unknown', fields: { relay: 'k2e-02' } }),
       ],
       counts: { ok: 0, warn: 0, crit: 1, unknown: 1 },
     })
@@ -275,7 +275,7 @@ describe('card specifics', () => {
         items: [
           fixtureItem('alpha'),
           fixtureItem('ohana', { health: 'crit', reason: 'timeout', fields: { version: null, phase: null } }),
-          fixtureItem('luzz', { health: 'unknown' }),
+          fixtureItem('larkspur', { health: 'unknown' }),
           fixtureItem('beta', { health: 'warn', fields: { version: '0.45.6', phase: 'draining' } }),
         ],
         counts: { ok: 1, warn: 1, crit: 1, unknown: 1 },
@@ -284,15 +284,15 @@ describe('card specifics', () => {
     const tile = (k: string) => m.card.querySelector(`[data-k2c-item="${k}"]`)
     expect(tile('ohana')?.getAttribute('data-k2c-state')).toBe('crit')
     expect(tile('ohana')?.textContent).toContain('timeout')
-    expect(tile('luzz')?.className).toContain('k2c-unknown')
+    expect(tile('larkspur')?.className).toContain('k2c-unknown')
     expect(tile('alpha')?.querySelector('[data-k2c-ask]')).toBeNull()
     expect(tile('beta')?.querySelector('[data-k2c-ask]')).toBeNull()
     expect(m.card.querySelector('[data-k2c-banner]')?.textContent).toBe('1 down · 1 warning · 1 unknown')
     ;(tile('ohana')?.querySelector('[data-k2c-ask]') as HTMLButtonElement).click()
-    ;(tile('luzz')?.querySelector('[data-k2c-ask]') as HTMLButtonElement).click()
+    ;(tile('larkspur')?.querySelector('[data-k2c-ask]') as HTMLButtonElement).click()
     expect(m.asks).toEqual([
       ['fleet', 'ohana'],
-      ['fleet', 'luzz'],
+      ['fleet', 'larkspur'],
     ])
   })
 
@@ -336,8 +336,8 @@ describe('card specifics', () => {
       view({
         items: [
           fixtureItem('ohana', { fields: { relay: 'k2e-01', up: true } }),
-          fixtureItem('luzz', { health: 'crit', fields: { relay: 'k2e-01', up: false } }),
-          fixtureItem('acv', { fields: { relay: 'k2e-02', up: true } }),
+          fixtureItem('larkspur', { health: 'crit', fields: { relay: 'k2e-01', up: false } }),
+          fixtureItem('aperture', { fields: { relay: 'k2e-02', up: true } }),
         ],
       }),
     )
@@ -400,7 +400,7 @@ function opsBoxes(over: Partial<SourceResult> = {}): ZenSourceView {
       items: [
         fixtureItem('ohana', { fields: { version: '0.44.4', online: true, phase: 'ready', customer: true, needs_go: 'rosson' } }),
         fixtureItem('akzm', { fields: { version: '0.46.0', online: true, phase: 'ready', customer: false, needs_go: null } }),
-        fixtureItem('luzz', { health: 'warn', fields: { version: '0.45.9', online: true, phase: 'ready', customer: false, needs_go: null } }),
+        fixtureItem('larkspur', { health: 'warn', fields: { version: '0.45.9', online: true, phase: 'ready', customer: false, needs_go: null } }),
       ],
       counts: { ok: 2, warn: 1, crit: 0, unknown: 0 },
       ...over,
@@ -418,7 +418,7 @@ describe('@2 cards', () => {
         items: [
           fixtureItem('ohana', { fields: { version: '0.44.4', phase: 'ready' } }),
           fixtureItem('akzm', { health: 'crit', reason: 'timeout', fields: { version: null, phase: null } }),
-          fixtureItem('luzz', { fields: { version: '0.45.9', phase: 'ready' } }),
+          fixtureItem('larkspur', { fields: { version: '0.45.9', phase: 'ready' } }),
         ],
         counts: { ok: 2, warn: 0, crit: 1, unknown: 0 },
       }),
@@ -431,7 +431,7 @@ describe('@2 cards', () => {
     expect(tile('ohana')?.textContent).toContain('go: rosson')
     expect(tile('akzm')?.getAttribute('data-k2c-state')).toBe('crit')
     expect(tile('akzm')?.textContent).toContain('0.46.0')
-    expect(tile('luzz')?.getAttribute('data-k2c-state')).toBe('warn')
+    expect(tile('larkspur')?.getAttribute('data-k2c-state')).toBe('warn')
     expect(m.card.querySelectorAll('[data-k2c-item]')).toHaveLength(3)
     expect(m.card.querySelector('[data-k2c-banner]')?.textContent).toBe('1 down · 1 warning')
     expect(m.card.textContent).toContain('2 sources')
@@ -590,8 +590,8 @@ describe('@2 cards', () => {
           fields: { past_due: 2, past_due_not_kept: 1, canceled_routing: 1, reconcile_ok: true, ts: NOW - 10 },
           items: [
             fixtureItem('edf', { health: 'warn', fields: { keep_live: false } }),
-            fixtureItem('noir', { fields: { keep_live: true } }),
-            fixtureItem('canceled/quillify', { list: 'canceled', health: 'crit', fields: { canceled_label: 'quillify' } }),
+            fixtureItem('nakatomi', { fields: { keep_live: true } }),
+            fixtureItem('canceled/quahog', { list: 'canceled', health: 'crit', fields: { canceled_label: 'quahog' } }),
           ],
           counts: { ok: 1, warn: 1, crit: 1, unknown: 0 },
         },
@@ -604,7 +604,7 @@ describe('@2 cards', () => {
     expect(row('past_due')?.textContent).toContain('1 not kept live')
     expect(row('edf')?.getAttribute('data-k2c-state')).toBe('warn')
     expect(row('canceled_routing')?.textContent).toContain('1 canceled but still routing')
-    expect(row('canceled/quillify')?.textContent).toContain('quillify')
+    expect(row('canceled/quahog')?.textContent).toContain('quahog')
     expect(row('reconcile')?.getAttribute('data-k2c-state')).toBe('ok')
     // Stripe's states-only source alone keeps @1's words.
     const s = await mount('money-alerts-2', { source: 'money' })

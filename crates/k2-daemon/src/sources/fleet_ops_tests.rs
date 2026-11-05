@@ -36,14 +36,14 @@ fn spec(name: &str) -> SourceSpec {
 }
 
 /// What K2 Web answers, by `?part=` (the live shapes), with knobs the
-/// test turns: the block age, ohana's version, luzz online, a relay's push
+/// test turns: the block age, ohana's version, larkspur online, a relay's push
 /// age, the past-due / canceled rows.
 #[derive(Clone)]
 struct Web {
     now: i64,
     ts_age: i64,
     ohana: &'static str,
-    luzz_online: bool,
+    larkspur_online: bool,
     k2e02_push_age: i64,
     canceled: Vec<&'static str>,
     cert_days: i64,
@@ -58,14 +58,14 @@ impl Web {
                  "last_ok": ts, "down_since": null, "tier": "pro", "stripe_status": "active"},
                 {"label": "ohana", "customer": true, "needs_go": "rosson", "online": true, "version": self.ohana, "phase": "ready",
                  "last_ok": ts, "down_since": null, "tier": "pro", "stripe_status": "active"},
-                {"label": "luzz", "customer": true, "needs_go": "rosson", "online": self.luzz_online, "version": "0.46.0",
-                 "phase": "ready", "last_ok": ts, "down_since": if self.luzz_online { Value::Null } else { json!(ts - 60) },
+                {"label": "larkspur", "customer": true, "needs_go": "rosson", "online": self.larkspur_online, "version": "0.46.0",
+                 "phase": "ready", "last_ok": ts, "down_since": if self.larkspur_online { Value::Null } else { json!(ts - 60) },
                  "tier": "ded-s", "stripe_status": "active"}
             ]}}),
             "billing" => json!({"billing": {"ts": ts, "error": null,
                 "subdomains": {"by_stripe_status": {"active": 53, "past_due": 2, "canceled": 1}, "suspended": 3, "missing_period_end": 0},
                 "servers": {"by_stripe_status": {"active": 11, "past_due": 1}},
-                "past_due": [{"label": "edf", "keep_live": false}, {"label": "noir", "keep_live": true}],
+                "past_due": [{"label": "edf", "keep_live": false}, {"label": "nakatomi", "keep_live": true}],
                 "canceled_but_routing": self.canceled.iter().map(|l| json!({"label": l})).collect::<Vec<_>>(),
                 "reconcile": {"ts": self.now - 3300, "ok": true, "error": null, "write_mode": false,
                               "would_cancel": 0, "would_restore": 0, "date_diffs": 0, "status_diffs": 2}}}),
@@ -139,9 +139,9 @@ fn every_fleet_ops_source_validates_and_reads_k2_webs_shapes_end_to_end() {
         now: T0,
         ts_age: 10,
         ohana: "0.44.4",
-        luzz_online: true,
+        larkspur_online: true,
         k2e02_push_age: 20,
-        canceled: vec!["quillify"],
+        canceled: vec!["quahog"],
         cert_days: 10,
     }));
     let w2 = web.clone();
@@ -194,16 +194,16 @@ fn every_fleet_ops_source_validates_and_reads_k2_webs_shapes_end_to_end() {
     // waits; a box never rated yet reads unknown meanwhile (as before 0.46.1).
     assert_eq!(item(&boxes, "ohana")["health"], "unknown");
     assert_eq!(item(&boxes, "ohana")["soft"], json!({"count": 1, "of": 3, "level": "warn"}));
-    assert_eq!(item(&boxes, "luzz")["health"], "ok", "a patch behind stays ok");
+    assert_eq!(item(&boxes, "larkspur")["health"], "ok", "a patch behind stays ok");
 
     // Billing: keep_live warns at once (opted in), canceled-but-routing is a
     // list item and a count, the old first-row fields stay for the widgets.
     let billing = read("k2-ops-billing");
     assert_eq!(item(&billing, "edf")["health"], "warn");
-    let canceled = item(&billing, "canceled/quillify");
+    let canceled = item(&billing, "canceled/quahog");
     assert_eq!((canceled["list"].clone(), canceled["health"].clone()), (json!("canceled"), json!("crit")));
     assert_eq!(billing["fields"]["canceled_routing"], 1);
-    assert_eq!(billing["fields"]["canceled_routing_first_label"], "quillify", "alerts.js and edge.js read it");
+    assert_eq!(billing["fields"]["canceled_routing_first_label"], "quahog", "alerts.js and edge.js read it");
     assert_eq!(billing["fields"]["past_due"], 2);
     assert_eq!(billing["fields"]["past_due_not_kept"], 1);
     assert_eq!(billing["health"], "crit");
@@ -230,17 +230,17 @@ fn every_fleet_ops_source_validates_and_reads_k2_webs_shapes_end_to_end() {
 
     check(&mut h, "k2-ops-boxes"); // check 2
     assert_eq!(item(&read("k2-ops-boxes"), "ohana")["soft"]["count"], 2);
-    // Check 3: luzz goes offline, k2e-02 stops pushing.
+    // Check 3: larkspur goes offline, k2e-02 stops pushing.
     {
         let mut w = web.lock().unwrap();
-        w.luzz_online = false;
+        w.larkspur_online = false;
         w.k2e02_push_age = 1000;
     }
     check(&mut h, "k2-ops-boxes");
     let boxes = read("k2-ops-boxes");
     assert_eq!(item(&boxes, "ohana")["health"], "warn", "a minor behind warns on its 3rd check");
-    assert_eq!(item(&boxes, "luzz")["health"], "warn", "offline warns at once…");
-    assert_eq!(item(&boxes, "luzz")["soft"], json!({"count": 1, "of": 3, "level": "crit"}));
+    assert_eq!(item(&boxes, "larkspur")["health"], "warn", "offline warns at once…");
+    assert_eq!(item(&boxes, "larkspur")["soft"], json!({"count": 1, "of": 3, "level": "crit"}));
     // A relay 1000 s quiet: warn, then crit on its 2nd check (critAfter 2).
     let k2e02 = |n: &str| item(&read("k2-ops-edge"), "k2e-02")[n].clone();
     for _ in 0..3 {
@@ -263,21 +263,21 @@ fn every_fleet_ops_source_validates_and_reads_k2_webs_shapes_end_to_end() {
     assert_eq!(cert(), "warn", "certs' legacy wait ends on the 3rd check");
     // The boxes block goes old while K2 Web still serves it.
     web.lock().unwrap().ts_age = 1000;
-    let luzz_before = item(&read("k2-ops-boxes"), "luzz")["soft"]["count"].clone();
+    let larkspur_before = item(&read("k2-ops-boxes"), "larkspur")["soft"]["count"].clone();
     check(&mut h, "k2-ops-boxes");
     let boxes = read("k2-ops-boxes");
     assert_eq!(boxes["health"], "crit", "the block's own ts is 1000 s old");
     assert_eq!(boxes["phase"], "live", "an old block is crit on its ts, not a stale fetch");
-    if luzz_before == json!(1) {
-        assert_eq!(item(&boxes, "luzz")["health"], "warn", "2 checks offline: still warn");
+    if larkspur_before == json!(1) {
+        assert_eq!(item(&boxes, "larkspur")["health"], "warn", "2 checks offline: still warn");
         check(&mut h, "k2-ops-boxes");
     }
-    assert_eq!(item(&read("k2-ops-boxes"), "luzz")["health"], "crit", "…and crit after 3 checks offline");
+    assert_eq!(item(&read("k2-ops-boxes"), "larkspur")["health"], "crit", "…and crit after 3 checks offline");
     let events = {
         let conn = db.lock();
         let row = store::get_by_name(&conn, "k2-ops-boxes").unwrap().unwrap();
         store::events(&conn, &row.id, 50).unwrap()
     };
-    assert!(events.iter().any(|e| e.kind == "went_crit" && e.item_key.as_deref() == Some("luzz")));
+    assert!(events.iter().any(|e| e.kind == "went_crit" && e.item_key.as_deref() == Some("larkspur")));
     assert!(events.iter().any(|e| e.kind == "went_warn" && e.item_key.as_deref() == Some("ohana")));
 }

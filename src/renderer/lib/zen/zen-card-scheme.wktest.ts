@@ -52,7 +52,7 @@ const VIEW = {
   fields: { target_version: '0.46.2' },
   items: [
     { key: 'ohana', health: 'ok', fields: { version: '0.46.2', phase: 'ready' } },
-    { key: 'luzz', health: 'warn', fields: { version: '0.45.7', phase: 'ready' }, soft: { count: 1, of: 3, level: 'crit' } },
+    { key: 'larkspur', health: 'warn', fields: { version: '0.45.7', phase: 'ready' }, soft: { count: 1, of: 3, level: 'crit' } },
   ],
   counts: { ok: 1, warn: 1, crit: 0, unknown: 0 },
   soft: { count: 0, of: 3 },

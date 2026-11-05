@@ -13,7 +13,7 @@
 //!   K2's issuer ([`crate::domains::acme::issue_extra_name`], DNS-01 on a
 //!   K2-hosted zone). Never a SAN on the mail certificate, never
 //!   Stalwart's ACME (one failing name fails a whole Stalwart order —
-//!   the noir incident behind C24).
+//!   the customer-box incident behind C24).
 //! - **DNS-gated, every run.** A name is only issued when its A records
 //!   are all this box (the public IPv4, else the mail host's A set) and
 //!   any AAAA it has are the mail host's. Checked again on every

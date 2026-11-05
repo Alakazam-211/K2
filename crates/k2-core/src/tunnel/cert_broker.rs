@@ -448,8 +448,8 @@ pub fn cert_dns_sans(cert_pem: &str) -> Vec<String> {
 /// itself an explicit `*.<sub>.k2.dev` SAN entry, not pattern-matched).
 /// False for an unparseable leaf. This is what catches a SUBDOMAIN RENAME:
 /// a fresh, valid cert for the OLD name must not be reused for the new one
-/// (found live on rpmavs.k2.dev, 2026-07-07 — the box kept serving its
-/// cfed.k2.dev cert after the rename because reuse only checked expiry).
+/// (found live on a renamed customer box, 2026-07-07 — it kept serving its
+/// old-name cert after the rename because reuse only checked expiry).
 pub fn cert_covers(cert_pem: &str, required: &[String]) -> bool {
     let sans = cert_dns_sans(cert_pem);
     if sans.is_empty() {

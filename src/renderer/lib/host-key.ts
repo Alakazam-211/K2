@@ -3,13 +3,13 @@
 //
 // Canonical form (Home M1, MS8 + MS60):
 //   - `local` for the daemon on the computer running this window;
-//   - `https` on 443: the bare lowercase hostname (`dtl.k2.dev`);
+//   - `https` on 443: the bare lowercase hostname (`dharma.k2.dev`);
 //   - anything else carries its port, plain `http` on 80 included
 //     (`192.168.1.20:38471`, `box.lan:80`), so `http://x` and `https://x`
 //     never share a key;
 //   - an IPv6 literal is always `[addr]:port`.
-// `canonicalHostKey(string)` parses any spelling (`https://DTL.k2.dev/`,
-// `dtl.k2.dev:443`, `dtl.k2.dev`) and re-emits the canonical key, or throws.
+// `canonicalHostKey(string)` parses any spelling (`https://DHARMA.k2.dev/`,
+// `dharma.k2.dev:443`, `dharma.k2.dev`) and re-emits the canonical key, or throws.
 //
 // Kept free of app imports so the request layer can use it without an
 // import cycle.

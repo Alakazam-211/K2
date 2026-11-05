@@ -1504,7 +1504,7 @@ mod tests {
         assert_eq!(owner, badge_key_for(&conn, "owner").expect("again"), "stable");
         assert_eq!(owner.len(), 32);
         assert!(owner.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{owner}");
-        for name in ["gina", "rosson.long@lztek.io"] {
+        for name in ["gina", "rosson.long@lumon.io"] {
             let k = badge_key_for(&conn, name).expect("key");
             assert_ne!(k, owner, "a different person, a different key");
             assert!(!k.contains(name) && !k.contains("owner"), "{k}");

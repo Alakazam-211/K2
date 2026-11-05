@@ -1367,7 +1367,7 @@ Not in this build: a Windows runner, a grant required per app address, mailbox a
 
 Mail-manage / DNS-manage agents can add `mail.<apex>` themselves once the apex is on the box. Thread posts from `k2 thread` remind agents the overlay paints markdown.
 
-- **Hostname add/remove is dns_manage.** `k2 domain name add <hostname> [--role mail|publish|direct|other]` and `name remove` use the same grant as `k2 dns` / `k2 cert issue`. Apex `k2 domain add|remove` stays owner (exit 3). e2e on lztek: idempotent add of `mail.discover-nocode.com`, scratch add+remove, apex still owner_only.
+- **Hostname add/remove is dns_manage.** `k2 domain name add <hostname> [--role mail|publish|direct|other]` and `name remove` use the same grant as `k2 dns` / `k2 cert issue`. Apex `k2 domain add|remove` stays owner (exit 3). e2e on a hosted box: idempotent add of a mail hostname, scratch add+remove, apex still owner_only.
 - **Thread markdown nudge.** After a successful `k2 thread` write (not `--json`), a stderr hint on the first post and every 10th: Thread renders markdown (`**bold**`, lists, `code`, fences, links). Help and AGENTS.md Tooling say the same.
 - **Doctor refreshes.** `k2 hostmail doctor` POSTs `/cli/mail/doctor` (runs probes now). It no longer GETs the last stored run, which stayed stale after PTR/DNS already moved.
 - **Cert issue vs CNAME.** If the apex is `dns_write`, `k2 cert issue` uses DNS-01 on `_acme-challenge.<host>` (not the `mail` CNAME). It waits until **ns1 and ns2** both have the TXT, then 8.8.8.8 and 1.1.1.1, before telling Let's Encrypt (querying public DNS too early caches NXDOMAIN from a lagging NS). Finalize accepts an already-Valid order. Issue JSON reports inventory PEM SANs, not live TLS through a CNAME. e2e: `scratch-le4.discover-nocode.com` issued YE2. If the hostname is a CNAME and the zone is not `dns_write`, it fails loud instead of HTTP-01 following the CNAME onto a closed :80.
@@ -1379,7 +1379,7 @@ Not in this build: People hub, hide XOAUTH2 when no IdP, Omarchy pacman package.
 Hosted-mail operators can set this box’s SMTP reverse DNS and unban Mail.app users after a migration. Skin guests can move PDFs and images without an owner token. ⌘L opens the server switcher.
 
 - **PTR / HELO.** `k2 hostmail ptr show|set <hostname>` writes the SMTP banner name and asks k2.dev to set the OVH reverse for this box’s origin IP. Doctor PTR/FCrDNS now queries 8.8.8.8 and 1.1.1.1, not the box’s own stub cache. One IPv4, one PTR — not one per hosted domain.
-- **Mint quota and autoconfig.** New mailboxes default to unlimited quota (0 = unlimited). Mail-manage still sets a cap per inbox. Autoconfig DNS uses the attached `mail.` hostname (`mail.lztek.io`), not `mail.<connect>.k2.dev`.
+- **Mint quota and autoconfig.** New mailboxes default to unlimited quota (0 = unlimited). Mail-manage still sets a cap per inbox. Autoconfig DNS uses the attached `mail.` hostname (e.g. `mail.example.com`), not `mail.<connect>.k2.dev`.
 - **Auth bans.** `k2 hostmail bans list|clear|migrate` and `k2 hostmail allowlist list|add|remove`. Default `bans list` shows reason counts and real-user (`authFailure`) rows first; scanner IPs are a summary (full list: `--json`).
 - **Skin guest files.** Guest `k2skn_` can `read-binary` / `upload-binary` / `create` / `copy` / `move` in rooms with `files:read` / `files:write`. Pin lookup is find-only (200 if Chat is live, 404 if not — it does not start the agent). Thread posts still wake a sleeping Chat the same way `k2 msg` does. Admin Skin Access stays owner.
 - **⌘L / ⇧⌘L.** ⌘L opens the server switcher (search focused). ⇧⌘L is the local LLM helper (was ⌘L).
@@ -1393,7 +1393,7 @@ Attach a real domain to **this** server — Settings → K2 Server → **Domains
 
 Hosted mail now listens for IMAP on **143** (STARTTLS) and **993** (IMAPS) as well as the existing submission ports. Mail.app can use 993; 443 ALPN is no longer the only IMAP door.
 
-Mail-manage operators get the rest of the hosted-mail CLI (e2e'd on lztek.io). `k2 mail …` for these verbs still exits 2 and points at `k2 hostmail`.
+Mail-manage operators get the rest of the hosted-mail CLI (e2e'd on a hosted box). `k2 mail …` for these verbs still exits 2 and points at `k2 hostmail`.
 
 - **Catch-all, alias, forward.** `k2 hostmail catchall|alias|forward`. An alias is an extra address on an existing mailbox, not a new mint. Plus-tags (`user+tag@`) already work and are not aliases. Forward dest must be minted on this host; `--keep` leaves a local copy. Out of office and forward share one Sieve script — unset one leaves the other.
 - **Out of office and company footer.** `k2 hostmail ooo` (vacation auto-reply on that mailbox) and `k2 hostmail footer` (one host-wide outbound plain-text footer). `--domain` on footer is reserved.

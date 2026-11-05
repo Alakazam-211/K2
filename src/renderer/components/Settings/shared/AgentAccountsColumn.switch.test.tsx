@@ -69,8 +69,8 @@ const AFSROW = account({
   usage: usage([{ label: 'Session', used: 0.79, resetsAt: IN_TWO_DAYS }, { label: 'Weekly', used: 0.23, resetsAt: IN_TWO_DAYS }]),
   usageCheckedAt: NOW_S - 3 * 3600,
 })
-const LZTEK = account({
-  id: 'acc_lztek', label: 'lztek', plan: 'max',
+const LUMON = account({
+  id: 'acc_lumon', label: 'lumon', plan: 'max',
   usage: usage([{ label: 'Session', used: 0, resetsAt: IN_TWO_DAYS }, { label: 'Weekly', used: 1, resetsAt: IN_TWO_DAYS }]),
   usageCheckedAt: NOW_S - 30,
 })
@@ -88,7 +88,7 @@ function doc(): Record<string, unknown> {
       {
         tool: 'claude', display: 'Claude', supported: true, subscription: true, apiKeys: true, activeId: 'acc_rakzm',
         liveAccountId: 'acc_rakzm', switchedAt: SWITCHED_AT, switchedBy: 'owner-token', loginMethod: 'temp_home',
-        accounts: [RAKZM, AFSROW, LZTEK], pins: [],
+        accounts: [RAKZM, AFSROW, LUMON], pins: [],
       },
       notYet('codex', 'Codex'), notYet('grok', 'Grok'), notYet('gemini', 'Gemini'),
       notYet('cursor', 'Cursor Agent'), notYet('pi', 'Pi'), notYet('hermes', 'Hermes'),
@@ -147,10 +147,10 @@ describe('switching the server default', () => {
 
   it('warns, but still switches, when the target is at 100%', async () => {
     await renderColumn()
-    fireEvent.click(within(screen.getByTestId('llm-account-acc_lztek')).getByRole('button', { name: 'Use this token' }))
-    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_lztek' }))
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_lumon')).getByRole('button', { name: 'Use this token' }))
+    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_lumon' }))
     const msg = confirmSpy.mock.calls[0][0].message
-    expect(msg).toMatch(/Warning: lztek is at 100% of its Weekly limit until /)
+    expect(msg).toMatch(/Warning: lumon is at 100% of its Weekly limit until /)
   })
 
   it('a token that is signing in cannot be switched to', async () => {
@@ -222,7 +222,7 @@ describe('what each row says', () => {
     expect(screen.getByTestId('llm-usage-error-acc_rakzm').textContent).toContain('last check failed (usage endpoint status 429)')
     expect(screen.getByTestId('llm-usage-age-acc_afsrow').textContent).toContain('Usage checked 3 h ago')
     expect(screen.queryByTestId('llm-usage-error-acc_afsrow')).toBeNull()
-    expect(screen.getByTestId('llm-usage-age-acc_lztek').textContent).toContain('Usage checked just now')
+    expect(screen.getByTestId('llm-usage-age-acc_lumon').textContent).toContain('Usage checked just now')
   })
 
   it('Sign in again is on every subscription that is not the default and opens the sign-in', async () => {
@@ -234,7 +234,7 @@ describe('what each row says', () => {
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/login', { id: 'acc_afsrow', mode: 'this_computer' }),
     )
-    expect(within(screen.getByTestId('llm-account-acc_lztek')).getByRole('button', { name: 'Sign in again' })).toBeTruthy()
+    expect(within(screen.getByTestId('llm-account-acc_lumon')).getByRole('button', { name: 'Sign in again' })).toBeTruthy()
   })
 
   it('opening the page re-reads usage on that server', async () => {
@@ -254,9 +254,9 @@ describe('helpers', () => {
   })
 
   it('exhaustedWarnings skips windows that already reset', () => {
-    const a = { ...LZTEK, usage: usage([{ label: 'Weekly', used: 1, resetsAt: '2020-01-01T00:00:00Z' }]) } as unknown as LlmAccount
+    const a = { ...LUMON, usage: usage([{ label: 'Weekly', used: 1, resetsAt: '2020-01-01T00:00:00Z' }]) } as unknown as LlmAccount
     expect(exhaustedWarnings(a)).toEqual([])
-    expect(exhaustedWarnings(LZTEK as unknown as LlmAccount)).toHaveLength(1)
+    expect(exhaustedWarnings(LUMON as unknown as LlmAccount)).toHaveLength(1)
   })
 
   it('switchConfirmText names "no token" when nothing is the default yet', () => {

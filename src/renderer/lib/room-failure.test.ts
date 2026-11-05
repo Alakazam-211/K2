@@ -7,9 +7,9 @@ import type { HostEntry } from './host-pool'
 
 function entry(patch: Partial<HostEntry> = {}): HostEntry {
   return {
-    hostKey: 'dtl.k2.dev',
+    hostKey: 'dharma.k2.dev',
     saved: true,
-    hostId: 'id-dtl',
+    hostId: 'id-dharma',
     reach: 'live',
     boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', features: [], at: 1 },
     auth: 'ok',
@@ -22,7 +22,7 @@ function entry(patch: Partial<HostEntry> = {}): HostEntry {
   }
 }
 
-const base = { serverLabel: 'dtl', saved: true }
+const base = { serverLabel: 'dharma', saved: true }
 
 describe('roomFailure', () => {
   it('a live, signed-in Member on a new enough server: no failure', () => {
@@ -44,7 +44,7 @@ describe('roomFailure', () => {
     })
     expect(f).toEqual({
       kind: 'offline',
-      title: 'dtl is offline. Retrying…',
+      title: 'dharma is offline. Retrying…',
       detail: 'Next try in 5 s.',
       action: 'retry',
       actionLabel: 'Retry',
@@ -55,7 +55,7 @@ describe('roomFailure', () => {
   it('B restarting (phase not ready): Retry', () => {
     const f = roomFailure({ ...base, entry: entry({ reach: 'starting' }) })
     expect(f?.kind).toBe('restarting')
-    expect(f?.title).toBe('dtl is restarting…')
+    expect(f?.title).toBe('dharma is restarting…')
     expect(f?.action).toBe('retry')
   })
 
@@ -65,23 +65,23 @@ describe('roomFailure', () => {
   })
 
   it('sign-in needed, new password, signing in: Sign in to B, with the pool’s note', () => {
-    const s = roomFailure({ ...base, entry: entry({ auth: 'signin-required', authNote: 'dtl refused the saved password. Sign in again.' }) })
+    const s = roomFailure({ ...base, entry: entry({ auth: 'signin-required', authNote: 'dharma refused the saved password. Sign in again.' }) })
     expect(s).toEqual({
       kind: 'signin-required',
-      title: 'Sign in to dtl.',
-      detail: 'dtl refused the saved password. Sign in again.',
+      title: 'Sign in to dharma.',
+      detail: 'dharma refused the saved password. Sign in again.',
       action: 'sign-in',
-      actionLabel: 'Sign in to dtl',
+      actionLabel: 'Sign in to dharma',
       inputOff: true,
     })
-    expect(roomFailure({ ...base, entry: entry({ auth: 'rotate-required' }) })?.title).toBe('dtl needs a new password.')
-    expect(roomFailure({ ...base, entry: entry({ auth: 'signing-in' }) })?.title).toBe('Signing in to dtl…')
+    expect(roomFailure({ ...base, entry: entry({ auth: 'rotate-required' }) })?.title).toBe('dharma needs a new password.')
+    expect(roomFailure({ ...base, entry: entry({ auth: 'signing-in' }) })?.title).toBe('Signing in to dharma…')
   })
 
   it('kicked: Removed from B. Sign in again. — a click, never automatic', () => {
     const f = roomFailure({ ...base, entry: entry({ auth: 'kicked' }) })
     expect(f?.kind).toBe('kicked')
-    expect(f?.title).toBe('Removed from dtl. Sign in again.')
+    expect(f?.title).toBe('Removed from dharma. Sign in again.')
     expect(f?.action).toBe('sign-in')
   })
 
@@ -92,10 +92,10 @@ describe('roomFailure', () => {
     })
     expect(f).toEqual({
       kind: 'version-too-old',
-      title: 'dtl is on v0.40.30. This room needs v0.41.0 or newer.',
-      detail: 'Update dtl, or open its server in this window.',
+      title: 'dharma is on v0.40.30. This room needs v0.41.0 or newer.',
+      detail: 'Update dharma, or open its server in this window.',
       action: 'open-server',
-      actionLabel: 'Open dtl’s server',
+      actionLabel: 'Open dharma’s server',
       inputOff: true,
     })
     // Exactly the floor opens.
@@ -118,7 +118,7 @@ describe('roomFailure', () => {
         ...base,
         entry: entry({ boot: { phase: 'ready', ready: true, version: null, protocol: 1, instanceId: 'i', features: [], at: 1 } }),
       })?.title,
-    ).toBe('dtl is on an unknown version. This room needs v0.41.0 or newer.')
+    ).toBe('dharma is on an unknown version. This room needs v0.41.0 or newer.')
   })
 
   it('too old wins over a login state: the room cannot open either way', () => {
@@ -132,7 +132,7 @@ describe('roomFailure', () => {
   it('no access: a Viewer or an unknown role (MS83); Open B’s server', () => {
     const v = roomFailure({ ...base, entry: entry({ role: 'viewer' }) })
     expect(v?.kind).toBe('no-access')
-    expect(v?.title).toBe('You don’t have access to this agent on dtl.')
+    expect(v?.title).toBe('You don’t have access to this agent on dharma.')
     expect(v?.action).toBe('open-server')
     expect(roomFailure({ ...base, entry: entry({ role: 'guest' }) })?.kind).toBe('no-access')
   })
@@ -142,7 +142,7 @@ describe('roomFailure', () => {
   })
 
   it('a removed server: says so and offers nothing to fall back to', () => {
-    const f = roomFailure({ serverLabel: 'dtl', saved: false, entry: entry() })
+    const f = roomFailure({ serverLabel: 'dharma', saved: false, entry: entry() })
     expect(f).toEqual({
       kind: 'removed',
       title: 'This server was removed from this computer.',

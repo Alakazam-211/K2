@@ -63,11 +63,11 @@
 #   K2_GMAIL_CLIENT_ID                  — pre-packaged Gmail OAuth client id
 #                                         (option_env! into mail/oauth/mod.rs)
 #   K2_GMAIL_CLIENT_SECRET              — matching desktop client secret
-#   K2_MICROSOFT_CLIENT_ID              — optional MS client id (not the DTL bug)
+#   K2_MICROSOFT_CLIENT_ID              — optional MS client id (not the customer-box bug)
 #
 # Without K2_GMAIL_CLIENT_* the Linux binary ships
 # client_id=REPLACE_ME.apps.googleusercontent.com and email-link fails with
-# Google invalid_client (DTL proof). macOS release.sh sources .env; this
+# Google invalid_client (proven on a customer box). macOS release.sh sources .env; this
 # workflow MUST inject Gmail at compile time and strings-check the binary.
 
 name: daemon-binaries
@@ -188,7 +188,7 @@ jobs:
 
       - name: Build k2-daemon + k2-node + k2-root-helper + k2-app-engine (release, standalone bins)
         env:
-          # Priority: Gmail (customer-facing invalid_client on DTL). MS optional.
+          # Priority: Gmail (customer-facing invalid_client on a customer box). MS optional.
           K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
           K2_GMAIL_CLIENT_SECRET: ${{ secrets.K2_GMAIL_CLIENT_SECRET }}
           K2_MICROSOFT_CLIENT_ID: ${{ secrets.K2_MICROSOFT_CLIENT_ID }}

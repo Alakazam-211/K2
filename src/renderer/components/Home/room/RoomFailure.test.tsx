@@ -28,11 +28,11 @@ import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const KEY = 'dtl.k2.dev'
-const DTL: ConnectHost = {
-  id: 'id-dtl',
-  label: 'dtl',
-  hostname: 'dtl.k2.dev',
+const KEY = 'dharma.k2.dev'
+const DHARMA: ConnectHost = {
+  id: 'id-dharma',
+  label: 'dharma',
+  hostname: 'dharma.k2.dev',
   port: 443,
   secure: true,
   username: 'rosson',
@@ -45,7 +45,7 @@ function entry(patch: Partial<HostEntry>): HostEntry {
   return {
     hostKey: KEY,
     saved: true,
-    hostId: 'id-dtl',
+    hostId: 'id-dharma',
     reach: 'live',
     boot: { phase: 'ready', ready: true, version: '0.41.6', protocol: 1, instanceId: 'i1', features: [], at: 1 },
     auth: 'ok',
@@ -89,28 +89,28 @@ function button(el: HTMLElement): HTMLButtonElement {
 beforeEach(() => {
   h.invokes = []
   hostPool.store.setState({ entries: {} })
-  useConnectHostStore.setState({ hosts: [DTL], activeHost: 'local' })
+  useConnectHostStore.setState({ hosts: [DHARMA], activeHost: 'local' })
 })
 
 const CASES: Array<[string, Partial<HostEntry>, string, string, string]> = [
-  ['offline', { reach: 'offline', boot: null }, 'dtl is offline. Retrying…', 'Retry', 'retry'],
-  ['restarting', { reach: 'starting' }, 'dtl is restarting…', 'Retry', 'retry'],
-  ['signin-required', { auth: 'signin-required' }, 'Sign in to dtl.', 'Sign in to dtl', 'sign-in'],
-  ['kicked', { auth: 'kicked' }, 'Removed from dtl. Sign in again.', 'Sign in to dtl', 'sign-in'],
+  ['offline', { reach: 'offline', boot: null }, 'dharma is offline. Retrying…', 'Retry', 'retry'],
+  ['restarting', { reach: 'starting' }, 'dharma is restarting…', 'Retry', 'retry'],
+  ['signin-required', { auth: 'signin-required' }, 'Sign in to dharma.', 'Sign in to dharma', 'sign-in'],
+  ['kicked', { auth: 'kicked' }, 'Removed from dharma. Sign in again.', 'Sign in to dharma', 'sign-in'],
   [
     'version-too-old',
     { boot: { phase: 'ready', ready: true, version: '0.40.30', protocol: 1, instanceId: 'i', features: [], at: 1 } },
-    'dtl is on v0.40.30. This room needs v0.41.0 or newer.',
-    'Open dtl’s server',
+    'dharma is on v0.40.30. This room needs v0.41.0 or newer.',
+    'Open dharma’s server',
     'open-server',
   ],
-  ['no-access', { role: 'viewer' }, 'You don’t have access to this agent on dtl.', 'Open dtl’s server', 'open-server'],
+  ['no-access', { role: 'viewer' }, 'You don’t have access to this agent on dharma.', 'Open dharma’s server', 'open-server'],
 ]
 
 describe('RoomFailureView', () => {
   for (const [kind, patch, title, label, action] of CASES) {
     it(`${kind}: shows "${title}" and one "${label}" button that calls ${action}`, () => {
-      const failure = roomFailure({ serverLabel: 'dtl', saved: true, entry: entry(patch) })
+      const failure = roomFailure({ serverLabel: 'dharma', saved: true, entry: entry(patch) })
       if (!failure) throw new Error(`no failure for ${kind}`)
       const actions = spyActions()
       const { el, root } = mount(createElement(RoomFailureView, { failure, actions }))
@@ -184,7 +184,7 @@ describe('roomFailureActions act on that server only (MS5, MS36)', () => {
     setEntry(entry({ auth: 'kicked' }))
     roomFailureActions(KEY).signIn()
     expect(signIn).toHaveBeenCalledTimes(1)
-    expect(signIn.mock.calls[0][0].id).toBe('id-dtl')
+    expect(signIn.mock.calls[0][0].id).toBe('id-dharma')
     expect(pickHost).not.toHaveBeenCalled()
     expect(h.invokes.filter((c) => c === 'k2_secret_delete' || c === 'connect_cli_token_delete')).toEqual([])
   })
@@ -195,7 +195,7 @@ describe('roomFailureActions act on that server only (MS5, MS36)', () => {
     setEntry(entry({ auth: 'rotate-required' }))
     roomFailureActions(KEY).signIn()
     expect(rotate).toHaveBeenCalledTimes(1)
-    expect(rotate.mock.calls[0][0].id).toBe('id-dtl')
+    expect(rotate.mock.calls[0][0].id).toBe('id-dharma')
     expect(rotate.mock.calls[0][1]).toEqual({ activate: false })
   })
 
@@ -204,6 +204,6 @@ describe('roomFailureActions act on that server only (MS5, MS36)', () => {
     useConnectHostStore.setState({ pickHost })
     roomFailureActions(KEY).openServer()
     expect(pickHost).toHaveBeenCalledTimes(1)
-    expect(pickHost.mock.calls[0][0].id).toBe('id-dtl')
+    expect(pickHost.mock.calls[0][0].id).toBe('id-dharma')
   })
 })

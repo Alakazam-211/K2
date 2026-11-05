@@ -64,7 +64,7 @@ fn engine() -> Result<StalwartClient, CliResponse> {
 /// Shape matches Stalwart's documented DATA-stage sample (`set` a
 /// quoted string, `foreverypart {`, `extracttext`, `replace "${…}"`)
 /// so the trusted compiler accepts it. `text:` without a trailing `;`
-/// is what failed `x:SieveSystemScript/set` on lztek.
+/// is what failed `x:SieveSystemScript/set` on a fleet box.
 pub fn compose_footer_script(text: &str) -> String {
     let escaped = sieve_quote_string(text);
     format!(

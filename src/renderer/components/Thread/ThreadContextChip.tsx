@@ -59,7 +59,7 @@ export function ThreadContextComposeChip({
   )
 }
 
-/** Where the chip was, after its context didn't go ("Not sent: dtl is older"). */
+/** Where the chip was, after its context didn't go ("Not sent: dharma is older"). */
 export function ThreadContextNote({ note, onDismiss }: { note: string; onDismiss: () => void }): JSX.Element {
   return (
     <div

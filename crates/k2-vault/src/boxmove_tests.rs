@@ -52,7 +52,7 @@ fn ok() -> crate::policy::HumanProof {
 }
 
 fn src() -> MoveSource {
-    MoveSource { host: "acv-old".into(), tunnel_subdomain: Some("acv".into()), tunnel_device_id: Some("dev-1".into()) }
+    MoveSource { host: "aperture-old".into(), tunnel_subdomain: Some("aperture".into()), tunnel_device_id: Some("dev-1".into()) }
 }
 
 #[test]

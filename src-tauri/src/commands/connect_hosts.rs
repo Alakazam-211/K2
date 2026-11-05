@@ -165,7 +165,7 @@ pub fn read_cli_token(hostname: &str) -> Option<String> {
 
 /// Upsert a hostname → session token for CLI tray / remote verbs.
 ///
-/// `hostname` is the Connect host name (e.g. `claimchaser.k2.dev`). Empty
+/// `hostname` is the Connect host name (e.g. `cyberdyne.k2.dev`). Empty
 /// hostname or token is rejected. Never logs the token value.
 #[tauri::command]
 pub fn connect_cli_token_upsert(hostname: String, token: String) -> Result<(), String> {
@@ -298,18 +298,18 @@ mod tests {
         let dir = tmp_home("cli-tok");
         let _home = HomeGuard::set(&dir);
         connect_cli_token_upsert(
-            "claimchaser.k2.dev".to_string(),
+            "cyberdyne.k2.dev".to_string(),
             "sess-abc".to_string(),
         )
         .unwrap();
         let map = read_tokens_map().unwrap();
         assert_eq!(
-            map.get("claimchaser.k2.dev").and_then(|v| v.as_str()),
+            map.get("cyberdyne.k2.dev").and_then(|v| v.as_str()),
             Some("sess-abc")
         );
-        connect_cli_token_delete("claimchaser.k2.dev".to_string()).unwrap();
+        connect_cli_token_delete("cyberdyne.k2.dev".to_string()).unwrap();
         let map2 = read_tokens_map().unwrap();
-        assert!(map2.get("claimchaser.k2.dev").is_none());
+        assert!(map2.get("cyberdyne.k2.dev").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

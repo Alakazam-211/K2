@@ -565,14 +565,14 @@ fn a_widget_reads_a_declared_neighbours_data_read_only() {
     std::fs::write(d.f.widget_dir("board").join("manifest.json"), reader("[\"lists\"]")).expect("manifest");
     d.stamp(MadeBy::Owner);
     ok(&DataWho::Owner, "POST", "/cli/zen/data/put", json!({"widget": "lists", "key": "holds/ohana", "value": "freeze"}), &[]);
-    ok(&DataWho::Owner, "POST", "/cli/zen/data/put", json!({"widget": "lists", "key": "holds/luzz", "value": "migrating"}), &[]);
+    ok(&DataWho::Owner, "POST", "/cli/zen/data/put", json!({"widget": "lists", "key": "holds/larkspur", "value": "migrating"}), &[]);
 
     let e = d.call("store.get", json!(["holds/ohana", {"from": "lists"}]));
     assert_eq!(e["value"], "freeze", "{e}");
     assert_eq!(d.call("store.get", json!(["holds/ohana"])), Value::Null, "without from, its own data");
     let page = d.call("store.list", json!([{"prefix": "holds/", "from": "lists"}]));
     let keys: Vec<&str> = page["items"].as_array().unwrap().iter().map(|i| i["key"].as_str().unwrap()).collect();
-    assert_eq!(keys, vec!["holds/luzz", "holds/ohana"]);
+    assert_eq!(keys, vec!["holds/larkspur", "holds/ohana"]);
     let ch = d.call("store.changes", json!([{"since": 0, "from": "lists"}]));
     assert_eq!(ch["items"].as_array().unwrap().len(), 2, "{ch}");
     // Read-only: no write verb takes from.

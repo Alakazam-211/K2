@@ -122,9 +122,9 @@ fn keys_of(v: &Value) -> Vec<String> {
 fn the_test_sew_refuses_a_key_real_sew_would() {
     let t = t();
     for body in [
-        json!({"public_url": "wss://voice.lztek.k2.dev", "turn_trusted_cidrs": ["127.0.0.1/32"]}),
-        json!({"public_url": "wss://voice.lztek.k2.dev", "tier": "passthrough"}),
-        json!({"public_url": "wss://voice.lztek.k2.dev", "relay_only": "true"}),
+        json!({"public_url": "wss://voice.lumon.k2.dev", "turn_trusted_cidrs": ["127.0.0.1/32"]}),
+        json!({"public_url": "wss://voice.lumon.k2.dev", "tier": "passthrough"}),
+        json!({"public_url": "wss://voice.lumon.k2.dev", "relay_only": "true"}),
     ] {
         let e = sew_media(&t.env(), &["media", "install"], &body, "media_install_failed").expect_err("refused");
         assert_eq!(e.code, "media_install_failed", "{body}");
@@ -205,22 +205,22 @@ fn a_tunnel_install_publishes_no_ip_and_hands_sew_relay_only_passthrough() {
     let t = t();
     let out = t.install().expect("tunnel install");
     assert_eq!(out["turnTier"], "tunnel");
-    assert_eq!(out["turnHost"], "turn.lztek.k2.dev");
+    assert_eq!(out["turnHost"], "turn.lumon.k2.dev");
     assert_eq!(out["nodeIp"], Value::Null);
     assert_eq!(out["relayOnly"], true);
-    assert_eq!(out["iceServers"], json!(["turns:turn.lztek.k2.dev:443?transport=tcp"]));
+    assert_eq!(out["iceServers"], json!(["turns:turn.lumon.k2.dev:443?transport=tcp"]));
     assert_eq!(out["turnTls"]["served"], "ok", "{out}");
 
     let cp = t.ops.cp_log();
     assert!(!cp.iter().any(|c| c.contains("/turn/dns")), "no DNS in the tunnel tier: {cp:?}");
     let cert = t.cp_body("POST /cert");
     assert_eq!(cert["mode"], "turn-tunnel");
-    assert_eq!(cert["subdomain"], "lztek", "the bare label");
-    assert_eq!(csr_sans(cert["csr"].as_str().unwrap()), vec!["turn.lztek.k2.dev".to_string()]);
+    assert_eq!(cert["subdomain"], "lumon", "the bare label");
+    assert_eq!(csr_sans(cert["csr"].as_str().unwrap()), vec!["turn.lumon.k2.dev".to_string()]);
 
     let m = t.stdin_of(TUNNEL_INSTALL);
     assert_eq!(m["turn_tls"], "passthrough");
-    assert_eq!(m["turn_domain"], "turn.lztek.k2.dev");
+    assert_eq!(m["turn_domain"], "turn.lumon.k2.dev");
     assert_eq!(m["relay_only"], true);
     assert_eq!(m["bind_v4"], "127.0.0.1", "media sockets off the network");
     assert!(m.get("node_ip").is_none(), "no node IP: Sew writes 127.0.0.1 itself: {m}");
@@ -235,7 +235,7 @@ fn a_tunnel_install_publishes_no_ip_and_hands_sew_relay_only_passthrough() {
     req.validate().expect("valid for protocol 12");
 
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true], "the voice lane is armed");
-    assert_eq!(t.ops.served_connects.lock().unwrap().last().map(String::as_str), Some("turn.lztek.k2.dev"));
+    assert_eq!(t.ops.served_connects.lock().unwrap().last().map(String::as_str), Some("turn.lumon.k2.dev"));
     assert_eq!(t.ops.served_ports.lock().unwrap().last(), Some(&443));
     let st = load(&t.env());
     assert_eq!((st.installed, voice::tier(&st), st.node_ip.as_deref()), (true, "tunnel", None));
@@ -247,7 +247,7 @@ fn the_tunnel_tier_needs_the_preview_helper_12_and_a_relay_only_sew() {
     let t = t();
     *t.ops.tunnel_preview.lock().unwrap() = false;
     let out = t.install().expect("direct install");
-    assert_eq!(out["turnHost"], "turn-lztek.k2.dev");
+    assert_eq!(out["turnHost"], "turn-lumon.k2.dev");
     assert!(t.ops.lane_calls.lock().unwrap().is_empty(), "no voice lane without the preview");
     assert!(t.stdin_of(TUNNEL_INSTALL).get("relay_only").is_none(), "protocol-11 clean");
 
@@ -321,10 +321,10 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     let v = set_tier_named(&t.env(), "tunnel").expect("to tunnel");
     assert_eq!((v["turnTier"].as_str(), v["changed"].as_bool()), (Some("tunnel"), Some(true)), "{v}");
     let r = t.stdin_of(RECONF);
-    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("passthrough"), Some("turn.lztek.k2.dev"), Some(true)));
+    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("passthrough"), Some("turn.lumon.k2.dev"), Some(true)));
     assert_eq!(r["bind_v4"], "127.0.0.1");
     assert_eq!(keys_of(&r), ["bind_v4", "relay_only", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"], "{r}");
-    assert!(t.ops.cp_log().contains(&"DELETE /turn/dns/lztek".to_string()), "the box IP leaves DNS: {:?}", t.ops.cp_log());
+    assert!(t.ops.cp_log().contains(&"DELETE /turn/dns/lumon".to_string()), "the box IP leaves DNS: {:?}", t.ops.cp_log());
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true]);
 
     // The front's own convergence never moves voice off the tunnel.
@@ -337,7 +337,7 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     let v = set_tier_named(&t.env(), TIER_DIRECT).expect("to direct");
     assert_eq!(v["turnTier"], "direct");
     let r = t.stdin_of(RECONF);
-    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("direct"), Some("turn-lztek.k2.dev"), Some(false)));
+    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("direct"), Some("turn-lumon.k2.dev"), Some(false)));
     assert_eq!(r["node_ip"], "203.0.113.7");
     assert_eq!(r["bind_v4"], "0.0.0.0", "media sockets back on the network");
     assert_eq!(
@@ -345,7 +345,7 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
         ["bind_v4", "node_ip", "relay_only", "turn_advertise_port", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"],
         "{r}"
     );
-    assert!(t.ops.cp_log().contains(&"PUT /turn/dns/lztek".to_string()));
+    assert!(t.ops.cp_log().contains(&"PUT /turn/dns/lumon".to_string()));
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true, false], "the lane stops");
     assert_eq!(set_tier_named(&t.env(), "front").unwrap_err().code, "bad_request");
 }
@@ -370,7 +370,7 @@ fn the_tunnel_preflight_checks_the_tunnel_not_public_ports() {
     assert_eq!(get("tunnel_tier")["status"], "ok");
     assert_eq!(get("e2e")["status"], "fail");
     assert_eq!(get("pro")["status"], "fail");
-    assert_eq!(get("tunnel_label")["detail"], "TURN host turn.lztek.k2.dev");
+    assert_eq!(get("tunnel_label")["detail"], "TURN host turn.lumon.k2.dev");
     assert!(!get("ports")["detail"].as_str().unwrap().contains("7881"), "no public ports: {c:?}");
     *t.ops.confirmed.lock().unwrap() = None;
     let c = voice::preflight(&t.env());

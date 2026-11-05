@@ -212,7 +212,7 @@ async fn t3_5_routes_gate_cap_keep_alive_and_round_trip() {
         let port = d.port;
         let tok = OWNER_TOKEN;
         let cache_root = home.join(".k2").join("cache").join("agent-avatars");
-        let addr = "scout::dtl.k2.dev";
+        let addr = "scout::dharma.k2.dev";
         let (bytes, url) = png_url(5, 500);
 
         // GET on each POST row → 405, and the same socket answers the next request.
@@ -285,7 +285,7 @@ async fn t3_5_routes_gate_cap_keep_alive_and_round_trip() {
         assert_eq!(s, 200, "owner put: {b}");
         assert_eq!(json(&b, "put")["changed"], true, "{b}");
         assert_eq!(
-            std::fs::read(cache_root.join("dtl.k2.dev").join("scout.png")).expect("image on disk"),
+            std::fs::read(cache_root.join("dharma.k2.dev").join("scout.png")).expect("image on disk"),
             bytes,
             "the image lands under $HOME/.k2/cache/agent-avatars/<server>/<workspace>.png"
         );
@@ -295,7 +295,7 @@ async fn t3_5_routes_gate_cap_keep_alive_and_round_trip() {
         let other = "nora::192.168.1.20:38471";
         let (s, b) = c.request("POST", &format!("/cli/home/avatars/put?token={tok}"), Some(&put_body(other, None)));
         assert_eq!(s, 200, "a miss: {b}");
-        let q = enc(&format!("{addr},{other},ghost::dtl.k2.dev,not-an-address"));
+        let q = enc(&format!("{addr},{other},ghost::dharma.k2.dev,not-an-address"));
         let (s, b) = c.request("GET", &format!("/cli/home/avatars?token={tok}&addresses={q}"), None);
         assert_eq!(s, 200, "{b}");
         let v = json(&b, "get");
@@ -320,7 +320,7 @@ async fn t3_5_routes_gate_cap_keep_alive_and_round_trip() {
         }
 
         // 101 addresses → 400 too_many; 100 is fine.
-        let many: Vec<String> = (0..101).map(|i| format!("w{i}::dtl.k2.dev")).collect();
+        let many: Vec<String> = (0..101).map(|i| format!("w{i}::dharma.k2.dev")).collect();
         let (s, v) = call(port, "GET", &format!("/cli/home/avatars?token={tok}&addresses={}", enc(&many.join(","))), None);
         assert_eq!(s, 400, "{v}");
         assert_eq!(v["error"], "too_many", "{v}");
@@ -340,7 +340,7 @@ async fn t3_5_routes_gate_cap_keep_alive_and_round_trip() {
         assert_eq!(s, 200, "{v}");
         assert_eq!((v["removed"].as_u64(), v["kept"].as_u64()), (Some(1), Some(1)), "{v}");
         assert!(!cache_root.join("192.168.1.20_3a38471").exists(), "empty server folder removed");
-        assert!(cache_root.join("dtl.k2.dev").join("scout.png").is_file(), "kept entry stays");
+        assert!(cache_root.join("dharma.k2.dev").join("scout.png").is_file(), "kept entry stays");
     });
 }
 

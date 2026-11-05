@@ -79,7 +79,7 @@ LEGACY_PG_HELPER="/usr/local/libexec/k2-pg-helper"
 LEGACY_PG_SUDOERS="/etc/sudoers.d/k2-pg-helper"
 LEGACY_MAIL_HELPER="/usr/local/libexec/k2-mail-helper"
 LEGACY_MAIL_SUDOERS="/etc/sudoers.d/k2-mail-helper"
-# An older hand-installed mechanism (akzm, lztek): retired only when its
+# An older hand-installed mechanism (akzm and another fleet box): retired only when its
 # content is exactly what K2 wrote (sidecar_is_ours), else reported.
 LEGACY_MAIL_SIDECAR_SUDOERS="/etc/sudoers.d/k2-mail-sidecar"
 # The same 2026-09 provisioning put PATH shims in /usr/local/bin (first in
@@ -538,7 +538,7 @@ retire() {
 sidecar_is_ours() {
 	local line cmds cmd u="$RUN_USER" any=0
 	# The 2026-09 mail-sidecar provisioning wrote exactly this one line
-	# (seen on akzm and lztek, sha256 4adef024…). It is broader than the
+	# (seen on akzm and another fleet box, sha256 4adef024…). It is broader than the
 	# helper ever needed (bare systemctl/chown/useradd), so it is K2's to
 	# retire once the root helper answers.
 	if [ "$(grep -v '^[[:space:]]*\(#\|$\)' "$1")" = "$u ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd" ]; then
@@ -574,7 +574,7 @@ normalized() {
 		{ print }' "$1"
 }
 # The 2026-09 k2-if-k2-sudo, normalized (106 bytes as written, identical
-# on akzm and lztek). Only the k2 form is known.
+# on akzm and another fleet box). Only the k2 form is known.
 SHIM_SUDO_KNOWN='#!/bin/sh
 REAL="$1"; shift
 if [ "$(id -un)" = k2 ]; then

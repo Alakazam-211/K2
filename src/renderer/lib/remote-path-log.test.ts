@@ -5,9 +5,9 @@ describe('redactRemoteUrl', () => {
   it('drops token query', () => {
     expect(
       redactRemoteUrl(
-        'https://rpmavs.k2.dev/cli/chat/list?project_path=/home/k2/ai/Argus&token=SECRET',
+        'https://rekall.k2.dev/cli/chat/list?project_path=/home/k2/ai/Argus&token=SECRET',
       ),
-    ).toBe('rpmavs.k2.dev/cli/chat/list')
+    ).toBe('rekall.k2.dev/cli/chat/list')
   })
 
   it('keeps path on a non-URL string', () => {

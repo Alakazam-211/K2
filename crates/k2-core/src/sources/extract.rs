@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(p.fields["hi"], json!(3.5));
         assert_eq!(p.fields["kinds"], json!(2));
 
-        let obj = json!({"boxes": {"ohana": {"v": "0.45.5"}, "luzz": {"v": "0.45.6"}}});
+        let obj = json!({"boxes": {"ohana": {"v": "0.45.5"}, "larkspur": {"v": "0.45.6"}}});
         let e = Extract {
             items: Some(ItemsSpec {
                 pointer: Some("/boxes".into()),

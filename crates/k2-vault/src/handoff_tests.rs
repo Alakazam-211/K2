@@ -83,7 +83,7 @@ fn value(v: &LocalVault, ws: &str, name: &str) -> Vec<u8> {
 fn sealed_between(a: &LocalVault, b: &LocalVault, tweak: impl FnOnce(&mut HandoffPayload)) -> (Vec<u8>, String) {
     let id = new_delivery_id();
     let from = Party { fingerprint: PEER_FP.into(), host: "rosson.k2.dev".into(), workspace_id: "ws-sales".into(), handle: "sales".into(), actor: "agent:ws-sales/s".into(), vault_id: String::new() };
-    let to = Party { fingerprint: ME_FP.into(), host: "luzz.k2.dev".into(), workspace_id: "ws-ops".into(), handle: "ops".into(), actor: String::new(), vault_id: b.vault_id().into() };
+    let to = Party { fingerprint: ME_FP.into(), host: "larkspur.k2.dev".into(), workspace_id: "ws-ops".into(), handle: "ops".into(), actor: String::new(), vault_id: b.vault_id().into() };
     let mut p = HandoffPayload::new(&id, from, to, item("STRIPE_KEY"), &SecretBytes::from_slice(SENTINEL.as_bytes()), "n".into(), None);
     tweak(&mut p);
     (a.handoff_seal(&b.carry_recipient().expect("recipient"), &mut p).expect("seal"), id)

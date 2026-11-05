@@ -229,7 +229,7 @@ fn the_plan_offers_own_and_used_secrets_with_kind_defaults() {
         assert_eq!(build_plan(&v, &owner(), &s.id, &ask).expect_err("unknown").code, "unknown_secret");
 
         // Route: names only; a passport is refused.
-        let (code, p) = route(PLAN, owner(), json!({ "project_path": s.path, "vault_target": target_of(&v, "luzz"), "clone_id": "ca-c" }));
+        let (code, p) = route(PLAN, owner(), json!({ "project_path": s.path, "vault_target": target_of(&v, "larkspur"), "clone_id": "ca-c" }));
         assert_eq!(code, 200, "{p}");
         assert_eq!(p["confirm"]["action"], CONFIRM_ACTION);
         assert!(p["confirm"]["secretId"].as_str().expect("secretId").starts_with("clone:"));
@@ -246,12 +246,12 @@ fn a_copy_needs_a_confirm_bound_to_the_exact_plan_and_person() {
     crate::test_support::with_temp_home(|| {
         let v = crate::vault::ensure_test_vault();
         let s = Src::new(&v);
-        let target = target_of(&v, "luzz.k2.dev");
+        let target = target_of(&v, "larkspur.k2.dev");
         let ask = s.ask(Some(target.clone()), Some("ca-clone-1"));
         let plan = build_plan(&v, &owner(), &s.id, &ask).expect("plan");
         assert_eq!(take_confirm(&v, &owner(), &plan, &ask).expect_err("no token").code, "vault_confirm_required");
         let (sid, reason, _) = confirm_binding(&v, &owner(), &ask).expect("binding");
-        assert!(reason.contains("luzz.k2.dev") && reason.contains(&s.label), "{reason}");
+        assert!(reason.contains("larkspur.k2.dev") && reason.contains(&s.label), "{reason}");
 
         // Another plan (another clone id): refused.
         let (other_sid, _, _) = confirm_binding(&v, &owner(), &s.ask(Some(target.clone()), Some("ca-clone-2"))).expect("binding");
@@ -562,7 +562,7 @@ fn the_generic_confirm_binds_clone_carry_to_the_daemon_built_plan() {
     crate::test_support::with_temp_home(|| {
         let (_d, v) = temp_vault("ca-confirm");
         let s = Src::new(&v);
-        let ask = json!({ "project_path": s.path, "vault_target": target_of(&v, "luzz.k2.dev"), "clone_id": "ca-cf" });
+        let ask = json!({ "project_path": s.path, "vault_target": target_of(&v, "larkspur.k2.dev"), "clone_id": "ca-cf" });
         let call = |c: &VaultCaller, body: Value| {
             let r = crate::vault_routes::handle_on(&v, crate::vault_routes::CONFIRM_FINISH, Ok(c.clone()), body.to_string().as_bytes(), &Default::default(), "test", None);
             (r.status[..3].parse::<u16>().expect("status"), serde_json::from_str::<Value>(&r.body).expect("json"))
@@ -582,9 +582,9 @@ fn the_generic_confirm_binds_clone_carry_to_the_daemon_built_plan() {
         crate::vault_routes::test_hooks::set_local_auth_fake(None);
         assert_eq!(code, 200, "{r}");
         let reason = REASON.lock().expect("reason").clone();
-        assert!(reason.contains("copy 1 secret from") && reason.contains("luzz.k2.dev"), "{reason}");
+        assert!(reason.contains("copy 1 secret from") && reason.contains("larkspur.k2.dev"), "{reason}");
         assert!(!reason.contains("reveal everything"), "the client's label is ignored: {reason}");
-        let ask: CarryAsk = serde_json::from_value(json!({ "project_path": s.path, "vault_target": target_of(&v, "luzz.k2.dev"), "clone_id": "ca-cf", "confirm_token": r["token"] })).expect("ask");
+        let ask: CarryAsk = serde_json::from_value(json!({ "project_path": s.path, "vault_target": target_of(&v, "larkspur.k2.dev"), "clone_id": "ca-cf", "confirm_token": r["token"] })).expect("ask");
         let plan = build_plan(&v, &owner(), &s.id, &ask).expect("plan");
         assert_eq!(r["secretId"], json!(confirm_binding(&v, &owner(), &ask).expect("binding").0));
         assert_eq!(take_confirm(&v, &owner(), &plan, &ask).expect("token works").as_deref(), Some("local-auth"));
@@ -681,8 +681,8 @@ fn one_confirm_approves_a_proposal_and_covers_its_secret_copy() {
         let (_d, v) = temp_vault("ca-approve-one");
         v.set_confirm_password("correct horse", &Actor::Owner).expect("vault password");
         let s = Src::new(&v);
-        let p = propose(&s.id, "luzz.k2.dev");
-        let target = target_of(&v, "luzz.k2.dev");
+        let p = propose(&s.id, "larkspur.k2.dev");
+        let target = target_of(&v, "larkspur.k2.dev");
         let body = |extra: Value| -> ConfirmBody {
             let mut b = json!({ "project_path": s.path, "vault_target": target, "clone_id": "ca-one", "method": "vault-password", "password": "correct horse", "proposal": p.id });
             for (k, val) in extra.as_object().expect("obj") {
@@ -699,7 +699,7 @@ fn one_confirm_approves_a_proposal_and_covers_its_secret_copy() {
         // One call, one check: both tokens.
         let r = confirm_route(&v, &owner(), &body(json!({})), "test").expect("one confirm");
         let reason = r["reason"].as_str().expect("reason");
-        assert!(reason.starts_with(&format!("approve the clone of {} to luzz.k2.dev and copy 1 secret", s.label)), "{reason}");
+        assert!(reason.starts_with(&format!("approve the clone of {} to larkspur.k2.dev and copy 1 secret", s.label)), "{reason}");
         assert_eq!(r["proposal"], json!(p.id));
         let approve = r["approveToken"].as_str().expect("approve token").to_string();
         let carry = r["token"].as_str().expect("carry token").to_string();
@@ -728,7 +728,7 @@ fn one_confirm_approves_a_proposal_and_covers_its_secret_copy() {
         let skip_all: serde_json::Map<String, Value> = plan.rows.iter().map(|row| (row.name.clone(), json!("skip"))).collect();
         let r = confirm_route(&v, &owner(), &body(json!({ "secrets": skip_all })), "test").expect("approve only");
         assert!(r["token"].is_null(), "{r}");
-        assert_eq!(r["reason"], json!(format!("approve the clone of {} to luzz.k2.dev", s.label)));
+        assert_eq!(r["reason"], json!(format!("approve the clone of {} to larkspur.k2.dev", s.label)));
         let a = r["approveToken"].as_str().expect("approve").to_string();
         assert!(v.confirm.take(&a, approve_action, Some(&p.id), "owner").is_ok());
 

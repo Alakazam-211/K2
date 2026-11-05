@@ -21,7 +21,7 @@ import {
 } from '@/lib/clone-proposals'
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
-const TARGET = { recipient: 'age1dest', vault_id: 'vault-d', label: 'luzz.k2.dev' }
+const TARGET = { recipient: 'age1dest', vault_id: 'vault-d', label: 'larkspur.k2.dev' }
 const BINDING = { action: 'clone-carry', secretId: 'clone:abc', reason: 'Copy 1 secret', methods: ['vault-password'], allowed: true }
 
 function preview(): ClonePreview {
@@ -47,14 +47,14 @@ function proposal(secrets: Record<string, string>, over: Record<string, unknown>
     id: 'cp_1',
     projectId: 'p1',
     proposedBy: 'agent:sales/s1',
-    target: 'luzz.k2.dev',
+    target: 'larkspur.k2.dev',
     options: { threads: false, sinceDays: 30, secrets, allHistory: false },
     why: 'move to the new box',
     status: 'open',
     expiresAt: 9e9,
     workspaceHandle: 'sales',
     workspacePath: '/w/sales',
-    summary: 'clone sales to luzz.k2.dev, …',
+    summary: 'clone sales to larkspur.k2.dev, …',
     ...over,
   })
   if (!p) throw new Error('proposal did not parse')

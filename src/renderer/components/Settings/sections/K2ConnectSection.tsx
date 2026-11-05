@@ -267,7 +267,7 @@ interface TunnelConfigView {
 // invalidateDaemonWs is the between-retries hook so a rotated port/token is
 // re-read.
 // Tunnel is always THIS Mac's daemon (expose local). Never use the
-// active remote host — when the user is remoted into iascm.k2.dev (etc.)
+// active remote host — when the user is remoted into another box (a customer's, etc.)
 // getDaemonWs() would hit the remote and (a) fire cross-origin POSTs
 // with Content-Type that flaky preflights reject, and (b) thrash the
 // connection story while Access/Users correctly talks to the remote.

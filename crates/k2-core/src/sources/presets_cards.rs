@@ -4,7 +4,7 @@
 //!
 //! | Preset | Args | Card |
 //! |---|---|---|
-//! | `k2-fleet` | `boxes=ohana,luzz,…` (a bare label is `<label>.k2.dev`) | `k2:fleet-grid@3`, `k2:version-spread@3` |
+//! | `k2-fleet` | `boxes=ohana,larkspur,…` (a bare label is `<label>.k2.dev`) | `k2:fleet-grid@3`, `k2:version-spread@3` |
 //! | `k2-fleet-summary` | `url`, `secret` | the same cards, from K2 Web's one route |
 //! | `github-latest-release` | `repo=Owner/Name` | `k2:version-spread@3` (`latest`) |
 //! | `vercel-deployments` | `team`, `secret`, `limit?` (≤ 20) | `k2:deploys@3` |
@@ -96,7 +96,7 @@ fn build(name: &str, args: &BTreeMap<String, String>) -> Result<SourceSpec, Spec
                 targets.push(json!({"key": key, "url": format!("https://{host}/boot-status")}));
             }
             if targets.is_empty() {
-                return Err(bad("boxes lists at least one box: boxes=ohana,luzz"));
+                return Err(bad("boxes lists at least one box: boxes=ohana,larkspur"));
             }
             if targets.len() > super::MAX_TARGETS_PER_SOURCE {
                 return Err(bad(format!("at most {} boxes per source", super::MAX_TARGETS_PER_SOURCE)));
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn every_card_preset_validates() {
         let cases: [(&str, &[(&str, &str)]); 5] = [
-            ("k2-fleet", &[("boxes", "ohana, luzz,box.example.test")]),
+            ("k2-fleet", &[("boxes", "ohana, larkspur,box.example.test")]),
             ("k2-fleet-summary", &[("url", "https://cp.example.test/fleet-summary"), ("secret", "FLEET_RO")]),
             ("github-latest-release", &[("repo", "Alakazam-211/K2")]),
             ("vercel-deployments", &[("team", "team_x"), ("secret", "VERCEL_RO")]),
@@ -245,11 +245,11 @@ mod tests {
 
     #[test]
     fn fleet_fans_out_per_box_and_matches_the_summary_fields() {
-        let s = built("k2-fleet", &[("boxes", "ohana,luzz")]);
+        let s = built("k2-fleet", &[("boxes", "ohana,larkspur")]);
         let crate::sources::FetchTargets::Targets(t) = &s.fetch else { panic!("fan-out") };
         assert_eq!(t.iter().map(|t| (t.key.as_str(), t.url.as_str())).collect::<Vec<_>>(), [
             ("ohana", "https://ohana.k2.dev/boot-status"),
-            ("luzz", "https://luzz.k2.dev/boot-status")
+            ("larkspur", "https://larkspur.k2.dev/boot-status")
         ]);
         assert_eq!(s.on_target_error, OnTargetError::Crit, "a down box is a red tile (GV55)");
         assert_eq!(s.timeout_secs, crate::sources::FANOUT_TIMEOUT_SECS);
@@ -284,7 +284,7 @@ mod tests {
         use crate::sources::state::{apply_poll, FetchOutcome, Health, Phase, PollInput, Reason, SourceState};
         use crate::sources::view::{build, Viewer};
         use crate::sources::{AgentAccess, SourceKind, SourceRow, SourceStatus, Viewers};
-        let mut spec = built("k2-fleet", &[("boxes", "ohana,luzz,acv")]);
+        let mut spec = built("k2-fleet", &[("boxes", "ohana,larkspur,aperture")]);
         spec.name = "fleet".into();
         spec.label = "Fleet boxes".into();
         let v = spec.validate(false).expect("validates");
@@ -303,8 +303,8 @@ mod tests {
                 spec: &v.spec,
                 outcomes: vec![
                     (Some("ohana".into()), FetchOutcome::Err { reason: Reason::Timeout, http_status: None, retry_after_secs: None }),
-                    (Some("luzz".into()), ok("0.45.6")),
-                    (Some("acv".into()), ok("0.45.5")),
+                    (Some("larkspur".into()), ok("0.45.6")),
+                    (Some("aperture".into()), ok("0.45.5")),
                 ],
                 now: 1_000 + i * 60,
                 simulated: false,
@@ -381,8 +381,8 @@ mod tests {
         }
         let ohana = j["items"].as_array().and_then(|a| a.iter().find(|i| i["key"] == "ohana")).cloned().expect("ohana tile");
         assert_eq!((ohana["health"].as_str(), ohana["reason"].as_str()), (Some("crit"), Some("timeout")), "{ohana}");
-        let luzz = j["items"].as_array().and_then(|a| a.iter().find(|i| i["key"] == "luzz")).cloned().expect("luzz tile");
-        assert_eq!(luzz["fields"]["version"], "0.45.6");
+        let larkspur = j["items"].as_array().and_then(|a| a.iter().find(|i| i["key"] == "larkspur")).cloned().expect("larkspur tile");
+        assert_eq!(larkspur["fields"]["version"], "0.45.6");
         assert_eq!(view.server_now, 1_200);
         assert!(st.items.get("ohana").is_some_and(|i| i.health == Health::Crit));
     }

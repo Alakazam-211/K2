@@ -53,7 +53,7 @@ export interface RoomFailure {
 }
 
 export interface RoomFailureInput {
-  /** The server's label for copy ("dtl", "This computer"). */
+  /** The server's label for copy ("dharma", "This computer"). */
   serverLabel: string
   /** The pool's entry for that server; undefined = never checked. */
   entry: HostEntry | undefined

@@ -54,21 +54,21 @@ import { CloneProposalsBanner, hostForTarget, proposalWorkspaceOf } from './Clon
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { resetSharedWhoamiForTests } from '@/lib/shared-whoami'
 
-const LUZZ = { id: 'h1', label: 'Luzz', hostname: 'luzz.k2.dev', port: 443, secure: true } as ConnectHost
+const LARKSPUR = { id: 'h1', label: 'Larkspur', hostname: 'larkspur.k2.dev', port: 443, secure: true } as ConnectHost
 
 function row(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'cp_1',
     projectId: 'p1',
     proposedBy: 'agent:sales/s1',
-    target: 'luzz.k2.dev',
+    target: 'larkspur.k2.dev',
     options: { threads: true, secrets: { STRIPE_KEY: 'copy' }, allHistory: true },
     why: 'move to the new box',
     status: 'open',
     expiresAt: 9e9,
     workspaceHandle: 'sales',
     workspacePath: '/w/sales',
-    summary: 'clone sales to luzz.k2.dev, Thread all, 1 secret copied',
+    summary: 'clone sales to larkspur.k2.dev, Thread all, 1 secret copied',
     ...over,
   }
 }
@@ -80,7 +80,7 @@ beforeEach(() => {
   h.gets.length = 0
   h.posts.length = 0
   h.started.length = 0
-  useConnectHostStore.setState({ hosts: [LUZZ] })
+  useConnectHostStore.setState({ hosts: [LARKSPUR] })
 })
 afterEach(() => cleanup())
 
@@ -90,10 +90,10 @@ describe('proposal helpers', () => {
     expect(proposalWorkspaceOf('sales/reviewer')).toBe('sales')
     expect(proposalWorkspaceOf('import:abc')).toBeNull()
     expect(proposalWorkspaceOf('gb:bot')).toBeNull()
-    expect(hostForTarget([LUZZ], 'LUZZ.k2.dev')).toBe(LUZZ)
-    expect(hostForTarget([LUZZ], 'luzz.k2.dev:443')).toBe(LUZZ)
-    expect(hostForTarget([LUZZ], 'here')).toBeNull()
-    expect(hostForTarget([LUZZ], 'other.k2.dev')).toBeNull()
+    expect(hostForTarget([LARKSPUR], 'LARKSPUR.k2.dev')).toBe(LARKSPUR)
+    expect(hostForTarget([LARKSPUR], 'larkspur.k2.dev:443')).toBe(LARKSPUR)
+    expect(hostForTarget([LARKSPUR], 'here')).toBeNull()
+    expect(hostForTarget([LARKSPUR], 'other.k2.dev')).toBeNull()
   })
 })
 
@@ -102,12 +102,12 @@ describe('Clone proposals on the Thread', () => {
     renderInPrimaryRoom(<CloneProposalsBanner addr="sales/reviewer" />)
     await waitFor(() => expect(screen.getByTestId('clone-proposal-cp_1')).toBeTruthy())
     expect(h.gets).toContainEqual({ route: 'clone-proposal/list', params: { status: 'open', workspace: 'sales' } })
-    expect(screen.getByText('sales proposes a clone to luzz.k2.dev')).toBeTruthy()
-    expect(screen.getByText(/move to the new box · clone sales to luzz\.k2\.dev/)).toBeTruthy()
+    expect(screen.getByText('sales proposes a clone to larkspur.k2.dev')).toBeTruthy()
+    expect(screen.getByText(/move to the new box · clone sales to larkspur\.k2\.dev/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Review clone…' }))
     await waitFor(() => expect(h.started).toHaveLength(1))
     const [p, path, name, host] = h.started[0] as [{ id: string }, string, string, ConnectHost]
-    expect([p.id, path, name, host]).toEqual(['cp_1', '/w/sales', 'sales', LUZZ])
+    expect([p.id, path, name, host]).toEqual(['cp_1', '/w/sales', 'sales', LARKSPUR])
   })
 
   it('Deny posts the denial and the proposal goes away', async () => {

@@ -25,8 +25,8 @@ ok() { echo "  PASS: $*"; pass=$((pass + 1)); }
 echo "== note helper wording (shared with the Thread-rename note, TR17) =="
 eval "$(sed -n '/^_k2_addr_note()/,/^}/p' "$K2_CLI")"
 declare -F _k2_addr_note >/dev/null || fail "_k2_addr_note missing from cli/k2"
-[ "$(_k2_addr_note "seoca::q.k2.dev" "quillify-website::q.k2.dev" 2>&1)" = \
-  "note: seoca::q.k2.dev is quillify-website::q.k2.dev" ] || fail "synonym wording"
+[ "$(_k2_addr_note "seoca::q.k2.dev" "quahog-website::q.k2.dev" 2>&1)" = \
+  "note: seoca::q.k2.dev is quahog-website::q.k2.dev" ] || fail "synonym wording"
 [ "$(_k2_addr_note "k2/3" "k2/reviewer" renamed 2>&1)" = "note: k2/3 is now k2/reviewer" ] \
     || fail "rename wording"
 [ -z "$(_k2_addr_note "same" "same" 2>&1)" ] || fail "no note when nothing changed"
@@ -48,7 +48,7 @@ BASE="http://127.0.0.1:${K2SO_PORT}"
 W_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 PEER_DIR="$SANDBOX_HOME/peer"
 mkdir -p "$PEER_DIR"
-python3 -c "import json,sys; json.dump({'agents':[{'workspace_id':sys.argv[1],'workspace_name':'Seoca','agent':'quillify-website','address':sys.argv[1]+'::quillify-website','aliases':[]}]}, open(sys.argv[2],'w'))" \
+python3 -c "import json,sys; json.dump({'agents':[{'workspace_id':sys.argv[1],'workspace_name':'Seoca','agent':'quahog-website','address':sys.argv[1]+'::quahog-website','aliases':[]}]}, open(sys.argv[2],'w'))" \
     "$W_ID" "$PEER_DIR/roster.json"
 cat >"$PEER_DIR/peer.py" <<'PY'
 import http.server, json, os, sys
@@ -104,8 +104,8 @@ if step == "offer":
     open(os.path.join(d, "na"), "wb").write(na)
     c = hashlib.sha256(b"k2-sas-commit-v2" + fp.encode() + na).hexdigest()
     print(json.dumps({"offer": {"v": 2, "session": "a7-session", "fingerprint": fp,
-        "public_key_pem": open(os.path.join(d, "pub.pem")).read(), "label": "quillify",
-        "subdomain": "quillify", "base_url": sys.argv[3], "commitment": c}}))
+        "public_key_pem": open(os.path.join(d, "pub.pem")).read(), "label": "quahog",
+        "subdomain": "quahog", "base_url": sys.argv[3], "commitment": c}}))
 elif step == "reveal":
     na = open(os.path.join(d, "na"), "rb").read()
     print(json.dumps({"reveal": {"v": 2, "session": "a7-session", "fingerprint": fp, "nonce": na.hex()}}))
@@ -153,12 +153,12 @@ k2() {
 
 echo "== connections add binds to the workspace (CA8) =="
 out="$(k2 connections add "seoca::${PHOST}" 2>&1)" || fail "add: $out"
-grep -Fq "reaches quillify-website::${PHOST} (Seoca)" <<<"$out" || fail "add must say what it reaches: $out"
-ok "add seoca::host → reaches quillify-website (Seoca)"
+grep -Fq "reaches quahog-website::${PHOST} (Seoca)" <<<"$out" || fail "add must say what it reaches: $out"
+ok "add seoca::host → reaches quahog-website (Seoca)"
 
 out="$(k2 connections add "nobody::${PHOST}" 2>&1)" || fail "add nobody: $out"
 grep -Fq "isn't on ${PHOST}'s roster" <<<"$out" || fail "add must warn on an unknown name: $out"
-grep -Fq "quillify-website" <<<"$out" || fail "warning lists the roster's names: $out"
+grep -Fq "quahog-website" <<<"$out" || fail "warning lists the roster's names: $out"
 k2 connections remove "nobody::${PHOST}" >/dev/null || fail "remove nobody"
 ok "add of an unknown name warns with the roster's names (row kept, then removed)"
 
@@ -167,24 +167,24 @@ js="$(k2 connections list --json)"
 row="$(jq -c --arg a "seoca::${PHOST}" '.connections[] | select(.address == $a)' <<<"$js")"
 [ -n "$row" ] || fail "remote row missing: $js"
 [ "$(jq -r .remoteWorkspaceId <<<"$row")" = "$W_ID" ] || fail "remoteWorkspaceId: $row"
-[ "$(jq -r .handle <<<"$row")" = "quillify-website" ] || fail "handle: $row"
+[ "$(jq -r .handle <<<"$row")" = "quahog-website" ] || fail "handle: $row"
 [ "$(jq -r .displayName <<<"$row")" = "Seoca" ] || fail "displayName: $row"
 txt="$(k2 connections list)"
-grep -Fq "seoca::${PHOST} → quillify-website (Seoca)" <<<"$txt" || fail "text list: $txt"
+grep -Fq "seoca::${PHOST} → quahog-website (Seoca)" <<<"$txt" || fail "text list: $txt"
 ok "list --json has remoteWorkspaceId/handle/displayName; text shows → handle (display)"
 
 echo "== k2 msg by either name; note only when the name differs =="
 err="$SANDBOX_HOME/msg.err"
-k2 msg "quillify-website::${PHOST}" "by handle" 2>"$err" >/dev/null \
+k2 msg "quahog-website::${PHOST}" "by handle" 2>"$err" >/dev/null \
     || fail "msg by handle (the reply address) must succeed: $(cat "$err")"
 if grep -q '^note:' "$err"; then fail "no note when typed name is the handle: $(cat "$err")"; fi
-ok "msg quillify-website::host → exit 0, no note"
+ok "msg quahog-website::host → exit 0, no note"
 
 k2 msg "seoca::${PHOST}" "by display name" 2>"$err" >/dev/null \
     || fail "msg by display name must succeed: $(cat "$err")"
-grep -Fxq "note: seoca::${PHOST} is quillify-website::${PHOST}" "$err" \
+grep -Fxq "note: seoca::${PHOST} is quahog-website::${PHOST}" "$err" \
     || fail "note line missing: $(cat "$err")"
-ok "msg seoca::host → exit 0 + note: seoca::host is quillify-website::host"
+ok "msg seoca::host → exit 0 + note: seoca::host is quahog-website::host"
 
 [ "$(wc -l <"$PEER_DIR/inbound.log" | tr -d ' ')" = "2" ] \
     || fail "peer must have received exactly 2 envelopes: $(wc -l <"$PEER_DIR/inbound.log")"

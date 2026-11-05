@@ -31,7 +31,7 @@ export interface CloneProposal {
   id: string
   projectId: string
   proposedBy: string
-  /** A host (`luzz.k2.dev`) or `here`. */
+  /** A host (`larkspur.k2.dev`) or `here`. */
   target: string
   options: CloneProposalOptions
   why: string | null

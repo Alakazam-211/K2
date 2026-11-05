@@ -1,4 +1,4 @@
-// Mac screenshot / NSIRD jail. Valid on This Mac; never on a Linux DTL.
+// Mac screenshot / NSIRD jail. Valid on This Mac; never on a Linux box.
 // Remote-only refuse — do not glob /Users or C:\Users (valid remote homes).
 
 import { useConnectHostStore } from '@/stores/connect-host'

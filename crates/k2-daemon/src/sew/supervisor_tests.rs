@@ -614,16 +614,16 @@ fn purge_checks_the_hostname_first_and_deletes_vault_keys_last() {
     let key_ref = t.row().master_key_ref.unwrap();
     let f = purge(&t.env(), "not-this-box", false).unwrap_err();
     assert_eq!(f.code, "confirm_hostname_mismatch");
-    assert!(f.hint.contains("lztek"));
+    assert!(f.hint.contains("lumon"));
     assert!(t.ops.effects().is_empty(), "nothing before the hostname check");
     // Sew's purge fails: vault untouched, row kept as error.
     t.ops.queue(&format!("engine sew purge {INSTALL_ID}"), Ok(json!({"sewExit": 3, "sew": {"error": {"message": "confirm mismatch"}}})));
-    assert_eq!(purge(&t.env(), "lztek", false).unwrap_err().code, "purge_failed");
+    assert_eq!(purge(&t.env(), "lumon", false).unwrap_err().code, "purge_failed");
     assert!(t.secrets.resolve(&key_ref).unwrap().is_some());
     assert!(t.secrets.recovery().unwrap().is_some(), "a failed purge keeps the vault's recovery key");
     assert_eq!(t.row().status, "error");
     t.ops.clear();
-    let r = purge(&t.env(), "lztek", true).unwrap();
+    let r = purge(&t.env(), "lumon", true).unwrap();
     assert_eq!(t.secrets.recovery().unwrap(), None, "the purge removes the vault's sew-launch-key");
     assert!(r["warning"].as_str().unwrap().contains("K2 deleted sew-launch-key from the vault"), "{r}");
     assert_eq!(r["purged"], true);
@@ -647,7 +647,7 @@ fn purge_after_uninstall_types_back_none() {
     uninstall(&t.env(), false).unwrap();
     assert!(!t.ops.unit(pin::UNIT_DB).is_active());
     t.ops.clear();
-    let r = purge(&t.env(), "lztek", false).unwrap();
+    let r = purge(&t.env(), "lumon", false).unwrap();
     assert_eq!(r["purged"], true);
     assert_eq!(t.ops.effects(), vec!["engine sew purge none".to_string()]);
     assert!(r["backupsAt"].is_null());
@@ -665,7 +665,7 @@ fn purge_of_an_unrecognised_sew_is_k2s_teardown_and_finishes_the_cleanup() {
     t.enabled();
     let key_ref = t.row().master_key_ref.unwrap();
     *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
-    let r = purge(&t.env(), "lztek", false).unwrap();
+    let r = purge(&t.env(), "lumon", false).unwrap();
     assert_eq!(r["purged"], true);
     assert_eq!(r["teardown"], "k2");
     assert_eq!(r["binary"]["executed"], false);
@@ -689,7 +689,7 @@ fn k2_teardown_reports_where_kept_backups_went() {
     let t = t();
     t.enabled();
     *t.ops.on_disk.lock().unwrap() = Some("unknown".into());
-    let r = purge(&t.env(), "lztek", true).unwrap();
+    let r = purge(&t.env(), "lumon", true).unwrap();
     assert_eq!(r["teardown"], "k2");
     assert_eq!(r["backupsAt"], "/var/lib/sew-backups-20260103T000000Z");
 }
@@ -705,7 +705,7 @@ fn an_older_helper_refusing_an_unknown_binary_points_at_a_helper_update() {
         &format!("engine sew purge {INSTALL_ID}"),
         Err("root helper engine sew purge: exit 3: sew helper: unknown sew binary".into()),
     );
-    let f = purge(&t.env(), "lztek", false).unwrap_err();
+    let f = purge(&t.env(), "lumon", false).unwrap_err();
     assert_eq!(f.code, "purge_failed");
     assert!(f.hint.contains("k2 root-helper update"), "{}", f.hint);
     assert!(t.secrets.resolve(&key_ref).unwrap().is_some(), "vault key kept");
@@ -795,7 +795,7 @@ fn disable_pauses_uninstall_pauses_or_drops_and_purge_drops_the_grant_hook() {
     assert_eq!(&hook_calls(&t)[5..], ["on /run/sew/mgmt.sock /etc/sew/mgmt.token", "drop", "off"]);
     t.ops.hook_calls.lock().unwrap().clear();
     t.ops.hook_calls.lock().unwrap().push("on (earlier)".into());
-    assert_eq!(purge(&t.env(), "lztek", false).unwrap()["grantHook"]["target"], "off");
+    assert_eq!(purge(&t.env(), "lumon", false).unwrap()["grantHook"]["target"], "off");
     assert_eq!(&hook_calls(&t)[1..], ["drop", "off"]);
 }
 
@@ -1402,7 +1402,7 @@ fn backups_list_and_run_over_mgmt_not_the_helper() {
 fn a_missing_key_mirror_is_a_setup_warning_but_a_stale_dir_mirror_degrades() {
     let t = t();
     t.enabled();
-    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
+    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lumon.k2.dev"}));
     store::update(1, |r| {
         r.ship_kind = "dir".into();
         r.recovery_shown_at = Some(1);
@@ -2234,16 +2234,16 @@ fn the_boot_check_stores_a_changed_install_id_for_person_confirms() {
 fn purge_types_back_sews_public_host_and_forgets_k2s_sew_records() {
     let t = t();
     t.enabled();
-    assert_eq!(purge_hostname(&t.env(), &t.row()), "lztek", "no public URL: the box hostname");
-    t.ops.records.lock().unwrap().insert(SERVER_RECORD.into(), json!({"publicUrl": "https://Hearth.lztek.k2.dev:443/x"}));
+    assert_eq!(purge_hostname(&t.env(), &t.row()), "lumon", "no public URL: the box hostname");
+    t.ops.records.lock().unwrap().insert(SERVER_RECORD.into(), json!({"publicUrl": "https://Hearth.lumon.k2.dev:443/x"}));
     t.ops.records.lock().unwrap().insert(JWKS_RECORD.into(), json!({"have": OLD_JWKS}));
-    assert_eq!(purge_hostname(&t.env(), &t.row()), "hearth.lztek.k2.dev");
-    assert_eq!(status(&t.env(), false)["purgeConfirmHostname"], "hearth.lztek.k2.dev");
-    let f = purge(&t.env(), "lztek", false).unwrap_err();
+    assert_eq!(purge_hostname(&t.env(), &t.row()), "hearth.lumon.k2.dev");
+    assert_eq!(status(&t.env(), false)["purgeConfirmHostname"], "hearth.lumon.k2.dev");
+    let f = purge(&t.env(), "lumon", false).unwrap_err();
     assert_eq!(f.code, "confirm_hostname_mismatch");
-    assert!(f.hint.contains("--confirm-hostname hearth.lztek.k2.dev"), "{}", f.hint);
+    assert!(f.hint.contains("--confirm-hostname hearth.lumon.k2.dev"), "{}", f.hint);
     assert!(t.ops.effects().is_empty());
-    let r = purge(&t.env(), "hearth.lztek.k2.dev", false).unwrap();
+    let r = purge(&t.env(), "hearth.lumon.k2.dev", false).unwrap();
     assert_eq!(r["purged"], true);
     let recs = t.ops.records.lock().unwrap();
     assert!(recs.get(SERVER_RECORD).is_none() && recs.get(JWKS_RECORD).is_none(), "{recs:?}");

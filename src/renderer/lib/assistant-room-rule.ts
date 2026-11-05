@@ -13,7 +13,7 @@
 // focused room's server and the window's server.
 
 export interface AssistantServer {
-  /** Host key (`local`, `dtl.k2.dev`, `ip:port`). */
+  /** Host key (`local`, `dharma.k2.dev`, `ip:port`). */
   hostKey: string
   /** Label for copy (`This computer`, the saved server's label). */
   label: string

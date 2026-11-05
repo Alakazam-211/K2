@@ -100,9 +100,9 @@ describe('the chip in the message box', () => {
     const { bridge } = fakeBridge()
     render(<ZenCompose bridge={bridge} address="alice::local" label="Alice" disabled={false} />)
     act(() => setZenThreadContext(KEY, { text: 'Board: K2 Boards', origin: ORIGIN }, ['chat']))
-    act(() => noteZenThreadContext(KEY, 'Not sent: dtl is older'))
+    act(() => noteZenThreadContext(KEY, 'Not sent: dharma is older'))
     expect(q('[data-zen-context-chip]')).toBeNull()
-    expect(q('[data-zen-context-note]')?.textContent).toContain('Not sent: dtl is older')
+    expect(q('[data-zen-context-note]')?.textContent).toContain('Not sent: dharma is older')
   })
 })
 

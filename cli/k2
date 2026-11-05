@@ -7429,7 +7429,7 @@ PY
 # WITHOUT a grant is FAIL-CLOSED — it authorizes ZERO workspaces and every
 # /v1/w/<ws>/* call returns the uniform 404 (the daemon route has accepted
 # this field since 0.40.21; the flag was simply never exposed here, which
-# made every CLI-minted key dead on arrival for /v1 — found on rpmavs
+# made every CLI-minted key dead on arrival for /v1 — found on a customer box
 # 2026-07-07).
 # --allow / --deny (Phase 0, wiki public chat): per-key CAPABILITIES that gate
 # which /v1 doors the key may open (orthogonal to the workspace grant):
@@ -34217,7 +34217,7 @@ for c in conns:
     if c.get('remote'):
         addr = c.get('address') or ('%s::%s' % (c.get('agent', '?'), c.get('host', '?')))
         # A7: a bound row shows the workspace it reaches, e.g.
-        # seoca::quillify.k2.dev → quillify-website (Seoca).
+        # seoca::quahog.k2.dev → quahog-website (Seoca).
         handle = c.get('handle') or ''
         display = c.get('displayName') or ''
         bound = ''
@@ -48368,7 +48368,7 @@ MOVING TO ANOTHER BOX
 GIVING A SECRET TO ANOTHER AGENT
   Never paste it into k2 msg (K2 now redacts known values there anyway).
   Send it by name: k2 vault send STRIPE_KEY --to ops --note "refund job"
-  (or --to ops::luzz.k2.dev on another server; or k2 msg ops "…" --secret
+  (or --to ops::larkspur.k2.dev on another server; or k2 msg ops "…" --secret
   STRIPE_KEY). You never handle the value; it moves vault to vault, sealed
   to the other server's vault across servers.
   It arrives pending: a person there accepts it (k2 vault incoming), unless
@@ -54567,7 +54567,7 @@ USAGE
   k2 agent restart <name> [flags]
 
   <name> is the agent's handle, its name, or its full workspace path
-  (/home/k2/hatlab/hatlab-manager; a trailing slash or a symlink to the
+  (/home/k2/hooli/hooli-manager; a trailing slash or a symlink to the
   folder works too). When a name matches more than one workspace, or an
   old handle that was retired, it exits 4 and the error names each
   workspace's handle and path: use one of those.
@@ -74472,7 +74472,7 @@ Import mail into a hosted address this workspace can manage. Maildir
 
 Large Maildirs need a long wait: this command waits up to 2 hours
 (7200s). The global CLI 30s cap does not apply here — 30s was the
-lztek wall (daemon kept importing after the client gave up).
+wall a field import hit (the daemon kept importing after the client gave up).
 
 USAGE
   k2 hostmail import --address <a@domain> --maildir <path> [--skip-inbox] [--json]

@@ -378,7 +378,7 @@ export interface ZenPostOptions {
 }
 
 /** What a send did. `contextNote`: its Board context didn't go, in the
- *  words the chip's place shows ("Not sent: dtl is older"). */
+ *  words the chip's place shows ("Not sent: dharma is older"). */
 export interface ZenPostResult {
   id: string | null
   seq: number | null

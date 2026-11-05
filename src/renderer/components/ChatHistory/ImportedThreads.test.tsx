@@ -46,7 +46,7 @@ function row(over: Record<string, unknown>): Record<string, unknown> {
     localConversationId: 'conv-main',
     role: 'canonical',
     cloneId: 'c1',
-    sourceHost: 'luzz.k2.dev',
+    sourceHost: 'larkspur.k2.dev',
     sourceHandle: 'sales',
     sourceConversationId: 'src-main',
     docCount: 412,
@@ -89,10 +89,10 @@ describe('Imported Threads: parse and labels', () => {
       ],
     })
     expect(importedTitle(main)).toBe('sales main Thread')
-    expect(importedDetail(main)).toBe('in the main Thread · 412 messages · from luzz.k2.dev')
+    expect(importedDetail(main)).toBe('in the main Thread · 412 messages · from larkspur.k2.dev')
     expect(importedTitle(side)).toBe('reviewer')
-    expect(importedDetail(side)).toBe('read-only history · 1 message · from luzz.k2.dev')
-    expect(importedDetail(pending)).toBe('joins the main Thread when Chat starts · 412 messages · from luzz.k2.dev')
+    expect(importedDetail(side)).toBe('read-only history · 1 message · from larkspur.k2.dev')
+    expect(importedDetail(pending)).toBe('joins the main Thread when Chat starts · 412 messages · from larkspur.k2.dev')
   })
 })
 

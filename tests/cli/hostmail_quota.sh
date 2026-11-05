@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# quota flags must ride _mail_py env (lztek: --gb dropped → usage nothing to set).
+# quota flags must ride _mail_py env (field report: --gb dropped → usage nothing to set).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

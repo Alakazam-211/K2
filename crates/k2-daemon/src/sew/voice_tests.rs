@@ -117,22 +117,22 @@ fn install_gets_dns_then_a_single_san_cert_for_its_own_key_and_hands_sew_turn_tl
     t.chat();
     let out = t.install(InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() }).unwrap();
     assert_eq!(out["state"], "installed");
-    assert_eq!(out["turnHost"], "turn-lztek.k2.dev");
-    assert_eq!(out["publicUrl"], "wss://voice.lztek.k2.dev");
+    assert_eq!(out["turnHost"], "turn-lumon.k2.dev");
+    assert_eq!(out["publicUrl"], "wss://voice.lumon.k2.dev");
     assert_eq!(out["nodeIp"], "203.0.113.7");
     assert_eq!(out["turnTls"]["served"], "ok");
     assert_eq!(out["warnings"], json!([]), "the box carries its public IP, served leaf is ours");
 
     // Order of the K2 Connect calls (docs/turn.md): DNS first, then the cert.
-    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek", "POST /cert"]);
-    assert_eq!(t.cp_body("PUT /turn/dns/lztek"), json!({}), "the control plane observes the IP");
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lumon", "POST /cert"]);
+    assert_eq!(t.cp_body("PUT /turn/dns/lumon"), json!({}), "the control plane observes the IP");
     let cert_body = t.cp_body("POST /cert");
     assert_eq!(cert_body["mode"], "turn");
-    assert_eq!(cert_body["subdomain"], "lztek");
+    assert_eq!(cert_body["subdomain"], "lumon");
     assert_eq!(cert_body["token"], "", "the tunnel token rides the Authorization header");
     let (sans, cns, spki) = csr_names(cert_body["csr"].as_str().unwrap());
-    assert_eq!(sans, vec!["turn-lztek.k2.dev"], "exactly one SAN, no wildcard, no base name");
-    assert_eq!(cns, vec!["turn-lztek.k2.dev"], "CN is the host (rcgen's default CN is refused)");
+    assert_eq!(sans, vec!["turn-lumon.k2.dev"], "exactly one SAN, no wildcard, no base name");
+    assert_eq!(cns, vec!["turn-lumon.k2.dev"], "CN is the host (rcgen's default CN is refused)");
 
     // The key: P-256, in the vault, never the tunnel key, never on disk.
     let st = t.state();
@@ -150,7 +150,7 @@ fn install_gets_dns_then_a_single_san_cert_for_its_own_key_and_hands_sew_turn_tl
     assert_eq!(effects, vec!["engine sew stage-media", "engine sew media install"]);
     let body = t.stdin_of("engine sew media install");
     assert_eq!(body["turn_tls"], "direct");
-    assert_eq!(body["turn_domain"], "turn-lztek.k2.dev");
+    assert_eq!(body["turn_domain"], "turn-lumon.k2.dev");
     assert_eq!(body["turn_advertise_port"], 5349);
     assert_eq!(body["udp_port"], 7882);
     assert_eq!(body["tcp_port"], 7881);
@@ -177,10 +177,10 @@ fn an_app_origin_is_the_voice_url_and_needs_no_nested_label() {
     let t = t();
     t.chat();
     let out = t
-        .install(InstallRequest { public_url: Some("wss://hearth.lztek.k2.dev".into()), tarball_path: Some(MEDIA.into()), ..Default::default() })
+        .install(InstallRequest { public_url: Some("wss://hearth.lumon.k2.dev".into()), tarball_path: Some(MEDIA.into()), ..Default::default() })
         .unwrap();
-    assert_eq!(out["publicUrl"], "wss://hearth.lztek.k2.dev");
-    assert_eq!(t.stdin_of("engine sew media install")["public_url"], "wss://hearth.lztek.k2.dev");
+    assert_eq!(out["publicUrl"], "wss://hearth.lumon.k2.dev");
+    assert_eq!(t.stdin_of("engine sew media install")["public_url"], "wss://hearth.lumon.k2.dev");
     assert!(t.ops.nested.lock().unwrap().is_empty(), "Hearth's BFF proxies /rtc same-origin");
     // A custom domain bound to this box works too; anything else is refused
     // before any effect.
@@ -188,13 +188,13 @@ fn an_app_origin_is_the_voice_url_and_needs_no_nested_label() {
     assert_eq!(check_voice_url(&t.env(), "wss://acme.dev").unwrap(), "wss://acme.dev");
     for bad in [
         "wss://evil.example",
-        "wss://lztek.k2.dev.evil.example",
+        "wss://lumon.k2.dev.evil.example",
         "wss://otherbox.k2.dev",
         "wss://notacme.dev",
-        "https://hearth.lztek.k2.dev",
-        "wss://hearth.lztek.k2.dev/rtc",
-        "wss://hearth.lztek.k2.dev:8443",
-        "wss://Hearth.lztek.k2.dev",
+        "https://hearth.lumon.k2.dev",
+        "wss://hearth.lumon.k2.dev/rtc",
+        "wss://hearth.lumon.k2.dev:8443",
+        "wss://Hearth.lumon.k2.dev",
     ] {
         assert!(check_voice_url(&t.env(), bad).is_err(), "{bad}");
     }
@@ -209,13 +209,13 @@ fn ip_unverified_stops_before_sew_and_says_k2_retries() {
     let t = t();
     t.chat();
     t.ops.queue_cp(
-        "PUT /turn/dns/lztek",
+        "PUT /turn/dns/lumon",
         Err(CpError { status: 403, code: "ip_unverified".into(), detail: "caller 198.51.100.9; relay none".into() }),
     );
     let f = t.install(InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() }).unwrap_err();
     assert_eq!((f.code, f.status), ("turn_ip_unverified", 409));
     assert!(f.hint.contains("next tunnel login"), "{}", f.hint);
-    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek"], "no cert without the record");
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lumon"], "no cert without the record");
     assert!(!t.ops.effects().contains(&"engine sew media install".to_string()));
     let st = t.state();
     assert!(!st.installed);
@@ -232,14 +232,14 @@ fn an_install_re_run_reuses_a_valid_cert_and_spends_no_turn_issuance() {
     t.voice();
     let before = t.state();
     t.install(InstallRequest::default()).unwrap();
-    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek"], "DNS again, no new cert");
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lumon"], "DNS again, no new cert");
     assert_eq!(t.state().cert_leaf_sha256, before.cert_leaf_sha256);
     assert_eq!(t.state().turn_key_ref, before.turn_key_ref);
     // Inside the renewal window an install re-run issues a fresh one.
     t.ops.cp_calls.lock().unwrap().clear();
     t.advance(70 * 86_400);
     t.install(InstallRequest::default()).unwrap();
-    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek", "POST /cert"]);
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lumon", "POST /cert"]);
 }
 
 #[test]
@@ -252,10 +252,10 @@ fn a_cert_for_another_name_or_key_is_never_handed_to_sew() {
     t.ops.queue_cp("POST /cert", Ok(json!({"cert": foreign.pem()})));
     let f = t.install(InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() }).unwrap_err();
     assert_eq!(f.code, "turn_failed");
-    assert!(f.hint.contains("expected exactly [turn-lztek.k2.dev]"), "{}", f.hint);
+    assert!(f.hint.contains("expected exactly [turn-lumon.k2.dev]"), "{}", f.hint);
     let key_ref = t.state().turn_key_ref.expect("the vault key is recorded even when issuance fails");
     // Right name, wrong key.
-    let wrong = rcgen::CertificateParams::new(vec!["turn-lztek.k2.dev".to_string()]).unwrap().self_signed(&other_key).unwrap();
+    let wrong = rcgen::CertificateParams::new(vec!["turn-lumon.k2.dev".to_string()]).unwrap().self_signed(&other_key).unwrap();
     t.ops.queue_cp("POST /cert", Ok(json!({"cert": wrong.pem()})));
     let f = t.install(InstallRequest::default()).unwrap_err();
     assert!(f.hint.contains("not for K2's TURN key"), "{}", f.hint);
@@ -301,16 +301,16 @@ fn nat_is_warned_and_a_foreign_cert_on_5349_is_reported() {
 fn the_voice_url_changes_later_through_reconfigure_and_a_sew_restart() {
     let t = t();
     t.voice();
-    let out = set_url(&t.env(), "wss://hearth.lztek.k2.dev").unwrap();
+    let out = set_url(&t.env(), "wss://hearth.lumon.k2.dev").unwrap();
     assert_eq!(out["changed"], true);
     assert_eq!(t.ops.effects(), vec!["engine sew media reconfigure", "engine sew systemctl restart"]);
-    assert_eq!(t.stdin_of("engine sew media reconfigure"), json!({"public_url": "wss://hearth.lztek.k2.dev"}));
+    assert_eq!(t.stdin_of("engine sew media reconfigure"), json!({"public_url": "wss://hearth.lumon.k2.dev"}));
     // Moving off the default drops the nested voice label.
     assert_eq!(t.ops.nested.lock().unwrap().last().unwrap(), &("voice".to_string(), None));
-    assert_eq!(t.state().public_url.as_deref(), Some("wss://hearth.lztek.k2.dev"));
+    assert_eq!(t.state().public_url.as_deref(), Some("wss://hearth.lumon.k2.dev"));
     assert!(!t.state().voice_label);
     t.ops.clear();
-    assert_eq!(set_url(&t.env(), "wss://hearth.lztek.k2.dev").unwrap()["changed"], false);
+    assert_eq!(set_url(&t.env(), "wss://hearth.lumon.k2.dev").unwrap()["changed"], false);
     assert!(t.ops.effects().is_empty());
     assert_eq!(set_url(&t.env(), "wss://elsewhere.example").unwrap_err().code, "url_not_on_this_box");
 }
@@ -319,11 +319,11 @@ fn the_voice_url_changes_later_through_reconfigure_and_a_sew_restart() {
 fn a_url_set_before_voice_exists_is_kept_for_the_install() {
     let t = t();
     t.chat();
-    let out = set_url(&t.env(), "wss://hearth.lztek.k2.dev").unwrap();
+    let out = set_url(&t.env(), "wss://hearth.lumon.k2.dev").unwrap();
     assert_eq!(out["applied"], false);
     assert!(t.ops.effects().is_empty());
     t.install(InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() }).unwrap();
-    assert_eq!(t.stdin_of("engine sew media install")["public_url"], "wss://hearth.lztek.k2.dev");
+    assert_eq!(t.stdin_of("engine sew media install")["public_url"], "wss://hearth.lumon.k2.dev");
 }
 
 // ── renewal ──────────────────────────────────────────────────────────────
@@ -337,7 +337,7 @@ fn renewal_waits_for_the_window_then_reuses_the_key_without_an_engine_restart() 
     assert!(t.ops.cp_log().is_empty(), "90-day cert: nothing due");
     t.advance(61 * 86_400);
     tick(&t.env());
-    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek", "POST /cert"]);
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lumon", "POST /cert"]);
     assert_eq!(t.ops.effects(), vec!["engine sew media turn-cert"], "same IP: no reconfigure, no restart");
     let st = t.state();
     assert_eq!(st.turn_key_ref, st0.turn_key_ref, "the key is reused");
@@ -367,7 +367,7 @@ fn ip_unverified_on_renewal_backs_off_until_the_next_frpc_login() {
     let t = t();
     t.voice();
     t.advance(61 * 86_400);
-    t.ops.queue_cp("PUT /turn/dns/lztek", Err(CpError { status: 403, code: "ip_unverified".into(), detail: "x".into() }));
+    t.ops.queue_cp("PUT /turn/dns/lumon", Err(CpError { status: 403, code: "ip_unverified".into(), detail: "x".into() }));
     tick(&t.env());
     let st = t.state();
     assert_eq!(st.failures, 1);
@@ -378,7 +378,7 @@ fn ip_unverified_on_renewal_backs_off_until_the_next_frpc_login() {
     assert!(t.ops.cp_log().is_empty(), "backing off");
     *t.ops.logins.lock().unwrap() = 2; // frpc logged in again
     tick(&t.env());
-    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek", "POST /cert"]);
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lumon", "POST /cert"]);
     let st = t.state();
     assert_eq!((st.failures, st.logins_at_failure, st.last_error.clone()), (0, None, None));
 }
@@ -412,7 +412,7 @@ fn status_maps_voice_into_the_server_verdict() {
     let t = t();
     t.voice();
     // Sew's public URL is set (its own warning has its own test).
-    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
+    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lumon.k2.dev"}));
     // Clear the chat-side K2 alarms (no off-box backups, recovery key).
     store::update(1, |r| {
         r.ship_kind = "dir".into();
@@ -424,7 +424,7 @@ fn status_maps_voice_into_the_server_verdict() {
     assert_eq!(s["state"], "running", "port_443_unavailable is a setup warning, not degraded: {}", s["alarms"]);
     let w = s["warnings"].to_string();
     assert!(w.contains("port_443_unavailable") && w.contains("voice_unprobed"), "{w}");
-    assert_eq!(s["voice"]["turnHost"], "turn-lztek.k2.dev");
+    assert_eq!(s["voice"]["turnHost"], "turn-lumon.k2.dev");
     assert!(s["voice"]["cert"]["daysLeft"].as_i64().unwrap() >= 89);
 
     // An engine alarm degrades the server; a probe clears the warning.
@@ -464,7 +464,7 @@ fn uninstall_removes_the_engine_record_label_and_key_and_purge_forgets_voice() {
     let out = uninstall(&t.env()).unwrap();
     assert_eq!(out["warnings"], json!([]));
     assert_eq!(t.ops.effects(), vec!["engine sew media uninstall"]);
-    assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lztek"]);
+    assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lumon"]);
     assert_eq!(t.ops.nested.lock().unwrap().last().unwrap(), &("voice".to_string(), None));
     assert_eq!(t.secrets.resolve(&key_ref).unwrap(), None);
     assert!(t.ops.voice_load().is_none());
@@ -495,7 +495,7 @@ fn uninstall_when_sew_says_not_installed_still_forgets_voice() {
         assert_eq!(w.len(), 1, "{out}");
         assert!(w[0].as_str().unwrap().contains("K2's own voice records were cleaned up"), "{out}");
         assert_eq!(t.ops.effects(), vec!["engine sew media uninstall"]);
-        assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lztek"]);
+        assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lumon"]);
         assert_eq!(t.ops.nested.lock().unwrap().last().unwrap(), &("voice".to_string(), None));
         assert_eq!(t.secrets.resolve(&key_ref).unwrap(), None);
         assert!(t.ops.voice_load().is_none());
@@ -589,21 +589,21 @@ fn server_config_sets_only_the_public_url_and_setup_links_follow_it() {
     t.ops.mgmt_status.lock().unwrap()["provider"] = json!("standalone");
     t.enable_with(Some("standalone")).unwrap();
     t.ops.clear();
-    let out = crate::sew::supervisor::server_config(&t.env(), "https://hearth.lztek.k2.dev").unwrap();
+    let out = crate::sew::supervisor::server_config(&t.env(), "https://hearth.lumon.k2.dev").unwrap();
     assert_eq!(out["restarted"], true);
-    assert_eq!(out["setupLinks"], "https://hearth.lztek.k2.dev/setup");
+    assert_eq!(out["setupLinks"], "https://hearth.lumon.k2.dev/setup");
     assert_eq!(t.ops.effects(), vec!["engine sew config", "engine sew systemctl restart"]);
     let body = t.stdin_of("engine sew config");
-    assert_eq!(body, json!({"server.public_url": "https://hearth.lztek.k2.dev"}), "never identity.standalone.setup_url");
+    assert_eq!(body, json!({"server.public_url": "https://hearth.lumon.k2.dev"}), "never identity.standalone.setup_url");
     let req: k2_root_proto::sew::ConfigRequest = serde_json::from_value(body).unwrap();
     req.validate().unwrap();
     t.ops.clear();
-    for bad in ["https://evil.example", "https://hearth.lztek.k2.dev/setup", "http://hearth.lztek.k2.dev", ""] {
+    for bad in ["https://evil.example", "https://hearth.lumon.k2.dev/setup", "http://hearth.lumon.k2.dev", ""] {
         assert!(crate::sew::supervisor::server_config(&t.env(), bad).is_err(), "{bad}");
     }
     assert!(t.ops.effects().is_empty());
     // K2 remembers what it set; a refused value never replaces it.
-    assert_eq!(crate::sew::supervisor::public_url(&t.env()).as_deref(), Some("https://hearth.lztek.k2.dev"));
+    assert_eq!(crate::sew::supervisor::public_url(&t.env()).as_deref(), Some("https://hearth.lumon.k2.dev"));
 }
 
 /// 0.46.1: while Sew's public URL is unset, status (and so `enable`, which
@@ -617,13 +617,13 @@ fn status_warns_until_the_public_url_is_set_and_names_the_fix() {
     let s = crate::sew::supervisor::status(&t.env(), false);
     let w: Vec<&Value> = s["warnings"].as_array().unwrap().iter().filter(|w| w["code"] == "public_url_unset").collect();
     assert_eq!(w.len(), 1, "{}", s["warnings"]);
-    assert_eq!(w[0]["fix"], "k2 hostchat config --public-url https://<app>.lztek.k2.dev");
+    assert_eq!(w[0]["fix"], "k2 hostchat config --public-url https://<app>.lumon.k2.dev");
     assert!(w[0]["message"].as_str().unwrap().contains("k2 hostchat config --public-url"), "{}", w[0]);
     assert_eq!(s["publicUrl"], Value::Null);
-    crate::sew::supervisor::server_config(&t.env(), "https://hearth.lztek.k2.dev").unwrap();
+    crate::sew::supervisor::server_config(&t.env(), "https://hearth.lumon.k2.dev").unwrap();
     let s = crate::sew::supervisor::status(&t.env(), false);
     assert!(!s["warnings"].to_string().contains("public_url_unset"), "{}", s["warnings"]);
-    assert_eq!(s["publicUrl"], "https://hearth.lztek.k2.dev");
+    assert_eq!(s["publicUrl"], "https://hearth.lumon.k2.dev");
     // No K2 Connect label: the fix names a generic host.
     *t.ops.label.lock().unwrap() = None;
     t.ops.records.lock().unwrap().clear();
@@ -635,13 +635,13 @@ fn status_warns_until_the_public_url_is_set_and_names_the_fix() {
 fn the_voice_url_never_rides_config_set() {
     let t = t();
     t.voice();
-    set_url(&t.env(), "wss://hearth.lztek.k2.dev").unwrap();
+    set_url(&t.env(), "wss://hearth.lumon.k2.dev").unwrap();
     assert!(!t.ops.effects().iter().any(|e| e == "engine sew config"), "{:?}", t.ops.effects());
     // `media reconfigure` is `sew media install --reconfigure` with the
     // URL in its JSON input (the helper's own test pins that argv).
     let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(t.stdin_of("engine sew media reconfigure")).unwrap();
     req.validate_reconfigure().unwrap();
-    assert_eq!(req.public_url.as_deref(), Some("wss://hearth.lztek.k2.dev"));
+    assert_eq!(req.public_url.as_deref(), Some("wss://hearth.lumon.k2.dev"));
 }
 
 // ── users (standalone) ───────────────────────────────────────────────────
@@ -656,7 +656,7 @@ fn standalone(t: &T) {
 fn link_answer(user: &str, role: &str) -> Value {
     json!({"member_id": "48831765147549703", "username": user, "install_role": role, "deactivated": false,
            "created": true, "reactivated": false, "changed": true,
-           "setup_link": {"url": format!("https://hearth.lztek.k2.dev/setup#token=sewpw_{}", "z".repeat(43)), "expires_at": "2026-10-17T12:00:00.000Z"}})
+           "setup_link": {"url": format!("https://hearth.lumon.k2.dev/setup#token=sewpw_{}", "z".repeat(43)), "expires_at": "2026-10-17T12:00:00.000Z"}})
 }
 
 fn queue_mgmt(t: &T, key: &str, a: Result<Value, MgmtError>) {
@@ -787,7 +787,7 @@ fn behind_the_front_voice_installs_on_the_passthrough_tier() {
     assert_eq!(out["ports"]["turnTls"], 443);
     let body = t.stdin_of("engine sew media install");
     assert_eq!(body["turn_tls"], "passthrough");
-    assert_eq!(body["turn_domain"], "turn-lztek.k2.dev");
+    assert_eq!(body["turn_domain"], "turn-lumon.k2.dev");
     assert!(body.get("turn_advertise_port").is_none(), "passthrough advertises 443 by Sew's default, never 5349");
     assert!(body["turn_cert_pem"].as_str().unwrap().contains("BEGIN CERTIFICATE"));
     assert!(body["turn_key_pem"].as_str().unwrap().contains("PRIVATE KEY"));
@@ -796,7 +796,7 @@ fn behind_the_front_voice_installs_on_the_passthrough_tier() {
     assert_eq!(*t.ops.served_ports.lock().unwrap(), vec![443], "the served check probes :443");
     let st = t.state();
     assert_eq!(st.turn_tier.as_deref(), Some("passthrough"));
-    assert_eq!(front_route_host(&t.env()).as_deref(), Some("turn-lztek.k2.dev"), "the front routes the TURN host");
+    assert_eq!(front_route_host(&t.env()).as_deref(), Some("turn-lumon.k2.dev"), "the front routes the TURN host");
     let (s, _, _) = status(&t.env(), true);
     assert_eq!(s["turnTier"], "passthrough");
     assert_eq!(s["turnTls"]["port"], 443);
@@ -812,17 +812,17 @@ fn purge_rebuilds_the_front_table_without_the_turn_route() {
         let t = t();
         *t.ops.front.lock().unwrap() = true;
         t.voice();
-        assert_eq!(front_route_host(&t.env()).as_deref(), Some("turn-lztek.k2.dev"));
+        assert_eq!(front_route_host(&t.env()).as_deref(), Some("turn-lumon.k2.dev"));
         let before = *t.ops.front_rebuilds.lock().unwrap();
         if let Some(d) = disk {
             *t.ops.on_disk.lock().unwrap() = Some(d.into());
         }
-        let r = crate::sew::supervisor::purge(&t.env(), "lztek", false).expect("purge");
+        let r = crate::sew::supervisor::purge(&t.env(), "lumon", false).expect("purge");
         assert_eq!(r["teardown"], if disk.is_some() { "k2" } else { "sew" });
         assert_eq!(front_route_host(&t.env()), None, "the TURN route is gone from the voice record");
         assert_eq!(*t.ops.front_rebuilds.lock().unwrap(), before + 1, "the front table was rebuilt once, after the record went");
         assert!(t.ops.voice_load().is_none());
-        assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lztek"]);
+        assert_eq!(t.ops.cp_log(), vec!["DELETE /turn/dns/lumon"]);
     }
 }
 
@@ -845,7 +845,7 @@ fn set_tier_moves_an_installed_engine_both_ways_without_reissuing() {
     assert_eq!(t.ops.effects(), vec!["engine sew media reconfigure restart-now"]);
     let body = t.stdin_of("engine sew media reconfigure restart-now");
     assert_eq!(body["turn_tls"], "passthrough");
-    assert_eq!(body["turn_domain"], "turn-lztek.k2.dev");
+    assert_eq!(body["turn_domain"], "turn-lumon.k2.dev");
     assert_eq!(body["turn_cert_pem"].as_str(), Some(chain.as_str()), "the cert K2 already holds");
     assert!(body.get("turn_advertise_port").is_none());
     let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(body).unwrap();
@@ -893,7 +893,7 @@ fn a_sew_without_passthrough_keeps_turn_on_5349() {
 /// the engine with no alarms. Only the probe can move the verdict.
 fn quiet(t: &T) {
     t.voice();
-    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
+    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lumon.k2.dev"}));
     store::update(1, |r| {
         r.ship_kind = "dir".into();
         r.recovery_shown_at = Some(1);

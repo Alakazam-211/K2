@@ -1753,23 +1753,23 @@ mod tests {
 
     #[test]
     fn is_front_door_host_skin_prefix_and_nested_caddy_target() {
-        assert!(is_front_door_host("skin.dtl.k2.dev"));
-        assert!(is_front_door_host("Skin.DTL.k2.dev:443"));
-        assert!(!is_front_door_host("dtl.k2.dev"));
-        assert!(!is_front_door_host("agents.dtl.k2.dev"));
+        assert!(is_front_door_host("skin.dharma.k2.dev"));
+        assert!(is_front_door_host("Skin.DHARMA.k2.dev:443"));
+        assert!(!is_front_door_host("dharma.k2.dev"));
+        assert!(!is_front_door_host("agents.dharma.k2.dev"));
 
         let prev = crate::tunnel::subdomains::current();
         let mut targets = std::collections::HashMap::new();
         targets.insert("agents".into(), "127.0.0.1:38472".into());
         crate::tunnel::subdomains::store(crate::tunnel::subdomains::SubdomainMap {
-            primary: "dtl".into(),
+            primary: "dharma".into(),
             targets,
         });
         assert!(
-            is_front_door_host("agents.dtl.k2.dev"),
+            is_front_door_host("agents.dharma.k2.dev"),
             "nested label targeting Caddy loopback is the front door"
         );
-        assert!(!is_front_door_host("dtl.k2.dev"), "kingdom host is not");
+        assert!(!is_front_door_host("dharma.k2.dev"), "kingdom host is not");
 
         let mut spa = std::collections::HashMap::new();
         spa.insert("globex".into(), "127.0.0.1:3847".into());

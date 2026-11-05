@@ -225,7 +225,7 @@ describe('Cmd+1–9 is one window-level handler (MS18, Q5)', () => {
     const homes = useHomesStore.getState()
     const id = homes.createHome('Test Home')
     if (!id) throw new Error('createHome failed')
-    for (const address of ['cortana::local', 'noaccess::b.test', 'anna::dtl.k2.dev']) {
+    for (const address of ['cortana::local', 'noaccess::b.test', 'anna::dharma.k2.dev']) {
       useHomesStore.getState().addRow(id, { address, workspaceId: null, label: address })
     }
     usePageViewStore.getState().setPage('home')
@@ -236,7 +236,7 @@ describe('Cmd+1–9 is one window-level handler (MS18, Q5)', () => {
       fireEvent.keyDown(window, { key: '2', metaKey: true })
       fireEvent.keyDown(window, { key: '9', metaKey: true })
     })
-    expect(opened.rows).toEqual(['anna::dtl.k2.dev', 'cortana::local'])
+    expect(opened.rows).toEqual(['anna::dharma.k2.dev', 'cortana::local'])
   })
 
   it('on Agents, Cmd+N switches workspace as before and opens no Home row', () => {
@@ -274,7 +274,7 @@ describe('Cmd+Option+1–9: Home switcher on Home, Agents switch elsewhere (0.43
     const second = useHomesStore.getState().createHome('Second')
     const third = useHomesStore.getState().createHome('Third')
     if (!second || !third) throw new Error('createHome failed')
-    useHomesStore.getState().addRow(second, { address: 'anna::dtl.k2.dev', workspaceId: null, label: 'anna' })
+    useHomesStore.getState().addRow(second, { address: 'anna::dharma.k2.dev', workspaceId: null, label: 'anna' })
     useHomesStore.getState().selectHome(first.id)
     const setActiveWorkspace = vi.fn()
     useProjectsStore.setState({

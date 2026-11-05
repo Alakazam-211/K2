@@ -2,7 +2,7 @@
 //!
 //! The daemon stages the CLI itself at boot (`k2_core::cli_stage`), but
 //! only where it may write: a `/usr/local/bin/k2` that root installed (an
-//! older provision, a hand copy) froze at its first version — lztek ran a
+//! older provision, a hand copy) froze at its first version — a fleet box ran a
 //! 0.40.148 CLI against a 0.46.x daemon. After each auto-heal pass the
 //! daemon asks the root helper (`helper cli-refresh`, protocol 9) to
 //! replace that file with the CLI compiled into the signed helper. The

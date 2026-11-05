@@ -33,8 +33,8 @@ const SCREENSHOT =
 
 function makeRemoteHost(): ConnectHost {
   return {
-    id: 'dtl-1',
-    label: 'DTL',
+    id: 'dharma-1',
+    label: 'DHARMA',
     hostname: 'anna.k2.dev',
     username: 'rosson',
     port: 443,

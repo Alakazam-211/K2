@@ -26,7 +26,7 @@
 //! Mirrors `HTTPS_PORT` in `tunnel_tls_listener.rs`: a re-bindable
 //! `Mutex<Option<u16>>`, NOT a `OnceLock`, so a dead accept loop (panic,
 //! FD exhaustion) clears the record and [`ensure_port`] re-binds instead of
-//! returning a dead port forever (the luzz silent-outage class).
+//! returning a dead port forever (the customer-box silent-outage class).
 
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;

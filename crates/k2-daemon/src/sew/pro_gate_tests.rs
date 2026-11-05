@@ -45,7 +45,7 @@ fn hosting_needs_a_pro_reading() {
     let h = hosting(&env);
     assert_eq!(h["state"], "pro");
     assert!(h.get("reason").is_none(), "{h}");
-    let reading = TierReading { primary: "lztek".into(), tier: Some("pro".into()), fetched_at: 1 };
+    let reading = TierReading { primary: "lumon".into(), tier: Some("pro".into()), fetched_at: 1 };
     *ops.tier.lock().unwrap() = TierView::Stale(reading);
     require_pro(&env).expect("a stale Pro reading still hosts (a control-plane blip closes nothing)");
     assert_eq!(hosting(&env)["reading"], "stale");
@@ -54,7 +54,7 @@ fn hosting_needs_a_pro_reading() {
 }
 
 fn voice_record(ops: &FakeOps, installed: bool, tier: Option<&str>) {
-    *ops.voice.lock().unwrap() = Some(json!({"installed": installed, "turnTier": tier, "label": "lztek"}));
+    *ops.voice.lock().unwrap() = Some(json!({"installed": installed, "turnTier": tier, "label": "lumon"}));
 }
 
 /// §6.4: direct mode (and passthrough behind the :443 front) publishes the
@@ -69,7 +69,7 @@ fn exposure_and_ports_follow_the_voice_tier() {
     assert_eq!((e["mode"].as_str(), e["public"].as_bool()), (Some("direct"), Some(true)), "{e}");
     assert_eq!(
         e["note"],
-        "Direct mode makes this box's address public: its IP is in DNS (turn-lztek.k2.dev), in public certificate logs, and \
+        "Direct mode makes this box's address public: its IP is in DNS (turn-lumon.k2.dev), in public certificate logs, and \
          visible to everyone who joins a call."
     );
     assert_eq!(

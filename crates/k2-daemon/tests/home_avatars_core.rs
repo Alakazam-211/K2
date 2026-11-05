@@ -75,7 +75,7 @@ fn names(dir: &Path) -> Vec<String> {
 fn t3_1_encoding_round_trips_one_to_one_and_refuses_bad_components() {
     let cases = [
         ("local", "local"),
-        ("dtl.k2.dev", "dtl.k2.dev"),
+        ("dharma.k2.dev", "dharma.k2.dev"),
         ("192.168.1.20:38471", "192.168.1.20_3a38471"),
         ("[fe80::1]:38471", "_5bfe80_3a_3a1_5d_3a38471"),
         ("scout_v3", "scout_5fv3"),
@@ -124,14 +124,14 @@ fn t3_1_encoding_round_trips_one_to_one_and_refuses_bad_components() {
 #[test]
 fn t3_2_put_writes_then_same_hash_is_a_no_op_then_type_swap_then_miss() {
     let (_t, cache) = temp_cache("put");
-    let addr = "scout::dtl.k2.dev";
+    let addr = "scout::dharma.k2.dev";
     let img = png(7, 300);
 
     let out = cache.put_at(addr, Some(&data_url("image/png", &img)), 1_000).expect("first put");
     assert!(out.changed, "first put changes: {out:?}");
     let png_path = cache.image_path(addr, "png").expect("png path");
     let meta_path = cache.meta_path(addr).expect("meta path");
-    assert_eq!(png_path, cache.root().join("dtl.k2.dev").join("scout.png"));
+    assert_eq!(png_path, cache.root().join("dharma.k2.dev").join("scout.png"));
     assert_eq!(std::fs::read(&png_path).expect("png on disk"), img, "image bytes on disk");
     let meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&meta_path).expect("meta on disk")).expect("meta json");
@@ -161,14 +161,14 @@ fn t3_2_put_writes_then_same_hash_is_a_no_op_then_type_swap_then_miss() {
     let out = cache.put_at(addr, Some(&data_url("image/jpeg", &j)), 6_000).expect("jpeg put");
     assert!(out.changed, "{out:?}");
     assert!(!png_path.exists(), "the old .png must go when the type changes");
-    assert_eq!(names(&cache.root().join("dtl.k2.dev")), vec!["scout.jpg", "scout.json"]);
+    assert_eq!(names(&cache.root().join("dharma.k2.dev")), vec!["scout.jpg", "scout.json"]);
     let got = cache.get(addr).expect("get").expect("entry");
     assert_eq!(got.data_url.as_deref(), Some(data_url("image/jpeg", &j).as_str()));
 
     // null → missing, no image file.
     let out = cache.put_at(addr, None, 7_000).expect("null put");
     assert!(out.changed && out.missing, "{out:?}");
-    assert_eq!(names(&cache.root().join("dtl.k2.dev")), vec!["scout.json"], "a miss keeps only the meta");
+    assert_eq!(names(&cache.root().join("dharma.k2.dev")), vec!["scout.json"], "a miss keeps only the meta");
     let got = cache.get(addr).expect("get").expect("a miss is an entry");
     assert!(got.missing, "{got:?}");
     assert_eq!(got.data_url, None);
@@ -177,8 +177,8 @@ fn t3_2_put_writes_then_same_hash_is_a_no_op_then_type_swap_then_miss() {
     assert!(!out.changed, "a second miss is not a change: {out:?}");
 
     // Addresses are normalized: mixed case reads the same entry.
-    assert!(cache.get("SCOUT::DTL.K2.DEV").expect("get").is_some(), "lowercased lookup");
-    assert_eq!(cache.get("nobody::dtl.k2.dev").expect("get"), None, "no entry → None");
+    assert!(cache.get("SCOUT::DHARMA.K2.DEV").expect("get").is_some(), "lowercased lookup");
+    assert_eq!(cache.get("nobody::dharma.k2.dev").expect("get"), None, "no entry → None");
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn t3_2_svg_and_other_types_round_trip_with_canonical_mime() {
 #[test]
 fn t3_3_refusals_carry_exact_codes_and_write_nothing() {
     let (_t, cache) = temp_cache("refuse");
-    let addr = "scout::dtl.k2.dev";
+    let addr = "scout::dharma.k2.dev";
     let cases: Vec<(String, &str)> = vec![
         ("https://x/y.png".to_string(), "not_data_url"),
         ("data:image/png,rawbytes".to_string(), "not_data_url"),
@@ -270,22 +270,22 @@ fn t3_4_prune_keeps_listed_and_recent_and_removes_empty_servers() {
     let (_t, cache) = temp_cache("prune");
     let now = 10_000_000u64;
     let old = now - PRUNE_GRACE_MS - 1;
-    cache.put_at("keep::dtl.k2.dev", Some(&data_url("image/png", &png(1, 64))), old).expect("keep");
-    cache.put_at("gone::dtl.k2.dev", Some(&data_url("image/png", &png(2, 64))), old).expect("gone");
-    cache.put_at("fresh::dtl.k2.dev", Some(&data_url("image/png", &png(3, 64))), now - 10_000).expect("fresh");
+    cache.put_at("keep::dharma.k2.dev", Some(&data_url("image/png", &png(1, 64))), old).expect("keep");
+    cache.put_at("gone::dharma.k2.dev", Some(&data_url("image/png", &png(2, 64))), old).expect("gone");
+    cache.put_at("fresh::dharma.k2.dev", Some(&data_url("image/png", &png(3, 64))), now - 10_000).expect("fresh");
     cache.put_at("solo::192.168.1.20:38471", None, old).expect("solo miss");
 
     let out = cache
-        .prune_at(&["KEEP::dtl.k2.dev".to_string(), "not an address".to_string()], now)
+        .prune_at(&["KEEP::dharma.k2.dev".to_string(), "not an address".to_string()], now)
         .expect("prune");
     assert_eq!(out.removed, 2, "gone + solo are removed: {out:?}");
     assert_eq!(out.kept, 2, "keep + fresh (10 s old) stay: {out:?}");
     assert_eq!(out.removed_servers, 1, "the LAN server folder is left empty and removed: {out:?}");
-    assert!(cache.get("keep::dtl.k2.dev").expect("get").is_some(), "listed entry kept");
-    assert!(cache.get("fresh::dtl.k2.dev").expect("get").is_some(), "an unlisted entry written 10 s ago is kept");
-    assert_eq!(cache.get("gone::dtl.k2.dev").expect("get"), None, "unlisted old entry removed");
+    assert!(cache.get("keep::dharma.k2.dev").expect("get").is_some(), "listed entry kept");
+    assert!(cache.get("fresh::dharma.k2.dev").expect("get").is_some(), "an unlisted entry written 10 s ago is kept");
+    assert_eq!(cache.get("gone::dharma.k2.dev").expect("get"), None, "unlisted old entry removed");
     assert_eq!(
-        names(&cache.root().join("dtl.k2.dev")),
+        names(&cache.root().join("dharma.k2.dev")),
         vec!["fresh.json", "fresh.png", "keep.json", "keep.png"],
         "gone.png and gone.json are deleted"
     );

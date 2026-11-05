@@ -47,7 +47,7 @@ use k2_core::log_debug;
 /// **Not** a `OnceLock<u16>`: the accept task can die (panic, OS close, FD
 /// exhaustion) while the daemon process stays alive. A OnceLock would keep
 /// returning the **dead** port forever → frpc dials connection-refused →
-/// silent external outage (luzz 2026-07-29, acme/acv class).
+/// silent external outage (customer boxes, 2026-07-29 and earlier).
 ///
 /// **Keyed by subdomain** (0.45.2): the listener serves ONE name. Before
 /// 0.45.2 a tunnel start reused any live listener, so after "release `afs`,
@@ -445,7 +445,7 @@ async fn spawn_listener_with(
         tokio::spawn(async move {
             // If the accept task ends or panics, clear the record so the
             // next ensure/self-heal rebinds instead of returning a dead
-            // port (luzz silent outage class). Only this generation's
+            // port (customer-box silent outage class). Only this generation's
             // record: a newer listener may own the slot already.
             struct ClearOnDrop {
                 generation: u64,
@@ -538,7 +538,7 @@ fn take_or_claim_listener() -> Result<TcpListener, String> {
 /// Idempotent + serialized + **liveness- and name-aware**:
 ///   * if a listener is recorded, still accepts on loopback, **and serves
 ///     the subdomain now in `tunnel.json`**, return it;
-///   * if recorded but **dead** (accept task gone — luzz 2026-07-29) or
+///   * if recorded but **dead** (accept task gone — a customer box, 2026-07-29) or
 ///     serving **another name** (subdomain switch, 0.45.2), stop it and
 ///     re-bind for the configured name (new ephemeral port, cert for the
 ///     new name);

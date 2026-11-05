@@ -1584,7 +1584,7 @@ fn cli_refresh_replaces_only_an_older_k2_cli_and_is_idempotent() {
     assert_eq!((v["result"].as_str(), v["reason"].as_str()), (Some("skipped"), Some("absent")));
     assert!(!cli.exists());
 
-    // A stale K2 CLI (lztek: 0.40.148) is replaced with the helper's copy, 0755.
+    // A stale K2 CLI (a fleet box had 0.40.148) is replaced with the helper's copy, 0755.
     std::fs::write(&cli, "#!/bin/bash\nK2_CLI_VERSION=\"0.40.148\"\necho old\n").unwrap();
     std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
     let v = cli_json(&t.call(&["helper", "cli-refresh"]));

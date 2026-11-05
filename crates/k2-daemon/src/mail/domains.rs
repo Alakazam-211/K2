@@ -1480,10 +1480,10 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
 
         // Out-of-zone mail host.
         let mut rows = fixture_rows();
-        apply_mail_host_a_row(&mut rows, "customer.example", Some("mail.lztek.io"), Some("203.0.113.7"));
-        let a = rows.iter().find(|r| r.id == "a:mail.lztek.io").expect("A row");
-        assert!(a.purpose.contains("set this in the zone of mail.lztek.io"), "{}", a.purpose);
-        assert!(!render_zone_file("customer.example", &rows).contains("mail.lztek.io.\t3600\tIN\tA"));
+        apply_mail_host_a_row(&mut rows, "customer.example", Some("mail.lumon.io"), Some("203.0.113.7"));
+        let a = rows.iter().find(|r| r.id == "a:mail.lumon.io").expect("A row");
+        assert!(a.purpose.contains("set this in the zone of mail.lumon.io"), "{}", a.purpose);
+        assert!(!render_zone_file("customer.example", &rows).contains("mail.lumon.io.\t3600\tIN\tA"));
         // In zone + known: the zone file carries it.
         let mut rows = fixture_rows();
         apply_mail_host_a_row(&mut rows, "acme.dev", Some("mail.acme.dev"), Some("203.0.113.7"));
@@ -1581,11 +1581,11 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
             ),
             Some("mail.oldhost.k2.dev"),
         );
-        apply_current_hostname_advanced(&mut rows, Some("mail.lztek.io"));
+        apply_current_hostname_advanced(&mut rows, Some("mail.lumon.io"));
         apply_dmarc_p_none(&mut rows, "acme.dev");
         let cname = rows.iter().find(|r| r.name.starts_with("autoconfig")).unwrap();
         assert!(
-            cname.expected.contains("mail.lztek.io"),
+            cname.expected.contains("mail.lumon.io"),
             "C25 advanced CNAME follows current hostname: {}",
             cname.expected
         );
@@ -1687,7 +1687,7 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
         let db = k2_core::db::shared();
         let conn = db.lock();
         let apex = format!("ext-{}.example", &uuid::Uuid::new_v4().simple().to_string()[..12]);
-        assert!(zone_is_k2_hosted(&conn, "lztek.k2.dev"));
+        assert!(zone_is_k2_hosted(&conn, "lumon.k2.dev"));
         assert!(!zone_is_k2_hosted(&conn, &apex), "no binding = external");
         for (dns_write, status, hosted) in [(0, None, false), (1, Some("pending_ns"), false), (1, Some("active"), true)] {
             conn.execute("DELETE FROM domain_bindings WHERE apex = ?1", rusqlite::params![apex])
@@ -1748,20 +1748,20 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
             rows.iter().find(|r| r.id == "mx").unwrap().expected,
             "10 mail.acme.dev."
         );
-        apply_current_hostname_mx(&mut rows, Some("mail.lztek.io"));
+        apply_current_hostname_mx(&mut rows, Some("mail.lumon.io"));
         assert_eq!(
             rows.iter().find(|r| r.id == "mx").unwrap().expected,
-            "10 mail.lztek.io.",
+            "10 mail.lumon.io.",
             "H7: expected MX is the current mail_server.hostname"
         );
         assert_eq!(
             rows.iter().find(|r| r.id == "ptr").unwrap().name,
-            "mail.lztek.io"
+            "mail.lumon.io"
         );
         apply_current_hostname_mx(&mut rows, None);
         assert_eq!(
             rows.iter().find(|r| r.id == "mx").unwrap().expected,
-            "10 mail.lztek.io.",
+            "10 mail.lumon.io.",
             "missing hostname leaves the current expected MX"
         );
     }
@@ -1776,7 +1776,7 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
             let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
             conn.execute(
                 "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
-                 VALUES (1, 'running', '0.16.10', 'mail.lztek.io', 100)",
+                 VALUES (1, 'running', '0.16.10', 'mail.lumon.io', 100)",
                 [],
             )
             .expect("seed hostname");
@@ -1787,7 +1787,7 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
             let db = k2_core::db::shared();
             let conn = db.lock();
             conn.execute(
-                "UPDATE mail_server SET hostname = 'mail.lztek.io' WHERE id = 1",
+                "UPDATE mail_server SET hostname = 'mail.lumon.io' WHERE id = 1",
                 [],
             )
             .expect("hostname after add");
@@ -1795,7 +1795,7 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
             let rows = effective_rows(&conn, &row);
             assert_eq!(
                 rows.iter().find(|r| r.id == "mx").unwrap().expected,
-                "10 mail.lztek.io.",
+                "10 mail.lumon.io.",
                 "H7: show/check/list MX follows current hostname, not add-time zone"
             );
             let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);

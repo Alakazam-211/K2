@@ -301,7 +301,7 @@ fn propose(who: &Who, body: &[u8]) -> R<J> {
             ws_by_token(req).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{req}'")))?
         }
     };
-    let target = s(&v, "to").ok_or_else(|| no(codes::BAD_REQUEST, 400, "say where: to = a host (luzz.k2.dev) or 'here'"))?;
+    let target = s(&v, "to").ok_or_else(|| no(codes::BAD_REQUEST, 400, "say where: to = a host (larkspur.k2.dev) or 'here'"))?;
     let why = s(&v, "why");
     if who.passport().is_some() && why.is_none() {
         return Err(no(codes::BAD_REQUEST, 400, "say why for your human: --why \"…\""));

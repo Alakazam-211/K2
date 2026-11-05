@@ -1225,10 +1225,10 @@ mod tests {
         assert!(names_loosely_match("seoca.old", "seoca-old"), "tray fold");
         assert!(names_loosely_match("seoca.old", "seocaold"), "cli fold");
         assert!(names_loosely_match("Press Agent", "press-agent"));
-        assert!(names_loosely_match("QUILLIFY-WEBSITE", "quillify-website"));
+        assert!(names_loosely_match("QUAHOG-WEBSITE", "quahog-website"));
         assert!(!names_loosely_match("sales", "sales-team"), "D20");
         assert!(!names_loosely_match("", ""), "empty never matches");
-        assert!(!names_loosely_match("seoca", "quillify-website"));
+        assert!(!names_loosely_match("seoca", "quahog-website"));
     }
 
     #[test]
@@ -1812,13 +1812,13 @@ mod tests {
         crate::db::init_for_tests();
         let (src, path, rid) = one_row("bind-display", "seoca");
         let report = heal_a("bind-display", &[
-            entry("ws-w", "quillify-website", &[], "Seoca"),
+            entry("ws-w", "quahog-website", &[], "Seoca"),
             entry("ws-x", "other-site", &[], "Other"),
         ]);
         assert!(report.bound >= 1, "{report:?}");
         let r = row(&src, &rid);
         assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-w"));
-        assert_eq!(r.remote_handle.as_deref(), Some("quillify-website"));
+        assert_eq!(r.remote_handle.as_deref(), Some("quahog-website"));
         assert_eq!(r.remote_display_name.as_deref(), Some("Seoca"));
         assert_eq!(r.agent, "seoca", "a display-name bind never rewrites the saved name");
         assert_eq!(r.peer_fingerprint.as_deref(), Some("fp-a"));
@@ -1845,7 +1845,7 @@ mod tests {
         crate::db::init_for_tests();
         let (src, path, rid) = one_row("canonical", "seoca");
         heal_a("canonical", &[
-            entry("ws-display", "quillify-website", &[], "Seoca"),
+            entry("ws-display", "quahog-website", &[], "Seoca"),
             entry("ws-handle", "seoca", &[], "Somebody"),
         ]);
         let r = row(&src, &rid);
@@ -1862,18 +1862,18 @@ mod tests {
     fn roster_heal_marks_gone_and_never_rebinds_by_name() {
         crate::db::init_for_tests();
         let (src, path, rid) = one_row("gone", "seoca");
-        heal_a("gone", &[entry("ws-old", "quillify-website", &[], "Seoca")]);
+        heal_a("gone", &[entry("ws-old", "quahog-website", &[], "Seoca")]);
         assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-old"));
         assert!(row(&src, &rid).remote_workspace_gone_at.is_none());
 
-        let impostor = [entry("ws-new", "quillify-website", &["seoca"], "Seoca")];
+        let impostor = [entry("ws-new", "quahog-website", &["seoca"], "Seoca")];
         let report = heal_a("gone", &impostor);
         assert_eq!(report.gone, 1, "{report:?}");
         assert_eq!(report.bound, 0, "{report:?}");
         let r = row(&src, &rid);
         assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-old"), "binding kept, not moved");
         assert!(r.remote_workspace_gone_at.is_some(), "marked gone: {r:?}");
-        assert_eq!(r.remote_handle.as_deref(), Some("quillify-website"), "cached names kept");
+        assert_eq!(r.remote_handle.as_deref(), Some("quahog-website"), "cached names kept");
         assert_eq!(r.agent, "seoca");
 
         // Next heal: still gone, counted once, still not bound elsewhere.
@@ -1883,7 +1883,7 @@ mod tests {
 
         // The SAME id listed again (it was only hidden): heals in place,
         // the gone mark clears and the cached names follow.
-        heal_a("gone", &[entry("ws-old", "quillify-website", &[], "Seoca Two")]);
+        heal_a("gone", &[entry("ws-old", "quahog-website", &[], "Seoca Two")]);
         let r = row(&src, &rid);
         assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-old"));
         assert!(r.remote_workspace_gone_at.is_none(), "same id back, not gone: {r:?}");

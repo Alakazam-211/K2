@@ -215,7 +215,7 @@ export const DOMAINS_MANIFEST: SettingEntry[] = [
     section: 'domains',
     label: 'Custom domains',
     description: 'Names this machine terminates — attach an apex, then hostnames under it',
-    keywords: ['domain', 'apex', 'hostname', 'dns', 'cert', 'tls', 'lztek', 'bind'],
+    keywords: ['domain', 'apex', 'hostname', 'dns', 'cert', 'tls', 'bind'],
   },
   {
     id: 'domains.add',

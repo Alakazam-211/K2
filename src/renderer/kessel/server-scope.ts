@@ -23,8 +23,8 @@
 // Host keys match Home's `handle::host` keys and are canonical
 // (`lib/host-key.ts`, MS60): `local`, `<sub>.k2.dev` for https on 443,
 // `host:port` otherwise (plain http on 80 included), `[v6]:port` for IPv6.
-// `scopeForHost('https://DTL.k2.dev/')`, `scopeForHost('dtl.k2.dev:443')` and
-// `scopeForHost('dtl.k2.dev')` are one scope.
+// `scopeForHost('https://DHARMA.k2.dev/')`, `scopeForHost('dharma.k2.dev:443')` and
+// `scopeForHost('dharma.k2.dev')` are one scope.
 //
 // `id` is the registry identity (event buses, dial queues): `primary` for the
 // primary scope (its subscribers survive a server switch, as the module-level

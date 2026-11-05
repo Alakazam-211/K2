@@ -1,6 +1,6 @@
 //! E10: Email Notifications' own DMARC check (Q5: required before a
 //! hosted sender is ready, **any** policy). The hosted-mail record table
-//! grades only `p=none`, so a `p=reject` domain like lztek would never
+//! grades only `p=none`, so a `p=reject` domain would never
 //! pass it; this check doesn't use it.
 //!
 //! A domain passes when a parseable `v=DMARC1` record with a `p=` of

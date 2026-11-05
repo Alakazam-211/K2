@@ -111,7 +111,7 @@ printf 'k2 ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper\n' >/etc/sudoers
 chmod 0440 /etc/sudoers.d/k2-pg-helper
 OLD="$(runuser -u k2 -- sudo -n /usr/local/libexec/k2-mail-helper version)"
 echo "$OLD" | grep -q '"protocol":2' || fail "legacy mail helper protocol 2: $OLD"
-# The older hand-installed mechanism on akzm/lztek, byte for byte: the
+# The older hand-installed mechanism on akzm and another fleet box, byte for byte: the
 # broad sudoers line plus the /usr/local/bin PATH shims that lean on it.
 printf 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd\n' >/etc/sudoers.d/k2-mail-sidecar
 chmod 0440 /etc/sudoers.d/k2-mail-sidecar

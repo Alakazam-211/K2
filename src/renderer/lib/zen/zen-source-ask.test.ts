@@ -21,7 +21,7 @@ const RED = fixtureView({
   items: [
     fixtureItem('alpha'),
     fixtureItem('ohana', { health: 'crit', reason: 'timeout', fields: { version: '0.0.1-value' } }),
-    fixtureItem('luzz', { health: 'unknown', reason: null }),
+    fixtureItem('larkspur', { health: 'unknown', reason: null }),
   ],
 })
 
@@ -39,7 +39,7 @@ describe('zenSourceAskDraft', () => {
     expect(d).toContain('red (crit)')
     expect(d).toContain('Some boxes are down.')
     expect(d).toContain('ohana (crit, timeout)')
-    expect(d).toContain('luzz (unknown)')
+    expect(d).toContain('larkspur (unknown)')
     expect(d).not.toContain('alpha')
     expect(d).toContain('This check runs on akzm.k2.dev.')
     expect(d).toContain('k2 sources show fleet')

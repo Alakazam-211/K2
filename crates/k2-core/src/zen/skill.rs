@@ -1083,7 +1083,7 @@ several sources, `config.sources = \"a, b\"`):\n\n",
         s.push_str(&format!("- `{id}` with {}\n", presets.iter().map(|p| format!("`--preset {p}`")).collect::<Vec<_>>().join(" or ")));
     }
     s.push_str(
-        "\n`k2 sources propose --preset k2-fleet --preset-arg boxes=ohana,luzz --name fleet --label Fleet`\n\
+        "\n`k2 sources propose --preset k2-fleet --preset-arg boxes=ohana,larkspur --name fleet --label Fleet`\n\
 makes the fleet source; `config.source = \"fleet::<that server>\"` shows it on a Mac's Garden.\n\
 `k2-fleet-summary` (K2 Web's one route) gives the same item keys and fields, so a card\n\
 keeps working when the source switches. `k2:version-spread@3` measures boxes against\n\

@@ -9,7 +9,7 @@
 
 /// The PINNED Stalwart version the supervisor installs and manages.
 ///
-/// v0.16.25 (K2 0.45.4, field-fixes HF2): the fixes akzm's and lztek's
+/// v0.16.25 (K2 0.45.4, field-fixes HF2): the fixes our fleet boxes'
 /// IT agents kept hitting — 0.16.23's `bit_and` (spam-filter v3.0.2's
 /// DNSBL rules load) and its one-nameserver-at-a-time DNSSEC resolver
 /// (the hickory TCP-retry race behind the false "DNSSEC … Bogus"),

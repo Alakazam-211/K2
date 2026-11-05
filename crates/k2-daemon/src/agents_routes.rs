@@ -1809,9 +1809,9 @@ mod gap_route_tests {
     }
 }
 
-/// 0.46.6 fleet-roll papercuts: `k2 agent restart hatlab-manager` said
-/// "no agent/workspace named 'hatlab-manager' — did you mean
-/// 'hatlab-manager'?", and scripts parsed the `k2 agent list` table (a
+/// 0.46.6 fleet-roll papercuts: `k2 agent restart <name>-manager` said
+/// "no agent/workspace named '<name>-manager' — did you mean
+/// '<name>-manager'?", and scripts parsed the `k2 agent list` table (a
 /// path with a space split it). The resolver's miss is explained, never
 /// answered with the same name; paths resolve however they're spelled;
 /// `/cli/agent/list` carries what scripts need.
@@ -1839,7 +1839,7 @@ mod agent_resolve_tests {
         let home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let tag = &uuid::Uuid::new_v4().simple().to_string()[..6];
-        let name = format!("hatlab-manager-{tag}");
+        let name = format!("hooli-manager-{tag}");
         // The fleet roll: the workspace was removed (its handle retired for
         // good) and registered again at a new path, with the same name.
         let old_id = uuid::Uuid::new_v4().to_string();
@@ -1849,7 +1849,7 @@ mod agent_resolve_tests {
             let conn = db.lock();
             conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![old_id]).expect("delete");
         }
-        let new_dir = home.path().join("hatlab").join(&name);
+        let new_dir = home.path().join("hooli").join(&name);
         std::fs::create_dir_all(&new_dir).unwrap();
         let new_path = new_dir.to_string_lossy().to_string();
         let new_handle = format!("{name}-2");

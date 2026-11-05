@@ -141,8 +141,8 @@ describe('the chip', () => {
 
   it('a context that didn’t go clears the chip and leaves a note until dismissed', () => {
     setZenThreadContext(key, ctx('Board: K2 Boards'), ['chat'])
-    noteZenThreadContext(key, 'Not sent: dtl is older')
-    expect(zenConversationContext(G, 'chat')).toEqual({ key, context: null, note: 'Not sent: dtl is older' })
+    noteZenThreadContext(key, 'Not sent: dharma is older')
+    expect(zenConversationContext(G, 'chat')).toEqual({ key, context: null, note: 'Not sent: dharma is older' })
     clearZenThreadContextNote(key)
     expect(zenConversationContext(G, 'chat')).toEqual({ key: null, context: null, note: null })
   })
@@ -167,8 +167,8 @@ describe('per server (CA6, CA8)', () => {
   const scope = (isRemote: boolean, supports: boolean) => ({ isRemote, serverSupports: (f: string) => supports && f === 'thread-context-v1' })
 
   it('an older server gets no context and the message goes without it', async () => {
-    expect(await zenThreadContextForServer(scope(true, false) as never, 'dtl', ctx('Board: K2 Boards'))).toEqual({
-      note: 'Not sent: dtl is older',
+    expect(await zenThreadContextForServer(scope(true, false) as never, 'dharma', ctx('Board: K2 Boards'))).toEqual({
+      note: 'Not sent: dharma is older',
     })
     expect(h.checks).toEqual([])
   })

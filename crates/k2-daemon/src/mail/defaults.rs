@@ -1798,7 +1798,7 @@ pub fn last_error_fallback(supervisor_err: Option<&str>, cert_state: &str, acme:
     Some(format!("acme: {reason}"))
 }
 
-/// 0.46.1 (partii on luzz): Stalwart deletes an AcmeRenewal task when it
+/// 0.46.1 (partii on a customer box): Stalwart deletes an AcmeRenewal task when it
 /// succeeds, so a Pending/Retry/Failed task that was created (or failed)
 /// before the certificate now served was issued is not the live state
 /// of anything — `cert renew` issued the real certificate and the old

@@ -2660,7 +2660,7 @@ mod tests {
     /// opaque `badgeKey`; there is no `principal` key at all.
     #[test]
     fn no_push_data_of_any_kind_carries_a_username() {
-        for name in ["owner", "gina", "rosson.long@lztek.io"] {
+        for name in ["owner", "gina", "rosson.long@lumon.io"] {
             let key = badge_key("server-salt", name);
             let thread = match thread_event(ThreadMsgKind::Text, 1, "c-privacy") {
                 PushEvent::ThreadPost(t) => PushEvent::ThreadPost(ThreadPush {

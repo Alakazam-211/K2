@@ -575,7 +575,7 @@ export function formatWhen(secs: number): string {
 }
 
 /** Usage windows of the token's last reading that are used up and not
- *  reset yet, as warnings: "lztek is at 100% of its Weekly limit until …". */
+ *  reset yet, as warnings: "lumon is at 100% of its Weekly limit until …". */
 export function exhaustedWarnings(a: LlmAccount, nowMs: number = Date.now()): string[] {
   const out: string[] = []
   for (const w of a.usage?.windows ?? []) {

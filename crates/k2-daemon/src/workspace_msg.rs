@@ -3889,7 +3889,7 @@ mod tests {
         assert!(!hint.contains("k2so"), "stale binary name in hint: {hint}");
 
         let r = deliver_live(
-            "chris::claimchaser.k2.dev",
+            "chris::cyberdyne.k2.dev",
             "hi",
             "sender",
             "",

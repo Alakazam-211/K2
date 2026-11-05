@@ -51,7 +51,7 @@ if printf '%s\n' "$ROOT_DB" | grep -Ev '^[[:space:]]*#' | grep -Eq 'k2-pg-helper
 fi
 printf '%s' "$DB_BLOCK" | grep -q 'k2-root-helper pg install-ram-fence' || fail "7b fences RAM through the root helper"
 ok "7b: no pg helper copy, no unchecked sudoers, RAM fence via k2-root-helper"
-# dtl / edf: an existing cluster is adopted — the check runs before apt and
+# Customer boxes: an existing cluster is adopted — the check runs before apt and
 # the adopt branch never installs, inits, rewrites config or fences.
 L_PGEXIST="$(line_of 'PG_EXISTING=""')"
 L_APT="$(line_of 'apt-get install -y -qq postgresql')"

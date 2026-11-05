@@ -4,7 +4,7 @@
 //! Before this, a `pending_ns` row only turned `active` when someone ran
 //! `k2 domain refresh`. k2.dev's sweep flips a zone within minutes of the
 //! registrar delegation, but the box kept its cached `pending_ns` and
-//! refused every `k2 dns` write locally (quillify.info, 2026-10-07).
+//! refused every `k2 dns` write locally (a customer domain, 2026-10-07).
 //!
 //! - **P1, the loop** ([`spawn`]): one detached thread for the daemon's
 //!   life. While any bound row is `pending_ns` it makes ONE read-only

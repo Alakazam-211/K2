@@ -884,7 +884,7 @@ pub mod fake {
         /// [`SewOps::voice_lane_up`] once armed (default true).
         pub lane_comes_up: Mutex<bool>,
         pub lane_armed: Mutex<bool>,
-        /// [`SewOps::confirmed_label`] (default `lztek`, the box label).
+        /// [`SewOps::confirmed_label`] (default `lumon`, the box label).
         pub confirmed: Mutex<Option<String>>,
         pub e2e: Mutex<bool>,
         pub frpc: Mutex<bool>,
@@ -964,7 +964,7 @@ pub mod fake {
                 lane_calls: Mutex::new(Vec::new()),
                 lane_comes_up: Mutex::new(true),
                 lane_armed: Mutex::new(false),
-                confirmed: Mutex::new(Some("lztek".into())),
+                confirmed: Mutex::new(Some("lumon".into())),
                 e2e: Mutex::new(true),
                 frpc: Mutex::new(true),
                 served_connects: Mutex::new(Vec::new()),
@@ -1003,7 +1003,7 @@ pub mod fake {
                 clock: Mutex::new(1_800_000_000),
                 linux: true,
                 mgmt_bodies: Mutex::new(vec![]),
-                label: Mutex::new(Some("lztek".into())),
+                label: Mutex::new(Some("lumon".into())),
                 apexes: Mutex::new(vec!["acme.dev".into()]),
                 ips: Mutex::new(vec!["203.0.113.7".into()]),
                 cp_calls: Mutex::new(vec![]),
@@ -1040,7 +1040,7 @@ pub mod fake {
         pub fn set_tier(&self, tier: Option<&str>) {
             *self.tier.lock().unwrap() = match tier {
                 Some(t) => k2_core::tunnel::subdomains::TierView::Fresh(k2_core::tunnel::subdomains::TierReading {
-                    primary: "lztek".into(),
+                    primary: "lumon".into(),
                     tier: Some(t.to_string()),
                     fetched_at: *self.clock.lock().unwrap(),
                 }),
@@ -1501,7 +1501,7 @@ pub mod fake {
             *self.port.lock().unwrap()
         }
         fn hostname(&self) -> String {
-            "lztek".into()
+            "lumon".into()
         }
         fn owner_notice(&self, title: &str, body: &str) {
             self.notices.lock().unwrap().push((title.to_string(), body.to_string()));

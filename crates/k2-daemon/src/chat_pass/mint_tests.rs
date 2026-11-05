@@ -509,7 +509,7 @@ mod live_row {
         b.enable(with_voice);
         // Same process, no restart, no extra setter: the mint follows the row.
         b.assert_mints(&r, "right after enable");
-        let purged = sup::purge(&b.env(), "lztek", false).expect("purge");
+        let purged = sup::purge(&b.env(), "lumon", false).expect("purge");
         assert_eq!(purged["purged"], true);
         b.assert_refused(&r, "after purge");
         // Re-enable after a purge works again without a restart.

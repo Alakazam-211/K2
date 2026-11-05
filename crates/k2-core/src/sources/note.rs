@@ -105,7 +105,7 @@ fn short_value(v: &Json) -> String {
     }
 }
 
-/// `ohana (timeout since 03:04)` / `luzz (version 0.44.4, phase null)`.
+/// `ohana (timeout since 03:04)` / `larkspur (version 0.44.4, phase null)`.
 fn item_summary(ev: &NoteEvent, key: &str) -> String {
     let st = ev.state.items.get(key);
     let mut parts: Vec<String> = Vec::new();
@@ -313,15 +313,15 @@ mod tests {
         st.phase = Phase::Live;
         st.updated_at = Some(10_920); // 03:02
         st.items.insert("ohana".into(), item("ohana", Health::Crit, Some(Reason::Timeout)));
-        st.items.insert("luzz".into(), item("luzz", Health::Crit, None));
+        st.items.insert("larkspur".into(), item("larkspur", Health::Crit, None));
         st.items.insert("akzm".into(), item("akzm", Health::Ok, None));
         let proj = Projection {
             fields: BTreeMap::new(),
             items: vec![ProjectedItem {
-                key: "luzz".into(),
+                key: "larkspur".into(),
                 fields: BTreeMap::from([
                     ("version".to_string(), Json::from("0.44.4")),
-                    ("url".to_string(), Json::from("https://luzz.k2.dev/x?token=abc")),
+                    ("url".to_string(), Json::from("https://larkspur.k2.dev/x?token=abc")),
                 ]),
                 list: None,
             }],
@@ -339,7 +339,7 @@ mod tests {
         });
         let lines: Vec<&str> = note.lines().collect();
         assert_eq!(lines[0], "[source:fleet] ohana went red at 03:12 UTC (hard after 3 checks). Runs on akzm.k2.dev.");
-        assert_eq!(lines[1], "Red: ohana (timeout since 03:04), luzz (url https://luzz.k2.dev/x, version 0.44.4 since 03:04).");
+        assert_eq!(lines[1], "Red: ohana (timeout since 03:04), larkspur (url https://larkspur.k2.dev/x, version 0.44.4 since 03:04).");
         assert_eq!(lines[2], "Last good: 03:02 UTC. Reason: timeout.");
         assert_eq!(lines[3], "Link: https://k2.dev/admin/fleet");
         assert_eq!(lines[4], "Owner's note: check the relay first");
@@ -354,14 +354,14 @@ mod tests {
             let (mut r, st, proj) = fixture();
             r.agent_access = aa;
             r.keep = keep;
-            let t = crit(Some("luzz"));
+            let t = crit(Some("larkspur"));
             let note = build(&NoteInput {
                 events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: Some(&proj), at: 11_520, owner_note: None }],
                 host: "akzm.k2.dev",
             });
             assert!(!note.contains("0.44.4"), "{aa:?}/{keep:?}: {note}");
             assert!(!note.contains("version"), "{note}");
-            assert!(note.contains("luzz (since 03:04)"), "{note}");
+            assert!(note.contains("larkspur (since 03:04)"), "{note}");
             assert!(!note.contains("Owner's note"), "{note}");
         }
     }

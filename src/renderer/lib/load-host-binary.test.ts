@@ -67,8 +67,8 @@ describe('loadHostBinary', () => {
 
   it('remote + Mac tmp refuses without daemonCliGet', async () => {
     const host: ConnectHost = {
-      id: 'dtl-1',
-      label: 'DTL',
+      id: 'dharma-1',
+      label: 'DHARMA',
       hostname: 'anna.k2.dev',
       username: 'rosson',
       port: 443,

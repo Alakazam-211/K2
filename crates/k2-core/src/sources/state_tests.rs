@@ -297,7 +297,7 @@ fn fleet_ops() -> SourceSpec {
 fn fleet_ops_fixture_stale_behind_target_and_crit_after_n() {
     let spec = fleet_ops();
     let mut r = Run::new(spec);
-    let body = |now: i64, ts_age: i64, ohana: &str, luzz_seen_age: i64, past_due: usize| {
+    let body = |now: i64, ts_age: i64, ohana: &str, larkspur_seen_age: i64, past_due: usize| {
         ok(json!({
             "ts": now - ts_age,
             "target_version": "0.46.0",
@@ -305,7 +305,7 @@ fn fleet_ops_fixture_stale_behind_target_and_crit_after_n() {
             "boxes": [
                 {"name": "akzm", "version": "0.46.0", "last_seen": now - 30},
                 {"name": "ohana", "version": ohana, "last_seen": now - 30},
-                {"name": "luzz", "version": "0.46.1", "last_seen": now - luzz_seen_age}
+                {"name": "larkspur", "version": "0.46.1", "last_seen": now - larkspur_seen_age}
             ],
             "certs": [{"host": "k2.dev", "days_left": 60}, {"host": "app.k2.dev", "days_left": 12}]
         }))
@@ -315,7 +315,7 @@ fn fleet_ops_fixture_stale_behind_target_and_crit_after_n() {
     // All current except a cert in 12 days (warn at once, not after failAfter).
     let ts = r.poll(vec![(None, body(next(&r), 10, "0.46.0", 30, 0))]);
     assert_eq!(r.st.items["akzm"].health, Health::Ok);
-    assert_eq!(r.st.items["luzz"].health, Health::Ok, "ahead of target is ok");
+    assert_eq!(r.st.items["larkspur"].health, Health::Ok, "ahead of target is ok");
     assert_eq!(r.st.items["certs/app.k2.dev"].health, Health::Warn);
     assert_eq!(r.st.items["certs/k2.dev"].health, Health::Ok);
     assert_eq!(r.st.health, Health::Warn);
@@ -352,9 +352,9 @@ fn fleet_ops_fixture_stale_behind_target_and_crit_after_n() {
     // A box not seen for 10+ minutes: crit only after 2 checks.
     r.poll(vec![(None, body(next(&r), 0, "0.46.0", 30, 0))]);
     r.poll(vec![(None, body(next(&r), 0, "0.46.0", 900, 0))]);
-    assert_eq!(r.st.items["luzz"].health, Health::Warn, "crit after 2: warn first");
+    assert_eq!(r.st.items["larkspur"].health, Health::Warn, "crit after 2: warn first");
     r.poll(vec![(None, body(next(&r), 0, "0.46.0", 900, 0))]);
-    assert_eq!(r.st.items["luzz"].health, Health::Crit);
+    assert_eq!(r.st.items["larkspur"].health, Health::Crit);
 
     // A second list shows up as a count: past_due goes warn at once.
     r.poll(vec![(None, body(next(&r), 0, "0.46.0", 30, 2))]);

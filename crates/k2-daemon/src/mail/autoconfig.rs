@@ -584,22 +584,22 @@ _webdav._tcp.example.com. IN SRV 0 1 443 box.example.net.\n";
     #[test]
     fn autoconfig_rewrites_connect_host_to_attached_mail_hostname() {
         let zone = "\
-autoconfig.lztek.io. IN CNAME mail.lztek.k2.dev.\n\
-autodiscover.lztek.io. IN CNAME mail.lztek.k2.dev.\n\
-_imaps._tcp.lztek.io. IN SRV 0 1 993 mail.lztek.k2.dev.\n\
-_jmap._tcp.lztek.io. IN SRV 0 1 443 mail.lztek.k2.dev.\n\
-_submissions._tcp.lztek.io. IN SRV 0 1 465 mail.lztek.k2.dev.\n";
-        let rows = autoconfig_rows("lztek.io", zone, Some("mail.lztek.io"));
+autoconfig.lumon.io. IN CNAME mail.lumon.k2.dev.\n\
+autodiscover.lumon.io. IN CNAME mail.lumon.k2.dev.\n\
+_imaps._tcp.lumon.io. IN SRV 0 1 993 mail.lumon.k2.dev.\n\
+_jmap._tcp.lumon.io. IN SRV 0 1 443 mail.lumon.k2.dev.\n\
+_submissions._tcp.lumon.io. IN SRV 0 1 465 mail.lumon.k2.dev.\n";
+        let rows = autoconfig_rows("lumon.io", zone, Some("mail.lumon.io"));
         assert!(!rows.is_empty(), "{rows:?}");
         for r in &rows {
             assert!(
-                !r.expected.to_ascii_lowercase().contains("lztek.k2.dev"),
+                !r.expected.to_ascii_lowercase().contains("lumon.k2.dev"),
                 "must not plant Connect host: {} {}",
                 r.name,
                 r.expected
             );
             assert!(
-                r.expected.to_ascii_lowercase().contains("mail.lztek.io"),
+                r.expected.to_ascii_lowercase().contains("mail.lumon.io"),
                 "attached mail hostname: {} {}",
                 r.name,
                 r.expected

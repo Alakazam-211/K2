@@ -178,10 +178,10 @@ describe('setHeartbeatSession — host-aware default (0.40.48)', () => {
 
   it('targets the ACTIVE host route, never the local Tauri bridge', async () => {
     daemonCliPostQuery.mockResolvedValue({ success: true })
-    await setHeartbeatSession('/home/k2/ai/rpmavs-sb-migration', 'daily', { mode: 'pinned' })
+    await setHeartbeatSession('/home/k2/ai/rekall-sb-migration', 'daily', { mode: 'pinned' })
     expect(invoke).not.toHaveBeenCalled()
     expect(daemonCliPostQuery).toHaveBeenCalledWith('heartbeat/set-session', {
-      project: '/home/k2/ai/rpmavs-sb-migration',
+      project: '/home/k2/ai/rekall-sb-migration',
       name: 'daily',
       mode: 'pinned',
       session_id: null,

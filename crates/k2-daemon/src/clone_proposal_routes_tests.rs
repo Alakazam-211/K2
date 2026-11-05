@@ -86,7 +86,7 @@ fn an_agent_proposes_its_own_workspace_and_a_person_approves_with_a_confirm() {
     let (st, v) = call(
         NEW,
         &a,
-        json!({"to": "luzz.k2.dev", "copy": ["STRIPE_KEY"], "skip": "GMAIL_TOKEN", "sinceDays": 30, "why": "moving to the new box"}),
+        json!({"to": "larkspur.k2.dev", "copy": ["STRIPE_KEY"], "skip": "GMAIL_TOKEN", "sinceDays": 30, "why": "moving to the new box"}),
     );
     assert_eq!(st, "200 OK", "{v}");
     assert_eq!(v["status"], "held");
@@ -122,7 +122,7 @@ fn an_agent_proposes_its_own_workspace_and_a_person_approves_with_a_confirm() {
     let (st, v) = call(APPROVE, &Who::Owner, json!({"proposal": id, "confirmToken": token_for(&id, "owner")}));
     assert_eq!(st, "200 OK", "{v}");
     assert_eq!(v["proposal"]["status"], "approved");
-    assert_eq!(v["run"]["target"], "luzz.k2.dev");
+    assert_eq!(v["run"]["target"], "larkspur.k2.dev");
     assert_eq!(v["run"]["workspacePath"], format!("/tmp/k2-cc-proposal-test/{}", f.ws_a));
     assert_eq!(v["run"]["options"]["secrets"]["STRIPE_KEY"], "copy");
     assert!(msgs_to(&f.ws_a).iter().any(|m| m.contains("approved") && m.contains(&id)), "the agent is told");

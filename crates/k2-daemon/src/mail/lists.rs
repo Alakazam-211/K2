@@ -130,7 +130,7 @@ fn collision_user(address: &str) -> Result<(), CliResponse> {
 
 /// Stalwart 0.16 `x:MailingList/query` filter is **text or tenant**
 /// (N9). `emailAddress` and `domainId` both 502 `unsupportedFilter`
-/// on lztek. Prefer `text` = local-part; on that fail, enumerate with
+/// on a fleet box. Prefer `text` = local-part; on that fail, enumerate with
 /// no filter and match locally.
 fn query_list_ids(
     engine: &StalwartClient,

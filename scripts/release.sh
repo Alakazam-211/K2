@@ -729,7 +729,7 @@ if ! grep -qE "^## ${VERSION//./\\.} " WHATS_NEW.md; then
 fi
 echo "  Found '## ${VERSION}' entry. OK to proceed."
 
-# ── Step 1.6c: Linux builds on K2 Compute (shadow only, background) ──
+# ── Step 1.6c: Linux builds on K2 Compute (shadow or compute mode, background) ──
 k2_shadow_start
 
 # ── Step 2: Build K2.app + every sidecar binary ──

@@ -8,9 +8,11 @@ import PresenceAvatar from '@/components/Presence/PresenceAvatar'
 import type { PresenceRole } from '@/components/Presence/PresenceChip'
 import { roomFailureActions } from '@/components/Home/room/RoomFailure'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useSettingsStore } from '@/stores/settings'
 import { useVoice, voice } from '@/stores/voice'
 import type { VoiceCall, ServerRooms } from '@/stores/voice-core'
+import type { VoiceDevice } from '@/lib/voice/voice-engine'
 import { MIC_DENIED_LINE, hostingStateText, isLaneReconnecting, micBlockedText, type VoiceOccupant, type VoiceRoom } from '@/lib/voice/voice-wire'
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
 import { isWebClient } from '@/lib/is-web'
@@ -42,6 +44,11 @@ function Occupants({ list, size }: { list: VoiceOccupant[]; size: number }): Rea
       ))}
     </span>
   )
+}
+
+/** "System default" ('' → null) first, then the devices in the engine's order. */
+function deviceOptions(list: VoiceDevice[]): { value: string; label: string }[] {
+  return [{ value: '', label: 'System default' }, ...list.map((d) => ({ value: d.id, label: d.label }))]
 }
 
 function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
@@ -111,40 +118,32 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
       </div>
       {devices && (devices.inputs.length > 0 || devices.outputs.length > 0) ? (
         <div className="mt-2 flex flex-col gap-1 text-[11px] text-[var(--color-text-secondary)]">
-          <label className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2">
             Microphone
-            <select
-              data-testid="voice-input"
-              className="max-w-[170px] bg-[var(--color-bg-elevated)] text-[11px]"
+            <SettingDropdown
+              compact
+              className="min-w-0 max-w-[170px]"
+              ariaLabel="Microphone"
+              triggerData={{ 'data-testid': 'voice-input' }}
               value={prefs.inputDeviceId ?? ''}
-              onChange={(e) => voice.setPrefs({ inputDeviceId: e.currentTarget.value || null })}
-            >
-              <option value="">System default</option>
-              {devices.inputs.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center justify-between gap-2">
+              options={deviceOptions(devices.inputs)}
+              onChange={(v) => voice.setPrefs({ inputDeviceId: v || null })}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2">
             Speakers
-            <select
-              data-testid="voice-output"
-              className="max-w-[170px] bg-[var(--color-bg-elevated)] text-[11px]"
+            <SettingDropdown
+              compact
+              className="min-w-0 max-w-[170px]"
+              ariaLabel="Speakers"
+              triggerData={{ 'data-testid': 'voice-output' }}
               disabled={!devices.outputSelectable}
               title={devices.outputSelectable ? undefined : 'This system plays calls on its default output.'}
               value={prefs.outputDeviceId ?? ''}
-              onChange={(e) => voice.setPrefs({ outputDeviceId: e.currentTarget.value || null })}
-            >
-              <option value="">System default</option>
-              {devices.outputs.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              options={deviceOptions(devices.outputs)}
+              onChange={(v) => voice.setPrefs({ outputDeviceId: v || null })}
+            />
+          </div>
         </div>
       ) : null}
     </section>

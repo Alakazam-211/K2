@@ -39,7 +39,11 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   useEffect(() => {
     if (!open) return
     const onPointer = (ev: MouseEvent): void => {
-      if (!rootRef.current?.contains(ev.target as Node)) close()
+      const t = ev.target as Node
+      if (rootRef.current?.contains(t)) return
+      // The device menus portal to <body>: a pick there is not outside.
+      if (t instanceof Element && t.closest('[data-setting-dropdown-menu]')) return
+      close()
     }
     const onKey = (ev: KeyboardEvent): void => {
       if (ev.key === 'Escape') close()

@@ -235,4 +235,61 @@ describe('VoiceButton', () => {
     expect(screen.getAllByTestId('voice-room-state').map((e) => e.textContent)).toEqual(['Full', 'Closing', 'Unavailable', 'Closes in 8 s'])
     expect(screen.queryByTestId('voice-join')).toBeNull()
   })
+
+  it('devices use K2 menus: System default first, a pick sets the pref and keeps the list open', async () => {
+    h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
+    h.lists = { 'sewlab.k2.dev': sewList }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getAllByTestId('voice-join')).toHaveLength(2))
+    fireEvent.click(screen.getAllByTestId('voice-join')[0])
+    await waitFor(() => expect(screen.getByTestId('voice-input')).toBeTruthy())
+
+    const input = screen.getByTestId('voice-input')
+    expect(input.tagName).toBe('BUTTON')
+    expect(document.querySelector('select')).toBeNull()
+    expect(input.textContent).toBe('System default')
+
+    fireEvent.click(input)
+    const menu = screen.getByTestId('setting-dropdown-menu')
+    // Portaled out of the popover, above it.
+    expect(screen.getByTestId('voice-popover').contains(menu)).toBe(false)
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(50)
+    expect(Array.from(menu.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['System default', 'Fake microphone'])
+    const pick = Array.from(menu.querySelectorAll('button')).find((b) => b.textContent === 'Fake microphone')
+    if (!pick) throw new Error('no Fake microphone option')
+    // A mousedown inside the portaled menu is not outside the popover.
+    fireEvent.mouseDown(pick)
+    fireEvent.click(pick)
+    expect(voice.store.getState().prefs.inputDeviceId).toBe('fake-mic')
+    expect(screen.getByTestId('voice-popover')).toBeTruthy()
+    expect(screen.getByTestId('voice-input').textContent).toBe('Fake microphone')
+
+    // Back to System default → null.
+    fireEvent.click(screen.getByTestId('voice-input'))
+    const back = Array.from(screen.getByTestId('setting-dropdown-menu').querySelectorAll('button')).find((b) => b.textContent === 'System default')
+    if (!back) throw new Error('no System default option')
+    fireEvent.mouseDown(back)
+    fireEvent.click(back)
+    expect(voice.store.getState().prefs.inputDeviceId).toBeNull()
+
+    // Speakers: enabled while the engine can route output; disabled with the tooltip when it can't.
+    const output = screen.getByTestId('voice-output') as HTMLButtonElement
+    expect(output.disabled).toBe(false)
+    act(() => {
+      const d = voice.store.getState().devices
+      if (!d) throw new Error('devices not loaded')
+      voice.store.setState({ devices: { ...d, outputSelectable: false } })
+    })
+    const off = screen.getByTestId('voice-output') as HTMLButtonElement
+    expect(off.disabled).toBe(true)
+    expect(off.getAttribute('title')).toBe('This system plays calls on its default output.')
+    fireEvent.click(off)
+    expect(screen.queryByTestId('setting-dropdown-menu')).toBeNull()
+
+    // A mousedown truly outside still closes the popover.
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('voice-popover')).toBeNull()
+  })
 })

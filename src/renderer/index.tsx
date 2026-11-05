@@ -9,6 +9,7 @@ import { installExternalLinkHandler } from './lib/external-link-handler'
 import { installRandomUUIDPolyfill } from './lib/random-uuid'
 import { desktopOsFromNavigator } from './lib/desktop-chrome'
 import { bootWebHostIfNeeded } from './web/boot-host'
+import { installRendererHeartbeat } from './lib/renderer-heartbeat'
 import { bootZenPausedStart, noteZenWidgetsHeartbeat, noteZenWidgetsVisibility } from './lib/zen/zen-widgets-running'
 
 // Hosted web over plain HTTP (LAN IP / remote vite:dev:web) is not a
@@ -23,29 +24,30 @@ document.documentElement.setAttribute('data-os', desktopOsFromNavigator(navigato
 
 // 0.39.x (Issue #6): webview liveness HEARTBEAT.
 // Beat once synchronously the instant the bundle executes (so the
-// Rust-side watchdog in src-tauri/src/lib.rs knows the renderer JS came
-// alive at launch), then on a ~3s timer for the rest of the session.
-// The watchdog reloads the webview from Rust (the programmatic
-// equivalent of right-click → Reload) if these heartbeats go stale —
-// covering BOTH the black-screen-after-update launch failure AND a
-// mid-session content-process death (e.g. the renderer crashing after
-// the laptop sleeps + wakes). `.catch` swallows the rejection in
-// non-Tauri/dev (browser) contexts where `invoke` has no backend.
+// Rust-side watchdog in src-tauri/src/webview_watchdog.rs knows the
+// renderer JS came alive at launch), then on a ~3s timer for the rest of
+// the session. The watchdog reloads the webview from Rust (the programmatic
+// equivalent of right-click → Reload) if these heartbeats go stale and an
+// eval probe goes unanswered — covering BOTH the black-screen-after-update
+// launch failure AND a mid-session content-process death (e.g. the
+// renderer crashing after the laptop sleeps + wakes).
 //
 // Zen v2 (prd-zen-user-widgets-v2 UW32, UW56): the watchdog is per window
 // (Tauri tells `renderer_heartbeat` which window called), and each beat
 // also counts toward a Garden's "custom widgets started fine" marker. At
 // boot this window asks whether the watchdog reloaded it, so a Garden whose
 // widgets froze the window opens with them paused.
-const beat = (): void => {
-  void invoke('renderer_heartbeat').catch(() => {})
-  noteZenWidgetsHeartbeat()
-}
-beat()
-setInterval(beat, 3000)
-// A hidden window's timers are throttled: a watchdog reload then is not a
-// widget freeze, and the widgets relaunch (zen-widgets-running.ts).
-document.addEventListener('visibilitychange', () => noteZenWidgetsVisibility())
+//
+// 0.46.9: each beat says whether the page is visible, and a visibility
+// change beats at once, so the shell doesn't take a hidden window's
+// throttled timers for a freeze (lib/renderer-heartbeat.ts).
+installRendererHeartbeat({
+  invoke: (cmd, args) => invoke(cmd, args),
+  onBeat: noteZenWidgetsHeartbeat,
+  // A hidden window's timers are throttled: a watchdog reload then is not
+  // a widget freeze, and the widgets relaunch (zen-widgets-running.ts).
+  onVisibilityChange: () => noteZenWidgetsVisibility(),
+})
 void bootZenPausedStart(() => invoke<number | null>('watchdog_take_reload_note'))
 
 // NOTE: do NOT statically import `./App` here. ConnectionGate uses

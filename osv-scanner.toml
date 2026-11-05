@@ -203,6 +203,12 @@ id = "GHSA-xwg4-73v4-xw9w"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "postcss's internal id helper at build time; never ships, no attacker-controlled size argument. Fix with postcss."
 
+# pin-utils 0.1.0 (added 2026-11-05)
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0441"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "Unmaintained (no known vulnerability). pin-utils is a small pin_mut! macro crate. Only path: k2-core -> portable-pty 0.8.1 -> nix 0.25.1 (its aio feature, on by default there); K2's own nix is 0.29, which has no pin-utils. Nothing to fix in place and no newer pin-utils. Fix: portable-pty 0.9 (nix 0.28+), a minor-version bump with API changes, with the dependency PRD."
+
 # picomatch 4.0.3
 [[IgnoredVulns]]
 id = "GHSA-3v7f-55p6-f55p"

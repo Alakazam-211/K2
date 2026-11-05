@@ -1,0 +1,5 @@
+# What a build of the check app leaves behind.
+src-tauri/Cargo.lock
+src-tauri/gen/
+src-tauri/target/
+src-tauri/run*.log

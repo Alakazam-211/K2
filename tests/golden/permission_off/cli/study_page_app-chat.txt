@@ -137,6 +137,12 @@ with k2 app domain primary <app> <host> once it is live, else the App's
 label), and a person on another host can't connect. A host Sew doesn't list
 yet answers 422 invalid_state, reason origin_not_listed, and joins nothing:
 see .apps[] in k2 hostchat home --json (origins, delivered), then retry.
+IN A TAURI APP the page runs Sew's browser kit (@sew/voice) inside the
+webview: WKWebView on macOS, WebView2 on Windows. k2 app init --template
+tauri --voice writes the plist keys, entitlements, the mic hook for your own
+origin and the window settings; your server sends the CSP (script-src
+'wasm-unsafe-eval'). Or Sew's tauri-plugin-sew-voice runs the call natively.
+What is tested where: k2 study tauri-voice. Linux webviews can't call.
 
 YOUR SERVER (never the browser):
   chat.member({principal})  GET /cli/sew/app/member → memberId (DMs, calls,

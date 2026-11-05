@@ -1,0 +1,18 @@
+[package]
+name = "k2-voice-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "TEST ONLY: K2's Tauri --voice template built into a real app, checking the webview"
+license = "MIT"
+
+# Its own workspace: stock Tauri from crates.io, as an App team builds it
+# (K2's patched wry and tauri-runtime-wry never apply here).
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+serde_json = "1"

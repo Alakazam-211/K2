@@ -2622,13 +2622,13 @@ exit: 0
     {
       "name": "app init",
       "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name> | --app <app>] [--voice] [--dry-run] [--json]",
-      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). With --voice: the mic and camera keys. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
+      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). With --voice: the mic and camera keys, src-tauri/src/k2_voice.rs (media for the App's own origin only) and the first window's call settings. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
       "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
       "flags": [
         {"name": "--template", "arg": "tauri|static|node-api", "description": "What to write."},
         {"name": "--name", "arg": "name", "description": "The App name (default: the folder's name)."},
         {"name": "--app", "arg": "app", "description": "tauri only: a thin shell over this App, already on this box, instead of a new <name>-web."},
-        {"name": "--voice", "arg": null, "description": "tauri only: the mic and camera keys for calls (macOS, iOS); the Android lines are printed."},
+        {"name": "--voice", "arg": null, "description": "tauri only: what calls in the webview need: the mic and camera keys (macOS, iOS), k2_voice.rs (media for the App's own origin), the first window's call settings; the Android lines are printed."},
         {"name": "--dry-run", "arg": null, "description": "Print every file and change; write nothing."},
         {"name": "--json", "arg": null, "description": "{template, folder, name, files[{path, action, note, content?}], next[], notes[], applied?}."}
       ]

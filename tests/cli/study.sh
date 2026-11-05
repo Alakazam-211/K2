@@ -775,6 +775,19 @@ done
 ta_lines="$(printf '%s\n' "$ta_out" | wc -l | tr -d ' ')"
 if [ "$ta_lines" -le 210 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 210)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: tauri row" "$("$K2" study)" "  tauri               A Tauri app on K2"
+assert_contains "tauri points at tauri-voice" "$ta_out" "k2 study tauri-voice"
+echo "== k2 study tauri-voice (calls in a Tauri window, 0.46.9) =="
+tv_out="$("$K2" study tauri-voice)"
+assert_contains "title" "$tv_out" "k2 study tauri-voice — calls inside a Tauri app's window"
+for needle in "@sew/voice" "tauri-plugin-sew-voice" "remote.urls" "ipc: http://ipc.localhost" "NSMicrophoneUsageDescription" \
+    "com.apple.security.device.audio-input" "backgroundThrottling" "additionalBrowserArgs" \
+    ".on_permission_request(k2_voice::on_permission_request)" "k2_voice::APP_ORIGINS" "'wasm-unsafe-eval'" \
+    "Let" "WHAT K2 HAS TESTED" "compiles; never run" "not tested" "K2_CHECK_MIC=1" "tccutil reset Microphone"; do
+    assert_contains "tauri-voice: $needle" "$tv_out" "$needle"
+done
+tv_lines="$(printf '%s\n' "$tv_out" | wc -l | tr -d ' ')"
+if [ "$tv_lines" -le 100 ]; then echo "  PASS: tauri-voice is bounded ($tv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri-voice is $tv_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: tauri-voice row" "$("$K2" study)" "  tauri-voice         Calls in a Tauri window"
 assert_contains "app-deploys: static Apps" "$("$K2" study app-deploys)" "STATIC APPS (0.46.7: a built site, no server)"
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"
 assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$K2_CLI" || true)" "k2 study app-runtime"

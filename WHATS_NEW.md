@@ -11,6 +11,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Updating K2 during a call asks first,** because the update ends the call.
 - **If you lose access during a call, K2 says why.** Losing access to a room, being removed or being timed out each end the call with their own line. If only speaking is taken away, you stay in the call and can still listen, and K2 tells you when you can speak again.
 
+### Apps
+- **Calls inside a Tauri app's window.** `k2 app init --template tauri --voice` now writes everything the webview needs for a call: the microphone hook that lets only your App's own pages use the mic (`src-tauri/src/k2_voice.rs`, Tauri 2.12+), no App Nap on macOS, a window that keeps running while hidden, the Windows (WebView2) settings, and an example CSP for the voice kit. Tested on macOS: WebRTC with end-to-end encryption, the noise filter's WebAssembly and storage all work in a hidden window. Windows builds but hasn't been run yet. `k2 study tauri-voice` says what is tested where.
+
 ## 0.46.8 — Agents run their Apps' people
 
 An agent can now look after its App's people from start to finish, and App screens update the moment someone's access changes, with no sign-out. Mailboxes can forward to up to 100 addresses and send files, your own domain can reach an App through K2 Connect, and the Windows installer is back.

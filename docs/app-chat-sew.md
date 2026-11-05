@@ -201,6 +201,48 @@ deactivated (history stays); giving chat again brings back the same member id.
   `everyone` or `all`; otherwise `username_unusable`.
 - **Browsers:** calls are end-to-end encrypted; Firefox can't join calls yet.
 
+## Calls in a Tauri app
+
+There are two ways to put a call in a desktop app built with Tauri 2.
+
+**The webview (most Apps).** The window loads your live site, and the page runs
+Sew's browser voice kit (`@sew/voice`: WebRTC, a noise filter in an
+AudioWorklet, WebAssembly) inside the webview: WKWebView on macOS, WebView2 on
+Windows. Your server mints the call credential (`sewcc_…`); the page talks to
+`https://<your App's host>/_k2/voice/sew/` and to Sew's TURN directly.
+`k2 app init --template tauri --voice` writes what the shell needs:
+
+| File | What it carries |
+|---|---|
+| `src-tauri/Info.plist` | `NSMicrophoneUsageDescription`, `NSCameraUsageDescription` (without them WKWebView has no `navigator.mediaDevices`), `NSAppSleepDisabled` |
+| `src-tauri/Entitlements.plist` + `bundle.macOS.entitlements` | `com.apple.security.device.audio-input` and `.camera` under the hardened runtime |
+| `tauri.conf.json`, first window | `backgroundThrottling: "disabled"` (macOS 14+) and WebView2's `additionalBrowserArgs` (audio without a tap, no slowing while hidden) |
+| `src-tauri/src/k2_voice.rs` | Tauri 2.12's `on_permission_request`: the mic and camera for your App's own origin with no second prompt, refused to any other page. You add `mod k2_voice;` and `.on_permission_request(k2_voice::on_permission_request)` in `lib.rs` |
+| `k2/README.md` | the CSP your page sends while the room is on |
+
+The CSP: `script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:;
+connect-src 'self' https://<host> wss://<host>`. Serve the kit's AudioWorklet
+script and `.wasm` from your own origin (`application/wasm`). CSP doesn't cover
+TURN. Add `ipc: http://ipc.localhost` to `connect-src` only if the page calls a
+Tauri plugin. On Windows the person must allow desktop apps to use the
+microphone (Settings > Privacy > Microphone).
+
+**A native plugin.** Sew's `tauri-plugin-sew-voice` runs the call in Rust, with
+no WebRTC in the webview; its JS API follows `@sew/voice` where it can. A page
+on a remote URL reaches it over Tauri's IPC: a capability that names the URL
+(`remote.urls`) and `ipc: http://ipc.localhost` in `connect-src`. K2 hasn't
+tested it for an App.
+
+**What is tested.** `tests/app-template/tauri-voice-check` builds the `--voice`
+files into a stock Tauri 2.12 app and checks the webview. On macOS (WKWebView,
+hardened runtime, a remote origin, the window hidden) it passed: WebRTC between
+two peers through an E2EE frame transform, the AudioWorklet with WebAssembly
+inside it, WebAssembly under `'wasm-unsafe-eval'` (refused without it), audio
+without a tap, IndexedDB across a restart. Not yet: the mic itself on a real
+Mac, a minimised window, a real call through Sew. Windows compiles only; iOS
+and Android are untested; Linux webviews have no WebRTC. Details and the steps
+to run it on your own Mac: `k2 study tauri-voice`.
+
 ## Errors
 
 | Code | When | Do |

@@ -26,11 +26,16 @@
 //! byte kept; `tauri.conf.json5` and `Tauri.toml` get the snippet printed
 //! instead (TA-17: Tauri reads all three).
 //!
-//! **`--voice`:** `src-tauri/Info.plist` (macOS) and `Info.ios.plist` (Tauri
-//! merges both), `src-tauri/Entitlements.plist` and
-//! `bundle.macOS.entitlements`. A plist that exists is never edited: the keys
-//! it lacks are printed. So are the Android lines: `gen/android` belongs to
-//! `tauri android init`.
+//! **`--voice`:** `src-tauri/Info.plist` (macOS: the usage keys and
+//! `NSAppSleepDisabled`) and `Info.ios.plist` (Tauri merges both),
+//! `src-tauri/Entitlements.plist` and `bundle.macOS.entitlements`, the first
+//! window's `backgroundThrottling` and `additionalBrowserArgs` (WebView2), and
+//! `src-tauri/src/k2_voice.rs` (the mic and camera for the App's own origin,
+//! through Tauri 2.12's `on_permission_request`; the person adds the two lines
+//! to `lib.rs`). A plist that exists is never edited: the keys it lacks are
+//! printed. So are the Android lines: `gen/android` belongs to `tauri android
+//! init`. `tests/app-template/tauri-voice-check` builds these files into a
+//! real Tauri app and checks the webview.
 
 mod json_insert;
 mod text;
@@ -317,6 +322,17 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
                             "src-tauri/tauri.conf.json can't take bundle.macOS.entitlements ({why}): add \"entitlements\": \"{ENTITLEMENTS}\" under bundle.macOS by hand, or the mic and camera entitlements won't reach the build"
                         )),
                     }
+                    let cur = after.clone().unwrap_or_else(|| before.clone());
+                    match json_insert::wire_first_window(&cur, &text::voice_window_keys()) {
+                        Ok(json_insert::Wired { text: Some(edited), added: more }) => {
+                            after = Some(edited);
+                            added.extend(more);
+                        }
+                        Ok(json_insert::Wired { text: None, .. }) => {}
+                        Err(why) => p.notes.push(format!(
+                            "src-tauri/tauri.conf.json: no window to give the call settings to ({why}). If your Rust code builds the window, pass its builder through k2_voice::voice_window (src-tauri/src/k2_voice.rs); else add backgroundThrottling \"disabled\" and additionalBrowserArgs (k2_voice::WEBVIEW2_ARGS) to your first window"
+                        )),
+                    }
                 }
                 match after {
                     Some(after) => p.files.push(FilePlan {
@@ -329,7 +345,11 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
                     None => p.files.push(FilePlan {
                         path: "src-tauri/tauri.conf.json".into(),
                         action: Action::Skipped,
-                        note: format!("already has plugins.updater and bundle.createUpdaterArtifacts: left as it is (make sure its endpoints are: {})", endpoints.join(" , ")),
+                        note: format!(
+                            "already has plugins.updater and bundle.createUpdaterArtifacts{}: left as it is (make sure its endpoints are: {})",
+                            if t.voice { " and the call settings" } else { "" },
+                            endpoints.join(" , ")
+                        ),
                         content: String::new(),
                         before: None,
                     }),
@@ -358,11 +378,11 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
         None => text::tauri_readme(app_id, host),
     };
     if t.voice {
-        readme.push_str(text::VOICE_README);
+        readme.push_str(&text::voice_readme(host));
     }
     new_file(folder, "k2/README.md", &readme, p);
     if t.voice {
-        plan_voice(folder, base, entitlements.as_deref(), p);
+        plan_voice(folder, base, host, entitlements.as_deref(), p);
     }
     // CE-3: a preset stub when the repo already keeps compute presets.
     let compute = folder.join(".k2/compute.toml");
@@ -411,14 +431,29 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
             format!("k2 app status {app_id}"),
         ],
     };
+    if t.voice {
+        p.next.insert(0, VOICE_WIRE_STEP.into());
+    }
     Ok(())
 }
 
+/// `--voice`: the one change K2 leaves to the person (it never edits Rust).
+const VOICE_WIRE_STEP: &str =
+    "src-tauri/src/lib.rs: add `mod k2_voice;` and `.on_permission_request(k2_voice::on_permission_request)` on tauri::Builder::default() (Tauri 2.12 or newer; k2/README.md, Calls)";
+
 /// `--voice`: the mic and camera keys, per platform.
-fn plan_voice(folder: &Path, name: &str, entitlements: Option<&str>, p: &mut Plan) {
+fn plan_voice(folder: &Path, name: &str, host: &str, entitlements: Option<&str>, p: &mut Plan) {
     let usage = text::voice_usage_keys(name);
-    plist_keys(folder, "src-tauri/Info.plist", &usage, "macOS's", p);
+    let mut macos = usage.clone();
+    macos.extend(text::voice_macos_keys());
+    plist_keys(folder, "src-tauri/Info.plist", &macos, "macOS's", p);
     plist_keys(folder, "src-tauri/Info.ios.plist", &usage, "iOS's", p);
+    new_file(folder, "src-tauri/src/k2_voice.rs", &text::k2_voice_rs(host), p);
+    if let Some(old) = std::fs::read_to_string(folder.join("src-tauri/Cargo.toml")).ok().as_deref().and_then(tauri_older_than_2_12) {
+        p.notes.push(format!(
+            "src-tauri/Cargo.toml asks for tauri {old}: k2_voice.rs needs 2.12 or newer (on_permission_request). Set tauri = \"2.12\" and run cargo update -p tauri"
+        ));
+    }
     let ents = text::voice_entitlements();
     // A path inside src-tauri/ K2 may write; one outside gets the keys printed.
     let inside = entitlements.filter(|e| !Path::new(e).is_absolute() && !e.split(['/', '\\']).any(|c| c == ".."));
@@ -452,6 +487,24 @@ fn plan_voice(folder: &Path, name: &str, entitlements: Option<&str>, p: &mut Pla
             content: missing.iter().map(|l| format!("{l}\n")).collect(),
             before: None,
         });
+    }
+}
+
+/// The `tauri` requirement in a `Cargo.toml` when it is a 2.x below 2.12
+/// (`"2"`, `"2.11"`, `"^2.10.1"`); `None` when it is newer, absent or not
+/// plain. `"2"` allows 2.12 but a lock file may hold an older one: named too.
+fn tauri_older_than_2_12(cargo_toml: &str) -> Option<String> {
+    let line = cargo_toml.lines().map(str::trim).find(|l| l.starts_with("tauri ") || l.starts_with("tauri="))?;
+    let rest = line.split_once('=')?.1.trim();
+    let req = if rest.starts_with('{') { rest.split("version").nth(1)?.split('"').nth(1)? } else { rest.split('"').nth(1)? };
+    let v = req.trim_start_matches(['^', '~', '=', ' ']);
+    let mut parts = v.split('.');
+    if parts.next()? != "2" {
+        return None;
+    }
+    match parts.next() {
+        None => Some(req.to_string()),
+        Some(minor) => (minor.parse::<u32>().ok()? < 12).then(|| req.to_string()),
     }
 }
 

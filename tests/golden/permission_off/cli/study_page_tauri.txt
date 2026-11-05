@@ -189,24 +189,14 @@ START (A BUNDLED WEB BUILD)
 
 10. CALLS
     k2 app init --template tauri [--app <app>] --voice
-  adds the mic and camera keys on macOS and iOS and prints the Android lines
-  (AndroidManifest; ask at run time there). Sew holds one origin per App today,
-  your primary: if the shell loads a custom name, mark it (k2 app domain
-  primary <app> <host>), or joins answer with another host (k2 study app-chat).
-  Where calls work (they are end-to-end encrypted):
-    Chrome, Edge, Chromium      yes (Sew tests these)
-    Safari 15.4+ (macOS, iOS)   yes, not tested by Sew yet; before 17.2 one quality layer
-    Firefox                     no: refused when joining an encrypted call
-    Tauri on macOS              expected on macOS 12+, not yet tested
-    Tauri on Windows            expected, not yet tested; Settings > Privacy >
-                                Microphone and Camera must allow desktop apps
-    Tauri on Linux              no: Ubuntu and Arch ship the webview without WebRTC;
-                                open the call in Chrome
-    Tauri on iOS                expected on iOS 15.4+, not yet tested
-    Tauri on Android            expected, not yet tested
-  Every webview also needs a persistent data folder (encryption keys live in
-  IndexedDB), audio that plays without a tap, and a connect-src covering your
-  /rtc/v1 and the voice kit's .wasm URL.
+  writes what a call in the window needs: the mic and camera keys, the
+  hardened runtime's entitlements, src-tauri/src/k2_voice.rs (the mic for
+  your App's own origin only), the window settings for a hidden window and
+  WebView2, and the CSP in k2/README.md. Tested on macOS; Windows compiles,
+  not yet tested; iOS and Android not yet tested; Linux webviews can't call.
+  Calls answer on each live host with Sew 0.7.2+; otherwise mark the one
+  the shell loads: k2 app domain primary <app> <host>.
+  All of it, and the check to run on a real Mac: k2 study tauri-voice.
 
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
 k2 study app-profile, k2 app init --help, k2 app links --help.

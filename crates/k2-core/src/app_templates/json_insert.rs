@@ -11,7 +11,7 @@ pub struct Wired {
     /// The new text, or `None` when both keys were already there.
     pub text: Option<String>,
     /// The keys it added (`plugins.updater`, `bundle.createUpdaterArtifacts`).
-    pub added: Vec<&'static str>,
+    pub added: Vec<String>,
 }
 
 /// Add `plugins.updater` (= `updater`) and `bundle.createUpdaterArtifacts:
@@ -41,7 +41,7 @@ pub fn wire_updater(text: &str, updater: &J) -> Result<Wired, String> {
             None => insert_member(&t, object_at(&t, &[]).ok_or("no top-level object")?, "bundle", &serde_json::json!({ "createUpdaterArtifacts": true }), &unit),
         }
         .ok_or("the bundle object couldn't be found in the text")?;
-        added.push("bundle.createUpdaterArtifacts");
+        added.push("bundle.createUpdaterArtifacts".into());
     }
     if need_updater {
         t = match object_at(&t, &["plugins"]) {
@@ -49,7 +49,7 @@ pub fn wire_updater(text: &str, updater: &J) -> Result<Wired, String> {
             None => insert_member(&t, object_at(&t, &[]).ok_or("no top-level object")?, "plugins", &serde_json::json!({ "updater": updater }), &unit),
         }
         .ok_or("the plugins object couldn't be found in the text")?;
-        added.push("plugins.updater");
+        added.push("plugins.updater".into());
     }
     // The proof: the new text is the old value plus exactly these keys.
     let after: J = serde_json::from_str(&t).map_err(|e| format!("the edit didn't parse ({e})"))?;
@@ -106,7 +106,53 @@ pub fn wire_entitlements(text: &str, path: &str) -> Result<Wired, String> {
     if got != expect {
         return Err("the edit didn't come out as planned".into());
     }
-    Ok(Wired { text: Some(after), added: vec!["bundle.macOS.entitlements"] })
+    Ok(Wired { text: Some(after), added: vec!["bundle.macOS.entitlements".into()] })
+}
+
+/// Add `keys` to the first window (`app.windows[0]`) where they are missing
+/// (`text: None` when it has them all). `Err(why)`: the config lists no
+/// window (one made in Rust), or K2 can't edit it safely; the same proof as
+/// [`wire_updater`].
+pub fn wire_first_window(text: &str, keys: &[(&str, J)]) -> Result<Wired, String> {
+    let root: J = serde_json::from_str(text).map_err(|e| format!("it doesn't parse as JSON: {e}"))?;
+    let first = root.get("app").and_then(|a| a.get("windows")).and_then(J::as_array).and_then(|w| w.first());
+    let Some(first) = first else {
+        return Err("it lists no window (app.windows[0])".into());
+    };
+    let Some(have) = first.as_object() else {
+        return Err("its app.windows[0] isn't an object".into());
+    };
+    let missing: Vec<&(&str, J)> = keys.iter().filter(|(k, _)| !have.contains_key(*k)).collect();
+    if missing.is_empty() {
+        return Ok(Wired { text: None, added: Vec::new() });
+    }
+    let unit = indent_unit(text);
+    let mut t = text.to_string();
+    let mut expect = root.clone();
+    let mut added = Vec::new();
+    for (k, v) in missing {
+        let open = first_window_at(&t).ok_or("app.windows[0] couldn't be found in the text")?;
+        t = insert_member(&t, open, k, v, &unit).ok_or("app.windows[0] couldn't be edited")?;
+        expect["app"]["windows"][0].as_object_mut().ok_or("app.windows[0]")?.insert(k.to_string(), v.clone());
+        added.push(format!("app.windows[0].{k}"));
+    }
+    let got: J = serde_json::from_str(&t).map_err(|e| format!("the edit didn't parse ({e})"))?;
+    if got != expect {
+        return Err("the edit didn't come out as planned".into());
+    }
+    Ok(Wired { text: Some(t), added })
+}
+
+/// The `{` of `app.windows[0]`.
+fn first_window_at(t: &str) -> Option<usize> {
+    let b = t.as_bytes();
+    let app = object_at(t, &["app"])?;
+    let m = members(b, app)?.into_iter().find(|(ks, ke, _, _)| &t[*ks..*ke] == "\"windows\"")?;
+    if b.get(m.2) != Some(&b'[') {
+        return None;
+    }
+    let i = skip_ws(b, m.2 + 1);
+    (b.get(i) == Some(&b'{')).then_some(i)
 }
 
 /// The file's indent step: the leading whitespace of the first member of
@@ -314,5 +360,31 @@ mod tests {
         assert!(wire_updater("[1]", &updater()).is_err());
         assert!(wire_updater("{\"bundle\": 3}", &updater()).is_err());
         assert!(wire_updater("{ // a comment\n}", &updater()).is_err(), "JSON5 isn't edited");
+    }
+
+    #[test]
+    fn the_first_window_gains_only_missing_keys() {
+        let conf = "{\n  \"app\": {\n    \"windows\": [\n      {\n        \"title\": \"Acme\",\n        \"url\": \"https://acme.example.com/\"\n      },\n      { \"label\": \"second\" }\n    ]\n  }\n}\n";
+        let keys = [("backgroundThrottling", json!("disabled")), ("additionalBrowserArgs", json!("--a --b"))];
+        let w = wire_first_window(conf, &keys).expect("edit");
+        assert_eq!(w.added, ["app.windows[0].backgroundThrottling", "app.windows[0].additionalBrowserArgs"]);
+        let t = w.text.expect("changed");
+        assert!(
+            t.contains("        \"url\": \"https://acme.example.com/\",\n        \"backgroundThrottling\": \"disabled\",\n        \"additionalBrowserArgs\": \"--a --b\"\n      },"),
+            "{t}"
+        );
+        let v: J = serde_json::from_str(&t).unwrap();
+        assert_eq!(v["app"]["windows"][1], json!({ "label": "second" }), "only the first window");
+        assert!(wire_first_window(&t, &keys).unwrap().text.is_none(), "twice: nothing to add");
+        // A value the person set stays.
+        let mine = "{\"app\": {\"windows\": [{\"backgroundThrottling\": \"throttle\"}]}}";
+        let w = wire_first_window(mine, &keys).unwrap();
+        assert_eq!(w.added, ["app.windows[0].additionalBrowserArgs"]);
+        let v: J = serde_json::from_str(&w.text.unwrap()).unwrap();
+        assert_eq!(v["app"]["windows"][0]["backgroundThrottling"], "throttle");
+        // No window in the config (made in Rust), or an odd one: refused.
+        assert!(wire_first_window("{\"app\": {\"windows\": []}}", &keys).is_err());
+        assert!(wire_first_window("{\"identifier\": \"a.b\"}", &keys).is_err());
+        assert!(wire_first_window("{\"app\": {\"windows\": [3]}}", &keys).is_err());
     }
 }

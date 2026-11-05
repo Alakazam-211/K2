@@ -40,6 +40,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
   voice-rooms         This server's own voice rooms (preview): k2 voice, who may change or join
   tauri               A Tauri app on K2: web build, server, updates, signing, links, push, uploads
+  tauri-voice         Calls in a Tauri window: --voice files, the mic hook, CSP, what is tested
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries

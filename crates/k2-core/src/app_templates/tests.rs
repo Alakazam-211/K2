@@ -208,13 +208,22 @@ fn voice_writes_the_keys_and_prints_what_it_wont_edit() {
         let t = d.read(f);
         assert!(t.starts_with("<?xml") && t.contains("<key>NSMicrophoneUsageDescription</key>") && t.contains("<key>NSCameraUsageDescription</key>"), "{f}: {t}");
     }
+    assert!(d.read("src-tauri/Info.plist").contains("<key>NSAppSleepDisabled</key>\n  <true/>"), "macOS: no App Nap");
+    assert!(!d.read("src-tauri/Info.ios.plist").contains("NSAppSleepDisabled"), "a macOS key");
     let t = d.read("src-tauri/Entitlements.plist");
     assert!(t.contains("<key>com.apple.security.device.audio-input</key>\n  <true/>") && t.contains("<key>com.apple.security.device.camera</key>"), "{t}");
     let conf: J = serde_json::from_str(&d.read("src-tauri/tauri.conf.json")).unwrap();
     assert_eq!(conf["bundle"]["macOS"]["entitlements"], "./Entitlements.plist");
     assert_eq!(conf["bundle"]["createUpdaterArtifacts"], true);
     assert_eq!(conf["bundle"]["active"], true, "kept");
-    assert!(d.read("k2/README.md").contains("## Calls"));
+    let readme = d.read("k2/README.md");
+    assert!(readme.contains("## Calls") && readme.contains("wss://my-tauri-app-web.box.k2.dev") && readme.contains("'wasm-unsafe-eval'"), "{readme}");
+    let rs = d.read("src-tauri/src/k2_voice.rs");
+    assert!(rs.contains("pub const APP_ORIGINS: &[&str] = &[\"https://my-tauri-app-web.box.k2.dev\"];"), "{rs}");
+    assert!(rs.contains(&format!("pub const WEBVIEW2_ARGS: &str = \"{}\";", text::WEBVIEW2_VOICE_ARGS)));
+    // No window in this config (one made in Rust): said, and the Rust helper named.
+    assert!(p.notes.iter().any(|n| n.contains("k2_voice::voice_window")), "{:?}", p.notes);
+    assert!(p.next[0].contains(".on_permission_request(k2_voice::on_permission_request)"), "{:?}", p.next);
 
     // Again: nothing to write, the plists are left alone.
     let p2 = plan_with(&d.0, "tauri", &o).unwrap();
@@ -259,6 +268,74 @@ fn voice_writes_the_keys_and_prints_what_it_wont_edit() {
 
     // Only for the Tauri template.
     assert_eq!(plan_with(&d.0, "static", &o).unwrap_err().code, codes::TAURI_ONLY);
+}
+
+/// The check app (`tests/app-template/tauri-voice-check`, built and run on a
+/// Mac by its run.sh) holds exactly what `--voice` writes, so what it proves
+/// is what App builders get.
+#[test]
+fn voice_files_match_the_checked_app() {
+    const CHECK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/app-template/tauri-voice-check/src-tauri");
+    let base = r#"{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "voice-check",
+  "version": "0.1.0",
+  "identifier": "dev.k2.voice-check",
+  "build": {
+    "frontendDist": "../page"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "voice-check",
+        "create": false,
+        "url": "http://127.0.0.1/",
+        "width": 480,
+        "height": 360
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.png", "icons/icon.ico"]
+  }
+}
+"#;
+    let d = Dir::new("tpl-voice-check");
+    d.write("src-tauri/tauri.conf.json", base);
+    d.write("src-tauri/Cargo.toml", "[dependencies]\ntauri = { version = \"2.12\", features = [] }\n");
+    let o = Options { voice: true, name: Some("voice-check"), ..Options::default() };
+    let p = plan_with(&d.0, "tauri", &o).unwrap();
+    assert!(!p.notes.iter().any(|n| n.contains("2.12")), "tauri 2.12 is new enough: {:?}", p.notes);
+    let conf = p.files.iter().find(|f| f.path == "src-tauri/tauri.conf.json").unwrap();
+    assert!(conf.note.contains("app.windows[0].backgroundThrottling, app.windows[0].additionalBrowserArgs"), "{}", conf.note);
+    apply(&d.0, &p).unwrap();
+    let read = |rel: &str| std::fs::read_to_string(format!("{CHECK}/{rel}")).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    for f in ["Info.plist", "Entitlements.plist", "src/k2_voice.rs"] {
+        assert_eq!(d.read(&format!("src-tauri/{f}")), read(f), "{f}: the template and the checked app differ");
+    }
+    let got: J = serde_json::from_str(&d.read("src-tauri/tauri.conf.json")).unwrap();
+    let want: J = serde_json::from_str(&read("tauri.conf.json")).unwrap();
+    assert_eq!(got, want, "tauri.conf.json: the template and the checked app differ");
+}
+
+#[test]
+fn old_tauri_is_named() {
+    for (toml, want) in [
+        ("tauri = \"2.11\"", Some("2.11")),
+        ("tauri = { version = \"^2.10.1\", features = [] }", Some("^2.10.1")),
+        ("tauri = { version = \"2\" }", Some("2")),
+        ("tauri = \"2.12\"", None),
+        ("tauri = { version = \"2.13.0\" }", None),
+        ("tauri-build = \"2.0\"", None),
+        ("tauri.workspace = true", None),
+        ("tauri = { git = \"https://example.com/t\" }", None),
+    ] {
+        assert_eq!(super::tauri_older_than_2_12(&format!("[dependencies]\n{toml}\n")).as_deref(), want, "{toml}");
+    }
 }
 
 #[test]

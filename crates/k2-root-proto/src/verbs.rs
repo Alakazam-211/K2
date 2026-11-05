@@ -326,6 +326,12 @@ pub enum SewVerb {
     /// folder is kept (owner and mode reset). Sew writes the mirror as `sew`,
     /// which the daemon can't create for it.
     MirrorDir,
+    /// `engine sew box-backup` (protocol 13, 0.46.9,
+    /// `namespaces.sewboxbackup`; read-only, no stdin, no argv beyond the
+    /// verb): [`crate::box_backup::BoxBackupFacts`], the box backup
+    /// client's fixed `paths` and `excludes` files and whether its timer is
+    /// enabled. Never its `env` (the restic password).
+    BoxBackup,
     /// Stdin: [`crate::sew::MediaRequest`] → `sew media install
     /// --config-json` with the staged media tarball (Sew writes its own
     /// sysctl drop-in when `sysctl` is `apply`). TURN TLS PEM text in the
@@ -395,6 +401,7 @@ impl SewVerb {
             ["restore", id] if crate::sew::bundle_id_ok(id) => Self::Restore(id.to_string()),
             ["token"] => Self::Token,
             ["mirror-dir"] => Self::MirrorDir,
+            ["box-backup"] => Self::BoxBackup,
             ["media", "install"] => Self::MediaInstall,
             ["media", "uninstall"] => Self::MediaUninstall,
             ["media", "upgrade"] => Self::MediaUpgrade,
@@ -439,6 +446,7 @@ impl SewVerb {
             Self::Restore(id) => s(&["restore", id]),
             Self::Token => s(&["token"]),
             Self::MirrorDir => s(&["mirror-dir"]),
+            Self::BoxBackup => s(&["box-backup"]),
             Self::MediaInstall => s(&["media", "install"]),
             Self::MediaUninstall => s(&["media", "uninstall"]),
             Self::MediaUpgrade => s(&["media", "upgrade"]),
@@ -470,6 +478,7 @@ impl SewVerb {
             | Self::InstallBin
             | Self::Doctor
             | Self::MediaStatus
+            | Self::BoxBackup
             | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart | S::ResetFailed) => Class::Open,
             Self::Install
             | Self::InstallReconfigure
@@ -516,7 +525,7 @@ impl SewVerb {
     }
 
     fn reads_only(&self) -> bool {
-        matches!(self, Self::Status | Self::Doctor | Self::MediaStatus)
+        matches!(self, Self::Status | Self::Doctor | Self::MediaStatus | Self::BoxBackup)
     }
 
     /// One of each (tests, docs).
@@ -543,6 +552,7 @@ impl SewVerb {
             Self::Restore("20260927T031512Z".into()),
             Self::Token,
             Self::MirrorDir,
+            Self::BoxBackup,
             Self::MediaInstall,
             Self::MediaUninstall,
             Self::MediaUpgrade,
@@ -2815,6 +2825,7 @@ mod tests {
             &["engine", "sew", "systemctl", "restart"],
             &["engine", "sew", "systemctl", "reset-failed"],
             &["engine", "sew", "media", "status"],
+            &["engine", "sew", "box-backup"],
         ];
         let daemon: &[&[&str]] = &[
             &["engine", "sew", "install"],
@@ -2857,7 +2868,12 @@ mod tests {
             assert!(v.takes_lock(), "{a:?}");
         }
         assert_eq!(open.len() + daemon.len(), SewVerb::catalog().len(), "every sew verb is in one table");
-        for read in [&["engine", "sew", "status"][..], &["engine", "sew", "doctor"], &["engine", "sew", "media", "status"]] {
+        for read in [
+            &["engine", "sew", "status"][..],
+            &["engine", "sew", "doctor"],
+            &["engine", "sew", "media", "status"],
+            &["engine", "sew", "box-backup"],
+        ] {
             assert!(!Verb::parse(read).unwrap().takes_lock(), "{read:?}");
         }
         assert!(Verb::parse(&["engine", "sew", "stage"]).unwrap().takes_lock());
@@ -2879,6 +2895,10 @@ mod tests {
             &["engine", "sew", "install-bin", "/tmp/sew"],
             &["engine", "sew", "config", "server.public_url"],
             &["engine", "sew", "config-set", "keys.mirror.path", "/mnt/x"],
+            // box-backup reads two fixed files: never a caller path.
+            &["engine", "sew", "box-backup", "/etc/k2-backup/env"],
+            &["engine", "sew", "box-backup", "env"],
+            &["engine", "sew", "box-backup", "--paths", "/etc/shadow"],
             &["engine", "sew", "systemctl", "start", "k2-daemon.service"],
             &["engine", "sew", "systemctl", "restart", "sew-db.service"],
             &["engine", "sew", "systemctl", "daemon-reexec"],

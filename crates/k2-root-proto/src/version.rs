@@ -84,6 +84,16 @@
 //!   SW-8) under `namespaces.sewmirror`, [`SEW_MIRROR_DIR_MIN_PROTOCOL`].
 //!   Another 0.46.8 lane that needs a helper change joins 12 here with its own
 //!   namespace flag; never 13 before 12 ships.
+//! - 13 = every root-helper change 0.46.9 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it; 12 shipped in 0.46.8):
+//!   `engine sew box-backup` (read-only: the box backup client's
+//!   `/etc/k2-backup/paths` and `excludes` and whether `k2-backup.timer` is
+//!   enabled, so `k2 hostchat ship box-backup` can clear
+//!   `k2_backup_offbox_none` only on evidence; never the client's `env`, no
+//!   caller path), under `namespaces.sewboxbackup`,
+//!   [`SEW_BOX_BACKUP_MIN_PROTOCOL`]. Another 0.46.9 lane that needs a
+//!   helper change joins 13 here with its own namespace flag; never 14
+//!   before 13 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -92,7 +102,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 12;
+pub const PROTOCOL: u32 = 13;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -129,6 +139,9 @@ pub const SEW_TUNNEL_MIN_PROTOCOL: u32 = 12;
 /// `engine sew mirror-dir` (0.46.8, SW-8 keyring mirror folder). Gated on
 /// this AND `namespaces.sewmirror == true`.
 pub const SEW_MIRROR_DIR_MIN_PROTOCOL: u32 = 12;
+/// `engine sew box-backup` (0.46.9: what the box backup client carries,
+/// read-only). Gated on this AND `namespaces.sewboxbackup == true`.
+pub const SEW_BOX_BACKUP_MIN_PROTOCOL: u32 = 13;
 /// `apps podman install|uninstall` (K2's Podman 5 bundle, 0.46.1 lane P).
 /// Rides 0.46.1's one helper bump, 8 (7 shipped in 0.46.0 for Sew).
 pub const PODMAN_INSTALL_MIN_PROTOCOL: u32 = 8;
@@ -309,7 +322,12 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 12, "protocol 12 = 0.46.8's one bump (the :80 front); 11 = 0.46.6's (Sew install reconfigure)");
+        assert_eq!(PROTOCOL, 13, "protocol 13 = 0.46.9's one bump (Sew box-backup facts); 12 = 0.46.8's (the :80 front)");
+        assert_eq!(SEW_BOX_BACKUP_MIN_PROTOCOL, 13, "box-backup joins 0.46.9's one bump");
+        assert!(
+            crate::verbs::catalog().iter().any(|v| v.argv() == ["engine", "sew", "box-backup"]),
+            "protocol 13 carries engine sew box-backup"
+        );
         assert_eq!(FRONT80_MIN_PROTOCOL, 12, "the :80 front joins 0.46.8's one bump");
         assert_eq!(SEW_RECONFIGURE_MIN_PROTOCOL, 11, "Sew reconfigure joins 0.46.6's one bump");
         assert_eq!(SEW_TUNNEL_MIN_PROTOCOL, 12, "the voice tunnel joins 0.46.8's one bump");

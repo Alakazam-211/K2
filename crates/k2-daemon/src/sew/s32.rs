@@ -14,7 +14,10 @@
 //!   health loop ([`ship_tick`]) streams each new bundle there over the
 //!   mgmt socket (`GET /mgmt/v1/backups/{id}/archive`) and keeps the newest
 //!   [`SHIP_KEEP`]. `none` is allowed and audited (alarm
-//!   `k2_backup_offbox_none`). `k2` (an Alakazam target) is not built.
+//!   `k2_backup_offbox_none`). `box-backup` (0.46.9, the owner only): the
+//!   box's own backup client carries `/var/lib/sew/backups` off the box;
+//!   K2 copies nothing and clears the alarm only while it sees the evidence
+//!   ([`super::box_backup`]). `k2` (an Alakazam target) is not built.
 //! - **`POST /cli/sew/server/mirror {kind, path?}`**: Sew's keyring mirror
 //!   (`keys.mirror.*` through the root helper's `engine sew config`, then a
 //!   restart). Never the K2 vault or a system path (root-proto validator).
@@ -205,7 +208,7 @@ pub fn decorate_status(env: &Env, body: &mut Value, who: &Who) {
         "tied": mirror_is_tied(env, &row),
         "tie": rec.get(MIRROR_TIE).filter(|t| t["state"] == "pending").cloned(),
     });
-    let ship = json!({
+    let mut ship = json!({
         "kind": row.ship_kind,
         "path": row.ship_path,
         "lastShippedId": rec.get("lastShippedId").cloned().unwrap_or(Value::Null),
@@ -213,6 +216,9 @@ pub fn decorate_status(env: &Env, body: &mut Value, who: &Who) {
         "lastError": rec.get("lastError").cloned().unwrap_or(Value::Null),
         "lastErrorAt": rec.get("lastErrorAt").cloned().unwrap_or(Value::Null),
     });
+    if row.ship_kind == super::box_backup::KIND {
+        ship["boxBackup"] = super::box_backup::evidence(env).json();
+    }
     if body.get("backup").is_some_and(Value::is_object) {
         body["backup"]["ship"] = ship;
     } else {
@@ -589,8 +595,15 @@ fn set_ship(env: &Env, who: &Who, v: &Value) -> R<Value> {
             fs().check_dir(p).map_err(|e| no("invalid_path", 400, e))?;
             ("dir", Some(p.to_string()))
         }
+        // 0.46.9: the box's own backup client carries the bundles. The
+        // owner's word, never an admin's or an agent's: it can clear an
+        // alarm (only while K2 sees the evidence, but still).
+        super::box_backup::KIND => {
+            need_owner_for_box_backup(who)?;
+            (super::box_backup::KIND, None)
+        }
         "k2" => return Err(no("not_available", 400, "an Alakazam-hosted backup destination is not built yet: use a folder on another disk (kind dir)")),
-        _ => return Err(no("bad_request", 400, "kind is none or dir")),
+        _ => return Err(no("bad_request", 400, "kind is none, dir or box-backup")),
     };
     let now = env.ops.now();
     store::update(now, |r| {
@@ -608,15 +621,47 @@ fn set_ship(env: &Env, who: &Who, v: &Value) -> R<Value> {
         // Backups stay on this box only: audited (plan §2).
         crate::vault::auth_audit("sew-ship-none", &who.label(), "backups stay on this box", "cli");
     }
+    let evidence = (kind == super::box_backup::KIND).then(|| {
+        // Judge it fresh, not from a reading taken before the owner chose it.
+        super::box_backup::forget();
+        let e = super::box_backup::evidence(env);
+        let outcome = if e.ok { "evidence seen".to_string() } else { format!("no evidence yet: {}", e.reasons.join("; ")) };
+        crate::vault::auth_audit("sew-ship-box-backup", &who.label(), &outcome, "cli");
+        e
+    });
     emit("ship");
     // 0.46.8 (SW-8): the keyring mirror follows the ship folder.
     let mirror = tie_mirror(env);
     let restarted = mirror.get("restarted").and_then(Value::as_bool).unwrap_or(false);
     let mut out = json!({"ok": true, "ship": {"kind": kind, "path": path}, "mirror": mirror, "restarted": restarted});
+    if let Some(e) = evidence {
+        out["ship"]["boxBackup"] = e.json();
+        out["note"] = json!(if e.ok {
+            "K2 sees the box backup carry Sew's bundles: k2_backup_offbox_none clears"
+        } else {
+            "recorded, but k2_backup_offbox_none stays until K2 sees the box backup carry Sew's bundles (ship.boxBackup.reason says what is missing)"
+        });
+    }
     if restarted {
         out["note"] = json!("Sew restarted to use its new keyring mirror (calls and chat reconnect on their own)");
     }
     Ok(out)
+}
+
+/// `ship box-backup`: the owner (the owner token, an Owner login or a K2
+/// shell tab, as for the home client), on top of Manage Sew. An Admin
+/// login and every agent are refused.
+fn need_owner_for_box_backup(who: &Who) -> R<()> {
+    use k2_core::connect_users::Role;
+    match who {
+        Who::Owner | Who::Login { role: Role::Owner, .. } | Who::Shell { .. } => Ok(()),
+        Who::Agent { .. } => Err(no(
+            "owner_only",
+            403,
+            "only the server's owner says the box backup carries Sew's bundles; an agent can't, even with \"Manage Chat / Voice Hosting\" (ask the owner to run k2 hostchat ship box-backup)",
+        )),
+        _ => Err(no("owner_only", 403, "only the server's owner says the box backup carries Sew's bundles (k2 hostchat ship box-backup)")),
+    }
 }
 
 fn set_mirror(env: &Env, v: &Value) -> R<Value> {
@@ -765,6 +810,17 @@ pub fn tie_mirror(env: &Env) -> Value {
                 }
             }
         },
+        // Ship `box-backup` (0.46.9): K2 ties nothing to it. A mirror K2
+        // tied to the old folder stays where it is and becomes the owner's
+        // own (dropping it would leave no off-box key copy, and costs a
+        // Sew restart).
+        (super::box_backup::KIND, _) => {
+            if row.mirror_kind == "dir" {
+                json!({"state": "kept", "path": row.mirror_path, "at": now})
+            } else {
+                json!({"state": "none", "at": now})
+            }
+        }
         // Ship `none`: a mirror K2 tied goes with it; the owner's own stays.
         _ => {
             if ours(row.mirror_path.as_deref()) && row.mirror_kind == "dir" {

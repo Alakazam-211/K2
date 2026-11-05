@@ -1792,6 +1792,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // branches. Renumber freely on a slip (and edit the migration-order
         // tests). The store is `crate::delivery_journal`.
         ("0267_delivery_journal", include_str!("../../drizzle_sql/0267_delivery_journal.sql")),
+        // 0268 — Sew's off-box copy through the box's own backup (0.46.9):
+        // `sew_server` rebuilt so `ship_kind` may be 'box-backup' (0166's
+        // CHECK allowed 'none'/'dir'). 0265-0267 are other 0.46.9 branches';
+        // renumber freely on a slip (and edit the migration-order tests).
+        ("0268_sew_ship_box_backup", include_str!("../../drizzle_sql/0268_sew_ship_box_backup.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2471,7 +2476,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0267_delivery_journal",
+            last_name, "0268_sew_ship_box_backup",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2598,6 +2603,8 @@ mod tests {
                 "0263_chat_refresh_switch",
                 "0264_person_pictures",
                 "0267_delivery_journal",
+                // 0.46.9: Sew ship kind box-backup.
+                "0268_sew_ship_box_backup",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2732,6 +2739,8 @@ mod tests {
                 "0263_chat_refresh_switch",
                 "0264_person_pictures",
                 "0267_delivery_journal",
+                // 0.46.9: Sew ship kind box-backup.
+                "0268_sew_ship_box_backup",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2946,6 +2955,51 @@ mod tests {
         assert_eq!(once, 1, "0221 is recorded once");
     }
 
+    /// 0268 (Sew ship kind box-backup, 0.46.9) on a 0.46.8 database: the
+    /// Sew row is kept column for column, `ship_kind` takes 'box-backup',
+    /// anything else 0166 refused is still refused, and a second run is a
+    /// no-op.
+    #[test]
+    fn a_046_8_database_upgrades_through_0268_sew_ship_box_backup() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0264_person_pictures")).unwrap();
+        conn.execute(
+            "INSERT INTO sew_server (id, status, pinned_version, installed_version, install_id, mirror_kind, mirror_path, \
+             ship_kind, ship_path, last_error, updated_at) \
+             VALUES (1, 'running', '0.7.3', '0.7.3', '48831765147549701', 'dir', '/mnt/keys', 'dir', '/mnt/offbox', 'old', 42)",
+            [],
+        )
+        .unwrap();
+        let refused = conn.execute("UPDATE sew_server SET ship_kind = 'box-backup' WHERE id = 1", []);
+        assert!(refused.is_err(), "0.46.8's CHECK refuses box-backup");
+
+        run_migrations(&conn).unwrap();
+        let row: (String, String, Option<String>, String, Option<String>, Option<String>, i64) = conn
+            .query_row(
+                "SELECT status, mirror_kind, mirror_path, ship_kind, ship_path, last_error, updated_at FROM sew_server WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("running".into(), "dir".into(), Some("/mnt/keys".into()), "dir".into(), Some("/mnt/offbox".into()), Some("old".into()), 42),
+            "the row is kept"
+        );
+        conn.execute("UPDATE sew_server SET ship_kind = 'box-backup', ship_path = NULL WHERE id = 1", []).unwrap();
+        for bad in ["UPDATE sew_server SET ship_kind = 's3'", "UPDATE sew_server SET mirror_kind = 'box-backup'", "UPDATE sew_server SET status = 'gone'"] {
+            assert!(conn.execute(bad, []).is_err(), "{bad} is still refused");
+        }
+        assert!(
+            conn.execute("INSERT INTO sew_server (id, status, pinned_version, updated_at) VALUES (2, 'running', '0.7.3', 1)", []).is_err(),
+            "still one row"
+        );
+        run_migrations(&conn).unwrap();
+        let kind: String = conn.query_row("SELECT ship_kind FROM sew_server WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(kind, "box-backup", "a second run changes nothing");
+        assert!(!table_names(&conn).iter().any(|n| n == "sew_server_0268"), "the copy is renamed into place");
+    }
+
     /// 0217 (box usage trends, prd-app-resources-disk-guard-v1 Slice B) on a
     /// 0.46.3 database (last migration 0219): it applies after 0219 and 0220, adds one
     /// empty table that refuses an unknown subject or resolution, keeps the
@@ -2959,7 +3013,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0267_delivery_journal", "0267 (0.46.9) runs last");
+        assert_eq!(top, "0268_sew_ship_box_backup", "0268 (0.46.9) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3011,9 +3065,10 @@ mod tests {
                 "0262_mail_forward_volume",
                 "0263_chat_refresh_switch",
                 "0264_person_pictures",
-                "0267_delivery_journal"
+                "0267_delivery_journal",
+                "0268_sew_ship_box_backup"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3855,7 +3910,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0267 (the delivery journal, 0.46.9) is the newest: its record
+            // 0268 (Sew ship kind box-backup, 0.46.9) is the newest: its
+            // record goes (a re-run copies sew_server into a fresh table again).
+            conn.execute("DELETE FROM _migrations WHERE name = '0268_sew_ship_box_backup'", []).unwrap();
+            // 0267 (the delivery journal, 0.46.9) came before it: its record
             // goes (its table and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0267_delivery_journal'", []).unwrap();
             // 0264 (person pictures, 0.46.8) came before it: its record goes

@@ -92,7 +92,8 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     let v = json(&o);
     // 7 brought `engine sew`; 8 is 0.46.1's helper changes (protocols are
     // additive, so the Sew namespace is still here).
-    assert_eq!(v["protocol"], 12, "11 was 0.46.6's one bump; 12 is 0.46.8's (additive)");
+    assert_eq!(v["protocol"], 13, "12 was 0.46.8's one bump; 13 is 0.46.9's (additive)");
+    assert_eq!(v["namespaces"]["sewboxbackup"], true, "box-backup (0.46.9)");
     assert_eq!(v["namespaces"]["sewreconf"], true, "install reconfigure (0.46.6)");
     assert_eq!(v["namespaces"]["sewtunnel"], true, "the voice tunnel's media keys (0.46.8)");
     assert_eq!(v["namespaces"]["sewmirror"], true, "mirror-dir (0.46.8)");
@@ -124,6 +125,67 @@ fn status_reports_pin_binary_staging_and_units_without_running_sew() {
     assert_eq!(v["binary"]["known"], false);
     assert!(v["binary"]["version"].is_null());
     assert!(sew_calls(&t).is_empty(), "status never runs sew as root");
+}
+
+// ── engine sew box-backup (protocol 13) ─────────────────────────────────
+
+fn timer_answers(t: &T, word: &str) {
+    t.exec.0.borrow_mut().rules.push((
+        SYSTEMCTL.into(),
+        "is-enabled".into(),
+        ExecOut { status: if word == "enabled" { 0 } else { 1 }, stdout: format!("{word}\n").into_bytes(), stderr: vec![] },
+    ));
+}
+
+#[test]
+fn box_backup_reads_the_two_fixed_files_and_the_timer_and_never_the_env() {
+    use k2_root_proto::box_backup::{BoxBackupFacts, FileRead};
+    let t = box_root();
+    // No client at all: both files missing, the timer unknown. An answer,
+    // not a failure, and no lock (read-only).
+    let o = t.call(&["engine", "sew", "box-backup"]);
+    ok(&o);
+    let f: BoxBackupFacts = serde_json::from_value(json(&o)).expect("the wire shape");
+    assert_eq!(f, BoxBackupFacts { paths: FileRead::Missing, excludes: FileRead::Missing, timer: "unknown".into() });
+    // A set-up client: the text comes back as written; the env never does.
+    write(&t, "/etc/k2-backup/paths", "/etc\n/var/lib\n");
+    write(&t, "/etc/k2-backup/excludes", "/var/lib/docker\n");
+    write(&t, "/etc/k2-backup/env", "RESTIC_PASSWORD=hunter2-not-real\n");
+    timer_answers(&t, "enabled");
+    let o = t.call(&["engine", "sew", "box-backup"]);
+    ok(&o);
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(!out.contains("RESTIC_PASSWORD") && !out.contains("hunter2"), "the env is never read: {out}");
+    let f: BoxBackupFacts = serde_json::from_str(&out).expect("the wire shape");
+    assert_eq!(f.paths, FileRead::Text { text: "/etc\n/var/lib\n".into() });
+    assert_eq!(f.excludes, FileRead::Text { text: "/var/lib/docker\n".into() });
+    assert_eq!(f.timer, "enabled");
+    let ran: Vec<Vec<String>> = t
+        .calls()
+        .into_iter()
+        .filter(|(_, a, _)| !a.iter().any(|x| x == "MainPID"))
+        .map(|(p, a, _)| std::iter::once(p).chain(a).collect())
+        .collect();
+    assert!(!ran.is_empty(), "the timer was asked");
+    assert!(
+        ran.iter().all(|c| c[0] == SYSTEMCTL && c[1..] == ["is-enabled".to_string(), "k2-backup.timer".to_string()]),
+        "only systemctl is-enabled k2-backup.timer runs: {ran:?}"
+    );
+    // Never through a link, never past the cap.
+    std::fs::remove_file(t.p("/etc/k2-backup/excludes")).unwrap();
+    symlink(t.p("/etc/k2-backup/env"), t.p("/etc/k2-backup/excludes")).unwrap();
+    std::fs::write(t.p("/etc/k2-backup/paths"), "/".repeat(k2_root_proto::box_backup::CAP_FILE + 1)).unwrap();
+    let f: BoxBackupFacts = serde_json::from_value(json(&t.call(&["engine", "sew", "box-backup"]))).expect("the wire shape");
+    match (&f.paths, &f.excludes) {
+        (FileRead::Error { error: p }, FileRead::Error { error: e }) => {
+            assert!(p.contains("too large"), "{p}");
+            assert!(e.contains("symlink"), "{e}");
+        }
+        other => panic!("both refused: {other:?}"),
+    }
+    let v = Verb::parse(&["engine", "sew", "box-backup"]).unwrap();
+    assert_eq!(v.class(), Class::Open);
+    assert!(!v.takes_lock(), "read-only");
 }
 
 // ── release build without a Sew pin ──────────────────────────────────────

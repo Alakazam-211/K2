@@ -235,6 +235,18 @@ pub trait SewOps: Send + Sync {
         mirror_dir_via_helper(&self.helper_state(), path, |argv, stdin| self.helper(argv, Some(stdin)))
     }
 
+    // ── ship kind box-backup (0.46.9) ────────────────────────────────────
+    /// What the box backup client (`k2-backup`) is set to carry: its
+    /// `/etc/k2-backup/paths` and `excludes` and whether `k2-backup.timer`
+    /// is enabled ([`super::box_backup`]). Read as the daemon user, through
+    /// the root helper (protocol 13) when the files are root-only; cached
+    /// for [`super::box_backup::CACHE_SECS`]. The machine tests answer it
+    /// from memory.
+    fn box_backup_facts(&self) -> super::box_backup::BoxBackupFacts {
+        use super::box_backup as bb;
+        bb::cached(|| bb::read_with(&self.helper_state(), bb::direct_read, bb::timer_word, |argv| self.helper(argv, None)))
+    }
+
     // ── the plan tier (voice rooms PRD v1.9 §8, S7) ───────────────────────
     /// This box's plan tier, cached by the tunnel's refresh loop
     /// (`k2_core::tunnel::subdomains::tier_view` for [`Self::box_label`];
@@ -908,6 +920,11 @@ pub mod fake {
         pub tier: Mutex<k2_core::tunnel::subdomains::TierView>,
         /// [`SewOps::voice_preview`] (default off).
         pub preview: Mutex<bool>,
+        /// [`SewOps::box_backup_facts`] (default: no box backup client:
+        /// both files missing, the timer `not-found`).
+        pub box_backup: Mutex<crate::sew::box_backup::BoxBackupFacts>,
+        /// How many times [`SewOps::box_backup_facts`] was read.
+        pub box_backup_reads: Mutex<usize>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -1032,6 +1049,12 @@ pub mod fake {
                 mirror_dir_fail: Mutex::new(Some(super::MIRROR_DIR_PENDING.to_string())),
                 tier: Mutex::new(k2_core::tunnel::subdomains::TierView::Unknown),
                 preview: Mutex::new(false),
+                box_backup: Mutex::new(crate::sew::box_backup::BoxBackupFacts {
+                    paths: crate::sew::box_backup::FileRead::Missing,
+                    excludes: crate::sew::box_backup::FileRead::Missing,
+                    timer: "not-found".into(),
+                }),
+                box_backup_reads: Mutex::new(0),
             }
         }
 
@@ -1670,6 +1693,10 @@ pub mod fake {
         }
         fn voice_preview(&self) -> bool {
             *self.preview.lock().unwrap()
+        }
+        fn box_backup_facts(&self) -> crate::sew::box_backup::BoxBackupFacts {
+            *self.box_backup_reads.lock().unwrap() += 1;
+            self.box_backup.lock().unwrap().clone()
         }
         fn mirror_dir(&self, path: &str) -> Result<(), String> {
             if let Some(e) = self.mirror_dir_fail.lock().unwrap().clone() {

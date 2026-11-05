@@ -48,6 +48,7 @@
 //!   direct-mode exposure note and the ports file.
 
 pub mod autosetup;
+pub mod box_backup;
 pub mod fetch;
 pub mod health;
 pub mod governed;

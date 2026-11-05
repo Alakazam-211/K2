@@ -271,6 +271,172 @@ fn ship_sets_dir_or_none_and_refuses_the_vault_system_paths_and_k2() {
     use_fs_for_tests(None);
 }
 
+// ── ship box-backup (0.46.9) ────────────────────────────────────────────
+
+fn box_backup_facts(paths: &str, excludes: Option<&str>, timer: &str) -> crate::sew::box_backup::BoxBackupFacts {
+    use crate::sew::box_backup::{BoxBackupFacts, FileRead};
+    BoxBackupFacts {
+        paths: FileRead::Text { text: paths.into() },
+        excludes: excludes.map_or(FileRead::Missing, |e| FileRead::Text { text: e.into() }),
+        timer: timer.into(),
+    }
+}
+
+fn has_alarm(s: &Value, a: &str) -> bool {
+    s["alarms"].as_array().expect("alarms").iter().any(|x| x == a)
+}
+
+/// `ship box-backup`: the owner's word, recorded at once; the alarm clears
+/// only while the box backup's files and timer show it carries Sew's
+/// bundles, and comes back (with the reason) the moment they don't.
+#[test]
+fn ship_box_backup_clears_the_offbox_alarm_only_on_evidence() {
+    let t = t();
+    let _fs = memfs();
+    t.enable();
+    // Kind none never reads the box backup.
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert!(has_alarm(&s, "k2_backup_offbox_none"), "{s}");
+    assert_eq!(*t.ops.box_backup_reads.lock().unwrap(), 0, "kind none reads nothing");
+    assert!(s["backup"]["ship"].get("boxBackup").is_none(), "{s}");
+
+    // No client on this box yet: recorded, the alarm stays, and why.
+    let _ = take_emitted();
+    let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "box-backup"}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["ship"]["kind"], "box-backup");
+    assert_eq!(v["ship"]["path"], Value::Null);
+    assert_eq!(v["ship"]["boxBackup"]["ok"], false, "{v}");
+    assert!(v["note"].as_str().unwrap().contains("k2_backup_offbox_none stays"), "{v}");
+    assert_eq!(take_emitted(), vec!["ship"]);
+    let row = crate::sew::store::load().unwrap();
+    assert_eq!((row.ship_kind.as_str(), row.ship_path.as_deref()), ("box-backup", None));
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert!(has_alarm(&s, "k2_backup_offbox_none"), "{s}");
+    assert_eq!(s["state"], "degraded", "{s}");
+    let bb = &s["backup"]["ship"]["boxBackup"];
+    assert_eq!(bb["ok"], false, "{s}");
+    assert!(bb["reason"].as_str().unwrap().contains("/etc/k2-backup/paths is missing"), "{bb}");
+    assert_eq!(bb["timer"], "not-found");
+    assert_eq!(s["moveOffK2"]["missing"], json!(["ship_folder", "keyring_mirror"]), "{s}");
+
+    // The evidence: paths cover /var/lib, nothing relevant excluded, the
+    // timer enabled. The alarm clears; hosting reads running.
+    *t.ops.box_backup.lock().unwrap() = box_backup_facts("/etc\n/var/lib\n", Some("/var/lib/docker\n"), "enabled");
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert!(!has_alarm(&s, "k2_backup_offbox_none"), "{s}");
+    assert_eq!(s["alarms"], json!([]), "{s}");
+    assert_eq!(s["state"], "running", "{s}");
+    let bb = &s["backup"]["ship"]["boxBackup"];
+    assert_eq!(bb["ok"], true, "{s}");
+    assert_eq!(bb["coveredBy"], "/var/lib");
+    assert_eq!(bb["reason"], Value::Null);
+    assert_eq!(bb["line"], "the box backup (k2-backup) carries Sew's bundles");
+    assert_eq!(s["moveOffK2"]["missing"], json!(["keyring_mirror"]), "the box backup counts as the bundle copy: {s}");
+    let (_, b) = t.get(&Who::Owner, "/cli/sew/backups");
+    assert_eq!(b["ship"]["boxBackup"]["ok"], true, "{b}");
+
+    // Each missing fact brings the alarm back with its own reason.
+    for (facts, why) in [
+        (box_backup_facts("/etc\n/var/lib\n", None, "disabled"), "k2-backup.timer is not enabled"),
+        (box_backup_facts("/etc\n/home\n", None, "enabled"), "does not cover /var/lib/sew/backups"),
+        (box_backup_facts("/var/lib\n", Some("/var/lib/sew\n"), "enabled"), "excludes /var/lib/sew/backups"),
+        (box_backup_facts("/var/lib\n", Some("/var/lib/sew/backups/*\n"), "enabled"), "excludes /var/lib/sew/backups"),
+    ] {
+        *t.ops.box_backup.lock().unwrap() = facts;
+        let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+        assert!(has_alarm(&s, "k2_backup_offbox_none"), "{why}: {s}");
+        assert_eq!(s["state"], "degraded", "{why}: {s}");
+        let reason = s["backup"]["ship"]["boxBackup"]["reason"].as_str().expect("a reason").to_string();
+        assert!(reason.contains(why), "{reason} should say {why}");
+    }
+    // Root-only files on a box whose helper is too old: the alarm stays and
+    // says so.
+    *t.ops.box_backup.lock().unwrap() = crate::sew::box_backup::BoxBackupFacts {
+        paths: crate::sew::box_backup::FileRead::Error { error: crate::sew::box_backup::HELPER_TOO_OLD.into() },
+        excludes: crate::sew::box_backup::FileRead::Missing,
+        timer: "enabled".into(),
+    };
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert!(has_alarm(&s, "k2_backup_offbox_none"), "{s}");
+    assert!(s["backup"]["ship"]["boxBackup"]["reason"].as_str().unwrap().contains("can't read /etc/k2-backup/paths"), "{s}");
+
+    // Switching back: none raises the alarm whatever the box backup does;
+    // dir clears it the usual way.
+    *t.ops.box_backup.lock().unwrap() = box_backup_facts("/", None, "enabled");
+    let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "none"}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert!(v["ship"].get("boxBackup").is_none(), "{v}");
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert!(has_alarm(&s, "k2_backup_offbox_none"), "none is none: {s}");
+    assert!(s["backup"]["ship"].get("boxBackup").is_none(), "{s}");
+    let (st, _) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
+    assert_eq!(st, "200 OK");
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert!(!has_alarm(&s, "k2_backup_offbox_none"), "{s}");
+    // And back to box-backup with evidence: a fresh reading at once.
+    let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "box-backup"}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["ship"]["boxBackup"]["ok"], true, "{v}");
+    assert!(v["note"].as_str().unwrap().contains("clears"), "{v}");
+    use_fs_for_tests(None);
+}
+
+/// Only the owner (the owner token, an Owner login, a K2 shell tab) says
+/// the box backup carries Sew's bundles. An admin and every agent are
+/// refused, even with Manage Chat / Voice Hosting; nothing changes.
+#[test]
+fn ship_box_backup_is_the_owners_only() {
+    let t = t();
+    t.enable();
+    for (who, want) in [
+        (agent("w-it"), "owner_only"),
+        (agent("w-plain"), "chat_manage_off"),
+        (login(Role::Admin), "owner_only"),
+        (login(Role::Member), "owner_only"),
+        (shell("w-plain"), "chat_manage_off"),
+    ] {
+        let (st, v) = t.call(&who, SHIP, json!({"kind": "box-backup"}));
+        assert_eq!(st, "403 Forbidden", "{who:?}: {v}");
+        assert_eq!(code(&v), want, "{who:?}: {v}");
+        assert_eq!(crate::sew::store::load().unwrap().ship_kind, "none", "{who:?} changed nothing");
+    }
+    assert!(take_emitted().is_empty());
+    for who in [login(Role::Owner), shell("w-it"), Who::Owner] {
+        let (st, v) = t.call(&who, SHIP, json!({"kind": "box-backup"}));
+        assert_eq!(st, "200 OK", "{who:?}: {v}");
+        assert_eq!(crate::sew::store::load().unwrap().ship_kind, "box-backup");
+        // An agent with the switch may still switch it back.
+        let (st, v) = t.call(&agent("w-it"), SHIP, json!({"kind": "none"}));
+        assert_eq!(st, "200 OK", "{v}");
+    }
+}
+
+/// A keyring mirror K2 tied to the old ship folder stays when the owner
+/// moves to box-backup (it becomes the owner's own: dropping it would
+/// leave no off-box key copy, and costs a Sew restart).
+#[test]
+fn ship_box_backup_keeps_a_tied_mirror_as_the_owners_own() {
+    let t = t();
+    let _fs = memfs();
+    t.enable();
+    *t.ops.mirror_dir_fail.lock().unwrap() = None;
+    let (_, v) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
+    assert_eq!(v["mirror"]["state"], "tied", "{v}");
+    t.ops.clear();
+    let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "box-backup"}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["mirror"]["state"], "kept", "{v}");
+    assert_eq!(v["restarted"], false, "{v}");
+    assert!(t.ops.effects().is_empty(), "Sew is not touched: {:?}", t.ops.effects());
+    let row = crate::sew::store::load().unwrap();
+    assert_eq!((row.mirror_kind.as_str(), row.mirror_path.clone()), ("dir", Some(tied_path())));
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["mirror"]["tied"], false, "now the owner's own: {s}");
+    assert_eq!(s["mirror"]["tie"], Value::Null, "{s}");
+    use_fs_for_tests(None);
+}
+
 #[test]
 fn mirror_goes_through_engine_sew_config_then_restarts() {
     let t = t();
@@ -451,14 +617,27 @@ fn an_owner_mirror_elsewhere_is_kept_and_a_hand_set_mirror_ends_the_tie() {
 #[test]
 fn move_off_k2_names_each_missing_piece() {
     let mut row = crate::sew::store::Row::new("0.6.0", 1);
-    let v = crate::sew::supervisor::move_off_k2(&row, false);
+    let v = crate::sew::supervisor::move_off_k2(&row, false, false);
     assert_eq!(v["missing"], json!(["ship_folder", "keyring_mirror", "launch_key"]));
     assert!(v["line"].as_str().unwrap().contains("the launch key in the K2 vault (sew-launch-key"), "{v}");
+    // `box-backup` with no evidence: the bundle copy is still missing, and
+    // the words say so (not "a folder").
+    row.ship_kind = "box-backup".into();
+    let v = crate::sew::supervisor::move_off_k2(&row, true, false);
+    assert_eq!(v["missing"], json!(["ship_folder", "keyring_mirror"]));
+    let line = v["line"].as_str().unwrap();
+    assert!(line.contains("the box backup carrying Sew's bundles") && line.contains("the box backup doesn't set it"), "{line}");
+    // With evidence it counts as the off-box bundle copy.
+    let v = crate::sew::supervisor::move_off_k2(&row, true, true);
+    assert_eq!(v["missing"], json!(["keyring_mirror"]));
+    // Evidence for another kind counts for nothing.
+    row.ship_kind = "none".into();
+    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true, true)["missing"], json!(["ship_folder", "keyring_mirror"]));
     row.ship_kind = "dir".into();
     row.mirror_kind = "dir".into();
-    let v = crate::sew::supervisor::move_off_k2(&row, false);
+    let v = crate::sew::supervisor::move_off_k2(&row, false, false);
     assert_eq!((v["ready"].as_bool(), v["missing"].clone()), (Some(false), json!(["launch_key"])));
-    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true)["ready"], true);
+    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true, false)["ready"], true);
 }
 
 #[test]

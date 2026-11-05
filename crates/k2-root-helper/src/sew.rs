@@ -147,6 +147,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::Restore(id) => restore(ctx, id),
         SewVerb::Token => token(ctx),
         SewVerb::MirrorDir => mirror_dir(ctx, stdin),
+        SewVerb::BoxBackup => Ok(box_backup(ctx)),
         SewVerb::MediaInstall => media_install(ctx, stdin),
         SewVerb::MediaUpgrade => media_upgrade(ctx),
         SewVerb::MediaRollback => media_rollback(ctx),
@@ -1031,6 +1032,43 @@ fn rotate_master(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     }
     require_known(ctx)?;
     run_sew(ctx, &["keys", "rotate-master", "--new-from", "-"], Some(stdin))
+}
+
+/// `engine sew box-backup` (protocol 13, read-only): the box backup
+/// client's `/etc/k2-backup/paths` and `excludes` (fixed names, never
+/// through a link, at most [`k2_root_proto::box_backup::CAP_FILE`] bytes
+/// each, never its `env`) and `systemctl is-enabled k2-backup.timer`. The
+/// daemon judges them; a missing file is an answer, not a failure.
+fn box_backup(ctx: &Ctx) -> J {
+    use k2_root_proto::box_backup::{BoxBackupFacts, FileRead, CAP_FILE, CONFIG_DIR, EXCLUDES_FILE, PATHS_FILE, TIMER_UNIT};
+    let dir = ctx.dir(CONFIG_DIR);
+    let read = |name: &str| -> FileRead {
+        let d = match &dir {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FileRead::Missing,
+            Err(e) => return FileRead::Error { error: format!("{CONFIG_DIR}: {}", e.kind_str()) },
+        };
+        match d.read_file(OsStr::new(name), CAP_FILE) {
+            Ok(None) => FileRead::Missing,
+            Ok(Some(b)) => match String::from_utf8(b) {
+                Ok(text) => FileRead::Text { text },
+                Err(_) => FileRead::Error { error: format!("{CONFIG_DIR}/{name} is not UTF-8 text") },
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                FileRead::Error { error: format!("{CONFIG_DIR}/{name}: {e}") }
+            }
+            Err(e) => FileRead::Error { error: format!("{CONFIG_DIR}/{name}: {}", e.kind_str()) },
+        }
+    };
+    let timer = ctx
+        .exec
+        .run(SYSTEMCTL, &["is-enabled".into(), TIMER_UNIT.into()], None)
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".into());
+    let facts = BoxBackupFacts { paths: read(PATHS_FILE), excludes: read(EXCLUDES_FILE), timer };
+    serde_json::to_value(facts).unwrap_or_else(|e| json!({"error": e.to_string()}))
 }
 
 fn token(ctx: &Ctx) -> HResult<J> {

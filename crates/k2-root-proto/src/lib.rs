@@ -43,8 +43,12 @@
 //!   (protocol 10, `namespaces.creds`, `k2 vault systemd-cred`): the cred
 //!   and unit name rules, the exact deny list of K2's own units, the fixed
 //!   paths and the canned drop-in.
+//! - [`box_backup`]: what the box's own backup client (`k2-backup`,
+//!   restic) is set to carry (protocol 13, `namespaces.sewboxbackup`): its
+//!   fixed config paths and the read-only facts the helper answers.
 
 pub mod apps;
+pub mod box_backup;
 pub mod caller;
 pub mod cli;
 pub mod creds;

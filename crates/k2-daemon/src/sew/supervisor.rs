@@ -1480,7 +1480,14 @@ pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> 
     if env.ops.record_load(JWKS_RECORD).is_some() {
         a.push(ALARM_JWKS_DRIFT.into());
     }
-    if row.ship_kind == "none" {
+    // `box-backup` (0.46.9) clears it only while K2 sees the box backup
+    // carry Sew's bundles (`status.backup.ship.boxBackup` says why not).
+    let offbox_none = match row.ship_kind.as_str() {
+        "none" => true,
+        super::box_backup::KIND => !super::box_backup::evidence(env).ok,
+        _ => false,
+    };
+    if offbox_none {
         a.push("k2_backup_offbox_none".into());
     }
     if row.upgrade_progress.as_ref().and_then(|p| p.get("result")).and_then(Value::as_str) == Some("rollback_failed") {
@@ -1492,13 +1499,13 @@ pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> 
 
 /// `status.backup`: K2's off-box ship setting plus Sew's own backup state
 /// (SW15 `status.backup`; null fields while Sew is down or has none).
-fn backup_status(row: &Row, sew_status: Option<&Value>) -> Value {
+fn backup_status(env: &Env, row: &Row, sew_status: Option<&Value>) -> Value {
     let b: wire::StatusBackup = sew_status
         .and_then(|s| s.get("backup"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
     json!({
-        "ship": {"kind": row.ship_kind},
+        "ship": ship_json(env, row),
         "lastOkAt": b.last_ok_at,
         "lastId": b.last_id,
         "lastKind": b.last_kind,
@@ -1507,6 +1514,17 @@ fn backup_status(row: &Row, sew_status: Option<&Value>) -> Value {
         "lastErrorAt": b.last_error_at,
         "alarms": sew_alarms(sew_status, &["backup_failed", "backup_stale"]),
     })
+}
+
+/// The ship setting for status and `backups`: `{kind, path}`, plus
+/// `boxBackup` (the evidence, [`super::box_backup::Evidence::json`]) for
+/// kind `box-backup`.
+pub fn ship_json(env: &Env, row: &Row) -> Value {
+    let mut v = json!({"kind": row.ship_kind, "path": row.ship_path});
+    if row.ship_kind == super::box_backup::KIND {
+        v["boxBackup"] = super::box_backup::evidence(env).json();
+    }
+    v
 }
 
 /// `status.drill`: Sew's restore-drill state (SW15 `status.drill`).
@@ -1557,18 +1575,27 @@ pub fn split_setup_warnings(alarms: &mut Vec<String>, sew_status: Option<&Value>
 /// `launch_key` = the vault's `sew-launch-key` holds the current master
 /// key. Answers `{ready, missing: [ship_folder|keyring_mirror|launch_key],
 /// line}`; without a ship folder (the default) only the "the box still
-/// runs" path works, and the line says what to set.
-pub fn move_off_k2(row: &Row, launch_key: bool) -> Value {
+/// runs" path works, and the line says what to set. `box_backup` = the
+/// ship kind is `box-backup` and K2 sees the box backup carry Sew's
+/// bundles (0.46.9): that counts as the off-box bundle copy.
+pub fn move_off_k2(row: &Row, launch_key: bool, box_backup: bool) -> Value {
     let mut missing: Vec<&str> = Vec::new();
     let mut words: Vec<&str> = Vec::new();
-    if row.ship_kind != "dir" {
+    let boxed = row.ship_kind == super::box_backup::KIND;
+    if row.ship_kind != "dir" && !(boxed && box_backup) {
         missing.push("ship_folder");
-        words.push("an off-box backup folder (k2 hostchat ship dir <folder on another disk>)");
+        words.push(if boxed {
+            "the box backup carrying Sew's bundles (k2 hostchat status says what K2 can't see)"
+        } else {
+            "an off-box backup folder (k2 hostchat ship dir <folder on another disk>)"
+        });
     }
     if row.mirror_kind != "dir" {
         missing.push("keyring_mirror");
         words.push(if row.ship_kind == "dir" {
             "the keyring mirror (K2 sets it in the backup folder on its own; k2 hostchat status shows why it waits)"
+        } else if boxed {
+            "the keyring mirror (the box backup doesn't set it: k2 hostchat mirror dir <folder on another disk>)"
         } else {
             "the keyring mirror (it follows the backup folder)"
         });
@@ -1728,10 +1755,10 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         "recoveryKeyInVault": in_vault,
         "recoveryKeyVaultName": super::secrets::LAUNCH_NAME,
         // 0.46.8 (SW-8): what moving off K2 still needs.
-        "moveOffK2": move_off_k2(&row, in_vault),
+        "moveOffK2": move_off_k2(&row, in_vault, row.ship_kind == super::box_backup::KIND && super::box_backup::evidence(env).ok),
         "masterKeyAgeDays": row.master_key_created_at.map(|t| (now - t) / 86_400),
         "rotationInProgress": row.master_prev_ref.is_some(),
-        "backup": backup_status(&row, sew_status.as_ref()),
+        "backup": backup_status(env, &row, sew_status.as_ref()),
         "drill": drill_status(sew_status.as_ref()),
         "host": {"hostname": row.host, "mode": row.host_mode},
         "appUrl": row.app_url,
@@ -3497,7 +3524,7 @@ pub fn backups(env: &Env) -> R<Value> {
         "ok": true,
         "backups": list,
         "latest": latest,
-        "ship": {"kind": row.ship_kind, "path": row.ship_path},
+        "ship": ship_json(env, &row),
     }))
 }
 

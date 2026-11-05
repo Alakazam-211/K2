@@ -370,6 +370,16 @@ or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
    Don't grant it k2-arch or k2n12-vin. `k2 compute nodes` (from the
    release checkout) must list them.
 
+3. Node packages (K2 Web, on every CI and release node, k2n7-vin to
+   k2n11-vin): the `sys:` packages the jobs ask for must be approved, or
+   a job fails at once with `package_not_approved`. CI and the gate:
+   `pkg-config zlib1g-dev libssl-dev libasound2-dev` plus, for the gate
+   and L3, `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
+   librsvg2-dev libxdo-dev patchelf file xdg-utils`. Also approve
+   `shellcheck` on every CI node, so a shellcheck step can ask for
+   `sys:shellcheck`. Until then, `--needs aqua:koalaman/shellcheck@v0.10.0`
+   works today (job 288ebba1).
+
 **B. OAuth values for the release builds (owner, release checkout)**
 1. `(set -a; . ./.env; set +a; printf %s "$K2_GMAIL_CLIENT_ID" | k2 vault set K2_GMAIL_CLIENT_ID --scope ws:pod-leader; printf %s "$K2_GMAIL_CLIENT_SECRET" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope ws:pod-leader)`
    and the same for `K2_MICROSOFT_CLIENT_ID` if `.env` has a real one.

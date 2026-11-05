@@ -564,7 +564,8 @@ git -C "$srcrepo" init -q
 git -C "$srcrepo" -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m release
 git -C "$srcrepo" tag "v$V"
 export K2_SIGN_SOURCE_DIR="$srcrepo"
-export STUB_TAG_COMMIT="$(git -C "$srcrepo" rev-parse "refs/tags/v$V^{commit}")"
+STUB_TAG_COMMIT="$(git -C "$srcrepo" rev-parse "refs/tags/v$V^{commit}")"
+export STUB_TAG_COMMIT
 export STUB_ATTESTED="$tmp/attested"
 for a in x86_64 aarch64; do awk '{print $1}' "$good/k2-daemon-linux-$a.sha256"; done > "$STUB_ATTESTED"
 fresh_rel() {

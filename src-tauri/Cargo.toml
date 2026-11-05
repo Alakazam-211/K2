@@ -97,7 +97,7 @@ parking_lot = "0.12"
 # Native voice calls (prd-k2-voice-rooms-v1 §14), behind the `native-voice`
 # feature below. Named by version; the root Cargo.toml's [patch.crates-io] says
 # where it comes from. It brings cpal, str0m and openmls, which is why it is
-# optional (the 0.46.4 rule above; vs-live V40). K2 leaves the plugin's
+# optional (the 0.46.4 rule above; vs-live V40), though on by default. K2 leaves the plugin's
 # `keyring-store` feature off: its Linux Secret Service backend can't build beside
 # K2's `sync-secret-service`, and K2 passes its own store over its own keyring.
 # zeroize: the device key K2's store handles.
@@ -193,7 +193,7 @@ windows-core = "0.62"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
-default = ["browser-pane"]
+default = ["browser-pane", "native-voice"]
 # Embedded Browser Tab (PRD prd-browser-pane-v1.md). Pulls tauri's
 # `unstable` multiwebview API, which has documented whole-app side effects
 # (WindowEvent::Focused regression, tauri #12568) — watch focus-dependent
@@ -202,8 +202,12 @@ default = ["browser-pane"]
 # Feature-less builds keep the inert stub: `cargo check -p k2 --no-default-features`.
 browser-pane = ["tauri/unstable"]
 # Native voice calls: Sew's Tauri plugin (engine, audio devices, E2EE) in this
-# process. Off until the per-OS calls pass (N3); `cargo check -p k2` and the
-# builders don't need ALSA headers until then.
+# process. ON by default since 0.46.9 (Rosson 11-05), so every release, dev
+# and CI build of the app has it with no flag to pass: release.sh, build-app.sh,
+# dev-build.sh, `tauri dev`, the Linux app job and the Windows NSIS build.
+# Building it needs ALSA headers on Linux (libasound2-dev / alsa-lib) and about
+# 20 GB for a release link. `cargo check -p k2 --no-default-features` still
+# builds without it (the renderer then stays on the seat path).
 native-voice = ["dep:tauri-plugin-sew-voice", "dep:zeroize"]
 
 [dev-dependencies]

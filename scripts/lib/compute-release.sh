@@ -112,8 +112,12 @@ k2cr_submit() {
     local label="$1" node="$2" kind="$3" arch="$4" needs="$5"
     shift 5
     [ "${1:-}" = "--" ] && shift
+    # The app links the native voice stack (native-voice, on by default since
+    # 0.46.9): a release link needs at least 20G (job 96d5148c, 11-03).
+    local mem=16G
+    [ "$kind" = "linux-app" ] && mem=20G
     local -a args=(compute run "$node" --sha "$K2CR_COMMIT" --detach --gate --json
-        --artifact 'dist/*' --needs "$needs" --mem 16G --queue-timeout "${K2_COMPUTE_QUEUE_TIMEOUT:-2h}" --retries 1
+        --artifact 'dist/*' --needs "$needs" --mem "$mem" --queue-timeout "${K2_COMPUTE_QUEUE_TIMEOUT:-2h}" --retries 1
         --env "BUILD_COMMIT=$K2CR_COMMIT" --env "BUILD_TREE=$K2CR_TREE")
     [ -n "${K2_COMPUTE_WORKSPACE:-}" ] && args+=(--workspace "$K2_COMPUTE_WORKSPACE")
     [ -n "${K2_COMPUTE_CPUS:-}" ] && args+=(--cpus "$K2_COMPUTE_CPUS")
@@ -153,7 +157,7 @@ k2cr_submit() {
 k2cr_submit_release_set() {
     local rust="rust@${K2_COMPUTE_RUST:-stable}" rc=0
     local bins_needs="$rust,cmake@3,sys:pkg-config,sys:zlib1g-dev"
-    local app_needs="$rust,cmake@3,bun@1.2,sys:pkg-config,sys:libwebkit2gtk-4.1-dev,sys:libgtk-3-dev,sys:libayatana-appindicator3-dev,sys:librsvg2-dev,sys:patchelf,sys:libxdo-dev,sys:file,sys:xdg-utils,sys:libssl-dev"
+    local app_needs="$rust,cmake@3,bun@1.2,sys:pkg-config,sys:libwebkit2gtk-4.1-dev,sys:libgtk-3-dev,sys:libayatana-appindicator3-dev,sys:librsvg2-dev,sys:patchelf,sys:libxdo-dev,sys:file,sys:xdg-utils,sys:libssl-dev,sys:libasound2-dev"
     local node="${K2_COMPUTE_NODE:-k2n9-vin}"
     k2cr_submit L1 "${K2_COMPUTE_X86_NODE:-$node}" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
     k2cr_submit L3 "${K2_COMPUTE_APP_NODE:-$node}" linux-app x86_64 "$app_needs" -- bash scripts/ci/build-linux-app.sh || rc=1

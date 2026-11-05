@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.9 — Voice calls in the desktop app
+
+### Voice rooms (preview)
+- **You can talk in a voice room from the K2 desktop app.** Join a room from the headset in the top bar, and the call runs inside the app, encrypted end to end, on macOS, Windows and Linux. While you're in the call you can mute, deafen, and pick your microphone and speakers. The call keeps going when you open or close another K2 window.
+- **The first call asks for your microphone.** If K2 can't use it, the join says so and opens your system's privacy settings. On Windows, "Let desktop apps access your microphone" has to be on.
+- **Updating K2 during a call asks first,** because the update ends the call.
+- **If you lose access during a call, K2 says why.** Losing access to a room, being removed or being timed out each end the call with their own line. If only speaking is taken away, you stay in the call and can still listen, and K2 tells you when you can speak again.
+
 ## 0.46.8 — Agents run their Apps' people
 
 An agent can now look after its App's people from start to finish, and App screens update the moment someone's access changes, with no sign-out. Mailboxes can forward to up to 100 addresses and send files, your own domain can reach an App through K2 Connect, and the Windows installer is back.

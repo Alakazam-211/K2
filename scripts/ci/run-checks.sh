@@ -25,8 +25,10 @@
 #   k2-compute/rust-test   scripts/ci/checks.sh rust-test
 #   k2-compute/audit       scripts/ci/checks.sh audit
 # Where: K2 picks the node (--any --os linux --arch x86_64) among the
-# nodes this workspace is granted. The grants are the fence: k2-ci is
-# granted k2n7/k2n8/k2n9/k2n10 only, never k2n12. K2_CI_NODE_WEB,
+# nodes this workspace is granted, never k2-arch (--avoid when it is
+# granted: an Arch node has no Debian sys: packages; K2_COMPUTE_AVOID).
+# The grants are the fence: k2-ci is granted the Debian Ryzens k2n7, k2n8,
+# k2n9 and k2n10 only, never k2n12 (the fuzz node) or k2-arch. K2_CI_NODE_WEB,
 # K2_CI_NODE_RUST_CHECK, K2_CI_NODE_RUST_TEST, K2_CI_NODE_AUDIT pin a part
 # to a node instead ("any" = the default).
 #
@@ -123,10 +125,14 @@ submit() {
     source "$ROOT/scripts/lib/compute-tier.sh"
     local rust t
     rust="$(k2_rust_need "$SHA")"
-    local -a tier_args=()
+    local -a tier_args=() avoid_args=()
     while IFS= read -r t; do [ -n "$t" ] && tier_args+=("$t"); done < <(K2_BIN="$K2" k2_compute_tier_args "${K2_CI_TIER:-ci}")
+    # A part K2 places itself never lands on k2-arch (Arch: no apt sys:).
+    while IFS= read -r t; do [ -n "$t" ] && avoid_args+=("$t"); done < <(K2_BIN="$K2" k2_compute_avoid_args)
     # cargo-nextest: rust-test runs nextest (.config/nextest.toml, profile ci).
-    local rust_needs="${K2_CI_RUST_NEEDS:-$rust,cargo-nextest,cmake@3,sys:pkg-config,sys:zlib1g-dev}"
+    # libssl-dev as checks.yml's apt line; libasound2-dev for the native-voice
+    # crates (kessel-audio, cpal/ALSA) a workspace build reaches.
+    local rust_needs="${K2_CI_RUST_NEEDS:-$rust,cargo-nextest,cmake@3,sys:pkg-config,sys:zlib1g-dev,sys:libssl-dev,sys:libasound2-dev}"
     local web_needs="${K2_CI_WEB_NEEDS:-bun@1.2,node@22,python@3.12}"
     local audit_needs="${K2_CI_AUDIT_NEEDS:-$rust,python@3.12,sys:pkg-config}"
     local -a parts
@@ -143,7 +149,11 @@ submit() {
         needs="$rust_needs"; [ "$p" = web ] && needs="$web_needs"; [ "$p" = audit ] && needs="$audit_needs"
         status pending "$p" "submitting ($([ "$node" = any ] && echo "K2 picks the node" || echo "$node"))"
         args=(compute run)
-        if [ "$node" = any ]; then args+=(--any --os linux --arch x86_64); else args+=("$node"); fi
+        if [ "$node" = any ]; then
+            args+=(--any --os linux --arch x86_64 ${avoid_args[@]+"${avoid_args[@]}"})
+        else
+            args+=("$node")
+        fi
         args+=(--sha "$SHA" ${tier_args[@]+"${tier_args[@]}"} --detach --json --needs "$needs" --mem "${K2_CI_MEM:-24G}"
             --timeout 2h --queue-timeout 2h --retries 1)
         [ -n "$REF" ] && args+=(--supersede "k2-ci/${REF#refs/heads/}/$p")

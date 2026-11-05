@@ -190,6 +190,16 @@ case "$2" in
         printf '{"job": "%s"}\n' "$job"
         ;;
     wait) exit 0 ;;
+    --help)
+        # A CLI with --avoid (0.46.8+) when STUB_AVOID=1; else a plain help.
+        echo "k2 compute — help"; echo "  [--tier standard|priority|batch|ci]"
+        [ "${STUB_AVOID:-0}" = 1 ] && echo "  [--avoid <node>]..."
+        exit 0
+        ;;
+    nodes)
+        # The nodes this workspace is granted ($STUB_NODES, comma list).
+        python3 -c 'import json,sys; print(json.dumps({"nodes": [{"name": n} for n in sys.argv[1].split(",") if n]}))' "${STUB_NODES:-k2n7-vin,k2n8-vin}"
+        ;;
     get)
         job="$3"; part="$(cat "$STUB_DIR/$job")"
         ex=0; st=done
@@ -237,6 +247,19 @@ grep -q -- "--mem 24G" "$tmp/c-ok" && ! grep -q -- "--supersede" "$tmp/c-ok" \
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and len(v["parts"])==4, v' "$tmp/state-ok/runs/$SHA.json" \
     && pass "run record written" || fail "record" "$(cat "$tmp/state-ok/runs/$SHA.json")"
 ! grep -q 'target_url' "$tmp/o-ok" && pass "no target_url (logs stay in K2)" || fail "target_url" "$(cat "$tmp/o-ok")"
+grep -q -- "--needs rust@1.98.7,cargo-nextest,[^ ]*sys:libssl-dev,sys:libasound2-dev .*checks.sh rust-check" "$tmp/c-ok" \
+    && pass "rust parts ask for libssl-dev and ALSA (native-voice crates)" || fail "rust sys needs" "$(grep rust-check "$tmp/c-ok")"
+! grep -q -- "--avoid" "$tmp/c-ok" && pass "no --avoid when the CLI has none (before 0.46.8)" || fail "avoid on old cli" "$(cat "$tmp/c-ok")"
+rc="$(STUB_AVOID=1 STUB_NODES=k2n7-vin,k2-arch,k2n8-vin run_checks avoid)"
+[ "$rc" = 0 ] && [ "$(grep -c -- "k2 compute run --any --os linux --arch x86_64 --avoid k2-arch --sha $SHA " "$tmp/c-avoid")" = 4 ] \
+    && pass "k2-arch granted: every part K2 places avoids it (an Arch node has no Debian sys: packages)" || fail "avoid k2-arch" "rc=$rc $(cat "$tmp/c-avoid")"
+rc="$(STUB_AVOID=1 STUB_NODES=k2n7-vin,k2n8-vin run_checks avoid-none)"
+[ "$rc" = 0 ] && ! grep -q -- "--avoid" "$tmp/c-avoid-none" \
+    && pass "k2-arch not granted: no --avoid (K2 refuses --avoid on a node it can't see)" || fail "avoid not granted" "rc=$rc $(cat "$tmp/c-avoid-none")"
+rc="$(K2_CI_NODE_AUDIT=k2n8-vin STUB_AVOID=1 STUB_NODES=k2-arch,k2n8-vin run_checks avoid-pinned)"
+[ "$rc" = 0 ] && grep -q -- "k2 compute run k2n8-vin --sha $SHA .*checks.sh audit" "$tmp/c-avoid-pinned" \
+    && ! grep "checks.sh audit" "$tmp/c-avoid-pinned" | grep -q -- "--avoid" \
+    && pass "a part pinned to a node gets no --avoid (K2 refuses both together)" || fail "avoid pinned" "rc=$rc $(cat "$tmp/c-avoid-pinned")"
 
 export STUB_FAIL=rust-test
 rc="$(run_checks fail)"

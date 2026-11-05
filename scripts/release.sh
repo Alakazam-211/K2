@@ -672,9 +672,11 @@ else
     bash "$PROJECT_DIR/scripts/sign-app-engine.sh" --preflight
 fi
 
-# ── Step 0.6: Linux build gate (k2-ci@40.160.54.133) ──
-# Shared with scripts/build-app.sh — full rationale + designated-box details
-# live in scripts/linux-build-gate.sh. Escape: K2_SKIP_LINUX_GATE=1 (loud).
+# ── Step 0.6: Linux build gate (a K2 Compute job; K2_LINUX_GATE=ssh = the old box) ──
+# Shared with scripts/build-app.sh — full rationale and settings live in
+# scripts/linux-build-gate.sh: `cargo check --workspace --all-targets`
+# (the k2 crate too) at HEAD on a Linux node, --tier ci, the pinned Rust.
+# No GitHub runner is involved. Escape: K2_SKIP_LINUX_GATE=1 (loud).
 echo ""
 echo "Step 0.6: Linux build gate..."
 "$PROJECT_DIR/scripts/linux-build-gate.sh"

@@ -356,12 +356,10 @@ where
 {
     match live(app_id) {
         None => {
-            match super::local_answers::for_app(app_id) {
-                Some(l) => {
-                    if let FirstRequest::Answered = answer_first(client, &l).await {
-                        return;
-                    }
-                }
+            let local = super::local_answers::for_app(app_id);
+            match read_first(client, app_id, local.as_ref()).await {
+                Some(FirstRequest::Answered) => return,
+                Some(FirstRequest::Pass(_)) => {}
                 None => consume_request_head(client).await,
             }
             let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
@@ -396,32 +394,48 @@ pub enum TlsAppOutcome {
 /// shared by the K2 Connect E2E listener (`*.<sub>.k2.dev`), the App TLS
 /// door (custom names, 0.46.6) and the App's front port: the client-IP
 /// rewrite when the App allows it ([`rewrite_mode`] for `label`), K2's own
-/// answers for the App's pairing link files (read before the backend is
-/// dialed), then the counted splice to `be`. The caller answers a failure.
+/// answers for the App's pairing link files and the native call door
+/// (`voice_door`; read before the backend is dialed), then the counted
+/// splice to `be`. The caller answers a failure.
 pub async fn serve_tls_app<S>(client: &mut S, be: Arc<Backend>, label: &str, mode: crate::client_ip::Mode) -> TlsAppOutcome
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mode = rewrite_mode(&be, label, mode);
     let local = mode.and_then(|_| super::local_answers::for_app(label));
-    match (mode, local) {
-        (Some(mode), Some(l)) => match answer_first(client, &l).await {
-            FirstRequest::Answered => TlsAppOutcome::Answered,
-            FirstRequest::Pass(bytes) => {
-                let r = {
-                    let mut r = crate::client_ip::Replay::new(bytes, client);
-                    splice_with(&mut r, be, Some(mode), Some(l)).await
-                };
-                match r {
-                    Ok(()) => TlsAppOutcome::Spliced,
-                    Err(why) => TlsAppOutcome::Failed { head_read: true, why },
-                }
+    match read_first(client, label, local.as_ref()).await {
+        Some(FirstRequest::Answered) => TlsAppOutcome::Answered,
+        Some(FirstRequest::Pass(bytes)) => {
+            let r = {
+                let mut r = crate::client_ip::Replay::new(bytes, client);
+                splice_with(&mut r, be, mode, local).await
+            };
+            match r {
+                Ok(()) => TlsAppOutcome::Spliced,
+                Err(why) => TlsAppOutcome::Failed { head_read: true, why },
             }
-        },
-        (mode, _) => match splice(client, be, mode).await {
+        }
+        None => match splice(client, be, mode).await {
             Ok(()) => TlsAppOutcome::Spliced,
             Err(why) => TlsAppOutcome::Failed { head_read: false, why },
         },
+    }
+}
+
+/// A connection's first request, when K2 may answer it before the App is
+/// dialed: the native call door on a box with voice (`voice_door`, App up or
+/// down, raw splice or not), else `local`'s answers. `None`: K2 reads
+/// nothing and the App gets the connection as it comes.
+async fn read_first<S>(client: &mut S, app_id: &str, local: Option<&crate::client_ip::LocalAnswer>) -> Option<FirstRequest>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    if super::voice_door::watching(app_id) {
+        return Some(super::voice_door::first_request(client, app_id, local).await);
+    }
+    match local {
+        Some(l) => Some(answer_first(client, l).await),
+        None => None,
     }
 }
 

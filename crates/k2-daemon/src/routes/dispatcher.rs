@@ -1499,7 +1499,9 @@ async fn handle_one_request(
     // Voice rooms §14.11: the native call engine's door to Sew. It carries a
     // call credential, not a K2 login, so it answers before K2's login and
     // method gates; its own allowlist and credential check run instead. Never
-    // on an App's link.
+    // on an App's gateway link (the App's own container calling K2). An App's
+    // public addresses never reach this dispatcher: their door is
+    // `apps::voice_door`, on the App path.
     if ingress != Ingress::App && crate::voice::sew_lane::is_lane(path_and_query) {
         let head_len = buf[..n].windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4);
         match head_len {

@@ -108,6 +108,8 @@ pub mod local_answers;
 pub mod updates_routes;
 /// `/_k2/updates/…` on an App's hosts and the check-in counts (0.46.7, TC-9).
 pub mod updates_serve;
+/// `/_k2/voice/sew/` on an App's hosts: the native call door (0.46.9).
+pub mod voice_door;
 pub mod open;
 /// The delete guard, hand over / park / unpark, the orphan sweep (Q8).
 pub mod ownership;

@@ -7,9 +7,16 @@
 //! answer. Sew's client API stays loopback-only; this is the one way in, and
 //! only for those routes.
 //!
+//! **On App addresses too** (0.46.9): `https://<app>.<label>.k2.dev/_k2/voice/sew/`
+//! and the App's live custom names, for a third-party native app whose own
+//! server mints the credential. Same allowlist, same credential rule, same
+//! limits; only the switch differs ([`serve_app`]; the App's gate is
+//! `apps::voice_door`).
+//!
 //! K2's rules, on top of Sew's own check of the credential's scope on every
 //! request:
-//! - off (404) unless the voice rooms preview is on;
+//! - off (404) on the box's label unless the voice rooms preview is on, and on
+//!   an App's address unless that App's door is open (`voice_door_off`);
 //! - anything not on Sew's allowlist answers 404 here and is never forwarded,
 //!   `/api/v1/gateway/ticket` included;
 //! - only a `sewcc_` bearer is accepted, and it is the only credential that
@@ -234,7 +241,27 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str
     serve_to(client, head, head_len, k2_core::voice_preview::enabled(), &crate::sew::ops::client_addr()).await;
 }
 
+/// The box label's door: off while the voice rooms preview is.
 async fn serve_to<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, preview_on: bool, sew_addr: &str) {
+    let off = (!preview_on).then_some(("voice_rooms_off", "no such route"));
+    serve_door(client, head, head_len, off, sew_addr).await;
+}
+
+/// The 404 code on an App's address whose door is shut.
+pub const APP_DOOR_OFF: &str = "voice_door_off";
+const APP_DOOR_OFF_HINT: &str = "no call door on this App's address: the App needs Sew's client API approved (box service sew-api), \
+     voice:join approved if it asks for chat caps, and voice installed on this server (k2 study chat-voice)";
+
+/// An App address's door (`apps::voice_door`): this lane, open only when
+/// `open` (that App's gate). The allowlist, the credential rule and the limits
+/// are the box label's.
+pub async fn serve_app<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, open: bool, sew_addr: &str) {
+    let off = (!open).then_some((APP_DOOR_OFF, APP_DOOR_OFF_HINT));
+    serve_door(client, head, head_len, off, sew_addr).await;
+}
+
+/// `off`: the door is shut; answer 404 with this `(code, hint)`.
+async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, off: Option<(&str, &str)>, sew_addr: &str) {
     let mut consumed = vec![0u8; head_len];
     if client.read_exact(&mut consumed).await.is_err() {
         return;
@@ -245,8 +272,8 @@ async fn serve_to<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str,
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return answer(client, "400 Bad Request", "usage", "bad request line", None).await;
     };
-    if !preview_on {
-        return answer(client, "404 Not Found", "voice_rooms_off", not_found, None).await;
+    if let Some((code, hint)) = off {
+        return answer(client, "404 Not Found", code, hint, None).await;
     }
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p, Some(q)),

@@ -3411,21 +3411,25 @@ fn answer_action_card(
     if action.id == k2_core::permission::CARD_ACTION_PERMISSION || action.id == k2_core::permission::CARD_ACTION_BATCH {
         return answer_permission_card(params, resolved, card_id, action, session_author);
     }
+    let who = session_author.to_string();
+    let tapped = opt_param(params, "answer").or_else(|| opt_param(params, "option")).map(|a| a.trim().to_string()).unwrap_or_default();
+    // Every tap is logged with what came of it (a refusal and a no-op too),
+    // so "I clicked and nothing happened" can be read back.
+    let log = |outcome: &str| {
+        k2_core::log_debug!("[action-card] {} card {card_id}: {who} tapped '{tapped}': {outcome}", action.id);
+    };
     let gate = if action.id == crate::action_cards::KEEP_WIDGET {
         require_garden_owner_card_person(params, session_author, "answers")
     } else {
         require_action_card_person(params, session_author, "answers")
     };
     if let Err(r) = gate {
+        log(&format!("refused {}", r.body));
         return r;
     }
-    if let Some(r) = refuse_if_expired(resolved, card_id) {
-        return r;
-    }
-    let Some(answer) = opt_param(params, "answer").or_else(|| opt_param(params, "option")).map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
-    else {
-        return usage("answer required");
-    };
+    // A card that already closed (another viewer, Settings or the CLI
+    // decided first; this view missed the frame) says so, with the card as
+    // it is now: never a silent no-op.
     let doc = match overlay::get_thread_doc(&resolved.conversation_id, card_id) {
         Ok(Some(d)) => d,
         Ok(None) => return not_found(format!("card not found: {card_id}")),
@@ -3435,15 +3439,39 @@ fn answer_action_card(
         return usage("that card has no options");
     };
     if choice.status != "pending" {
-        return card_error(overlay::CARD_NOT_PENDING.to_string());
+        let r = card_not_pending_response(&resolved.conversation_id, card_id);
+        log(&format!("not pending ({})", choice.status));
+        return r;
     }
+    if refuse_if_expired(resolved, card_id).is_some() {
+        log("expired");
+        return card_not_pending_response(&resolved.conversation_id, card_id);
+    }
+    let Some(answer) = opt_param(params, "answer").or_else(|| opt_param(params, "option")).map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
+    else {
+        return usage("answer required");
+    };
     if !choice.options.iter().any(|o| o.label == answer) {
         return usage(format!("'{answer}' is not an option on this card"));
     }
+    // A question decided elsewhere while this card waited (Settings, the
+    // CLI): the card closes showing that decision, and the tap is told.
+    if let Some((label, by, result)) = crate::action_cards::decided_elsewhere(&action) {
+        let note = result["message"].as_str().unwrap_or_default().to_string();
+        if let Err(e) = close_action_card_as(&resolved.conversation_id, card_id, &label, by, result) {
+            k2_core::log_debug!("[action-card] {} card {card_id}: close as decided: {e}", action.id);
+        }
+        log(&format!("already decided elsewhere: {note}"));
+        return card_not_pending_response(&resolved.conversation_id, card_id);
+    }
     let result = match crate::action_cards::run(&action, &answer, session_author) {
         Ok(r) => r,
-        Err(e) => return error_json("409 Conflict", "action_failed", e),
+        Err(e) => {
+            log(&format!("action failed: {e}"));
+            return error_json("409 Conflict", "action_failed", e);
+        }
     };
+    log(&format!("ok: {}", result["message"].as_str().unwrap_or_default()));
     match overlay::answer_card(
         &resolved.conversation_id,
         &resolved.project_id,
@@ -3478,8 +3506,102 @@ fn answer_action_card(
                 resolved,
             ))
         }
+        // Someone else's tap closed it between our check and this write.
+        Err(e) if e == overlay::CARD_NOT_PENDING => {
+            log("closed by another tap meanwhile");
+            card_not_pending_response(&resolved.conversation_id, card_id)
+        }
         Err(e) => card_error(e),
     }
+}
+
+/// "2026-11-05 15:12 UTC" for a card's `answeredAt` (the person may be in
+/// any time zone, so the server says UTC).
+pub(crate) fn card_time_words(at: i64) -> String {
+    chrono::DateTime::from_timestamp(at, 0).map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_else(|| at.to_string())
+}
+
+/// Who a card's `answeredBy` names, for a sentence: the owner's display
+/// name (else "the owner"), a login's username.
+pub(crate) fn card_author_words(a: Option<&overlay::PostAuthor>) -> String {
+    match a {
+        Some(a) if a.kind == k2_core::overlay::doc::AUTHOR_OWNER => {
+            a.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "the owner".to_string())
+        }
+        Some(a) => a.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| a.login.clone()),
+        None => "K2".to_string(),
+    }
+}
+
+/// What a closed card says about itself: "Already answered: “Always trust
+/// this folder” by baden at 2026-11-05 15:12 UTC. Always trusted. …".
+pub(crate) fn closed_card_words(doc: &overlay::OverlayDoc) -> String {
+    let Some(c) = doc.choice.as_ref() else {
+        return "this card is no longer waiting for an answer".to_string();
+    };
+    let at = c.answered_at.map(|t| format!(" at {}", card_time_words(t))).unwrap_or_default();
+    let who = card_author_words(c.answered_by.as_ref());
+    let result = c
+        .action
+        .as_ref()
+        .and_then(|a| a.result.as_ref())
+        .and_then(|r| r["message"].as_str())
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(|m| format!(" {m}"))
+        .unwrap_or_default();
+    match c.status.as_str() {
+        "answered" => format!("Already answered: “{}” by {who}{at}.{result}", c.answer.as_deref().unwrap_or("")),
+        "voided" => format!("This card was closed by {who}{at}."),
+        "expired" => format!("This card expired{at}."),
+        other => format!("This card is {other}."),
+    }
+}
+
+/// The 409 for a tap on a card that is no longer waiting (another viewer,
+/// the CLI or Settings decided first; a view that missed the frame): it
+/// says who decided what and when, and carries the card as it is now so
+/// the client updates it in place. Never silent.
+pub(crate) fn card_not_pending_response(conversation_id: &str, card_id: &str) -> CliResponse {
+    let doc = overlay::get_thread_doc(conversation_id, card_id).ok().flatten();
+    let seq = k2_core::overlay::store::thread_seq_of(conversation_id, card_id).ok().flatten();
+    let hint = doc.as_ref().map(closed_card_words).unwrap_or_else(|| "this card was already answered or dismissed".to_string());
+    CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "card_not_pending", "hint": hint },
+            "id": card_id,
+            "seq": seq,
+            "conversation_id": conversation_id,
+            "doc": doc,
+        })
+        .to_string(),
+    }
+}
+
+/// The `answeredBy` a person's settings decision stamps on its card when it
+/// came from somewhere else than the card (Settings, the CLI): the same
+/// author a tap from that credential stores.
+pub(crate) fn person_card_author(session_author: &str) -> overlay::PostAuthor {
+    with_owner_name(compose_author_for_session(session_author), &workspace_msg::resolve_owner_from())
+}
+
+/// Close a waiting action card as answered with `label` (a decision made
+/// elsewhere, or a stale card whose question was already decided), keep
+/// `result` on it, and send the frame to every open view.
+pub(crate) fn close_action_card_as(conversation_id: &str, card_id: &str, label: &str, by: overlay::PostAuthor, result: serde_json::Value) -> Result<(), String> {
+    let cb = overlay::close_action_card(conversation_id, card_id, label, Some(by))?;
+    let cb = match overlay::record_action_result(conversation_id, card_id, result) {
+        Ok(with_result) => with_result,
+        Err(e) => {
+            k2_core::log_debug!("[overlay] action card {card_id}: result not stored: {e}");
+            cb
+        }
+    };
+    publish_card_frame(&cb);
+    Ok(())
 }
 
 /// Map a card store error: a card that is no longer pending is 409

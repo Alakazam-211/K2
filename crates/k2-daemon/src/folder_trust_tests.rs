@@ -209,7 +209,10 @@ fn the_card_answer_runs_the_decision_only_for_what_it_showed() {
     let good = action(r.fingerprint.as_deref(), &r.scope);
     let out = crate::action_cards::run(&good, TRUST_IT, "owner").expect("trust it");
     assert_eq!(out["granted"], true);
-    assert_eq!(out["message"], "Trusted. K2 asks again if these settings change.");
+    assert_eq!(
+        out["message"],
+        "Trusted. K2 asks again if these settings change. A session K2 stopped here starts again when you open its tab."
+    );
 
     std::fs::write(ws.join(".claude/settings.json"), HOOK2).unwrap();
     for answer in [TRUST_IT, ALWAYS, DONT] {
@@ -528,4 +531,233 @@ fn an_env_gated_shell_stays_gated_for_reuse_and_stop() {
     note_spawn(&key, Some(&login), &[], &none);
     assert!(!session_is_gated(&key, Some(&login), &[]));
     gate_live(&key, Some(&login), &[], &none, &s(&ws), None, None, "test").expect("a plain shell again");
+}
+
+// ── The card on a Thread: who decides, what every view sees (2026-11-05) ──
+//
+// Field report: on a 0.46.7 server Baden (a login) chose "Always" on the
+// card at 15:12:48; the decision was stored and the held session started.
+// Rosson later tapped the same card from a view that still showed it
+// waiting, and "nothing happened": the daemon answered 409 card_not_pending
+// with no word on who decided what, logged nothing, and the client dropped
+// the refusal (console only). These pin the daemon half of the fix.
+
+/// A workspace folder with a pinned Chat, so the card goes on its Thread:
+/// (project id, Thread address, conversation id).
+fn register_with_thread(path: &Path) -> (String, String, String) {
+    let id = uuid::Uuid::new_v4().to_string();
+    let handle = format!("ftc{}", &id[..8]);
+    let conv = uuid::Uuid::new_v4().to_string();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT OR REPLACE INTO projects (id, path, name, handle) VALUES (?1, ?2, ?3, ?3)",
+        rusqlite::params![id, s(path), handle],
+    )
+    .unwrap();
+    k2_core::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &id, None, Some(&conv), "claude", "system", "running")
+        .expect("pin the Chat");
+    drop(conn);
+    let addr = k2_core::workspace_session_handles::workspace_address_name_shared(&id).expect("address");
+    (id, addr, conv)
+}
+
+fn login(name: &str, role: k2_core::connect_users::Role) {
+    k2_core::connect_users::add_user(name, "password123").unwrap_or_else(|e| panic!("add {name}: {e}"));
+    k2_core::connect_users::set_role(name, role).unwrap_or_else(|e| panic!("role {name}: {e}"));
+}
+
+fn tap(addr: &str, card: &str, answer: &str, author: &str) -> CliResponse {
+    let body = json!({ "addr": addr, "id": card, "answer": answer }).to_string();
+    crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), author)
+}
+
+fn card_doc(conv: &str, card: &str) -> k2_core::overlay::ChoiceBody {
+    k2_core::overlay::get_thread_doc(conv, card).expect("read").expect("card stored").choice.expect("a choice card")
+}
+
+/// The owner's own Connect login (Owner role; the session author a remote
+/// desktop's request carries) decides on the card; an Admin login is
+/// refused with words that name the owner, and nothing is recorded. The
+/// card then shows the decision, by whom, with the result line. "Always"
+/// is stored as always and holds through a later change the watcher sees.
+/// A later tap on that card (a view that missed the frame) is a 409 that
+/// says who decided what and when, and carries the card as it is now.
+#[test]
+fn a_remote_owner_login_decides_on_the_card_and_every_later_tap_is_told() {
+    let e = env();
+    let ws = folder(&e.home, "K2 - Market Research", Some(HOOK));
+    let (_pid, addr, conv) = register_with_thread(&ws);
+    let r = held(&ws);
+    let card = r.card.clone().expect("a card on the folder's Thread");
+    login("rosson", k2_core::connect_users::Role::Owner);
+    login("baden", k2_core::connect_users::Role::Admin);
+    // The session author a Connect session resolves to is its username.
+    let rosson = crate::session_author::for_token(Some(&k2_core::connect_users::create_session("rosson")), "agent");
+    assert_eq!(rosson, "rosson");
+
+    // An Admin is refused, in words, naming the owner; nothing changes.
+    let refused = tap(&addr, &card, ALWAYS, "baden");
+    assert_eq!(refused.status, "403 Forbidden", "{}", refused.body);
+    let v = json_of(&refused);
+    assert_eq!(v["error"]["code"], "action_card_person_only", "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("only this server's owner answers"), "{v}");
+    assert_eq!(card_doc(&conv, &card).status, "pending");
+    assert_eq!(gate::status(&s(&ws)).unwrap().decision, None, "an Admin's tap records nothing");
+    let path = s(&ws);
+    let fp = r.fingerprint.clone().unwrap();
+    let refused = dispatch(true, DECIDE_PATH, &params(&[("path", path.as_str()), ("decision", "always"), ("fingerprint", fp.as_str())]), b"", "baden");
+    assert_eq!(refused.status, "403 Forbidden", "the decide route has the same rule: {}", refused.body);
+
+    // The owner's remote login decides.
+    let ok = tap(&addr, &card, ALWAYS, &rosson);
+    assert_eq!(ok.status, "200 OK", "{}", ok.body);
+    let v = json_of(&ok);
+    assert_eq!(v["status"], "answered", "{v}");
+    assert_eq!(v["action"]["result"]["decision"], "always", "{v}");
+    assert!(v["action"]["result"]["message"].as_str().unwrap().starts_with("Always trusted. Undo in Settings → Workspaces."), "{v}");
+    let c = card_doc(&conv, &card);
+    assert_eq!((c.status.as_str(), c.answer.as_deref()), ("answered", Some(ALWAYS)));
+    let by = c.answered_by.clone().expect("answeredBy");
+    assert_eq!((by.kind.as_str(), by.login.as_str()), (k2_core::overlay::doc::AUTHOR_USER, "rosson"));
+    assert!(c.answered_at.is_some());
+    let st = gate::status(&path).unwrap();
+    assert_eq!((st.state.as_str(), st.decision, st.decided_by.as_deref()), ("always", Some(Decision::Always), Some("rosson")));
+
+    // Always survives a change the watcher sees under a live session: no
+    // hold, no new card.
+    let before = gate::evaluate(&path).unwrap().fingerprint;
+    std::fs::write(ws.join(".claude/settings.json"), HOOK2).unwrap();
+    let after = crate::folder_trust_watch::recheck_path(&ws, Some(&before), None);
+    assert_ne!(after, before, "the watcher saw the change");
+    let st = gate::status(&path).unwrap();
+    assert_eq!(st.state, "always", "{st:?}");
+    assert!(gate::pending_of(&st.scope).is_none(), "nothing asks again");
+    assert!(matches!(gate::ensure(&path, Door::Spawn, &Actor::by("test"), None), Outcome::Granted { .. }));
+
+    // A late tap, from any person: told who decided what and when, with
+    // the card as it is now; the decision stays.
+    for author in ["owner", "rosson"] {
+        let late = tap(&addr, &card, TRUST_IT, author);
+        assert_eq!(late.status, "409 Conflict", "{author}: {}", late.body);
+        let v = json_of(&late);
+        assert_eq!(v["error"]["code"], "card_not_pending", "{v}");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.starts_with(&format!("Already answered: “{ALWAYS}” by rosson at ")), "{hint}");
+        assert!(hint.contains(" UTC. Always trusted."), "{hint}");
+        assert_eq!(v["doc"]["choice"]["status"], "answered", "{v}");
+        assert_eq!(v["doc"]["choice"]["answer"], ALWAYS, "{v}");
+        assert_eq!(v["doc"]["choice"]["answeredBy"]["login"], "rosson", "{v}");
+        assert_eq!(v["id"], card.as_str());
+        assert!(v["seq"].is_i64(), "{v}");
+    }
+    assert_eq!(gate::status(&path).unwrap().decision, Some(Decision::Always), "late taps change nothing");
+}
+
+/// Settings (and the CLI) decide through `/cli/folder-trust/decide`: the
+/// waiting card closes showing that choice and who made it (it used to be
+/// voided, which said nothing). Whichever is first decides: a Settings
+/// view that still showed the question gets 409 already-decided with who
+/// and when; a tap on the card after is told the same way. The CLI (no
+/// `seen_state`) still applies an explicit choice.
+#[test]
+fn settings_decides_like_the_card_and_whichever_is_first_stands() {
+    let e = env();
+    let ws = folder(&e.home, "settingsdecide", Some(HOOK));
+    let (_pid, addr, conv) = register_with_thread(&ws);
+    let r = held(&ws);
+    let card = r.card.clone().expect("a card");
+    let fp = r.fingerprint.clone().unwrap();
+    let path = s(&ws);
+    let from_settings = |d: &str, author: &str| {
+        dispatch(true, DECIDE_PATH, &params(&[("path", path.as_str()), ("decision", d), ("fingerprint", fp.as_str()), ("seen_state", "pending")]), b"", author)
+    };
+
+    let ok = from_settings("once", "owner");
+    assert_eq!(ok.status, "200 OK", "{}", ok.body);
+    let v = json_of(&ok);
+    assert_eq!(v["decision"], "once");
+    assert_eq!(v["status"]["state"], "trusted", "the row reads the new state from the answer: {v}");
+    assert!(v["message"].as_str().unwrap().starts_with("Trusted. K2 asks again if these settings change."), "{v}");
+    let c = card_doc(&conv, &card);
+    assert_eq!((c.status.as_str(), c.answer.as_deref()), ("answered", Some(TRUST_IT)), "the card shows Settings' choice");
+    assert_eq!(c.answered_by.as_ref().map(|a| a.kind.as_str()), Some(k2_core::overlay::doc::AUTHOR_OWNER));
+    let result = c.action.and_then(|a| a.result).expect("the card keeps the result");
+    assert_eq!(result["decision"], "once");
+
+    // A second Settings view that still showed the question: refused, told.
+    let late = from_settings("deny", "owner");
+    assert_eq!(late.status, "409 Conflict", "{}", late.body);
+    let v = json_of(&late);
+    assert_eq!(v["error"], ALREADY_DECIDED);
+    let msg = v["message"].as_str().unwrap();
+    assert!(msg.starts_with("Already decided: Trusted (this version of its settings) by the owner at "), "{msg}");
+    assert!(msg.ends_with("UTC. To change it, Reset first."), "{msg}");
+    assert_eq!(v["current"]["state"], "trusted");
+    assert_eq!(gate::status(&path).unwrap().decision, Some(Decision::Once), "the first decision stands");
+
+    // The card's tap after Settings decided: told, not silent.
+    let tapped = tap(&addr, &card, DONT, "owner");
+    assert_eq!(tapped.status, "409 Conflict", "{}", tapped.body);
+    let hint = json_of(&tapped)["error"]["hint"].as_str().unwrap().to_string();
+    assert!(hint.starts_with(&format!("Already answered: “{TRUST_IT}” by ")), "{hint}");
+
+    // The CLI sends no seen_state: its explicit choice applies.
+    let cli = dispatch(true, DECIDE_PATH, &params(&[("path", path.as_str()), ("decision", "deny"), ("fingerprint", fp.as_str())]), b"", "owner");
+    assert_eq!(cli.status, "200 OK", "{}", cli.body);
+    assert_eq!(gate::status(&path).unwrap().state, "denied");
+}
+
+/// A card a 0.46.7 server left waiting after the folder was decided
+/// elsewhere (the decision is in the store, the card still shows the
+/// question): a tap closes it showing the stored decision and who made
+/// it, says so, and runs nothing.
+#[test]
+fn a_card_left_waiting_after_a_decision_closes_on_tap_with_that_decision() {
+    let e = env();
+    let ws = folder(&e.home, "leftwaiting", Some(HOOK));
+    let (_pid, addr, conv) = register_with_thread(&ws);
+    let r = held(&ws);
+    let card = r.card.clone().expect("a card");
+    // Straight into the store, the card untouched (what an old decide left).
+    gate::decide(&s(&ws), Decision::Always, "baden", None).expect("stored");
+    assert_eq!(card_doc(&conv, &card).status, "pending", "the setup: a card still waiting");
+
+    let tapped = tap(&addr, &card, DONT, "owner");
+    assert_eq!(tapped.status, "409 Conflict", "{}", tapped.body);
+    let v = json_of(&tapped);
+    let hint = v["error"]["hint"].as_str().unwrap();
+    assert!(hint.starts_with(&format!("Already answered: “{ALWAYS}” by baden at ")), "{hint}");
+    assert!(hint.contains("Already decided: Always trusted by baden at "), "{hint}");
+    let c = card_doc(&conv, &card);
+    assert_eq!((c.status.as_str(), c.answer.as_deref()), ("answered", Some(ALWAYS)));
+    assert_eq!(c.answered_by.as_ref().map(|a| a.login.as_str()), Some("baden"));
+    assert_eq!(gate::status(&s(&ws)).unwrap().decision, Some(Decision::Always), "the tap ran nothing");
+}
+
+/// The paused sessions: a trust starts the held ones again and the answer
+/// says so; with none held it says how a stopped session comes back.
+#[test]
+fn a_trust_says_what_happens_to_the_paused_sessions() {
+    let e = env();
+    let ws = folder(&e.home, "restarts", Some(HOOK));
+    let (pid, addr, _conv) = register_with_thread(&ws);
+    let r = held(&ws);
+    let card = r.card.clone().expect("a card");
+    // A held spawn of a harmless program (never a real AI CLI in tests).
+    let req = crate::spawn::SpawnWorkspaceSessionRequest {
+        agent_name: "a".into(),
+        project_id: Some(pid),
+        cwd: s(&ws),
+        command: Some("true".into()),
+        ..Default::default()
+    };
+    hold_spawn(&r.scope, &req);
+    assert_eq!(held_count(&r.scope), 1);
+    let ok = tap(&addr, &card, TRUST_IT, "owner");
+    assert_eq!(ok.status, "200 OK", "{}", ok.body);
+    let v = json_of(&ok);
+    assert_eq!(v["action"]["result"]["restarting"], 1, "{v}");
+    assert!(v["action"]["result"]["message"].as_str().unwrap().ends_with(" Starting the 1 session K2 held here again."), "{v}");
+    assert_eq!(held_count(&r.scope), 0, "taken for the retry");
 }

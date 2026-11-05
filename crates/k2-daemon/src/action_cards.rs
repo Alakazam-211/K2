@@ -37,6 +37,19 @@ pub fn keep_prompt(agent: &str, widget: &str, garden: &str) -> String {
     )
 }
 
+/// A waiting card whose question was already decided somewhere else
+/// (Settings, the CLI) after it was posted: the option that matches that
+/// decision, who made it, and the result the card keeps. The answer route
+/// then closes the card that way and tells the tap, instead of running the
+/// action again. `None`: the question is still open (or the action has no
+/// such notion).
+pub fn decided_elsewhere(action: &CardAction) -> Option<(String, k2_core::overlay::PostAuthor, J)> {
+    match action.id.as_str() {
+        crate::folder_trust::CARD_ACTION => crate::folder_trust::decided_elsewhere(&action.params),
+        _ => None,
+    }
+}
+
 /// Run `action` for the person's `answer` (already checked to be one of the
 /// card's options). `by` is the answering person (`owner` or a login). The
 /// result is shown in the answer's JSON.

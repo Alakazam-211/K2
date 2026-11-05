@@ -688,6 +688,7 @@ pub fn run_card(params: &J, answer: &str, by: &str) -> Result<J, String> {
     let r = match gate::decide_checked(path, decision, by, seen) {
         Ok(r) => r,
         Err(DecideError::Changed(why)) => {
+            log_debug!("[folder-trust] card: {by} chose {} for {path}: refused, changed: {why}", decision.as_str());
             let fresh = gate::request(path, &Actor { by: "recheck".into(), caller: Some("K2".into()), ..Default::default() });
             let next = match fresh {
                 Outcome::Held(r) if r.card.is_some() => "K2 posted a new card for what's there now.".to_string(),
@@ -698,34 +699,122 @@ pub fn run_card(params: &J, answer: &str, by: &str) -> Result<J, String> {
             };
             return Err(format!("Nothing was decided: {why}. {next}"));
         }
-        Err(DecideError::Failed(e)) => return Err(e),
+        Err(DecideError::Failed(e)) => {
+            log_debug!("[folder-trust] card: {by} chose {} for {path}: failed: {e}", decision.as_str());
+            return Err(e);
+        }
     };
     if let Some(p) = pending {
-        close_pending(&p, false);
+        close_pending(&p, None);
     }
-    let stopped = after_decision(&r.scope, decision, r.granted);
-    let mut message = r.message.clone();
-    if stopped > 0 {
-        message.push_str(&format!(" Stopped {stopped} running session{} there.", if stopped == 1 { "" } else { "s" }));
-    }
+    let (stopped, restarting, message) = finish_decision(&r, decision);
     Ok(json!({
         "decision": decision.as_str(),
         "path": r.path,
         "granted": r.granted,
         "leftover": r.leftover,
         "stopped": stopped,
+        "restarting": restarting,
         "message": message,
     }))
 }
 
-/// After a decision: resolve the owner ticket and (when the decision came
-/// from elsewhere than the card) void the waiting card.
-fn close_pending(p: &gate::Pending, void_card: bool) {
-    if void_card {
-        if let (Some(conv), Some(card), Some(project)) = (p.conversation.as_deref(), p.card.as_deref(), p.project.as_deref()) {
-            match k2_core::overlay::void_card(conv, project, card, None) {
-                Ok(cb) => crate::overlay_routes::publish_action_frame(&cb),
-                Err(e) => log_debug!("[folder-trust] void card {card}: {e}"),
+/// Held spawns for `scope` still inside [`HELD_TTL`] (the ones a trust
+/// starts again).
+fn live_held(scope: &str) -> usize {
+    let g = HELD.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().and_then(|m| m.get(scope)).map(|l| l.iter().filter(|h| h.at.elapsed() < HELD_TTL).count()).unwrap_or(0)
+}
+
+/// After a person's decision (card, Settings, CLI): run [`after_decision`]
+/// and say what it did, so the person knows whether the paused sessions
+/// are back: `(stopped, restarting, message)`.
+fn finish_decision(r: &gate::DecideResult, decision: Decision) -> (usize, usize, String) {
+    let restarting = if r.granted && decision != Decision::Deny { live_held(&r.scope) } else { 0 };
+    let stopped = after_decision(&r.scope, decision, r.granted);
+    let mut message = r.message.clone();
+    if stopped > 0 {
+        message.push_str(&format!(" Stopped {stopped} running session{} there.", if stopped == 1 { "" } else { "s" }));
+    }
+    if restarting > 0 {
+        message.push_str(&format!(
+            " Starting the {restarting} session{} K2 held here again.",
+            if restarting == 1 { "" } else { "s" }
+        ));
+    } else if r.granted && decision != Decision::Deny {
+        message.push_str(" A session K2 stopped here starts again when you open its tab.");
+    }
+    (stopped, restarting, message)
+}
+
+/// The card's option for a decision.
+pub fn decision_label(d: Decision) -> &'static str {
+    match d {
+        Decision::Once => TRUST_IT,
+        Decision::Always => ALWAYS,
+        Decision::Deny => DONT,
+    }
+}
+
+/// "Always trusted by baden at 2026-11-05 15:12 UTC."
+pub fn decision_words(d: Decision, by: Option<&str>, at: Option<i64>) -> String {
+    let what = match d {
+        Decision::Once => "Trusted (this version of its settings)",
+        Decision::Always => "Always trusted",
+        Decision::Deny => "Not trusted",
+    };
+    let who = match by.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(b) if crate::session_author::is_owner_token(b) => " by the owner".to_string(),
+        Some("upgrade") => " by K2's 0.46.4 upgrade".to_string(),
+        Some(b) => format!(" by {b}"),
+        None => String::new(),
+    };
+    let when = at.map(|t| format!(" at {}", crate::overlay_routes::card_time_words(t))).unwrap_or_default();
+    format!("{what}{who}{when}.")
+}
+
+/// A `folder.trust` card still waiting although its folder was decided
+/// after it was posted (in Settings or with the CLI, and the card wasn't
+/// closed then): the option that matches the decision, who made it, and
+/// the result the card keeps. `None` while the folder still waits for a
+/// decision (an ask is recorded, or nothing covers the folder now).
+pub fn decided_elsewhere(params: &J) -> Option<(String, k2_core::overlay::PostAuthor, J)> {
+    let path = params["path"].as_str().filter(|p| !p.is_empty())?;
+    let scope = gate::scope_for(path)?;
+    // Every decision clears the recorded ask, and an ask is recorded only
+    // while nothing covers the folder: an ask on record means the folder
+    // still waits, whatever this card is.
+    if gate::pending_of(&scope).is_some() {
+        return None;
+    }
+    let st = gate::status(path).ok()?;
+    let decision = st.decision?;
+    if !matches!(st.state.as_str(), "trusted" | "always" | "denied") {
+        return None;
+    }
+    let by = st.decided_by.clone().unwrap_or_default();
+    let message = format!("Already decided: {}", decision_words(decision, Some(&by), st.decided_at));
+    let author = crate::overlay_routes::person_card_author(if by.is_empty() { "owner" } else { &by });
+    Some((
+        decision_label(decision).to_string(),
+        author,
+        json!({ "decision": decision.as_str(), "path": st.path, "granted": decision != Decision::Deny, "message": message, "elsewhere": true }),
+    ))
+}
+
+/// After a decision: resolve the owner ticket and, when the decision came
+/// from elsewhere than the card (`decided`: Settings or the CLI, with who
+/// and the result), close the waiting card as answered with that choice,
+/// so every open view shows it (it used to be voided, which said nothing
+/// about what was decided).
+fn close_pending(p: &gate::Pending, decided: Option<(Decision, &str, J)>) {
+    if let Some((decision, by, result)) = decided {
+        if let (Some(conv), Some(card)) = (p.conversation.as_deref(), p.card.as_deref()) {
+            let author = crate::overlay_routes::person_card_author(by);
+            match crate::overlay_routes::close_action_card_as(conv, card, decision_label(decision), author, result) {
+                Ok(()) => log_debug!("[folder-trust] card {card} closed: {by} chose {} outside the card", decision.as_str()),
+                Err(e) if e == k2_core::overlay::CARD_NOT_PENDING => {}
+                Err(e) => log_debug!("[folder-trust] close card {card}: {e}"),
             }
         }
     }
@@ -803,6 +892,11 @@ pub fn dispatch(is_post: bool, path: &str, params: &HashMap<String, String>, bod
                 return CliResponse::method_not_allowed();
             }
             if let Err(r) = crate::overlay_routes::require_action_card_person(params, session_author, "answers") {
+                log_debug!(
+                    "[folder-trust] decide: {session_author} for {}: refused (not the owner): {}",
+                    param(params, body, "path").unwrap_or_default(),
+                    r.body
+                );
                 return r;
             }
             decide_route(params, body, session_author)
@@ -917,12 +1011,22 @@ fn decide_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliR
     };
     let fp = (fp != "none").then_some(fp);
     let scope_seen = param(params, body, "scope");
+    // Settings sends the state it showed (`seen_state`): when that was a
+    // question and the folder has been decided since (the card, another
+    // window, the CLI), the first decision stands and this one is told who
+    // made it. The CLI sends none: its explicit choice applies.
+    if let Some(seen_state) = param(params, body, "seen_state") {
+        if let Some(r) = already_decided(&folder, &seen_state, decision, by) {
+            return r;
+        }
+    }
     let scope = gate::scope_for(&folder);
     let pending = scope.as_deref().and_then(gate::pending_of);
     let seen = Seen { path: None, scope: scope_seen.as_deref(), fingerprint: fp.as_deref() };
     let r = match gate::decide_checked(&folder, decision, by, seen) {
         Ok(r) => r,
         Err(DecideError::Changed(why)) => {
+            log_debug!("[folder-trust] decide: {by} chose {} for {folder}: refused, changed: {why}", decision.as_str());
             // Refresh the ask (a new card or ticket for what's there now).
             let _ = gate::request(&folder, &Actor { by: "recheck".into(), caller: Some("K2".into()), ..Default::default() });
             let current = gate::status(&folder).ok().map(|s| serde_json::to_value(&s).unwrap_or(J::Null));
@@ -937,17 +1041,56 @@ fn decide_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliR
                 .to_string(),
             };
         }
-        Err(DecideError::Failed(e)) => return err("400 Bad Request", "usage", e),
+        Err(DecideError::Failed(e)) => {
+            log_debug!("[folder-trust] decide: {by} chose {} for {folder}: failed: {e}", decision.as_str());
+            return err("400 Bad Request", "usage", e);
+        }
     };
-    // The card that was waiting no longer asks anything.
+    let (stopped, restarting, message) = finish_decision(&r, decision);
+    // The card that was waiting closes showing this decision and who made
+    // it, on every open view: Settings and the CLI decide the same thing
+    // the card does, and whichever is first decides.
     if let Some(p) = pending {
-        close_pending(&p, true);
+        let result = json!({ "decision": decision.as_str(), "path": r.path, "granted": r.granted, "stopped": stopped, "message": message });
+        close_pending(&p, Some((decision, by, result)));
     }
-    let stopped = after_decision(&r.scope, decision, r.granted);
     let mut v = serde_json::to_value(&r).unwrap_or(J::Null);
     v["ok"] = json!(true);
     v["stopped"] = json!(stopped);
+    v["restarting"] = json!(restarting);
+    v["message"] = json!(message);
+    if let Ok(st) = gate::status(&r.path) {
+        v["status"] = serde_json::to_value(&st).unwrap_or(J::Null);
+    }
     CliResponse::ok_json(v.to_string())
+}
+
+/// Status states that still wait for a person's decision (Settings shows
+/// its Trust it / Always / Don't trust buttons for these).
+pub const UNDECIDED_STATES: &[&str] = &["pending", "changed", "undecided"];
+/// The 409 when a decision made from a view that showed a question
+/// (`seen_state`) finds the folder decided since.
+pub const ALREADY_DECIDED: &str = "folder_trust_already_decided";
+
+/// The 409 for a decision from a stale view: the view showed a question
+/// (`seen_state` pending / changed / undecided) and a decision covers the
+/// folder now. `None`: go ahead.
+fn already_decided(folder: &str, seen_state: &str, decision: Decision, by: &str) -> Option<CliResponse> {
+    if !UNDECIDED_STATES.contains(&seen_state) {
+        return None;
+    }
+    let st = gate::status(folder).ok()?;
+    let d = st.decision?;
+    if !matches!(st.state.as_str(), "trusted" | "always" | "denied") {
+        return None;
+    }
+    let message = format!("Already decided: {} To change it, Reset first.", decision_words(d, st.decided_by.as_deref(), st.decided_at));
+    log_debug!("[folder-trust] decide: {by} chose {} for {folder}: refused, {message}", decision.as_str());
+    Some(CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: json!({ "error": ALREADY_DECIDED, "message": message, "current": serde_json::to_value(&st).unwrap_or(J::Null) }).to_string(),
+    })
 }
 
 fn reset_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliResponse {

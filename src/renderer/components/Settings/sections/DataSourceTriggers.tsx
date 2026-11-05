@@ -22,6 +22,7 @@ import {
   triggerLog,
 } from '@/lib/sources/sources-api'
 import { useProjectsStore } from '@/stores/projects'
+import { SettingDropdown } from '../controls/SettingControls'
 import { ago, btn, btnPrimary, danger, every, input, makerLabel, muted, onLabel, sourcesErrorText } from './data-sources-ui'
 
 type OnKind = TriggerOn['kind']
@@ -114,16 +115,19 @@ function TriggerForm({
           .finally(() => setBusy(false))
       }}
     >
-      <label className={`block text-[11px] ${muted}`}>
+      <div className={`block text-[11px] ${muted}`}>
         When
-        <select className={`${input} mt-0.5`} value={f.kind} onChange={(e) => set('kind', e.currentTarget.value as OnKind)} data-testid="sources-trigger-on">
-          {ON_CHOICES.map((c) => (
-            <option key={c.kind} value={c.kind}>
-              {c.label}
-            </option>
-          ))}
-        </select>
-      </label>
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-0.5"
+          ariaLabel="When"
+          triggerData={{ 'data-testid': 'sources-trigger-on' }}
+          value={f.kind}
+          options={ON_CHOICES.map((c) => ({ value: c.kind, label: c.label }))}
+          onChange={(v) => set('kind', v as OnKind)}
+        />
+      </div>
       {f.kind === 'stale_for' && (
         <label className={`block text-[11px] ${muted}`}>
           Minutes with no good check (5 or more)
@@ -137,17 +141,20 @@ function TriggerForm({
           />
         </label>
       )}
-      <label className={`block text-[11px] ${muted}`}>
+      <div className={`block text-[11px] ${muted}`}>
         Wake this agent
-        <select className={`${input} mt-0.5`} value={f.agent} onChange={(e) => set('agent', e.currentTarget.value)} data-testid="sources-trigger-agent">
-          <option value="">Choose…</option>
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      </label>
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-0.5"
+          ariaLabel="Wake this agent"
+          triggerData={{ 'data-testid': 'sources-trigger-agent' }}
+          placeholder="Choose…"
+          value={f.agent}
+          options={agents.map((a) => ({ value: a.id, label: a.label }))}
+          onChange={(v) => set('agent', v)}
+        />
+      </div>
       <label className={`block text-[11px] ${muted}`}>
         Your note to the agent (optional, plain text)
         <input

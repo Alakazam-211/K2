@@ -3,6 +3,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
+import { pickValue, pickedValue } from '@/test-utils/setting-dropdown'
 
 const daemonCliGet = vi.hoisted(() => vi.fn())
 const daemonCliPost = vi.hoisted(() => vi.fn())
@@ -288,7 +289,7 @@ describe('DataSourcesSection', () => {
     render(<DataSourcesSection />)
     fireEvent.click(await screen.findByTestId('sources-row-review'))
     const rev = await screen.findByTestId('sources-review')
-    expect((within(rev).getByTestId('sources-review-secret') as HTMLSelectElement).value).toBe('STRIPE_SK')
+    expect(pickedValue(within(rev).getByTestId('sources-review-secret'))).toBe('STRIPE_SK')
     // Secret-bound defaults: admins only, agents see states.
     expect(within(rev).getByTestId('sources-review-viewers').querySelectorAll('input')[1]).toHaveProperty('checked', true)
     fireEvent.click(within(rev).getByTestId('sources-review-approve'))
@@ -346,8 +347,8 @@ describe('triggers and simulate', () => {
     await waitFor(() => expect(posts.at(-1)).toEqual({ route: 'sources/triggers/approve', body: { id: 't-1' } }))
     fireEvent.click(screen.getByTestId('sources-trigger-add'))
     const form = await screen.findByTestId('sources-trigger-form')
-    fireEvent.change(within(form).getByTestId('sources-trigger-on'), { target: { value: 'stale_for' } })
-    fireEvent.change(within(form).getByTestId('sources-trigger-agent'), { target: { value: 'p-web' } })
+    pickValue(within(form).getByTestId('sources-trigger-on'), 'stale_for')
+    pickValue(within(form).getByTestId('sources-trigger-agent'), 'p-web')
     fireEvent.change(within(form).getByTestId('sources-trigger-note'), { target: { value: 'check the relay' } })
     fireEvent.click(within(form).getByTestId('sources-trigger-save'))
     await waitFor(() => expect(posts.at(-1)?.route).toBe('sources/triggers/add'))
@@ -378,7 +379,7 @@ describe('triggers and simulate', () => {
     fireEvent.click(screen.getByTestId('sources-menu-simulate'))
     const d = await screen.findByTestId('sources-simulate')
     fireEvent.click(within(d).getByLabelText('Amber'))
-    fireEvent.change(within(d).getByTestId('sources-simulate-for'), { target: { value: '600' } })
+    pickValue(within(d).getByTestId('sources-simulate-for'), '600')
     fireEvent.click(within(d).getByTestId('sources-simulate-start'))
     await waitFor(() => expect(posts.at(-1)).toEqual({ route: 'sources/simulate', body: { name: 'fleet', state: 'warn', forSecs: 600 } }))
     fireEvent.click(screen.getByTestId('sources-row-menu'))

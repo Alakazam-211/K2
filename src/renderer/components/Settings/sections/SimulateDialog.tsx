@@ -11,6 +11,7 @@ import type { SimulateState, SourceSimulated } from '@/lib/sources/sources-types
 import { simulateSource } from '@/lib/sources/sources-api'
 import { btn, btnPrimary, danger, hhmm, muted, sourcesErrorText } from './data-sources-ui'
 import { SquareRadio } from '@/components/ui'
+import { SettingDropdown } from '../controls/SettingControls'
 
 const STATES: Array<{ state: SimulateState; label: string }> = [
   { state: 'crit', label: 'Red' },
@@ -77,21 +78,19 @@ export function SimulateDialog({
           </label>
         ))}
       </fieldset>
-      <label className={`block text-[11px] ${muted}`}>
+      <div className={`flex items-center text-[11px] ${muted}`}>
         For
-        <select
-          className="ml-1.5 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)]"
-          value={secs}
-          onChange={(e) => setSecs(Number(e.currentTarget.value))}
-          data-testid="sources-simulate-for"
-        >
-          {DURATIONS.map((d) => (
-            <option key={d.secs} value={d.secs}>
-              {d.label}
-            </option>
-          ))}
-        </select>
-      </label>
+        <SettingDropdown
+          compact
+          menuAlign="left"
+          className="ml-1.5"
+          ariaLabel="For"
+          triggerData={{ 'data-testid': 'sources-simulate-for' }}
+          value={String(secs)}
+          options={DURATIONS.map((d) => ({ value: String(d.secs), label: d.label }))}
+          onChange={(v) => setSecs(Number(v))}
+        />
+      </div>
       <div className="flex gap-1.5">
         <button type="button" className={btnPrimary} disabled={busy} onClick={() => void send(state)} data-testid="sources-simulate-start">
           Simulate

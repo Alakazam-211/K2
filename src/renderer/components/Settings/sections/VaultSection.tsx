@@ -37,6 +37,7 @@ import {
   type VaultStatus,
 } from './vault-api'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
+import { SettingDropdown } from '../controls/SettingControls'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { handoffOriginText, takeRequestedVaultTab } from './handoff-api'
 import { IncomingList, SentList } from './HandoffLists'
@@ -113,6 +114,11 @@ export function ceilingChoices(kind: string): string[] {
  * shows the value it will send. */
 export function withCurrent(choices: string[], current: string): string[] {
   return choices.includes(current) ? choices : [...choices, current]
+}
+
+/** Delivery modes as K2 menu options, labelled the way the vault says them. */
+function deliveryOptions(choices: string[]): { value: string; label: string }[] {
+  return choices.map((d) => ({ value: d, label: deliveryLabel(d) }))
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -780,26 +786,31 @@ function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => 
   }
   return (
     <div className="space-y-1.5 max-w-md" data-testid="vault-delivery-panel">
-      <label className={`block text-[11px] ${muted}`}>
+      <div className={`block text-[11px] ${muted}`}>
         How agents get it
-        <select value={delivery} onChange={(e) => setDelivery(e.target.value)} className={`${input} mt-1`} data-testid="vault-delivery-select">
-          {withCurrent(deliveryChoices(secret.kind), delivery).map((d) => (
-            <option key={d} value={d}>
-              {deliveryLabel(d)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className={`block text-[11px] ${muted}`}>
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-1"
+          ariaLabel="How agents get it"
+          triggerData={{ 'data-testid': 'vault-delivery-select' }}
+          value={delivery}
+          options={deliveryOptions(withCurrent(deliveryChoices(secret.kind), delivery))}
+          onChange={setDelivery}
+        />
+      </div>
+      <div className={`block text-[11px] ${muted}`}>
         The most an agent may ever get
-        <select value={ceiling} onChange={(e) => setCeiling(e.target.value)} className={`${input} mt-1`}>
-          {withCurrent(ceilingChoices(secret.kind), ceiling).map((d) => (
-            <option key={d} value={d}>
-              {deliveryLabel(d)}
-            </option>
-          ))}
-        </select>
-      </label>
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-1"
+          ariaLabel="The most an agent may ever get"
+          value={ceiling}
+          options={deliveryOptions(withCurrent(ceilingChoices(secret.kind), ceiling))}
+          onChange={setCeiling}
+        />
+      </div>
       {deliveryReadable(delivery) && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
       <button type="button" className={btn} disabled={busy} onClick={() => void save()}>
         Save
@@ -877,27 +888,34 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
   }
   return (
     <div className="space-y-1.5 max-w-md" data-testid="vault-share-panel">
-      <label className={`block text-[11px] ${muted}`}>
+      <div className={`block text-[11px] ${muted}`}>
         Share with
-        <select value={to} onChange={(e) => setTo(e.target.value)} className={`${input} mt-1`}>
-          <option value="ws:*">all my agents</option>
-          {projects.map((p) => (
-            <option key={p.id} value={`ws:${p.id}`}>
-              {p.handle || p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className={`block text-[11px] ${muted}`}>
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-1"
+          ariaLabel="Share with"
+          value={to}
+          options={[
+            { value: 'ws:*', label: 'all my agents' },
+            ...projects.map((p) => ({ value: `ws:${p.id}`, label: p.handle || p.name })),
+          ]}
+          onChange={setTo}
+        />
+      </div>
+      <div className={`block text-[11px] ${muted}`}>
         How they get it
-        <select value={as} onChange={(e) => setAs(e.target.value)} className={`${input} mt-1`} data-testid="vault-share-as">
-          {withCurrent(deliveryChoices(secret.kind), as).map((d) => (
-            <option key={d} value={d}>
-              {deliveryLabel(d)}
-            </option>
-          ))}
-        </select>
-      </label>
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-1"
+          ariaLabel="How they get it"
+          triggerData={{ 'data-testid': 'vault-share-as' }}
+          value={as}
+          options={deliveryOptions(withCurrent(deliveryChoices(secret.kind), as))}
+          onChange={setAs}
+        />
+      </div>
       {deliveryReadable(as) && <p className={`text-[11px] ${muted}`}>They can see this value, so you confirm first.</p>}
       {pwMethod === null ? (
         <button type="button" className={btn} disabled={busy} onClick={() => void share()}>
@@ -1234,25 +1252,39 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           one workspace
         </label>
         {scope === 'workspace' && (
-          <select value={workspace} onChange={(e) => setWorkspace(e.target.value)} className={input} aria-label="Workspace">
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.handle || p.name}
-              </option>
-            ))}
-          </select>
+          <SettingDropdown
+            fullWidth
+            menuAlign="left"
+            ariaLabel="Workspace"
+            value={workspace}
+            options={projects.map((p) => ({ value: p.id, label: p.handle || p.name }))}
+            onChange={setWorkspace}
+          />
         )}
         <label className="flex items-center gap-1.5 text-[var(--color-text-secondary)] cursor-pointer">
           <SquareRadio checked={scope === 'server'} onChange={() => setScope('server')} />
           all my agents
         </label>
       </fieldset>
-      <label className={`block text-[11px] ${muted}`}>
+      <div className={`block text-[11px] ${muted}`}>
         Kind
-        <select
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-1"
+          ariaLabel="Kind"
+          triggerData={{ 'data-testid': 'vault-add-kind' }}
           value={kind}
-          onChange={(e) => {
-            const k = e.target.value
+          options={[
+            { value: 'api_key', label: 'API key' },
+            { value: 'password', label: 'password' },
+            { value: 'oauth_token', label: 'sign-in token' },
+            { value: 'ssh_key', label: 'SSH key' },
+            { value: 'generic', label: 'other' },
+          ]}
+          onChange={(k) => {
+            // A re-pick of the same kind keeps the value and delivery.
+            if (k === kind) return
             setKind(k)
             // The value field may change shape (one line vs a key): start empty.
             setHas(false)
@@ -1260,38 +1292,31 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
             if (k === 'ssh_key') setDelivery('file')
             else if (delivery === 'agent') setDelivery('fetch')
           }}
-          className={`${input} mt-1`}
-          data-testid="vault-add-kind"
-        >
-          <option value="api_key">API key</option>
-          <option value="password">password</option>
-          <option value="oauth_token">sign-in token</option>
-          <option value="ssh_key">SSH key</option>
-          <option value="generic">other</option>
-        </select>
-      </label>
+        />
+      </div>
       {presets.length > 0 && (
-        <label className={`block text-[11px] ${muted}`}>
+        <div className={`block text-[11px] ${muted}`}>
           Service
-          <select
+          <SettingDropdown
+            fullWidth
+            menuAlign="left"
+            className="mt-1"
+            ariaLabel="Service"
+            triggerData={{ 'data-testid': 'vault-add-preset' }}
             value={preset}
-            onChange={(e) => {
-              const id = e.target.value
+            options={[
+              { value: '', label: 'None (I’ll set the sites)' },
+              ...presets.map((p) => ({ value: p.id, label: p.label })),
+            ]}
+            onChange={(id) => {
+              // A re-pick of the same service keeps sites typed since.
+              if (id === preset) return
               setPreset(id)
               const p = presets.find((x) => x.id === id)
               setSites((p?.hosts ?? []).map(siteLabel).join(', '))
             }}
-            className={`${input} mt-1`}
-            data-testid="vault-add-preset"
-          >
-            <option value="">None (I&rsquo;ll set the sites)</option>
-            {presets.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
+          />
+        </div>
       )}
       <label className={`block text-[11px] ${muted}`}>
         Only send it to
@@ -1303,16 +1328,19 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           data-testid="vault-add-sites"
         />
       </label>
-      <label className={`block text-[11px] ${muted}`}>
+      <div className={`block text-[11px] ${muted}`}>
         How agents get it
-        <select value={delivery} onChange={(e) => setDelivery(e.target.value)} className={`${input} mt-1`} data-testid="vault-add-delivery">
-          {deliveryChoices(kind).map((d) => (
-            <option key={d} value={d}>
-              {deliveryLabel(d)}
-            </option>
-          ))}
-        </select>
-      </label>
+        <SettingDropdown
+          fullWidth
+          menuAlign="left"
+          className="mt-1"
+          ariaLabel="How agents get it"
+          triggerData={{ 'data-testid': 'vault-add-delivery' }}
+          value={delivery}
+          options={deliveryOptions(deliveryChoices(kind))}
+          onChange={setDelivery}
+        />
+      </div>
       {deliveryReadable(delivery) && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
       {needsSite && <p className={`text-[11px] ${danger}`}>Add a site, or let agents read it.</p>}
       <ValueField fieldRef={fieldRef} label="Value" onPresence={setHas} multiline={isMultilineKind(kind)} />

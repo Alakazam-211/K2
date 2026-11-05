@@ -3,6 +3,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within, act } from '@testing-library/react'
+import { menuOptions, menuValues, pickValue, pickedValue } from '@/test-utils/setting-dropdown'
 
 const daemonCliGet = vi.hoisted(() => vi.fn())
 const daemonCliPost = vi.hoisted(() => vi.fn())
@@ -372,7 +373,7 @@ describe('VaultSection', () => {
     fireEvent.click(screen.getByTestId('vault-add'))
     const form = screen.getByTestId('vault-add-form')
     fireEvent.change(within(form).getByPlaceholderText('STRIPE_KEY'), { target: { value: 'NEW_KEY' } })
-    fireEvent.change(within(form).getByTestId('vault-add-preset'), { target: { value: 'stripe' } })
+    pickValue(within(form).getByTestId('vault-add-preset'), 'stripe')
     expect((within(form).getByTestId('vault-add-sites') as HTMLInputElement).value).toBe('api.stripe.com')
     const value = within(form).getByLabelText('Value') as HTMLInputElement
     fireEvent.change(value, { target: { value: VALUE } })
@@ -396,16 +397,17 @@ describe('VaultSection', () => {
     await renderPage()
     fireEvent.click(within(row('DEPLOY_KEY')).getByRole('button', { name: 'Change delivery' }))
     const panel = within(row('DEPLOY_KEY')).getByTestId('vault-delivery-panel')
-    const select = within(panel).getByTestId('vault-delivery-select') as HTMLSelectElement
-    expect(select.value).toBe('agent')
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['agent', 'file', 'env'])
+    const select = within(panel).getByTestId('vault-delivery-select')
+    expect(select.tagName).toBe('BUTTON')
+    expect(pickedValue(select)).toBe('agent')
+    expect(menuValues(select)).toEqual(['agent', 'file', 'env'])
     expect(panel.textContent).not.toContain('Agents can see this value')
-    fireEvent.change(select, { target: { value: 'file' } })
+    pickValue(select, 'file')
     expect(panel.textContent).toContain('Agents can see this value')
     // An API key has no agent choice.
     fireEvent.click(within(row('STRIPE_KEY')).getByRole('button', { name: 'Change delivery' }))
     const p2 = within(row('STRIPE_KEY')).getByTestId('vault-delivery-panel')
-    expect(Array.from((within(p2).getByTestId('vault-delivery-select') as HTMLSelectElement).options).map((o) => o.value)).not.toContain('agent')
+    expect(menuValues(within(p2).getByTestId('vault-delivery-select'))).not.toContain('agent')
   })
 
   it('the Share panel shows the delivery it will send, even one outside the usual choices', async () => {
@@ -418,9 +420,10 @@ describe('VaultSection', () => {
     await renderPage()
     fireEvent.click(within(row('API_KEY_X')).getByRole('button', { name: 'Share' }))
     const panel = within(row('API_KEY_X')).getByTestId('vault-share-panel')
-    const as = within(panel).getByTestId('vault-share-as') as HTMLSelectElement
-    expect(as.value).toBe('api')
-    expect(as.options[as.selectedIndex].textContent).toBe('the agent can print it')
+    const as = within(panel).getByTestId('vault-share-as')
+    expect(pickedValue(as)).toBe('api')
+    expect(as.textContent).toBe('the agent can print it')
+    expect(menuOptions(as).find((o) => o.value === 'api')?.label).toBe('the agent can print it')
     expect(panel.textContent).toContain('They can see this value')
     fireEvent.click(within(panel).getByRole('button', { name: 'Share' }))
     // VC-B2: a share they can read asks for a confirm first, like reveal.
@@ -439,7 +442,7 @@ describe('VaultSection', () => {
     await renderPage()
     fireEvent.click(within(row('STRIPE_KEY')).getByRole('button', { name: 'Share' }))
     const panel = within(row('STRIPE_KEY')).getByTestId('vault-share-panel')
-    expect((within(panel).getByTestId('vault-share-as') as HTMLSelectElement).value).toBe('fetch')
+    expect(pickedValue(within(panel).getByTestId('vault-share-as'))).toBe('fetch')
     expect(panel.textContent).not.toContain('They can see this value')
     fireEvent.click(within(panel).getByRole('button', { name: 'Share' }))
     await waitFor(() => expect(posts.some((p) => p.route === 'vault/grant')).toBe(true))
@@ -455,7 +458,7 @@ describe('VaultSection', () => {
     fireEvent.click(screen.getByTestId('vault-add'))
     const form = screen.getByTestId('vault-add-form')
     fireEvent.change(within(form).getByPlaceholderText('STRIPE_KEY'), { target: { value: 'NEW_SSH' } })
-    fireEvent.change(within(form).getByTestId('vault-add-kind'), { target: { value: 'ssh_key' } })
+    pickValue(within(form).getByTestId('vault-add-kind'), 'ssh_key')
     const area = within(form).getByTestId('vault-value-multiline') as HTMLTextAreaElement
     expect(area.tagName).toBe('TEXTAREA')
     fireEvent.change(area, { target: { value: KEY } })
@@ -484,14 +487,17 @@ describe('VaultSection', () => {
     await renderPage()
     fireEvent.click(screen.getByTestId('vault-add'))
     const form = screen.getByTestId('vault-add-form')
-    const delivery = () => within(form).getByTestId('vault-add-delivery') as HTMLSelectElement
-    expect(Array.from(delivery().options).map((o) => o.value)).not.toContain('agent')
-    fireEvent.change(within(form).getByTestId('vault-add-kind'), { target: { value: 'ssh_key' } })
-    expect(Array.from(delivery().options).map((o) => o.value)).toContain('agent')
-    fireEvent.change(delivery(), { target: { value: 'agent' } })
+    const delivery = () => within(form).getByTestId('vault-add-delivery')
+    expect(menuValues(delivery())).not.toContain('agent')
+    pickValue(within(form).getByTestId('vault-add-kind'), 'ssh_key')
+    expect(menuValues(delivery())).toContain('agent')
+    pickValue(delivery(), 'agent')
     expect(form.textContent).not.toContain('Agents can see this value')
-    fireEvent.change(within(form).getByTestId('vault-add-kind'), { target: { value: 'api_key' } })
-    expect(delivery().value).toBe('fetch')
+    // A re-pick of the same kind keeps the delivery.
+    pickValue(within(form).getByTestId('vault-add-kind'), 'ssh_key')
+    expect(pickedValue(delivery())).toBe('agent')
+    pickValue(within(form).getByTestId('vault-add-kind'), 'api_key')
+    expect(pickedValue(delivery())).toBe('fetch')
   })
 })
 

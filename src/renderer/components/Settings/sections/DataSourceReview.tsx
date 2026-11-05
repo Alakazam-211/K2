@@ -30,6 +30,7 @@ import { ConfirmStep } from './DataSourceConfirm'
 import { DataSourceTryTree, TrySummary } from './DataSourceTryTree'
 import { btn, btnPrimary, danger, every, makerLabel, maskQuery, muted, sourcesErrorOf, sourcesErrorText } from './data-sources-ui'
 import { SquareRadio } from '@/components/ui'
+import { SettingDropdown } from '../controls/SettingControls'
 
 /** Does a vault secret's site list include this origin? */
 export function secretFitsOrigin(s: Pick<VaultSecret, 'hosts' | 'status'>, origin: string): boolean {
@@ -256,25 +257,26 @@ export function DataSourceReview({
 
       {!secretBound && (
         <div className="text-[11px] space-y-1">
-          <label className={muted}>
-            Secret{' '}
-            <select
-              className="ml-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)]"
+          <span className={`${muted} inline-flex items-center`}>
+            Secret
+            <SettingDropdown
+              compact
+              menuAlign="left"
+              className="ml-1 min-w-0 max-w-[240px]"
+              ariaLabel="Secret"
+              triggerData={{ 'data-testid': 'sources-review-secret' }}
               value={secret}
-              onChange={(e) => setSecret(e.currentTarget.value)}
-              data-testid="sources-review-secret"
-            >
-              <option value="">None</option>
-              {pending.secret && !fitting.some((s) => s.name === pending.secret) && (
-                <option value={pending.secret}>{pending.secret} (asked for)</option>
-              )}
-              {fitting.map((s) => (
-                <option key={s.id} value={s.name}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              options={[
+                { value: '', label: 'None' },
+                ...(pending.secret && !fitting.some((s) => s.name === pending.secret)
+                  ? [{ value: pending.secret, label: `${pending.secret} (asked for)` }]
+                  : []),
+                // By name: two secrets with one name (workspace and server) are one pick.
+                ...[...new Set(fitting.map((s) => s.name))].map((n) => ({ value: n, label: n })),
+              ]}
+              onChange={setSecret}
+            />
+          </span>
           <button
             type="button"
             className={`${btn} ml-1.5`}

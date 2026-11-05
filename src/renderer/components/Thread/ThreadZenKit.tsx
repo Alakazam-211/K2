@@ -24,6 +24,7 @@ import { ChangesCard } from '@/components/SessionView/ChangesCard'
 import type { HandoffDecideBody, HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 import { coerceChanges, coerceHandoff, sameThreadItem, type OverlayStashOffer, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
+import { daemonErrorText } from '@/lib/daemon-error'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { ThreadContextLine } from './ThreadContextChip'
@@ -461,6 +462,8 @@ export const ThreadBubble = memo(function ThreadBubble({
   // A narrow column (ThreadColumn): the whole column but a small inset.
   const narrow = useThreadColumnNarrow()
   const permissionActions = usePermissionActions(item, onAnswer)
+  // Why the last tap on this choice card didn't count (shown on the card).
+  const [pickError, setPickError] = useState<string | null>(null)
   // A sent reply (prd-thread-message-menu-v1): its quote draws as a small
   // line above the person's words.
   const reply = useMemo(() => (kind === 'text' ? parseThreadReply(text) : null), [kind, text])
@@ -564,13 +567,22 @@ export const ThreadBubble = memo(function ThreadBubble({
             permission={item.doc.choice.permission ?? null}
             permissionActions={permissionActions}
             from={item.doc.from || ''}
+            error={pickError}
             onPick={(label) => {
-              const warn = (err: unknown): void => console.warn('[thread] answer failed:', err)
+              // A refusal (not the owner, already answered, the folder
+              // changed) is shown on the card in the daemon's words: a tap
+              // that does nothing visible reads as broken (2026-11-05).
+              const shown = (err: unknown): void => {
+                console.warn('[thread] answer failed:', err)
+                setPickError(daemonErrorText(err) || 'K2 couldn’t record that answer.')
+              }
+              setPickError(null)
               try {
                 const sent = onAnswer?.({ answer: label })
-                if (sent instanceof Promise) sent.catch(warn)
+                if (sent instanceof Promise) sent.catch(shown)
+                else if (!onAnswer) setPickError('This view can’t answer cards.')
               } catch (err) {
-                warn(err)
+                shown(err)
               }
             }}
           />

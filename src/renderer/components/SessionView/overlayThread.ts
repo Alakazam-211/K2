@@ -959,6 +959,29 @@ export function applyOverlayFrame(
   ])
 }
 
+/** The card a `thread/answer` refusal carries when the card was no longer
+ *  waiting (409 `card_not_pending` with `{id, seq, doc}`, daemon 0.46.9+):
+ *  as a frame, so `applyOverlayFrame` updates the card the way a live frame
+ *  would have (who answered, what, the result line). Null for any other
+ *  error, or an older daemon's refusal without the card. */
+export function staleCardFrame(err: unknown): OverlayWsFrame | null {
+  if (!err || typeof err !== 'object') return null
+  const e = err as { code?: unknown; body?: unknown }
+  const body = e.body && typeof e.body === 'object' ? (e.body as Record<string, unknown>) : null
+  if (!body) return null
+  const code = e.code ?? (body.error && typeof body.error === 'object' ? (body.error as { code?: unknown }).code : null)
+  if (code !== 'card_not_pending') return null
+  const doc = body.doc
+  const id = typeof body.id === 'string' ? body.id : ''
+  if (!id || !doc || typeof doc !== 'object' || Array.isArray(doc)) return null
+  return {
+    collection: 'thread',
+    id,
+    ...(typeof body.seq === 'number' ? { seq: body.seq } : {}),
+    doc: doc as OverlayDoc,
+  }
+}
+
 // ── The Thread turn (prd-daemon-activity-and-thread-working-v1 S7) ─────────
 //
 // While the agent works on a Thread message, the daemon sends ephemeral

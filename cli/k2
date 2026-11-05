@@ -48154,6 +48154,14 @@ WHAT K2 DOES
   the decision. The card, status and a held spawn list them; the owner
   removes them all with k2 workspace trust forget <folder>.
 
+  Who decides: the owner (the owner token, or a login with the Owner
+  role, from any device). Admins and Members are refused, in words. The
+  same three choices are in Settings → Workspaces → Folder trust while the
+  folder waits, and on the CLI. Whichever is used first decides: the card
+  closes showing that choice and who made it, and a later tap on it says
+  "Already answered: … by <who> at <time>". A trust starts the spawns K2
+  held there again; a session K2 stopped starts again when its tab opens.
+
   While a card waits: no new session starts in that folder (the spawn gets
   409 folder_trust_pending and runs once the owner trusts it), heartbeats
   are skipped (held: folder trust), k2 msg tells you the same. Print mode

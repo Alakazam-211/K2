@@ -67,6 +67,10 @@ export interface ChoiceCardProps {
   /** 0.46.3: what a settings card's action did ("Kept as yours. Undo in
    *  Settings → Gardens → Local Data."), shown under the chosen option. */
   resultMessage?: string | null
+  /** Why the last pick didn't count, in the daemon's words ("only this
+   *  server's owner answers…", "Already answered: … by baden at …"):
+   *  shown on the card, never only in the console. */
+  error?: string | null
   onPick: (label: string) => void
   /** A permission card's `cards=2` view (`choice.permission`): drawn as
    *  PermissionCard / PermissionBatchCard instead. */
@@ -87,6 +91,7 @@ function PlainChoiceCard({
   expiresAt,
   nowSec,
   resultMessage,
+  error,
   openPinForm,
   pinScope,
   onPick,
@@ -174,6 +179,15 @@ function PlainChoiceCard({
           {expiry}
         </div>
       )}
+      {error ? (
+        <div
+          data-testid="thread-choice-error"
+          role="alert"
+          className="text-[10px] text-[var(--color-danger,#c33)] leading-relaxed"
+        >
+          {error}
+        </div>
+      ) : null}
       {status === 'answered' && answeredBy && (
         <div
           data-testid="thread-choice-answered-by"

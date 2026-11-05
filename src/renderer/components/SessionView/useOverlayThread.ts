@@ -77,6 +77,7 @@ import {
   OVERLAY_PAGE_SIZE,
   overlayItemFromThreadPost,
   releaseOverlayWebSocket,
+  staleCardFrame,
   subscribeOverlayThreadLive,
   threadItemsFromSnapshot,
   threadWindowFloor,
@@ -696,7 +697,14 @@ export function useOverlayThread(opts: {
         name?: string
         kind?: string
         ref?: string
-      }>(scope, 'thread/answer', threadAnswerBody(addr, id, payload))
+      }>(scope, 'thread/answer', threadAnswerBody(addr, id, payload)).catch((e: unknown) => {
+        // The card was already answered (another viewer, Settings, the CLI)
+        // and this view missed the frame: the refusal carries the card as
+        // it is now, so it shows who decided; the card shows the words.
+        const frame = staleCardFrame(e)
+        if (frame) setItems((prev) => applyOverlayFrame(prev, frame, 0))
+        throw e
+      })
       const isSecret = payload.secret !== undefined
       setItems((prev) =>
         prev.map((it) => {

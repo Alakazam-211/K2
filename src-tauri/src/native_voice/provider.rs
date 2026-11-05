@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tauri_plugin_sew_voice::{BoxFuture, JoinAnswer, JoinProvider, JoinRequest, ProviderError};
+use tauri_plugin_sew_voice::{BoxFuture, ConsentRequired, JoinAnswer, JoinProvider, JoinRequest, ProviderError};
 
 /// The longest a daemon can take to answer a join (`voice/bff.rs`: a
 /// reconnecting lane, a level sync, the member gate and Sew's answer add up to
@@ -129,6 +129,9 @@ pub fn answer_from(status: u16, retry_after_secs: Option<u64>, body: &[u8], logi
         401 => Err(ProviderError::SigninRequired),
         _ => {
             let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            if let Some(c) = consent_required(&v) {
+                return Err(ProviderError::ConsentRequired(Box::new(c)));
+            }
             let code = v.pointer("/error/code").or_else(|| v.get("code")).and_then(Value::as_str);
             match code {
                 Some(code) => {
@@ -144,6 +147,19 @@ pub fn answer_from(status: u16, retry_after_secs: Option<u64>, body: &[u8], logi
             }
         }
     }
+}
+
+/// Sew 0.7.3's recorded room: the reason, not the code, says so (Sew answers
+/// `409 conflict` with `details.reason = recording_consent_required`). Only
+/// [`ProviderError::ConsentRequired`] makes the engine hold the join for the
+/// person's answer. The daemon passes Sew's details through as its own
+/// (`error.details`); a daemon from before 0.46.9 nests Sew's error under
+/// `error.details.sew`. A refusal without a prompt stays a plain refusal.
+fn consent_required(v: &Value) -> Option<ConsentRequired> {
+    ["/error/details", "/error/details/sew/details"].iter().find_map(|p| {
+        let d = v.pointer(p)?;
+        (d.get("reason").and_then(Value::as_str) == Some("recording_consent_required")).then(|| ConsentRequired::from_details(d)).flatten()
+    })
 }
 
 /// A refusal's detail reaches the webview. Sew's refusals carry no token, so a

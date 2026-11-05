@@ -237,6 +237,38 @@ fn refusals_map_as_the_guide_says() {
     assert!(matches!(err(500, None, json!({})), ProviderError::Other(_)));
 }
 
+/// Sew's details for a recorded room (a live recording 77, notice 3141), with
+/// the reason Sew puts beside them.
+fn consent_details() -> Value {
+    let mut d = serde_json::to_value(tauri_plugin_sew_voice::fake::consent_required(77, 3141)).expect("json");
+    d["reason"] = json!("recording_consent_required");
+    d
+}
+
+/// A recorded room is `ConsentRequired` (so the engine holds the join), read
+/// from the reason, never the code: from this daemon (Sew's details as its
+/// own) and from an older one (nested under `details.sew`). Other 409s, and
+/// a consent refusal without a prompt, stay plain refusals.
+#[test]
+fn a_recorded_room_is_consent_required_and_other_409s_are_refusals() {
+    let l = login("https://lab.k2.dev");
+    let err = |v: Value| answer_from(409, None, &serde_json::to_vec(&v).expect("json"), &l).err().expect("an error");
+    let d = consent_details();
+    for body in [
+        json!({"ok": false, "code": "recording_consent_required", "error": {"code": "recording_consent_required", "hint": "answer it", "details": d}}),
+        json!({"error": {"code": "conflict", "hint": "answer it", "details": {"sew": {"code": "conflict", "hint": "answer it", "details": d}}}}),
+    ] {
+        match err(body.clone()) {
+            ProviderError::ConsentRequired(c) => assert_eq!(c.notice_version(), 3141, "{body}"),
+            other => panic!("{body}: {other:?}"),
+        }
+    }
+    let bare = err(json!({"error": {"code": "recording_consent_required", "hint": "x", "details": {"reason": "recording_consent_required"}}}));
+    assert!(matches!(bare, ProviderError::Refused { ref code, .. } if code == "recording_consent_required"), "{bare:?}");
+    let full = err(json!({"error": {"code": "room_full", "hint": "full", "details": {"limit": 5}}}));
+    assert!(matches!(full, ProviderError::Refused { ref code, .. } if code == "room_full"), "{full:?}");
+}
+
 #[test]
 fn a_refusal_that_quotes_a_token_loses_its_detail() {
     let l = login("https://lab.k2.dev");
@@ -509,6 +541,24 @@ async fn a_server_refusal_reaches_the_window_as_given() {
     let e = w.svc.join(join_args()).await.err().expect("the join fails");
     assert_eq!(e.code, "room_full");
     assert_eq!(e.detail, json!({"hint": "full", "details": {"limit": 5}}));
+}
+
+/// A recorded room through K2's provider: the plugin holds the join at
+/// `consent_required` (no call id, nothing more asked of the daemon), and the
+/// window's leave (the desktop has no consent sheet before 0.46.10) ends it
+/// `left` at once. It never holds on by itself or hangs.
+#[tokio::test]
+async fn a_held_join_is_given_up_by_leave_and_never_hangs() {
+    let body = json!({"ok": false, "error": {"code": "recording_consent_required", "hint": "answer it", "details": consent_details()}});
+    let (base, mut seen) = fake_daemon(vec![(409, body)]).await;
+    let w = world(Arc::new(provider_for(&base)));
+    let r = tokio::time::timeout(std::time::Duration::from_secs(5), w.svc.join(join_args())).await.expect("join answers").expect("held, not failed");
+    assert_eq!(r.call_id, "", "no room while held");
+    assert!(matches!(w.svc.snapshot().state, CallState::ConsentRequired { notice_version: 3141, .. }), "{:?}", w.svc.snapshot().state);
+    seen.recv().await.expect("the one join");
+    tokio::time::timeout(std::time::Duration::from_secs(5), w.svc.leave()).await.expect("leave answers").expect("leave");
+    assert_eq!(w.svc.snapshot().state, CallState::Ended { reason: "left".into() });
+    assert!(seen.try_recv().is_err(), "nothing more was asked of the daemon");
 }
 
 // ── what ships with it ──

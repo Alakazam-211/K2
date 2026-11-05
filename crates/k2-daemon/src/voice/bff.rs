@@ -158,6 +158,15 @@ pub fn sew_refusal(a: &SewAnswer) -> Refusal {
     if is("channel_closing") {
         return Refusal::new(409, "room_closing", "this room is closing: the people in it stay, no one new joins");
     }
+    // Sew 0.7.3: a recorded room asks each joiner first, and no answer is
+    // never a yes. Sew's details pass through unchanged (`reason`,
+    // `consent_prompt`, `recording`, `auto`): the native engine reads them as
+    // `ConsentRequired` and holds the join for the person's answer.
+    if reason == "recording_consent_required" {
+        let details = a.body.pointer("/error/details").cloned().unwrap_or(Value::Null);
+        let h = if hint.is_empty() { "this room is being recorded: answer its recording notice to join".to_string() } else { hint };
+        return Refusal::new(409, "recording_consent_required", h).details(details);
+    }
     // Sew 0.7.2: a join's `origin` must be the session App's. K2's voice rooms
     // have no App, so a body naming one always lands here; K2's clients send none.
     if is("origin_not_listed") {

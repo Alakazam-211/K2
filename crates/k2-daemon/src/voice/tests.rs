@@ -745,6 +745,12 @@ fn sew_refusals_map_to_the_clients_codes() {
         assert_eq!(x.details.unwrap()["sew"]["details"]["reason"], reason);
     }
     assert_eq!(r(200, Value::Null).status, 502, "a non-error status never passes as a refusal status");
+    // Sew 0.7.3's recorded room: Sew's details reach the client unchanged.
+    let details = json!({"reason": "recording_consent_required", "recording": null, "auto": false,
+        "consent_prompt": {"recording_id": "77", "notice_version": 3141}});
+    let c = r(409, json!({"ok": false, "error": {"code": "conflict", "hint": "answer the recording notice", "details": details}}));
+    assert_eq!((c.status, c.code.as_str(), c.hint.as_str()), (409, "recording_consent_required", "answer the recording notice"));
+    assert_eq!(c.details, Some(details));
 }
 
 #[test]

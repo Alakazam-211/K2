@@ -1561,6 +1561,12 @@ pub fn note_reply(conversation_id: &str) {
 
 /// An owner hook envelope the activity store just applied.
 pub fn on_envelope(env: &HookEnvelope, at: i64) {
+    // 0.46.9 take check: the lead read in a Thread line (a stamped prompt).
+    if env.event == "UserPromptSubmit" && env.agent_id.is_none() {
+        if let Some(addr) = env.prompt_thread_addr.as_deref() {
+            crate::delivery_take::note_stamp(&env.pane, addr, at);
+        }
+    }
     run(|t, now| t.envelope(env, at, &snap_of, now));
 }
 
@@ -1605,7 +1611,14 @@ pub fn spawn() {
         let mut transcripts = crate::activity_transcript::subscribe();
         let t = std::thread::Builder::new().name("thread-activity-transcript".into()).spawn(move || loop {
             match transcripts.blocking_recv() {
-                Ok(ev) => run(|t, now| t.transcript(&ev.session_id, &ev.signal, ev.at, &snap_of, now)),
+                Ok(ev) => {
+                    // 0.46.9 take check: a stamped user turn or queued
+                    // command in the transcript.
+                    if let Some(addr) = ev.signal.thread_addr() {
+                        crate::delivery_take::note_stamp(&ev.session_id, addr, ev.at);
+                    }
+                    run(|t, now| t.transcript(&ev.session_id, &ev.signal, ev.at, &snap_of, now))
+                }
                 Err(RecvError::Lagged(n)) => {
                     // A missed stamp leaves a turn unbound: it still ends
                     // when its lead goes idle (A22).

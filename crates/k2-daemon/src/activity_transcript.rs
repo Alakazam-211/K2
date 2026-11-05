@@ -461,7 +461,9 @@ fn argv_conversation(sid: &str) -> Option<String> {
     )
 }
 
-fn grid_rows(sid: &str) -> Option<Vec<String>> {
+/// The session's visible screen rows (also the Thread take check's
+/// "is the text still on screen", `delivery_take`).
+pub(crate) fn grid_rows(sid: &str) -> Option<Vec<String>> {
     let id = SessionId::parse(sid)?;
     let session = crate::v2_session_map::lookup_by_session_id(&id)?;
     Some(session.visible_text_rows())

@@ -32,9 +32,12 @@
 //! and would double-inject on every ordinary retry, so it is not done.
 //! Before this feature the same crash meant a double post instead.
 //! Since send-delay fix 2 (0.46.8) the inject runs after the answer, on the
-//! agent's delivery lane (`delivery_queue`, in memory), so the window is
-//! "until the lane reaches it". A repeat never queues a second delivery:
-//! it answers before anything is queued.
+//! agent's delivery lane (`delivery_queue`), so the window is "until the
+//! lane reaches it". Since 0.46.9 the lane's jobs are journaled
+//! (`delivery_journal`, migration 0267): a queued line survives a restart;
+//! only the moment between the commit and the journal write is open. A
+//! repeat never queues a second delivery: it answers before anything is
+//! queued.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 

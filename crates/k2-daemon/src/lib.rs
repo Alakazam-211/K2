@@ -203,6 +203,12 @@ pub mod client_msg_id;
 /// Send-delay fix 2 (0.46.8): Thread and project chat posts answer before
 /// the agent inject, which runs on a per-agent, in-order delivery lane.
 pub(crate) mod delivery_queue;
+/// 0.46.9: the delivery lanes' journal (migration 0267): a queued Thread or
+/// project chat delivery survives a daemon restart.
+pub(crate) mod delivery_journal;
+/// 0.46.9: the Thread take check: a delivered line the agent never read in
+/// is typed in once more, then the Thread is told.
+pub(crate) mod delivery_take;
 // Thread push trigger + per-(Thread, person) coalescer (S3).
 pub mod thread_push;
 // push-content-available-v1 (0.46.7): stale hints for Thread changes that never alert.

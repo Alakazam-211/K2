@@ -23,9 +23,11 @@
 //! notes) use [`run_in_order`]: their job still takes its place in the
 //! lane, so it never jumps ahead of a person's queued post.
 //!
-//! Known gap: the queue is in memory. A daemon that dies with jobs queued
-//! drops them (the posts are stored; the agent reads them in the Thread or
-//! with `k2 project read`). See also `client_msg_id`'s known gap.
+//! The queue itself is in memory. Since 0.46.9 the Thread and project chat
+//! callers also write each job to the delivery journal
+//! ([`crate::delivery_journal`], SQLite), and boot queues again what a
+//! restart left behind. A job cut off mid-delivery is never typed in
+//! twice: its Thread is told instead.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{LazyLock, Mutex};

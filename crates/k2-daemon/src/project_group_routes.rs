@@ -1700,6 +1700,9 @@ pub(crate) enum PocDelivery {
 }
 
 /// One project chat line on its way to the PoC, owned for the lane.
+/// Written to the delivery journal (0.46.9, [`crate::delivery_journal`])
+/// as JSON while it waits, so a restart doesn't lose it.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct PocJob {
     message_id: String,
     path: String,
@@ -1749,6 +1752,22 @@ impl PocJob {
         record_test_poc_outcome(&self.message_id, &outcome);
         outcome
     }
+}
+
+fn queue_poc_job(lane: &str, job: PocJob, entry: crate::delivery_journal::Entry) {
+    crate::delivery_queue::run_later(lane, move || {
+        entry.started();
+        job.run();
+        entry.finish();
+    });
+}
+
+/// Boot ([`crate::delivery_journal::replay_on_boot`]): queue a journal
+/// row's project chat line again, on its lane, under the same row.
+pub(crate) fn requeue_poc_delivery(row: &k2_core::delivery_journal::JournalRow) -> Result<(), String> {
+    let job: PocJob = serde_json::from_str(&row.body).map_err(|e| format!("unreadable project chat delivery: {e}"))?;
+    queue_poc_job(&row.lane, job, crate::delivery_journal::Entry::existing(&row.id));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1905,17 +1924,21 @@ pub(crate) fn store_and_deliver(
                     // posts: lines reach that PTY in the order they came.
                     let lane = crate::overlay_routes::workspace_delivery_lane(poc_id);
                     let queued = || (false, Some(DELIVERY_QUEUED.to_string()), None);
+                    let entry = crate::delivery_journal::record(&lane, k2_core::delivery_journal::KIND_PROJECT, &job);
                     match delivery {
                         PocDelivery::Later => {
-                            crate::delivery_queue::run_later(&lane, move || {
-                                job.run();
-                            });
+                            queue_poc_job(&lane, job, entry);
                             queued()
                         }
                         PocDelivery::Wait => crate::delivery_queue::run_in_order(
                             &lane,
                             crate::delivery_queue::WAIT_FOR_OWN_DELIVERY,
-                            move || job.run(),
+                            move || {
+                                entry.started();
+                                let out = job.run();
+                                entry.finish();
+                                out
+                            },
                         )
                         .unwrap_or_else(queued),
                     }

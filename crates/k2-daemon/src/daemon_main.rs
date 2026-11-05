@@ -1620,6 +1620,11 @@ async fn async_main() {
 
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
+    // 0.46.9: Thread and project chat deliveries a restart left queued go
+    // back on their agents' lanes (the journal, migration 0267). After
+    // `ready` and the session adoption above, so a wake can spawn and the
+    // agents that survived get their lines in the order they were sent.
+    let _replayed = delivery_journal::replay_on_boot();
     // 0.46.4: the boot migrations' leftovers whose trash timed out, now off
     // the boot path (background thread, no Finder, never deleted).
     let _deferred_trash = k2_core::safe_delete::trash_later(deferred_boot_trash);

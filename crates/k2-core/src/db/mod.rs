@@ -1786,6 +1786,12 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // table, `person_pictures`. Renumber freely on a slip (and edit the
         // migration-order tests). The store is `crate::person_picture`.
         ("0264_person_pictures", include_str!("../../drizzle_sql/0264_person_pictures.sql")),
+        // 0267 — the delivery lanes' journal (0.46.9): one new table,
+        // `delivery_journal`, so a queued Thread / project chat delivery
+        // survives a daemon restart. 0265 and 0266 are held by other
+        // branches. Renumber freely on a slip (and edit the migration-order
+        // tests). The store is `crate::delivery_journal`.
+        ("0267_delivery_journal", include_str!("../../drizzle_sql/0267_delivery_journal.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2465,7 +2471,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0264_person_pictures",
+            last_name, "0267_delivery_journal",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2591,6 +2597,7 @@ mod tests {
                 "0262_mail_forward_volume",
                 "0263_chat_refresh_switch",
                 "0264_person_pictures",
+                "0267_delivery_journal",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2724,6 +2731,7 @@ mod tests {
                 "0262_mail_forward_volume",
                 "0263_chat_refresh_switch",
                 "0264_person_pictures",
+                "0267_delivery_journal",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2951,7 +2959,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0264_person_pictures", "0264 (0.46.8) runs last");
+        assert_eq!(top, "0267_delivery_journal", "0267 (0.46.9) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3002,7 +3010,8 @@ mod tests {
                 "0261_mail_outbound_reply_to",
                 "0262_mail_forward_volume",
                 "0263_chat_refresh_switch",
-                "0264_person_pictures"
+                "0264_person_pictures",
+                "0267_delivery_journal"
             ],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262)"
         );
@@ -3846,7 +3855,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0264 (person pictures, 0.46.8) is the newest: its record goes
+            // 0267 (the delivery journal, 0.46.9) is the newest: its record
+            // goes (its table and index are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0267_delivery_journal'", []).unwrap();
+            // 0264 (person pictures, 0.46.8) came before it: its record goes
             // (its table is IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0264_person_pictures'", []).unwrap();
             // 0263 (the chat refresh switch, 0.46.8) came before it: its record

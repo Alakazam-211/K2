@@ -4032,8 +4032,10 @@ fn fire_card_callbacks(resolved: &ResolvedOverlay, from: &str, cbs: Vec<CardCall
 /// Where a Thread delivery goes: the agent's PTY, or (the lib's unit
 /// tests, which have no Tokio reactor) the test sink. Read on the
 /// request's thread, before the job moves to a lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum DeliverySink {
+    /// Also what a job read back from the journal gets (boot replay).
+    #[default]
     Live,
     Test,
 }
@@ -4065,7 +4067,7 @@ fn thread_delivery_lane(resolved: &ResolvedOverlay) -> String {
 }
 
 /// An owned [`ThreadTurn`], for a delivery that runs after the answer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct QueuedTurn {
     conversation_id: String,
     turn_id: String,
@@ -4073,8 +4075,10 @@ struct QueuedTurn {
 }
 
 /// One Thread delivery, owned, so it can run on the agent's lane
-/// ([`crate::delivery_queue`]) after the post has answered.
-#[derive(Debug, Clone)]
+/// ([`crate::delivery_queue`]) after the post has answered. Written to
+/// the delivery journal (0.46.9, [`crate::delivery_journal`]) as JSON
+/// while it waits, so a restart doesn't lose it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct ThreadDeliveryJob {
     lane: String,
     addr: String,
@@ -4085,7 +4089,13 @@ struct ThreadDeliveryJob {
     via: String,
     command: String,
     turn: Option<QueuedTurn>,
+    #[serde(skip)]
     sink: DeliverySink,
+    /// 0.46.9 take check: this is the one retry of a line the agent never
+    /// read in ([`crate::delivery_take`]). Not taken again → a notice in
+    /// the Thread, never a third delivery.
+    #[serde(default)]
+    retry: bool,
 }
 
 impl ThreadDeliveryJob {
@@ -4111,7 +4121,16 @@ impl ThreadDeliveryJob {
                 started_at: t.started_at,
             }),
             sink: delivery_sink(),
+            retry: false,
         }
+    }
+
+    /// The one retry of a line the agent never read in: no Thread turn of
+    /// its own (the first delivery's turn already ran its course).
+    fn into_retry(mut self) -> Self {
+        self.retry = true;
+        self.turn = None;
+        self
     }
 
     /// An app guest's delivery: `from` is its [`workspace_msg::guest_label`].
@@ -4121,13 +4140,54 @@ impl ThreadDeliveryJob {
     }
 
     fn run(self) -> ThreadDelivery {
+        let since = chrono::Utc::now().timestamp_millis();
         let turn = self.turn.as_ref().map(|t| ThreadTurn {
             conversation_id: &t.conversation_id,
             turn_id: &t.turn_id,
             started_at: t.started_at,
         });
         let sender = if self.guest { workspace_msg::Sender::Guest(&self.from) } else { workspace_msg::Sender::Named(&self.from) };
-        deliver_thread_to_pty(self.sink, &self.addr, &self.payload, sender, &self.via, &self.command, turn)
+        let out = deliver_thread_to_pty(self.sink, &self.addr, &self.payload, sender, &self.via, &self.command, turn, self.retry);
+        self.check_taken(&out, since);
+        out
+    }
+
+    /// 0.46.9 take check ([`crate::delivery_take`]): a line that reached a
+    /// live session is watched until the agent reads it in. Not taken
+    /// (the agent idle for the window, nothing on its screen): typed in
+    /// once more; the retry not taken (or not delivered): a notice in the
+    /// Thread for the sender.
+    fn check_taken(&self, out: &ThreadDelivery, since: i64) {
+        if self.sink != DeliverySink::Live {
+            return;
+        }
+        if self.retry && !out.success {
+            post_not_taken_notice(self, NotTaken::RetryFailed);
+            return;
+        }
+        let Some(session) = out.target_session_id.as_deref().filter(|_| out.success) else {
+            return;
+        };
+        if crate::delivery_take::take_window().is_none() || !self.payload.contains(&format!("[thread:{}]", self.addr)) {
+            return;
+        }
+        let next = self.clone();
+        let on_not_taken: Box<dyn FnOnce() + Send + 'static> = if self.retry {
+            Box::new(move || post_not_taken_notice(&next, NotTaken::NeverReadIn))
+        } else {
+            Box::new(move || {
+                k2_core::log_debug!("[thread-delivery] typing it in once more addr={}", next.addr);
+                deliver_thread_later(next.into_retry());
+            })
+        };
+        crate::delivery_take::watch(crate::delivery_take::Watch::new(
+            session,
+            &self.addr,
+            since,
+            &self.payload,
+            self.retry,
+            on_not_taken,
+        ));
     }
 
     /// The lib's unit tests deliver inline (deterministic), except to an
@@ -4143,14 +4203,24 @@ impl ThreadDeliveryJob {
 /// that no client connection owns (headless-safe). The outcome goes where
 /// it always went: the Thread turn (`delivering`, then following the
 /// session or `delivery_failed`) and the log.
+///
+/// 0.46.9: the job is in the delivery journal ([`crate::delivery_journal`])
+/// from now until its lane is done with it, so a restart re-sends it.
 fn deliver_thread_later(job: ThreadDeliveryJob) {
     if job.inline_in_tests() {
         job.run();
         return;
     }
+    let entry = crate::delivery_journal::record(&job.lane, k2_core::delivery_journal::KIND_THREAD, &job);
+    queue_thread_job(job, entry);
+}
+
+fn queue_thread_job(job: ThreadDeliveryJob, entry: crate::delivery_journal::Entry) {
     let lane = job.lane.clone();
     crate::delivery_queue::run_later(&lane, move || {
+        entry.started();
         job.run();
+        entry.finish();
     });
 }
 
@@ -4162,11 +4232,100 @@ fn deliver_thread_in_order(job: ThreadDeliveryJob) -> ThreadDelivery {
     }
     let lane = job.lane.clone();
     let addr = job.addr.clone();
-    crate::delivery_queue::run_in_order(&lane, crate::delivery_queue::WAIT_FOR_OWN_DELIVERY, move || job.run())
-        .unwrap_or_else(|| {
-            k2_core::log_debug!("[overlay] delivery to {addr} still queued; answering not delivered");
-            ThreadDelivery::default()
-        })
+    let entry = crate::delivery_journal::record(&lane, k2_core::delivery_journal::KIND_THREAD, &job);
+    crate::delivery_queue::run_in_order(&lane, crate::delivery_queue::WAIT_FOR_OWN_DELIVERY, move || {
+        entry.started();
+        let out = job.run();
+        entry.finish();
+        out
+    })
+    .unwrap_or_else(|| {
+        k2_core::log_debug!("[overlay] delivery to {addr} still queued; answering not delivered");
+        ThreadDelivery::default()
+    })
+}
+
+/// Boot ([`crate::delivery_journal::replay_on_boot`]): queue a journal
+/// row's Thread delivery again, on its lane, under the same row.
+pub(crate) fn requeue_thread_delivery(row: &k2_core::delivery_journal::JournalRow) -> Result<(), String> {
+    let mut job: ThreadDeliveryJob = serde_json::from_str(&row.body).map_err(|e| format!("unreadable Thread delivery: {e}"))?;
+    job.sink = delivery_sink();
+    queue_thread_job(job, crate::delivery_journal::Entry::existing(&row.id));
+    Ok(())
+}
+
+/// Boot: a journal row's Thread line is not sent again; say so in its
+/// Thread, so the sender knows to check.
+pub(crate) fn abandon_thread_delivery(row: &k2_core::delivery_journal::JournalRow, why: crate::delivery_journal::Abandon) {
+    let job: ThreadDeliveryJob = match serde_json::from_str(&row.body) {
+        Ok(j) => j,
+        Err(e) => {
+            k2_core::log_debug!("[delivery] boot: unreadable Thread row {} ({e}); no notice", row.id);
+            return;
+        }
+    };
+    let why = match why {
+        crate::delivery_journal::Abandon::Interrupted => NotTaken::RestartMidDelivery,
+        crate::delivery_journal::Abandon::TooOld => NotTaken::RestartTooOld,
+    };
+    post_not_taken_notice(&job, why);
+}
+
+/// Why K2 tells a Thread its line may not have reached the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotTaken {
+    /// Typed in twice; the agent never read it in.
+    NeverReadIn,
+    /// The retry could not be typed in.
+    RetryFailed,
+    /// K2 restarted while it was typing it in.
+    RestartMidDelivery,
+    /// K2 restarted and the line was over an hour old.
+    RestartTooOld,
+}
+
+/// The sender's own words, shortened, for a notice.
+fn notice_quote(payload: &str) -> String {
+    let body = match payload.find("[thread:") {
+        Some(i) => payload[i..].find(']').map_or(payload, |j| &payload[i + j + 1..]),
+        None => payload,
+    };
+    let line = body.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let line = line.trim_start_matches('>').trim();
+    let short: String = line.chars().take(60).collect();
+    if short.chars().count() < line.chars().count() {
+        format!("{short}...")
+    } else {
+        short
+    }
+}
+
+/// K2's words for a [`NotTaken`] notice.
+fn not_taken_text(agent: &str, quote: &str, why: NotTaken) -> String {
+    let what = if quote.is_empty() { "a message".to_string() } else { format!("the message \"{quote}\"") };
+    match why {
+        NotTaken::NeverReadIn => format!(
+            "K2: {agent} didn't take {what}. K2 typed it into {agent}'s terminal twice, but the agent never read it in. Its screen may be on another view. Check its terminal, then send the message again."
+        ),
+        NotTaken::RetryFailed => format!(
+            "K2: {agent} didn't take {what}, and K2 couldn't type it in again. Check its terminal, then send the message again."
+        ),
+        NotTaken::RestartMidDelivery => format!(
+            "K2: K2 itself restarted while it was typing {what} into {agent}'s terminal, so it may not have reached {agent}. Check before you send it again."
+        ),
+        NotTaken::RestartTooOld => format!(
+            "K2: {what} was still waiting for {agent} when K2 restarted, and it was over an hour old, so K2 didn't send it. Send it again if it still matters."
+        ),
+    }
+}
+
+/// A notice in the job's Thread (no inject, no wake, no push).
+fn post_not_taken_notice(job: &ThreadDeliveryJob, why: NotTaken) {
+    let text = not_taken_text(&job.addr, &notice_quote(&job.payload), why);
+    match post_workspace_notice(&job.addr, &job.addr, &text) {
+        Ok(id) => k2_core::log_debug!("[thread-delivery] told the Thread ({why:?}) addr={} doc={id}", job.addr),
+        Err(e) => k2_core::log_debug!("[thread-delivery] couldn't tell the Thread ({why:?}) addr={}: {e}", job.addr),
+    }
 }
 
 /// Feedback / Projects Chat / `k2 talk`: `deliver_live(..., wake=true)`.
@@ -4177,6 +4336,10 @@ fn deliver_thread_in_order(job: ThreadDeliveryJob) -> ThreadDelivery {
 /// With `turn`, the inject starts a Thread turn (TW1): `delivering` until
 /// delivery returns, then it follows the v2 session that took the inject
 /// (`target_session_id`), or ends `delivery_failed`.
+///
+/// 0.46.9: every delivery logs one `[thread-delivery]` line, delivered or
+/// not ([`thread_delivery_log_line`]).
+#[allow(clippy::too_many_arguments)]
 fn deliver_thread_to_pty(
     sink: DeliverySink,
     addr: &str,
@@ -4185,6 +4348,7 @@ fn deliver_thread_to_pty(
     via: &str,
     command: &str,
     turn: Option<ThreadTurn<'_>>,
+    retry: bool,
 ) -> ThreadDelivery {
     if sink == DeliverySink::Test {
         return test_delivery(addr, payload);
@@ -4192,6 +4356,7 @@ fn deliver_thread_to_pty(
     if let Some(t) = turn {
         crate::thread_activity::start_turn(t.conversation_id, addr, t.turn_id, t.started_at);
     }
+    let t0 = std::time::Instant::now();
     let resp = crate::workspace_msg::deliver_live_as(
         addr,
         payload,
@@ -4201,12 +4366,7 @@ fn deliver_thread_to_pty(
         crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
         via,
     );
-    if !resp.success {
-        k2_core::log_debug!(
-            "[overlay] deliver_live failed addr={addr} via={via} reason={:?}",
-            resp.reason
-        );
-    }
+    k2_core::log_debug!("{}", thread_delivery_log_line(addr, via, &resp, t0.elapsed().as_millis(), retry));
     if let Some(t) = turn {
         let target = resp.target_session_id.as_deref().filter(|_| resp.success);
         // A wake can re-pin the agent's Chat to a new conversation; the
@@ -4226,6 +4386,22 @@ fn deliver_thread_to_pty(
 pub(crate) struct ThreadDelivery {
     pub success: bool,
     pub target_session_id: Option<String>,
+}
+
+/// The one log line per Thread delivery (0.46.9): where it went, how
+/// (`path` = the delivery cascade's branch), how many tries, how long.
+fn thread_delivery_log_line(addr: &str, via: &str, resp: &workspace_msg::MsgResponse, ms: u128, retry: bool) -> String {
+    let session = resp.target_session_id.as_deref().unwrap_or("-");
+    let path = resp.branch.as_deref().unwrap_or("-");
+    let outcome = if resp.success {
+        "delivered".to_string()
+    } else {
+        format!("not delivered reason={}", resp.reason.as_deref().unwrap_or("unknown"))
+    };
+    format!(
+        "[thread-delivery] {outcome} addr={addr} via={via} session={session} path={path} attempts={} woke={} ms={ms} retry={retry}",
+        resp.attempts, resp.woke
+    )
 }
 
 /// Unit tests have no Tokio reactor, so a delivery is recorded instead of
@@ -9141,4 +9317,8 @@ mod tests {
     // Send-delay fix 2: posts answer before the agent inject (0.46.8).
     #[path = "delivery_lane_tests.rs"]
     mod delivery_lane;
+
+    // 0.46.9: the delivery journal, the one log line, the take-check notices.
+    #[path = "delivery_journal_tests.rs"]
+    mod journal;
 }

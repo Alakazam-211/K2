@@ -376,6 +376,9 @@ pub mod owner_account_prompt;
 pub mod person_name;
 // Profile pictures for K2's own people (0.46.8, migration 0264).
 pub mod person_picture;
+// The delivery lanes' journal (0.46.9, migration 0267): a queued Thread or
+// project chat delivery survives a daemon restart.
+pub mod delivery_journal;
 // Companion C4 (prd-companion-v2 §4) — the daemon-held mobile
 // push-device registry (`push_devices`): upsert-by-device-id
 // registration, dead-token pruning. The `push::K2Cloud` adapter

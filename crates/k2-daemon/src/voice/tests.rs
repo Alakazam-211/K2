@@ -579,7 +579,7 @@ fn a_phone_and_a_desktop_share_one_call_and_leaves_stay_idempotent() {
     assert_eq!((me["room"]["id"].as_str(), me["room"]["name"].as_str()), (Some("room-1"), Some("Room 1")));
     assert_eq!(me["on"], json!({"kind": "login"}));
     assert_eq!(me["callId"], Value::Null, "another session's call id is never shown");
-    assert_eq!((me["mayBeLeaving"].as_bool(), me["presenceLagSecs"].as_u64()), (Some(true), Some(40)));
+    assert_eq!((me["mayBeLeaving"].as_bool(), me["presenceLagSecs"].as_u64()), (Some(true), Some(45)));
     assert!(me["hint"].as_str().unwrap().contains("may still be leaving"), "{me}");
     let me = bff::me_view(&desk, &rooms, &d);
     assert_eq!((me["here"].as_bool(), me["elsewhere"].as_bool(), me["callId"].as_str()), (Some(true), Some(false), Some(desk_call.as_str())));

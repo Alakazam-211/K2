@@ -80,9 +80,12 @@ pub mod paths {
 /// Seconds a client waits before retrying a "pending" answer.
 pub const RETRY_SECS: u64 = 2;
 /// How long Sew's voice presence can still list a client that vanished (a
-/// killed app): about 20 s until the media room drops it, then Sew's 20 s
-/// reconnect window (Sew's answer to the phone gap list, row 13).
-pub const PRESENCE_LAG_SECS: u64 = 40;
+/// killed app). Sew's timing (the phone gap list, row 13): the media room
+/// drops it after about 20 s (15 s without packets, then 5 s of cleanup),
+/// then Sew's 20 s reconnect window runs, then its 1 s admit sweep. Sew
+/// measured the drop at 40.9 s; 45 s leaves headroom over that. K2's
+/// occupancy follower long-polls, so it adds no fixed delay of its own.
+pub const PRESENCE_LAG_SECS: u64 = 45;
 /// How long an ended call is remembered, so its leave stays a success.
 pub const ENDED_KEEP: Duration = Duration::from_secs(3600);
 /// Ended calls remembered at most (oldest dropped first).

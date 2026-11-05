@@ -84,7 +84,7 @@ ROOMS = {"ok": True, "server": "box", "hosting": {"state": "ok", "line": "Voice 
                     "occupants": [{"user": "ada", "muted": True, "deafened": False}, {"user": "owner", "muted": False, "deafened": False}]},
                    {"id": "room-2", "slug": "room-2", "name": "Room 2", "limit": 25, "closing": True, "unavailable": None, "occupants": []}],
          "me": {"user": "ada", "inCall": True, "room": {"id": "room-1", "name": "Standup"}, "channelId": "901", "here": False, "elsewhere": True,
-                "on": {"kind": "phone", "name": "Ada's iPhone"}, "mayBeLeaving": True, "presenceLagSecs": 40, "presence": "live"}}
+                "on": {"kind": "phone", "name": "Ada's iPhone"}, "mayBeLeaving": True, "presenceLagSecs": 45, "presence": "live"}}
 
 class H(BaseHTTPRequestHandler):
     def _go(self, method):
@@ -179,7 +179,7 @@ assert_contains "rooms: hosting line" "$out" "Voice rooms on box: on"
 assert_contains "rooms: a room with its count" "$out" "Standup"
 assert_contains "rooms: a muted person" "$out" "ada (muted)"
 assert_contains "rooms: closing" "$out" "closing"
-assert_contains "rooms: in a call on another device (phones, §6.4)" "$out" "you: in Standup from another device or session (if that app was closed, this can lag up to 40 s)"
+assert_contains "rooms: in a call on another device (phones, §6.4)" "$out" "you: in Standup from another device or session (if that app was closed, this can lag up to 45 s)"
 assert_eq "rooms is a GET" "$(req_where /cli/voice/rooms method)" "GET"
 run owner voice rooms --json
 assert_eq "rooms --json is the raw body" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["rev"])' "$out")" "3"

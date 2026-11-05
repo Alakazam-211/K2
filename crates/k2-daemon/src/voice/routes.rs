@@ -31,7 +31,7 @@
 //! same answers (gap-voice-calls-mobile-v1 §11 row 4). `rooms` carries `me`
 //! for a login caller: where Sew's presence lists the person, `here` (this
 //! session's call) or `elsewhere` (another device or session), never claimed
-//! live (`mayBeLeaving`: presence trails a killed app by about 40 s).
+//! live (`mayBeLeaving`: presence trails a killed app by up to about 45 s).
 //! `session/leave` is idempotent for the session's own calls (`already`).
 //!
 //! Refusals: `{"ok": false, "error": {"code", "hint", "details"?}}` (K2's

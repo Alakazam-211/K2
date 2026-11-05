@@ -48,6 +48,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/meet/unbind",
     "/cli/sew/media/preflight",
     "/cli/sew/media/probe",
+    "/cli/sew/media/rebind",
     "/cli/sew/media/renew",
     "/cli/sew/media/tier",
     "/cli/sew/media/uninstall",
@@ -81,6 +82,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/meet/bind",
     "/cli/sew/meet/unbind",
     "/cli/sew/media/probe",
+    "/cli/sew/media/rebind",
     "/cli/sew/media/renew",
     "/cli/sew/media/tier",
     "/cli/sew/media/uninstall",
@@ -561,6 +563,13 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             let v = json_body(body)?;
             let t = s(&v, "tier").ok_or_else(|| no("bad_request", 400, "name the tier: tunnel or direct"))?;
             super::voice::set_tier_named(&env, t)
+        }
+        "/cli/sew/media/rebind" => {
+            // Sew 11-05: a tunnel box installed before Sew 0.7.4 keeps its
+            // engine on every IPv6 address until this reconfigure (the
+            // upgrade runs it too). Restarts sew-media.
+            need_manage(who)?;
+            super::voice_tunnel::rebind(&env)
         }
         "/cli/sew/media/probe" => {
             need_manage(who)?;

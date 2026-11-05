@@ -842,7 +842,7 @@ pub fn set_url(env: &Env, url: &str) -> R<Value> {
 
 /// The chain and key K2 already holds for the TURN host (no issuance: a
 /// tier move must not spend K2 Connect's turn budget).
-fn held_material(env: &Env, st: &VoiceState) -> R<(String, String, String)> {
+pub(super) fn held_material(env: &Env, st: &VoiceState) -> R<(String, String, String)> {
     let host = st.turn_host.clone().ok_or_else(|| no("voice_not_installed", 409, "no TURN host recorded"))?;
     let chain = st.cert_pem.clone().ok_or_else(|| no("k2_turn_cert_missing", 409, "no TURN certificate recorded: k2 hostchat media renew"))?;
     let r = st.turn_key_ref.as_deref().ok_or_else(|| no("k2_turn_cert_missing", 409, "no TURN key recorded"))?;

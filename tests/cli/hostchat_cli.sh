@@ -364,6 +364,11 @@ assert_eq "probe exit 0" "$rc" "0"
 assert_eq "probe body" "$(req_where /cli/sew/media/probe body)" '{"tcp": "fail", "turnTls": "ok", "udp": "ok"}'
 run owner hostchat media renew
 assert_eq "renew is a POST" "$(req_where /cli/sew/media/renew method)" "POST"
+# Sew 11-05: close the tunnel tier's IPv6 bind on an upgraded box.
+run owner hostchat media rebind
+assert_eq "rebind exit 0" "$rc" "0"
+assert_eq "rebind is a POST" "$(req_where /cli/sew/media/rebind method)" "POST"
+assert_eq "rebind body" "$(req_where /cli/sew/media/rebind body)" '{}'
 # 0.46.3: media uninstall confirms (Sew: "Live calls end."). No terminal and
 # no --yes refuses before any request; --yes / -y send confirm: true.
 before="$(nreq)"

@@ -2562,6 +2562,12 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
                 },
             );
             steps.push("voice: the NEW sew runs sew media upgrade --now (Sew rolls the engine back itself on failure)");
+            if super::voice::current_tier(env).as_deref() == Some(super::voice::TIER_TUNNEL) {
+                steps.push(
+                    "voice through the tunnel (Sew 0.7.4 and later): sew media install --reconfigure --restart closes the \
+                     engine's IPv6 bind, then sew doctor's media.tunnel_bind must be ok",
+                );
+            }
         }
         if !is_release(&from) {
             steps.push("rollback: never onto the binary on disk now (not a release K2 pinned); a failed upgrade waits for a person");
@@ -2638,6 +2644,37 @@ fn upgrade_media(env: &Env, to: &str) -> Result<Value, String> {
         )),
         Some(n) => Err(format!("sew media upgrade refused (exit {n}): {}", sew_message(&v))),
         None => Err(format!("the helper answered the voice engine upgrade to {to} without a Sew exit: {}", short(&v))),
+    }
+}
+
+/// After the engine upgrade on a TUNNEL box, Sew's steps 3 and 4 (Sew 11-05):
+/// `sew media install --reconfigure --restart`, which rewrites a stored IPv6
+/// bind of `"::"` (an upgrade never rewrites Sew's media settings), then
+/// `sew doctor`'s `media.tunnel_bind`. Skipped on the direct tier, and on a
+/// Sew older than 0.7.4 (its reconfigure keeps `"::"`). A failure keeps the
+/// upgrade (core and engine are on `to`) and names `k2 hostchat media rebind`.
+fn upgrade_tunnel_bind(env: &Env, to: &str) -> &'static str {
+    let st = super::voice::load(env);
+    if super::voice::tier(&st) != super::voice::TIER_TUNNEL {
+        return "done";
+    }
+    let live = mgmt(env, "GET", "/mgmt/v1/status", None).ok().and_then(|s| s.get("version").and_then(Value::as_str).map(str::to_string));
+    if !live.as_deref().is_some_and(super::voice_tunnel::sew_rewrites_tunnel_bind) {
+        k2_core::log_debug!("[sew] upgrade to {to}: tunnel bind step skipped (Sew {} predates it)", live.as_deref().unwrap_or("?"));
+        return "done";
+    }
+    upgrade_note(env, Some("tunnel-bind"), None);
+    match super::voice_tunnel::rebind_steps(env, &st) {
+        Ok(_) => "done",
+        Err(f) => {
+            let m = format!(
+                "Sew and its voice engine are upgraded to {to}, but voice through the tunnel may still listen on this box's \
+                 IPv6 addresses: {} ({}). Fix that, then run k2 hostchat media rebind",
+                f.hint, f.code
+            );
+            save_enable(env, |r| r.last_error = Some(m));
+            "tunnel_bind_failed"
+        }
     }
 }
 
@@ -2738,7 +2775,7 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                         if voice {
                             upgrade_note(env, Some("media"), None);
                             match upgrade_media(env, to) {
-                                Ok(_) => "done",
+                                Ok(_) => upgrade_tunnel_bind(env, to),
                                 Err(why) => {
                                     let m = format!("Sew is upgraded to {to}, but the voice engine was not: {why}");
                                     save_enable(env, |r| r.last_error = Some(m));

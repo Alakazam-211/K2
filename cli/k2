@@ -68157,6 +68157,13 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
                                             voice.<box>): re-runs sew media install --reconfigure, restarts sew
   k2 hostchat media status [--json]
   k2 hostchat media renew                   renew the TURN certificate now
+  k2 hostchat media rebind [--json]         voice through the tunnel only: close the voice engine's IPv6
+                                            listeners (sew media install --reconfigure --restart, then
+                                            sew doctor's media.tunnel_bind must be ok). A box set up before
+                                            Sew 0.7.4 listens on every IPv6 address until this runs;
+                                            k2 hostchat upgrade runs it itself. Needs Sew 0.7.4 or later
+                                            (else: k2 hostchat upgrade). Restarts sew-media (calls in
+                                            progress drop). Does nothing on the direct tier.
   k2 hostchat media tier tunnel|direct [--json]
                                             (preview: k2 settings set voiceTunnelPreview true, or
                                             K2_VOICE_TUNNEL=1; direct also works with it off) tunnel: all voice through K2 Connect, at
@@ -68468,7 +68475,7 @@ sys.exit(3 if bad else 0)
 
 # Wait until GET /cli/sew/status leaves "upgrading", then print the result
 # and its reason (upgradeProgress.lastError, else lastError). Exit 0 only on
-# result "done"; anything else (refused, aborted, rolled_back, media_failed,
+# result "done"; anything else (refused, aborted, rolled_back, media_failed, tunnel_bind_failed,
 # rollback_failed) exits 3 with the reason on stderr.
 _hostchat_upgrade_wait() {
     local as_json="${1:-0}" i=0 shown=""
@@ -68489,7 +68496,7 @@ p = json.load(sys.stdin).get("upgradeProgress") or {}
 st = p.get("steps") or {}
 # Execution order: seq from the daemon; an older daemon has only whole-second
 # `at` (ties) and a key-sorted object, so ties fall back to the machine order.
-order = ["stage", "upgrade", "health", "rollback", "media"]
+order = ["stage", "upgrade", "health", "rollback", "media", "tunnel-bind"]
 def key(kv):
     k, v = kv[0], kv[1] or {}
     return (v.get("seq") or 0, v.get("at") or 0, order.index(k) if k in order else len(order))
@@ -69114,6 +69121,7 @@ _hostchat_media() {
             _hostchat_call POST /cli/sew/media/url "$(_compute_json K2_CJ_publicUrl="$u")"
             _hostchat_print media-url "$as_json" ;;
         renew) _hostchat_call POST /cli/sew/media/renew "{}"; _hostchat_print media-renew "$as_json" ;;
+        rebind) _hostchat_call POST /cli/sew/media/rebind "{}"; _hostchat_print media-rebind "$as_json" ;;
         tier)
             # 0.46.8 voice rooms (preview): voice through the tunnel or direct.
             local t="${pos[0]:-}"

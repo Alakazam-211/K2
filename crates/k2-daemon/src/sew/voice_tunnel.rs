@@ -40,7 +40,7 @@ use serde_json::{json, Value};
 
 use k2_root_proto::sew::{sew_takes_trusted_cidrs, MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_RELAY_ONLY_REFUSED, TUNNEL_TRUSTED_CIDRS, UNIT_MEDIA};
 
-use super::supervisor::{self as sup, no, Env, R};
+use super::supervisor::{self as sup, no, Env, Fail, R};
 use super::voice::{self, VoiceState, TIER_TUNNEL};
 
 /// Sew's FEATURES flag for the relay-only passthrough tier (Sew 0.7.0).
@@ -460,6 +460,154 @@ pub fn move_out(env: &Env, st: VoiceState) -> R<Value> {
         "restarted": [UNIT_MEDIA], "note": "sew-media restarted: calls in progress dropped",
         "exposure": "Direct mode makes this box's address public: its IP is in DNS (turn-<label>.k2.dev), in public certificate logs, and visible to everyone who joins a call.",
     }))
+}
+
+// ── the tunnel tier's IPv6 bind (Sew 0.7.4 on, 11-05) ─────────────────────
+
+/// The first Sew whose `sew media install --reconfigure` rewrites a tunnel
+/// box's stored `voice.ops.bind_v6 = "::"` to `""` (IPv6 off).
+pub const TUNNEL_BIND_MIN_SEW: &str = "0.7.4";
+/// The minimum this build checks against: the unit tests run K2's fixture
+/// releases (0.0.x), which stand in for a Sew that has the step.
+#[cfg(not(test))]
+const TUNNEL_BIND_GATE: &str = TUNNEL_BIND_MIN_SEW;
+#[cfg(test)]
+const TUNNEL_BIND_GATE: &str = "0.0.2";
+/// `sew doctor`'s check that the tunnel tier's engine listens on no public
+/// IPv6 address.
+pub const DOCTOR_TUNNEL_BIND: &str = "media.tunnel_bind";
+/// Sew's warning when the reconfigure rewrote `"::"`.
+pub const WARNING_BIND_V6_REWRITTEN: &str = "tunnel_bind_v6_rewritten";
+
+/// Does this Sew (`GET /mgmt/v1/status` version, a build suffix allowed)
+/// rewrite the tunnel tier's IPv6 bind on a reconfigure?
+pub fn sew_rewrites_tunnel_bind(version: &str) -> bool {
+    at_least(version, TUNNEL_BIND_GATE)
+}
+
+/// `version` (a build suffix allowed) is `min` or later.
+pub fn at_least(version: &str, min: &str) -> bool {
+    let plain = version.split('+').next().unwrap_or(version);
+    matches!(k2_root_proto::sew::version_cmp(plain, min), Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater))
+}
+
+/// `sew doctor`'s [`DOCTOR_TUNNEL_BIND`] check from its answer (as the helper
+/// wraps it), or a `missing` row when Sew didn't report one.
+pub fn tunnel_bind_check(doctor: &Value) -> Value {
+    doctor
+        .pointer("/sew/checks")
+        .and_then(Value::as_array)
+        .and_then(|a| a.iter().find(|c| c["id"] == DOCTOR_TUNNEL_BIND).cloned())
+        .unwrap_or_else(|| json!({"id": DOCTOR_TUNNEL_BIND, "status": "missing", "detail": "sew doctor did not report it"}))
+}
+
+/// A failed `sew media install --reconfigure` on the tunnel tier. Sew's exit 78
+/// naming `voice.ops.bind_v6` is someone's hand-set, non-loopback IPv6 bind,
+/// which the tunnel tier refuses; any other exit 78 is the relay-only refusal.
+pub fn rebind_refusal(e: String) -> Fail {
+    if e.contains(&format!(": exit {SEW_EXIT_RELAY_ONLY_REFUSED}:")) && e.contains("bind_v6") {
+        return no(
+            "sew_tunnel_bind_refused",
+            409,
+            format!(
+                "Sew refused the tunnel tier's settings (exit {SEW_EXIT_RELAY_ONLY_REFUSED}): voice.ops.bind_v6 in Sew's media \
+                 settings is set by hand to an address that isn't loopback. Voice through the tunnel allows only \"\" (IPv6 \
+                 off) or \"::1\". Set it back to \"\" or remove it, then run k2 hostchat media rebind. Nothing changed. Sew \
+                 said: {e}"
+            ),
+        );
+    }
+    if e.contains(&format!(": exit {SEW_EXIT_RELAY_ONLY_REFUSED}:")) {
+        return no(
+            "sew_relay_only_refused",
+            409,
+            format!(
+                "Sew refused relay-only TURN for this TURN tier (exit {SEW_EXIT_RELAY_ONLY_REFUSED}: relay-only needs the \
+                 passthrough tier, never plain or off); nothing changed: {e}"
+            ),
+        );
+    }
+    no("media_reconfigure_failed", 500, e)
+}
+
+/// Sew's steps 3 and 4 on a tunnel box (Sew 11-05): `sew media install
+/// --reconfigure --restart` with the tunnel tier's own keys, which rewrites
+/// a stored `bind_v6 = "::"` to `""` (an upgrade never rewrites Sew's media
+/// settings, so a box installed before Sew 0.7.4 keeps listening on every IPv6
+/// address), then `sew doctor`'s `media.tunnel_bind` must be ok. The caller
+/// holds the latch. Restarts sew-media: calls in progress drop.
+pub fn rebind_steps(env: &Env, st: &VoiceState) -> R<Value> {
+    let (h, chain, key_pem) = voice::held_material(env, st)?;
+    let body = media_keys(&h, &chain, &key_pem, takes_trusted_cidrs(env)?);
+    let v = sup::sew_run(env, &["media", "reconfigure", "restart-now"], Some(body.to_string().as_bytes())).map_err(rebind_refusal)?;
+    let rewritten = v.pointer("/sew/warnings").is_some_and(|w| w.to_string().contains(WARNING_BIND_V6_REWRITTEN));
+    let doctor = sup::helper_json(env, &["doctor"]).map_err(|e| no("doctor_failed", 500, format!("sew-media was reconfigured, but sew doctor didn't answer: {e}")))?;
+    let check = tunnel_bind_check(&doctor);
+    if check["status"] != "ok" {
+        let say = |k: &str| check[k].as_str().unwrap_or("").to_string();
+        let mut f = no(
+            "tunnel_bind_not_ok",
+            500,
+            format!(
+                "sew-media was reconfigured, but sew doctor's {DOCTOR_TUNNEL_BIND} is {}: {} {}",
+                check["status"].as_str().unwrap_or("?"),
+                say("detail"),
+                say("hint")
+            )
+            .trim_end()
+            .to_string(),
+        );
+        f.extra = Some(json!({"tunnelBind": check, "rewritten": rewritten}));
+        return Err(f);
+    }
+    Ok(json!({"rewritten": rewritten, "tunnelBind": check}))
+}
+
+/// `POST /cli/sew/media/rebind` (`k2 hostchat media rebind`): run Sew's steps 3
+/// and 4 on an already-upgraded tunnel box. The direct tier listens publicly on
+/// purpose (Sew: skip it there). Refused on a Sew older than 0.7.4, whose
+/// reconfigure keeps `"::"`: `k2 hostchat upgrade` first, which runs it too.
+pub fn rebind(env: &Env) -> R<Value> {
+    if !env.ops.linux() {
+        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
+    }
+    let st = voice::load(env);
+    if !st.installed {
+        return Err(no("voice_not_installed", 409, "voice is not installed: k2 hostchat media install"));
+    }
+    let tier = voice::tier(&st).to_string();
+    if tier != TIER_TUNNEL {
+        return Ok(json!({
+            "ok": true, "turnTier": tier, "changed": false,
+            "hint": "only voice through the tunnel needs this: the direct tier listens on the box's public addresses on purpose",
+        }));
+    }
+    sup::helper_check(env)?;
+    if !helper_ok(env) {
+        let hs = env.ops.helper_state();
+        return Err(no("helper_outdated", 409, crate::root_helper::helper_needed("Closing the voice tunnel's IPv6 bind", k2_root_proto::version::SEW_TUNNEL_MIN_PROTOCOL, &hs)));
+    }
+    let status = sup::mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| no("mgmt_unreachable", 503, format!("Sew's version: {e}")))?;
+    let version = status.get("version").and_then(Value::as_str).unwrap_or("").to_string();
+    if !sew_rewrites_tunnel_bind(&version) {
+        return Err(no(
+            "sew_upgrade_needed",
+            409,
+            format!(
+                "Sew {version} keeps its IPv6 bind on a reconfigure; Sew {TUNNEL_BIND_MIN_SEW} and later close it. Run k2 \
+                 hostchat upgrade: it does this step itself on a tunnel box"
+            ),
+        ));
+    }
+    let _l = sup::begin(env)?;
+    let mut out = rebind_steps(env, &st)?;
+    sup::changed("voice-tier");
+    out["ok"] = json!(true);
+    out["turnTier"] = json!(TIER_TUNNEL);
+    out["changed"] = json!(true);
+    out["restarted"] = json!([UNIT_MEDIA]);
+    out["note"] = json!("sew-media restarted: calls in progress dropped");
+    Ok(out)
 }
 
 /// Renewal in the tunnel tier (same key; no DNS, no node IP): a new chain

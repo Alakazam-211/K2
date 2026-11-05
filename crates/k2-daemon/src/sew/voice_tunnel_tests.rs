@@ -450,3 +450,140 @@ fn with_the_preview_off_the_loop_leaves_the_lane_alone() {
     assert_eq!(s.state, PathState::Off);
     assert!(t.ops.lane_calls.lock().unwrap().is_empty());
 }
+
+// ── the tunnel tier's IPv6 bind (Sew 11-05) ──────────────────────────────
+
+const MEDIA_UPGRADE: &str = "engine sew media upgrade";
+const DOCTOR: &str = "engine sew doctor";
+
+/// Sew `0.0.1` on disk with voice installed, then `k2 hostchat upgrade` to
+/// the pin with both tarballs. Returns the upgrade's final progress.
+fn upgrade_from_old(t: &T) -> Value {
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    crate::sew::store::update(1, |r| r.installed_version = Some("0.0.1".into())).unwrap();
+    t.ops.clear();
+    let req = crate::sew::supervisor::UpgradeRequest {
+        tarball_path: Some(TARBALL.into()),
+        media_tarball_path: Some(MEDIA.into()),
+        dry_run: false,
+        accept_binary: None,
+    };
+    let env = t.env();
+    let (l, from) = crate::sew::supervisor::upgrade_begin(&env, &req).unwrap().unwrap();
+    let p = crate::sew::supervisor::upgrade_machine(&env, &req, &from);
+    drop(l);
+    p
+}
+
+fn position(effects: &[String], argv: &str) -> usize {
+    effects.iter().position(|e| e == argv).unwrap_or_else(|| panic!("no `{argv}` in {effects:?}"))
+}
+
+/// A tunnel box: Sew's order, upgrade → media upgrade → `sew media install
+/// --reconfigure --restart` with the tunnel's own keys → `sew doctor`.
+#[test]
+fn a_tunnel_upgrade_closes_the_ipv6_bind_after_the_engine_upgrade() {
+    let t = t();
+    t.install().expect("install");
+    let p = upgrade_from_old(&t);
+    assert_eq!(p["result"], "done", "{p}");
+    assert!(p["steps"].get("tunnel-bind").is_some(), "{p}");
+    let fx = t.ops.effects();
+    let (up, media, reconf, doctor) = (position(&fx, "engine sew upgrade"), position(&fx, MEDIA_UPGRADE), position(&fx, RECONF), position(&fx, DOCTOR));
+    assert!(up < media && media < reconf && reconf < doctor, "{fx:?}");
+    let body = t.stdin_of(RECONF);
+    assert_eq!((body["relay_only"].as_bool(), body["bind_v4"].as_str(), body["turn_tls"].as_str()), (Some(true), Some("127.0.0.1"), Some("passthrough")), "{body}");
+    assert!(body.get("bind_v6").is_none(), "Sew rewrites the bind itself: {body}");
+}
+
+/// A direct box skips the step (Sew: it listens publicly on purpose).
+#[test]
+fn a_direct_upgrade_runs_no_tunnel_bind_step() {
+    let t = t();
+    t.install().expect("install");
+    set_tier_named(&t.env(), TIER_DIRECT).expect("to direct");
+    let p = upgrade_from_old(&t);
+    assert_eq!(p["result"], "done", "{p}");
+    assert!(p["steps"].get("tunnel-bind").is_none(), "{p}");
+    let fx = t.ops.effects();
+    let media = position(&fx, MEDIA_UPGRADE);
+    assert!(!fx[media..].iter().any(|e| e == RECONF || e == DOCTOR), "{fx:?}");
+}
+
+/// Sew's exit 78 naming `voice.ops.bind_v6` (a hand-set, non-loopback bind)
+/// is its own error with Sew's words; the upgrade itself stands.
+#[test]
+fn a_hand_set_ipv6_bind_is_named_and_the_upgrade_stands() {
+    let t = t();
+    t.install().expect("install");
+    t.ops.queue(RECONF, Ok(json!({"sewExit": 78, "reason": "voice.ops.bind_v6 = \"2001:db8::1\" is not allowed in tunnel mode (use \"\" or \"::1\")"})));
+    let p = upgrade_from_old(&t);
+    assert_eq!(p["result"], "tunnel_bind_failed", "{p}");
+    let last = p["lastError"].as_str().expect("a reason");
+    assert!(last.contains("sew_tunnel_bind_refused") && last.contains("2001:db8::1") && last.contains("k2 hostchat media rebind"), "{last}");
+    assert_eq!(crate::sew::store::load().unwrap().installed_version.as_deref(), Some(k2_root_proto::sew::pinned().version));
+}
+
+#[test]
+fn exit_78_is_told_apart_by_what_sew_names() {
+    let bind = rebind_refusal("sew media reconfigure restart-now: exit 78: voice.ops.bind_v6 must be \"\" or \"::1\" in tunnel mode".into());
+    assert_eq!((bind.code, bind.status), ("sew_tunnel_bind_refused", 409));
+    assert!(bind.hint.contains("voice.ops.bind_v6") && bind.hint.contains("k2 hostchat media rebind"), "{}", bind.hint);
+    let relay = rebind_refusal("sew media reconfigure restart-now: exit 78: relay_only requires turn tier passthrough".into());
+    assert_eq!(relay.code, "sew_relay_only_refused");
+    assert_eq!(rebind_refusal("sew media reconfigure restart-now: exit 2: bad key".into()).code, "media_reconfigure_failed");
+}
+
+/// `sew doctor`'s `media.tunnel_bind`: ok passes; anything else, or no row
+/// at all, fails with Sew's detail and hint.
+#[test]
+fn the_doctor_check_is_read_and_a_failing_one_is_an_error() {
+    let ok = json!({"sewExit": 0, "sew": {"checks": [{"id": "media.tunnel_bind", "status": "ok", "detail": "bind_v6 \"\""}]}});
+    assert_eq!(tunnel_bind_check(&ok)["status"], "ok");
+    assert_eq!(tunnel_bind_check(&json!({"sewExit": 0, "sew": {"checks": []}}))["status"], "missing");
+    let t = t();
+    t.install().expect("install");
+    t.ops.queue(DOCTOR, Ok(json!({"sewExit": 1, "sew": {"ok": false, "checks": [
+        {"id": "media.tunnel_bind", "status": "fail", "detail": "sew-media listens on [::]:7881", "hint": "sew media install --reconfigure --restart"},
+    ]}})));
+    let e = rebind(&t.env()).expect_err("doctor fails");
+    assert_eq!(e.code, "tunnel_bind_not_ok");
+    assert!(e.hint.contains("[::]:7881") && e.hint.contains("--reconfigure --restart"), "{}", e.hint);
+    assert_eq!(e.extra.as_ref().unwrap()["tunnelBind"]["status"], "fail");
+}
+
+/// `k2 hostchat media rebind`: steps 3 and 4 on an upgraded tunnel box,
+/// nothing on a direct one, refused on a Sew that keeps "::".
+#[test]
+fn the_owner_command_rebinds_a_tunnel_box_only() {
+    let t = t();
+    t.install().expect("install");
+    t.ops.clear();
+    t.ops.queue(RECONF, Ok(json!({"sewExit": 0, "sew": {"changed": ["media.toml"], "warnings": ["tunnel_bind_v6_rewritten"]}})));
+    let v = rebind(&t.env()).expect("rebind");
+    assert_eq!((v["changed"].as_bool(), v["rewritten"].as_bool(), v["tunnelBind"]["status"].as_str()), (Some(true), Some(true), Some("ok")), "{v}");
+    let fx = t.ops.effects();
+    assert!(position(&fx, RECONF) < position(&fx, DOCTOR), "{fx:?}");
+
+    *t.ops.mgmt_version.lock().unwrap() = Some("0.0.1".into());
+    t.ops.clear();
+    let e = rebind(&t.env()).expect_err("too old");
+    assert_eq!(e.code, "sew_upgrade_needed", "{}", e.hint);
+    assert!(e.hint.contains("k2 hostchat upgrade"), "{}", e.hint);
+    assert!(!t.ops.effects().iter().any(|x| x == RECONF), "nothing ran");
+    *t.ops.mgmt_version.lock().unwrap() = None;
+
+    set_tier_named(&t.env(), TIER_DIRECT).expect("to direct");
+    t.ops.clear();
+    let v = rebind(&t.env()).expect("direct");
+    assert_eq!((v["changed"].as_bool(), v["turnTier"].as_str()), (Some(false), Some(TIER_DIRECT)), "{v}");
+    assert!(!t.ops.effects().iter().any(|x| x == RECONF), "direct is left alone");
+}
+
+#[test]
+fn the_real_gate_is_sew_0_7_4() {
+    assert_eq!(TUNNEL_BIND_MIN_SEW, "0.7.4");
+    for (v, yes) in [("0.7.4", true), ("0.8.0", true), ("0.8.0+g0507cb9", true), ("0.7.3", false), ("0.6.1", false), ("", false)] {
+        assert_eq!(at_least(v, TUNNEL_BIND_MIN_SEW), yes, "{v}");
+    }
+}

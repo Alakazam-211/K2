@@ -1384,6 +1384,8 @@ pub mod fake {
                     Self::sew_exit(0, json!({"ok": true, "checks": [
                         {"id": "media.binary", "status": "ok", "detail": "matches the pin", "hint": ""},
                         {"id": "media.version", "status": "ok", "detail": format!("sew-media {mv}"), "hint": ""},
+                        // Sew 0.7.4 on: the tunnel tier listens on no public IPv6.
+                        {"id": "media.tunnel_bind", "status": "ok", "detail": "bind_v6 \"\" (IPv6 off)", "hint": ""},
                     ]}))
                 }
                 "engine sew rotate-master" => Self::sew_exit(0, json!({"restarted": true})),

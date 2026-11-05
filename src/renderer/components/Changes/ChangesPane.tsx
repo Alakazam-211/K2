@@ -35,6 +35,7 @@ import {
   type ReviewNote,
 } from '@/stores/git-notes'
 import type { ChangesItemData, ChangesListLayout } from '@/stores/tabs'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { ChangesList, changesRowKey } from './ChangesList'
 import { ChangesDiffSlot } from './ChangesDiffSlot'
 import { ChangesNotesList } from './ChangesNotesList'
@@ -393,25 +394,32 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
             {loading && <span className="text-[10px] text-[var(--color-text-muted)]">…</span>}
           </div>
           <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
-            <label className="flex min-w-0 flex-1 items-center gap-1">
+            {/* Branches load on first touch. The menu portals out but its
+                React events bubble here: only the row itself loads. */}
+            <div
+              className="flex min-w-0 flex-1 items-center gap-1"
+              onFocus={loadBranches}
+              onMouseDown={(e) => {
+                if (e.currentTarget.contains(e.target as Node)) loadBranches()
+              }}
+            >
               <span>Compare</span>
-              <select
-                data-changes-base=""
-                aria-label="Compare against"
-                className="min-w-0 flex-1 bg-[var(--color-bg-elevated)] text-[10px] text-[var(--color-text-secondary)] outline-none"
+              <SettingDropdown
+                compact
+                fullWidth
+                menuAlign="left"
+                className="min-w-0 flex-1"
+                ariaLabel="Compare against"
+                triggerData={{ 'data-changes-base': '' }}
                 value={base ?? ''}
-                onFocus={loadBranches}
-                onMouseDown={loadBranches}
-                onChange={(e) => patch({ base: e.target.value || null, selectedPath: null, selectedGroup: null })}
-              >
-                <option value="">HEAD (staged / unstaged)</option>
-                {baseOptions.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={[{ value: '', label: 'HEAD (staged / unstaged)' }, ...baseOptions.map((b) => ({ value: b, label: b }))]}
+                onChange={(v) => {
+                  // A re-pick of the same base keeps the selected file.
+                  if ((v || null) === base) return
+                  patch({ base: v || null, selectedPath: null, selectedGroup: null })
+                }}
+              />
+            </div>
             {repo.base && (
               <span className="flex-shrink-0 tabular-nums" title="HEAD vs the base branch">
                 ↑{repo.base.ahead} ↓{repo.base.behind}

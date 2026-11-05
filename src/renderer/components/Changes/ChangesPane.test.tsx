@@ -48,6 +48,7 @@ vi.mock('./ChangesDiffSlot', () => ({
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { ChangesPane } from './ChangesPane'
 import { fakeScope } from '@/test-utils/fake-scope'
+import { menuValues, pickValue } from '@/test-utils/setting-dropdown'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { viewOnlyScope, type ServerScope } from '@/kessel/server-scope'
 import { __resetGitChangesForTests, type ChangesFile, type GitSnapshot } from '@/stores/git-changes'
@@ -581,16 +582,21 @@ describe('ChangesPane', () => {
     const scope = fakeScope('b')
     openPane(scope)
     await flush()
-    const select = document.querySelector('[data-changes-base]') as HTMLSelectElement
+    const select = document.querySelector('[data-changes-base]') as HTMLElement
+    // K2's themed menu, not a native select.
+    expect(select.tagName).toBe('BUTTON')
+    expect(cli.get.mock.calls.some((c) => c[1] === 'git/branches')).toBe(false)
+    // The first touch loads the branches.
     await act(async () => {
-      fireEvent.focus(select)
+      fireEvent.mouseDown(select)
     })
     await flush()
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['', 'main', 'origin/main'])
-    await act(async () => {
-      fireEvent.change(select, { target: { value: 'main' } })
-    })
+    expect(cli.get.mock.calls.filter((c) => c[1] === 'git/branches').length).toBe(1)
+    expect(menuValues(select)).toEqual(['', 'main', 'origin/main'])
+    pickValue(select, 'main')
     await flush()
+    // The pick inside the portalled menu does not ask for branches again.
+    expect(cli.get.mock.calls.filter((c) => c[1] === 'git/branches').length).toBe(1)
     const data = useTabsStore.getState().tabs[0].paneGroups.values().next().value!.items[0].data as ChangesItemData
     expect(data.base).toBe('main')
     expect(cli.get.mock.calls.some((c) => c[1] === 'git/snapshot' && (c[2] as Record<string, string>).base === 'main')).toBe(true)

@@ -384,8 +384,9 @@ fn generated_zen_verbs_holds_exactly_the_bridge_rows() {
     }
     // Today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open,
     // thread.links and thread.pickFiles, plus app-room-stream's thread.inbox,
-    // plus catalog v20's agents.show and conversation.setContext.
-    assert_eq!(generated.len(), 45, "+ the 0.46.5 activity SDK's thread.onActivity");
+    // plus catalog v20's agents.show and conversation.setContext, plus
+    // catalog v50's thread.download.
+    assert_eq!(generated.len(), 46, "+ the 0.46.5 activity SDK's thread.onActivity, + catalog v50's thread.download");
 }
 
 // ── TUWA3: no GET side effects, headless ────────────────────────────────

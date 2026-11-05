@@ -111,6 +111,7 @@ WHAT GOES WRONG
   431 on /rtc/v1 → K2's 64 KiB request-head limit: tell K2
   calls fail on another host of the App, or in a Tauri window → k2 study tauri-voice
   device certificate refused: revoked → a logout, often your sign-in code's: k2 study app-chat
+  degraded, k2_backup_offbox_none → no off-box backup: the owner, k2 hostchat ship (--help)
 
 NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents never join calls.
 

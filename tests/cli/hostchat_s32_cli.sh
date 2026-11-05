@@ -47,7 +47,8 @@ out="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" hostchat --help 2>&1)"; rc=$?
 set -e
 assert_eq "help exit 0" "$rc" "0"
 assert_contains "help: app-url" "$out" "k2 hostchat app-url set https://HOST[/path] | clear | show"
-assert_contains "help: ship" "$out" "k2 hostchat ship dir <path> | none"
+assert_contains "help: ship" "$out" "k2 hostchat ship dir <path> | box-backup | none"
+assert_contains "help: box-backup evidence" "$out" "k2_backup_offbox_none clears only while K2 sees all three"
 assert_contains "help: mirror" "$out" "k2 hostchat mirror dir <path> | none"
 assert_contains "help: never the vault" "$out" "Never the K2 vault"
 assert_contains "help: app spaces" "$out" "k2 hostchat app-space bind <app> <space-id>"
@@ -96,7 +97,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/cli/sew/status":
             out = {"ok": True, "supported": True, "state": "running", "installId": "48831765147549701",
                    "appUrl": state["appUrl"], "owner": "set", "alarms": [], "warnings": [],
-                   "backup": {"ship": {"kind": "dir", "path": "/mnt/offbox/sew", "lastShippedId": "20260103T000000Z", "lastError": None}},
+                   "backup": {"ship": state.get("ship") or {"kind": "dir", "path": "/mnt/offbox/sew", "lastShippedId": "20260103T000000Z", "lastError": None}},
                    "mirror": {"kind": "dir", "path": "/mnt/keys"}}
         elif p == "/cli/sew/server/app-url":
             u = b.get("url")
@@ -105,11 +106,20 @@ class H(BaseHTTPRequestHandler):
             else:
                 state["appUrl"] = u or None
                 out = {"ok": True, "appUrl": state["appUrl"]}
+        elif p == "/cli/sew/server/ship" and b.get("kind") == "box-backup":
+            bb = {"ok": False, "reason": "k2-backup.timer is not enabled (systemctl is-enabled says 'disabled')",
+                  "coveredBy": "/var/lib", "timer": "disabled",
+                  "line": "the box backup (k2-backup) is chosen, but K2 can't see it carry Sew's bundles: k2-backup.timer is not enabled (systemctl is-enabled says 'disabled')"}
+            state["ship"] = {"kind": "box-backup", "path": None, "boxBackup": bb}
+            out = {"ok": True, "ship": state["ship"], "mirror": {"state": "none"}, "restarted": False,
+                   "note": "recorded, but k2_backup_offbox_none stays until K2 sees the box backup carry Sew's bundles"}
         elif p in ("/cli/sew/server/ship", "/cli/sew/server/mirror"):
             if b.get("path", "").startswith("/forbidden"):
                 status, out = 403, {"ok": False, "error": {"code": "chat_manage_off", "hint": "Manage Sew is off"}}
             else:
                 out = {"ok": True, "echo": b}
+                if p == "/cli/sew/server/ship":
+                    state["ship"] = None
         elif p == "/cli/sew/app-spaces":
             out = {"ok": True, "spaces": [{"appId": "hearth", "spaceId": "spc_1", "boundAt": 1, "boundBy": "owner",
                                            "members": {"added": 3, "held": 1, "pending": 0}}],
@@ -213,7 +223,24 @@ run owner hostchat ship dir
 assert_eq "ship dir without a path → exit 2" "$rc" "2"
 run owner hostchat mirror s3
 assert_eq "mirror s3 → exit 2" "$rc" "2"
+run owner hostchat mirror box-backup
+assert_eq "mirror box-backup → exit 2" "$rc" "2"
+assert_contains "mirror box-backup says it is ship's" "$err" "box-backup is for k2 hostchat ship"
+run owner hostchat ship s3
+assert_eq "ship s3 → exit 2" "$rc" "2"
+assert_contains "ship usage names box-backup" "$err" "k2 hostchat ship dir <path> | box-backup | none"
 assert_eq "ship/mirror usage sends nothing" "$(nreq)" "$before"
+run owner hostchat ship box-backup
+assert_eq "ship box-backup exit 0" "$rc" "0"
+assert_eq "ship box-backup body" "$(req_where /cli/sew/server/ship body)" '{"kind": "box-backup"}'
+assert_eq "ship box-backup is a POST with the owner token" "$(req_where /cli/sew/server/ship method)/$(req_where /cli/sew/server/ship token)" "POST/$OWNER"
+assert_contains "ship box-backup: the evidence line" "$out" "off-box copy:    the box backup (k2-backup) is chosen, but K2 can't see it carry Sew's bundles: k2-backup.timer is not enabled"
+assert_contains "ship box-backup: covered by" "$out" "covered by:      /var/lib"
+assert_contains "ship box-backup: the note" "$out" "k2_backup_offbox_none stays"
+run owner hostchat status
+assert_contains "status: the box backup line" "$out" "off-box copy:    the box backup (k2-backup) is chosen, but K2 can't see it carry"
+run owner hostchat ship dir offbox
+assert_eq "back to a folder exit 0" "$rc" "0"
 
 echo "== app spaces =="
 run owner hostchat app-spaces

@@ -651,6 +651,23 @@ describe('panels', () => {
     expect((screen.getByLabelText('Keyring mirror: Alakazam escrow') as HTMLInputElement).disabled).toBe(true)
   })
 
+  it("off-box: the box's own backup is a backup destination only, with what K2 sees", async () => {
+    const reason = 'k2-backup.timer is not enabled (systemctl is-enabled says \'disabled\')'
+    const ship = { kind: 'box-backup', path: null, boxBackup: { ok: false, reason, timer: 'disabled' } }
+    gets({ 'sew/status': running({ state: 'degraded', alarms: ['k2_backup_offbox_none'], backup: { ship, lastOkAt: null, alarms: [] } }) })
+    posts({ 'sew/server/ship': { ok: true } })
+    await renderReady('Degraded')
+    fireEvent.click(screen.getByRole('button', { name: 'Backups' }))
+    expect(screen.getByTestId('sew-ship-box-backup').textContent).toBe(`This box's own backup: ${reason}`)
+    fireEvent.click(screen.getByRole('button', { name: 'Off-box copies' }))
+    const radio = screen.getByLabelText("Backup destination: this box's own backup") as HTMLInputElement
+    expect(radio.checked).toBe(true)
+    expect(screen.getByText(`K2 can't see it yet: ${reason}`)).toBeTruthy()
+    expect(screen.queryByLabelText("Keyring mirror: this box's own backup")).toBeNull()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    await waitFor(() => expect(postBodies('sew/server/ship')).toEqual([{ kind: 'box-backup' }]))
+  })
+
   it('public URL posts config publicUrl', async () => {
     gets({ 'sew/status': running({ publicUrl: null, warnings: [{ code: 'public_url_unset', message: 'Set a public URL' }] }) })
     posts({ 'sew/server/config': { ok: true } })

@@ -69,7 +69,8 @@ import {
   uninstallSew,
   upgradeSew,
   youOf,
-  type OffboxKind,
+  type ShipKind,
+  type SewBoxBackup,
   type SewAlarmAction,
   type SewAppSpace,
   type SewBackup,
@@ -868,6 +869,10 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
               {b.ship.lastShippedId ? ` · last ${b.ship.lastShippedId}` : ''}
               {b.ship.lastError ? <span className="text-[var(--color-status-error-soft)]"> · {b.ship.lastError}</span> : null}
             </>
+          ) : b?.ship?.kind === 'box-backup' ? (
+            <span className={b.ship.boxBackup?.ok ? '' : 'text-[var(--color-status-warn)]'} data-testid="sew-ship-box-backup">
+              {b.ship.boxBackup?.ok ? "This box's own backup (k2-backup)" : `This box's own backup: ${b.ship.boxBackup?.reason ?? 'K2 can\'t see it yet'}`}
+            </span>
           ) : (
             <span className="text-[var(--color-status-warn)]">Not set</span>
           )}
@@ -916,14 +921,19 @@ function OffboxBlock({
   current,
   disabled,
   onSave,
+  boxBackup,
 }: {
   title: string
   noun: string
   current: { kind: string; path: string | null }
   disabled: boolean
-  onSave: (kind: OffboxKind, path: string) => Promise<void>
+  onSave: (kind: ShipKind, path: string) => Promise<void>
+  /** The backup destination only: offer the box's own backup (0.46.9). */
+  boxBackup?: SewBoxBackup | null | false
 }): React.JSX.Element {
-  const [kind, setKind] = useState<OffboxKind>(current.kind === 'dir' ? 'dir' : 'none')
+  const [kind, setKind] = useState<ShipKind>(
+    current.kind === 'dir' ? 'dir' : current.kind === 'box-backup' && boxBackup !== false ? 'box-backup' : 'none',
+  )
   const [path, setPath] = useState(current.path ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -951,6 +961,22 @@ function OffboxBlock({
         <SquareRadio name={`${slug}-kind`} checked={kind === 'dir'} onChange={() => setKind('dir')} aria-label={`${title}: a folder on another disk`} />
         A folder on another disk
       </label>
+      {boxBackup !== false ? (
+        <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+          <SquareRadio
+            name={`${slug}-kind`}
+            checked={kind === 'box-backup'}
+            onChange={() => setKind('box-backup')}
+            aria-label={`${title}: this box's own backup`}
+          />
+          This box&apos;s own backup (k2-backup takes them off the box; the owner only)
+        </label>
+      ) : null}
+      {kind === 'box-backup' && current.kind === 'box-backup' && boxBackup ? (
+        <p className={`text-[10px] ${boxBackup.ok ? secondary : 'text-[var(--color-status-warn)]'}`}>
+          {boxBackup.ok ? 'K2 sees the box backup carry them.' : `K2 can't see it yet: ${boxBackup.reason ?? 'no evidence'}`}
+        </p>
+      ) : null}
       <label className={`flex items-center gap-2 text-[11px] ${muted}`}>
         <SquareRadio name={`${slug}-kind`} disabled aria-label={`${title}: Alakazam escrow`} />
         Alakazam escrow (coming later)
@@ -981,6 +1007,7 @@ function OffboxPanel({ status, canMutate, reload }: PanelProps): React.JSX.Eleme
         title="Backup destination"
         noun="backups"
         current={{ kind: ship.kind, path: ship.path ?? null }}
+        boxBackup={ship.boxBackup ?? null}
         disabled={!canMutate}
         onSave={async (kind, path) => {
           await setSewShip(kind, path)
@@ -991,8 +1018,10 @@ function OffboxPanel({ status, canMutate, reload }: PanelProps): React.JSX.Eleme
         title="Keyring mirror"
         noun="keys"
         current={mirror}
+        boxBackup={false}
         disabled={!canMutate}
         onSave={async (kind, path) => {
+          if (kind === 'box-backup') return
           const ok = await useConfirmDialogStore.getState().confirm({
             title: 'Change the keyring mirror?',
             message: 'Sew restarts to apply this. Sessions reconnect on their own.',

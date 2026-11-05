@@ -81,9 +81,22 @@ export interface SewProgress {
   to?: string
 }
 
+/** Ship kind `box-backup` (0.46.9): what K2 sees of the box's own backup. */
+export interface SewBoxBackup {
+  ok: boolean
+  reason?: string | null
+  reasons?: string[]
+  coveredBy?: string | null
+  excludedBy?: string | null
+  timer?: string
+  line?: string
+}
+
 export interface SewShip {
   kind: string
   path?: string | null
+  /** Kind `box-backup` only. */
+  boxBackup?: SewBoxBackup | null
   lastShippedId?: string | null
   lastShippedAt?: number | string | null
   lastError?: string | null
@@ -497,12 +510,14 @@ export async function fetchSewBackups(): Promise<SewBackup[]> {
 }
 
 export type OffboxKind = 'none' | 'dir'
+/** The ship also takes `box-backup` (0.46.9, the owner only). */
+export type ShipKind = OffboxKind | 'box-backup'
 
-function offboxBody(kind: OffboxKind, path: string): Record<string, unknown> {
+function offboxBody(kind: ShipKind, path: string): Record<string, unknown> {
   return kind === 'dir' ? { kind, path: path.trim() } : { kind }
 }
 
-export async function setSewShip(kind: OffboxKind, path = ''): Promise<{ ok: boolean }> {
+export async function setSewShip(kind: ShipKind, path = ''): Promise<{ ok: boolean }> {
   return daemonCliPost(primaryScope(), 'sew/server/ship', offboxBody(kind, path))
 }
 

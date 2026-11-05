@@ -11338,6 +11338,7 @@ WHAT GOES WRONG
   431 on /rtc/v1 → K2's 64 KiB request-head limit: tell K2
   calls fail on another host of the App, or in a Tauri window → k2 study tauri-voice
   device certificate refused: revoked → a logout, often your sign-in code's: k2 study app-chat
+  degraded, k2_backup_offbox_none → no off-box backup: the owner, k2 hostchat ship (--help)
 
 NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents never join calls.
 
@@ -44239,7 +44240,7 @@ cmd_schema() {
     {"name": "hostchat users", "usage": "k2 hostchat users <list|owner|invite|reset|revoke|reactivate|role> [<name|email>] [--display-name NAME] [--role member|admin|guest] [--email EMAIL]", "description": "Sew's own users on a standalone install (refused with provider_is_k2 on a K2-identity install). owner = the first install owner; invite/reset print a one-time setup link to stdout only (24 h). Names and emails become Sew handles ([a-z0-9_-]{2,64}).", "args": [], "flags": []},
     {"name": "hostchat config", "usage": "k2 hostchat config [set approvals.by people|people+agents] [set default_space <space>|none] | config --public-url https://HOST [--json]", "description": "No arguments: every key, its value and allowed values. set approvals.by: who may approve queued chat posts (people, or people+agents with Manage Chat / Voice Hosting). set default_space: the Space whose chat access governs DMs outside every Space (a person sets it; none clears). While voice rooms are on and the K5 Space exists it is fixed to k5-admin: any other value (or none) answers 409 default_space_fixed; give an agent access to k5-admin instead. --public-url: set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. Until it is set, k2 hostchat status (and enable) warn public_url_unset with this fix. The voice URL is not set here: k2 hostchat media url.", "args": [], "flags": []},
     {"name": "hostchat app-url", "usage": "k2 hostchat app-url set https://HOST[/path] | clear | show [--json]", "description": "Where the owner's Sew web app lives (POST /cli/sew/server/app-url; https, or http://127.0.0.1|localhost for development; no query or fragment). k2 hostchat open and Settings → Chat / Voice Hosting → Open Sew as owner go there. Manage Chat / Voice Hosting.", "args": [], "flags": []},
-    {"name": "hostchat ship", "usage": "k2 hostchat ship dir <path> | none [--json]", "description": "Off-box backup copies (POST /cli/sew/server/ship): dir = a folder on ANOTHER disk you mounted (NFS, SMB, sshfs, a replicated volume); every new backup bundle is copied to <path>/<install id>/ and the newest 7 kept. Refused: system folders, /var/lib/sew, ~/.k2, the same disk as Sew's data. none = backups stay on this box (audited; alarm k2_backup_offbox_none). A failed copy raises k2_backup_not_shipped. Manage Chat / Voice Hosting.", "args": [], "flags": []},
+    {"name": "hostchat ship", "usage": "k2 hostchat ship dir <path> | box-backup | none [--json]", "description": "Off-box backup copies (POST /cli/sew/server/ship): dir = a folder on ANOTHER disk you mounted (NFS, SMB, sshfs, a replicated volume); every new backup bundle is copied to <path>/<install id>/ and the newest 7 kept. Refused: system folders, /var/lib/sew, ~/.k2, the same disk as Sew's data. box-backup = this box's own nightly backup (k2-backup) takes /var/lib/sew/backups off the box; the owner only; k2_backup_offbox_none clears only while K2 sees /etc/k2-backup/paths cover the folder, /etc/k2-backup/excludes not drop it and k2-backup.timer enabled (status backup.ship.boxBackup says which is missing). none = backups stay on this box (audited; alarm k2_backup_offbox_none). A failed copy raises k2_backup_not_shipped. Manage Chat / Voice Hosting (box-backup: the owner).", "args": [], "flags": []},
     {"name": "hostchat mirror", "usage": "k2 hostchat mirror dir <path> | none [--json]", "description": "Sew's keyring mirror (POST /cli/sew/server/mirror → engine sew config keys.mirror.*, then a restart). Never the K2 vault, ~/.k2 or a system path. Manage Chat / Voice Hosting.", "args": [], "flags": []},
     {"name": "hostchat app-space", "usage": "k2 hostchat app-spaces [--json] | k2 hostchat app-space bind <app-id> <space-id> | unbind <app-id> <space-id> [--remove-app-members] | governance <app-id> <space-id> app|sew [--json]", "description": "Which Sew Space belongs to which App (K31; GET /cli/sew/app-spaces, POST /cli/sew/app-spaces/{bind,unbind}); app-spaces also shows who governs each Space (sew or app). Members come ONLY from that App's user grants (an App grant plus a chat member grant); Connect owners and admins are never added by role. bind binds Sew's side first; unbind keeps everyone by default (K2 stops managing the Space, and Sew resets governance to sew), and --remove-app-members removes only the members K2 added (never people added by hand). Manage Chat / Voice Hosting.", "args": [], "flags": []},
     {"name": "hostchat app-space governance", "usage": "k2 hostchat app-space governance <app-id> <space-id> app|sew [--json]", "description": "Who governs an App's Space (POST /cli/sew/app-spaces/governance; Sew 0.6.0+). app: the App decides who sees which channel (its manifest's chat block and its own chat.channels / chat.setChannels calls); the App's service owner owns the Space and box users (the owner, admins) leave it first. sew: back to Sew's own roles. The owner or an admin, in person (a vault confirm from a terminal outside K2); Manage Chat / Voice Hosting alone is not enough, and an agent asks on a permission card (k2 permission request sew.space-governance app=<app> space=<id> to=app|sew --why \"...\") when cards are on. Needs the Space bound to that App and the App's chat key (chat_key_required); a Sew without app_governed_spaces answers sew_feature_missing. Binding never switches it; an unbind resets it to sew.", "args": [{"name": "app-id", "required": true}, {"name": "space-id", "required": true}, {"name": "governance", "required": true, "description": "app or sew"}], "flags": []},
@@ -67991,8 +67992,17 @@ Server:
   k2 hostchat app-url set https://HOST[/path] | clear | show [--json]
          where the owner's Sew web app lives (k2 hostchat open goes there)
 Off-box copies (a folder on ANOTHER disk you mounted: NFS, SMB, sshfs, a replicated volume):
-  k2 hostchat ship dir <path> | none [--json]
+  k2 hostchat ship dir <path> | box-backup | none [--json]
          backup bundles: each new one is copied there (the newest 7 kept).
+         box-backup = this box's own nightly backup (k2-backup) already takes
+           /var/lib/sew/backups off the box, so K2 copies nothing. The owner
+           only (owner token, Owner login or a K2 shell tab). The alarm
+           k2_backup_offbox_none clears only while K2 sees all three:
+           /etc/k2-backup/paths lists /var/lib/sew/backups or a folder above
+           it, /etc/k2-backup/excludes doesn't drop it, and k2-backup.timer
+           is enabled. Otherwise the alarm stays and k2 hostchat status says
+           which is missing. Root-only files are read by the root helper
+           (protocol 13).
          none = backups stay on this box only (alarm k2_backup_offbox_none).
   k2 hostchat mirror dir <path> | none [--json]
          Sew's keyring mirror (restarts Sew). Never the K2 vault or ~/.k2.
@@ -68185,7 +68195,9 @@ if verb in ("status",):
     if v.get("owner") not in (None, "none"):
         line("owner in Sew", v.get("owner"))
     sh = (v.get("backup") or {}).get("ship") or {}
-    if sh.get("kind"):
+    if sh.get("kind") == "box-backup":
+        line("off-box copy", (sh.get("boxBackup") or {}).get("line") or "the box backup (k2-backup)")
+    elif sh.get("kind"):
         line("off-box copy", sh.get("path") if sh.get("kind") == "dir" else "none (backups stay on this box)")
         line("last copied", sh.get("lastShippedId"))
         line("copy error", sh.get("lastError"))
@@ -68295,6 +68307,20 @@ elif verb == "rollback":
     if d:
         line("sew doctor", "voice engine ok" if d.get("ok") else "voice engine checks fail (see --json)")
     line("error", v.get("error"))
+elif verb == "ship":
+    sh = v.get("ship") or {}
+    bb = sh.get("boxBackup")
+    if bb is not None:
+        line("off-box copy", bb.get("line"))
+        line("covered by", bb.get("coveredBy"))
+        line("timer", bb.get("timer"))
+    else:
+        line("off-box copy", sh.get("path") if sh.get("kind") == "dir" else "none (backups stay on this box)")
+    mi = v.get("mirror") or {}
+    line("key mirror", "%s%s" % (mi.get("state"), (" " + mi["path"]) if mi.get("path") else ""))
+    if mi.get("error"):
+        line("key mirror", "waiting: %s" % mi.get("error"))
+    line("note", v.get("note"))
 elif verb == "recovery-key":
     print(v.get("recoveryKey") or v.get("key") or "")
     if v.get("warning"):
@@ -68736,13 +68762,17 @@ print("%-20s %-14s %s" % ("server.public_url", "(see status)", "https://HOST on 
                 *) echo '{"error":"usage","hint":"k2 hostchat app-url set <url> | clear | show"}' >&2; exit 2 ;;
             esac ;;
         ship|mirror)
-            local route="/cli/sew/server/$sub"
+            local route="/cli/sew/server/$sub" kinds="dir <path> | none"
+            [ "$sub" = "ship" ] && kinds="dir <path> | box-backup | none"
             case "${pos[0]:-}" in
                 none) _hostchat_call POST "$route" '{"kind":"none"}' ;;
                 dir)
                     [ -n "${pos[1]:-}" ] || { echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat $sub dir <path> (a folder on another disk)\"}" >&2; exit 2; }
                     _hostchat_call POST "$route" "$(_compute_json K2_CJ_kind=dir K2_CJ_path="$(abs "${pos[1]}")")" ;;
-                *) echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat $sub dir <path> | none\"}" >&2; exit 2 ;;
+                box-backup)
+                    [ "$sub" = "ship" ] || { echo '{"error":"usage","hint":"box-backup is for k2 hostchat ship; the keyring mirror is k2 hostchat mirror dir <path> | none"}' >&2; exit 2; }
+                    _hostchat_call POST "$route" '{"kind":"box-backup"}' ;;
+                *) echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat $sub $kinds\"}" >&2; exit 2 ;;
             esac
             _hostchat_print "$sub" "$as_json" ;;
         open)

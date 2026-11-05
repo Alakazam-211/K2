@@ -180,8 +180,12 @@ async fn refusals_are_answered_here_and_never_reach_sew() {
     assert!(out.starts_with("HTTP/1.1 401"), "cookie only: {out}");
     let big = format!("POST /_k2/voice/sew/api/v1/me/voice/stats HTTP/1.1\r\n{auth}Content-Length: {}\r\n\r\n", MAX_BODY + 1);
     assert!(through(&addr, true, &big).await.starts_with("HTTP/1.1 413"));
-    let plain_get = format!("GET /_k2/voice/sew/api/v1/gateway HTTP/1.1\r\n{auth}\r\n");
-    assert!(through(&addr, true, &plain_get).await.starts_with("HTTP/1.1 400"), "gateway without upgrade");
+    // Rev 2 point 2: the gateway without an upgrade is not a route.
+    for target in ["/_k2/voice/sew/api/v1/gateway", "/_k2/voice/sew/api/v1/gateway?v=1&encoding=json"] {
+        let plain_get = format!("GET {target} HTTP/1.1\r\n{auth}\r\n");
+        let out = through(&addr, true, &plain_get).await;
+        assert!(out.starts_with("HTTP/1.1 404") && out.contains(r#""code":"not_found""#), "gateway without upgrade: {out}");
+    }
 
     assert!(tokio::time::timeout(Duration::from_millis(100), seen.recv()).await.is_err(), "something reached Sew");
 }
@@ -249,7 +253,7 @@ async fn open_gateway(addr: &str, cred: &str) -> (tokio::io::DuplexStream, tokio
 }
 
 #[tokio::test]
-async fn the_gateway_splices_and_the_newest_socket_wins() {
+async fn the_gateway_splices_and_a_second_socket_on_one_credential_passes_too() {
     let (addr, mut seen) = fake_sew("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", true).await;
     let cred = "sewcc_ws-a.secret";
     let (mut first, first_task) = open_gateway(&addr, cred).await;
@@ -263,26 +267,25 @@ async fn the_gateway_splices_and_the_newest_socket_wins() {
     first.read_exact(&mut b).await.expect("echo");
     assert_eq!(&b, b"ping");
 
-    // A second socket with the same credential: the first one ends.
+    // Rev 2 point 4: a second socket with the same credential reaches Sew
+    // too, and K2 cuts neither: the takeover (and its 4011) is Sew's.
     let (mut second, second_task) = open_gateway(&addr, cred).await;
-    tokio::time::timeout(Duration::from_secs(5), first_task).await.expect("the old socket closed").expect("task");
+    let got = seen.recv().await.expect("Sew saw the second handshake");
+    assert!(got.starts_with("GET /api/v1/gateway?v=1&encoding=json HTTP/1.1\r\n"), "{got}");
     second.write_all(b"pong").await.expect("frame");
     second.read_exact(&mut b).await.expect("echo");
     assert_eq!(&b, b"pong");
-
-    // Another credential doesn't touch it.
-    let (mut other, other_task) = open_gateway(&addr, "sewcc_ws-b.secret").await;
-    second.write_all(b"more").await.expect("frame");
-    second.read_exact(&mut b).await.expect("still open");
+    first.write_all(b"more").await.expect("frame");
+    tokio::time::timeout(Duration::from_secs(5), first.read_exact(&mut b)).await.expect("in time").expect("the first is still open");
     assert_eq!(&b, b"more");
 
+    drop(first);
+    tokio::time::timeout(Duration::from_secs(5), first_task).await.expect("closed").expect("task");
+    second.write_all(b"last").await.expect("frame");
+    second.read_exact(&mut b).await.expect("the second outlives the first");
+    assert_eq!(&b, b"last");
     drop(second);
     tokio::time::timeout(Duration::from_secs(5), second_task).await.expect("closed").expect("task");
-    other.write_all(b"last").await.expect("frame");
-    other.read_exact(&mut b).await.expect("echo");
-    drop(other);
-    tokio::time::timeout(Duration::from_secs(5), other_task).await.expect("closed").expect("task");
-    assert!(!sockets().lock().unwrap().contains_key("ws-a"), "the table empties");
 }
 
 #[tokio::test]
@@ -291,5 +294,67 @@ async fn a_refused_handshake_passes_through_and_opens_no_socket() {
     let req = "GET /_k2/voice/sew/api/v1/gateway HTTP/1.1\r\nAuthorization: Bearer sewcc_ws-refused.secret\r\nUpgrade: websocket\r\n\r\n";
     let out = through(&addr, true, req).await;
     assert!(out.starts_with("HTTP/1.1 403"), "{out}");
-    assert!(!sockets().lock().unwrap().contains_key("ws-refused"));
+}
+
+/// Rev 2 point 1: `{id}` and `{call_id}` are one segment of
+/// `[A-Za-z0-9_-]{1,128}`; `..`, any `%`-escape and empty segments never pass.
+#[test]
+fn path_parameters_are_one_plain_segment() {
+    let ok = "a".repeat(128);
+    assert_eq!(allowed("POST", &format!("/api/v1/devices/{ok}/renew")), Some(Route::Http));
+    assert_eq!(allowed("POST", &format!("/api/v1/calls/r_{}/keys/state", "b".repeat(126))), Some(Route::Http));
+    assert_eq!(allowed("POST", "/api/v1/calls/r_Abc-9_x/keys/commit"), Some(Route::Http));
+    let long = "a".repeat(129);
+    for (m, p) in [
+        ("POST", format!("/api/v1/devices/{long}/renew")),
+        ("POST", format!("/api/v1/calls/{long}/keys/state")),
+        ("POST", "/api/v1/devices/../renew".to_string()),
+        ("POST", "/api/v1/devices/a..b/renew".to_string()),
+        ("POST", "/api/v1/devices/%2e%2e/renew".to_string()),
+        ("POST", "/api/v1/devices/a%2Fb/renew".to_string()),
+        ("POST", "/api/v1/calls/r_1%00/keys/state".to_string()),
+        ("POST", "/api/v1/devices//renew".to_string()),
+        ("POST", "/api/v1/calls//keys/state".to_string()),
+        ("POST", "/api/v1/calls/r_1/keys//state".to_string()),
+        ("POST", "/api/v1//devices".to_string()),
+        ("POST", "/api/v1/devices/".to_string()),
+        ("GET", "/api/v1/gateway/".to_string()),
+        ("POST", "/api/v1/calls/r_1/keys/state/".to_string()),
+        ("POST", "/api/v1/calls/r.1/keys/state".to_string()),
+    ] {
+        assert_eq!(allowed(m, &p), None, "{m} {p}");
+    }
+}
+
+/// Rev 2 point 2: query strings pass through unchanged.
+#[tokio::test]
+async fn query_strings_pass_through_unchanged() {
+    let (addr, mut seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    for (target, q) in [
+        ("/api/v1/devices/crl", "?after=1730851200"),
+        ("/api/v1/devices/crl", "?after=2026-11-05T10%3A00%3A00Z&limit=50"),
+        ("/api/v1/me/voice", "?v=1&encoding=json"),
+    ] {
+        let req = format!("GET /_k2/voice/sew{target}{q} HTTP/1.1\r\nAuthorization: Bearer sewcc_q.secret\r\n\r\n");
+        let out = through(&addr, true, &req).await;
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        let got = seen.recv().await.expect("Sew saw it");
+        assert!(got.starts_with(&format!("GET {target}{q} HTTP/1.1\r\n")), "{got}");
+    }
+}
+
+/// Rev 2 point 3: a call credential with a cookie is forwarded with the
+/// cookie stripped; a cookie alone is the door's own 401.
+#[tokio::test]
+async fn a_cookie_is_stripped_never_refused_and_never_enough() {
+    let (addr, mut seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    let both = "Authorization: Bearer sewcc_ck.secret\r\nCookie: k2_session=abc\r\ncookie: other=1\r\n";
+    let out = through(&addr, true, &post("/api/v1/me/voice/state", both, "{}")).await;
+    assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+    let got = seen.recv().await.expect("Sew saw it");
+    assert!(got.starts_with("POST /api/v1/me/voice/state HTTP/1.1\r\n") && got.contains("Authorization: Bearer sewcc_ck.secret\r\n"), "{got}");
+    assert!(!got.to_ascii_lowercase().contains("cookie"), "{got}");
+    let out = through(&addr, true, &post("/api/v1/me/voice/state", "Cookie: k2_session=abc\r\n", "{}")).await;
+    assert!(out.starts_with("HTTP/1.1 401") && out.contains("call_credential_required"), "{out}");
+    assert!(tokio::time::timeout(Duration::from_millis(100), seen.recv()).await.is_err(), "a cookie alone reached Sew");
 }

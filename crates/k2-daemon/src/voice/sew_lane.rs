@@ -22,22 +22,24 @@
 //! - only a `sewcc_` bearer is accepted, and it is the only credential that
 //!   crosses: K2 adds none, and drops cookies and every other header it
 //!   doesn't list;
+//! - `GET /api/v1/gateway` without a WebSocket upgrade is a 404 too; query
+//!   strings pass through unchanged;
 //! - a rate limit per credential, a cap on relays at once;
-//! - one live gateway socket per credential: the newest wins, so a client
-//!   that reconnects isn't locked out by its own half-dead socket.
+//! - no socket limit of K2's own: a second call socket on one credential
+//!   passes through, and Sew takes it over (the first closes `4011`
+//!   `session_revoked`, Sew's door spec rev 2).
 //!
 //! The credential is never logged, and never appears in an answer K2 writes.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Notify;
 
 /// The lane's path prefix (with its slash, so `/_k2/voice/sewx` isn't it).
 pub const PREFIX: &str = "/_k2/voice/sew/";
@@ -80,7 +82,7 @@ pub fn is_lane(path_and_query: &str) -> bool {
 }
 
 fn id_ok(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Sew's allowlist (§14.11), on the path with the prefix stripped.
@@ -196,27 +198,6 @@ impl Drop for RelaySlot {
     }
 }
 
-fn sockets() -> &'static Mutex<HashMap<String, Arc<Notify>>> {
-    static S: OnceLock<Mutex<HashMap<String, Arc<Notify>>>> = OnceLock::new();
-    S.get_or_init(Default::default)
-}
-
-/// This credential's gateway socket from now on: an older one is told to close.
-fn claim_socket(sel: &str) -> Arc<Notify> {
-    let mine = Arc::new(Notify::new());
-    let old = sockets().lock().unwrap_or_else(|e| e.into_inner()).insert(sel.to_string(), Arc::clone(&mine));
-    if let Some(old) = old {
-        old.notify_one();
-    }
-    mine
-}
-
-fn release_socket(sel: &str, mine: &Arc<Notify>) {
-    let mut g = sockets().lock().unwrap_or_else(|e| e.into_inner());
-    if g.get(sel).is_some_and(|cur| Arc::ptr_eq(cur, mine)) {
-        g.remove(sel);
-    }
-}
 
 // ── answers K2 writes itself ─────────────────────────────────────────
 
@@ -285,6 +266,10 @@ async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &st
     let Some(route) = allowed(method, sew_path) else {
         return answer(client, "404 Not Found", "not_found", not_found, None).await;
     };
+    // The gateway is only ever a WebSocket: a plain GET isn't a route.
+    if route == Route::Gateway && !wants_upgrade(head) {
+        return answer(client, "404 Not Found", "not_found", not_found, None).await;
+    }
     let Some(bearer) = sewcc_bearer(head) else {
         return answer(client, "401 Unauthorized", "call_credential_required", "this door takes a call credential", None).await;
     };
@@ -314,11 +299,8 @@ async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &st
             relay_http(client, sew_addr, out.as_bytes(), &body).await;
         }
         Route::Gateway => {
-            if !wants_upgrade(head) {
-                return answer(client, "400 Bad Request", "websocket_required", "the gateway is a WebSocket", None).await;
-            }
             let out = upstream_head(method, &up_target, sew_addr, bearer, head, None, true);
-            relay_gateway(client, sew_addr, out.as_bytes(), sel).await;
+            relay_gateway(client, sew_addr, out.as_bytes()).await;
         }
     }
 }
@@ -349,7 +331,7 @@ async fn relay_http<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &st
     let _ = client.flush().await;
 }
 
-async fn relay_gateway<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &str, head: &[u8], sel: &str) {
+async fn relay_gateway<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &str, head: &[u8]) {
     let unreachable = "K2 could not reach this server's Sew";
     let Some(mut up) = connect_sew(addr).await else {
         return answer(client, "502 Bad Gateway", "voice_unavailable", unreachable, Some(2)).await;
@@ -383,13 +365,9 @@ async fn relay_gateway<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: 
         let _ = tokio::time::timeout(HTTP_TIMEOUT, tokio::io::copy(&mut up, client)).await;
         return;
     }
-    let mine = claim_socket(sel);
-    tokio::select! {
-        _ = tokio::io::copy_bidirectional(client, &mut up) => {}
-        // A newer socket for this credential took over.
-        _ = mine.notified() => {}
-    }
-    release_socket(sel, &mine);
+    // No limit of K2's own: Sew decides when a second socket takes over and
+    // closes the first itself, with its own close frame.
+    let _ = tokio::io::copy_bidirectional(client, &mut up).await;
 }
 
 #[cfg(test)]

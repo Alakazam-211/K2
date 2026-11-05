@@ -95,12 +95,16 @@ fn refused(code: &str, hint: &str) -> ProviderError {
 }
 
 /// `POST /cli/voice/join`'s body: Sew's join with the call credential and no
-/// `e2ee`, the same for a join and every re-join.
+/// `e2ee`, the same for a join and every re-join. The person's answer to a
+/// recording notice (Sew's `recording_notice`) rides in the join when the
+/// engine has one, so a re-join after a yes isn't refused again; the daemon
+/// passes `join` to Sew as is.
 pub fn join_body(req: &JoinRequest) -> Value {
-    json!({
-        "room": req.room,
-        "join": { "call_credential": true, "self_mute": req.muted || req.deafened, "self_deaf": req.deafened },
-    })
+    let mut join = json!({ "call_credential": true, "self_mute": req.muted || req.deafened, "self_deaf": req.deafened });
+    if let Some(notice) = &req.recording_notice {
+        join["recording_notice"] = json!(notice);
+    }
+    json!({ "room": req.room, "join": join })
 }
 
 /// The door the engine uses for this login's server.

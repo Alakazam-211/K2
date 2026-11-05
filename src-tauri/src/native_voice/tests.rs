@@ -262,6 +262,24 @@ fn the_join_body_asks_for_the_credential_and_sends_no_e2ee() {
     }
 }
 
+/// The person's answer to a recording notice reaches Sew's join as given, and
+/// no answer sends no key.
+#[test]
+fn the_join_body_carries_the_recording_notice_only_when_there_is_one() {
+    let without = JoinRequest { target: "h".into(), room: "room-2".into(), muted: false, deafened: false, rejoin: None, recording_notice: None };
+    assert!(join_body(&without)["join"].get("recording_notice").is_none(), "{}", join_body(&without));
+    let notice = json!({"recording_id": "77", "consent": true, "notice_version": 3141});
+    let with = JoinRequest {
+        rejoin: Some(RejoinReason::AdmitLost),
+        recording_notice: Some(serde_json::from_value(notice.clone()).expect("Sew's RecordingNotice")),
+        ..without
+    };
+    assert_eq!(
+        join_body(&with),
+        json!({"room": "room-2", "join": {"call_credential": true, "self_mute": false, "self_deaf": false, "recording_notice": notice}})
+    );
+}
+
 #[test]
 fn saved_hosts_resolve_as_the_renderer_builds_them() {
     assert_eq!(host_base_url("lab.k2.dev", 443, true), "https://lab.k2.dev");

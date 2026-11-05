@@ -242,36 +242,36 @@ mod tests {
         assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", meet("other")), vec!["https://hearth.sewlab.k2.dev".to_string()]);
     }
 
-    /// NSI (Vanilla, 2026-10-27): with a live custom primary, the App's
+    /// A client (Vanilla, 2026-10-27): with a live custom primary, the App's
     /// k2.dev names (its own label and the labels it took or attached:
-    /// agents.nsi, agent.nsi, dannon.nsi, dannon1.nsi) all stay in
+    /// agents.acme, agent.acme, globex.acme, globex1.acme) all stay in
     /// K2_APP_ORIGINS. Live-only filtering applies to custom names only.
     #[test]
     fn k2_dev_labels_stay_origins_next_to_a_live_custom_primary() {
         let _db = k2_core::db::scoped_for_test();
         let _home = crate::test_support::TempHome::new();
         let mut cfg = k2_core::tunnel::config::TunnelConfig::default();
-        cfg.subdomain = "nsi".into();
+        cfg.subdomain = "acme".into();
         k2_core::tunnel::config::save(&cfg).unwrap();
         let svc = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let s = k2_core::published_services::insert(&conn, "ws-n", "agentnsi", "app", "/x", 0, "tunnel", "running", "cmd", "").unwrap();
-            k2_core::domains::upsert_binding(&conn, "agentnsi.com", Some("z1"), true).unwrap();
-            k2_core::domains::upsert_name(&conn, "nsi.agentnsi.com", "agentnsi.com", "app:agentnsi").unwrap();
+            let s = k2_core::published_services::insert(&conn, "ws-n", "agentacme", "app", "/x", 0, "tunnel", "running", "cmd", "").unwrap();
+            k2_core::domains::upsert_binding(&conn, "agentacme.com", Some("z1"), true).unwrap();
+            k2_core::domains::upsert_name(&conn, "acme.agentacme.com", "agentacme.com", "app:agentacme").unwrap();
             s.id
         };
-        let taken = ["agents", "agent", "dannon", "dannon1"].map(String::from);
+        let taken = ["agents", "agent", "globex", "globex1"].map(String::from);
         // Not served yet: every k2.dev name is there, the custom one isn't.
-        let o = with_taken_labels(for_service(&svc, "agentnsi"), &taken);
+        let o = with_taken_labels(for_service(&svc, "agentacme"), &taken);
         assert_eq!(
             o,
             [
-                "https://agentnsi.nsi.k2.dev",
-                "https://agents.nsi.k2.dev",
-                "https://agent.nsi.k2.dev",
-                "https://dannon.nsi.k2.dev",
-                "https://dannon1.nsi.k2.dev"
+                "https://agentacme.acme.k2.dev",
+                "https://agents.acme.k2.dev",
+                "https://agent.acme.k2.dev",
+                "https://globex.acme.k2.dev",
+                "https://globex1.acme.k2.dev"
             ]
             .map(String::from)
             .to_vec()
@@ -279,13 +279,13 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::domains::set_app_state(&conn, "nsi.agentnsi.com", k2_core::domains::STATE_LIVE, None).unwrap();
-            k2_core::domains::set_primary(&conn, "agentnsi", "nsi.agentnsi.com").unwrap();
+            k2_core::domains::set_app_state(&conn, "acme.agentacme.com", k2_core::domains::STATE_LIVE, None).unwrap();
+            k2_core::domains::set_primary(&conn, "agentacme", "acme.agentacme.com").unwrap();
         }
-        let o = with_taken_labels(for_service(&svc, "agentnsi"), &taken);
-        assert_eq!(o[0], "https://nsi.agentnsi.com", "the live primary leads");
-        for l in ["agentnsi", "agents", "agent", "dannon", "dannon1"] {
-            assert!(o.contains(&format!("https://{l}.nsi.k2.dev")), "{l} dropped: {o:?}");
+        let o = with_taken_labels(for_service(&svc, "agentacme"), &taken);
+        assert_eq!(o[0], "https://acme.agentacme.com", "the live primary leads");
+        for l in ["agentacme", "agents", "agent", "globex", "globex1"] {
+            assert!(o.contains(&format!("https://{l}.acme.k2.dev")), "{l} dropped: {o:?}");
         }
         assert_eq!(o.len(), 6);
     }

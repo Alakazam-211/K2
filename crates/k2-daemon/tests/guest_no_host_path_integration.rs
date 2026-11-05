@@ -1,4 +1,4 @@
-//! App guests never see a host path (0.46.5 patch-up item 14, Agent NSI
+//! App guests never see a host path (0.46.5 patch-up item 14, Agent Acme
 //! Vanilla: a K2 system line on a room's Thread showed
 //! `/home/<owner>/AI Projects/<workspace>` as its sender to App guests).
 //!

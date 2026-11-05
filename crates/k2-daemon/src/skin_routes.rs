@@ -1311,7 +1311,7 @@ pub fn resolve_app_target(raw: &str) -> Result<String, String> {
         Ok(None) => {}
         Err(e) => return Err(format!("app lookup: {e}")),
     }
-    // NSI 0.46.4 #4: the bare App id (what `k2 app list` shows and an
+    // 0.46.4 field report #4: the bare App id (what `k2 app list` shows and an
     // agent types) or a bare publish name, when it names ONE App on the
     // box. Two with that name: say so and list them, never guess.
     match k2_core::deploy::store::get_app(&conn, &t.to_ascii_lowercase()) {
@@ -3435,7 +3435,7 @@ pub struct SkinLoginReply {
     pub retry_after: Option<i64>,
 }
 
-/// Machine-readable lockout reply (nsi BFF, 2026-10-13): `423 Locked`
+/// Machine-readable lockout reply (a client BFF, 2026-10-13): `423 Locked`
 /// `{"error":"locked","retryAfterSecs":N}`. Given for any presented
 /// username/email with a live lock — known principal or not — because the
 /// lock is counted per presented string, so it is no username oracle. It

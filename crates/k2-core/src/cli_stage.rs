@@ -7,7 +7,7 @@
 //! provision script `install`s it (Linux). A headless Linux SERVER has no
 //! app, so if the provision/migration step is skipped the CLI silently
 //! never appears — daemon + data present, `k2` command absent. That bit
-//! the nsi migration (internal migration-runbook lesson L-cli).
+//! a client-box migration (internal migration-runbook lesson L-cli).
 //!
 //! Fix: the daemon self-stages the CLI at boot, exactly like the
 //! `k2-open` shim ([`crate::open_shim`]) — embed `cli/k2` via
@@ -116,7 +116,7 @@ pub fn stage_cli_at(target: &Path) -> Result<Option<PathBuf>, String> {
 
 /// Testable core of the boot entry: try `primary`, and when it fails
 /// with a real write error (typically EACCES: a root-owned
-/// `/usr/local/bin/k2` under a non-root daemon — the nsi/rpmavs
+/// `/usr/local/bin/k2` under a non-root daemon — the acme/rpmavs
 /// migration trap, 2026-07-15), fall back to `fallback` so the CLI can
 /// never silently freeze at an old version again. `~/.local/bin` is the
 /// same user-writable dir the Linux daemon itself installs into, and is
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn unwritable_primary_falls_back() {
-        // Simulate the nsi/rpmavs trap: the primary location cannot be
+        // Simulate the acme/rpmavs trap: the primary location cannot be
         // written by the daemon user. Here its parent "directory" is a
         // regular file, which fails for every user, root included.
         let dir = tmp_dir("fallback");

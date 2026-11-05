@@ -83,7 +83,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     let _db_url = EnvVar::set("DATABASE_URL", "postgres://daemon-only");
     let seen = quiet_alerts();
     let d = k2_daemon::test_harness::start(OWNER).await;
-    let ws = seed_ws(&env, "nsi");
+    let ws = seed_ws(&env, "acme");
     let other = seed_ws(&env, "elsewhere");
     let app = ws.path.join("jobs");
     std::fs::create_dir_all(&app).unwrap();
@@ -96,7 +96,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     k2_daemon::vault::publish_env::set(&svc, Some("legacy"), None).unwrap();
 
     // The owner sees what breaks.
-    let r = get(d.port, "/cli/app/warnings", OWNER, "app=nsi/jobsw").await;
+    let r = get(d.port, "/cli/app/warnings", OWNER, "app=acme/jobsw").await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = r.json();
     assert_eq!(v["cutover"], json!(null), "no cut-over set (kept for compatibility)");
@@ -154,7 +154,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     let r = post(d.port, "/cli/app/deny", OWNER, json!({"request": req})).await;
     assert_eq!(r.status, 409, "decided once: {}", r.body);
     // The owner turns it off directly.
-    let r = post(d.port, "/cli/app/clean-mode", OWNER, json!({"app": "nsi/jobsw", "on": false})).await;
+    let r = post(d.port, "/cli/app/clean-mode", OWNER, json!({"app": "acme/jobsw", "on": false})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(!k2_daemon::vault::publish_env::is_clean_mode(&svc));
     assert_eq!(k2_daemon::vault::publish_env::get(&svc).mode, "clean", "off never gives the inherited env back");
@@ -172,7 +172,7 @@ async fn app_key_is_minted_in_person_held_for_agents_and_opens_only_its_app() {
     let _seen = quiet_alerts();
     let d = k2_daemon::test_harness::start(OWNER).await;
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
-    let ws = seed_ws(&env, "nsikey");
+    let ws = seed_ws(&env, "acmekey");
     let room_a = seed_ws(&env, "rooma");
     let room_b = seed_ws(&env, "roomb");
     let app = ws.path.join("jobs");

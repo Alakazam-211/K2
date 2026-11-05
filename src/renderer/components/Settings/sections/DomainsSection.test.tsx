@@ -242,20 +242,20 @@ describe('DomainsSection — the daemon re-checks pending domains (prd-dns-pendi
 describe('DomainsSection — custom App names', () => {
   const WAITING: DomainRow = {
     ...ACTIVE,
-    apex: 'agentnsi.com',
+    apex: 'agentacme.com',
     names: [
       {
-        hostname: 'nsi.agentnsi.com',
-        role: 'app:agentnsi',
+        hostname: 'acme.agentacme.com',
+        role: 'app:agentacme',
         cert: { state: 'issued', issuer: "Let's Encrypt" },
         app: {
-          app: 'agentnsi',
+          app: 'agentacme',
           state: 'waiting_dns',
           live: false,
           notServedYet: true,
           words: 'not served yet: waiting for the DNS records',
-          lastError: 'TXT _k2-domain.nsi.agentnsi.com "k2-verify=ab12" is not visible yet',
-          txt: { type: 'TXT', name: '_k2-domain.nsi.agentnsi.com', value: 'k2-verify=ab12' },
+          lastError: 'TXT _k2-domain.acme.agentacme.com "k2-verify=ab12" is not visible yet',
+          txt: { type: 'TXT', name: '_k2-domain.acme.agentacme.com', value: 'k2-verify=ab12' },
           served: 'elsewhere',
         },
       },
@@ -265,9 +265,9 @@ describe('DomainsSection — custom App names', () => {
   it('a bound App name that nothing serves reads "not served yet", never just its cert', async () => {
     listRows = [WAITING]
     render(<DomainsSection />)
-    const chip = await screen.findByTestId('app-state-nsi.agentnsi.com')
+    const chip = await screen.findByTestId('app-state-acme.agentacme.com')
     expect(chip.textContent).toBe('not served yet · waiting dns')
-    expect(screen.getByText(/TXT _k2-domain\.nsi\.agentnsi\.com "k2-verify=ab12" \(DNS-only\)/)).toBeTruthy()
+    expect(screen.getByText(/TXT _k2-domain\.acme\.agentacme\.com "k2-verify=ab12" \(DNS-only\)/)).toBeTruthy()
   })
 
   it('Check now POSTs /cli/app/domain/check with the App and host', async () => {
@@ -280,8 +280,8 @@ describe('DomainsSection — custom App names', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Check now' }))
     await waitFor(() =>
       expect(calls.find((c) => c.path === '/cli/app/domain/check')?.body).toEqual({
-        app: 'agentnsi',
-        host: 'nsi.agentnsi.com',
+        app: 'agentacme',
+        host: 'acme.agentacme.com',
       }),
     )
   })
@@ -299,7 +299,7 @@ describe('DomainsSection — custom App names', () => {
     }
     listRows = [ext]
     render(<DomainsSection />)
-    const chip = await screen.findByTestId('app-state-nsi.agentnsi.com')
+    const chip = await screen.findByTestId('app-state-acme.agentacme.com')
     expect(chip.textContent).toBe('served by your own web server (not by K2) · primary')
     expect(screen.queryByText(/\(DNS-only\)/)).toBeNull()
   })
@@ -309,7 +309,7 @@ describe('DomainsSection — custom App names', () => {
     live.names[0].app = { ...live.names[0].app!, state: 'live', live: true, notServedYet: false, primary: true }
     listRows = [live]
     render(<DomainsSection />)
-    const chip = await screen.findByTestId('app-state-nsi.agentnsi.com')
+    const chip = await screen.findByTestId('app-state-acme.agentacme.com')
     expect(chip.textContent).toBe('live · primary')
   })
 })
@@ -326,13 +326,13 @@ describe('DomainsSection — custom App names through K2 Connect', () => {
   })
   const row = (app: Record<string, unknown>): DomainRow => ({
     ...BYO,
-    apex: 'agentnsi.com',
+    apex: 'agentacme.com',
     names: [
       {
-        hostname: 'nsi.agentnsi.com',
-        role: 'app:agentnsi',
+        hostname: 'acme.agentacme.com',
+        role: 'app:agentacme',
         cert: { state: 'missing' },
-        app: { app: 'agentnsi', state: 'waiting_dns', live: false, notServedYet: true, words: 'not served yet: waiting for the DNS records', ...app },
+        app: { app: 'agentacme', state: 'waiting_dns', live: false, notServedYet: true, words: 'not served yet: waiting for the DNS records', ...app },
       },
     ],
   } as DomainRow)
@@ -341,47 +341,47 @@ describe('DomainsSection — custom App names through K2 Connect', () => {
     listRows = [row({
       recordsPath: 'connect',
       records: [
-        { type: 'CNAME', name: 'nsi.agentnsi.com', value: 'agentnsi.box.k2.dev' },
-        { type: 'TXT', name: '_k2-domain.nsi.agentnsi.com', value: 'k2-verify=t' },
+        { type: 'CNAME', name: 'acme.agentacme.com', value: 'agentacme.box.k2.dev' },
+        { type: 'TXT', name: '_k2-domain.acme.agentacme.com', value: 'k2-verify=t' },
       ],
       pathB: pathB({}),
     })]
     render(<DomainsSection />)
-    expect((await screen.findByTestId('app-path-b-nsi.agentnsi.com')).textContent).toBe('Through K2 Connect (Pro)')
-    expect(screen.getByTestId('app-record-CNAME').textContent).toContain('agentnsi.box.k2.dev')
+    expect((await screen.findByTestId('app-path-b-acme.agentacme.com')).textContent).toBe('Through K2 Connect (Pro)')
+    expect(screen.getByTestId('app-record-CNAME').textContent).toContain('agentacme.box.k2.dev')
     expect(screen.getByTestId('app-record-TXT').textContent).toContain('"k2-verify=t"')
-    expect(screen.getByTestId('app-path-b-meter-nsi.agentnsi.com').textContent).toContain('3 of 20')
+    expect(screen.getByTestId('app-path-b-meter-acme.agentacme.com').textContent).toContain('3 of 20')
   })
 
   it('says why and links the upgrade when the box is not on Pro; no badge on Path A', async () => {
     listRows = [row({
       recordsPath: 'direct',
-      records: [{ type: 'A', name: 'nsi.agentnsi.com', value: '203.0.113.10' }],
+      records: [{ type: 'A', name: 'acme.agentacme.com', value: '203.0.113.10' }],
       pathB: pathB({ available: false, why: 'needs K2 Connect Pro', upgrade: 'https://k2.dev/dashboard' }),
     })]
     render(<DomainsSection />)
-    const link = await screen.findByTestId('app-path-b-upgrade-nsi.agentnsi.com')
+    const link = await screen.findByTestId('app-path-b-upgrade-acme.agentacme.com')
     expect(link.getAttribute('href')).toBe('https://k2.dev/dashboard')
-    expect(screen.queryByTestId('app-path-b-nsi.agentnsi.com')).toBeNull()
+    expect(screen.queryByTestId('app-path-b-acme.agentacme.com')).toBeNull()
     expect(screen.getByTestId('app-record-A').textContent).toContain('203.0.113.10')
   })
 
   it('before a claim succeeds, the CNAME shows alone and says why there is no TXT', async () => {
     listRows = [row({
       recordsPath: 'connect',
-      records: [{ type: 'CNAME', name: 'nsi.agentnsi.com', value: 'agentnsi.box.k2.dev' }],
+      records: [{ type: 'CNAME', name: 'acme.agentacme.com', value: 'agentacme.box.k2.dev' }],
       txtPending: 'No TXT record to set yet: K2 Connect gives the value once it accepts the claim.',
       pathB: pathB({}),
     })]
     render(<DomainsSection />)
-    expect((await screen.findByTestId('app-txt-pending-nsi.agentnsi.com')).textContent).toContain('No TXT record to set yet')
+    expect((await screen.findByTestId('app-txt-pending-acme.agentacme.com')).textContent).toContain('No TXT record to set yet')
     expect(screen.queryByTestId('app-record-TXT')).toBeNull()
   })
 
   it('a live name K2 Connect routes keeps its badge', async () => {
     listRows = [row({ state: 'live', live: true, notServedYet: false, viaRelay: true, recordsPath: 'connect' })]
     render(<DomainsSection />)
-    await screen.findByTestId('app-path-b-nsi.agentnsi.com')
+    await screen.findByTestId('app-path-b-acme.agentacme.com')
     expect(screen.queryByTestId('app-record-CNAME')).toBeNull()
   })
 })

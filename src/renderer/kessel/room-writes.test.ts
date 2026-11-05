@@ -195,7 +195,7 @@ describe('the usable remote-room scope', () => {
     }
   })
 
-  // 0.46.6 (NSI papercut 12): a confirm card's Allow in a Home remote room
+  // 0.46.6 (client papercut 12): a confirm card's Allow in a Home remote room
   // was refused before any request (vault/confirm/start not on the list),
   // so B never saw the confirm or the answer and the hold stayed pending.
   it('a remote room runs a confirm card’s Allow on its own server: confirm start, finish, then the answer', async () => {
@@ -220,7 +220,7 @@ describe('the usable remote-room scope', () => {
         method: 'connect-password',
         password: 'pw',
       })
-      await daemonCliPost(room, 'thread/answer', { addr: 'agent-nsi', id: 'c1', answer: 'Allow', confirmToken: t.token })
+      await daemonCliPost(room, 'thread/answer', { addr: 'agent-acme', id: 'c1', answer: 'Allow', confirmToken: t.token })
       expect(calls.map((c) => new URL(c).pathname)).toEqual([
         '/cli/vault/confirm/start',
         '/cli/vault/confirm/finish',

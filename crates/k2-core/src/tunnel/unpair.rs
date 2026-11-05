@@ -1061,7 +1061,7 @@ mod tests {
     #[test]
     fn replay_drops_a_pre_0452_queued_release_without_sending_it() {
         // The exact unpaired.json shape 0.45.0 wrote on Alakazam's Mac mini
-        // (no holder record): replaying it could free `nsi`, which a live
+        // (no holder record): replaying it could free `acme`, which a live
         // box holds. It must be dropped, its bearer scrubbed, nothing sent.
         with_temp_home(|| {
             let cp = CountingControlPlane::start(200);
@@ -1069,10 +1069,10 @@ mod tests {
             std::fs::write(
                 tombstone_path(),
                 format!(
-                    r#"{{"released_at":"2026-10-08T15:00:00+00:00","subdomain":"nsi",
+                    r#"{{"released_at":"2026-10-08T15:00:00+00:00","subdomain":"acme",
                         "device_id":"dev-old-mac","token_sha256":"{}",
-                        "upstream_reported":false,"pending_token":"tok-nsi"}}"#,
-                    token_fingerprint("tok-nsi")
+                        "upstream_reported":false,"pending_token":"tok-acme"}}"#,
+                    token_fingerprint("tok-acme")
                 ),
             )
             .expect("plant 0.45.0 tombstone");
@@ -1090,7 +1090,7 @@ mod tests {
             assert!(t.replay_dropped.is_some());
             // The tombstone still refuses the released bearer locally.
             assert!(identity_released(&TunnelConfig {
-                token: "tok-nsi".to_string(),
+                token: "tok-acme".to_string(),
                 ..Default::default()
             })
             .is_some());

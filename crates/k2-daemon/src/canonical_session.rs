@@ -6,7 +6,7 @@
 //! Pre-0.37.2, the only path that spawned a workspace's canonical PTY
 //! was `DaemonWakeProvider::wake` (when a wake signal arrived) or the
 //! renderer's AgentChatPane mount (when the user opened a chat tab).
-//! For automation deployments — Baden's nsi-checkin Scout SMS bridge
+//! For automation deployments — Baden's acme-checkin Scout SMS bridge
 //! is the canonical example — a fresh workspace flow is:
 //!
 //!   k2so workspace open <path>
@@ -24,7 +24,7 @@
 //! 1. The renderer's pinned-tab attach can race against `--wake`'s
 //!    spawn and end up subscribing to a different session than the
 //!    one the inject lands in. Same "blank pinned tab" class as the
-//!    pre-0.37 Dannon Erskins bug.
+//!    pre-0.37 blank-tab bug.
 //! 2. The first inject's audit row buckets to `_orphan` because the
 //!    workspace+agent pair isn't registered when the egress path
 //!    runs. Self-corrects on next spawn but leaves an audit gap.

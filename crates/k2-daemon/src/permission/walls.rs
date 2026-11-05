@@ -499,7 +499,7 @@ pub(crate) const ROWS: &[Row] = &[
         )
     },
     // An agent's held `k2 publish run` (a `publish_run` App request, 0.46.6
-    // NSI papercut 12: it printed no Ask-with line).
+    // client papercut 12: it printed no Ask-with line).
     Row {
         params: &[("request", &[ParamFrom::Response("/request/id")])],
         ..row(
@@ -1220,7 +1220,7 @@ mod tests {
             (403, "POST", "/cli/sidecar/retire", vec![], Some(json!({"name":"fix","discard":false})), json!({"error":{"code":"retire_needs_person","hint":"x","sidecar":"fix","discard":"no"}}), "sidecar.retire"),
             // 0.46.6: an agent's own reset (the owner's route) and a password
             // it may not set (a box login).
-            (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.nsi","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),
+            (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.acme","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),
             (403, "POST", "/cli/skin/users/password", vec![], Some(json!({"username":"adam","password":"hunter2-not-real"})), json!({"ok":false,"error":{"code":"owner_only","hint":"'adam' has a box login"}}), "apps.user-password-reset"),
             (403, "GET", "/cli/docs/read", vec![("workspace", "alpha"), ("path", "/abs/alpha/notes/plan.md")], None, json!({"ok":false,"error":{"code":"doc_not_shared","hint":"x","workspace":"alpha","path":"notes/plan.md"}}), "docs.share"),
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
@@ -1356,12 +1356,12 @@ mod tests {
     #[test]
     fn the_password_reset_walls_name_the_person_and_the_mode_never_the_password() {
         let owner_only = || json!({"ok":false,"error":{"code":"owner_only","hint":"x"}});
-        let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","app":"agents.nsi","code":true})), owner_only()).unwrap();
+        let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","app":"agents.acme","code":true})), owner_only()).unwrap();
         assert_eq!(action_of(&p), "apps.user-password-reset", "{p}");
-        assert_eq!(p["params"], json!({"user":"adam","app":"agents.nsi","mode":"link"}), "{p}");
+        assert_eq!(p["params"], json!({"user":"adam","app":"agents.acme","mode":"link"}), "{p}");
         assert_eq!(p["approvers"], super::super::actions::password_reset::FLOOR.label());
         let cmd = p["command"].as_str().unwrap();
-        assert!(cmd.starts_with("k2 permission request apps.user-password-reset ") && cmd.contains(" user=adam") && cmd.contains(" app=agents.nsi") && cmd.contains(" mode=link"), "{cmd}");
+        assert!(cmd.starts_with("k2 permission request apps.user-password-reset ") && cmd.contains(" user=adam") && cmd.contains(" app=agents.acme") && cmd.contains(" mode=link"), "{cmd}");
         let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","to":"adam@example.test"})), owner_only()).unwrap();
         assert_eq!(p["params"]["mode"], "email", "{p}");
         assert!(p["params"].get("app").is_none(), "no App named: K2 picks it, so no placeholder: {p}");

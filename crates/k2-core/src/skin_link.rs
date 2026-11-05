@@ -461,7 +461,7 @@ mod tests {
             // Suspend: link and remote passes in one step; other tokens stay.
             let l = mint_link_pass(APP, "argus", "gw:38601", &caps(&["thread:read"]), &["ws-1".to_string()]).unwrap();
             let other = mint_remote_pass(OTHER_APP, "o", &caps(&["thread:read"]), &[], 3600).unwrap();
-            let (_, plat) = create_token("dannon-bff", Some(&caps(&["thread:read"])), &["ws-1".to_string()]).unwrap();
+            let (_, plat) = create_token("globex-bff", Some(&caps(&["thread:read"])), &["ws-1".to_string()]).unwrap();
             assert_eq!(revoke_app_passes(APP).unwrap(), 2);
             assert!(resolve_skin_token(&r.raw).is_none());
             assert!(resolve_link_pass(&l.raw, "gw:38601", APP).is_none());
@@ -532,7 +532,7 @@ mod tests {
             assert_eq!(classify_presented(&m.raw), PresentedPass::Link { link_id: "gw:38601".into(), app_service_id: APP.into() });
 
             // A platform token is a live pass but never a link pass.
-            let (_, plat) = create_token("dannon-bff", Some(&caps(&["thread:read"])), &["ws-1".to_string()]).unwrap();
+            let (_, plat) = create_token("globex-bff", Some(&caps(&["thread:read"])), &["ws-1".to_string()]).unwrap();
             assert!(resolve_link_pass(&plat, "gw:38601", APP).is_none());
             assert_eq!(classify_presented(&plat), PresentedPass::Other);
             assert_eq!(classify_presented("k2skn_unknown"), PresentedPass::Unknown);

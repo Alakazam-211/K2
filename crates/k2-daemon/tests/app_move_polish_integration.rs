@@ -1,4 +1,4 @@
-//! 0.46.4 App-move polish (Agent NSI's list after moving a live Next.js BFF
+//! 0.46.4 App-move polish (Agent Acme's list after moving a live Next.js BFF
 //! from a `--cmd` service onto the App runtime), end to end through the
 //! REAL dispatcher:
 //!
@@ -215,26 +215,26 @@ async fn bare_app_ids_resolve_when_unique_and_ambiguous_ones_list_candidates() {
     let env = setup(&[]);
     let _seen = quiet_alerts();
     let d = k2_daemon::test_harness::start(OWNER).await;
-    let nsi = seed_ws(&env, "agent-nsi");
+    let acme = seed_ws(&env, "agent-acme");
     let other = seed_ws(&env, "bareother");
-    let svc = app_row(&nsi, "agentnsi");
+    let svc = app_row(&acme, "agentacme");
 
     // The owner's copy-host (dry run) by the bare App id: the App's service.
-    let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": "agentnsi", "dryRun": true})).await;
+    let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": "agentacme", "dryRun": true})).await;
     assert_eq!(r.status, 200, "bare App id: {}", r.body);
     assert_eq!(r.json()["app"], svc.as_str(), "{}", r.body);
     // The long form still works and names the same App.
-    let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": "agent-nsi/agentnsi", "dryRun": true})).await;
+    let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": "agent-acme/agentacme", "dryRun": true})).await;
     assert_eq!((r.status, r.json()["app"].clone()), (200, json!(svc)), "{}", r.body);
     // A bare publish name unique on the box resolves too.
     let jobs = service(&other, "jobsbff", "node s.js", &other.path, 47_102);
     let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": "jobsbff", "dryRun": true})).await;
     assert_eq!((r.status, r.json()["app"].clone()), (200, json!(jobs)), "{}", r.body);
     // The same name in two workspaces: refused, both candidates named.
-    service(&nsi, "jobsbff", "node s.js", &nsi.path, 47_103);
+    service(&acme, "jobsbff", "node s.js", &acme.path, 47_103);
     let r = post(d.port, "/cli/skin/grants/copy-host", OWNER, json!({"app": "jobsbff", "dryRun": true})).await;
     assert_eq!(r.status, 400, "{}", r.body);
-    for want in ["ambiguous", "agent-nsi/jobsbff", "bareother/jobsbff"] {
+    for want in ["ambiguous", "agent-acme/jobsbff", "bareother/jobsbff"] {
         assert!(r.body.contains(want), "{want} missing: {}", r.body);
     }
     // Unknown stays a plain refusal.
@@ -243,12 +243,12 @@ async fn bare_app_ids_resolve_when_unique_and_ambiguous_ones_list_candidates() {
     assert!(r.body.contains("unknown app"), "{}", r.body);
 
     // Runtime verbs: `<workspace>/<app id>` names the App …
-    let r = get(d.port, "/cli/app/inspect", OWNER, "app=agent-nsi%2Fagentnsi").await;
+    let r = get(d.port, "/cli/app/inspect", OWNER, "app=agent-acme%2Fagentacme").await;
     assert_eq!(r.status, 200, "{}", r.body);
     // … but only in its own workspace.
-    let r = get(d.port, "/cli/app/inspect", OWNER, "app=bareother%2Fagentnsi").await;
+    let r = get(d.port, "/cli/app/inspect", OWNER, "app=bareother%2Fagentacme").await;
     assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
-    let r = get(d.port, "/cli/app/inspect", OWNER, "app=agentnsi").await;
+    let r = get(d.port, "/cli/app/inspect", OWNER, "app=agentacme").await;
     assert_eq!(r.status, 200, "{}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }
@@ -356,20 +356,20 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
     let env = setup(&[]);
     let seen = quiet_alerts();
     let d = k2_daemon::test_harness::start(OWNER).await;
-    let nsi = seed_ws(&env, "domnsi");
+    let acme = seed_ws(&env, "domacme");
     let other = seed_ws(&env, "domother");
-    app_row(&nsi, "domapp");
+    app_row(&acme, "domapp");
     app_row(&other, "domotherapp");
-    service(&nsi, "domagents", "node server.js", &nsi.path, 47_201);
+    service(&acme, "domagents", "node server.js", &acme.path, 47_201);
     service(&other, "domtheirs", "node server.js", &other.path, 47_202);
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         k2_core::db::schema::SubdomainWorkspace::claim(&conn, "domtheirextra", &other.id).unwrap();
-        k2_core::db::schema::SubdomainWorkspace::claim(&conn, "domextra", &nsi.id).unwrap();
+        k2_core::db::schema::SubdomainWorkspace::claim(&conn, "domextra", &acme.id).unwrap();
     }
-    let mine = passport(&nsi);
-    allow_manage(&nsi, true);
+    let mine = passport(&acme);
+    allow_manage(&acme, true);
     let add = |who: String, label: &'static str| {
         let port = d.port;
         async move { post(port, "/cli/app/domain/add", &who, json!({"app": "domapp", "label": label})).await }
@@ -420,7 +420,7 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
     // App install's own label: the same rule.
     let r = post(d.port, "/cli/app/install", &mine, json!({"app": "domgrafana", "tunnel": true})).await;
     assert_eq!((r.status, r.code()), (403, "label_exists_elsewhere".to_string()), "agent install: {}", r.body);
-    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "domgrafana", "tunnel": true, "workspace": nsi.id})).await;
+    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "domgrafana", "tunnel": true, "workspace": acme.id})).await;
     assert_eq!((r.status, r.code()), (409, "label_exists_elsewhere".to_string()), "owner install without transfer: {}", r.body);
     {
         let db = k2_core::db::shared();
@@ -435,7 +435,7 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
     let r = post(d.port, "/cli/app/domain/add", &passport(&other), json!({"app": "domapp", "label": "x1"})).await;
     assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
     // Without "Build and run Apps" the change is held for the owner.
-    allow_manage(&nsi, false);
+    allow_manage(&acme, false);
     let r = add(mine.clone(), "domextra").await;
     assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
     // The owner's card names the hostname.
@@ -443,7 +443,7 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
     assert!(v["request"]["summary"].as_str().expect("summary").ends_with("domain add domapp domextra"), "{v}");
     let lines = v["diff"]["lines"].as_array().expect("diff lines");
     assert!(lines.iter().any(|l| l.as_str().expect("line").starts_with("hostname: domextra.")), "{v}");
-    allow_manage(&nsi, true);
+    allow_manage(&acme, true);
 
     // rm of something never attached; of a taken label (that's label return).
     let r = post(d.port, "/cli/app/domain/rm", &mine, json!({"app": "domapp", "label": "domextra"})).await;
@@ -457,12 +457,12 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
             service_id: "svc-domagents".into(),
             legacy_port: 47_201,
             taken_at: 1,
-            taken_by: "agent:domnsi".into(),
+            taken_by: "agent:domacme".into(),
         });
         cfg.subdomains.push(k2_core::app_grace::config::AttachedSubdomain {
             label: "domextra".into(),
             added_at: 2,
-            added_by: "agent:domnsi".into(),
+            added_by: "agent:domacme".into(),
             previous_target: Some("127.0.0.1:47201".into()),
         });
         conn.execute("UPDATE apps SET config_json = ?2 WHERE app_id = ?1", rusqlite::params!["domapp", serde_json::to_string(&cfg).unwrap()]).unwrap();
@@ -499,7 +499,7 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        assert!(k2_core::db::schema::SubdomainWorkspace::transfer(&conn, "domextra", &nsi.id, &other.id, None).unwrap());
+        assert!(k2_core::db::schema::SubdomainWorkspace::transfer(&conn, "domextra", &acme.id, &other.id, None).unwrap());
     }
     let r = post(d.port, "/cli/app/domain/rm", &mine, json!({"app": "domapp", "label": "domextra"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -515,7 +515,7 @@ async fn domain_add_takes_only_the_workspaces_own_labels_and_lists_them() {
         cfg.subdomains.push(k2_core::app_grace::config::AttachedSubdomain {
             label: "domextra2".into(),
             added_at: 3,
-            added_by: "agent:domnsi".into(),
+            added_by: "agent:domacme".into(),
             previous_target: None,
         });
         conn.execute("UPDATE apps SET config_json = ?2 WHERE app_id = ?1", rusqlite::params!["domapp", serde_json::to_string(&cfg).unwrap()]).unwrap();
@@ -553,23 +553,23 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
     let d = k2_daemon::test_harness::start(OWNER).await;
     // A vault on a file key under the temp home (the approvals' confirms).
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
-    let nsi = seed_ws(&env, "mpnsi");
+    let acme = seed_ws(&env, "mpacme");
     let rooms = seed_ws(&env, "mpsales");
     let stranger = seed_ws(&env, "mpstranger");
     let old = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        k2_core::published_services::insert(&conn, &nsi.id, "agents", "node server.js", &nsi.path.to_string_lossy(), 47_301, "tunnel", "running", "cmd", "")
+        k2_core::published_services::insert(&conn, &acme.id, "agents", "node server.js", &acme.path.to_string_lossy(), 47_301, "tunnel", "running", "cmd", "")
             .unwrap()
             .id
     };
-    let app_svc = app_row(&nsi, "mpapp");
+    let app_svc = app_row(&acme, "mpapp");
     // The old BFF hands its guests the `sales` room (its guests-rooms grant).
     k2_core::skin::guest_rooms::grant(&old, &[rooms.id.clone()], "owner").unwrap();
     box_login_user("ada");
     box_login_user("bo");
-    let agent = passport(&nsi);
-    allow_manage(&nsi, false);
+    let agent = passport(&acme);
+    allow_manage(&acme, false);
 
     // The plan, as the service's own agent (no switch yet).
     let r = get(d.port, "/cli/app/move-plan", &agent, "service=agents&app=mpapp").await;
@@ -595,7 +595,7 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
     assert_eq!(step(&p, "stop_old")["command"], "k2 publish stop agents");
     assert_eq!(p["ownerStepsTodo"], json!(["build_switch", "copy_host", "guest_rooms"]));
     // The owner sees the names.
-    let r = get(d.port, "/cli/app/move-plan", OWNER, "service=mpnsi%2Fagents").await;
+    let r = get(d.port, "/cli/app/move-plan", OWNER, "service=mpacme%2Fagents").await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(step(&r.json(), "copy_host")["users"], json!(["ada", "bo"]));
     assert_eq!(r.json()["app"]["id"], "mpapp", "the workspace's only App by default");
@@ -608,13 +608,13 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
         k2_core::connect_users::create_session(user)
     };
     let member = session("mpmember", k2_core::connect_users::Role::Member);
-    let r = get(d.port, "/cli/app/move-plan", &member, "service=mpnsi%2Fagents").await;
+    let r = get(d.port, "/cli/app/move-plan", &member, "service=mpacme%2Fagents").await;
     assert_eq!(r.status, 200, "{}", r.body);
     let ch = step(&r.json(), "copy_host").clone();
     assert_eq!(ch["userCount"], json!(2), "{ch}");
     assert!(ch.get("users").is_none(), "a Member never sees the names: {ch}");
     let admin = session("mpadmin", k2_core::connect_users::Role::Admin);
-    let r = get(d.port, "/cli/app/move-plan", &admin, "service=mpnsi%2Fagents").await;
+    let r = get(d.port, "/cli/app/move-plan", &admin, "service=mpacme%2Fagents").await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(step(&r.json(), "copy_host")["users"], json!(["ada", "bo"]), "{}", r.body);
     // Another workspace's agent: no such service.
@@ -647,7 +647,7 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
     let ran: Vec<&str> = v["result"]["steps"].as_array().unwrap().iter().map(|s| s["step"].as_str().unwrap()).collect();
     assert_eq!(ran, ["build_switch", "copy_host", "guest_rooms"], "{v}");
     assert!(v["result"]["steps"].as_array().unwrap().iter().all(|s| s["result"] == "ran"), "{v}");
-    assert_eq!(k2_daemon::apps::access::level(&nsi.id), k2_daemon::apps::access::Level::Build);
+    assert_eq!(k2_daemon::apps::access::level(&acme.id), k2_daemon::apps::access::Level::Build);
     let grant = k2_core::skin::guest_rooms::get_grant(&app_svc).unwrap().expect("the App's guests-rooms grant");
     assert_eq!(grant.rooms, vec![rooms.id.clone()]);
     let after = k2_core::skin::copy_host_grants_to_app(&app_svc, "test", true).unwrap();
@@ -663,7 +663,7 @@ async fn move_plan_lists_every_step_and_one_approval_runs_the_owner_steps() {
             .count()
     };
     assert_eq!(audited, 3);
-    assert!(seen.lock().unwrap().iter().any(|(w, t)| w == &nsi.id && t.contains(&req) && t.contains("approved")), "the agent hears");
+    assert!(seen.lock().unwrap().iter().any(|(w, t)| w == &acme.id && t.contains(&req) && t.contains("approved")), "the agent hears");
     // Nothing left for the owner.
     let r = post(d.port, "/cli/app/move-plan/request", &agent, json!({"service": "agents", "app": "mpapp"})).await;
     assert_eq!((r.status, r.json()["status"].clone()), (200, json!("nothing_to_request")), "{}", r.body);

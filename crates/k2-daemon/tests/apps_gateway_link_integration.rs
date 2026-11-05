@@ -124,7 +124,7 @@ async fn s14_the_link_admits_only_its_own_pass_on_app_routes() {
     assert_eq!(st, 200);
 
     // Refusals, each with its code.
-    let (_, platform) = k2_core::skin::create_token("dannon-bff", Some(&["thread:read".to_string()]), &[ws.id.clone()]).unwrap();
+    let (_, platform) = k2_core::skin::create_token("globex-bff", Some(&["thread:read".to_string()]), &[ws.id.clone()]).unwrap();
     let cases: Vec<(String, Option<String>, u16, &str)> = vec![
         ("/gw/me".into(), None, 401, "pass_required"),
         ("/gw/me".into(), Some(OWNER.into()), 401, "wrong_credential"),

@@ -1036,43 +1036,43 @@ mod tests {
         crate::db::run_migrations_through(&conn, Some("0231_zen_version_carry")).unwrap();
         conn.execute_batch(
             "INSERT INTO domain_bindings (apex) VALUES ('example.com');
-             INSERT INTO domain_bindings (apex) VALUES ('nsihomes.com');
-             INSERT INTO domain_names (hostname, apex, role) VALUES ('nsihomes.com', 'nsihomes.com', 'app:agentnsi');
-             INSERT INTO domain_names (hostname, apex, role) VALUES ('www.nsihomes.com', 'nsihomes.com', 'app:agentnsi');
-             INSERT INTO domain_names (hostname, apex, role) VALUES ('a.gone.test', 'gone.test', 'app:agentnsi');
+             INSERT INTO domain_bindings (apex) VALUES ('acmehomes.com');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('acmehomes.com', 'acmehomes.com', 'app:agentacme');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('www.acmehomes.com', 'acmehomes.com', 'app:agentacme');
+             INSERT INTO domain_names (hostname, apex, role) VALUES ('a.gone.test', 'gone.test', 'app:agentacme');
              INSERT INTO domain_names (hostname, apex, role) VALUES ('b.example.com', 'example.com', 'app:hearth');
              INSERT INTO domain_names (hostname, apex, role) VALUES ('mail.example.com', 'example.com', 'mail');",
         )
         .unwrap();
         // What the App had before 0.46.6 (every bound name, first by name).
         assert_eq!(
-            hostnames_for_app(&conn, "agentnsi").unwrap(),
-            vec!["nsihomes.com".to_string(), "www.nsihomes.com".to_string()]
+            hostnames_for_app(&conn, "agentacme").unwrap(),
+            vec!["acmehomes.com".to_string(), "www.acmehomes.com".to_string()]
         );
         crate::db::run_migrations(&conn).unwrap();
-        let a = app_domain(&conn, "nsihomes.com").unwrap().expect("still bound");
+        let a = app_domain(&conn, "acmehomes.com").unwrap().expect("still bound");
         assert_eq!(a.state, STATE_EXTERNAL);
         assert!(a.is_external() && a.is_origin() && !a.is_live(), "served by its own proxy, not by K2");
         assert_eq!(a.verify_token.len(), 32);
         assert!(a.is_primary, "the pre-upgrade K2_APP_ORIGIN stays primary");
-        assert!(!app_domain(&conn, "www.nsihomes.com").unwrap().unwrap().is_primary);
+        assert!(!app_domain(&conn, "www.acmehomes.com").unwrap().unwrap().is_primary);
         assert_eq!(
-            origin_hostnames_for_app(&conn, "agentnsi").unwrap(),
-            vec!["nsihomes.com".to_string(), "www.nsihomes.com".to_string()],
+            origin_hostnames_for_app(&conn, "agentacme").unwrap(),
+            vec!["acmehomes.com".to_string(), "www.acmehomes.com".to_string()],
             "the same origins as before the upgrade"
         );
-        assert_eq!(primary_hostname_for_app(&conn, "agentnsi").unwrap(), Some("nsihomes.com".to_string()));
-        assert!(live_hostnames_for_app(&conn, "agentnsi").unwrap().is_empty(), "K2 serves none of them");
+        assert_eq!(primary_hostname_for_app(&conn, "agentacme").unwrap(), Some("acmehomes.com".to_string()));
+        assert!(live_hostnames_for_app(&conn, "agentacme").unwrap().is_empty(), "K2 serves none of them");
         let gone = app_domain(&conn, "a.gone.test").unwrap().unwrap();
         assert!(!gone.is_primary && !gone.is_origin(), "a dangling apex was no origin before either");
         assert_eq!(primary_hostname_for_app(&conn, "hearth").unwrap(), Some("b.example.com".to_string()));
         // Bound after the upgrade: waiting_dns, no origin.
-        upsert_name(&conn, "shop.nsihomes.com", "nsihomes.com", "app:agentnsi").unwrap();
-        assert_eq!(app_domain(&conn, "shop.nsihomes.com").unwrap().unwrap().state, STATE_WAITING_DNS);
-        assert_eq!(origin_hostnames_for_app(&conn, "agentnsi").unwrap().len(), 2);
+        upsert_name(&conn, "shop.acmehomes.com", "acmehomes.com", "app:agentacme").unwrap();
+        assert_eq!(app_domain(&conn, "shop.acmehomes.com").unwrap().unwrap().state, STATE_WAITING_DNS);
+        assert_eq!(origin_hostnames_for_app(&conn, "agentacme").unwrap().len(), 2);
         // Re-adding a grandfathered name keeps it external.
-        upsert_name(&conn, "nsihomes.com", "nsihomes.com", "app:agentnsi").unwrap();
-        assert_eq!(app_domain(&conn, "nsihomes.com").unwrap().unwrap().state, STATE_EXTERNAL);
+        upsert_name(&conn, "acmehomes.com", "acmehomes.com", "app:agentacme").unwrap();
+        assert_eq!(app_domain(&conn, "acmehomes.com").unwrap().unwrap().state, STATE_EXTERNAL);
         let st: Option<String> = conn
             .query_row("SELECT state FROM domain_names WHERE hostname = 'mail.example.com'", [], |r| r.get(0))
             .unwrap();

@@ -990,7 +990,7 @@ mod tests {
         }
     }
 
-    /// 0.46.5 (Agent NSI Vanilla): `k2 app data ls <app>` on a guarded App
+    /// 0.46.5 (Agent Acme Vanilla): `k2 app data ls <app>` on a guarded App
     /// answered `data_failed: App engine: argv`: the root rode as `""` and
     /// the engine refuses an empty argv word. An exec that refuses exactly
     /// like the engine now lists the root (and every path) fine.

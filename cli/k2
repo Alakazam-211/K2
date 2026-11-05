@@ -1181,7 +1181,7 @@ cli_post_json() {
     local _K2_CFG="" out rc=0
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
     _k2_cfg_add data-raw "$body"
-    # 0.46.6 (NSI papercut 12): note the refusal's (or hold's) `permission`
+    # 0.46.6 (client papercut 12): note the refusal's (or hold's) `permission`
     # object, so a held `k2 publish run` ends with its Ask-with line.
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
@@ -7342,7 +7342,7 @@ except Exception as e:
 # The daemon evaluates the gate PER REQUEST (misc_routes::api_enabled() =
 # K2_API env OR legacy K2_SANDBOX_API OR this setting), so on/off take
 # effect IMMEDIATELY — no daemon restart, no confirm+reboot. The env flags
-# remain a force-on override for headless boxes (nsi's systemd drop-in);
+# remain a force-on override for headless boxes (a hosted box's systemd drop-in);
 # where one is set, `k2 api off` clears only the setting and `status`
 # explains why the surface is still up. The daemon 403s non-owner/admin
 # writers of apiEnabled server-side.
@@ -9572,7 +9572,7 @@ if site:
     _app_rt_deployment_exit "$json_out"
 }
 
-# 0.46.4 (NSI #3): what a build or deploy packed — size, files, the
+# 0.46.4 (field report #3): what a build or deploy packed — size, files, the
 # heaviest paths — and the .k2appignore tip when the folder had none.
 _app_seed_size_note() {
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -16430,7 +16430,7 @@ cmd_app_approve() {
     _app_approve "$1"
 }
 
-# `k2 app approvals revoke <w_id> | --app <name>` (0.46.6, NSI papercut 13):
+# `k2 app approvals revoke <w_id> | --app <name>` (0.46.6, client papercut 13):
 # the owner withdraws an approved `k2 publish run`'s standing, so the next
 # identical re-run asks again. Owner only (the daemon refuses a passport).
 _app_approvals_revoke() {
@@ -35610,7 +35610,7 @@ def env_ends(s):
     v = s.get("envRemovedIn") if isinstance(s, dict) else None
     return str(v) if v else None
 
-# NSI 0.46.4 #4: a daemon that IS that release says so (cutoverNow).
+# 0.46.4 field report #4: a daemon that IS that release says so (cutoverNow).
 def env_now(s):
     return bool(isinstance(s, dict) and s.get("cutoverNow"))
 
@@ -35640,7 +35640,7 @@ if mode == "service" and verb == "run" and d.get("status") == "held":
         print("held for the owner: %s  %s" % (r.get("id") or d.get("requestId") or "?", r.get("summary") or ""))
         for why in d.get("reasons") or []:
             print("  why: %s" % why)
-        # 0.46.6 (NSI papercut 12): where the owner sees it, and the
+        # 0.46.6 (client papercut 12): where the owner sees it, and the
         # permission card K2 raised for it (as k2 app holds say).
         if d.get("reused"):
             print("  this is your earlier request %s (asked %s ago), still pending; nothing new was filed" % (r.get("id") or "?", d.get("askedAgo") or "a while"))

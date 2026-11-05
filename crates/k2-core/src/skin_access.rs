@@ -109,7 +109,7 @@ const MANAGER_CAPS: &[&str] = &[
     CAP_ROOM_MEMBERS,
 ];
 
-/// The suggestions (from a customer's agent, agent-nsi 2026-10-20), mapped
+/// The suggestions (from a customer's agent, agent-acme 2026-10-20), mapped
 /// to the caps that exist today. The list is data: more come later.
 pub const TEMPLATES: &[RoleTemplate] = &[
     RoleTemplate {

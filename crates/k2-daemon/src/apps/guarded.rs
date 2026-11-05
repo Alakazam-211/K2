@@ -1088,7 +1088,7 @@ mod tests {
 
     fn spec() -> AppSpec {
         AppSpec {
-            app_id: "nsi-skin".into(),
+            app_id: "acme-skin".into(),
             service_id: "6f1c0d7e-1111-4222-8333-944455556666".into(),
             workspace_id: "ws-1".into(),
             deployment_id: "d-0123456789ab".into(),
@@ -1126,7 +1126,7 @@ mod tests {
             assert!(!e.contains_key(never), "{never}");
         }
         assert_eq!(e["K2_APP_ID"], "6f1c0d7e-1111-4222-8333-944455556666", "AR37: the service UUID");
-        assert_eq!(e["K2_APP_NAME"], "nsi-skin");
+        assert_eq!(e["K2_APP_NAME"], "acme-skin");
         assert_eq!(e["K2_HOST"], "127.0.0.1");
         assert_eq!(e["K2_PORT"], "8730", "inside the wall K2_PORT is the link, the same port for every App");
         assert_eq!(e["K2_GATEWAY_URL"], "http://127.0.0.1:8730");
@@ -1172,15 +1172,15 @@ mod tests {
         let mut s = spec();
         s.env.insert("K2_APP_ORIGIN".into(), "https://forged.example".into());
         // Only the label.
-        s.public_origins = vec!["https://nsi-skin.sewlab.k2.dev".into()];
+        s.public_origins = vec!["https://acme-skin.sewlab.k2.dev".into()];
         let e = guarded_env(&s, None, None);
-        assert_eq!(e["K2_APP_ORIGIN"], "https://nsi-skin.sewlab.k2.dev", "a manifest can't set it");
-        assert_eq!(e["K2_APP_ORIGINS"], "https://nsi-skin.sewlab.k2.dev");
+        assert_eq!(e["K2_APP_ORIGIN"], "https://acme-skin.sewlab.k2.dev", "a manifest can't set it");
+        assert_eq!(e["K2_APP_ORIGINS"], "https://acme-skin.sewlab.k2.dev");
         // A custom domain first, then the label.
-        s.public_origins = vec!["https://jobs.example.com".into(), "https://nsi-skin.sewlab.k2.dev".into()];
+        s.public_origins = vec!["https://jobs.example.com".into(), "https://acme-skin.sewlab.k2.dev".into()];
         let e = guarded_env(&s, None, None);
         assert_eq!(e["K2_APP_ORIGIN"], "https://jobs.example.com");
-        assert_eq!(e["K2_APP_ORIGINS"], "https://jobs.example.com,https://nsi-skin.sewlab.k2.dev");
+        assert_eq!(e["K2_APP_ORIGINS"], "https://jobs.example.com,https://acme-skin.sewlab.k2.dev");
     }
 
     #[test]

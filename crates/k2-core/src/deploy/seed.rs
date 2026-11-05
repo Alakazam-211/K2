@@ -421,8 +421,8 @@ pub fn store_folder(folder: &Path, exclude: &BTreeSet<String>) -> Result<Stored,
     res
 }
 
-/// What a stored Seed weighs, for the build and deploy answers (NSI
-/// 0.46.4 #3: a pack with `var/` and `.next/cache` in it was 10× the code).
+/// What a stored Seed weighs, for the build and deploy answers (field
+/// report 0.46.4 #3: a pack with `var/` and `.next/cache` in it was 10× the code).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeedSize {

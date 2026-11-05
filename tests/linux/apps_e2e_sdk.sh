@@ -18,7 +18,7 @@
 # Steps:
 #   1. the room ($WS): its pinned Chat, a guest role, two guests and a
 #      lock-check guest per run, a pending card, a dump table;
-#   2. OUTSIDE the wall (the --cmd path Dannon's BFFs use today): the
+#   2. OUTSIDE the wall (the --cmd path App BFFs use today): the
 #      suite through the SDK at the daemon's loopback port, run by node 24
 #      from the pinned base image (podman, host network);
 #   3. INSIDE the wall: tests/contract/fixture-app deployed guarded; its

@@ -1,4 +1,4 @@
-//! `k2 app move-plan <service>` (0.46.4, NSI #2): every step that moves a
+//! `k2 app move-plan <service>` (0.46.4, field report #2): every step that moves a
 //! legacy `--cmd` service onto the App runtime, what's already done, and
 //! ONE owner approval for the owner's steps.
 //!

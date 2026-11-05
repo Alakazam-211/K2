@@ -1155,7 +1155,7 @@ describe('k2:diary@2: how many ghosts are out (0.45.2 counts)', () => {
 
   it('the wording varies (agents and numbers get different lines), every one haunted', async () => {
     const seen = new Set<string>()
-    for (const handle of ['cortana', 'nora', 'mara', 'appa', 'baden', 'julie', 'sterling', 'dannon']) {
+    for (const handle of ['cortana', 'nora', 'mara', 'appa', 'baden', 'julie', 'sterling', 'globex']) {
       for (const counts of [{ subagents: 2, tools: 0, commands: 0 }, { subagents: 0, tools: 6, commands: 0 }, { subagents: 1, tools: 1, commands: 0 }]) {
         document.body.innerHTML = ''
         const h = await harness({ reduced: true })

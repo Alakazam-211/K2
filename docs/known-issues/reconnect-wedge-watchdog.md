@@ -20,7 +20,7 @@ Independent design reviews (blind, 2026-07-22) agreed:
 | Still open | Why it matters |
 |------------|----------------|
 | **Root of heartbeat silence** | Ops proved thrash, not *why* JS went intermittent (main-thread stall vs content-process vs dual reload paths). |
-| **ConnectionGate / “NSI down” copy** | User-facing “refused to connect” while remote stayed healthy may be recovery-UI semantics, not a dead webview. |
+| **ConnectionGate / “Acme down” copy** | User-facing “refused to connect” while remote stayed healthy may be recovery-UI semantics, not a dead webview. |
 | **Control-plane blip vs host-down** | 0.40.48 targeted host reboot / poisoned pool; this failure mode is client loss of `connect.k2.dev` with a healthy host. |
 | **Park gate completeness** | Grid park keys off `recovery.kind`; if that stays `connected` during a control-plane-only blip, park never arms. |
 | **Watchdog as reconnect tool** | Reloading the whole webview mid-storm can wipe client state; anti-thrash only rate-limits that self-harm. |

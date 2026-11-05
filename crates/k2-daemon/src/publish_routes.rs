@@ -161,7 +161,7 @@ pub fn dispatch_post_as(path: &str, params: &HashMap<String, String>, who: crate
     }
     let _clear = Clear;
     CALLER.with(|c| *c.borrow_mut() = Some(who.clone()));
-    // 0.46.6 (NSI papercut 12): a held `k2 publish run` (a `publish_run`
+    // 0.46.6 (client papercut 12): a held `k2 publish run` (a `publish_run`
     // request) says where the owner sees it and raises the agent's
     // `apps.approve` card, as every `/cli/app/*` hold does.
     crate::apps::approvals::enrich_held(&who, dispatch_post(path, params))
@@ -301,7 +301,7 @@ const APPROVED_RUN_KEYS: &[&str] = &["projectId", "name", "cmd", "cwd", "port", 
 /// one made later is a new one, which the old approval never covered.
 const MADE_BY_APPROVAL_SECS: i64 = 600;
 
-/// The owner's approval this re-run repeats exactly (NSI papercut 13):
+/// The owner's approval this re-run repeats exactly (client papercut 13):
 /// `(request id, when it lapses)`. It stands while
 /// - the service or App is still this workspace's under the name, and was
 ///   not removed and made again after the approval;
@@ -1038,7 +1038,7 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     if let Some(d) = &dev {
         run_body["dev"] = serde_json::json!({ "idleSecs": d.idle_secs, "memMb": d.mem_mb, "cpus": d.cpus });
     }
-    // 0.46.6 (NSI papercut 13): the owner already approved this exact run
+    // 0.46.6 (client papercut 13): the owner already approved this exact run
     // (same App, command, folder, port and tunnel) and it is still the
     // App's latest approved run: the identical re-run goes through. Any
     // change asks again.
@@ -1578,7 +1578,7 @@ mod tests {
     }
 
     /// K5: where a `--cmd` run goes. An existing `--cmd` service stays as
-    /// it is in 0.46.1 (NSI's Jobs keeps working untouched); a new label
+    /// it is in 0.46.1 (a client's Jobs keeps working untouched); a new label
     /// goes on the open path only where the box has it.
     #[test]
     fn cmd_runs_route_to_the_open_path_only_for_new_labels_on_a_ready_box() {

@@ -537,7 +537,7 @@ async fn the_app_link_serves_every_new_thread_row() {
     assert!(seen.iter().all(|(w, _)| *w == ws.id), "alerts go to the App's own workspace: {seen:?}");
 }
 
-/// Vanilla's field report (0.46.3, nsi, 2026-10-26), exactly: an App
+/// Vanilla's field report (0.46.3, acme, 2026-10-26), exactly: an App
 /// GUEST's pass (`k2skn_`, from the App's own login) sent as Bearer through
 /// the App's gateway link by Node `fetch`, `Content-Type: application/json`,
 /// `POST /cli/thread/post` with `from`, `via: "thread"` and `attachments`

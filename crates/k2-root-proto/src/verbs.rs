@@ -1843,7 +1843,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::PgDual { op: crate::pg_dual::DualOp::Status, from: m16, to: m17, db: jobs, id: "0123456789ab".into() },
         Verb::PgHbaApp {
             add: false,
-            id: AppId::parse("nsi-skin").expect("id"),
+            id: AppId::parse("acme-skin").expect("id"),
         },
         Verb::KeepStatus,
         Verb::KeepKekInit,
@@ -1866,7 +1866,7 @@ pub fn catalog() -> Vec<Verb> {
         },
         Verb::AppsNftRemove,
         Verb::AppsNftApp {
-            id: AppId::parse("nsi-skin").expect("id"),
+            id: AppId::parse("acme-skin").expect("id"),
             gw: 38_601,
             box_ports: vec![],
         },
@@ -1875,7 +1875,7 @@ pub fn catalog() -> Vec<Verb> {
             gw: 38_602,
             box_ports: vec![8470, 7880],
         },
-        Verb::AppsNftAppRemove(AppId::parse("nsi-skin").expect("id")),
+        Verb::AppsNftAppRemove(AppId::parse("acme-skin").expect("id")),
         Verb::AppsInstallEngine,
         Verb::AppsLogs {
             id: AppId::parse("jobs").expect("id"),

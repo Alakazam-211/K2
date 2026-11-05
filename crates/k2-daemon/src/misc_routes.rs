@@ -209,7 +209,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             // inbound, all sub-second) lets `--wake`
                             // race ahead and spawn a session that the
                             // sidebar's window pane never sees. Filed by
-                            // nsi-checkin Scout deployment as the
+                            // acme-checkin Scout deployment as the
                             // "canonical PTY initialization" issue.
                             // Best-effort — not having an agent yet
                             // (operator is between `mode` and AGENT.md
@@ -1791,7 +1791,7 @@ pub(crate) fn sandbox_api_enabled() -> bool {
 /// evaluated PER REQUEST, so flipping the Settings toggle takes effect with
 /// NO daemon restart (the settings path deliberately skips the confirm+reboot
 /// dialog). The env flag stays a valid force-on override for headless boxes
-/// (nsi's systemd drop-in keeps working untouched).
+/// (a hosted box's systemd drop-in keeps working untouched).
 ///
 /// BACK-COMPAT: the legacy `K2_SANDBOX_API` (which pre-split meant "the whole
 /// /v1 surface") still implies the surface is on — existing Dedicated units

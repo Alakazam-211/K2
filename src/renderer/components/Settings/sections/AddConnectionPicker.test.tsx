@@ -77,12 +77,12 @@ const ROSTERS = {
     },
     {
       kind: 'peer',
-      key: 'fp-nsi',
-      fingerprint: 'fp-nsi',
-      label: 'NSI',
-      subdomain: 'nsi',
+      key: 'fp-acme',
+      fingerprint: 'fp-acme',
+      label: 'Acme',
+      subdomain: 'acme',
       base_url: '',
-      host: 'nsi.k2.dev',
+      host: 'acme.k2.dev',
       repair_recommended: true,
       status: 'ok',
       error: null,
@@ -112,7 +112,7 @@ const ROSTERS = {
       repair_recommended: false,
       status: 'ok',
       error: null,
-      agents: [agent('r1', 'Argus', 'argus'), agent('r2', 'Cortana', 'cortana', ['cora']), agent('r3', 'dannon', 'dannon')],
+      agents: [agent('r1', 'Argus', 'argus'), agent('r2', 'Cortana', 'cortana', ['cora']), agent('r3', 'globex', 'globex')],
     },
   ],
   timeout_secs: 5,
@@ -194,9 +194,9 @@ describe('AddConnectionPicker: sections in the daemon order', () => {
   it('shows This server first, then each paired server, rows A to Z, without the workspace itself', async () => {
     render(<Harness />)
     await screen.findByText('RPM')
-    expect(sectionKeys()).toEqual(['local', 'peer:fp-nsi', 'peer:fp-old', 'peer:fp-rpm'])
+    expect(sectionKeys()).toEqual(['local', 'peer:fp-acme', 'peer:fp-old', 'peer:fp-rpm'])
     expect(rowLabels('local')).toEqual(['Billing', 'Cortana'])
-    expect(rowLabels('peer:fp-rpm')).toEqual(['Argus', 'Cortana', 'dannon'])
+    expect(rowLabels('peer:fp-rpm')).toEqual(['Argus', 'Cortana', 'globex'])
     // The handle is the row's detail; the host sits beside the server name.
     expect(within(option('peer:fp-rpm', 'Argus')).getByText('argus')).toBeTruthy()
     expect(within(sectionEl('peer:fp-rpm')).getByText('· rpm.k2.dev')).toBeTruthy()
@@ -220,13 +220,13 @@ describe('AddConnectionPicker: sections in the daemon order', () => {
     fireEvent.click(within(status).getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(rowLabels('peer:fp-old')).toEqual(['Laptop agent']))
     expect(sectionEl('peer:fp-old').hasAttribute('data-dim')).toBe(false)
-    expect(sectionKeys()).toEqual(['local', 'peer:fp-nsi', 'peer:fp-old', 'peer:fp-rpm'])
+    expect(sectionKeys()).toEqual(['local', 'peer:fp-acme', 'peer:fp-old', 'peer:fp-rpm'])
   })
 
   it('shows the re-pair hint inline, and Re-pair opens Connected Servers', async () => {
     render(<Harness />)
-    await screen.findByText('NSI')
-    const hint = sectionEl('peer:fp-nsi').querySelector('[data-repair-hint]') as HTMLElement
+    await screen.findByText('Acme')
+    const hint = sectionEl('peer:fp-acme').querySelector('[data-repair-hint]') as HTMLElement
     expect(hint.textContent).toContain('older pairing')
     expect(hint.getAttribute('title')).toContain('Paired with the older pairing code')
     expect(sectionEl('peer:fp-rpm').querySelector('[data-repair-hint]')).toBeNull()
@@ -244,8 +244,8 @@ describe('AddConnectionPicker: sections in the daemon order', () => {
     })
     render(<Harness />)
     await screen.findByText('RPM')
-    expect(sectionEl('peer:fp-nsi').querySelector('[data-listing="rejected"]')?.textContent).toContain('NSI refused this server')
-    expect(sectionEl('peer:fp-nsi').hasAttribute('data-dim')).toBe(true)
+    expect(sectionEl('peer:fp-acme').querySelector('[data-listing="rejected"]')?.textContent).toContain('Acme refused this server')
+    expect(sectionEl('peer:fp-acme').hasAttribute('data-dim')).toBe(true)
     expect(sectionEl('peer:fp-rpm').querySelector('[data-listing="empty"]')?.textContent).toContain('No connectable agents on this server')
   })
 })
@@ -261,9 +261,9 @@ describe('AddConnectionPicker: search and keyboard', () => {
     fireEvent.change(search(), { target: { value: 'cora' } })
     expect(rowLabels('peer:fp-rpm')).toEqual(['Cortana'])
 
-    fireEvent.change(search(), { target: { value: 'nsi.k2' } })
-    expect(sectionKeys()).toEqual(['peer:fp-nsi'])
-    expect(rowLabels('peer:fp-nsi')).toEqual(['Adam', 'Jobs'])
+    fireEvent.change(search(), { target: { value: 'acme.k2' } })
+    expect(sectionKeys()).toEqual(['peer:fp-acme'])
+    expect(rowLabels('peer:fp-acme')).toEqual(['Adam', 'Jobs'])
 
     // Naming the offline server keeps its status (and Retry) on screen.
     fireEvent.change(search(), { target: { value: 'old laptop' } })
@@ -283,7 +283,7 @@ describe('AddConnectionPicker: search and keyboard', () => {
     fireEvent.keyDown(box, { key: 'ArrowDown' })
     expect(box.getAttribute('aria-activedescendant')).toBe(option('local', 'Cortana').id)
     fireEvent.keyDown(box, { key: 'ArrowDown' })
-    expect(box.getAttribute('aria-activedescendant')).toBe(option('peer:fp-nsi', 'Adam').id)
+    expect(box.getAttribute('aria-activedescendant')).toBe(option('peer:fp-acme', 'Adam').id)
     fireEvent.keyDown(box, { key: 'ArrowUp' })
     fireEvent.keyDown(box, { key: 'Enter' })
     await waitFor(() => expect(onAddLocal).toHaveBeenCalledWith('ws-cortana'))
@@ -292,7 +292,7 @@ describe('AddConnectionPicker: search and keyboard', () => {
     fireEvent.change(box, { target: { value: 'jobs' } })
     fireEvent.keyDown(box, { key: 'ArrowDown' })
     fireEvent.keyDown(box, { key: 'Enter' })
-    await waitFor(() => expect(onAddRemote).toHaveBeenCalledWith('jobs::nsi.k2.dev'))
+    await waitFor(() => expect(onAddRemote).toHaveBeenCalledWith('jobs::acme.k2.dev'))
   })
 
   it('Esc closes the picker', async () => {
@@ -323,11 +323,11 @@ describe('AddConnectionPicker: connected agents and adding', () => {
     const onAddRemote = vi.fn(async () => null)
     render(<Harness onAddRemote={onAddRemote} />)
     await screen.findByText('RPM')
-    fireEvent.click(option('peer:fp-rpm', 'dannon'))
-    await waitFor(() => expect(option('peer:fp-rpm', 'dannon').getAttribute('data-row-state')).toBe('checked'))
-    expect(onAddRemote).toHaveBeenCalledWith('dannon::rpm.k2.dev')
-    fireEvent.click(option('peer:fp-nsi', 'Jobs'))
-    await waitFor(() => expect(option('peer:fp-nsi', 'Jobs').getAttribute('data-row-state')).toBe('checked'))
+    fireEvent.click(option('peer:fp-rpm', 'globex'))
+    await waitFor(() => expect(option('peer:fp-rpm', 'globex').getAttribute('data-row-state')).toBe('checked'))
+    expect(onAddRemote).toHaveBeenCalledWith('globex::rpm.k2.dev')
+    fireEvent.click(option('peer:fp-acme', 'Jobs'))
+    await waitFor(() => expect(option('peer:fp-acme', 'Jobs').getAttribute('data-row-state')).toBe('checked'))
     expect(screen.getByRole('dialog', { name: 'Add connection' })).toBeTruthy()
     // The rosters were fetched once: adding never re-dials every server.
     expect(cli.calls.filter((c) => c.route === 'federation/peer-rosters')).toHaveLength(1)

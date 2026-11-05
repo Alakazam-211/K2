@@ -201,7 +201,7 @@ pub const ROUTES: &[Route] = &[
     // in person (handler: owner token or Owner login + a vault confirm
     // bound to the request, never a passport).
     get("/cli/app/approvals", Member),
-    // 0.46.6 (NSI papercut 13): the owner withdraws an approved run's
+    // 0.46.6 (client papercut 13): the owner withdraws an approved run's
     // standing for identical re-runs.
     post("/cli/app/approvals/revoke", Owner),
     post("/cli/app/approve", Owner),

@@ -4835,7 +4835,7 @@ async fn skin_grant_role_rewrites_live_session_in_place() {
     });
 }
 
-/// 0.46.5 item 13 (Agent NSI Vanilla): an App-only guest on a rooms scope
+/// 0.46.5 item 13 (Agent Acme Vanilla): an App-only guest on a rooms scope
 /// (the shape `k2 app user add <app> <name> --test --room <h>` makes) given
 /// a role with `k2 app user role` (POST /cli/skin/roles/assign) gets the
 /// role's caps at login: the role goes on its App login's grant, not only

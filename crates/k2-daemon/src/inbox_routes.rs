@@ -981,16 +981,16 @@ mod tests {
     #[test]
     fn split_federated_user_target_parses_colon_form() {
         let (agent, host) =
-            split_federated_user_target("ahama::nsi.k2.dev").expect("user form");
+            split_federated_user_target("ahama::acme.k2.dev").expect("user form");
         assert_eq!(agent, "ahama");
-        assert_eq!(host, "nsi.k2.dev");
+        assert_eq!(host, "acme.k2.dev");
         let lan = split_federated_user_target("sales::10.2.40.28:38471").unwrap();
         assert_eq!(lan.0, "sales");
         assert_eq!(lan.1, "10.2.40.28:38471");
         assert!(split_federated_user_target("fp::ws::agent").is_none());
         assert!(split_federated_user_target("local-handle").is_none());
-        let legacy = split_federated_user_target("ahama@nsi.k2.dev").unwrap();
-        assert_eq!(legacy, ("ahama".into(), "nsi.k2.dev".into()));
+        let legacy = split_federated_user_target("ahama@acme.k2.dev").unwrap();
+        assert_eq!(legacy, ("ahama".into(), "acme.k2.dev".into()));
     }
 
     #[test]
@@ -1005,7 +1005,7 @@ mod tests {
         ));
         std::fs::write(&tmp, b"# hi\n").unwrap();
         let mut params = HashMap::new();
-        params.insert("workspace".into(), "ahama::nsi.k2.dev".into());
+        params.insert("workspace".into(), "ahama::acme.k2.dev".into());
         params.insert("path".into(), tmp.display().to_string());
         params.insert("wake".into(), "true".into());
         let resp = handle_deliver_post(&params);

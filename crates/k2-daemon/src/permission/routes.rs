@@ -299,7 +299,7 @@ fn asking_conversation(workspace_id: &str, addr: Option<&str>) -> Result<(String
 /// The Thread the card goes on: `addr` when the agent named one, else the
 /// Thread of the session that asked (its passport's cell: a sidecar's own
 /// `<ws>/<name>` Thread, by `k2 whoami`'s rules), else the pinned Chat.
-/// 0.46.6 (NSI papercut 12): the CLI sends no `addr`, so a sidecar's card
+/// 0.46.6 (client papercut 12): the CLI sends no `addr`, so a sidecar's card
 /// went to the main Thread and the `[permission:]` turn to the main
 /// session, never the one that asked.
 fn asking_thread(workspace_id: &str, session_id: &str, addr: Option<&str>) -> Result<(String, String), CliResponse> {

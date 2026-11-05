@@ -19,17 +19,17 @@ const LINK = 'https://box.k2.dev/cli/skin/password/set#k2inv_abc123'
 const RESET_VIEW = {
   requestId: 'pr_reset1',
   action: 'apps.user-password-reset',
-  setting: "Reset adam's password (agents.nsi)",
-  whatChanges: 'K2 makes a new password for adam and shows it to you once; agent-nsi never sees it.',
+  setting: "Reset adam's password (agents.acme)",
+  whatChanges: 'K2 makes a new password for adam and shows it to you once; agent-acme never sees it.',
   grant: 'one-time',
-  scope: 'adam on agents.nsi',
+  scope: 'adam on agents.acme',
   duration: 'once',
   consequences: 'adam is signed out everywhere and their sign-in lock is cleared.',
   values: [
-    { key: 'workspace', value: 'agent-nsi' },
+    { key: 'workspace', value: 'agent-acme' },
     { key: 'user', value: 'adam' },
   ],
-  why: { by: 'agent-nsi', text: 'Adam is locked out' },
+  why: { by: 'agent-acme', text: 'Adam is locked out' },
   notes: [],
   askedFor: null,
   approvers: { floor: 'owner', label: 'owner', names: ['rosson'] },
@@ -59,7 +59,7 @@ function card(doc: Record<string, unknown>, actions: PermissionCardActions): { u
       nowSec={1761062000}
       permission={c.permission}
       permissionActions={actions}
-      from="agent-nsi"
+      from="agent-acme"
       onPick={() => {
         throw new Error('a permission card never answers through onPick')
       }}
@@ -71,7 +71,7 @@ function answering(forYou: Record<string, unknown> | null): PermissionCardAction
   return { answer: vi.fn(async () => ({ ok: true, ...(forYou ? { forYou } : {}) })) }
 }
 
-const PW_FOR_YOU = { kind: 'apps.user-password-reset', mode: 'password', username: 'adam', app: 'agents.nsi', secret: SECRET, revealSecs: 60 }
+const PW_FOR_YOU = { kind: 'apps.user-password-reset', mode: 'password', username: 'adam', app: 'agents.acme', secret: SECRET, revealSecs: 60 }
 
 let clipboard = ''
 const writeText = vi.fn(async (t: string) => {
@@ -140,8 +140,8 @@ describe('the password-reset card: Allow', () => {
   })
 
   it('the wire body carries reveal and mode as strings', () => {
-    expect(permissionAnswerBody('agent-nsi', 'tc_1', { answer: 'Allow', mode: 'password', reveal: true })).toEqual({
-      addr: 'agent-nsi',
+    expect(permissionAnswerBody('agent-acme', 'tc_1', { answer: 'Allow', mode: 'password', reveal: true })).toEqual({
+      addr: 'agent-acme',
       id: 'tc_1',
       answer: 'Allow',
       client: 'desktop',
@@ -230,7 +230,7 @@ describe('the password-reset card: the one-time reveal', () => {
   })
 
   it('a link shows as a link, and a code when the box has no front door', async () => {
-    card(reveal('link', false), answering({ kind: 'apps.user-password-reset', mode: 'link', username: 'adam', app: 'agents.nsi', link: LINK }))
+    card(reveal('link', false), answering({ kind: 'apps.user-password-reset', mode: 'link', username: 'adam', app: 'agents.acme', link: LINK }))
     expect(screen.getByTestId('permission-allow').textContent).toBe('Allow: show me a link')
     fireEvent.click(screen.getByTestId('permission-allow'))
     await settle()

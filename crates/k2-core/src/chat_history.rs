@@ -4470,7 +4470,7 @@ mod tests {
     fn newest_session_picks_latest_nonempty_and_skips_empty() {
         let tmp = U6TempDir::new("newest-session");
         let projects = tmp.path.join(".claude").join("projects");
-        let hash = "-Users-z-proj-nsi";
+        let hash = "-Users-z-proj-acme";
         let dir = projects.join(hash);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -4499,7 +4499,7 @@ mod tests {
     fn newest_session_includes_worktree_siblings_and_ignores_other_projects() {
         let tmp = U6TempDir::new("newest-session-wt");
         let projects = tmp.path.join(".claude").join("projects");
-        let hash = "-Users-z-proj-nsi";
+        let hash = "-Users-z-proj-acme";
         let wt_dir = projects.join(format!("{hash}-feature-x"));
         let other_dir = projects.join("-Users-z-proj-OTHER");
         std::fs::create_dir_all(&wt_dir).unwrap();
@@ -4530,7 +4530,7 @@ mod tests {
         // (the resolver then mints a fresh `--session-id`, preserving the
         // brand-new-workspace behavior from #681).
         assert_eq!(
-            newest_session_in_projects_dir(&projects, "-Users-z-proj-nsi"),
+            newest_session_in_projects_dir(&projects, "-Users-z-proj-acme"),
             None
         );
     }

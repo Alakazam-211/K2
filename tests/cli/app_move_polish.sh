@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 0.46.4 App-move polish (Agent NSI's list), through the CLI against a
+# 0.46.4 App-move polish (Agent Acme's list), through the CLI against a
 # sandbox daemon (temp HOME, K2_APPS=1 + K2_APPS_PROCESS=1, air-gapped;
 # this checkout's cli/k2):
 #

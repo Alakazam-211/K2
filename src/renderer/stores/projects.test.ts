@@ -584,7 +584,7 @@ describe('projects store — Plan B host-aware migration', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
 
     // Self-echo is eaten, not deferred: a trailing fetchProjects after
-    // reorder is the NSI Settings-drag disconnect (N+1 over E2E).
+    // reorder is the Acme Settings-drag disconnect (N+1 over E2E).
     await vi.advanceTimersByTimeAsync(500)
     expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()

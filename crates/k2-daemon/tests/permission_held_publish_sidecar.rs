@@ -1,4 +1,4 @@
-//! NSI papercut 12 (0.46.4 field report, fixed for 0.46.6), headless: the
+//! client papercut 12 (0.46.4 field report, fixed for 0.46.6), headless: the
 //! real dispatcher in process on a temp `$HOME`, permission cards on.
 //!
 //! An agent working in a **sidecar** (`<ws>/<name>`, a second harness tab
@@ -16,7 +16,7 @@
 //! - a hold whose card can't go up (no Thread) carries the Ask-with
 //!   `permission` object (`/cli/publish/run` had no wall row).
 //!
-//! NSI papercut 13: one owner approval covers identical re-runs of the
+//! client papercut 13: one owner approval covers identical re-runs of the
 //! same App (command, folder, port, tunnel); any change asks again.
 //!
 //! No real agent CLI runs (a `claude` that is `cat`), no real `~/.k2`, no
@@ -148,7 +148,7 @@ fn publish_run_requests(ws: &Ws, name: &str) -> Vec<String> {
     ids.collect::<rusqlite::Result<Vec<_>>>().expect("rows")
 }
 
-/// NSI papercut 13: one owner approval covers identical re-runs of the
+/// client papercut 13: one owner approval covers identical re-runs of the
 /// same App (same command, folder, port, tunnel); any change asks again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_identical_publish_runs_take_one_approval_and_a_change_asks_again() {
@@ -157,7 +157,7 @@ async fn three_identical_publish_runs_take_one_approval_and_a_change_asks_again(
     k2_daemon::apps::alerts::set_sink(Some(Box::new(|_: &str, _: &str| {})));
     let d = k2_daemon::test_harness::start(OWNER).await;
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
-    let ws = seed_ws(&env, "nsirerun");
+    let ws = seed_ws(&env, "acmererun");
     let agent = passport(&ws);
     let port = k2_core::test_env::loopback_test_port();
     let cmd = "exec python3 -m http.server $PORT --bind 127.0.0.1";
@@ -259,7 +259,7 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
     let d = k2_daemon::test_harness::start(OWNER).await;
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
 
-    let ws = seed_ws(&env, "nsiside");
+    let ws = seed_ws(&env, "acmeside");
     let main = pin_chat(&ws);
     let conv = uuid::Uuid::new_v4().to_string();
     sidecar(&ws, &conv, "sales");
@@ -276,7 +276,7 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
 
     // 1. The hold raises the card, on the sidecar's Thread.
     let port = k2_core::test_env::loopback_test_port();
-    let run = json!({"name": "nsi-sales", "cmd": "exec python3 -m http.server $PORT --bind 127.0.0.1", "port": port, "noTunnel": true});
+    let run = json!({"name": "acme-sales", "cmd": "exec python3 -m http.server $PORT --bind 127.0.0.1", "port": port, "noTunnel": true});
     let r = post(d.port, "/cli/publish/run", &agent, run).await;
     assert_eq!(r.status, 202, "{}", r.body);
     let v = r.json();
@@ -325,11 +325,11 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
     assert_eq!(app_req["status"], "approved", "{app_req}");
     wait_until("the approved service answers", 20, || http_get(port, "/").is_some_and(|(s, _)| s == 200)).await;
 
-    let r = post(d.port, "/cli/publish/rm", OWNER, json!({"name": "nsi-sales", "project": ws.id})).await;
+    let r = post(d.port, "/cli/publish/rm", OWNER, json!({"name": "acme-sales", "project": ws.id})).await;
     assert_eq!(r.status, 200, "{}", r.body);
 
     // 5. No Thread at all: the card can't go up, so the hold teaches.
-    let lone = seed_ws(&env, "nsilone");
+    let lone = seed_ws(&env, "acmelone");
     cards_on(&lone);
     let lone_agent = passport(&lone);
     let run = json!({"name": "lone-svc", "cmd": "exec python3 -m http.server $PORT --bind 127.0.0.1", "port": k2_core::test_env::loopback_test_port(), "noTunnel": true});

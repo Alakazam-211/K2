@@ -63,7 +63,7 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         return json!({ "card": null });
     };
     let handle = present::workspace_handle(ws);
-    // The Thread of the session that asked (a sidecar's own, 0.46.6 NSI
+    // The Thread of the session that asked (a sidecar's own, 0.46.6 client
     // papercut 12), else the pinned Chat.
     let own = r
         .requester_session

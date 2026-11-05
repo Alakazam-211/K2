@@ -47,7 +47,7 @@ use k2_core::log_debug;
 /// **Not** a `OnceLock<u16>`: the accept task can die (panic, OS close, FD
 /// exhaustion) while the daemon process stays alive. A OnceLock would keep
 /// returning the **dead** port forever → frpc dials connection-refused →
-/// silent external outage (luzz 2026-07-29, nsi/acv class).
+/// silent external outage (luzz 2026-07-29, acme/acv class).
 ///
 /// **Keyed by subdomain** (0.45.2): the listener serves ONE name. Before
 /// 0.45.2 a tunnel start reused any live listener, so after "release `afs`,

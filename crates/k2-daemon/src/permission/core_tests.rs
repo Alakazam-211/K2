@@ -712,7 +712,7 @@ fn the_agents_route_lists_switches_and_recent_requests_for_owners_and_admins() {
     assert_eq!(r.status, "405 Method Not Allowed");
 }
 
-// ── the asking session's Thread (0.46.6, NSI papercut 12) ───────────
+// ── the asking session's Thread (0.46.6, client papercut 12) ───────────
 
 /// A sidecar Thread `<ws>/<name>` of `ws` (provider conversation `conv`,
 /// a `tab-*` harness tab), as the overlay route tests seed one.

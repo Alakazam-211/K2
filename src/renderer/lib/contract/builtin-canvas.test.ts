@@ -306,7 +306,7 @@ describe('k2:canvas@1 Agents', () => {
     agent('sew', 2, { working: true, activity: 'working' }),
     agent('k2', 0, { image: 'data:image/png;base64,iVBORw0KGgo=' }),
     agent('k2-dev-web', 1, { needsYou: true, activity: 'needs-you', selected: true }),
-    agent('far', 3, { address: 'far::nsi.k2.dev', server: 'nsi.k2.dev' }),
+    agent('far', 3, { address: 'far::acme.k2.dev', server: 'acme.k2.dev' }),
     agent('off', 4, { state: 'offline', stateLabel: 'Offline', openable: false }),
   ]
   const unread = { ok: true, total: 5, byConversation: [
@@ -329,7 +329,7 @@ describe('k2:canvas@1 Agents', () => {
     expect(rows[3].querySelector('.ag-badge')).toBeNull()
     expect(text(rows[1].querySelector('.ag-sub'))).toBe('needs you')
     expect(text(rows[2].querySelector('.ag-sub'))).toBe('working')
-    expect(text(rows[3].querySelector('.ag-sub'))).toBe('nsi.k2.dev')
+    expect(text(rows[3].querySelector('.ag-sub'))).toBe('acme.k2.dev')
     expect(rows[1].classList.contains('ag-sel')).toBe(true)
     expect(rows[4].disabled).toBe(true)
     expect(text(m.doc.querySelector('[data-tile="agents"] .cv-tile-meta'))).toBe('5 agents · 1 working · 1 needs you · 5 unread')
@@ -342,7 +342,7 @@ describe('k2:canvas@1 Agents', () => {
     await sleep(10)
     m.doc.querySelectorAll('.ag-row')[3].click()
     await until('opened', () => m.fake.log.opened.length === 1)
-    expect(m.fake.log.opened).toEqual(['far::nsi.k2.dev'])
+    expect(m.fake.log.opened).toEqual(['far::acme.k2.dev'])
     expect(m.fake.log.layoutSet).toEqual([{ column: 1, collapsed: false }])
   })
 

@@ -5,7 +5,7 @@ describe('isApexTunnelLabel', () => {
   it('accepts single-label apex purchases', () => {
     expect(isApexTunnelLabel('rosson')).toBe(true)
     expect(isApexTunnelLabel('z3thon')).toBe(true)
-    expect(isApexTunnelLabel('nsi')).toBe(true)
+    expect(isApexTunnelLabel('acme')).toBe(true)
     expect(isApexTunnelLabel('claimchaser')).toBe(true)
     expect(isApexTunnelLabel('rpmavs')).toBe(true)
   })

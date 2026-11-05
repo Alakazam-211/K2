@@ -177,14 +177,14 @@ fn agent_owner(handle: &str, ws: &str) -> Owner {
     }
 }
 
-/// A scan result: the agent `nsi` owns a big folder.
+/// A scan result: the agent `acme` owns a big folder.
 fn publish_scan(f: &Fx) {
     dg::publish_snapshot(Snapshot {
         consumers: vec![
             Consumer {
                 kind: "workspace".into(),
                 id: f.ws_a.clone(),
-                owner: agent_owner("nsi", &f.ws_a),
+                owner: agent_owner("acme", &f.ws_a),
                 disk: Some("9:9".into()),
                 disk_bytes: Some(104_000_000_000),
                 parts: [("uploads".to_string(), 29_000_000_000u64), ("node_modules".to_string(), 2_100_000_000)].into_iter().collect(),
@@ -196,7 +196,7 @@ fn publish_scan(f: &Fx) {
                 kind: "app".into(),
                 id: "jobs".into(),
                 path: Some("walled".into()),
-                owner: agent_owner("nsi", &f.ws_a),
+                owner: agent_owner("acme", &f.ws_a),
                 disk: Some("9:9".into()),
                 disk_bytes: Some(6_200_000_000),
                 ..Consumer::default()
@@ -227,12 +227,12 @@ fn at_refuse_new_work_gets_disk_low_and_nothing_is_created() {
     assert_eq!((st, code(&v)), (409, "disk_low"), "{v}");
     let hint = v["error"]["hint"].as_str().unwrap();
     assert!(hint.contains("96% full"), "{hint}");
-    assert!(hint.contains("k2 msg nsi::box.k2.dev"), "the hint names who to ask: {hint}");
+    assert!(hint.contains("k2 msg acme::box.k2.dev"), "the hint names who to ask: {hint}");
     assert!(hint.contains("--disk-override"), "{hint}");
     assert!(hint.contains("2.6 GB of old Seeds"), "{hint}");
     assert_eq!(v["error"]["level"], "refuse");
     assert_eq!(v["error"]["disk"]["mount"], "/");
-    assert_eq!(v["error"]["biggest"][0]["owner"]["handle"], "nsi");
+    assert_eq!(v["error"]["biggest"][0]["owner"]["handle"], "acme");
     assert!(v["error"]["biggest"][0]["owner"].get("workspaceId").is_none(), "{v}");
     assert_eq!(seed_count(), seeds, "no Seed was stored");
 
@@ -487,9 +487,9 @@ fn the_view_shows_folders_to_people_only_and_refuses_app_passes_and_members() {
     // Apps the scan hasn't measured still have a row, unknown as null.
     let plain = v["consumers"].as_array().unwrap().iter().find(|c| c["id"] == "plain").cloned().unwrap();
     assert!(plain["diskBytes"].is_null(), "{plain}");
-    assert_eq!(v["byOwner"][0]["owner"]["handle"], "nsi");
+    assert_eq!(v["byOwner"][0]["owner"]["handle"], "acme");
     assert_eq!(v["byOwner"][0]["diskBytes"], 110_200_000_000u64);
-    assert!(v["suggestion"].as_str().unwrap().contains("k2 msg nsi::box.k2.dev"), "{v}");
+    assert!(v["suggestion"].as_str().unwrap().contains("k2 msg acme::box.k2.dev"), "{v}");
     assert_eq!(v["k2WillClear"]["seedsBytes"], 2_600_000_000u64);
 
     // An Admin login sees folders too; agents and shell tabs never.
@@ -501,7 +501,7 @@ fn the_view_shows_folders_to_people_only_and_refuses_app_passes_and_members() {
         let row = ws_row(&v);
         assert!(row.get("folder").is_none(), "{who:?}: {row}");
         assert!(row["owner"].get("workspaceId").is_none(), "{who:?}: {row}");
-        assert_eq!(row["owner"]["address"], "nsi::box.k2.dev");
+        assert_eq!(row["owner"]["address"], "acme::box.k2.dev");
         assert!(v["byOwner"][0]["owner"].get("workspaceId").is_none(), "{v}");
         assert!(!v.to_string().contains(&f.ws_a_path.to_string_lossy().to_string()), "{who:?} sees no path: {v}");
         assert!(!v.to_string().contains(&f.ws_a), "{who:?} sees no workspace id: {v}");
@@ -519,8 +519,8 @@ fn the_view_shows_folders_to_people_only_and_refuses_app_passes_and_members() {
     assert_eq!(v["consumers"][0]["diskBytes"], 6_200_000_000u64);
     let (st, v) = get("/cli/app/resources", &Who::Owner, &[("app", "nope")]);
     assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
-    let (_, v) = get("/cli/app/resources", &Who::Owner, &[("owner", "nsi")]);
-    assert!(v["consumers"].as_array().unwrap().iter().all(|c| c["owner"]["handle"] == "nsi"), "{v}");
+    let (_, v) = get("/cli/app/resources", &Who::Owner, &[("owner", "acme")]);
+    assert!(v["consumers"].as_array().unwrap().iter().all(|c| c["owner"]["handle"] == "acme"), "{v}");
 
     // The box view's disk usage comes from the same scan.
     let (_, v) = get("/cli/app/list", &Who::Owner, &[("box", "1")]);
@@ -601,7 +601,7 @@ fn a_guest_upload_past_the_reserve_is_no_space_naming_nobody() {
     assert!(matches!(err, k2_core::fs_guest_upload::GuestChunkError::NoSpace(_)), "{err:?}");
     assert_eq!(msg, dg::GUEST_NO_SPACE);
     assert!(!msg.chars().any(|c| c.is_ascii_digit()), "{msg}");
-    assert!(!msg.contains("nsi") && !msg.contains('/'), "{msg}");
+    assert!(!msg.contains("acme") && !msg.contains('/'), "{msg}");
     // The owner's upload gets the plain message with the numbers.
     let e = k2_core::fs_commands::write_upload(&dir.to_string_lossy(), "big.bin", &vec![0u8; 16 * 1024 * 1024]).expect_err("past the reserve");
     assert!(e.contains("this server keeps 10 GiB free"), "{e}");

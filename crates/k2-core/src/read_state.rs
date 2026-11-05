@@ -1583,7 +1583,7 @@ mod tests {
         );
     }
 
-    /// The Agent NSI report (Rosson 2026-10-26: "a message that says
+    /// The Agent Acme report (Rosson 2026-10-26: "a message that says
     /// unread but I can never read it"): an agent row's badge sums every
     /// Thread of the workspace, but reading the agent marks only the
     /// conversation its address reaches now. An earlier chat's Thread keeps

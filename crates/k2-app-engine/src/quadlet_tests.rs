@@ -12,9 +12,9 @@ fn base_render<'a>(app: &'a AppId, argv: &'a [String], secrets: &'a [SecretMount
         runtime: "/var/lib/k2app/engine/oci/crun",
         base: 65_537,
         seed_dir: "/var/lib/k2app/seeds/aaaa",
-        data_dir: "/var/lib/k2app/apps/nsi-skin/data",
-        cache_dir: "/var/lib/k2app/apps/nsi-skin/cache",
-        env_file: "/var/lib/k2app/engine/run/nsi-skin/d-0123456789ab.env",
+        data_dir: "/var/lib/k2app/apps/acme-skin/data",
+        cache_dir: "/var/lib/k2app/apps/acme-skin/cache",
+        env_file: "/var/lib/k2app/engine/run/acme-skin/d-0123456789ab.env",
         seccomp: "/var/lib/k2app/engine/seccomp-k2-v1.json",
         gw_port: 38_601,
         px_port: 38_901,
@@ -25,7 +25,7 @@ fn base_render<'a>(app: &'a AppId, argv: &'a [String], secrets: &'a [SecretMount
         resources: &RES,
         drain_secs: 30,
         secrets,
-        pass_dir: Some("/run/k2app/pass/nsi-skin"),
+        pass_dir: Some("/run/k2app/pass/acme-skin"),
         io: &IO,
         box_forwards: &[],
         db_port: None,
@@ -41,15 +41,15 @@ static IO: k2_root_proto::apps::IoMax = k2_root_proto::apps::IoMax {
 
 #[test]
 fn the_floor_is_in_every_unit() {
-    let app = AppId::parse("nsi-skin").unwrap();
+    let app = AppId::parse("acme-skin").unwrap();
     let argv = vec!["node".to_string(), "server.mjs".to_string()];
     let secrets = vec![
-        SecretMount::Env { secret: "k2-nsi-skin--d-0123456789ab--0".into(), var: "STRIPE_KEY".into() },
-        SecretMount::File { secret: "k2-nsi-skin--d-0123456789ab--1".into(), target: "/run/secrets/db.json".into() },
+        SecretMount::Env { secret: "k2-acme-skin--d-0123456789ab--0".into(), var: "STRIPE_KEY".into() },
+        SecretMount::File { secret: "k2-acme-skin--d-0123456789ab--1".into(), target: "/run/secrets/db.json".into() },
     ];
     let u = render(&base_render(&app, &argv, &secrets));
     for want in [
-        "\nContainerName=k2app-nsi-skin--d-0123456789ab\n",
+        "\nContainerName=k2app-acme-skin--d-0123456789ab\n",
         "\nPull=never\n",
         "\nGlobalArgs=--runtime=/var/lib/k2app/engine/oci/crun\n",
         "\nLabel=k2.wall=guarded\n",
@@ -62,7 +62,7 @@ fn the_floor_is_in_every_unit() {
         "\nTmpfs=/tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777\n",
         "\nVolume=/var/lib/k2app/seeds/aaaa:/app:ro\n",
         "\nNetwork=pasta:-T,8730:38601,-T,38901\n",
-        "\nVolume=/run/k2app/pass/nsi-skin:/run/k2:ro\n",
+        "\nVolume=/run/k2app/pass/acme-skin:/run/k2:ro\n",
         "\nPublishPort=127.0.0.1:41234:41234\n",
         "\nRunInit=true\n",
         "\nPidsLimit=512\n",
@@ -70,10 +70,10 @@ fn the_floor_is_in_every_unit() {
         "\nPodmanArgs=--memory=512m --memory-swap=512m --log-opt=max-size=52428800\n",
         "\nLogDriver=k8s-file\n",
         "\nStopTimeout=40\n",
-        "\nSecret=k2-nsi-skin--d-0123456789ab--0,type=env,target=STRIPE_KEY\n",
-        "\nSecret=k2-nsi-skin--d-0123456789ab--1,type=mount,target=/run/secrets/db.json,mode=0400,uid=0,gid=0\n",
+        "\nSecret=k2-acme-skin--d-0123456789ab--0,type=env,target=STRIPE_KEY\n",
+        "\nSecret=k2-acme-skin--d-0123456789ab--1,type=mount,target=/run/secrets/db.json,mode=0400,uid=0,gid=0\n",
         "\nExec=\"node\" \"server.mjs\"\n",
-        "\nSlice=k2apps-nsi_skin.slice\n",
+        "\nSlice=k2apps-acme_skin.slice\n",
         "\nRestart=no\n",
         "\nTimeoutStopSec=60\n",
         "\nOOMPolicy=kill\n",

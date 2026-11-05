@@ -342,7 +342,7 @@ export async function markReadOnServer(scope: ServerScope, kind: UnreadKind, id:
 // An agent row's badge sums EVERY Thread of the agent's workspace (the
 // pinned Chat, sidecars, and earlier chats' Threads that no address reaches
 // any more), but opening the agent reads only the Thread it shows. So a line
-// in an earlier chat's Thread could keep the badge at 1 for good (Agent NSI,
+// in an earlier chat's Thread could keep the badge at 1 for good (Agent Acme,
 // Rosson 2026-10-26). "Mark all as read" on the row asks the agent's own
 // server to read all of them for this login there.
 

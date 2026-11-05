@@ -432,8 +432,8 @@ impl AppId {
         format!("app_{}", self.0.replace('-', "_"))
     }
     /// The id with dashes as underscores, for systemd unit and slice names
-    /// (a dash there means nesting: `k2apps-nsi-skin.slice` would sit
-    /// inside App `nsi`'s slice).
+    /// (a dash there means nesting: `k2apps-acme-skin.slice` would sit
+    /// inside App `acme`'s slice).
     pub fn unit_safe(&self) -> String {
         self.0.replace('-', "_")
     }
@@ -1364,7 +1364,7 @@ mod tests {
         for ok in [
             "a",
             "jobs",
-            "nsi-skin",
+            "acme-skin",
             "a1",
             &format!("a{}", "b".repeat(31)),
         ] {
@@ -1397,8 +1397,8 @@ mod tests {
     #[test]
     fn hba_block_edits() {
         let jobs = AppId::parse("jobs").unwrap();
-        let nsi = AppId::parse("nsi-skin").unwrap();
-        assert_eq!(nsi.pg_name(), "app_nsi_skin");
+        let acme = AppId::parse("acme-skin").unwrap();
+        assert_eq!(acme.pg_name(), "app_acme_skin");
         assert_eq!(hba_line(&jobs), "host app_jobs app_jobs 127.0.0.1/32 scram-sha-256");
         let base = "# PostgreSQL Client Authentication\n\nlocal all postgres peer\nhost all all 127.0.0.1/32 scram-sha-256\n";
         let a = hba_edit(base, true, &jobs).unwrap().unwrap();
@@ -1407,14 +1407,14 @@ mod tests {
         let pos_line = a.find("host app_jobs").unwrap();
         assert!(pos_line < a.find("local all postgres").unwrap());
         assert_eq!(hba_edit(&a, true, &jobs).unwrap(), None, "idempotent");
-        let b = hba_edit(&a, true, &nsi).unwrap().unwrap();
+        let b = hba_edit(&a, true, &acme).unwrap().unwrap();
         assert_eq!(b.matches(HBA_BEGIN).count(), 1);
-        assert!(b.contains("host app_jobs app_jobs") && b.contains("host app_nsi_skin app_nsi_skin"));
+        assert!(b.contains("host app_jobs app_jobs") && b.contains("host app_acme_skin app_acme_skin"));
         let c = hba_edit(&b, false, &jobs).unwrap().unwrap();
-        assert!(!c.contains("app_jobs") && c.contains("app_nsi_skin"));
+        assert!(!c.contains("app_jobs") && c.contains("app_acme_skin"));
         assert_eq!(hba_edit(&c, false, &jobs).unwrap(), None);
         // Last line out: the block goes, the file is as it was.
-        assert_eq!(hba_edit(&c, false, &nsi).unwrap().unwrap(), base);
+        assert_eq!(hba_edit(&c, false, &acme).unwrap().unwrap(), base);
         assert_eq!(hba_edit(base, false, &jobs).unwrap(), None);
         for bad in [
             format!("{HBA_BEGIN}\nhost all all 0.0.0.0/0 trust\n{HBA_END}\n"),
@@ -1761,10 +1761,10 @@ mod tests {
 
     #[test]
     fn nft_ruleset_shape() {
-        let jobs = AppId::parse("nsi-skin").unwrap();
+        let jobs = AppId::parse("acme-skin").unwrap();
         let cg = app_cgroups(997, &jobs);
-        assert_eq!(cg[0].0, "user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice");
-        assert_eq!(cg[1].0, "k2apps.slice/k2app-process@nsi-skin.service");
+        assert_eq!(cg[0].0, "user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-acme_skin.slice");
+        assert_eq!(cg[1].0, "k2apps.slice/k2app-process@acme-skin.service");
         let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601, box_ports: vec![] };
         let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
         assert!(r.contains("meta skuid 998 jump k2app_v5"), "process Apps' user gets the same chain");
@@ -1775,7 +1775,7 @@ mod tests {
         assert!(!r.contains("38600-38899"), "{r}");
         assert!(!r.contains("38900-38999") && !r.contains("dport 389"), "{r}");
         assert!(r.contains(
-            "socket cgroupv2 level 5 \"user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"
+            "socket cgroupv2 level 5 \"user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-acme_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"
         ));
         // V38: App UIDs reach every K2 cluster in the band on loopback.
         assert!(r.contains("oifname \"lo\" tcp dport 5432-5449 accept"), "{r}");

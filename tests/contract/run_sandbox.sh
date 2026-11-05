@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The must-not-break suite (tests/contract/must-not-break.ts) through the
 # server SDK against a THROWAWAY daemon on this machine: the --cmd path
-# Dannon's BFFs use today (the daemon's loopback port, no App pass).
+# App BFFs use today (the daemon's loopback port, no App pass).
 #
 #   bash tests/contract/run_sandbox.sh [path/to/k2-daemon]
 #

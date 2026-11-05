@@ -212,7 +212,7 @@ fi
 # The daemon self-stages the CLI at every boot (cli_stage, 0.40.41+) so
 # updates carry it forward — that only works if the DAEMON USER can write
 # this file. Root-owned k2 = CLI silently frozen at provision-day version
-# (bit nsi + rpmavs, 2026-07-15).
+# (bit acme + rpmavs, 2026-07-15).
 chown "$K2_RUN_USER:$K2_RUN_USER" /usr/local/bin/k2
 
 # ── 6. tunnel.json (before first daemon start, so boot auto-dials) ───

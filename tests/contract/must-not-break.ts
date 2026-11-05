@@ -1,8 +1,8 @@
 // The must-not-break contract (prd-k2-app-runtime-v1 §14.2 + AR40, S23):
-// Dannon's and NSI's routes, driven through the server SDK, against a live
+// Client Apps' routes, driven through the server SDK, against a live
 // daemon. The same suite runs two ways:
 //
-// - from outside (tests/contract/run.ts): the --cmd path Dannon's BFFs use
+// - from outside (tests/contract/run.ts): the --cmd path App BFFs use
 //   today (K2_GATEWAY_URL = the daemon's loopback port, no App pass);
 // - from inside a wall (tests/contract/fixture-app/server.mjs, deployed by
 //   tests/linux/apps_e2e_sdk.sh): the App's gateway link, on the guarded

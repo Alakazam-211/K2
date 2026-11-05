@@ -21,7 +21,7 @@ pub const DESIRED_STOPPED: &str = "stopped";
 
 /// `published_services.kind`. Existing rows (pre-0114) are `cmd`.
 pub const KIND_CMD: &str = "cmd";
-/// Official Dannon skin gateway helper (not a user shell).
+/// Official skin gateway helper (not a user shell).
 pub const KIND_SKIN: &str = "skin";
 /// Display sentinel stored in `cmd` for `kind=skin`. Never a shell string.
 pub const CMD_SKIN_SENTINEL: &str = "(skin)";

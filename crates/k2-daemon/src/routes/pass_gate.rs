@@ -15,7 +15,7 @@
 //! written.
 //!
 //! - The request still reaches its arm, so every answer keeps today's bytes
-//!   (clients and Dannon's must-not-break tests pin them: the classic 403,
+//!   (clients and their must-not-break tests pin them: the classic 403,
 //!   the terminal/chatter/design-note teaching 403s, a 409 before auth): an
 //!   arm that refused a pass refuses it the same way; only an arm that
 //!   would have *accepted* one (the bug class) now sees none.

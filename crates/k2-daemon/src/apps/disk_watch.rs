@@ -449,7 +449,7 @@ fn rows_words(s: &Share) -> String {
         .join(", ")
 }
 
-/// "agent-nsi 104 GB (its folder 38 GB, jobs_db 58 GB)"
+/// "agent-acme 104 GB (its folder 38 GB, jobs_db 58 GB)"
 fn owner_words(s: &Share) -> String {
     let top: Vec<String> = s.rows.iter().take(2).map(|(w, b, _)| format!("{} {}", w.replace("your folder", "its folder"), human_gb(*b))).collect();
     format!("{} {} ({})", s.handle, human_gb(s.total), top.join(", "))

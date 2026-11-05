@@ -1,5 +1,5 @@
 //! Mark all as read (thread-read-all-v1, K2 0.46.5; Rosson 2026-10-26:
-//! "In Agent NSI I have a message that says unread but I can never read
+//! "In Agent Acme I have a message that says unread but I can never read
 //! it, so the marker always shows 1"), headless: the real dispatcher in
 //! process on a temp `$HOME`, over loopback.
 //!

@@ -542,7 +542,7 @@ mod tests {
             assert_eq!(err.code(), "usage", "{sql}");
             assert!(err.hint().contains("_k2_"), "{sql} {}", err.hint());
         }
-        // Dannon's RLS walls call SECURITY INVOKER functions through the
+        // An App's RLS walls call SECURITY INVOKER functions through the
         // query door; that stays a read statement that returns rows.
         let call = classify_guest_sql("select job_update($1,$2::jsonb)").expect("function call");
         assert!(call.read);

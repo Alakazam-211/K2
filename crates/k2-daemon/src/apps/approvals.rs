@@ -132,7 +132,7 @@ fn ago(secs: i64) -> String {
 }
 
 /// Where the owner sees one held request, and whether a permission card
-/// is up for it (0.46.4 field report, NSI #9/#11: a held `k2 app install`
+/// is up for it (0.46.4 field report #9/#11: a held `k2 app install`
 /// printed only "held for the owner: w_…", reused an old request without
 /// saying so, and never said whether the owner would see a card):
 /// - `reused` / `askedAgo`: this call found the same request pending from
@@ -472,7 +472,7 @@ pub(crate) fn apply_as(r: &reqs::AppRequest, by: &str, via: &str) -> R<J> {
 
 // ── revoke a standing run approval ───────────────────────────────────
 
-/// POST `/cli/app/approvals/revoke {request}` or `{app}` (0.46.6, NSI
+/// POST `/cli/app/approvals/revoke {request}` or `{app}` (0.46.6, client
 /// papercut 13): the owner withdraws an approved `k2 publish run`'s
 /// standing, so the next identical re-run is held again. `app` revokes
 /// every standing approval of that App label. The owner only (the owner

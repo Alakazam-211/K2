@@ -9,7 +9,7 @@ import { ZEN_CUSTOM_VERBS } from './zen-verbs.generated'
 const change = {
   app: 'svc-1',
   appName: 'jobs',
-  appHandle: 'nsi/jobs',
+  appHandle: 'initech/jobs',
   username: 'dana',
   role: null,
   before: [],

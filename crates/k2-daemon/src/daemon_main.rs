@@ -529,7 +529,7 @@ async fn async_main() {
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API
-    // env flag remains a force-on override (nsi's systemd drop-in unchanged).
+    // env flag remains a force-on override (a hosted box's systemd drop-in unchanged).
     k2_core::app_settings::set_api_enabled(k2_core::app_settings::load().api_enabled);
     let settings = k2_core::app_settings::load();
     k2_core::airgap::set_setting_enabled(settings.airgap);
@@ -1014,7 +1014,7 @@ async fn async_main() {
 
     // 0.40.41 — self-stage the `k2` CLI on headless Linux servers. macOS
     // keeps the app-managed symlink; on Linux the CLI otherwise only
-    // arrives via the provision/migration step, which the nsi migration
+    // arrives via the provision/migration step, which a client-box migration
     // skipped (internal migration-runbook lesson L-cli). Linux-only, never
     // clobbers a symlink, non-fatal.
     match k2_core::cli_stage::stage_cli() {

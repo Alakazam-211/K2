@@ -412,7 +412,7 @@ async fn the_review_lines_hold_box_logins_one_password_keys_and_suspensions() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
-/// 0.46.5 item 15 (Agent NSI, 0.46.4): `k2 app user add <app> <name> --test
+/// 0.46.5 item 15 (Agent Acme, 0.46.4): `k2 app user add <app> <name> --test
 /// --room R --expires 24h --password-stdin` held for the owner, approved;
 /// afterwards the roster showed role and rooms as "—" and login was 401.
 /// The approval carries every non-secret field (room scope, role,

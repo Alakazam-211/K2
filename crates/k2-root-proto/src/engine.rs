@@ -61,7 +61,7 @@ pub fn unit_stem(app: &AppId, deployment: &str) -> String {
 
 /// The App's own slice inside `user@<k2app>`: nested in `k2apps.slice`
 /// by systemd's dash rule, with the App id's dashes as underscores so App
-/// `nsi-skin` never nests inside App `nsi`.
+/// `acme-skin` never nests inside App `acme`.
 pub fn app_slice(app: &AppId) -> String {
     format!("k2apps-{}.slice", app.unit_safe())
 }
@@ -1121,7 +1121,7 @@ mod tests {
 
     fn spec() -> StartSpec {
         StartSpec {
-            app: "nsi-skin".into(),
+            app: "acme-skin".into(),
             deployment: "d-0123456789ab".into(),
             seed: "a".repeat(64),
             image: "localhost/k2-base/node24:ec857ea6bb60".into(),
@@ -1151,9 +1151,9 @@ mod tests {
 
     #[test]
     fn names_and_slots() {
-        let a = AppId::parse("nsi-skin").unwrap();
-        assert_eq!(unit_stem(&a, "d-0123456789ab"), "k2app-nsi-skin--d-0123456789ab");
-        assert_eq!(app_slice(&a), "k2apps-nsi_skin.slice");
+        let a = AppId::parse("acme-skin").unwrap();
+        assert_eq!(unit_stem(&a, "d-0123456789ab"), "k2app-acme-skin--d-0123456789ab");
+        assert_eq!(app_slice(&a), "k2apps-acme_skin.slice");
         assert_eq!(slot_base(0), 1);
         assert_eq!(slot_base(1), 65_537);
         assert_eq!(MAX_SLOTS, 64);

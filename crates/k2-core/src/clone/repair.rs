@@ -372,9 +372,9 @@ mod tests {
     fn repairs_stale_slug_dir_and_is_idempotent() {
         let home = TempDir::new("gh23-repair");
         // DEST path on THIS machine (arbitrary, with spaces).
-        let dest = "/Users/alakazamlabs/AI Projects/nsi-plan01".to_string();
+        let dest = "/Users/alakazamlabs/AI Projects/acme-plan01".to_string();
         // SOURCE the file was cloned from (different machine/user/layout).
-        let source = "/Users/z3thon/DevProjects/Nelson Specialty Industrial/nsi-plan01";
+        let source = "/Users/z3thon/DevProjects/Acme Industrial/acme-plan01";
 
         let slug = claude_project_hash(&dest);
         let slug_dir = home.path.join(".claude").join("projects").join(&slug);

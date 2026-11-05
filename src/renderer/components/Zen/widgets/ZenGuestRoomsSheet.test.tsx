@@ -17,11 +17,11 @@ const ask = {
   change: {
     app: 'svc-1',
     appName: 'jobs',
-    appHandle: 'nsi/jobs',
+    appHandle: 'initech/jobs',
     username: 'dana',
     role: null,
     before: ['p-own'],
-    beforeHandles: ['nsi'],
+    beforeHandles: ['initech'],
     after: ['p-acme'],
     afterHandles: ['acme'],
     widget: 'guestdesk',
@@ -40,10 +40,10 @@ describe('ZenGuestRoomsSheet', () => {
     render(<ZenGuestRoomsSheet ask={ask} onDone={onDone} />)
     expect(screen.getByTestId('zen-guest-rooms-user').textContent).toBe('dana')
     expect(screen.getByTestId('zen-guest-rooms-widget').textContent).toBe('guestdesk')
-    expect(screen.getByTestId('zen-guest-rooms-before').textContent).toBe('nsi')
+    expect(screen.getByTestId('zen-guest-rooms-before').textContent).toBe('initech')
     expect(screen.getByTestId('zen-guest-rooms-after').textContent).toBe('acme')
     expect(screen.getByText('Adds acme.')).toBeTruthy()
-    expect(screen.getByText('Removes nsi.')).toBeTruthy()
+    expect(screen.getByText('Removes initech.')).toBeTruthy()
     expect(screen.getByText(/An agent made this widget/)).toBeTruthy()
     fireEvent.click(screen.getByTestId('zen-guest-rooms-cancel'))
     expect(onDone).toHaveBeenCalledWith(null)

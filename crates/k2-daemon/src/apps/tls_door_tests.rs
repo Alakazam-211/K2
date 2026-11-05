@@ -197,7 +197,7 @@ fn rig_app(app: &str, ws: &str) {
     runtime_app(ws, app);
 }
 
-/// NSI requirement: the door SETS and OVERWRITES `X-Forwarded-For` and
+/// Client requirement: the door SETS and OVERWRITES `X-Forwarded-For` and
 /// `X-Real-IP` (and `X-K2-Client-IP`) from the address front443 saw; a
 /// client's own copies never reach the App.
 #[tokio::test]
@@ -243,7 +243,7 @@ async fn a_live_name_reaches_its_app_and_the_client_ip_headers_are_k2s() {
     crate::apps::router::clear("jobs");
 }
 
-/// NSI requirement: a 20 MB single request and a 100 MB chunked upload pass
+/// Client requirement: a 20 MB single request and a 100 MB chunked upload pass
 /// whole (no body limit at the door).
 #[tokio::test]
 async fn big_uploads_pass_whole() {
@@ -334,10 +334,10 @@ async fn a_websocket_upgrades_and_survives_an_idle_gap() {
     websocket_survives(Duration::from_secs(3)).await;
 }
 
-/// NSI requirement: a 10+ minute WebSocket through the door. Long, so it
+/// Client requirement: a 10+ minute WebSocket through the door. Long, so it
 /// runs on request: `cargo test -p k2-daemon --lib door_websocket_eleven -- --ignored`.
 #[tokio::test]
-#[ignore = "11 minutes; run with --ignored (NSI long-lived WebSocket check)"]
+#[ignore = "11 minutes; run with --ignored (client long-lived WebSocket check)"]
 async fn door_websocket_eleven_idle_minutes() {
     websocket_survives(Duration::from_secs(11 * 60)).await;
 }

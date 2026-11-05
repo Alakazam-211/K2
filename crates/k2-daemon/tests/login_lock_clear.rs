@@ -414,7 +414,7 @@ fn skin_login(port: u16, username: &str, password: &str) -> Resp {
     )
 }
 
-/// agent-nsi (0.45.5): the lock is the principal's, whichever name was
+/// agent-acme (0.45.5): the lock is the principal's, whichever name was
 /// typed. Username locked → the right password as the email is 423; mixed
 /// wrong tries share one limit; unlock (either name) clears it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

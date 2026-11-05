@@ -222,7 +222,7 @@ fn collect_paths(event: &Event, out: &mut HashSet<String>) {
 /// Agent workspaces constantly rewrite under `.k2/` / `.k2so/`, and
 /// `.git/` / build dirs thrash. Emitting those as `fs_changed` made
 /// every connected Files tree force-reload (0.40.58 bounce loop on
-/// hosts like NSI). User-visible source files still pass through.
+/// busy hosted boxes). User-visible source files still pass through.
 pub(crate) fn is_noisy(path: &str) -> bool {
     // Normalize separators for a simple contains check.
     let p = path.replace('\\', "/");

@@ -1,4 +1,4 @@
-//! Test guests (0.46.4, NSI B): short-lived guests to test one App with.
+//! Test guests (0.46.4, field report B): short-lived guests to test one App with.
 //! A person makes them, as every guest (whether an App's own agent may is
 //! parked for its own arc; the daemon route refuses agents). A test guest
 //! is an App-only guest (one `kind=app` grant on that App, no box login) plus a

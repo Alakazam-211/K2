@@ -311,7 +311,7 @@ fn resolve_whoami(params: &HashMap<String, String>) -> Result<WhoamiInfo, String
 /// the passport's daemon PTY id), when that cell is a **sidecar**
 /// (`<ws>/<name>`), by the same rules as `k2 whoami`. `None` for the
 /// canonical cell, or a cell that can't be classified: callers use the
-/// workspace's pinned Thread then. 0.46.6 (NSI papercut 12): a sidecar's
+/// workspace's pinned Thread then. 0.46.6 (client papercut 12): a sidecar's
 /// `k2 permission request` card went to the main Thread, so its
 /// `[permission:]` answer never reached the session that asked.
 pub(crate) fn sidecar_thread_addr(project_id: &str, session_id: &str) -> Option<String> {

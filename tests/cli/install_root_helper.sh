@@ -516,7 +516,7 @@ printf '%s' "$out" | grep -q "legacy mail : retired: (none)" || fail "bare mail 
 [ ! -e "$D10/var/backups/k2-root-helper" ] || fail "no backup dir when nothing was removed"
 ok "no prior helpers: installs, retires nothing, makes no backup dir"
 
-echo "== a non-k2 daemon user (nsi: alakazamlabs) =="
+echo "== a non-k2 daemon user (acme: alakazamlabs) =="
 D11="$WORK/box11"
 mkdir -p "$D11/usr/local/libexec" "$D11/etc/sudoers.d"
 printf 'old pg helper' >"$D11/usr/local/libexec/k2-pg-helper"

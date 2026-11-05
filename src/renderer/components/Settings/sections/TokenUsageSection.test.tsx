@@ -406,14 +406,14 @@ describe('live and activity', () => {
 
 describe('a focused Home room on another server', () => {
   it("offers the room's server; choosing it sends every request there and drops the chat link", async () => {
-    const roomScope = fakeScope('nsi.k2.dev')
-    const room = { key: 'nsi', isPrimary: false, scope: roomScope } as unknown as Room
+    const roomScope = fakeScope('acme.k2.dev')
+    const room = { key: 'acme', isPrimary: false, scope: roomScope } as unknown as Room
     usePageViewStore.setState({ page: 'home' })
     useWindowRoomStore.setState({ focused: room })
     await renderPage()
     expect(h.calls.every((c) => c.scope === primaryScope())).toBe(true)
     fireEvent.click(screen.getByTestId('usage-server-room'))
-    await waitFor(() => expect(screen.getByTestId('usage-title').textContent).toBe('Usage on nsi.k2.dev'))
+    await waitFor(() => expect(screen.getByTestId('usage-title').textContent).toBe('Usage on acme.k2.dev'))
     await waitFor(() => expect(h.calls.some((c) => c.scope === roomScope && c.route === 'usage/tokens')).toBe(true))
     await waitFor(() => expect(h.calls.some((c) => c.scope === roomScope && c.route === 'usage/turns')).toBe(true))
     await screen.findByTestId('usage-activity-row-3')

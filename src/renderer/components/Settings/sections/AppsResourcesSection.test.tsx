@@ -63,7 +63,7 @@ const GIB = 1073741824
 
 const USAGE = {
   ok: true,
-  box: { host: 'nsi.k2.dev', cores: 8, memBytes: 32 * GIB, checkedAt: 1792345320 },
+  box: { host: 'acme.k2.dev', cores: 8, memBytes: 32 * GIB, checkedAt: 1792345320 },
   guard: {
     mode: 'on',
     modeSource: 'setting',
@@ -75,15 +75,15 @@ const USAGE = {
   mem: { totalBytes: 32 * GIB, availableBytes: 10 * GIB, agentsBytes: null },
   cpu: { load5: 2.1 },
   consumers: [
-    { kind: 'app', id: 'jobs', owner: { kind: 'agent', handle: 'agent-nsi', address: 'agent-nsi::nsi.k2.dev' }, diskBytes: 6.2e9, memBytes: 1.1 * GIB, budgetBytes: null },
-    { kind: 'database', id: 'jobs_db', owner: { kind: 'agent', handle: 'agent-nsi' }, diskBytes: 58.2e9, memBytes: null },
-    { kind: 'workspace', id: 'ws-1', owner: { kind: 'agent', handle: 'agent-nsi' }, diskBytes: 38.4e9, memBytes: null, folder: '/home/k2/AI Projects/nsi' },
+    { kind: 'app', id: 'jobs', owner: { kind: 'agent', handle: 'agent-acme', address: 'agent-acme::acme.k2.dev' }, diskBytes: 6.2e9, memBytes: 1.1 * GIB, budgetBytes: null },
+    { kind: 'database', id: 'jobs_db', owner: { kind: 'agent', handle: 'agent-acme' }, diskBytes: 58.2e9, memBytes: null },
+    { kind: 'workspace', id: 'ws-1', owner: { kind: 'agent', handle: 'agent-acme' }, diskBytes: 38.4e9, memBytes: null, folder: '/home/k2/AI Projects/acme' },
     { kind: 'shared', id: 'mail', owner: { kind: 'server' }, diskBytes: 12.4e9, memBytes: null },
     { kind: 'service', id: 'plans-desk-api', owner: { kind: 'agent', handle: 'plans-desk' }, diskBytes: null, memBytes: 0.3 * GIB },
   ],
   byOwner: [
-    { owner: { handle: 'agent-nsi', address: 'agent-nsi::nsi.k2.dev' }, diskBytes: 104e9 },
-    { owner: { handle: 'plans-desk', address: 'plans-desk::nsi.k2.dev' }, diskBytes: 14e9 },
+    { owner: { handle: 'agent-acme', address: 'agent-acme::acme.k2.dev' }, diskBytes: 104e9 },
+    { owner: { handle: 'plans-desk', address: 'plans-desk::acme.k2.dev' }, diskBytes: 14e9 },
   ],
   k2WillClear: { seedsBytes: 2.6e9, seeds: 14, nextSweepAt: 1792400000 },
   scan: { workspacesAt: 1792338000, running: false },
@@ -104,7 +104,7 @@ const TRENDS = {
       { at: 121, cpuCores: 2.25, memBytes: 22 * GIB },
     ],
   },
-  apps: [{ app: 'jobs', owner: { handle: 'agent-nsi' }, memBudgetBytes: 2 * GIB, summary: { memPeakBytes: 1.5 * GIB, cpuAvgCores: 0.4 }, points: [] }],
+  apps: [{ app: 'jobs', owner: { handle: 'agent-acme' }, memBudgetBytes: 2 * GIB, summary: { memPeakBytes: 1.5 * GIB, cpuAvgCores: 0.4 }, points: [] }],
   services: [],
   budgets: { enforced: false },
 }
@@ -155,7 +155,7 @@ describe('AppsResourcesSection', () => {
     expect(screen.getByTestId('box-usage-row-database-jobs_db').textContent).toContain('58 GB')
     expect(screen.getByTestId('box-usage-row-shared-mail').textContent).toContain('this server')
     expect(screen.queryByTestId('box-usage-row-service-plans-desk-api')).toBeNull()
-    expect(screen.getByTestId('box-usage-row-owner-agent-nsi').textContent).toContain('agent-nsi::nsi.k2.dev')
+    expect(screen.getByTestId('box-usage-row-owner-agent-acme').textContent).toContain('agent-acme::acme.k2.dev')
     expect(screen.getByText(/K2 clears 2.6 GB of its own old Seeds/)).not.toBeNull()
     await waitFor(() => expect(screen.getByTestId('box-trend-CPU').textContent).toContain('2.25 of 8 cores'))
     expect(screen.getByTestId('box-trend-RAM').querySelector('polyline')).not.toBeNull()

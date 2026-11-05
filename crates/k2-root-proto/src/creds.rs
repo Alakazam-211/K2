@@ -188,7 +188,7 @@ pub const K2_UNIT_FAMILIES: &[(&str, Option<&str>)] = &[
     ("sew-backup@", None),
     ("sew-drill@", None),
     ("k2test-", None),
-    // K2 daemon units are k2-daemon-<box> on hosted boxes (k2-daemon-nsi,
+    // K2 daemon units are k2-daemon-<box> on hosted boxes (k2-daemon-acme,
     // a second daemon's k2-daemon-b, …); daemon.toml names them at call
     // time, and this family keeps a box's own name out even when it isn't.
     ("k2-daemon-", None),
@@ -614,7 +614,7 @@ mod tests {
         let daemons = vec!["ops-daemon-two.service".to_string()];
         assert_eq!(deny_reason("ops-daemon-two.service", &daemons), Some("a K2 daemon unit (daemon.toml)"));
         assert_eq!(deny_reason("ops-daemon-two.service", &[]), None);
-        assert!(deny_reason("k2-daemon-nsi.service", &[]).is_some(), "a hosted box's daemon unit");
+        assert!(deny_reason("k2-daemon-acme.service", &[]).is_some(), "a hosted box's daemon unit");
     }
 
     /// Review A-H2 / B-M1: fail closed. No allow list, or a unit off it, is

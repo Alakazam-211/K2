@@ -83,7 +83,7 @@ function pathIsUnderRoot(path: string, root: string): boolean {
 /**
  * Client-side mirror of daemon `fs_live::is_noisy` — skip live-refresh
  * for high-churn agent/VCS/build paths so Files doesn't thrash when the
- * host is busy (0.40.58 bounce on NSI-class remotes).
+ * host is busy (0.40.58 bounce on busy hosted remotes).
  */
 export function isNoisyFsPath(path: string): boolean {
   const p = path.replace(/\\/g, '/')

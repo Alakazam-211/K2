@@ -1808,9 +1808,9 @@ mod tests {
         };
         let s = Snapshot {
             consumers: vec![
-                row("app", agent("nsi"), Some(6)),
-                row("database", agent("nsi"), Some(58)),
-                row("workspace", agent("nsi"), Some(38)),
+                row("app", agent("acme"), Some(6)),
+                row("database", agent("acme"), Some(58)),
+                row("workspace", agent("acme"), Some(38)),
                 row("workspace", agent("plans"), Some(14)),
                 row("service", agent("plans"), None),
                 row("shared", Owner::server(), Some(1000)),
@@ -1819,19 +1819,19 @@ mod tests {
         };
         let by = s.by_owner();
         assert_eq!(by.len(), 2);
-        assert_eq!(by[0].owner.handle.as_deref(), Some("nsi"));
+        assert_eq!(by[0].owner.handle.as_deref(), Some("acme"));
         assert_eq!(by[0].disk_bytes, 102);
         assert_eq!(by[1].disk_bytes, 14);
         // The agent copy of a row has no folder and no workspace id; null
         // stays null (unknown is never 0).
-        let mut w = row("workspace", agent("nsi"), None);
-        w.folder = Some("/home/k2/AI Projects/nsi".into());
+        let mut w = row("workspace", agent("acme"), None);
+        w.folder = Some("/home/k2/AI Projects/acme".into());
         let a = serde_json::to_value(w.for_agent()).unwrap();
         assert!(a.get("folder").is_none());
         assert!(a["owner"].get("workspaceId").is_none());
         assert!(a["diskBytes"].is_null());
-        assert_eq!(a["owner"]["address"], "nsi::box.k2.dev");
-        assert_eq!(a["id"], "nsi", "a workspace row's id is the handle for agents");
+        assert_eq!(a["owner"]["address"], "acme::box.k2.dev");
+        assert_eq!(a["id"], "acme", "a workspace row's id is the handle for agents");
     }
 
     #[test]

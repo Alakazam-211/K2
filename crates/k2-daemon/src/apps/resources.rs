@@ -521,7 +521,7 @@ pub(crate) fn memory_warning() -> Option<J> {
     }))
 }
 
-/// The biggest owners in words (`agent-nsi 104 GB`) with their `k2 msg`
+/// The biggest owners in words (`agent-acme 104 GB`) with their `k2 msg`
 /// line, and the JSON for the refusal.
 fn biggest(n: usize) -> Vec<(String, Option<String>, J)> {
     let Some(snap) = dg::latest_snapshot() else { return vec![] };

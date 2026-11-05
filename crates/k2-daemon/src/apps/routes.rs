@@ -752,7 +752,7 @@ impl Drop for ShadowRead {
 /// foreign App is `app_not_found`, never "forbidden": no existence leak).
 pub(crate) fn app_for(who: &Who, app_id: Option<&str>) -> R<AppRow> {
     let raw = app_id.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the App (its App id)"))?.trim().to_ascii_lowercase();
-    // 0.46.4 (NSI #4): `<workspace>/<app id>`, the form the guest and grant
+    // 0.46.4 (field report #4): `<workspace>/<app id>`, the form the guest and grant
     // verbs print, names the same App here (its workspace must match).
     let (ws_part, id) = match raw.split_once('/') {
         Some((w, i)) if !w.is_empty() && !i.is_empty() && !i.contains('/') => (Some(w.to_string()), i.to_string()),
@@ -1227,7 +1227,7 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     // owner approves.
     let egress = super::egress_routes::request_manifest_hosts(who, &app.app_id, &seed, &dep);
     let mut out = deployment_answer(&dep, wait_secs(v))?;
-    // 0.46.4 (NSI #3): what was packed, and its heaviest paths.
+    // 0.46.4 (field report #3): what was packed, and its heaviest paths.
     out["seedSize"] = seed_size(&seed);
     // DM-8: shipping from a folder doesn't stop the dev site running in it.
     if let Some(site) = s(v, "folder").and_then(|f| crate::publish_runtime::dev_site_in_folder(f)) {

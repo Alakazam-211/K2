@@ -24,7 +24,7 @@ NOTICE="This service still inherits the K2 daemon's whole environment because it
 cat >"$WORK/stub.py" <<'PY2'
 import http.server, json, sys
 NOTICE = sys.argv[2]
-# "now": the daemon IS the cut-over release (cutoverNow, NSI 0.46.4 #4).
+# "now": the daemon IS the cut-over release (cutoverNow, 0.46.4 field report #4).
 NOW = len(sys.argv) > 3 and sys.argv[3] == "now"
 # "noend": a daemon with no end set (Rosson 2026-10-26: --cmd services keep
 # running), so envRemovedIn is null.
@@ -124,7 +124,7 @@ printf '%s' "$out" | grep -q "^PUBLISHED SERVICES" || fail "study vault lacks th
 printf '%s' "$out" | grep -Fq "k2 publish env <name> clean" || fail "study vault lacks the switch: $out"
 ok "k2 study vault explains the switch"
 
-# NSI 0.46.4 #4: a daemon that IS the cut-over release never says "ends in
+# 0.46.4 field report #4: a daemon that IS the cut-over release never says "ends in
 # K2 <its own version>": it says the end is now.
 kill "$STUB_PID" 2>/dev/null || true
 wait "$STUB_PID" 2>/dev/null || true

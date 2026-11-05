@@ -482,9 +482,9 @@ fn the_box_disk_card_reads_app_resources_without_paths() {
                 id: "ws-secret-id".into(),
                 owner: Owner {
                     kind: "agent".into(),
-                    agent: Some("Agent NSI".into()),
-                    handle: Some("agent-nsi".into()),
-                    address: Some("agent-nsi::box".into()),
+                    agent: Some("Agent Acme".into()),
+                    handle: Some("agent-acme".into()),
+                    address: Some("agent-acme::box".into()),
                     workspace_id: Some("ws-secret-id".into()),
                 },
                 disk_bytes: Some(38_400_000_000),
@@ -504,9 +504,9 @@ fn the_box_disk_card_reads_app_resources_without_paths() {
     assert!(["ok", "warn", "refuse", "critical"].contains(&v["disks"][0]["level"].as_str().unwrap_or("")), "{v}");
     let top = v["top"].as_array().expect("top");
     assert_eq!(top.len(), 2, "unmeasured rows are left out: {v}");
-    assert_eq!(top[0], json!({ "kind": "workspace", "id": "agent-nsi", "owner": "agent-nsi", "diskBytes": 38_400_000_000u64 }));
+    assert_eq!(top[0], json!({ "kind": "workspace", "id": "agent-acme", "owner": "agent-acme", "diskBytes": 38_400_000_000u64 }));
     assert_eq!(top[1]["owner"], json!(null), "the server's own part");
-    assert_eq!(v["owners"][0], json!({ "handle": "agent-nsi", "address": "agent-nsi::box", "diskBytes": 38_400_000_000u64 }));
+    assert_eq!(v["owners"][0], json!({ "handle": "agent-acme", "address": "agent-acme::box", "diskBytes": 38_400_000_000u64 }));
     let all = v.to_string();
     assert!(!all.contains("secret-folder") && !all.contains("ws-secret-id"), "no folder path or workspace id: {all}");
     let (code, v) = d.raw(&"0".repeat(64), "app.resources", json!([]));

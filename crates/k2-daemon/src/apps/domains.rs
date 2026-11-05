@@ -1,4 +1,4 @@
-//! Extra nested hostnames for an App (0.46.4, NSI #6): `k2 app label take`
+//! Extra nested hostnames for an App (0.46.4, field report #6): `k2 app label take`
 //! moves only a `--cmd` service's own label; a BFF also served on other
 //! subdomains of its workspace (hand-made with `k2 publish subdomain
 //! create … --target localhost:<port>`) had no way onto the App.
@@ -767,7 +767,7 @@ mod tests {
     #[test]
     fn labels_and_hosts_normalise() {
         assert_eq!(label_of("Agents").unwrap(), "agents");
-        assert_eq!(label_of(&format!("agents.nsi.{}", k2_core::tunnel::config::SUBDOMAIN_HOST)).unwrap(), "agents");
+        assert_eq!(label_of(&format!("agents.initech.{}", k2_core::tunnel::config::SUBDOMAIN_HOST)).unwrap(), "agents");
         assert!(label_of("-bad").is_err());
         assert!(label_of("a_b").is_err());
         assert_eq!(loopback_port("127.0.0.1:3001"), Some(3001));
@@ -799,7 +799,7 @@ mod custom_tests {
     use crate::apps::custom_domains::test_util::{build_switch, dns_manage, runtime_app};
     use std::net::IpAddr;
 
-    const HOST: &str = "nsi.agentnsi.com";
+    const HOST: &str = "initech.agentinitech.com";
 
     struct Proven(String);
     impl flow::Lookup for Proven {
@@ -823,22 +823,22 @@ mod custom_tests {
     }
 
     fn setup() {
-        runtime_app("ws-nsi", "agentnsi");
+        runtime_app("ws-initech", "agentinitech");
         runtime_app("ws-other", "crm");
-        build_switch("ws-nsi", true);
+        build_switch("ws-initech", true);
         build_switch("ws-other", true);
         flow::set_test_box_ips(Some(vec!["203.0.113.10".parse().unwrap()]));
         let db = k2_core::db::shared();
         let conn = db.lock();
-        k2_core::domains::upsert_binding(&conn, "agentnsi.com", None, false).unwrap();
+        k2_core::domains::upsert_binding(&conn, "agentinitech.com", None, false).unwrap();
     }
 
     #[test]
     fn custom_hosts_are_told_apart_from_labels() {
-        assert!(is_custom_host("nsi.agentnsi.com"));
-        assert!(is_custom_host("agentnsi.com."));
+        assert!(is_custom_host("initech.agentinitech.com"));
+        assert!(is_custom_host("agentinitech.com."));
         assert!(!is_custom_host("agents"));
-        assert!(!is_custom_host("agents.nsi.k2.dev"));
+        assert!(!is_custom_host("agents.initech.k2.dev"));
         assert!(!is_custom_host("k2.dev"));
         for p in ["/cli/app/domain/check", "/cli/app/domain/primary", "/cli/app/domain/add", "/cli/app/domain/rm"] {
             assert!(crate::apps::routes::is_post_route(p), "{p} is POST-only (405 on GET, PRD test 10)");
@@ -855,14 +855,14 @@ mod custom_tests {
         let _db = k2_core::db::scoped_for_test();
         let _home = crate::test_support::TempHome::new();
         setup();
-        build_switch("ws-nsi", false);
-        let me = agent("ws-nsi");
+        build_switch("ws-initech", false);
+        let me = agent("ws-initech");
         for (path, body) in [
-            ("/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })),
-            ("/cli/app/domain/check", json!({ "app": "agentnsi", "host": HOST })),
-            ("/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })),
-            ("/cli/app/domain/primary", json!({ "app": "agentnsi", "host": HOST })),
-            ("/cli/app/domain/external", json!({ "app": "agentnsi", "host": HOST, "external": true })),
+            ("/cli/app/domain/add", json!({ "app": "agentinitech", "label": HOST })),
+            ("/cli/app/domain/check", json!({ "app": "agentinitech", "host": HOST })),
+            ("/cli/app/domain/rm", json!({ "app": "agentinitech", "label": HOST })),
+            ("/cli/app/domain/primary", json!({ "app": "agentinitech", "host": HOST })),
+            ("/cli/app/domain/external", json!({ "app": "agentinitech", "host": HOST, "external": true })),
         ] {
             let e = post(&me, path, body).unwrap_err();
             assert_eq!((e.code, e.status), (codes::APPS_MANAGE_OFF, 403), "{path}: {}", e.hint);
@@ -917,15 +917,15 @@ mod custom_tests {
         relay_claims::set_test_ready(Some(Ok(())));
         let cp = Rc::new(Cp { down: RefCell::new(true), claims: RefCell::new(0) });
         relay_claims::set_test_api(Some(cp.clone()));
-        let me = agent("ws-nsi");
+        let me = agent("ws-initech");
 
         // K2 Connect not answering: bound, the CNAME alone, the reason, no TXT.
-        let v = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         let c = &v["custom"];
         assert_eq!(*cp.claims.borrow(), 1);
         let recs = c["records"].as_array().unwrap();
         assert_eq!(recs.len(), 1, "{c}");
-        assert_eq!((recs[0]["type"].as_str(), recs[0]["value"].as_str()), (Some("CNAME"), Some("agentnsi.box1.k2.dev")));
+        assert_eq!((recs[0]["type"].as_str(), recs[0]["value"].as_str()), (Some("CNAME"), Some("agentinitech.box1.k2.dev")));
         assert!(c["txt"].is_null(), "the box's token is never shown: {c}");
         let p = c["txtPending"].as_str().unwrap();
         assert!(p.contains("No TXT record to set yet") && p.contains("database didn't answer"), "{p}");
@@ -934,13 +934,13 @@ mod custom_tests {
         // It answers: the next list or check shows ITS value.
         *cp.down.borrow_mut() = false;
         flow::set_test_lookup(None);
-        let d = app_domain_of(&app_for(&me, Some("agentnsi")).unwrap(), HOST).unwrap();
+        let d = app_domain_of(&app_for(&me, Some("agentinitech")).unwrap(), HOST).unwrap();
         relay_claims::with_api(|api| relay_claims::ensure_claim(&d, api)).unwrap();
-        let list = handle("/cli/app/domains", &me, b"", &HashMap::from([("app".to_string(), "agentnsi".to_string())])).unwrap();
+        let list = handle("/cli/app/domains", &me, b"", &HashMap::from([("app".to_string(), "agentinitech".to_string())])).unwrap();
         let c = &list["custom"][0];
         let recs = c["records"].as_array().unwrap();
         assert_eq!(recs.len(), 2, "{c}");
-        assert_eq!(recs[1]["name"].as_str(), Some("_k2-domain.nsi.agentnsi.com"));
+        assert_eq!(recs[1]["name"].as_str(), Some("_k2-domain.initech.agentinitech.com"));
         assert_eq!(recs[1]["value"].as_str(), Some("k2-verify=relay-picked-token-0123456789"));
         assert_eq!(c["txt"]["value"].as_str(), Some("k2-verify=relay-picked-token-0123456789"));
         assert!(c.get("txtPending").is_none(), "{c}");
@@ -990,15 +990,15 @@ mod custom_tests {
         let bind = |h: &str, relay: Option<&str>| {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::domains::upsert_name(&conn, h, "agentnsi.com", "app:agentnsi").unwrap();
+            k2_core::domains::upsert_name(&conn, h, "agentinitech.com", "app:agentinitech").unwrap();
             k2_core::domains::set_relay_state(&conn, h, relay, None, 1).unwrap();
         };
-        let me = agent("ws-nsi");
+        let me = agent("ws-initech");
 
         bind(HOST, Some(k2_core::domains::RELAY_VERIFIED));
         let cp = Rc::new(Cp { calls: RefCell::new(vec![]), down: false });
         relay_claims::set_test_api(Some(cp.clone()));
-        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         assert_eq!(*cp.calls.borrow(), vec![HOST.to_string()]);
         assert!(v["relay"].as_str().unwrap().contains("released at K2 Connect"), "{v}");
         assert!(v["note"].as_str().unwrap().contains("a few seconds' blip"), "{v}");
@@ -1006,14 +1006,14 @@ mod custom_tests {
         bind(HOST, Some(k2_core::domains::RELAY_CLAIMED));
         let cp = Rc::new(Cp { calls: RefCell::new(vec![]), down: true });
         relay_claims::set_test_api(Some(cp.clone()));
-        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         assert!(v["relay"].as_str().unwrap().contains("didn't confirm the release"), "{v}");
         assert_eq!(v["removed"], HOST);
 
         bind(HOST, None);
         let cp = Rc::new(Cp { calls: RefCell::new(vec![]), down: false });
         relay_claims::set_test_api(Some(cp.clone()));
-        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         assert!(cp.calls.borrow().is_empty(), "no claim: nothing to release");
         assert!(v["relay"].is_null(), "{v}");
         relay_claims::set_test_api(None);
@@ -1027,48 +1027,48 @@ mod custom_tests {
         let _db = k2_core::db::scoped_for_test();
         let _home = crate::test_support::TempHome::new();
         setup();
-        let me = agent("ws-nsi");
+        let me = agent("ws-initech");
 
-        let e = post(&agent("ws-other"), "/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })).unwrap_err();
+        let e = post(&agent("ws-other"), "/cli/app/domain/add", json!({ "app": "agentinitech", "label": HOST })).unwrap_err();
         assert_eq!(e.code, codes::APP_NOT_FOUND, "another workspace's App is not found: {e:?}");
 
-        let v = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         assert_eq!(v["custom"]["state"], "waiting_dns", "{v}");
         assert_eq!(v["custom"]["notServedYet"], true);
         let recs = v["custom"]["records"].as_array().unwrap();
         assert!(recs.iter().any(|r| r["type"] == "A" && r["value"] == "203.0.113.10"), "{recs:?}");
         let txt = recs.iter().find(|r| r["type"] == "TXT").unwrap();
         assert_eq!(txt["name"], format!("_k2-domain.{HOST}"));
-        assert!(v["custom"]["next"].as_str().unwrap().contains(&format!("k2 app domain check agentnsi {HOST}")));
-        let again = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        assert!(v["custom"]["next"].as_str().unwrap().contains(&format!("k2 app domain check agentinitech {HOST}")));
+        let again = post(&me, "/cli/app/domain/add", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         assert_eq!(again["already"], true);
 
-        let list = handle("/cli/app/domains", &me, b"", &HashMap::from([("app".to_string(), "agentnsi".to_string())])).unwrap();
+        let list = handle("/cli/app/domains", &me, b"", &HashMap::from([("app".to_string(), "agentinitech".to_string())])).unwrap();
         assert_eq!(list["custom"][0]["hostname"], HOST);
 
         // Not proven: check leaves it waiting, no order.
         flow::set_test_lookup(Some(Box::new(Proven("unrelated".into()))));
-        let v = post(&me, "/cli/app/domain/check", json!({ "app": "agentnsi", "host": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/check", json!({ "app": "agentinitech", "host": HOST })).unwrap();
         assert_eq!((v["custom"]["state"].as_str(), v["check"]["ok"].as_bool()), (Some("waiting_dns"), Some(false)));
         assert!(flow::take_test_issues().is_empty());
 
         // Proven: issuing, one order.
         let token = txt["value"].as_str().unwrap().to_string();
         flow::set_test_lookup(Some(Box::new(Proven(token))));
-        let v = post(&me, "/cli/app/domain/check", json!({ "app": "agentnsi", "host": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/check", json!({ "app": "agentinitech", "host": HOST })).unwrap();
         assert_eq!(v["custom"]["state"], "issuing", "{v}");
         assert_eq!(flow::take_test_issues(), vec![HOST.to_string()]);
 
         // Primary: accepted, says it waits for live, and asks for a sweep
         // so Sew's origin follows now (S7, AG-13b).
         let _ = k2_core::tool_hook::take_reconcile_request();
-        let v = post(&me, "/cli/app/domain/primary", json!({ "app": "agentnsi", "host": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/primary", json!({ "app": "agentinitech", "host": HOST })).unwrap();
         assert_eq!((v["primary"].as_str(), v["live"].as_bool()), (Some(HOST), Some(false)));
         assert!(k2_core::tool_hook::take_reconcile_request(), "primary asked for a sweep");
-        let e = post(&me, "/cli/app/domain/primary", json!({ "app": "agentnsi", "host": "other.agentnsi.com" })).unwrap_err();
+        let e = post(&me, "/cli/app/domain/primary", json!({ "app": "agentinitech", "host": "other.agentinitech.com" })).unwrap_err();
         assert_eq!(e.code, NOT_ATTACHED);
 
-        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         assert_eq!(v["removed"], HOST);
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1172,20 +1172,20 @@ mod custom_tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::domains::upsert_name(&conn, "mail.agentnsi.com", "agentnsi.com", "mail").unwrap();
-            k2_core::domains::upsert_name(&conn, "crm.agentnsi.com", "agentnsi.com", "app:crm").unwrap();
+            k2_core::domains::upsert_name(&conn, "mail.agentinitech.com", "agentinitech.com", "mail").unwrap();
+            k2_core::domains::upsert_name(&conn, "crm.agentinitech.com", "agentinitech.com", "app:crm").unwrap();
         }
-        let me = agent("ws-nsi");
-        let e = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": "mail.agentnsi.com" })).unwrap_err();
+        let me = agent("ws-initech");
+        let e = post(&me, "/cli/app/domain/add", json!({ "app": "agentinitech", "label": "mail.agentinitech.com" })).unwrap_err();
         assert_eq!(e.code, crate::apps::custom_domains::NAME_IN_USE, "{e:?}");
         assert!(e.hint.contains("mail"), "{}", e.hint);
-        let e = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": "crm.agentnsi.com" })).unwrap_err();
+        let e = post(&me, "/cli/app/domain/add", json!({ "app": "agentinitech", "label": "crm.agentinitech.com" })).unwrap_err();
         assert_eq!(e.code, crate::apps::custom_domains::BOUND_ELSEWHERE, "{e:?}");
-        let e = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": "app.unattached.example" })).unwrap_err();
+        let e = post(&me, "/cli/app/domain/add", json!({ "app": "agentinitech", "label": "app.unattached.example" })).unwrap_err();
         assert_eq!(e.code, NOT_ATTACHED);
         assert!(e.hint.contains("k2 domain add unattached.example"), "{}", e.hint);
         // The owner may not take the mail host either.
-        let e = post(&Who::Owner, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": "mail.agentnsi.com" })).unwrap_err();
+        let e = post(&Who::Owner, "/cli/app/domain/add", json!({ "app": "agentinitech", "label": "mail.agentinitech.com" })).unwrap_err();
         assert_eq!(e.code, crate::apps::custom_domains::NAME_IN_USE);
     }
 
@@ -1201,9 +1201,9 @@ mod custom_tests {
             let conn = db.lock();
             k2_core::domains::upsert_binding_zone(
                 &conn,
-                "agentnsi.com",
+                "agentinitech.com",
                 &k2_core::domains::BoundZone {
-                    zone_id: Some("z-nsi".into()),
+                    zone_id: Some("z-initech".into()),
                     status: Some("active".into()),
                     nameservers: vec![],
                     dns_write: true,
@@ -1215,17 +1215,17 @@ mod custom_tests {
         let _api = crate::dns::proxy::set_fake_dns_api(|method, path, _| {
             let ok = |b: &str| Ok(crate::dns::proxy::DnsHttpResponse { status: 200, body: b.to_string() });
             match (method, path) {
-                ("GET", "/api/dns/zones/z-nsi") => ok(r#"{"records":[]}"#),
-                ("POST", "/api/dns/zones/z-nsi/records") => ok(r#"{"record":{"id":"r1"}}"#),
+                ("GET", "/api/dns/zones/z-initech") => ok(r#"{"records":[]}"#),
+                ("POST", "/api/dns/zones/z-initech/records") => ok(r#"{"record":{"id":"r1"}}"#),
                 other => panic!("unexpected DNS API call {other:?}"),
             }
         });
-        dns_manage("ws-nsi", false);
-        let v = post(&agent("ws-nsi"), "/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        dns_manage("ws-initech", false);
+        let v = post(&agent("ws-initech"), "/cli/app/domain/add", json!({ "app": "agentinitech", "label": HOST })).unwrap();
         assert_eq!(v["txt"]["planted"], false, "{v}");
         assert!(!crate::dns::proxy::fake_dns_api_calls().iter().any(|(m, _)| m == "POST"), "no write without dns_manage");
-        dns_manage("ws-nsi", true);
-        let v = post(&agent("ws-nsi"), "/cli/app/domain/add", json!({ "app": "agentnsi", "label": "www.agentnsi.com" })).unwrap();
+        dns_manage("ws-initech", true);
+        let v = post(&agent("ws-initech"), "/cli/app/domain/add", json!({ "app": "agentinitech", "label": "www.agentinitech.com" })).unwrap();
         assert_eq!(v["txt"]["planted"], true, "{v}");
     }
 

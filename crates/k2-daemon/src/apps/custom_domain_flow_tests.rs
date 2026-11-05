@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use super::*;
 use crate::apps::custom_domains::test_util::runtime_app;
 
-const HOST: &str = "nsi.agentnsi.com";
+const HOST: &str = "initech.agentinitech.com";
 const BOX: &str = "203.0.113.10";
 
 struct Fake {
@@ -42,12 +42,12 @@ impl Lookup for Fake {
 }
 
 fn setup() -> AppDomain {
-    runtime_app("ws-nsi", "agentnsi");
+    runtime_app("ws-initech", "agentinitech");
     set_test_box_ips(Some(vec![BOX.parse().unwrap()]));
     let db = k2_core::db::shared();
     let conn = db.lock();
-    domains::upsert_binding(&conn, "agentnsi.com", None, false).unwrap();
-    domains::upsert_name(&conn, HOST, "agentnsi.com", "app:agentnsi").unwrap();
+    domains::upsert_binding(&conn, "agentinitech.com", None, false).unwrap();
+    domains::upsert_name(&conn, HOST, "agentinitech.com", "app:agentinitech").unwrap();
     domains::app_domain(&conn, HOST).unwrap().unwrap()
 }
 
@@ -67,36 +67,36 @@ fn the_check_needs_the_txt_and_every_address_at_this_box() {
     let d = setup();
     let ips: Vec<IpAddr> = vec![BOX.parse().unwrap()];
 
-    let o = evaluate(&d, &Fake::new(vec![], &[BOX]), &ips, "nsi");
+    let o = evaluate(&d, &Fake::new(vec![], &[BOX]), &ips, "initech");
     assert!(!o.ok && !o.txt_ok && o.here);
     assert!(o.reason.unwrap().contains(&format!("TXT _k2-domain.{HOST}")));
 
-    let o = evaluate(&d, &Fake::new(vec!["k2-verify=someone-elses".into()], &[BOX]), &ips, "nsi");
+    let o = evaluate(&d, &Fake::new(vec!["k2-verify=someone-elses".into()], &[BOX]), &ips, "initech");
     assert!(!o.ok && !o.txt_ok, "another box's token is not this box's proof");
 
-    let o = evaluate(&d, &Fake::new(proof(&d), &["198.51.100.20"]), &ips, "nsi");
+    let o = evaluate(&d, &Fake::new(proof(&d), &["198.51.100.20"]), &ips, "initech");
     assert!(!o.ok && o.txt_ok && !o.here);
     assert!(o.reason.as_ref().unwrap().contains("DNS now points at 198.51.100.20"), "{o:?}");
 
-    let o = evaluate(&d, &Fake::new(proof(&d), &[BOX, "198.51.100.20"]), &ips, "nsi");
+    let o = evaluate(&d, &Fake::new(proof(&d), &[BOX, "198.51.100.20"]), &ips, "initech");
     assert!(!o.ok, "every address must be this box's (the CA may pick any)");
 
-    let o = evaluate(&d, &Fake::new(proof(&d), &["104.16.1.1"]), &ips, "nsi");
+    let o = evaluate(&d, &Fake::new(proof(&d), &["104.16.1.1"]), &ips, "initech");
     assert!(o.reason.unwrap().contains("grey cloud"), "Cloudflare proxy named");
 
-    let o = evaluate(&d, &Fake::new(proof(&d), &[]), &ips, "nsi");
+    let o = evaluate(&d, &Fake::new(proof(&d), &[]), &ips, "initech");
     assert!(o.reason.unwrap().contains("no A/AAAA record"));
 
-    let o = evaluate(&d, &Fake::new(proof(&d), &[BOX]), &[], "nsi");
+    let o = evaluate(&d, &Fake::new(proof(&d), &[BOX]), &[], "initech");
     assert!(!o.ok, "no known box address → never proven");
 
     // A CNAME to this box's k2.dev name is Path B (0.46.8).
     let mut via_connect = Fake::new(proof(&d), &["5.6.7.8"]);
-    via_connect.cname = Some("nsi.k2.dev".into());
-    let o = evaluate(&d, &via_connect, &ips, "nsi");
+    via_connect.cname = Some("initech.k2.dev".into());
+    let o = evaluate(&d, &via_connect, &ips, "initech");
     assert_eq!((o.ok, o.path), (true, Some(domains::PATH_CONNECT)));
 
-    let o = evaluate(&d, &Fake::new(proof(&d), &[BOX]), &ips, "nsi");
+    let o = evaluate(&d, &Fake::new(proof(&d), &[BOX]), &ips, "initech");
     assert_eq!((o.ok, o.path, o.reason), (true, Some(PATH_DIRECT), None));
     assert!(is_cloudflare_proxy(&"2606:4700::1".parse().unwrap()));
     assert!(!is_cloudflare_proxy(&BOX.parse().unwrap()));
@@ -144,7 +144,7 @@ fn a_proven_name_with_a_usable_cert_goes_live_without_an_order() {
     assert_eq!(r.state, STATE_LIVE);
     assert_eq!(*orders.borrow(), 0);
     assert_eq!(crate::apps::tls_door::reload().routed, vec![HOST.to_string()]);
-    assert_eq!(crate::apps::tls_door::app_for_host(HOST), Some("agentnsi".to_string()));
+    assert_eq!(crate::apps::tls_door::app_for_host(HOST), Some("agentinitech".to_string()));
 }
 
 /// PRD test 8: DNS moved away from a live name → it keeps serving with a
@@ -164,7 +164,7 @@ fn dns_moving_away_fails_after_seven_days_and_recovers() {
     }
     let moved = Fake::new(proof(&d), &["198.51.100.20"]);
     let t0 = 1_000_000;
-    let o = evaluate(&row(), &moved, &[BOX.parse().unwrap()], "nsi");
+    let o = evaluate(&row(), &moved, &[BOX.parse().unwrap()], "initech");
     assert_eq!(apply(&row(), &o, t0), Next::Nothing);
     let r = row();
     assert_eq!(r.state, STATE_LIVE, "still served during the grace");
@@ -184,14 +184,14 @@ fn dns_moving_away_fails_after_seven_days_and_recovers() {
     let binding = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        domains::get_binding(&conn, "agentnsi.com").unwrap()
+        domains::get_binding(&conn, "agentinitech.com").unwrap()
     };
-    let rr = crate::domains::renew::AttachedRow { hostname: HOST.into(), role: "app:agentnsi".into(), binding };
+    let rr = crate::domains::renew::AttachedRow { hostname: HOST.into(), role: "app:agentinitech".into(), binding };
     assert!(crate::domains::renew::qualifies(&rr).is_err(), "renewal skipped while failing");
 
     // DNS back: live again (the cert is still usable), the run cleared.
     let back = Fake::new(proof(&d), &[BOX]);
-    let o = evaluate(&row(), &back, &[BOX.parse().unwrap()], "nsi");
+    let o = evaluate(&row(), &back, &[BOX.parse().unwrap()], "initech");
     assert_eq!(apply(&row(), &o, t0 + FAILING_AFTER_SECS + 60), Next::Reroute);
     let r = row();
     assert_eq!((r.state.as_str(), r.failing_since, r.last_error), (STATE_LIVE, None, None));
@@ -228,9 +228,9 @@ fn k2_plants_and_removes_the_txt_on_a_k2_hosted_zone() {
     let _api = crate::dns::proxy::set_fake_dns_api(move |method, path, body| {
         let ok = |b: &str| Ok(crate::dns::proxy::DnsHttpResponse { status: 200, body: b.to_string() });
         match (method, path) {
-            ("GET", "/api/dns/zones/z-nsi") => ok(r#"{"records":[{"id":"r1","type":"TXT","name":"_k2-domain.nsi","content":"k2-verify=old"},{"id":"r2","type":"A","name":"nsi","content":"203.0.113.10"}]}"#),
+            ("GET", "/api/dns/zones/z-initech") => ok(r#"{"records":[{"id":"r1","type":"TXT","name":"_k2-domain.initech","content":"k2-verify=old"},{"id":"r2","type":"A","name":"initech","content":"203.0.113.10"}]}"#),
             ("DELETE", "/api/dns/records/r1") => ok("{}"),
-            ("POST", "/api/dns/zones/z-nsi/records") => {
+            ("POST", "/api/dns/zones/z-initech/records") => {
                 p.borrow_mut().push(body.unwrap_or("").to_string());
                 ok(r#"{"record":{"id":"r9"}}"#)
             }
@@ -238,19 +238,19 @@ fn k2_plants_and_removes_the_txt_on_a_k2_hosted_zone() {
         }
     });
     let binding = k2_core::domains::DomainBinding {
-        apex: "agentnsi.com".into(),
-        zone_id: Some("z-nsi".into()),
+        apex: "agentinitech.com".into(),
+        zone_id: Some("z-initech".into()),
         dns_write: true,
         created_at: 0,
         status: Some("active".into()),
         nameservers: vec![],
         auto_created: false,
     };
-    assert_eq!(txt_relative_name(HOST, "agentnsi.com"), "_k2-domain.nsi");
+    assert_eq!(txt_relative_name(HOST, "agentinitech.com"), "_k2-domain.initech");
     plant_txt(&d, &binding).unwrap();
     let body: J = serde_json::from_str(&posted.borrow()[0]).unwrap();
     assert_eq!(body["type"], "TXT");
-    assert_eq!(body["name"], "_k2-domain.nsi");
+    assert_eq!(body["name"], "_k2-domain.initech");
     assert_eq!(body["content"], format!("k2-verify={}", d.verify_token));
     let calls = crate::dns::proxy::fake_dns_api_calls();
     assert!(calls.iter().any(|(m, p)| m == "DELETE" && p == "/api/dns/records/r1"), "the old proof is replaced: {calls:?}");
@@ -283,7 +283,7 @@ fn a_grandfathered_name_stays_an_origin_until_the_owner_moves_it() {
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        assert_eq!(domains::origin_hostnames_for_app(&conn, "agentnsi").unwrap(), vec![HOST.to_string()]);
+        assert_eq!(domains::origin_hostnames_for_app(&conn, "agentinitech").unwrap(), vec![HOST.to_string()]);
     }
 
     // The owner's check, DNS not at this box: stays external, still an origin.
@@ -461,7 +461,7 @@ fn path_b_box() -> (Rc<FakeCp>, Seams) {
 /// picked. The box's label comes from tunnel.json, so the test names it.
 fn cname_here(_: &AppDomain) -> Fake {
     let mut f = Fake::new(vec![format!("k2-verify={PICKED}")], &["192.0.2.50"]);
-    f.cname = Some(format!("agentnsi.{}.k2.dev", label()));
+    f.cname = Some(format!("agentinitech.{}.k2.dev", label()));
     f
 }
 
@@ -489,40 +489,40 @@ fn the_dns_check_recognises_path_b() {
     let relay: IpAddr = "192.0.2.50".parse().unwrap();
 
     // CNAME to the App's own name, and to the box's name.
-    for target in ["agentnsi.nsi.k2.dev", "nsi.k2.dev", "NSI.k2.dev."] {
+    for target in ["agentinitech.initech.k2.dev", "initech.k2.dev", "INITECH.k2.dev."] {
         let mut f = Fake::new(proof(&d), &["192.0.2.50"]);
         f.cname = Some(target.into());
-        let o = evaluate_with(&d, &f, &ips, "nsi", &[relay]);
+        let o = evaluate_with(&d, &f, &ips, "initech", &[relay]);
         assert_eq!((o.ok, o.here, o.path), (true, true, Some(domains::PATH_CONNECT)), "{target}");
     }
     // TXT missing: DNS is right, still not proven.
     let mut f = Fake::new(vec![], &["192.0.2.50"]);
-    f.cname = Some("agentnsi.nsi.k2.dev".into());
-    let o = evaluate_with(&d, &f, &ips, "nsi", &[relay]);
+    f.cname = Some("agentinitech.initech.k2.dev".into());
+    let o = evaluate_with(&d, &f, &ips, "initech", &[relay]);
     assert_eq!((o.ok, o.here, o.path), (false, true, Some(domains::PATH_CONNECT)));
     assert!(o.reason.unwrap().contains("TXT"));
     // ALIAS / flattening: no CNAME, only relay addresses.
-    let o = evaluate_with(&d, &Fake::new(proof(&d), &["192.0.2.50"]), &ips, "nsi", &[relay]);
+    let o = evaluate_with(&d, &Fake::new(proof(&d), &["192.0.2.50"]), &ips, "initech", &[relay]);
     assert_eq!((o.ok, o.path), (true, Some(domains::PATH_CONNECT)));
     // Mixed.
-    let o = evaluate_with(&d, &Fake::new(proof(&d), &["192.0.2.50", "198.51.100.20"]), &ips, "nsi", &[relay]);
+    let o = evaluate_with(&d, &Fake::new(proof(&d), &["192.0.2.50", "198.51.100.20"]), &ips, "initech", &[relay]);
     assert!(!o.ok);
     let r = o.reason.unwrap();
-    assert!(r.contains("part of your DNS points elsewhere (198.51.100.20)") && r.contains("agentnsi.nsi.k2.dev"), "{r}");
+    assert!(r.contains("part of your DNS points elsewhere (198.51.100.20)") && r.contains("agentinitech.initech.k2.dev"), "{r}");
     // Cloudflare's proxy is named, as on Path A.
-    let o = evaluate_with(&d, &Fake::new(proof(&d), &["104.16.1.1"]), &ips, "nsi", &[relay]);
+    let o = evaluate_with(&d, &Fake::new(proof(&d), &["104.16.1.1"]), &ips, "initech", &[relay]);
     assert!(o.reason.unwrap().contains("grey cloud"));
     // Another server's K2 name.
     let mut f = Fake::new(proof(&d), &["192.0.2.50"]);
     f.cname = Some("other.k2.dev".into());
-    let o = evaluate_with(&d, &f, &ips, "nsi", &[relay]);
+    let o = evaluate_with(&d, &f, &ips, "initech", &[relay]);
     assert!(!o.ok && o.path.is_none());
-    assert!(o.reason.unwrap().contains("isn't this server's K2 name: point it at agentnsi.nsi.k2.dev"));
+    assert!(o.reason.unwrap().contains("isn't this server's K2 name: point it at agentinitech.initech.k2.dev"));
     // Off K2 Connect a relay address is just somewhere else.
     let o = evaluate_with(&d, &Fake::new(proof(&d), &["192.0.2.50"]), &ips, "", &[relay]);
     assert!(!o.ok && o.path.is_none(), "{o:?}");
     // Path A is untouched.
-    let o = evaluate_with(&d, &Fake::new(proof(&d), &[BOX]), &ips, "nsi", &[relay]);
+    let o = evaluate_with(&d, &Fake::new(proof(&d), &[BOX]), &ips, "initech", &[relay]);
     assert_eq!((o.ok, o.path), (true, Some(PATH_DIRECT)));
 }
 
@@ -533,18 +533,18 @@ fn path_b_records_are_a_cname_or_alias_and_never_a_relay_address() {
     let _db = k2_core::db::scoped_for_test();
     let mut d = setup();
     d.relay_state = Some(domains::RELAY_CLAIMED.into());
-    let r = records_connect(&d, "nsi");
+    let r = records_connect(&d, "initech");
     assert_eq!(r.len(), 2);
-    assert_eq!((r[0]["type"].as_str(), r[0]["name"].as_str(), r[0]["value"].as_str()), (Some("CNAME"), Some(HOST), Some("agentnsi.nsi.k2.dev")));
+    assert_eq!((r[0]["type"].as_str(), r[0]["name"].as_str(), r[0]["value"].as_str()), (Some("CNAME"), Some(HOST), Some("agentinitech.initech.k2.dev")));
     assert!(r[0]["note"].as_str().unwrap().contains("DNS-only"));
     assert_eq!(r[1]["type"], "TXT");
     let mut apex = d.clone();
-    apex.hostname = "agentnsi.com".into();
-    let r = records_connect(&apex, "nsi");
-    assert_eq!((r[0]["type"].as_str(), r[0]["value"].as_str()), (Some("ALIAS"), Some("agentnsi.nsi.k2.dev")));
+    apex.hostname = "agentinitech.com".into();
+    let r = records_connect(&apex, "initech");
+    assert_eq!((r[0]["type"].as_str(), r[0]["value"].as_str()), (Some("ALIAS"), Some("agentinitech.initech.k2.dev")));
     let note = r[0]["note"].as_str().unwrap();
     assert!(note.contains("ALIAS, ANAME or CNAME flattening") && note.contains("DNS-only"), "{note}");
-    for rec in records_connect(&d, "nsi").iter().chain(r.iter()) {
+    for rec in records_connect(&d, "initech").iter().chain(r.iter()) {
         assert!(!matches!(rec["type"].as_str(), Some("A") | Some("AAAA")), "no relay address is ever offered: {rec}");
     }
     assert!(records_connect(&d, "").is_empty(), "off K2 Connect there is nothing to point at");
@@ -570,7 +570,7 @@ fn a_verified_claim_issues_and_the_tunnel_carries_the_name() {
     let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let d = setup();
-    set_box_label("nsi");
+    set_box_label("initech");
     let (cp, _s) = path_b_box();
     let orders = RefCell::new(Vec::<String>::new());
     let issue = |h: &str| orders.borrow_mut().push(h.to_string());
@@ -616,10 +616,10 @@ fn the_boxs_own_token_is_not_the_proof_on_path_b() {
     let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let d = setup();
-    set_box_label("nsi");
+    set_box_label("initech");
     let (cp, _s) = path_b_box();
     let mut f = Fake::new(proof(&d), &["192.0.2.50"]);
-    f.cname = Some("agentnsi.nsi.k2.dev".into());
+    f.cname = Some("agentinitech.initech.k2.dev".into());
     let (r, o) = check_with(HOST, &f, &|h| panic!("no order for {h}")).unwrap();
     assert!(!o.ok && !o.txt_ok, "{o:?}");
     assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_WAITING_DNS, Some(domains::RELAY_CLAIMED)));
@@ -631,11 +631,11 @@ fn the_boxs_own_token_is_not_the_proof_on_path_b() {
         b.relay_state = None;
         b
     };
-    assert_eq!(records_connect(&bare, "nsi").len(), 1);
+    assert_eq!(records_connect(&bare, "initech").len(), 1);
     let mut held = d.clone();
     held.relay_state = Some(domains::RELAY_CLAIMED.into());
     held.verify_token = PICKED.into();
-    assert_eq!(records_connect(&held, "nsi")[1]["value"], format!("k2-verify={PICKED}"));
+    assert_eq!(records_connect(&held, "initech")[1]["value"], format!("k2-verify={PICKED}"));
 }
 
 /// The owner turned the :80 redirect off: the claim says so; otherwise it is
@@ -645,7 +645,7 @@ fn the_claim_sends_http_redirect_only_when_the_owner_chose() {
     let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let d = setup();
-    set_box_label("nsi");
+    set_box_label("initech");
     let (cp, _s) = path_b_box();
     let mut cfg = k2_core::front443::load();
     cfg.http = Some(false);
@@ -660,7 +660,7 @@ fn control_plane_refusals_are_plain_words_and_never_issue() {
     let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let d = setup();
-    set_box_label("nsi");
+    set_box_label("initech");
     let (cp, _s) = path_b_box();
     let no_order = |h: &str| panic!("no order for {h}");
     for (code, want) in [
@@ -720,7 +720,7 @@ fn the_box_refuses_before_any_claim_when_it_cant_be_path_b() {
     let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let d = setup();
-    set_box_label("nsi");
+    set_box_label("initech");
     let (cp, _s) = path_b_box();
     let no_order = |h: &str| panic!("no order for {h}");
 
@@ -745,8 +745,8 @@ fn the_box_refuses_before_any_claim_when_it_cant_be_path_b() {
         let db = k2_core::db::shared();
         let conn = db.lock();
         for i in 0..k2_core::tunnel::custom_names::MAX_PER_BOX {
-            let h = format!("n{i}.agentnsi.com");
-            domains::upsert_name(&conn, &h, "agentnsi.com", "app:agentnsi").unwrap();
+            let h = format!("n{i}.agentinitech.com");
+            domains::upsert_name(&conn, &h, "agentinitech.com", "app:agentinitech").unwrap();
             domains::set_relay_state(&conn, &h, Some(domains::RELAY_VERIFIED), None, 1).unwrap();
         }
     }
@@ -764,7 +764,7 @@ fn the_control_plane_decides_a_relayed_names_fate() {
     let _db = k2_core::db::scoped_for_test();
     let _home = crate::test_support::TempHome::new();
     let d = setup();
-    set_box_label("nsi");
+    set_box_label("initech");
     let (cp, _s) = path_b_box();
     let pem = crate::domains::acme::test_le_pem(HOST);
     crate::domains::store::install(HOST, &pem.chain_pem, &pem.key_pem).unwrap();
@@ -774,7 +774,7 @@ fn the_control_plane_decides_a_relayed_names_fate() {
 
     // DNS moved: 30 days of failed box checks change nothing but the words.
     let moved = Fake::new(proof(&d), &["198.51.100.20"]);
-    let o = evaluate_with(&row(), &moved, &[BOX.parse().unwrap()], "nsi", &["192.0.2.50".parse().unwrap()]);
+    let o = evaluate_with(&row(), &moved, &[BOX.parse().unwrap()], "initech", &["192.0.2.50".parse().unwrap()]);
     assert!(!o.ok);
     assert_eq!(apply(&row(), &o, 1_000_000 + 30 * 24 * 3600), Next::Nothing);
     let r = row();
@@ -803,14 +803,14 @@ fn the_control_plane_decides_a_relayed_names_fate() {
 
 // ── a name missing from K2 Connect's list (one wrong answer stops nothing) ──
 
-const OTHER: &str = "other.agentnsi.com";
+const OTHER: &str = "other.agentinitech.com";
 const MIN: i64 = 60;
 
 /// A live name K2 Connect routes, and a second held name so a list can be
 /// non-empty without it.
 fn live_pair() -> (Rc<FakeCp>, Seams) {
     let d = setup();
-    set_box_label("nsi");
+    set_box_label("initech");
     let (cp, s) = path_b_box();
     let pem = crate::domains::acme::test_le_pem(HOST);
     crate::domains::store::install(HOST, &pem.chain_pem, &pem.key_pem).unwrap();
@@ -819,7 +819,7 @@ fn live_pair() -> (Rc<FakeCp>, Seams) {
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        domains::upsert_name(&conn, OTHER, "agentnsi.com", "app:agentnsi").unwrap();
+        domains::upsert_name(&conn, OTHER, "agentinitech.com", "app:agentinitech").unwrap();
         domains::set_relay_state(&conn, OTHER, Some(domains::RELAY_VERIFIED), None, 1).unwrap();
     }
     cp.calls.borrow_mut().clear();

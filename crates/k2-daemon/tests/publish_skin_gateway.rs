@@ -5330,7 +5330,7 @@ async fn publish_cmd_service_gets_app_id_env() {
     });
 }
 
-/// nsi BFF asks (2026-10-13), so a BFF never reads skin.db:
+/// A client BFF asks (2026-10-13), so a BFF never reads skin.db:
 /// (a) `POST /cli/skin/login` takes an email in place of the username,
 ///     with and without `app`; an unknown email is the generic 401;
 /// (b) a locked login is `423 {"error":"locked","retryAfterSecs":N}` with

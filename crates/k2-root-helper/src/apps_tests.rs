@@ -1486,27 +1486,27 @@ fn hba_app_adds_and_removes_the_canned_line_in_every_cluster() {
     let t = box_root();
     with_clusters(&t, &["16", "17"]);
     rule(&t, SYSTEMCTL, "is-active", 0, "");
-    let o = t.call(&["pg", "hba-app", "add", "nsi-skin"]);
+    let o = t.call(&["pg", "hba-app", "add", "acme-skin"]);
     ok(&o);
     let v = json(&o);
-    assert_eq!(v["role"], "app_nsi_skin");
+    assert_eq!(v["role"], "app_acme_skin");
     assert_eq!(v["changed"], serde_json::json!(["16", "17"]));
     assert_eq!(v["reloaded"], true);
     for ver in ["16", "17"] {
         let p = format!("/etc/postgresql/{ver}/main/pg_hba.conf");
         let text = read(&t, &p);
-        assert!(text.contains("\nhost app_nsi_skin app_nsi_skin 127.0.0.1/32 scram-sha-256\n"), "{text}");
-        assert!(text.find("app_nsi_skin").unwrap() < text.find("local all postgres").unwrap(), "above every rule");
+        assert!(text.contains("\nhost app_acme_skin app_acme_skin 127.0.0.1/32 scram-sha-256\n"), "{text}");
+        assert!(text.find("app_acme_skin").unwrap() < text.find("local all postgres").unwrap(), "above every rule");
         let mode = std::fs::metadata(t.p(&p)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640, "the file keeps its mode");
     }
     assert_eq!(calls_of(&t, SYSTEMCTL).iter().filter(|c| *c == "reload postgresql.service").count(), 1);
     // Idempotent: no write, no reload.
-    let o = t.call(&["pg", "hba-app", "add", "nsi-skin"]);
+    let o = t.call(&["pg", "hba-app", "add", "acme-skin"]);
     ok(&o);
     assert_eq!(json(&o)["changed"], serde_json::json!([]));
     assert_eq!(calls_of(&t, SYSTEMCTL).iter().filter(|c| *c == "reload postgresql.service").count(), 1);
-    let o = t.call(&["pg", "hba-app", "remove", "nsi-skin"]);
+    let o = t.call(&["pg", "hba-app", "remove", "acme-skin"]);
     ok(&o);
     assert_eq!(read(&t, "/etc/postgresql/16/main/pg_hba.conf"), HBA_BASE);
 }
@@ -1591,8 +1591,8 @@ fn nft_app_admits_only_the_apps_own_port_by_cgroup_and_is_daemon_only() {
     let t = box_root();
     with_app_user(&t);
     current_table(&t);
-    container_cgroup(&t, "nsi-skin");
-    let o = t.call(&["apps", "nft", "app", "nsi-skin", "38601"]);
+    container_cgroup(&t, "acme-skin");
+    let o = t.call(&["apps", "nft", "app", "acme-skin", "38601"]);
     ok(&o);
     let v = json(&o);
     assert_eq!(v["rules"], 1);
@@ -1601,26 +1601,26 @@ fn nft_app_admits_only_the_apps_own_port_by_cgroup_and_is_daemon_only() {
     assert_eq!(sc.len(), 1);
     assert!(sc[0].starts_with("flush chain inet k2app k2app_apps\n"), "{}", sc[0]);
     assert!(sc[0].contains(
-        "add rule inet k2app k2app_apps socket cgroupv2 level 5 \"user.slice/user-996.slice/user@996.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"
+        "add rule inet k2app k2app_apps socket cgroupv2 level 5 \"user.slice/user-996.slice/user@996.service/k2apps.slice/k2apps-acme_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"
     ));
     // A second App: both rules, each its own port. A port already held is refused.
-    container_cgroup(&t, "nsi");
-    ok(&t.call(&["apps", "nft", "app", "nsi", "38600"]));
+    container_cgroup(&t, "acme");
+    ok(&t.call(&["apps", "nft", "app", "acme", "38600"]));
     let last = nft_scripts(&t).pop().unwrap();
     assert_eq!(last.matches("add rule").count(), 2);
-    assert!(last.contains("k2apps-nsi.slice\" oifname \"lo\" tcp dport { 38600, 38900 } accept"));
+    assert!(last.contains("k2apps-acme.slice\" oifname \"lo\" tcp dport { 38600, 38900 } accept"));
     let o = t.call(&["apps", "nft", "app", "jobs", "38600"]);
     assert_eq!(o.code, exit::STATE);
-    assert!(o.stderr.contains("belongs to App nsi"), "{}", o.stderr);
+    assert!(o.stderr.contains("belongs to App acme"), "{}", o.stderr);
     // A full re-apply keeps the per-App rules (boot, drift).
     t.as_agent();
     ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]));
     let full = nft_scripts(&t).pop().unwrap();
-    assert!(full.contains("k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"));
+    assert!(full.contains("k2apps-acme_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"));
     assert!(!full.contains("38600-38899"), "never the whole gateway range");
     // Agents can't add or remove rules.
     assert_eq!(t.call(&["apps", "nft", "app", "jobs", "38602"]).code, exit::NOT_DAEMON);
-    assert_eq!(t.call(&["apps", "nft", "app-remove", "nsi"]).code, exit::NOT_DAEMON);
+    assert_eq!(t.call(&["apps", "nft", "app-remove", "acme"]).code, exit::NOT_DAEMON);
 }
 
 #[test]
@@ -1758,17 +1758,17 @@ fn logs_read_one_deployments_unit_for_the_daemon_only() {
     let t = box_root();
     with_app_user(&t);
     rule(&t, k2_root_proto::paths::JOURNALCTL, "-o", 0, "esc a1 up on 41000\n");
-    let o = t.call(&["apps", "logs", "nsi-skin", "d-0123456789ab", "200"]);
+    let o = t.call(&["apps", "logs", "acme-skin", "d-0123456789ab", "200"]);
     ok(&o);
     let v = json(&o);
     assert_eq!(v["text"], "esc a1 up on 41000\n");
-    assert_eq!(v["unit"], "k2app-nsi-skin--d-0123456789ab.service");
+    assert_eq!(v["unit"], "k2app-acme-skin--d-0123456789ab.service");
     assert_eq!(
         calls_of(&t, k2_root_proto::paths::JOURNALCTL),
-        vec!["--no-pager -o cat -n 200 _SYSTEMD_OWNER_UID=996 _SYSTEMD_USER_UNIT=k2app-nsi-skin--d-0123456789ab.service".to_string()]
+        vec!["--no-pager -o cat -n 200 _SYSTEMD_OWNER_UID=996 _SYSTEMD_USER_UNIT=k2app-acme-skin--d-0123456789ab.service".to_string()]
     );
     t.as_agent();
-    assert_eq!(t.call(&["apps", "logs", "nsi-skin", "d-0123456789ab", "200"]).code, exit::NOT_DAEMON);
+    assert_eq!(t.call(&["apps", "logs", "acme-skin", "d-0123456789ab", "200"]).code, exit::NOT_DAEMON);
 }
 
 #[test]

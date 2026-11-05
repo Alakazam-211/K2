@@ -1,4 +1,4 @@
-//! Official Dannon skin gateway helper (`k2-daemon --skin-gateway`).
+//! Official skin gateway helper (`k2-daemon --skin-gateway`).
 //!
 //! Child of k2-daemon (`kind=skin`). Serves static UI + HttpOnly cookie
 //! on this origin + allowlisted Thread proxy. Holds `k2skn_` in **this
@@ -1601,7 +1601,7 @@ fn status_line(code: u16) -> &'static str {
         403 => "403 Forbidden",
         404 => "404 Not Found",
         400 => "400 Bad Request",
-        // A locked login passes through to the browser as-is (nsi BFF ask).
+        // A locked login passes through to the browser as-is (a client BFF ask).
         423 => "423 Locked",
         429 => "429 Too Many Requests",
         502 => "502 Bad Gateway",

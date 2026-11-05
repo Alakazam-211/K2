@@ -1766,18 +1766,18 @@ mod tests {
                 bytes: b"# Ship\n\nDo the thing.\n".to_vec(),
             }],
             None,
-            Some("ahama::nsi.k2.dev"),
+            Some("ahama::acme.k2.dev"),
             Some("msg-inbox"),
             Some("please review"),
         )
         .unwrap();
         assert_eq!(pkg.title, "Ship");
-        assert_eq!(pkg.from, "ahama::nsi.k2.dev");
+        assert_eq!(pkg.from, "ahama::acme.k2.dev");
         assert!(pkg.sidecar_paths.is_empty());
         let content = fs::read_to_string(inbox_root(ws.path()).join(&pkg.filename)).unwrap();
         assert!(content.contains("Do the thing."));
         assert!(content.contains("please review"));
-        assert!(content.contains("from: ahama::nsi.k2.dev"));
+        assert!(content.contains("from: ahama::acme.k2.dev"));
     }
 
     #[test]

@@ -138,7 +138,7 @@ describe('pickIconImage', () => {
   })
 
   it('remote host: opens the custom picker (NOT the native input) and feeds the data URL to the crop dialog', async () => {
-    hostState.activeHost = 'nsi.k2.dev'
+    hostState.activeHost = 'acme.k2.dev'
     daemonCliGetMock.mockResolvedValueOnce({ base64: 'aWNvbg==' })
     const clickNativeInput = vi.fn()
     const setCropImage = vi.fn()
@@ -156,7 +156,7 @@ describe('pickIconImage', () => {
   })
 
   it('remote host: cancel leaves the crop dialog untouched', async () => {
-    hostState.activeHost = 'nsi.k2.dev'
+    hostState.activeHost = 'acme.k2.dev'
     const clickNativeInput = vi.fn()
     const setCropImage = vi.fn()
 

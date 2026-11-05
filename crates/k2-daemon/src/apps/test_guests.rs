@@ -1,4 +1,4 @@
-//! Test guests for an App (0.46.4, NSI B: "test guests need the owner
+//! Test guests for an App (0.46.4, field report B: "test guests need the owner
 //! each time"): short-lived guests scoped to one App, to test it with.
 //!
 //! ```text

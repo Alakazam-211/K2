@@ -14,7 +14,7 @@
 //! - a denial spike: more than 20 refused calls in 5 minutes (401, 403,
 //!   423, 429 and `pass_wrong_link` only: [`counts_toward_spike`]);
 //! - the first successful use of each write verb, gathered into one wake
-//!   per App per [`DIGEST_WINDOW`] (0.46.4, NSI C: a test run's login,
+//!   per App per [`DIGEST_WINDOW`] (0.46.4, field report C: a test run's login,
 //!   logout and upload were three wakes), and none at all for what one of
 //!   the App's own test guests did (someone testing the App);
 //! - any `pass_wrong_link`;
@@ -23,7 +23,7 @@
 //! Each kind is said at most once per App per 5 minutes (first use: once
 //! per verb, ever).
 //!
-//! **Refusals are visible** (0.46.4, NSI A): every refused call's row
+//! **Refusals are visible** (0.46.4, field report A): every refused call's row
 //! carries K2's error code, whether the gate refused it or the route's
 //! handler did (a login's `401` included), and the App's own log (the live
 //! deployment's, `k2 app logs`) gets one line per refused call:
@@ -139,7 +139,7 @@ pub fn begin(ctx: &LinkCtx, b: Begin<'_>) {
 
 /// The response for the open call (status line like `200 OK`, and the
 /// body sent). A refusal (4xx/5xx) records K2's error code from the body
-/// when the gate didn't already (a handler's own refusal, NSI A).
+/// when the gate didn't already (a handler's own refusal, field report A).
 pub fn note_response(status: &str, body: &str) {
     let code: u16 = status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(0);
     let _ = CONN.try_with(|c| {
@@ -149,7 +149,7 @@ pub fn note_response(status: &str, body: &str) {
                     o.call.result = code;
                 }
                 // A guest login names who signed in (on behalf of): the
-                // digest knows the App's own test guests by it (NSI C).
+                // digest knows the App's own test guests by it (field report C).
                 // A phone paired through the link names who it signed in too
                 // (app pairing: the audit records the redeem door).
                 if code == 200
@@ -217,7 +217,7 @@ pub fn finish() {
     record(o.call);
 }
 
-// ── the App's log: one line per refused call (NSI A) ─────────────────
+// ── the App's log: one line per refused call (field report A) ─────────────────
 
 /// Lines a minute one App's log gets about refused calls.
 pub const REFUSED_LINES_PER_MIN: usize = 20;
@@ -544,7 +544,7 @@ fn first_uses(conn: &rusqlite::Connection, batch: &[Call]) {
         if seen {
             continue;
         }
-        // NSI C: a call as one of the App's own test guests is someone
+        // field report C: a call as one of the App's own test guests is someone
         // testing the App: no wake about it.
         if by_own_test_guest(c) {
             continue;
@@ -559,7 +559,7 @@ fn first_uses(conn: &rusqlite::Connection, batch: &[Call]) {
     }
 }
 
-// ── first write verbs: one digest per App (NSI C) ────────────────────
+// ── first write verbs: one digest per App (field report C) ────────────────────
 
 /// First write verbs are told in one wake per App per this window
 /// (`K2_APPS_FIRST_USE_DIGEST_SECS` overrides, for tests).
@@ -659,7 +659,7 @@ pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let conn = store::open(&store::db_path()).map_err(|e| no("audit_unavailable", 503, format!("app-audit.db: {e}")))?;
     let q = store::Query { app_id: &app.app_id, since_ms, verb: params.get("verb").map(String::as_str).filter(|v| !v.is_empty()), denied_only: denied, limit };
     let mut rows = store::list(&conn, &q).map_err(|e| no("audit_unavailable", 503, e.to_string()))?;
-    // NSI 0.46.4 #5: the newest `limit` rows either way; `oldest=1` reads
+    // 0.46.4 field report #5: the newest `limit` rows either way; `oldest=1` reads
     // them top to bottom.
     let oldest_first = params.get("oldest").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
     if oldest_first {

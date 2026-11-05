@@ -839,7 +839,7 @@ fn manual_manifest(source_project_path: &str) -> CloneManifest {
 fn unpack_rewrites_embedded_cwd_for_arbitrary_spaced_paths() {
     let root = TempDir::new("gh23-unpack");
     // SOURCE machine path — arbitrary user/parent, WITH SPACES.
-    let source = "/Users/z3thon/DevProjects/Nelson Specialty Industrial/nsi-plan01";
+    let source = "/Users/z3thon/DevProjects/Acme Industrial/acme-plan01";
     // DEST machine: a real temp parent (also containing a space) + home.
     let dest_parent = root.path().join("AI Projects");
     fs::create_dir_all(&dest_parent).unwrap();
@@ -870,7 +870,7 @@ fn unpack_rewrites_embedded_cwd_for_arbitrary_spaced_paths() {
     let (res, _m) = unpack_bundle(&bundle, &dest_parent, &home).unwrap();
     let dest = res.dest_path.to_string_lossy().to_string();
     assert!(dest.contains("AI Projects"), "dest under spaced parent");
-    assert_eq!(res.dest_path.file_name().unwrap(), "nsi-plan01");
+    assert_eq!(res.dest_path.file_name().unwrap(), "acme-plan01");
 
     // The slug dir is the DEST slug (original→dest remap handled).
     let projects_dir = home.join(".claude").join("projects");

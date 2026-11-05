@@ -66,9 +66,9 @@ if printf '%s' "$inner" | grep -E '^[[:space:]]*_apply_remote_host '; then
 fi
 ok "tray agent::host does not take the Connect-token path"
 
-_split_remote_target "ahama::nsi.k2.dev"
+_split_remote_target "ahama::acme.k2.dev"
 [ "$_BARE_TARGET" = "ahama" ] || fail "bare target: $_BARE_TARGET"
-[ "$_REMOTE_HOST" = "nsi.k2.dev" ] || fail "host: $_REMOTE_HOST"
+[ "$_REMOTE_HOST" = "acme.k2.dev" ] || fail "host: $_REMOTE_HOST"
 [ "${_IS_WIRE_FORM:-0}" = "0" ] || fail "user form must not be wire"
 ok "agent::host still splits as user form"
 

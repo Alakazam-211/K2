@@ -55,15 +55,15 @@ fn row(kind: &str, id: &str, owner: Owner, bytes: u64) -> Consumer {
     Consumer { kind: kind.into(), id: id.into(), owner, disk: Some("8:1".into()), disk_bytes: Some(bytes), ..Consumer::default() }
 }
 
-/// Four agents (nsi biggest, then plans, mail, tiny) plus a server row.
+/// Four agents (acme biggest, then plans, mail, tiny) plus a server row.
 fn snap(workspaces_at: i64) -> Arc<Snapshot> {
-    let mut ws_nsi = row("workspace", "id-nsi", agent("nsi"), 38_400_000_000);
-    ws_nsi.parts = [("uploads".to_string(), 29_000_000_000u64), ("node_modules".into(), 2_100_000_000), (".next".into(), 1_400_000_000)].into();
+    let mut ws_acme = row("workspace", "id-acme", agent("acme"), 38_400_000_000);
+    ws_acme.parts = [("uploads".to_string(), 29_000_000_000u64), ("node_modules".into(), 2_100_000_000), (".next".into(), 1_400_000_000)].into();
     Arc::new(Snapshot {
         consumers: vec![
-            ws_nsi,
-            row("database", "jobs_db", agent("nsi"), 58_200_000_000),
-            row("app", "jobs", agent("nsi"), 6_200_000_000),
+            ws_acme,
+            row("database", "jobs_db", agent("acme"), 58_200_000_000),
+            row("app", "jobs", agent("acme"), 6_200_000_000),
             row("workspace", "id-plans", agent("plans"), 14_000_000_000),
             row("workspace", "id-mail", agent("mail"), 800_000_000),
             row("workspace", "id-tiny", agent("tiny"), 1_000_000),
@@ -198,7 +198,7 @@ fn the_live_sink_lists_and_closes_its_own_disk_tickets() {
 
 #[test]
 fn ticket_titles_give_the_mount_and_level() {
-    assert_eq!(ticket_mount_level("Disk / 89% full on nsi.k2.dev (118 GB free)", 2), Some(("/".into(), Level::Warn)));
+    assert_eq!(ticket_mount_level("Disk / 89% full on acme.k2.dev (118 GB free)", 2), Some(("/".into(), Level::Warn)));
     assert_eq!(ticket_mount_level("Disk /System/Volumes/Data 43.9% full on z3mbp (52 GB free)", 2), Some(("/System/Volumes/Data".into(), Level::Warn)));
     assert_eq!(ticket_mount_level("Disk /mnt/my disk 96% full on box (9 GB free)", 1), Some(("/mnt/my disk".into(), Level::Refuse)));
     assert_eq!(ticket_mount_level("CRITICAL: disk / 99% full on box (1 GB free)", 1), Some(("/".into(), Level::Critical)));
@@ -217,8 +217,8 @@ fn old_device_keys_and_duplicate_tickets_are_merged_once() {
     let mut st = WatchState::default();
     st.levels.insert("1:16".into(), Level::Warn);
     st.levels.insert("1:15".into(), Level::Warn);
-    st.sent.insert("id-nsi|disk:1:17:warn".into(), 1_799_999_000);
-    st.sent.insert("id-nsi|growth:app:jobs".into(), 1_799_999_000);
+    st.sent.insert("id-acme|disk:1:17:warn".into(), 1_799_999_000);
+    st.sent.insert("id-acme|growth:app:jobs".into(), 1_799_999_000);
     let sink = TicketRec {
         open: vec![
             OpenTicket { id: "aaaaaaaa-old".into(), title: "Disk /System/Volumes/Data 43.9% full on z3mbp (52 GB free)".into(), priority: 2, created_at: 100 },
@@ -237,8 +237,8 @@ fn old_device_keys_and_duplicate_tickets_are_merged_once() {
     assert_eq!(st.levels.iter().map(|(k, v)| (k.as_str(), *v)).collect::<Vec<_>>(), vec![(key, Level::Warn)]);
     assert!(st.volume_keys);
     // The agent's mark for the device it is on now moved to the volume.
-    assert!(st.sent.contains_key(&format!("id-nsi|disk:{key}:warn")), "{:?}", st.sent);
-    assert!(st.sent.contains_key("id-nsi|growth:app:jobs"));
+    assert!(st.sent.contains_key(&format!("id-acme|disk:{key}:warn")), "{:?}", st.sent);
+    assert!(st.sent.contains_key("id-acme|growth:app:jobs"));
     assert!(!st.sent.keys().any(|k| k.contains("disk:1:17")));
     // Only once: a second tick merges nothing again.
     tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now)), "z3mbp", now + 60, &sink, &no_fresh);
@@ -266,15 +266,15 @@ fn notices_go_once_to_the_owner_and_the_three_biggest_agents() {
     let mut st = load_state(&path);
     let now = 1_800_000_000;
     let fresh = snap(now - 60);
-    let out = tick_with(&mut st, &[disk(89)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[disk(89)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now, &sink, &no_fresh);
     let got = sink.take();
     assert_eq!(got, out);
     assert_eq!(got.len(), 4, "{got:#?}");
     match &got[0] {
         Notice::Owner { title, body, priority } => {
-            assert_eq!(title, "Disk / 89% full on nsi.k2.dev (118 GB free)");
+            assert_eq!(title, "Disk / 89% full on acme.k2.dev (118 GB free)");
             assert_eq!(*priority, 2);
-            assert!(body.starts_with("The biggest users: nsi 103 GB (jobs_db 58 GB, its folder 38 GB), plans 14 GB (its folder 14 GB), mail 800 MB"), "{body}");
+            assert!(body.starts_with("The biggest users: acme 103 GB (jobs_db 58 GB, its folder 38 GB), plans 14 GB (its folder 14 GB), mail 800 MB"), "{body}");
             assert!(body.contains("Nothing was deleted.") && body.contains("K2 clears 2.6 GB of its own old Seeds"), "{body}");
             assert!(body.contains("k2 app resources settings --refuse 95 --reserve 10G") && body.contains("--mode off"), "{body}");
         }
@@ -287,36 +287,36 @@ fn notices_go_once_to_the_owner_and_the_three_biggest_agents() {
             n => panic!("warn = notes, never a wake: {n:?}"),
         })
         .collect();
-    assert_eq!(notes, vec!["id-nsi", "id-plans", "id-mail"], "the three biggest, not tiny");
+    assert_eq!(notes, vec!["id-acme", "id-plans", "id-mail"], "the three biggest, not tiny");
     if let Notice::Note { title, text, .. } = &got[1] {
         assert_eq!(title, "Disk / on this box is 89% full (118 GB free).");
         assert!(text.starts_with("You use 103 GB: jobs_db 58 GB, your folder 38 GB (uploads 29 GB, node_modules 2.1 GB, .next 1.4 GB), App jobs 6.2 GB. K2 deletes nothing of yours."), "{text}");
     }
     // Still 89% next minute: nothing.
-    assert!(tick_with(&mut st, &[disk(89)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now + 60, &sink, &no_fresh).is_empty());
+    assert!(tick_with(&mut st, &[disk(89)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now + 60, &sink, &no_fresh).is_empty());
     // A restart: the state file keeps the crossing.
     save_state(&path, &st).unwrap();
     let mut st = load_state(&path);
-    assert!(tick_with(&mut st, &[disk(89)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now + 120, &sink, &no_fresh).is_empty(), "no repeat after a restart");
+    assert!(tick_with(&mut st, &[disk(89)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now + 120, &sink, &no_fresh).is_empty(), "no repeat after a restart");
     // Refuse: the ticket at priority 1 and wakes.
-    let out = tick_with(&mut st, &[disk(96)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now + 180, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[disk(96)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now + 180, &sink, &no_fresh);
     assert!(matches!(&out[0], Notice::Owner { priority: 1, body, .. } if body.contains("are refused now")), "{out:#?}");
     assert_eq!(out.iter().filter(|n| matches!(n, Notice::Wake { .. })).count(), 3);
     // Critical within the day: the owner hears (CRITICAL); each agent's
     // cause is new (critical), so it hears once too.
-    let out = tick_with(&mut st, &[disk(99)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now + 240, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[disk(99)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now + 240, &sink, &no_fresh);
     assert!(matches!(&out[0], Notice::Owner { title, priority: 1, .. } if title.starts_with("CRITICAL: disk / 99")), "{out:#?}");
     assert_eq!(out.iter().filter(|n| matches!(n, Notice::Wake { .. })).count(), 3);
     // Down and back up to critical inside 24 h: the owner gets the new
     // crossing; the agents' same cause is deduped.
-    tick_with(&mut st, &[disk(50)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now + 300, &sink, &no_fresh);
+    tick_with(&mut st, &[disk(50)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now + 300, &sink, &no_fresh);
     sink.take();
-    let out = tick_with(&mut st, &[disk(99)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now + 360, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[disk(99)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now + 360, &sink, &no_fresh);
     assert_eq!(out.len(), 1, "agents already heard about critical today: {out:#?}");
     // A day later the same cause may go again.
-    tick_with(&mut st, &[disk(50)], &guard(Mode::On), Some(fresh.clone()), "nsi.k2.dev", now + 400, &sink, &no_fresh);
+    tick_with(&mut st, &[disk(50)], &guard(Mode::On), Some(fresh.clone()), "acme.k2.dev", now + 400, &sink, &no_fresh);
     let day = now + 400 + DEDUPE_SECS;
-    let out = tick_with(&mut st, &[disk(99)], &guard(Mode::On), Some(snap(day - 60)), "nsi.k2.dev", day, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[disk(99)], &guard(Mode::On), Some(snap(day - 60)), "acme.k2.dev", day, &sink, &no_fresh);
     assert_eq!(out.iter().filter(|n| matches!(n, Notice::Wake { .. })).count(), 3);
     // Mode off: nothing at all, and no state change.
     let before = st.clone();

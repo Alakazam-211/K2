@@ -1,4 +1,4 @@
-//! App guests never see a host path (0.46.5 patch-up item 14, Agent NSI
+//! App guests never see a host path (0.46.5 patch-up item 14, Agent Acme
 //! Vanilla).
 //!
 //! A K2 system line on a room's Thread (`post_workspace_note`: a test
@@ -195,33 +195,33 @@ mod tests {
         for p in ["/home/a/AI Projects/x", "/Users/z/x", "/tmp/x", "~", "~/x", "C:\\Users\\x", "c:/x", "a\\b"] {
             assert!(is_host_path(p), "{p}");
         }
-        for a in ["sales", "ws/review", "sales::host.k2.dev", "import:abc", "k2", "", "agent-nsi-vanilla", "dana"] {
+        for a in ["sales", "ws/review", "sales::host.k2.dev", "import:abc", "k2", "", "agent-acme-vanilla", "dana"] {
             assert!(!is_host_path(a), "{a}");
         }
     }
 
     #[test]
     fn a_doc_loses_the_rooms_folder_and_path_senders() {
-        let s = GuestScrub::new(Some("/home/alakazamlabs/AI Projects/agent-nsi-vanilla/"), "agent-nsi-vanilla");
+        let s = GuestScrub::new(Some("/home/alakazamlabs/AI Projects/agent-acme-vanilla/"), "agent-acme-vanilla");
         let mut d = json!({
-            "from": "/home/alakazamlabs/AI Projects/agent-nsi-vanilla",
+            "from": "/home/alakazamlabs/AI Projects/agent-acme-vanilla",
             "to": "/srv/elsewhere",
-            "body": "K2: saved /home/alakazamlabs/AI Projects/agent-nsi-vanilla/out/a.txt",
-            "choice": {"prompt": "in /home/alakazamlabs/AI Projects/agent-nsi-vanilla?"},
+            "body": "K2: saved /home/alakazamlabs/AI Projects/agent-acme-vanilla/out/a.txt",
+            "choice": {"prompt": "in /home/alakazamlabs/AI Projects/agent-acme-vanilla?"},
             "author": {"kind": "guest", "login": "dana"},
         });
         s.doc(&mut d);
         let t = d.to_string();
         assert!(!t.contains("/home/"), "{t}");
         assert!(!t.contains("/srv/"), "a path recipient is renamed too: {t}");
-        assert_eq!(d["from"], "agent-nsi-vanilla");
-        assert_eq!(d["to"], "agent-nsi-vanilla");
-        assert_eq!(d["body"], "K2: saved agent-nsi-vanilla/out/a.txt");
+        assert_eq!(d["from"], "agent-acme-vanilla");
+        assert_eq!(d["to"], "agent-acme-vanilla");
+        assert_eq!(d["body"], "K2: saved agent-acme-vanilla/out/a.txt");
         assert_eq!(d["author"]["login"], "dana", "other fields untouched");
         // An address sender stays.
-        let mut d = json!({"from": "sales", "to": "agent-nsi-vanilla", "body": "hi"});
+        let mut d = json!({"from": "sales", "to": "agent-acme-vanilla", "body": "hi"});
         s.doc(&mut d);
-        assert_eq!(d, json!({"from": "sales", "to": "agent-nsi-vanilla", "body": "hi"}));
+        assert_eq!(d, json!({"from": "sales", "to": "agent-acme-vanilla", "body": "hi"}));
     }
 
     #[test]

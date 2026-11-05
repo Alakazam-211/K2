@@ -1,7 +1,7 @@
 //! 0.46.0 "grace" routes for existing Apps (Rosson's cross-over plan,
 //! 2026-10-14: 0.46.0 adds the new ways and removes nothing; no release is
 //! the cut-over, `k2_core::app_grace::CUTOVER_RELEASE`). They serve every
-//! published `--cmd` service (NSI's Jobs BFF, Hearth) and every runtime App, and are **not** behind the runtime
+//! published `--cmd` service (a client's Jobs BFF, Hearth) and every runtime App, and are **not** behind the runtime
 //! preview flag.
 //!
 //! ```text
@@ -483,7 +483,7 @@ pub(crate) fn report(t: &Target) -> J {
         let at = format!("{}:{}", r.file, r.line);
         let n = &r.name;
         if APP_ONLY_ENV.contains(&n.as_str()) && !provided.contains(n) {
-            // The App's own environment (NSI 0.46.4 #4): code written for
+            // The App's own environment (0.46.4 field report #4): code written for
             // the App runtime reads these, and they are exactly what an App
             // gets. Expected, never a break.
             warnings.push(warning(

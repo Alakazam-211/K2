@@ -1,6 +1,6 @@
 //! RS-A15 `guests:rooms`, headless (room-scope amendment 2026-10-18): the
 //! real dispatcher in process on a temp `$HOME`, over loopback, the way
-//! Agent NSI's Jobs BFF calls it to replace `POST /cli/skin/users/rooms`
+//! Agent Acme's Jobs BFF calls it to replace `POST /cli/skin/users/rooms`
 //! with the owner token.
 //!
 //! - the owner token and Connect logins never reach `/cli/skin/guests/rooms`;

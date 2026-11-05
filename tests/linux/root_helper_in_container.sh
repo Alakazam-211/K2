@@ -467,20 +467,20 @@ req agent keep gen bump
 expect_rc 77 "user-scope agent verb"
 ok "user-scope MainPID (private-socket fallback, no user bus): the user-scope daemon passes, its child is refused"
 
-echo "== a non-k2 daemon user (nsi: alakazamlabs) =="
+echo "== a non-k2 daemon user (acme: alakazamlabs) =="
 usys stop k2-daemon.service || true
 useradd -m -s /bin/bash alakazamlabs
 chown -R alakazamlabs:alakazamlabs /run/k2fd
-sed 's/^User=k2$/User=alakazamlabs/' /etc/systemd/system/k2-daemon.service >/etc/systemd/system/k2-daemon-nsi.service
-grep -q '^User=alakazamlabs$' /etc/systemd/system/k2-daemon-nsi.service || fail "nsi unit"
+sed 's/^User=k2$/User=alakazamlabs/' /etc/systemd/system/k2-daemon.service >/etc/systemd/system/k2-daemon-acme.service
+grep -q '^User=alakazamlabs$' /etc/systemd/system/k2-daemon-acme.service || fail "acme unit"
 systemctl daemon-reload
-systemctl start k2-daemon-nsi.service
+systemctl start k2-daemon-acme.service
 sleep 1
-systemctl is-active --quiet k2-daemon-nsi.service || fail "alakazamlabs fake daemon did not start"
-K2_ALLOW_TEST_KEYS_BUILD=1 bash /it/scripts/install-root-helper.sh --file "$CUR" --user alakazamlabs --unit k2-daemon-nsi.service >/tmp/irh3.log 2>&1 \
+systemctl is-active --quiet k2-daemon-acme.service || fail "alakazamlabs fake daemon did not start"
+K2_ALLOW_TEST_KEYS_BUILD=1 bash /it/scripts/install-root-helper.sh --file "$CUR" --user alakazamlabs --unit k2-daemon-acme.service >/tmp/irh3.log 2>&1 \
 	|| { cat /tmp/irh3.log; fail "install with --user alakazamlabs"; }
 grep -q '^user = "alakazamlabs"$' /etc/k2-root-helper/daemon.toml || fail "daemon.toml user"
-grep -q '^unit = "k2-daemon-nsi.service"$' /etc/k2-root-helper/daemon.toml || fail "daemon.toml unit"
+grep -q '^unit = "k2-daemon-acme.service"$' /etc/k2-root-helper/daemon.toml || fail "daemon.toml unit"
 grep -q '^alakazamlabs ALL=(root) NOPASSWD: /usr/local/libexec/k2-root-helper$' /etc/sudoers.d/k2-root-helper || fail "sudoers user"
 grep -q "check       : alakazamlabs may run it" /tmp/irh3.log || fail "door check as alakazamlabs: $(cat /tmp/irh3.log)"
 if runuser -u k2 -- sudo -n -l "$H" >/dev/null 2>&1; then fail "k2 must no longer reach the helper"; fi

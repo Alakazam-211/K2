@@ -59,7 +59,7 @@ pub const HOST_APP_ID: &str = "host";
 pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
 
 /// skin.db schema version this binary knows (`PRAGMA user_version`, S24-1).
-/// Steps are additive only: nsi's BFF reads `principals` and
+/// Steps are additive only: a client's BFF reads `principals` and
 /// `login_lockouts` directly, so no step renames, drops or rebuilds.
 ///   1 = AM1 sync: the host grant is the login truth (role or rooms).
 ///   2 = `tokens.app_service_id` (+ index) and `grants.created_by`.
@@ -6507,7 +6507,7 @@ pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool
 }
 
 /// `POST /cli/skin/roles/assign` (`k2 app user role <user> <role>`),
-/// 0.46.5 (item 13, Agent NSI Vanilla): for an App-only guest (App
+/// 0.46.5 (item 13, Agent Acme Vanilla): for an App-only guest (App
 /// logins, no box login) the role lives on its App login's grant, so the
 /// role goes THERE, through the one in-place path [`set_app_grant_role`]
 /// (`k2 app grant role`): a rooms-only grant (a test guest added with
@@ -8594,7 +8594,7 @@ mod tests {
         });
     }
 
-    /// nsi BFF ask (2026-10-13): a locked login says how long is left, and
+    /// A client BFF ask (2026-10-13): a locked login says how long is left, and
     /// an unknown username locks exactly like a known one (no oracle).
     #[test]
     fn lockout_reports_retry_after_for_known_and_unknown_alike() {
@@ -8767,7 +8767,7 @@ mod tests {
         .expect("lock rows")
     }
 
-    /// agent-nsi (0.45.5): username locked, the right password typed as
+    /// agent-acme (0.45.5): username locked, the right password typed as
     /// the EMAIL still signed in. The lock is the principal's.
     #[test]
     fn lock_via_username_refuses_email_with_right_password() {

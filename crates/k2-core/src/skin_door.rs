@@ -843,7 +843,7 @@ fn nested_target(loopback_port: u16) -> String {
 /// True when `host` (no scheme; port optional) is the Caddy front door:
 /// reserved `skin.*` **or** a nested Connect label whose target is this
 /// box's Caddy loopback (`127.0.0.1:38472`). A nested label pointed at
-/// an SPA port (NSI `dannon` → `:3847`) is **not** the front door.
+/// an SPA port (Initech `globex` → `:3847`) is **not** the front door.
 pub fn is_front_door_host(host: &str) -> bool {
     let host = host.trim().to_ascii_lowercase();
     let host = host.split(':').next().unwrap_or("").trim_end_matches('.');
@@ -1772,13 +1772,13 @@ mod tests {
         assert!(!is_front_door_host("dtl.k2.dev"), "kingdom host is not");
 
         let mut spa = std::collections::HashMap::new();
-        spa.insert("dannon".into(), "127.0.0.1:3847".into());
+        spa.insert("globex".into(), "127.0.0.1:3847".into());
         crate::tunnel::subdomains::store(crate::tunnel::subdomains::SubdomainMap {
-            primary: "nsi".into(),
+            primary: "initech".into(),
             targets: spa,
         });
         assert!(
-            !is_front_door_host("dannon.nsi.k2.dev"),
+            !is_front_door_host("globex.initech.k2.dev"),
             "nested label targeting the SPA is not the Caddy front door"
         );
         crate::tunnel::subdomains::store((*prev).clone());

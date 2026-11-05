@@ -371,12 +371,12 @@ fn folders_walk_partial_and_new_first_then_app_workspaces_then_biggest() {
 fn the_snapshot_names_every_rows_owner() {
     let home = crate::test_support::TempHome::new();
     let _db = k2_core::db::scoped_for_test();
-    let ws_path = home.path().join("AI").join("nsi");
+    let ws_path = home.path().join("AI").join("acme");
     std::fs::create_dir_all(&ws_path).unwrap();
     {
         let h = k2_core::db::shared();
         let conn = h.lock();
-        for (id, p) in [("ws-nsi", ws_path.to_string_lossy().to_string()), ("ws-plans", home.path().join("AI/plans").to_string_lossy().to_string())] {
+        for (id, p) in [("ws-acme", ws_path.to_string_lossy().to_string()), ("ws-plans", home.path().join("AI/plans").to_string_lossy().to_string())] {
             conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, ?1, ?2, ?3)", params![id, p, id.trim_start_matches("ws-")]).unwrap();
         }
         store::insert_app(
@@ -385,7 +385,7 @@ fn the_snapshot_names_every_rows_owner() {
                 app_id: "jobs",
                 service_id: "svc-jobs",
                 seed_id: None,
-                owner_workspace: "ws-nsi",
+                owner_workspace: "ws-acme",
                 isolation: "process",
                 memory_limit_bytes: None,
                 front_port: 0,
@@ -413,7 +413,7 @@ fn the_snapshot_names_every_rows_owner() {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO sql_databases (id, project_id, name, status, created_at) VALUES ('d1', 'ws-nsi', 'jobs_db', 'active', 1), ('d2', 'ws-plans', 'gone_db', 'dropped', 1)",
+            "INSERT INTO sql_databases (id, project_id, name, status, created_at) VALUES ('d1', 'ws-acme', 'jobs_db', 'active', 1), ('d2', 'ws-plans', 'gone_db', 'dropped', 1)",
             [],
         )
         .unwrap();
@@ -421,7 +421,7 @@ fn the_snapshot_names_every_rows_owner() {
     let mut c = Cache::default();
     c.apps.insert("jobs".into(), FolderScan { bytes: 6000, parts: [("data".to_string(), 4800), ("logs".into(), 50), ("node_modules".into(), 1000)].into(), partial: false, scanned_at: 11 });
     c.workspaces.insert(
-        "ws-nsi".into(),
+        "ws-acme".into(),
         FolderScan { bytes: 38_400, parts: [("uploads".to_string(), 29_000), ("node_modules".into(), 2_100), (".next".into(), 1_400), ("src".into(), 10)].into(), partial: false, scanned_at: 12 },
     );
     c.workspaces_at = Some(12);
@@ -439,8 +439,8 @@ fn the_snapshot_names_every_rows_owner() {
     let jobs = row("app", "jobs");
     assert_eq!(jobs.path.as_deref(), Some("process"));
     assert_eq!(jobs.owner.kind, "agent");
-    assert_eq!(jobs.owner.handle.as_deref(), Some("nsi"));
-    assert_eq!(jobs.owner.workspace_id.as_deref(), Some("ws-nsi"));
+    assert_eq!(jobs.owner.handle.as_deref(), Some("acme"));
+    assert_eq!(jobs.owner.workspace_id.as_deref(), Some("ws-acme"));
     assert_eq!(jobs.disk_bytes, Some(6000));
     assert_eq!(jobs.parts["data"], 4800);
     assert_eq!(jobs.parts["other"], 1000, "a folder not named data/cache/logs/home is other");
@@ -457,18 +457,18 @@ fn the_snapshot_names_every_rows_owner() {
     assert!(s.consumers.iter().all(|r| r.id != "svc-jobs"), "an App's own service is not a --cmd row");
     let db = row("database", "jobs_db");
     assert_eq!(db.disk_bytes, Some(58_200));
-    assert_eq!(db.owner.handle.as_deref(), Some("nsi"));
+    assert_eq!(db.owner.handle.as_deref(), Some("acme"));
     assert!(s.consumers.iter().all(|r| r.id != "gone_db"), "dropped databases are gone");
     let pg = row("shared", "postgres");
     assert_eq!(pg.disk_bytes, Some(1_107), "WAL + databases no agent owns");
-    let ws = row("workspace", "ws-nsi");
+    let ws = row("workspace", "ws-acme");
     assert_eq!(ws.disk_bytes, Some(38_400));
     assert_eq!(ws.parts.len(), 3, "the three biggest parts");
     assert!(!ws.parts.contains_key("src"));
     assert_eq!(ws.folder.as_deref(), Some(ws_path.to_string_lossy().as_ref()), "people get the folder");
     let agent_view = ws.for_agent();
     assert!(agent_view.folder.is_none() && agent_view.owner.workspace_id.is_none(), "agents never");
-    assert_eq!(agent_view.id, "nsi", "an agent sees the handle, never the workspace id");
+    assert_eq!(agent_view.id, "acme", "an agent sees the handle, never the workspace id");
     let plans_ws = row("workspace", "ws-plans");
     assert_eq!(plans_ws.disk_bytes, None, "not scanned yet: unknown");
     assert_eq!(s.scan.workspaces_at, Some(12));
@@ -477,7 +477,7 @@ fn the_snapshot_names_every_rows_owner() {
     assert_eq!(s.scan.disk_at, Some(20));
     assert!(s.k2_will_clear.is_none(), "mode off in tests: no sweep, nothing to clear");
     let by = s.by_owner();
-    assert_eq!(by[0].owner.handle.as_deref(), Some("nsi"));
+    assert_eq!(by[0].owner.handle.as_deref(), Some("acme"));
     assert_eq!(by[0].disk_bytes, 6000 + 58_200 + 38_400);
     // Smoke r6: K2's internal audit sentinels are not agent folders.
     let ids: Vec<&str> = {
@@ -487,7 +487,7 @@ fn the_snapshot_names_every_rows_owner() {
         assert_eq!(n, 2, "the scoped DB seeds both sentinels, so the filter is exercised");
         s.consumers.iter().filter(|r| r.kind == "workspace").map(|r| r.id.as_str()).collect()
     };
-    assert_eq!(ids, vec!["ws-nsi", "ws-plans"], "no _orphan / _broadcast rows");
+    assert_eq!(ids, vec!["ws-acme", "ws-plans"], "no _orphan / _broadcast rows");
     let tracked: Vec<String> = tracked_paths().into_iter().map(|(_, p)| p.to_string_lossy().to_string()).collect();
     assert!(tracked.iter().all(|p| p != "_orphan" && p != "_broadcast"), "{tracked:?}");
 }

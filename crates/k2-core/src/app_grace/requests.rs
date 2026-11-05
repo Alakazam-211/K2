@@ -279,7 +279,7 @@ pub fn list(conn: &Connection, f: &Filter<'_>, limit: i64) -> rusqlite::Result<V
 /// for this workspace's `app_label`, when its body has the same value as
 /// `body` under every one of `keys` (the change's fingerprint). Only the
 /// latest counts: once a different change was approved, going back to an
-/// older one asks again. 0.46.6 (NSI papercut 13): [`create`] reuses only
+/// older one asks again. 0.46.6 (client papercut 13): [`create`] reuses only
 /// a *pending* twin, so an identical re-run after the approval filed a
 /// fresh request each time; the caller uses this to let it through.
 pub fn approved_same(
@@ -304,7 +304,7 @@ pub fn approved_same(
     Ok(latest.filter(|r| same(r) && standing_revoked(r).is_none()))
 }
 
-/// How long an approved run stands for identical re-runs (NSI papercut
+/// How long an approved run stands for identical re-runs (client papercut
 /// 13, Rosson's rule via K2 2026-10-27): 30 days from the decision.
 pub const STANDING_RUN_SECS: i64 = 30 * 86_400;
 
@@ -464,9 +464,9 @@ pub(crate) mod tests {
         let c = conn();
         for (i, kind) in ALL_KINDS.iter().enumerate() {
             let body = serde_json::json!({ "i": i });
-            insert(&c, &new(kind, "jobs", &body, "agent:nsi"), 100).unwrap_or_else(|e| panic!("kind {kind} refused by the CHECK: {e}"));
+            insert(&c, &new(kind, "jobs", &body, "agent:acme"), 100).unwrap_or_else(|e| panic!("kind {kind} refused by the CHECK: {e}"));
         }
-        assert!(insert(&c, &new("bogus", "jobs", &serde_json::json!({}), "agent:nsi"), 100).is_err(), "an unknown kind is refused");
+        assert!(insert(&c, &new("bogus", "jobs", &serde_json::json!({}), "agent:acme"), 100).is_err(), "an unknown kind is refused");
         let sql = include_str!("../../drizzle_sql/0183_app_door.sql");
         for k in ALL_KINDS {
             assert!(sql.contains(&format!("'{k}'")), "0183's CHECK names {k}");
@@ -498,7 +498,7 @@ pub(crate) mod tests {
     #[test]
     fn set_result_keeps_a_password_set_written_while_applying() {
         let c = conn();
-        let r = create(&c, &new(KIND_CONFIG, "jobs", &serde_json::json!({"a": 1}), "agent:nsi"), 100).unwrap();
+        let r = create(&c, &new(KIND_CONFIG, "jobs", &serde_json::json!({"a": 1}), "agent:acme"), 100).unwrap();
         // The agent's one password set lands before the approval's result.
         c.execute(
             "UPDATE app_widenings SET result_json = json_set(COALESCE(result_json, '{}'), '$.passwordSet', json('true')) WHERE id = ?1",
@@ -509,7 +509,7 @@ pub(crate) mod tests {
         let got = get(&c, &r.id).unwrap().unwrap().result.unwrap();
         assert_eq!(got, serde_json::json!({"made": "usw-once", "passwordSet": true}));
         // Without one, the result is written as given.
-        let r2 = create(&c, &new(KIND_CONFIG, "other", &serde_json::json!({"a": 2}), "agent:nsi"), 100).unwrap();
+        let r2 = create(&c, &new(KIND_CONFIG, "other", &serde_json::json!({"a": 2}), "agent:acme"), 100).unwrap();
         set_result(&c, &r2.id, STATUS_FAILED, &serde_json::json!({"code": "x"})).unwrap();
         assert_eq!(get(&c, &r2.id).unwrap().unwrap().result.unwrap(), serde_json::json!({"code": "x"}));
     }
@@ -518,8 +518,8 @@ pub(crate) mod tests {
     fn held_requests_dedupe_decide_once_and_expire() {
         let c = conn();
         let body = serde_json::json!({"app": "jobs", "ops": [{"memory": 2147483648i64}]});
-        let a = create(&c, &new(KIND_CONFIG, "jobs", &body, "agent:nsi"), 100).unwrap();
-        let b = create(&c, &new(KIND_CONFIG, "jobs", &body, "agent:nsi"), 101).unwrap();
+        let a = create(&c, &new(KIND_CONFIG, "jobs", &body, "agent:acme"), 100).unwrap();
+        let b = create(&c, &new(KIND_CONFIG, "jobs", &body, "agent:acme"), 101).unwrap();
         assert_eq!(a.id, b.id, "the same proposal from the same agent is one request");
         assert!(a.id.starts_with("w_") && a.id.len() == 14, "{}", a.id);
         assert_eq!(a.status, STATUS_PENDING);
@@ -534,24 +534,24 @@ pub(crate) mod tests {
         assert_eq!((d.status.as_str(), d.decision_reason.as_deref()), (STATUS_DENIED, Some("no")));
         assert_eq!(decide(&c, &a.id, STATUS_APPROVED, "owner", None, None, 104).unwrap_err(), "not_pending", "decided once");
         // A failed apply is recorded on the request.
-        let f = create(&c, &new(KIND_CLEAN_MODE, "jobs", &serde_json::json!({"on": false}), "agent:nsi"), 110).unwrap();
+        let f = create(&c, &new(KIND_CLEAN_MODE, "jobs", &serde_json::json!({"on": false}), "agent:acme"), 110).unwrap();
         decide(&c, &f.id, STATUS_APPROVED, "owner", Some("local-auth"), None, 111).unwrap();
         set_result(&c, &f.id, STATUS_FAILED, &serde_json::json!({"code": "app_not_found"})).unwrap();
         let f = get(&c, &f.id).unwrap().unwrap();
         assert_eq!((f.status.as_str(), f.confirm_via.as_deref()), (STATUS_FAILED, Some("local-auth")));
         assert_eq!(f.result.unwrap()["code"], "app_not_found");
         // Expiry after seven days; approving an expired request fails.
-        let e = create(&c, &new(KIND_APP_KEY, "other", &serde_json::json!({}), "agent:nsi"), 200).unwrap();
+        let e = create(&c, &new(KIND_APP_KEY, "other", &serde_json::json!({}), "agent:acme"), 200).unwrap();
         assert_eq!(decide(&c, &e.id, STATUS_APPROVED, "owner", None, None, 200 + TTL_SECS).unwrap_err(), "request_expired");
         assert_eq!(get(&c, &e.id).unwrap().unwrap().status, STATUS_EXPIRED);
-        let g = create(&c, &new(KIND_APP_KEY, "third", &serde_json::json!({}), "agent:nsi"), 300).unwrap();
+        let g = create(&c, &new(KIND_APP_KEY, "third", &serde_json::json!({}), "agent:acme"), 300).unwrap();
         let gone = expire_due(&c, 300 + TTL_SECS).unwrap();
         assert_eq!(gone.iter().map(|r| r.id.clone()).collect::<Vec<_>>(), vec![g.id.clone()]);
         assert!(expire_due(&c, 300 + TTL_SECS).unwrap().is_empty());
-        assert_eq!(decide(&c, &g.id, STATUS_WITHDRAWN, "agent:nsi", None, None, 300 + TTL_SECS + 1).unwrap_err(), "not_pending");
+        assert_eq!(decide(&c, &g.id, STATUS_WITHDRAWN, "agent:acme", None, None, 300 + TTL_SECS + 1).unwrap_err(), "not_pending");
     }
 
-    /// NSI papercut 13: the latest approved run with the same fingerprint
+    /// client papercut 13: the latest approved run with the same fingerprint
     /// stands; a different value, a later different approval, or a revoke
     /// ends it.
     #[test]
@@ -559,7 +559,7 @@ pub(crate) mod tests {
         let c = conn();
         let keys = ["cmd", "port"];
         let a = serde_json::json!({"cmd": "serve", "port": 8080, "probeTimeout": null});
-        let r = create(&c, &new(KIND_PUBLISH_RUN, "sales", &a, "agent:nsi"), 100).unwrap();
+        let r = create(&c, &new(KIND_PUBLISH_RUN, "sales", &a, "agent:acme"), 100).unwrap();
         assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "sales", &a, &keys).unwrap().is_none(), "pending stands for nothing");
         decide(&c, &r.id, STATUS_APPROVED, "owner", Some("local-auth"), None, 110).unwrap();
         set_result(&c, &r.id, STATUS_APPROVED, &serde_json::json!({"name": "sales"})).unwrap();
@@ -579,7 +579,7 @@ pub(crate) mod tests {
         assert_eq!(rv.result.as_ref().and_then(|v| v.get("name")).cloned(), Some(serde_json::json!("sales")), "the result is kept");
         assert!(approved_same(&c, KIND_PUBLISH_RUN, "ws-1", "sales", &a, &keys).unwrap().is_none());
         assert_eq!(revoke_standing(&c, &r.id, "owner", 201).unwrap_err(), "already_revoked");
-        let cfg = create(&c, &new(KIND_CONFIG, "sales", &a, "agent:nsi"), 100).unwrap();
+        let cfg = create(&c, &new(KIND_CONFIG, "sales", &a, "agent:acme"), 100).unwrap();
         assert_eq!(revoke_standing(&c, &cfg.id, "owner", 202).unwrap_err(), "not_standing");
         assert_eq!(revoke_standing(&c, "w_nope", "owner", 202).unwrap_err(), "request_not_found");
     }

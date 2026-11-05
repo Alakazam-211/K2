@@ -7467,7 +7467,7 @@ mod tests {
 
     #[test]
     fn thread_post_empty_or_k2_from_stamps_room_handle_not_k2() {
-        let handle = format!("dannon-cherokee{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let handle = format!("globex-bff{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         let pin_id = uuid::Uuid::new_v4().to_string();
         pin(&project_id, &pin_id);

@@ -1721,7 +1721,7 @@ mod tests {
         .expect("grant");
     }
 
-    /// Papercut 8 (agent-nsi, agent-nsi-vanilla 10-26): a file secret
+    /// Papercut 8 (agent-acme, agent-acme-vanilla 10-26): a file secret
     /// granted while a session runs never reached its `$K2_SECRETS_DIR`
     /// (only a restart did). Now: every session gets its dir at spawn even
     /// with nothing in it; after a grant, live delivery writes the file;

@@ -572,7 +572,7 @@ pub struct AppSettings {
     /// without editing a launchd plist / systemd drop-in + restarting the
     /// daemon. The daemon's `misc_routes::api_enabled()` gate is true when
     /// EITHER the env flag OR this setting is on (env stays a valid force-on
-    /// override for headless boxes — nsi's systemd drop-in keeps working).
+    /// override for headless boxes — a hosted box's systemd drop-in keeps working).
     /// The gate consults the [`api_enabled_setting`] runtime mirror PER
     /// REQUEST, so the Settings toggle takes effect live — no restart, no
     /// confirm+reboot dialog. Default MUST stay OFF (surface dark by

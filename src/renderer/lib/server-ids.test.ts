@@ -51,11 +51,11 @@ describe('server-ids', () => {
 
   it('a home server’s servers map fills gaps but never overrides a host’s own answer', () => {
     noteServerId('z3mbpz.k2.dev', Z)
-    noteServerMap({ 'z3mbpz.k2.dev': '9999999999999999', 'nsi.k2.dev': '4444444444444444', bad: 'x' })
+    noteServerMap({ 'z3mbpz.k2.dev': '9999999999999999', 'acme.k2.dev': '4444444444444444', bad: 'x' })
     expect(serverIdForHost('z3mbpz.k2.dev')).toBe(Z)
-    expect(serverIdForHost('nsi.k2.dev')).toBe('4444444444444444')
+    expect(serverIdForHost('acme.k2.dev')).toBe('4444444444444444')
     expect(serverIdForHost('bad')).toBeNull()
-    expect(hostKeyForServerId('4444444444444444')).toBe('nsi.k2.dev')
+    expect(hostKeyForServerId('4444444444444444')).toBe('acme.k2.dev')
   })
 
   it('a migrated box (new identity key) keeps resolving its old id to the host, so rows move to the new id', () => {

@@ -255,7 +255,7 @@ fn class_of(v: &J, user: &str) -> String {
 #[test]
 fn the_plan_lists_every_row_with_its_case() {
     let f = fx("t01");
-    add_labels(&f, "agent-t01", "dannon-t01");
+    add_labels(&f, "agent-t01", "globex-t01");
     let (o1, o2) = (guest("own1-t01", &f.svc, &[&f.a]), guest("own2-t01", &f.svc, &[&f.a]));
     let added = guest("added-t01", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&added, &f.a).unwrap();
@@ -284,7 +284,7 @@ fn the_plan_lists_every_row_with_its_case() {
         vec![
             (f.app.clone(), "app".into(), f.a.clone()),
             ("agent-t01".into(), "taken".into(), f.a.clone()),
-            ("dannon-t01".into(), "subdomain".into(), f.a.clone())
+            ("globex-t01".into(), "subdomain".into(), f.a.clone())
         ],
         "{v}"
     );
@@ -400,7 +400,7 @@ pub(super) fn notes_for(ws: &str) -> Vec<String> {
 #[test]
 fn every_label_moves_and_nothing_restarts() {
     let f = fx("t11");
-    add_labels(&f, "agent-t11", "dannon-t11");
+    add_labels(&f, "agent-t11", "globex-t11");
     {
         let h = k2_core::db::shared();
         let conn = h.lock();
@@ -416,7 +416,7 @@ fn every_label_moves_and_nothing_restarts() {
     assert_eq!(holder("agent-t11").as_deref(), Some(f.a.as_str()), "nothing moves before the approval");
     let (st, v) = approve(&req_id(&v));
     assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
-    for l in [f.app.as_str(), "agent-t11", "dannon-t11"] {
+    for l in [f.app.as_str(), "agent-t11", "globex-t11"] {
         assert_eq!(holder(l).as_deref(), Some(f.b.as_str()), "{l} is B's");
     }
     let after = app_row(&f.app);
@@ -1327,7 +1327,7 @@ fn the_app_s_audit_keeps_the_whole_trail() {
 #[test]
 fn undo_puts_everything_back_with_compare_and_set_passwords() {
     let f = fx("t51");
-    add_labels(&f, "agent-t51", "dannon-t51");
+    add_labels(&f, "agent-t51", "globex-t51");
     let kept = guest("kay-t51", &f.svc, &[&f.a]);
     k2_core::skin::creators::stamp(&kept, &f.a).unwrap();
     k2_core::skin::creators::tie(&kept, &f.a, "agent:test", k2_core::skin::ties::REASON_CREATED).unwrap();
@@ -1354,7 +1354,7 @@ fn undo_puts_everything_back_with_compare_and_set_passwords() {
     assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
     assert_eq!(handover_row(&hid).state, "undone");
     assert_eq!(app_row(&f.app).owner_workspace, f.a);
-    for l in [f.app.as_str(), "agent-t51", "dannon-t51"] {
+    for l in [f.app.as_str(), "agent-t51", "globex-t51"] {
         assert_eq!(holder(l).as_deref(), Some(f.a.as_str()), "{l} is A's again");
     }
     assert_eq!(super::labels::load_cfg(&f.app).unwrap().labels[0].service_id, "svc-legacy", "the taken label points back");

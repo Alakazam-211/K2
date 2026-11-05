@@ -47,7 +47,7 @@ use std::sync::Arc;
 
 use k2_core::log_debug;
 
-use crate::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
+use crate::spawn::{spawn_agent_session_v2_with, SpawnOpts, SpawnWorkspaceSessionRequest};
 
 /// Daemon-side headless wake spawn. Returns the v2 session id as a
 /// String (the renderer's `openHeartbeatTab` flow + the daemon's
@@ -70,7 +70,9 @@ pub fn spawn_wake_headless(
         wake_prompt,
         heartbeat_name,
         WakeDelivery::Background,
+        false,
     )
+    .map(|f| f.terminal_id)
     .map_err(|e| e.to_string())
 }
 
@@ -79,19 +81,37 @@ pub fn spawn_wake_headless(
 /// quiescence + locked inject). A heartbeat records `fired` on `Ok`
 /// only; `Err(NotDelivered)` becomes a recorded failure, never a
 /// silent `fired`.
+///
+/// 0.46.9: `replace` evicts a live session under the heartbeat's key
+/// instead of reusing it (a stale session, `hb_stale`), and the answer
+/// says whether the live one was reused.
 pub fn spawn_wake_headless_confirmed(
     agent_name: &str,
     project_path: &str,
     wake_prompt: &str,
     heartbeat_name: Option<&str>,
-) -> Result<String, WakeFireError> {
+    replace: bool,
+) -> Result<WakeFired, WakeFireError> {
     spawn_wake_headless_with(
         agent_name,
         project_path,
         wake_prompt,
         heartbeat_name,
         WakeDelivery::Confirmed,
+        replace,
     )
+}
+
+/// A delivered wake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WakeFired {
+    /// The v2 session the prompt went into.
+    pub terminal_id: String,
+    /// A live session under the key took it (no new spawn, no login pick).
+    pub reused: bool,
+    /// The conversation it runs: the pinned id of a new spawn, or the
+    /// reused session's own (from its argv). `None` when not known.
+    pub conversation_id: Option<String>,
 }
 
 /// How the post-spawn wake prompt is delivered.
@@ -132,7 +152,8 @@ fn spawn_wake_headless_with(
     wake_prompt: &str,
     heartbeat_name: Option<&str>,
     delivery: WakeDelivery,
-) -> Result<String, WakeFireError> {
+    replace: bool,
+) -> Result<WakeFired, WakeFireError> {
     if std::env::var("K2SO_TRACE_WAKE_SPAWN")
         .map(|v| v == "1")
         .unwrap_or(false)
@@ -245,7 +266,7 @@ fn spawn_wake_headless_with(
         _ => None,
     };
 
-    let outcome = spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
+    let outcome = spawn_agent_session_v2_with(SpawnWorkspaceSessionRequest {
         agent_name: agent_name.to_string(),
         project_id: project_id.clone(),
         cwd: project_path.to_string(),
@@ -263,10 +284,25 @@ fn spawn_wake_headless_with(
         env_owner_set: true,
         launch_prompt: None,
         label: None,
-    })
+    }, SpawnOpts { replace })
     .map_err(WakeFireError::SpawnFailed)?;
 
     let terminal_id = outcome.session_id.to_string();
+    let reused = outcome.reused;
+    // 0.46.9: a reused session keeps its own conversation; the uuid minted
+    // above was never passed to it and never gets a transcript.
+    let conversation_id = if reused {
+        crate::v2_session_map::lookup_by_session_id(&outcome.session_id).and_then(|s| {
+            k2_core::workspace::provider_resume::session_id_from_spawn_argv(
+                s.program.as_deref().unwrap_or(""),
+                &s.args,
+            )
+        })
+    } else if session_id_pinned {
+        Some(pinned_session_id.clone())
+    } else {
+        None
+    };
 
     log_debug!(
         "[daemon/wake] spawned v2 PTY for {} in {} (id={})",
@@ -366,9 +402,16 @@ fn spawn_wake_headless_with(
             // adapter (`heartbeat_launch::smart_launch`), so a stale
             // cross-provider id degrades to a fresh fire, never a
             // wrong-grammar resume.
-            if session_id_pinned {
+            //
+            // 0.46.9: on a reuse, the saved id is the reused session's own
+            // conversation (or left as it was when its argv names none),
+            // never the uuid minted above: that id never gets a
+            // transcript, so the next fire took it for a ghost and fired
+            // fresh again, into the same live session (field report
+            // 2026-11-05).
+            if let Some(cid) = conversation_id.as_deref() {
                 let _ = k2_core::db::schema::AgentHeartbeat::save_session_id(
-                    &conn, pid, hb_name, &pinned_session_id,
+                    &conn, pid, hb_name, cid,
                 );
             }
             let _ = k2_core::db::schema::AgentHeartbeat::save_active_terminal_id(
@@ -380,10 +423,11 @@ fn spawn_wake_headless_with(
             crate::session_events::emit_heartbeat_live(project_path, pid, hb_name, true);
         }
         log_debug!(
-            "[daemon/wake] pinned heartbeat '{}' session id: {} terminal: {}",
+            "[daemon/wake] heartbeat '{}' session id: {:?} terminal: {} reused: {}",
             hb_name,
-            pinned_session_id,
-            terminal_id
+            conversation_id,
+            terminal_id,
+            reused
         );
     }
 
@@ -444,9 +488,10 @@ fn spawn_wake_headless_with(
     // The Arc dropping silently retires the unused outcome metadata.
     let _ = Arc::new(outcome);
 
+    let fired = WakeFired { terminal_id: terminal_id.clone(), reused, conversation_id };
     let Some((live, prompt, profile, ceiling)) = delivery_job else {
         return match delivery {
-            WakeDelivery::Background => Ok(terminal_id),
+            WakeDelivery::Background => Ok(fired),
             WakeDelivery::Confirmed => Err(WakeFireError::NotDelivered {
                 terminal_id,
                 reason: "session_lookup_miss",
@@ -467,14 +512,14 @@ fn spawn_wake_headless_with(
                     );
                 }
             });
-            Ok(terminal_id)
+            Ok(fired)
         }
         WakeDelivery::Confirmed => match crate::workspace_msg::deliver_heartbeat_wake(
             &live,
             &prompt,
             Some((&profile, ceiling)),
         ) {
-            Ok(()) => Ok(terminal_id),
+            Ok(()) => Ok(fired),
             Err(reason) => Err(WakeFireError::NotDelivered { terminal_id, reason }),
         },
     }

@@ -42,6 +42,8 @@ REOPEN (same history)
 START AND STOP HELPERS
   k2 sessions new <name> --brief <file> [--cli <cli>]   prints <ws>/<name>; default: your CLI
   k2 sessions stop <name>        stop is sleep; open or msg brings it back
+  A heartbeat run (hb:<name>) is not a helper: k2 heartbeat restart <name>
+  stops it and its next fire starts fresh (any session here may; no switch).
   In the brief, say "when done, k2 msg <ws> with a summary". A helper works in
   your checkout: for a separate branch, tell it to make its own git worktree.
 

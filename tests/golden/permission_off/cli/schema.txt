@@ -2177,6 +2177,16 @@ exit: 0
       ]
     },
     {
+      "name": "heartbeat restart",
+      "usage": "k2 heartbeat restart <name> [--workspace <ws>] [--json]",
+      "description": "Stop a heartbeat's own session and forget its saved conversation, so the next fire starts a new session on the token a new chat here would use (the workspace's pinned token, else the server default). For a session stuck on a usage limit, signed out, or on an old token. The schedule and WAKEUP.md stay. Nothing fires now (k2 heartbeat signal fire <name> to fire at once). hb:<name> works too. A chosen session (heartbeat session --set) is kept; --auto lets K2 start its own. An agent may restart its own workspace's heartbeats with no switch. Exit 0 ok, 1 error (no such heartbeat), 2 bad usage or not a heartbeat name, 3 refused (another workspace), 4 workspace not found.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Another workspace's heartbeat (handle, name or path; people only)."},
+        {"name": "--json", "arg": null, "description": "The daemon's answer as JSON."}
+      ]
+    },
+    {
       "name": "heartbeat show",
       "usage": "k2 heartbeat show <name> [--workspace <ws>] [--json]",
       "description": "One heartbeat's full details (schedule, enabled, last fire, saved session).",

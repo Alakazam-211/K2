@@ -32,6 +32,16 @@
 //!
 //! In all three cases a `heartbeat_fires` audit row is written so
 //! `k2so heartbeat status <name>` reflects the decision.
+//!
+//! 0.46.9 (field report 2026-11-05): before a fire injects into, reuses or
+//! resumes a heartbeat session, `hb_stale` checks it. A session whose last
+//! turn was a limit or sign-in error, or that runs on a token a new start
+//! would no longer pick, is replaced (killed, then a fresh spawn that runs
+//! the login pick). The fire record says what happened: `delivered`,
+//! `delivered into live session`, `restarted: token changed`,
+//! `restarted: weekly limit`, `restarted: usage limit`, `restarted: signed
+//! out`. `k2 heartbeat restart <name>` ([`restart_session`]) lets an agent
+//! restart its own heartbeat's session.
 
 use std::path::Path;
 
@@ -362,20 +372,47 @@ fn smart_launch_checked(
         let _ = AgentHeartbeat::clear_active_terminal_id(&conn, &project_id, &hb.name);
     }
 
+    let hb_key = hb_session_key(&project_id, &hb.name);
+
     // ── Dispatch on the decision, reusing the held live handles ─────────
     match decision {
         LaunchDecision::FreshFire => {
             // Distinguish the two fresh-fire causes for the audit trail:
             // (a) no saved session at all, vs (b) a saved session whose
             // JSONL vanished — the latter clears the ghost id first.
-            if saved_session.is_some() && !saved_jsonl_exists {
+            let cause = if saved_session.is_some() && !saved_jsonl_exists {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 let _ = AgentHeartbeat::clear_session_id(&conn, &project_id, &hb.name);
-            }
-            run_fresh_fire(project_path, &project_id, &agent_name, &hb, &wakeup_abs, catchup_of)
+                FreshCause::GhostCleared
+            } else {
+                FreshCause::NoSavedSession
+            };
+            run_fresh_fire(project_path, &project_id, &agent_name, &hb, &wakeup_abs, catchup_of, cause)
         }
         LaunchDecision::Inject { .. } => {
+            // 0.46.9: a stale live session (limit, sign-in error, token
+            // changed) is replaced, never woken. A person's own chat tab
+            // found by argv is left running; the heartbeat gets its own
+            // new session.
+            let target = active_candidate
+                .as_ref()
+                .map(|l| std::sync::Arc::clone(&l.0))
+                .or_else(|| argv_candidate.as_ref().map(|(_, l)| std::sync::Arc::clone(&l.0)));
+            if let Some(live) = target {
+                let stale =
+                    crate::hb_stale::check_live(&project_id, &hb_key, &live, saved_session.as_deref());
+                match stale_step(&hb.name, chosen_session(&hb), stale) {
+                    StaleStep::Proceed => {}
+                    StaleStep::Replace(stale) => {
+                        return run_fresh_fire(project_path, &project_id, &agent_name, &hb,
+                            &wakeup_abs, catchup_of, FreshCause::Stale(stale));
+                    }
+                    StaleStep::Fail(msg) => {
+                        return record_fire_failure(&project_id, &agent_name, &hb, &msg);
+                    }
+                }
+            }
             // Prefer the stamped (2a) handle; fall back to the argv (2b)
             // handle. The planner already guaranteed one is present + alive.
             let session_id = saved_session.clone().unwrap_or_default();
@@ -393,8 +430,93 @@ fn smart_launch_checked(
             }
         }
         LaunchDecision::ResumeAndFire { claude_session_id } => {
+            // 0.46.9: a saved conversation whose last turn was a limit or
+            // sign-in error, or that was recorded on a token a new start
+            // would not pick, is not resumed: a new session takes the wake.
+            let stale = crate::hb_stale::check_saved(
+                &project_id,
+                &hb_key,
+                &resolved_for_resume.command,
+                &claude_session_id,
+            );
+            match stale_step(&hb.name, chosen_session(&hb), stale) {
+                StaleStep::Proceed => {}
+                StaleStep::Replace(stale) => {
+                    return run_fresh_fire(project_path, &project_id, &agent_name, &hb,
+                        &wakeup_abs, catchup_of, FreshCause::Stale(stale));
+                }
+                StaleStep::Fail(msg) => {
+                    return record_fire_failure(&project_id, &agent_name, &hb, &msg);
+                }
+            }
             run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
                 &wakeup_abs, &claude_session_id, &resolved_for_resume, catchup_of)
+        }
+    }
+}
+
+/// The v2 map key of a heartbeat's own session.
+pub fn hb_session_key(project_id: &str, name: &str) -> String {
+    format!("{project_id}:hb:{name}")
+}
+
+/// What a fire does with a stale verdict ([`stale_step`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaleStep {
+    /// Healthy, or a token change on a chosen session: wake it as before.
+    Proceed,
+    /// Kill it and start a new session (the heartbeat's own lane).
+    Replace(crate::hb_stale::Stale),
+    /// A chosen session (`k2 heartbeat session <n> --set`) that is stuck:
+    /// K2 never retargets a person's choice, so the fire fails loudly.
+    Fail(String),
+}
+
+/// 0.46.9: the heartbeat's own session is replaced when stale. A
+/// heartbeat pinned to a chosen session (`session_provider` set) is never
+/// silently moved off it: a limit or sign-in error fails the fire with a
+/// message saying what to do; a token change alone wakes it as before (a
+/// resume keeps its conversation's token by design).
+pub fn stale_step(hb_name: &str, chosen: bool, stale: Option<crate::hb_stale::Stale>) -> StaleStep {
+    let Some(s) = stale else { return StaleStep::Proceed };
+    if !chosen {
+        return StaleStep::Replace(s);
+    }
+    if s.reason == crate::hb_stale::StaleReason::TokenChanged {
+        return StaleStep::Proceed;
+    }
+    StaleStep::Fail(format!(
+        "stuck: {} ({}); this heartbeat delivers into a chosen session \
+         (k2 heartbeat session {}), so K2 does not replace it: fix that session, \
+         or set --auto to let K2 start a new one",
+        s.reason.code().replace('_', " "),
+        s.detail,
+        hb_name
+    ))
+}
+
+/// A heartbeat set to a chosen session (`k2 heartbeat session <n> --set`).
+fn chosen_session(hb: &AgentHeartbeat) -> bool {
+    hb.session_provider.as_deref().is_some_and(|p| !p.trim().is_empty())
+}
+
+/// Why a fire starts (or reuses) a session instead of resuming one.
+#[derive(Debug, Clone)]
+enum FreshCause {
+    /// The heartbeat has no saved conversation.
+    NoSavedSession,
+    /// Its saved conversation has no transcript; the id was cleared.
+    GhostCleared,
+    /// Its session (live or saved) is stale and is replaced.
+    Stale(crate::hb_stale::Stale),
+}
+
+impl FreshCause {
+    fn words(&self) -> String {
+        match self {
+            FreshCause::NoSavedSession => "no saved session".to_string(),
+            FreshCause::GhostCleared => "transcript missing (ghost id cleared)".to_string(),
+            FreshCause::Stale(s) => s.detail.clone(),
         }
     }
 }
@@ -610,11 +732,35 @@ fn run_fresh_fire(
     hb: &AgentHeartbeat,
     wakeup_abs: &Path,
     catchup_of: Option<&str>,
+    cause: FreshCause,
 ) -> serde_json::Value {
     let Some(delivery) = wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
     let prompt = delivery.prompt.clone();
+
+    // 0.46.9: a live session already under the heartbeat's key would take
+    // this wake (a reuse never runs the login pick). Check it first; a
+    // stale one is replaced.
+    let key = hb_session_key(project_id, &hb.name);
+    let stale = match &cause {
+        FreshCause::Stale(s) => Some(s.clone()),
+        _ => crate::v2_session_map::lookup_by_agent_name(&key)
+            .filter(|live| live.is_child_alive())
+            .and_then(|live| {
+                crate::hb_stale::check_live(project_id, &key, &live, hb.last_session_id.as_deref())
+            }),
+    };
+    if stale.is_some() {
+        // The replacement never resumes the stale conversation.
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = AgentHeartbeat::clear_session_id(&conn, project_id, &hb.name);
+    }
+    let why = match &stale {
+        Some(s) => s.detail.clone(),
+        None => cause.words(),
+    };
 
     // 0.37.0: every daemon-driven heartbeat fresh-fire goes through
     // v2 via `wake_headless::spawn_wake_headless`. The
@@ -633,34 +779,239 @@ fn run_fresh_fire(
         project_path,
         &prompt,
         Some(&hb.name),
+        stale.is_some(),
     );
 
+    // A restart says so in the fire record's first words, success or not.
+    let lead = match &stale {
+        Some(s) => format!("{} ({why}); ", s.reason.restart_note()),
+        None => String::new(),
+    };
+    let fail = |msg: String| {
+        if let Some(s) = &stale {
+            note_restart_activity(project_id, &hb.name, s, Some(msg.as_str()));
+        }
+        record_fire_failure(project_id, agent_name, hb, &format!("{lead}{msg}"))
+    };
+
     match result {
-        Ok(terminal_id) => {
+        Ok(fired) => {
+            // A replacement that fails at once (it exits, or its first
+            // turn is the same limit or sign-in error) is a failed fire.
+            if stale.is_some() {
+                if let Err(e) = confirm_restart(&fired) {
+                    return fail(format!("the new session {e}; {}", delivery.audit_note()));
+                }
+            }
+            if let Some(s) = &stale {
+                note_restart_activity(project_id, &hb.name, s, None);
+            }
             crate::active_reaper::note_workspace_need(project_id);
             stamp_fired_and_release(project_id, &hb.name);
+            let (outcome, branch) = match (&stale, fired.reused) {
+                (Some(s), _) => (s.reason.restart_note(), "restarted"),
+                (None, true) => ("delivered into live session", "reused_live"),
+                (None, false) => ("delivered", "fresh_fire"),
+            };
+            k2_core::log_debug!(
+                "[heartbeat] hb={} project={} {outcome} ({why}) session={}",
+                hb.name,
+                project_id,
+                fired.terminal_id
+            );
             let decision = write_fired_audit(project_id, agent_name, hb,
-                &format!("smart_launch: no saved session — fresh fire; {}",
-                    delivery.audit_note()),
+                &format!("smart_launch: {outcome} ({why}); session {}; {}",
+                    fired.terminal_id, delivery.audit_note()),
                 catchup_of);
             serde_json::json!({
                 "success": true,
                 "decision": decision,
-                "branch": "fresh_fire",
+                "branch": branch,
+                "outcome": outcome,
+                "restartReason": stale.as_ref().map(|s| s.reason.code()),
                 "name": hb.name,
                 "agent": agent_name,
-                "terminalId": terminal_id,
+                "terminalId": fired.terminal_id,
+                "reused": fired.reused,
                 "wakePrompt": delivery.to_json(),
             })
         }
-        Err(crate::wake_headless::WakeFireError::SpawnFailed(e)) => record_fire_failure(
-            project_id, agent_name, hb, &format!("fresh fire spawn failed: {e}"),
-        ),
-        Err(e @ crate::wake_headless::WakeFireError::NotDelivered { .. }) => record_fire_failure(
-            project_id, agent_name, hb,
-            &format!("fresh fire: {e}; {}", delivery.audit_note()),
-        ),
+        Err(crate::wake_headless::WakeFireError::SpawnFailed(e)) => {
+            fail(format!("fresh fire spawn failed: {e}"))
+        }
+        Err(e @ crate::wake_headless::WakeFireError::NotDelivered { .. }) => {
+            fail(format!("fresh fire: {e}; {}", delivery.audit_note()))
+        }
     }
+}
+
+/// How long a replacement session is watched for an at-once failure.
+fn restart_confirm_window() -> std::time::Duration {
+    let test_override = std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND")
+        .ok()
+        .filter(|c| !c.is_empty())
+        .is_some();
+    if test_override {
+        std::time::Duration::from_millis(1200)
+    } else {
+        std::time::Duration::from_secs(8)
+    }
+}
+
+/// 0.46.9: after a restart, watch the new session briefly. `Err` when it
+/// exits at once or its first turn is a limit or sign-in error (the new
+/// token is out too): the fire is then a failure, never `fired`.
+fn confirm_restart(fired: &crate::wake_headless::WakeFired) -> Result<(), String> {
+    let sid = k2_core::session::SessionId::parse(&fired.terminal_id)
+        .ok_or_else(|| "has an unreadable id".to_string())?;
+    let deadline = std::time::Instant::now() + restart_confirm_window();
+    loop {
+        let Some(live) = crate::v2_session_map::lookup_by_session_id(&sid) else {
+            return Err("exited at once".to_string());
+        };
+        if !live.is_child_alive() {
+            return Err("exited at once".to_string());
+        }
+        if let Some(conv) = fired.conversation_id.as_deref() {
+            let tool = live
+                .program
+                .as_deref()
+                .and_then(k2_core::llm_accounts::Tool::from_command);
+            if tool == Some(k2_core::llm_accounts::Tool::Claude) {
+                let first = crate::hb_stale::started_on(&sid).and_then(|s| s.home);
+                let mut homes: Vec<std::path::PathBuf> = first.into_iter().collect();
+                homes.push(k2_core::llm_accounts::store::live_home(k2_core::llm_accounts::Tool::Claude).0);
+                if let Some(r) = crate::hb_stale::transcript_verdict(conv, &homes) {
+                    return Err(format!("hit an error at once ({})", r.code()));
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+/// The agent-visible line (`k2 activity`) for a heartbeat restart.
+fn note_restart_activity(
+    project_id: &str,
+    name: &str,
+    stale: &crate::hb_stale::Stale,
+    failed: Option<&str>,
+) {
+    let summary = match failed {
+        None => format!(
+            "Heartbeat {name}: {} ({}). Its old session was stopped and a new one took the wake.",
+            stale.reason.restart_note(),
+            stale.detail
+        ),
+        Some(e) => format!(
+            "Heartbeat {name}: {} ({}), but the new session failed: {e}",
+            stale.reason.restart_note(),
+            stale.detail
+        ),
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::log_activity(
+        &conn,
+        project_id,
+        Some("heartbeat"),
+        "heartbeat.restarted",
+        None,
+        None,
+        None,
+        Some(&summary),
+    );
+}
+
+/// `k2 heartbeat restart <name>` (0.46.9): stop THIS workspace's heartbeat
+/// session so its next fire starts a new one (which runs the login pick).
+/// The workspace is `project_path`, which the route takes from the
+/// caller's token for an agent (never from an argument), so an agent can
+/// only ever restart its own workspace's heartbeats.
+///
+/// Kills and unregisters the terminal under `<project_id>:hb:<name>`
+/// (that clears the row's `active_terminal_id`), and clears
+/// `last_session_id`. A person's chat tab is never touched. `hb:<name>`
+/// (the address `k2 sessions` prints) reads as `<name>`. Returns the
+/// answer JSON and the History line; `Err` = the dispatch's error text.
+pub fn restart_session(project_path: &str, raw_name: &str) -> Result<(serde_json::Value, String), String> {
+    let raw = raw_name.trim();
+    let name = raw.strip_prefix("hb:").unwrap_or(raw).trim();
+    if name.is_empty() || name.contains(':') || name.contains('/') {
+        return Err(format!(
+            "not_a_heartbeat: '{raw}' is not a heartbeat name. Name one from \
+             k2 heartbeat schedule list (this workspace's only; a person adds \
+             --workspace <ws> for another workspace's)"
+        ));
+    }
+    let (project_id, row) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let project_id = resolve_project_id(&conn, project_path)
+            .ok_or_else(|| format!("Project not found: {project_path}"))?;
+        let row = AgentHeartbeat::get_by_name(&conn, &project_id, name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| k2_core::heartbeats::no_such_heartbeat(name))?;
+        (project_id, row)
+    };
+    let key = hb_session_key(&project_id, &row.name);
+    let chosen = row.session_provider.as_deref().is_some_and(|p| !p.trim().is_empty());
+    let stopped = {
+        // Same single-flight a fire's spawn takes, so no spawn lands
+        // between the kill and the clears below.
+        let lock = crate::spawn::canonical_spawn_lock(&key);
+        let _g = lock.lock();
+        let stopped = crate::v2_session_map::unregister(&key).map(|s| s.session_id.to_string());
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        // A chosen session (`k2 heartbeat session <n> --set`) is the
+        // person's pick: kept. Only the heartbeat's own conversation goes.
+        if !chosen {
+            let _ = AgentHeartbeat::clear_session_id(&conn, &project_id, &row.name);
+        }
+        let _ = AgentHeartbeat::clear_active_terminal_id(&conn, &project_id, &row.name);
+        stopped
+    };
+    let cleared = if chosen { None } else { row.last_session_id.clone().filter(|s| !s.is_empty()) };
+    crate::session_events::emit_heartbeat_live(project_path, &project_id, &row.name, false);
+    let history = match (&stopped, &cleared) {
+        (Some(t), _) if chosen => format!("session restarted: stopped {t}; the chosen session is kept"),
+        (Some(t), _) => format!("session restarted: stopped {t}; the next fire starts a new session"),
+        (None, Some(_)) => "session restarted: none was running; saved conversation cleared, the next fire starts a new session".to_string(),
+        (None, None) => "session restarted: none was running and none was saved".to_string(),
+    };
+    {
+        let actor = crate::heartbeat_routes::request_actor();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::log_activity(
+            &conn,
+            &project_id,
+            actor.as_deref().or(Some("heartbeat")),
+            "heartbeat.restarted",
+            None,
+            None,
+            None,
+            Some(&format!("Heartbeat {}: {history}", row.name)),
+        );
+    }
+    let v = serde_json::json!({
+        "success": true,
+        "name": row.name,
+        "stopped": stopped.is_some(),
+        "terminalId": stopped,
+        "clearedSessionId": cleared,
+        "keptChosenSession": chosen,
+        "next": if chosen {
+            "the next fire resumes the chosen session (k2 heartbeat session)"
+        } else {
+            "the next fire starts a new session"
+        },
+    });
+    Ok((v, history))
 }
 
 /// 0.37.8 — opt-in branch when `hb.use_workspace_session = true`.
@@ -910,7 +1261,8 @@ fn run_resume_and_fire(
     // session — degrade to a fresh fire, exactly the Slice-2 gate.
     let Some((args, prompt_delivery)) = plan_resume_fire(resolved, session_id, &delivery.prompt)
     else {
-        return run_fresh_fire(project_path, project_id, agent_name, hb, wakeup_abs, catchup_of);
+        return run_fresh_fire(project_path, project_id, agent_name, hb, wakeup_abs, catchup_of,
+            FreshCause::NoSavedSession);
     };
 
     // 0.37.8 — register the resumed PTY under the heartbeat's own
@@ -1658,3 +2010,7 @@ mod emit_path_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "heartbeat_restart_tests.rs"]
+mod restart_tests;

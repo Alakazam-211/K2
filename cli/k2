@@ -3036,6 +3036,82 @@ except Exception as e:
 "
 }
 
+# 0.46.9: stop a heartbeat's own session so its next fire starts a new
+# one (which picks the LLM token again). An agent may restart its own
+# workspace's heartbeats with no switch; the daemon takes the workspace
+# from the caller's token. --workspace (another workspace's) is people only.
+cmd_heartbeat_restart() {
+    local name="" ws="" as_json=0
+    local usage="Usage: k2 heartbeat restart <name> [--workspace <ws>] [--json]"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --workspace|--project)
+                ws="${2:-}"
+                [ -n "$ws" ] || { echo "$usage" >&2; exit 2; }
+                shift 2 ;;
+            --workspace=*|--project=*) ws="${1#*=}"; shift ;;
+            -*) echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"; shift
+                else echo "Unexpected argument: $1" >&2; echo "$usage" >&2; exit 2; fi ;;
+        esac
+    done
+    [ -z "$name" ] && { echo "$usage" >&2; exit 2; }
+    local extra=()
+    if [ -n "$ws" ]; then
+        if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
+        extra=("workspace=$(urlencode "$ws")")
+    fi
+    local out rc=0
+    out="$(cli_send cli_request_post "/cli/heartbeat/restart" "name=$(urlencode "$name")" ${extra[@]+"${extra[@]}"})" || true
+    printf '%s' "$out" | HB_NAME="$name" HB_JSON="$as_json" python3 -c '
+import json, os, sys
+name = os.environ["HB_NAME"]
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %r" % raw[:300], file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict):
+    print("Error: unexpected reply: %r" % raw[:300], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error")
+if err == "no_such_heartbeat":
+    msg = d.get("message") or ("no heartbeat named %s" % name)
+    print("Error (no_such_heartbeat): %s. List them with: k2 heartbeat schedule list" % msg, file=sys.stderr)
+    sys.exit(1)
+if isinstance(err, dict):
+    code = err.get("code") or "error"
+    print("Error (%s): %s" % (code, err.get("hint") or err.get("message") or code), file=sys.stderr)
+    refused = ("other_workspace", "admin_only", "owner_only", "forbidden", "wrong_credential", "invalid_token", "role_required")
+    sys.exit(3 if code in refused else 1)
+if err == "role_required":
+    print("Error (role_required): %s" % (d.get("message") or err), file=sys.stderr)
+    sys.exit(3)
+if err:
+    err = str(err)
+    print("Error: %s" % err, file=sys.stderr)
+    if err.startswith("not_a_heartbeat"):
+        sys.exit(2)
+    sys.exit(4 if "workspace not found" in err else 1)
+if os.environ["HB_JSON"] == "1":
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+hb = d.get("name") or name
+print("Restarted heartbeat session: %s" % hb)
+if d.get("stopped"):
+    print("  stopped session: %s" % d.get("terminalId"))
+else:
+    print("  no session was running")
+if d.get("clearedSessionId"):
+    print("  cleared saved conversation: %s" % d["clearedSessionId"])
+print("The next fire starts a new session. To fire it now: k2 heartbeat signal fire %s" % hb)
+' || rc=$?
+    return "$rc"
+}
+
 cmd_heartbeat_enable_disable() {
     local enabled="$1"; shift
     local name="" ws="" as_json=0
@@ -44342,6 +44418,16 @@ cmd_schema() {
       ]
     },
     {
+      "name": "heartbeat restart",
+      "usage": "k2 heartbeat restart <name> [--workspace <ws>] [--json]",
+      "description": "Stop a heartbeat's own session and forget its saved conversation, so the next fire starts a new session on the token a new chat here would use (the workspace's pinned token, else the server default). For a session stuck on a usage limit, signed out, or on an old token. The schedule and WAKEUP.md stay. Nothing fires now (k2 heartbeat signal fire <name> to fire at once). hb:<name> works too. A chosen session (heartbeat session --set) is kept; --auto lets K2 start its own. An agent may restart its own workspace's heartbeats with no switch. Exit 0 ok, 1 error (no such heartbeat), 2 bad usage or not a heartbeat name, 3 refused (another workspace), 4 workspace not found.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Another workspace's heartbeat (handle, name or path; people only)."},
+        {"name": "--json", "arg": null, "description": "The daemon's answer as JSON."}
+      ]
+    },
+    {
       "name": "heartbeat show",
       "usage": "k2 heartbeat show <name> [--workspace <ws>] [--json]",
       "description": "One heartbeat's full details (schedule, enabled, last fire, saved session).",
@@ -51856,6 +51942,8 @@ REOPEN (same history)
 START AND STOP HELPERS
   k2 sessions new <name> --brief <file> [--cli <cli>]   prints <ws>/<name>; default: your CLI
   k2 sessions stop <name>        stop is sleep; open or msg brings it back
+  A heartbeat run (hb:<name>) is not a helper: k2 heartbeat restart <name>
+  stops it and its next fire starts fresh (any session here may; no switch).
   In the brief, say "when done, k2 msg <ws> with a summary". A helper works in
   your checkout: for a separate branch, tell it to make its own git worktree.
 
@@ -57906,6 +57994,37 @@ DELIVERY (where a fire's wake message lands)
                                  Deliver into a specific saved session
                                  (handle: sales/reviewer or 1; UUID form
                                  still wants --provider claude|grok|…)
+
+RESTART (the heartbeat's own session)
+  heartbeat restart <n> [--workspace <ws>] [--json]
+       Stops the heartbeat's own session and forgets its saved
+       conversation. The schedule and WAKEUP.md stay as they are. Nothing
+       fires now: the next fire starts a new session (to fire at once:
+       heartbeat signal fire <n>). Use it when the session is stuck: out
+       of its usage limit, signed out, or on an old LLM token.
+       The new session uses the token a new chat here would use: the
+       workspace's pinned token, else the server default. If that token is
+       out too, the fire fails again (heartbeat status <n> shows it): ask
+       your person to pick another token, or wait for the limit to reset.
+       <n> is the heartbeat's name (hb:<n> works too). Run from inside that
+       heartbeat's own session, it stops you. It never stops the pinned
+       chat or a sidecar. A heartbeat set to a chosen session (heartbeat
+       session <n> --set) keeps that choice and restart stops only the
+       heartbeat's own terminal; to let K2 start its own session instead:
+       heartbeat session <n> --auto.
+       An agent may restart its own workspace's heartbeats; no switch is
+       needed (k2 sessions stop refuses hb: runs). --workspace <ws>
+       (another workspace's) is for people only.
+       Fires also restart a stuck session on their own when the CLI's last
+       answer was a limit or sign-in error, or the token changed:
+       heartbeat status <n> then shows "restarted: weekly limit",
+       "restarted: usage limit", "restarted: signed out" or "restarted:
+       token changed". If the new session fails too, the fire is recorded
+       as an error. A chosen session is never replaced: when it is stuck,
+       the fire is recorded as an error that says so.
+       Exit: 0 done · 1 error (no such heartbeat) · 2 bad usage or not a
+       heartbeat name · 3 refused (you named another workspace) · 4
+       workspace not found
 
 INSPECTION (read-only)
   heartbeat show <n> [--workspace <ws>] [--json]  Single heartbeat details + instructions
@@ -90509,6 +90628,7 @@ EOF
                 esac
                 ;;
             session)        shift 2; cmd_heartbeat_session "$@" ;;
+            restart)        shift 2; cmd_heartbeat_restart "$@" ;;
             rename)         shift 2; cmd_heartbeat_rename "$@" ;;
             edit)           shift 2; cmd_heartbeat_edit "$@" ;;
             show)           shift 2; cmd_heartbeat_show "$@" ;;

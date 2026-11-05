@@ -980,6 +980,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/heartbeat/preview-schedule", NoLogin),
     post("/cli/heartbeat/remove", Owner),
     post("/cli/heartbeat/rename", Member),
+    // 0.46.9: an agent restarts its own heartbeat's session (no hire switch).
+    post("/cli/heartbeat/restart", Member),
     both("/cli/heartbeat/schedule", Member),
     get("/cli/heartbeat/scheduler-status", Member),
     post("/cli/heartbeat/set-session", Member),
@@ -2434,6 +2436,9 @@ pub const FORMERLY_GET_WRITES: &[&str] = &[
     "/cli/heartbeat/launch",
     "/cli/heartbeat/remove",
     "/cli/heartbeat/rename",
+    // 0.46.9: new, never a GET; listed for the same query-param POST shape
+    // so the per-cell socket admits it like its heartbeat siblings.
+    "/cli/heartbeat/restart",
     "/cli/heartbeat/set-session",
     "/cli/heartbeat/set-use-workspace-session",
     "/cli/heartbeat/unarchive",

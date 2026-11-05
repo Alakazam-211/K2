@@ -761,6 +761,21 @@ pub fn dispatch_get(
             }
             Ok(crate::heartbeat_launch::smart_launch(project_path, &name).to_string())
         }
+        "/cli/heartbeat/restart" => {
+            // 0.46.9: stop this workspace's heartbeat session so the next
+            // fire starts a new one. `project_path` is the caller's own
+            // workspace for an agent (stamped from its token; a
+            // `workspace=` naming another is refused before this arm),
+            // so no "hire and manage agents" switch is needed. History
+            // gets a `changed` row naming who did it.
+            let name = params.get("name").cloned().unwrap_or_default();
+            if name.trim().is_empty() {
+                return Err("Missing 'name' parameter".to_string());
+            }
+            let (v, history) = crate::heartbeat_launch::restart_session(project_path, &name)?;
+            let row_name = v["name"].as_str().unwrap_or(name.as_str()).to_string();
+            with_change(project_path, &row_name, &history, Ok(v.to_string()))
+        }
         "/cli/heartbeat/remove" => {
             let name = params.get("name").cloned().unwrap_or_default();
             if name.is_empty() {

@@ -356,6 +356,10 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
     if let Some(llm) = meta.get("llm_slot").filter(|v| !v.is_null()) {
         crate::llm_accounts_runtime::reseed_after_adoption(llm, info.pid);
     }
+    // 0.46.9: the token a heartbeat session started on (hb_stale).
+    if let Some(started) = meta.get("hb_started_on").filter(|v| !v.is_null()) {
+        crate::hb_stale::reseed_after_adoption(&session_id, started);
+    }
     // P44: the cell listener ptyd held across the restart.
     if crate::session_token::scoped_hooks_enabled() {
         match crate::cell_uds::take_held_cell_listener(owner, &session_id) {

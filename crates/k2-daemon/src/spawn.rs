@@ -187,10 +187,27 @@ pub struct SpawnWorkspaceSessionOutcome {
 pub fn spawn_agent_session_v2_blocking(
     req: SpawnWorkspaceSessionRequest,
 ) -> Result<SpawnWorkspaceSessionOutcome, String> {
+    spawn_agent_session_v2_with(req, SpawnOpts::default())
+}
+
+/// How a find-or-spawn treats a live session already under its key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpawnOpts {
+    /// Evict (unregister + kill) a live session under the key instead of
+    /// reusing it, so the new spawn runs the login pick (0.46.9: a stale
+    /// heartbeat session, `hb_stale`).
+    pub replace: bool,
+}
+
+/// [`spawn_agent_session_v2_blocking`] with [`SpawnOpts`].
+pub fn spawn_agent_session_v2_with(
+    req: SpawnWorkspaceSessionRequest,
+    opts: SpawnOpts,
+) -> Result<SpawnWorkspaceSessionOutcome, String> {
     let canonical_key = canonical_key_for_request(&req);
     let lock = canonical_spawn_lock(&canonical_key);
     let _g = lock.lock();
-    spawn_agent_session_v2_blocking_inner(req)
+    spawn_agent_session_v2_with_inner(req, opts)
 }
 
 /// Map key this request will occupy. Heartbeat overrides stay on
@@ -212,6 +229,14 @@ pub(crate) fn canonical_key_for_request(req: &SpawnWorkspaceSessionRequest) -> S
 /// the gap.
 pub(crate) fn spawn_agent_session_v2_blocking_inner(
     req: SpawnWorkspaceSessionRequest,
+) -> Result<SpawnWorkspaceSessionOutcome, String> {
+    spawn_agent_session_v2_with_inner(req, SpawnOpts::default())
+}
+
+/// The find-or-spawn body. Caller MUST hold [`canonical_spawn_lock`].
+fn spawn_agent_session_v2_with_inner(
+    req: SpawnWorkspaceSessionRequest,
+    opts: SpawnOpts,
 ) -> Result<SpawnWorkspaceSessionOutcome, String> {
     if req.agent_name.is_empty() {
         return Err("agent_name required".into());
@@ -253,7 +278,8 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
     // the observer task panicked or the broadcast channel closed
     // before ChildExit landed.
     if let Some(existing) = v2_session_map::lookup_by_agent_name(&canonical_key) {
-        if existing.is_child_alive()
+        if !opts.replace
+            && existing.is_child_alive()
             && live_program_matches(existing.program.as_deref(), req.command.as_deref())
         {
             // Folder trust (review A-M1): a live session is reused only
@@ -303,11 +329,12 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         // then spawn the requested harness.
         log_debug!(
             "[daemon/spawn] evicting v2 entry under canonical_key={} \
-             alive={} live_program={:?} expected={:?}",
+             alive={} live_program={:?} expected={:?} replace={}",
             canonical_key,
             existing.is_child_alive(),
             existing.program,
             req.command,
+            opts.replace,
         );
         v2_session_map::unregister(&canonical_key);
         existing.kill();
@@ -571,6 +598,16 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         )
         .map_err(|e| format!("LLM token: {e}"))?
     };
+    // 0.46.9 (hb_stale): what a heartbeat session starts on, so a later
+    // fire can tell when the token a new start would pick has changed.
+    let hb_started_on = if canonical_key.contains(":hb:") {
+        crate::hb_stale::started_on_for_spawn(cfg.program.as_deref(), llm_login.as_ref().map(|g| &g.login))
+    } else {
+        None
+    };
+    if let Some(s) = &hb_started_on {
+        ptyd_meta.insert("hb_started_on".into(), s.to_json());
+    }
     {
         let args_for_id = cfg.durable_args.clone().unwrap_or_else(|| cfg.args.clone());
         cfg.ptyd_meta = Some(crate::ptyd_adopt::spawn_meta(
@@ -584,6 +621,9 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         ));
     }
     let session = DaemonPtySession::spawn(cfg).map_err(|e| format!("v2 spawn failed: {e}"))?;
+    if let Some(s) = hb_started_on {
+        crate::hb_stale::note_started_on(&session.session_id, s);
+    }
     if let Some(g) = llm_login {
         g.spawned(session.child_pid());
     }

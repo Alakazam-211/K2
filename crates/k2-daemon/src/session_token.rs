@@ -2205,6 +2205,8 @@ mod tests {
         assert!(is_agent_verb("/cli/heartbeat/edit"));
         assert!(is_agent_verb("/cli/heartbeat/fire"));
         assert!(is_agent_verb("/cli/heartbeat/status"));
+        // 0.46.9: an agent restarts its own heartbeat's session.
+        assert!(is_agent_verb("/cli/heartbeat/restart"));
         assert!(is_agent_verb("/cli/heartbeat-log"));
         // OS install + fleet-wide list stay owner-only (teaching owner_only).
         assert!(!is_agent_verb("/cli/heartbeat/install-launchd"));

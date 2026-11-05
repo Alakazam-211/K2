@@ -70,7 +70,7 @@ case "$MODE" in
             dirty=""
         fi
         [ -n "${K2_LINUX_GATE_WORKSPACE:-}" ] && args+=(--workspace "$K2_LINUX_GATE_WORKSPACE")
-        args+=(--needs "$needs" --mem 20G --timeout 90m --queue-timeout 1h --retries 1
+        args+=(--needs "$needs" --mem 24G --timeout 90m --queue-timeout 1h --retries 1
             --wait --failures --max-wait "${K2_LINUX_GATE_MAX_WAIT:-90m}")
         echo "Linux build gate on K2 Compute: ${head_sha:0:12}${dirty}, $rust (K2 picks a Linux x86 node)..."
         rc=0

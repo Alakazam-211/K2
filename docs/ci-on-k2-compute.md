@@ -204,7 +204,7 @@ anything. It runs as a K2 Compute job (`K2_LINUX_GATE=compute`, the
 default): `cargo check --workspace --all-targets` at HEAD (plus
 uncommitted changes, `--dirty`), on a Linux x86 node K2 picks among the
 release workspace's grants (never k2-arch), `--tier ci`, the pinned Rust,
-the GTK/WebKit and ALSA headers, `--mem 20G`, and it waits for the result.
+the GTK/WebKit and ALSA headers, `--mem 24G` (peak 17.7G, job 20fbaea6), and it waits for the result.
 No GitHub runner and no ssh box is involved. `K2_LINUX_GATE=ssh` is the
 old way (rsync and ssh to the ship box) while that box exists;
 `K2_SKIP_LINUX_GATE=1` skips it loudly. Step 0.5 (cargo, typecheck,

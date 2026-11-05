@@ -64,7 +64,7 @@ rc="$(gate ok)"
 line="$(runline ok)"
 [ "$rc" = 0 ] && grep -q "Linux build gate passed" "$tmp/out-ok" && pass "exit 0 when the job passes" || fail "ok rc=$rc" "$(cat "$tmp/out-ok")"
 for want in "compute run --any --os linux --arch x86_64 --sha $HEAD_SHA" "--tier ci" "--needs rust@1.98.7,cmake@3," \
-    "sys:libasound2-dev" "sys:libwebkit2gtk-4.1-dev" "sys:libgtk-3-dev" "--mem 20G" "--wait --failures" \
+    "sys:libasound2-dev" "sys:libwebkit2gtk-4.1-dev" "sys:libgtk-3-dev" "--mem 24G" "--wait --failures" \
     "-- sh -c ./scripts/fetch-frpc.sh && RUSTFLAGS='-D warnings' cargo check --workspace --all-targets"; do
     [[ "$line" == *"$want"* ]] && pass "job has: $want" || fail "job lacks: $want" "$line"
 done

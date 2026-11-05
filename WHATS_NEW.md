@@ -23,6 +23,14 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Chat / Voice Hosting
 - **K2 installs and upgrades to Sew 0.8.0,** which lets one chat Space show in more than one App later on, and carries Sew's call fixes: calls renew their sign-in in time, and on a tunnelled voice server the voice engine no longer listens on IPv6. Upgrade with `k2 hostchat upgrade`. Going back to Sew 0.7.3 afterwards needs `k2 hostchat rollback --accept-data-loss`, because 0.8.0 changes Sew's data. Upgrades were tested from Sew 0.6.1 and newer.
 
+### Logs and delivery
+- **A Thread message waiting for a busy agent now survives a K2 restart.** K2 sends it once it's back up. If K2 stopped while it was typing a message in, or the message waited over an hour, K2 doesn't send it again; it says so in the Thread instead.
+- **K2 checks that your agent read your message in.** If the agent sat idle for 20 seconds and never took it (for example, its screen was on another view), K2 types it in once more. If that doesn't work either, the Thread tells you to check the agent's terminal. A busy agent is never sent a message twice. Set `K2_THREAD_TAKE_CHECK_SECS` on the daemon to change the 20 seconds, or 0 to turn the check off.
+- **The daemon log has one `[thread-delivery]` line per Thread message,** with the session it reached, how, and how many tries it took.
+- **Every phone added to or removed from push now leaves a `[push]` line in the log with the reason,** and `k2 push log` shows these next to the sends.
+- **A push no longer goes to a phone that was removed a moment before it was sent.**
+- **If this box's own nightly backup already takes Sew's backups off the box, the owner can run `k2 hostchat ship box-backup`.** K2 clears the off-box alarm only while it can see that backup is set up, and `k2 hostchat status` says what is missing.
+
 ## 0.46.8 — Agents run their Apps' people
 
 An agent can now look after its App's people from start to finish, and App screens update the moment someone's access changes, with no sign-out. Mailboxes can forward to up to 100 addresses and send files, your own domain can reach an App through K2 Connect, and the Windows installer is back.

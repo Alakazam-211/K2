@@ -140,7 +140,7 @@ pub fn dark() -> CliResponse {
     no(
         404,
         "voice_rooms_off",
-        "voice rooms are a preview: the owner turns them on with K2_VOICE_ROOMS=1 or Settings voiceRoomsPreview",
+        "voice rooms are a preview: the owner turns them on (k2 settings set voiceRoomsPreview true, or K2_VOICE_ROOMS=1)",
     )
 }
 

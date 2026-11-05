@@ -11367,8 +11367,9 @@ WHAT EXISTS. A Linux server with Pro and Chat / Voice Hosting hosts 0-10
 rooms (default 1, 25 people each), named "Room N" until renamed; slugs
 room-1..room-10 never change. People see and join rooms only on servers
 their K2 app is signed in to, with their own login there. Nothing is
-shared between servers. Preview: until the owner turns voiceRoomsPreview
-on, every k2 voice command answers voice_rooms_off.
+shared between servers. Preview: until the owner runs k2 settings set
+voiceRoomsPreview true (from a terminal outside K2), every k2 voice
+command answers voice_rooms_off.
 
 READ (anyone, agents too)
   k2 voice rooms       who's in each room; closing / unavailable rooms
@@ -11378,8 +11379,9 @@ READ (anyone, agents too)
 Never poll: the app refreshes on the server's voice_rooms_changed event.
 
 HOSTING STATES (k2 voice status, first one that applies)
-  preview_off · sew_off (Chat / Voice Hosting not on: k2 hostchat status)
-  · voice_off + detail (Sew older than 0.7.0, or the K5 Space blocked)
+  not_linux · preview_off · sew_off (Chat / Voice Hosting not on, or it
+  uses its own sign-ins (identity standalone, can't host): k2 hostchat
+  status) · voice_off + detail (Sew older than 0.7.0, or the K5 Space blocked)
   · starting · not_pro · count_zero · voice_lane_reconnecting (under 20 s:
   joins wait) · voice_lane_down (joins refused, live calls end) · ok.
 
@@ -41534,6 +41536,13 @@ cmd_settings() {
     # workspace agent mode. The `k2 mode` deprecation pointed here,
     # but the setter was never implemented — the command printed the
     # current settings and silently ignored the flag.
+    # 0.46.9: `k2 settings set <key> <value>`, the server switches the
+    # daemon's hints name (voice rooms, voice tunnel, compute, board files).
+    if [ "${1:-}" = "set" ]; then
+        shift
+        _settings_set "$@"
+        return
+    fi
     local set_mode=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -41564,6 +41573,83 @@ cmd_settings() {
         return
     fi
     cli_request "/cli/settings" | _settings_print show
+}
+
+# `k2 settings set <key> <true|false>` (0.46.9): the short list of server
+# switches K2's own hints tell the owner to flip. Each is an owner-only key
+# on POST /cli/settings/update (settings_routes OWNER_ONLY_KEYS); the daemon
+# refuses agents and every other login, so this CLI decides nothing but the
+# allowlist and the value. Order = the order help prints them.
+_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview boardFilePreview)
+
+_settings_set_keys_line() {
+    local IFS=","
+    printf '%s' "${_K2_SETTINGS_SET_KEYS[*]}" | sed 's/,/, /g'
+}
+
+_settings_set() {
+    case "${1:-}" in
+        -h|--help) cmd_help_settings; return 0 ;;
+    esac
+    if [ $# -ne 2 ]; then
+        echo "Error: usage: k2 settings set <key> <true|false>  (keys: $(_settings_set_keys_line))" >&2
+        exit 2
+    fi
+    local key="$1" raw="$2" value="" k known=0
+    for k in "${_K2_SETTINGS_SET_KEYS[@]}"; do
+        [ "$k" = "$key" ] && known=1
+    done
+    if [ "$known" != 1 ]; then
+        echo "Error: k2 settings set doesn't change '$key'. It takes: $(_settings_set_keys_line). Other settings are in the K2 app's Settings." >&2
+        exit 2
+    fi
+    case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
+        true|on) value=true ;;
+        false|off) value=false ;;
+        *)
+            echo "Error: $key takes true or false (on and off work too), not '$raw'." >&2
+            exit 2
+            ;;
+    esac
+    local raw_out status out
+    raw_out="$(cli_send_json POST /cli/settings/update "{\"$key\":$value}")"
+    status="${raw_out##*$'\n'}"
+    out="${raw_out%$'\n'*}"
+    [ "$status" = "$raw_out" ] && out=""
+    [ -n "$status" ] || status="000"
+    printf '%s' "$out" | SS_KEY="$key" SS_VALUE="$value" SS_STATUS="$status" python3 -c '
+import json, os, sys
+key, want, status = os.environ["SS_KEY"], os.environ["SS_VALUE"] == "true", os.environ["SS_STATUS"]
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    d = None
+if status != "200" or not isinstance(d, dict) or d.get("error") is not None:
+    err = d.get("error") if isinstance(d, dict) else None
+    code = err.get("code", "") if isinstance(err, dict) else ""
+    hint = (err.get("hint") or err.get("message") or code) if isinstance(err, dict) else (err if isinstance(err, str) else "")
+    if not hint:
+        hint = "no answer from the K2 daemon" if status == "000" else "the daemon answered HTTP %s: %r" % (status, raw[:200])
+    print("Error: %s%s" % ((code + ": ") if code and code not in hint else "", hint), file=sys.stderr)
+    low = (code + " " + hint).lower()
+    if status in ("401", "403") or any(w in low for w in ("owner", "admin", "forbidden", "not allowed", "refused", "passport")):
+        print("Server settings are the owner'"'"'s: ask your human, or run it from a terminal outside a K2 agent session.", file=sys.stderr)
+        sys.exit(3)
+    sys.exit(2 if status == "400" else 1)
+if d.get(key) is not want:
+    print("Error: the daemon answered, but %s is %s, not %s. Run k2 settings set again, or check the daemon log." % (key, json.dumps(d.get(key)), json.dumps(want)), file=sys.stderr)
+    sys.exit(1)
+print("%s is now %s on this server." % (key, "true" if want else "false"))
+nxt = {
+    "voiceRoomsPreview": "k2 voice status says whether this server can host rooms, and why not.",
+    "voiceTunnelPreview": "k2 hostchat media tier tunnel moves voice onto K2'"'"'s tunnel.",
+    "computePreview": "k2 compute nodes lists the machines.",
+    "boardFilePreview": "Board files open in a tab in the K2 app.",
+}
+if want:
+    print("Next: " + nxt[key])
+'
 }
 
 # 0.46.1: a daemon refusal (an agent passport, a member) used to print
@@ -44016,7 +44102,7 @@ cmd_schema() {
     },
     {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...", "description": "Chat / Voice Hosting on this box: the chat and voice server (powered by Sew), over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Chat / Voice Hosting (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge and recovery-key, Sew's launch key, are the owner's; --drop-prev the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
     {"name": "hostchat enable", "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]", "description": "Install and start Chat / Voice Hosting (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. With no --tarball the daemon downloads the pinned release from github.com/Alakazam-211/sew-releases (or reuses ~/.k2/cache/sew) and installs it only if its sha256 matches K2's pin; --tarball and --media-tarball are for a box without internet. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect).", "args": [], "flags": [{"name": "--identity", "arg": "k2|standalone", "description": "Identity provider (explicit; fixed per install)."}, {"name": "--voice-url", "arg": "wss://HOST", "description": "voice.public_url: an origin on this box's k2.dev label or a bound custom domain (e.g. an App that proxies /rtc). Default wss://voice.<label>.k2.dev."}, {"name": "--media-tarball", "arg": "FILE", "description": "The sew-media release tarball (sha256 must be this build's pin)."}, {"name": "--no-wait", "arg": null, "description": "Return once the install started."}]},
-    {"name": "hostchat media", "usage": "k2 hostchat media <preflight|install|url|status|renew|tier|probe|uninstall> ...", "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880; with the voice tunnel preview: the tunnel tier checks instead), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), tier tunnel|direct (preview voice_tunnel_preview / K2_VOICE_TUNNEL: TURN through the tunnel on a second frpc, relay-only, no public port; or direct; restarts sew-media), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall.", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}]},
+    {"name": "hostchat media", "usage": "k2 hostchat media <preflight|install|url|status|renew|tier|probe|uninstall> ...", "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880; with the voice tunnel preview: the tunnel tier checks instead), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), tier tunnel|direct (tunnel is a preview: k2 settings set voiceTunnelPreview true, or K2_VOICE_TUNNEL=1: TURN through the tunnel on a second frpc, relay-only, no public port; or direct; restarts sew-media), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall.", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}]},
     {"name": "hostchat users", "usage": "k2 hostchat users <list|owner|invite|reset|revoke|reactivate|role> [<name|email>] [--display-name NAME] [--role member|admin|guest] [--email EMAIL]", "description": "Sew's own users on a standalone install (refused with provider_is_k2 on a K2-identity install). owner = the first install owner; invite/reset print a one-time setup link to stdout only (24 h). Names and emails become Sew handles ([a-z0-9_-]{2,64}).", "args": [], "flags": []},
     {"name": "hostchat config", "usage": "k2 hostchat config [set approvals.by people|people+agents] [set default_space <space>|none] | config --public-url https://HOST [--json]", "description": "No arguments: every key, its value and allowed values. set approvals.by: who may approve queued chat posts (people, or people+agents with Manage Chat / Voice Hosting). set default_space: the Space whose chat access governs DMs outside every Space (a person sets it; none clears). While voice rooms are on and the K5 Space exists it is fixed to k5-admin: any other value (or none) answers 409 default_space_fixed; give an agent access to k5-admin instead. --public-url: set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. Until it is set, k2 hostchat status (and enable) warn public_url_unset with this fix. The voice URL is not set here: k2 hostchat media url.", "args": [], "flags": []},
     {"name": "hostchat app-url", "usage": "k2 hostchat app-url set https://HOST[/path] | clear | show [--json]", "description": "Where the owner's Sew web app lives (POST /cli/sew/server/app-url; https, or http://127.0.0.1|localhost for development; no query or fragment). k2 hostchat open and Settings → Chat / Voice Hosting → Open Sew as owner go there. Manage Chat / Voice Hosting.", "args": [], "flags": []},
@@ -45921,8 +46007,8 @@ cmd_schema() {
     },
     {
       "name": "settings",
-      "usage": "k2 settings [--mode <off|custom|manager|k2>]",
-      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. A daemon refusal exits 3.",
+      "usage": "k2 settings [--mode <off|custom|manager|k2>] | k2 settings set <key> <true|false>",
+      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview or boardFilePreview (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
       "args": [],
       "flags": []
     },
@@ -57687,9 +57773,11 @@ EOF
 cmd_help_settings() {
     cat <<'EOF'
 k2 settings [--mode <off|custom|manager|k2>]
+k2 settings set <key> <true|false>
 
 Show this workspace's settings (name, mode, heartbeat, pinned). With
---mode, set the workspace mode.
+--mode, set the workspace mode. With set, turn one of this server's
+preview switches on or off.
 
 WORKSPACE MODE
   --mode <off|custom|manager|k2>
@@ -57698,12 +57786,28 @@ WORKSPACE MODE
                             manager: the workspace coordinates other workspaces
                             k2: K2's own agent (k2so is accepted too)
 
+SERVER SWITCHES (the owner only, from a terminal outside K2)
+  k2 settings set <key> <true|false>      on and off work too
+    voiceRoomsPreview       voice rooms on this server (k2 voice, the
+                            top-bar headset, Settings → Voice Rooms)
+    voiceTunnelPreview      voice through K2's tunnel
+                            (k2 hostchat media tier tunnel)
+    computePreview          compute nodes (same as k2 compute preview on|off)
+    boardFilePreview        board files open in a tab
+  These are the only keys it takes; any other key is refused with this
+  list. Agents, Admins and Members are refused: the daemon checks that the
+  caller is the owner. An agent asks its human (k2 thread). The change
+  applies at once, with no restart.
+
 EXIT
-  0 ok · 1 no usable answer · 2 bad usage · 3 the daemon refused (owner/admin)
+  0 ok · 1 no usable answer · 2 bad usage or an unknown key ·
+  3 the daemon refused (owner/admin)
 
 EXAMPLES
   k2 settings
   k2 settings --mode manager
+  k2 settings set voiceRoomsPreview true
+  k2 settings set voiceTunnelPreview off
 EOF
 }
 
@@ -67427,8 +67531,8 @@ cmd_mail_access() {
 # Exit: 0 ok · 1 you said no at a [y/N] prompt · 2 bad request · 3 refused / infra.
 
 # ── `k2 voice` — voice rooms on this server (prd-k2-voice-rooms-v1 §9.3) ──
-# Preview: every route answers voice_rooms_off until the owner turns
-# voiceRoomsPreview on. The daemon (/cli/voice/*) owns the rooms, who's in
+# Preview: every route answers voice_rooms_off until the owner runs
+# `k2 settings set voiceRoomsPreview true`. The daemon (/cli/voice/*) owns the rooms, who's in
 # them and the hosting state; this CLI only reads and asks.
 
 _voice_usage() {
@@ -67474,7 +67578,7 @@ token reads and changes rooms but never joins or moderates
 Talks to this server (or the one --host names), like every k2 verb.
 Exit codes: 0 ok, 2 bad usage, 3 refused or unavailable. stderr carries
 {"error": <code>, "hint": …}: voice_rooms_off (preview off: the owner
-turns it on), owner_or_admin_only, moderator_only, agents_not_in_voice,
+runs k2 settings set voiceRoomsPreview true), owner_or_admin_only, moderator_only, agents_not_in_voice,
 room_closing / room_full / room_not_found, not_in_room, close_from_top,
 voice_unavailable or voice_member_pending (retry in a few seconds).
 Full list and fixes: k2 study voice-rooms.
@@ -67781,8 +67885,8 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
   k2 hostchat media status [--json]
   k2 hostchat media renew                   renew the TURN certificate now
   k2 hostchat media tier tunnel|direct [--json]
-                                            (preview, voice_tunnel_preview / K2_VOICE_TUNNEL; direct also
-                                            works with it off) tunnel: all voice through K2 Connect, at
+                                            (preview: k2 settings set voiceTunnelPreview true, or
+                                            K2_VOICE_TUNNEL=1; direct also works with it off) tunnel: all voice through K2 Connect, at
                                             turn.<label>.k2.dev:443 (the relay's port, nothing to open
                                             here), on a second frpc. The box's IP leaves voice DNS and K2
                                             opens no voice port. Needs K2 Connect Pro, Sew 0.7.0 and root

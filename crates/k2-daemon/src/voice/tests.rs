@@ -31,6 +31,7 @@ fn ready_facts() -> HostingFacts {
         linux: true,
         preview: true,
         chat_on: true,
+        sew_standalone: false,
         flags: VoiceFeatures { server_governed_space: true, mgmt_voice_states: true, voice_channel_closing: true, ..Default::default() },
         space: Some(SpaceRow { space_id: Some("7001".into()), state: SPACE_READY.into(), ..Default::default() }),
         tier: Tier::Ok,
@@ -67,6 +68,21 @@ fn hosting_state_follows_the_table_in_order() {
         assert_eq!(h.state, want, "{f:?}");
         assert!(!h.line.is_empty());
     }
+    // Sew installed with its own sign-ins: said plainly, not "isn't on".
+    let mut f = ready_facts();
+    f.chat_on = false;
+    assert_eq!(hosting_of(&f).line, "Voice rooms are off on this server: Chat / Voice Hosting isn't on (k2 hostchat status).");
+    assert_eq!(hosting_of(&f).detail, None);
+    f.sew_standalone = true;
+    let h = hosting_of(&f);
+    assert_eq!(h.state, "sew_off");
+    assert_eq!(h.line, "This server's Chat / Voice Hosting uses its own sign-ins (standalone), so it can't host K2 voice rooms.");
+    assert_eq!(h.detail.as_deref(), Some("identity: standalone (k2 hostchat status)"));
+    // The earlier checks still come first.
+    f.preview = false;
+    assert_eq!(hosting_of(&f).state, "preview_off");
+    assert_eq!(hosting_of(&f).line, "Voice rooms are a preview: the owner turns them on (k2 settings set voiceRoomsPreview true, or K2_VOICE_ROOMS=1).");
+
     let mut f = ready_facts();
     f.space = Some(SpaceRow { state: SPACE_BLOCKED.into(), why: Some("slug_taken".into()), ..Default::default() });
     assert_eq!(hosting_of(&f).detail.as_deref(), Some("K2 Admin Space: slug_taken"));

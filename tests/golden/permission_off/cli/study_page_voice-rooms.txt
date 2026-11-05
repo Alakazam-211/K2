@@ -11,8 +11,9 @@ WHAT EXISTS. A Linux server with Pro and Chat / Voice Hosting hosts 0-10
 rooms (default 1, 25 people each), named "Room N" until renamed; slugs
 room-1..room-10 never change. People see and join rooms only on servers
 their K2 app is signed in to, with their own login there. Nothing is
-shared between servers. Preview: until the owner turns voiceRoomsPreview
-on, every k2 voice command answers voice_rooms_off.
+shared between servers. Preview: until the owner runs k2 settings set
+voiceRoomsPreview true (from a terminal outside K2), every k2 voice
+command answers voice_rooms_off.
 
 READ (anyone, agents too)
   k2 voice rooms       who's in each room; closing / unavailable rooms
@@ -22,8 +23,9 @@ READ (anyone, agents too)
 Never poll: the app refreshes on the server's voice_rooms_changed event.
 
 HOSTING STATES (k2 voice status, first one that applies)
-  preview_off · sew_off (Chat / Voice Hosting not on: k2 hostchat status)
-  · voice_off + detail (Sew older than 0.7.0, or the K5 Space blocked)
+  not_linux · preview_off · sew_off (Chat / Voice Hosting not on, or it
+  uses its own sign-ins (identity standalone, can't host): k2 hostchat
+  status) · voice_off + detail (Sew older than 0.7.0, or the K5 Space blocked)
   · starting · not_pro · count_zero · voice_lane_reconnecting (under 20 s:
   joins wait) · voice_lane_down (joins refused, live calls end) · ok.
 

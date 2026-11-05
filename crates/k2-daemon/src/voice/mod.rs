@@ -62,6 +62,9 @@ pub struct HostingFacts {
     pub preview: bool,
     /// Chat / Voice Hosting's grant-hook target is enabled.
     pub chat_on: bool,
+    /// Sew is installed with its own sign-ins (`standalone` identity), so
+    /// it takes no K2 grants and can never host K2 voice rooms.
+    pub sew_standalone: bool,
     pub flags: VoiceFeatures,
     pub space: Option<SpaceRow>,
     /// Lane E's Pro gate (`sew::pro_gate`).
@@ -85,6 +88,13 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
         return h("preview_off", "Voice rooms are a preview: the owner turns them on (k2 settings set voiceRoomsPreview true, or K2_VOICE_ROOMS=1).", None);
     }
     if !f.chat_on {
+        if f.sew_standalone {
+            return h(
+                "sew_off",
+                "This server's Chat / Voice Hosting uses its own sign-ins (standalone), so it can't host K2 voice rooms.",
+                Some("identity: standalone (k2 hostchat status)".into()),
+            );
+        }
         return h("sew_off", "Voice rooms are off on this server: Chat / Voice Hosting isn't on (k2 hostchat status).", None);
     }
     if !f.flags.server_governed_space {
@@ -122,11 +132,15 @@ pub fn hosting_facts() -> HostingFacts {
     let chat_on = preview
         && skin
         && k2_core::tool_hook::get_target(k2_core::tool_hook::CHAT_KIND).ok().flatten().is_some_and(|t| t.enabled);
+    let sew_standalone = !chat_on
+        && crate::sew::store::load()
+            .is_some_and(|row| crate::sew::supervisor::row_provider(&row) == k2_root_proto::sew::PROVIDER_STANDALONE);
     let (tier, not_pro_reason) = pro_tier();
     HostingFacts {
         linux: cfg!(target_os = "linux"),
         preview,
         chat_on,
+        sew_standalone,
         flags: if chat_on { k2_core::tool_hook::sew_voice_features().unwrap_or_default() } else { VoiceFeatures::default() },
         space: if chat_on { k2_core::tool_hook::admin_space_view().ok().and_then(|v| v.space) } else { None },
         tier,

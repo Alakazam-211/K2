@@ -313,7 +313,7 @@ pub fn dark() -> CliResponse {
     CliResponse {
         status: "404 Not Found",
         content_type: "application/json",
-        body: r#"{"error":{"code":"compute_disabled","hint":"compute nodes are a preview: the owner turns them on with K2_COMPUTE=1 or Settings computePreview"}}"#
+        body: r#"{"error":{"code":"compute_disabled","hint":"compute nodes are a preview: the owner turns them on (k2 compute preview on, or K2_COMPUTE=1)"}}"#
             .to_string(),
     }
 }

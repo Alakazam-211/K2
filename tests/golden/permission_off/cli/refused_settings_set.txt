@@ -3,10 +3,12 @@ exit: 3
 --- stdout
 --- stderr
 Error: owner_only: only the server's owner may do this
-Workspace settings are the owner's or an admin's: ask your human, or run it from a terminal outside a K2 agent session.
+Server settings are the owner's: ask your human, or run it from a terminal outside a K2 agent session.
 --- requests
-> GET /cli/settings?token=passport-golden&project=<SANDBOX>%2Fws
+> POST /cli/settings/update?token=passport-golden
 > Host: 127.0.0.1:<PORT>
 > User-Agent: curl/<VERSION>
 > Accept: */*
-> body: 
+> Content-Type: application/json
+> Content-Length: 23
+> body: {"computePreview":true}

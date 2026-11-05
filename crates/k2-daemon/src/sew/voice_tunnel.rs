@@ -109,7 +109,7 @@ pub fn ready(env: &Env) -> R<()> {
         return Err(no(
             "voice_tunnel_preview_off",
             409,
-            "voice through the tunnel is a preview: turn on voice_tunnel_preview (Settings) or set K2_VOICE_TUNNEL=1 in the daemon's environment",
+            "voice through the tunnel is a preview: the owner turns it on (k2 settings set voiceTunnelPreview true, or K2_VOICE_TUNNEL=1 in the daemon's environment)",
         ));
     }
     // §7.3: a box under the voice floor runs chat only.

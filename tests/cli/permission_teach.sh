@@ -46,7 +46,10 @@ trap cleanup EXIT
 #   /cli/connections         → 403 agents_create_connections_disabled + permission (Ask)
 #   /cli/compute/admin/propose → 403 remote_admin_off + machine hint
 #   /cli/project-group/create  → 403 agent_permission_off + permission
-#   /cli/settings/update     → 403 owner_only, no permission (stays exit 1)
+#   /cli/settings/update     → 403 owner_only, no permission (stays exit 1);
+#                              to the agent's passport while on, + permission
+#                              {requestable:false}, as the daemon's
+#                              send_response teaches it (k2 settings set)
 #   anything else            → 403 owner_only + permission {requestable:false}
 cat > "$SANDBOX/stub.py" <<'PY'
 import json, sys
@@ -124,7 +127,10 @@ class H(BaseHTTPRequestHandler):
                     err["permission"] = {"requestable": False, "where": "a person does this, in Settings or from a terminal outside K2"}
             return self.reply(403, err)
         if path in ("/cli/settings/update", "/cli/workspace/open"):
-            return self.reply(403, {"error": {"code": "owner_only", "hint": "owner only"}})
+            err = {"error": {"code": "owner_only", "hint": "owner only"}}
+            if on and path == "/cli/settings/update" and "token=passport-teach" in self.path:
+                err["permission"] = {"requestable": False, "where": "a person does this, from a terminal outside K2"}
+            return self.reply(403, err)
         err = {"error": {"code": "owner_only", "hint": "only the server's owner may do this"}}
         if on:
             if path == "/cli/connections" and "action=remove" in self.path:
@@ -279,9 +285,13 @@ printf '%s\n' "$ERR" | grep -q "don't run your command again" && ok || bad "node
 [ "$(last_err_line)" = 'Ask with: k2 permission request compute.admin-approve request=car_9f8e7d --why "<what you need it for>"' ] && ok \
     || bad "node policy held: last stderr line is '$(last_err_line)'"
 
-# Any other refusal to the agent: "It can't be requested."
+# Any other refusal to the agent: "It can't be requested." `k2 settings set`
+# (0.46.9) writes /cli/settings/update; the owner's switch, exit 3, line once.
 run agent settings set computePreview true
+[ "$RC" = 3 ] && ok || bad "settings set: exit $RC, want 3 ($ERR)"
 [ "$(last_err_line)" = "It can't be requested." ] && ok || bad "settings set: last stderr line is '$(last_err_line)'"
+[ "$(printf '%s\n' "$ERR" | grep -c "It can't be requested.")" = 1 ] && ok || bad "settings set: the closing line must print once"
+grep -q '^POST /cli/settings/update {"computePreview":true}$' "$LOG" && ok || bad "settings set: wrong request: $(cat "$LOG")"
 
 # The mail family (its own Python transport) ends the same way: an agent
 # widening its own inbox access (M0) is the owner's, exit 3, line once.

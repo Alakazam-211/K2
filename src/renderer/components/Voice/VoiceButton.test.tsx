@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
 // Voice rooms lane D (§4.1–§4.6): the headset hides unless a signed-in
-// server reports `voice-rooms-v1`; the list shows "This server" first, the
+// server reports `voice-rooms-v1` (or shows dimmed, with the window server's
+// reason, while that server has the preview on but doesn't host); the list shows "This server" first, the
 // call on top, join / leave against the fake engine, the confirm when
 // switching calls, the signed-out row and the lane-reconnecting line.
 
@@ -16,9 +17,16 @@ const h = vi.hoisted(() => ({
   entries: {} as Record<string, unknown>,
   lists: {} as Record<string, unknown>,
   signIn: vi.fn(),
+  preview: false,
+  setSection: vi.fn(),
 }))
 
-vi.mock('@/stores/settings', () => ({ useSettingsStore: { getState: () => ({ setSection: () => {} }) } }))
+vi.mock('@/stores/settings', () => {
+  const state = (): { voiceRoomsPreview: boolean; setSection: (s: string) => void } => ({ voiceRoomsPreview: h.preview, setSection: h.setSection })
+  const useSettingsStore = <T,>(sel: (s: ReturnType<typeof state>) => T): T => sel(state())
+  useSettingsStore.getState = state
+  return { useSettingsStore }
+})
 
 vi.mock('@/components/Home/room/RoomFailure', () => ({
   roomFailureActions: (hostKey: string) => ({ signIn: () => h.signIn(hostKey), retry: () => {}, openServer: () => {} }),
@@ -108,9 +116,11 @@ beforeEach(async () => {
   h.entries = {}
   h.lists = {}
   h.signIn.mockReset()
+  h.setSection.mockReset()
+  h.preview = false
   await act(async () => {
     if (voice.store.getState().call) await voice.leave()
-    voice.store.setState({ rooms: {}, notice: null, popoverOpen: false })
+    voice.store.setState({ rooms: {}, notice: null, popoverOpen: false, windowHosting: null })
     voice.recompute()
   })
 })
@@ -122,6 +132,74 @@ describe('VoiceButton', () => {
     act(() => voice.recompute())
     const { container } = render(<VoiceButton withPipe />)
     expect(container.innerHTML).toBe('')
+  })
+
+  it("preview on but this server doesn't host: a dimmed headset whose list says why, in the daemon's words", async () => {
+    h.preview = true
+    h.entries = { 'zed.k2.dev': entry('zed.k2.dev', { role: 'owner' }, []) }
+    h.lists = {
+      'zed.k2.dev': {
+        hosting: { state: 'not_linux', line: 'Voice rooms are hosted on Linux servers. Sign in to one from the server list to join its rooms.', detail: null },
+        canManage: true,
+        rev: 1,
+        rooms: [],
+      },
+    }
+    act(() => voice.recompute())
+    const { container } = render(<VoiceButton withPipe />)
+    const button = screen.getByTestId('voice-button')
+    expect(button.getAttribute('data-look')).toBe('unavailable')
+    expect(button.className).toContain('opacity-40')
+    expect(button.getAttribute('title')).toBe("Voice rooms: this server doesn't host them. Click to see why.")
+    expect(container.querySelector('[data-top-bar-pipe]')).not.toBeNull()
+
+    fireEvent.click(button)
+    await waitFor(() => expect(screen.getByTestId('voice-window-hosting').getAttribute('data-state')).toBe('not_linux'))
+    expect(screen.getByTestId('voice-window-hosting').textContent).toContain('This server · zed')
+    expect(screen.getByTestId('voice-window-hosting-line').textContent).toBe(
+      'Voice rooms are hosted on Linux servers. Sign in to one from the server list to join its rooms. Settings',
+    )
+    // No "No voice rooms yet" line under the reason.
+    expect(screen.queryByTestId('voice-empty')).toBeNull()
+    fireEvent.click(screen.getByTestId('voice-open-settings'))
+    expect(h.setSection).toHaveBeenCalledWith('voice-rooms')
+  })
+
+  it("the dimmed list shows the reason's detail, no Settings link for a Member, and a failed read", async () => {
+    h.preview = true
+    h.entries = { 'zed.k2.dev': entry('zed.k2.dev', {}, []) }
+    h.lists = {
+      'zed.k2.dev': {
+        hosting: { state: 'not_pro', line: 'Voice rooms need the Pro plan.', detail: 'plan: free' },
+        canManage: false,
+        rev: 1,
+        rooms: [],
+      },
+    }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getByTestId('voice-window-hosting-line').textContent).toBe('Voice rooms need the Pro plan.'))
+    expect(screen.getByTestId('voice-window-hosting-detail').textContent).toBe('plan: free')
+    expect(screen.queryByTestId('voice-open-settings')).toBeNull()
+
+    // Closed, then opened again with the route failing: the error, not a stale line.
+    fireEvent.click(screen.getByTestId('voice-button'))
+    h.lists = {}
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getByTestId('voice-window-hosting-error').textContent).toContain('no list'))
+    expect(screen.queryByTestId('voice-window-hosting-line')).toBeNull()
+  })
+
+  it('a server that hosts again turns the dimmed headset back into the normal one', () => {
+    h.preview = true
+    h.entries = { 'zed.k2.dev': entry('zed.k2.dev', {}, []) }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    expect(screen.getByTestId('voice-button').getAttribute('data-look')).toBe('unavailable')
+    h.entries = { 'zed.k2.dev': entry('zed.k2.dev') }
+    act(() => voice.recompute())
+    expect(screen.getByTestId('voice-button').getAttribute('data-look')).toBe('rest')
   })
 
   it('shows the headset with its own divider when the roster is hidden', () => {

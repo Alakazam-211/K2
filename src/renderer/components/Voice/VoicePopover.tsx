@@ -11,7 +11,7 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useSettingsStore } from '@/stores/settings'
 import { useVoice, voice } from '@/stores/voice'
-import type { VoiceCall, ServerRooms } from '@/stores/voice-core'
+import type { VoiceCall, ServerRooms, WindowHosting } from '@/stores/voice-core'
 import type { VoiceDevice } from '@/lib/voice/voice-engine'
 import { MIC_DENIED_LINE, hostingStateText, isLaneReconnecting, micBlockedText, type VoiceOccupant, type VoiceRoom } from '@/lib/voice/voice-wire'
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
@@ -275,7 +275,51 @@ function ServerSection({
   )
 }
 
-export default function VoicePopover(): React.JSX.Element {
+/** The dimmed headset's list (no server hosts rooms, the window's server has
+ *  the preview on): why this server doesn't host, in the daemon's own words
+ *  (`hosting.line`, the line Settings → Voice Rooms shows). */
+function WindowHostingSection({ wh }: { wh: WindowHosting | null }): React.JSX.Element {
+  const list = wh?.list ?? null
+  const line = list ? (hostingStateText(list.hosting) ?? list.hosting.line) : null
+  return (
+    <section data-testid="voice-window-hosting" data-state={list?.hosting.state} className="py-1">
+      <header className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">
+        {wh ? `This server · ${wh.label}` : 'This server'}
+      </header>
+      {!list && !wh?.error ? <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p> : null}
+      {wh?.error && !list ? (
+        <p data-testid="voice-window-hosting-error" className="text-[11px] text-[var(--color-status-error-soft)]">
+          Couldn't read why this server doesn't host voice rooms. {wh.error}
+        </p>
+      ) : null}
+      {line ? (
+        <p data-testid="voice-window-hosting-line" className="text-[11px] text-[var(--color-text-secondary)]">
+          {line}
+          {list?.canManage ? (
+            <>
+              {' '}
+              <button
+                type="button"
+                data-testid="voice-open-settings"
+                className="underline hover:text-[var(--color-text-primary)]"
+                onClick={() => useSettingsStore.getState().setSection('voice-rooms')}
+              >
+                Settings
+              </button>
+            </>
+          ) : null}
+        </p>
+      ) : null}
+      {list?.hosting.detail ? (
+        <p data-testid="voice-window-hosting-detail" className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
+          {list.hosting.detail}
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
+export default function VoicePopover({ unavailable = false }: { unavailable?: boolean }): React.JSX.Element {
   // The list drops over the room, so it gives way over a live Browser page.
   // The claim lives and dies with this box, not with the store's open flag.
   const rootRef = useRef<HTMLDivElement>(null)
@@ -284,6 +328,7 @@ export default function VoicePopover(): React.JSX.Element {
   const rooms = useVoice((s) => s.rooms)
   const call = useVoice((s) => s.call)
   const notice = useVoice((s) => s.notice)
+  const windowHosting = useVoice((s) => s.windowHosting)
   const [confirm, setConfirm] = useState<{ server: VoiceServer; room: VoiceRoom } | null>(null)
 
   const join = (server: VoiceServer, room: VoiceRoom): void => {
@@ -347,10 +392,11 @@ export default function VoicePopover(): React.JSX.Element {
           </div>
         </div>
       ) : null}
+      {unavailable ? <WindowHostingSection wh={windowHosting} /> : null}
       {servers.map((s) => (
         <ServerSection key={s.hostKey} server={s} rooms={rooms[s.hostKey]} call={call} onJoin={join} />
       ))}
-      {!anyRooms && allRead ? (
+      {!anyRooms && allRead && !unavailable ? (
         <p data-testid="voice-empty" className="mt-1 text-[11px] text-[var(--color-text-muted)]">
           No voice rooms yet. Rooms show here from Linux servers with Pro that you're signed in to.
         </p>

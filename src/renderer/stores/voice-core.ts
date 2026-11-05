@@ -70,6 +70,16 @@ export interface ServerRooms {
   at: number | null
 }
 
+/** The window's own server while it doesn't host rooms but has the preview
+ *  on: its `/cli/voice/rooms` answer, for the dimmed headset's reason line. */
+export interface WindowHosting {
+  hostKey: string
+  label: string
+  list: VoiceRoomsList | null
+  error: string | null
+  loading: boolean
+}
+
 export type CallPhase = 'joining' | 'connecting' | 'connected' | 'reconnecting'
 
 export interface VoiceCall {
@@ -113,6 +123,8 @@ export interface VoiceState {
   engineKind: 'seat' | 'native'
   /** The audio devices, while a native call's panel has asked (hot-plug updates it). */
   devices: VoiceDevices | null
+  /** The window's server's hosting answer, read by `readWindowHosting`. */
+  windowHosting: WindowHosting | null
 }
 
 export interface VoiceDeps {
@@ -169,6 +181,9 @@ export interface VoiceController {
    *  already has that `rev`. */
   noteRoomsChanged(hostKey: string, rev: number | null): void
   setPopoverOpen(open: boolean): void
+  /** Read the window's own server's `/cli/voice/rooms` into `windowHosting`:
+   *  why it doesn't host (the dimmed headset, §4.5). */
+  readWindowHosting(): Promise<void>
   /** Join `room` on `hostKey`. A call in progress is left first (the UI
    *  asks before calling this, §4.3). */
   join(hostKey: string, room: VoiceRoom): Promise<void>
@@ -203,6 +218,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     prefs: deps.loadPrefs(),
     engineKind: 'seat',
     devices: null,
+    windowHosting: null,
   }))
   let reported = deps.loadReported()
   let engine: VoiceEngine | null = null
@@ -362,6 +378,20 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     recompute()
     // The headset's look reads the lists, with or without the popover open.
     await refreshRooms()
+  }
+
+  const readWindowHosting = async (): Promise<void> => {
+    const hostKey = deps.windowKey()
+    const label = deps.labelOf(hostKey)
+    const prev = store.getState().windowHosting
+    const keep = prev && canon(prev.hostKey) === canon(hostKey) ? prev : null
+    store.setState({ windowHosting: { hostKey, label, list: keep?.list ?? null, error: null, loading: true } })
+    try {
+      const list = await deps.api.rooms(deps.scopeFor(hostKey))
+      store.setState({ windowHosting: { hostKey, label, list, error: null, loading: false } })
+    } catch (err) {
+      store.setState({ windowHosting: { hostKey, label, list: null, error: err instanceof Error ? err.message : String(err), loading: false } })
+    }
   }
 
   const notice = (text: string, kind: 'error' | 'info', micSettings = false): void => {
@@ -958,6 +988,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       store.setState({ popoverOpen: open })
       if (open) void refreshRooms()
     },
+    readWindowHosting,
     join,
     leave,
     setMuted,

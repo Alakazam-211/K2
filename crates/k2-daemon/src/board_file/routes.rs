@@ -267,7 +267,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         return CliResponse::not_found();
     }
     if !k2_core::board_preview::enabled() {
-        return refusal("404 Not Found", "not_enabled", "Board files are a preview: the owner turns them on with K2_BOARD_FILE=1 or Settings' board_file_preview");
+        return refusal("404 Not Found", "not_enabled", "Board files are a preview: the owner turns them on (k2 settings set boardFilePreview true, or K2_BOARD_FILE=1)");
     }
     let is_post = method.eq_ignore_ascii_case("POST");
     // Mutating routes are POST only (feedback_post_only_route_guards).

@@ -16,6 +16,8 @@
 //! | `agents.stop` | `agents:stop` | stop its turn |
 //! | `git.land` | `agents:start` + `git:read` | land its branch (K2's sheet first) |
 //! | `agents.settle` | `agents:start` + `git:read` | retire / discard (K2's sheet first) |
+//! | `agents.end` | `agents:start` | end a sidecar's process (K2's sheet first; catalog v50) |
+//! | `agents.archive` | `agents:start` | take a stopped sidecar off the list (catalog v50) |
 //!
 //! **Addresses.** A row's address is `ws::local` (a workspace's main
 //! agent) or `ws/name::local` (a sidecar). Only this computer's agents:
@@ -25,7 +27,12 @@
 //! **No host paths.** Files are relative to the agent's worktree; a
 //! worktree is relative to its workspace (`.worktrees/k2-fix`).
 //!
-//! **K2's sheet.** `agents.start`, `git.land` and `agents.settle` first
+//! **Only sidecars.** `agents.end` and `agents.archive` refuse a
+//! workspace's main agent and a heartbeat session by name (`bad_args`).
+//!
+//! **K2's sheet.** `agents.start`, `git.land`, `agents.settle` and
+//! `agents.end` (a running agent only: an asleep one answers
+//! `{ended: false}` at once) first
 //! answer `confirm_required` with the change (what the sheet shows) and a
 //! one-time `secretId` bound to this placement, verb and arguments; K2's
 //! renderer (never widget code: the frame never sees the id) shows the
@@ -54,7 +61,7 @@ use super::workbench_w1 as w1;
 use crate::cli_response::CliResponse;
 
 /// The rows this file answers, in catalog order.
-pub const VERBS: [&str; 10] = [
+pub const VERBS: [&str; 12] = [
     "work.list",
     "git.snapshot",
     "git.diffFile",
@@ -64,6 +71,8 @@ pub const VERBS: [&str; 10] = [
     "agents.stop",
     "git.land",
     "agents.settle",
+    "agents.end",
+    "agents.archive",
     "git.note",
 ];
 
@@ -637,6 +646,62 @@ fn sidecar_of<'a>(t: &'a Target, verb: &str) -> Result<&'a str, CliResponse> {
     t.handle().ok_or_else(|| bad_args(format!("{verb} is for a sidecar (ws/name), not a workspace's main agent")))
 }
 
+/// What end and archive say about a session that isn't a sidecar (by its
+/// role in the shared list), or `None` for a sidecar.
+pub(crate) fn not_a_sidecar(verb: &str, address: &str, role: &str) -> Option<CliResponse> {
+    match role {
+        "sidecar" | "worktree" => None,
+        "heartbeat" => Some(bad_args(format!(
+            "{verb} is for a sidecar, and {address} is a heartbeat session: K2 runs those on their schedule (k2 heartbeat)"
+        ))),
+        "main" => Some(bad_args(format!("{verb} is for a sidecar (ws/name), not a workspace's main agent"))),
+        other => Some(bad_args(format!("{verb} is for a sidecar, and {address} is a {other} session"))),
+    }
+}
+
+/// A sidecar for end and archive: a workspace's main agent and a heartbeat
+/// session are refused by name, anything else that isn't here is
+/// `not_bound`.
+fn sidecar_target(address: &str, verb: &str) -> Result<(Target, String), CliResponse> {
+    match target(address) {
+        Ok(t) => {
+            let name = sidecar_of(&t, verb)?.to_string();
+            Ok((t, name))
+        }
+        Err(e) => {
+            let raw = address.trim().to_ascii_lowercase();
+            let token = raw.strip_suffix(&format!("::{LOCAL_HOST}")).unwrap_or(raw.as_str());
+            let role = token.split_once('/').and_then(|(ws, name)| {
+                let ws = crate::fs_routes::resolve_owner_workspace(ws).ok()?;
+                sessions::role_of(&ws.project_id, name)
+            });
+            Err(role.and_then(|r| not_a_sidecar(verb, &raw, &r)).unwrap_or(e))
+        }
+    }
+}
+
+/// End a sidecar's process (`k2 sidecar stop`): K2's sheet first, for a
+/// running one; an asleep one has nothing to end.
+fn end(w: &Placed, args: &Map<String, J>, b: &CallBody) -> Result<J, CliResponse> {
+    let (t, name) = sidecar_target(str_arg(args, "address"), "agents.end")?;
+    match b.confirm_token.as_deref().filter(|s| !s.is_empty()) {
+        None => {
+            if !t.sidecar.as_ref().is_some_and(|s| s.live()) {
+                return Ok(json!({ "ended": false }));
+            }
+            let change = json!({
+                "kind": "end", "address": t.address(), "thread": t.thread(), "workspace": t.ws_label, "name": name,
+                "worktree": t.worktree(),
+            });
+            Err(ask(w, &b.verb, args, change, json!({})))
+        }
+        Some(token) => {
+            confirmed(w, &b.verb, args, token)?;
+            w1::end(&t.ws_handle, &name)
+        }
+    }
+}
+
 /// W1's Land sheet read, for a sidecar that works in its own worktree.
 fn review_of(t: &Target, verb: &str) -> Result<(String, J), CliResponse> {
     let name = sidecar_of(t, verb)?.to_string();
@@ -860,6 +925,18 @@ fn answer(row: &VerbRow, w: &Placed, args: &Map<String, J>, b: &CallBody) -> Res
             v
         }),
         "agents.start" => start(w, args, b),
+        "agents.end" => end(w, args, b).map(|mut v| {
+            if v.get("cancelled").is_none() {
+                v["cancelled"] = json!(false);
+            }
+            v
+        }),
+        // Reversible (k2 sidecar new <name> brings it back): a press is
+        // enough, no sheet.
+        "agents.archive" => {
+            let (t, name) = sidecar_target(str_arg(args, "address"), "agents.archive")?;
+            w1::archive(&t.ws_handle, &name)
+        }
         other => Err(no(400, "unknown_verb", format!("{other} isn't a Workbench row"))),
     }
 }

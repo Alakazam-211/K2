@@ -354,3 +354,68 @@ fn the_reach_route_lists_sidecars_without_git_or_paths() {
     assert_eq!(row["worktree"], ".worktrees/k2-fix");
     assert_eq!(row["branch"], Value::Null, "no git work on the reach path");
 }
+
+/// A plain sidecar (no worktree of its own) beside `fix`, asleep: what
+/// `k2 sidecar new plain` leaves once it was stopped.
+fn add_plain_sidecar(b: &Bench) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, session_id, command, args_json, cwd, last_seen_at, created_by) \
+         VALUES ('w-wb', 'pane-wb-plain', 'tab-pane-wb-plain', 'conv-wb-plain', 'claude', '[]', ?1, unixepoch(), 'owner')",
+        rusqlite::params![b.repo.to_string_lossy()],
+    )
+    .expect("plain sidecar tab row");
+    k2_core::sidecar::bind_name(&conn, "w-wb", "claude", "conv-wb-plain", "plain", "plain").expect("bind name");
+}
+
+const PLAIN: &str = "wb-room/plain::local";
+
+#[test]
+fn end_and_archive_need_agents_start_and_take_only_sidecars() {
+    let b = bench(&["agents:stop", "git:read"]);
+    for verb in ["agents.end", "agents.archive"] {
+        assert_eq!(b.refuse(verb, json!([{ "address": SIDECAR }])).0, "cap_not_granted", "{verb}: agents:stop isn't enough");
+    }
+    b.set(&ALL);
+    for verb in ["agents.end", "agents.archive"] {
+        let (code, err) = b.refuse(verb, json!([{ "address": "wb-room::local" }]));
+        assert_eq!(code, "bad_args", "{verb}: the main agent: {err}");
+        assert!(err["hint"].as_str().expect("hint").contains("main agent"), "{err}");
+        assert_eq!(b.refuse(verb, json!([{ "address": "wb-room/nope::local" }])).0, "not_bound", "{verb}");
+        assert_eq!(b.refuse(verb, json!([{ "address": "wb-room/fix::other.k2.dev" }])).0, "not_bound", "{verb}");
+    }
+}
+
+#[test]
+fn a_heartbeat_session_is_refused_by_name() {
+    let r = crate::garden_data::workbench_rows::not_a_sidecar("agents.end", "wb-room/hb:nightly::local", "heartbeat").expect("refused");
+    assert_eq!(r.status, "400 Bad Request");
+    let v: Value = serde_json::from_str(&r.body).expect("json");
+    assert_eq!(v["error"]["code"], "bad_args");
+    assert!(v["error"]["hint"].as_str().expect("hint").contains("heartbeat session"), "{v}");
+    assert!(crate::garden_data::workbench_rows::not_a_sidecar("agents.end", "x", "sidecar").is_none());
+    assert!(crate::garden_data::workbench_rows::not_a_sidecar("agents.end", "x", "worktree").is_none());
+    assert!(crate::garden_data::workbench_rows::not_a_sidecar("agents.archive", "x", "main").is_some());
+}
+
+#[test]
+fn end_an_asleep_sidecar_is_nothing_to_end_and_archive_takes_it_off_the_list() {
+    let b = bench(&ALL);
+    add_plain_sidecar(&b);
+    // Asleep: nothing to end, no sheet, nothing changes.
+    assert_eq!(b.call("agents.end", json!([{ "address": PLAIN }])), json!({ "ended": false, "cancelled": false }));
+    assert_eq!(b.call("agents.end", json!([{ "address": SIDECAR }])), json!({ "ended": false, "cancelled": false }));
+
+    // A worktree sidecar isn't archived (W1's retire owns its worktree): 409, by name.
+    let (status, err) = b.raw("agents.archive", json!([{ "address": SIDECAR }]), None);
+    assert_eq!((status, err["error"]["code"].as_str()), (409, Some("worktree_sidecar")), "{err}");
+
+    // The plain one goes off the list; its name brings it back later.
+    let listed = |b: &Bench| b.call("work.list", json!([])).as_array().expect("rows").iter().any(|r| r["address"] == PLAIN);
+    assert!(listed(&b), "plain is listed first");
+    assert_eq!(b.call("agents.archive", json!([{ "address": PLAIN }])), json!({ "archived": true }));
+    assert!(!listed(&b), "plain is off the list");
+    // Gone now: the same answer as an agent that isn't there.
+    assert_eq!(b.refuse("agents.archive", json!([{ "address": PLAIN }])).0, "not_bound");
+}

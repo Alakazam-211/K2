@@ -31,6 +31,16 @@ describe('ZenWorkSheet', () => {
     expect(zenWorkSheetWords({ kind: 'settle', name: 'fix', discard: true }).go).toBe('Discard')
     expect(zenWorkSheetWords({ kind: 'settle', name: 'fix', discard: false }).go).toBe('Retire')
     expect(zenWorkSheetWords({ kind: 'start', name: 'fix', workspace: 'K2' }).title).toBe('Start fix in K2?')
+    // Catalog v50: ending a running agent is K2's sheet too.
+    expect(zenWorkSheetWords({ kind: 'end', name: 'notes' })).toEqual({ title: 'End notes?', go: 'End it', danger: true })
+  })
+
+  it('catalog v50: End says what stays; End it is yes', () => {
+    const done = vi.fn()
+    render(<ZenWorkSheet change={{ kind: 'end', name: 'notes', worktree: null }} widget="Garden chat" onDone={done} />)
+    expect(screen.getByTestId('zen-work-end').textContent).toContain('Its tab, transcript and Thread stay')
+    fireEvent.click(screen.getByTestId('zen-work-go'))
+    expect(done).toHaveBeenCalledWith(true)
   })
 
   it('shows the commits and files as text; Land is yes, Cancel and Esc are no', () => {

@@ -91,6 +91,23 @@ pub fn rows_from_roster(v: &J) -> Vec<SessionRow> {
         .collect()
 }
 
+/// The role of the session with this handle in a workspace's shared list
+/// (`heartbeat`, `chat`, …), or `None`: what end and archive say when an
+/// address isn't a sidecar.
+pub fn role_of(project_id: &str, handle: &str) -> Option<String> {
+    role_in(&roster_json(project_id).ok()?, handle)
+}
+
+fn role_in(v: &J, handle: &str) -> Option<String> {
+    v.get("sessions")?
+        .as_array()?
+        .iter()
+        .find(|r| r.get("handle").and_then(J::as_str).is_some_and(|h| h.trim().eq_ignore_ascii_case(handle)))
+        .and_then(|r| r.get("role"))
+        .and_then(J::as_str)
+        .map(str::to_string)
+}
+
 /// The workspace's sessions in the shared list's shape (contract §2).
 fn roster_json(project_id: &str) -> Result<J, String> {
     let opts = crate::workspace_roster::RosterOpts { all: true, include_api: false, caller_map_key: None };
@@ -123,5 +140,9 @@ mod tests {
         assert!(rows[0].live());
         assert_eq!((rows[1].handle.as_str(), rows[1].cli.as_deref(), rows[1].live()), ("rev", Some("codex"), false));
         assert!(rows_from_roster(&json!({ "ok": true })).is_empty());
+        // What end and archive name when an address isn't a sidecar.
+        assert_eq!(role_in(&v, "hb:nightly").as_deref(), Some("heartbeat"));
+        assert_eq!(role_in(&v, "HB:Nightly").as_deref(), Some("heartbeat"));
+        assert_eq!(role_in(&v, "nobody"), None);
     }
 }

@@ -83,6 +83,35 @@ pub fn stop(workspace_handle: &str, sidecar: &str) -> Result<J, CliResponse> {
     Ok(json!({ "stopped": v["interrupted"].as_bool().unwrap_or(false) }))
 }
 
+/// A sidecar route's refusal for a Garden: `no_such_sidecar` is the
+/// Workbench's `not_bound` (the same answer as an agent that isn't there);
+/// `sidecar_live`, `sidecar_attached` and `worktree_sidecar` keep their
+/// names (catalog v50).
+fn sidecar_refusal(r: CliResponse) -> CliResponse {
+    let v: J = serde_json::from_str(&r.body).unwrap_or(J::Null);
+    if v["error"]["code"] == "no_such_sidecar" {
+        let hint = v["error"]["hint"].as_str().unwrap_or("no such sidecar").to_string();
+        return super::person_rows::no(403, "not_bound", hint);
+    }
+    passthrough(r)
+}
+
+/// End a sidecar's process (`POST /cli/sidecar/stop`, `k2 sidecar stop`).
+/// Never `--force`: a sidecar someone has open in a tab is
+/// `sidecar_attached`. Its tab row, transcript and Thread stay.
+pub fn end(workspace_handle: &str, sidecar: &str) -> Result<J, CliResponse> {
+    let v = post("/cli/sidecar/stop", json!({ "workspace": workspace_handle, "name": sidecar })).map_err(|(_, _, r)| sidecar_refusal(r))?;
+    Ok(json!({ "ended": v["stopped"].as_bool().unwrap_or(false) }))
+}
+
+/// Take a stopped sidecar off the list (`POST /cli/sidecar/archive`,
+/// `k2 sidecar archive`): `sidecar_live` while it runs, `worktree_sidecar`
+/// for one in its own worktree (retire it instead).
+pub fn archive(workspace_handle: &str, sidecar: &str) -> Result<J, CliResponse> {
+    let v = post("/cli/sidecar/archive", json!({ "workspace": workspace_handle, "name": sidecar })).map_err(|(_, _, r)| sidecar_refusal(r))?;
+    Ok(json!({ "archived": v["archived"].as_bool().unwrap_or(false) }))
+}
+
 /// W1's Land sheet read (`GET /cli/sidecar/review`): the commits, files,
 /// tips and why Land would refuse.
 pub fn review(workspace_handle: &str, sidecar: &str) -> Result<J, CliResponse> {

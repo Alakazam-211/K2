@@ -9,12 +9,15 @@
 // - **Writes need the person's press** in this frame within 5 s
 //   (`ZEN_PICK_GESTURE_MS`); without one they answer `failed` and nothing
 //   reaches the daemon.
-// - **K2's sheet.** `agents.start`, `git.land` and `agents.settle` first
+// - **K2's sheet.** `agents.start`, `git.land`, `agents.settle` and
+//   `agents.end` (catalog v50; a running agent only) first
 //   answer `confirm_required` with the change; this file asks the host to
 //   draw K2's sheet outside the frame, and repeats the call with the
 //   daemon's one-time id only after the person's press there. The widget
 //   never sees the id: it hears a closed answer (`{landed}`, `{settled}`,
 //   `{cancelled: true}` on Cancel; `declined` for a cancelled Start).
+// - `agents.archive` (catalog v50) needs the press only: it is reversible
+//   (`k2 sidecar new <name>` brings the agent back).
 // - One sheet at a time per frame (a widget can't stack sheets).
 
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
@@ -49,7 +52,7 @@ export const ZEN_WORK_WRITES: ReadonlySet<string> = new Set([
 
 /** What K2's sheet shows (the daemon's `change`; `kind` picks the words). */
 export interface ZenWorkChange {
-  kind: 'land' | 'settle' | 'start'
+  kind: 'land' | 'settle' | 'start' | 'end'
   [k: string]: unknown
 }
 
@@ -103,7 +106,7 @@ export function zenWorkErrorFrom(err: unknown): ZenWorkError {
     const change = e.change
     const kind = isObj(change) ? change.kind : undefined
     const ask =
-      code === 'confirm_required' && isObj(change) && (kind === 'land' || kind === 'settle' || kind === 'start') && typeof e.secretId === 'string'
+      code === 'confirm_required' && isObj(change) && (kind === 'land' || kind === 'settle' || kind === 'start' || kind === 'end') && typeof e.secretId === 'string'
         ? { change: change as ZenWorkChange, secretId: e.secretId }
         : null
     return new ZenWorkError(code, message, ask)
@@ -115,6 +118,7 @@ export function zenWorkErrorFrom(err: unknown): ZenWorkError {
 function cancelled(verb: string): unknown {
   if (verb === 'git.land') return { landed: false, commits: 0, head: null, conflict: [], cancelled: true }
   if (verb === 'agents.settle') return { settled: false, discarded: false, cancelled: true }
+  if (verb === 'agents.end') return { ended: false, cancelled: true }
   throw new ZenWorkError('declined', 'The person didn’t start it.')
 }
 

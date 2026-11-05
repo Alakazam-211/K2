@@ -1,5 +1,5 @@
-// 0.46.7 Workbench: K2's own sheet for a widget's Start, Land, Retire or
-// Discard (GTC-5). K2's DOM laid over the widget's card, outside the sealed
+// 0.46.7 Workbench: K2's own sheet for a widget's Start, Land, Retire,
+// Discard or End (catalog v50) (GTC-5). K2's DOM laid over the widget's card, outside the sealed
 // frame (the G8 pattern, like ZenLinkSheet): the widget can't draw it, click
 // it or read it, and every word is K2's; the facts (commits, files, branch)
 // are the daemon's, read when the person pressed the widget's button.
@@ -34,6 +34,7 @@ export function zenWorkSheetWords(c: ZenWorkChange): { title: string; go: string
   if (c.kind === 'land') return { title: `Land ${who}’s ${str(c.ahead)} commit(s) on ${str(c.base)}?`, go: `Land on ${str(c.base)}`, danger: false }
   if (c.kind === 'settle' && c.discard === true) return { title: `Discard ${who}?`, go: 'Discard', danger: true }
   if (c.kind === 'settle') return { title: `Retire ${who}?`, go: 'Retire', danger: false }
+  if (c.kind === 'end') return { title: `End ${who}?`, go: 'End it', danger: true }
   return { title: `Start ${who} in ${str(c.workspace)}?`, go: 'Start', danger: false }
 }
 
@@ -110,6 +111,18 @@ export function ZenWorkSheet({ change, widget, onDone }: ZenWorkSheetProps): Rea
               ? `: its ${str(change.unlanded) || '0'} commit(s) that aren’t landed are thrown away, and uncommitted files go to the Trash.`
               : ' and deletes its branch (every commit is landed).'}{' '}
             Its Thread stays.
+          </p>
+        )}
+        {change.kind === 'end' && (
+          <p style={muted} data-testid="zen-work-end">
+            K2 ends the agent’s process now, even mid-turn. Its tab, transcript and Thread stay, so it can start again
+            {str(change.worktree) ? (
+              <>
+                {' '}
+                in its worktree <span style={mono}>{str(change.worktree)}</span>
+              </>
+            ) : null}
+            .
           </p>
         )}
         {change.kind === 'start' && (

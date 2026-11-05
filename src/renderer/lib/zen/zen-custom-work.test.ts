@@ -25,11 +25,24 @@ function work(opts: { pressed?: boolean; yes?: boolean; answers?: Array<unknown>
 }
 
 describe('Workbench rows on the bridge', () => {
-  it('lists the ten daemon rows, five of them writes', () => {
+  it('lists the twelve daemon rows, seven of them writes (catalog v50: agents.end and agents.archive)', () => {
     expect([...ZEN_WORK_VERBS].sort()).toEqual(
-      ['agents.settle', 'agents.start', 'agents.stop', 'compute.jobs', 'git.diffFile', 'git.land', 'git.log', 'git.note', 'git.snapshot', 'work.list'].sort(),
+      [
+        'agents.archive',
+        'agents.end',
+        'agents.settle',
+        'agents.start',
+        'agents.stop',
+        'compute.jobs',
+        'git.diffFile',
+        'git.land',
+        'git.log',
+        'git.note',
+        'git.snapshot',
+        'work.list',
+      ].sort(),
     )
-    expect([...ZEN_WORK_WRITES].sort()).toEqual(['agents.settle', 'agents.start', 'agents.stop', 'git.land', 'git.note'])
+    expect([...ZEN_WORK_WRITES].sort()).toEqual(['agents.archive', 'agents.end', 'agents.settle', 'agents.start', 'agents.stop', 'git.land', 'git.note'])
     for (const v of ZEN_WORK_WRITES) expect(ZEN_WORK_VERBS.has(v)).toBe(true)
   })
 
@@ -95,6 +108,40 @@ describe('Workbench rows on the bridge', () => {
     expect(zenWorkErrorFrom(new Error('plain text')).wire).toEqual({ code: 'failed', message: 'plain text' })
     // A confirm_required without a known kind or id is not a sheet.
     expect(zenWorkErrorFrom(new Error(JSON.stringify({ error: { code: 'confirm_required', change: { kind: 'other' }, secretId: 'x' } }))).ask).toBeNull()
+  })
+
+  it('catalog v50: End asks K2’s sheet then ends; Cancel is {ended: false, cancelled: true}', async () => {
+    const ended = { ended: true, cancelled: false }
+    const t = work({ answers: [ask('end'), ended] })
+    await expect(t.w.call('agents.end', [{ address: 'k2/fix::local' }])).resolves.toEqual(ended)
+    expect(t.confirm).toHaveBeenCalledWith({ kind: 'end', name: 'fix' })
+    expect(t.calls.map((c) => c.token)).toEqual([undefined, 'sid-1'])
+    const no = work({ yes: false, answers: [ask('end')] })
+    await expect(no.w.call('agents.end', [{ address: 'k2/fix::local' }])).resolves.toEqual({ ended: false, cancelled: true })
+    expect(no.calls).toHaveLength(1)
+    // An asleep agent: the daemon answers at once, no sheet.
+    const asleep = work({ answers: [{ ended: false, cancelled: false }] })
+    await expect(asleep.w.call('agents.end', [{ address: 'k2/fix::local' }])).resolves.toEqual({ ended: false, cancelled: false })
+    expect(asleep.confirm).not.toHaveBeenCalled()
+  })
+
+  it('catalog v50: Archive needs only the press (reversible), and the daemon’s 409s keep their names', async () => {
+    const t = work({ answers: [{ archived: true }] })
+    await expect(t.w.call('agents.archive', [{ address: 'k2/notes::local' }])).resolves.toEqual({ archived: true })
+    expect(t.confirm).not.toHaveBeenCalled()
+    for (const c of ['sidecar_live', 'worktree_sidecar', 'sidecar_attached', 'not_bound'] as const) {
+      const r = work({ answers: [new Error(JSON.stringify({ error: { code: c, hint: `${c} hint` } }))] })
+      const verb = c === 'sidecar_attached' ? 'agents.end' : 'agents.archive'
+      const err = await r.w.call(verb, [{ address: 'k2/notes::local' }]).catch((e: unknown) => e)
+      expect((err as ZenWorkError).wire, c).toEqual({ code: c, message: `${c} hint` })
+    }
+    // No press: neither reaches the daemon.
+    const none = work({ pressed: false })
+    for (const verb of ['agents.end', 'agents.archive']) {
+      const err = await none.w.call(verb, [{ address: 'k2/notes::local' }]).catch((e: unknown) => e)
+      expect((err as ZenWorkError).wire.code).toBe('failed')
+    }
+    expect(none.calls).toEqual([])
   })
 
   it('an unknown verb is refused here', async () => {

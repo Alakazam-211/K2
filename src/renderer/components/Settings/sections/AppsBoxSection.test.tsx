@@ -12,6 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { menuValues, pickValue } from '@/test-utils/setting-dropdown'
 
 const h = vi.hoisted(() => ({
   gets: [] as Array<{ route: string; params: Record<string, unknown> | undefined }>,
@@ -211,7 +212,7 @@ describe('the Apps rows', () => {
     expect(within(actions).queryByRole('button', { name: 'Park' })).toBeNull()
     fireEvent.click(within(actions).getByRole('button', { name: 'Unpark…' }))
     const sheet = await screen.findByTestId('apps-handover-old')
-    fireEvent.change(within(sheet).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
+    pickValue(within(sheet).getByLabelText('Agent for old'), 'ws-ops')
     await screen.findByTestId('apps-handover-old-plan')
     expect(h.gets.find((g) => g.route === 'app/handover/plan')?.params).toEqual({ app: 'old', to: 'ws-ops' })
     fireEvent.click(within(screen.getByTestId('apps-handover-old-plan')).getByRole('button', { name: 'Unpark' }))
@@ -301,7 +302,7 @@ describe('the Apps rows', () => {
     h.refuse['app/unpark'] = [{ code: 'handover_stale', hint }]
     render(<AppsBoxSection />)
     fireEvent.click(within(await screen.findByTestId('apps-row-old-actions')).getByRole('button', { name: 'Unpark…' }))
-    fireEvent.change(within(await screen.findByTestId('apps-handover-old')).getByLabelText('Agent for old'), { target: { value: 'ws-ops' } })
+    pickValue(within(await screen.findByTestId('apps-handover-old')).getByLabelText('Agent for old'), 'ws-ops')
     fireEvent.click(within(await screen.findByTestId('apps-handover-old-plan')).getByRole('button', { name: 'Unpark' }))
     expect((await screen.findByTestId('apps-handover-old-error')).textContent).toContain(hint)
     expect(h.posts.map((p) => p.route)).toEqual(['app/unpark'])
@@ -323,9 +324,11 @@ describe('the Hand over… sheet (0.46.5)', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Hand over…' }))
     const sheet = await screen.findByTestId('apps-handover-shop')
     // The current agent isn't offered.
-    const options = Array.from((within(sheet).getByLabelText('Agent for shop') as HTMLSelectElement).options).map((o) => o.value)
-    expect(options).toEqual(['', 'ws-ops'])
-    fireEvent.change(within(sheet).getByLabelText('Agent for shop'), { target: { value: 'ws-ops' } })
+    // K2's themed menu; "Hand it to…" is the placeholder, not an option.
+    const trigger = within(sheet).getByLabelText('Agent for shop')
+    expect(trigger.textContent).toBe('Hand it to…')
+    expect(menuValues(trigger)).toEqual(['ws-ops'])
+    pickValue(within(sheet).getByLabelText('Agent for shop'), 'ws-ops')
     const plan = await screen.findByTestId('apps-handover-shop-plan')
     for (const line of PLAN.lines) expect(plan.textContent).toContain(line)
     // The plan's choices: the shared database, a secret name clash, shared guests.
@@ -345,7 +348,7 @@ describe('the Hand over… sheet (0.46.5)', () => {
     h.plan = { ...PLAN, ready: false, blockers: [{ code: 'handover_db_busy', hint: 'its database is being upgraded', names: [] }] }
     render(<AppsBoxSection />)
     fireEvent.click(within(await screen.findByTestId('apps-row-shop')).getByRole('button', { name: 'Hand over…' }))
-    fireEvent.change(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), { target: { value: 'ws-ops' } })
+    pickValue(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), 'ws-ops')
     const plan = await screen.findByTestId('apps-handover-shop-plan')
     expect(within(plan).getByTestId('apps-handover-shop-blocker').textContent).toBe('its database is being upgraded')
     expect((within(plan).getByRole('button', { name: 'Hand over' }) as HTMLButtonElement).disabled).toBe(true)
@@ -356,7 +359,7 @@ describe('the Hand over… sheet (0.46.5)', () => {
     h.posts = []
     render(<AppsBoxSection />)
     fireEvent.click(within(await screen.findByTestId('apps-row-shop')).getByRole('button', { name: 'Hand over…' }))
-    fireEvent.change(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), { target: { value: 'ws-ops' } })
+    pickValue(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), 'ws-ops')
     fireEvent.click(within(await screen.findByTestId('apps-handover-shop-plan')).getByRole('button', { name: 'Hand over' }))
     const pw = await screen.findByLabelText('Password to confirm')
     fireEvent.change(pw, { target: { value: 'hunter2' } })

@@ -37,6 +37,7 @@ import { SquareCheckbox } from '@/components/ui'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import { isAirgap } from '@/lib/airgap'
 import { useDialogEscape } from '../settings-esc'
+import { SettingDropdown } from '../controls/SettingControls'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 
@@ -526,23 +527,25 @@ function AppAccessLimit({
         The most an App login made for a hired agent may get: one App, its rooms, and the highest role.
       </p>
       {optsError && <p className="text-[10px] text-[var(--color-status-error-soft)]">Couldn&apos;t load Apps: {optsError}</p>}
-      <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+      <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
         App
-        <select
-          aria-label="App"
+        <SettingDropdown
+          compact
+          className="min-w-0 max-w-[60%]"
+          ariaLabel="App"
           value={form.app}
-          onChange={(e) => onChange({ app: e.target.value, rooms: e.target.value ? [SELF_ROOM] : [], role: '' })}
-          className="max-w-[60%] px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-        >
-          <option value="">{NO_APP_ACCESS}</option>
-          {opts.apps.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.workspace ? `${a.name} (${a.workspace})` : a.name}
-            </option>
-          ))}
-          {form.app && !app && <option value={form.app}>{form.app} (not published any more)</option>}
-        </select>
-      </label>
+          options={[
+            { value: '', label: NO_APP_ACCESS },
+            ...opts.apps.map((a) => ({ value: a.id, label: a.workspace ? `${a.name} (${a.workspace})` : a.name })),
+            ...(form.app && !app ? [{ value: form.app, label: `${form.app} (not published any more)` }] : []),
+          ]}
+          onChange={(v) => {
+            // A re-pick of the same App keeps the rooms and role.
+            if (v === form.app) return
+            onChange({ app: v, rooms: v ? [SELF_ROOM] : [], role: '' })
+          }}
+        />
+      </div>
       {!form.app ? (
         <p className="text-[10px] text-[var(--color-text-muted)]" data-testid="app-access-none">
           {NO_APP_ACCESS}: agents hired with this key get no App login.
@@ -561,25 +564,23 @@ function AppAccessLimit({
           {form.rooms.length === 0 && (
             <p className="text-[10px] text-[var(--color-status-warn-text)]">Pick at least one room.</p>
           )}
-          <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+          <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
             Highest role
-            <select
-              aria-label="Highest role"
+            <SettingDropdown
+              compact
+              className="min-w-0 max-w-[60%]"
+              ariaLabel="Highest role"
               value={form.role}
-              onChange={(e) => onChange({ ...form, role: e.target.value })}
-              className="max-w-[60%] px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-            >
-              <option value="">No role (Thread only in these rooms)</option>
-              {(app?.roles ?? []).map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.appId ? r.name : `${r.name} (all Apps)`}
-                </option>
-              ))}
-              {form.role && !app?.roles.some((r) => r.id === form.role) && (
-                <option value={form.role}>{form.role} (not found)</option>
-              )}
-            </select>
-          </label>
+              options={[
+                { value: '', label: 'No role (Thread only in these rooms)' },
+                ...(app?.roles ?? []).map((r) => ({ value: r.id, label: r.appId ? r.name : `${r.name} (all Apps)` })),
+                ...(form.role && !app?.roles.some((r) => r.id === form.role)
+                  ? [{ value: form.role, label: `${form.role} (not found)` }]
+                  : []),
+              ]}
+              onChange={(v) => onChange({ ...form, role: v })}
+            />
+          </div>
           <p className="text-[10px] text-[var(--color-text-muted)]">
             A hired agent may get this role, or one no wider, when all its rooms are ticked above.
           </p>
@@ -797,32 +798,36 @@ function CreateKeyModal({
                   />
                 </label>
               ))}
-              <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
                 Database access for hired agents
-                <select
-                  aria-label="Database access for hired agents"
+                <SettingDropdown
+                  compact
+                  className="min-w-0"
+                  ariaLabel="Database access for hired agents"
                   value={hireForm.db}
-                  onChange={(e) => setHireField('db', e.target.value as HireForm['db'])}
-                  className="px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-                >
-                  <option value="off">off</option>
-                  <option value="read" disabled={!db}>read</option>
-                  <option value="write" disabled={!db}>write</option>
-                </select>
-              </label>
-              <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                  options={[
+                    { value: 'off', label: 'off' },
+                    { value: 'read', label: 'read', disabled: !db },
+                    { value: 'write', label: 'write', disabled: !db },
+                  ]}
+                  onChange={(v) => setHireField('db', v as HireForm['db'])}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
                 Messages and sessions to its agents
-                <select
-                  aria-label="Reach"
+                <SettingDropdown
+                  compact
+                  className="min-w-0"
+                  ariaLabel="Reach"
                   value={hireForm.reach}
-                  onChange={(e) => setHireField('reach', e.target.value as HireForm['reach'])}
-                  className="px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-                >
-                  <option value="none">none (hire, link, retire only)</option>
-                  <option value="message">message</option>
-                  <option value="host-sessions">message + host sessions</option>
-                </select>
-              </label>
+                  options={[
+                    { value: 'none', label: 'none (hire, link, retire only)' },
+                    { value: 'message', label: 'message' },
+                    { value: 'host-sessions', label: 'message + host sessions' },
+                  ]}
+                  onChange={(v) => setHireField('reach', v as HireForm['reach'])}
+                />
+              </div>
               <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
                 Folder under the hire root
                 <input

@@ -29,6 +29,7 @@ import { BOX_LOGIN_REASON, PeopleSection, PEOPLE_MANIFEST, canResetPassword, par
 import { MUST_CHANGE_NOTE } from './AppUserDialogs'
 import { UserTemplatesSection } from './UserTemplatesSection'
 import { SECTION_LABELS } from '../searchManifest'
+import { menuOptions, pickValue, waitForMenuOptions } from '@/test-utils/setting-dropdown'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 
@@ -507,12 +508,26 @@ describe('PeopleSection', () => {
     fireEvent.change(screen.getByLabelText('New user’s email'), { target: { value: 'eve@clinic.test' } })
     expect(invite.disabled).toBe(false)
     fireEvent.click(invite)
-    await waitFor(() => expect(screen.getByRole('option', { name: 'shop (cmd)' })).toBeTruthy())
+    // K2's themed menus; "Choose an App" is the placeholder, not an option.
+    const appPick = screen.getByLabelText('Invite to App')
+    expect(appPick.textContent).toBe('Choose an App')
+    await waitForMenuOptions(appPick, (o) => expect(o).toEqual([{ value: 'svc-shop', label: 'shop (cmd)', disabled: false }]))
     const submit = screen.getByRole('button', { name: 'Add and send link' }) as HTMLButtonElement
     expect(submit.disabled).toBe(true)
-    fireEvent.change(screen.getByLabelText('Invite to App'), { target: { value: 'svc-shop' } })
-    expect(screen.queryByRole('option', { name: 'other' })).toBeNull()
-    fireEvent.change(screen.getByLabelText('Role in the App'), { target: { value: 'role-staff' } })
+    pickValue(appPick, 'svc-shop')
+    // The pick happened above the dialog: it is still open.
+    expect(screen.getByTestId('add-user-dialog')).toBeTruthy()
+    // Only this App's roles (and all-App ones).
+    expect(menuOptions(screen.getByLabelText('Role in the App')).map((o) => o.label)).toEqual(['No role', 'staff'])
+    pickValue(screen.getByLabelText('Role in the App'), 'role-staff')
+    // Re-picking the same App keeps the role.
+    pickValue(appPick, 'svc-shop')
+    expect(screen.getByLabelText('Role in the App').textContent).toBe('staff')
+    // Esc with a menu open closes the menu only.
+    fireEvent.click(appPick)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByTestId('setting-dropdown-menu')).toBeNull()
+    expect(screen.getByTestId('add-user-dialog')).toBeTruthy()
     fireEvent.click(submit)
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/invite', {

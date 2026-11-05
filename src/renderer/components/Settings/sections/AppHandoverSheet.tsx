@@ -17,6 +17,7 @@ import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { fetchHandoverPlan, requestHandover, type HandoverOptions, type HandoverPlan } from './app-access-api'
 import { APP_APPROVE_CONFIRM_ACTION, approveAppRequest } from './app-approvals-api'
 import { vaultApi } from './vault-api'
+import { SettingDropdown } from '../controls/SettingControls'
 
 const muted = 'text-[var(--color-text-muted)]'
 
@@ -123,23 +124,21 @@ export function AppHandoverSheet({
   return (
     <div className="pl-9 space-y-2" data-testid={`apps-handover-${appId}`}>
       <div className="flex items-center gap-2 flex-wrap">
-        <select
-          aria-label={`Agent for ${appId}`}
-          className="px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag"
+        <SettingDropdown
+          compact
+          menuAlign="left"
+          className="min-w-0 max-w-[240px]"
+          ariaLabel={`Agent for ${appId}`}
+          placeholder="Hand it to…"
           value={to}
-          onChange={(e) => {
-            setTo(e.target.value)
-            if (e.target.value) void loadPlan(e.target.value, opts)
-            else setStep({ kind: 'pick' })
+          options={choices.map((p) => ({ value: p.id, label: p.name }))}
+          onChange={(v) => {
+            // A re-pick of the same agent keeps the plan up (no reload).
+            if (v === to) return
+            setTo(v)
+            void loadPlan(v, opts)
           }}
-        >
-          <option value="">Hand it to…</option>
-          {choices.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        />
         <Button variant="ghost" onClick={onClose}>
           Close
         </Button>

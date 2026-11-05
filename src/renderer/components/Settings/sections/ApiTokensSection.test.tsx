@@ -22,6 +22,7 @@ vi.mock('@/stores/settings', () => {
 
 import { ApiTokensSection, publicApiToggleLocation } from './ApiTokensSection'
 import { escOwnedByDialog } from '../settings-esc'
+import { menuLabels, menuOptions, pickValue, pickedValue, waitForMenuOptions } from '@/test-utils/setting-dropdown'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -172,8 +173,12 @@ describe('ApiTokensSection hire scope', () => {
     render(<ApiTokensSection />)
     fireEvent.click(await screen.findByText('Create API key'))
     fireEvent.click(screen.getByLabelText('Allow hiring agents'))
-    const sel = screen.getByLabelText('Database access for hired agents') as HTMLSelectElement
-    expect((sel.querySelector('option[value="write"]') as HTMLOptionElement).disabled).toBe(true)
+    // K2's themed menu: read and write are there but off without the db door.
+    expect(menuOptions(screen.getByLabelText('Database access for hired agents'))).toEqual([
+      { value: 'off', label: 'off', disabled: false },
+      { value: 'read', label: 'read', disabled: true },
+      { value: 'write', label: 'write', disabled: true },
+    ])
     fireEvent.change(screen.getByLabelText('Agents per day'), { target: { value: '0' } })
     fireEvent.click(screen.getByText('Create'))
     expect(await screen.findByText(/Agents per day must be a whole number/)).toBeTruthy()
@@ -263,8 +268,16 @@ describe('ApiTokensSection App access limit', () => {
     fireEvent.click(screen.getByLabelText('Allow hiring agents'))
     const none = screen.getByTestId('app-access-none')
     expect(none.textContent).toContain('No App access: agents hired with this key get no App login.')
-    expect((screen.getByLabelText('App') as HTMLSelectElement).value).toBe('')
+    expect(screen.getByLabelText('App').tagName).toBe('BUTTON')
+    expect(document.querySelector('select')).toBeNull()
+    expect(pickedValue(screen.getByLabelText('App'))).toBe('')
     expect(screen.queryByLabelText('Highest role')).toBeNull()
+    // The menu sits above the dialog; Esc closes the menu, not the dialog.
+    fireEvent.click(screen.getByLabelText('App'))
+    expect(Number(screen.getByTestId('setting-dropdown-menu').style.zIndex)).toBeGreaterThan(80)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByTestId('setting-dropdown-menu')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Create API key' })).toBeTruthy()
   })
 
   it('mints a hire key with the App, rooms and highest role picked in the form', async () => {
@@ -278,17 +291,22 @@ describe('ApiTokensSection App access limit', () => {
     render(<ApiTokensSection />)
     fireEvent.click(await screen.findByText('Create API key'))
     fireEvent.click(screen.getByLabelText('Allow hiring agents'))
-    await waitFor(() => expect(screen.getByLabelText('App').querySelectorAll('option').length).toBe(2))
-    fireEvent.change(screen.getByLabelText('App'), { target: { value: 'svc-jobs' } })
+    await waitForMenuOptions(screen.getByLabelText('App'), (o) => expect(o.map((x) => x.value)).toEqual(['', 'svc-jobs']))
+    pickValue(screen.getByLabelText('App'), 'svc-jobs')
     expect((screen.getByLabelText('Room self') as HTMLInputElement).checked).toBe(true)
     fireEvent.click(screen.getByLabelText('Room job-a'))
-    const role = screen.getByLabelText('Highest role') as HTMLSelectElement
-    expect([...role.options].map((o) => o.textContent)).toEqual([
+    // A re-pick of the same App keeps the rooms ticked.
+    pickValue(screen.getByLabelText('App'), 'svc-jobs')
+    expect((screen.getByLabelText('Room job-a') as HTMLInputElement).checked).toBe(true)
+    // The pick happened inside the dialog: it is still open.
+    expect(screen.getByRole('dialog', { name: 'Create API key' })).toBeTruthy()
+    const role = screen.getByLabelText('Highest role')
+    expect(menuLabels(role)).toEqual([
       'No role (Thread only in these rooms)',
       'Member',
       'Viewer (all Apps)',
     ])
-    fireEvent.change(role, { target: { value: 'role-member' } })
+    pickValue(role, 'role-member')
     fireEvent.click(screen.getByText('Create'))
     await waitFor(() => expect(screen.getByText('k2sk_ceiling')).toBeTruthy())
     const body = daemonCliPost.mock.calls[2][2] as { hire: Record<string, unknown>; confirmToken: string }
@@ -301,8 +319,8 @@ describe('ApiTokensSection App access limit', () => {
     render(<ApiTokensSection />)
     fireEvent.click(await screen.findByText('Create API key'))
     fireEvent.click(screen.getByLabelText('Allow hiring agents'))
-    await waitFor(() => expect(screen.getByLabelText('App').querySelectorAll('option').length).toBe(2))
-    fireEvent.change(screen.getByLabelText('App'), { target: { value: 'svc-jobs' } })
+    await waitForMenuOptions(screen.getByLabelText('App'), (o) => expect(o.map((x) => x.value)).toEqual(['', 'svc-jobs']))
+    pickValue(screen.getByLabelText('App'), 'svc-jobs')
     fireEvent.click(screen.getByLabelText('Room self'))
     fireEvent.click(screen.getByText('Create'))
     expect(await screen.findByText(/Pick at least one room on jobs/)).toBeTruthy()
@@ -319,10 +337,11 @@ describe('ApiTokensSection App access limit', () => {
     fireEvent.click(await screen.findByLabelText('Change App access for jobs-ceiling'))
     const dialog = screen.getByTestId('edit-app-access')
     await waitFor(() => expect(dialog.textContent).toContain('Now: jobs · 3 rooms · up to Member'))
-    expect((screen.getByLabelText('App') as HTMLSelectElement).value).toBe('svc-jobs')
+    expect(pickedValue(screen.getByLabelText('App'))).toBe('svc-jobs')
     expect((screen.getByLabelText('Room job-b') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByLabelText('Highest role') as HTMLSelectElement).value).toBe('role-member')
-    fireEvent.change(screen.getByLabelText('App'), { target: { value: '' } })
+    expect(pickedValue(screen.getByLabelText('Highest role'))).toBe('role-member')
+    pickValue(screen.getByLabelText('App'), '')
+    expect(screen.getByTestId('edit-app-access')).toBeTruthy()
     expect(screen.getByTestId('app-access-none').textContent).toContain('get no App login')
     fireEvent.click(screen.getByText('Save'))
     await waitFor(() => expect(screen.queryByTestId('edit-app-access')).toBeNull())
@@ -384,7 +403,7 @@ describe('ApiTokensSection App access limit', () => {
     })
     render(<ApiTokensSection />)
     fireEvent.click(await screen.findByLabelText('Change App access for jobs-ceiling'))
-    fireEvent.change(await screen.findByLabelText('Highest role'), { target: { value: 'role-viewer' } })
+    pickValue(await screen.findByLabelText('Highest role'), 'role-viewer')
     fireEvent.click(screen.getByLabelText('Room portal'))
     fireEvent.click(screen.getByText('Save'))
     const pw = await screen.findByLabelText('Confirm password')

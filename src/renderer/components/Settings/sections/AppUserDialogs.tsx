@@ -18,6 +18,8 @@
 import React, { useEffect, useId, useState } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { DialogFrame, DialogScrim, SquareRadio } from '@/components/ui'
+import { SettingDropdown } from '../controls/SettingControls'
+import { settingMenuOpen } from '../settings-esc'
 import type { PersonRow } from './PeopleSection'
 
 /** POST one `/cli/*` route on the window's server (PeopleSection passes it). */
@@ -67,6 +69,8 @@ function Sheet({
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
+        // An open K2 menu (App, Role) closes first; the dialog stays.
+        if (settingMenuOpen()) return
         e.preventDefault()
         e.stopPropagation()
         onClose()
@@ -628,28 +632,34 @@ export function AddUserDialog({
         {mode === 'invite' ? (
           <div className="space-y-2">
             <p className={MUTED}>An invite is for one App. They choose their password on that App’s page.</p>
-            <label className="block space-y-1">
+            <div className="block space-y-1">
               <span className={MUTED}>App</span>
-              <select className={FIELD_CLS} aria-label="Invite to App" value={app} onChange={(e) => { setApp(e.target.value); setRole('') }}>
-                <option value="">Choose an App</option>
-                {apps.map((a) => (
-                  <option key={a.value} value={a.value}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block space-y-1">
+              <SettingDropdown
+                fullWidth
+                menuAlign="left"
+                ariaLabel="Invite to App"
+                placeholder="Choose an App"
+                value={app}
+                options={apps}
+                onChange={(v) => {
+                  // A re-pick of the same App keeps the role.
+                  if (v === app) return
+                  setApp(v)
+                  setRole('')
+                }}
+              />
+            </div>
+            <div className="block space-y-1">
               <span className={MUTED}>Role in this App (optional)</span>
-              <select className={FIELD_CLS} aria-label="Role in the App" value={role} onChange={(e) => setRole(e.target.value)}>
-                <option value="">No role</option>
-                {appRoles.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <SettingDropdown
+                fullWidth
+                menuAlign="left"
+                ariaLabel="Role in the App"
+                value={role}
+                options={[{ value: '', label: 'No role' }, ...appRoles.map((r) => ({ value: r.value, label: r.label }))]}
+                onChange={setRole}
+              />
+            </div>
             <label className="block space-y-1">
               <span className={MUTED}>
                 Send from (optional): a sender address set up for this App. Leave it blank to use the App’s default.

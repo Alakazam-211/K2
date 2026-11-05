@@ -14,6 +14,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Apps
 - **Calls inside a Tauri app's window.** `k2 app init --template tauri --voice` now writes everything the webview needs for a call: the microphone hook that lets only your App's own pages use the mic (`src-tauri/src/k2_voice.rs`, Tauri 2.12+), no App Nap on macOS, a window that keeps running while hidden, the Windows (WebView2) settings, and an example CSP for the voice kit. Tested on macOS: WebRTC with end-to-end encryption, the noise filter's WebAssembly and storage all work in a hidden window. Windows builds but hasn't been run yet. `k2 study tauri-voice` says what is tested where.
+- **Desktop and phone apps can make calls through their App's own address.** The app reaches Sew's call routes at `https://<your App's host>/_k2/voice/sew/` (its K2 label or a live custom domain) with the short-lived call credential your App's server gets for the signed-in person. The app never holds a K2 pass. K2 passes on only Sew's call routes, and only for an App whose Sew access and voice you approved. The TURN host comes in the call's own answer, so apps never hard-code it. More: `k2 study chat-voice`.
 
 ## 0.46.8 — Agents run their Apps' people
 

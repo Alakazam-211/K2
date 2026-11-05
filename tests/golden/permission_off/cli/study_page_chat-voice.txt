@@ -86,6 +86,19 @@ THE ORDER
 11. The first real call is the outside test: two people, one on a phone
     off Wi-Fi. Then: k2 hostchat media probe --udp ok --tcp ok --turn-tls ok
 
+NATIVE APPS (Sew's call engine, tauri-plugin-sew-voice, in a desktop or
+phone app). Your Server, as the person, makes Sew's voice join through
+sew-api (POST /api/v1/channels/<id>/voice/join) with call_credential: true.
+It gives the app that answer (its call_credential.token is the sewcc_…,
+10 minutes) and api_base https://<the host the app reached>/_k2/voice/sew/
+(your App's label or a live custom name); never the person's own session.
+The engine does the rest there with Authorization: Bearer sewcc_… (keys,
+devices, the call socket, leave, mute, stats; it renews every 5 minutes).
+No K2 pass, no cookie, no Origin; any other route is 404. Media goes to
+TURN directly. The TURN host and its credentials come in the call's
+signalling join (ice_servers): never hard-code them. 404 voice_door_off:
+no voice (step 1), or sew-api or voice:join not approved (step 7).
+
 WHAT GOES WRONG
   origin null, no calls from outside → no public URL (step 2)
   403 no_chat_caps → the role holds none of your chat caps (6)

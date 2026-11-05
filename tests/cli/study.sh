@@ -769,11 +769,12 @@ for needle in "k2 app init --template tauri" "k2 app deploy <name>-web dist --ma
     "k2 app links set" "--drop" "k2.asGuest(pass).push.register" "at most 16 MiB" "files.uploadChunk" "k2 app status" \
     "THIN SHELL OVER A LIVE SITE" "k2 app init --template tauri --app <app>" "app.windows[0].url" "endpoints.fallback" \
     "k2dl_" "dl_token_missing" "k2 app updates token <name>-web --file <file>" "k2 connect status" \
-    "--max-devices 5" "One id" "--voice" "not yet tested" "k2 app domain" "push.viewing" "signCommand"; do
+    "--max-devices 5" "One id" "--voice" "not yet tested" "k2 app domain" "push.viewing" "signCommand" \
+    "tauri-plugin-sew-voice" "sewcc_" "https://<your App's host>/_k2/voice/sew/" "never hard-coded"; do
     assert_contains "tauri: $needle" "$ta_out" "$needle"
 done
 ta_lines="$(printf '%s\n' "$ta_out" | wc -l | tr -d ' ')"
-if [ "$ta_lines" -le 210 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 210)" >&2; fail=$((fail + 1)); fi
+if [ "$ta_lines" -le 216 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 216)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: tauri row" "$("$K2" study)" "  tauri               A Tauri app on K2"
 assert_contains "tauri points at tauri-voice" "$ta_out" "k2 study tauri-voice"
 echo "== k2 study tauri-voice (calls in a Tauri window, 0.46.9) =="
@@ -799,7 +800,8 @@ for needle in "k2 app install <app> --tunnel" "re-creating drops its logins" "gu
     "k2 chat space create <slug> --name \"<Name>\" --owner <owner-user>" "k2 hostchat app-space bind <app>" \
     "k2 app user chat <owner-user> member --app <app>" "tied_pending_reset" "no_chat_caps" \
     "k2 app approve <id>" "--core sew=on" "chat:channels" "delivered true" "Hearth" "optional" \
-    "k2 study chat-voice-rooms" "Owner" "chat_manage on"; do
+    "k2 study chat-voice-rooms" "Owner" "chat_manage on" \
+    "NATIVE APPS" "call_credential: true" "/_k2/voice/sew/" "Bearer sewcc_" "ice_servers" "voice_door_off"; do
     assert_contains "chat-voice: $needle" "$cv_out" "$needle"
 done
 # K2's own names win over Sew's draft: no proposed cap, no flags this K2 lacks.
@@ -807,7 +809,7 @@ for absent in "chat:structure" "--manager" "--voice" "k2 app grant add --kind ch
     assert_absent "chat-voice: no $absent" "$cv_out" "$absent"
 done
 cv_lines="$(printf '%s\n' "$cv_out" | wc -l | tr -d ' ')"
-if [ "$cv_lines" -le 101 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 101)" >&2; fail=$((fail + 1)); fi
+if [ "$cv_lines" -le 114 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 114)" >&2; fail=$((fail + 1)); fi
 cr_out="$("$K2" study chat-voice-rooms)"
 assert_contains "title" "$cr_out" "k2 study chat-voice-rooms — Rooms and channels in your App Space"
 for needle in "POST /api/v1/spaces/{space_id}/channels" "\"type\":\"voice\"" "NOT idempotent" "409 conflict" \

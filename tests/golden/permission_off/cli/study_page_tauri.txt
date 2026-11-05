@@ -197,6 +197,12 @@ START (A BUNDLED WEB BUILD)
   Calls answer on each live host with Sew 0.7.2+; otherwise mark the one
   the shell loads: k2 app domain primary <app> <host>.
   All of it, and the check to run on a real Mac: k2 study tauri-voice.
+  Native calls (Sew's engine, tauri-plugin-sew-voice: the call runs in the
+  app's Rust and needs no WebRTC in the webview): your server mints a
+  short-lived sewcc_ call credential for the signed-in person and returns it
+  with api_base https://<your App's host>/_k2/voice/sew/. The app holds no K2
+  pass: it talks to that door and to TURN directly, with the TURN host taken
+  from the call's join, never hard-coded. Setup: k2 study chat-voice (NATIVE APPS).
 
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
 k2 study app-profile, k2 app init --help, k2 app links --help.

@@ -11237,6 +11237,19 @@ THE ORDER
 11. The first real call is the outside test: two people, one on a phone
     off Wi-Fi. Then: k2 hostchat media probe --udp ok --tcp ok --turn-tls ok
 
+NATIVE APPS (Sew's call engine, tauri-plugin-sew-voice, in a desktop or
+phone app). Your Server, as the person, makes Sew's voice join through
+sew-api (POST /api/v1/channels/<id>/voice/join) with call_credential: true.
+It gives the app that answer (its call_credential.token is the sewcc_…,
+10 minutes) and api_base https://<the host the app reached>/_k2/voice/sew/
+(your App's label or a live custom name); never the person's own session.
+The engine does the rest there with Authorization: Bearer sewcc_… (keys,
+devices, the call socket, leave, mute, stats; it renews every 5 minutes).
+No K2 pass, no cookie, no Origin; any other route is 404. Media goes to
+TURN directly. The TURN host and its credentials come in the call's
+signalling join (ice_servers): never hard-code them. 404 voice_door_off:
+no voice (step 1), or sew-api or voice:join not approved (step 7).
+
 WHAT GOES WRONG
   origin null, no calls from outside → no public URL (step 2)
   403 no_chat_caps → the role holds none of your chat caps (6)
@@ -50160,6 +50173,12 @@ START (A BUNDLED WEB BUILD)
   Calls answer on each live host with Sew 0.7.2+; otherwise mark the one
   the shell loads: k2 app domain primary <app> <host>.
   All of it, and the check to run on a real Mac: k2 study tauri-voice.
+  Native calls (Sew's engine, tauri-plugin-sew-voice: the call runs in the
+  app's Rust and needs no WebRTC in the webview): your server mints a
+  short-lived sewcc_ call credential for the signed-in person and returns it
+  with api_base https://<your App's host>/_k2/voice/sew/. The app holds no K2
+  pass: it talks to that door and to TURN directly, with the TURN host taken
+  from the call's join, never hard-coded. Setup: k2 study chat-voice (NATIVE APPS).
 
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
 k2 study app-profile, k2 app init --help, k2 app links --help.

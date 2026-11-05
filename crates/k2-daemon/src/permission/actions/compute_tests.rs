@@ -166,6 +166,129 @@ fn compute_admin_approve_is_off_while_compute_is_dark_and_follows_the_request() 
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
 }
 
+// ── held node requests in chat (0.46.9, Rosson 2026-11-05) ──────────
+
+fn set_operate(ws: &Ws, on: bool) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    cadmin::set_agents_can_operate_compute(&conn, &ws.id, on).expect("operate");
+}
+
+fn set_manage(ws: &Ws, on: bool) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute("UPDATE projects SET agents_can_manage_compute = ?1 WHERE id = ?2", rusqlite::params![on as i64, ws.id])
+        .expect("manage");
+    assert_eq!(n, 1, "the workspace row exists");
+}
+
+/// The card names the exact change (the request's own summary, as
+/// Settings shows it), its node and the reason filed with it.
+#[test]
+fn the_card_names_the_change_and_its_reason() {
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("e2cw");
+    let (_node, name) = node_for(&ws);
+    let id = propose(&ws, &name);
+    let v = ask_ok(&ws, "compute.admin-approve", json!({ "request": id }));
+    let vw = view(&ws, &card_of(&v));
+    let summary = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        cadmin::request_by_id(&conn, &id).expect("row").summary
+    };
+    let want = summary[..1].to_uppercase() + &summary[1..];
+    assert_eq!(vw["whatChanges"], format!("{}.", want.trim_end_matches('.')), "{vw}");
+    assert!(want.contains(&name), "the change names the node: {want}");
+    let cons = vw["consequences"].as_str().unwrap_or_else(|| panic!("no consequences: {vw}"));
+    assert!(cons.contains(&format!("Approving runs it on {name} as root")), "{cons}");
+    assert!(cons.contains(&format!("request {id} in Settings → Compute → Approvals")), "{cons}");
+    assert!(cons.ends_with("Reason given with the request: wedged"), "{cons}");
+    let prompt = vw.to_string();
+    assert!(!prompt.contains('\u{2014}'), "no em dashes on the card: {vw}");
+    assert!(!prompt.contains("{change}") && !prompt.contains("{reason}") && !prompt.contains("{node}"), "every value filled: {vw}");
+}
+
+/// Allow on the card approves once; Settings then finds it decided. Deny on
+/// the card denies the node request itself; Settings then can't approve it.
+#[test]
+fn the_cards_allow_and_deny_are_settings_own_and_decide_once() {
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("e2cd");
+    let (node, name) = node_for(&ws);
+
+    // Allow: applied once; a second approval (Settings) is refused.
+    let id = propose(&ws, &name);
+    let v = ask_ok(&ws, "compute.admin-approve", json!({ "request": id }));
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow", "confirmToken": token_for(&id, "owner") }));
+    assert_eq!((s.as_str(), &a["action"]["result"]["outcome"]), ("200 OK", &json!("approved")), "{a}");
+    assert_eq!(state_of(&id), "sent");
+    assert_eq!(nodes::take_sent(&node).iter().filter(|f| matches!(f, Frame::Admin(_))).count(), 1, "one signed command");
+    let e = call(APPROVE, &Who::Owner, json!({ "request": id, "confirmToken": token_for(&id, "owner") }))
+        .expect_err("already decided on the card");
+    assert_eq!(e.0, 409, "{e:?}");
+    assert!(nodes::take_sent(&node).is_empty(), "never a second apply");
+
+    // Deny: the node request is denied, as the person, with the reason.
+    let id = propose(&ws, &name);
+    let v = ask_ok(&ws, "compute.admin-approve", json!({ "request": id }));
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Deny", "reason": "not this week" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id).state, RequestState::Denied);
+    let decided = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        cadmin::request_by_id(&conn, &id).expect("row")
+    };
+    assert_eq!((decided.state.as_str(), decided.deny_reason.as_deref()), ("denied", Some("not this week")), "{decided:?}");
+    let e = call(APPROVE, &Who::Owner, json!({ "request": id, "confirmToken": token_for(&id, "owner") })).expect_err("denied on the card");
+    assert_eq!(e.0, 409, "{e:?}");
+    assert!(nodes::take_sent(&node).is_empty(), "nothing sent for a denied request");
+
+    // Denied in Settings first: the open card goes stale at the click.
+    let id = propose(&ws, &name);
+    let v = ask_ok(&ws, "compute.admin-approve", json!({ "request": id }));
+    call(crate::compute_admin::DENY, &Who::Owner, json!({ "request": id })).expect("denied in Settings");
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow", "confirmToken": token_for(&id, "owner") }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id).state, RequestState::Stale);
+    assert_eq!(state_of(&id), "denied");
+    assert!(nodes::take_sent(&node).is_empty());
+    // … and a new ask for it is refused (it isn't waiting).
+    assert!(ask_refused(&ws, "compute.admin-approve", json!({ "request": id })).contains("denied"));
+}
+
+/// Only an agent that may operate or manage compute nodes brings one to
+/// chat: neither switch is refused at the ask, and a switch turned off
+/// while the card waits makes the click stale.
+#[test]
+fn only_an_agent_that_may_act_on_nodes_raises_the_card() {
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("e2cm");
+    let (node, name) = node_for(&ws);
+    let id = propose(&ws, &name);
+
+    set_operate(&ws, false);
+    let (s, v) = ask(&ws, "compute.admin-approve", json!({ "request": id }));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("compute_admin_off")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("Allow managing compute nodes"), "{v}");
+
+    // "Allow managing compute nodes" alone is enough.
+    set_manage(&ws, true);
+    let v = ask_ok(&ws, "compute.admin-approve", json!({ "request": id }));
+    // Turned off while the card waits: stale at the click, nothing sent.
+    set_manage(&ws, false);
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow", "confirmToken": token_for(&id, "owner") }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id).state, RequestState::Stale);
+    assert_eq!(state_of(&id), "pending", "still waiting in Settings");
+    assert!(nodes::take_sent(&node).is_empty());
+}
+
 // ── compute.allow-nodes (0.46.8) ─────────────────────────────────────
 
 /// An active node, granted to `ws` or not, with a unique name.

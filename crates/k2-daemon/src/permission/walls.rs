@@ -335,6 +335,29 @@ pub(crate) const ROWS: &[Row] = &[
         params: &[("request", &[ParamFrom::Body("/request"), ParamFrom::Body("/id"), ParamFrom::Query("request")])],
         ..row(ask("compute.admin-approve", Floor::Owner), code(403, "owner_only"), "/cli/compute/admin/approve", POST)
     },
+    // 0.46.9 (Rosson 2026-11-05): a held node request (`held: true`, its
+    // `car_…` id) brings itself to the person's chat: a node admin
+    // proposal, a policy widening, a share change, a wall on an older
+    // node. Only an agent that may operate or manage nodes files one; the
+    // card checks that again.
+    Row {
+        params: &[("request", &[ParamFrom::Response("/request/id")])],
+        ..row(
+            ask("compute.admin-approve", Floor::Owner),
+            WallMatch::Held { status: 200, field: "held", value: "true" },
+            "/cli/compute/admin/propose",
+            POST,
+        )
+    },
+    Row {
+        params: &[("request", &[ParamFrom::Response("/request/id")])],
+        ..row(
+            ask("compute.admin-approve", Floor::Owner),
+            WallMatch::Held { status: 200, field: "held", value: "true" },
+            "/cli/compute/nodes/",
+            POST,
+        )
+    },
     // Job tiers (0.46.5): `--tier ci` / `--gate` without a grant that
     // allows CI, and a compute manager setting `allowCi` on a grant.
     Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "ci_not_allowed"), "/cli/compute/", ANY) },
@@ -814,7 +837,13 @@ fn row_matches(r: &Row, req: &Refused<'_>, code: Option<&str>) -> bool {
     let hit = match r.matches {
         WallMatch::Code { status, code: c } => req.status == status && code == Some(c),
         WallMatch::Held { status, field, value } => {
-            req.status == status && req.response.get(field).and_then(Value::as_str) == Some(value)
+            req.status == status
+                && match req.response.get(field) {
+                    Some(Value::String(s)) => s == value,
+                    // `held: true` (a held compute node request, 0.46.9).
+                    Some(Value::Bool(b)) => value == if *b { "true" } else { "false" },
+                    _ => false,
+                }
         }
     };
     hit && req.path.starts_with(r.prefix)
@@ -1847,6 +1876,32 @@ mod tests {
         .expect("taught");
         assert_eq!(p["command"], "k2 permission request mail.stop-sending target=/Users/x/sales --why \"<what you need it for>\"", "{p}");
         assert_eq!(p["approvers"], "owner or admin", "{p}");
+    }
+
+    /// 0.46.9 (Rosson 2026-11-05): a held compute node request (`held:
+    /// true`, its `car_…` id) teaches the ask that brings it to chat, on the
+    /// writes that hold; anything else under compute stays as it was.
+    #[test]
+    fn a_held_compute_node_request_teaches_its_card() {
+        let held = json!({"held": true, "request": {"id": "car_abc123", "state": "pending"}, "hint": "held for the owner"});
+        let want = "k2 permission request compute.admin-approve request=car_abc123 --why \"<what you need it for>\"";
+        for path in [
+            "/cli/compute/admin/propose",
+            "/cli/compute/nodes/policy/set",
+            "/cli/compute/nodes/servers/limits",
+            "/cli/compute/nodes/servers/add",
+            "/cli/compute/nodes/wall",
+        ] {
+            let p = teach_of(200, "POST", path, &[], Some(json!({"node": "k2n1-m4"})), held.clone()).unwrap_or_else(|| panic!("{path}: not taught"));
+            assert_eq!(action_of(&p), "compute.admin-approve", "{path}: {p}");
+            assert_eq!(p["approvers"], "owner", "{path}: {p}");
+            assert_eq!(p["command"], want, "{path}: {p}");
+        }
+        // Not held, held false, a read, or another family: nothing to teach.
+        assert!(teach_of(200, "POST", "/cli/compute/nodes/policy/set", &[], None, json!({"ok": true, "changed": true})).is_none());
+        assert!(teach_of(200, "POST", "/cli/compute/nodes/policy/set", &[], None, json!({"held": false})).is_none());
+        assert!(teach_of(200, "GET", "/cli/compute/nodes/health", &[], None, held.clone()).is_none());
+        assert!(teach_of(200, "POST", "/cli/compute/run", &[], None, held.clone()).is_none());
     }
 
     /// 0.46.9 (Rosson 2026-11-05): the agent's own `k2 compute access on`

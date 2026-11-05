@@ -40,22 +40,42 @@ pub(crate) static ADMIN_APPROVE: ActionSpec = ActionSpec {
     proof: Proof::SettingsConfirm { action: ConfirmAction::NodeAdmin },
     // The node admin request itself lives 24 h.
     expiry: Expiry { default_secs: cadmin::REQUEST_TTL_SECS, max_secs: MAX_EXPIRY_SECS },
+    // 0.46.9 (Rosson 2026-11-05): the card names the exact change (the
+    // request's own summary, `{change}`) and the request's reason;
+    // `with_computed` fills both from the stored request.
     words: Words {
         setting: "Compute approvals",
-        what_changes: "Run {ws}'s node admin request {request} as root on its node",
-        consequences: "K2 signs the step with the owner's approval key and sends it to the node, which runs it as root. Check what it does in Settings → Compute → Approvals first.",
+        what_changes: "{change}",
+        consequences: "Approving runs it on {node} as root, signed with the owner's approval key. It is request {request} in Settings → Compute → Approvals too: whichever you answer first decides it, once. Reason given with the request: {reason}",
         scope: "node request {request}",
         duration: "once",
         retry: "",
     },
     undo: Undo::None,
     settings: SettingsRef { page: "compute", path: "Settings → Compute → Approvals" },
-    walls: &[Wall {
-        matches: WallMatch::Code { status: 403, code: "owner_only" },
-        route_prefix: crate::compute_admin::APPROVE,
-        method: WallMethod::Post,
-        params: &[("request", ParamFrom::Body("/request"))],
-    }],
+    walls: &[
+        Wall {
+            matches: WallMatch::Code { status: 403, code: "owner_only" },
+            route_prefix: crate::compute_admin::APPROVE,
+            method: WallMethod::Post,
+            params: &[("request", ParamFrom::Body("/request"))],
+        },
+        // 0.46.9: the hold itself (`held: true`, a `car_…` id) teaches
+        // the ask: a node admin proposal, a policy widening, a share
+        // change, a wall on an older node.
+        Wall {
+            matches: WallMatch::Held { status: 200, field: "held", value: "true" },
+            route_prefix: crate::compute_admin::PROPOSE,
+            method: WallMethod::Post,
+            params: &[("request", ParamFrom::Response("/request/id"))],
+        },
+        Wall {
+            matches: WallMatch::Held { status: 200, field: "held", value: "true" },
+            route_prefix: "/cli/compute/nodes/",
+            method: WallMethod::Post,
+            params: &[("request", ParamFrom::Response("/request/id"))],
+        },
+    ],
     coverage: WallCoverage::PrefixOnly,
     machine_hints: &[MachineHint {
         code: cadmin::codes::REMOTE_ADMIN_OFF,
@@ -80,10 +100,85 @@ pub(crate) mod test_seams {
     }
 }
 
+/// The asking workspace may still act on compute nodes: "Allow this agent
+/// to operate compute nodes" or "Allow managing compute nodes", the two
+/// switches that let an agent file a held node request at all (0.46.9,
+/// Rosson 2026-11-05: an agent with permission to manage compute brings
+/// its approvals to chat). Without either it can't raise or keep one.
+fn may_act_on_nodes(workspace_id: &str) -> bool {
+    let operate = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        cadmin::agents_can_operate_compute(&conn, workspace_id)
+    };
+    operate || crate::compute_manage::workspace_allows(workspace_id)
+}
+
+/// The refusal (and the stale reason at the click) when neither is on.
+pub(crate) const NO_NODE_SWITCH: &str = "this agent can't operate or manage compute nodes now, so it can't bring their approvals to chat. \
+     Ask your owner to turn on \"Allow this agent to operate compute nodes\" or \"Allow managing compute nodes\" \
+     (Settings → Workspaces → <agent> → Agent); the request still waits in Settings → Compute → Approvals";
+
+/// The card's words from the stored node request (0.46.9): `{change}` is
+/// its summary (what the owner reads in Settings), `{node}` its node,
+/// `{reason}` the reason filed with it. Fixed at filing, so the card's
+/// text hash holds until the click.
+pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
+    if action != ADMIN_APPROVE.id {
+        return None;
+    }
+    let mut out = ctx.clone();
+    let id = text_param(ctx, "request").unwrap_or("").to_string();
+    let row = (!id.is_empty())
+        .then(|| {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            cadmin::request_by_id(&conn, &id).map(|r| {
+                let node = k2_core::compute::store::node_by_id(&conn, &r.node_id).map(|n| n.name).unwrap_or_else(|| "its node".to_string());
+                (r, node)
+            })
+        })
+        .flatten()
+        .filter(|(r, _)| r.proposer_workspace.as_deref() == Some(ctx.workspace_id.as_str()));
+    let (change, node, reason) = match row {
+        Some((r, node)) => {
+            let mut s = r.summary.trim().to_string();
+            if let Some(c) = s.get(..1) {
+                s = c.to_uppercase() + &s[1..];
+            }
+            (s, node, r.reason.filter(|x| !x.trim().is_empty()).unwrap_or_else(|| "none".to_string()))
+        }
+        None => (format!("Approve node request {id}"), "its node".to_string(), "none".to_string()),
+    };
+    out.params.insert("change".into(), json!(change));
+    out.params.insert("node".into(), json!(node));
+    out.params.insert("reason".into(), json!(reason));
+    Some(out)
+}
+
+/// The card's Deny denies the node request itself, as the person, through
+/// the Settings route's own entry (0.46.9: "Denying it denies"). Already
+/// decided in Settings (or withdrawn) is left as it is.
+pub(crate) fn on_denied(action: &str, request: &str, who: &Answerer, why: Option<&str>) {
+    if action != ADMIN_APPROVE.id || request.is_empty() || !compute_on() {
+        return;
+    }
+    let mut body = json!({ "request": request });
+    if let Some(w) = why.filter(|w| !w.trim().is_empty()) {
+        body["why"] = json!(w);
+    }
+    if let Err(r) = crate::compute_admin::handle(crate::compute_admin::DENY, &who_of(who), body.to_string().as_bytes(), &HashMap::new(), None) {
+        k2_core::log_debug!("[permission] compute.admin-approve deny of {request}: {} {}", r.code, r.hint);
+    }
+}
+
 /// The current state of the node admin request.
 fn check(ctx: &Ctx) -> Check {
     if !compute_on() {
         return Check::Moved("compute nodes are off on this server".into());
+    }
+    if !may_act_on_nodes(&ctx.workspace_id) {
+        return Check::Unavailable { code: "compute_admin_off", why: NO_NODE_SWITCH.into() };
     }
     let Some(id) = text_param(ctx, "request") else {
         return Check::Moved("name the node admin request: request=<its car_… id> (k2 compute node admin requests)".into());

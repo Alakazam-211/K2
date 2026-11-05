@@ -2428,7 +2428,13 @@ fn servers_limits(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
     let args = serde_json::to_value(&largs).map_err(|e| no("internal", 500, e.to_string()))?;
     pshare::check_verb_args(pshare::VERB_LIMITS, &args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
     let row = server_row(&node, &server)?;
-    let summary = admin::summarize(&node.name, pshare::VERB_LIMITS, &args);
+    // 0.46.9: from → to, so Settings and the permission card name the
+    // exact change ("Raise rosson.k2.dev's share on k2n1-m4: CPUs 7 → 10").
+    let mut before = serde_json::to_value(&row.limits).unwrap_or_else(|_| json!({}));
+    if let (Some(p), Some(m)) = (server_priority(&row), before.as_object_mut()) {
+        m.insert("priority".into(), json!(p));
+    }
+    let summary = admin::summarize_limits_change(&node.name, &row.label, &args, &before);
     let hold = |why: &str| {
         let body_v = json!({"verb": pshare::VERB_LIMITS, "args": args});
         let reason = s(&v, "reason").map(str::to_string).or_else(|| (!why.is_empty()).then(|| why.to_string()));

@@ -849,6 +849,94 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
     }
 }
 
+/// `servers.limits` in plain words, with the share it changes from
+/// (0.46.9, Rosson 2026-11-05: "Raise rosson.k2.dev's share on k2n1-m4:
+/// CPUs 7 → 10, memory 8 → 14 GB"). `server` is the server's label;
+/// `before` its current share (`ShareLimits` as JSON, plus `priority` when
+/// known). A value `before` lacks shows only the new one. What the owner
+/// reads in Settings → Compute → Approvals and on the permission card.
+pub fn summarize_limits_change(node: &str, server: &str, args: &Value, before: &Value) -> String {
+    // (key, name, unit); the order the line reads in.
+    const FIELDS: &[(&str, &str, &str)] = &[
+        ("max_cpus", "CPUs", ""),
+        ("max_mem_gb", "memory", " GB"),
+        ("max_running", "jobs at once", ""),
+        ("max_queued", "queued jobs", ""),
+        ("cpu_hours_day", "CPU hours a day", ""),
+        ("max_job_secs", "longest job", ""),
+        ("disk_gb", "disk", " GB"),
+        ("weight", "weight", ""),
+        ("top_class", "top class", ""),
+        ("gate", "CI gate jobs", ""),
+        ("exclusive", "exclusive jobs", ""),
+        ("network", "network", ""),
+    ];
+    let shown = |key: &str, v: &Value, unit: &str| -> String {
+        match v {
+            Value::Bool(b) => (if *b { "yes" } else { "no" }).to_string(),
+            Value::Number(n) if key == "max_job_secs" => n.as_u64().map(super::share::human_secs).unwrap_or_else(|| n.to_string()),
+            Value::Number(n) => format!("{n}{unit}"),
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }
+    };
+    // Up, down, or neither (a choice that isn't a number or a switch).
+    let rank = |v: &Value| -> Option<f64> {
+        match v {
+            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            Value::Number(n) => n.as_f64(),
+            _ => None,
+        }
+    };
+    let empty = Map::new();
+    let set = args.get("set").and_then(Value::as_object).unwrap_or(&empty);
+    let mut parts = Vec::new();
+    let (mut up, mut down, mut other) = (0, 0, 0);
+    let mut one = |name: &str, key: &str, unit: &str, new: &Value, old: Option<&Value>| {
+        match old.filter(|o| !o.is_null()) {
+            Some(o) if o == new => parts.push(format!("{name} stays {}", shown(key, new, unit))),
+            Some(o) => {
+                match (rank(o), rank(new)) {
+                    (Some(a), Some(b)) if b > a => up += 1,
+                    (Some(a), Some(b)) if b < a => down += 1,
+                    _ => other += 1,
+                }
+                parts.push(format!("{name} {} → {}", shown(key, o, unit), shown(key, new, unit)));
+            }
+            None => {
+                other += 1;
+                parts.push(format!("{name} → {}", shown(key, new, unit)));
+            }
+        }
+    };
+    for (key, name, unit) in FIELDS {
+        if let Some(new) = set.get(*key) {
+            one(name, key, unit, new, before.get(*key));
+        }
+    }
+    // Keys this list doesn't name yet still show, never dropped.
+    let mut rest: Vec<(&String, &Value)> = set.iter().filter(|(k, _)| !FIELDS.iter().any(|(f, _, _)| f == k)).collect();
+    rest.sort_by(|a, b| a.0.cmp(b.0));
+    for (key, new) in rest {
+        one(key, key, "", new, before.get(key.as_str()));
+    }
+    if let Some(p) = args.get("priority").filter(|p| p.is_boolean()) {
+        one("Priority counts", "priority", "", p, before.get("priority"));
+    }
+    let verb = match (up, down, other) {
+        (u, 0, 0) if u > 0 => "Raise",
+        (0, d, 0) if d > 0 => "Lower",
+        _ => "Change",
+    };
+    let until = match args.get("for_secs").and_then(Value::as_i64) {
+        Some(0) => ", no end date".to_string(),
+        Some(f) => format!(", ends in {}", super::share::human_secs(f.max(0) as u64)),
+        None => String::new(),
+    };
+    let what = if parts.is_empty() { "no change".to_string() } else { parts.join(", ") };
+    format!("{verb} {server}'s share on {node}: {what}{until}")
+}
+
 fn names_str(a: &Map<String, Value>) -> String {
     a.get("names")
         .and_then(Value::as_array)
@@ -1202,6 +1290,28 @@ mod tests {
             proposer_session: None,
             now,
         }
+    }
+
+    /// 0.46.9: a held share change names what it changes, from and to.
+    #[test]
+    fn a_share_change_reads_from_and_to() {
+        let before = json!({"weight": 1, "top_class": "interactive", "gate": false, "exclusive": false, "max_running": 1,
+            "max_queued": 10, "cpu_hours_day": 8, "max_job_secs": 7200, "max_cpus": 7, "max_mem_gb": 8, "disk_gb": 40,
+            "network": "no-lan", "priority": false});
+        let raise = json!({"server": "slot:2", "set": {"max_mem_gb": 14, "max_cpus": 10}});
+        assert_eq!(
+            summarize_limits_change("k2n1-m4", "rosson.k2.dev", &raise, &before),
+            "Raise rosson.k2.dev's share on k2n1-m4: CPUs 7 → 10, memory 8 GB → 14 GB"
+        );
+        let mixed = json!({"server": "x", "set": {"max_cpus": 4, "gate": true, "max_job_secs": 14400}, "for_secs": 0, "priority": true});
+        assert_eq!(
+            summarize_limits_change("n", "x", &mixed, &before),
+            "Change x's share on n: CPUs 7 → 4, longest job 2h → 4h, CI gate jobs no → yes, Priority counts no → yes, no end date"
+        );
+        // Nothing known before: the new values alone; an unnamed key still shows.
+        let unknown = json!({"server": "x", "set": {"max_cpus": 10, "future_key": 3}, "for_secs": 86400});
+        assert_eq!(summarize_limits_change("n", "x", &unknown, &json!({})), "Change x's share on n: CPUs → 10, future_key → 3, ends in 24h");
+        assert!(!summarize_limits_change("n", "x", &raise, &before).contains('\u{2014}'), "no em dashes");
     }
 
     #[test]

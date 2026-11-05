@@ -878,6 +878,12 @@ fn servers_add_limits_pause_and_revoke() {
     // Widening: held, nothing sent.
     let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "set": {"max_running": 3}})).unwrap();
     assert_eq!(r["held"], true, "{r}");
+    // 0.46.9: Settings and the card name the exact change, from and to.
+    assert_eq!(
+        r["request"]["summary"],
+        format!("Raise z3thon.k2.dev's share on {}: jobs at once 1 → 3", f.node_name),
+        "{r}"
+    );
     assert!(test_seams::take_sent(&f.node).is_empty());
     let e = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "nobody.k2.dev", "set": {"max_queued": 1}})).unwrap_err();
     assert_eq!(e.0, 404);

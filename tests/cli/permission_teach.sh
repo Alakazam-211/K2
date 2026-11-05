@@ -102,6 +102,15 @@ class H(BaseHTTPRequestHandler):
                     "card": {"raised": False, "where": "no permission card went up; the request waits in Settings → App Approvals"},
                     "permission": ask("apps.approve", " request=w_abc123def456")}
             return self.reply(202, body)
+        if path == "/cli/compute/nodes/policy/set":
+            # A widening is held for the owner (`held: true`, a car_ id);
+            # with cards on it teaches the card that brings it to chat (0.46.9).
+            held = {"held": True, "request": {"id": "car_9f8e7d", "state": "pending", "node": "k2n1-m4",
+                                               "summary": "change job limits on k2n1-m4: max_cpus=10"},
+                    "hint": "held for the owner"}
+            if on:
+                held["permission"] = ask("compute.admin-approve", " request=car_9f8e7d")
+            return self.reply(200, held)
         if path == "/cli/agent-access/set":
             # The switch's route refuses every passport (`forbidden`); the
             # daemon teaches compute.use only for the agent's own
@@ -260,6 +269,15 @@ run agent compute manage on
 [ "$RC" = 3 ] && ok || bad "compute manage on: exit $RC, want 3 ($ERR)"
 [ "$(last_err_line)" = "It can't be requested." ] && ok || bad "compute manage on: last stderr line is '$(last_err_line)'"
 
+# 0.46.9: a held node request (exit 2) says where the owner approves it,
+# and ends with the Ask-with line that brings it to their chat.
+run agent compute node policy k2n1-m4 set max_cpus=10 --reason "bigger builds"
+[ "$RC" = 2 ] && ok || bad "node policy held: exit $RC, want 2 ($ERR)"
+printf '%s\n' "$ERR" | grep -q '^held for the owner: car_9f8e7d$' && ok || bad "node policy held: '$ERR'"
+printf '%s\n' "$ERR" | grep -q "^  or bring it to the owner's chat as a card: run the Ask with: line below$" && ok || bad "node policy held: no chat line: '$ERR'"
+[ "$(last_err_line)" = 'Ask with: k2 permission request compute.admin-approve request=car_9f8e7d --why "<what you need it for>"' ] && ok \
+    || bad "node policy held: last stderr line is '$(last_err_line)'"
+
 # Any other refusal to the agent: "It can't be requested."
 run agent settings set computePreview true
 [ "$(last_err_line)" = "It can't be requested." ] && ok || bad "settings set: last stderr line is '$(last_err_line)'"
@@ -305,6 +323,9 @@ run agent study permissions
 [ "$RC" = 2 ] && ok || bad "study permissions (off): exit $RC, want 2"
 run agent connections add billing
 printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "connections add (off): a closing line" || ok
+run agent compute node policy k2n1-m4 set max_cpus=10
+[ "$RC" = 2 ] && ok || bad "node policy held (off): exit $RC, want 2"
+printf '%s' "$ERR" | grep -q "Ask with:\|It can.t be requested\|owner's chat" && bad "node policy held (off): a card line: $ERR" || ok
 run agent compute access on
 printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "compute access on (off): a closing line" || ok
 [ "$RC" = 3 ] && ok || bad "compute access on (off): exit $RC, want 3 (forbidden)"

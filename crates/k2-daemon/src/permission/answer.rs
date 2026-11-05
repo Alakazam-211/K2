@@ -397,6 +397,9 @@ fn decide_one(
         // A Garden card's Deny is "Not now" / "Keep it" (prd-garden-access-v1
         // §1.5): stored in its asks table; a no-op for every other action.
         crate::zen_garden_cards::on_denied(&denied);
+        // A held compute node request's card: Deny denies that request
+        // too, through Settings' own deny entry, as this person (0.46.9).
+        super::actions::compute::on_denied(&denied.action, denied.held_ref.as_deref().unwrap_or(""), who, reason);
         return Ok(denied);
     }
 

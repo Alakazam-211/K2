@@ -433,7 +433,9 @@ pub enum WallMatch {
     /// A refusal with this `error.code` (or flat `error` string).
     Code { status: u16, code: &'static str },
     /// A held answer: a 2xx whose JSON `field` equals `value`
-    /// (`{202, "status", "held"}`, or `"pending_approval"` for a held send).
+    /// (`{202, "status", "held"}`, or `"pending_approval"` for a held send),
+    /// or is the boolean `value` names (`{200, "held", "true"}`: a held
+    /// compute node request).
     Held { status: u16, field: &'static str, value: &'static str },
 }
 

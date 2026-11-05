@@ -24841,6 +24841,12 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
                    held for the owner: exit 2 with the request id
   k2 compute node admin list [--node N] [--state open|pending|all] [--json]
   k2 compute node admin withdraw <id>
+                   Bring a held request to the owner's chat (permission cards on;
+                   an agent that may operate or manage compute nodes; its own
+                   requests only): the hold ends with that line, or run
+                   k2 permission request compute.admin-approve request=<id> --why "…"
+                   Allow there approves it exactly as Settings does; Deny denies
+                   it. It stays in Settings too; the first answer decides it
 Node admin, owner only (refused for agents and inside K2 terminals):
   k2 compute node admin approve <id>           Touch ID / your password, then signed + sent
   k2 compute node admin deny <id> [--why "…"]
@@ -27319,6 +27325,11 @@ print("held for the owner: %s\n  %s" % (r["id"], r["summary"]))' >&2
         exit 0
     fi
     echo "  the owner approves it in Settings → Compute → Approvals (or: k2 compute node admin approve $id, outside K2)" >&2
+    # 0.46.9: with permission cards on, the daemon's Ask with: line (printed
+    # last, at exit) brings this same request to the owner's chat as a card.
+    if _permission_in_body "$_CP_BODY"; then
+        echo "  or bring it to the owner's chat as a card: run the Ask with: line below" >&2
+    fi
     exit 2
 }
 

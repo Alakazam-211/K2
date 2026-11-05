@@ -296,7 +296,8 @@ fn the_walls_match_the_refusals() {
             })
             .collect()
     };
-    assert_eq!(code("compute.use"), ["compute_off"]);
+    // 0.46.9: and the agent's own `k2 compute access on` (the switch's route).
+    assert_eq!(code("compute.use"), ["compute_off", "forbidden"]);
     assert_eq!(code("compute.operate"), ["operate_off"]);
     assert_eq!(code("compute.manage"), ["owner_only"]);
     // `/cli/sidecar/` and `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-X4).

@@ -84,8 +84,8 @@ pub(crate) struct Row {
     /// `key=<key>` placeholder for the agent to fill in.
     pub optional: &'static [&'static str],
     /// `(pointer, value)`: the refused request's JSON body must have this
-    /// string there (ASCII case aside): `app.login-grant` is `kind=app`
-    /// only. Read for a match only.
+    /// string there (ASCII case aside), or a boolean spelled `true` /
+    /// `false`: `app.login-grant` is `kind=app` only. Read for a match only.
     pub body_eq: &'static [(&'static str, &'static str)],
     /// A JSON pointer in the refused request's body that must name the
     /// asking agent's **own** workspace (a handle, name, path or id):
@@ -289,6 +289,9 @@ const LOGIN_GRANT_PARAMS: &[(&str, &[ParamFrom])] = &[
     ("role", &[ParamFrom::Body("/roleId")]),
 ];
 
+/// `k2 compute access on`'s body: the compute toggle, turned on.
+const COMPUTE_ACCESS_ON: &[(&str, &str)] = &[("/toggle", "compute"), ("/value", "true")];
+
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
 /// off-goldens' captured refusals).
 pub(crate) const ROWS: &[Row] = &[
@@ -305,6 +308,22 @@ pub(crate) const ROWS: &[Row] = &[
     row(ask("compute.use", Floor::Admin), code(403, "not_granted"), "/cli/compute/", ANY),
     row(ask("compute.use", Floor::Admin), code(403, "owner_only"), "/cli/compute/grants", ANY),
     row(ask("compute.use", Floor::Admin), code(403, "owner_only"), "/cli/compute/agents", ANY),
+    // 0.46.9 (Rosson 2026-11-05): the agent's own `k2 compute access on`.
+    // The switch's route refuses every passport (`forbidden`); turning on
+    // its OWN workspace's "Allow compute nodes" asks for compute.use. The
+    // body names that workspace, or none (a passport acts for its own).
+    // Another workspace's, `off`, and every other toggle (`compute_manage`
+    // among them) stay "It can't be requested."
+    Row {
+        body_eq: COMPUTE_ACCESS_ON,
+        own_ws: Some("/workspace"),
+        ..row(ask("compute.use", Floor::Admin), code(403, "forbidden"), "/cli/agent-access/set", POST)
+    },
+    Row {
+        body_eq: COMPUTE_ACCESS_ON,
+        body_has: Some(("/workspace", false)),
+        ..row(ask("compute.use", Floor::Admin), code(403, "forbidden"), "/cli/agent-access/set", POST)
+    },
     row(ask("compute.operate", Floor::Admin), code(403, "operate_off"), "/cli/", ANY),
     // `owner_or_manager` routes: "Allow managing compute nodes" lets the
     // agent through. Owner both on and off.
@@ -835,8 +854,11 @@ pub(crate) fn names_own_workspace(token: &str, workspace_id: &str) -> bool {
 }
 
 fn body_eq_ok(r: &Row, body: Option<&Value>) -> bool {
-    r.body_eq.iter().all(|(p, want)| {
-        body.and_then(|b| b.pointer(p)).and_then(Value::as_str).is_some_and(|v| v.trim().eq_ignore_ascii_case(want))
+    r.body_eq.iter().all(|(p, want)| match body.and_then(|b| b.pointer(p)) {
+        Some(Value::String(v)) => v.trim().eq_ignore_ascii_case(want),
+        // A JSON boolean matches "true" / "false" (`value` on a switch).
+        Some(Value::Bool(v)) => *want == if *v { "true" } else { "false" },
+        _ => false,
     })
 }
 
@@ -1825,6 +1847,71 @@ mod tests {
         .expect("taught");
         assert_eq!(p["command"], "k2 permission request mail.stop-sending target=/Users/x/sales --why \"<what you need it for>\"", "{p}");
         assert_eq!(p["approvers"], "owner or admin", "{p}");
+    }
+
+    /// 0.46.9 (Rosson 2026-11-05): the agent's own `k2 compute access on`
+    /// asks for compute.use: with its own workspace named by any name, or
+    /// none named (the CLI sends none from a K2 terminal). Never for another
+    /// workspace, never for `off`, never for another toggle
+    /// (`compute_manage` stays the owner's: "It can't be requested").
+    #[test]
+    fn compute_access_on_asks_for_compute_use_for_its_own_workspace_only() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let me = crate::permission::actions::held::tests::seed("wca");
+        let other = crate::permission::actions::held::tests::seed("wcb");
+        // The bytes the route answers every passport (the off golden).
+        let refused = json!({"error":{"code":"forbidden","hint":"only the owner or an admin login may change agent access"}});
+        let teach_as = |ws: &str, body: Value| {
+            let params = HashMap::new();
+            permission_for(&Refused {
+                status: 403,
+                method: "POST",
+                path: "/cli/agent-access/set",
+                params: &params,
+                body: Some(&body),
+                response: &refused,
+                workspace_id: ws,
+            })
+            .expect("a passport's refusal always carries a permission object")
+        };
+        let want = "k2 permission request compute.use --why \"<what you need it for>\"";
+        for body in [
+            json!({"toggle":"compute","value":true}),
+            json!({"toggle":"compute","value":true,"workspace":""}),
+            json!({"toggle":"compute","value":true,"workspace":me.handle}),
+            json!({"toggle":"compute","value":true,"workspace":me.id}),
+        ] {
+            let p = teach_as(&me.id, body.clone());
+            assert_eq!(action_of(&p), "compute.use", "{body}: {p}");
+            assert_eq!(p["params"], json!({}), "{body}: the workspace is never a value: {p}");
+            assert_eq!(p["approvers"], "owner or admin", "{body}: {p}");
+            assert_eq!(p["command"], want, "{body}: {p}");
+        }
+        for body in [
+            // Another workspace's switch.
+            json!({"toggle":"compute","value":true,"workspace":other.handle}),
+            json!({"toggle":"compute","value":true,"workspace":other.id}),
+            // Off is not this card.
+            json!({"toggle":"compute","value":false}),
+            json!({"toggle":"compute","value":false,"workspace":me.handle}),
+            // "Allow managing compute nodes" stays the owner's own act.
+            json!({"toggle":"compute_manage","value":true}),
+            json!({"toggle":"compute_manage","value":true,"workspace":me.handle}),
+            // Other switches through the same route are not this card.
+            json!({"toggle":"compute_operate","value":true}),
+            json!({"toggle":"permission_cards","value":true}),
+            // Not the CLI's body.
+            json!({"toggle":"compute","value":"on"}),
+            json!({"value":true}),
+        ] {
+            let p = teach_as(&me.id, body.clone());
+            assert_eq!(p["requestable"], false, "{body}: {p}");
+            assert!(p.get("action").is_none() && p.get("command").is_none(), "{body}: {p}");
+        }
+        // With no known asker, a named workspace never matches.
+        let p = teach_as("", json!({"toggle":"compute","value":true,"workspace":me.handle}));
+        assert_eq!(p["requestable"], false, "{p}");
     }
 
     /// 0.46.8: `own_ws` rows teach only for the asking agent's own

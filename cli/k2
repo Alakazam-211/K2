@@ -24806,7 +24806,10 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
   k2 compute access on|off --workspace WS
                    the Agent tab's "Allow compute nodes" (Settings → Workspaces →
                    <agent> → Agent): on = a grant on every machine switched on,
-                   default limits (and ones added later); off removes them all
+                   default limits (and ones added later); off removes them all.
+                   The owner or an admin sets it. An agent can't; with
+                   permission cards on, it asks for its own workspace with
+                   k2 permission request compute.use --why "…"
   k2 compute usage [--days N]    k2 compute events --audit [--limit N]
                    the audit log (plain `events` shows job events since 0.46.7)
 Node admin (agents need "Allow this agent to operate compute nodes"):

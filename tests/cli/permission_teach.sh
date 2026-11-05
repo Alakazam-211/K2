@@ -102,6 +102,18 @@ class H(BaseHTTPRequestHandler):
                     "card": {"raised": False, "where": "no permission card went up; the request waits in Settings → App Approvals"},
                     "permission": ask("apps.approve", " request=w_abc123def456")}
             return self.reply(202, body)
+        if path == "/cli/agent-access/set":
+            # The switch's route refuses every passport (`forbidden`); the
+            # daemon teaches compute.use only for the agent's own
+            # `k2 compute access on` (0.46.9, Rosson 2026-11-05).
+            err = {"error": {"code": "forbidden", "hint": "only the owner or an admin login may change agent access"}}
+            if on:
+                b = json.loads(body or "{}")
+                if b.get("toggle") == "compute" and b.get("value") is True and not b.get("workspace"):
+                    err["permission"] = ask("compute.use")
+                else:
+                    err["permission"] = {"requestable": False, "where": "a person does this, in Settings or from a terminal outside K2"}
+            return self.reply(403, err)
         if path in ("/cli/settings/update", "/cli/workspace/open"):
             return self.reply(403, {"error": {"code": "owner_only", "hint": "owner only"}})
         err = {"error": {"code": "owner_only", "hint": "only the server's owner may do this"}}
@@ -235,6 +247,19 @@ run agent workspace open "$SANDBOX/ws"
 printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "workspace open: a closing line without a permission object" || ok
 [ "$RC" = 1 ] && ok || bad "workspace open: exit $RC, want 1"
 
+# 0.46.9: the agent's own `k2 compute access on` asks for compute.use ...
+run agent compute access on
+[ "$RC" = 3 ] && ok || bad "compute access on: exit $RC, want 3 ($ERR)"
+[ "$(last_err_line)" = 'Ask with: k2 permission request compute.use --why "<what you need it for>"' ] && ok \
+    || bad "compute access on: last stderr line is '$(last_err_line)'"
+[ "$(printf '%s\n' "$ERR" | grep -c '^Ask with:')" = 1 ] && ok || bad "compute access on: the closing line must print once"
+grep '^POST /cli/agent-access/set ' "$LOG" | grep -q '"toggle": "compute"' && ok || bad "compute access on: wrong request: $(cat "$LOG")"
+grep '^POST /cli/agent-access/set ' "$LOG" | grep -q '"workspace"' && bad "compute access on: a K2 terminal names no workspace: $(cat "$LOG")" || ok
+# ... while "Allow managing compute nodes" stays the owner's own act.
+run agent compute manage on
+[ "$RC" = 3 ] && ok || bad "compute manage on: exit $RC, want 3 ($ERR)"
+[ "$(last_err_line)" = "It can't be requested." ] && ok || bad "compute manage on: last stderr line is '$(last_err_line)'"
+
 # Any other refusal to the agent: "It can't be requested."
 run agent settings set computePreview true
 [ "$(last_err_line)" = "It can't be requested." ] && ok || bad "settings set: last stderr line is '$(last_err_line)'"
@@ -280,6 +305,10 @@ run agent study permissions
 [ "$RC" = 2 ] && ok || bad "study permissions (off): exit $RC, want 2"
 run agent connections add billing
 printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "connections add (off): a closing line" || ok
+run agent compute access on
+printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "compute access on (off): a closing line" || ok
+[ "$RC" = 3 ] && ok || bad "compute access on (off): exit $RC, want 3 (forbidden)"
+printf '%s' "$ERR" | grep -q '"error": "forbidden"' && ok || bad "compute access on (off): '$ERR'"
 run agent mail access grant ops@brand.test "$SANDBOX/ws" --level send
 printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "mail access grant (off): a closing line" || ok
 [ "$RC" = 3 ] && ok || bad "mail access grant (off): exit $RC, want 3 (owner_only)"

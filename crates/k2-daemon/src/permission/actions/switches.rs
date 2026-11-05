@@ -257,6 +257,21 @@ pub(crate) const fn off_spec(
     }
 }
 
+/// `compute.use`'s walls: a run (or any compute verb) while the switch is
+/// off, and (0.46.9, Rosson 2026-11-05) the agent's own `k2 compute access
+/// on`, which the switch's route refuses to every passport (`forbidden`;
+/// the walls map teaches it only for the agent's own workspace, toggle
+/// `compute`, value on).
+const COMPUTE_USE_WALLS: &[Wall] = &[
+    code_wall("compute_off", "/cli/"),
+    Wall {
+        matches: WallMatch::Code { status: 403, code: "forbidden" },
+        route_prefix: "/cli/agent-access/set",
+        method: WallMethod::Post,
+        params: &[],
+    },
+];
+
 const CORE: &[ParamSpec] = &[ParamSpec { key: "core", kind: ParamKind::Core, required: true, list: false, choices: &[] }];
 /// `chat.manage`'s walls: its own refusal, and (0.46.8) a `k2 chat` read
 /// with no chat account while the switch is off (the walls map reads
@@ -298,7 +313,7 @@ pub(crate) static SWITCHES: [Switch; 17] = [
             "Allow compute nodes",
             "Let {ws} run jobs on this server's compute nodes",
             "It may use every machine switched on here, with default limits, and machines added later. Jobs see only the code {ws} sends.",
-            &[code_wall("compute_off", "/cli/")],
+            COMPUTE_USE_WALLS,
             WallCoverage::Code,
         ),
         off: off_spec(

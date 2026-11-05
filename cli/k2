@@ -11495,15 +11495,28 @@ from the owner's or an Admin's own login: K2 uses that person's own Sew
 session, so Sew records who did it. <person> is a login, owner or a
 member id from k2 voice rooms --json.
 
-RECORDING NOTICES. When a call is recorded, each person in it answers the
-notice from their own login (the app, or a paired phone) while in that
-call: k2 voice consent <recording-id> yes --notice <version>, or ... no
-(declines, or withdraws an earlier yes). The id and version come from the
-notice. Route: POST /cli/voice/recording/consent {recording_id,
-consent, notice_version}; yes must send notice_version. Same callers as
-join: never an agent or the bare owner token. consent_notice_changed: the
-notice changed after it was shown; show details.consent_prompt and ask
-again. not_in_voice: join the call first. recording_not_active: it ended.
+RECORDING NOTICES. When a call is recorded, each person in it answers a
+notice. The notice reaches the voice client inside the call (Sew's
+recording event: the recording's id and consent_prompt.notice_version;
+the native engine's sew-voice://recording event). The CLI is in no call
+and sees no notice: k2 voice consent is for voice clients and tests.
+  k2 voice consent <recording-id> yes --notice <version>   records you
+  k2 voice consent <recording-id> no     declines, or withdraws a yes
+Answer again while the recording runs; the last answer counts.
+HTTP (the app, a paired phone): POST /cli/voice/recording/consent with
+the same bearer token the client joined with (a login session, or the
+phone's paired session), body {"recording_id": "77", "consent": true,
+"notice_version": 2}: recording_id a string of digits, consent true or
+false (JSON, not "yes"), notice_version a whole number, required for
+true, optional for false. Any other key is 400 usage. 200 answers {ok,
+recordingId, consent, recording: Sew's recording}. Refusals use K2's
+shape {"ok": false, "error": {code, hint, details}}: 400 usage · 403
+owner_token_cannot_join / agents_not_in_voice (never an agent or the bare
+owner token) · 403 device_session_ended (pair the phone again) · 404
+recording_not_found · 422 not_in_voice (join the call first) · 422
+recording_not_active (it ended) · 409 consent_notice_changed (the notice
+changed after it was shown: show details.consent_prompt, with its new
+notice_version, and ask again) · 503 recording_unavailable (retry).
 
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is
@@ -67760,10 +67773,13 @@ server can't host, and lets the owner or an Admin change them. Read
   k2 voice consent <recording-id> yes --notice <version>
   k2 voice consent <recording-id> no  answer a call's recording notice as your own
                                       login, while you are in that call. yes records
-                                      you; no declines, or withdraws a yes. Both
-                                      values come from the notice (recording id and
+                                      you; no declines, or withdraws a yes; the last
+                                      answer counts. Both values come from the notice
+                                      your voice client shows (recording id and
                                       notice_version); yes must name the version
-                                      you were shown
+                                      you were shown. Like join, for voice clients
+                                      and tests: the CLI sees no notices.
+                                      HTTP shape: k2 study voice-rooms
   k2 voice kick|mute|unmute|deafen|undeafen <room> <person>
                                       moderate (owner/Admin, from their own login on
                                       this server; Sew records who did it). kick ends

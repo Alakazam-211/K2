@@ -244,6 +244,12 @@ export const CATALOG_ERROR_CODES = [
   'password_unchanged',
   // Catalog v40 (0.46.7 Workbench): git reads on a folder that isn't a repo.
   'not_a_repo',
+  // Catalog v50: thread.download's secret-file refusal, and agents.end /
+  // agents.archive's sidecar refusals.
+  'attachment_secret',
+  'sidecar_live',
+  'sidecar_attached',
+  'worktree_sidecar',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

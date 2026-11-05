@@ -70,8 +70,9 @@ pub const FRAME_MAX_BYTES: usize = 48 * 1024;
 /// 172 since Garden files and history (0.46.5, prd-garden-board-needs-v1
 /// §9): eleven rows, the downloads:save and uploads:pick groups and the
 /// restore echo note; 173 since catalog v43's store.grantees row; 175
-/// since catalog v49's compute.nodes row and its compute:nodes group).
-pub const GUIDE_MAX_LINES: usize = 175;
+/// since catalog v49's compute.nodes row and its compute:nodes group; 178
+/// since catalog v50's thread.download, agents.end and agents.archive).
+pub const GUIDE_MAX_LINES: usize = 178;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];
@@ -864,7 +865,7 @@ mod tests {
     #[test]
     fn zen_verbs_is_todays_37_plus_nothing_else() {
         let rows = bridge_rows(catalog());
-        assert_eq!(rows.len(), 45, "ZEN_VERBS: today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles, plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's agents.show and conversation.setContext, plus the 0.46.5 activity SDK's thread.onActivity");
+        assert_eq!(rows.len(), 46, "ZEN_VERBS: today's 37 plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles, plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's agents.show and conversation.setContext, plus the 0.46.5 activity SDK's thread.onActivity, plus catalog v50's thread.download");
         for frame in ["layout.get", "layout.set", "layout.toggle", "layout.subscribe"] {
             assert!(!rows.iter().any(|v| v.verb == frame), "{frame} is a frame row (no cap), never in ZEN_VERBS");
         }
@@ -872,12 +873,12 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            108,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus catalog v29's thread.onActivity (the 0.46.5 activity SDK), plus catalog v30's Garden files rows blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v40's Workbench: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle and agents.openTerminal (0.46.7), plus catalog v43's store.grantees (the Board Garden), plus catalog v47's six boardFile.* tab rows, plus catalog v48's boardFile.files and boardFile.openTab (the Boards Garden's file list), plus catalog v49's compute.nodes (the Compute Garden)"
+            111,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus catalog v29's thread.onActivity (the 0.46.5 activity SDK), plus catalog v30's Garden files rows blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v40's Workbench: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle and agents.openTerminal (0.46.7), plus catalog v43's store.grantees (the Board Garden), plus catalog v47's six boardFile.* tab rows, plus catalog v48's boardFile.files and boardFile.openTab (the Boards Garden's file list), plus catalog v49's compute.nodes (the Compute Garden), plus catalog v50's thread.download, agents.end and agents.archive"
         );
         assert_eq!(
             catalog().verbs_exposed_to(Exposure::Widget).len(),
-            53,
+            54,
             "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open; 0.46.5's thread.onActivity, blobs.put/get and downloads.begin/save; 0.46.6's uploads.pick and uploads.dropped; catalog v40's agents.openTerminal; catalog v47's six boardFile.* tab rows; catalog v48's boardFile.files and boardFile.openTab)"
         );
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",

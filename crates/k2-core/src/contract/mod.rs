@@ -522,8 +522,8 @@ mod tests {
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            55,
-            "store.* ×15 (store.patch since catalog v21, 0.46.4; store.history, store.restore and store.snapshot since catalog v32, 0.46.6; store.grantees since catalog v43, the Board Garden), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), blobs.info / blobs.list (0.46.5), tickets.attachment (catalog v31, 0.46.6), and the Workbench's 10 (catalog v40, 0.46.7: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle), and the Compute Garden's compute.nodes (catalog v49)"
+            57,
+            "store.* ×15 (store.patch since catalog v21, 0.46.4; store.history, store.restore and store.snapshot since catalog v32, 0.46.6; store.grantees since catalog v43, the Board Garden), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), blobs.info / blobs.list (0.46.5), tickets.attachment (catalog v31, 0.46.6), and the Workbench's 10 (catalog v40, 0.46.7: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle), and the Compute Garden's compute.nodes (catalog v49), and the Workbench's agents.end and agents.archive (catalog v50)"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
         assert_eq!(
@@ -777,6 +777,12 @@ mod tests {
                 "password_unchanged",
                 // 0.46.7 Workbench (catalog v40): git reads on a folder that isn't a repo.
                 "not_a_repo",
+                // Catalog v50: thread.download's secret-file refusal, and
+                // agents.end / agents.archive's sidecar refusals.
+                "attachment_secret",
+                "sidecar_live",
+                "sidecar_attached",
+                "worktree_sidecar",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

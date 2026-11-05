@@ -47092,7 +47092,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 49.
+From K2's verb catalog, version 50.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -82034,7 +82034,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 49.
+for at once (no review). From K2's verb catalog, version 50.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -82096,7 +82096,7 @@ thread:read (Read the Thread)
 thread:post (Post to the Thread)
   k2.thread.pickFiles(address)                                                                                     local    thread-attachments-v1  const {files} = await k2.thread.pickFiles(row.address)  [not_bound]
   k2.thread.post(address, text, {attachments})                                                                     portable zen-v1                 await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large usage]
-  k2.thread.answer(address, cardId, choice)                                                                        portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited card_person_only]
+  k2.thread.answer(address, cardId, choice?)                                                                       portable zen-v1                 await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited card_person_only]
   k2.compose.draft(address, text)                                                                                  local    zen-v1                 await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
   k2.conversation.setContext(text)                                                                                 local    thread-context-v1      await k2.conversation.setContext('Board: ' + board.name)  [needs_editor not_bound bad_args rate_limited]
 sources:read (Read data sources)
@@ -82109,6 +82109,7 @@ sources:read (Read data sources)
 links:open (Open links in your browser)
   k2.links.open(url)                                                                                               local    zen-widgets-v1         const {ok} = await k2.open('https://example.com/report')  [bad_args rate_limited]
 downloads:save (Save files to your Downloads)
+  k2.thread.download(address, docId, n)                                                                            local    zen-files-v1           const {saved, name} = await k2.thread.download(row.address, item.id, 0)  +thread:read  [not_bound not_granted not_found attachment_secret bad_args rate_limited]
   k2.downloads.begin(name, {mime})                                                                                 local    zen-files-v1           k2.download('Board.png', async () => await drawPng())  [bad_args rate_limited]
   k2.downloads.save(name, data, {mime, ticket})                                                                    local    zen-files-v1           const {saved, name} = await k2.download('board.json', JSON.stringify(doc))  [not_granted bad_args too_large rate_limited blob_missing]
 uploads:pick (Take files you pick or drop)
@@ -82171,6 +82172,8 @@ agents:start (Start, land and discard worktree agents)
   k2.agents.start({base, brief, harness, name, workspace})                                                         local    workbench-v1           const t = await k2.agents.start({workspace: 'k2::local', name: 'fix-login', brief})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined confirm_required]
   k2.git.land({address})                                                                                           local    workbench-v1           const r = await k2.git.land({address: row.address})  +git:read  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined conflict confirm_required]
   k2.agents.settle({address, discard})                                                                             local    workbench-v1           await k2.agents.settle({address: row.address, discard: true})  +git:read  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined conflict confirm_required]
+  k2.agents.end({address})                                                                                         local    workbench-v1           const {ended} = await k2.agents.end({address: row.address})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined sidecar_attached confirm_required]
+  k2.agents.archive({address})                                                                                     local    workbench-v1           await k2.agents.archive({address: row.address})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused sidecar_live worktree_sidecar]
 agents:stop (Stop an agent's turn)
   k2.agents.stop({address})                                                                                        local    workbench-v1           await k2.agents.stop({address: row.address})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined]
 

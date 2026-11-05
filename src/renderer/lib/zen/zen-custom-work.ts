@@ -31,11 +31,21 @@ export const ZEN_WORK_VERBS: ReadonlySet<string> = new Set([
   'agents.stop',
   'git.land',
   'agents.settle',
+  'agents.end',
+  'agents.archive',
   'git.note',
 ])
 
 /** Rows that change something: a press in the frame first. */
-export const ZEN_WORK_WRITES: ReadonlySet<string> = new Set(['agents.start', 'agents.stop', 'git.land', 'agents.settle', 'git.note'])
+export const ZEN_WORK_WRITES: ReadonlySet<string> = new Set([
+  'agents.start',
+  'agents.stop',
+  'git.land',
+  'agents.settle',
+  'agents.end',
+  'agents.archive',
+  'git.note',
+])
 
 /** What K2's sheet shows (the daemon's `change`; `kind` picks the words). */
 export interface ZenWorkChange {

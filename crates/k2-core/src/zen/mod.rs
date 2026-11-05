@@ -256,6 +256,9 @@ pub const BRIDGE_CAPS: &[&str] = &[
     // 0.46.5 activity SDK: `thread.onActivity` (with thread:read), the
     // Garden's twin of the App ear.
     "activity:read",
+    // Catalog v50: `thread.download` (with thread:read), K2's own save of a
+    // Thread file (the frame never gets the bytes).
+    "downloads:save",
 ];
 
 /// The caps a custom widget may ask for, and runs with when it asks

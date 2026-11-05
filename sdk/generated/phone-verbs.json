@@ -1,8 +1,10 @@
 {
   "generatedBy": "contract-gen",
-  "catalogVersion": 49,
+  "catalogVersion": 50,
   "verbs": [
     {"cap":"activity:read","feature":"app-api-v1","phone":"door","verb":"activity.snapshot"},
+    {"cap":"agents:start","feature":"workbench-v1","phone":"later","verb":"agents.archive"},
+    {"cap":"agents:start","feature":"workbench-v1","phone":"later","verb":"agents.end"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.list"},
     {"cap":"agents:read","feature":"workbench-v1","phone":"later","verb":"agents.openTerminal"},
     {"cap":"agents:start","feature":"workbench-v1","phone":"later","verb":"agents.settle"},
@@ -87,6 +89,7 @@
     {"cap":"thread:post","feature":"zen-v1","phone":"later","verb":"thread.answer"},
     {"cap":"thread:read","feature":"thread-images-v1","phone":"later","verb":"thread.attachment"},
     {"cap":"thread:read","feature":"inbox-catchup-v1","phone":"door","verb":"thread.catchup"},
+    {"cap":"downloads:save","feature":"zen-files-v1","phone":"later","verb":"thread.download"},
     {"cap":"thread:read","feature":"thread-stream-v1","phone":"later","verb":"thread.inbox"},
     {"cap":"thread:read","feature":"thread-attachments-v1","phone":"later","verb":"thread.links"},
     {"cap":"thread:read","feature":"thread-read-v1","phone":"later","verb":"thread.markRead"},

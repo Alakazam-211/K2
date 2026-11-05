@@ -103,8 +103,9 @@ describe('TUWA5: the generated tables', () => {
   // 37 until catalog v16; Thread parity (0.46.3, Rosson 2026-10-20) adds
   // thread.attachment, thread.open, thread.links and thread.pickFiles.
   // app-room-stream (0.46.3) adds thread.inbox. Catalog v20 (0.46.3 r10)
-  // adds agents.show and conversation.setContext.
-  it('ZEN_VERBS is today’s 45 entries, key for key and cap for cap', () => {
+  // adds agents.show and conversation.setContext. Catalog v50 adds
+  // thread.download (K2 saves the original file; alsoCaps thread:read).
+  it('ZEN_VERBS is today’s 46 entries, key for key and cap for cap', () => {
     expect(ZEN_VERBS).toEqual({
       'agents.list': 'agents:read',
       'agents.subscribe': 'agents:read',
@@ -128,6 +129,7 @@ describe('TUWA5: the generated tables', () => {
       'thread.onActivity': 'activity:read',
       'thread.markRead': 'thread:read',
       'thread.attachment': 'thread:read',
+      'thread.download': 'downloads:save',
       'thread.open': 'thread:read',
       'thread.links': 'thread:read',
       'thread.pickFiles': 'thread:post',
@@ -156,7 +158,7 @@ describe('TUWA5: the generated tables', () => {
       'controls.bind': null,
       'theme.get': null,
     })
-    expect(Object.keys(ZEN_VERBS)).toHaveLength(45)
+    expect(Object.keys(ZEN_VERBS)).toHaveLength(46)
   })
 
   it('ZEN_CUSTOM_VERBS is the UW16 list as amended by UWB10, plus the whole canvas (0.45.3)', () => {
@@ -222,6 +224,8 @@ describe('TUWA5: the generated tables', () => {
       // attachments, links and K2's file picker reach widgets.
       'thread.markRead': { cap: 'thread:read', reach: 'local', kind: 'call' },
       'thread.attachment': { cap: 'thread:read', reach: 'local', kind: 'call' },
+      // Catalog v50: K2 saves the original file from the agent's server.
+      'thread.download': { cap: 'downloads:save', also: ['thread:read'], reach: 'local', kind: 'call' },
       'thread.open': { cap: 'thread:read', reach: 'local', kind: 'call' },
       'thread.links': { cap: 'thread:read', reach: 'local', kind: 'call' },
       'thread.pickFiles': { cap: 'thread:post', reach: 'local', kind: 'call' },
@@ -296,6 +300,9 @@ describe('TUWA5: the generated tables', () => {
       'git.land': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
       'agents.settle': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
       'agents.stop': { cap: 'agents:stop', reach: 'local', kind: 'call' },
+      // Catalog v50: end a sidecar (K2's sheet first) and archive a stopped one.
+      'agents.end': { cap: 'agents:start', reach: 'local', kind: 'call' },
+      'agents.archive': { cap: 'agents:start', reach: 'local', kind: 'call' },
     })
     for (const v of ['projects.list', 'projects.messages', 'projects.post']) {
       expect(v in ZEN_CUSTOM_VERBS, `${v}: no project chat on the Garden bridge`).toBe(false)

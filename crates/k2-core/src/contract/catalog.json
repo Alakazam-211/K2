@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 49,
+  "catalogVersion": 50,
   "caps": [
     {
       "name": "agents:read",
@@ -349,7 +349,11 @@
     {"code": "all_suppressed", "doc": "Every recipient is suppressed (a hard bounce, a spam complaint or an unsubscribe), so nothing was sent."},
     {"code": "password_change_required", "doc": "The password is right, but someone else set it (the owner, an admin, an agent, an App key, or K2 made it): no pass. The answer (403) carries mustChangePassword, changeToken (one use, 15 minutes), changeUrl and changePath. Send the person's browser to changeUrl; they choose a new password, then sign in with it."},
     {"code": "password_unchanged", "doc": "The new password is the temporary one the person was given: they choose another. The change token still works."},
-    {"code": "not_a_repo", "doc": "The agent's folder isn't in a git repository, so there is no branch, diff or log to show."}
+    {"code": "not_a_repo", "doc": "The agent's folder isn't in a git repository, so there is no branch, diff or log to show."},
+    {"code": "attachment_secret", "doc": "The file looks like a secret now, so K2 won't let it leave the agent's server. Secrets travel through the vault (k2 vault)."},
+    {"code": "sidecar_live", "doc": "The agent is running. End it first (agents.end), then archive it."},
+    {"code": "sidecar_attached", "doc": "Someone has the agent open in a tab right now, so K2 didn't end it. Close that tab first."},
+    {"code": "worktree_sidecar", "doc": "The agent works in its own git worktree. Archive doesn't take it: retire it with agents.settle, which removes the worktree."}
   ],
   "bannedFields": [
     "workspacePath",
@@ -835,6 +839,17 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "secret": {
+                      "title": "ThreadSecretCard",
+                      "type": "object",
+                      "properties": {
+                        "status": {"type": "string", "description": "pending, answered or expired."},
+                        "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
+                      },
+                      "required": ["status", "expiresAt"],
+                      "additionalProperties": false,
+                      "description": "A secret card (doc.kind secret): its status only, never the value, the prompt or where it goes. thread.answer on it opens K2's own sheet. Absent on every other item."
+                    },
                     "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
                     "context": {
                       "title": "ThreadContext",
@@ -919,7 +934,11 @@
                             "description": "Milliseconds since the epoch: the file's modified time when it was sent."
                           },
                           "line": {"type": "integer"},
-                          "lineEnd": {"type": "integer"}
+                          "lineEnd": {"type": "integer"},
+                          "canDownload": {
+                            "type": "boolean",
+                            "description": "true when the person may save this file (thread.download). Absent on a hidden file."
+                          }
                         },
                         "required": ["kind", "state"],
                         "additionalProperties": false
@@ -961,6 +980,17 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "secret": {
+                      "title": "ThreadSecretCard",
+                      "type": "object",
+                      "properties": {
+                        "status": {"type": "string", "description": "pending, answered or expired."},
+                        "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
+                      },
+                      "required": ["status", "expiresAt"],
+                      "additionalProperties": false,
+                      "description": "A secret card (doc.kind secret): its status only, never the value, the prompt or where it goes. thread.answer on it opens K2's own sheet. Absent on every other item."
+                    },
                     "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
                     "context": {
                       "title": "ThreadContext",
@@ -1045,7 +1075,11 @@
                             "description": "Milliseconds since the epoch: the file's modified time when it was sent."
                           },
                           "line": {"type": "integer"},
-                          "lineEnd": {"type": "integer"}
+                          "lineEnd": {"type": "integer"},
+                          "canDownload": {
+                            "type": "boolean",
+                            "description": "true when the person may save this file (thread.download). Absent on a hidden file."
+                          }
                         },
                         "required": ["kind", "state"],
                         "additionalProperties": false
@@ -1123,6 +1157,17 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "secret": {
+                      "title": "ThreadSecretCard",
+                      "type": "object",
+                      "properties": {
+                        "status": {"type": "string", "description": "pending, answered or expired."},
+                        "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
+                      },
+                      "required": ["status", "expiresAt"],
+                      "additionalProperties": false,
+                      "description": "A secret card (doc.kind secret): its status only, never the value, the prompt or where it goes. thread.answer on it opens K2's own sheet. Absent on every other item."
+                    },
                     "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
                     "context": {
                       "title": "ThreadContext",
@@ -1207,7 +1252,11 @@
                             "description": "Milliseconds since the epoch: the file's modified time when it was sent."
                           },
                           "line": {"type": "integer"},
-                          "lineEnd": {"type": "integer"}
+                          "lineEnd": {"type": "integer"},
+                          "canDownload": {
+                            "type": "boolean",
+                            "description": "true when the person may save this file (thread.download). Absent on a hidden file."
+                          }
                         },
                         "required": ["kind", "state"],
                         "additionalProperties": false
@@ -1553,6 +1602,17 @@
               },
               "body": {"type": ["string", "null"]},
               "via": {"type": ["string", "null"]},
+              "secret": {
+                "title": "ThreadSecretCard",
+                "type": "object",
+                "properties": {
+                  "status": {"type": "string", "description": "pending, answered or expired."},
+                  "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
+                },
+                "required": ["status", "expiresAt"],
+                "additionalProperties": false,
+                "description": "A secret card (doc.kind secret): its status only, never the value, the prompt or where it goes. thread.answer on it opens K2's own sheet. Absent on every other item."
+              },
               "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
               "context": {
                 "title": "ThreadContext",
@@ -1637,7 +1697,11 @@
                       "description": "Milliseconds since the epoch: the file's modified time when it was sent."
                     },
                     "line": {"type": "integer"},
-                    "lineEnd": {"type": "integer"}
+                    "lineEnd": {"type": "integer"},
+                    "canDownload": {
+                      "type": "boolean",
+                      "description": "true when the person may save this file (thread.download). Absent on a hidden file."
+                    }
                   },
                   "required": ["kind", "state"],
                   "additionalProperties": false
@@ -1781,6 +1845,36 @@
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "too_large", "failed"],
       "doc": "One attachment of a message: its live meta, a preview, or an image thumbnail (thread-images-v1).",
       "example": "const t = await k2.thread.attachment(row.address, item.id, 0, {mode: 'thumb'})"
+    },
+    {
+      "verb": "thread.download",
+      "cap": "downloads:save",
+      "alsoCaps": ["thread:read"],
+      "exposure": ["widget"],
+      "phone": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-files-v1",
+      "bindings": {"renderer": {"impl": "registered"}},
+      "request": [
+        {"title": "address", "type": "string", "description": "A row's address, handle::host."},
+        {"title": "docId", "type": "string", "description": "The message's doc id."},
+        {"title": "n", "type": "integer", "minimum": 0, "description": "The attachment's index in doc.attachments."}
+      ],
+      "response": {
+        "title": "ThreadFileSaved",
+        "type": "object",
+        "properties": {
+          "saved": {"type": "boolean", "description": "False when the person cancelled (K2's card, or the transfer card's Cancel) or the copy failed (K2's toast says why)."},
+          "name": {"type": "string", "description": "The name it was saved as in Downloads (never a path)."}
+        },
+        "required": ["saved"],
+        "additionalProperties": false
+      },
+      "errors": ["cap_not_granted", "not_bound", "not_granted", "not_found", "attachment_secret", "bad_args", "rate_limited", "verb_unavailable", "failed"],
+      "doc": "Save a message's attachment to the person's Downloads, whole and as it is (its own name and type, any size, audio too), just after a click in the widget. K2 copies it from the agent's server: no bytes pass through the widget. Hide the button when the file's canDownload isn't true.",
+      "example": "const {saved, name} = await k2.thread.download(row.address, item.id, 0)"
     },
     {
       "verb": "thread.open",
@@ -1989,11 +2083,16 @@
       "request": [
         {"title": "address", "type": "string", "description": "A row's address, handle::host."},
         {"title": "cardId", "type": "string"},
-        {"title": "choice", "type": "string"}
+        {
+          "title": "choice",
+          "type": "string",
+          "default": "",
+          "description": "The option's label (a choice card). Leave it out for a secret card."
+        }
       ],
       "response": {"type": "null"},
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed", "sending_off", "rate_limited", "card_person_only"],
-      "doc": "Answer a choice card in the Thread (never a secret card).",
+      "doc": "Answer a choice card in the Thread. On a secret card (doc.kind secret) it opens K2's own sheet outside the widget instead, just after a click in it: the person types the value there, and it never reaches the widget. Answers null once the sheet closes; the card's new status comes with the Thread's next view.",
       "example": "await k2.thread.answer(row.address, card.id, 'Yes')"
     },
     {
@@ -27269,6 +27368,104 @@
       ],
       "doc": "Retire an agent (within 5 s of a press): stop it, remove its worktree, delete its branch. Refused (conflict) while it has commits that aren't landed, unless discard. K2's sheet asks the person first; answers {settled, discarded, cancelled}. Its Thread stays.",
       "example": "await k2.agents.settle({address: row.address, discard: true})"
+    },
+    {
+      "verb": "agents.end",
+      "cap": "agents:start",
+      "exposure": ["garden-local"],
+      "phone": "later",
+      "app": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {"http": {"method": "POST", "route": "/cli/zen/call"}},
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {"type": "string", "description": "A sidecar's address from agents.list() or work.list(): ws/name::local."}
+          },
+          "required": ["address"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WorkEnded",
+        "type": "object",
+        "properties": {
+          "ended": {"type": "boolean", "description": "False when it was already asleep (nothing to end) or the person pressed Cancel."},
+          "cancelled": {"type": "boolean", "description": "The person pressed Cancel on K2's sheet: nothing changed."}
+        },
+        "required": ["ended", "cancelled"],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "paused",
+        "declined",
+        "verb_unavailable",
+        "failed",
+        "sidecar_attached",
+        "confirm_required"
+      ],
+      "doc": "End a sidecar agent's process (k2 sidecar stop), within 5 s of a press in the widget. K2's sheet asks the person first. Its tab, transcript and Thread stay, so it can start again. Already asleep: {ended: false} at once, with no sheet. Only sidecars: a workspace's main agent or a heartbeat session is bad_args.",
+      "example": "const {ended} = await k2.agents.end({address: row.address})"
+    },
+    {
+      "verb": "agents.archive",
+      "cap": "agents:start",
+      "exposure": ["garden-local"],
+      "phone": "later",
+      "app": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {"http": {"method": "POST", "route": "/cli/zen/call"}},
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {"type": "string", "description": "A sidecar's address from agents.list() or work.list(): ws/name::local."}
+          },
+          "required": ["address"],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WorkArchived",
+        "type": "object",
+        "properties": {
+          "archived": {"type": "boolean"}
+        },
+        "required": ["archived"],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "paused",
+        "verb_unavailable",
+        "failed",
+        "sidecar_live",
+        "worktree_sidecar"
+      ],
+      "doc": "Take a stopped sidecar off the agent list (k2 sidecar archive), within 5 s of a press in the widget. Its transcript and Thread stay, and k2 sidecar new <name> brings it back. A running one is sidecar_live (end it first); one in its own worktree is worktree_sidecar (use agents.settle). Only sidecars.",
+      "example": "await k2.agents.archive({address: row.address})"
     },
     {
       "verb": "git.note",

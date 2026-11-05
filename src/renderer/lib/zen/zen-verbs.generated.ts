@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 49
+export const ZEN_CATALOG_VERSION = 50
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -29,6 +29,7 @@ export const ZEN_VERBS = {
   'thread.inbox': 'thread:read',
   'thread.markRead': 'thread:read',
   'thread.attachment': 'thread:read',
+  'thread.download': 'downloads:save',
   'thread.open': 'thread:read',
   'thread.links': 'thread:read',
   'thread.pickFiles': 'thread:post',
@@ -125,6 +126,7 @@ export const ZEN_CUSTOM_VERBS = {
   'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
   'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
   'links.open': { cap: 'links:open', reach: 'local', kind: 'call' },
+  'thread.download': { cap: 'downloads:save', also: ['thread:read'], reach: 'local', kind: 'call' },
   'downloads.begin': { cap: 'downloads:save', reach: 'local', kind: 'call' },
   'downloads.save': { cap: 'downloads:save', reach: 'local', kind: 'call' },
   'uploads.pick': { cap: 'uploads:pick', reach: 'local', kind: 'call' },
@@ -181,6 +183,8 @@ export const ZEN_CUSTOM_VERBS = {
   'agents.start': { cap: 'agents:start', reach: 'local', kind: 'call' },
   'git.land': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
   'agents.settle': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
+  'agents.end': { cap: 'agents:start', reach: 'local', kind: 'call' },
+  'agents.archive': { cap: 'agents:start', reach: 'local', kind: 'call' },
   'agents.stop': { cap: 'agents:stop', reach: 'local', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 

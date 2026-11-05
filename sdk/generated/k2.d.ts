@@ -307,6 +307,8 @@ export interface TerminalOpened {
 }
 
 export interface ThreadFile {
+  /** true when the person may save this file (thread.download). Absent on a hidden file. */
+  readonly canDownload?: boolean
   /** file. */
   readonly kind: string
   readonly line?: number
@@ -383,6 +385,13 @@ export interface ThreadContext {
   readonly widget: string
 }
 
+export interface ThreadSecretCard {
+  /** Unix seconds when a pending card expires; null when it never does. */
+  readonly expiresAt: number | null
+  /** pending, answered or expired. */
+  readonly status: string
+}
+
 export interface ThreadDoc {
   /** Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index. */
   readonly attachments?: ThreadFile[] | null
@@ -397,6 +406,8 @@ export interface ThreadDoc {
   readonly from?: string
   readonly id: string
   readonly kind: string
+  /** A secret card (doc.kind secret): its status only, never the value, the prompt or where it goes. thread.answer on it opens K2's own sheet. Absent on every other item. */
+  readonly secret?: ThreadSecretCard
   readonly to?: string | null
   readonly via?: string | null
 }
@@ -850,6 +861,13 @@ export interface SourceAsk {
 export interface LinkOpened {
   /** True when K2 opened it; false when the person said Don't open. */
   readonly ok: boolean
+}
+
+export interface ThreadFileSaved {
+  /** The name it was saved as in Downloads (never a path). */
+  readonly name?: string
+  /** False when the person cancelled (K2's card, or the transfer card's Cancel) or the copy failed (K2's toast says why). */
+  readonly saved: boolean
 }
 
 export interface DownloadTicket {
@@ -1745,6 +1763,17 @@ export interface WorkSettled {
   readonly settled: boolean
 }
 
+export interface WorkEnded {
+  /** The person pressed Cancel on K2's sheet: nothing changed. */
+  readonly cancelled: boolean
+  /** False when it was already asleep (nothing to end) or the person pressed Cancel. */
+  readonly ended: boolean
+}
+
+export interface WorkArchived {
+  readonly archived: boolean
+}
+
 export interface WorkStopped {
   readonly stopped: boolean
 }
@@ -1763,7 +1792,7 @@ export interface StoreTxHandle {
 }
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'blob_missing' | 'bad_args' | 'bad_shape' | 'pass_required' | 'access_lost' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'no_chat_caps' | 'app_claim_invalid' | 'not_app_granted' | 'chat_off_for_person' | 'shared_person' | 'has_assistants' | 'chat_limit' | 'username_unusable' | 'chat_not_app_scoped' | 'no_chat_member' | 'sew_feature_missing' | 'chat_key_required' | 'sew_unreachable' | 'sew_refused' | 'space_unbound' | 'app_mismatch' | 'channel_type_mismatch' | 'client_msg_id_reused' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'push_off' | 'push_server_only' | 'not_for_host' | 'channel_unavailable' | 'push_devices_full' | 'push_not_configured' | 'too_many_recipients' | 'push_queue_full' | 'airgap' | 'vault_closed' | 'token_in_use' | 'pairing_off' | 'pairing_from_device' | 'reauth_required' | 'device_signin_off' | 'host_not_paired' | 'no_public_host' | 'pairing_not_served' | 'pair_code_invalid' | 'pairing_not_from_browser' | 'duplicate_label' | 'needs_editor' | 'retired' | 'card_person_only' | 'edit_off' | 'type_refused' | 'type_mismatch' | 'bad_image' | 'agent_login' | 'email_off' | 'no_sender' | 'sender_not_granted' | 'system_sender' | 'recipient_out_of_scope' | 'header_not_allowed' | 'message_too_large' | 'domain_not_ready' | 'dmarc_missing' | 'relay_not_ready' | 'idempotency_conflict' | 'no_mail_path' | 'email_paused' | 'all_suppressed' | 'password_change_required' | 'password_unchanged' | 'not_a_repo'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'blob_missing' | 'bad_args' | 'bad_shape' | 'pass_required' | 'access_lost' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'no_chat_caps' | 'app_claim_invalid' | 'not_app_granted' | 'chat_off_for_person' | 'shared_person' | 'has_assistants' | 'chat_limit' | 'username_unusable' | 'chat_not_app_scoped' | 'no_chat_member' | 'sew_feature_missing' | 'chat_key_required' | 'sew_unreachable' | 'sew_refused' | 'space_unbound' | 'app_mismatch' | 'channel_type_mismatch' | 'client_msg_id_reused' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'push_off' | 'push_server_only' | 'not_for_host' | 'channel_unavailable' | 'push_devices_full' | 'push_not_configured' | 'too_many_recipients' | 'push_queue_full' | 'airgap' | 'vault_closed' | 'token_in_use' | 'pairing_off' | 'pairing_from_device' | 'reauth_required' | 'device_signin_off' | 'host_not_paired' | 'no_public_host' | 'pairing_not_served' | 'pair_code_invalid' | 'pairing_not_from_browser' | 'duplicate_label' | 'needs_editor' | 'retired' | 'card_person_only' | 'edit_off' | 'type_refused' | 'type_mismatch' | 'bad_image' | 'agent_login' | 'email_off' | 'no_sender' | 'sender_not_granted' | 'system_sender' | 'recipient_out_of_scope' | 'header_not_allowed' | 'message_too_large' | 'domain_not_ready' | 'dmarc_missing' | 'relay_not_ready' | 'idempotency_conflict' | 'no_mail_path' | 'email_paused' | 'all_suppressed' | 'password_change_required' | 'password_unchanged' | 'not_a_repo' | 'attachment_secret' | 'sidecar_live' | 'sidecar_attached' | 'worktree_sidecar'
 
 /** Codes worth retrying unchanged (catalog `retryable`); handler-object subscriptions retry these on their own. */
 export type K2_RETRYABLE = 'not_bound' | 'rate_limited' | 'unreachable' | 'busy'
@@ -1877,7 +1906,7 @@ export interface K2Verbs {
   'thread.mute': { args: [args: { addr: string; muted: boolean; until?: number }]; value: AppReadState }
   'thread.pickFiles': { args: [address: string]; value: ThreadPicked }
   'thread.post': { args: [address: string, text: string, opts?: { attachments?: ThreadAttach[] }]; value: Posted }
-  'thread.answer': { args: [address: string, cardId: string, choice: string]; value: null }
+  'thread.answer': { args: [address: string, cardId: string, choice?: string]; value: null }
   'compose.draft': { args: [address: string, text: string]; value: null }
   'conversation.setContext': { args: [text: string | null]; value: null }
   'sources.list': { args: []; value: SourceListRow[] }
@@ -1887,6 +1916,7 @@ export interface K2Verbs {
   'sources.refresh': { args: [address: string]; value: SourceRefresh }
   'sources.ask': { args: [address: string, itemKey?: string | null]; value: SourceAsk }
   'links.open': { args: [url: string]; value: LinkOpened }
+  'thread.download': { args: [address: string, docId: string, n: number]; value: ThreadFileSaved }
   'downloads.begin': { args: [name: string, opts?: { mime?: string }]; value: DownloadTicket }
   'downloads.save': { args: [name: string, data: unknown, opts?: { mime?: string; ticket?: string }]; value: DownloadSaved }
   'uploads.pick': { args: [opts?: { accept?: string[]; max?: number; multiple?: boolean }]; value: UploadPicked }
@@ -1943,11 +1973,13 @@ export interface K2Verbs {
   'agents.start': { args: [args: { base?: string; brief: string; harness?: string; name: string; workspace: string }]; value: WorkStarted }
   'git.land': { args: [args: { address: string }]; value: WorkLanded }
   'agents.settle': { args: [args: { address: string; discard?: boolean }]; value: WorkSettled }
+  'agents.end': { args: [args: { address: string }]; value: WorkEnded }
+  'agents.archive': { args: [args: { address: string }]; value: WorkArchived }
   'agents.stop': { args: [args: { address: string }]; value: WorkStopped }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'boardFile.open' | 'boardFile.key' | 'boardFile.openTab' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'boardFile.submit' | 'boardFile.hold' | 'boardFile.flush' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'compute.nodes' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'thread.download' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'boardFile.open' | 'boardFile.key' | 'boardFile.openTab' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'boardFile.submit' | 'boardFile.hold' | 'boardFile.flush' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'compute.nodes' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.end' | 'agents.archive' | 'agents.stop'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'boardFile.events' | 'boardFile.files' | 'thread.onActivity'
 
 export interface K2 {
@@ -2036,6 +2068,10 @@ export interface K2 {
     start(args: { base?: string; brief: string; harness?: string; name: string; workspace: string }): Promise<WorkStarted>
     /** Retire an agent (within 5 s of a press): stop it, remove its worktree, delete its branch. Refused (conflict) while it has commits that aren't landed, unless discard. K2's sheet asks the person first; answers {settled, discarded, cancelled}. Its Thread stays. This computer only. caps agents:start + git:read · local · workbench-v1. e.g. `await k2.agents.settle({address: row.address, discard: true})` */
     settle(args: { address: string; discard?: boolean }): Promise<WorkSettled>
+    /** End a sidecar agent's process (k2 sidecar stop), within 5 s of a press in the widget. K2's sheet asks the person first. Its tab, transcript and Thread stay, so it can start again. Already asleep: {ended: false} at once, with no sheet. Only sidecars: a workspace's main agent or a heartbeat session is bad_args. This computer only. cap agents:start · local · workbench-v1. e.g. `const {ended} = await k2.agents.end({address: row.address})` */
+    end(args: { address: string }): Promise<WorkEnded>
+    /** Take a stopped sidecar off the agent list (k2 sidecar archive), within 5 s of a press in the widget. Its transcript and Thread stay, and k2 sidecar new <name> brings it back. A running one is sidecar_live (end it first); one in its own worktree is worktree_sidecar (use agents.settle). Only sidecars. This computer only. cap agents:start · local · workbench-v1. e.g. `await k2.agents.archive({address: row.address})` */
+    archive(args: { address: string }): Promise<WorkArchived>
     /** Stop the agent's current turn (its harness's own interrupt key, never the process), within 5 s of a press in the widget. This computer only. cap agents:stop · local · workbench-v1. e.g. `await k2.agents.stop({address: row.address})` */
     stop(args: { address: string }): Promise<WorkStopped>
   }
@@ -2084,8 +2120,10 @@ export interface K2 {
     pickFiles(address: string): Promise<ThreadPicked>
     /** Send text to the agent as you, with files picked by the person riding it (thread.pickFiles). cap thread:post · portable · zen-v1. e.g. `await k2.thread.post(row.address, 'How is it going?')` */
     post(address: string, text: string, opts?: { attachments?: ThreadAttach[] }): Promise<Posted>
-    /** Answer a choice card in the Thread (never a secret card). cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
-    answer(address: string, cardId: string, choice: string): Promise<null>
+    /** Answer a choice card in the Thread. On a secret card (doc.kind secret) it opens K2's own sheet outside the widget instead, just after a click in it: the person types the value there, and it never reaches the widget. Answers null once the sheet closes; the card's new status comes with the Thread's next view. cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
+    answer(address: string, cardId: string, choice?: string): Promise<null>
+    /** Save a message's attachment to the person's Downloads, whole and as it is (its own name and type, any size, audio too), just after a click in the widget. K2 copies it from the agent's server: no bytes pass through the widget. Hide the button when the file's canDownload isn't true. caps downloads:save + thread:read · local · zen-files-v1. e.g. `const {saved, name} = await k2.thread.download(row.address, item.id, 0)` */
+    download(address: string, docId: string, n: number): Promise<ThreadFileSaved>
     /** The agent's live Thread turn, exactly as an App guest with the same caps sees it (thread.activity + its thread_activity frames: counts, never text): the current turn at once, then every frame; turn null means nothing is running (never infer it from messages). caps activity:read + thread:read · portable · widget-activity-v1. e.g. `const off = k2.thread.onActivity(row.address, ({turn}) => turn ? drawWorking(turn) : hideWorking())` */
     onActivity(address: string, cb: (value: ThreadActivityState) => void, onError?: (error: K2Error) => void): () => void
     /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */

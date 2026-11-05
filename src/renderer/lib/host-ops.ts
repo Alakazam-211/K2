@@ -19,7 +19,8 @@ import { bootStatusUrl, shouldRetryWithoutToken } from '@/lib/boot-status-view'
 import {
   updateAvailableCopy,
   newerNoArtifactCopy,
-  type UpdateCheckResult,
+  readUpdateCheck,
+  replySnippet,
 } from '@/components/Settings/sections/update-host'
 
 /** The resolved wire credentials for one saved host. */
@@ -61,8 +62,11 @@ export class HostOpError extends Error {
 }
 
 /** Surface a clean message from a daemon error body (`{"error":"…"}`) or the
- *  raw text, matching daemon-cli's parseDaemonResponse. */
-async function parse<T>(res: Response): Promise<T> {
+ *  raw text, matching daemon-cli's parseDaemonResponse. Every route these
+ *  helpers call answers JSON, so a 2xx body that isn't JSON (an HTML page, a
+ *  proxy's text) is an error that says so — it used to come back as a bare
+ *  string and render as "vundefined" (z3.k2.dev, 2026-11-05). */
+async function parse<T>(res: Response, what: string): Promise<T> {
   const text = await res.text()
   if (!res.ok) {
     let msg = text
@@ -78,7 +82,10 @@ async function parse<T>(res: Response): Promise<T> {
   try {
     return JSON.parse(text) as T
   } catch {
-    return text as unknown as T
+    throw new HostOpError(
+      `Unexpected reply to ${what} (HTTP ${res.status}, not JSON): ${replySnippet(text)}`,
+      res.status,
+    )
   }
 }
 
@@ -105,7 +112,7 @@ export async function hostOpPost<T = unknown>(
       body: JSON.stringify(body ?? {}),
       signal: AbortSignal.timeout(timeoutMs),
     })
-    return parse<T>(res)
+    return parse<T>(res, route)
   })
 }
 
@@ -128,7 +135,7 @@ export async function hostOpGet<T = unknown>(
     search.set('token', creds.token)
     const url = `${creds.base}/cli/${route}?${search.toString()}`
     const res = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) })
-    return parse<T>(res)
+    return parse<T>(res, route)
   })
 }
 
@@ -190,7 +197,7 @@ export async function hostBootStatus(
           signal: AbortSignal.timeout(timeoutMs),
         })
       }
-      return parse<HostBootStatus>(res)
+      return parse<HostBootStatus>(res, 'boot-status')
     })
   } catch {
     // Unreachable / still restarting / dead socket after every retry — the
@@ -213,8 +220,12 @@ export type CheckSummary =
  *   - `available`        → "Update available for <host> — <cur> → <latest>" (+ Update button)
  *   - `newer-no-artifact`→ a newer version exists but no build for this platform
  *   - `up-to-date`       → "<host> is up to date (v<cur>)"
+ * Throws `UpdateReplyError` when `body` is not an update check.
  */
-export function summarizeCheck(hostLabel: string, r: UpdateCheckResult): CheckSummary {
+export function summarizeCheck(hostLabel: string, body: unknown): CheckSummary {
+  // A reply that isn't an update check throws a named UpdateReplyError
+  // instead of printing "up to date (vundefined)".
+  const r = readUpdateCheck(hostLabel, body)
   if (r.available) {
     return { kind: 'available', text: updateAvailableCopy(hostLabel, r.current, r.latest), latest: r.latest }
   }

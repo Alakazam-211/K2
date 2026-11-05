@@ -77,6 +77,22 @@ describe('summarizeCheck — update-check response → display', () => {
     }
   })
 
+  // z3.k2.dev, 2026-11-05: "z3 is up to date (vundefined)".
+  it('a reply that is not an update check throws a named error, never "vundefined"', () => {
+    for (const body of ['<!doctype html><title>Sign in</title>', { ok: true }, undefined, { latest: '0.46.8', available: false }]) {
+      let caught: unknown = null
+      try {
+        summarizeCheck('z3', body)
+      } catch (e) {
+        caught = e
+      }
+      if (!(caught instanceof Error)) throw new Error(`summarizeCheck accepted ${JSON.stringify(body)}`)
+      expect(caught.name).toBe('UpdateReplyError')
+      expect(caught.message).toContain('Unexpected reply from z3 to the update check')
+      expect(caught.message).not.toContain('vundefined')
+    }
+  })
+
   it('reports newer-no-artifact distinctly from up-to-date', () => {
     const s = summarizeCheck('Hetzner box', {
       current: '0.40.10',
@@ -177,6 +193,23 @@ describe('hostOpPost / hostOpGet — survive a remote restart (retry-on-network-
 
     await expect(hostOpGet(CREDS, 'settings/get')).rejects.toThrow('boom')
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  // Every host-op route answers JSON. A 2xx that isn't (an HTML page in
+  // front of the daemon) used to come back as a bare string.
+  it('a 2xx body that is not JSON throws HostOpError naming the route and the reply', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ body: '<!doctype html><title>Sign in</title>' })))
+    const err = await hostOpPost(CREDS, 'daemon/update/check', 15000).then(
+      (v) => {
+        throw new Error(`resolved ${JSON.stringify(v)}`)
+      },
+      (e: unknown) => e,
+    )
+    if (!(err instanceof HostOpError)) throw new Error(`threw ${String(err)}`)
+    expect(err.status).toBe(200)
+    expect(err.message).toBe(
+      'Unexpected reply to daemon/update/check (HTTP 200, not JSON): "<!doctype html><title>Sign in</title>"',
+    )
   })
 
   it('a non-2xx throws HostOpError with the status and the daemon message (P23)', async () => {

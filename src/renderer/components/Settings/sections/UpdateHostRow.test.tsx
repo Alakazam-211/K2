@@ -27,6 +27,8 @@ vi.mock('@/lib/backoff', async (importOriginal) => {
 import { UpdateHostRow } from './GeneralSection'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { useToastStore } from '@/stores/toast'
+import { forgetAllUpdateJobsForTests } from './update-host'
 
 const HOST: ConnectHost = {
   id: 'id-rosson',
@@ -150,6 +152,8 @@ beforeEach(() => {
   cliPost.mockReset()
   useConnectHostStore.setState({ activeHost: HOST, hosts: [HOST], serverVersion: '0.46.2', serverProtocol: 1 })
   useConfirmDialogStore.setState({ confirm: async () => true })
+  useToastStore.setState({ toasts: [] })
+  forgetAllUpdateJobsForTests()
 })
 
 afterEach(() => {
@@ -248,6 +252,89 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     await clickButton('Download')
     await clickButton('Install & restart Rosson')
     await screen.findByText('Update failed on Rosson: boot verifier failed.', undefined, { timeout: 5000 })
+  })
+
+  // z3.k2.dev, 2026-11-05: the row showed "vundefined" and the update sat
+  // staged on the host. A 200 whose body is not an update check (HTML, a
+  // bare string, another route's JSON) must be an error that says so.
+  it('a check reply that is not an update check is a named error, never "vundefined"', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    const post = cliPost.getMockImplementation()!
+    cliPost.mockImplementation(async (scope: unknown, route: string, body: unknown) => {
+      // daemon-cli hands a non-JSON 200 back as the raw string.
+      if (route === 'daemon/update/check') return '<!doctype html><title>Sign in</title>'
+      return post(scope, route, body)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await waitFor(() => expect(cliPost).toHaveBeenCalledWith(expect.anything(), 'daemon/update/check', {}))
+    await waitFor(() => {
+      const toasts = useToastStore.getState().toasts.map((t) => t.message)
+      expect(toasts.some((m) => m.includes('Unexpected reply from Rosson to the update check'))).toBe(true)
+    })
+    const all = [row().textContent ?? '', ...useToastStore.getState().toasts.map((t) => t.message)].join('\n')
+    expect(all).not.toContain('undefined')
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull()
+  })
+
+  it('a status reply without a phase is shown on the row, and the job still reaches Install & restart', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    let bad = 2
+    cliGet.mockImplementation(async (_scope: unknown, route: string) => {
+      if (route === 'auth/whoami') return { username: 'rosson', role: 'owner' }
+      if (route === 'daemon/update/status') {
+        if (bad > 0) {
+          bad -= 1
+          return '<html>gateway</html>'
+        }
+        return { phase: 'staged', progress: 1 }
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await clickButton('Download')
+    await screen.findByText(/Unexpected reply from Rosson to the update status/)
+    // The job is kept: the Download button does not come back for it.
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull()
+    await screen.findByRole('button', { name: 'Install & restart Rosson' }, { timeout: 5000 })
+    expect(row().textContent).not.toMatch(/Unexpected reply/)
+  })
+
+  it('leaving the page after Download keeps the job: back on the row, Install & restart is offered (no second download)', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    const first = render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await clickButton('Download')
+    await screen.findByText('Update staged for Rosson — ready to install & restart.')
+    first.unmount()
+
+    render(<UpdateHostRow />)
+    await screen.findByRole('button', { name: 'Install & restart Rosson' }, { timeout: 5000 })
+    const starts = cliPost.mock.calls.filter((c) => c[1] === 'daemon/update/start')
+    expect(starts).toHaveLength(1)
+    await clickButton('Install & restart Rosson')
+    const applies = cliPost.mock.calls.filter((c) => c[1] === 'daemon/update/apply')
+    expect(applies).toHaveLength(1)
+    expect(applies[0][2]).toEqual({ job_id: 'job-1' })
+  })
+
+  it('a kept job the host no longer knows (it restarted) clears with a message', async () => {
+    scriptUpdate({ check: CHECK_AVAILABLE })
+    const first = render(<UpdateHostRow />)
+    await clickButton('Check for updates')
+    await clickButton('Download')
+    await screen.findByText('Update staged for Rosson — ready to install & restart.')
+    first.unmount()
+
+    cliGet.mockImplementation(async (_scope: unknown, route: string) => {
+      if (route === 'auth/whoami') return { username: 'rosson', role: 'owner' }
+      if (route === 'daemon/update/status') throw Object.assign(new Error('not found'), { status: 404 })
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<UpdateHostRow />)
+    await screen.findByText(/Rosson no longer has the downloaded update/, undefined, { timeout: 5000 })
+    expect(screen.getByRole('button', { name: 'Check for updates' })).toBeTruthy()
   })
 
   it('a Member sees the row but cannot check or update', async () => {

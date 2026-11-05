@@ -76,19 +76,17 @@ import {
   updatePhaseCopy,
   updateCompleteCopy,
   updateHostConfirmCopy,
-  isTerminalPhase,
-  isFailurePhase,
-  isStaged,
   isForbiddenError,
   isAuthError,
   updateForbiddenCopy,
-  shouldAutoApplyAfterStage,
   shouldResolveComeback,
-  isAmbiguousApplyError,
-  pollErrorMeansRestart,
+  driveUpdateJob,
+  readUpdateCheck,
+  readUpdateStart,
+  UpdateReplyError,
   type UpdateCheckResult,
-  type UpdateStatusResult,
 } from './update-host'
+import { useToastStore } from '@/stores/toast'
 import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 
 // Shared small-button styles for the per-host tile controls — matching the
@@ -1079,7 +1077,8 @@ function HostTile({
     setPhaseText(null)
     setUpdateError(null)
     try {
-      const r = await hostOpPost<UpdateCheckResult>(creds, 'daemon/update/check', 15000)
+      // A reply that isn't an update check throws (named), never "vundefined".
+      const r = readUpdateCheck(label, await hostOpPost<unknown>(creds, 'daemon/update/check', 15000))
       setSummary(summarizeCheck(label, r))
       setHostCurrent(r.current)
       // Shape A vs B: Connections auto-applies only for standalone (and
@@ -1087,6 +1086,10 @@ function HostTile({
       setInstallKind(r.installKind)
     } catch (e) {
       const m = errMsg(e)
+      if (e instanceof UpdateReplyError) {
+        setCheckError(`Update check failed: ${m}`)
+        return
+      }
       clearIfAuthError(m)
       setCheckError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Update check failed: ${m}`)
     } finally {
@@ -1095,117 +1098,71 @@ function HostTile({
   }
 
   /**
-   * Poll update status after start. Shape B (standalone / unknown): when
-   * phase hits `staged`, POST apply once with `{ job_id }` — without this the
-   * binary never swaps (#55 Bug A). Shape A (bundled-app): never apply; keep
-   * polling until terminal (co-located Tauri app installs itself).
+   * Drive the started job to an outcome (`driveUpdateJob`): Shape B
+   * (standalone / unknown) applies once the job is `staged`; Shape A
+   * (bundled-app) never applies. The loop keeps going if this tile unmounts
+   * (the person confirmed the install; stopping left z3.k2.dev `staged` with
+   * nothing to apply it, 2026-11-05). On screen: the tile's lines; gone: a
+   * toast for a failure.
    *
-   * Connection errors BEFORE apply are hard failures (not "reconnecting").
-   * Connection errors AFTER apply (or after Shape A stage, when the app is
-   * installing) hand off to version-gated waitForHostReady.
+   * Errors BEFORE apply are hard failures (not "reconnecting"), an
+   * unreadable status reply included. After apply (or a Shape A stage) a
+   * dropped host hands off to the version-gated waitForHostReady.
    */
   const pollStatus = async (
     jobId: string,
     kind: UpdateCheckResult['installKind'] | undefined,
   ): Promise<'applied' | 'failed' | 'unreachable'> => {
-    let appliedSent = false
-    let sawStaged = false
-    for (let i = 0; i < 90; i++) {
-      if (!aliveRef.current) return 'failed'
-      await new Promise((r) => setTimeout(r, 2000))
-      if (!aliveRef.current) return 'failed'
-      let status: UpdateStatusResult
-      try {
-        status = await hostOpGet<UpdateStatusResult>(creds, 'daemon/update/status', {
-          job_id: jobId,
-        })
-      } catch (e) {
-        // Only treat as "host going down for install" AFTER apply (Shape B)
-        // or after staged on Shape A (app self-installs). Pre-apply blips are
-        // real failures — never claim reconnecting success.
-        // Shape A (0.46.3): the app posts applying/restarting and stops the
-        // daemon within milliseconds, so the poll rarely sees those phases
-        // (and Shape A never posts staged): a drop after start is the
-        // install, not a failure (pollErrorMeansRestart).
-        if (
-          appliedSent ||
-          (sawStaged && !shouldAutoApplyAfterStage(kind)) ||
-          pollErrorMeansRestart({ err: e, installKind: kind, applySent: appliedSent })
-        ) {
-          return 'unreachable'
-        }
-        const m = errMsg(e)
-        clearIfAuthError(m)
-        if (aliveRef.current) {
-          setPhaseText(null)
-          setUpdateError(
-            isForbiddenError(m)
-              ? updateForbiddenCopy(label)
-              : `Lost connection to ${label} before the update could install: ${m}`,
-          )
-        }
-        return 'failed'
-      }
-      if (!aliveRef.current) return 'failed'
-      const pct = typeof status.progress === 'number' ? status.progress * 100 : undefined
-      setPhaseText(updatePhaseCopy(status.phase, label, { progress: pct, current: hostCurrent }))
-
-      if (isFailurePhase(status.phase)) {
+    const fail = (text: string): 'failed' => {
+      if (aliveRef.current) {
         setPhaseText(null)
-        setUpdateError(
-          status.error
-            ? `Update error on ${label}: ${status.error}`
-            : updatePhaseCopy(status.phase, label, { current: hostCurrent }),
+        setUpdateError(text)
+      } else {
+        useToastStore.getState().addToast(text, 'error', 10000)
+      }
+      return 'failed'
+    }
+    const refused = (err: unknown): 'failed' => {
+      const m = errMsg(err)
+      // An unreadable reply quotes the body, which may say "Forbidden":
+      // it is never a permission refusal.
+      if (err instanceof UpdateReplyError) return fail(`Couldn't install the update on ${label}: ${m}`)
+      clearIfAuthError(m)
+      return fail(
+        isForbiddenError(m) ? updateForbiddenCopy(label) : `Couldn't install the update on ${label}: ${m}`,
+      )
+    }
+    const outcome = await driveUpdateJob({
+      hostLabel: label,
+      installKind: kind,
+      status: () => hostOpGet<unknown>(creds, 'daemon/update/status', { job_id: jobId }),
+      apply: () => hostOpPost(creds, 'daemon/update/apply', 30000, { job_id: jobId }),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      onStatus: (status) => {
+        if (!aliveRef.current) return
+        const pct = typeof status.progress === 'number' ? status.progress * 100 : undefined
+        setPhaseText(updatePhaseCopy(status.phase, label, { progress: pct, current: hostCurrent }))
+      },
+      onApplying: () => {
+        if (aliveRef.current) setPhaseText(`Installing update on ${label}…`)
+      },
+    })
+    switch (outcome.kind) {
+      case 'applied':
+      case 'unreachable':
+        return outcome.kind
+      case 'job-failed':
+        return fail(
+          outcome.status.error
+            ? `Update error on ${label}: ${outcome.status.error}`
+            : updatePhaseCopy(outcome.status.phase, label, { current: hostCurrent }),
         )
-        return 'failed'
-      }
-
-      if (isStaged(status.phase)) {
-        sawStaged = true
-        if (shouldAutoApplyAfterStage(kind) && !appliedSent) {
-          appliedSent = true
-          setPhaseText(`Installing update on ${label}…`)
-          try {
-            // Shape B: start only stages; apply swaps the binary + restarts.
-            await hostOpPost(creds, 'daemon/update/apply', 30000, { job_id: jobId })
-          } catch (e) {
-            const m = errMsg(e)
-            // Apply often races the host drop: a connection error, gateway
-            // 502/503/504, or a retried apply that reached the NEW daemon
-            // ("not 'staged'") is the install/restart path, not a failure.
-            if (isAmbiguousApplyError(e) && !isAuthError(m)) {
-              return 'unreachable'
-            }
-            clearIfAuthError(m)
-            if (aliveRef.current) {
-              setPhaseText(null)
-              setUpdateError(
-                isForbiddenError(m)
-                  ? updateForbiddenCopy(label)
-                  : `Couldn't install the update on ${label}: ${m}`,
-              )
-            }
-            return 'failed'
-          }
-          continue
-        }
-        // Shape A: stay in the poll loop until terminal / host goes away.
-      }
-
-      if (status.phase === 'restarting' || status.phase === 'done') {
-        return 'applied'
-      }
-
-      // Other terminal (shouldn't reach here after isFailurePhase) — stop.
-      if (isTerminalPhase(status.phase)) {
-        return 'failed'
-      }
+      case 'poll-failed':
+      case 'apply-failed':
+        return refused(outcome.err)
+      case 'timed-out':
+        return fail(`Timed out waiting for the update on ${label}.`)
     }
-    if (aliveRef.current) {
-      setPhaseText(null)
-      setUpdateError(`Timed out waiting for the update on ${label}.`)
-    }
-    return 'failed'
   }
 
   const doUpdate = async (): Promise<void> => {
@@ -1227,13 +1184,10 @@ function HostTile({
     const expectedVersion = latest
     const kind = installKind
     try {
-      const res = await hostOpPost<{ job_id?: string }>(creds, 'daemon/update/start', 30000)
-      const jobId = res?.job_id
-      if (!jobId) {
-        setPhaseText(null)
-        setUpdateError(`${label} did not return an update job id.`)
-        return
-      }
+      const { job_id: jobId } = readUpdateStart(
+        label,
+        await hostOpPost<unknown>(creds, 'daemon/update/start', 30000),
+      )
       const outcome = await pollStatus(jobId, kind)
       if (!aliveRef.current) return
       if (outcome === 'failed') {

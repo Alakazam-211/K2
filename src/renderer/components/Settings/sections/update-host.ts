@@ -72,6 +72,141 @@ export interface UpdateStatusResult {
   running_version?: string
 }
 
+// ── Reading the host's replies (z3.k2.dev, 2026-11-05) ───────────────
+//
+// Rosson updated z3 from his desktop: the row showed "vundefined" and the
+// update sat `staged` on the host with no apply. A 2xx whose body is not
+// the route's answer (HTML, a bare string, another route's JSON) used to be
+// cast straight to the result type, so `current` read as undefined and a
+// status without `phase` silently dropped the row back to idle. Every
+// update reply now goes through one of these readers: a body of the wrong
+// shape is an `UpdateReplyError` that says what came back.
+
+const UPDATE_PHASES: ReadonlySet<string> = new Set<UpdatePhase>([
+  'downloading',
+  'verifying',
+  'staged',
+  'applying',
+  'restarting',
+  'done',
+  'failed',
+  'rolled-back',
+])
+
+/** A host answered an update route with a body that is not that route's
+ *  answer. Not a refusal and not a dropped connection. */
+export class UpdateReplyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UpdateReplyError'
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.trim() !== ''
+}
+
+/** The first ~80 characters of a reply, on one line, for an error message. */
+export function replySnippet(body: unknown): string {
+  if (body === undefined || body === null || body === '') return 'an empty reply'
+  let raw: string
+  if (typeof body === 'string') {
+    raw = body
+  } else {
+    try {
+      raw = JSON.stringify(body) ?? String(body)
+    } catch {
+      raw = String(body)
+    }
+  }
+  const flat = raw.replace(/\s+/g, ' ').trim()
+  return `"${flat.length > 80 ? `${flat.slice(0, 80)}…` : flat}"`
+}
+
+/** `POST daemon/update/check`'s answer, or an `UpdateReplyError`. Every
+ *  host with the route (0.39.33+) sends `current`, `latest`, `available`. */
+export function readUpdateCheck(hostLabel: string, body: unknown): UpdateCheckResult {
+  if (
+    isRecord(body) &&
+    isNonEmptyString(body.current) &&
+    isNonEmptyString(body.latest) &&
+    typeof body.available === 'boolean'
+  ) {
+    return body as unknown as UpdateCheckResult
+  }
+  throw new UpdateReplyError(
+    `Unexpected reply from ${hostLabel} to the update check (expected its current and latest version): got ${replySnippet(body)}`,
+  )
+}
+
+/** `GET daemon/update/status`'s answer, or an `UpdateReplyError`. */
+export function readUpdateStatus(hostLabel: string, body: unknown): UpdateStatusResult {
+  if (isRecord(body) && typeof body.phase === 'string' && UPDATE_PHASES.has(body.phase)) {
+    return body as unknown as UpdateStatusResult
+  }
+  throw new UpdateReplyError(
+    `Unexpected reply from ${hostLabel} to the update status (expected a phase): got ${replySnippet(body)}`,
+  )
+}
+
+/** `POST daemon/update/start`'s answer (`{job_id}`), or an `UpdateReplyError`. */
+export function readUpdateStart(hostLabel: string, body: unknown): { job_id: string } {
+  if (isRecord(body) && isNonEmptyString(body.job_id)) return { job_id: body.job_id }
+  throw new UpdateReplyError(
+    `Unexpected reply from ${hostLabel} to the update start (expected a job id): got ${replySnippet(body)}`,
+  )
+}
+
+// ── The downloaded update survives leaving the page ──────────────────
+//
+// Settings → General's update is two steps (Download, then Install &
+// restart), and the job id lived only in the row's state: leaving the page
+// after Download lost it, so a staged update had no Install button and
+// Check → Download started a second download. The row keeps its job here,
+// per host id, for the life of this window, and picks it up when it mounts.
+
+export interface KeptUpdateJob {
+  jobId: string
+  /** The check that offered this update (versions + installKind). */
+  check: UpdateCheckResult
+  /** `apply` was sent: a dropped host now means it is installing. */
+  applySent: boolean
+}
+
+const keptUpdateJobs = new Map<string, KeptUpdateJob>()
+
+export function keepUpdateJob(hostId: string, job: KeptUpdateJob): void {
+  keptUpdateJobs.set(hostId, { ...job })
+}
+
+export function keptUpdateJob(hostId: string): KeptUpdateJob | null {
+  const job = keptUpdateJobs.get(hostId)
+  return job ? { ...job } : null
+}
+
+export function forgetUpdateJob(hostId: string): void {
+  keptUpdateJobs.delete(hostId)
+}
+
+export function forgetAllUpdateJobsForTests(): void {
+  keptUpdateJobs.clear()
+}
+
+/** The row's line when the kept job is gone from the host (it restarted
+ *  before Install & restart): nothing was installed. */
+export function updateJobGoneCopy(hostLabel: string): string {
+  return `${hostLabel} no longer has the downloaded update (it restarted), so nothing was installed. Check for updates to download it again.`
+}
+
+/** The row's line while status replies can't be read. */
+export function updateStatusUnreadableCopy(message: string): string {
+  return `${message}. Still checking…`
+}
+
 /**
  * Visibility/enablement decision for the Update-host control. Mirrors
  * EXACTLY the render guards in UpdateHostRow — the unmistakable
@@ -343,6 +478,101 @@ export function pollErrorMeansRestart(args: {
   return isGatewayStatus(status) || status === 404
 }
 
+/** How a Settings → Connections update job ended. */
+export type UpdateJobOutcome =
+  /** The job reported `restarting`/`done`. */
+  | { kind: 'applied' }
+  /** The host went away after `apply` (or a Shape A start): watch it come back. */
+  | { kind: 'unreachable' }
+  /** The job itself failed or rolled back on the host. */
+  | { kind: 'job-failed'; status: UpdateStatusResult }
+  /** A status poll failed before `apply` (refusal, dropped host, unreadable reply). */
+  | { kind: 'poll-failed'; err: unknown }
+  /** `apply` was refused by a host that is still up. */
+  | { kind: 'apply-failed'; err: unknown }
+  /** The job never reached a verdict in the poll window. */
+  | { kind: 'timed-out' }
+
+export interface UpdateJobDeps {
+  hostLabel: string
+  installKind: string | undefined
+  /** `GET daemon/update/status?job_id=` — the raw body; read here. */
+  status: () => Promise<unknown>
+  /** `POST daemon/update/apply {job_id}`. */
+  apply: () => Promise<unknown>
+  sleep: (ms: number) => Promise<void>
+  /** Each status the host reported (for the progress line). */
+  onStatus?: (s: UpdateStatusResult) => void
+  /** Just before `apply` is sent. */
+  onApplying?: () => void
+  intervalMs?: number
+  maxPolls?: number
+}
+
+/**
+ * Drive a started update job to an outcome (Settings → Connections, where
+ * the person confirmed "Install & restart" before `start`). Shape B
+ * (standalone / unknown): when the job is `staged`, send `apply` once — the
+ * binary never swaps without it (#55 Bug A). Shape A (bundled-app): never
+ * apply; the co-located app installs itself.
+ *
+ * It does not stop when the tile unmounts: the person already confirmed the
+ * install, and stopping left the job `staged` on the host with nothing to
+ * apply it (z3.k2.dev, 2026-11-05). A status reply it can't read ends the
+ * job with that error before `apply`, never a 3-minute wait.
+ */
+export async function driveUpdateJob(deps: UpdateJobDeps): Promise<UpdateJobOutcome> {
+  const interval = deps.intervalMs ?? 2000
+  const maxPolls = deps.maxPolls ?? 90
+  const kind = deps.installKind
+  let applySent = false
+  let sawStaged = false
+  for (let i = 0; i < maxPolls; i++) {
+    await deps.sleep(interval)
+    let status: UpdateStatusResult
+    try {
+      status = readUpdateStatus(deps.hostLabel, await deps.status())
+    } catch (err) {
+      // After apply (or after a Shape A stage, when the app is installing)
+      // the host going away is the install. Before that, a failed or
+      // unreadable poll is a real failure — never claim it is restarting.
+      if (
+        applySent ||
+        (sawStaged && !shouldAutoApplyAfterStage(kind)) ||
+        (!(err instanceof UpdateReplyError) &&
+          pollErrorMeansRestart({ err, installKind: kind, applySent }))
+      ) {
+        return { kind: 'unreachable' }
+      }
+      return { kind: 'poll-failed', err }
+    }
+    deps.onStatus?.(status)
+    if (isFailurePhase(status.phase)) return { kind: 'job-failed', status }
+    if (isStaged(status.phase)) {
+      sawStaged = true
+      if (shouldAutoApplyAfterStage(kind) && !applySent) {
+        applySent = true
+        deps.onApplying?.()
+        try {
+          await deps.apply()
+        } catch (err) {
+          // Apply often races the host drop: a connection error, a gateway
+          // 502/503/504, or a retried apply that reached the NEW daemon is
+          // the install going ahead, not a failure.
+          if (isAmbiguousApplyError(err) && !isAuthError(errorText(err))) {
+            return { kind: 'unreachable' }
+          }
+          return { kind: 'apply-failed', err }
+        }
+        continue
+      }
+      // Shape A: keep polling until terminal / the host goes away.
+    }
+    if (status.phase === 'restarting' || status.phase === 'done') return { kind: 'applied' }
+  }
+  return { kind: 'timed-out' }
+}
+
 /** The comeback watcher's outcome. `unconfirmed` is NOT a failure: the host
  *  never showed us a verdict within the window (still installing, or its
  *  version can't be compared). */
@@ -595,3 +825,4 @@ export function isAuthError(message: string): boolean {
     message,
   )
 }
+

@@ -29,6 +29,15 @@ import {
   isStaged,
   isTerminalPhase,
   isFailurePhase,
+  readUpdateCheck,
+  readUpdateStatus,
+  readUpdateStart,
+  UpdateReplyError,
+  keepUpdateJob,
+  keptUpdateJob,
+  forgetUpdateJob,
+  updateJobGoneCopy,
+  updateStatusUnreadableCopy,
   type UpdateRole,
   type UpdateCheckResult,
   type UpdateStatusResult,
@@ -1206,6 +1215,9 @@ export function UpdateHostRow(): React.JSX.Element | null {
   const [check, setCheck] = useState<UpdateCheckResult | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<UpdateStatusResult | null>(null)
+  // A line about the job the status poll can't show as a phase: replies it
+  // can't read, or the host no longer having the job (z3.k2.dev, 2026-11-05).
+  const [jobNote, setJobNote] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
   // Comeback watcher (0.40.48; verdicts 0.46.3): once the host goes away to
   // install, watch it come back and decide from what it REPORTS — its
@@ -1236,15 +1248,20 @@ export function UpdateHostRow(): React.JSX.Element | null {
   // Resolve the viewer's role on the ACTIVE remote host (host-aware
   // whoami). Owner/Admin may update; a Member can't (the route 403s).
   // Re-runs whenever the active remote changes. Also resets any in-flight
-  // check/job state so a host switch never shows a stale update.
+  // check/job state so a host switch never shows a stale update — except a
+  // job this window started on THIS host (kept across leaving the page):
+  // the row picks it up, so a downloaded update still reaches Install &
+  // restart (z3.k2.dev, 2026-11-05).
   useEffect(() => {
-    setCheck(null)
-    setJobId(null)
+    const kept = isRemote ? keptUpdateJob(hostId) : null
+    setCheck(kept?.check ?? null)
+    setJobId(kept?.jobId ?? null)
     setStatus(null)
+    setJobNote(null)
     setApplying(false)
     setWatching(false)
     setComeback(null)
-    applySentRef.current = false
+    applySentRef.current = kept?.applySent ?? false
     startInstanceRef.current = undefined
     if (!isRemote) {
       setRole(null)
@@ -1286,14 +1303,39 @@ export function UpdateHostRow(): React.JSX.Element | null {
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
-        const s = await daemonCliGet<UpdateStatusResult>(primaryScope(), 'daemon/update/status', { job_id: jobId })
-        if (!cancelled) setStatus(s)
+        const s = readUpdateStatus(
+          hostLabel,
+          await daemonCliGet<unknown>(primaryScope(), 'daemon/update/status', { job_id: jobId }),
+        )
+        if (cancelled) return
+        setStatus(s)
+        setJobNote(null)
+        if (isFailurePhase(s.phase)) forgetUpdateJob(hostId)
       } catch (e) {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : String(e)
+        // A reply that isn't a status: say so on the row and keep the job
+        // (the next readable answer brings its phase back). Never drop to
+        // idle silently — that hid the Install & restart button. Checked
+        // first: the message quotes the reply, which may say "Forbidden".
+        if (e instanceof UpdateReplyError) {
+          setJobNote(updateStatusUnreadableCopy(msg))
+          return
+        }
         if (isForbiddenError(msg)) {
           addToast(updateForbiddenCopy(hostLabel), 'error', 8000)
+          forgetUpdateJob(hostId)
           setJobId(null)
+          return
+        }
+        // The host forgot the job before Install & restart (it restarted):
+        // nothing was installed. Say so and offer a fresh check.
+        if (!applySentRef.current && (e as { status?: unknown } | null)?.status === 404) {
+          forgetUpdateJob(hostId)
+          setJobId(null)
+          setStatus(null)
+          setCheck(null) // its answer is stale now: check again
+          setJobNote(updateJobGoneCopy(hostLabel))
           return
         }
         // The host dropped (or forgot the job across a restart) at a point
@@ -1311,7 +1353,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [jobId, phase, hostGoneInstalling, installKind, hostLabel, addToast])
+  }, [jobId, phase, hostGoneInstalling, installKind, hostLabel, hostId, addToast])
 
   // Surface a failure phase once, as a host-named toast with the reason.
   useEffect(() => {
@@ -1346,9 +1388,12 @@ export function UpdateHostRow(): React.JSX.Element | null {
           jobStatus: async () => {
             if (!job) return null
             try {
-              return await daemonCliGet<UpdateStatusResult>(primaryScope(), 'daemon/update/status', { job_id: job })
+              return readUpdateStatus(
+                hostLabel,
+                await daemonCliGet<unknown>(primaryScope(), 'daemon/update/status', { job_id: job }),
+              )
             } catch {
-              return null // older daemon (404 after restart) / still settling
+              return null // older daemon (404 after restart) / still settling / unreadable
             }
           },
           // Jittered so many clients watching the same rebooting host don't
@@ -1363,6 +1408,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
       if (!alive || !outcome) return
       // Resolve the job UI back to idle: the outcome line takes over, and the
       // version line shows what the host ACTUALLY reports (never assumed).
+      forgetUpdateJob(hostId)
       setComeback(outcome)
       setJobId(null)
       setStatus(null)
@@ -1420,8 +1466,15 @@ export function UpdateHostRow(): React.JSX.Element | null {
     // Baden screenshot: a stale "rolled back to v0.40.44" line sitting
     // under a correct "is on v0.40.47" check result).
     setComeback(null)
+    setJobNote(null)
+    forgetUpdateJob(hostId)
     try {
-      const result = await daemonCliPost<UpdateCheckResult>(primaryScope(), 'daemon/update/check', {})
+      // A reply that isn't an update check throws a named error instead of
+      // rendering "<host> is on vundefined" (z3.k2.dev, 2026-11-05).
+      const result = readUpdateCheck(
+        hostLabel,
+        await daemonCliPost<unknown>(primaryScope(), 'daemon/update/check', {}),
+      )
       setCheck(result)
       if (!result.available) {
         // B4: a newer version exists but there's no build for this host's
@@ -1439,7 +1492,9 @@ export function UpdateHostRow(): React.JSX.Element | null {
         }
       }
     } catch (e) {
-      reportError(e)
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!(e instanceof UpdateReplyError) && isForbiddenError(msg)) reportError(e)
+      else addToast(`Couldn't check ${hostLabel} for updates: ${msg}`, 'error', 8000)
     } finally {
       setChecking(false)
     }
@@ -1448,11 +1503,17 @@ export function UpdateHostRow(): React.JSX.Element | null {
   const handleDownload = async (): Promise<void> => {
     setComeback(null)
     setWatching(false)
+    setJobNote(null)
     applySentRef.current = false
     // Bundled-app hosts restart on their own once the app has the update.
     if (check?.installKind === 'bundled-app') await captureInstanceId()
     try {
-      const { job_id } = await daemonCliPost<{ job_id: string }>(primaryScope(), 'daemon/update/start', {})
+      const { job_id } = readUpdateStart(
+        hostLabel,
+        await daemonCliPost<unknown>(primaryScope(), 'daemon/update/start', {}),
+      )
+      // Kept for this window: leaving the page no longer loses the job.
+      if (check) keepUpdateJob(hostId, { jobId: job_id, check, applySent: false })
       setStatus({ phase: 'downloading' })
       setJobId(job_id)
     } catch (e) {
@@ -1473,6 +1534,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
     setApplying(true)
     await captureInstanceId()
     applySentRef.current = true
+    if (check) keepUpdateJob(hostId, { jobId, check, applySent: true })
     try {
       await daemonCliPost(primaryScope(), 'daemon/update/apply', { job_id: jobId })
       // The host now installs + restarts; the watcher confirms the version.
@@ -1486,15 +1548,19 @@ export function UpdateHostRow(): React.JSX.Element | null {
         return
       }
       applySentRef.current = false
+      if (check) keepUpdateJob(hostId, { jobId, check, applySent: false })
       reportError(e)
       setApplying(false)
     }
   }
 
-  // Decide the action-area content from the current state.
+  // Decide the action-area content from the current state. A job whose
+  // phase isn't known yet (picked up after leaving the page, or replies
+  // that can't be read) is in progress: never the idle Download button,
+  // which would start a second download.
   const inProgress =
     hostGoneInstalling ||
-    (jobId !== null && phase !== null && !isStaged(phase) && !isFailurePhase(phase))
+    (jobId !== null && !isStaged(phase) && !isFailurePhase(phase))
   const staged = !hostGoneInstalling && isStaged(phase)
   const watchLine =
     comeback?.kind === 'slow' ? updateSlowComebackCopy(hostLabel) : updateReconnectingCopy(hostLabel)
@@ -1641,6 +1707,14 @@ export function UpdateHostRow(): React.JSX.Element | null {
               />
             </div>
           )}
+        </div>
+      )}
+
+      {/* The job can't be shown as a phase: an unreadable status reply, or
+          the host no longer has the downloaded update. */}
+      {jobNote && !hostGoneInstalling && (
+        <div className="mt-2 text-[11px] text-[var(--color-status-error-soft)] break-words">
+          {jobNote}
         </div>
       )}
 

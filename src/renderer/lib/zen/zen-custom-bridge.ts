@@ -83,6 +83,7 @@ import {
 } from './zen-custom-projection'
 import { ZenThreadVerbError, projectZenThreadFileData, zenThreadAttachments, type ZenThreadDelta } from './zen-thread-files'
 import type { ZenPermissionSheet } from './permission-sheet'
+import type { ZenSecretSheet } from './secret-sheet'
 import { DaemonHttpError } from '../daemon-http-error'
 import type { ZenInboxMessage } from './zen-thread-inbox'
 import type { ZenWidgetStopReason } from './zen-custom-run'
@@ -186,6 +187,10 @@ export interface ZenCustomLayerDeps {
    *  opens K2's sheet outside the frame instead of answering (a widget
    *  never answers one). Without it the daemon's own check refuses. */
   permissions?: ZenPermissionSheet
+  /** Catalog v50: `thread.answer` on a secret card opens K2's sheet outside
+   *  the frame (`secret-sheet.ts`); the value never reaches the widget.
+   *  Without it that answer is `verb_unavailable`. */
+  secrets?: ZenSecretSheet
   /** The kind of card `cardId` on `address` is now (`handoff`, `choice`,
    *  …), or null when the conversation doesn't hold it. A widget never
    *  answers a person's card (accept cards from Home §3.3): `thread.answer`
@@ -1086,6 +1091,36 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       await deps.ensureConversation(address)
       return projectZenThreadFileData(await inner('thread.attachment', address, args[1], n, opts))
     },
+    // Catalog v50: K2 saves the original file itself, from the agent's
+    // server into Downloads (name, type, size, audio too): no bytes cross
+    // the frame. The downloads.* rules apply (a press within 5 s, once
+    // every 2 s, 10 a minute, one at a time, K2's first-time card and the
+    // hourly budget), after the server's own checks (canDownload, a file
+    // that looks like a secret, an App guest's files:download).
+    'thread.download': async (args) => {
+      const d = needDownloads('thread.download')
+      const address = needAddress('thread.download', args[0])
+      if (typeof args[1] !== 'string' || !args[1]) refuse('bad_args', 'thread.download needs a message id')
+      const n = needInt('thread.download', 'n', args[2], 0)
+      if (args.length > 3) refuse('bad_args', 'thread.download takes (address, docId, n)')
+      downloadGate('thread.download', d)
+      downloading = true
+      try {
+        await deps.ensureConversation(address)
+        const authorize = async (info: { name: string; size: number }): Promise<boolean> => {
+          // Review #1: K2's own card the first time this widget saves a file.
+          if (!(await d.consent({ name: info.name, size: info.size }))) return false
+          const over = await d.spend(info.size)
+          if (over) refuse('rate_limited', `thread.download: ${over}.`)
+          return true
+        }
+        const r = (await inner('thread.download', address, args[1], n, { authorize })) as { saved?: unknown; name?: unknown } | null
+        if (r?.saved !== true) return { saved: false }
+        return typeof r.name === 'string' && r.name ? { saved: true, name: r.name } : { saved: true }
+      } finally {
+        downloading = false
+      }
+    },
     'thread.open': async (args) => {
       const address = needAddress('thread.open', args[0])
       const t = args[1]
@@ -1157,15 +1192,38 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       const address = needAddress('thread.answer', args[0])
       const cardId = args[1]
       if (typeof cardId !== 'string' || !cardId) refuse('failed', 'thread.answer needs a card id')
-      // UW50: a choice only, never a secret.
-      if (typeof args[2] !== 'string') refuse('failed', 'Widgets answer with a choice only, never a secret.')
-      needText('thread.answer', args[2])
+      const noChoice = args[2] === undefined || args[2] === null || args[2] === ''
+      let kind = deps.cardKind?.(address, cardId as string) ?? null
+      if (kind === null && noChoice && deps.cardKind) {
+        // No choice: a secret card, maybe on a conversation not open yet.
+        await deps.ensureConversation(address)
+        kind = deps.cardKind(address, cardId as string)
+      }
       // A secret another agent sent is a person's card: Home, K2's own
       // conversation widget or the agent's server answers it, never a
       // widget's code (prd-accept-cards-from-home-v1 §3.3).
-      if (deps.cardKind?.(address, cardId as string) === 'handoff') {
+      if (kind === 'handoff') {
         refuse('failed', 'A widget never accepts a secret. Answer it in the agent’s Thread: on Home, in K2’s conversation widget, or on its server.')
       }
+      // Catalog v50: a secret card opens K2's own sheet outside the frame;
+      // the person types the value there and it never reaches the widget.
+      // The widget sends no choice (UW50 stays: never a value).
+      if (kind === 'secret') {
+        if (!noChoice) {
+          refuse('bad_args', 'A secret card takes no choice: K2’s own sheet asks the person for the value. Call thread.answer(address, cardId).')
+        }
+        if (args.length > 3) refuse('bad_args', 'thread.answer takes (address, cardId, choice?)')
+        const sheet = deps.secrets
+        if (!sheet) refuse('verb_unavailable', 'K2 can’t show a secret card from this widget here; answer it in the agent’s Thread.')
+        needSending()
+        await deps.ensureConversation(address)
+        const opened = await sheet!.open(address, cardId as string)
+        if (!opened.ok) refuse(opened.code, opened.message)
+        return null
+      }
+      // UW50: a choice only, never a secret.
+      if (typeof args[2] !== 'string') refuse('failed', 'Widgets answer with a choice only, never a secret.')
+      needText('thread.answer', args[2])
       needSending()
       // Permission cards: only a person answers, on K2's sheet outside the
       // frame. The widget hears `null` once the person closed it.

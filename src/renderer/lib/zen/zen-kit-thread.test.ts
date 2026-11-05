@@ -232,17 +232,28 @@ describe('k2-thread@1: messages', () => {
     expect(doc.querySelectorAll('.k2t-msg')).toHaveLength(2)
   })
 
-  it('a choice card answers with a tap; secrets say to use K2’s own Thread', () => {
+  it('a choice card answers with a tap; a pending secret card asks K2 to open its own sheet (catalog v50)', () => {
     const f = fakeK2()
     const { win, root, doc } = boot(f)
     win.K2Thread.mount(root, { address: AGENT })
     const choice = msg(3, '', false, { kind: 'choice', choice: { prompt: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }], allow_custom: false, status: 'pending' } })
-    f.threadSubs[0].cb(view([choice, { seq: 4, id: 's4', doc: { id: 's4', kind: 'secret' } }]))
-    const chips = [...doc.querySelectorAll<HTMLButtonElement>('.k2t-opts .k2t-chip')]
+    const secret = (seq: number, status: string) => ({ seq, id: `s${seq}`, doc: { id: `s${seq}`, kind: 'secret', from: 'alice', secret: { status, expiresAt: null } } })
+    f.threadSubs[0].cb(view([choice, secret(4, 'pending'), secret(5, 'answered'), secret(6, 'expired')]))
+    const chips = [...doc.querySelectorAll<HTMLButtonElement>('[data-seq="3"] .k2t-opts .k2t-chip')]
     expect(chips.map((c) => c.textContent)).toEqual(['Yes', 'No'])
     chips[0].click()
     expect(f.answers).toEqual([[AGENT, 'm3', 'Yes']])
-    expect(doc.querySelector('[data-kind="secret"]')?.textContent).toContain('K2’s own Thread')
+    // The button sends no value: K2's sheet outside the frame asks the person.
+    const open = doc.querySelector<HTMLButtonElement>('[data-seq="4"] [data-k2t-secret-open]')
+    expect(open?.textContent).toBe('Enter it in K2')
+    open!.click()
+    expect(f.answers).toEqual([
+      [AGENT, 'm3', 'Yes'],
+      [AGENT, 's4', undefined],
+    ])
+    expect(doc.querySelector('[data-seq="5"] [data-k2t-secret-open]')).toBeNull()
+    expect(doc.querySelector('[data-seq="5"] .k2t-status')?.textContent).toBe('Answered')
+    expect(doc.querySelector('[data-seq="6"] .k2t-status')?.textContent).toBe('Expired')
   })
 
   it('0.46.3: an answered settings card shows what K2 did under the answer; other cards look as before', () => {

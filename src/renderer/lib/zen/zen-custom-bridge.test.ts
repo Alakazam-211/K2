@@ -527,10 +527,36 @@ describe('TUW3.4 / TUWA7: the guest projection', () => {
       id: 'm4',
       doc: { id: 'm4', kind: 'text', from: 'alice', to: 'you', created_at: 5, body: 'hi', via: 'agent', choice: null },
     })
-    expect(projectZenThreadItem({ ...base, doc: { id: 's', kind: 'secret', from: 'alice', secret: { name: 'API', status: 'open' } } })).toEqual({
+    // Catalog v50: a secret card adds its status and expiry, never its
+    // name, value, prompt, sites or how K2 sends it.
+    const secret = {
+      name: 'API',
+      status: 'pending',
+      prompt: 'Paste the API key',
+      hosts: ['https://api.example.test:443'],
+      delivery: 'fetch',
+      ref: 'k2v://x',
+      expiresAt: 1700,
+      inject: { dst: 'header:Authorization', fmt: 'Bearer {}' },
+      envName: 'API_KEY',
+    }
+    const projected = projectZenThreadItem({ ...base, doc: { id: 's', kind: 'secret', from: 'alice', created_at: 5, secret } })
+    expect(projected).toEqual({
       seq: 4,
       id: 'm4',
-      doc: { id: 's', kind: 'secret' },
+      doc: { id: 's', kind: 'secret', from: 'alice', created_at: 5, secret: { status: 'pending', expiresAt: 1700 } },
+    })
+    for (const leak of ['API', 'Paste the API key', 'api.example.test', 'k2v://', 'Bearer', 'API_KEY', 'fetch']) {
+      expect(JSON.stringify(projected), leak).not.toContain(leak)
+    }
+    expect(projectZenThreadItem({ ...base, doc: { id: 's', kind: 'secret', from: 'alice', secret: { name: 'API', status: 'set', expiresAt: 9 } } })?.doc).toEqual({
+      id: 's',
+      kind: 'secret',
+      from: 'alice',
+      secret: { status: 'answered', expiresAt: null },
+    })
+    expect(projectZenThreadItem({ ...base, doc: { id: 's', kind: 'secret', from: 'alice', secret: { name: 'API', status: 'expired' } } })?.doc).toMatchObject({
+      secret: { status: 'expired', expiresAt: null },
     })
     expect(projectZenThreadItem({ ...base, doc: { ...base.doc, kind: 'tool' } })).toBeNull()
   })
@@ -1108,5 +1134,186 @@ describe('Thread parity (catalog v16): the new verbs through the layer', () => {
       'thread.links': () => Promise.reject(new ZenThreadVerbError('verb_unavailable', 'box is older')),
     })
     expect(code(await call(createZenCustomLayer(h.deps), 'thread.links', 'alice::local', ['a/b.ts']))).toBe('verb_unavailable')
+  })
+})
+
+describe('Catalog v50: thread.download (K2 saves the original file; no bytes cross)', () => {
+  const DL: ZenCustomWidgetPayload['caps'] = ['agents:read', 'thread:read', 'thread:post', 'downloads:save']
+
+  function dlHarness(opts: { pressed?: boolean; consent?: boolean; over?: string | null; impl?: (...a: unknown[]) => unknown } = {}) {
+    const asked: Array<{ name: string; size: number }> = []
+    const spent: number[] = []
+    const state = { pressed: opts.pressed ?? true }
+    const h = harness(
+      {
+        downloads: {
+          pressed: () => state.pressed,
+          consent: async (ask) => {
+            asked.push(ask)
+            return opts.consent ?? true
+          },
+          spend: async (size) => {
+            spent.push(size)
+            return opts.over ?? null
+          },
+          save: async () => {
+            throw new Error('thread.download never saves frame bytes')
+          },
+        },
+      },
+      {
+        'thread.download': (...a: unknown[]) => {
+          if (opts.impl) return opts.impl(...a)
+          const o = a[3] as { authorize: (i: { name: string; size: number; mime: string }) => Promise<boolean> }
+          return o
+            .authorize({ name: 'take 3.m4a', size: 120 * 1024 * 1024, mime: 'audio/mp4' })
+            .then((yes) => (yes ? { saved: true, name: 'take 3.m4a', path: '/Users/me/Downloads/take 3.m4a' } : { saved: false }))
+        },
+      },
+    )
+    h.widget.current = payload({ caps: DL, requested: DL })
+    return { h, asked, spent, state }
+  }
+
+  it('a press, then K2 saves the file itself: the name only (never a path or bytes), big audio included', async () => {
+    const { h, asked, spent } = dlHarness()
+    const layer = createZenCustomLayer(h.deps)
+    const r = await call(layer, 'thread.download', 'alice::local', 'm4', 0)
+    expect(r).toEqual({ id: 1, ok: true, value: { saved: true, name: 'take 3.m4a' } })
+    expect('bytes' in r).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('/Users/')
+    // K2's first-time card and the hourly budget saw the real size (over 50 MiB is fine here).
+    expect(asked).toEqual([{ name: 'take 3.m4a', size: 120 * 1024 * 1024 }])
+    expect(spent).toEqual([120 * 1024 * 1024])
+    expect(h.calls.map((c) => [c.verb, c.args.slice(0, 3)])).toEqual([['thread.download', ['alice::local', 'm4', 0]]])
+  })
+
+  it('checks its arguments before anything reaches K2', async () => {
+    const { h } = dlHarness()
+    const layer = createZenCustomLayer(h.deps)
+    const bad: unknown[][] = [['', 0], [7, 0], ['m4', -1], ['m4', 1.5], ['m4', 0, { mode: 'raw' }]]
+    for (const args of bad) {
+      h.clock.t += 3_000
+      expect(code(await call(layer, 'thread.download', 'alice::local', ...args)), JSON.stringify(args)).toBe('bad_args')
+    }
+    expect(code(await call(layer, 'thread.download', 'nobody::local', 'm4', 0))).toBe('not_bound')
+    expect(h.calls).toEqual([])
+  })
+
+  it('needs a press, once every 2 s, one at a time', async () => {
+    const { h, state } = dlHarness({ pressed: false })
+    const layer = createZenCustomLayer(h.deps)
+    const r = await call(layer, 'thread.download', 'alice::local', 'm4', 0)
+    expect(code(r)).toBe('failed')
+    expect(JSON.stringify(r)).toContain('needs a click')
+    expect(h.calls).toEqual([])
+    state.pressed = true
+    expect(await call(layer, 'thread.download', 'alice::local', 'm4', 0)).toMatchObject({ ok: true })
+    expect(code(await call(layer, 'thread.download', 'alice::local', 'm4', 0))).toBe('rate_limited')
+    expect(h.calls).toHaveLength(1)
+  })
+
+  it('needs downloads:save, and thread:read too', async () => {
+    const { h } = dlHarness()
+    h.widget.current = payload({ caps: ['agents:read', 'thread:read'], requested: ['agents:read', 'thread:read'] })
+    const layer = createZenCustomLayer(h.deps)
+    expect(code(await call(layer, 'thread.download', 'alice::local', 'm4', 0))).toBe('cap_not_granted')
+    h.widget.current = payload({ caps: ['agents:read', 'downloads:save'], requested: ['agents:read', 'downloads:save'] })
+    const r2 = await call(layer, 'thread.download', 'alice::local', 'm4', 0)
+    expect(code(r2)).toBe('cap_not_granted')
+    expect(JSON.stringify(r2)).toContain('thread:read')
+    expect(h.calls).toEqual([])
+  })
+
+  it('without K2’s download path (the preview) it is verb_unavailable', async () => {
+    const { h } = dlHarness()
+    const layer = createZenCustomLayer({ ...h.deps, downloads: undefined })
+    expect(code(await call(layer, 'thread.download', 'alice::local', 'm4', 0))).toBe('verb_unavailable')
+    expect(h.calls).toEqual([])
+  })
+
+  it('a No on K2’s card is {saved: false}; over the hourly budget is rate_limited', async () => {
+    const no = dlHarness({ consent: false })
+    expect(await call(createZenCustomLayer(no.h.deps), 'thread.download', 'alice::local', 'm4', 0)).toEqual({ id: 1, ok: true, value: { saved: false } })
+    expect(no.spent).toEqual([])
+    const over = dlHarness({ over: 'at most 30 downloads an hour from one widget' })
+    const r = await call(createZenCustomLayer(over.h.deps), 'thread.download', 'alice::local', 'm4', 0)
+    expect(code(r)).toBe('rate_limited')
+    expect(JSON.stringify(r)).toContain('30 downloads an hour')
+  })
+
+  it('the agent’s server’s refusals keep their names (not a silent false)', async () => {
+    for (const [c, msg] of [
+      ['attachment_secret', 'notes.env now looks like a secret'],
+      ['not_granted', 'you may not save this file'],
+      ['not_found', 'the file isn’t there any more'],
+      ['verb_unavailable', 'box is older'],
+    ] as const) {
+      const { h, asked } = dlHarness({ impl: () => Promise.reject(new ZenThreadVerbError(c, msg)) })
+      const r = await call(createZenCustomLayer(h.deps), 'thread.download', 'alice::local', 'm4', 0)
+      expect(code(r), c).toBe(c)
+      expect(JSON.stringify(r)).toContain(msg)
+      expect(asked, c).toEqual([])
+    }
+  })
+})
+
+describe('Catalog v50: secret cards open K2’s own sheet; the value never crosses', () => {
+  type Open = { ok: true } | { ok: false; code: 'rate_limited' | 'failed'; message: string }
+  function secretHarness(opts: { kind?: string | null; open?: Open } = {}) {
+    const opened: Array<{ address: string; cardId: string }> = []
+    const h = harness({
+      cardKind: (_address, cardId) => (cardId === 's1' ? (opts.kind === undefined ? 'secret' : opts.kind) : 'choice'),
+      secrets: {
+        handles: () => true,
+        open: async (address, cardId) => {
+          opened.push({ address, cardId })
+          return opts.open ?? { ok: true }
+        },
+      },
+    })
+    return { h, opened }
+  }
+
+  it('thread.answer(address, cardId) on a secret card opens K2’s sheet and answers null; nothing is answered from the frame', async () => {
+    const { h, opened } = secretHarness()
+    const layer = createZenCustomLayer(h.deps)
+    expect(await call(layer, 'thread.answer', 'alice::local', 's1')).toEqual({ id: 1, ok: true, value: null })
+    expect(opened).toEqual([{ address: 'alice::local', cardId: 's1' }])
+    // No answer reached K2's own verb: the sheet answers, as the person.
+    expect(h.calls).toEqual([])
+  })
+
+  it('a widget can’t pass a value along: a choice or secret on a secret card is refused, and no sheet opens', async () => {
+    const { h, opened } = secretHarness()
+    const layer = createZenCustomLayer(h.deps)
+    expect(code(await call(layer, 'thread.answer', 'alice::local', 's1', 'sk-live-123'))).toBe('bad_args')
+    expect(code(await call(layer, 'thread.answer', 'alice::local', 's1', { secret: 'sk-live-123' }))).toBe('bad_args')
+    expect(code(await call(layer, 'thread.answer', 'alice::local', 's1', '', 'extra'))).toBe('bad_args')
+    expect(opened).toEqual([])
+    // UW50 stays for every other card: no secret from a widget.
+    expect(code(await call(layer, 'thread.answer', 'alice::local', 'c1', { secret: 'sk-live-123' }))).toBe('failed')
+    expect(h.calls).toEqual([])
+  })
+
+  it('the sheet’s own refusals (no press, one at a time) keep their codes; no sheet host is verb_unavailable', async () => {
+    const noPress = secretHarness({ open: { ok: false, code: 'failed', message: 'K2 opens a secret card only just after the person clicks in the widget.' } })
+    const r = await call(createZenCustomLayer(noPress.h.deps), 'thread.answer', 'alice::local', 's1')
+    expect(code(r)).toBe('failed')
+    expect(JSON.stringify(r)).toContain('clicks in the widget')
+    const busy = secretHarness({ open: { ok: false, code: 'rate_limited', message: 'K2 is already showing a secret card.' } })
+    expect(code(await call(createZenCustomLayer(busy.h.deps), 'thread.answer', 'alice::local', 's1'))).toBe('rate_limited')
+    const none = secretHarness()
+    expect(code(await call(createZenCustomLayer({ ...none.h.deps, secrets: undefined }), 'thread.answer', 'alice::local', 's1'))).toBe('verb_unavailable')
+  })
+
+  it('while posting is paused it is sending_off; a handoff card stays refused', async () => {
+    const { h, opened } = secretHarness()
+    h.paused = true
+    expect(code(await call(createZenCustomLayer(h.deps), 'thread.answer', 'alice::local', 's1'))).toBe('sending_off')
+    const hand = secretHarness({ kind: 'handoff' })
+    expect(code(await call(createZenCustomLayer(hand.h.deps), 'thread.answer', 'alice::local', 's1'))).toBe('failed')
+    expect(opened).toEqual([])
+    expect(hand.opened).toEqual([])
   })
 })

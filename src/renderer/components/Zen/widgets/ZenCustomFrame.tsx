@@ -49,6 +49,8 @@ import { ZenWorkSheet } from './ZenWorkSheet'
 import { ZenGuestRoomsSheet } from './ZenGuestRoomsSheet'
 import { createZenPermissionSheet, type ZenPermissionAsk } from '@/lib/zen/permission-sheet'
 import { ZenPermissionSheet } from './ZenPermissionSheet'
+import { createZenSecretSheet, type ZenSecretAsk } from '@/lib/zen/secret-sheet'
+import { ZenSecretSheet } from './ZenSecretSheet'
 import { allowZenLinkSite, createZenLinks, fetchZenLinkSites, type ZenLinkAnswer, type ZenLinkAsk } from '@/lib/zen/zen-links'
 import { ZenLinkSheet } from './ZenLinkSheet'
 import { ZenDownloadSheet } from './ZenDownloadSheet'
@@ -198,6 +200,8 @@ export function ZenCustomFrame({
   const [guestAsk, setGuestAsk] = useState<{ ask: ZenGuestRoomsAsk; resolve: (token: string | null) => void } | null>(null)
   // Permission cards (0.46.3): K2's sheet for a card the widget shows.
   const [permissionAsk, setPermissionAsk] = useState<{ ask: ZenPermissionAsk; resolve: () => void } | null>(null)
+  // Secret cards (catalog v50): K2's sheet for a card the widget shows; the value never reaches the frame.
+  const [secretAsk, setSecretAsk] = useState<{ ask: ZenSecretAsk; resolve: () => void } | null>(null)
   // `k2.open` (0.46.4): K2's card the first time a site is opened from this Garden.
   const [linkAsk, setLinkAsk] = useState<{ ask: ZenLinkAsk; resolve: (answer: ZenLinkAnswer) => void } | null>(null)
   // 0.46.7 Workbench: K2's sheet for a widget's Start, Land, Retire or Discard.
@@ -477,6 +481,14 @@ export function ZenCustomFrame({
             show: (ask) => new Promise<void>((resolve) => setPermissionAsk({ ask, resolve })),
             gesture: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS) || zenFrameHasFocus(frameRef.current),
           }),
+          // Secret cards (catalog v50): `thread.answer` on one opens K2's
+          // sheet over the card (outside the frame), only just after a press
+          // in the widget (focus alone isn't one).
+          secrets: createZenSecretSheet({
+            find: (address, cardId) => zenThreadItemTarget(address, cardId)?.item ?? null,
+            show: (ask) => new Promise<void>((resolve) => setSecretAsk({ ask, resolve })),
+            pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
+          }),
           // A handoff card is a person's: the bridge refuses a widget's answer.
           cardKind: (address, cardId) => zenThreadItemTarget(address, cardId)?.item.doc.kind ?? null,
           stop: (reason) => stopZenWidget(key, reason),
@@ -566,6 +578,23 @@ export function ZenCustomFrame({
           onDone={() => {
             permissionAsk.resolve()
             setPermissionAsk(null)
+          }}
+        />
+      )}
+      {secretAsk && (
+        <ZenSecretSheet
+          ask={secretAsk.ask}
+          // The window's own answer path, as K2's Conversation widget answers:
+          // no widget origin, so the daemon takes it as the person's.
+          answer={async (payload) => {
+            await (bridge.call('thread.answer', secretAsk.ask.address, secretAsk.ask.cardId, payload) as Promise<unknown>)
+          }}
+          dismiss={async () => {
+            await (bridge.call('thread.void', secretAsk.ask.address, secretAsk.ask.cardId) as Promise<unknown>)
+          }}
+          onDone={() => {
+            secretAsk.resolve()
+            setSecretAsk(null)
           }}
         />
       )}

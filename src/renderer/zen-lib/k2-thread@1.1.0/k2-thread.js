@@ -28,7 +28,9 @@
 // The core (from k2:kanban@3's dock): bubbles, yours right and the agent's
 // left, "author · time" under each; choice cards answered with a tap
 // (a permission card shows K2's words and one button that asks K2 to open
-// its own sheet outside the frame: only a person answers those, there);
+// its own sheet outside the frame: only a person answers those, there; a
+// secret card shows its status and "Enter it in K2", which opens K2's own
+// sheet: the person types the value there and the widget never sees it);
 // Enter sends, Shift+Enter is a new line, one post at a time and the text
 // stays until K2 took it; the working tab on the field's top edge (state,
 // counters, clock; "Sent" until the agent picks it up); K2's stick-to-bottom
@@ -567,8 +569,26 @@
         bubble.setAttribute('data-k2t-ch', '')
         wrap.appendChild(bubble)
         if (kind === 'secret') {
-          bubble.appendChild(el('div', 'k2t-text', doc.body || 'Secret requested'))
-          bubble.appendChild(el('div', 'k2t-status', 'Answer secret cards in K2’s own Thread (widgets can’t send secrets).'))
+          // Only the card's status reaches the widget (never the value or
+          // the prompt). The button asks K2 to open its own sheet outside
+          // the frame, where the person types the value.
+          var sc = doc.secret && typeof doc.secret === 'object' ? doc.secret : {}
+          bubble.setAttribute('data-k2t-secret', sc.status || '')
+          bubble.appendChild(el('div', 'k2t-text', 'Secret requested'))
+          if (sc.status === 'pending') {
+            var sopts = el('div', 'k2t-opts')
+            var sb = el('button', 'k2t-chip', 'Enter it in K2')
+            sb.type = 'button'
+            sb.setAttribute('data-k2t-ch', '')
+            sb.setAttribute('data-k2t-secret-open', '')
+            sb.addEventListener('click', function () {
+              answer(id)
+            })
+            sopts.appendChild(sb)
+            bubble.appendChild(sopts)
+          } else {
+            bubble.appendChild(el('div', 'k2t-status', sc.status === 'expired' ? 'Expired' : 'Answered'))
+          }
         } else if (perm) {
           bubble.appendChild(permissionBlock(id, perm))
         } else {

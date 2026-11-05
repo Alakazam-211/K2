@@ -159,6 +159,8 @@ import {
   zenPreviewRel,
   zenResolveForOpen,
   zenThreadAttachment,
+  zenThreadDownload,
+  type ZenThreadDownloadInfo,
   zenThreadAttachments,
   zenThreadDelta,
   zenThreadLinks,
@@ -2260,6 +2262,24 @@ export function installZenDataVerbs(): () => void {
         ...(o.mode !== undefined ? { mode: o.mode as ZenThreadFileMode } : {}),
         ...(o.px !== undefined ? { px: o.px as number } : {}),
       })
+    }),
+    // Catalog v50: K2 saves the original file from the agent's server (no
+    // bytes through a widget). `opts.authorize` is the custom layer's
+    // consent card and hourly budget, after the server's own checks.
+    registerZenVerb('thread.download', (_ctx, address, docId, n, opts) => {
+      const a = str(address, 'address')
+      const o = isObj(opts) ? opts : {}
+      const authorize =
+        typeof o.authorize === 'function'
+          ? (o.authorize as (info: ZenThreadDownloadInfo) => Promise<boolean>)
+          : (): Promise<boolean> => Promise.resolve(true)
+      // The daemon says per viewer whether a file may be saved; K2's own
+      // Thread hides the button on false, and so does this verb.
+      const file = feedViews.get(a)?.items.find((it) => it.id === docId || it.doc.id === docId)?.doc.attachments?.[n as number]
+      if (file && file.canDownload === false) {
+        throw new ZenThreadVerbError('not_granted', 'thread.download: the agent’s server says you may not save this file.')
+      }
+      return zenThreadDownload(zenThreadTarget(a), str(docId, 'docId'), n as number, authorize)
     }),
     registerZenVerb('thread.open', (_ctx, address, target) => openZenThreadFile(str(address, 'address'), target)),
     registerZenVerb('thread.links', (_ctx, address, candidates) =>

@@ -30,7 +30,7 @@
 //   - a Thread turn (`thread.onActivity`, 0.46.5): `{address, turn, live,
 //     source, fresh}`, where `turn` is the App guest's turn, key for key.
 
-import type { OverlayChoice, OverlayThreadItem, ThreadChangesDoc, ThreadFileObject, ThreadTurn } from '@/components/SessionView/overlayThread'
+import type { OverlayChoice, OverlaySecret, OverlayThreadItem, ThreadChangesDoc, ThreadFileObject, ThreadTurn } from '@/components/SessionView/overlayThread'
 import { coerceChanges } from '@/components/SessionView/overlayThread'
 import type { UserWidgetCap } from '../k2-caps.generated'
 import { agentLookColor, agentLookImage } from '../agent-look'
@@ -186,6 +186,9 @@ export interface ZenWidgetThreadFile {
   modifiedAt?: number
   line?: number
   lineEnd?: number
+  /** The agent's server says this person may save it (`thread.download`);
+   *  a Garden hides its save button otherwise, as K2's Thread does. */
+  canDownload?: boolean
 }
 
 const FILE_STATES: ReadonlySet<string> = new Set(['ok', 'changed', 'gone', 'hidden'])
@@ -202,7 +205,24 @@ export function projectZenThreadFile(f: ThreadFileObject): ZenWidgetThreadFile {
   if (typeof f.modifiedAt === 'number' && Number.isFinite(f.modifiedAt)) out.modifiedAt = f.modifiedAt
   if (typeof f.line === 'number' && Number.isInteger(f.line)) out.line = f.line
   if (typeof f.lineEnd === 'number' && Number.isInteger(f.lineEnd)) out.lineEnd = f.lineEnd
+  if (typeof f.canDownload === 'boolean') out.canDownload = f.canDownload
   return out
+}
+
+/** A secret card as a widget sees it: its status and expiry only. Never
+ *  the value, the name, the prompt, the sites or how K2 sends it. */
+export interface ZenWidgetSecretCard {
+  status: 'pending' | 'answered' | 'expired'
+  /** Unix seconds a pending card expires; null when it never does. */
+  expiresAt: number | null
+}
+
+/** The closed status words: `set` (and any later word) reads as answered. */
+export function projectZenSecretCard(raw: OverlaySecret | null | undefined): ZenWidgetSecretCard {
+  const st = typeof raw?.status === 'string' ? raw.status : 'pending'
+  const status: ZenWidgetSecretCard['status'] = st === 'pending' ? 'pending' : st === 'expired' ? 'expired' : 'answered'
+  const exp = raw?.expiresAt
+  return { status, expiresAt: status === 'pending' && typeof exp === 'number' && Number.isInteger(exp) ? exp : null }
 }
 
 export interface ZenWidgetThreadItem {
@@ -226,7 +246,14 @@ export interface ZenWidgetThreadItem {
          *  `k2`), read from git. Absent on every other item. */
         changes?: ThreadChangesDoc
       }
-    | { id: string; kind: 'secret' }
+    | {
+        id: string
+        kind: 'secret'
+        from: string
+        created_at?: number
+        /** Catalog v50: status and expiry; `thread.answer` on it opens K2's sheet. */
+        secret: ZenWidgetSecretCard
+      }
 }
 
 /** A post's Board context as a widget sees it: the text and which widget
@@ -274,7 +301,19 @@ function projectAnswerer(raw: unknown): ZenWidgetCardAnswerer | null {
 /** One Thread item, or null for a kind widgets don't get. */
 export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadItem | null {
   const d = item.doc
-  if (d.kind === 'secret') return { seq: item.seq, id: item.id, doc: { id: d.id, kind: 'secret' } }
+  if (d.kind === 'secret') {
+    return {
+      seq: item.seq,
+      id: item.id,
+      doc: {
+        id: d.id,
+        kind: 'secret',
+        from: d.from,
+        ...(typeof d.created_at === 'number' ? { created_at: d.created_at } : {}),
+        secret: projectZenSecretCard(d.secret),
+      },
+    }
+  }
   if (d.kind !== 'text' && d.kind !== 'choice' && d.kind !== 'changes') return null
   const context = d.kind === 'text' ? projectContext(d.context) : null
   // Re-read into the closed ThreadChanges shape: never the doc's own object.

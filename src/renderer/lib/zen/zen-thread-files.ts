@@ -275,6 +275,89 @@ export async function zenThreadAttachment(
   return projectZenThreadFileData(await attachmentRaw(t, docId, n, mode, mode === 'thumb' ? px : undefined))
 }
 
+// ── Saving the original (catalog v50) ─────────────────────────────────────
+
+/** What the save's first chunk said: the name and type the file keeps. */
+export interface ZenThreadDownloadInfo {
+  name: string
+  size: number
+  mime: string
+}
+
+/** The agent's server's refusal of a save, as a named error. */
+function downloadRefusal(err: unknown): unknown {
+  if (!(err instanceof DaemonHttpError)) return err
+  const code = err.code ?? ''
+  if (code === 'attachment_secret') {
+    return new ZenThreadVerbError('attachment_secret', `thread.download: ${err.message}`)
+  }
+  if (err.status === 403) {
+    return new ZenThreadVerbError('not_granted', `thread.download: you may not save this file from here (${code || 'forbidden'}: ${err.message}).`)
+  }
+  if (err.status === 404 || err.status === 410) {
+    return new ZenThreadVerbError('not_found', `thread.download: the file isn’t there any more (${code || err.status}: ${err.message}).`)
+  }
+  return new ZenThreadVerbError('failed', code ? `thread.download: ${code}: ${err.message}` : `thread.download: ${err.message}`)
+}
+
+/** The base name of a file name the daemon sent (never a folder). */
+function plainName(raw: unknown): string {
+  const s = typeof raw === 'string' ? raw : ''
+  return s.split(/[\\/]/).pop()?.trim() || 'file'
+}
+
+/** Ask the agent's server for the save's first byte (`mode=download`):
+ *  its own checks run (a guest's `files:download`, a file that looks like
+ *  a secret now, one that's gone) and refuse as a named error before
+ *  anything is saved. Nothing of the file reaches the caller but its
+ *  name, size and type. */
+export async function zenThreadDownloadProbe(t: ZenThreadTarget, docId: string, n: number): Promise<ZenThreadDownloadInfo> {
+  if (typeof docId !== 'string' || !docId) throw new ZenThreadVerbError('bad_args', 'thread.download needs a message id')
+  if (!Number.isInteger(n) || n < 0) throw new ZenThreadVerbError('bad_args', 'thread.download needs an index ≥ 0')
+  needFeature(t.scope, 'thread-images-v1', 'thread.download')
+  let raw: unknown
+  try {
+    raw = await daemonCliGet<unknown>(t.scope, 'thread/attachment', { addr: t.threadAddr, id: docId, n, mode: 'download', offset: 0, len: 1 })
+  } catch (err) {
+    throw downloadRefusal(err)
+  }
+  const r = isObj(raw) ? raw : {}
+  const size = typeof r.size === 'number' && Number.isFinite(r.size) ? r.size : 0
+  return { name: plainName(r.name), size, mime: typeof r.mime === 'string' ? r.mime : 'application/octet-stream' }
+}
+
+/** What saves the file (K2's own Thread download, by default). */
+export type ZenThreadSaver = (
+  ref: { scope: ServerScope; addr: string; docId: string; n: number },
+  name: string,
+  opts: { fromOthers: boolean },
+) => Promise<string | null>
+
+/** K2's own Thread save (loaded on first use: the transfer card's stores
+ *  stay out of every page that only reads a Thread). */
+const saveLikeTheThread: ZenThreadSaver = async (ref, name, opts) =>
+  (await import('@/lib/thread-attachment-download')).downloadThreadAttachment(ref, name, opts)
+
+/** `thread.download(address, docId, n)`: K2 saves the original file from
+ *  the agent's server into Downloads, through the desktop Thread's own
+ *  save (transfer card, Cancel, toast). No bytes pass through a widget.
+ *  `authorize` sees the name and size after the server's checks and
+ *  before the save (the widget's consent card and hourly budget); false
+ *  stops it. A widget-started save is always quarantined (`fromOthers`). */
+export async function zenThreadDownload(
+  t: ZenThreadTarget,
+  docId: string,
+  n: number,
+  authorize: (info: ZenThreadDownloadInfo) => Promise<boolean>,
+  save: ZenThreadSaver = saveLikeTheThread,
+): Promise<{ saved: boolean; name?: string }> {
+  const info = await zenThreadDownloadProbe(t, docId, n)
+  if (!(await authorize(info))) return { saved: false }
+  const landed = await save({ scope: t.scope, addr: t.threadAddr, docId, n }, info.name, { fromOthers: true })
+  if (landed === null) return { saved: false }
+  return { saved: true, name: plainName(landed) }
+}
+
 // ── Links ─────────────────────────────────────────────────────────────────
 
 const transports = new WeakMap<ServerScope, FileLinkTransport>()

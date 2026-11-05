@@ -693,8 +693,8 @@
       "files": [
         {
           "name": "k2-thread.js",
-          "bytes": 54525,
-          "sha256": "69685cde6f3448fd80af170e09f71af292baaa8b78b4ca9c3f365e61f4b9f236"
+          "bytes": 55478,
+          "sha256": "b86bfa6ae058acd24389613ededd0e96232af873d95ff97efb9abf8f9b7f45e3"
         }
       ],
       "notes": "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab (the agent's Thread turn in k2-activity@1's words, never a guess), stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names, activity:read for the working tab; K2 loads k2-activity@1 for you). Add marked and dompurify for markdown bodies."

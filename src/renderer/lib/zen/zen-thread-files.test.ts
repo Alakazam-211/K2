@@ -9,6 +9,18 @@ const h = vi.hoisted(() => ({
   post: new Map<string, (b: Record<string, unknown>) => unknown>(),
   drops: [] as Array<{ paths: string[]; workspacePath?: string }>,
   browserDrops: [] as Array<{ names: string[]; workspacePath?: string }>,
+  saves: [] as Array<{ label: string; opts: Record<string, unknown>; first: unknown }>,
+  saveAnswer: '/Users/me/Downloads/take 3.m4a' as string | null,
+}))
+
+// thread.download (catalog v50): K2's own Thread save, through the real
+// downloadThreadAttachment; only the transfer itself is faked here.
+vi.mock('@/lib/fs-transfer', async (orig) => ({
+  ...(await orig<typeof import('@/lib/fs-transfer')>()),
+  downloadChunks: vi.fn(async (label: string, read: (offset: number, len: number) => Promise<unknown>, opts: Record<string, unknown> = {}) => {
+    h.saves.push({ label, opts, first: await read(0, 4) })
+    return h.saveAnswer
+  }),
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
@@ -49,6 +61,7 @@ import {
   zenThreadAttachment,
   zenThreadAttachments,
   zenThreadDelta,
+  zenThreadDownload,
   zenThreadLinks,
   zenThreadMarkRead,
   zenThreadOpenTarget,
@@ -112,6 +125,8 @@ beforeEach(() => {
   h.post.clear()
   h.drops.length = 0
   h.browserDrops.length = 0
+  h.saves.length = 0
+  h.saveAnswer = '/Users/me/Downloads/take 3.m4a'
 })
 
 describe('thread.read afterSeq (thread-delta-v1)', () => {
@@ -304,5 +319,69 @@ describe('thread.pickFiles and posts with attachments', () => {
       expect(() => zenThreadAttachments(bad), JSON.stringify(bad)).toThrow(ZenThreadVerbError)
     }
     expect(await code(zenThreadPostAttachments(target(scope([])), 'x', [{ relPath: 'a' }]))).toBe('verb_unavailable')
+  })
+})
+
+describe('thread.download (catalog v50): K2 saves the original, quarantined', () => {
+  const chunk = (p: Record<string, unknown>) => ({ ok: true, base64: 'AAAA', len: 3, size: 120 * 1024 * 1024, eof: false, offset: p.offset, name: 'take 3.m4a', mime: 'audio/mp4' })
+
+  it('probes mode=download, asks authorize with the name and size, then saves with mode=download and quarantine on', async () => {
+    h.get.set('thread/attachment', chunk)
+    const seen: unknown[] = []
+    const r = await zenThreadDownload(target(), 'm4', 2, async (info) => {
+      seen.push(info)
+      return true
+    })
+    expect(r).toEqual({ saved: true, name: 'take 3.m4a' })
+    expect(seen).toEqual([{ name: 'take 3.m4a', size: 120 * 1024 * 1024, mime: 'audio/mp4' }])
+    // The probe, then the save's own reads: every one is mode=download on the Thread door.
+    expect(h.calls.map((c) => [c.route, c.data.mode, c.data.addr, c.data.id, c.data.n])).toEqual([
+      ['thread/attachment', 'download', 'scout/chat', 'm4', 2],
+      ['thread/attachment', 'download', 'scout/chat', 'm4', 2],
+    ])
+    expect(h.saves).toHaveLength(1)
+    expect(h.saves[0].label).toBe('take 3.m4a')
+    expect(h.saves[0].opts).toEqual({ quarantine: true })
+  })
+
+  it('a No from authorize saves nothing; a cancelled transfer is {saved: false}', async () => {
+    h.get.set('thread/attachment', chunk)
+    expect(await zenThreadDownload(target(), 'm4', 0, async () => false)).toEqual({ saved: false })
+    expect(h.saves).toEqual([])
+    h.saveAnswer = null
+    expect(await zenThreadDownload(target(), 'm4', 0, async () => true)).toEqual({ saved: false })
+  })
+
+  it('the server’s refusals are named before anything is saved or asked', async () => {
+    const cases: Array<[DaemonHttpError, string]> = [
+      [new DaemonHttpError('notes.env now looks like a secret', 403, 'attachment_secret'), 'attachment_secret'],
+      [new DaemonHttpError('needs files:download', 403, 'cap_not_granted'), 'not_granted'],
+      [new DaemonHttpError('no such attachment', 404, 'not_found'), 'not_found'],
+      [new DaemonHttpError('gone', 410, 'gone'), 'not_found'],
+      [new DaemonHttpError('boom', 500, 'io'), 'failed'],
+    ]
+    for (const [err, want] of cases) {
+      h.get.set('thread/attachment', () => {
+        throw err
+      })
+      let asked = false
+      const got = await code(
+        zenThreadDownload(target(), 'm4', 0, async () => {
+          asked = true
+          return true
+        }),
+      )
+      expect(got, err.code ?? '').toBe(want)
+      expect(asked).toBe(false)
+    }
+    expect(h.saves).toEqual([])
+  })
+
+  it('bad args and an older server never ask', async () => {
+    const yes = async () => true
+    expect(await code(zenThreadDownload(target(), '', 0, yes))).toBe('bad_args')
+    expect(await code(zenThreadDownload(target(), 'm4', -1, yes))).toBe('bad_args')
+    expect(await code(zenThreadDownload(target(scope(['thread-attachments-v1'])), 'm4', 0, yes))).toBe('verb_unavailable')
+    expect(h.calls).toEqual([])
   })
 })

@@ -101,7 +101,7 @@ parking_lot = "0.12"
 # `keyring-store` feature off: its Linux Secret Service backend can't build beside
 # K2's `sync-secret-service`, and K2 passes its own store over its own keyring.
 # zeroize: the device key K2's store handles.
-tauri-plugin-sew-voice = { version = "=0.3.0", optional = true }
+tauri-plugin-sew-voice = { version = "=0.4.0", optional = true }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

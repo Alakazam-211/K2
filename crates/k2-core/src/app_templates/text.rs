@@ -248,17 +248,24 @@ macOS, WebView2 on Windows. `k2 app init --template tauri --voice` wrote:
 
 ### Wire it (once)
 
-In `src-tauri/src/lib.rs` (Tauri 2.12 or newer: `cargo update -p tauri`):
+Where your code calls `tauri::Builder::default()`, usually `run()` in
+`src-tauri/src/lib.rs` (Tauri 2.12 or newer: `cargo update -p tauri`):
 
 ```rust
-mod k2_voice;
+mod k2_voice; // top of that file
 
 tauri::Builder::default()
     .on_permission_request(k2_voice::on_permission_request)
+    // ...your other .plugin() and .setup() calls, then .run(...)
 ```
 
-Add each custom domain the window loads to `k2_voice::APP_ORIGINS`. A window
-built in Rust goes through `k2_voice::voice_window(builder)`.
+Add each custom domain the window loads to `k2_voice::APP_ORIGINS`, as
+`"https://app.example.com"`. A window built in Rust goes through
+`k2_voice::voice_window(builder)` for the two window settings.
+
+If the mic fails: no `navigator.mediaDevices` means Info.plist lacks the
+keys; `NotAllowedError` means the page's origin isn't in `APP_ORIGINS`, or
+macOS said no (System Settings > Privacy & Security > Microphone).
 
 ### Your page's CSP
 

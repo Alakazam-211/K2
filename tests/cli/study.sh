@@ -781,8 +781,8 @@ tv_out="$("$K2" study tauri-voice)"
 assert_contains "title" "$tv_out" "k2 study tauri-voice — calls inside a Tauri app's window"
 for needle in "@sew/voice" "tauri-plugin-sew-voice" "remote.urls" "ipc: http://ipc.localhost" "NSMicrophoneUsageDescription" \
     "com.apple.security.device.audio-input" "backgroundThrottling" "additionalBrowserArgs" \
-    ".on_permission_request(k2_voice::on_permission_request)" "k2_voice::APP_ORIGINS" "'wasm-unsafe-eval'" \
-    "Let" "WHAT K2 HAS TESTED" "compiles; never run" "not tested" "K2_CHECK_MIC=1" "tccutil reset Microphone"; do
+    ".on_permission_request(k2_voice::on_permission_request)" "k2_voice::APP_ORIGINS" "k2_voice::voice_window(builder)" "NotAllowedError" "'wasm-unsafe-eval'" \
+    "Let" "WHAT K2 HAS TESTED" "compiles (cargo check); never run" "not tested" "K2_CHECK_MIC=1" "tccutil reset Microphone"; do
     assert_contains "tauri-voice: $needle" "$tv_out" "$needle"
 done
 tv_lines="$(printf '%s\n' "$tv_out" | wc -l | tr -d ' ')"

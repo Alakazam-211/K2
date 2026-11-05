@@ -11501,15 +11501,19 @@ recording event: the recording's id and consent_prompt.notice_version;
 the native engine's sew-voice://recording event). The CLI is in no call
 and sees no notice: k2 voice consent is for voice clients and tests.
   k2 voice consent <recording-id> yes --notice <version>   records you
-  k2 voice consent <recording-id> no     declines, or withdraws a yes
+  k2 voice consent <recording-id> no [--notice <version>]
+                                         declines, or withdraws a yes
 Answer again while the recording runs; the last answer counts.
-HTTP (the app, a paired phone): POST /cli/voice/recording/consent with
-the same bearer token the client joined with (a login session, or the
-phone's paired session), body {"recording_id": "77", "consent": true,
-"notice_version": 2}: recording_id a string of digits, consent true or
-false (JSON, not "yes"), notice_version a whole number, required for
-true, optional for false. Any other key is 400 usage. 200 answers {ok,
-recordingId, consent, recording: Sew's recording}. Refusals use K2's
+HTTP (the app, a paired phone): to the same server, with the same
+Authorization: Bearer <token>, as the client's POST /cli/voice/join (a
+login session, or the phone's paired session):
+  POST /cli/voice/recording/consent
+  {"recording_id": "77", "consent": true, "notice_version": 2}
+recording_id is Sew's id as given (a string of digits; a number works
+too), consent is JSON true or false (not "yes"), notice_version a whole
+number, required for true, optional for false. Any other key is 400
+usage. 200 answers {ok, recordingId, consent, recording: Sew's recording
+as is} (K2's own keys are camelCase). Refusals use K2's
 shape {"ok": false, "error": {code, hint, details}}: 400 usage · 403
 owner_token_cannot_join / agents_not_in_voice (never an agent or the bare
 owner token) · 403 device_session_ended (pair the phone again) · 404

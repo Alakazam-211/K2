@@ -68157,13 +68157,19 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
                                             voice.<box>): re-runs sew media install --reconfigure, restarts sew
   k2 hostchat media status [--json]
   k2 hostchat media renew                   renew the TURN certificate now
-  k2 hostchat media rebind [--json]         voice through the tunnel only: close the voice engine's IPv6
-                                            listeners (sew media install --reconfigure --restart, then
-                                            sew doctor's media.tunnel_bind must be ok). A box set up before
-                                            Sew 0.7.4 listens on every IPv6 address until this runs;
-                                            k2 hostchat upgrade runs it itself. Needs Sew 0.7.4 or later
-                                            (else: k2 hostchat upgrade). Restarts sew-media (calls in
-                                            progress drop). Does nothing on the direct tier.
+  k2 hostchat media rebind [--json]         voice through the tunnel only: stop the voice engine listening
+                                            on the box's IPv6 addresses (IPv4 stays on 127.0.0.1, as the
+                                            tunnel set it). Runs sew media install --reconfigure --restart,
+                                            then checks sew doctor's media.tunnel_bind: it fails unless that
+                                            check is ok, and the answer shows it (tunnelBind). Upgrading Sew
+                                            alone doesn't fix a box set up before Sew 0.7.4, but on a tunnel
+                                            box k2 hostchat upgrade runs this step itself (step tunnel-bind),
+                                            so after an upgrade you don't need it. Use it when that step
+                                            failed, or on a box already on Sew 0.7.4 or later. On an older
+                                            Sew it is refused (sew_upgrade_needed) before anything changes:
+                                            run k2 hostchat upgrade. Restarts sew-media once (calls in
+                                            progress drop: tell the owner first). On the direct tier it
+                                            changes nothing and exits 0 (changed: false).
   k2 hostchat media tier tunnel|direct [--json]
                                             (preview: k2 settings set voiceTunnelPreview true, or
                                             K2_VOICE_TUNNEL=1; direct also works with it off) tunnel: all voice through K2 Connect, at

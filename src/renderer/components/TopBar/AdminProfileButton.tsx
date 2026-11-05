@@ -55,6 +55,7 @@ import { OWNER_ACCOUNT_TAG, useOwnerAccounts } from '@/components/Settings/secti
 import { PersonNameInput, usePersonName } from '@/components/Presence/PersonNameFields'
 import { realName } from '@/lib/person-name'
 import { SettingRow } from '@/components/Settings/controls/SettingControls'
+import { settingMenuOpen } from '@/components/Settings/settings-esc'
 import { COLOR_NEEDS_NEWER_SERVER, PersonColorPicker } from '@/components/Presence/PersonColorPicker'
 import type { PersonColorView } from '@/components/Presence/person-color-api'
 import { PresenceChip, type PresenceRole } from '@/components/Presence/PresenceChip'
@@ -610,6 +611,8 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
+        // An open K2 menu (Your account, Pairs as) closes first; the dialog stays.
+        if (settingMenuOpen()) return
         e.preventDefault()
         e.stopPropagation()
         onClose()

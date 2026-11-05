@@ -29,6 +29,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderSVG } from 'uqr'
 import type { ServerScope } from '@/kessel/server-scope'
 import { onPairCodeChanged } from '@/stores/session-events'
+import { SettingDropdown } from '../controls/SettingControls'
 import {
   fetchPairCodeStatus,
   fetchPairedPhones,
@@ -312,23 +313,19 @@ export function PhonePairing({
       {pairAs && !code && !outcome && (
         <div className="space-y-2" data-pair-as="">
           {choices ? (
-            <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
+            <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
               Pairs as
-              <select
-                aria-label="Pairs as"
-                className="bg-transparent border border-[var(--color-border)] px-2 py-1 text-[11px] no-drag cursor-pointer"
+              <SettingDropdown
+                compact
+                menuAlign="left"
+                className="min-w-0 max-w-[260px]"
+                ariaLabel="Pairs as"
+                placeholder={pairAs.user ? undefined : 'Choose a login…'}
                 value={target}
-                onChange={(e) => setPicked(e.target.value)}
-              >
-                {!pairAs.user && <option value="">Choose a login…</option>}
-                {choices.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                    {c === pairAs.user ? ' (your linked login)' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={choices.map((c) => ({ value: c, label: c === pairAs.user ? `${c} (your linked login)` : c }))}
+                onChange={setPicked}
+              />
+            </div>
           ) : pairAs.user ? (
             <p className="m-0 text-[11px] text-[var(--color-text-secondary)]">
               A new code pairs as <span className="font-mono">{pairAs.user}</span>.

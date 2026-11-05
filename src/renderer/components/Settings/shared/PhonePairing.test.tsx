@@ -6,6 +6,7 @@
 // 10 minutes, the phones with Revoke, and the daemon's refusal hints.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { menuLabels, menuValues, pickValue, pickedValue } from '@/test-utils/setting-dropdown'
 import type { PairCodeChangedEvent } from '@/stores/session-events'
 
 // 0.46.6 pair success: the panel's `pair_code_changed` subscription,
@@ -123,8 +124,11 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
       throw new Error(`unexpected ${url}`)
     }
     render(<PhonePairing scope={SCOPE} mode="all" nowMs={() => now} />)
-    const select = (await screen.findByLabelText('Pairs as')) as HTMLSelectElement
-    expect(select.value).toBe('rosson')
+    const select = await screen.findByLabelText('Pairs as')
+    // K2's themed menu, not a native select.
+    expect(select.tagName).toBe('BUTTON')
+    expect(pickedValue(select)).toBe('rosson')
+    expect(menuLabels(select)).toEqual(['ada', 'rosson (your linked login)'])
     expect(screen.getByText('rosson (your linked login)')).toBeTruthy()
     expect(screen.queryByLabelText('Your password')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Pair a phone' }))
@@ -150,7 +154,7 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
       return { status: 200, body: { ...CODE, user: 'ada' } }
     }
     render(<PhonePairing scope={SCOPE} mode="all" />)
-    fireEvent.change(await screen.findByLabelText('Pairs as'), { target: { value: 'ada' } })
+    pickValue(await screen.findByLabelText('Pairs as'), 'ada')
     fireEvent.click(screen.getByRole('button', { name: 'Pair a phone' }))
     await waitFor(() => expect(document.querySelector('[data-pair-code]')?.textContent).toContain('Pairs as ada'))
     expect(body(calls.find((c) => c.url.includes('pair-code'))?.init)).toEqual({ user: 'ada' })
@@ -169,6 +173,9 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
     render(<PhonePairing scope={SCOPE} mode="all" />)
     await waitFor(() => expect(document.querySelector('[data-pair-as-missing]')?.textContent).toContain('Your account'))
     expect((screen.getByRole('button', { name: 'Pair a phone' }) as HTMLButtonElement).disabled).toBe(true)
+    // "Choose a login…" is the placeholder, not an option.
+    expect(screen.getByLabelText('Pairs as').textContent).toBe('Choose a login…')
+    expect(menuValues(screen.getByLabelText('Pairs as'))).toEqual(['ada'])
   })
 
   it('lists every phone as text and revokes one', async () => {

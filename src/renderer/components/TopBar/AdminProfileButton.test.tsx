@@ -577,6 +577,12 @@ describe('the Admin profile modal: editing inline (the owner)', () => {
     render(<AdminProfileButton />)
     await openLoaded()
     await waitFor(() => expect(text('admin-profile-name')).toBe('Rosson Long'))
+    // Esc with the menu open closes the menu only; the profile stays.
+    act(() => void fireEvent.click(screen.getByLabelText('Your account')))
+    await screen.findByTestId('setting-dropdown-menu')
+    act(() => void fireEvent.keyDown(window, { key: 'Escape' }))
+    expect(screen.queryByTestId('setting-dropdown-menu')).toBeNull()
+    expect(screen.getByTestId('admin-profile-dialog')).toBeTruthy()
     await pickAccount('julie')
     await waitFor(() => expect(h.posts).toEqual([{ route: 'owner/accounts', body: { accounts: ['julie'] } }]))
     // The names are re-read for the new account; with none, the username shows.

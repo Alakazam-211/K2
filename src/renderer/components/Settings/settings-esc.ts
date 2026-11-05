@@ -17,6 +17,14 @@ export function escOwnedByDialog(e: Pick<KeyboardEvent, 'defaultPrevented'>, doc
   return e.defaultPrevented || doc.querySelector('[aria-modal="true"]') !== null
 }
 
+/** True while a SettingDropdown menu is open (it portals to <body> with
+ *  `data-setting-dropdown-menu`). A dialog whose Esc listener runs in the
+ *  capture phase checks this first: it registered before the menu's, so it
+ *  would otherwise close the whole dialog instead of just the menu. */
+export function settingMenuOpen(doc: Document = document): boolean {
+  return doc.querySelector('[data-setting-dropdown-menu]') !== null
+}
+
 /** For a dialog's own window listener: claim the Escape, then close. */
 export function claimEscape(e: KeyboardEvent): boolean {
   if (e.key !== 'Escape') return false

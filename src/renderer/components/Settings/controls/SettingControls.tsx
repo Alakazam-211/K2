@@ -338,6 +338,8 @@ export function SettingDropdown({
               <button
                 type="button"
                 disabled={isDisabled}
+                data-value={option.value}
+                data-selected={isActive ? '' : undefined}
                 onClick={() => {
                   if (disabled || isDisabled) return
                   onChange(option.value)

@@ -12,4 +12,8 @@ sew-mls-crypto (MIT OR Apache-2.0), which holds code derived from openmls_rust_c
 OpenMLS, MIT) and carries OpenMLS's MIT licence text. A binary that includes sew-call-client
 includes all three and must carry their NOTICE files.
 
+The `rust-crypto` feature's DTLS/SRTP provider (src/rust_crypto.rs) follows the str0m-rust-crypto
+crate of str0m (https://github.com/algesten/str0m, Copyright Martin Algesten, MIT OR
+Apache-2.0).
+
 Not affiliated with or endorsed by LiveKit, Inc.

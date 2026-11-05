@@ -28,6 +28,7 @@ import {
   joinErrorText,
   micBlockedText,
   nativeJoinErrorCode,
+  recordingStartedText,
   type VoiceJoinAnswer,
   type VoiceErrorCode,
   type VoiceRoom,
@@ -44,6 +45,7 @@ import {
   type NativeEvents,
   type NativeLevel,
   type NativeParticipant,
+  type NativeRecording,
   type NativeVoiceEngine,
 } from '@/lib/voice/native-voice-engine'
 import type { VoiceDevices } from '@/lib/voice/voice-engine'
@@ -214,6 +216,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   /** The engine's own list and levels; `participants` is drawn from them. */
   let nativePeople: NativeParticipant[] = []
   let nativeSpeaking = new Set<string>()
+  /** The recording this window already told the person about. */
+  let toldRecording: string | null = null
   /** Bumped per join/leave so a stale async step never touches a newer call. */
   let callGen = 0
   /** Lists in a row that didn't show this login in its room. */
@@ -408,6 +412,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const clearNativeCall = (): void => {
     nativePeople = []
     nativeSpeaking = new Set()
+    toldRecording = null
     store.setState({ devices: null })
   }
 
@@ -533,6 +538,15 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       void refreshRooms(c.hostKey)
       return
     }
+    if (s.state === 'consent_required') {
+      // A join held for the recording notice (plugin 0.2.0+). The K2 app has
+      // no consent sheet yet, and no answer is never a yes: give it up. This
+      // window's own join says why itself (joinNative).
+      if (nativeJoining) return
+      const held = store.getState().call
+      if (held) void endCall(callGen, 'recording_consent_required', { tellServer: true, toast: true })
+      return
+    }
     const c = store.getState().call
     if (!c) {
       void adoptNativeCall().catch((err: unknown) => console.warn('[voice] reading the live call failed:', err))
@@ -586,8 +600,18 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     else console.warn(`[voice] engine says: ${code}`)
   }
 
+  /** A recording in this person's call (plugin 0.2.0+). They stay unrecorded
+   *  (`pending`): the K2 app can't answer the notice yet. Say so once. */
+  const onNativeRecording = (r: NativeRecording | null): void => {
+    const c = store.getState().call
+    if (!r || !c || r.myConsent !== 'pending' || toldRecording === r.recordingId) return
+    toldRecording = r.recordingId
+    notice(recordingStartedText(c.roomName), 'info')
+  }
+
   const nativeEvents: NativeEvents = {
     onState: onNativeState,
+    onRecording: onNativeRecording,
     onParticipants: onNativeParticipants,
     onSpeaking: onNativeSpeaking,
     onDevices: (d: NativeDevices) => {
@@ -712,6 +736,15 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         store.setState({ call: null })
         callGen += 1
         clearNativeCall()
+        void refreshRooms(hostKey)
+        return
+      }
+      if (phase === 'consent_required') {
+        // Held for the recording notice: no answer is never a yes, and the K2
+        // app can't send one yet. Give the join up and say why.
+        failJoin(gen, 'recorded_room', room, label)
+        clearNativeCall()
+        await n.leave().catch((err: unknown) => console.warn('[voice] leave failed:', err))
         void refreshRooms(hostKey)
         return
       }

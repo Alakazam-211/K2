@@ -10,6 +10,7 @@ import {
   parseDevices,
   parseEngineError,
   parseParticipants,
+  parseRecording,
   parseSpeaking,
   type NativeEvents,
   type NativeVoiceBridge,
@@ -54,6 +55,7 @@ function events(): NativeEvents & { log: unknown[] } {
     onSpeaking: (l) => log.push(['speaking', l]),
     onDevices: (d) => log.push(['devices', d]),
     onError: (c, d) => log.push(['error', c, d]),
+    onRecording: (r) => log.push(['recording', r]),
   }
 }
 
@@ -69,6 +71,13 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
     expect(parseCallState(contract.states.connected)).toEqual({ state: 'connected' })
     expect(parseCallState(contract.states.reconnecting)).toEqual({ state: 'reconnecting', attempt: 3 })
     expect(parseCallState(contract.states.ended)).toEqual({ state: 'ended', reason: 'channel_archived' })
+    expect(parseCallState(contract.states.consent_required)).toEqual({ state: 'consent_required', recordingId: '77', noticeVersion: 3141 })
+  })
+
+  it('reads the recording event, and null once none is active', () => {
+    expect(parseRecording(contract.recording.pending)).toEqual({ recordingId: '77', myConsent: 'pending', recorderPresent: true })
+    expect(parseRecording(contract.recording.granted)).toEqual({ recordingId: '77', myConsent: 'granted', recorderPresent: true })
+    expect(parseRecording(contract.recording.stopped)).toBeNull()
   })
 
   it('reads participants (no names), speaking, devices and errors', () => {
@@ -131,6 +140,21 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
 describe("Sew's 0.7.2 additions", () => {
   const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
 
+  it("reads Sew 0.7.3's held join and its recording payloads", () => {
+    expect(parseCallState(sew.recording.held.state)).toEqual({
+      state: 'consent_required',
+      recordingId: '48831765147549720',
+      noticeVersion: 3141,
+      target: 'k2:acme',
+      room: '48831765147549698',
+    })
+    expect(parseCallState(sew.state_snapshot.consent_required)).toMatchObject({ state: 'consent_required', noticeVersion: 3141 })
+    expect(parseRecording(sew.recording.held.recording)).toEqual({ recordingId: '48831765147549720', myConsent: 'pending', recorderPresent: false })
+    expect(parseRecording(sew.recording.granted)?.myConsent).toBe('granted')
+    expect(parseRecording(sew.recording.withdrawn)?.myConsent).toBe('withdrawn')
+    expect(parseRecording(sew.recording.stopped)).toBeNull()
+  })
+
   it('reads target and room on a state, and a move', () => {
     expect(parseCallState(sew.moved.payload)).toEqual({ state: 'connected', target: 'k2:acme', room: '48831765147549710' })
     expect(parseCallState(sew.ended.sew_reasons[0].payload)).toEqual({ state: 'ended', reason: 'perms_lost', target: 'k2:acme', room: '48831765147549698' })
@@ -138,7 +162,7 @@ describe("Sew's 0.7.2 additions", () => {
 })
 
 describe('events', () => {
-  it('listens to the five events and stops on stop()', async () => {
+  it('listens to every event and stops on stop()', async () => {
     const f = fakeBridge()
     const e = new NativeVoiceEngine(f.bridge)
     const ev = events()
@@ -149,16 +173,19 @@ describe('events', () => {
     f.fire('sew-voice://speaking', contract.speaking)
     f.fire('sew-voice://devices', contract.devices)
     f.fire('sew-voice://errors', contract.errors.device_lost)
-    expect(ev.log.map((x) => (x as unknown[])[0])).toEqual(['state', 'participants', 'speaking', 'devices', 'error'])
+    f.fire('sew-voice://recording', contract.recording.granted)
+    expect(ev.log.map((x) => (x as unknown[])[0])).toEqual(['state', 'participants', 'speaking', 'devices', 'error', 'recording'])
     e.stop()
     f.fire('sew-voice://state', contract.states.idle)
-    expect(ev.log).toHaveLength(5)
+    expect(ev.log).toHaveLength(6)
   })
 
   it('a payload outside the contract throws, it is never guessed at', () => {
     expect(() => parseCallState({ state: 'ringing' })).toThrow(/unexpected state/)
     expect(() => parseCallState({ state: 'ended' })).toThrow(/unexpected state/)
     expect(() => parseCallState({ state: 'reconnecting' })).toThrow(/unexpected state/)
+    expect(() => parseCallState({ state: 'consent_required', recording_id: '77' })).toThrow(/unexpected state/)
+    expect(() => parseRecording({ recording_id: '77' })).toThrow(/recording/)
     expect(() => parseParticipants({})).toThrow(/participants/)
     expect(() => parseParticipants([{ is_self: true }])).toThrow(/participant/)
     expect(() => parseSpeaking([{ member_id: '1' }])).toThrow(/speaking/)

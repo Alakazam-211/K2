@@ -496,15 +496,20 @@ describe('live access: how a call ends', () => {
     kicked: 'You were removed from Standup.',
     room_closed: 'Standup closed.',
     credential_lost: 'The call to Standup ended: you were signed out, or joined from another device.',
+    credential_expired: 'The call to Standup ended: your sign-in to sewlab expired. Join again to continue.',
+    recording_declined: "You left Standup: it's recorded, and you said no to being recorded.",
+    recording_withdrawn: 'You left Standup: you stopped being recorded, and this room needs everyone recorded.',
+    recording_consent_timeout: "You left Standup: it's recorded, and no answer to the recording notice came in time.",
   }
+  const ends = [...sewContract.ended.sew_reasons, ...sewContract.ended.fallbacks, ...sewContract.ended.recording_reasons]
 
   it("has a line for every reason in Sew's contract", () => {
-    const named = [...sewContract.ended.sew_reasons, ...sewContract.ended.fallbacks].map((r: { reason: string }) => r.reason).sort()
+    const named = ends.map((r: { reason: string }) => r.reason).sort()
     expect(named).toEqual(Object.keys(lines).sort())
     expect(sewContract.ended.event).toBe('sew-voice://state')
   })
 
-  it.each([...sewContract.ended.sew_reasons, ...sewContract.ended.fallbacks].map((r: { reason: string; payload: unknown }) => [r.reason, r.payload]))('%s ends the call with its line', async (reason, payload) => {
+  it.each(ends.map((r: { reason: string; payload: unknown }) => [r.reason, r.payload]))('%s ends the call with its line', async (reason, payload) => {
     const s = await inCall()
     s.fire('state', payload)
     expect(s.ctl.store.getState().call).toBeNull()
@@ -516,6 +521,59 @@ describe('live access: how a call ends', () => {
     s.fire('state', { state: 'ended', reason: 'some_new_reason' })
     expect(s.ctl.store.getState().call).toBeNull()
     expect(s.ctl.store.getState().notice?.text).toBe('The call to Standup ended.')
+  })
+
+  it("Sew 0.8.0's app_unlinked: the App the call came through was unlinked", async () => {
+    const s = await inCall()
+    s.fire('state', { state: 'ended', reason: 'app_unlinked', target: 'host-1', room: 'room-1' })
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: 'The call to Standup ended: the App you joined it from was unlinked from it.', kind: 'error' })
+  })
+})
+
+describe('recording consent (plugin 0.2.0+; the K2 app has no consent sheet yet)', () => {
+  const held = sewContract.recording.held
+
+  it('a join held for the notice is given up, with its line, and never answered', async () => {
+    const s = setup({ plugin: { joinResult: { call_id: '' }, state: sewContract.state_snapshot.consent_required } })
+    await s.ctl.join(SEW, room1)
+    await settle()
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice).toMatchObject({
+      text: "Standup is being recorded. The K2 app can't answer recording notices yet, so you weren't joined.",
+      kind: 'error',
+    })
+    const sent = s.calls.map(([c]) => c)
+    expect(sent).toContain(`${P}leave`)
+    expect(sent).not.toContain(`${P}consent`)
+  })
+
+  it("the server's own refusal of a recorded room gets the same words", async () => {
+    const sew = { code: 'conflict', hint: 'answer the recording notice', details: { reason: 'recording_consent_required' } }
+    const s = setup({ plugin: { joinError: { code: 'conflict', detail: { hint: 'answer the recording notice', details: { sew } } } } })
+    await s.ctl.join(SEW, room1)
+    expect(s.ctl.store.getState().notice?.text).toBe("Standup is being recorded. The K2 app can't answer recording notices yet, so you weren't joined.")
+  })
+
+  it('a call that becomes held (a re-join after the notice changed) ends, and leaves', async () => {
+    const s = await inCall()
+    s.fire('state', held.state)
+    await settle()
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice?.text).toBe("The call to Standup ended: it's now recorded, and the K2 app can't answer recording notices yet.")
+    expect(s.calls.map(([c]) => c)).toContain(`${P}leave`)
+  })
+
+  it('a recording started mid-call: the call stays, one info line, unrecorded', async () => {
+    const s = await inCall()
+    s.fire('recording', held.recording)
+    s.fire('recording', held.recording)
+    expect(s.ctl.store.getState().call?.phase).toBe('connected')
+    expect(s.toasts.filter((t) => t.includes('started recording'))).toEqual([
+      "Someone started recording Standup. You aren't recorded: the K2 app can't answer recording notices yet.",
+    ])
+    s.fire('recording', sewContract.recording.stopped)
+    expect(s.ctl.store.getState().call?.phase).toBe('connected')
   })
 })
 

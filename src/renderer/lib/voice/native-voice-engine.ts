@@ -38,8 +38,22 @@ export type NativeCallState = NativeCallPlace &
     | { state: 'connecting' }
     | { state: 'connected' }
     | { state: 'reconnecting'; attempt: number }
+    /** Held (plugin 0.2.0+): the room is recorded and Sew lets the join in only
+     *  with the person's answer to its notice. No mic, no media until then. */
+    | { state: 'consent_required'; recordingId: string; noticeVersion: number }
     | { state: 'ended'; reason: string }
   )
+
+/** The `recording` event (plugin 0.2.0+): the call's active recording, or null
+ *  once none is active. Only what K2 reads today. This device is recorded only
+ *  after Sew says `granted`: no answer is never consent. */
+export interface NativeRecording {
+  recordingId: string
+  /** `pending`, `granted`, `declined` or `withdrawn`. */
+  myConsent: string
+  /** The recorder (Sew Notes) is in the call's media now. */
+  recorderPresent: boolean
+}
 
 /** No names here: the media token and call keys carry none (the rooms list does). */
 export interface NativeParticipant {
@@ -85,6 +99,7 @@ export interface NativeEvents {
   onSpeaking(levels: NativeLevel[]): void
   onDevices(devices: NativeDevices): void
   onError(code: string, detail: unknown): void
+  onRecording(recording: NativeRecording | null): void
 }
 
 /** A command's rejection: the plugin's `{code, detail}`. */
@@ -122,11 +137,25 @@ export function parseCallState(v: unknown): NativeCallState {
     case 'reconnecting':
       if (typeof r.attempt === 'number') return { state: 'reconnecting', attempt: r.attempt, ...place }
       break
+    case 'consent_required':
+      if (typeof r.recording_id === 'string' && typeof r.notice_version === 'number') {
+        return { state: 'consent_required', recordingId: r.recording_id, noticeVersion: r.notice_version, ...place }
+      }
+      break
     case 'ended':
       if (typeof r.reason === 'string') return { state: 'ended', reason: r.reason, ...place }
       break
   }
   throw badShape('state', v)
+}
+
+export function parseRecording(v: unknown): NativeRecording | null {
+  if (v === null) return null
+  const r = record(v)
+  if (!r || typeof r.recording_id !== 'string' || typeof r.my_consent !== 'string' || typeof r.recorder_present !== 'boolean') {
+    throw badShape('recording', v)
+  }
+  return { recordingId: r.recording_id, myConsent: r.my_consent, recorderPresent: r.recorder_present }
 }
 
 export function parseParticipants(v: unknown): NativeParticipant[] {
@@ -217,6 +246,7 @@ export class NativeVoiceEngine {
         const e = parseEngineError(p)
         events.onError(e.code, e.detail)
       }),
+      on('recording', (p) => events.onRecording(parseRecording(p))),
     ])
   }
 

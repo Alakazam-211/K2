@@ -221,6 +221,7 @@ export type VoiceErrorCode =
   | 'signin_required'
   | 'join_timeout'
   | 'owner_token_cannot_join'
+  | 'recorded_room'
   | 'unknown'
 
 const CODE_OF: Readonly<Record<string, VoiceErrorCode>> = {
@@ -233,6 +234,10 @@ const CODE_OF: Readonly<Record<string, VoiceErrorCode>> = {
   e2ee_unsupported_client: 'e2ee_unsupported',
   unauthenticated: 'signin_required',
   owner_token_cannot_join: 'owner_token_cannot_join',
+  // Sew 0.7.3: the room is recorded and the join carried no answer to its
+  // notice. The K2 app has no consent sheet yet, so it can't send one.
+  recording_consent_required: 'recorded_room',
+  recording_consent_required_to_join: 'recorded_room',
 }
 
 /** The §4.6 code of a refusal: lane C's `code`, and the `details` beside it.
@@ -308,6 +313,8 @@ export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabe
       return `${serverLabel} didn't answer in time. Try again in a moment.`
     case 'owner_token_cannot_join':
       return `Sign in to ${serverLabel} with your own login to join.`
+    case 'recorded_room':
+      return recordedRoomJoinText(roomName)
     case 'unknown':
       return hint ? `Couldn't join ${roomName} on ${serverLabel}: ${hint}` : `Couldn't join ${roomName} on ${serverLabel}.`
   }
@@ -358,9 +365,34 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
       return `The call to ${roomName} ended: you were signed out, or joined from another device.`
     case 'mic_denied':
       return `The call to ${roomName} ended: K2 lost your microphone. Allow it in your system's privacy settings.`
+    case 'credential_expired':
+      return `The call to ${roomName} ended: your sign-in to ${serverLabel} expired. Join again to continue.`
+    case 'app_unlinked':
+      // Sew 0.8.0 (VoiceLeaveReason::AppUnlinked, code 29): the App the call
+      // was joined through no longer shows this room's Space.
+      return `The call to ${roomName} ended: the App you joined it from was unlinked from it.`
+    case 'recording_declined':
+      return `You left ${roomName}: it's recorded, and you said no to being recorded.`
+    case 'recording_withdrawn':
+      return `You left ${roomName}: you stopped being recorded, and this room needs everyone recorded.`
+    case 'recording_consent_timeout':
+      return `You left ${roomName}: it's recorded, and no answer to the recording notice came in time.`
+    case 'recording_consent_required':
+      return `The call to ${roomName} ended: it's now recorded, and the K2 app can't answer recording notices yet.`
     default:
       return `The call to ${roomName} ended.`
   }
+}
+
+/** A join into a recorded room. Sew asks each person first, and no answer is
+ *  never a yes; the K2 app can't answer the notice yet. */
+export function recordedRoomJoinText(roomName: string): string {
+  return `${roomName} is being recorded. The K2 app can't answer recording notices yet, so you weren't joined.`
+}
+
+/** A recording started in this person's call. They stay in it, unrecorded. */
+export function recordingStartedText(roomName: string): string {
+  return `Someone started recording ${roomName}. You aren't recorded: the K2 app can't answer recording notices yet.`
 }
 
 /** The system refused the mic: the person stays in the call and can listen. */

@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri_plugin_sew_voice::fake::{FakeEngine, RecordingSink};
-use tauri_plugin_sew_voice::wire::{EVENT_NAMES, EVENT_PREFIX};
+use tauri_plugin_sew_voice::wire::{consent, RecordingInfo, EVENT_NAMES, EVENT_PREFIX};
 use tauri_plugin_sew_voice::{
     CallEvent, CallState, DeviceList, EngineError, ErrorInfo, JoinArgs, JoinProvider, JoinRequest, JoinResult, MuteArgs, Participant, ProviderError, RejoinReason,
     SetDeviceArgs, Spawn, Speaking, StateEvent, StateSnapshot, VoiceService, COMMANDS, DEFAULT_DEVICE, PLUGIN_NAME,
@@ -94,6 +94,15 @@ fn the_renderers_contract_file_matches_the_plugin() {
     assert_eq!(exact::<StateSnapshot>(&f["snapshots"]["live"]).call_id.as_deref(), Some("r_x"));
     assert_eq!(exact::<StateSnapshot>(&f["snapshots"]["idle"]).call_id, None);
     assert_eq!(f["rejoinReasons"], json!([RejoinReason::AdmitLost, RejoinReason::CredentialExpired]));
+    assert_eq!(
+        exact::<CallState>(&f["states"]["consent_required"]),
+        CallState::ConsentRequired { recording_id: "77".into(), notice_version: 3141 }
+    );
+    assert_eq!(exact::<RecordingInfo>(&f["recording"]["pending"]).my_consent, consent::PENDING);
+    let granted: RecordingInfo = exact(&f["recording"]["granted"]);
+    assert!(granted.recorder_present && granted.participants[0].recorded);
+    assert_eq!(granted.my_consent, consent::GRANTED);
+    assert_eq!(exact::<Option<RecordingInfo>>(&f["recording"]["stopped"]), None);
 }
 
 /// Sew's own contract file: the renderer's copy is byte for byte the one at the
@@ -104,7 +113,7 @@ fn sews_contract_matches_the_plugin_and_the_renderers_copy() {
     let copy = std::fs::read(repo_root().join("src/renderer/lib/voice/sew-native-voice-contract.json")).expect("the renderer's copy");
     assert_eq!(copy, pinned, "the renderer's copy of Sew's contract is stale");
     let f: Value = serde_json::from_slice(&pinned).expect("JSON");
-    for group in ["sew_reasons", "fallbacks"] {
+    for group in ["sew_reasons", "fallbacks", "recording_reasons"] {
         for r in f["ended"][group].as_array().expect(group) {
             let want = CallState::Ended { reason: r["reason"].as_str().expect("reason").into() };
             assert_eq!(exact::<StateEvent>(&r["payload"]).state, want);
@@ -122,6 +131,19 @@ fn sews_contract_matches_the_plugin_and_the_renderers_copy() {
     assert!(denied[0].speak_denied && denied[0].muted && !denied[0].server_muted);
     assert_eq!(exact::<StateSnapshot>(&f["state_snapshot"]["speak_denied"]).participants.len(), 1);
     assert_eq!(exact::<StateSnapshot>(&f["state_snapshot"]["moved"]).room.as_deref(), Some("48831765147549710"));
+    // Recording consent (Sew 0.7.3): a held join, its notice, and the call's recording.
+    let held = exact::<StateSnapshot>(&f["state_snapshot"]["consent_required"]);
+    assert!(matches!(held.state, CallState::ConsentRequired { notice_version: 3141, .. }), "{:?}", held.state);
+    assert_eq!(held.call_id, None);
+    let held_state = exact::<StateEvent>(&f["recording"]["held"]["state"]);
+    assert!(matches!(held_state.state, CallState::ConsentRequired { .. }), "{:?}", held_state.state);
+    let notice: RecordingInfo = exact(&f["recording"]["held"]["recording"]);
+    assert_eq!(notice.my_consent, consent::PENDING);
+    assert!(notice.consent_prompt.is_some());
+    for name in ["granted", "withdrawn"] {
+        let _: RecordingInfo = exact(&f["recording"][name]);
+    }
+    assert_eq!(exact::<Option<RecordingInfo>>(&f["recording"]["stopped"]), None);
 }
 
 /// Lane C's `POST /cli/voice/join` answer around Sew's `VoiceJoinResponse`.
@@ -232,7 +254,7 @@ fn a_refusal_that_quotes_a_token_loses_its_detail() {
 
 #[test]
 fn the_join_body_asks_for_the_credential_and_sends_no_e2ee() {
-    let req = |muted, deafened, rejoin| JoinRequest { target: "h".into(), room: "room-2".into(), muted, deafened, rejoin };
+    let req = |muted, deafened, rejoin| JoinRequest { target: "h".into(), room: "room-2".into(), muted, deafened, rejoin, recording_notice: None };
     assert_eq!(join_body(&req(false, false, None)), json!({"room": "room-2", "join": {"call_credential": true, "self_mute": false, "self_deaf": false}}));
     assert_eq!(join_body(&req(false, true, None)), json!({"room": "room-2", "join": {"call_credential": true, "self_mute": true, "self_deaf": true}}));
     for r in [RejoinReason::AdmitLost, RejoinReason::CredentialExpired] {
@@ -309,7 +331,7 @@ fn provider_for(base: &str) -> K2Provider<Table> {
 }
 
 fn request(rejoin: Option<RejoinReason>) -> JoinRequest {
-    JoinRequest { target: "host-1".into(), room: "room-1".into(), muted: true, deafened: false, rejoin }
+    JoinRequest { target: "host-1".into(), room: "room-1".into(), muted: true, deafened: false, rejoin, recording_notice: None }
 }
 
 #[tokio::test]
@@ -408,7 +430,7 @@ async fn until(what: &str, mut pred: impl FnMut() -> bool) {
 
 /// What every event carried, as one string: no token may be in it.
 fn all_events(sink: &RecordingSink) -> String {
-    ["state", "participants", "speaking", "errors", "devices"].iter().map(|e| format!("{:?}", sink.of(e))).collect()
+    EVENT_NAMES.iter().map(|e| format!("{:?}", sink.of(e))).collect()
 }
 
 #[tokio::test]

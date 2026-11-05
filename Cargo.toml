@@ -118,16 +118,17 @@ vte = { path = "third_party/vte" }
 sew-proto = { path = "third_party/sew-proto" }
 # Native voice (src-tauri's `native-voice` feature, prd-k2-voice-rooms-v1 §14).
 # THE ONE PLACE that says where Sew's crates come from: Sew's public mirror, pinned
-# by commit (Sew release 0.7.2; the mirror has no tags). K2 names them by version,
+# by commit (Sew release 0.7.4: sew-proto 0.7.4, sew-call-client and
+# tauri-plugin-sew-voice 0.3.0; the mirror has no tags). K2 names them by version,
 # so moving to crates.io later only removes these rows. sew-proto here is 0.7, beside
 # the 0.3 above that sew-client uses, hence the rename.
-sew-proto-native = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cefc646a6c9477e753c779403b4d8b1f94c67d08", package = "sew-proto" }
-sew-lkproto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cefc646a6c9477e753c779403b4d8b1f94c67d08" }
-sew-mls-crypto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cefc646a6c9477e753c779403b4d8b1f94c67d08" }
-sew-e2ee = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cefc646a6c9477e753c779403b4d8b1f94c67d08" }
-sew-lk-compat = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cefc646a6c9477e753c779403b4d8b1f94c67d08" }
-sew-call-client = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cefc646a6c9477e753c779403b4d8b1f94c67d08" }
-tauri-plugin-sew-voice = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cefc646a6c9477e753c779403b4d8b1f94c67d08" }
+sew-proto-native = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cc20c171e929222facf36ba9793a4de2fde7cd50", package = "sew-proto" }
+sew-lkproto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cc20c171e929222facf36ba9793a4de2fde7cd50" }
+sew-mls-crypto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cc20c171e929222facf36ba9793a4de2fde7cd50" }
+sew-e2ee = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cc20c171e929222facf36ba9793a4de2fde7cd50" }
+sew-lk-compat = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cc20c171e929222facf36ba9793a4de2fde7cd50" }
+sew-call-client = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cc20c171e929222facf36ba9793a4de2fde7cd50" }
+tauri-plugin-sew-voice = { git = "https://github.com/Alakazam-211/sew-crates", rev = "cc20c171e929222facf36ba9793a4de2fde7cd50" }
 # A [patch] applies only from the workspace root: the mirror's fork rows, copied.
 str0m = { git = "https://github.com/Alakazam-211/str0m", rev = "f80c8fa09323778b181923a840a9fd36e1c8d951" }
 str0m-proto = { git = "https://github.com/Alakazam-211/str0m", rev = "f80c8fa09323778b181923a840a9fd36e1c8d951" }

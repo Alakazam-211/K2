@@ -2,13 +2,14 @@
   "_": "The JSON of tauri-plugin-sew-voice's commands, answers and events (Sew's tests/contract.rs, J4). src-tauri's native_voice::tests holds this file to the plugin's real types; native-voice-engine.test.ts holds the TS adapter to this file.",
   "plugin": "sew-voice",
   "eventPrefix": "sew-voice://",
-  "events": ["state", "participants", "speaking", "errors", "devices"],
-  "commands": ["join", "leave", "mute", "devices", "set_device", "state"],
+  "events": ["state", "participants", "speaking", "errors", "devices", "recording"],
+  "commands": ["join", "leave", "mute", "devices", "set_device", "state", "consent", "withdraw_consent"],
   "states": {
     "idle": { "state": "idle" },
     "connecting": { "state": "connecting" },
     "connected": { "state": "connected" },
     "reconnecting": { "state": "reconnecting", "attempt": 3 },
+    "consent_required": { "state": "consent_required", "recording_id": "77", "notice_version": 3141 },
     "ended": { "state": "ended", "reason": "channel_archived" }
   },
   "participants": [
@@ -35,5 +36,17 @@
     "live": { "state": "reconnecting", "attempt": 1, "participants": [], "call_id": "r_x" },
     "idle": { "state": "idle", "participants": [], "call_id": null }
   },
-  "rejoinReasons": ["admit_lost", "credential_expired"]
+  "rejoinReasons": ["admit_lost", "credential_expired"],
+  "recording": {
+    "pending": { "recording_id": "77", "auto": false, "my_consent": "pending", "participants": [], "recorder_present": true },
+    "granted": {
+      "recording_id": "77",
+      "auto": false,
+      "started_by": "7",
+      "my_consent": "granted",
+      "participants": [{ "member_id": "48831765147549699", "consent": "granted", "recorded": true }],
+      "recorder_present": true
+    },
+    "stopped": null
+  }
 }

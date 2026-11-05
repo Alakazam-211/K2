@@ -397,7 +397,8 @@ fn policy_narrowing_goes_at_once_and_widening_is_held() {
     // Higher: held for the owner, nothing sent.
     let r = call(NODE_POLICY_SET, &agent(&f), json!({"node": f.node_name, "set": {"mem_cap_gb": 10}, "reason": "bigger builds"})).unwrap();
     assert_eq!(r["held"], true);
-    assert_eq!(r["request"]["summary"], format!("change job limits on {}: mem_cap_gb=10", f.node_name));
+    // 0.46.9: from the policy the node last reported (6, narrowed above).
+    assert_eq!(r["request"]["summary"], format!("change job limits on {}: mem_cap_gb 6 → 10", f.node_name));
     assert!(test_seams::take_sent(&f.node).is_empty(), "widening waits for the owner");
 
     // The node counts a change as widening that we didn't: held too.

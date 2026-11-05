@@ -46,7 +46,7 @@ pub(crate) static ADMIN_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Compute approvals",
         what_changes: "{change}",
-        consequences: "Approving runs it on {node} as root, signed with the owner's approval key. It is request {request} in Settings → Compute → Approvals too: whichever you answer first decides it, once. Reason given with the request: {reason}",
+        consequences: "Like every approved node change, it runs on {node} as root, signed with the owner's approval key. This is request {request} in Settings → Compute → Approvals: whichever you answer first decides it, and the other then shows it as decided. The agent's reason when it filed the request: {reason}",
         scope: "node request {request}",
         duration: "once",
         retry: "",

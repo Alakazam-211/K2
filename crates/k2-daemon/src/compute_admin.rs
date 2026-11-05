@@ -891,8 +891,10 @@ fn policy_set(who: &Who, body: &[u8]) -> R<Value> {
     if cols.policy_at.is_none_or(|at| compute::now() - at > POLICY_FRESH_SECS) && node_admin_ready(&node, wire::FEATURE_ADMIN).is_ok() {
         current = refresh_policy(who, &node)?.or(current);
     }
+    // 0.46.9: the held change reads from → to (Settings and the card).
+    let before = current.clone().unwrap_or_default();
     let hold = |why: &str| {
-        let summary = admin::summarize(&node.name, "policy.set", &args);
+        let summary = admin::summarize_policy_change(&node.name, &changes, &before);
         let body_v = json!({"verb": "policy.set", "args": args});
         let reason = s(&v, "reason").map(str::to_string).or_else(|| (!why.is_empty()).then(|| why.to_string()));
         file_request(&op, &node, "command", Class::Privileged, &body_v, &summary, reason.as_deref())

@@ -937,6 +937,27 @@ pub fn summarize_limits_change(node: &str, server: &str, args: &Value, before: &
     format!("{verb} {server}'s share on {node}: {what}{until}")
 }
 
+/// A held `policy.set` in plain words, from the policy the node last
+/// reported to the new values (0.46.9): "change job limits on k2n1-m4:
+/// max_cpus 6 → 10". A key the node didn't report shows only the new value.
+pub fn summarize_policy_change(node: &str, set: &Map<String, Value>, current: &Map<String, Value>) -> String {
+    let shown = |v: &Value| match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let mut keys: Vec<&String> = set.keys().collect();
+    keys.sort();
+    let parts: Vec<String> = keys
+        .into_iter()
+        .map(|k| match current.get(k).filter(|o| !o.is_null()) {
+            Some(o) if o == &set[k] => format!("{k} stays {}", shown(o)),
+            Some(o) => format!("{k} {} → {}", shown(o), shown(&set[k])),
+            None => format!("{k} → {}", shown(&set[k])),
+        })
+        .collect();
+    format!("change job limits on {node}: {}", parts.join(", "))
+}
+
 fn names_str(a: &Map<String, Value>) -> String {
     a.get("names")
         .and_then(Value::as_array)
@@ -1312,6 +1333,10 @@ mod tests {
         let unknown = json!({"server": "x", "set": {"max_cpus": 10, "future_key": 3}, "for_secs": 86400});
         assert_eq!(summarize_limits_change("n", "x", &unknown, &json!({})), "Change x's share on n: CPUs → 10, future_key → 3, ends in 24h");
         assert!(!summarize_limits_change("n", "x", &raise, &before).contains('\u{2014}'), "no em dashes");
+        // A held policy widening, from the policy the node last reported.
+        let set = json!({"max_cpus": 10, "mem_cap_gb": 12}).as_object().unwrap().clone();
+        let current = json!({"max_cpus": 6}).as_object().unwrap().clone();
+        assert_eq!(summarize_policy_change("k2n1-m4", &set, &current), "change job limits on k2n1-m4: max_cpus 6 → 10, mem_cap_gb → 12");
     }
 
     #[test]

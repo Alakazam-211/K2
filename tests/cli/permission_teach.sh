@@ -274,7 +274,8 @@ run agent compute manage on
 run agent compute node policy k2n1-m4 set max_cpus=10 --reason "bigger builds"
 [ "$RC" = 2 ] && ok || bad "node policy held: exit $RC, want 2 ($ERR)"
 printf '%s\n' "$ERR" | grep -q '^held for the owner: car_9f8e7d$' && ok || bad "node policy held: '$ERR'"
-printf '%s\n' "$ERR" | grep -q "^  or bring it to the owner's chat as a card: run the Ask with: line below$" && ok || bad "node policy held: no chat line: '$ERR'"
+printf '%s\n' "$ERR" | grep -q "^  to ask the owner in chat now, run the Ask with: line below: it puts this same request on a card.$" && ok || bad "node policy held: no chat line: '$ERR'"
+printf '%s\n' "$ERR" | grep -q "don't run your command again" && ok || bad "node policy held: no don't-rerun line: '$ERR'"
 [ "$(last_err_line)" = 'Ask with: k2 permission request compute.admin-approve request=car_9f8e7d --why "<what you need it for>"' ] && ok \
     || bad "node policy held: last stderr line is '$(last_err_line)'"
 

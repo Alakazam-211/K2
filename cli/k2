@@ -24809,7 +24809,8 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    default limits (and ones added later); off removes them all.
                    The owner or an admin sets it. An agent can't; with
                    permission cards on, it asks for its own workspace with
-                   k2 permission request compute.use --why "…"
+                   k2 permission request compute.use --why "…" (no workspace:
+                   always its own). Allowed, it is on: run your command again
   k2 compute usage [--days N]    k2 compute events --audit [--limit N]
                    the audit log (plain `events` shows job events since 0.46.7)
 Node admin (agents need "Allow this agent to operate compute nodes"):
@@ -24841,12 +24842,15 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
                    held for the owner: exit 2 with the request id
   k2 compute node admin list [--node N] [--state open|pending|all] [--json]
   k2 compute node admin withdraw <id>
-                   Bring a held request to the owner's chat (permission cards on;
-                   an agent that may operate or manage compute nodes; its own
-                   requests only): the hold ends with that line, or run
+                   Ask the owner to approve a held request in their chat
+                   (permission cards on; an agent that may operate or manage
+                   compute nodes; its own requests only, another's is refused):
+                   the hold ends with that line, or run
                    k2 permission request compute.admin-approve request=<id> --why "…"
-                   Allow there approves it exactly as Settings does; Deny denies
-                   it. It stays in Settings too; the first answer decides it
+                   Allow on the card approves and sends it exactly as Settings
+                   does (don't run your command again); Deny denies it. It stays
+                   in Settings too: the first answer decides it, and a request
+                   already decided can't be asked for
 Node admin, owner only (refused for agents and inside K2 terminals):
   k2 compute node admin approve <id>           Touch ID / your password, then signed + sent
   k2 compute node admin deny <id> [--why "…"]
@@ -27328,7 +27332,8 @@ print("held for the owner: %s\n  %s" % (r["id"], r["summary"]))' >&2
     # 0.46.9: with permission cards on, the daemon's Ask with: line (printed
     # last, at exit) brings this same request to the owner's chat as a card.
     if _permission_in_body "$_CP_BODY"; then
-        echo "  or bring it to the owner's chat as a card: run the Ask with: line below" >&2
+        echo "  to ask the owner in chat now, run the Ask with: line below: it puts this same request on a card." >&2
+        echo "  Allow there sends it to the node, as Settings would (don't run your command again); your [permission:] turn says how it went" >&2
     fi
     exit 2
 }

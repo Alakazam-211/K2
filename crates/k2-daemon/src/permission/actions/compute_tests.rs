@@ -203,9 +203,9 @@ fn the_card_names_the_change_and_its_reason() {
     assert_eq!(vw["whatChanges"], format!("{}.", want.trim_end_matches('.')), "{vw}");
     assert!(want.contains(&name), "the change names the node: {want}");
     let cons = vw["consequences"].as_str().unwrap_or_else(|| panic!("no consequences: {vw}"));
-    assert!(cons.contains(&format!("Approving runs it on {name} as root")), "{cons}");
-    assert!(cons.contains(&format!("request {id} in Settings → Compute → Approvals")), "{cons}");
-    assert!(cons.ends_with("Reason given with the request: wedged"), "{cons}");
+    assert!(cons.contains(&format!("it runs on {name} as root")), "{cons}");
+    assert!(cons.contains(&format!("This is request {id} in Settings → Compute → Approvals")), "{cons}");
+    assert!(cons.ends_with("The agent's reason when it filed the request: wedged"), "{cons}");
     let prompt = vw.to_string();
     assert!(!prompt.contains('\u{2014}'), "no em dashes on the card: {vw}");
     assert!(!prompt.contains("{change}") && !prompt.contains("{reason}") && !prompt.contains("{node}"), "every value filled: {vw}");

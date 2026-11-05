@@ -109,19 +109,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            asset: k2-daemon-linux-x86_64
-            root_asset: k2-root-helper-linux-x86_64
-            node_asset: k2-node-linux-x86_64
-            engine_asset: k2-app-engine-linux-x86_64
-            cross: false
-          - target: aarch64-unknown-linux-gnu
-            asset: k2-daemon-linux-aarch64
-            root_asset: k2-root-helper-linux-aarch64
-            node_asset: k2-node-linux-aarch64
-            engine_asset: k2-app-engine-linux-aarch64
-            cross: true
+        # Who builds x86_64 (prd-ci-release-on-compute-stage1-v1 §7): on a
+        # tag push with the repo variable LINUX_BUILDS=compute, release.sh
+        # built, signed and published x86_64 from K2 Compute before the tag,
+        # so only aarch64 builds here (no ARM node yet). Any other tag push,
+        # and every manual dispatch (the fallback), builds both. release.sh
+        # refuses to run when its K2_LINUX_BUILDS disagrees with the
+        # variable. (A job-level if: can't read matrix, and exclude can't
+        # drop include entries, hence the JSON.)
+        include: >-
+          ${{ fromJSON(
+          (github.event_name == 'push' && vars.LINUX_BUILDS == 'compute')
+          && '[{"target":"aarch64-unknown-linux-gnu","asset":"k2-daemon-linux-aarch64","root_asset":"k2-root-helper-linux-aarch64","node_asset":"k2-node-linux-aarch64","engine_asset":"k2-app-engine-linux-aarch64","cross":true}]'
+          || '[{"target":"x86_64-unknown-linux-gnu","asset":"k2-daemon-linux-x86_64","root_asset":"k2-root-helper-linux-x86_64","node_asset":"k2-node-linux-x86_64","engine_asset":"k2-app-engine-linux-x86_64","cross":false},{"target":"aarch64-unknown-linux-gnu","asset":"k2-daemon-linux-aarch64","root_asset":"k2-root-helper-linux-aarch64","node_asset":"k2-node-linux-aarch64","engine_asset":"k2-app-engine-linux-aarch64","cross":true}]'
+          ) }}
 
     steps:
       - name: Checkout (at the release tag)
@@ -130,8 +131,10 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch head 2026-10-22)
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # action pinned; the Rust version is toolchain: below
         with:
+          # = rust-toolchain.toml's channel (tests/packaging/rust-pin.sh)
+          toolchain: 1.99.1
           targets: ${{ matrix.target }}
 
       - name: Cache cargo + target

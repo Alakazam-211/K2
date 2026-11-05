@@ -27,7 +27,11 @@ VERSION="9.9.9"
 repo="$tmp/repo"
 mkdir -p "$repo"
 git -C "$repo" init -q
-git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m release
+# Pinned to a version unlike the real repo's, so the tests see the pin read
+# AT THE RELEASE COMMIT in the repo it lives in.
+printf '[toolchain]\nchannel = "1.98.7"\n' > "$repo/rust-toolchain.toml"
+git -C "$repo" add rust-toolchain.toml
+git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m release
 COMMIT="$(git -C "$repo" rev-parse HEAD)"
 TREE="$(git -C "$repo" rev-parse 'HEAD^{tree}')"
 
@@ -65,9 +69,18 @@ else:
     head[8:11] = b"AI\x02"
     files[f"K2_{version}_amd64.AppImage"] = bytes(head)
 meta = {}
+sums = []
 for n, data in files.items():
     open(os.path.join(out, "dist", n), "wb").write(data)
     meta[n] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+    # The side files the real build scripts write: <bin>.sha256 (linux-bins),
+    # app-linux.sums (linux-app), both in sha256sum format.
+    if kind == "linux-bins":
+        open(os.path.join(out, "dist", n + ".sha256"), "w").write("%s  %s\n" % (meta[n]["sha256"], n))
+    else:
+        sums.append("%s  %s\n" % (meta[n]["sha256"], n))
+if sums:
+    open(os.path.join(out, "dist", "app-linux.sums"), "w").write("".join(sums))
 info = {"kind": kind, "version": "0.0.1" if tamper == "info_version" else version, "arch": arch,
         "commit": commit, "tree": tree, "files": meta}
 if kind == "linux-bins":
@@ -93,7 +106,7 @@ case "$verb" in
             if [ "$seen_dd" = 1 ]; then argv+=("$1"); shift; continue; fi
             case "$1" in
                 --) seen_dd=1; shift ;;
-                --sha|--artifact|--needs|--mem|--queue-timeout|--retries|--env|--secret|--workspace) shift 2 ;;
+                --sha|--artifact|--needs|--mem|--queue-timeout|--retries|--env|--secret|--workspace|--tier) shift 2 ;;
                 *) shift ;;
             esac
         done
@@ -197,7 +210,7 @@ export STUB_VERSION="$VERSION" STUB_COMMIT="$COMMIT" STUB_TREE="$TREE"
 run_case() {
     local name="$1"
     export STUB_DIR="$tmp/stub-$name" STUB_CALLS="$tmp/calls-$name"
-    rm -rf "$STUB_DIR" "$tmp/$name" "$tmp/$name-files"
+    rm -rf "${STUB_DIR:?}" "${tmp:?}/$name" "${tmp:?}/$name-files"
     mkdir -p "$STUB_DIR"
     : > "$STUB_CALLS"
     (
@@ -220,26 +233,57 @@ want="$(printf '%s' '["bash","scripts/ci/build-linux-bins.sh","x86_64"]' | shasu
 got="$(python3 "$PY" argv-sha256 bash scripts/ci/build-linux-bins.sh x86_64)"
 [ "$got" = "$want" ] && pass "argv_sha256 is sha256 of the canonical JSON array" || fail "argv_sha256" "$got != $want"
 
-echo "happy path:"
-unset STUB_TAMPER K2_COMPUTE_X86_NODE K2_COMPUTE_VERIFY_NODE K2_COMPUTE_ARM_NODE GEN_TAMPER GEN_SALT
+echo "happy path (the defaults: secret OAuth, V1 on, --tier ci, the pin):"
+unset STUB_TAMPER K2_COMPUTE_X86_NODE K2_COMPUTE_VERIFY_NODE K2_COMPUTE_ARM_NODE GEN_TAMPER GEN_SALT K2_COMPUTE_OAUTH K2_COMPUTE_OAUTH_SECRETS K2_COMPUTE_RUST K2_COMPUTE_TIER K2_LINUX_BUILDS
+# This Mac's .env values: they must never reach argv (secret mode).
+export K2_GMAIL_CLIENT_ID="gm-id-VALUE-1234.apps.example" K2_GMAIL_CLIENT_SECRET="gm-SECRET-VALUE-5678" K2_MICROSOFT_CLIENT_ID="ms-ID-VALUE-9012"
 rc="$(run_case ok)"
-[ "$rc" = 0 ] && pass "collect verifies L1 and L3" || fail "collect rc=$rc" "$(cat "$tmp/ok.collect")"
-[ "$(wc -l < "$tmp/ok/jobs.tsv" | tr -d ' ')" = 2 ] && pass "two jobs (L1 x86 bins, L3 app)" || fail "jobs.tsv" "$(cat "$tmp/ok/jobs.tsv")"
+[ "$rc" = 0 ] && pass "collect verifies L1, L3 and V1" || fail "collect rc=$rc" "$(cat "$tmp/ok.collect")"
+[ "$(cut -f1,3 "$tmp/ok/jobs.tsv" | tr '\t\n' ': ')" = "L1:k2n7-vin L3:k2n8-vin V1:k2n9-vin " ] \
+    && pass "three jobs: L1 k2n7, L3 k2n8, V1 k2n9 (the Ryzen nodes)" || fail "jobs.tsv" "$(cat "$tmp/ok/jobs.tsv")"
 grep -q 'L2 aarch64: no ARM node yet' "$tmp/ok.submit" && pass "aarch64 seam is named" || fail "aarch64 note" "$(cat "$tmp/ok.submit")"
-run_line="$(grep -m1 'k2 compute run k2n9-vin .*build-linux-bins.sh x86_64' "$tmp/calls-ok" || true)"
-for want in "--sha $COMMIT" "--gate" "--detach" "--artifact dist/*" "--queue-timeout 2h" "--env BUILD_COMMIT=$COMMIT" "--env BUILD_OAUTH=placeholder" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
+run_line="$(grep -m1 'k2 compute run k2n7-vin' "$tmp/calls-ok" || true)"
+for want in "--sha $COMMIT" "--tier ci" "--detach" "--artifact dist/*" "--env BUILD_COMMIT=$COMMIT" "--needs rust@1.98.7," "--mem 20G" "--queue-timeout 2h" \
+    "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--secret K2_GMAIL_CLIENT_SECRET=BUILD_GMAIL_CLIENT_SECRET" \
+    "--secret K2_MICROSOFT_CLIENT_ID=BUILD_MICROSOFT_CLIENT_ID" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
     [[ "$run_line" == *"$want"* ]] && pass "L1 submit has $want" || fail "L1 submit lacks $want" "$run_line"
 done
+! grep -q -- "--gate\|rust@stable\|BUILD_OAUTH=placeholder" "$tmp/calls-ok" && pass "no --gate, no rust@stable, no placeholder by default" \
+    || fail "old defaults" "$(cat "$tmp/calls-ok")"
+! grep -q -e "gm-id-VALUE" -e "gm-SECRET-VALUE" -e "ms-ID-VALUE" "$tmp/calls-ok" "$tmp/ok/jobs.tsv" "$tmp/ok/summary.txt" \
+    && pass "secret mode: no OAuth value in argv or the audit files (names only)" || fail "value leaked" "$(grep -e VALUE "$tmp/calls-ok")"
+grep -q "Rust for every job: rust@1.98.7" "$tmp/ok/summary.txt" && pass "the pin is read at the release commit and recorded" || fail "pin summary" "$(cat "$tmp/ok/summary.txt")"
 ! grep -qE -- '--env (K2_|K2SO_)' "$tmp/calls-ok" && pass "no K2_* name in --env (nodes refuse them: env_k2_reserved)" \
     || fail "K2_* env" "$(grep -- '--env K2' "$tmp/calls-ok")"
-grep -q 'k2 compute run k2n9-vin .*bun@1.2.*sys:libwebkit2gtk-4.1-dev.*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
-    && pass "L3 goes to k2n9-vin (the 0.46.7 default: Yrs rule) with bun + GTK packages" || fail "L3 submit" "$(cat "$tmp/calls-ok")"
+grep -q 'k2 compute run k2n8-vin .*rust@1.98.7,.*bun@1.2.*sys:libwebkit2gtk-4.1-dev.*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
+    && pass "L3 goes to k2n8-vin with the pin, bun + GTK packages" || fail "L3 submit" "$(cat "$tmp/calls-ok")"
+grep -q 'k2 compute run k2n8-vin .*sys:libasound2-dev --mem 24G .*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
+    && pass "L3 asks for ALSA headers and 24G (native-voice release link)" || fail "L3 voice needs" "$(grep build-linux-app "$tmp/calls-ok")"
+grep -q '(reported only) the daemon' "$tmp/ok.collect" && pass "the daemon's dual build is reported, not required" || fail "daemon dual" "$(cat "$tmp/ok.collect")"
 grep -q 'k2 compute fetch .* --over-relay --json' "$tmp/calls-ok" && pass "fetch passes --over-relay (AppImage > 100 MB)" || fail "fetch flags" "$(cat "$tmp/calls-ok")"
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and v["oauth"]=="placeholder" and v["node"]=="k2n9-vin", v' "$tmp/ok/L1.verdict.json" \
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and v["oauth"]=="placeholder" and v["node"]=="k2n7-vin", v' "$tmp/ok/L1.verdict.json" \
     && pass "L1 verdict: ok, node, oauth mode recorded" || fail "L1 verdict" "$(cat "$tmp/ok/L1.verdict.json")"
 
+echo "compute mode staging (stage 1):"
+(
+    cd "$repo"
+    source "$ROOT/scripts/lib/compute-release.sh"
+    K2CR_STATE="$tmp/ok" K2CR_FILES="$tmp/ok-files" K2CR_COLLECTED=1 k2cr_stage "$tmp/dist" > "$tmp/stage.out" 2>&1
+) && pass "k2cr_stage copies the verified files" || fail "stage" "$(cat "$tmp/stage.out")"
+python3 - "$tmp/dist" "$tmp/ok/staged.txt" <<'PYS' && pass "staged: 4 binaries + .sha256, deb/rpm/AppImage, SHA256SUMS with L3's 3 lines" || fail "staged set" "$(ls "$tmp/dist")"
+import os, sys
+d, staged = sys.argv[1], open(sys.argv[2]).read().split()
+want = {f"{b}-linux-x86_64{x}" for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine") for x in ("", ".sha256")}
+want |= {"K2_9.9.9_amd64.deb", "K2-9.9.9-1.x86_64.rpm", "K2_9.9.9_amd64.AppImage", "SHA256SUMS-linux-x86_64.txt"}
+assert set(os.listdir(d)) == want, sorted(set(os.listdir(d)) ^ want)
+assert set(staged) == want, staged
+assert len(open(os.path.join(d, "SHA256SUMS-linux-x86_64.txt")).read().splitlines()) == 3
+PYS
+rc=0; (cd "$repo"; source "$ROOT/scripts/lib/compute-release.sh"; K2CR_STATE="$tmp/ok" K2CR_FILES="$tmp/ok-files" K2CR_COLLECTED=0 k2cr_stage "$tmp/dist2") >/dev/null 2>&1 || rc=$?
+[ "$rc" != 0 ] && [ ! -e "$tmp/dist2" ] && pass "stage refuses before collect" || fail "stage before collect" "rc=$rc"
+
 echo "one OAuth mode and path remap for every Linux builder (0.46.6):"
-export K2_COMPUTE_VERIFY_NODE=k2n7-vin
+export K2_COMPUTE_OAUTH=placeholder
 rc="$(run_case remap)"
 ! grep -q 'BUILD_REMAP' "$tmp/calls-remap" && pass "no per-job BUILD_REMAP (the build script always remaps)" \
     || fail "BUILD_REMAP still passed" "$(grep BUILD_REMAP "$tmp/calls-remap")"
@@ -247,7 +291,7 @@ rc="$(run_case remap)"
     || fail "oauth per job" "$(cat "$tmp/calls-remap")"
 export K2_COMPUTE_OAUTH=secret K2_COMPUTE_OAUTH_SECRETS="gmail-id,gmail-secret"
 rc="$(run_case secret)"
-l1="$(grep -m1 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-secret" || true)"
+l1="$(grep -m1 'k2 compute run k2n7-vin' "$tmp/calls-secret" || true)"
 for want in "--secret gmail-id=BUILD_GMAIL_CLIENT_ID" "--secret gmail-secret=BUILD_GMAIL_CLIENT_SECRET"; do
     [[ "$l1" == *"$want"* ]] && pass "secret mode: L1 has $want" || fail "secret mode lacks $want" "$l1"
 done
@@ -255,8 +299,21 @@ done
 [ "$(grep -c -- '--secret gmail-id=BUILD_GMAIL_CLIENT_ID' "$tmp/calls-secret")" = 2 ] && pass "secret mode: V1 too" \
     || fail "secret mode V1" "$(cat "$tmp/calls-secret")"
 ! grep -q 'build-linux-app.sh.*--secret\|--secret.*build-linux-app' "$tmp/calls-secret" \
-    && ! grep 'build-linux-app.sh' "$tmp/calls-secret" | grep -q -- '--secret' && pass "secret mode: the app job gets no OAuth" \
-    || fail "app job secrets" "$(grep build-linux-app.sh "$tmp/calls-secret")"
+    && ! grep 'k2n8-vin' "$tmp/calls-secret" | grep -q -- '--secret' && pass "secret mode: the app job gets no OAuth" \
+    || fail "app job secrets" "$(grep k2n8-vin "$tmp/calls-secret")"
+unset K2_COMPUTE_OAUTH_SECRETS K2_MICROSOFT_CLIENT_ID
+rc="$(run_case nomss)"
+! grep -q "K2_MICROSOFT_CLIENT_ID" "$tmp/calls-nomss" && [ "$(grep -c -- '--secret K2_GMAIL_CLIENT_ID=' "$tmp/calls-nomss")" = 2 ] \
+    && pass "no Microsoft id in this Mac's env: only the two Gmail secrets" || fail "ms default" "$(cat "$tmp/calls-nomss")"
+export K2_MICROSOFT_CLIENT_ID="ms-ID-VALUE-9012"
+export K2_COMPUTE_VERIFY_NODE=none
+rc="$(run_case nov1)"
+[ "$(wc -l < "$tmp/nov1/jobs.tsv" | tr -d ' ')" = 2 ] && pass "K2_COMPUTE_VERIFY_NODE=none: no V1" || fail "no V1" "$(cat "$tmp/nov1/jobs.tsv")"
+unset K2_COMPUTE_VERIFY_NODE
+export K2_COMPUTE_RUST=1.97.0 K2_COMPUTE_TIER=standard
+rc="$(run_case overrides)"
+grep -q -- "--tier standard .*--needs rust@1.97.0," "$tmp/calls-overrides" && pass "K2_COMPUTE_RUST and K2_COMPUTE_TIER override" || fail "overrides" "$(cat "$tmp/calls-overrides")"
+unset K2_COMPUTE_RUST K2_COMPUTE_TIER
 export K2_COMPUTE_OAUTH=bogus
 rc="$(run_case badmode)"
 grep -q 'K2_COMPUTE_OAUTH must be placeholder, env or secret' "$tmp/badmode.submit" && pass "an unknown OAuth mode is refused" \
@@ -291,9 +348,10 @@ export K2_COMPUTE_X86_NODE=stranger-1; check_tamper t-node "a node off the relea
 unset K2_COMPUTE_X86_NODE
 export K2_COMPUTE_REQUIRE_BAKED_OAUTH=1; check_tamper t-oauth "a placeholder-OAuth daemon when baked is required" "oauth 'placeholder'"
 unset K2_COMPUTE_REQUIRE_BAKED_OAUTH
+export K2_LINUX_BUILDS=compute; check_tamper t-oauth-compute "compute mode always requires baked OAuth" "oauth 'placeholder'"
+unset K2_LINUX_BUILDS
 
 echo "dual build (V1, G12):"
-export K2_COMPUTE_VERIFY_NODE=k2n7-vin
 rc="$(run_case v-same)"
 [ "$rc" = 0 ] && grep -q 'identical in both builds' "$tmp/v-same.collect" && pass "V1 identical to L1 passes" \
     || fail "V1 same" "rc=$rc $(cat "$tmp/v-same.collect")"
@@ -305,8 +363,8 @@ rc="$(
     cd "$repo"
     source "$ROOT/scripts/lib/compute-release.sh"
     k2cr_init "$VERSION" "$COMMIT" "$tmp/v-diff" "$tmp/v-diff-files"
-    k2cr_submit L1 k2n9-vin linux-bins x86_64 rust@stable -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
-    GEN_SALT=other k2cr_submit V1 k2n7-vin linux-bins x86_64 rust@stable -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
+    k2cr_submit L1 k2n7-vin linux-bins x86_64 rust@1.98.7 -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
+    GEN_SALT=other k2cr_submit V1 k2n9-vin linux-bins x86_64 rust@1.98.7 -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
     r=0; k2cr_collect >"$tmp/v-diff.collect" 2>&1 || r=$?; echo "$r"
 )"
 [ "$rc" != 0 ] && grep -q 'k2-node-linux-x86_64: the two builds differ' "$tmp/v-diff.collect" && pass "V1 differing from L1 fails" \
@@ -314,23 +372,27 @@ rc="$(
 unset K2_COMPUTE_VERIFY_NODE
 
 echo "nodes (0.46.7: the Ryzens, Yrs rule):"
-export K2_COMPUTE_NODE=k2-arch
+export K2_COMPUTE_NODE=k2n10-vin
 rc="$(run_case one-node)"
-[ "$rc" = 0 ] && [ "$(grep -c 'k2 compute run k2-arch ' "$tmp/calls-one-node")" = 2 ] \
-    && pass "K2_COMPUTE_NODE moves L1 and L3 together (and k2-arch is a release node)" || fail "K2_COMPUTE_NODE" "rc=$rc $(cat "$tmp/calls-one-node")"
+[ "$rc" = 0 ] && [ "$(grep -c 'k2 compute run k2n10-vin ' "$tmp/calls-one-node")" = 2 ] \
+    && pass "K2_COMPUTE_NODE moves L1 and L3 together (k2n10-vin is a release node)" || fail "K2_COMPUTE_NODE" "rc=$rc $(cat "$tmp/calls-one-node")"
 export K2_COMPUTE_X86_NODE=k2n9-vin
 rc="$(run_case split-node)"
-grep -q 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-split-node" && grep -q 'k2 compute run k2-arch .*build-linux-app.sh' "$tmp/calls-split-node" \
+grep -q 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-split-node" && grep -q 'k2 compute run k2n10-vin .*build-linux-app.sh' "$tmp/calls-split-node" \
     && pass "K2_COMPUTE_X86_NODE beats K2_COMPUTE_NODE for L1 only" || fail "per-job node" "$(cat "$tmp/calls-split-node")"
 unset K2_COMPUTE_NODE K2_COMPUTE_X86_NODE
 ! grep -q -- '--cpus' "$tmp/calls-ok" && pass "no --cpus unless K2_COMPUTE_CPUS is set" || fail "default cpus" "$(cat "$tmp/calls-ok")"
 export K2_COMPUTE_QUEUE_TIMEOUT=3h K2_COMPUTE_CPUS=8
 rc="$(run_case qt)"
-[ "$(grep -c -- '--queue-timeout 3h' "$tmp/calls-qt")" = 2 ] && pass "K2_COMPUTE_QUEUE_TIMEOUT reaches every job" || fail "queue timeout" "$(cat "$tmp/calls-qt")"
-[ "$(grep -c -- '--cpus 8 ' "$tmp/calls-qt")" = 2 ] && pass "K2_COMPUTE_CPUS reaches every job" || fail "cpus" "$(cat "$tmp/calls-qt")"
+[ "$(grep -c -- '--queue-timeout 3h' "$tmp/calls-qt")" = 3 ] && pass "K2_COMPUTE_QUEUE_TIMEOUT reaches every job" || fail "queue timeout" "$(cat "$tmp/calls-qt")"
+[ "$(grep -c -- '--cpus 8 ' "$tmp/calls-qt")" = 3 ] && pass "K2_COMPUTE_CPUS reaches every job" || fail "cpus" "$(cat "$tmp/calls-qt")"
 unset K2_COMPUTE_QUEUE_TIMEOUT K2_COMPUTE_CPUS
 for gone in k2n4-vin k2n5-vin k2n6-hil; do
     export K2_COMPUTE_X86_NODE="$gone"; check_tamper "t-gone-$gone" "$gone (gone) is not a release node" "not a release node"
+done
+# k2-arch is Arch (pacman, no apt sys: packages) and k2n12 is the fuzz node.
+for notrel in k2-arch k2n12-vin; do
+    export K2_COMPUTE_X86_NODE="$notrel"; check_tamper "t-notrel-$notrel" "$notrel is not a release node" "not a release node"
 done
 unset K2_COMPUTE_X86_NODE
 
@@ -350,16 +412,16 @@ so_rc=0
     bash "$ROOT/scripts/lib/compute-release.sh" --shadow-only "${C2:0:9}" --wait-min 1) > "$tmp/so.out" 2>&1 || so_rc=$?
 so_state="$tmp/audit/shadow-${C2:0:12}/compute"
 [ "$so_rc" = 0 ] && pass "shadow-only: exit 0 when every job verifies" || fail "shadow-only rc=$so_rc" "$(cat "$tmp/so.out")"
-[ "$(wc -l < "$so_state/jobs.tsv" | tr -d ' ')" = 2 ] && grep -q "^version 9.9.9" "$so_state/summary.txt" \
+[ "$(wc -l < "$so_state/jobs.tsv" | tr -d ' ')" = 3 ] && grep -q "^version 9.9.9" "$so_state/summary.txt" \
     && pass "shadow-only: the release set, version read from the commit" || fail "shadow-only state" "$(cat "$so_state/summary.txt" "$so_state/jobs.tsv")"
 grep -q "commit  $C2" "$so_state/summary.txt" && grep -q -- "--sha $C2" "$STUB_CALLS" \
     && pass "shadow-only: the short sha is resolved to the full commit" || fail "shadow-only sha" "$(cat "$STUB_CALLS")"
 python3 -c 'import json,sys; [json.load(open(p))["ok"] or sys.exit(1) for p in sys.argv[1:]]' "$so_state/L1.verdict.json" "$so_state/L3.verdict.json" \
     && pass "shadow-only: receipts fetched and verified (L1, L3)" || fail "shadow-only verdicts" "$(cat "$so_state"/*.verdict.json)"
-grep -q 'L1: job .* on k2n9-vin: done exit 0, queued ?, ran 1.0 min' "$tmp/so.out" \
+grep -q 'L1: job .* on k2n7-vin: done exit 0, queued ?, ran 1.0 min' "$tmp/so.out" \
     && pass "shadow-only: prints where and how long each job ran" || fail "shadow-only times" "$(cat "$tmp/so.out")"
-! grep -q '^gh ' "$STUB_CALLS" && ! grep -qvE '^k2 compute (run|wait|get|receipt|fetch) ' "$STUB_CALLS" \
-    && pass "shadow-only: only k2 compute run/wait/get/receipt/fetch (no GitHub, no cancel)" || fail "shadow-only calls" "$(cat "$STUB_CALLS")"
+! grep -q '^gh ' "$STUB_CALLS" && ! grep -qvE '^k2 compute (run|wait|get|receipt|fetch) |^k2 compute --help$' "$STUB_CALLS" \
+    && pass "shadow-only: only k2 compute run/wait/get/receipt/fetch and the --tier probe (no GitHub, no cancel)" || fail "shadow-only calls" "$(cat "$STUB_CALLS")"
 [ -z "$(git -C "$repo2" status --porcelain)" ] && [ "$(git -C "$repo2" tag)" = "" ] && [ "$(git -C "$repo2" rev-parse HEAD)" = "$C2" ] \
     && pass "shadow-only: the checkout is untouched (no tag, no commit, no files)" || fail "shadow-only repo" "$(git -C "$repo2" status --porcelain)"
 rc=0; (cd "$repo2" && bash "$ROOT/scripts/lib/compute-release.sh" --shadow-only) >/dev/null 2>&1 || rc=$?
@@ -389,18 +451,37 @@ printf 'github-built' > "$STUB_REL/v$VERSION/k2-node-linux-x86_64"
     source "$ROOT/scripts/lib/compute-release.sh"
     K2CR_STATE="$tmp/ok" K2CR_FILES="$tmp/ok-files" k2cr_compare_github "v$VERSION" > "$tmp/report.out" 2>&1
 )
-python3 - "$tmp/ok/shadow-report.json" <<'PY' && pass "report: same daemon, differing node, missing assets counted" || fail "report" "$(cat "$tmp/report.out")"
+python3 - "$tmp/ok/shadow-report.json" <<'PY' && pass "report: per job (L1, V1, L3): same daemon, differing node, missing assets counted" || fail "report" "$(cat "$tmp/report.out")"
 import json, sys
 r = json.load(open(sys.argv[1]))
-by = {x["name"]: x for x in r["files"]}
-assert by["k2-daemon-linux-x86_64"]["match"] is True, by
-assert by["k2-node-linux-x86_64"]["match"] is False and by["k2-node-linux-x86_64"]["markers_equal"] is False, by
-assert by["K2_9.9.9_amd64.AppImage"]["match"] is None, by
-assert r["summary"]["match"] == 1 and r["summary"]["differ"] == 1, r["summary"]
-assert not any("build-info" in n or n.endswith(".sha256") for n in by), by
+by = {(x["job"], x["name"]): x for x in r["files"]}
+for job in ("L1", "V1"):  # V1 (the dual build) is compared too, row by row
+    assert by[(job, "k2-daemon-linux-x86_64")]["match"] is True, by
+    assert by[(job, "k2-node-linux-x86_64")]["match"] is False and by[(job, "k2-node-linux-x86_64")]["markers_equal"] is False, by
+assert by[("L3", "K2_9.9.9_amd64.AppImage")]["match"] is None, by
+assert r["summary"]["match"] == 2 and r["summary"]["differ"] == 2, r["summary"]
+assert not any("build-info" in n or n.endswith((".sha256", ".sums")) for _, n in by), by
 PY
 grep -q 'gh release download v9.9.9 .*--pattern k2-daemon-linux-x86_64' "$tmp/calls-ok" && ! grep -q -- '--pattern \*' "$tmp/calls-ok" \
     && pass "GitHub assets fetched by exact name" || fail "gh calls" "$(grep gh "$tmp/calls-ok")"
+
+python3 - "$PY" "$tmp" <<'PYE' && pass "elf-comment reads the toolchain lines of an ELF's .comment" || fail "elf-comment" "see above"
+import os, subprocess, sys
+py, tmp = sys.argv[1], sys.argv[2]
+# A minimal 64-bit LE ELF: header, .comment data, .shstrtab, 3 section headers.
+comment = b"GCC: (Ubuntu 13.3.0) 13.3.0\0rustc version 1.99.1 (x 2026-10-13)\0GCC: (Ubuntu 13.3.0) 13.3.0\0"
+shstr = b"\0.comment\0.shstrtab\0"
+body = comment + shstr
+shoff = 64 + len(body)
+h = bytearray(64); h[0:4] = b"\x7fELF"; h[4] = 2; h[5] = 1; h[18:20] = (62).to_bytes(2, "little")
+h[40:48] = shoff.to_bytes(8, "little"); h[58:60] = (64).to_bytes(2, "little"); h[60:62] = (3).to_bytes(2, "little"); h[62:64] = (2).to_bytes(2, "little")
+def sh(name, off, size):
+    b = bytearray(64); b[0:4] = name.to_bytes(4, "little"); b[24:32] = off.to_bytes(8, "little"); b[32:40] = size.to_bytes(8, "little"); return bytes(b)
+data = bytes(h) + body + bytes(64) + sh(1, 64, len(comment)) + sh(10, 64 + len(comment), len(shstr))
+p = os.path.join(tmp, "elf-with-comment"); open(p, "wb").write(data)
+out = subprocess.run([sys.executable, py, "elf-comment", p], capture_output=True, text=True, check=True).stdout.splitlines()
+assert out == ["GCC: (Ubuntu 13.3.0) 13.3.0", "rustc version 1.99.1 (x 2026-10-13)"], out
+PYE
 
 echo "aborted release:"
 export STUB_DIR="$tmp/stub-abort" STUB_CALLS="$tmp/calls-abort"
@@ -412,28 +493,53 @@ rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
     k2cr_submit_release_set >/dev/null 2>&1
     k2cr_cancel_open 2>/dev/null
 )
-[ "$(grep -c 'k2 compute cancel .* --force' "$tmp/calls-abort")" = 2 ] && pass "uncollected jobs are cancelled" || fail "cancel" "$(cat "$tmp/calls-abort")"
+[ "$(grep -c 'k2 compute cancel .* --force' "$tmp/calls-abort")" = 3 ] && pass "uncollected jobs are cancelled" || fail "cancel" "$(cat "$tmp/calls-abort")"
 
 echo "build scripts:"
 for s in scripts/ci/build-linux-bins.sh scripts/ci/build-linux-app.sh scripts/ci/shadow-linux-builds.sh scripts/ci/repro-build-env.sh scripts/lib/compute-release.sh scripts/release.sh; do
     bash -n "$ROOT/$s" && pass "bash -n $s" || fail "bash -n $s" "syntax"
 done
-# repro-build-env.sh: the same mappings, most specific last, for rustc and C.
-fake="$tmp/repro"; mkdir -p "$fake/src/target" "$fake/cargo"
-rf="$(cd "$fake/src" && env -u RUSTFLAGS -u CFLAGS -u CXXFLAGS -u CARGO_TARGET_DIR CARGO_HOME="$fake/cargo" \
-    bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null; printf "%s\n%s\n%s" "$RUSTFLAGS" "$CFLAGS" "$CXXFLAGS"' _ "$ROOT/scripts/ci/repro-build-env.sh")"
+# repro-build-env.sh: the same mappings, most specific last; rustc through
+# RUSTFLAGS, C/C++ through compiler wrappers (never CFLAGS: vendored OpenSSL
+# bakes "compiler: cc <CFLAGS>" into the daemon); SOURCE_DATE_EPOCH from the
+# commit.
+fake="$tmp/repro"; mkdir -p "$fake/src/target" "$fake/cargo" "$fake/realbin"
+git -C "$fake/src" init -q
+GIT_COMMITTER_DATE="2026-10-01T00:00:00Z" git -C "$fake/src" -c user.email=t@t -c user.name=t commit -q --allow-empty -m t
+CT="$(git -C "$fake/src" log -1 --format=%ct)"
+for t in cc c++ gcc g++ aarch64-linux-gnu-gcc; do
+    printf '#!/bin/sh\necho "REAL %s $*"\n' "$t" > "$fake/realbin/$t"; chmod +x "$fake/realbin/$t"
+done
+rf="$(cd "$fake/src" && env -u RUSTFLAGS -u CFLAGS -u CXXFLAGS -u CARGO_TARGET_DIR -u SOURCE_DATE_EPOCH -u CC -u CXX \
+    PATH="$fake/realbin:$PATH" CARGO_HOME="$fake/cargo" CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null
+        printf "%s\n%s\n%s\n%s\n" "$RUSTFLAGS" "${CFLAGS:-}" "${CXXFLAGS:-}" "$SOURCE_DATE_EPOCH"
+        printf "%s\n" "$(command -v cc)"
+        cc -c x.c -o x.o; c++ -c y.cc; aarch64-linux-gnu-gcc -c z.c' _ "$ROOT/scripts/ci/repro-build-env.sh")"
 src_p="$(cd "$fake/src" && pwd -P)"
-python3 - "$rf" "$src_p" "$fake/cargo" <<'PY' && pass "repro env: checkout, cargo home, target remapped (target last) for rustc + C/C++" || fail "repro env" "$rf"
+python3 - "$rf" "$src_p" "$fake/cargo" "$CT" <<'PY' && pass "repro env: rustc remaps (target last); C/C++ maps come from wrappers, not CFLAGS; SOURCE_DATE_EPOCH = commit time" || fail "repro env" "$rf"
 import sys
-rust, c, cxx = sys.argv[1].split("\n")
-src, cargo = sys.argv[2], sys.argv[3]
+lines = sys.argv[1].split("\n")
+rust, c, cxx, sde, cc_path = lines[:5]
+calls = lines[5:8]
+src, cargo, ct = sys.argv[2], sys.argv[3], sys.argv[4]
 r = rust.split()
 assert f"--remap-path-prefix={src}=/k2" in r, r
 assert f"--remap-path-prefix={cargo}=/cargo" in r, r
 assert f"--remap-path-prefix={src}/target=/target" in r, r
 assert r.index(f"--remap-path-prefix={src}/target=/target") > r.index(f"--remap-path-prefix={src}=/k2"), r
-assert c == cxx and f"-ffile-prefix-map={src}=/k2" in c.split() and f"-ffile-prefix-map={src}/target=/target" in c.split(), c
+assert c == "" and cxx == "", ("CFLAGS/CXXFLAGS must carry no paths (OpenSSL records them)", c, cxx)
+assert sde == ct, (sde, ct)
+assert "/k2-repro-cc." in cc_path and cc_path.endswith("/cc"), cc_path
+for call, tool, tail in zip(calls, ("cc", "c++", "aarch64-linux-gnu-gcc"), ("-c x.c -o x.o", "-c y.cc", "-c z.c")):
+    w = call.split()
+    assert w[:2] == ["REAL", tool], call
+    assert f"-ffile-prefix-map={src}=/k2" in w and f"-ffile-prefix-map={src}/target=/target" in w, call
+    assert w.index(f"-ffile-prefix-map={src}/target=/target") > w.index(f"-ffile-prefix-map={src}=/k2"), call
+    assert call.endswith(tail), call
 PY
+sde2="$(cd "$fake/src" && env SOURCE_DATE_EPOCH=12345 PATH="$fake/realbin:$PATH" CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null; echo "$SOURCE_DATE_EPOCH"' _ "$ROOT/scripts/ci/repro-build-env.sh")"
+[ "$sde2" = 12345 ] && pass "repro env keeps a SOURCE_DATE_EPOCH the caller set" || fail "sde kept" "$sde2"
 rf2="$(env RUSTFLAGS="-C keep" CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$2" >/dev/null; printf "%s" "$RUSTFLAGS"' _ "$ROOT/scripts/ci/repro-build-env.sh" "$fake/src")"
 [[ "$rf2" == "-C keep --remap-path-prefix="* ]] && pass "repro env keeps the caller's RUSTFLAGS first" || fail "repro env append" "$rf2"
 mkdir -p "$fake/with space"

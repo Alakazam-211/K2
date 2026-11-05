@@ -8,11 +8,13 @@
 # (in shadow mode nothing does: GitHub stays the source of truth).
 #
 #   k2cr_init <version> <commit> <state-dir> <files-dir>
-#   k2cr_submit_release_set      L1 x86 bins, L3 app, [V1 verify], [L2 arm]
+#   k2cr_submit_release_set      L1 x86 bins, L3 app, V1 verify, [L2 arm]
 #   k2cr_submit <label> <node> <kind> <arch> <needs> -- <argv…>
 #   k2cr_wait <minutes>          every submitted job ends (or time is up)
 #   k2cr_collect                 fetch + verify each job (verdicts in state dir)
 #   k2cr_compare_github <tag>    shadow report vs the GitHub-built assets
+#   k2cr_stage <dist-dir>        compute mode: copy the verified x86 files
+#                                where release.sh signs and publishes them
 #   k2cr_cancel_open             best effort, for an aborted release
 #
 # Standalone (a dry run of the shadow builds for any commit; no bump, no
@@ -31,52 +33,75 @@
 #   (big; target/compute-dist/<v>), and <files-dir>-github the GitHub
 #   assets the shadow report compares them with.
 #
-# Settings (env). Every job is sent with --gate (= --tier ci: next free
-# slot; the workspace needs a grant with --ci on each node).
-#   K2_COMPUTE_NODE          k2n9-vin    the default node for L1 and L3.
-#                                        0.46.7 vendors the private Yrs fork
-#                                        (vendor/k2-mpc-base/vendor/yrs), so
-#                                        its jobs may run only on k2n9-vin or
-#                                        k2-arch until Rosson lifts that. One
-#                                        node = the jobs run one after another
-#                                        (a grant runs 1 job at a time).
-#   K2_COMPUTE_X86_NODE      $K2_COMPUTE_NODE  L1: daemon, node, root helper, engine
-#   K2_COMPUTE_APP_NODE      $K2_COMPUTE_NODE  L3: deb, rpm, AppImage
-#   K2_COMPUTE_VERIFY_NODE   (unset)     V1: second x86 build of the root-key
-#                                        assets on another node (G12 compare)
+# Settings (env; the defaults are the Ryzen build nodes). Every job is sent
+# with --tier ci (the same as --gate on a pre-0.46.5 CLI): it runs first in
+# the node's queue, and the workspace needs a grant with --ci on each node.
+#   K2_COMPUTE_NODE          (unset)     one node for both L1 and L3 (by-hand
+#                                        runs; the per-job names below win)
+#   K2_COMPUTE_X86_NODE      k2n7-vin    L1: daemon, node, root helper, engine
+#   K2_COMPUTE_APP_NODE      k2n8-vin    L3: deb, rpm, AppImage
+#   K2_COMPUTE_VERIFY_NODE   k2n9-vin    V1: a second x86 build of the same
+#                                        set on another node; the root helper,
+#                                        node and engine must be byte-identical
+#                                        to L1's (G12). "none" = no V1 (loud in
+#                                        compute mode)
 #   K2_COMPUTE_ARM_NODE      (unset)     L2: aarch64, natively. Unset until the
 #                                        ARM Linux VM exists (G10); GitHub still
 #                                        builds aarch64 then.
-#   K2_COMPUTE_RELEASE_NODES the build pool: k2n7-vin … k2n12-vin, k2-arch
+#   K2_COMPUTE_RELEASE_NODES "k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin"
 #                                        (+ the ARM node): a receipt from any
-#                                        other node fails. k2n4/5/6 are gone.
-#   K2_COMPUTE_QUEUE_TIMEOUT 2h          --queue-timeout per job (on one node
-#                                        the last job queues behind the others)
-#   K2_COMPUTE_RUST          stable      rust@<this> (pin it for G12)
+#                                        other node fails. Debian-based Ryzens
+#                                        only: k2-arch is Arch (no apt sys:
+#                                        packages) and k2n12 is the fuzz node.
+#   K2_COMPUTE_RUST          the pin     rust@<this>. Default: rust-toolchain.toml
+#                                        AT THE RELEASE COMMIT (scripts/lib/
+#                                        rust-pin.sh); an explicit rust@ need
+#                                        overrides the job checkout's file
+#   K2_COMPUTE_TIER          ci          --tier for every job (ci runs first;
+#                                        needs a grant with --ci). standard for
+#                                        a by-hand run from a workspace without
+#                                        one.
+#   K2_COMPUTE_QUEUE_TIMEOUT 2h          --queue-timeout per job
+#   K2_COMPUTE_BINS_MEM      20G         --mem for L1, V1 and L2
+#   K2_COMPUTE_APP_MEM       24G         --mem for L3: the app links the native
+#                                        voice stack (native-voice, on by default
+#                                        since 0.46.9); its release link needs
+#                                        at least 20G (job 96d5148c, 11-03)
 #   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run (z3mbpZ's
-#                                        release checkout: pod-leader-4)
+#                                        release checkout: pod-leader)
 #   K2_COMPUTE_CPUS          (unset)     --cpus per job (unset: the node's default,
 #                                        4 on the Ryzens; z3mbpZ's share allows 8)
-#   K2_COMPUTE_OAUTH         placeholder placeholder | env: pass this Mac's
-#                                        Gmail/MS OAuth values with --env
-#                                        (stored in the job plan; Q4) |
-#                                        secret: vault secrets via --secret
-#                                        (sealed to the node, names only in
-#                                        the plan). Only env/secret bake the
-#                                        daemon the way GitHub does, so only
-#                                        they can match its bytes. Every
+#   K2_COMPUTE_OAUTH         secret      secret: the Gmail/MS OAuth values come
+#                                        from the vault via --secret, sealed to
+#                                        the node, names only in the plan
+#                                        (Rosson 2026-10-29) | placeholder: built
+#                                        without them (by-hand shadow only; such
+#                                        a daemon never ships) | env: this Mac's
+#                                        values with --env (stored in the job
+#                                        plan; tests only). Only secret/env bake
+#                                        the daemon the way GitHub does. Every
 #                                        linux-bins job (L1, V1, L2) gets the
 #                                        same mode.
-#   K2_COMPUTE_OAUTH_SECRETS "K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET"
-#                                        vault names for secret mode: Gmail id,
-#                                        Gmail secret[, Microsoft id] (the MS
-#                                        one only if GitHub bakes it too). A
-#                                        person grants each: k2 vault grant
-#                                        NAME --to compute:<ws>/<node> --as env
+#   K2_COMPUTE_OAUTH_SECRETS vault names for secret mode: Gmail id, Gmail
+#                                        secret[, Microsoft id]. Default
+#                                        K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET
+#                                        plus K2_MICROSOFT_CLIENT_ID when this
+#                                        Mac's env sets a real one (so compute
+#                                        bakes Microsoft exactly when the Mac
+#                                        build does). A person grants each, per
+#                                        node: k2 vault grant NAME --to
+#                                        compute:<ws>/<node> --as env
+#                                        --env-name BUILD_<…> (a K2_* env
+#                                        name is refused; the job's --secret
+#                                        NAME=BUILD_* names it anyway)
 #   K2_BIN                   k2          the CLI (tests stub it)
 
 K2CR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 K2CR_PY="$K2CR_LIB_DIR/../ci/compute_release.py"
+# shellcheck source=scripts/lib/rust-pin.sh
+source "$K2CR_LIB_DIR/rust-pin.sh"
+# shellcheck source=scripts/lib/compute-tier.sh
+source "$K2CR_LIB_DIR/compute-tier.sh"
 
 k2cr_k2() { "${K2_BIN:-k2}" "$@"; }
 
@@ -99,45 +124,47 @@ k2cr_init() {
 }
 
 k2cr_release_nodes() {
-    local n="${K2_COMPUTE_RELEASE_NODES:-k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin,k2n12-vin,k2-arch}"
+    local n="${K2_COMPUTE_RELEASE_NODES:-k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin}"
     [ -n "${K2_COMPUTE_ARM_NODE:-}" ] && n="$n,$K2_COMPUTE_ARM_NODE"
     printf '%s' "$n"
 }
 
 # k2cr_submit <label> <node> <kind> <arch> <needs> -- <argv…>
-# Detached, --gate, at exactly K2CR_COMMIT, keeping dist/* (the node's
+# Detached, --tier ci, at exactly K2CR_COMMIT, keeping dist/* (the node's
 # walker matches no file with a trailing `**`). Appends
 # "label<TAB>job<TAB>node<TAB>kind<TAB>arch<TAB>argv-json" to jobs.tsv.
 k2cr_submit() {
     local label="$1" node="$2" kind="$3" arch="$4" needs="$5"
     shift 5
     [ "${1:-}" = "--" ] && shift
-    # The app links the native voice stack (native-voice, on by default since
-    # 0.46.9): a release link needs at least 20G (job 96d5148c, 11-03).
-    local mem=16G
-    [ "$kind" = "linux-app" ] && mem=20G
-    local -a args=(compute run "$node" --sha "$K2CR_COMMIT" --detach --gate --json
+    local -a tier_args=()
+    local t
+    while IFS= read -r t; do [ -n "$t" ] && tier_args+=("$t"); done < <(k2_compute_tier_args "${K2_COMPUTE_TIER:-ci}") \
+        || { echo "  ✗ $label: no tier flags" >&2; return 1; }
+    local mem="${K2_COMPUTE_BINS_MEM:-20G}"
+    [ "$kind" = "linux-app" ] && mem="${K2_COMPUTE_APP_MEM:-24G}"
+    local -a args=(compute run "$node" --sha "$K2CR_COMMIT" --detach ${tier_args[@]+"${tier_args[@]}"} --json
         --artifact 'dist/*' --needs "$needs" --mem "$mem" --queue-timeout "${K2_COMPUTE_QUEUE_TIMEOUT:-2h}" --retries 1
         --env "BUILD_COMMIT=$K2CR_COMMIT" --env "BUILD_TREE=$K2CR_TREE")
     [ -n "${K2_COMPUTE_WORKSPACE:-}" ] && args+=(--workspace "$K2_COMPUTE_WORKSPACE")
     [ -n "${K2_COMPUTE_CPUS:-}" ] && args+=(--cpus "$K2_COMPUTE_CPUS")
     if [ "$kind" = "linux-bins" ]; then
-        if [ "${K2_COMPUTE_OAUTH:-placeholder}" = "env" ]; then
+        if [ "${K2_COMPUTE_OAUTH:-secret}" = "env" ]; then
             [ -n "${K2_GMAIL_CLIENT_ID:-}" ] && [ -n "${K2_GMAIL_CLIENT_SECRET:-}" ] \
                 || { echo "  ✗ $label: K2_COMPUTE_OAUTH=env but this Mac has no Gmail OAuth values" >&2; return 1; }
             # K2_* names are refused in --env; the build script maps BUILD_*.
             args+=(--env "BUILD_GMAIL_CLIENT_ID=$K2_GMAIL_CLIENT_ID" --env "BUILD_GMAIL_CLIENT_SECRET=$K2_GMAIL_CLIENT_SECRET")
             [ -n "${K2_MICROSOFT_CLIENT_ID:-}" ] && args+=(--env "BUILD_MICROSOFT_CLIENT_ID=$K2_MICROSOFT_CLIENT_ID")
-        elif [ "${K2_COMPUTE_OAUTH:-placeholder}" = "secret" ]; then
+        elif [ "${K2_COMPUTE_OAUTH:-secret}" = "secret" ]; then
             # Values never in the plan or argv: the node fetches them sealed
             # at spawn, as the BUILD_* names the build script maps.
             local -a names
-            IFS=, read -r -a names <<< "${K2_COMPUTE_OAUTH_SECRETS:-K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET}"
+            IFS=, read -r -a names <<< "$(k2cr_oauth_secret_names)"
             [ "${#names[@]}" -ge 2 ] && [ -n "${names[0]}" ] && [ -n "${names[1]}" ] \
                 || { echo "  ✗ $label: K2_COMPUTE_OAUTH_SECRETS needs the Gmail id and secret names" >&2; return 1; }
             args+=(--secret "${names[0]}=BUILD_GMAIL_CLIENT_ID" --secret "${names[1]}=BUILD_GMAIL_CLIENT_SECRET")
             [ -n "${names[2]:-}" ] && args+=(--secret "${names[2]}=BUILD_MICROSOFT_CLIENT_ID")
-        elif [ "${K2_COMPUTE_OAUTH:-placeholder}" = "placeholder" ]; then
+        elif [ "${K2_COMPUTE_OAUTH:-secret}" = "placeholder" ]; then
             args+=(--env BUILD_OAUTH=placeholder)
         else
             echo "  ✗ $label: K2_COMPUTE_OAUTH must be placeholder, env or secret (got $K2_COMPUTE_OAUTH)" >&2
@@ -154,15 +181,43 @@ k2cr_submit() {
     echo "  $label → job ${job:0:8} on $node ($kind $arch)"
 }
 
+# The vault names secret mode sends (see K2_COMPUTE_OAUTH_SECRETS).
+k2cr_oauth_secret_names() {
+    if [ -n "${K2_COMPUTE_OAUTH_SECRETS:-}" ]; then
+        printf '%s' "$K2_COMPUTE_OAUTH_SECRETS"
+        return 0
+    fi
+    local n="K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET"
+    case "${K2_MICROSOFT_CLIENT_ID:-}" in
+        ""|REPLACE_ME*) ;;
+        *) n="$n,K2_MICROSOFT_CLIENT_ID" ;;
+    esac
+    printf '%s' "$n"
+}
+
+k2cr_verify_node() {
+    local v="${K2_COMPUTE_VERIFY_NODE-k2n9-vin}"
+    [ "$v" = "none" ] && v=""
+    printf '%s' "$v"
+}
+
 k2cr_submit_release_set() {
-    local rust="rust@${K2_COMPUTE_RUST:-stable}" rc=0
+    local rust rc=0 verify
+    if [ -n "${K2_COMPUTE_RUST:-}" ]; then
+        rust="rust@$K2_COMPUTE_RUST"
+    else
+        # The repo the release commit lives in (release.sh / shadow run from it).
+        rust="$(K2_RUST_PIN_REPO="$(git rev-parse --show-toplevel)" k2_rust_need "$K2CR_COMMIT")" \
+            || { echo "  ✗ can't read the Rust pin at ${K2CR_COMMIT:0:12}" >&2; return 1; }
+    fi
+    echo "  Rust for every job: $rust" | tee -a "$K2CR_STATE/summary.txt"
     local bins_needs="$rust,cmake@3,sys:pkg-config,sys:zlib1g-dev"
     local app_needs="$rust,cmake@3,bun@1.2,sys:pkg-config,sys:libwebkit2gtk-4.1-dev,sys:libgtk-3-dev,sys:libayatana-appindicator3-dev,sys:librsvg2-dev,sys:patchelf,sys:libxdo-dev,sys:file,sys:xdg-utils,sys:libssl-dev,sys:libasound2-dev"
-    local node="${K2_COMPUTE_NODE:-k2n9-vin}"
-    k2cr_submit L1 "${K2_COMPUTE_X86_NODE:-$node}" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
-    k2cr_submit L3 "${K2_COMPUTE_APP_NODE:-$node}" linux-app x86_64 "$app_needs" -- bash scripts/ci/build-linux-app.sh || rc=1
-    if [ -n "${K2_COMPUTE_VERIFY_NODE:-}" ]; then
-        k2cr_submit V1 "$K2_COMPUTE_VERIFY_NODE" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
+    k2cr_submit L1 "${K2_COMPUTE_X86_NODE:-${K2_COMPUTE_NODE:-k2n7-vin}}" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
+    k2cr_submit L3 "${K2_COMPUTE_APP_NODE:-${K2_COMPUTE_NODE:-k2n8-vin}}" linux-app x86_64 "$app_needs" -- bash scripts/ci/build-linux-app.sh || rc=1
+    verify="$(k2cr_verify_node)"
+    if [ -n "$verify" ]; then
+        k2cr_submit V1 "$verify" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
     fi
     if [ -n "${K2_COMPUTE_ARM_NODE:-}" ]; then
         k2cr_submit L2 "$K2_COMPUTE_ARM_NODE" linux-bins aarch64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh aarch64 || rc=1
@@ -199,6 +254,7 @@ k2cr_wait() {
 k2cr_collect() {
     local label job node kind arch argv_json bad=0 d require=""
     [ "${K2_COMPUTE_REQUIRE_BAKED_OAUTH:-0}" = "1" ] && require="--require-oauth baked"
+    [ "${K2_LINUX_BUILDS:-}" = "compute" ] && require="--require-oauth baked"
     while IFS=$'\t' read -r label job node kind arch argv_json; do
         [ -n "$label" ] || continue
         d="$K2CR_STATE/$label"
@@ -230,11 +286,63 @@ k2cr_collect() {
     # G12: the verify build must equal L1 for the root-key assets.
     if [ -s "$K2CR_STATE/V1.verdict.json" ] && [ -s "$K2CR_STATE/L1.verdict.json" ]; then
         if python3 "$K2CR_PY" same-files --a "$K2CR_FILES/L1/dist" --b "$K2CR_FILES/V1/dist" \
-            --names k2-root-helper-linux-x86_64,k2-node-linux-x86_64,k2-app-engine-linux-x86_64 \
+            --names "$(k2cr_dual_names)" \
             | tee -a "$K2CR_STATE/summary.txt"; then :; else bad=1; fi
+        echo "  (reported only) the daemon:" | tee -a "$K2CR_STATE/summary.txt"
+        python3 "$K2CR_PY" same-files --a "$K2CR_FILES/L1/dist" --b "$K2CR_FILES/V1/dist" \
+            --names k2-daemon-linux-x86_64 | tee -a "$K2CR_STATE/summary.txt" || true
     fi
     K2CR_COLLECTED=1
     return "$bad"
+}
+
+# The files V1 must reproduce byte for byte: the root-key assets (they
+# run as root on customer boxes). The daemon is compared too, but only
+# reported (plan §6: measure whether the daemons reproduce first).
+k2cr_dual_names() {
+    printf '%s' "k2-root-helper-linux-x86_64,k2-node-linux-x86_64,k2-app-engine-linux-x86_64"
+}
+
+# Compute mode (stage 1): copy every verified x86 file into <dist-dir>,
+# where release.sh signs and publishes it. Writes <dist-dir>/
+# SHA256SUMS-linux-x86_64.txt from L3's app-linux.sums (the Arch package's
+# line is merged in after the tag by arch-package.yml). Refuses unless
+# collect verified everything. Prints the staged names, one per line, to
+# <state>/staged.txt.
+k2cr_stage() {
+    local dist="$1" f
+    [ "${K2CR_COLLECTED:-0}" = "1" ] || { echo "  ✗ stage: nothing collected" >&2; return 1; }
+    for f in L1 L3; do
+        python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["ok"] else 1)' "$K2CR_STATE/$f.verdict.json" 2>/dev/null \
+            || { echo "  ✗ stage: $f is not verified" >&2; return 1; }
+    done
+    mkdir -p "$dist" || return 1
+    : > "$K2CR_STATE/staged.txt"
+    local bins="$K2CR_FILES/L1/dist" app="$K2CR_FILES/L3/dist" b
+    for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
+        f="$b-linux-x86_64"
+        [ -s "$bins/$f" ] && [ -s "$bins/$f.sha256" ] || { echo "  ✗ stage: $f missing from L1" >&2; return 1; }
+        cp "$bins/$f" "$bins/$f.sha256" "$dist/" || return 1
+        printf '%s\n%s\n' "$f" "$f.sha256" >> "$K2CR_STATE/staged.txt"
+    done
+    local sums="$app/app-linux.sums"
+    [ -s "$sums" ] && [ "$(grep -c . "$sums")" = 3 ] || { echo "  ✗ stage: L3's app-linux.sums is not 3 lines" >&2; return 1; }
+    while read -r _ f; do
+        [ -s "$app/$f" ] || { echo "  ✗ stage: $f missing from L3" >&2; return 1; }
+        cp "$app/$f" "$dist/" || return 1
+        echo "$f" >> "$K2CR_STATE/staged.txt"
+    done < "$sums"
+    cp "$sums" "$dist/SHA256SUMS-linux-x86_64.txt" || return 1
+    echo "SHA256SUMS-linux-x86_64.txt" >> "$K2CR_STATE/staged.txt"
+    # The copies must still be the verified bytes.
+    (cd "$dist" && sha256sum -c --quiet SHA256SUMS-linux-x86_64.txt 2>/dev/null || shasum -a 256 -c --quiet SHA256SUMS-linux-x86_64.txt) \
+        || { echo "  ✗ stage: staged packages don't match L3's sums" >&2; return 1; }
+    for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
+        f="$b-linux-x86_64"
+        (cd "$dist" && { sha256sum -c --quiet "$f.sha256" 2>/dev/null || shasum -a 256 -c --quiet "$f.sha256"; }) \
+            || { echo "  ✗ stage: $f doesn't match its .sha256" >&2; return 1; }
+    done
+    echo "  staged $(grep -c . "$K2CR_STATE/staged.txt") compute-built files in $dist" | tee -a "$K2CR_STATE/summary.txt"
 }
 
 # Shadow report: compute-built files vs this tag's GitHub assets.

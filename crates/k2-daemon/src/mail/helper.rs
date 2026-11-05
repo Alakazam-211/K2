@@ -2180,9 +2180,11 @@ mod tests {
         for gone in ["helper_asset:", "--bin k2-mail-helper"] {
             assert!(!workflow.contains(gone), "daemon-binaries.yml still ships {gone}");
         }
+        // The build matrix is JSON (fromJSON on vars.LINUX_BUILDS: a compute
+        // release builds only aarch64 here), so the keys are quoted.
         for asset in [
-            "root_asset: k2-root-helper-linux-x86_64",
-            "root_asset: k2-root-helper-linux-aarch64",
+            "\"root_asset\":\"k2-root-helper-linux-x86_64\"",
+            "\"root_asset\":\"k2-root-helper-linux-aarch64\"",
             "-p k2-root-helper",
             "gh release upload \"$TAG\" scripts/install-mail-helper.sh scripts/install-root-helper.sh --clobber",
         ] {

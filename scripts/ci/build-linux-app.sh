@@ -41,7 +41,7 @@ if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
     exit 1
 fi
 for tool in bun cargo pkg-config; do
-    command -v "$tool" >/dev/null || { echo "FATAL: $tool is not installed (--needs bun@1.2,rust@stable,sys:pkg-config)" >&2; exit 1; }
+    command -v "$tool" >/dev/null || { echo "FATAL: $tool is not installed (--needs bun@1.2,rust@<rust-toolchain.toml channel>,sys:pkg-config)" >&2; exit 1; }
 done
 pkg-config --exists webkit2gtk-4.1 || { echo "FATAL: webkit2gtk-4.1 dev package missing (sys:libwebkit2gtk-4.1-dev; owner: sudo k2-node packages allow …)" >&2; exit 1; }
 

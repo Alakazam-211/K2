@@ -1,0 +1,21 @@
+# The one Rust compiler for K2 (Rosson 2026-10-29): every machine that
+# builds K2 uses this rustc, so the Macs, the z3mbpZ release, the Linux
+# compute nodes, the Windows box and GitHub produce the same code, and two
+# Linux builders can produce the same bytes (scripts/ci/repro-build-env.sh).
+#
+# rustup reads this file. Homebrew's cargo does not: install rustup.
+# scripts/lib/rust-pin.sh reads `channel` for every K2 Compute job
+# (`--needs rust@<channel>`): an explicit `--needs rust@stable` would set
+# RUSTUP_TOOLCHAIN on the node and override this file. The GitHub
+# workflows name the same version (tests/packaging/rust-pin.sh checks).
+#
+# No `targets`: every release build is native (macOS aarch64 on z3mbpZ,
+# Linux x86_64 on the nodes, Windows on its box). A cross build adds its
+# own target (daemon-binaries.yml's aarch64 leg).
+#
+# To move to a new Rust: change `channel`, the four `toolchain:` lines in
+# .github/workflows, and run the full gate on a node.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

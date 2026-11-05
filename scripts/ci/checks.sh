@@ -41,6 +41,9 @@ part_web() {
     step "Arch/Omarchy packaging lock";            bash tests/packaging/arch-omarchy-bundle.sh
     step "Arch PKGBUILD sources, sums, syntax";    bash scripts/check-arch-pkgbuild.sh
     step "Arch PKGBUILD check on broken fixtures"; bash tests/packaging/check-arch-pkgbuild.sh
+    step "Published Arch package never changes (stubbed)"; bash tests/packaging/arch-upload-pkg.sh
+    step "Omarchy k2-bin recipe";                  bash scripts/check-omarchy-recipe.sh
+    step "Omarchy recipe check on broken fixtures"; bash tests/packaging/check-omarchy-recipe.sh
     step "Linux SHA256SUMS (stubbed)";             bash tests/packaging/linux-sums.sh
     step "Step 10.6, failed Arch build (stubbed)"; bash tests/packaging/linux-sums-step.sh
     step "Release lock (stub k2-node)";            bash tests/packaging/release-lock.sh
@@ -48,6 +51,8 @@ part_web() {
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh
     step "Update signing on z3mbpZ (stubbed)";     bash tests/packaging/updater-signing.sh
     step "CI gate scripts (stubbed)";              bash tests/packaging/ci-gate.sh
+    step "Rust pin (rust-toolchain.toml)";         bash tests/packaging/rust-pin.sh
+    step "release.sh compute mode (stubbed)";      bash tests/packaging/release-compute-mode.sh
     step "release.sh waits + Step 0.5 env (stubbed)"; bash tests/packaging/release-wait-and-preflight.sh
     step "macOS sidecars build once (stubbed)";    bash tests/packaging/build-once.sh
     step "bun install";                            bun install --frozen-lockfile

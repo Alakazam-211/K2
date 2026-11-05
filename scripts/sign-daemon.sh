@@ -33,7 +33,8 @@
 #      K2 Compute builds (--from-dir): --compute-verdict names the state dir
 #      where compute_release.py wrote <label>.verdict.json after checking
 #      each job's signed receipt; the daemon's sha256 must be in a verdict
-#      with ok:true (and, off --dry, that verdict's commit is the tag's);
+#      with ok:true (and, off --dry, that verdict's tree is the tag's tree:
+#      compute builds release.sh's preview commit, which has that tree);
 #   2. check the sha256, then scripts/lib/check-daemon-asset.py (ELF of the
 #      right arch, exactly one K2_DAEMON_BUILD marker for this version, no
 #      test-keys, k2-ptyd embedded), then the OAuth bake check
@@ -245,14 +246,23 @@ PY
 }
 
 check_compute_provenance() { # <file> <asset>
-    python3 -I - "$VERDICTS" "$2" "$(sha256_of "$1")" "$TAG_COMMIT" <<'PY' || die "$2: no ok compute verdict lists these bytes — not signing"
+    # Compute builds the release PREVIEW commit (release.sh Step 1.6c), made
+    # before Step 8.9 commits the same tree under a new commit id. So the
+    # verdict must name the tag's TREE (release.sh checks that the two trees
+    # agree before it pushes anything).
+    local tag_tree=""
+    if [ -n "$TAG_COMMIT" ]; then
+        tag_tree="$(git -C "$SRC_DIR" rev-parse --verify --quiet "$TAG_COMMIT^{tree}")" \
+            || die "can't read the tree of $TAG ($TAG_COMMIT)"
+    fi
+    python3 -I - "$VERDICTS" "$2" "$(sha256_of "$1")" "$tag_tree" <<'PY' || die "$2: no ok compute verdict lists these bytes — not signing"
 import glob, json, os, sys
-d, name, sha, commit = sys.argv[1:5]
+d, name, sha, tree = sys.argv[1:5]
 for p in sorted(glob.glob(os.path.join(d, "*.verdict.json"))):
     v = json.load(open(p))
     if v.get("ok") is not True or v.get("problems"):
         continue
-    if commit and v.get("commit") != commit:
+    if tree and v.get("tree") != tree:
         continue
     for k, meta in (v.get("files") or {}).items():
         if k.rsplit("/", 1)[-1] == name and meta.get("sha256") == sha:

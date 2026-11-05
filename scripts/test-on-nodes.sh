@@ -48,13 +48,18 @@ done
 case "$shards" in ''|*[!0-9]*) echo "usage: --shards N (1–16)" >&2; exit 2 ;; esac
 
 K2="${K2_CLI:-k2}"
+# The pinned Rust of this checkout's HEAD (rust-toolchain.toml): an explicit
+# rust@ need overrides the job checkout's file, so never rust@stable.
+# shellcheck source=scripts/lib/rust-pin.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/rust-pin.sh"
+rust_need="$(k2_rust_need HEAD)"
 common=(
     compute test --any --shards "$shards"
     --profile ci
     # No sys: packages: --any also picks k2-arch, where the Debian names
     # (zlib1g-dev, pkg-config) are package_not_approved. The Linux nodes
     # have the C build deps installed; K2_TEST_NEEDS overrides the list.
-    --needs "${K2_TEST_NEEDS:-rust@stable,cargo-nextest,cmake@3,ninja,protoc}"
+    --needs "${K2_TEST_NEEDS:-$rust_need,cargo-nextest,cmake@3,ninja,protoc}"
     --mem 16G --env CARGO_BUILD_JOBS=4
     # A cold node builds the whole workspace first.
     --timeout 2h --stall-timeout 30m --queue-timeout 2h --retries 1

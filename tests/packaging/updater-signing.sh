@@ -612,6 +612,43 @@ PY
 python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1]))["artifacts"]; sys.exit(0 if {"macos-aarch64","linux-x86_64","linux-aarch64","k2-app-engine-linux-x86_64","k2-app-engine-linux-aarch64"} == set(a) else 1)' "$rel/daemon-latest.json" \
     && pass "the released manifest lists macOS, both Linux daemons and both engines" || fail "released manifest" "$(cat "$rel/daemon-latest.json")"
 
+echo "== sign-daemon.sh: the compute path (stub gh): the verdict's tree must be the tag's =="
+# Compute builds release.sh's preview commit (Step 1.6c); Step 8.9 then
+# commits the same tree under another commit id. So the verdict is matched
+# by tree, never by commit.
+srctree="$(git -C "$srcrepo" rev-parse "refs/tags/v$V^{tree}")"
+mkcompverdict() { # <state dir> <tree>
+    mkdir -p "$1"
+    python3 -I - "$tmp/comp-dist" "$1" "$2" <<'PY'
+import hashlib, json, os, sys
+d, out, tree = sys.argv[1:4]
+files = {"dist/" + n: {"sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest(), "bytes": 1}
+         for n in sorted(os.listdir(d)) if not n.endswith(".sha256")}
+json.dump({"label": "L1", "ok": True, "commit": "d" * 40, "tree": tree, "files": files, "problems": [], "job": "j1"},
+          open(os.path.join(out, "L1.verdict.json"), "w"))
+PY
+}
+rm -rf "$tmp/comp-dist"; mkdir -p "$tmp/comp-dist"
+cp "$good/k2-daemon-linux-x86_64" "$good/k2-daemon-linux-x86_64.sha256" "$good/k2-app-engine-linux-x86_64" "$tmp/comp-dist/"
+mkcompverdict "$tmp/comp-v-good" "$srctree"
+mkcompverdict "$tmp/comp-v-other" "$(printf 'e%.0s' $(seq 1 40))"
+fresh_rel; rm -f "$STUB_REL/v$V/k2-daemon-linux-x86_64" "$STUB_REL/v$V/k2-daemon-linux-x86_64.sha256"
+if K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" --from-dir "$tmp/comp-dist" --compute-verdict "$tmp/comp-v-other" >"$tmp/cp.out" 2>&1; then
+    fail "compute: verdict for another tree" "signed"
+else
+    grep -q "k2-daemon-linux-x86_64: no ok compute verdict" "$tmp/cp.out" && ! grep -q '^UPLOAD .*\.sig' "$STUB_GH_LOG" \
+        && pass "compute: a verdict for another tree is refused (no signature uploaded)" || fail "compute other tree" "$(tail -4 "$tmp/cp.out")"
+fi
+fresh_rel; rm -f "$STUB_REL/v$V/k2-daemon-linux-x86_64" "$STUB_REL/v$V/k2-daemon-linux-x86_64.sha256"
+if K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" --from-dir "$tmp/comp-dist" --compute-verdict "$tmp/comp-v-good" >"$tmp/cp.out" 2>&1; then
+    grep -q "k2-daemon-linux-x86_64: in L1.verdict.json (job j1)" "$tmp/cp.out" && grep -q "k2-daemon-linux-aarch64: provenance ok (attested" "$tmp/cp.out" \
+        && grep -q '^UPLOAD k2-daemon-linux-x86_64$' "$STUB_GH_LOG" && grep -q '^UPLOAD k2-daemon-linux-x86_64.sig2$' "$STUB_GH_LOG" \
+        && pass "compute: the tag's tree in an ok verdict → x86 signed from the stage and uploaded; aarch64 still from GitHub's attested build" \
+        || fail "compute path" "$(tail -8 "$tmp/cp.out"; cat "$STUB_GH_LOG")"
+else
+    fail "compute path" "$(tail -20 "$tmp/cp.out")"
+fi
+
 echo "== sign-daemon.sh --preflight: the GitHub secrets, and gh can check provenance =="
 if STUB_GH_OLD=1 bash "$ROOT/scripts/sign-daemon.sh" --preflight "$V" >"$tmp/p.out" 2>&1; then
     fail "old gh" "preflight passed"
@@ -889,7 +926,7 @@ first_build=$(grep -nE '^(RUSTFLAGS=.*)?cargo |^bun |^bunx ' "$R" | grep -v ':ca
 [ -n "$env_line" ] && [ -n "$guard_line" ] && [ -n "$pre_line" ] && [ -n "$first_build" ] \
     && [ "$guard_line" -gt "$env_line" ] && [ "$pre_line" -gt "$guard_line" ] && [ "$first_build" -gt "$pre_line" ] \
     && pass "release.sh: .env → k2u_env_guard → signing preflight → first build" || fail "release.sh order" "env=$env_line guard=$guard_line pre=$pre_line build=$first_build"
-sd_line=$(grep -n 'bash "$PROJECT_DIR/scripts/sign-daemon.sh" "${VERSION}"' "$R" | head -1 | cut -d: -f1)
+sd_line=$(grep -nF 'bash "$PROJECT_DIR/scripts/sign-daemon.sh" "${DAEMON_SIGN_ARGS[@]}"' "$R" | head -1 | cut -d: -f1)
 rh_line=$(grep -n 'bash "$PROJECT_DIR/scripts/sign-root-helper.sh" "${VERSION}"' "$R" | head -1 | cut -d: -f1)
 [ -n "$sd_line" ] && [ -n "$rh_line" ] && [ "$sd_line" -lt "$rh_line" ] && pass "release.sh Step 10.5 signs the Linux daemons before the root helper" || fail "10.5 order" "$sd_line $rh_line"
 grep -q '^k2u_sign u1 "target/release/bundle/macos/K2.app.tar.gz" K2.app.tar.gz "$VERSION" \\$' "$R" \

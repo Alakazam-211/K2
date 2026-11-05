@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The compute job tiers gates (prd-compute-job-tiers-v1), one step per run,
 # meant for a compute node: `k2 compute run <node> --sha <sha> --needs
-# rust@stable,cmake@3 -- bash scripts/test/compute-tiers-gates.sh <step>`.
+# rust@1.99.1,cmake@3 -- bash scripts/test/compute-tiers-gates.sh <step>` (rust@ = the
+# rust-toolchain.toml channel: rust@stable would override the pin on the node).
 #
 # Steps: check | proto | node | core | daemon-unit | daemon-int | js | contract | typecheck | drill
 #

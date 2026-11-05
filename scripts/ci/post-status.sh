@@ -4,10 +4,17 @@
 #   scripts/ci/post-status.sh <sha> pending|success|failure|error <context> <description>
 #
 # Token: a fine-grained PAT with ONLY "Commit statuses: write" on
-# Alakazam-211/K2, never the owner's gh login. From K2_CI_STATUS_TOKEN, or
-# on macOS the login keychain item service "k2-ci-statuses", account
-# "github" (add it once: security add-generic-password -s k2-ci-statuses
-# -a github -w). The token goes to curl on stdin (-K -), never argv.
+# Alakazam-211/K2, never the owner's gh login. Looked up in this order:
+#   CI_STATUSES_TOKEN   the k2-ci-poll job's vault grant (k2 vault grant
+#                       K2_CI_STATUSES_TOKEN --to job:k2-ci-poll --as env
+#                       --env-name CI_STATUSES_TOKEN). A vault env grant
+#                       can't use a K2_* name (env_name_not_allowed).
+#   K2_CI_STATUSES_TOKEN  set by hand for a run outside the job (the old
+#                       name K2_CI_STATUS_TOKEN is still read)
+#   macOS login keychain item service "k2-ci-statuses", account "github"
+#                       (security add-generic-password -s k2-ci-statuses
+#                       -a github -w)
+# The token goes to curl on stdin (-K -), never argv.
 # No target_url: logs stay in K2 (k2 compute logs <job>).
 #
 # K2_CI_DRY_RUN=1 prints the status instead of posting (shadow runs,
@@ -30,11 +37,11 @@ if [ "${K2_CI_DRY_RUN:-0}" = "1" ]; then
     exit 0
 fi
 
-token="${K2_CI_STATUS_TOKEN:-}"
+token="${CI_STATUSES_TOKEN:-${K2_CI_STATUSES_TOKEN:-${K2_CI_STATUS_TOKEN:-}}}"
 if [ -z "$token" ] && command -v security >/dev/null 2>&1; then
     token="$(security find-generic-password -s k2-ci-statuses -a github -w 2>/dev/null || true)"
 fi
-[ -n "$token" ] || { echo "FATAL: no statuses token (K2_CI_STATUS_TOKEN or keychain item k2-ci-statuses)" >&2; exit 1; }
+[ -n "$token" ] || { echo "FATAL: no statuses token (CI_STATUSES_TOKEN from the job's vault grant, K2_CI_STATUSES_TOKEN by hand, or keychain item k2-ci-statuses)" >&2; exit 1; }
 
 printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -sS -f -K - \
     -X POST "${K2_CI_API:-https://api.github.com}/repos/$slug/statuses/$sha" \

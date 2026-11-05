@@ -45,6 +45,11 @@ env:
 jobs:
   build-linux-app:
     name: Build K2 app bundles (x86_64 deb/rpm/AppImage)
+    # With the repo variable LINUX_BUILDS=compute a tag push builds nothing
+    # here: release.sh published the bundles from K2 Compute before the tag
+    # (prd-ci-release-on-compute-stage1-v1 §7). The sums job needs this one,
+    # so it skips too. A manual dispatch always builds (the fallback).
+    if: github.event_name != 'push' || vars.LINUX_BUILDS != 'compute'
     runs-on: [self-hosted, linux, k2-linux]
     outputs:
       sums_b64: ${{ steps.collect.outputs.sums_b64 }}
@@ -55,7 +60,10 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch head 2026-10-22)
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # action pinned; the Rust version is toolchain: below
+        with:
+          # = rust-toolchain.toml's channel (tests/packaging/rust-pin.sh)
+          toolchain: 1.99.1
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3

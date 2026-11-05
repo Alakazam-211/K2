@@ -16,7 +16,8 @@
 # report (the reports and logs are kept under .bs-timings/).
 #
 # Meant for compute nodes, from the repo root:
-#   k2 compute run <node> --sha <sha> --needs rust@stable,cmake@3 --detach \
+#   k2 compute run <node> --sha <sha> --needs rust@1.99.1,cmake@3 --detach \
+#     (rust@ = rust-toolchain.toml's channel; rust@stable would override it)
 #     --artifact '.bs-timings/**' -- \
 #     env CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 bash scripts/measure-clean-build.sh [sidecars]
 #

@@ -33,10 +33,12 @@
 #   BUILD_OAUTH=placeholder → built WITHOUT them, recorded as
 #     "oauth": "placeholder" in build-info.json. Shadow builds only: such a
 #     daemon must never ship (release.sh refuses it), and its hash can't
-#     match the GitHub-built one. Whether the values may travel to nodes
-#     as plain --env is Rosson's call (plan §9 Q4); K2_COMPUTE_OAUTH=secret
-#     (compute-release.sh) sends them as vault secrets instead.
+#     match the GitHub-built one. Release builds use K2_COMPUTE_OAUTH=secret
+#     (compute-release.sh, Rosson 2026-10-29): vault secrets sealed to the
+#     node, never in argv, the job plan or logs.
 #   Neither → refused (the same FATAL as every release build).
+#   build-info.json says which ("oauth") and whether a Microsoft client id
+#   was baked too ("oauth_microsoft"; never a value).
 #
 # Paths: always remapped, the same way on every Linux builder
 # (scripts/ci/repro-build-env.sh: checkout → /k2, cargo home → /cargo,
@@ -172,7 +174,13 @@ done
 VERSION="$(grep -m1 '^version = ' crates/k2-daemon/Cargo.toml | sed 's/version = "\(.*\)"/\1/')"
 PTYD_SHA="$(_k2_sha256_of "$K2_PTYD_EMBED")"
 EXPORT_SHA="$(_k2_sha256_of "$K2_EXPORT_EMBED")"
-K2_BI_OUT="$OUT" K2_BI_ARCH="$ARCH" K2_BI_VERSION="$VERSION" K2_BI_OAUTH="$OAUTH_MODE" \
+# Whether a Microsoft client id was baked too (never the value): a shadow
+# diff against GitHub's daemon can come from that alone.
+OAUTH_MS=false
+if [ "$OAUTH_MODE" = "baked" ] && ! _k2_oauth_is_placeholder "${K2_MICROSOFT_CLIENT_ID:-}"; then
+    OAUTH_MS=true
+fi
+K2_BI_OUT="$OUT" K2_BI_ARCH="$ARCH" K2_BI_VERSION="$VERSION" K2_BI_OAUTH="$OAUTH_MODE" K2_BI_OAUTH_MS="$OAUTH_MS" \
 K2_BI_COMMIT="$(k2_ci_rev HEAD "${BUILD_COMMIT:-unknown}")" \
 K2_BI_TREE="$(k2_ci_rev 'HEAD^{tree}' "${BUILD_TREE:-unknown}")" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_CARGO="$(cargo -V)" \
@@ -193,6 +201,7 @@ info = {
     "commit": os.environ["K2_BI_COMMIT"],
     "tree": os.environ["K2_BI_TREE"],
     "oauth": os.environ["K2_BI_OAUTH"],
+    "oauth_microsoft": os.environ["K2_BI_OAUTH_MS"] == "true",
     "remap": "/k2 /cargo /target",
     "ptyd_sha256": os.environ["K2_BI_PTYD"],
     "export_sha256": os.environ["K2_BI_EXPORT"],

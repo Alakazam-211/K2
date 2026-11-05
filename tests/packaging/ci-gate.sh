@@ -95,12 +95,21 @@ echo "post-status.sh:"
 # of scripts/ci), never through git on $ROOT: a K2 Compute node's checkout
 # belongs to the node user, so git there refuses it ("dubious ownership").
 # run-checks.sh needs the sha to be a commit in its own checkout.
-mkdir -p "$tmp/rc/scripts/ci"
+mkdir -p "$tmp/rc/scripts/ci" "$tmp/rc/scripts/lib"
 cp "$ROOT"/scripts/ci/*.sh "$tmp/rc/scripts/ci/"
+cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$tmp/rc/scripts/lib/"
 git -C "$tmp/rc" init -q
+# An old commit without the pin, then one pinned to a version unlike the
+# repo's own, so the tests see the pin read AT THE SHA, not from the tree.
 git -C "$tmp/rc" add scripts
 git -C "$tmp/rc" -c user.email=t@t -c user.name=t commit -q -m checks
+OLD_SHA="$(git -C "$tmp/rc" rev-parse HEAD)"
+printf '[toolchain]\nchannel = "1.98.7"\ncomponents = ["rustfmt"]\n' > "$tmp/rc/rust-toolchain.toml"
+git -C "$tmp/rc" add rust-toolchain.toml
+git -C "$tmp/rc" -c user.email=t@t -c user.name=t commit -q -m pin
 SHA="$(git -C "$tmp/rc" rev-parse HEAD)"
+# The working tree says something else: run-checks must not read it.
+printf '[toolchain]\nchannel = "9.9.9"\n' > "$tmp/rc/rust-toolchain.toml"
 out="$(K2_CI_DRY_RUN=1 bash "$ROOT/scripts/ci/post-status.sh" "$SHA" success k2-compute/web "job abc on k2n4-vin, 9m")"
 [[ "$out" == *'"state": "success"'* && "$out" == *'"context": "k2-compute/web"'* ]] && pass "dry run prints the status" || fail "dry run" "$out"
 for bad in "nothex success k2-compute/web d" "$SHA green k2-compute/web d" "$SHA success web d" "$SHA success k2-compute/a/b d"; do
@@ -129,7 +138,7 @@ python3 "$tmp/srv.py" "$tmp/port" "$tmp/reqs" &
 srv_pid=$!
 for _ in $(seq 50); do [ -s "$tmp/port" ] && break; sleep 0.1; done
 API="http://127.0.0.1:$(cat "$tmp/port")"
-K2_CI_API="$API" K2_CI_STATUS_TOKEN="tok-secret" bash "$ROOT/scripts/ci/post-status.sh" "$SHA" failure k2-compute/rust-test "job x: exit 100" >/dev/null
+K2_CI_API="$API" CI_STATUSES_TOKEN="tok-secret" K2_CI_STATUSES_TOKEN="tok-hand" bash "$ROOT/scripts/ci/post-status.sh" "$SHA" failure k2-compute/rust-test "job x: exit 100" >/dev/null
 python3 - "$tmp/reqs" "$SHA" <<'PY' && pass "posts state/context/description with the bearer token" || fail "post" "$(cat "$tmp/reqs")"
 import json, sys
 r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
@@ -138,6 +147,27 @@ assert r["auth"] == "Bearer tok-secret", r
 assert r["body"] == {"state": "failure", "context": "k2-compute/rust-test", "description": "job x: exit 100"}, r
 assert "target_url" not in r["body"]
 PY
+K2_CI_API="$API" K2_CI_STATUSES_TOKEN="tok-hand" K2_CI_STATUS_TOKEN="tok-old" bash "$ROOT/scripts/ci/post-status.sh" "$SHA" success k2-compute/web "ok" >/dev/null
+python3 -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); assert r["auth"]=="Bearer tok-hand", r' "$tmp/reqs" \
+    && pass "token order: CI_STATUSES_TOKEN (the job grant), then K2_CI_STATUSES_TOKEN (by hand)" || fail "token order" "$(cat "$tmp/reqs")"
+K2_CI_API="$API" K2_CI_STATUS_TOKEN="tok-old" bash "$ROOT/scripts/ci/post-status.sh" "$SHA" success k2-compute/web "ok" >/dev/null
+python3 -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); assert r["auth"]=="Bearer tok-old", r' "$tmp/reqs" \
+    && pass "the old by-hand name K2_CI_STATUS_TOKEN still works" || fail "old name" "$(cat "$tmp/reqs")"
+grep -q "CI_STATUSES_TOKEN" "$ROOT/scripts/ci/post-status.sh" && ! grep -q -- "--env-name K2_" "$ROOT/scripts/ci/post-status.sh" "$ROOT/docs/ci-on-k2-compute.md" \
+    && pass "the documented job grant uses an env name the vault allows (not K2_*)" || fail "env name" "a K2_* --env-name is refused by the vault"
+
+echo "compute-tier.sh (the CLI one release behind):"
+mkdir -p "$tmp/tier-old" "$tmp/tier-new"
+printf '#!/bin/sh\n[ "$1 $2" = "compute --help" ] && { echo "k2 compute — help"; echo "  [--gate] [--exclusive]"; exit 0; }\n[ "$1" = --version ] && echo "k2 0.46.4"\n' > "$tmp/tier-old/k2"
+printf '#!/bin/sh\n[ "$1 $2" = "compute --help" ] && { echo "k2 compute — help"; echo "  [--tier standard|priority|batch|ci]"; exit 0; }\n' > "$tmp/tier-new/k2"
+chmod +x "$tmp/tier-old/k2" "$tmp/tier-new/k2"
+tier() { K2_BIN="$1" bash -c 'source "$1"; k2_compute_tier_args "$2" | tr "\n" " "' _ "$ROOT/scripts/lib/compute-tier.sh" "$2"; }
+[ "$(tier "$tmp/tier-new/k2" ci)" = "--tier ci " ] && [ "$(tier "$tmp/tier-new/k2" standard)" = "--tier standard " ] \
+    && pass "a 0.46.5+ CLI: --tier <tier>" || fail "new cli" "$(tier "$tmp/tier-new/k2" ci)"
+[ "$(tier "$tmp/tier-old/k2" ci)" = "--gate " ] && [ "$(tier "$tmp/tier-old/k2" standard)" = "" ] \
+    && pass "a 0.46.4 CLI: --gate for ci (the same tier), nothing for standard" || fail "old cli" "$(tier "$tmp/tier-old/k2" ci)"
+rc=0; K2_BIN="$tmp/tier-old/k2" bash -c 'source "$1"; k2_compute_tier_args priority' _ "$ROOT/scripts/lib/compute-tier.sh" >/dev/null 2>"$tmp/tier-err" || rc=$?
+[ "$rc" = 2 ] && grep -q "has no --tier priority" "$tmp/tier-err" && pass "a 0.46.4 CLI asked for priority: refused" || fail "old priority" "rc=$rc $(cat "$tmp/tier-err")"
 
 echo "run-checks.sh (stub k2):"
 mkdir -p "$tmp/bin"
@@ -165,8 +195,11 @@ case "$2" in
         ex=0; st=done
         [ "${STUB_FAIL:-}" = "$part" ] && ex=100
         [ "${STUB_LOST:-}" = "$part" ] && { st=interrupted; ex=null; }
-        printf '{"job": "%s", "short": "%s", "node": "%s", "state": "%s", "exit": %s, "durationSecs": 600, "reason": "node_lost"}\n' \
-            "$job" "${job:0:8}" "$(cat "$STUB_DIR/$job.node")" "$st" "$ex"
+        [ "${STUB_RUNNING:-}" = "$part" ] && [ ! -e "$STUB_DIR/done-$part" ] && { st=running; ex=null; }
+        reason=node_lost
+        [ "${STUB_SUPERSEDED:-}" = "$part" ] && { st=cancelled; ex=null; reason=superseded; }
+        printf '{"job": "%s", "short": "%s", "node": "%s", "state": "%s", "exit": %s, "durationSecs": 600, "reason": "%s"}\n' \
+            "$job" "${job:0:8}" "$(cat "$STUB_DIR/$job.node")" "$st" "$ex" "$reason"
         ;;
     *) exit 2 ;;
 esac
@@ -179,7 +212,7 @@ run_checks() {
     export STUB_DIR="$tmp/s-$name" STUB_CALLS="$tmp/c-$name" K2_CI_STATE="$tmp/state-$name"
     mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
     local rc=0
-    bash "$tmp/rc/scripts/ci/run-checks.sh" "$SHA" "$@" > "$tmp/o-$name" 2>&1 || rc=$?
+    K2_CI_REAP_PAUSE=0 bash "$tmp/rc/scripts/ci/run-checks.sh" "${RC_SHA:-$SHA}" "$@" > "$tmp/o-$name" 2>&1 || rc=$?
     echo "$rc"
 }
 final() { grep "context\": \"k2-compute/$2\"" "$tmp/o-$1" | tail -1; }
@@ -189,10 +222,15 @@ rc="$(run_checks ok)"
 for p in web rust-check rust-test audit; do
     [[ "$(final ok "$p")" == *'"state": "success"'* ]] && pass "$p: success status" || fail "$p success" "$(final ok "$p")"
 done
-grep -q "k2 compute run k2n4-vin --sha $SHA .*-- bash scripts/ci/checks.sh web" "$tmp/c-ok" \
-    && grep -q "k2 compute run k2n6-hil --sha $SHA .*-- bash scripts/ci/checks.sh rust-test" "$tmp/c-ok" \
-    && grep -q "k2 compute run k2n5-vin --sha $SHA .*--needs rust@stable,python@3.12,sys:pkg-config .*-- bash scripts/ci/checks.sh audit" "$tmp/c-ok" \
-    && pass "parts go to their nodes at the exact sha" || fail "submit lines" "$(cat "$tmp/c-ok")"
+[ "$(grep -c "k2 compute run --any --os linux --arch x86_64 --sha $SHA --tier ci .*-- bash scripts/ci/checks.sh " "$tmp/c-ok")" = 4 ] \
+    && pass "every part: K2 picks a granted Linux x86 node, at the exact sha, --tier ci" || fail "submit lines" "$(cat "$tmp/c-ok")"
+grep -q -- "--needs rust@1.98.7,cargo-nextest,.*checks.sh rust-test" "$tmp/c-ok" \
+    && grep -q -- "--needs rust@1.98.7,python@3.12,sys:pkg-config .*checks.sh audit" "$tmp/c-ok" \
+    && ! grep -q "rust@stable\|rust@9.9.9" "$tmp/c-ok" \
+    && pass "rust need = rust-toolchain.toml at the sha (not the tree, not stable)" || fail "pin at sha" "$(cat "$tmp/c-ok")"
+grep -q -- "--mem 24G" "$tmp/c-ok" && ! grep -q -- "--supersede" "$tmp/c-ok" \
+    && pass "24G per part; no --supersede without --ref" || fail "mem/supersede" "$(cat "$tmp/c-ok")"
+[ ! -e "$tmp/state-ok/inflight/$SHA.tsv" ] && pass "a finished run leaves nothing in flight" || fail "inflight left" "$(ls "$tmp/state-ok/inflight")"
 [ "$(grep "checks.sh rust-" "$tmp/c-ok" | grep -c -- "--needs [^ ]*cargo-nextest")" = 2 ] \
     && pass "rust parts ask the node for cargo-nextest" || fail "nextest need" "$(cat "$tmp/c-ok")"
 [ "$(grep -c '"state": "pending"' "$tmp/o-ok")" -ge 4 ] && pass "pending posted before the results" || fail "pending" "$(cat "$tmp/o-ok")"
@@ -219,11 +257,47 @@ unset STUB_REFUSE
 [ "$rc" = 1 ] && [[ "$(final refuse web)" == *'"state": "error"'* ]] && [[ "$(final refuse web)" == *not_granted* ]] \
     && pass "refused submit → error status with the code" || fail "refuse" "rc=$rc $(final refuse web)"
 
-export K2_CI_NODE_WEB=any
-rc="$(run_checks any --parts web)"
+export K2_CI_NODE_WEB=k2n8-vin
+rc="$(run_checks named --parts web)"
 unset K2_CI_NODE_WEB
-[ "$rc" = 0 ] && grep -q 'k2 compute run --any --os linux --arch x86_64 --sha' "$tmp/c-any" && ! grep -q 'checks.sh rust' "$tmp/c-any" \
-    && pass "--parts and node 'any'" || fail "any" "$(cat "$tmp/c-any")"
+[ "$rc" = 0 ] && grep -q 'k2 compute run k2n8-vin --sha' "$tmp/c-named" && ! grep -q 'checks.sh rust' "$tmp/c-named" \
+    && pass "--parts, and K2_CI_NODE_WEB pins a part to a node" || fail "named" "$(cat "$tmp/c-named")"
+
+RC_SHA="$OLD_SHA" rc="$(RC_SHA="$OLD_SHA" run_checks old --parts rust-check)"
+grep -q -- "--needs rust@stable," "$tmp/c-old" && grep -q "built before the pin" "$tmp/o-old" \
+    && pass "a commit from before the pin: rust@stable, with a note" || fail "old commit" "$(cat "$tmp/c-old" "$tmp/o-old")"
+
+export STUB_SUPERSEDED=web
+rc="$(run_checks sup --parts web,rust-check --ref refs/heads/integ/x)"
+unset STUB_SUPERSEDED
+grep -q -- "--supersede k2-ci/integ/x/web " "$tmp/c-sup" && grep -q -- "--supersede k2-ci/integ/x/rust-check " "$tmp/c-sup" \
+    && pass "--ref: each job supersedes the branch's older queued job for its part" || fail "supersede key" "$(cat "$tmp/c-sup")"
+[ "$rc" = 1 ] && [[ "$(final sup web)" == *'"state": "error"'* && "$(final sup web)" == *superseded* ]] \
+    && pass "a superseded job → error \"superseded by a newer push\"" || fail "superseded" "rc=$rc $(final sup web)"
+
+echo "run-checks.sh --submit-only / --reap (never waits):"
+export STUB_DIR="$tmp/s-split" STUB_CALLS="$tmp/c-split" K2_CI_STATE="$tmp/state-split" STUB_RUNNING=rust-test
+mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
+bash "$tmp/rc/scripts/ci/run-checks.sh" "$SHA" --submit-only --parts web,rust-test > "$tmp/o-split" 2>&1
+[ -s "$K2_CI_STATE/inflight/$SHA.tsv" ] && ! grep -q "compute wait\|compute get" "$STUB_CALLS" \
+    && pass "--submit-only submits and returns (no wait, no get)" || fail "submit-only" "$(cat "$STUB_CALLS")"
+rc=0; bash "$tmp/rc/scripts/ci/run-checks.sh" "$SHA" --submit-only --parts web > "$tmp/o-split2" 2>&1 || rc=$?
+[ "$rc" = 1 ] && grep -q "already in flight" "$tmp/o-split2" && pass "a second submit of an in-flight sha is refused" || fail "double submit" "rc=$rc $(cat "$tmp/o-split2")"
+rc=0; bash "$tmp/rc/scripts/ci/run-checks.sh" --reap "$SHA" > "$tmp/o-reap1" 2>&1 || rc=$?
+[ "$rc" = 10 ] && ! grep -q '"state": "success"' "$tmp/o-reap1" && [ -s "$K2_CI_STATE/inflight/$SHA.tsv" ] \
+    && pass "--reap while a part runs: exit 10, no final status yet" || fail "reap running" "rc=$rc $(cat "$tmp/o-reap1")"
+touch "$STUB_DIR/done-rust-test"
+rc=0; bash "$tmp/rc/scripts/ci/run-checks.sh" --reap "$SHA" > "$tmp/o-reap2" 2>&1 || rc=$?
+[ "$rc" = 0 ] && [ "$(grep -c '"state": "success"' "$tmp/o-reap2")" = 2 ] && [ ! -e "$K2_CI_STATE/inflight/$SHA.tsv" ] \
+    && [ -s "$K2_CI_STATE/runs/$SHA.json" ] && pass "--reap once done: final statuses, record, nothing in flight" || fail "reap done" "rc=$rc $(cat "$tmp/o-reap2")"
+rm -f "$STUB_DIR/done-rust-test"
+bash "$tmp/rc/scripts/ci/run-checks.sh" "$SHA" --submit-only --parts rust-test --wait-min 0 > /dev/null 2>&1
+rc=0; bash "$tmp/rc/scripts/ci/run-checks.sh" --reap "$SHA" > "$tmp/o-reap3" 2>&1 || rc=$?
+unset STUB_RUNNING
+[ "$rc" = 1 ] && grep -q '"state": "error"' "$tmp/o-reap3" && grep -q "at the deadline" "$tmp/o-reap3" \
+    && pass "past the deadline: error \"still running at the deadline\"" || fail "deadline" "rc=$rc $(cat "$tmp/o-reap3")"
+rc=0; bash "$tmp/rc/scripts/ci/run-checks.sh" --reap "$SHA" > /dev/null 2>&1 || rc=$?
+[ "$rc" = 1 ] && pass "--reap with nothing in flight fails loudly" || fail "reap nothing" "rc=$rc"
 
 echo "k2-ci-poll.sh (local origin):"
 git init -q --bare "$tmp/origin.git"
@@ -235,28 +309,44 @@ git -C "$tmp/ci" push -q origin HEAD:refs/heads/integ/x
 git -C "$tmp/ci" push -q origin HEAD:refs/heads/feature/y
 MAIN="$(git -C "$tmp/ci" rev-parse HEAD~1)"
 INTEG="$(git -C "$tmp/ci" rev-parse HEAD)"
-mkdir -p "$tmp/ci/scripts/ci"
+mkdir -p "$tmp/ci/scripts/ci" "$tmp/ci/scripts/lib"
 cp "$ROOT"/scripts/ci/*.sh "$tmp/ci/scripts/ci/"
+cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$tmp/ci/scripts/lib/"
 export STUB_DIR="$tmp/s-poll" STUB_CALLS="$tmp/c-poll" K2_CI_STATE="$tmp/state-poll"
 mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
-bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p1" 2>&1
-grep -q "checking refs/heads/main @ ${MAIN:0:12}" "$tmp/p1" && pass "first pass checks main's tip" || fail "pass 1" "$(cat "$tmp/p1")"
-bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p2" 2>&1
-grep -q "checking refs/heads/integ/x @ ${INTEG:0:12}" "$tmp/p2" && pass "second pass checks integ/x" || fail "pass 2" "$(cat "$tmp/p2")"
+K2_CI_MAX_INFLIGHT=1 bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p1" 2>&1
+grep -q "checking refs/heads/main @ ${MAIN:0:12}" "$tmp/p1" && grep -q "integ/x @ ${INTEG:0:12} waits" "$tmp/p1" \
+    && ! grep -q "compute wait" "$STUB_CALLS" && [ -s "$K2_CI_STATE/inflight/$MAIN.tsv" ] \
+    && pass "pass 1: submits main's tip and returns; integ/x waits (max in flight 1)" || fail "pass 1" "$(cat "$tmp/p1" "$STUB_CALLS")"
+grep -q -- "--supersede k2-ci/main/web " "$STUB_CALLS" && pass "the poller passes the branch (--supersede k2-ci/main/<part>)" || fail "poll ref" "$(cat "$STUB_CALLS")"
+K2_CI_MAX_INFLIGHT=1 bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p2" 2>&1
+grep -q "${MAIN:0:12} → pass" "$tmp/p2" && grep -q "checking refs/heads/integ/x @ ${INTEG:0:12}" "$tmp/p2" \
+    && pass "pass 2: reaps main (statuses), then submits integ/x" || fail "pass 2" "$(cat "$tmp/p2")"
 bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p3" 2>&1
-! grep -q checking "$tmp/p3" && pass "nothing new: no run (feature/* is not watched)" || fail "pass 3" "$(cat "$tmp/p3")"
-[ "$(wc -l < "$K2_CI_STATE/seen.tsv" | tr -d ' ')" = 2 ] && [ -s "$K2_CI_STATE/logs/$MAIN.log" ] \
-    && pass "seen.tsv and per-sha logs" || fail "state" "$(cat "$K2_CI_STATE/seen.tsv")"
-grep -q '"state": "success"' "$K2_CI_STATE/logs/$INTEG.log" && pass "the poller's run posted statuses (dry run)" || fail "poll statuses" "$(cat "$K2_CI_STATE/logs/$INTEG.log")"
+grep -q "${INTEG:0:12} → pass" "$tmp/p3" && ! grep -q checking "$tmp/p3" \
+    && pass "pass 3: reaps integ/x; nothing new (feature/* is not watched)" || fail "pass 3" "$(cat "$tmp/p3")"
+[ "$(wc -l < "$K2_CI_STATE/seen.tsv" | tr -d ' ')" = 2 ] && [ -s "$K2_CI_STATE/logs/$MAIN.log" ] && [ -z "$(ls "$K2_CI_STATE/inflight")" ] \
+    && pass "seen.tsv, per-sha logs, nothing left in flight" || fail "state" "$(cat "$K2_CI_STATE/seen.tsv")"
+grep -q '"state": "success"' "$K2_CI_STATE/logs/$INTEG.log" && grep -q '"state": "pending"' "$K2_CI_STATE/logs/$INTEG.log" \
+    && pass "the poller's runs posted pending then final statuses (dry run)" || fail "poll statuses" "$(cat "$K2_CI_STATE/logs/$INTEG.log")"
 # A live lock holds the pass; a dead one is cleared.
 git -C "$tmp/ci" -c user.email=t@t -c user.name=t commit -q --allow-empty -m three
 git -C "$tmp/ci" push -q origin HEAD:refs/heads/main
 mkdir "$K2_CI_STATE/poll.lock"; echo $$ > "$K2_CI_STATE/poll.lock/pid"
 bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p4" 2>&1
-grep -q "another run holds" "$tmp/p4" && ! grep -q checking "$tmp/p4" && pass "a live lock: no second run" || fail "live lock" "$(cat "$tmp/p4")"
+grep -q "another pass holds" "$tmp/p4" && ! grep -q checking "$tmp/p4" && pass "a live lock: no second pass" || fail "live lock" "$(cat "$tmp/p4")"
 echo 999999 > "$K2_CI_STATE/poll.lock/pid"
 bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p5" 2>&1
 grep -q "checking refs/heads/main" "$tmp/p5" && [ ! -d "$K2_CI_STATE/poll.lock" ] && pass "a dead poller's lock is cleared" || fail "dead lock" "$(cat "$tmp/p5")"
+# --mark-seen: the next tips are recorded, not checked.
+git -C "$tmp/ci" -c user.email=t@t -c user.name=t commit -q --allow-empty -m four
+git -C "$tmp/ci" push -q origin HEAD:refs/heads/integ/z
+: > "$STUB_CALLS"
+bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --mark-seen > "$tmp/p6" 2>&1
+grep -q "marked 1 tip" "$tmp/p6" && ! grep -q "compute run" "$STUB_CALLS" && grep -q "refs/heads/integ/z" "$K2_CI_STATE/seen.tsv" \
+    && pass "--mark-seen records today's tips without a run" || fail "mark-seen" "$(cat "$tmp/p6" "$STUB_CALLS")"
+bash "$tmp/ci/scripts/ci/k2-ci-poll.sh" --once > "$tmp/p7" 2>&1
+! grep -q "checking refs/heads/integ/z" "$tmp/p7" && pass "a marked tip is not checked" || fail "marked checked" "$(cat "$tmp/p7")"
 
 echo "gates read files, not git (node checkouts: dubious ownership):"
 # A `git` that refuses every repo, the way git refuses a node checkout the

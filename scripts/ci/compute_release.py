@@ -21,8 +21,13 @@ never runs a fetched binary.
 
   compute_release.py compare --compute DIR --github DIR [--out report.json]
       Shadow report: each compute-built file vs the GitHub-built file of
-      the same name (sha256, size, build markers). Never fails on a
-      difference (that's the finding); exit 2 only on bad input.
+      the same name (sha256, size, build markers, and for a differing ELF
+      the toolchain lines of its .comment section, so the report names the
+      cause). Never fails on a difference (that's the finding); exit 2
+      only on bad input.
+
+  compute_release.py elf-comment FILE
+      The toolchain lines of an ELF's .comment section (rustc, GCC, ld).
 
   compute_release.py same-files --a DIR --b DIR --names N1,N2,...
       Dual build (G12): the named files are byte-identical in both dirs.
@@ -223,11 +228,45 @@ def check_job(a):
         "duration_secs": get.get("durationSecs"),
         "tools": body.get("tools"),
         "oauth": (info or {}).get("oauth"),
+        "oauth_microsoft": (info or {}).get("oauth_microsoft"),
         "files": {n: {"sha256": v["sha256"], "bytes": v["bytes"]} for n, v in files.items()},
         "problems": problems,
     }
     print(json.dumps(verdict, indent=2, sort_keys=True))
     return 0 if not problems else 1
+
+
+def elf_comment(path):
+    """The toolchain lines in a 64-bit little-endian ELF's .comment section
+    (rustc, GCC, clang, linker), sorted and de-duplicated; [] when the file
+    is not such an ELF or has no .comment. Read-only, never executed."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        return []
+    shoff = int.from_bytes(data[40:48], "little")
+    shentsize = int.from_bytes(data[58:60], "little")
+    shnum = int.from_bytes(data[60:62], "little")
+    shstrndx = int.from_bytes(data[62:64], "little")
+    if shoff == 0 or shentsize < 64 or shstrndx >= shnum or shoff + shnum * shentsize > len(data):
+        return []
+
+    def sh(i):
+        b = shoff + i * shentsize
+        name = int.from_bytes(data[b:b + 4], "little")
+        off = int.from_bytes(data[b + 24:b + 32], "little")
+        size = int.from_bytes(data[b + 32:b + 40], "little")
+        return name, off, size
+
+    _, str_off, str_size = sh(shstrndx)
+    names = data[str_off:str_off + str_size]
+    for i in range(shnum):
+        name, off, size = sh(i)
+        end = names.find(b"\0", name)
+        if names[name:end] == b".comment":
+            raw = data[off:off + size].split(b"\0")
+            return sorted({x.decode("utf-8", "replace").strip() for x in raw if x.strip()})
+    return []
 
 
 def markers_of(path):
@@ -254,7 +293,9 @@ def compare(a):
                 continue
             p = os.path.join(dirpath, n)
             g = os.path.join(a.github, n)
-            row = {"name": n, "compute_sha256": sha256_file(p), "compute_bytes": os.path.getsize(p)}
+            rel = os.path.relpath(dirpath, a.compute)
+            row = {"name": n, "job": rel.split(os.sep)[0] if rel != "." else "",
+                   "compute_sha256": sha256_file(p), "compute_bytes": os.path.getsize(p)}
             if not os.path.isfile(g):
                 row.update(match=None, note="no GitHub asset of that name")
             else:
@@ -263,8 +304,17 @@ def compare(a):
                 if not row["match"]:
                     cm, gm = markers_of(p), markers_of(g)
                     row["markers_equal"] = cm == gm
+                    cc, gc = elf_comment(p), elf_comment(g)
+                    if cc or gc:
+                        row["toolchain_compute"] = cc
+                        row["toolchain_github"] = gc
+                        row["toolchain_equal"] = cc == gc
                     if n.startswith("k2-daemon-") and oauth == "placeholder":
                         row["note"] = "bytes differ: expected, this daemon was built with the OAuth placeholder and GitHub bakes the real client (K2_COMPUTE_OAUTH=secret builds it the same way)"
+                    elif (cc or gc) and cc != gc:
+                        row["note"] = "bytes differ: built with another toolchain (see toolchain_compute vs toolchain_github)"
+                    elif n.endswith((".deb", ".rpm", ".AppImage")):
+                        row["note"] = "bytes differ: packages carry archive timestamps; not expected to match"
                     else:
                         row["note"] = "bytes differ (same rustc, path remap and OAuth mode are needed; see build-info.json)"
             rows.append(row)
@@ -282,9 +332,14 @@ def compare(a):
             json.dump(report, f, indent=2, sort_keys=True)
     for r in rows:
         state = {True: "same", False: "DIFFERS", None: "no github asset"}[r["match"]]
-        print("  %-36s %-15s compute %s… (%d B)%s" % (
-            r["name"], state, r["compute_sha256"][:12], r["compute_bytes"],
+        print("  %-3s %-36s %-15s compute %s… (%d B)%s" % (
+            r["job"], r["name"], state, r["compute_sha256"][:12], r["compute_bytes"],
             "  github %s… (%d B)" % (r["github_sha256"][:12], r["github_bytes"]) if "github_sha256" in r else ""))
+        if r.get("match") is False and r.get("note"):
+            print("      %s" % r["note"])
+            if r.get("toolchain_equal") is False:
+                print("      compute: %s" % "; ".join(r["toolchain_compute"]))
+                print("      github:  %s" % "; ".join(r["toolchain_github"]))
     print("  shadow: %(match)d same, %(differ)d differ, %(github_missing)d without a GitHub asset" % summary)
     return 0
 
@@ -318,6 +373,8 @@ def main():
     s.add_argument("--compute", required=True)
     s.add_argument("--github", required=True)
     s.add_argument("--out")
+    s = sub.add_parser("elf-comment")
+    s.add_argument("file")
     s = sub.add_parser("same-files")
     s.add_argument("--a", required=True)
     s.add_argument("--b", required=True)
@@ -333,6 +390,10 @@ def main():
         return check_job(a)
     if a.cmd == "compare":
         return compare(a)
+    if a.cmd == "elf-comment":
+        for line in elf_comment(a.file):
+            print(line)
+        return 0
     return same_files(a)
 
 

@@ -83,6 +83,18 @@ jobs:
       - name: CI gate on K2 Compute (stubbed)
         run: bash tests/packaging/ci-gate.sh
 
+      # One Rust everywhere: rust-toolchain.toml, these workflows' toolchain:
+      # lines and every K2 Compute job's rust@ need agree; release.sh's
+      # Step 0.4 check (stub rustup/rustc).
+      - name: Rust pin (rust-toolchain.toml)
+        run: bash tests/packaging/rust-pin.sh
+
+      # release.sh K2_LINUX_BUILDS=compute (stage 1): pre-flight vs the repo
+      # variable, fatal before the tag, the tree check before the push,
+      # staging, and the workflows' LINUX_BUILDS switch (checks.yml stays manual).
+      - name: release.sh compute mode (stubbed)
+        run: bash tests/packaging/release-compute-mode.sh
+
       # The macOS sidecars build in ONE cargo call, and release.sh's Step
       # 8.5 standalone daemon uses the same package set (stub cargo/bun).
       # release.sh's dot-progress waits and the Step 0.5 mac build env
@@ -137,7 +149,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch head 2026-10-22)
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # action pinned; the Rust version is toolchain: below
+        with:
+          # = rust-toolchain.toml's channel (tests/packaging/rust-pin.sh)
+          toolchain: 1.99.1
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -295,7 +310,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch head 2026-10-22)
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # action pinned; the Rust version is toolchain: below
+        with:
+          # = rust-toolchain.toml's channel (tests/packaging/rust-pin.sh)
+          toolchain: 1.99.1
 
       - name: Advisory allow-list rules (reason, review date, expiry)
         run: python3 scripts/ci/audit-ignores.py check

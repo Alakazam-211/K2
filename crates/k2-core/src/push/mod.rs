@@ -49,6 +49,9 @@ pub mod budget;
 pub mod preview;
 // One log line + ring record per push attempt (0.46.3, `k2 push log`).
 pub mod attempts;
+// One log line + ring record per push device row added, changed or
+// removed (0.46.9, `k2 push log`).
+pub mod device_log;
 // End-to-end encrypted pushes (prd-e2e-push-v1 rev 2, 0.46.3): additive,
 // beside today's path. `seal` = HPKE PSK + padding; `e2e` = who gets what.
 pub mod e2e;
@@ -1787,6 +1790,26 @@ impl K2Cloud {
         self.dispatch_in_mode(event, badge_key, devices, e2e::server_mode())
     }
 
+    /// [`Self::dispatch`] after the send-time re-check (0.46.9,
+    /// [`crate::push_devices::recheck_for_send`]): `devices` was read a
+    /// moment ago, and a row may have gone since (the session reaper, an
+    /// APNs 410 prune, the phone turning push off). Each skipped device gets
+    /// one attempt record (`error=skipped:gone` or
+    /// `skipped:no_live_login`, `path=none`). Every daemon send path and
+    /// [`PushTarget::send`] go through here.
+    pub fn dispatch_rechecked(
+        &self,
+        event: &PushEvent,
+        badge_key: &str,
+        devices: &[crate::push_devices::PushDevice],
+    ) -> Result<(), PushError> {
+        let (send, skipped) = crate::push_devices::recheck_for_send(devices);
+        for (d, why) in &skipped {
+            attempts::record_recheck_skip(event, &d.device_id, why.as_wire());
+        }
+        self.dispatch(event, badge_key, &send)
+    }
+
     /// [`Self::dispatch`] with the server mode given.
     pub fn dispatch_in_mode(
         &self,
@@ -2198,7 +2221,7 @@ impl PushTarget for K2Cloud {
                 _ => login,
             };
             let key = crate::read_state::badge_key_for_shared(&person);
-            self.dispatch(event, &key, &group)?;
+            self.dispatch_rechecked(event, &key, &group)?;
         }
         Ok(())
     }
@@ -2504,7 +2527,53 @@ mod tests {
             .collect();
         assert!(!ids.contains(&dead_id), "dead-marked token pruned");
         assert!(ids.contains(&live_id), "live token survives");
+        // 0.46.9: the prune logs `[push] device remove reason=vendor_dead`.
+        let rec = attempts::short(&dead_id);
+        let logged = device_log::recent(Some(&rec));
+        assert!(
+            logged.iter().any(|e| e.reason == "vendor_dead" && e.action == "remove"),
+            "the 410 prune is logged: {logged:?}"
+        );
         crate::push_devices::remove_device(&live_id).expect("cleanup");
+    }
+
+    /// 0.46.9: the send-time re-check. The device list was read, then one
+    /// row went (the reaper, a 410, the phone's unregister) before the
+    /// relay call: only the row still there is sent to, and the dropped one
+    /// gets an attempt record `skipped:gone` with no relay call.
+    #[test]
+    fn a_send_skips_a_device_removed_after_the_list_was_read() {
+        let short = |l: &str| format!("{}-{l}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let (live_id, gone_id) = (short("rc-live"), short("rc-gone"));
+        let (live_token, gone_token) = (unique_token("rc-live"), unique_token("rc-gone"));
+        crate::push_devices::upsert_device(&live_id, "apns", &live_token, "owner").expect("live");
+        crate::push_devices::upsert_device(&gone_id, "apns", &gone_token, "owner").expect("gone");
+        let read: Vec<_> = crate::push_devices::list_devices()
+            .expect("list")
+            .into_iter()
+            .filter(|d| d.device_id == live_id || d.device_id == gone_id)
+            .collect();
+        assert_eq!(read.len(), 2);
+        assert!(crate::push_devices::remove_device_because(&gone_id, device_log::Reason::NoLiveLogin).expect("reaped"));
+
+        let sender = MockSender::new(serde_json::json!({ "results": [] }));
+        let cloud = K2Cloud::with_sender("https://push.k2.dev", "gw", sender.clone());
+        let event = PushEvent::ProjectMessageCreated { project_name: "Apollo".into(), group_id: "pg-rc".into() };
+        cloud.dispatch_rechecked(&event, "bk-rc", &read).expect("send");
+        let calls = sender.calls();
+        assert_eq!(calls.len(), 1);
+        let tokens: Vec<&str> = calls[0].2["devices"].as_array().expect("devices").iter().map(|d| d["token"].as_str().expect("token")).collect();
+        assert_eq!(tokens, [live_token.as_str()], "the removed row is never sent to");
+        let skipped = attempts::recent(Some(&gone_id));
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        assert_eq!(skipped[0].error.as_deref(), Some("skipped:gone"));
+        assert_eq!((skipped[0].path, skipped[0].lane, skipped[0].bytes), ("none", "none", 0));
+        assert_eq!(attempts::recent(Some(&live_id))[0].error, None);
+
+        // Every row gone: no relay call at all.
+        crate::push_devices::remove_device(&live_id).expect("cleanup");
+        cloud.dispatch_rechecked(&event, "bk-rc", &read).expect("nothing to send");
+        assert_eq!(sender.calls().len(), 1, "no devices left, no call");
     }
 
     #[test]

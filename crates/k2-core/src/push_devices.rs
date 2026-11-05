@@ -16,6 +16,8 @@
 
 use rusqlite::params;
 
+use crate::push::device_log::{self, Action, Reason};
+
 /// The vendor platforms the registry accepts. Anything else is
 /// refused loudly at [`upsert_device`] time — a typo'd platform must
 /// never sit in the table waiting to confuse the gateway.
@@ -179,26 +181,28 @@ pub fn upsert_device_e2e(
     // is the same install registered twice (an old id the phone dropped):
     // that person's every push reached the phone twice. The new id
     // replaces it.
+    // 0.46.9: one `[push]` line per row change, emitted after the commit
+    // (a rolled-back register logs nothing).
+    let mut events: Vec<device_log::DeviceEvent> = Vec::new();
     for dup in duplicate_token_rows(&tx, platform, token, device_id)?
         .into_iter()
-        .filter(|(_, login)| person_of(login) == me)
-        .map(|(id, _)| id)
+        .filter(|f| person_of(&f.username) == me)
     {
-        crate::push_device_keys::delete_key_in(&tx, &dup)?;
-        tx.execute("DELETE FROM push_devices WHERE device_id = ?1", params![dup])
+        crate::push_device_keys::delete_key_in(&tx, &dup.device_id)?;
+        tx.execute("DELETE FROM push_devices WHERE device_id = ?1", params![dup.device_id])
             .map_err(|e| format!("push device duplicate delete failed: {e}"))?;
+        events.push(device_log::event(
+            Action::Remove,
+            Reason::DuplicateToken,
+            dup.row(),
+            Some(format!("replaced_by={}", crate::push::attempts::short(device_id))),
+        ));
     }
-    let prev_user: Option<String> = tx
-        .query_row(
-            "SELECT username FROM push_devices WHERE device_id = ?1",
-            params![device_id],
-            |r| r.get(0),
-        )
-        .map(Some)
-        .or_else(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            e => Err(format!("push device upsert failed: {e}")),
-        })?;
+    let prev = facts_where(&tx, "device_id = ?1", &device_id)
+        .map_err(|e| format!("push device upsert failed: {e}"))?
+        .into_iter()
+        .next();
+    let prev_user: Option<String> = prev.as_ref().map(|p| p.username.clone());
     tx.execute(
         "INSERT INTO push_devices (device_id, platform, token, username, \
          created_at, updated_at, last_seen_at, previews, session_sid) \
@@ -228,21 +232,108 @@ pub fn upsert_device_e2e(
         .query_row(&format!("{DEVICE_SELECT} WHERE device_id = ?1"), params![device_id], row_to_device)
         .map_err(|e| format!("push device readback failed: {e}"))?;
     tx.commit().map_err(|e| format!("push device upsert failed: {e}"))?;
+    let row = device_log::Row::companion(device_id, platform, username, session_sid, token);
+    events.push(match &prev {
+        None => device_log::event(Action::Add, Reason::Register, row, None),
+        Some(p) if p.username != username || p.session_sid.as_deref() != session_sid => device_log::event(
+            Action::Update,
+            Reason::Moved,
+            row,
+            Some(format!(
+                "from login={} session={}",
+                p.username,
+                p.session_sid.as_deref().map(device_log::short_session).unwrap_or_else(|| "-".to_string())
+            )),
+        ),
+        Some(p) if p.token != token || p.platform != platform => {
+            device_log::event(Action::Update, Reason::TokenRotated, row, None)
+        }
+        Some(_) => device_log::event(Action::Update, Reason::Refresh, row, None),
+    });
+    drop(conn);
+    for e in events {
+        device_log::emit(e);
+    }
     Ok(device)
 }
 
-/// Other rows holding this platform's vendor token: `(device_id, username)`.
+/// The facts of one row a change log line needs (the token is hashed by
+/// [`device_log`], never logged).
+#[derive(Debug, Clone)]
+struct RowFacts {
+    device_id: String,
+    platform: String,
+    token: String,
+    username: String,
+    session_sid: Option<String>,
+}
+
+impl RowFacts {
+    fn row(&self) -> device_log::Row<'_> {
+        device_log::Row::companion(&self.device_id, &self.platform, &self.username, self.session_sid.as_deref(), &self.token)
+    }
+}
+
+const FACTS_SELECT: &str = "SELECT device_id, platform, token, username, session_sid FROM push_devices";
+
+fn row_to_facts(r: &rusqlite::Row) -> rusqlite::Result<RowFacts> {
+    Ok(RowFacts {
+        device_id: r.get(0)?,
+        platform: r.get(1)?,
+        token: r.get(2)?,
+        username: r.get(3)?,
+        session_sid: r.get(4)?,
+    })
+}
+
+/// The rows a `WHERE` clause (one parameter) selects.
+fn facts_where(conn: &rusqlite::Connection, clause: &str, p: &dyn rusqlite::ToSql) -> Result<Vec<RowFacts>, String> {
+    let mut st = conn
+        .prepare(&format!("{FACTS_SELECT} WHERE {clause} ORDER BY rowid"))
+        .map_err(|e| format!("push device read failed: {e}"))?;
+    let rows = st.query_map([p], row_to_facts).map_err(|e| format!("push device read failed: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("push device read failed: {e}"))
+}
+
+/// Delete one row (its key row first, V13) and log why. `Ok(false)` when it
+/// was already gone.
+fn delete_logged(conn: &rusqlite::Connection, f: &RowFacts, reason: Reason) -> Result<bool, String> {
+    crate::push_device_keys::delete_key_in(conn, &f.device_id)?;
+    let n = conn
+        .execute("DELETE FROM push_devices WHERE device_id = ?1", params![f.device_id])
+        .map_err(|e| format!("push device delete failed: {e}"))?;
+    if n > 0 {
+        device_log::record(Action::Remove, reason, f.row(), None);
+    }
+    Ok(n > 0)
+}
+
+/// Delete every row a `WHERE` clause selects, one logged line each.
+fn delete_where_logged(
+    conn: &rusqlite::Connection,
+    clause: &str,
+    p: &dyn rusqlite::ToSql,
+    reason: Reason,
+) -> Result<usize, String> {
+    let mut n = 0;
+    for f in facts_where(conn, clause, p)? {
+        n += usize::from(delete_logged(conn, &f, reason)?);
+    }
+    Ok(n)
+}
+
+/// Other rows holding this platform's vendor token.
 fn duplicate_token_rows(
     conn: &rusqlite::Connection,
     platform: &str,
     token: &str,
     device_id: &str,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<RowFacts>, String> {
     let mut st = conn
-        .prepare("SELECT device_id, username FROM push_devices WHERE platform = ?1 AND token = ?2 AND device_id != ?3")
+        .prepare(&format!("{FACTS_SELECT} WHERE platform = ?1 AND token = ?2 AND device_id != ?3"))
         .map_err(|e| format!("push device duplicate check failed: {e}"))?;
     let rows = st
-        .query_map(params![platform, token, device_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .query_map(params![platform, token, device_id], row_to_facts)
         .map_err(|e| format!("push device duplicate check failed: {e}"))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("push device duplicate check failed: {e}"))
 }
@@ -277,30 +368,22 @@ pub fn dedupe_by_token(devices: &[PushDevice]) -> Vec<PushDevice> {
         .collect()
 }
 
-/// Delete the key rows of the devices a `WHERE` clause selects (V13: every
-/// delete path deletes key rows explicitly; the FK is the second guard).
-fn delete_keys_where(conn: &rusqlite::Connection, clause: &str, p: &dyn rusqlite::ToSql) -> Result<usize, String> {
-    conn.execute(
-        &format!("DELETE FROM push_device_keys WHERE device_id IN (SELECT device_id FROM push_devices WHERE {clause})"),
-        [p],
-    )
-    .map_err(|e| format!("push key delete failed: {e}"))
+/// Remove a device by its id, logged as the owner's remove
+/// ([`remove_device_because`] names another reason). `Ok(true)` when a row
+/// was removed, `Ok(false)` when the id was unknown.
+pub fn remove_device(device_id: &str) -> Result<bool, String> {
+    remove_device_because(device_id, Reason::OwnerRemove)
 }
 
-/// Unregister a device by its id. `Ok(true)` when a row was removed,
-/// `Ok(false)` when the id was unknown (an unregister of an already-
-/// gone device is a fine no-op — the companion toggles blind).
-pub fn remove_device(device_id: &str) -> Result<bool, String> {
+/// Remove a device by its id and log `reason` ([`Reason::PhoneOff`] for the
+/// phone's own unregister, [`Reason::OwnerRemove`] for `k2 push device
+/// remove`). Its key row goes first (V13). `Ok(false)` when the id was
+/// unknown (an unregister of an already-gone device is a fine no-op: the
+/// companion toggles blind).
+pub fn remove_device_because(device_id: &str, reason: Reason) -> Result<bool, String> {
     let db = crate::db::shared();
     let conn = db.lock();
-    crate::push_device_keys::delete_key_in(&conn, device_id)?;
-    let n = conn
-        .execute(
-            "DELETE FROM push_devices WHERE device_id = ?1",
-            params![device_id.trim()],
-        )
-        .map_err(|e| format!("push device delete failed: {e}"))?;
-    Ok(n > 0)
+    Ok(delete_where_logged(&conn, "device_id = ?1", &device_id.trim(), reason)? > 0)
 }
 
 /// One device by its id, or `None`.
@@ -363,17 +446,17 @@ pub fn device_session_sid(device_id: &str) -> Result<Option<String>, String> {
 }
 
 /// Drop every device registered by one of these login sessions (`cu_…`
-/// ids): the session was logged out, revoked or expired. Returns the
-/// number of rows removed. Owner-token and legacy rows (NULL) never match.
+/// ids): the session was logged out, revoked or expired (`reason` says
+/// which; each row logs one line). Returns the number of rows removed.
+/// Owner-token and legacy rows (NULL) never match.
 pub fn remove_devices_for_sessions(
     conn: &rusqlite::Connection,
     session_sids: &[String],
+    reason: Reason,
 ) -> Result<usize, String> {
     let mut n = 0;
     for sid in session_sids {
-        delete_keys_where(conn, "session_sid = ?1", sid)?;
-        n += conn
-            .execute("DELETE FROM push_devices WHERE session_sid = ?1", params![sid])
+        n += delete_where_logged(conn, "session_sid = ?1", sid, reason)
             .map_err(|e| format!("push device session cleanup failed: {e}"))?;
     }
     Ok(n)
@@ -427,9 +510,7 @@ pub fn prune_devices_without_live_session(
             }
         };
         if dead {
-            crate::push_device_keys::delete_key_in(conn, &device_id)?;
-            n += conn
-                .execute("DELETE FROM push_devices WHERE device_id = ?1", params![device_id])
+            n += delete_where_logged(conn, "device_id = ?1", &device_id, Reason::NoLiveLogin)
                 .map_err(|e| format!("push device sweep failed: {e}"))?;
         }
     }
@@ -443,12 +524,89 @@ pub fn prune_devices_without_live_session(
 pub fn prune_device_by_token(token: &str) -> Result<usize, String> {
     let db = crate::db::shared();
     let conn = db.lock();
-    delete_keys_where(&conn, "token = ?1", &token)?;
-    conn.execute(
-        "DELETE FROM push_devices WHERE token = ?1",
-        params![token],
-    )
-    .map_err(|e| format!("push device prune failed: {e}"))
+    delete_where_logged(&conn, "token = ?1", &token, Reason::VendorDead)
+        .map_err(|e| format!("push device prune failed: {e}"))
+}
+
+/// Delete every row of one login, one logged line each (the Connect user
+/// was removed; TP11). Returns how many went.
+pub fn remove_devices_for_username(conn: &rusqlite::Connection, username: &str) -> Result<usize, String> {
+    delete_where_logged(conn, "username = ?1", &username, Reason::UserRemoved)
+}
+
+/// Why a device is not sent to at send time ([`recheck_for_send`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendSkip {
+    /// The row is gone, or now holds another token, platform or login.
+    Gone,
+    /// The row's login session is no longer live.
+    NoLiveLogin,
+}
+
+impl SendSkip {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Gone => "gone",
+            Self::NoLiveLogin => "no_live_login",
+        }
+    }
+}
+
+/// The send-time re-check (0.46.9). A device list read before a send can
+/// race a delete: on a live server the session reaper dropped a row two
+/// seconds after a send had read it. So right before the relay call each
+/// device is read again. It goes only when its row still exists with the
+/// same token, platform and login and, for a row linked to a login session,
+/// that session is still live
+/// ([`crate::connect_users::live_push_session_sids`]). Cost: one indexed
+/// read per device, plus one session-file read when any row is linked.
+///
+/// Returns the devices to send to and the ones skipped, with why. A DB read
+/// error keeps the list as it was (the send never fails on the re-check; the
+/// reaper still removes a dead row). A session store that can't be read
+/// skips the linked rows: no live login can be proven, and sign-ins fail on
+/// the same file.
+pub fn recheck_for_send(devices: &[PushDevice]) -> (Vec<PushDevice>, Vec<(PushDevice, SendSkip)>) {
+    let current: Vec<(PushDevice, Option<RowFacts>)> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let mut out = Vec::with_capacity(devices.len());
+        for d in devices {
+            match facts_where(&conn, "device_id = ?1", &d.device_id) {
+                Ok(rows) => out.push((d.clone(), rows.into_iter().next())),
+                Err(e) => {
+                    crate::log_debug!("[push] WARN send re-check skipped: {e}");
+                    return (devices.to_vec(), Vec::new());
+                }
+            }
+        }
+        out
+    };
+    let linked = current.iter().any(|(_, f)| f.as_ref().is_some_and(|f| f.session_sid.is_some()));
+    let live = if linked {
+        match crate::connect_users::live_push_session_sids() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                crate::log_debug!("[push] WARN send re-check: session store unreadable: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut send = Vec::new();
+    let mut skipped = Vec::new();
+    for (d, f) in current {
+        let same = |f: &RowFacts| f.token == d.token && f.platform == d.platform && f.username == d.username;
+        match f {
+            Some(f) if same(&f) => match &f.session_sid {
+                Some(sid) if !live.as_ref().is_some_and(|l| l.contains(sid)) => skipped.push((d, SendSkip::NoLiveLogin)),
+                _ => send.push(d),
+            },
+            _ => skipped.push((d, SendSkip::Gone)),
+        }
+    }
+    (send, skipped)
 }
 
 #[cfg(test)]
@@ -578,11 +736,11 @@ mod tests {
         let db = crate::db::shared();
         let conn = db.lock();
         assert_eq!(
-            remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_a)).expect("old session"),
+            remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_a), Reason::Logout).expect("old session"),
             0,
             "the old login no longer owns the re-linked phone"
         );
-        assert_eq!(remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_new)).expect("end"), 1);
+        assert_eq!(remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_new), Reason::Logout).expect("end"), 1);
         drop(conn);
         assert!(get_device(&a).expect("get a").is_none(), "its session ended: row gone");
         assert!(get_device(&b).expect("get b").is_some(), "another session of the same user keeps its row");
@@ -593,7 +751,7 @@ mod tests {
         assert_eq!(device_session_sid(&b).expect("b sid"), None);
         let db = crate::db::shared();
         let conn = db.lock();
-        assert_eq!(remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_b)).expect("end b"), 0);
+        assert_eq!(remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_b), Reason::Logout).expect("end b"), 0);
         drop(conn);
         remove_device(&b).expect("cleanup");
         remove_device(&own).expect("cleanup");
@@ -752,5 +910,125 @@ mod tests {
         let out = dedupe_by_token(&[row("old", "t1", 10), row("other", "t2", 5), row("new", "t1", 20)]);
         let ids: Vec<_> = out.iter().map(|d| d.device_id.as_str()).collect();
         assert_eq!(ids, ["other", "new"]);
+    }
+
+    // ── 0.46.9: one `[push]` record per row change; the send re-check ──
+
+    /// A device id whose first 8 characters are unique, so this test's
+    /// records in the process-wide ring are its own.
+    fn uid(label: &str) -> String {
+        format!("{}-{label}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+    }
+
+    /// `action reason` of one device's records, oldest first.
+    fn logged(id: &str) -> Vec<String> {
+        crate::push::device_log::recent(Some(id)).into_iter().map(|e| format!("{} {}", e.action, e.reason)).collect()
+    }
+
+    #[test]
+    fn every_register_kind_logs_one_record_with_its_reason() {
+        let id = uid("kinds");
+        let (t1, t2) = (tok("kinds-1"), tok("kinds-2"));
+        let sid = format!("cu_{}", uuid::Uuid::new_v4().simple());
+        upsert_device(&id, "apns", &t1, "owner").expect("register");
+        upsert_device(&id, "apns", &t1, "owner").expect("refresh");
+        upsert_device(&id, "apns", &t2, "owner").expect("token rotated");
+        upsert_device_for_session(&id, "apns", &t2, "gina", None, Some(&sid)).expect("moved");
+        assert_eq!(logged(&id), ["add register", "update refresh", "update token_rotated", "update moved"]);
+        let recs = crate::push::device_log::recent(Some(&id));
+        assert_eq!(recs[0].token, token_fingerprint(&t1), "the fingerprint, never the token");
+        assert_eq!(recs[0].login, "owner");
+        assert_eq!(recs[0].session, None);
+        assert_eq!(recs[3].login, "gina");
+        assert_eq!(recs[3].session.as_deref(), Some(&sid[..crate::push::device_log::SESSION_LEN]));
+        assert_eq!(recs[3].detail.as_deref(), Some("from login=owner session=-"));
+        for r in &recs {
+            assert!(!r.line().contains(&t1) && !r.line().contains(&t2), "{}", r.line());
+        }
+        remove_device(&id).expect("cleanup");
+    }
+
+    #[test]
+    fn the_duplicate_token_delete_logs_the_old_row_and_what_replaced_it() {
+        let t = tok("dup-log");
+        let (old, new) = (uid("dup-old"), uid("dup-new"));
+        upsert_device(&old, "apns", &t, "owner").expect("old");
+        upsert_device(&new, "apns", &t, "owner").expect("new");
+        assert_eq!(logged(&old), ["add register", "remove duplicate_token"]);
+        let rm = crate::push::device_log::recent(Some(&old)).pop().expect("record");
+        assert_eq!(rm.detail, Some(format!("replaced_by={}", &new[..8])));
+        assert_eq!(logged(&new), ["add register"]);
+        remove_device(&new).expect("cleanup");
+    }
+
+    #[test]
+    fn phone_off_owner_remove_and_a_dead_token_each_log_their_reason() {
+        let (a, b, c) = (uid("off"), uid("owner"), uid("dead"));
+        let dead = tok("dead-log");
+        upsert_device(&a, "apns", &tok("off"), "owner").expect("a");
+        upsert_device(&b, "fcm", &tok("owner"), "owner").expect("b");
+        upsert_device(&c, "apns", &dead, "owner").expect("c");
+        assert!(remove_device_because(&a, Reason::PhoneOff).expect("phone off"));
+        assert!(remove_device(&b).expect("owner remove"));
+        assert_eq!(prune_device_by_token(&dead).expect("410"), 1);
+        assert_eq!(logged(&a), ["add register", "remove phone_off"]);
+        assert_eq!(logged(&b), ["add register", "remove owner_remove"]);
+        assert_eq!(logged(&c), ["add register", "remove vendor_dead"]);
+        // A miss deletes nothing and logs nothing.
+        assert!(!remove_device_because(&a, Reason::PhoneOff).expect("miss"));
+        assert_eq!(logged(&a).len(), 2);
+    }
+
+    #[test]
+    fn ending_a_session_and_the_sweep_log_each_phone() {
+        let (a, s) = (uid("sess-end"), uid("sweep"));
+        let sid = format!("cu_{}", uuid::Uuid::new_v4().simple());
+        upsert_device_for_session(&a, "apns", &tok("se"), "gina", None, Some(&sid)).expect("a");
+        let db = crate::db::shared();
+        let conn = db.lock();
+        assert_eq!(remove_devices_for_sessions(&conn, std::slice::from_ref(&sid), Reason::Revoked).expect("end"), 1);
+        drop(conn);
+        assert_eq!(logged(&a), ["add register", "remove revoked"]);
+        // The sweep, on its own DB.
+        let _db = crate::db::scoped_for_test();
+        let dead_sid = format!("cu_{}", uuid::Uuid::new_v4().simple());
+        upsert_device_for_session(&s, "apns", &tok("sw"), "gina", None, Some(&dead_sid)).expect("s");
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let n = prune_devices_without_live_session(&conn, &Default::default(), &Default::default(), 0, i64::MAX).expect("sweep");
+        assert_eq!(n, 1);
+        drop(conn);
+        assert_eq!(logged(&s), ["add register", "remove no_live_login"]);
+    }
+
+    /// The race seen live: a send read the device list, then the reaper
+    /// dropped a row before the relay call. The re-check right before the
+    /// call keeps only rows that still exist unchanged.
+    #[test]
+    fn the_send_recheck_drops_rows_gone_or_changed_since_the_read() {
+        let (keep, gone, rotated, moved) = (uid("rc-keep"), uid("rc-gone"), uid("rc-rot"), uid("rc-moved"));
+        for id in [&keep, &gone, &rotated, &moved] {
+            upsert_device(id, "apns", &format!("tok-{id}"), "owner").expect("register");
+        }
+        let read: Vec<PushDevice> = list_devices()
+            .expect("list")
+            .into_iter()
+            .filter(|d| [&keep, &gone, &rotated, &moved].contains(&&d.device_id))
+            .collect();
+        assert_eq!(read.len(), 4);
+        // Between the read and the send:
+        assert!(remove_device_because(&gone, Reason::PhoneOff).expect("gone"));
+        upsert_device(&rotated, "apns", &tok("rc-new"), "owner").expect("rotated");
+        upsert_device(&moved, "apns", &format!("tok-{moved}"), "gina").expect("moved to another login");
+        let (send, skipped) = recheck_for_send(&read);
+        assert_eq!(send.iter().map(|d| d.device_id.as_str()).collect::<Vec<_>>(), [keep.as_str()]);
+        let mut why: Vec<(String, &str)> = skipped.iter().map(|(d, w)| (d.device_id.clone(), w.as_wire())).collect();
+        why.sort();
+        let mut want = vec![(gone.clone(), "gone"), (rotated.clone(), "gone"), (moved.clone(), "gone")];
+        want.sort();
+        assert_eq!(why, want);
+        for id in [&keep, &rotated, &moved] {
+            remove_device(id).expect("cleanup");
+        }
     }
 }

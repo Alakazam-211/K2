@@ -36,6 +36,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+use crate::push::device_log::Reason as PushReason;
+
 /// Default session lifetime. A connect-user's session token is valid
 /// for 7 days from issue (PRD connect-login-edge-only T1; was 30); after
 /// that they re-login — the desktop client silently revives from its
@@ -1570,9 +1572,24 @@ fn save_sessions(store: &SessionStore) -> Result<(), String> {
 /// stale record dropped, the reaper) takes its phone push registrations
 /// with it ([`end_push_registrations`]) — one hook, so no end path can
 /// forget. It runs after the session lock is released.
+///
+/// 0.46.9: each dropped phone logs one `[push]` line; this plain form says
+/// `session_ended`. [`update_sessions_because`] names the reason (logout,
+/// revoke, expiry).
 fn update_sessions<R>(f: impl FnOnce(&mut SessionStore) -> Result<R, String>) -> Result<R, String> {
-    let (r, ended) = update_sessions_locked(f)?;
-    end_push_registrations(&ended);
+    update_sessions_because(PushReason::SessionEnded, |store, _| f(store))
+}
+
+/// [`update_sessions`] with the reason the phone push registrations of the
+/// sessions it ends are logged under. `f` may change the reason (one
+/// lookup can end a record because it expired or because it was revoked).
+fn update_sessions_because<R>(
+    why: PushReason,
+    f: impl FnOnce(&mut SessionStore, &mut PushReason) -> Result<R, String>,
+) -> Result<R, String> {
+    let mut why = why;
+    let (r, ended) = update_sessions_locked(|store| f(store, &mut why))?;
+    end_push_registrations(&ended, why);
     Ok(r)
 }
 
@@ -1636,7 +1653,7 @@ fn note_ended_devices(store: &mut SessionStore, devices_before: &[String]) {
 /// fatal to the session change: a failure is logged and the reaper's sweep
 /// ([`prune_push_devices_without_live_session`]) catches the row later. No
 /// open DB (a process that never opened it) means nothing to drop here.
-fn end_push_registrations(ended_digests: &[String]) {
+fn end_push_registrations(ended_digests: &[String], why: PushReason) {
     if ended_digests.is_empty() {
         return;
     }
@@ -1645,7 +1662,7 @@ fn end_push_registrations(ended_digests: &[String]) {
     };
     let sids: Vec<String> = ended_digests.iter().map(|d| sid_from_digest(d)).collect();
     let conn = db.lock();
-    match crate::push_devices::remove_devices_for_sessions(&conn, &sids) {
+    match crate::push_devices::remove_devices_for_sessions(&conn, &sids, why) {
         Ok(0) => {}
         Ok(n) => crate::log_debug!("[connect_users] ended sessions dropped {n} push device(s)"),
         Err(e) => crate::log_debug!("[connect_users] WARN push devices not dropped: {e}"),
@@ -1666,23 +1683,7 @@ pub fn prune_push_devices_without_live_session() -> Result<usize, String> {
     // Taken BEFORE the read: a row registered at or after this second may
     // belong to a session newer than the snapshot, so the prune skips it.
     let taken_at = Utc::now();
-    // tmp+rename writes: a plain read sees a whole store.
-    let store = load_sessions()?;
-    let mut live_sids = std::collections::HashSet::new();
-    let mut live_users = std::collections::HashSet::new();
-    let mut states: HashMap<String, Option<(bool, u64)>> = HashMap::new();
-    for rec in &store.sessions {
-        if rec.expires_at <= taken_at {
-            continue;
-        }
-        let state = states
-            .entry(rec.username.clone())
-            .or_insert_with(|| user_auth_state(&rec.username));
-        if matches!(state, Some((disabled, epoch)) if !*disabled && *epoch == rec.token_epoch) {
-            live_sids.insert(sid_from_digest(&rec.token_digest));
-            live_users.insert(rec.username.clone());
-        }
-    }
+    let (live_sids, live_users) = live_sessions_at(taken_at)?;
     let legacy_cutoff = (taken_at - Duration::days(SESSION_TTL_DAYS)).timestamp();
     let db = crate::db::try_shared().ok_or_else(|| "database not open".to_string())?;
     let conn = db.lock();
@@ -1693,6 +1694,40 @@ pub fn prune_push_devices_without_live_session() -> Result<usize, String> {
         legacy_cutoff,
         taken_at.timestamp(),
     )
+}
+
+/// The live sessions at `at`: their `cu_…` ids and their users. A session
+/// counts as live when its record exists, has not expired, and its user
+/// exists, is enabled and still has the record's epoch (exactly what
+/// [`validate_session`] accepts). `Err` when the store can't be read.
+fn live_sessions_at(
+    at: DateTime<Utc>,
+) -> Result<(std::collections::HashSet<String>, std::collections::HashSet<String>), String> {
+    // tmp+rename writes: a plain read sees a whole store.
+    let store = load_sessions()?;
+    let mut live_sids = std::collections::HashSet::new();
+    let mut live_users = std::collections::HashSet::new();
+    let mut states: HashMap<String, Option<(bool, u64)>> = HashMap::new();
+    for rec in &store.sessions {
+        if rec.expires_at <= at {
+            continue;
+        }
+        let state = states
+            .entry(rec.username.clone())
+            .or_insert_with(|| user_auth_state(&rec.username));
+        if matches!(state, Some((disabled, epoch)) if !*disabled && *epoch == rec.token_epoch) {
+            live_sids.insert(sid_from_digest(&rec.token_digest));
+            live_users.insert(rec.username.clone());
+        }
+    }
+    Ok((live_sids, live_users))
+}
+
+/// The `cu_…` ids of the sessions live right now: the push send-time
+/// re-check ([`crate::push_devices::recheck_for_send`], 0.46.9). Read-only:
+/// never rewrites the store.
+pub fn live_push_session_sids() -> Result<std::collections::HashSet<String>, String> {
+    Ok(live_sessions_at(Utc::now())?.0)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1999,7 +2034,7 @@ fn lookup_session(token: &str) -> Lookup {
     // user) so a missing/disabled/epoch-bumped user is rejected. Done
     // inside the update so the disk delete of an invalid record is atomic
     // with the validity decision.
-    let result = update_sessions(|store| {
+    let result = update_sessions_because(PushReason::SessionEnded, |store, why| {
         let now = Utc::now();
         // Find the record whose digest matches, in constant time across
         // ALL records (don't early-return on the first mismatch — that
@@ -2029,6 +2064,7 @@ fn lookup_session(token: &str) -> Lookup {
         // Expired? Reap + reject.
         if store.sessions[idx].expires_at <= now {
             store.sessions.remove(idx);
+            *why = PushReason::SessionExpired;
             return Ok(gone);
         }
 
@@ -2056,6 +2092,7 @@ fn lookup_session(token: &str) -> Lookup {
             }
             _ => {
                 store.sessions.remove(idx);
+                *why = PushReason::Revoked;
                 Ok(gone)
             }
         }
@@ -2304,7 +2341,7 @@ pub fn revoke_device_session(id: &str, only_user: Option<&str>) -> Result<Option
         Some(u) => Some(normalize_username(u)?),
         None => None,
     };
-    let removed = update_sessions(|store| {
+    let removed = update_sessions_because(PushReason::Revoked, |store, _| {
         let pos = store.sessions.iter().position(|s| {
             s.device.is_some() && s.session_id == id && only.as_ref().is_none_or(|u| *u == s.username)
         });
@@ -2325,7 +2362,7 @@ pub fn revoke_device_session(id: &str, only_user: Option<&str>) -> Result<Option
 /// kick route reports it as `revokedSessions`).
 pub fn revoke_user_sessions(username: &str) -> usize {
     let target = normalize_username(username).unwrap_or_else(|_| username.to_string());
-    let removed: Vec<String> = update_sessions(|store| {
+    let removed: Vec<String> = update_sessions_because(PushReason::Revoked, |store, _| {
         let mut gone = Vec::new();
         store.sessions.retain(|s| {
             if s.username == target {
@@ -2382,7 +2419,7 @@ pub fn logout_session(token: &str) -> Option<String> {
     }
     let presented = token_digest(token);
     let presented_bytes = presented.as_bytes();
-    let r = update_sessions(|store| {
+    let r = update_sessions_because(PushReason::Logout, |store, _| {
         let mut found: Option<(usize, String)> = None;
         for (i, rec) in store.sessions.iter().enumerate() {
             let eq: bool = rec.token_digest.as_bytes().ct_eq(presented_bytes).into();
@@ -2412,7 +2449,7 @@ pub fn logout_session(token: &str) -> Option<String> {
 /// GH#22) so a headless daemon still evicts expired sessions. Idempotent.
 pub fn reap_expired_sessions() -> usize {
     let now = Utc::now();
-    update_sessions(|store| {
+    update_sessions_because(PushReason::SessionExpired, |store, _| {
         let before = store.sessions.len();
         store.sessions.retain(|s| s.expires_at > now);
         Ok(before - store.sessions.len())
@@ -4096,6 +4133,19 @@ mod tests {
         .expect("register device");
     }
 
+    /// 0.46.9: the `[push]` device records of one login with one reason
+    /// (`action:device`, sorted). Logins are unique per test, so parallel
+    /// tests never mix.
+    fn push_events(login: &str, reason: &str) -> Vec<String> {
+        let mut v: Vec<String> = crate::push::device_log::recent(None)
+            .into_iter()
+            .filter(|e| e.login == login && e.reason == reason)
+            .map(|e| format!("{}:{}", e.action, e.device))
+            .collect();
+        v.sort();
+        v
+    }
+
     fn push_ids() -> Vec<String> {
         let mut ids: Vec<String> = crate::push_devices::list_devices()
             .expect("list devices")
@@ -4120,8 +4170,10 @@ mod tests {
             crate::push_devices::upsert_device("phone-owner", "apns", "apns-owner", "owner").expect("owner");
             assert_eq!(push_ids(), vec!["phone-a", "phone-b", "phone-owner"]);
 
+            assert_eq!(push_events("pushmulti", "register"), vec!["add:phone-a", "add:phone-b"]);
             assert_eq!(logout_session(&a), Some("pushmulti".to_string()));
             assert_eq!(push_ids(), vec!["phone-b", "phone-owner"], "only the logged-out phone goes");
+            assert_eq!(push_events("pushmulti", "logout"), vec!["remove:phone-a"], "the logout is logged");
             // An unknown-token logout ends nothing.
             assert_eq!(logout_session("not-a-token"), None);
             assert_eq!(push_ids(), vec!["phone-b", "phone-owner"]);
@@ -4153,6 +4205,7 @@ mod tests {
             assert_eq!(push_ids(), with_rev(&["phone-rev"]));
             assert_eq!(revoke_user_sessions("pushrev"), 1);
             assert_eq!(push_ids(), keep, "kick / revoke");
+            assert_eq!(push_events("pushrev", "revoked"), vec!["remove:phone-re"], "the revoke is logged");
 
             let s = create_session("pushrev");
             push_reg("phone-rev", "pushrev", &s);
@@ -4225,8 +4278,10 @@ mod tests {
 
             assert_eq!(validate_session(&presented), None, "expired");
             assert_eq!(push_ids(), vec!["phone-live", "phone-swept"], "validate reaped it");
+            assert_eq!(push_events("pushexp", "session_expired"), vec!["remove:phone-pr"]);
             assert_eq!(reap_expired_sessions(), 1);
             assert_eq!(push_ids(), vec!["phone-live"], "the reaper reaped it");
+            assert_eq!(push_events("pushexp", "session_expired"), vec!["remove:phone-pr", "remove:phone-sw"]);
             assert_eq!(validate_session(&live), Some("pushexp".to_string()));
         });
     }
@@ -4243,6 +4298,17 @@ mod tests {
             push_reg("phone-r", "pushrelink", &old);
             let new = create_session("pushrelink");
             push_reg("phone-r", "pushrelink", &new);
+            assert_eq!(push_events("pushrelink", "moved"), vec!["update:phone-r"], "a new session is a move");
+            let moved = crate::push::device_log::recent(Some("phone-r"))
+                .into_iter()
+                .rfind(|e| e.login == "pushrelink" && e.reason == "moved")
+                .expect("moved record");
+            assert_eq!(
+                moved.detail.as_deref(),
+                Some(format!("from login=pushrelink session={}", crate::push::device_log::short_session(&session_sid(&old))).as_str())
+            );
+            push_reg("phone-r", "pushrelink", &new);
+            assert_eq!(push_events("pushrelink", "refresh"), vec!["update:phone-r"], "the same again is a refresh");
             assert_eq!(
                 crate::push_devices::device_session_sid("phone-r").expect("sid"),
                 Some(session_sid(&new))
@@ -4300,6 +4366,9 @@ mod tests {
 
             assert_eq!(prune_push_devices_without_live_session().expect("sweep"), 3);
             assert_eq!(push_ids(), vec!["legacy-live-user", "phone-live", "phone-owner"]);
+            assert_eq!(push_events("pushbumped", "no_live_login"), vec!["remove:phone-bu"]);
+            assert_eq!(push_events("pushnone", "no_live_login"), vec!["remove:legacy-n"]);
+            assert_eq!(push_events("pushlive", "no_live_login"), vec!["remove:legacy-o"]);
 
             // The session file is lost: every linked phone goes, the
             // legacy row of a now login-less user too; the owner stays.
@@ -4323,6 +4392,37 @@ mod tests {
             fs::remove_file(sessions_store_path()).expect("remove sessions file");
             assert_eq!(prune_push_devices_without_live_session().expect("sweep"), 0);
             assert_eq!(push_ids(), vec!["phone-race"]);
+        });
+    }
+
+    /// 0.46.9 send-time re-check: a phone whose login is no longer live
+    /// (here: its user's epoch moved, so no end event dropped the row yet)
+    /// is not sent to, while a live login's phone and the owner's are.
+    #[test]
+    fn push_send_recheck_skips_a_phone_whose_login_is_gone() {
+        let _db = crate::db::scoped_for_test();
+        with_temp_home(|| {
+            add_user("pushchklive", "password").expect("add");
+            add_user("pushchkgone", "password").expect("add");
+            let live = create_session("pushchklive");
+            let gone = create_session("pushchkgone");
+            push_reg("phone-chk-live", "pushchklive", &live);
+            push_reg("phone-chk-gone", "pushchkgone", &gone);
+            crate::push_devices::upsert_device("phone-chk-owner", "apns", "apns-chk-owner", "owner").expect("owner");
+            let read = crate::push_devices::list_devices().expect("list");
+            update_store(|store| {
+                let u = store.users.iter_mut().find(|u| u.username == "pushchkgone").expect("user");
+                u.token_epoch = u.token_epoch.wrapping_add(1);
+                Ok(())
+            })
+            .expect("bump epoch");
+            let (send, skipped) = crate::push_devices::recheck_for_send(&read);
+            let mut ids: Vec<&str> = send.iter().map(|d| d.device_id.as_str()).collect();
+            ids.sort();
+            assert_eq!(ids, ["phone-chk-live", "phone-chk-owner"]);
+            let why: Vec<(&str, &str)> = skipped.iter().map(|(d, w)| (d.device_id.as_str(), w.as_wire())).collect();
+            assert_eq!(why, [("phone-chk-gone", "no_live_login")]);
+            assert!(push_ids().contains(&"phone-chk-gone".to_string()), "the re-check never deletes; the sweep does");
         });
     }
 }

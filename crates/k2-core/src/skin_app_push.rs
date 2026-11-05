@@ -27,6 +27,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::{immediate_tx, normalize_app_target, now_secs, with_conn, BASE62, HOST_APP_ID};
+use crate::push::device_log::{self, Action, DeviceEvent, Reason};
 
 /// `channel`: the App's own phone app (the App's keys; the daemon sends).
 pub const CHANNEL_APP: &str = "app";
@@ -346,6 +347,48 @@ fn devices_where(conn: &Connection, filter: &str, args: &[&dyn rusqlite::ToSql])
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("push devices: {e}"))
 }
 
+impl PushDevice {
+    /// The `[push]` device record of this row (0.46.9): the session is the
+    /// device sign-in, else the pass that registered it; the login is the
+    /// guest's principal id. The token is hashed, never kept.
+    fn log_event(&self, action: Action, reason: Reason, detail: Option<String>) -> DeviceEvent {
+        device_log::event(
+            action,
+            reason,
+            device_log::Row {
+                device_id: &self.device_id,
+                platform: &self.platform,
+                login: &self.principal_id,
+                session: self.device_login_id.as_deref().or(self.session_token_id.as_deref()),
+                token: &self.push_token,
+                app: Some(&self.app),
+            },
+            detail,
+        )
+    }
+}
+
+/// Delete these rows by id; one `[push]` record each, returned for the
+/// caller to emit (after its commit when it owns the transaction).
+fn delete_rows(conn: &Connection, rows: &[PushDevice], reason: Reason) -> Result<Vec<DeviceEvent>, String> {
+    let mut out = Vec::new();
+    for d in rows {
+        let n = conn
+            .execute("DELETE FROM app_push_devices WHERE id = ?1", params![d.id])
+            .map_err(|e| format!("push device delete: {e}"))?;
+        if n > 0 {
+            out.push(d.log_event(Action::Remove, reason, None));
+        }
+    }
+    Ok(out)
+}
+
+fn emit_all(events: Vec<DeviceEvent>) {
+    for e in events {
+        device_log::emit(e);
+    }
+}
+
 fn new_id() -> String {
     use argon2::password_hash::rand_core::{OsRng, RngCore};
     const LEN: usize = 22;
@@ -428,8 +471,11 @@ pub fn register(app: &str, principal_id: &str, session_token_id: &str, reg: &Reg
                 .map_err(|e| format!("push token holders: {e}"))?;
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("push token holders: {e}"))?
         };
+        // 0.46.9: every row change logs one `[push]` line, after the commit
+        // (a refused register rolls back and logs nothing).
+        let mut events: Vec<DeviceEvent> = Vec::new();
         for h in &holders {
-            prune_principal_conn(&tx, h)?;
+            events.extend(prune_where_events(&tx, "d.principal_id = ?2", &[h])?);
         }
         let held: i64 = tx
             .query_row(
@@ -441,12 +487,23 @@ pub fn register(app: &str, principal_id: &str, session_token_id: &str, reg: &Reg
         if held > 0 {
             return Ok(Err(RegisterError::TokenInUse));
         }
-        tx.execute(
-            "DELETE FROM app_push_devices WHERE app_id = ?1 AND platform = ?2 AND push_token = ?3
-               AND principal_id = ?4 AND device_id != ?5",
-            params![app, reg.platform, reg.push_token, principal_id, reg.device_id],
+        let same_token = devices_where(
+            &tx,
+            "d.app_id = ?1 AND d.platform = ?2 AND d.push_token = ?3 AND d.principal_id = ?4 AND d.device_id != ?5",
+            &[&app, &reg.platform, &reg.push_token, &principal_id, &reg.device_id],
         )
         .map_err(|e| format!("push token move: {e}"))?;
+        for d in delete_rows(&tx, &same_token, Reason::DuplicateToken).map_err(|e| format!("push token move: {e}"))? {
+            events.push(DeviceEvent { detail: Some(format!("replaced_by={}", crate::push::attempts::short(&reg.device_id))), ..d });
+        }
+        let prev = devices_where(
+            &tx,
+            "d.app_id = ?1 AND d.principal_id = ?2 AND d.device_id = ?3",
+            &[&app, &principal_id, &reg.device_id],
+        )
+        .map_err(|e| format!("push device lookup: {e}"))?
+        .into_iter()
+        .next();
         let existing: Option<(String, Option<i64>, String)> = tx
             .query_row(
                 "SELECT id, previews, muted_topics FROM app_push_devices WHERE app_id = ?1 AND principal_id = ?2 AND device_id = ?3",
@@ -512,12 +569,32 @@ pub fn register(app: &str, principal_id: &str, session_token_id: &str, reg: &Reg
         // CP8: at most MAX_DEVICES_PER_GUEST per (App, guest).
         let mine = devices_where(&tx, "d.app_id = ?1 AND d.principal_id = ?2", &[&app, &principal_id])?;
         if mine.len() > MAX_DEVICES_PER_GUEST {
-            for d in mine.iter().filter(|d| d.id != id).rev().take(mine.len() - MAX_DEVICES_PER_GUEST) {
-                tx.execute("DELETE FROM app_push_devices WHERE id = ?1", params![d.id]).map_err(|e| format!("push device evict: {e}"))?;
-            }
+            let evict: Vec<PushDevice> =
+                mine.iter().filter(|d| d.id != id).rev().take(mine.len() - MAX_DEVICES_PER_GUEST).cloned().collect();
+            events.extend(delete_rows(&tx, &evict, Reason::DeviceCap).map_err(|e| format!("push device evict: {e}"))?);
         }
         let row = devices_where(&tx, "d.id = ?1", &[&id])?.into_iter().next().ok_or_else(|| "push device vanished".to_string())?;
         tx.commit().map_err(|e| format!("push device commit: {e}"))?;
+        let session = |d: &PushDevice| d.device_login_id.clone().or_else(|| d.session_token_id.clone());
+        let change = match &prev {
+            None => row.log_event(Action::Add, Reason::Register, None),
+            Some(p) if session(p) != session(&row) => row.log_event(
+                Action::Update,
+                Reason::Moved,
+                Some(format!(
+                    "from login={} session={}",
+                    p.principal_id,
+                    session(p).as_deref().map(device_log::short_session).unwrap_or_else(|| "-".to_string())
+                )),
+            ),
+            Some(p) if p.push_token != row.push_token || p.platform != row.platform => {
+                row.log_event(Action::Update, Reason::TokenRotated, None)
+            }
+            Some(_) => row.log_event(Action::Update, Reason::Refresh, None),
+        };
+        // The removals first, then this row's own change.
+        events.push(change);
+        emit_all(events);
         Ok(Ok(row))
     })?
 }
@@ -526,14 +603,14 @@ pub fn register(app: &str, principal_id: &str, session_token_id: &str, reg: &Reg
 /// guest's, another App's, none) is `Ok(false)`: the same answer.
 pub fn unregister(app: &str, principal_id: &str, device_id: &str) -> Result<bool, String> {
     let app = normalize_app_target(Some(app));
+    let device_id = device_id.trim().to_string();
     with_conn(|conn| {
-        let n = conn
-            .execute(
-                "DELETE FROM app_push_devices WHERE app_id = ?1 AND principal_id = ?2 AND device_id = ?3",
-                params![app, principal_id, device_id.trim()],
-            )
+        let rows = devices_where(conn, "d.app_id = ?1 AND d.principal_id = ?2 AND d.device_id = ?3", &[&app, &principal_id, &device_id])
             .map_err(|e| format!("push unregister: {e}"))?;
-        Ok(n > 0)
+        let events = delete_rows(conn, &rows, Reason::PhoneOff).map_err(|e| format!("push unregister: {e}"))?;
+        let removed = !events.is_empty();
+        emit_all(events);
+        Ok(removed)
     })
 }
 
@@ -613,11 +690,13 @@ pub fn device_counts(app: &str) -> Result<Vec<(String, i64, Vec<String>)>, Strin
 /// `Ok(false)`.
 pub fn remove_by_owner(app: &str, id: &str) -> Result<bool, String> {
     let app = normalize_app_target(Some(app));
+    let id = id.trim().to_string();
     with_conn(|conn| {
-        let n = conn
-            .execute("DELETE FROM app_push_devices WHERE app_id = ?1 AND id = ?2", params![app, id.trim()])
-            .map_err(|e| format!("push device remove: {e}"))?;
-        Ok(n > 0)
+        let rows = devices_where(conn, "d.app_id = ?1 AND d.id = ?2", &[&app, &id]).map_err(|e| format!("push device remove: {e}"))?;
+        let events = delete_rows(conn, &rows, Reason::OwnerRemove).map_err(|e| format!("push device remove: {e}"))?;
+        let removed = !events.is_empty();
+        emit_all(events);
+        Ok(removed)
     })
 }
 
@@ -627,13 +706,12 @@ pub fn remove_by_owner(app: &str, id: &str) -> Result<bool, String> {
 pub fn delete_dead(app: &str, id: &str, push_token: &str) -> Result<bool, String> {
     let app = normalize_app_target(Some(app));
     with_conn(|conn| {
-        let n = conn
-            .execute(
-                "DELETE FROM app_push_devices WHERE app_id = ?1 AND id = ?2 AND push_token = ?3",
-                params![app, id, push_token],
-            )
+        let rows = devices_where(conn, "d.app_id = ?1 AND d.id = ?2 AND d.push_token = ?3", &[&app, &id, &push_token])
             .map_err(|e| format!("push device prune: {e}"))?;
-        Ok(n > 0)
+        let events = delete_rows(conn, &rows, Reason::VendorDead).map_err(|e| format!("push device prune: {e}"))?;
+        let removed = !events.is_empty();
+        emit_all(events);
+        Ok(removed)
     })
 }
 
@@ -765,29 +843,42 @@ pub fn apps_with_agent_replies() -> Result<Vec<String>, String> {
 /// The rows that outlived their sign-in: a row tied to a device sign-in
 /// goes when that sign-in has ended or expired; a row without one goes when
 /// the pass that registered it has. `scope` is a fixed SQL fragment over
-/// `app_push_devices` (`?2`.. bound from `args`); `?1` is now.
-fn prune_where(conn: &Connection, scope: &str, args: &[&dyn rusqlite::ToSql]) -> Result<usize, String> {
+/// `app_push_devices d` (`?2`.. bound from `args`); `?1` is now. Returns
+/// one `[push]` record per row removed (reason `sign_in_ended`), not yet
+/// emitted.
+fn prune_where_events(conn: &Connection, scope: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<DeviceEvent>, String> {
     let now = now_secs();
     let mut all: Vec<&dyn rusqlite::ToSql> = vec![&now];
     all.extend_from_slice(args);
-    let sql = format!(
-        "DELETE FROM app_push_devices WHERE ({scope}) AND (
-            (device_login_id IS NOT NULL AND NOT EXISTS (
-                SELECT 1 FROM device_logins d
-                 WHERE d.id = app_push_devices.device_login_id AND d.revoked_at IS NULL AND d.expires_at > ?1))
-         OR (device_login_id IS NULL AND NOT EXISTS (
+    let filter = format!(
+        "({scope}) AND (
+            (d.device_login_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM device_logins dl
+                 WHERE dl.id = d.device_login_id AND dl.revoked_at IS NULL AND dl.expires_at > ?1))
+         OR (d.device_login_id IS NULL AND NOT EXISTS (
                 SELECT 1 FROM tokens t
-                 WHERE t.id = app_push_devices.session_token_id AND t.revoked_at IS NULL
+                 WHERE t.id = d.session_token_id AND t.revoked_at IS NULL
                    AND (t.expires_at IS NULL OR t.expires_at > ?1)))
          )"
     );
-    conn.execute(&sql, all.as_slice()).map_err(|e| format!("push device prune: {e}"))
+    let rows = devices_where(conn, &filter, all.as_slice()).map_err(|e| format!("push device prune: {e}"))?;
+    delete_rows(conn, &rows, Reason::SignInEnded).map_err(|e| format!("push device prune: {e}"))
+}
+
+/// [`prune_where_events`], logged now. Inside a caller's transaction the
+/// lines go out at the delete: a revoke that then fails and rolls back
+/// leaves a line for a row that stayed (the revoke itself fails loudly).
+fn prune_where(conn: &Connection, scope: &str, args: &[&dyn rusqlite::ToSql]) -> Result<usize, String> {
+    let events = prune_where_events(conn, scope, args)?;
+    let n = events.len();
+    emit_all(events);
+    Ok(n)
 }
 
 /// Prune one principal's stale rows, inside the revoke transaction that
 /// just ended their sessions or device sign-ins (CP6, A2).
 pub(super) fn prune_principal_conn(conn: &Connection, principal_id: &str) -> Result<usize, String> {
-    prune_where(conn, "principal_id = ?2", &[&principal_id])
+    prune_where(conn, "d.principal_id = ?2", &[&principal_id])
 }
 
 /// The hourly sweep (CP6): every row whose sign-in or pass ended without a
@@ -805,9 +896,12 @@ pub fn purge_app(app: &str) -> Result<usize, String> {
     }
     with_conn(|conn| {
         let tx = immediate_tx(conn)?;
-        let n = tx.execute("DELETE FROM app_push_devices WHERE app_id = ?1", params![app]).map_err(|e| format!("push purge: {e}"))?;
+        let rows = devices_where(&tx, "d.app_id = ?1", &[&app]).map_err(|e| format!("push purge: {e}"))?;
+        let events = delete_rows(&tx, &rows, Reason::AppRemoved).map_err(|e| format!("push purge: {e}"))?;
         tx.execute("DELETE FROM app_push_config WHERE app_id = ?1", params![app]).map_err(|e| format!("push purge: {e}"))?;
         tx.commit().map_err(|e| format!("push purge commit: {e}"))?;
+        let n = events.len();
+        emit_all(events);
         Ok(n)
     })
 }

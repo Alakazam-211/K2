@@ -1,6 +1,6 @@
 //! `k2 push log` (0.46.3) — headless: the real daemon binary, no app, a
 //! scratch HOME. `GET /cli/push/log` answers the owner with the attempt
-//! ring, refuses anyone else (403) and a POST (405); `k2 push log
+//! ring and (0.46.9) the phone-change ring, refuses anyone else (403) and a POST (405); `k2 push log
 //! [--json] [--device <id>]` reaches it and passes the filter through.
 //! (A fresh daemon has sent no pushes, so the ring is empty here; the
 //! records themselves are covered by k2-core's push tests and the route
@@ -158,7 +158,42 @@ async fn headless_push_log_route_and_cli() {
     assert_eq!(v["device"], "feedf00d");
     // Human view on an empty ring.
     let text = ok_stdout(k2_cli(&home, &workspace, &["push", "log", "--device", "1234abcd"]), "k2 push log --device");
-    assert_eq!(text.trim(), "no push attempts since the daemon started for device 1234abcd");
+    assert_eq!(text.trim(), "no push attempts or phone changes since the daemon started for device 1234abcd");
+    // 0.46.9: a phone's register and unregister show as device lines, with
+    // the reason and a token fingerprint, never the token.
+    let phone_token = "tok-cli-0123456789abcdef-secret";
+    for (path, body) in [
+        ("/cli/push/register-device", format!(r#"{{"deviceId":"cafe0123-cli-phone","platform":"apns","token":"{phone_token}"}}"#)),
+        ("/cli/push/unregister-device", r#"{"deviceId":"cafe0123-cli-phone"}"#.to_string()),
+    ] {
+        let (code, out) = curl(&[
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "--data-raw",
+            &body,
+            &format!("{base}{path}?token={token}"),
+        ]);
+        assert_eq!(code, 200, "{path}: {out}");
+    }
+    let text = ok_stdout(k2_cli(&home, &workspace, &["push", "log", "--device", "cafe0123"]), "k2 push log (device lines)");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    let fp = k2_core::push_devices::token_fingerprint(phone_token);
+    assert!(
+        lines[0].ends_with(&format!("  add     reason=register device=cafe0123 platform=apns login=owner session=- token={fp}")),
+        "{text}"
+    );
+    assert!(
+        lines[1].ends_with(&format!("  remove  reason=phone_off device=cafe0123 platform=apns login=owner session=- token={fp}")),
+        "{text}"
+    );
+    assert!(!text.contains("tok-cli"), "never the token: {text}");
+    let json = ok_stdout(k2_cli(&home, &workspace, &["push", "log", "--json", "--device", "cafe0123"]), "--json events");
+    let v: serde_json::Value = serde_json::from_str(&json).expect("events json");
+    assert_eq!(v["events"].as_array().expect("events").len(), 2, "{v}");
+    assert_eq!(v["events"][1]["reason"], "phone_off");
     // Usage errors exit 2.
     let bad = k2_cli(&home, &workspace, &["push", "log", "--bogus"]);
     assert_eq!(bad.status.code(), Some(2), "stderr={}", String::from_utf8_lossy(&bad.stderr));

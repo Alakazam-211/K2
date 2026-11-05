@@ -412,16 +412,10 @@ pub fn cleanup_removed_user(conn: &Connection, username: &str) -> Result<(), Str
         return Ok(());
     }
     delete_person(conn, &name)?;
-    // prd-e2e-push-v1 (V13): their phones' push keys go explicitly first
-    // (the foreign key cascade is only the second guard).
-    conn.execute(
-        "DELETE FROM push_device_keys WHERE device_id IN \
-         (SELECT device_id FROM push_devices WHERE username = ?1)",
-        params![name],
-    )
-    .map_err(|e| format!("push key cleanup: {e}"))?;
-    conn.execute("DELETE FROM push_devices WHERE username = ?1", params![name])
-        .map_err(|e| format!("push device cleanup: {e}"))?;
+    // prd-e2e-push-v1 (V13): each phone's push key goes explicitly first
+    // (the foreign key cascade is only the second guard); 0.46.9: one
+    // `[push]` line per phone (reason user_removed).
+    crate::push_devices::remove_devices_for_username(conn, &name).map_err(|e| format!("push device cleanup: {e}"))?;
     // Their read cursors and mutes go too (thread-read-v1).
     crate::read_state::delete_person(conn, &name)?;
     Ok(())
@@ -841,6 +835,13 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM push_devices WHERE username = 'gina'", [], |r| r.get(0))
             .expect("count");
         assert_eq!(n, 0);
+        // 0.46.9: one `[push]` record per phone, reason user_removed.
+        let logged: Vec<_> = crate::push::device_log::recent(Some("np-dev-g"))
+            .into_iter()
+            .filter(|e| e.reason == "user_removed" && e.login == "gina")
+            .collect();
+        assert_eq!(logged.len(), 2, "both of gina's phones logged: {logged:?}");
+        assert!(logged.iter().all(|e| e.action == "remove"));
         cleanup_removed_user(&conn, "owner").expect("no-op for owner");
         assert_eq!(PrefsSnapshot::load(&conn).expect("load").bell(OWNER).source, Source::User);
     }

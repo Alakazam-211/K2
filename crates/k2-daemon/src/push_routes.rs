@@ -431,21 +431,26 @@ pub fn handle_owner_get(path: &str, owner: bool) -> CliResponse {
     }
 }
 
-/// `GET /cli/push/log` (owner only): the attempt ring, oldest first;
-/// `device` (or `deviceId`) keeps one phone's, matched on the first 8
-/// characters of its id.
+/// `GET /cli/push/log` (owner only): the attempt ring and (0.46.9) the
+/// device-change ring (`events`: every push device registration added,
+/// changed or removed, K2 Companion's and Apps' own phone apps', with the
+/// reason), each oldest first; `device` (or `deviceId`) keeps one phone's,
+/// matched on the first 8 characters of its id.
 pub fn handle_log_get(params: &HashMap<String, String>, owner: bool) -> CliResponse {
     if !owner {
         return owner_only();
     }
     let device = params.get("device").or_else(|| params.get("deviceId")).map(|d| d.trim()).filter(|d| !d.is_empty());
     let attempts = k2_core::push::attempts::recent(device);
+    let events = k2_core::push::device_log::recent(device);
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
             "cap": k2_core::push::attempts::RING_CAP,
+            "eventsCap": k2_core::push::device_log::RING_CAP,
             "device": device.map(k2_core::push::attempts::short),
             "attempts": attempts,
+            "events": events,
         })
         .to_string(),
     )
@@ -628,7 +633,7 @@ fn handle_unregister(body: &[u8], username: &str) -> CliResponse {
     if !is_admin && !own {
         return CliResponse::ok_json(serde_json::json!({ "ok": true, "removed": false }).to_string());
     }
-    match push_devices::remove_device(&b.device_id) {
+    match push_devices::remove_device_because(&b.device_id, k2_core::push::device_log::Reason::PhoneOff) {
         Ok(removed) => CliResponse::ok_json(
             serde_json::json!({ "ok": true, "removed": removed }).to_string(),
         ),
@@ -648,9 +653,10 @@ fn handle_owner_remove(body: &[u8]) -> CliResponse {
     if id.is_empty() {
         return usage_error("missing 'deviceId'");
     }
-    match push_devices::remove_device(id) {
+    // 0.46.9: the delete logs its own `[push] device remove
+    // reason=owner_remove` line.
+    match push_devices::remove_device_because(id, k2_core::push::device_log::Reason::OwnerRemove) {
         Ok(true) => {
-            k2_core::log_debug!("[push] device {} removed by the owner/Admin", k2_core::push::attempts::short(id));
             CliResponse::ok_json(serde_json::json!({ "ok": true, "deviceId": id, "removed": true }).to_string())
         }
         Ok(false) => CliResponse {
@@ -814,7 +820,7 @@ pub(crate) fn deliver_badge(event: PushEvent) {
         let logins = b.device_usernames.clone();
         std::thread::spawn(move || {
             let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
-            if let Err(e) = cloud.dispatch(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
+            if let Err(e) = cloud.dispatch_rechecked(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
                 k2_core::log_debug!("[push] badge dispatch dropped ({}): {e}", cloud.label());
             }
         });
@@ -954,7 +960,7 @@ fn dispatch_push(event: PushEvent) {
                     return;
                 }
                 crate::badge_push::alert_sent(&event);
-                if let Err(e) = cloud.dispatch(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
+                if let Err(e) = cloud.dispatch_rechecked(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
                     k2_core::log_debug!("[push] dispatch failed ({}): {e}", cloud.label());
                 }
             }
@@ -1077,7 +1083,7 @@ pub(crate) fn deliver_thread(event: PushEvent) {
         let logins = t.device_usernames.clone();
         std::thread::spawn(move || {
             let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
-            if let Err(e) = cloud.dispatch(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
+            if let Err(e) = cloud.dispatch_rechecked(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
                 k2_core::log_debug!("[push] thread dispatch failed ({}): {e}", cloud.label());
             }
         });
@@ -2113,5 +2119,53 @@ mod tests {
                 assert!(!body.contains(f), "push log carries {f:?}: {body}");
             }
         }
+    }
+
+    /// 0.46.9: `k2 push log` shows device changes next to the sends. A
+    /// register, the phone's unregister and the owner's remove each leave
+    /// one `events` row with its reason; never the token.
+    #[test]
+    fn push_log_route_shows_device_changes_with_their_reason() {
+        let short = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+        let id = format!("{short}-push-log-events");
+        let t = tok("log-events");
+        ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "fcm", "token": t }),
+            "owner",
+        ));
+        let v = ok_json(post_json("/cli/push/unregister-device", serde_json::json!({ "deviceId": id }), "owner"));
+        assert_eq!(v["removed"], true);
+        ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "fcm", "token": t }),
+            "owner",
+        ));
+        ok_json(post_json(DEVICE_REMOVE_PATH, serde_json::json!({ "deviceId": id }), "owner"));
+
+        let mut params = HashMap::new();
+        params.insert("device".to_string(), id.clone());
+        let resp = handle_log_get(&params, true);
+        let v = ok_json(handle_log_get(&params, true));
+        assert_eq!(v["eventsCap"], 200);
+        let got: Vec<(String, String)> = v["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .map(|e| (e["action"].as_str().expect("action").to_string(), e["reason"].as_str().expect("reason").to_string()))
+            .collect();
+        let want: Vec<(String, String)> = [("add", "register"), ("remove", "phone_off"), ("add", "register"), ("remove", "owner_remove")]
+            .iter()
+            .map(|(a, r)| (a.to_string(), r.to_string()))
+            .collect();
+        assert_eq!(got, want, "{v}");
+        let e = &v["events"][0];
+        assert_eq!(e["device"], short.as_str());
+        assert_eq!(e["platform"], "fcm");
+        assert_eq!(e["login"], "owner");
+        assert!(e["session"].is_null(), "the owner token has no session");
+        assert_eq!(e["token"], push_devices::token_fingerprint(&t).as_str());
+        assert!(e["app"].is_null());
+        assert!(!resp.body.contains(&t), "never the token: {}", resp.body);
     }
 }

@@ -529,7 +529,7 @@ mod tests {
         {
             let db = crate::db::shared();
             let conn = db.lock();
-            assert_eq!(devices::remove_devices_for_sessions(&conn, &["cu_end".to_string()]).expect("end"), 1);
+            assert_eq!(devices::remove_devices_for_sessions(&conn, &["cu_end".to_string()], crate::push::device_log::Reason::Logout).expect("end"), 1);
         }
         gone("d-session");
         // 3. prune_device_by_token

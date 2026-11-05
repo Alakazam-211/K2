@@ -23881,15 +23881,48 @@ k2 push — the phones that get this server's pushes, and encrypted pushes
                                     phone registers again when its app next opens
                                     (if it is still signed in). Owner or Admin.
   k2 push log [--json] [--device <id>]
-                                    the last 200 push attempts, one per phone per
-                                    relay call, oldest first: device (8 chars),
-                                    kind, sealed/legacy/generic, bytes, key
-                                    fingerprint (sealed), relay status or error,
-                                    path (s0/s1/shared), relay markers, the
-                                    vendor result and ms. In memory only (gone on
-                                    restart); never message text, titles, names
-                                    or tokens. The daemon log has the same lines
-                                    ("[push] attempt ...").
+                                    what happened to each phone, oldest first
+                                    (this machine's local time). Two kinds of
+                                    line, mixed by time; each kind keeps its
+                                    last 200:
+                                    send: one per phone per relay call: device
+                                      (first 8 chars of its id), kind, lane=
+                                      sealed|legacy|generic, bytes, key
+                                      fingerprint (sealed), relay status or
+                                      error, the relay's auth path
+                                      (s0/s1/shared) and markers, the vendor
+                                      result (sent/failed/dead) and ms.
+                                      lane=none error=skipped:gone means the
+                                      phone's registration went (or changed)
+                                      after the send read the list, so nothing
+                                      went to it; skipped:no_live_login means
+                                      it is still there but its login ended.
+                                    add/update/remove: a phone's registration
+                                      changed: reason, device, platform, login,
+                                      session (12 chars), token fingerprint,
+                                      app=<id> for an App's own phone app.
+                                      Reasons: register, refresh, token_rotated,
+                                      moved (to another login or session),
+                                      duplicate_token, phone_off (the app's own
+                                      unregister), owner_remove, vendor_dead
+                                      (Apple/Google said the token is dead),
+                                      logout, revoked, session_expired,
+                                      session_ended, no_live_login (the
+                                      reaper's sweep, at boot and every 5
+                                      minutes, found its login ended with no
+                                      logout seen), user_removed; Apps also
+                                      sign_in_ended, device_cap, app_removed.
+                                      A removed phone comes back when its app
+                                      next opens signed in (sign in again if
+                                      the login ended).
+                                    --device <id> takes the whole id or its
+                                    first 8 characters (k2 push devices lists
+                                    ids). --json gives "attempts" and "events"
+                                    as two lists. In memory only: a restart
+                                    empties both (the daemon log keeps the same
+                                    lines: "[push] attempt ..." and "[push]
+                                    device ..."). Never message text, titles
+                                    or tokens.
 
 Owner only (the owner token or an Owner login), except `device remove`
 (also an Admin). Exit 2 usage, 3 not allowed, 4 no such device.
@@ -23981,11 +24014,22 @@ elif view == "removed":
     print("removed device", d.get("deviceId"), "(its registration and push key)")
 elif view == "log":
     import datetime
-    rows = d.get("attempts") or []
+    rows = [(a.get("atMs") or 0, 0, i, "send", a) for i, a in enumerate(d.get("attempts") or [])]
+    rows += [(e.get("atMs") or 0, 1, i, str(e.get("action")), e) for i, e in enumerate(d.get("events") or [])]
+    rows.sort(key=lambda r: (r[0], r[1], r[2]))
     if not rows:
-        print("no push attempts since the daemon started" + (" for device " + str(d.get("device")) if d.get("device") else ""))
-    for a in rows:
-        at = datetime.datetime.fromtimestamp((a.get("atMs") or 0) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        print("no push attempts or phone changes since the daemon started" + (" for device " + str(d.get("device")) if d.get("device") else ""))
+    for at_ms, src, _, what, a in rows:
+        at = datetime.datetime.fromtimestamp(at_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        if src == 1:
+            bits = ["reason=" + str(a.get("reason")), "device=" + str(a.get("device")), "platform=" + str(a.get("platform")),
+                    "login=" + str(a.get("login")), "session=" + str(a.get("session") or "-"), "token=" + str(a.get("token"))]
+            if a.get("app"):
+                bits.append("app=" + str(a.get("app")))
+            if a.get("detail"):
+                bits.append(str(a.get("detail")))
+            print(at + "  " + what.ljust(6) + "  " + " ".join(bits))
+            continue
         bits = ["device=" + str(a.get("device")), "kind=" + str(a.get("kind")), "lane=" + str(a.get("lane")),
                 "bytes=" + str(a.get("bytes"))]
         if a.get("key"):
@@ -23998,7 +24042,7 @@ elif view == "log":
         if a.get("vendor"):
             bits.append("vendor=" + str(a.get("vendor")))
         bits.append("ms=" + str(a.get("ms")))
-        print(at + "  " + " ".join(bits))
+        print(at + "  " + "send".ljust(6) + "  " + " ".join(bits))
 '
 }
 
@@ -50589,9 +50633,9 @@ WHEN APPLE OR GOOGLE SAY NO
   key's first accepted send means a wrong bundle id / project: sends pause,
   nothing is deleted. A refused key pauses that platform 10 minutes and
   leaves the App's agent a note; k2 app push status shows the code.
-  K2_APP_PUSH=off in the daemon's environment stops every App's push.
-  K2 Companion's own phones are k2 push, not this. A phone that pairs by
-  QR can register in the same call: k2 study app-pairing (push field).
+  K2_APP_PUSH=off in the daemon's environment stops every App's push. The
+  owner's k2 push log shows each phone added or removed, and why. K2
+  Companion's phones are k2 push. QR pairing can register: k2 study app-pairing.
 EOF
 }
 

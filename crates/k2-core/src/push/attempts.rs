@@ -58,7 +58,8 @@ pub struct PushAttempt {
     /// `nudge`, `badge`, `ticket`, `ticket_comment`, `project`,
     /// `attention`, `heartbeat_failed`.
     pub kind: &'static str,
-    /// `sealed` | `legacy` | `generic`.
+    /// `sealed` | `legacy` | `generic`, or `none` when the send-time
+    /// re-check dropped the device.
     pub lane: &'static str,
     /// The bytes this device's push carried: the sealed blob, else the
     /// `payload` JSON. 0 when nothing was sent.
@@ -259,6 +260,25 @@ pub(crate) fn record_skip(event: &PushEvent, device_id: &str, key_id: &str, clas
         lane: Lane::Sealed.as_wire(),
         bytes: 0,
         key: Some(short(key_id)),
+        status: None,
+        error: Some(format!("skipped:{class}")),
+        path: "none",
+        relay: "-",
+        vendor: None,
+        ms: 0,
+    });
+}
+
+/// A device the send-time re-check dropped before any call (0.46.9;
+/// `class` = `gone` | `no_live_login`).
+pub(crate) fn record_recheck_skip(event: &PushEvent, device_id: &str, class: &str) {
+    record(PushAttempt {
+        at_ms: super::unix_now_ms(),
+        device: short(device_id),
+        kind: kind_label(event, Lane::Legacy),
+        lane: "none",
+        bytes: 0,
+        key: None,
         status: None,
         error: Some(format!("skipped:{class}")),
         path: "none",

@@ -419,3 +419,63 @@ fn purge_takes_both_tables_and_settings_default_safely() {
     let e = register(HOST_APP_ID, &f.dana, &p, &reg("p1", "apns", APNS_A)).expect_err("never host");
     assert!(matches!(e, RegisterError::Store(ref m) if m.contains("never the box login")), "{e:?}");
 }
+
+/// 0.46.9: every App push device change logs one `[push]` record with its
+/// reason (`k2 push log` reads them): register, refresh, a new token, a new
+/// sign-in, the duplicate-token delete, the phone's unregister, the owner's
+/// remove, a dead token, the sweep and the App's removal. Never the token.
+#[test]
+fn every_app_device_change_logs_a_push_record_with_its_reason() {
+    let f = fx("log");
+    let p1 = session("dana", &f.app);
+    register(&f.app, &f.dana, &p1, &reg("lg-1", "apns", APNS_A)).expect("register");
+    register(&f.app, &f.dana, &p1, &reg("lg-1", "apns", APNS_A)).expect("refresh");
+    register(&f.app, &f.dana, &p1, &reg("lg-1", "apns", APNS_B)).expect("new token");
+    let p2 = session("dana", &f.app);
+    register(&f.app, &f.dana, &p2, &reg("lg-1", "apns", APNS_B)).expect("new sign-in");
+    register(&f.app, &f.dana, &p2, &reg("lg-2", "apns", APNS_B)).expect("same token, new id");
+    assert!(unregister(&f.app, &f.dana, "lg-2").expect("unregister"));
+    let r3 = register(&f.app, &f.dana, &p2, &reg("lg-3", "apns", APNS_A)).expect("register");
+    assert!(remove_by_owner(&f.app, &r3.id).expect("owner remove"));
+    let r4 = register(&f.app, &f.dana, &p2, &reg("lg-4", "apns", APNS_A)).expect("register");
+    assert!(delete_dead(&f.app, &r4.id, APNS_A).expect("dead"));
+    let p3 = session("dana", &f.app);
+    register(&f.app, &f.dana, &p3, &reg("lg-5", "fcm", FCM_A)).expect("register");
+    with_skin_conn(|c| c.execute("UPDATE tokens SET expires_at = 1 WHERE id = ?1", params![p3]).map_err(|e| e.to_string())).expect("expire");
+    assert_eq!(sweep().expect("sweep"), 1);
+    register(&f.app, &f.dana, &p2, &reg("lg-6", "apns", APNS_B)).expect("register");
+    assert_eq!(purge_app(&f.app).expect("purge"), 1);
+
+    let mine: Vec<DeviceEvent> = device_log::recent(None).into_iter().filter(|e| e.app.as_deref() == Some(f.app.as_str())).collect();
+    let got: Vec<String> = mine.iter().map(|e| format!("{} {} {}", e.action, e.reason, e.device)).collect();
+    assert_eq!(
+        got,
+        vec![
+            "add register lg-1",
+            "update refresh lg-1",
+            "update token_rotated lg-1",
+            "update moved lg-1",
+            "remove duplicate_token lg-1",
+            "add register lg-2",
+            "remove phone_off lg-2",
+            "add register lg-3",
+            "remove owner_remove lg-3",
+            "add register lg-4",
+            "remove vendor_dead lg-4",
+            "add register lg-5",
+            "remove sign_in_ended lg-5",
+            "add register lg-6",
+            "remove app_removed lg-6",
+        ]
+    );
+    assert!(mine.iter().all(|e| e.login == f.dana), "the guest's principal id");
+    assert_eq!(mine[0].session.as_deref(), Some(device_log::short_session(&p1).as_str()));
+    assert_eq!(mine[0].token, crate::push_devices::token_fingerprint(APNS_A));
+    assert_eq!(mine[3].detail.as_deref(), Some(format!("from login={} session={}", f.dana, device_log::short_session(&p1)).as_str()));
+    assert_eq!(mine[4].detail.as_deref(), Some("replaced_by=lg-2"));
+    for e in &mine {
+        let line = e.line();
+        assert!(!line.contains(&APNS_A[..16]) && !line.contains(&APNS_B[..16]) && !line.contains(&FCM_A[..16]), "{line}");
+        assert!(line.starts_with("[push] device ") && line.contains(&format!(" app={}", f.app)), "{line}");
+    }
+}

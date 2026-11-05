@@ -388,8 +388,8 @@ export interface ThreadContext {
 export interface ThreadSecretCard {
   /** Unix seconds when a pending card expires; null when it never does. */
   readonly expiresAt: number | null
-  /** pending, answered or expired. */
-  readonly status: string
+  /** Only a pending card opens K2's sheet. */
+  readonly status: 'pending' | 'answered' | 'expired'
 }
 
 export interface ThreadDoc {
@@ -2068,9 +2068,9 @@ export interface K2 {
     start(args: { base?: string; brief: string; harness?: string; name: string; workspace: string }): Promise<WorkStarted>
     /** Retire an agent (within 5 s of a press): stop it, remove its worktree, delete its branch. Refused (conflict) while it has commits that aren't landed, unless discard. K2's sheet asks the person first; answers {settled, discarded, cancelled}. Its Thread stays. This computer only. caps agents:start + git:read · local · workbench-v1. e.g. `await k2.agents.settle({address: row.address, discard: true})` */
     settle(args: { address: string; discard?: boolean }): Promise<WorkSettled>
-    /** End a sidecar agent's process (k2 sidecar stop), within 5 s of a press in the widget. K2's sheet asks the person first. Its tab, transcript and Thread stay, so it can start again. Already asleep: {ended: false} at once, with no sheet. Only sidecars: a workspace's main agent or a heartbeat session is bad_args. This computer only. cap agents:start · local · workbench-v1. e.g. `const {ended} = await k2.agents.end({address: row.address})` */
+    /** End a sidecar agent's process (k2 sidecar stop), within 5 s of a press in the widget. K2's sheet asks the person first; Cancel there answers {ended: false, cancelled: true}. Already asleep: {ended: false, cancelled: false} at once, with no sheet. Its tab, transcript and Thread stay, so it can start again. Only sidecars (ws/name::local): a workspace's main agent or a heartbeat session is bad_args. This computer only. cap agents:start · local · workbench-v1. e.g. `const {ended} = await k2.agents.end({address: row.address})` */
     end(args: { address: string }): Promise<WorkEnded>
-    /** Take a stopped sidecar off the agent list (k2 sidecar archive), within 5 s of a press in the widget. Its transcript and Thread stay, and k2 sidecar new <name> brings it back. A running one is sidecar_live (end it first); one in its own worktree is worktree_sidecar (use agents.settle). Only sidecars. This computer only. cap agents:start · local · workbench-v1. e.g. `await k2.agents.archive({address: row.address})` */
+    /** Take a stopped sidecar off the agent list (k2 sidecar archive), within 5 s of a press in the widget. No sheet: it is reversible (k2 sidecar new <name>, a CLI command, brings it back with its transcript and Thread). Answers {archived: true}. A running one is sidecar_live (end it first); one in its own worktree is worktree_sidecar (use agents.settle). Only sidecars (ws/name::local). This computer only. cap agents:start · local · workbench-v1. e.g. `await k2.agents.archive({address: row.address})` */
     archive(args: { address: string }): Promise<WorkArchived>
     /** Stop the agent's current turn (its harness's own interrupt key, never the process), within 5 s of a press in the widget. This computer only. cap agents:stop · local · workbench-v1. e.g. `await k2.agents.stop({address: row.address})` */
     stop(args: { address: string }): Promise<WorkStopped>
@@ -2120,9 +2120,9 @@ export interface K2 {
     pickFiles(address: string): Promise<ThreadPicked>
     /** Send text to the agent as you, with files picked by the person riding it (thread.pickFiles). cap thread:post · portable · zen-v1. e.g. `await k2.thread.post(row.address, 'How is it going?')` */
     post(address: string, text: string, opts?: { attachments?: ThreadAttach[] }): Promise<Posted>
-    /** Answer a choice card in the Thread. On a secret card (doc.kind secret) it opens K2's own sheet outside the widget instead, just after a click in it: the person types the value there, and it never reaches the widget. Answers null once the sheet closes; the card's new status comes with the Thread's next view. cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
+    /** Answer a choice card in the Thread with one of its option labels (cardId is the item's id). On a pending secret card (doc.kind secret) leave the choice out: it opens K2's own sheet outside the widget instead, within 5 s of a click in it. The person types the value there and it never reaches the widget. Answers null once the sheet closes (saved or closed alike); the card's new status comes with the Thread's next view. cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
     answer(address: string, cardId: string, choice?: string): Promise<null>
-    /** Save a message's attachment to the person's Downloads, whole and as it is (its own name and type, any size, audio too), just after a click in the widget. K2 copies it from the agent's server: no bytes pass through the widget. Hide the button when the file's canDownload isn't true. caps downloads:save + thread:read · local · zen-files-v1. e.g. `const {saved, name} = await k2.thread.download(row.address, item.id, 0)` */
+    /** Save attachment n of a Thread item (item.id, n its index in item.doc.attachments, from 0) to the person's Downloads, whole and as it is (its own name and type, any size, audio too), within 5 s of a click in the widget. K2 copies it from the agent's server: no bytes pass through the widget. Show the button only when that attachment's canDownload is true. saved is false when the person said no or cancelled. Refusals by name: not_granted, attachment_secret, not_found. caps downloads:save + thread:read · local · zen-files-v1. e.g. `const {saved, name} = await k2.thread.download(row.address, item.id, n)` */
     download(address: string, docId: string, n: number): Promise<ThreadFileSaved>
     /** The agent's live Thread turn, exactly as an App guest with the same caps sees it (thread.activity + its thread_activity frames: counts, never text): the current turn at once, then every frame; turn null means nothing is running (never infer it from messages). caps activity:read + thread:read · portable · widget-activity-v1. e.g. `const off = k2.thread.onActivity(row.address, ({turn}) => turn ? drawWorking(turn) : hideWorking())` */
     onActivity(address: string, cb: (value: ThreadActivityState) => void, onError?: (error: K2Error) => void): () => void

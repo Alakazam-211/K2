@@ -82109,7 +82109,7 @@ sources:read (Read data sources)
 links:open (Open links in your browser)
   k2.links.open(url)                                                                                               local    zen-widgets-v1         const {ok} = await k2.open('https://example.com/report')  [bad_args rate_limited]
 downloads:save (Save files to your Downloads)
-  k2.thread.download(address, docId, n)                                                                            local    zen-files-v1           const {saved, name} = await k2.thread.download(row.address, item.id, 0)  +thread:read  [not_bound not_granted not_found attachment_secret bad_args rate_limited]
+  k2.thread.download(address, docId, n)                                                                            local    zen-files-v1           const {saved, name} = await k2.thread.download(row.address, item.id, n)  +thread:read  [not_bound not_granted not_found attachment_secret bad_args rate_limited]
   k2.downloads.begin(name, {mime})                                                                                 local    zen-files-v1           k2.download('Board.png', async () => await drawPng())  [bad_args rate_limited]
   k2.downloads.save(name, data, {mime, ticket})                                                                    local    zen-files-v1           const {saved, name} = await k2.download('board.json', JSON.stringify(doc))  [not_granted bad_args too_large rate_limited blob_missing]
 uploads:pick (Take files you pick or drop)
@@ -82248,7 +82248,7 @@ WHICH TO PICK
   2D games            kaplay@3001      185 KB
   UI components       preact@10        17 KB
   a help button       k2-help@1        14 KB
-  a Thread panel      k2-thread@1      53 KB
+  a Thread panel      k2-thread@1      54 KB
   PNG from a canvas   k2-png@1         4 KB
   dates, numbers      no library: the browser's Intl.DateTimeFormat,
                       Intl.RelativeTimeFormat and Intl.NumberFormat
@@ -82287,7 +82287,7 @@ EVERY LIBRARY: request, global, licence, size
   plotly.js-dist-min@4  Plotly           MIT                  4.6 MB  download
   k2-help@1             K2Help           FSL-1.1-Apache-2.0    14 KB
   k2-activity@1         K2Activity       FSL-1.1-Apache-2.0    15 KB
-  k2-thread@1           K2Thread         FSL-1.1-Apache-2.0    53 KB
+  k2-thread@1           K2Thread         FSL-1.1-Apache-2.0    54 KB
   k2-markdown@1         K2Markdown       FSL-1.1-Apache-2.0     7 KB
   k2-png@1              K2Png            FSL-1.1-Apache-2.0     4 KB
   k2-diff@1             K2Diff           FSL-1.1-Apache-2.0    23 KB

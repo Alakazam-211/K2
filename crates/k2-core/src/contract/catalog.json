@@ -843,7 +843,7 @@
                       "title": "ThreadSecretCard",
                       "type": "object",
                       "properties": {
-                        "status": {"type": "string", "description": "pending, answered or expired."},
+                        "status": {"enum": ["pending", "answered", "expired"], "description": "Only a pending card opens K2's sheet."},
                         "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
                       },
                       "required": ["status", "expiresAt"],
@@ -984,7 +984,7 @@
                       "title": "ThreadSecretCard",
                       "type": "object",
                       "properties": {
-                        "status": {"type": "string", "description": "pending, answered or expired."},
+                        "status": {"enum": ["pending", "answered", "expired"], "description": "Only a pending card opens K2's sheet."},
                         "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
                       },
                       "required": ["status", "expiresAt"],
@@ -1161,7 +1161,7 @@
                       "title": "ThreadSecretCard",
                       "type": "object",
                       "properties": {
-                        "status": {"type": "string", "description": "pending, answered or expired."},
+                        "status": {"enum": ["pending", "answered", "expired"], "description": "Only a pending card opens K2's sheet."},
                         "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
                       },
                       "required": ["status", "expiresAt"],
@@ -1606,7 +1606,7 @@
                 "title": "ThreadSecretCard",
                 "type": "object",
                 "properties": {
-                  "status": {"type": "string", "description": "pending, answered or expired."},
+                  "status": {"enum": ["pending", "answered", "expired"], "description": "Only a pending card opens K2's sheet."},
                   "expiresAt": {"type": ["integer", "null"], "description": "Unix seconds when a pending card expires; null when it never does."}
                 },
                 "required": ["status", "expiresAt"],
@@ -1873,8 +1873,8 @@
         "additionalProperties": false
       },
       "errors": ["cap_not_granted", "not_bound", "not_granted", "not_found", "attachment_secret", "bad_args", "rate_limited", "verb_unavailable", "failed"],
-      "doc": "Save a message's attachment to the person's Downloads, whole and as it is (its own name and type, any size, audio too), just after a click in the widget. K2 copies it from the agent's server: no bytes pass through the widget. Hide the button when the file's canDownload isn't true.",
-      "example": "const {saved, name} = await k2.thread.download(row.address, item.id, 0)"
+      "doc": "Save attachment n of a Thread item (item.id, n its index in item.doc.attachments, from 0) to the person's Downloads, whole and as it is (its own name and type, any size, audio too), within 5 s of a click in the widget. K2 copies it from the agent's server: no bytes pass through the widget. Show the button only when that attachment's canDownload is true. saved is false when the person said no or cancelled. Refusals by name: not_granted, attachment_secret, not_found.",
+      "example": "const {saved, name} = await k2.thread.download(row.address, item.id, n)"
     },
     {
       "verb": "thread.open",
@@ -2092,7 +2092,7 @@
       ],
       "response": {"type": "null"},
       "errors": ["cap_not_granted", "not_bound", "verb_unavailable", "failed", "sending_off", "rate_limited", "card_person_only"],
-      "doc": "Answer a choice card in the Thread. On a secret card (doc.kind secret) it opens K2's own sheet outside the widget instead, just after a click in it: the person types the value there, and it never reaches the widget. Answers null once the sheet closes; the card's new status comes with the Thread's next view.",
+      "doc": "Answer a choice card in the Thread with one of its option labels (cardId is the item's id). On a pending secret card (doc.kind secret) leave the choice out: it opens K2's own sheet outside the widget instead, within 5 s of a click in it. The person types the value there and it never reaches the widget. Answers null once the sheet closes (saved or closed alike); the card's new status comes with the Thread's next view.",
       "example": "await k2.thread.answer(row.address, card.id, 'Yes')"
     },
     {
@@ -27416,7 +27416,7 @@
         "sidecar_attached",
         "confirm_required"
       ],
-      "doc": "End a sidecar agent's process (k2 sidecar stop), within 5 s of a press in the widget. K2's sheet asks the person first. Its tab, transcript and Thread stay, so it can start again. Already asleep: {ended: false} at once, with no sheet. Only sidecars: a workspace's main agent or a heartbeat session is bad_args.",
+      "doc": "End a sidecar agent's process (k2 sidecar stop), within 5 s of a press in the widget. K2's sheet asks the person first; Cancel there answers {ended: false, cancelled: true}. Already asleep: {ended: false, cancelled: false} at once, with no sheet. Its tab, transcript and Thread stay, so it can start again. Only sidecars (ws/name::local): a workspace's main agent or a heartbeat session is bad_args.",
       "example": "const {ended} = await k2.agents.end({address: row.address})"
     },
     {
@@ -27464,7 +27464,7 @@
         "sidecar_live",
         "worktree_sidecar"
       ],
-      "doc": "Take a stopped sidecar off the agent list (k2 sidecar archive), within 5 s of a press in the widget. Its transcript and Thread stay, and k2 sidecar new <name> brings it back. A running one is sidecar_live (end it first); one in its own worktree is worktree_sidecar (use agents.settle). Only sidecars.",
+      "doc": "Take a stopped sidecar off the agent list (k2 sidecar archive), within 5 s of a press in the widget. No sheet: it is reversible (k2 sidecar new <name>, a CLI command, brings it back with its transcript and Thread). Answers {archived: true}. A running one is sidecar_live (end it first); one in its own worktree is worktree_sidecar (use agents.settle). Only sidecars (ws/name::local).",
       "example": "await k2.agents.archive({address: row.address})"
     },
     {

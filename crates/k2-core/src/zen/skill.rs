@@ -453,27 +453,36 @@ says `answeredBy`: who answered or dismissed it, `{kind, login, name}` with\n\
 `null`); `null` while pending or when the agent answered itself. And\n\
 `expiresAt`: Unix seconds when a pending card expires (K2 closes it as\n\
 `expired`), or `null` when it never does.\n\n\
-**Secret cards** (`doc.kind` `secret`) say only `doc.secret = {status, expiresAt}`\n\
-(`pending`, `answered` or `expired`): never the value, its name, the prompt or where\n\
-it goes. To let the person answer one, call `k2.thread.answer(address, card.id)` with\n\
-no choice from a click in your widget: K2 opens its own sheet outside the widget, the\n\
-person types the value there, and your widget never sees it. It answers `null` when\n\
-the sheet closes; the new status comes with the next Thread view. A choice or value\n\
-passed along is `bad_args`, and a widget never sends a secret itself.\n\n\
+The next three need a click in your widget: call them within 5 s of the person's\n\
+press, else they answer `failed` (\"needs a click\"). `item` is a Thread item\n\
+(`{seq, id, doc}`) from `k2.thread.read` / `k2.thread.subscribe`.\n\n\
+**Secret cards** (`item.doc.kind` `secret`) say only `item.doc.secret = {status,\n\
+expiresAt}` (`pending`, `answered` or `expired`): never the value, its name, the\n\
+prompt or where it goes. To let the person answer a pending one, call\n\
+`k2.thread.answer(address, item.id)` with no choice: K2 opens its own sheet outside\n\
+the widget, the person types the value there, and your widget never sees it. It\n\
+answers `null` when the sheet closes, saved or not (they may close it and answer\n\
+later); the new status comes with the next Thread view. One sheet at a time\n\
+(`rate_limited`). A choice or value passed along is `bad_args`, and a widget never\n\
+sends a secret itself.\n\n\
 **Saving a Thread file:** `k2.thread.download(address, item.id, n)` (caps\n\
-`downloads:save` and `thread:read`), from a click, saves attachment `n` to the\n\
-person's Downloads as it is (its own name and type, any size, audio too). K2 copies\n\
-it from the agent's server; no bytes pass through your widget. It answers `{saved,\n\
-name}`; `saved` is false when the person said no. Show the button only when the\n\
-attachment's `canDownload` is `true`. Refusals by name: `not_granted`,\n\
-`attachment_secret` (the file looks like a secret now), `not_found`.\n\n\
-**Ending and archiving a sidecar** (cap `agents:start`, this computer only), from a\n\
-click: `k2.agents.end({address})` ends a running sidecar's process after K2's own\n\
-sheet asks the person (an asleep one answers `{ended: false}` at once; someone with it\n\
-open in a tab is `sidecar_attached`). `k2.agents.archive({address})` takes a stopped one\n\
-off the list, and `k2 sidecar new <name>` brings it back. Only sidecars\n\
-(`ws/name::local`): a main agent or a heartbeat session is `bad_args`. `sidecar_live`\n\
-means end it first; `worktree_sidecar` means retire it with `k2.agents.settle`.\n\n\
+`downloads:save` and `thread:read`) saves `item.doc.attachments[n]` (`n` from 0) to\n\
+the person's Downloads as it is (its own name and type, any size, audio too). K2\n\
+copies it from the agent's server; no bytes pass through your widget. It answers\n\
+`{saved, name}`; `saved` is false when the person said no or cancelled. Show the\n\
+button only when `item.doc.attachments[n].canDownload === true` (absent means no).\n\
+Refusals by `err.code`: `not_granted`, `attachment_secret` (the file looks like a\n\
+secret now), `not_found`.\n\n\
+**Ending and archiving a sidecar** (cap `agents:start`, this computer only: elsewhere\n\
+`k2.can('agents.end')` is false). A sidecar's address is `ws/name::local`;\n\
+`k2.work.list()` lists them with `live`. `k2.agents.end({address})` ends a running\n\
+sidecar's process after K2's own sheet asks the person: `{ended: true}`, or\n\
+`{ended: false, cancelled: true}` on Cancel; an asleep one answers `{ended: false,\n\
+cancelled: false}` at once; someone with it open in a tab is `sidecar_attached`.\n\
+`k2.agents.archive({address})` takes a stopped one off the list with no sheet\n\
+(`{archived: true}`); `k2 sidecar new <name>` on the command line brings it back. A\n\
+main agent or a heartbeat session is `bad_args`. `sidecar_live` means end it first;\n\
+`worktree_sidecar` means retire it with `k2.agents.settle`.\n\n\
 Built-in widgets get their caps from K2. A custom widget asks for caps in its\n\
 manifest and gets every one it asks for at once: widgets in your own Gardens\n\
 need no permissions.\n\n",
@@ -1720,12 +1729,12 @@ mod tests {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 49, "catalog v50's verbs need a new skill version");
         let body = generate_k2_zen_skill_for(false);
         for want in [
-            "`k2.thread.answer(address, card.id)` with\nno choice",
+            "`k2.thread.answer(address, item.id)` with no choice",
             "your widget never sees it",
             "`k2.thread.download(address, item.id, n)`",
             "no bytes pass through your widget",
-            "`canDownload` is `true`",
-            "`k2.agents.end({address})`",
+            "`item.doc.attachments[n].canDownload === true`",
+            "`k2.agents.end({address})` ends a running",
             "`k2.agents.archive({address})`",
             "`worktree_sidecar` means retire it with `k2.agents.settle`",
             "\"Enter it in K2\"",

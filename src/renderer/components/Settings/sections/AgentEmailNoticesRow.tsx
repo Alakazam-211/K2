@@ -9,6 +9,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { Toggle } from '@/components/ui'
+import { SettingDropdown } from '../controls/SettingControls'
 import type { ServerScope } from '@/kessel/server-scope'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { fetchNotifyCaller } from './notify-api'
@@ -157,23 +158,22 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
               {row?.sender ? (
                 <p className={muted}>Sends from {row.sender}.</p>
               ) : (
-                <label className={`${muted} flex items-center gap-2`}>
+                <div className={`${muted} flex items-center gap-2`}>
                   Sends from
-                  <select
-                    value={sender}
+                  <SettingDropdown
+                    compact
+                    menuAlign="left"
+                    className="min-w-0 max-w-[260px]"
+                    ariaLabel="Sender for this workspace's notices"
                     disabled={busy}
-                    onChange={(e) => setSender(e.target.value)}
-                    aria-label="Sender for this workspace's notices"
-                    className="px-1 py-0.5 text-xs bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
-                  >
-                    {choices.map((c) => (
-                      <option key={c.address} value={c.address}>
-                        {c.address}
-                        {c.state !== 'ready' ? ` (${c.state})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    value={sender}
+                    options={choices.map((c) => ({
+                      value: c.address,
+                      label: c.state !== 'ready' ? `${c.address} (${c.state})` : c.address,
+                    }))}
+                    onChange={setSender}
+                  />
+                </div>
               )}
               {askPassword && (
                 <input

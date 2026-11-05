@@ -75,9 +75,16 @@ describe('AgentHandoffAcceptFrom', () => {
     render(<AgentHandoffAcceptFrom project={OPS} />)
     await screen.findByTestId('handoff-accept-entry')
     // The picker offers other agents not already listed (not ops itself, not sales).
-    const pick = screen.getByTestId('handoff-accept-pick') as HTMLSelectElement
-    expect([...pick.options].map((o) => o.value)).toEqual(['', 'ws:p-billing'])
-    fireEvent.change(pick, { target: { value: 'ws:p-billing' } })
+    // K2's themed menu, not a native select; the prompt is a placeholder, not an option.
+    const pick = screen.getByTestId('handoff-accept-pick')
+    expect(pick.tagName).toBe('BUTTON')
+    expect(pick.textContent).toBe('An agent on this server…')
+    expect((screen.getByTestId('handoff-accept-pick-add') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(pick)
+    const options = [...screen.getByTestId('setting-dropdown-menu').querySelectorAll('button')]
+    expect(options.map((o) => o.textContent)).toEqual(['billing'])
+    fireEvent.click(options[0])
+    expect(screen.getByTestId('handoff-accept-pick').textContent).toBe('billing')
     fireEvent.click(screen.getByTestId('handoff-accept-pick-add'))
     await waitFor(() => expect(screen.getAllByTestId('handoff-accept-entry')).toHaveLength(2))
     const typedAdd = screen.getByTestId('handoff-accept-typed-add') as HTMLButtonElement

@@ -13,6 +13,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { handoffApi, requestVaultTab, type AcceptFromEntry } from './handoff-api'
+import { SettingDropdown } from '../controls/SettingControls'
 
 const btn =
   'px-2 py-0.5 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
@@ -153,20 +154,18 @@ export function AgentHandoffAcceptFrom({
       )}
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            className={input}
-            aria-label="Add an agent on this server"
-            data-testid="handoff-accept-pick"
+          <SettingDropdown
+            compact
+            menuAlign="left"
+            className="min-w-0 max-w-[220px]"
+            ariaLabel="Add an agent on this server"
+            triggerData={{ 'data-testid': 'handoff-accept-pick' }}
+            placeholder="An agent on this server…"
+            disabled={others.length === 0}
             value={pick}
-            onChange={(e) => setPick(e.target.value)}
-          >
-            <option value="">An agent on this server…</option>
-            {others.map((p) => (
-              <option key={p.id} value={`ws:${p.id}`}>
-                {p.handle || p.name}
-              </option>
-            ))}
-          </select>
+            options={others.map((p) => ({ value: `ws:${p.id}`, label: p.handle || p.name }))}
+            onChange={setPick}
+          />
           <button type="button" className={btn} disabled={busy || !pick} data-testid="handoff-accept-pick-add" onClick={() => void edit(pick, 'add')}>
             Add
           </button>

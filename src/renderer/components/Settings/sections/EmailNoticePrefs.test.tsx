@@ -147,9 +147,15 @@ describe('AgentEmailNoticesRow', () => {
     render(<AgentEmailNoticesRow scope={primaryScope()} projectId="ws-sales" />)
     expect(await screen.findByText(/^Off\. The agent can ask you/)).toBeTruthy()
     fireEvent.click(await screen.findByLabelText('Let this agent email people on this server'))
-    const select = (await screen.findByLabelText("Sender for this workspace's notices")) as HTMLSelectElement
+    const picker = await screen.findByLabelText("Sender for this workspace's notices")
+    // K2's themed menu, not a native select.
+    expect(picker.tagName).toBe('BUTTON')
+    expect(picker.textContent).toBe('notices@notify.brand.test')
     // Only a free sender: never the system sender, an App's or another workspace's.
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['notices@notify.brand.test'])
+    fireEvent.click(picker)
+    const options = [...screen.getByTestId('setting-dropdown-menu').querySelectorAll('button')]
+    expect(options.map((o) => o.textContent)).toEqual(['notices@notify.brand.test'])
+    fireEvent.click(options[0])
     fireEvent.click(screen.getByText('Confirm and turn on'))
     await waitFor(() => expect(h.posts.some((p) => p.route === 'notifications/email/agent/on')).toBe(true))
     expect(h.posts.find((p) => p.route === 'vault/confirm/start')?.body).toEqual({

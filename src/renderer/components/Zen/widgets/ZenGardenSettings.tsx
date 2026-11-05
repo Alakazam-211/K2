@@ -25,6 +25,7 @@ import { loadZenGardenThemes, setZenTheme } from '@/lib/zen/zen-theme-switch'
 import type { ZenThemeEntry } from '@/lib/zen/zen-page'
 import { zenPinGridText } from '@/lib/zen/zen-pin-grid'
 import { ZenOverlay, zenButtonStyle } from './ZenOverlay'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_PROPS } from '@/lib/zen/zen-materials'
 
 export const ZEN_RECENT_FIRST_LABEL = 'Recent agents first'
@@ -171,40 +172,18 @@ function ThemeRow({ gardenId }: { gardenId: string | null }): React.JSX.Element 
   return (
     <>
       <div className="flex items-center justify-between" style={rowStyle} {...ZEN_TILE_PROPS}>
-        <label id="zen-garden-theme-label" htmlFor="zen-garden-theme-select">
-          Theme
-        </label>
-        <select
-          id="zen-garden-theme-select"
-          data-zen-garden-theme-select={state.status}
+        <span id="zen-garden-theme-label">Theme</span>
+        {/* K2's themed menu (portals above the overlay; Esc closes it first). */}
+        <SettingDropdown
+          className="min-w-0"
+          ariaLabel="Theme"
+          triggerData={{ 'data-zen-garden-theme-select': state.status }}
           disabled={!ready || busy}
+          placeholder={ready ? 'Choose…' : state.status === 'loading' ? 'Loading…' : 'Unavailable'}
           value={ready?.active ?? ''}
-          onChange={(e) => pick(e.target.value)}
-          className="no-drag cursor-pointer"
-          style={{
-            minWidth: 140,
-            padding: '4px 8px',
-            borderRadius: 'calc(var(--zen-radius) - 4px)',
-            border: '1px solid var(--zen-border)',
-            background: 'var(--zen-surface-raised)',
-            color: 'var(--zen-text)',
-            font: 'inherit',
-            opacity: ready ? 1 : 0.6,
-          }}
-        >
-          {ready ? (
-            <>
-              {ready.active === null && <option value="">Choose…</option>}
-              {ready.themes.map((t) => (
-                <option key={t.name} value={t.name} data-zen-garden-theme-option={t.name}>
-                  {t.label}
-                </option>
-              ))}
-            </>
-          ) : (
-            <option value="">{state.status === 'loading' ? 'Loading…' : 'Unavailable'}</option>
-          )}
-        </select>
+          options={ready ? ready.themes.map((t) => ({ value: t.name, label: t.label })) : []}
+          onChange={pick}
+        />
       </div>
       <span data-zen-garden-theme-note={failed ? 'failed' : 'ok'} style={noteStyle}>
         {failed ? ZEN_GARDEN_THEME_FAILED_NOTE : ZEN_GARDEN_THEME_NOTE}

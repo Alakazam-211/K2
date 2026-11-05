@@ -16,6 +16,7 @@ import {
 } from '@/lib/garden-data/garden-data-api'
 import { zipStore, type ZipEntry } from '@/lib/zip-store'
 import { SquareRadio } from '@/components/ui'
+import { SettingDropdown } from '../controls/SettingControls'
 
 const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
@@ -194,19 +195,16 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
       {toRev !== null ? (
         <div className="mt-2 flex items-center gap-2 text-[11px]">
           <span>Restore</span>
-          <select
-            className="text-[11px] bg-transparent border border-[var(--color-border)]"
+          <SettingDropdown
+            compact
+            menuAlign="left"
+            className="min-w-0 max-w-[220px]"
+            ariaLabel="What to restore"
+            triggerData={{ 'data-garden-data-family': '' }}
             value={family}
-            onChange={(e) => setFamily(e.target.value)}
-            data-garden-data-family=""
-          >
-            <option value="">Everything</option>
-            {allFamilies.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+            options={[{ value: '', label: 'Everything' }, ...allFamilies.map((f) => ({ value: f, label: f }))]}
+            onChange={setFamily}
+          />
           <span className={MUTED}>
             {dry ? (changes === 0 ? 'Nothing to change.' : `${changes} key${changes === 1 ? '' : 's'} change: ${dry.families.join(', ')}`) : '…'}
           </span>

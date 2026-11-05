@@ -160,6 +160,7 @@ vi.mock('@/stores/session-events', () => ({
 
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { pickValue, waitForMenuOptions } from '@/test-utils/setting-dropdown'
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { buildDataLines, exportJsonl, formatBytes, makerText, ZenWidgetData } from './ZenWidgetData'
@@ -505,12 +506,13 @@ describe('0.46.6: files, export with images, restore (prd-garden-board-needs-v1 
     await waitFor(() =>
       expect(panel.querySelector('[data-garden-data-restore-warning]')?.textContent).toContain('access you removed may come back'),
     )
-    const select = panel.querySelector<HTMLSelectElement>('[data-garden-data-family]')
+    const select = panel.querySelector<HTMLElement>('[data-garden-data-family]')
     if (!select) throw new Error('no family picker')
-    await waitFor(() => expect([...select.options].map((o) => o.textContent)).toEqual(['Everything', 'board/', 'settings/']))
-    await act(async () => {
-      fireEvent.change(select, { target: { value: 'board/' } })
-    })
+    // K2's themed menu, not a native select.
+    expect(select.tagName).toBe('BUTTON')
+    await waitForMenuOptions(select, (o) => expect(o.map((x) => x.label)).toEqual(['Everything', 'board/', 'settings/']))
+    // Not inside act(): the menu has to render between the open and the pick.
+    pickValue(select, 'board/')
     await waitFor(() => expect(panel.querySelector('[data-garden-data-restore-warning]')).toBeNull())
     await act(async () => {
       fireEvent.click(within(panel).getByRole('button', { name: 'Restore' }))

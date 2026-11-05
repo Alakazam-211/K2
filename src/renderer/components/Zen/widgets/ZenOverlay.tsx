@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
+import { settingMenuOpen } from '@/components/Settings/settings-esc'
 
 /** Portal target: the Zen root (keeps Zen's tokens), else the body. */
 function useZenLayer(anchor: React.RefObject<HTMLElement | null>): HTMLElement | null {
@@ -48,6 +49,8 @@ export function ZenOverlay({
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      // An open K2 menu inside (Garden settings' Theme) closes first.
+      if (settingMenuOpen()) return
       e.preventDefault()
       e.stopPropagation()
       onClose()

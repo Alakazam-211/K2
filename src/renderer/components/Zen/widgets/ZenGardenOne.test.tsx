@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { cleanup, fireEvent, render } from '@testing-library/react'
+import { menuLabels, pickValue, pickedValue } from '@/test-utils/setting-dropdown'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenAgentRow, ZenThreadView } from '@/lib/zen/zen-data'
 import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
@@ -318,14 +319,25 @@ describe('Garden 1 from the 0.46.0 daemon (`pin-limit` 9, `recent-first` true)',
 
     // Theme: this Garden's list, its active theme selected.
     expect(h.gets).toEqual([{ route: 'zen/theme/list', params: { garden: 'g-1' } }])
-    const select = el('[data-zen-garden-theme-select]') as HTMLSelectElement
+    // K2's themed menu, not a native select.
+    const select = el('[data-zen-garden-theme-select]') as HTMLButtonElement
+    expect(select.tagName).toBe('BUTTON')
     expect(select.getAttribute('data-zen-garden-theme-select')).toBe('ready')
     expect(select.disabled).toBe(false)
-    expect(select.value).toBe('glass')
-    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['Basic', 'Glass', 'Paper'])
-    await act(async () => void fireEvent.change(select, { target: { value: 'paper' } }))
+    expect(pickedValue(select)).toBe('glass')
+    expect(menuLabels(select)).toEqual(['Basic', 'Glass', 'Paper'])
+    // Esc with the menu open closes the menu, not the settings overlay.
+    fireEvent.click(select)
+    expect(document.querySelector('[data-setting-dropdown-menu]')).not.toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(document.querySelector('[data-setting-dropdown-menu]')).toBeNull()
+    expect(document.querySelector('[data-testid="zen-garden-settings"]')).not.toBeNull()
+    // A pick in the portalled menu keeps the overlay open.
+    pickValue(select, 'paper')
+    await act(async () => {})
     expect(h.posts).toEqual([{ route: 'zen/theme/set', body: { name: 'paper', garden: 'g-1' } }])
-    expect((el('[data-zen-garden-theme-select]') as HTMLSelectElement).value).toBe('paper')
+    expect(document.querySelector('[data-testid="zen-garden-settings"]')).not.toBeNull()
+    expect(pickedValue(el('[data-zen-garden-theme-select]'))).toBe('paper')
     expect(document.querySelector('[data-zen-garden-theme-error]')).toBeNull()
 
     // Pinned agents: fixed, read-only.
@@ -357,8 +369,9 @@ describe('Garden 1 on an older daemon (no `pin-limit`, `recent-first`, or theme 
     await act(async () => void fireEvent.click(el('[data-zen-agents-settings]')))
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockRestore()
-    const select = el('[data-zen-garden-theme-select]') as HTMLSelectElement
+    const select = el('[data-zen-garden-theme-select]') as HTMLButtonElement
     expect(select.getAttribute('data-zen-garden-theme-select')).toBe('failed')
+    expect(select.textContent).toBe('Unavailable')
     expect(select.disabled).toBe(true)
     expect(el('[data-zen-garden-theme-note]').getAttribute('data-zen-garden-theme-note')).toBe('failed')
     expect(el('[data-zen-pin-grid-text]').textContent).toBe('3 across, no limit')

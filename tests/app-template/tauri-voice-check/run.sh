@@ -24,6 +24,7 @@ export CARGO_TARGET_DIR="${K2_JOB_CACHE:-$here/src-tauri}/target"
 if [ "$(uname -s)" = Darwin ]; then
   plutil -lint Info.plist Entitlements.plist
 fi
+cargo test   # k2_voice.rs's own test: allow and refuse by origin
 cargo build
 echo "tauri: $(cargo tree -i tauri --depth 0 2>/dev/null | head -1)"
 echo "wry:   $(cargo tree -i wry --depth 0 2>/dev/null | head -1)"

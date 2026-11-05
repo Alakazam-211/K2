@@ -20,6 +20,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A heartbeat no longer keeps waking a stuck session.** If the session's last answer was a usage-limit or sign-in error, or it runs on an LLM token a new chat here would no longer use, the next fire stops it and starts a new session on the current token. `k2 heartbeat status <name>` says what happened: "delivered", "delivered into live session", "restarted: weekly limit", "restarted: signed out" or "restarted: token changed". If the new session fails too, the fire counts as a failure. A heartbeat you pointed at a chosen session is never moved off it; the fire says it is stuck instead.
 - **`k2 heartbeat restart <name>`** stops a heartbeat's own session, so its next fire starts a new one. An agent can restart its own workspace's heartbeats without the "Allow hiring and managing agents" switch.
 
+### Chat / Voice Hosting
+- **K2 installs and upgrades to Sew 0.8.0,** which lets one chat Space show in more than one App later on, and carries Sew's call fixes: calls renew their sign-in in time, and on a tunnelled voice server the voice engine no longer listens on IPv6. Upgrade with `k2 hostchat upgrade`. Going back to Sew 0.7.3 afterwards needs `k2 hostchat rollback --accept-data-loss`, because 0.8.0 changes Sew's data. Upgrades were tested from Sew 0.6.1 and newer.
+
 ## 0.46.8 — Agents run their Apps' people
 
 An agent can now look after its App's people from start to finish, and App screens update the moment someone's access changes, with no sign-out. Mailboxes can forward to up to 100 addresses and send files, your own domain can reach an App through K2 Connect, and the Windows installer is back.

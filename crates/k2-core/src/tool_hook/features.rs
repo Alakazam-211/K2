@@ -16,7 +16,8 @@
 //! | [`SERVER_GOVERNED_SPACE`], [`MGMT_VOICE_STATES`], [`VOICE_CHANNEL_CLOSING`], [`TURN_RELAY_ONLY`], [`VOICE_MEDIA_PATH`], [`IMPORT_IDENTITY_MAP`] | Sew 0.7.0 (K2 voice rooms, sew-56): read together as [`VoiceFeatures`] (`tool_hook::sew_voice_features()`), one read of the list the last status refresh recorded |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //!
-//! The pin (Sew 0.7.3) reports twenty-nine flags, the same as 0.7.2. Up to 0.6.1 they are 0.5.0's
+//! The pin (Sew 0.8.0) reports thirty flags: 0.7.3's twenty-nine (the same as
+//! 0.7.2's) and `app_participant_links`, which K2 keeps but doesn't use yet. Up to 0.6.1 they are 0.5.0's
 //! twelve, 0.5.1's `app_session_member_role`, `app_voice_channel_create`,
 //! `home_client_owner_approval` and `k2_managed_guard`, and 0.6.0's
 //! `app_controls`, `app_governed_spaces`, `app_member_channels` and
@@ -237,6 +238,36 @@ mod tests {
         assert_eq!(list(&conn, "chat").unwrap().len(), 29, "kept whole");
         assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
         for flag in [APP_ORIGIN, APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, "k2_managed_guard"] {
+            assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
+        }
+    }
+
+    /// The pin, Sew 0.8.0: 0.7.3's twenty-nine plus `app_participant_links`
+    /// (sew-58's participant links, its `features_080.rs`). K2 doesn't make links
+    /// yet, so the flag is kept and ignored, and every gate reads as with 0.7.3.
+    #[test]
+    fn sew_0_8_0_flags_keep_every_gate_and_the_new_flag() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let mut reported: Vec<String> = SEW_0_6_0.iter().map(|s| s.to_string()).collect();
+        for f in [
+            "server_governed_space",
+            "import_identity_map",
+            "mgmt_voice_states",
+            "voice_channel_closing",
+            "voice_media_path",
+            "turn_relay_only",
+            "call_credential",
+            "call_stats_native",
+            "app_origins",
+            "app_participant_links",
+        ] {
+            reported.push(f.to_string());
+        }
+        assert!(note(&conn, "chat", &reported, 1).unwrap());
+        assert_eq!(list(&conn, "chat").unwrap().len(), 30, "kept whole");
+        assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
+        for flag in [APP_ORIGIN, APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, "k2_managed_guard", "app_participant_links"] {
             assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
         }
     }

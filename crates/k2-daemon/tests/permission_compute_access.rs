@@ -217,7 +217,9 @@ async fn an_agent_asks_for_its_own_compute_access_and_only_that_turns_on() {
         assert!(r.json().get("permission").is_none(), "{state}: taught while off: {}", r.body);
         // Asking anyway raises no card.
         let r = post(port, "/cli/permission/request", &pa, json!({ "action": "compute.use", "params": {}, "why": "Run the suite" })).await;
-        assert!(matches!(r.status, 401 | 403), "{state}: an ask while off is refused: {} {}", r.status, r.body);
+        // Off, the family isn't there (405, how the CLI tells "off"); the
+        // agent's own switch off answers the codeless 403.
+        assert!(matches!(r.status, 403 | 405), "{state}: an ask while off is refused: {} {}", r.status, r.body);
         assert!(!r.body.contains("\"card\""), "{state}: no card: {}", r.body);
         assert_eq!(asks(&a), 0, "{state}: no request was stored");
         assert!(!compute_on(&a), "{state}");

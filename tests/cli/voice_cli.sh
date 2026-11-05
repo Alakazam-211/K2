@@ -9,7 +9,8 @@
 #   2. Request shapes: rooms/status GET; set rooms N [--now] →
 #      /cli/voice/settings {count, now}; rename (multi-word names); close;
 #      join {room}; leave {callId}; kick|mute|… → /cli/voice/moderate
-#      {room, person, action}.
+#      {room, person, action}; consent <id> yes --notice N | no →
+#      /cli/voice/recording/consent {recording_id, consent, notice_version}.
 #   3. Summaries print people and the hosting line; --json prints raw.
 #   4. Exit codes: usage errors exit 2 before any /cli/voice request;
 #      refusals (403 agents_not_in_voice, 409 close_from_top) exit 3 with
@@ -50,7 +51,8 @@ out="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" voice --help 2>&1)"; rc=$?
 set -e
 assert_eq "voice --help exit 0" "$rc" "0"
 assert_contains "help: set rooms" "$out" "k2 voice set rooms <0-10> [--now]"
-assert_contains "help: owner token never joins" "$out" "never joins or moderates"
+assert_contains "help: owner token never joins" "$out" "never joins,"
+assert_contains "help: owner token never answers a notice or moderates" "$out" "answers a recording notice or moderates"
 assert_contains "help: study page" "$out" "k2 study voice-rooms"
 assert_contains "help: agents are read only" "$out" "Agents: read only"
 out="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" study voice-rooms 2>&1)"
@@ -122,6 +124,13 @@ class H(BaseHTTPRequestHandler):
                 out = {"ok": True, "left": True, "already": False, "room": "room-1", "channelId": "901"}
         elif p == "/cli/voice/moderate":
             out = {"ok": True, "action": b.get("action"), "person": b.get("person"), "room": {"name": "Standup"}}
+        elif p == "/cli/voice/recording/consent":
+            if rec["token"] == scoped:
+                status, out = 403, {"ok": False, "code": "agents_not_in_voice", "error": {"code": "agents_not_in_voice", "hint": "agents don't join voice rooms"}}
+            elif b.get("recording_id") == "8":
+                status, out = 409, {"ok": False, "code": "consent_notice_changed", "error": {"code": "consent_notice_changed", "hint": "the recording notice changed"}}
+            else:
+                out = {"ok": True, "recordingId": b.get("recording_id"), "consent": b.get("consent"), "recording": {"id": b.get("recording_id")}}
         self.send_response(status)
         data = json.dumps(out).encode()
         self.send_header("Content-Type", "application/json")
@@ -223,9 +232,29 @@ assert_contains "kick summary" "$out" "kick ada in Standup"
 run owner voice deafen 1 owner
 assert_eq "deafen body" "$(req_where /cli/voice/moderate body)" '{"action": "deafen", "person": "owner", "room": "1"}'
 
+echo "== recording consent =="
+run owner voice consent 77 yes --notice 2
+assert_eq "consent yes exits 0" "$rc" "0"
+assert_eq "consent yes body" "$(req_where /cli/voice/recording/consent body)" '{"consent": true, "notice_version": 2, "recording_id": "77"}'
+assert_eq "consent is a POST" "$(req_where /cli/voice/recording/consent method)" "POST"
+assert_eq "consent yes summary" "$out" "recording 77: you said yes; it records you"
+run owner voice consent 77 no
+assert_eq "consent no body (no notice needed)" "$(req_where /cli/voice/recording/consent body)" '{"consent": false, "recording_id": "77"}'
+assert_contains "consent no summary" "$out" "you said no; it does not record you"
+run owner voice consent 8 yes --notice 1
+assert_eq "a changed notice exits 3" "$rc" "3"
+assert_contains "a changed notice: the code on stderr" "$err" "consent_notice_changed"
+run cell voice consent 77 no
+assert_eq "agent consent exits 3" "$rc" "3"
+assert_contains "agent consent: agents_not_in_voice" "$err" "agents_not_in_voice"
+assert_eq "agent consent sends its passport" "$(req_where /cli/voice/recording/consent token)" "$SCOPED"
+run owner voice --help
+assert_contains "help: consent" "$out" "k2 voice consent <recording-id> yes --notice <version>"
+
 echo "== usage errors send nothing =="
 before="$(nreq)"
-for args in "set rooms 11" "set rooms x" "set seats 2" "rooms --now" "join" "kick room-1" "rename room-1" "frobnicate" "status extra"; do
+for args in "set rooms 11" "set rooms x" "set seats 2" "rooms --now" "join" "kick room-1" "rename room-1" "frobnicate" "status extra" \
+    "consent 77" "consent 77 yes" "consent 77 maybe" "consent x7 no" "consent 77 yes --notice v2" "join room-1 --notice 2"; do
     # shellcheck disable=SC2086
     run owner voice $args
     assert_eq "usage: k2 voice $args exits 2" "$rc" "2"

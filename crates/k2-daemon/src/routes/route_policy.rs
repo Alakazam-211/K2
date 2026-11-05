@@ -2066,12 +2066,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/systemd-cred/remove", Admin),
     post("/cli/vault/unsend", Member),
     // Voice rooms (prd-k2-voice-rooms-v1 §9.1, §9.4; preview, dark while
-    // off): join and the call's own routes are any login's (the handler
-    // refuses the bare owner token and passports); moderation, the count,
-    // renames and closing are Owner/Admin; status is Owner/Admin (agents
-    // read it with a passport, which this table never gates).
+    // off): join, the call's own routes and a recording consent are any
+    // login's (the handler refuses the bare owner token and passports);
+    // moderation, the count, renames and closing are Owner/Admin; status is
+    // Owner/Admin (agents read it with a passport, which this table never gates).
     post("/cli/voice/join", Member),
     post("/cli/voice/moderate", Admin),
+    post("/cli/voice/recording/consent", Member),
     get("/cli/voice/rooms", Member),
     post("/cli/voice/rooms/close", Admin),
     post("/cli/voice/rooms/rename", Admin),

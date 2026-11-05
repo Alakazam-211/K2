@@ -10,6 +10,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **The first call asks for your microphone.** If K2 can't use it, the join says so and opens your system's privacy settings. On Windows, "Let desktop apps access your microphone" has to be on.
 - **Updating K2 during a call asks first,** because the update ends the call.
 - **If you lose access during a call, K2 says why.** Losing access to a room, being removed or being timed out each end the call with their own line. If only speaking is taken away, you stay in the call and can still listen, and K2 tells you when you can speak again.
+- **Join from your phone too.** A phone paired to K2 joins a voice room as you, under the same rules as your desktop. You're in one call at a time: joining on the phone moves your call there, and `k2 voice rooms` says when you're in a call on another device (a closed app can stay listed for up to 45 seconds). Leaving a call that already ended is fine and says why. A phone whose pairing ended is told to pair again. When a call is recorded, you answer the notice from your own login or phone (`k2 voice consent`); agents and the owner token never can.
 - **Voice rooms say why they're missing.** With the voice rooms preview on, a server that can't host them (a Mac, no Pro, Chat / Voice Hosting off or on its own sign-ins) shows a dimmed headset, and a click gives the reason. The owner turns the previews on with the new `k2 settings set voiceRoomsPreview true` (also `voiceTunnelPreview`, `computePreview`, `boardFilePreview`).
 
 ### Apps

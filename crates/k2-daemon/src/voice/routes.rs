@@ -10,6 +10,8 @@
 //! POST /cli/voice/session/leave {callId?}
 //! POST /cli/voice/session/state|stats|keys/key_packages|keys/join {callId, body}
 //! POST /cli/voice/moderate {room, person, action}   kick|mute|unmute|deafen|undeafen (owner/Admin login)
+//! POST /cli/voice/recording/consent {recording_id, consent, notice_version?}
+//!                                          a person's own login only → Sew's recording
 //! ```
 //!
 //! Every route answers 404 `voice_rooms_off` while the preview is off (the
@@ -17,7 +19,7 @@
 //! !is_post { 405 }` here, and the dispatcher's `require_post`). Floors for
 //! logins live in `route_policy`; this handler classifies every caller:
 //!
-//! | caller | rooms | status | settings/rename/close | join, session | moderate |
+//! | caller | rooms | status | settings/rename/close | join, session, consent | moderate |
 //! |---|---|---|---|---|---|
 //! | owner token | ✓ | ✓ | ✓ | `owner_token_cannot_join` | `owner_token_cannot_moderate` |
 //! | Owner/Admin login | ✓ | ✓ | ✓ | ✓ | ✓ (own Sew session) |
@@ -33,6 +35,11 @@
 //! session's call) or `elsewhere` (another device or session), never claimed
 //! live (`mayBeLeaving`: presence trails a killed app by up to about 45 s).
 //! `session/leave` is idempotent for the session's own calls (`already`).
+//!
+//! `recording/consent` is the person's answer to a recording notice, sent to
+//! Sew's `POST /api/v1/recordings/{id}/consent` with their own Sew session
+//! (the same callers as join: a login or a paired phone). A grant must name
+//! the `notice_version` the person saw; unknown keys are a 400.
 //!
 //! Refusals: `{"ok": false, "error": {"code", "hint", "details"?}}` (K2's
 //! house shape, which `k2 voice` reads) with `code`, `hint` and `details`
@@ -67,6 +74,7 @@ pub const SESSION_STATS: &str = "/cli/voice/session/stats";
 pub const SESSION_KEY_PACKAGES: &str = "/cli/voice/session/keys/key_packages";
 pub const SESSION_KEYS_JOIN: &str = "/cli/voice/session/keys/join";
 pub const MODERATE: &str = "/cli/voice/moderate";
+pub const RECORDING_CONSENT: &str = "/cli/voice/recording/consent";
 
 pub const GET_ROUTES: &[&str] = &[ROOMS, STATUS];
 pub const POST_ROUTES: &[&str] = &[
@@ -80,6 +88,7 @@ pub const POST_ROUTES: &[&str] = &[
     SESSION_KEY_PACKAGES,
     SESSION_KEYS_JOIN,
     MODERATE,
+    RECORDING_CONSENT,
 ];
 
 /// Largest body (KeyPackages ride `session/keys/key_packages`).
@@ -228,20 +237,32 @@ fn need_manager(c: &Caller) -> Result<(), CliResponse> {
     }
 }
 
-/// The person behind the caller, for join and the call's routes.
-fn need_person(c: &Caller, owner_token: &str) -> Result<Person, CliResponse> {
+/// Refuses every caller that isn't a person's own login (or paired phone):
+/// the owner token, passports, App passes and bad tokens.
+fn not_a_person(c: &Caller) -> Option<CliResponse> {
     if let Some(r) = not_a_caller(c) {
-        return Err(r);
+        return Some(r);
     }
     match c {
-        Caller::OwnerToken => Err(no(
+        Caller::OwnerToken => Some(no(
             403,
             "owner_token_cannot_join",
             "the bare owner token can't join a voice room (agents can read it): join from your own login on this server",
         )),
-        Caller::Passport => Err(no(403, "agents_not_in_voice", "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)")),
+        Caller::Passport => Some(no(403, "agents_not_in_voice", "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)")),
+        Caller::Login { .. } => None,
+        Caller::App | Caller::DeviceEnded | Caller::Invalid => Some(no(401, "unauthenticated", "invalid or missing token")),
+    }
+}
+
+/// The person behind the caller, for join and the call's routes.
+fn need_person(c: &Caller, owner_token: &str) -> Result<Person, CliResponse> {
+    if let Some(r) = not_a_person(c) {
+        return Err(r);
+    }
+    match c {
         Caller::Login { username, role, token } => bff::person_of_login(token, username, *role, owner_token).map_err(|r| refuse(&r)),
-        Caller::App | Caller::DeviceEnded | Caller::Invalid => Err(no(401, "unauthenticated", "invalid or missing token")),
+        _ => Err(no(401, "unauthenticated", "invalid or missing token")),
     }
 }
 
@@ -628,6 +649,26 @@ fn session(c: &Caller, owner_token: &str, which: Forward, b: &Value) -> CliRespo
     }
 }
 
+/// `POST /cli/voice/recording/consent`: the caller's class first, then the
+/// body (400), then the person's own login (a phone's session included).
+fn consent(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
+    if let Some(r) = not_a_person(c) {
+        return r;
+    }
+    let req = match bff::consent_body(b) {
+        Ok(req) => req,
+        Err(r) => return refuse(&r),
+    };
+    let p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    match bff::recording_consent(&p, &req, &bff::deps()) {
+        Ok(v) => ok(v),
+        Err(r) => refuse(&r),
+    }
+}
+
 fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     match c {
         Caller::OwnerToken => {
@@ -702,6 +743,7 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
         SESSION_KEY_PACKAGES => session(&caller, owner_token, Forward::KeyPackages, &b),
         SESSION_KEYS_JOIN => session(&caller, owner_token, Forward::KeysJoin, &b),
         MODERATE => moderate(&caller, owner_token, &b),
+        RECORDING_CONSENT => consent(&caller, owner_token, &b),
         _ => CliResponse::not_found(),
     }
 }

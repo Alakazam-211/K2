@@ -565,6 +565,8 @@ mod phone {
                        "call_credential": {"token": "sewcc_sel.secret", "expires_at": "2099-01-01T00:00:00Z", "join_id": "j1", "device_scope": "d"}})
             } else if path == bff::paths::ME_VOICE_LEAVE {
                 json!({"ok": true})
+            } else if path.starts_with("/api/v1/recordings/") && path.ends_with("/consent") {
+                json!({"id": "77", "state": "recording", "my_consent": if body["consent"] == true { "granted" } else { "declined" }})
             } else {
                 return Err(format!("client sew fake: no answer for {path}"));
             };
@@ -691,6 +693,26 @@ mod phone {
         let (_, rp) = call(&phone, routes::ROOMS, false, json!({}));
         assert_eq!(rp["me"]["inCall"], false, "{rp}");
 
+        // A recording notice: the phone answers as ada, on its own Sew
+        // session (the one its join used); the owner token can't.
+        let (s, v) = call(&phone, routes::RECORDING_CONSENT, true, json!({"recording_id": "77", "consent": true, "notice_version": 2}));
+        assert_eq!(s, "200 OK", "{v}");
+        assert_eq!((v["recordingId"].as_str(), v["recording"]["my_consent"].as_str()), (Some("77"), Some("granted")), "{v}");
+        {
+            let calls = sew.calls.lock().unwrap();
+            let last = calls.last().cloned().expect("a call");
+            assert_eq!((last.1.as_str(), &last.2), ("/api/v1/recordings/77/consent", &json!({"consent": true, "notice_version": 2})));
+            let joins: Vec<Option<String>> = calls.iter().filter(|c| c.1.ends_with("/voice/join")).map(|c| c.0.clone()).collect();
+            assert!(last.0.is_some(), "a person's Sew session, never none");
+            assert_eq!(last.0, joins[1], "the phone's own Sew session (the desktop joined first): {joins:?}");
+        }
+        let before = sew.calls.lock().unwrap().len();
+        let (s, v) = call(OWNER_TOKEN, routes::RECORDING_CONSENT, true, json!({"recording_id": "77", "consent": false}));
+        assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("owner_token_cannot_join")), "{v}");
+        let (s, v) = call(&phone, routes::RECORDING_CONSENT, true, json!({"recording_id": "77", "consent": true}));
+        assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("400 Bad Request", Some("usage")), "a grant names its notice: {v}");
+        assert_eq!(sew.calls.lock().unwrap().len(), before, "refusals reach nothing");
+
         // The pairing is revoked: a named code on every route, never a 401,
         // and nothing reaches Sew. The desktop is untouched.
         let id = connect_users::device_sessions(Some("ada"))
@@ -701,7 +723,7 @@ mod phone {
             .id;
         connect_users::revoke_device_session(&id, None).expect("revoke").expect("revoked one");
         let before = sew.calls.lock().unwrap().len();
-        for (path, post) in [(routes::JOIN, true), (routes::LEAVE, true), (routes::ROOMS, false)] {
+        for (path, post) in [(routes::JOIN, true), (routes::LEAVE, true), (routes::ROOMS, false), (routes::RECORDING_CONSENT, true)] {
             let (s, v) = call(&phone, path, post, join.clone());
             assert_eq!(
                 (s.as_str(), v["error"]["code"].as_str(), v["code"].as_str()),

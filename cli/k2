@@ -11495,6 +11495,16 @@ from the owner's or an Admin's own login: K2 uses that person's own Sew
 session, so Sew records who did it. <person> is a login, owner or a
 member id from k2 voice rooms --json.
 
+RECORDING NOTICES. When a call is recorded, each person in it answers the
+notice from their own login (the app, or a paired phone) while in that
+call: k2 voice consent <recording-id> yes --notice <version>, or ... no
+(declines, or withdraws an earlier yes). The id and version come from the
+notice. Route: POST /cli/voice/recording/consent {recording_id,
+consent, notice_version}; yes must send notice_version. Same callers as
+join: never an agent or the bare owner token. consent_notice_changed: the
+notice changed after it was shown; show details.consent_prompt and ask
+again. not_in_voice: join the call first. recording_not_active: it ended.
+
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is
 down) · voice_member_pending / chat_member_pending (retry in 2 s) ·
@@ -67747,6 +67757,13 @@ server can't host, and lets the owner or an Admin change them. Read
   k2 voice join <room>                join as your own login (for voice clients and
                                       tests: the CLI has no audio)
   k2 voice leave [--call <callId>]    leave your call
+  k2 voice consent <recording-id> yes --notice <version>
+  k2 voice consent <recording-id> no  answer a call's recording notice as your own
+                                      login, while you are in that call. yes records
+                                      you; no declines, or withdraws a yes. Both
+                                      values come from the notice (recording id and
+                                      notice_version); yes must name the version
+                                      you were shown
   k2 voice kick|mute|unmute|deafen|undeafen <room> <person>
                                       moderate (owner/Admin, from their own login on
                                       this server; Sew records who did it). kick ends
@@ -67755,11 +67772,12 @@ server can't host, and lets the owner or an Admin change them. Read
                                       <person> is a login name or owner as
                                       k2 voice rooms shows it (--json: memberId)
 
-Agents: read only (rooms, status). Every change, join and moderation
-refuses an agent's passport (owner_or_admin_only, agents_not_in_voice,
-agents_cannot_moderate): ask your human in your Thread. The bare owner
-token reads and changes rooms but never joins or moderates
-(owner_token_cannot_join, owner_token_cannot_moderate).
+Agents: read only (rooms, status). Every change, join, consent and
+moderation refuses an agent's passport (owner_or_admin_only,
+agents_not_in_voice, agents_cannot_moderate): ask your human in your
+Thread. The bare owner token reads and changes rooms but never joins,
+answers a recording notice or moderates (owner_token_cannot_join,
+owner_token_cannot_moderate).
 
 Talks to this server (or the one --host names), like every k2 verb.
 Exit codes: 0 ok, 2 bad usage, 3 refused or unavailable. stderr carries
@@ -67767,6 +67785,9 @@ Exit codes: 0 ok, 2 bad usage, 3 refused or unavailable. stderr carries
 runs k2 settings set voiceRoomsPreview true), owner_or_admin_only, moderator_only, agents_not_in_voice,
 room_closing / room_full / room_not_found, not_in_room, close_from_top,
 voice_unavailable or voice_member_pending (retry in a few seconds).
+consent: recording_not_found, recording_not_active, not_in_voice (join
+the call first), consent_notice_changed (show the new notice in
+details.consent_prompt, then answer again).
 Full list and fixes: k2 study voice-rooms.
 EOF
 }
@@ -67852,6 +67873,11 @@ elif verb == "leave":
            "in_another_room": "you are in another room now; that call goes on"}
     w = v.get("why") or ""
     print("nothing to leave: that call already ended (%s) [%s]" % (why.get(w, w), w) if v.get("already") else "left")
+elif verb == "consent":
+    if v.get("consent"):
+        print("recording %s: you said yes; it records you" % v.get("recordingId"))
+    else:
+        print("recording %s: you said no; it does not record you (a yes you gave before is withdrawn)" % v.get("recordingId"))
 else:
     print("%s %s in %s" % (v.get("action"), v.get("person"), (v.get("room") or {}).get("name")))
 '
@@ -67861,12 +67887,13 @@ cmd_voice() {
     if [ $# -eq 0 ]; then _voice_usage; return 0; fi
     local sub="$1"; shift
     case "$sub" in -h|--help|help) _voice_usage; return 0 ;; esac
-    local as_json=0 now=0 call="" pos=()
+    local as_json=0 now=0 call="" notice="" pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
             --now) now=1; shift ;;
             --call) call="${2:?--call <callId>}"; shift 2 ;;
+            --notice) notice="${2:?--notice <version>}"; shift 2 ;;
             -h|--help) _voice_usage; return 0 ;;
             -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 voice --help)\"}" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
@@ -67876,6 +67903,9 @@ cmd_voice() {
     _voice_bad() { echo "{\"error\":\"usage\",\"hint\":\"$1 (k2 voice --help)\"}" >&2; exit 2; }
     if [ "$now" = "1" ]; then
         case "$sub" in set|close) ;; *) _voice_bad "--now only applies to k2 voice set rooms and k2 voice close" ;; esac
+    fi
+    if [ -n "$notice" ] && [ "$sub" != "consent" ]; then
+        _voice_bad "--notice only applies to k2 voice consent"
     fi
     case "$sub" in
         rooms|list)
@@ -67911,6 +67941,19 @@ cmd_voice() {
             [ "$n" -eq 0 ] || _voice_bad "k2 voice leave [--call <callId>]"
             _hostchat_call POST /cli/voice/session/leave "$(_compute_json K2_CJ_callId="$call")"
             _voice_print leave "$as_json" ;;
+        consent)
+            local cu="k2 voice consent <recording-id> yes --notice <version> | k2 voice consent <recording-id> no"
+            [ "$n" -eq 2 ] || _voice_bad "$cu"
+            case "${pos[0]}" in ''|*[!0-9]*) _voice_bad "the recording id is a number (from the notice): $cu" ;; esac
+            local cb
+            case "${pos[1]}" in
+                yes) cb=1; [ -n "$notice" ] || _voice_bad "yes needs --notice <version>, the notice_version you were shown" ;;
+                no) cb=0 ;;
+                *) _voice_bad "say yes or no: $cu" ;;
+            esac
+            case "$notice" in *[!0-9]*) _voice_bad "--notice is the notice's version number" ;; esac
+            _hostchat_call POST /cli/voice/recording/consent "$(_compute_json K2_CJ_recording_id="${pos[0]}" K2_CJ_consent_b="$cb" K2_CJ_notice_version_n="$notice")"
+            _voice_print consent "$as_json" ;;
         kick|mute|unmute|deafen|undeafen)
             [ "$n" -eq 2 ] || _voice_bad "k2 voice $sub <room> <person>"
             _hostchat_call POST /cli/voice/moderate "$(_compute_json K2_CJ_room="${pos[0]}" K2_CJ_person="${pos[1]}" K2_CJ_action="$sub")"

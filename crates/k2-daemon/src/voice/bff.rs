@@ -75,6 +75,10 @@ pub mod paths {
     pub fn member_move(space_id: &str, member_id: &str) -> String {
         format!("/api/v1/spaces/{space_id}/members/{member_id}/voice/move")
     }
+    /// The person's answer to a recording notice (Sew 0.7.x `RECORDING_CONSENT`).
+    pub fn recording_consent(recording_id: &str) -> String {
+        format!("/api/v1/recordings/{recording_id}/consent")
+    }
 }
 
 /// Seconds a client waits before retrying a "pending" answer.
@@ -897,6 +901,118 @@ pub fn forward(p: &Person, which: Forward, call_id: &str, body: &Value, d: &Deps
         return Err(sew_refusal(&a));
     }
     Ok(json!({ "ok": true, "sew": a.body }))
+}
+
+// ── recording consent ────────────────────────────────────────────────
+
+/// What `POST /cli/voice/recording/consent` takes (the usage hint).
+pub const CONSENT_USAGE: &str = "send {\"recording_id\": \"<the recording's id from Sew's notice>\", \"consent\": true|false, \"notice_version\": <the notice's notice_version>} (notice_version is required to grant)";
+
+/// One answer to a recording notice: Sew's `ConsentRequest` and the
+/// recording it is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsentReq {
+    /// Sew's recording id, a decimal string (`1 ..= i64::MAX`).
+    pub recording_id: String,
+    /// Grant (true), or decline or withdraw (false).
+    pub consent: bool,
+    /// The notice version the person saw. Required to grant, so a grant
+    /// always names the notice it answers (Sew then refuses a stale one).
+    pub notice_version: Option<u32>,
+}
+
+fn consent_usage(why: impl Into<String>) -> Refusal {
+    Refusal::new(400, "usage", format!("{}: {CONSENT_USAGE}", why.into()))
+}
+
+/// Read `{recording_id, consent, notice_version?}`. Unknown keys are refused
+/// (Sew's own body refuses them too), so a misspelt `notice_version` never
+/// drops the notice check without a word.
+pub fn consent_body(b: &Value) -> Result<ConsentReq, Refusal> {
+    let Some(o) = b.as_object() else { return Err(consent_usage("the body is a JSON object")) };
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "recording_id" | "consent" | "notice_version")) {
+        return Err(consent_usage(format!("unknown field {k}")));
+    }
+    let raw = match o.get("recording_id") {
+        Some(Value::String(s)) => s.trim().to_string(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => return Err(consent_usage("recording_id is missing")),
+    };
+    let id = match raw.parse::<u64>() {
+        Ok(n) if raw.bytes().all(|c| c.is_ascii_digit()) && n >= 1 && n <= i64::MAX as u64 => n,
+        _ => return Err(consent_usage("recording_id is Sew's id, a whole number from 1 (as a string)")),
+    };
+    let Some(consent) = o.get("consent").and_then(Value::as_bool) else {
+        return Err(consent_usage("consent is true or false"));
+    };
+    let notice_version = match o.get("notice_version") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v.as_u64().and_then(|n| u32::try_from(n).ok()) {
+            Some(n) => Some(n),
+            None => return Err(consent_usage("notice_version is the notice's whole number")),
+        },
+    };
+    if consent && notice_version.is_none() {
+        return Err(consent_usage("a grant names the notice the person saw: send its notice_version"));
+    }
+    Ok(ConsentReq { recording_id: id.to_string(), consent, notice_version })
+}
+
+/// A Sew refusal of a consent answer, in K2's words.
+fn consent_refusal(a: &SewAnswer) -> Refusal {
+    let reason = a.body.pointer("/error/details/reason").and_then(Value::as_str).unwrap_or("");
+    let code = a.body.pointer("/error/code").and_then(Value::as_str).unwrap_or("");
+    let sew = a.body.get("error").cloned().unwrap_or(Value::Null);
+    let status = if a.status >= 400 { a.status } else { 502 };
+    match reason {
+        "recording_not_active" => {
+            Refusal::new(status, "recording_not_active", "that recording isn't running any more: there is nothing to answer")
+                .details(json!({ "sew": sew }))
+        }
+        "not_in_voice" => Refusal::new(
+            status,
+            "not_in_voice",
+            "you aren't connected to that recording's call: consent is answered from inside the call",
+        )
+        .details(json!({ "sew": sew })),
+        // Sew's answer when the notice changed after the person saw it: show
+        // the new one (`details.consent_prompt`) and ask again.
+        "recording_consent_required" => {
+            let d = a.body.pointer("/error/details").cloned().unwrap_or(Value::Null);
+            Refusal::new(
+                409,
+                "consent_notice_changed",
+                "the recording notice changed after it was shown: show the new one (details.consent_prompt) and ask again",
+            )
+            .details(json!({
+                "consent_prompt": d.get("consent_prompt").cloned().unwrap_or(Value::Null),
+                "recording": d.get("recording").cloned().unwrap_or(Value::Null),
+                "sew": sew,
+            }))
+        }
+        "recording_unavailable" => Refusal::new(503, "recording_unavailable", "recording isn't available on this server's voice right now")
+            .details(json!({ "sew": sew }))
+            .retry(RETRY_SECS),
+        "agents_cannot_record" => Refusal::new(403, "agents_not_in_voice", "agents don't answer recording notices"),
+        _ if a.status == 404 || code == "not_found" => {
+            Refusal::new(404, "recording_not_found", "no recording with that id that this login can see")
+        }
+        _ => sew_refusal(a),
+    }
+}
+
+/// `POST /cli/voice/recording/consent`: the person's answer to a recording
+/// notice, sent to Sew as them (their own Sew session, as a join is).
+pub fn recording_consent(p: &Person, req: &ConsentReq, d: &Deps) -> Result<Value, Refusal> {
+    let mut body = json!({ "consent": req.consent });
+    if let Some(v) = req.notice_version {
+        body["notice_version"] = json!(v);
+    }
+    let a = as_person(p, d, &paths::recording_consent(&req.recording_id), &body)?;
+    if !a.ok() {
+        return Err(consent_refusal(&a));
+    }
+    Ok(json!({ "ok": true, "recordingId": req.recording_id, "consent": req.consent, "recording": a.body }))
 }
 
 /// Moderation actions (§9.1 `POST /cli/voice/moderate`).

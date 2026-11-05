@@ -49,6 +49,16 @@ from the owner's or an Admin's own login: K2 uses that person's own Sew
 session, so Sew records who did it. <person> is a login, owner or a
 member id from k2 voice rooms --json.
 
+RECORDING NOTICES. When a call is recorded, each person in it answers the
+notice from their own login (the app, or a paired phone) while in that
+call: k2 voice consent <recording-id> yes --notice <version>, or ... no
+(declines, or withdraws an earlier yes). The id and version come from the
+notice. Route: POST /cli/voice/recording/consent {recording_id,
+consent, notice_version}; yes must send notice_version. Same callers as
+join: never an agent or the bare owner token. consent_notice_changed: the
+notice changed after it was shown; show details.consent_prompt and ask
+again. not_in_voice: join the call first. recording_not_active: it ended.
+
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is
 down) · voice_member_pending / chat_member_pending (retry in 2 s) ·

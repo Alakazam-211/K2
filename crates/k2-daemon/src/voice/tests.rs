@@ -632,6 +632,99 @@ fn a_phone_and_a_desktop_share_one_call_and_leaves_stay_idempotent() {
     bff::forget_all();
 }
 
+/// A recording notice's answer goes to Sew as the person: their own pass
+/// traded for their own Sew session, on the phone as on the desktop.
+#[test]
+fn recording_consent_reaches_sew_as_the_person() {
+    let _l = lane::test_lock();
+    bff::forget_all();
+    let sew = Arc::new(FakeSew::default());
+    session_ok(&sew, "sews_ada");
+    let path = bff::paths::recording_consent("42");
+    assert_eq!(path, "/api/v1/recordings/42/consent");
+    sew.answer(&path, 200, json!({"id": "42", "state": "recording", "my_consent": "granted"}));
+    let d = deps(sew.clone());
+    let ada = phone("ada", UUID_ADA, Role::Member, "tok-ada-phone-c", "Ada's iPhone");
+
+    let req = bff::consent_body(&json!({"recording_id": "42", "consent": true, "notice_version": 3})).expect("a grant");
+    let v = bff::recording_consent(&ada, &req, &d).expect("consent");
+    assert_eq!((v["ok"].as_bool(), v["recordingId"].as_str(), v["consent"].as_bool()), (Some(true), Some("42"), Some(true)));
+    assert_eq!(v["recording"]["my_consent"], "granted", "Sew's recording as is");
+    let calls = sew.calls();
+    assert_eq!(calls.len(), 2, "one pass trade, one consent: {calls:?}");
+    assert_eq!(calls[0].1, bff::paths::AUTH_K2);
+    assert_eq!(calls[0].2, json!({"pass": format!("pass-for-{}", ada.ident.sub)}), "the person's own pass");
+    assert!(ada.ident.sub.contains(UUID_ADA), "the pass names ada: {}", ada.ident.sub);
+    assert_eq!(calls[1], (Some("sews_ada".to_string()), path.clone(), json!({"consent": true, "notice_version": 3})));
+
+    // A decline or withdraw needs no notice version, and Sew gets none.
+    let req = bff::consent_body(&json!({"recording_id": 42, "consent": false})).expect("a decline");
+    bff::recording_consent(&ada, &req, &d).expect("decline");
+    assert_eq!(sew.calls().last().unwrap().2, json!({"consent": false}));
+
+    // Sew's refusals, in K2's words.
+    let refused = |status: u16, body: Value| {
+        let s = Arc::new(FakeSew::default());
+        session_ok(&s, "sews_x");
+        s.answer(&path, status, body);
+        bff::forget_all();
+        let req = bff::consent_body(&json!({"recording_id": "42", "consent": true, "notice_version": 3})).unwrap();
+        bff::recording_consent(&ada, &req, &deps(s)).unwrap_err()
+    };
+    let r = refused(422, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": "recording_not_active"}}}));
+    assert_eq!((r.status, r.code.as_str()), (422, "recording_not_active"));
+    let r = refused(422, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": "not_in_voice"}}}));
+    assert_eq!((r.status, r.code.as_str()), (422, "not_in_voice"));
+    let r = refused(
+        409,
+        json!({"error": {"code": "conflict", "hint": "", "details": {"reason": "recording_consent_required", "auto": false,
+            "recording": {"id": "42"}, "consent_prompt": {"notice_version": 4, "text": "This call is recorded."}}}}),
+    );
+    assert_eq!((r.status, r.code.as_str()), (409, "consent_notice_changed"));
+    let det = r.details.expect("details");
+    assert_eq!((det["consent_prompt"]["notice_version"].as_u64(), det["recording"]["id"].as_str()), (Some(4), Some("42")), "the new notice to show");
+    let r = refused(404, json!({"error": {"code": "not_found", "hint": "not found"}}));
+    assert_eq!((r.status, r.code.as_str()), (404, "recording_not_found"));
+    let r = refused(503, json!({"error": {"code": "unavailable", "hint": "", "details": {"reason": "recording_unavailable"}}}));
+    assert_eq!((r.status, r.code.as_str(), r.retry_after_secs), (503, "recording_unavailable", Some(bff::RETRY_SECS)));
+    let r = refused(422, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": "not_space_member"}}}));
+    assert_eq!(r.code, "voice_member_pending", "the voice mapping covers the rest");
+    bff::forget_all();
+}
+
+#[test]
+fn a_bad_consent_body_is_a_usage_refusal() {
+    let bad = [
+        json!([1]),
+        json!({}),
+        json!({"consent": true, "notice_version": 1}),
+        json!({"recording_id": "", "consent": true, "notice_version": 1}),
+        json!({"recording_id": "0", "consent": true, "notice_version": 1}),
+        json!({"recording_id": "-4", "consent": true, "notice_version": 1}),
+        json!({"recording_id": "4x", "consent": true, "notice_version": 1}),
+        json!({"recording_id": "../4", "consent": true, "notice_version": 1}),
+        json!({"recording_id": "9223372036854775808", "consent": true, "notice_version": 1}),
+        json!({"recording_id": 1.5, "consent": true, "notice_version": 1}),
+        json!({"recording_id": "4"}),
+        json!({"recording_id": "4", "consent": "yes", "notice_version": 1}),
+        json!({"recording_id": "4", "consent": true}),
+        json!({"recording_id": "4", "consent": true, "notice_version": -1}),
+        json!({"recording_id": "4", "consent": true, "notice_version": 4294967296u64}),
+        json!({"recording_id": "4", "consent": true, "notice_version": "3"}),
+        json!({"recording_id": "4", "consent": true, "noticeVersion": 3}),
+        json!({"recordingId": "4", "consent": false}),
+    ];
+    for b in bad {
+        let r = bff::consent_body(&b).expect_err(&format!("{b} is refused"));
+        assert_eq!((r.status, r.code.as_str()), (400, "usage"), "{b}");
+        assert!(r.hint.contains("recording_id"), "the hint shows the body: {}", r.hint);
+    }
+    let ok = bff::consent_body(&json!({"recording_id": " 0042 ", "consent": false, "notice_version": null})).expect("a decline");
+    assert_eq!(ok, bff::ConsentReq { recording_id: "42".into(), consent: false, notice_version: None });
+    let max = bff::consent_body(&json!({"recording_id": "9223372036854775807", "consent": true, "notice_version": 0})).expect("the largest id");
+    assert_eq!((max.recording_id.as_str(), max.notice_version), ("9223372036854775807", Some(0)));
+}
+
 #[test]
 fn sew_refusals_map_to_the_clients_codes() {
     let r = |status: u16, body: Value| bff::sew_refusal(&SewAnswer { status, body });
@@ -715,6 +808,12 @@ fn routes_refuse_the_owner_token_agents_and_apps_where_the_prd_says() {
         (routes::JOIN, Caller::DeviceEnded, true, "403 Forbidden", "device_session_ended"),
         (routes::LEAVE, Caller::DeviceEnded, true, "403 Forbidden", "device_session_ended"),
         (routes::ROOMS, Caller::DeviceEnded, false, "403 Forbidden", "device_session_ended"),
+        // A recording consent: the person's own login only, like join.
+        (routes::RECORDING_CONSENT, Caller::OwnerToken, true, "403 Forbidden", "owner_token_cannot_join"),
+        (routes::RECORDING_CONSENT, Caller::Passport, true, "403 Forbidden", "agents_not_in_voice"),
+        (routes::RECORDING_CONSENT, Caller::App, true, "403 Forbidden", "app_pass_not_allowed"),
+        (routes::RECORDING_CONSENT, Caller::DeviceEnded, true, "403 Forbidden", "device_session_ended"),
+        (routes::RECORDING_CONSENT, Caller::Invalid, true, "401 Unauthorized", "unauthenticated"),
     ];
     for (path, caller, post, status, code) in cases {
         let r = routes::handle(path, caller.clone(), "owner", post, br#"{"room":"room-1","count":1,"name":"x"}"#);
@@ -729,6 +828,14 @@ fn routes_refuse_the_owner_token_agents_and_apps_where_the_prd_says() {
     // A body that isn't an object.
     let r = routes::handle(routes::SETTINGS, Caller::OwnerToken, "owner", true, b"[1]");
     assert_eq!(body(&r)["error"]["code"], "usage");
+    // A recording consent: POST only, and a bad body from a login is a 400
+    // before K2 looks the login up or calls Sew.
+    assert_eq!(routes::handle(routes::RECORDING_CONSENT, Caller::OwnerToken, "owner", false, b"").status, "405 Method Not Allowed");
+    let ada = Caller::Login { username: "ada".into(), role: Role::Member, token: "not-a-real-session".into() };
+    for bad in [&b"[1]"[..], br#"{"consent": true}"#, br#"{"recording_id": "7", "consent": true}"#, br#"{"recording_id": "7", "consent": 1}"#] {
+        let r = routes::handle(routes::RECORDING_CONSENT, ada.clone(), "owner", true, bad);
+        assert_eq!((r.status, body(&r)["error"]["code"].as_str()), ("400 Bad Request", Some("usage")), "{}", String::from_utf8_lossy(bad));
+    }
     // A Member login can't read status (the route floor says the same).
     let m = Caller::Login { username: "mo".into(), role: Role::Member, token: "t".into() };
     assert_eq!(body(&routes::handle(routes::STATUS, m, "owner", false, b""))["error"]["code"], "owner_or_admin_only");

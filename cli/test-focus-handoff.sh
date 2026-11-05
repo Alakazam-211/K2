@@ -8,14 +8,14 @@
 #   ./cli/test-focus-handoff.sh <workspace-path>
 #
 # Example:
-#   ./cli/test-focus-handoff.sh "/Users/z3thon/DevProjects/Alakazam Labs/K2SO"
+#   ./cli/test-focus-handoff.sh ~/code/acme-app
 #
 # What it does:
 #   1. Snapshots live session count for the workspace.
 #   2. Picks the first session and writes a sentinel string to it
 #      (NOT followed by \n, so it stays in the prompt buffer).
 #   3. Reads back to confirm the sentinel is now in the grid.
-#   4. Prompts you to right-click the workspace in the K2SO sidebar
+#   4. Prompts you to right-click the workspace in the K2 sidebar
 #      and pick "Open in Focus Window" — then press Enter here.
 #   5. Snapshots session count again.
 #   6. Reads the same session's grid and asserts the sentinel is
@@ -38,11 +38,11 @@ if [ -z "$WORKSPACE" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-K2SO="${SCRIPT_DIR}/k2so"
+K2="${SCRIPT_DIR}/k2"
 
-# Use the workspace path for K2SO's --project context. Otherwise the
+# Use the workspace path for k2's --project context. Otherwise the
 # CLI's PROJECT defaults to cwd which may not match.
-export K2SO_PROJECT_PATH="$WORKSPACE"
+export K2_PROJECT_PATH="$WORKSPACE"
 
 separator() { echo "─────────────────────────────────────────────────────"; }
 
@@ -54,21 +54,21 @@ separator
 # Step 1: snapshot before
 echo
 echo "[1/6] Snapshot BEFORE focus-window open"
-"$K2SO" sessions live "$WORKSPACE"
-COUNT_BEFORE=$("$K2SO" sessions live "$WORKSPACE" --count 2>/dev/null)
+"$K2" sessions live "$WORKSPACE"
+COUNT_BEFORE=$("$K2" sessions live "$WORKSPACE" --count 2>/dev/null)
 if [ -z "$COUNT_BEFORE" ] || [ "$COUNT_BEFORE" = "0" ]; then
     echo
-    echo "✗ No live sessions in workspace. Open the workspace in K2SO and start"
+    echo "✗ No live sessions in workspace. Open the workspace in K2 and start"
     echo "  a terminal session first, then re-run this script."
     exit 3
 fi
 echo "  → $COUNT_BEFORE live session(s)"
 
 # Step 2: pick first session, write sentinel
-SENTINEL="K2SO-HANDOFF-$(date +%s)-$RANDOM"
+SENTINEL="K2-HANDOFF-$(date +%s)-$RANDOM"
 echo
 echo "[2/6] Writing sentinel \"$SENTINEL\" to first session (no newline)"
-TARGET_ID=$("$K2SO" sessions live "$WORKSPACE" --json 2>/dev/null | python3 -c "
+TARGET_ID=$("$K2" sessions live "$WORKSPACE" --json 2>/dev/null | python3 -c "
 import json, sys
 arr = json.loads(sys.stdin.read())
 if not arr: sys.exit(1)
@@ -79,13 +79,13 @@ if [ -z "$TARGET_ID" ]; then
     exit 65
 fi
 echo "  → target: $TARGET_ID"
-"$K2SO" terminal write "$TARGET_ID" "$SENTINEL" >/dev/null
+"$K2" terminal write "$TARGET_ID" "$SENTINEL" >/dev/null
 
 # Step 3: confirm sentinel landed
 echo
 echo "[3/6] Reading back grid to confirm sentinel landed"
 sleep 0.5
-GRID_PRE=$("$K2SO" terminal read "$TARGET_ID" --lines 80 2>/dev/null)
+GRID_PRE=$("$K2" terminal read "$TARGET_ID" --lines 80 2>/dev/null)
 if echo "$GRID_PRE" | grep -q "$SENTINEL"; then
     echo "  ✓ sentinel visible in pre-focus grid"
 else
@@ -95,7 +95,7 @@ fi
 
 # Step 4: prompt user to open focus window
 echo
-echo "[4/6] Now, in K2SO:"
+echo "[4/6] Now, in K2:"
 echo "      → right-click the workspace in the sidebar"
 echo "      → choose \"Open in Focus Window\""
 echo "      → wait for the focus window to fully load"
@@ -107,8 +107,8 @@ sleep 1  # give the renderer a moment to settle
 # Step 5: snapshot after
 echo
 echo "[5/6] Snapshot AFTER focus-window open"
-"$K2SO" sessions live "$WORKSPACE"
-COUNT_AFTER=$("$K2SO" sessions live "$WORKSPACE" --count 2>/dev/null)
+"$K2" sessions live "$WORKSPACE"
+COUNT_AFTER=$("$K2" sessions live "$WORKSPACE" --count 2>/dev/null)
 echo "  → $COUNT_AFTER live session(s)"
 
 # Step 6: verify
@@ -123,7 +123,7 @@ if [ "$COUNT_BEFORE" != "$COUNT_AFTER" ]; then
     exit 1
 fi
 
-GRID_POST=$("$K2SO" terminal read "$TARGET_ID" --lines 80 2>/dev/null)
+GRID_POST=$("$K2" terminal read "$TARGET_ID" --lines 80 2>/dev/null)
 if ! echo "$GRID_POST" | grep -q "$SENTINEL"; then
     echo "✗ FAIL — sentinel \"$SENTINEL\" is no longer in session $TARGET_ID"
     echo "    The focus window may have swapped the PTY behind the same id."

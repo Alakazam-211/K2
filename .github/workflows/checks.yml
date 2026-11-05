@@ -16,11 +16,10 @@
 
 name: checks
 
+# Manual only (Rosson 2026-11-05): K2's own compute nodes run these gates
+# (builders' compute jobs, the release gate and the nightly runs), so GitHub's
+# runners no longer run them on every push or PR. Run it by hand if needed.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 jobs:

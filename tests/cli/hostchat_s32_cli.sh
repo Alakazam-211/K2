@@ -48,7 +48,7 @@ set -e
 assert_eq "help exit 0" "$rc" "0"
 assert_contains "help: app-url" "$out" "k2 hostchat app-url set https://HOST[/path] | clear | show"
 assert_contains "help: ship" "$out" "k2 hostchat ship dir <path> | box-backup | none"
-assert_contains "help: box-backup evidence" "$out" "k2_backup_offbox_none clears only while K2 sees all three"
+assert_contains "help: box-backup evidence" "$out" "K2 sees all three: /etc/k2-backup/paths lists that folder or one"
 assert_contains "help: mirror" "$out" "k2 hostchat mirror dir <path> | none"
 assert_contains "help: never the vault" "$out" "Never the K2 vault"
 assert_contains "help: app spaces" "$out" "k2 hostchat app-space bind <app> <space-id>"

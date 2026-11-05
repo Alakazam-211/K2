@@ -67996,13 +67996,18 @@ Off-box copies (a folder on ANOTHER disk you mounted: NFS, SMB, sshfs, a replica
          backup bundles: each new one is copied there (the newest 7 kept).
          box-backup = this box's own nightly backup (k2-backup) already takes
            /var/lib/sew/backups off the box, so K2 copies nothing. The owner
-           only (owner token, Owner login or a K2 shell tab). The alarm
-           k2_backup_offbox_none clears only while K2 sees all three:
-           /etc/k2-backup/paths lists /var/lib/sew/backups or a folder above
-           it, /etc/k2-backup/excludes doesn't drop it, and k2-backup.timer
-           is enabled. Otherwise the alarm stays and k2 hostchat status says
-           which is missing. Root-only files are read by the root helper
-           (protocol 13).
+           only (owner token, Owner login or a K2 shell tab; never an admin
+           or an agent). The alarm k2_backup_offbox_none clears only while
+           K2 sees all three: /etc/k2-backup/paths lists that folder or one
+           above it (/, /var, /var/lib, /var/lib/sew; simple globs count),
+           /etc/k2-backup/excludes doesn't drop it, and k2-backup.timer is
+           enabled. K2 checks on every status read (cached 30 s), so the
+           alarm comes back if one changes. It checks the setup, not whether
+           last night's run worked. k2 hostchat status names what is missing
+           (--json: backup.ship.boxBackup.reason). Root-only files are read
+           by the root helper; one older than protocol 13 keeps the alarm and
+           says so. Nothing restarts. Undo: ship dir <path> or ship none.
+           The keyring mirror stays separate (mirror below).
          none = backups stay on this box only (alarm k2_backup_offbox_none).
   k2 hostchat mirror dir <path> | none [--json]
          Sew's keyring mirror (restarts Sew). Never the K2 vault or ~/.k2.

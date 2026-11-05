@@ -166,6 +166,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/TunnelUrlsPanel.tsx',
   'components/Settings/sections/UserTemplatesSection.tsx',
   'components/Settings/sections/WakeSchedulerSection.tsx',
+  // 0.46.9: Settings → General's Update/Restart rows read the window's
+  // server's whoami until the role is known (Rosson 2026-11-05).
+  'components/Settings/sections/useActiveHostRole.ts',
   // 0.46.0: Settings → General → Your account reads this server's whoami/users.
   'components/Settings/sections/YourAccountRow.tsx',
   'components/Settings/sections/access-audit-api.ts',

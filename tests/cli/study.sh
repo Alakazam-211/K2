@@ -775,6 +775,22 @@ done
 pp_lines="$(printf '%s\n' "$pp_out" | wc -l | tr -d ' ')"
 if [ "$pp_lines" -le 80 ]; then echo "  PASS: app-pairing is bounded ($pp_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-pairing is $pp_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: app-pairing row" "$("$K2" study)" "  app-pairing         Your App's own phone app signs in by QR"
+echo "== k2 study app-account-deletion (0.46.9) =="
+ad_out="$("$K2" study app-account-deletion)"
+assert_contains "title" "$ad_out" "k2 study app-account-deletion — a person deletes their own account in an App"
+for needle in "5.1.1(v)" "POST /cli/skin/account/delete" "Authorization: Bearer" "401 reauth_required" "423 locked" \
+    "k2 app set <app> --account-deletion request|immediate" "k2 app account-deletion complete <app> <user>" \
+    "k2 app account-deletion cancel" "a waiting" "Play Console" "K2 serves no page" "has no erase yet" \
+    "k2 app history <app> --users" "the pass stops working"; do
+    assert_contains "app-account-deletion: $needle" "$ad_out" "$needle"
+done
+ad_lines="$(printf '%s\n' "$ad_out" | wc -l | tr -d ' ')"
+if [ "$ad_lines" -le 90 ]; then echo "  PASS: app-account-deletion is bounded ($ad_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-account-deletion is $ad_lines lines (max 90)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-account-deletion row" "$("$K2" study)" "  app-account-deletion  Delete my account from inside an App"
+api_out="$("$K2" study app-api)"
+for needle in "profile.deleteAccount" "diagnostics.send" "CLIENT LOGS (diagnostics.send" "k2 app logs <app> --client" "429 rate_limited"; do
+    assert_contains "app-api: $needle" "$api_out" "$needle"
+done
 echo "== k2 study tauri (prd-tauri-core-0467-v1 TC-14, 0.46.7) =="
 ta_out="$("$K2" study tauri)"
 assert_contains "title" "$ta_out" "k2 study tauri — the K2 side of a Tauri app, end to end"

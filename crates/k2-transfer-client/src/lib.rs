@@ -334,7 +334,7 @@ impl Client {
     /// What the door holds of this upload.
     pub async fn upload_status(&self, ep: &Endpoint) -> Result<UploadStatus, Error> {
         let r = self.send(|| self.http.get(&ep.url).bearer_auth(&ep.token)).await?;
-        r.json().await.map_err(Error::Transport)
+        json_of(r).await
     }
 
     /// Send one range (`start`, these bytes) of a `total`-byte upload.
@@ -361,7 +361,7 @@ impl Client {
                 req
             })
             .await?;
-        r.json().await.map_err(Error::Transport)
+        json_of(r).await
     }
 
     /// Finish the upload: K2 checks every byte and the sha256, then
@@ -381,7 +381,7 @@ impl Client {
                     .body(body.clone())
             })
             .await?;
-        r.json().await.map_err(Error::Transport)
+        json_of(r).await
     }
 
     /// Stop the upload; what K2 held is deleted.
@@ -511,6 +511,12 @@ impl Client {
         let _ = tokio::fs::remove_file(etag_file).await;
         Ok(DownloadDone { path: dest.to_path_buf(), size: at, etag: new_etag, fetched: at - fetched_from })
     }
+}
+
+/// A JSON answer (without reqwest's `json` feature: serde_json directly).
+async fn json_of<T: serde::de::DeserializeOwned>(r: reqwest::Response) -> Result<T, Error> {
+    let bytes = r.bytes().await.map_err(Error::Transport)?;
+    serde_json::from_slice(&bytes).map_err(|e| Error::Protocol(format!("an answer that isn't the expected JSON: {e}")))
 }
 
 fn with_suffix(p: &Path, suffix: &str) -> PathBuf {

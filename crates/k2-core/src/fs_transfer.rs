@@ -616,8 +616,22 @@ pub fn add_token(store: &Path, id: &str, ttl_secs: u64, now: u64) -> Result<(Str
     Ok((token, expires_at))
 }
 
+/// The part, read and write, never through a link (as
+/// the guest part opener in `fs_guest_upload`, plus read for the checksum).
 fn open_part(path: &Path) -> Result<fs::File, TransferError> {
-    let f = gu::open_part_no_follow(path).map_err(|e| TransferError::Invalid(format!("upload part could not be opened: {e}")))?;
+    let mut opts = fs::OpenOptions::new();
+    opts.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let f = opts.open(path).map_err(|e| TransferError::Invalid(format!("upload part could not be opened: {e}")))?;
     let meta = f.metadata().map_err(io)?;
     // A symlink (O_NOFOLLOW) or anything but our one-link regular file is
     // refused: a hard link at the part's name is someone else's file.

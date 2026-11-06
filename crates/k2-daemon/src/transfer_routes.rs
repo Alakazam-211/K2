@@ -290,13 +290,13 @@ mod tests {
 
     #[test]
     fn body_params_take_strings_numbers_and_booleans() {
-        let p = body_params(br#"{"uploadId":"abc","tokenTtlSecs":120,"x":true,"y":{"z":1}}"#).expect("params");
+        let p = body_params(br#"{"uploadId":"abc","tokenTtlSecs":120,"x":true,"y":{"z":1}}"#).unwrap_or_else(|r| panic!("params: {}", r.body));
         assert_eq!(p.get("uploadId").map(String::as_str), Some("abc"));
         assert_eq!(p.get("tokenTtlSecs").map(String::as_str), Some("120"));
         assert_eq!(p.get("x").map(String::as_str), Some("true"));
         assert!(!p.contains_key("y"));
         assert!(body_params(b"[1]").is_err());
-        assert!(body_params(b"  ").expect("empty").is_empty());
-        assert_eq!(ttl_param(&p, 600).expect("ttl"), 120);
+        assert!(body_params(b"  ").unwrap_or_else(|r| panic!("empty: {}", r.body)).is_empty());
+        assert_eq!(ttl_param(&p, 600).unwrap_or_else(|r| panic!("ttl: {}", r.body)), 120);
     }
 }

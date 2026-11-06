@@ -145,7 +145,7 @@ pub fn guest_part_len(dir: &Path, part_name: &str) -> Result<u64, GuestChunkErro
     }
 }
 
-pub(crate) fn open_part_no_follow(path: &Path) -> std::io::Result<fs::File> {
+fn open_part_no_follow(path: &Path) -> std::io::Result<fs::File> {
     let mut opts = fs::OpenOptions::new();
     opts.create(true).write(true);
     #[cfg(unix)]

@@ -272,7 +272,7 @@ fn check_ios(folder: &Path, apple: &Path, info_ios: Option<&str>, voice: bool, c
             let t = std::fs::read_to_string(m).unwrap_or_default();
             let mut need = vec![("NSPrivacyAccessedAPICategoryFileTimestamp", "C617.1", "file timestamps (Rust's std reads file metadata)", Level::Error)];
             if voice {
-                need.push(("NSPrivacyAccessedAPICategorySystemBootTime", "35F9.1", "system boot time (the native call plugin's audio)", Level::Warn));
+                need.push(("NSPrivacyAccessedAPICategorySystemBootTime", "35F9.1", "system boot time (the native call plugin's audio; harmless for a webview-only App)", Level::Warn));
             }
             let mut all = true;
             for (cat, reason, what, level) in need {
@@ -309,10 +309,11 @@ fn check_ios(folder: &Path, apple: &Path, info_ios: Option<&str>, voice: bool, c
                         fix: "under your <app>_iOS target's sources: in src-tauri/gen/apple/project.yml add  - path: ../../PrivacyInfo.xcprivacy  with  buildPhase: resources  (or add it to the target in Xcode)".into(),
                     });
                 }
-            } else {
-                c.notes.push("no src-tauri/gen/apple yet: after npx tauri ios init, run this again to check the privacy manifest is in the iOS target".into());
             }
         }
+    }
+    if !apple.is_dir() {
+        c.notes.push("no src-tauri/gen/apple yet: after npx tauri ios init, run this again to check the iOS target (that it includes the privacy manifest, and its generated Info.plist)".into());
     }
     // The Info keys: Info.ios.plist, and what tauri ios init generated.
     let mut texts: Vec<(String, String)> = Vec::new();
@@ -444,8 +445,20 @@ fn check_android(path: &str, manifest: &str, voice: bool, c: &mut Checker) {
         want.extend([
             ("RECORD_AUDIO", Level::Error, "a call can't open the microphone"),
             ("CAMERA", Level::Warn, "a video call can't open the camera"),
-            ("FOREGROUND_SERVICE_MICROPHONE", Level::Warn, "a call stops when the App goes to the background (it needs a microphone foreground service)"),
         ]);
+    }
+    // A service of a type needs that type's permission (Android 14 stops the
+    // App when it starts one without it).
+    let service_types: Vec<&str> = manifest
+        .split("foregroundServiceType=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .flat_map(|types| types.split('|'))
+        .collect();
+    for (ty, perm) in [("microphone", "FOREGROUND_SERVICE_MICROPHONE"), ("camera", "FOREGROUND_SERVICE_CAMERA"), ("mediaProjection", "FOREGROUND_SERVICE_MEDIA_PROJECTION"), ("phoneCall", "FOREGROUND_SERVICE_PHONE_CALL")] {
+        if service_types.contains(&ty) {
+            want.push((perm, Level::Error, "a service of that type stops the App when it starts (Android 14)"));
+        }
     }
     let mut ok = true;
     for (perm, level, why) in want {
@@ -469,8 +482,8 @@ fn check_android(path: &str, manifest: &str, voice: bool, c: &mut Checker) {
             level: Level::Warn,
             platform: "android",
             path: path.into(),
-            problem: "foreground-service permissions but no <service> with android:foregroundServiceType: Play rejects types the App doesn't use".into(),
-            fix: "add the call service (from your call plugin) with foregroundServiceType microphone|camera, or remove the unused permissions; Play's declaration needs a video of each type in use".into(),
+            problem: "foreground-service permissions but no <service> with android:foregroundServiceType: Play asks you to justify types the App doesn't use".into(),
+            fix: "a call only in the webview has no service: remove the FOREGROUND_SERVICE lines. With a native call plugin, its service declares foregroundServiceType microphone|camera, and Play's declaration needs a video of each type in use".into(),
         });
     }
     if ok {

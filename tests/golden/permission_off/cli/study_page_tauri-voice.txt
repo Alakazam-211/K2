@@ -67,8 +67,9 @@ NotAllowedError → the page's origin isn't in APP_ORIGINS, or macOS said no
 (System Settings > Privacy & Security > Microphone).
 WHAT K2 HAS TESTED: tests/app-template/tauri-voice-check (in K2's public
 repo, github.com/Alakazam-211/K2) builds the files --voice writes into a
-stock Tauri 2.12.5 app (not yours), signs it ad hoc with the hardened
-runtime, and loads a page from a remote origin with the CSP above, hidden.
+Tauri 2.12.5 app with K2's patched wry (not yours), signs it ad hoc with
+the hardened runtime, and loads a page from a remote origin with the CSP
+above, hidden.
   macOS 26.4, no screen, no mic: passed: mediaDevices; WebRTC between two
     peers through an end-to-end encryption frame transform, 50 packets/s for
     10 s while hidden; the AudioWorklet with WebAssembly inside it;

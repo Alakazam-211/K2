@@ -124,7 +124,8 @@ pub fn privacy_manifest(voice: bool) -> String {
 }
 
 const BOOT_TIME: &str = r#"    <!-- Calls: the native call plugin's audio (cpal) reads
-         mach_absolute_time to time audio between events in the app. -->
+         mach_absolute_time to time audio between events in the app.
+         Harmless for an App whose calls run only in the webview. -->
     <dict>
       <key>NSPrivacyAccessedAPIType</key>
       <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
@@ -337,7 +338,30 @@ const STORE_README: &str = r#"
 
 `k2 app init` wrote the files below. A file you already had is never
 changed: the keys it lacks were printed for you to add. Check the repo any
-time with `k2 app doctor --store`.
+time with `k2 app doctor --store`. Signing for the stores (certificates,
+provisioning profiles, the upload key) follows Tauri's own iOS and Android
+distribution guides.
+
+### Both stores
+
+- **More than a website.** Apple rejects an App that only shows a website
+  (guideline 4.2, minimum functionality). A shell over your live site needs
+  something a browser tab can't do: notifications, calls, offline use,
+  device features.
+- **Updates come from the stores.** Tauri's updater, which `k2 app init`
+  wired for desktop, is for desktop only: register `tauri-plugin-updater`
+  under `#[cfg(desktop)]`. A store App may not download code that changes
+  it (App Store guideline 2.5.2; Play's policy says the same).
+- **Account deletion.** An App with sign-up needs a way to delete the
+  account from inside the App (Apple guideline 5.1.1(v)), and Play asks for
+  a web link that does it too. K2 has no self-delete for an App's people
+  yet. Until it does, your App's server takes the request and the App's
+  owner removes the person (`k2 app user remove <username>`). Say in the
+  App how long that takes.
+- **A login for review.** Both stores sign in to test the App. Make a
+  normal account on your App for them, not a test guest (those end after 7
+  days). If you capped devices per person (`k2 app login settings`), allow
+  at least two. Put its email and password in the review notes.
 
 ### iOS
 
@@ -354,22 +378,18 @@ time with `k2 app doctor --store`.
   (or drag it into the target in Xcode, "Copy Bundle Resources"). It
   declares the APIs that need a reason, for what the template's crates call:
   file timestamps (Rust's std reads file metadata) and, with calls, system
-  boot time (the native call plugin's audio). Add a reason if you add a
-  crate that reads UserDefaults or free disk space.
+  boot time (the native call plugin's audio; harmless for calls in the
+  webview). Add a reason if you add a crate that reads UserDefaults or free
+  disk space. It already lists what K2 keeps for every App (next section).
 - `src-tauri/Info.ios.plist` (Tauri merges it into the app's Info.plist):
   - `UIApplicationSceneManifest`: iOS 27 requires the scene lifecycle.
     tao 0.37 (Tauri 2.12) installs its scene delegate; leave
     `UIApplicationSupportsMultipleScenes` true (with false, tao 0.35 showed
     a black screen; an iPad may then open a second window).
   - `ITSAppUsesNonExemptEncryption`: see Export compliance below.
-- App Store Connect, App Privacy: answer it from the next section. The
-  privacy manifest's list and those answers must say the same.
-- Account deletion: a store App with sign-up needs a way to delete the
-  account from inside the App (Apple guideline 5.1.1(v); Play asks for a web
-  link too). K2 has no self-delete for an App's people yet. Until it does,
-  your App's server takes the request and the App's owner removes the
-  person (`k2 app user remove <username>`). Say in the App how long that
-  takes.
+- App Store Connect, App Privacy: answer it from "What user data your App
+  stores and why", below. The privacy manifest and those answers must say
+  the same.
 
 {{EXPORT}}
 
@@ -381,33 +401,44 @@ time with `k2 app doctor --store`.
 
 - `POST_NOTIFICATIONS`: Android 13+ shows no notification until the person
   allows it. Ask at run time, after they turn on something that notifies.
-- Play Data safety: answer it from the next section.
+- Play Data safety: answer it from "What user data your App stores and
+  why", below.
 "#;
 
 const EXPORT_PLAIN: &str = r#"### Export compliance
 
 Without calls, the App's only encryption is HTTPS (TLS), which is exempt:
 `ITSAppUsesNonExemptEncryption` is `false`, so App Store Connect doesn't
-hold each build for the question. Set it to `true` the day you add
+hold each build for the export questions. Set it to `true` the day you add
 encryption of your own (end-to-end encrypted calls or messages, encrypted
-files): `k2 app init --template tauri --voice` explains what that means."#;
+files): the README that `k2 app init --template tauri --voice` writes says
+what that means."#;
 
 const EXPORT_VOICE: &str = r#"### Export compliance (calls are end-to-end encrypted)
 
-Calls carry end-to-end encryption your App ships itself (Sew's call
-encryption, on top of WebRTC), not only Apple's TLS. So
-`ITSAppUsesNonExemptEncryption` is `true`, and App Store Connect asks about
-it once per App:
+Calls carry end-to-end encryption your App ships itself, not only Apple's
+TLS: Sew's call encryption, with published, standard algorithms (MLS, RFC
+9420, for the keys; AES-128-GCM for the media; ask Sew, through your K2
+contact, for the exact list a filing needs). So
+`ITSAppUsesNonExemptEncryption` is `true`. This is not legal advice; check
+your own case.
 
-- Your App uses standard encryption algorithms (not proprietary ones), and
-  it is a mass-market product. Answer App Store Connect's questions that way.
-- The US: a mass-market App with standard encryption needs an annual
-  self-classification report to the US Bureau of Industry and Security (due
-  each February for the year before). It's yours to file, as the publisher.
-- France: Apple asks whether the App is available in France. If it is, you
-  need a declaration to ANSSI (France's cybersecurity agency) for the
-  encryption, and you upload its receipt to App Store Connect. Or leave
-  France out of the App's countries until you have it.
+- App Store Connect asks two questions for a build. Which algorithms:
+  choose "Standard encryption algorithms instead of, or in addition to,
+  using or accessing the encryption within Apple's operating system". And
+  whether the App is on the App Store in France (below). Until App Store
+  Connect gives you an export compliance code, each new build waits for
+  these answers; once it does, add the code to `Info.ios.plist` as
+  `ITSEncryptionExportComplianceCode` and later builds go straight through.
+- The US (Export Administration Regulations, 740.17): since 2021, most
+  mass-market apps with standard encryption no longer file the annual
+  self-classification report with the Bureau of Industry and Security;
+  encryption components and toolkits still do. Confirm that your App is the
+  first kind.
+- France: if the App is on the App Store in France, you need a declaration
+  to ANSSI (France's cybersecurity agency) for the encryption, and you
+  upload its receipt to App Store Connect. Or leave France out of the App's
+  countries until you have it.
 - Never mark the App "exempt" while calls are in it: that is a false
   declaration.
 - Chat is encrypted on the server, not end to end. Don't call it "end-to-end
@@ -416,38 +447,46 @@ it once per App:
 const STORE_VOICE_README: &str = r#"
 ### Calls in the store
 
-- iOS: `UIBackgroundModes` has `audio`, so a call keeps going with the App
-  in the background. Apple asks why in review: say "voice and video calls
-  continue while the app is in the background". Add `voip` only if you add
-  PushKit for incoming calls (with CallKit, which Apple then requires).
-- Android: the lines also ask for the foreground-service permissions a call
-  needs (`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`,
-  `FOREGROUND_SERVICE_CAMERA`). A call in the background runs in a
-  foreground service of type `microphone|camera`; without one, Android stops
-  the call when the App goes to the background. K2's template doesn't write
-  the service: it comes with a native call plugin. Add `mediaProjection` for
-  screen sharing and `phoneCall` (with `MANAGE_OWN_CALLS`) only with a
-  Telecom call service. Remove what you don't use before you upload.
-- Play asks for a foreground-service declaration for each type, with a short
-  video of the feature in use (a call that keeps going in the background).
-  Record it before you submit: review waits for it.
+- iOS: `UIBackgroundModes` `audio` is what keeps a call going when the
+  person leaves the App. K2 hasn't tested a webview call in the background
+  on an iPhone yet. Test it on a phone: if the call keeps going, keep the
+  key and tell review "voice and video calls continue while the app is in
+  the background". If it stops, remove the key: Apple rejects a background
+  mode the App doesn't use. Add `voip` only with PushKit for incoming calls
+  (and CallKit, which Apple then requires).
+- Android: a call that keeps going in the background runs in a foreground
+  service of type `microphone|camera`. That service is Kotlin, and it comes
+  with a native call plugin; `k2 app init` can't write it. So:
+  - Calls in the webview only (what `--voice` sets up): the call stops
+    when the App goes to the background. Before you upload, delete the
+    `FOREGROUND_SERVICE` lines `k2 app init` printed; Play then asks no
+    foreground-service questions.
+  - With a call plugin that runs the service: keep them. Add
+    `mediaProjection` for screen sharing, and `phoneCall` (with
+    `MANAGE_OWN_CALLS`) only with a Telecom call service. Play asks for a
+    declaration for each type, with a short video of a call that keeps
+    going in the background. Record it before you submit: review waits for
+    it.
 "#;
 
 const DATA_README: &str = r#"
 ## What user data your App stores and why
 
 A K2 App keeps its people's data on the App owner's own K2 server: the box
-you run, not K2's company and not a third party. For the stores, the App's
-owner is the developer who collects it. What K2 keeps for every App:
+you run, not K2's company and not a third party. Sew, K2's chat and voice
+server, runs on that same box. For the stores, the App's owner is the
+developer who collects the data. What K2 keeps for every App:
 
 | Data | Where | Why | App Store label | Play Data safety |
 |---|---|---|---|---|
 | Email address | your K2 server | sign-in | Contact Info: Email Address | Personal info: Email address |
 | Account id | your K2 server | sign-in | Identifiers: User ID | Personal info: User IDs |
-| Install id (the device id in `guests.login`) | your K2 server | one sign-in per device | Identifiers: Device ID | Device or other IDs |
+| Install id and device name (the `device` your server passes in `guests.login`), and a push token if the App sends push | your K2 server | one sign-in per device; notifications | Identifiers: Device ID | Device or other IDs |
 
-All three: linked to the person, not used for tracking, purpose App
-Functionality. K2 shares none of it with anyone.
+All three rows: linked to the person, not used for tracking, purpose App
+Functionality. The privacy manifest already lists them. K2 shares none of
+it with a third party, except that a push goes through Apple's or Google's
+push service.
 
 On the phone itself: the sign-in (keep it in the Keychain on iOS and the
 Keystore on Android, never in plain files or synced storage) and caches of
@@ -459,7 +498,9 @@ your choice: messages and files (User Content), call recordings (Audio
 Data), photos and videos, a display name, your own crash reports or
 analytics. For each kind your App keeps:
 
-1. Add it to `src-tauri/PrivacyInfo.xcprivacy` (the file lists the names).
+1. Add it to `src-tauri/PrivacyInfo.xcprivacy`: copy one of the three
+   entries there and change its type (a comment in the file names the type
+   for each kind).
 2. Answer App Store Connect's App Privacy and Play's Data safety the same way.
 3. If a third party gets it (an analytics or crash service), say so in both,
    and add that service's own privacy manifest.

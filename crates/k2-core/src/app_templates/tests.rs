@@ -425,7 +425,7 @@ fn tauri_writes_the_store_files_for_every_app() {
     let readme = d.read("k2/README.md");
     for want in [
         "## Runtime fixes (every Tauri App)",
-        &store::wry_patch_row(),
+        store::wry_patch_row().as_str(),
         "## Store review (App Store and Play)",
         "path: ../../PrivacyInfo.xcprivacy",
         "`ITSAppUsesNonExemptEncryption` is `false`",

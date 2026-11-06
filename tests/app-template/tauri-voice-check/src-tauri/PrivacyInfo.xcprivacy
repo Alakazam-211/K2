@@ -82,7 +82,8 @@
       </array>
     </dict>
     <!-- Calls: the native call plugin's audio (cpal) reads
-         mach_absolute_time to time audio between events in the app. -->
+         mach_absolute_time to time audio between events in the app.
+         Harmless for an App whose calls run only in the webview. -->
     <dict>
       <key>NSPrivacyAccessedAPIType</key>
       <string>NSPrivacyAccessedAPICategorySystemBootTime</string>

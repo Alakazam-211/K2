@@ -94,6 +94,7 @@ fn main() {
     let mut psnr_sum = 0.0;
     let mut encode_secs = 0.0;
     let mut scaled = Vec::new();
+    let mut qs = Vec::new();
     while pos < data.len() && n < max_frames {
         let line_end = pos
             + data[pos..]
@@ -118,6 +119,7 @@ fn main() {
         n += 1;
         let Some(out) = out else { continue };
         keyframes += out.keyframe as usize;
+        qs.push(out.q_index);
         bytes += out.data.len();
         ivf.extend_from_slice(&(out.data.len() as u32).to_le_bytes());
         ivf.extend_from_slice(&(n as u64 - 1).to_le_bytes());
@@ -141,10 +143,15 @@ fn main() {
             10.0 * (65025.0 / mse).log10()
         };
     }
+    qs.sort_unstable();
+    let q_range = match (qs.first(), qs.last()) {
+        (Some(lo), Some(hi)) => format!("q {lo}..{hi} (median {})", qs[qs.len() / 2]),
+        _ => "no frames".to_string(),
+    };
     ivf[count_pos..count_pos + 4].copy_from_slice(&out_frames.to_le_bytes());
     std::fs::write(output, &ivf).unwrap_or_else(|e| panic!("{output}: {e}"));
     println!(
-        "[encode] {w}x{h} {:?} target {} kbit/s: {n} frames in, {out_frames} out, {keyframes} keyframes, {:.0} kbit/s, PSNR {:.2} dB, {:.1} fps encode ({:.2} ms/frame)",
+        "[encode] {w}x{h} {:?} target {} kbit/s: {n} frames in, {out_frames} out, {keyframes} keyframes, {:.0} kbit/s, {q_range}, PSNR {:.2} dB, {:.1} fps encode ({:.2} ms/frame)",
         layers,
         bitrate / 1000,
         bytes as f64 * 8.0 / (n as f64 / fps as f64) / 1000.0,

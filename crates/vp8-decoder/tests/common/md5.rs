@@ -32,6 +32,9 @@ impl Md5 {
         }
     }
 
+    // The round number picks the function, the message word and the shift,
+    // as RFC 1321 writes it.
+    #[allow(clippy::needless_range_loop)]
     fn block(&mut self, chunk: &[u8]) {
         let mut m = [0u32; 16];
         for (i, w) in m.iter_mut().enumerate() {

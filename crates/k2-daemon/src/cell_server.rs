@@ -901,6 +901,23 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::app_pairing::owner_routes::handle(p, who, body, params))
             }
+            // 0.46.9: `k2 app set`, `k2 app account-deletion` and `k2 app logs
+            // --client` for this cell's passport, as on TCP (its own Apps;
+            // the handlers check who may write).
+            p if crate::app_account_deletion::OWNER_ROUTES.contains(&p) || p == crate::app_client_logs::LIST => {
+                if crate::app_account_deletion::OWNER_POST_ROUTES.contains(&p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::app_account_deletion::MAX_BODY {
+                    return from_cli(crate::app_account_deletion::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                if p == crate::app_client_logs::LIST {
+                    from_cli(crate::app_client_logs::handle_list(&who, is_post, params))
+                } else {
+                    from_cli(crate::app_account_deletion::handle_owner(p, &who, is_post, body, params))
+                }
+            }
             // Email Notifications (0.46.5): `k2 app email …` for this cell's
             // passport (its own workspace's Apps; on is the owner's; send
             // rides the agent's agentSend gate). `/cli/notifications/*` is

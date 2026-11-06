@@ -64,6 +64,25 @@ fn receive(frames: &[Vec<u8>]) {
 - **`ivf::IvfReader`** reads IVF files (the container the test vectors use)
   frame by frame.
 
+## Speed
+
+Frames per second on one core, decoding camera-like streams (a slow pan,
+a moving object and sensor noise) made by vp8-encoder, one keyframe then
+interframes. Version 0.1.0 in brackets.
+
+| Size, bitrate | Apple M4 | x86_64 (Xeon E-2288G) |
+|---|---|---|
+| 320x180, 300 kbit/s | 5,420 (3,140) | 2,580 (1,120) |
+| 640x360, 600 kbit/s | 1,720 (960) | 820 (310) |
+| 640x360, 1.2 Mbit/s | 1,340 (790) | 680 (280) |
+| 1280x720, 1.2 Mbit/s | 560 (310) | 270 (70) |
+
+At 640x360 and 600 kbit/s on the M4, a frame's 0.6 ms is split about:
+inter prediction 43%, tokens 24%, loop filter 20%, inverse transforms 7%,
+modes 6%. vp8-encoder's `decode_speed` example (in the repository)
+produces these numbers; with `RUSTFLAGS="--cfg vp8_stage_timers"` it also
+prints the split.
+
 ## Testing
 
 The conformance test needs a checkout of the repository: `scripts/` and

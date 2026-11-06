@@ -8,8 +8,8 @@ changes.
 ### Speed
 
 - One core decodes camera-like 640x360 video at 600 kbit/s at about
-  SPEED_MAC fps on an Apple M4 (was about BASE_MAC) and SPEED_X86 fps on
-  an x86_64 desktop (was about BASE_X86). See the README's Speed section.
+  1,720 fps on an Apple M4 (was about 960) and 820 fps on
+  an x86_64 server CPU (was about 310). See the README's Speed section.
 - **Loop filter.** It now works in 8-bit lanes with saturating arithmetic,
   which is exactly the RFC's clamping, and filters U and V together (eight
   segments each in one 16-lane pass). On aarch64 it uses NEON and on

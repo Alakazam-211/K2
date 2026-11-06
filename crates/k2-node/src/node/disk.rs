@@ -580,14 +580,28 @@ mod tests {
         assert_eq!(n.on_assign(&n.owner(), a), Some((id.to_string(), 1)));
     }
 
+    /// The job-end strip has run on `dir`: nothing is left but what a job
+    /// end keeps (or there is no dir). Not "`tmp` is gone": the strip
+    /// removes entries in directory order, so `tmp` can go while `target`
+    /// and `cache` are still being removed (64 test threads under load).
+    fn stripped(dir: &Path) -> bool {
+        match std::fs::read_dir(dir) {
+            Ok(rd) => rd.flatten().all(|e| JOB_END_KEEP.iter().any(|k| e.file_name() == *k)),
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+
     async fn ended(n: &Arc<Node>, id: &str) -> crate::ledger::Row {
         let t0 = std::time::Instant::now();
         loop {
             let r = n.owner().ledger.lock().unwrap().get(id, 1).unwrap().unwrap();
-            if r.state.is_terminal() && !n.running_ids().contains(&id.to_string()) && !n.layout().job_dir(id, 1).join("tmp").exists() {
+            if r.state.is_terminal() && !n.running_ids().contains(&id.to_string()) && stripped(&n.layout().job_dir(id, 1)) {
                 return r;
             }
-            assert!(t0.elapsed() < Duration::from_secs(20), "{id} never ended: {:?}", r.state);
+            if t0.elapsed() >= Duration::from_secs(20) {
+                let left: Vec<String> = std::fs::read_dir(n.layout().job_dir(id, 1)).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+                panic!("{id} never ended and stripped: {:?}, dir holds {left:?}", r.state);
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }

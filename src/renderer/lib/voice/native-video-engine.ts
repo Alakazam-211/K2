@@ -1,7 +1,7 @@
 // Video in K2's voice rooms, from Sew's plugin (`tauri-plugin-sew-voice`): its
-// video API (prd-sew-62 §B7), with the open points Sew settled on 2026-11-06.
-// `native-video-contract.json` holds what this file reads, so a change shows up
-// as a failing test.
+// video API (prd-sew-62 §B7), as Sew 0.8.2 ships it. `native-video-contract.json`
+// holds what this file reads, and src-tauri's native_voice tests hold that file
+// to the plugin's real types, so a change shows up as a failing test.
 //
 // Commands are `plugin:sew-voice|<name>` and reject `{code, detail}`. Arguments
 // are snake_case. Events go to every window, like the voice ones. Frames come
@@ -53,6 +53,15 @@ function codecList(v: unknown, what: string): VideoCodec[] {
   return v.filter((c): c is VideoCodec => c === 'vp8' || c === 'h264')
 }
 
+/** `receive`, `self_view` and `live_switch` are missing in an older payload:
+ *  false. Present, they must be booleans. */
+function optionalFlag(r: Record<string, unknown>, key: string, v: unknown): boolean {
+  const x = r[key]
+  if (x === undefined) return false
+  if (typeof x !== 'boolean') throw badShape(`video_caps.${key}`, v)
+  return x
+}
+
 export function parseVideoCaps(v: unknown): VideoCaps {
   const r = record(v)
   const s = record(r?.screen)
@@ -62,11 +71,14 @@ export function parseVideoCaps(v: unknown): VideoCaps {
     screen: { supported: s.supported, systemPicker: s.system_picker === true, list: s.list === true, windows: s.windows === true },
     publishCodecs: codecList(r.publish_codecs, 'publish_codecs'),
     decodeCodecs: Array.isArray(r.decode_codecs) ? r.decode_codecs.filter((c): c is string => typeof c === 'string') : [],
+    receive: optionalFlag(r, 'receive', v),
+    selfView: optionalFlag(r, 'self_view', v),
+    liveSwitch: optionalFlag(r, 'live_switch', v),
     backend: typeof r.backend === 'string' ? r.backend : '',
   }
 }
 
-function permission(v: unknown): CapturePermission {
+export function permission(v: unknown): CapturePermission {
   if (v === 'granted' || v === 'denied' || v === 'prompt' || v === 'unsupported') return v
   throw badShape('capture permission', v)
 }
@@ -157,13 +169,15 @@ export function parseSinkInfo(v: unknown): SinkInfo {
     !Number.isInteger(r.sink_id) ||
     r.sink_id < 0 ||
     r.sink_id > 0xffffffff ||
-    (r.mode === 'encoded' && typeof r.codec !== 'string') ||
+    // Encoded: the track's codec, or null for a self-view sink opened before
+    // the camera runs (each frame's header names it).
+    (r.mode === 'encoded' && typeof r.codec !== 'string' && r.codec !== null) ||
     (r.mode === 'decoded' && r.codec !== null) ||
     (r.mode !== 'encoded' && r.mode !== 'decoded')
   ) {
     throw badShape('video_sink answer', v)
   }
-  return { sinkId: r.sink_id, codec: r.mode === 'encoded' ? (r.codec as string) : null, mode: r.mode }
+  return { sinkId: r.sink_id, codec: typeof r.codec === 'string' ? r.codec : null, mode: r.mode }
 }
 
 /** The parts of sew-proto's `MediaPolicy` the UI reads. `camera_allowed` and
@@ -246,6 +260,14 @@ export class NativeVideoEngine implements VideoEngine {
 
   async setDevice(camera: string): Promise<void> {
     await this.command<null>('set_video_device', { camera })
+  }
+
+  async cameraPermission(): Promise<CapturePermission> {
+    return permission(await this.command<unknown>('camera_permission'))
+  }
+
+  async requestCameraPermission(): Promise<CapturePermission> {
+    return permission(await this.command<unknown>('request_camera_permission'))
   }
 
   async camera(on: boolean, device?: string): Promise<void> {

@@ -98,6 +98,21 @@ describe('the gate', () => {
     expect(engine.calls).toEqual([])
   })
 
+  it("says unavailable when video_caps can neither receive nor send (the plugin answers video_unsupported to the rest)", async () => {
+    const engine = new FakeVideoEngine({ caps: { receive: false, publishCodecs: [] } })
+    const s = setup(engine)
+    s.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    expect(s.ctl.store.getState().availability).toBe('unavailable')
+    await s.ctl.setCamera(true)
+    expect(engine.calls).toEqual([])
+    // Receive alone is enough: other people's video shows.
+    const viewer = setup(new FakeVideoEngine({ caps: { camera: false, screen: { supported: false, systemPicker: false, list: false, windows: false }, publishCodecs: [] } }))
+    viewer.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    expect(viewer.ctl.store.getState().availability).toBe('ready')
+  })
+
   it('says unavailable when an older plugin has no video_caps', async () => {
     const engine = new FakeVideoEngine()
     engine.caps = async () => {
@@ -370,6 +385,76 @@ describe('camera and screen', () => {
     expect(s.engine.calls).toContain('screen {"on":true,"source":"window:42"}')
     expect(s.ctl.store.getState().screenSources).toBeNull()
     expect(s.ctl.store.getState().local.screen).toBe('on')
+  })
+
+  it('reads the camera permission first, and asks the OS only from the button press, while it is undecided', async () => {
+    const engine = new FakeVideoEngine({ cameraPermission: 'prompt', cameraPrompt: 'granted' })
+    const s = setup(engine)
+    s.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    await s.ctl.loadDevices()
+    await s.ctl.setCamera(true)
+    expect(engine.calls).toEqual(['camera_permission', 'request_camera_permission', 'camera {"on":true}'])
+    expect(s.ctl.store.getState().local.camera).toBe('on')
+    // Granted now: the next press doesn't ask again.
+    await s.ctl.setCamera(false)
+    await s.ctl.setCamera(true)
+    expect(engine.calls.filter((c) => c === 'request_camera_permission')).toHaveLength(1)
+    expect(s.ctl.store.getState().notice).toBeNull()
+  })
+
+  it('a camera permission refused at the prompt, or before, sends no camera command and points to the settings', async () => {
+    const engine = new FakeVideoEngine({ cameraPermission: 'prompt', cameraPrompt: 'denied' })
+    const s = setup(engine)
+    s.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    await s.ctl.loadDevices()
+    await s.ctl.setCamera(true)
+    expect(engine.calls).toEqual(['camera_permission', 'request_camera_permission'])
+    expect(s.ctl.store.getState()).toMatchObject({
+      notice: { settings: 'camera', kind: 'error' },
+      pending: { camera: false },
+      local: { camera: 'off' },
+    })
+    expect(s.ctl.store.getState().devices?.permission.camera).toBe('denied')
+    // Denied already: no prompt, the same words.
+    await s.ctl.setCamera(true)
+    expect(engine.calls.slice(2)).toEqual(['camera_permission'])
+    expect(s.ctl.store.getState().notice?.line).toBe("K2 isn't allowed to use your camera. Allow K2 in your system's privacy settings.")
+    // The plugin's own refusal, if the permission changed in between, reads the same.
+    engine.permission = 'granted'
+    s.engine.refuseNext('camera', 'camera_permission_denied')
+    await s.ctl.setCamera(true)
+    expect(s.ctl.store.getState().notice).toMatchObject({ settings: 'camera' })
+  })
+
+  it('turning the camera off says nothing (the plugin says unpublished)', async () => {
+    const s = await ready()
+    await s.ctl.setCamera(true)
+    await s.ctl.setCamera(false)
+    expect(s.ctl.store.getState().local).toEqual({ camera: 'off', screen: 'off', reason: 'unpublished' })
+    expect(s.ctl.store.getState().notice).toBeNull()
+    expect(s.toasts).toEqual([])
+  })
+
+  it('a minimised shared window pauses the share and says so', async () => {
+    const s = await ready()
+    await s.ctl.setScreen(true)
+    s.engine.setLocal({ camera: 'off', screen: 'paused', reason: 'hidden' })
+    expect(s.ctl.store.getState().notice?.line).toBe('Screen sharing is paused while the window you shared is minimised or hidden.')
+  })
+
+  it('switching cameras mid-call says to turn it off and on only where the plugin cannot switch live', async () => {
+    const s = await ready()
+    await s.ctl.setCamera(true)
+    await s.ctl.setCameraDevice('cam:2')
+    expect(s.ctl.store.getState().notice).toBeNull()
+    const old = setup(new FakeVideoEngine({ caps: { liveSwitch: false } }))
+    old.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    await old.ctl.setCamera(true)
+    await old.ctl.setCameraDevice('cam:2')
+    expect(old.ctl.store.getState().notice?.line).toBe('Turn your camera off and on again to switch to that camera.')
   })
 
   it('says why the camera paused or stopped by itself', async () => {

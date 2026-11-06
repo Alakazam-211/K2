@@ -156,7 +156,7 @@ pub fn get(conn: &Connection, id: &str) -> Option<PkgRow> {
 
 /// Every row of a batch (or the one row when `id` is a row id).
 pub fn batch(conn: &Connection, id: &str) -> Vec<PkgRow> {
-    let mut st = match conn.prepare(&format!("SELECT {COLS} FROM compute_pkg_requests WHERE batch_id = ?1 OR id = ?1 ORDER BY created_at, id")) {
+    let mut st = match conn.prepare(&format!("SELECT {COLS} FROM compute_pkg_requests WHERE batch_id = ?1 OR id = ?1 ORDER BY created_at, rowid")) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -190,7 +190,7 @@ pub struct Filter<'a> {
 pub fn list(conn: &Connection, f: &Filter<'_>) -> Vec<PkgRow> {
     let sql = format!(
         "SELECT {COLS} FROM compute_pkg_requests WHERE (?1 IS NULL OR node_id = ?1) AND (?2 IS NULL OR workspace_id = ?2) \
-         AND (?3 IS NULL OR state = ?3) AND (?4 = 0 OR origin IN ('own','fwd')) ORDER BY created_at DESC, id LIMIT ?5"
+         AND (?3 IS NULL OR state = ?3) AND (?4 = 0 OR origin IN ('own','fwd')) ORDER BY created_at DESC, rowid DESC LIMIT ?5"
     );
     let mut st = match conn.prepare(&sql) {
         Ok(s) => s,

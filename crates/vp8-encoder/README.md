@@ -33,9 +33,11 @@ RFC 7741 packetiser takes.
 
 ## How it is checked
 
-- Every encoded frame is decoded by vp8-decoder, which matches the WebM
-  project's VP8 test vectors bit for bit. The encoder's reference frames
-  are that decoder's output, so encoder and receiver cannot drift apart.
+- The encoder reconstructs each frame with vp8-decoder's own prediction,
+  transforms and loop filter (vp8-decoder matches the WebM project's VP8
+  test vectors bit for bit). Debug builds, which the tests use, also decode
+  every frame and check that the decoder's reference frames equal the
+  encoder's, bit for bit.
 - The tests check picture quality (PSNR), the bitrate, keyframe requests,
   rate changes and the temporal-layer patterns. They also check that
   receivers which drop the upper layers still decode.

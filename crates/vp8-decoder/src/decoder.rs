@@ -3,9 +3,9 @@
 use std::fmt;
 
 use crate::bool_decoder::BoolDecoder;
-use crate::frame::{FrameBuf, Picture, Plane};
+use crate::frame::{FrameBuf, Picture};
 use crate::idct;
-use crate::loop_filter::{self, FilterParams};
+use crate::loop_filter;
 use crate::predict::{self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUMA_WS_SIZE, LUMA_WS_STRIDE};
 use crate::modes::{find_near_mvs, implied_bmode, Bounds, MbInfo, Mv};
 use crate::tables::*;
@@ -802,72 +802,16 @@ impl Decoder {
             if level == 0 {
                 continue;
             }
-            let p = FilterParams::new(level, hdr.sharpness, hdr.keyframe);
             let inner = mb.has_coeffs || mb.y_mode == B_PRED || mb.y_mode == SPLITMV;
-            let mb_limit = (level + 2) * 2 + p.interior_limit;
-            let b_limit = level * 2 + p.interior_limit;
-            if hdr.filter_simple {
-                let plane = &mut cur.y;
-                let s = plane.w;
-                let pos = row * 16 * s + col * 16;
-                let buf = &mut plane.data;
-                if col > 0 {
-                    loop_filter::simple_edge(buf, pos, 1, s, 16, mb_limit);
-                }
-                if inner {
-                    for k in [4, 8, 12] {
-                        loop_filter::simple_edge(buf, pos + k, 1, s, 16, b_limit);
-                    }
-                }
-                if row > 0 {
-                    loop_filter::simple_edge(buf, pos, s, 1, 16, mb_limit);
-                }
-                if inner {
-                    for k in [4, 8, 12] {
-                        loop_filter::simple_edge(buf, pos + k * s, s, 1, 16, b_limit);
-                    }
-                }
-            } else {
-                filter_plane_mb(&mut cur.y, 16, row, col, inner, mb_limit, b_limit, &p);
-                filter_plane_mb(&mut cur.u, 8, row, col, inner, mb_limit, b_limit, &p);
-                filter_plane_mb(&mut cur.v, 8, row, col, inner, mb_limit, b_limit, &p);
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn filter_plane_mb(
-    plane: &mut Plane,
-    n: usize,
-    row: usize,
-    col: usize,
-    inner: bool,
-    mb_limit: i32,
-    b_limit: i32,
-    p: &FilterParams,
-) {
-    let s = plane.w;
-    let pos = row * n * s + col * n;
-    let buf = &mut plane.data;
-    if col > 0 {
-        loop_filter::mb_edge(buf, pos, 1, s, n, mb_limit, p);
-    }
-    if inner {
-        let mut k = 4;
-        while k < n {
-            loop_filter::subblock_edge(buf, pos + k, 1, s, n, b_limit, p);
-            k += 4;
-        }
-    }
-    if row > 0 {
-        loop_filter::mb_edge(buf, pos, s, 1, n, mb_limit, p);
-    }
-    if inner {
-        let mut k = 4;
-        while k < n {
-            loop_filter::subblock_edge(buf, pos + k * s, s, 1, n, b_limit, p);
-            k += 4;
+            let FrameBuf { y, u, v } = cur;
+            let planes = loop_filter::Planes {
+                y: &mut y.data,
+                u: &mut u.data,
+                v: &mut v.data,
+                y_stride: y.w,
+                uv_stride: u.w,
+            };
+            loop_filter::filter_mb(planes, row, col, level, hdr.sharpness, hdr.keyframe, inner, hdr.filter_simple);
         }
     }
 }

@@ -4,16 +4,18 @@
 //! (intra 16x16 or 4x4 on keyframes; zero, near, nearest or new motion, or
 //! intra 16x16 on interframes), is predicted, transformed, quantized and
 //! reconstructed exactly as a decoder will; then the frame is written with
-//! probabilities fitted to its own token statistics. The encoder decodes its
-//! own output with vp8-decoder to get the reference frames, so encoder and
-//! receiver can never drift apart.
+//! probabilities fitted to its own token statistics. The reconstruction is
+//! loop-filtered with vp8-decoder's own filter to make the references, so
+//! encoder and receiver stay in step; debug builds also decode every frame
+//! and check that the references match bit for bit.
 
 use vp8_decoder::bool_encoder::BoolEncoder;
 use vp8_decoder::idct;
 use vp8_decoder::modes::{find_near_mvs, implied_bmode, Bounds, MbInfo, Mv};
 use vp8_decoder::predict::{self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUMA_WS_SIZE, LUMA_WS_STRIDE};
+use vp8_decoder::loop_filter;
 use vp8_decoder::tables::*;
-use vp8_decoder::{Decoder, Picture};
+use vp8_decoder::Picture;
 
 use std::sync::OnceLock;
 
@@ -133,7 +135,11 @@ pub(crate) struct Core {
     mbs: Vec<MbInfo>,
     levels: Vec<[i16; 400]>,
     skips: Vec<bool>,
-    decoder: Decoder,
+    /// The last and golden reference frames (Y, U, V), loop-filtered.
+    refs: [[Vec<u8>; 3]; 2],
+    /// Debug builds decode every frame to check the references.
+    #[cfg(debug_assertions)]
+    check: vp8_decoder::Decoder,
     rc: RateControl,
     frames_since_key: u64,
     key_pending: bool,
@@ -168,8 +174,13 @@ impl Core {
         };
         let rc = RateControl::new(cfg.bitrate_bps, cfg.max_bitrate_bps, cfg.fps, cfg.width * cfg.height, weights);
         let search_stride = aw + 2 * PAD;
-        let mut decoder = Decoder::new();
-        decoder.set_max_pixels(u64::MAX);
+        let plane_set = || [vec![0u8; aw * ah], vec![0u8; aw * ah / 4], vec![0u8; aw * ah / 4]];
+        #[cfg(debug_assertions)]
+        let check = {
+            let mut d = vp8_decoder::Decoder::new();
+            d.set_max_pixels(u64::MAX);
+            d
+        };
         Ok(Core {
             mb_cols,
             mb_rows,
@@ -182,7 +193,9 @@ impl Core {
             mbs: vec![MbInfo::default(); (mb_cols + 1) * (mb_rows + 1)],
             levels: vec![[0; 400]; mb_cols * mb_rows],
             skips: vec![false; mb_cols * mb_rows],
-            decoder,
+            refs: [plane_set(), plane_set()],
+            #[cfg(debug_assertions)]
+            check,
             rc,
             frames_since_key: 0,
             key_pending: true,
@@ -239,10 +252,8 @@ impl Core {
         let q = self.rc.pick_q(key, layer.tid as usize);
         self.load_source(pic);
         let data = self.encode_frame(key, q, &layer);
-        // Decode our own output: it gives the references a receiver has.
-        if let Err(e) = self.decoder.decode(&data) {
-            return Err(EncodeError::Internal(format!("own output failed to decode: {e}")));
-        }
+        #[cfg(debug_assertions)]
+        self.check_references(&data, &layer)?;
         self.rc.update(data.len() * 8, key, layer.tid as usize, q);
         if key {
             self.frames_since_key = 1;
@@ -278,11 +289,8 @@ impl Core {
             *m = MbInfo::default();
         }
         if !key {
-            let reference = self
-                .decoder
-                .reference_frame(layer.reference)
-                .expect("a keyframe has been decoded");
-            fill_search(&mut self.search, self.search_stride, reference.y, self.aw, self.ah);
+            let reference = &self.refs[ref_slot(layer.reference)];
+            fill_search(&mut self.search, self.search_stride, &reference[0], self.aw, self.ah);
         }
         let stride = self.mb_cols + 1;
         for row in 0..self.mb_rows {
@@ -297,10 +305,66 @@ impl Core {
                 self.skips[k] = coded.levels.iter().all(|&l| l == 0);
                 self.levels[k] = coded.levels;
                 self.mbs[i] = coded.info;
+                self.mbs[i].has_coeffs = !self.skips[k];
             }
         }
         let filter_level = loop_filter_level(q);
-        self.write_frame(key, q, filter_level, layer)
+        let data = self.write_frame(key, q, filter_level, layer);
+        self.update_references(key, filter_level, layer);
+        data
+    }
+
+    /// Loop-filters the reconstruction (as a decoder will) and stores it in
+    /// the references this frame refreshes.
+    fn update_references(&mut self, key: bool, filter_level: u8, layer: &LayerFrame) {
+        if filter_level > 0 {
+            let stride = self.mb_cols + 1;
+            let (aw, caw) = (self.aw, self.aw / 2);
+            let [y, u, v] = &mut self.rec;
+            for row in 0..self.mb_rows {
+                for col in 0..self.mb_cols {
+                    let mb = &self.mbs[(row + 1) * stride + col + 1];
+                    let inner = mb.has_coeffs || mb.y_mode == B_PRED || mb.y_mode == SPLITMV;
+                    let planes = loop_filter::Planes {
+                        y: &mut y[..],
+                        u: &mut u[..],
+                        v: &mut v[..],
+                        y_stride: aw,
+                        uv_stride: caw,
+                    };
+                    loop_filter::filter_mb(planes, row, col, filter_level as i32, 0, key, inner, false);
+                }
+            }
+        }
+        for (slot, refresh) in [(0, key || layer.refresh_last), (1, key || layer.refresh_golden)] {
+            if refresh {
+                for p in 0..3 {
+                    self.refs[slot][p].copy_from_slice(&self.rec[p]);
+                }
+            }
+        }
+    }
+
+    /// Debug builds: decode the frame and check that the decoder's
+    /// references are exactly ours.
+    #[cfg(debug_assertions)]
+    fn check_references(&mut self, data: &[u8], layer: &LayerFrame) -> Result<(), EncodeError> {
+        if let Err(e) = self.check.decode(data) {
+            return Err(EncodeError::Internal(format!("own output failed to decode: {e}")));
+        }
+        for (slot, which) in [(0, LAST_FRAME), (1, GOLDEN_FRAME)] {
+            let r = self.check.reference_frame(which).expect("decoded");
+            let same = r.y[..self.refs[slot][0].len()] == self.refs[slot][0][..]
+                && r.u[..self.refs[slot][1].len()] == self.refs[slot][1][..]
+                && r.v[..self.refs[slot][2].len()] == self.refs[slot][2][..];
+            if !same {
+                return Err(EncodeError::Internal(format!(
+                    "reference {which} differs from the decoder's (temporal layer {})",
+                    layer.tid
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Intra-codes a macroblock (16x16 or, on keyframes, 4x4 modes) into `rec`.
@@ -581,11 +645,11 @@ impl Core {
             ..MbInfo::default()
         };
         info.bmodes = [B_DC_PRED; 16];
-        let reference_pic = self.decoder.reference_frame(reference).expect("a reference frame");
+        let reference_planes = &self.refs[ref_slot(reference)];
         let mut levels = [0i16; 400];
         // Luma prediction straight into rec, then the residual.
         let refp = RefPlane {
-            data: reference_pic.y,
+            data: &reference_planes[0],
             w: aw,
             h: self.ah,
         };
@@ -612,7 +676,7 @@ impl Core {
         let caw = aw / 2;
         let cpos = (y / 2) * caw + x / 2;
         for p in 0..2 {
-            let plane = if p == 0 { reference_pic.u } else { reference_pic.v };
+            let plane = &reference_planes[1 + p];
             let refp = RefPlane {
                 data: plane,
                 w: caw,
@@ -875,6 +939,15 @@ fn write_mv(h: &mut BoolEncoder, v: i32, p: &[u8; MV_PROB_COUNT]) {
     }
     if a != 0 {
         h.write(p[MVP_SIGN], v < 0);
+    }
+}
+
+/// Where a reference frame is kept: last in slot 0, golden in slot 1.
+fn ref_slot(reference: u8) -> usize {
+    if reference == GOLDEN_FRAME {
+        1
+    } else {
+        0
     }
 }
 

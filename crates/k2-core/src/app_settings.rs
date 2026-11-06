@@ -502,11 +502,11 @@ pub struct AppSettings {
     /// only: it doesn't turn on for customers until held edits survive a restart.
     #[serde(default)]
     pub board_file_preview: bool,
-    /// Video in voice rooms preview: camera tiles, screen share and the
-    /// camera picker in the desktop app's call panel. The daemon only stores
-    /// and returns it; the desktop app reads it. Owner only, off by default:
-    /// it stays dark until Sew's plugin video lands and a real call is tested.
-    #[serde(default)]
+    /// Video in voice rooms: camera tiles, screen share and the camera
+    /// picker in the desktop app's call panel. The daemon only stores and
+    /// returns it; the desktop app reads it. On by default since Sew 0.8.2's
+    /// plugin video; the owner can still turn it off.
+    #[serde(default = "default_true")]
     pub video_rooms_preview: bool,
     /// Voice through the tunnel preview (lane A): the `tunnel` TURN tier,
     /// `frpc-voice` and the cert `turn-tunnel` request. Persisted mirror of
@@ -1291,7 +1291,7 @@ impl Default for AppSettings {
             compute_preview: false,
             voice_rooms_preview: false,
             board_file_preview: false,
-            video_rooms_preview: false,
+            video_rooms_preview: true,
             voice_tunnel_preview: false,
             voice_rooms_count: default_voice_rooms_count(),
             compute_placement: default_compute_placement(),
@@ -2763,21 +2763,21 @@ mod tests {
         assert_eq!(load().voice_rooms_count, 0, "a refused write keeps the old value");
     }
 
-    /// Video in voice rooms: off by default, an old file without the key
-    /// reads off, and the owner's write keeps true.
+    /// Video in voice rooms: on by default, an old file without the key
+    /// reads on, and the owner's write of false is kept.
     #[test]
-    fn video_rooms_preview_defaults_off_and_keeps_true() {
+    fn video_rooms_preview_defaults_on_and_keeps_false() {
         use serde_json::json;
         let _g = TEST_LOCK.lock();
         let _home = HomeGuard::new();
         let d = AppSettings::default();
-        assert!(!d.video_rooms_preview, "the preview defaults OFF");
-        assert_eq!(serde_json::to_value(&d).unwrap()["videoRoomsPreview"], json!(false));
+        assert!(d.video_rooms_preview, "video defaults ON");
+        assert_eq!(serde_json::to_value(&d).unwrap()["videoRoomsPreview"], json!(true));
         ensure_dir();
         fs::write(settings_file(), r#"{"apps": true}"#).unwrap();
-        assert!(!load().video_rooms_preview, "a file without the key reads off");
-        let s = update(json!({"videoRoomsPreview": true})).expect("the write is kept");
-        assert!(s.video_rooms_preview);
-        assert!(load().video_rooms_preview, "true survives a reload");
+        assert!(load().video_rooms_preview, "a file without the key reads on");
+        let s = update(json!({"videoRoomsPreview": false})).expect("the write is kept");
+        assert!(!s.video_rooms_preview);
+        assert!(!load().video_rooms_preview, "the owner's false survives a reload");
     }
 }

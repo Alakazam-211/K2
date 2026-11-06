@@ -258,7 +258,7 @@ interface SettingsState {
   voiceRoomsPreview: boolean
   /** Board files in a tab (the `board_file_preview` setting). Off by default. */
   boardFilePreview: boolean
-  /** Video in voice rooms (the `video_rooms_preview` setting): camera and screen share in the call panel. Off by default. */
+  /** Video in voice rooms (the `video_rooms_preview` setting): camera and screen share in the call panel. On by default (the owner can turn it off). */
   videoRoomsPreview: boolean
 
   // Apps (beta) on the focused server (Settings → Apps → This server).
@@ -560,7 +560,7 @@ async function persistAndApply(
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
-      videoRoomsPreview: result.videoRoomsPreview ?? false,
+      videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -613,7 +613,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   computePreview: false,
   voiceRoomsPreview: false,
   boardFilePreview: false,
-  videoRoomsPreview: false,
+  videoRoomsPreview: true,
   apps: true,
   apiEnabled: false,
   useLlmHitlDetection: false,
@@ -1038,7 +1038,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
-      videoRoomsPreview: result.videoRoomsPreview ?? false,
+      videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -1109,7 +1109,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
-      videoRoomsPreview: result.videoRoomsPreview ?? false,
+      videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,

@@ -172,17 +172,14 @@ impl Answer {
 }
 
 fn head_text(a: &Answer, body_len: u64) -> String {
-    let mut out = format!("HTTP/1.1 {}\r\n", a.status);
+    let mut out = format!("HTTP/1.1 {}\r\n{}", a.status, k2_core::frame_policy::CONNECT_HEADER_LINES);
     for (k, v) in &a.headers {
         // A value K2 wrote never holds a line break; refuse to send one.
         if !k.contains(['\r', '\n']) && !v.contains(['\r', '\n']) {
             out.push_str(&format!("{k}: {v}\r\n"));
         }
     }
-    out.push_str(&format!(
-        "Content-Length: {body_len}\r\nCache-Control: no-store\r\n{CORS}{}Connection: close\r\n\r\n",
-        k2_core::frame_policy::CONNECT_HEADER_LINES
-    ));
+    out.push_str(&format!("Content-Length: {body_len}\r\nCache-Control: no-store\r\n{CORS}Connection: close\r\n\r\n"));
     out
 }
 

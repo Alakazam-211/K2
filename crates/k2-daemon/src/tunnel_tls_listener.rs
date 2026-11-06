@@ -2716,8 +2716,19 @@ mod tests {
             .args(["--nocapture", "--test-threads=1"])
             .env(CHILD, "1")
             .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
-        let out = tokio::time::timeout(Duration::from_secs(180), child.output()).await.expect("the child ended").expect("the child ran");
+        // The child copies this process's environment when it starts. Under
+        // the one env lock that is the process's own: no other test's
+        // `EnvVar` is set then. Unlocked, the child once started while
+        // another test had `K2_CONNECT_BASE` set, and its prod-isolation
+        // guard refused to run (nightly soak, shuffled seed 2).
+        let child = {
+            let _env = k2_core::test_env::lock();
+            child.spawn().expect("the child ran")
+        };
+        let out = tokio::time::timeout(Duration::from_secs(180), child.wait_with_output()).await.expect("the child ended").expect("the child's output");
         let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         let tail: Vec<&str> = stderr.lines().rev().take(15).collect();
         let report = stdout.lines().find(|l| l.starts_with("SHORTAGE ")).unwrap_or_else(|| panic!("no report ({}):\n{stdout}\n{tail:#?}", out.status));

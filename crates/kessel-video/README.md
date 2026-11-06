@@ -288,9 +288,9 @@ On Windows:
   `ImplPreference::HardwareOnly` answers `unsupported` on a machine without
   a hardware MFT.
 - The encoder runs in low-latency mode with no B-frames, constant bitrate
-  (`set_rates` changes it in place), Constrained Baseline (`avc1.42C01F`
-  from Microsoft's encoder) or Constrained High, keyframes on request, and
-  CPU input (NV12; other formats are converted).
+  (`set_rates` changes it in place), Constrained Baseline or Constrained
+  High (`avc1.42C01F` and `avc1.640C1F` from Microsoft's encoder),
+  keyframes on request, and CPU input (NV12; other formats are converted).
 - The decoder takes Annex B access units and gives CPU frames in the asked
   format. It has no Direct3D device, so Microsoft's decoder decodes on the
   CPU. Native (Direct3D 11) frames aren't offered on Windows yet: cameras,

@@ -143,12 +143,21 @@ impl Planes {
                     "plane {i}: stride {stride} is shorter than its {row}-byte row"
                 )));
             }
-            let end = self.offsets[i] + stride * (rows - 1) + row;
-            if end > self.data.len() {
-                return Err(invalid(format!(
-                    "plane {i} ends at {end}, past the {}-byte buffer",
-                    self.data.len()
-                )));
+            // Public fields: any offset or stride can arrive here, so the
+            // end is computed without overflow.
+            let end = stride
+                .checked_mul(rows.saturating_sub(1))
+                .and_then(|n| n.checked_add(self.offsets[i]))
+                .and_then(|n| n.checked_add(row));
+            match end {
+                Some(end) if end <= self.data.len() => {}
+                _ => {
+                    return Err(invalid(format!(
+                        "plane {i} (offset {}, stride {stride}) runs past the {}-byte buffer",
+                        self.offsets[i],
+                        self.data.len()
+                    )))
+                }
             }
         }
         Ok(())
@@ -387,6 +396,13 @@ mod tests {
         assert!(Planes::new(PixelFormat::Nv12, 4, 2, vec![0u8; 11], [4, 4, 0], [0, 8, 0]).is_err());
         assert!(Planes::tight(PixelFormat::I420, 0, 4, vec![]).is_err());
         assert!(Planes::tight(PixelFormat::Native, 4, 4, vec![]).is_err());
+        // Offsets and strides whose sums overflow: an error, not a panic.
+        let mut p = Planes::tight(PixelFormat::I420, 4, 4, vec![0u8; 24]).expect("ok");
+        p.offsets[1] = usize::MAX - 1;
+        assert!(p.validate(4, 4).is_err());
+        let mut p = Planes::tight(PixelFormat::I420, 4, 4, vec![0u8; 24]).expect("ok");
+        p.strides[0] = u32::MAX;
+        assert!(p.validate(4, 16_384).is_err());
         let p = Planes::tight(PixelFormat::I420, 4, 4, vec![0u8; 24]).expect("ok");
         assert!(
             VideoFrame::from_planes(p, 8, 8, 0).is_err(),

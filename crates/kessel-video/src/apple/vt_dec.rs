@@ -273,7 +273,7 @@ impl VtDecoder {
                 return None;
             }
             let owned = Cf(v);
-            Some(CFBooleanGetValue(owned.0) != 0)
+            bool_value(owned.0)
         }
     }
 

@@ -89,25 +89,25 @@ pub(crate) fn planes_from(pb: CVPixelBufferRef) -> Result<(Planes, u32, u32), Vi
             CVPixelBufferGetWidth(pb) as u32,
             CVPixelBufferGetHeight(pb) as u32,
         );
-        if CVPixelBufferLockBaseAddress(pb, LOCK_READ_ONLY) != 0 {
-            return Err(VideoError::os(0, "CVPixelBufferLockBaseAddress failed"));
-        }
+        let lock = BaseLock::new(pb, LOCK_READ_ONLY)?;
         let mut out = Vec::with_capacity(format.frame_len(w, h));
         let mut ok = true;
         for i in 0..format.plane_count() {
             let (row, rows) = format.plane_size(i, w, h);
-            let (base, bpr) = if format == PixelFormat::Bgra {
+            let (base, bpr, have_rows) = if format == PixelFormat::Bgra {
                 (
                     CVPixelBufferGetBaseAddress(pb) as *const u8,
                     CVPixelBufferGetBytesPerRow(pb),
+                    CVPixelBufferGetHeight(pb),
                 )
             } else {
                 (
                     CVPixelBufferGetBaseAddressOfPlane(pb, i) as *const u8,
                     CVPixelBufferGetBytesPerRowOfPlane(pb, i),
+                    CVPixelBufferGetHeightOfPlane(pb, i),
                 )
             };
-            if base.is_null() || bpr < row {
+            if base.is_null() || bpr < row || have_rows < rows {
                 ok = false;
                 break;
             }
@@ -115,7 +115,7 @@ pub(crate) fn planes_from(pb: CVPixelBufferRef) -> Result<(Planes, u32, u32), Vi
                 out.extend_from_slice(std::slice::from_raw_parts(base.add(y * bpr), row));
             }
         }
-        CVPixelBufferUnlockBaseAddress(pb, LOCK_READ_ONLY);
+        drop(lock);
         if !ok {
             return Err(VideoError::os(
                 0,
@@ -141,9 +141,7 @@ pub(crate) fn fill_nv12(
     // SAFETY: a live pixel buffer, locked while we write rows within each
     // plane's reported size, which we check covers the frame.
     unsafe {
-        if CVPixelBufferLockBaseAddress(pb, 0) != 0 {
-            return Err(VideoError::os(0, "CVPixelBufferLockBaseAddress failed"));
-        }
+        let _lock = BaseLock::new(pb, 0)?;
         let mut res = Ok(());
         for i in 0..2 {
             let (row, rows) = PixelFormat::Nv12.plane_size(i, width, height);
@@ -173,8 +171,36 @@ pub(crate) fn fill_nv12(
                 }
             }
         }
-        CVPixelBufferUnlockBaseAddress(pb, 0);
         res
+    }
+}
+
+/// A pixel buffer's base address, locked until the guard drops: an early
+/// return or a panic in between (a caller's closure) can't leave it locked.
+struct BaseLock {
+    pb: CVPixelBufferRef,
+    flags: u64,
+}
+
+impl BaseLock {
+    /// Lock `pb` with `flags`.
+    ///
+    /// # Safety
+    /// `pb` must be a live pixel buffer that outlives the guard.
+    unsafe fn new(pb: CVPixelBufferRef, flags: u64) -> Result<BaseLock, VideoError> {
+        // SAFETY: the caller's contract.
+        if unsafe { CVPixelBufferLockBaseAddress(pb, flags) } != 0 {
+            return Err(VideoError::os(0, "CVPixelBufferLockBaseAddress failed"));
+        }
+        Ok(BaseLock { pb, flags })
+    }
+}
+
+impl Drop for BaseLock {
+    fn drop(&mut self) {
+        // SAFETY: locked by `new` with these flags, unlocked once; the
+        // buffer outlives the guard.
+        unsafe { CVPixelBufferUnlockBaseAddress(self.pb, self.flags) };
     }
 }
 
@@ -226,11 +252,10 @@ impl CvFrame {
         // bytes per row, which the lock keeps mapped, and no slice outlives
         // the lock: `f` only borrows them for its call.
         unsafe {
-            if CVPixelBufferLockBaseAddress(pb, LOCK_READ_ONLY) != 0 {
-                return Err(VideoError::os(0, "CVPixelBufferLockBaseAddress failed"));
-            }
+            // Unlocked when it drops, after `f`, even if `f` panics.
+            let _lock = BaseLock::new(pb, LOCK_READ_ONLY)?;
             let plane = |i: Option<usize>| locked_plane(self, i);
-            let r = if format == PixelFormat::Bgra {
+            if format == PixelFormat::Bgra {
                 match plane(None) {
                     Some(p) => f(
                         &SourceView::Rgb {
@@ -261,9 +286,7 @@ impl CvFrame {
                     }
                     _ => Err(VideoError::os(0, "an NV12 pixel buffer plane is missing")),
                 }
-            };
-            CVPixelBufferUnlockBaseAddress(pb, LOCK_READ_ONLY);
-            r
+            }
         }
     }
 }
@@ -357,7 +380,10 @@ pub fn apple_pixel_buffer(buffer: &NativeBuffer) -> Option<*mut std::ffi::c_void
 ///
 /// # Safety
 ///
-/// `pixel_buffer` must be a live `CVPixelBufferRef`.
+/// `pixel_buffer` must be a live `CVPixelBufferRef`. The frame reads its
+/// pixels in place, on whatever thread converts or encodes it, so the host
+/// must not write to the buffer while the frame or any clone of it is
+/// alive (that would be a data race).
 pub unsafe fn pixel_buffer_frame(
     pixel_buffer: *mut std::ffi::c_void,
     capture_us: u64,

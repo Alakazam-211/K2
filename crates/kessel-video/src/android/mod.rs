@@ -61,7 +61,10 @@ pub(crate) const PROJECTION_ID: &str = "media-projection";
 ///
 /// # Safety
 ///
-/// `buffer` must be a live `AHardwareBuffer*`.
+/// `buffer` must be a live `AHardwareBuffer*`. The frame reads its pixels
+/// in place, on whatever thread converts or encodes it, so the host must not
+/// write to the buffer while the frame or any clone of it is alive (that
+/// would be a data race).
 #[cfg(target_os = "android")]
 #[allow(unsafe_code)]
 pub unsafe fn hardware_buffer_frame(

@@ -1182,3 +1182,25 @@ fn frame_in_sources_ignore_the_background() {
     );
     drop(b);
 }
+
+#[test]
+fn locked_buffer_spans_are_checked_before_any_slice() {
+    use super::screen::{plane_span, rgba_span};
+    // 4x2 RGBA with rows of 6 pixels: one full row, then 4 pixels.
+    assert_eq!(rgba_span(6, 4, 2).expect("span"), (24, 24 + 16));
+    assert_eq!(rgba_span(4, 4, 1).expect("span"), (16, 16));
+    // No rows (h - 1 would wrap), no columns, a stride shorter than a row,
+    // and strides whose products overflow.
+    assert!(rgba_span(4, 4, 0).is_err());
+    assert!(rgba_span(4, 0, 4).is_err());
+    assert!(rgba_span(3, 4, 4).is_err());
+    assert!(rgba_span(u32::MAX, u32::MAX, u32::MAX).is_err());
+    // Planes: 2 rows of 3 pixels 2 bytes apart, rows 8 bytes apart.
+    assert_eq!(plane_span(3, 2, 8, 2), Some(8 + 5));
+    assert_eq!(plane_span(3, 1, 0, 2), Some(5));
+    assert_eq!(plane_span(0, 2, 8, 2), None);
+    assert_eq!(plane_span(3, 0, 8, 2), None);
+    assert_eq!(plane_span(3, 2, 8, 0), None);
+    assert_eq!(plane_span(3, 2, 4, 2), None, "rows overlap");
+    assert_eq!(plane_span(2, usize::MAX, usize::MAX, 1), None);
+}

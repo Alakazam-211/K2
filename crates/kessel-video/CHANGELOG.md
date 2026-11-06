@@ -138,6 +138,31 @@ Additions only: nothing in 0.1.3's API changes or goes away.
   requests, a size change, and the hardware and software flags. Hardware
   MFTs have not run.
 
+### Hardening
+
+- The Windows H.264 decoder reads each output only within the length its
+  buffer's lock reports (`Lock2DSize` for 2D buffers, the current length
+  otherwise), with every offset computed with checked arithmetic. A
+  picture layout that doesn't fit the buffer is an error, never a read
+  past it. A change of output type clears the cached layout even when the
+  same call fails, and outputs from before a change are dropped instead
+  of read with the new layout.
+- A Windows crop that starts on an odd column or row starts on the even
+  one before it, so each pixel keeps its own chroma.
+- The Windows codecs' sample times can't overflow.
+- Android: a locked AHardwareBuffer's span is checked before any slice is
+  made over it (a zero height, a stride shorter than a row, overflowing
+  sizes).
+- `Planes::validate` computes each plane's end with checked arithmetic, so
+  any offset or stride gives an error rather than a panic.
+- Apple: a pixel buffer's base address is unlocked by a guard, so an error
+  or a panic while it is locked can't leave it locked. CoreFoundation
+  values the OS hands back by key are type-checked before they are read
+  as booleans, numbers, dictionaries or arrays.
+- `pixel_buffer_frame` and `hardware_buffer_frame` now say in their safety
+  contract that the host must not write to the buffer while any clone of
+  the frame is alive: frames are read in place.
+
 ### Windows N and KN editions
 
 - Media Foundation's DLLs (`mfplat.dll`, `mf.dll`, `mfreadwrite.dll`) are

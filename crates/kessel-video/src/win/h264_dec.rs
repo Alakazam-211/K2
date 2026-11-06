@@ -44,6 +44,75 @@ struct Layout {
     stride: u32,
 }
 
+/// Unlocks a 2D buffer locked with `Lock2DSize`.
+struct Unlock2D<'a>(&'a IMF2DBuffer2);
+
+impl Drop for Unlock2D<'_> {
+    fn drop(&mut self) {
+        // SAFETY: locked by the caller, unlocked once.
+        let _ = unsafe { self.0.Unlock2D() };
+    }
+}
+
+/// Unlocks a buffer locked with `Lock`.
+struct Unlock<'a>(&'a IMFMediaBuffer);
+
+impl Drop for Unlock<'_> {
+    fn drop(&mut self) {
+        // SAFETY: locked by the caller, unlocked once.
+        let _ = unsafe { self.0.Unlock() };
+    }
+}
+
+/// Copy the picture `l` describes out of NV12 bytes `src` (the first
+/// scanline first, `pitch` bytes a row, the UV plane after `l.alloc_h`
+/// rows) as tight NV12. Every range is computed with checked arithmetic and
+/// taken with `get`, so a layout that doesn't fit `src` is an error, never
+/// a read past it.
+///
+/// A crop that starts on an odd column or row starts one earlier, on the
+/// even one: 4:2:0 chroma covers 2x2 blocks, and starting on a block keeps
+/// each pixel's chroma its own.
+fn copy_nv12(src: &[u8], pitch: usize, l: &Layout) -> Result<Vec<u8>, VideoError> {
+    let misfit = || {
+        VideoError::os(
+            0,
+            format!(
+                "an NV12 output of {} bytes, pitch {pitch}, can't hold a {}x{}+{}+{} picture \
+                 in {}x{}",
+                src.len(),
+                l.w,
+                l.h,
+                l.x,
+                l.y,
+                l.alloc_w,
+                l.alloc_h
+            ),
+        )
+    };
+    let (w, h) = (l.w as usize, l.h as usize);
+    let (x, y) = (l.x as usize & !1, l.y as usize & !1);
+    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+    // Rows of the picture never run into the next row.
+    let fits_row = |n: usize| x.checked_add(n).is_some_and(|end| end <= pitch);
+    if w == 0 || h == 0 || !fits_row(w) || !fits_row(cw * 2) {
+        return Err(misfit());
+    }
+    let uv_at = pitch.checked_mul(l.alloc_h as usize).ok_or_else(misfit)?;
+    let row = |base: usize, r: usize, n: usize| -> Option<&[u8]> {
+        let at = r.checked_mul(pitch)?.checked_add(base)?.checked_add(x)?;
+        src.get(at..at.checked_add(n)?)
+    };
+    let mut out = Vec::with_capacity(PixelFormat::Nv12.frame_len(l.w, l.h));
+    for r in y..y + h {
+        out.extend_from_slice(row(0, r, w).ok_or_else(misfit)?);
+    }
+    for r in y / 2..y / 2 + ch {
+        out.extend_from_slice(row(uv_at, r, cw * 2).ok_or_else(misfit)?);
+    }
+    Ok(out)
+}
+
 pub(crate) struct MfDecoder {
     mft: Mft,
     /// What `mft` was opened from, to reopen it.
@@ -133,7 +202,8 @@ impl MfDecoder {
                 .GetUINT32(&MF_MT_DEFAULT_STRIDE)
                 .map(|s| (s as i32).unsigned_abs())
                 .unwrap_or(alloc_w);
-            if x + w > alloc_w || y + h > alloc_h || w == 0 || h == 0 {
+            let inside = |o: u32, n: u32, total: u32| o.checked_add(n).is_some_and(|e| e <= total);
+            if !inside(x, w, alloc_w) || !inside(y, h, alloc_h) || w == 0 || h == 0 {
                 return Err(VideoError::os(
                     0,
                     format!("a {w}x{h}+{x}+{y} picture in a {alloc_w}x{alloc_h} buffer"),
@@ -151,89 +221,94 @@ impl MfDecoder {
         }
     }
 
-    fn copy_out(&self, sample: &IMFSample, l: Layout) -> Result<Planes, VideoError> {
-        let (w, h) = (l.w as usize, l.h as usize);
-        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-        let mut out = Vec::with_capacity(PixelFormat::Nv12.frame_len(l.w, l.h));
-        // SAFETY: the buffer is locked while we read rows inside it (checked
-        // against its length), then unlocked.
-        unsafe {
-            let buf = sample
-                .ConvertToContiguousBuffer()
-                .map_err(|e| map_error(&e, "ConvertToContiguousBuffer"))?;
-            let two_d = buf.cast::<IMF2DBuffer>().ok();
-            let mut p: *mut u8 = std::ptr::null_mut();
-            let (pitch, len) = match &two_d {
-                Some(b2) => {
-                    let mut pitch = 0i32;
-                    b2.Lock2D(&mut p, &mut pitch)
-                        .map_err(|e| map_error(&e, "Lock2D"))?;
-                    // A 2D buffer spans pitch x (rows of Y + rows of UV).
-                    let rows = l.alloc_h as usize + (l.alloc_h as usize).div_ceil(2);
-                    (pitch, pitch.max(0) as usize * rows)
+    /// The picture in `sample`, as tight NV12 planes. The bytes read are
+    /// the ones the buffer's lock reports, never a length worked out from
+    /// the media type: a layout that doesn't fit the buffer (a sample from
+    /// before a size change, a lying MFT) is an error, not a read past it.
+    fn copy_out(sample: &IMFSample, l: Layout) -> Result<Planes, VideoError> {
+        // SAFETY: a live sample's contiguous buffer.
+        let buf = unsafe { sample.ConvertToContiguousBuffer() }
+            .map_err(|e| map_error(&e, "ConvertToContiguousBuffer"))?;
+        let out = match buf.cast::<IMF2DBuffer2>() {
+            Ok(b2) => {
+                let (mut scan0, mut start) = (std::ptr::null_mut(), std::ptr::null_mut());
+                let (mut pitch, mut len) = (0i32, 0u32);
+                // SAFETY: a read lock that reports the first scanline, the
+                // row pitch, and the buffer's start and length; unlocked by
+                // the guard after the copy.
+                unsafe {
+                    b2.Lock2DSize(
+                        MF2DBuffer_LockFlags_Read,
+                        &mut scan0,
+                        &mut pitch,
+                        &mut start,
+                        &mut len,
+                    )
                 }
-                None => {
-                    let mut n = 0u32;
-                    buf.Lock(&mut p, None, Some(&mut n))
-                        .map_err(|e| map_error(&e, "Lock"))?;
-                    (l.stride as i32, n as usize)
+                .map_err(|e| map_error(&e, "Lock2DSize"))?;
+                let _unlock = Unlock2D(&b2);
+                // Bytes from the first scanline to the buffer's end. A
+                // bottom-up buffer (negative pitch) isn't an NV12 decoder
+                // output; refuse it rather than walk backwards.
+                let skip = (scan0 as usize).checked_sub(start as usize);
+                let avail = skip.and_then(|s| (len as usize).checked_sub(s));
+                let (Some(avail), Ok(pitch)) = (avail, usize::try_from(pitch)) else {
+                    return Err(VideoError::os(
+                        0,
+                        format!("a locked NV12 buffer with pitch {pitch} and length {len}"),
+                    ));
+                };
+                if scan0.is_null() {
+                    return Err(VideoError::os(0, "a locked NV12 buffer with no memory"));
                 }
-            };
-            let unlock = || match &two_d {
-                Some(b2) => {
-                    let _ = b2.Unlock2D();
-                }
-                None => {
-                    let _ = buf.Unlock();
-                }
-            };
-            let pitch_u = pitch.max(0) as usize;
-            let (x, y) = (l.x as usize, l.y as usize);
-            let uv_at = pitch_u * l.alloc_h as usize;
-            let last_y = (y + h - 1) * pitch_u + x + w;
-            let last_uv = uv_at + (y / 2 + ch - 1) * pitch_u + (x & !1) + cw * 2;
-            if p.is_null() || pitch_u < l.alloc_w as usize || last_y > len || last_uv > len {
-                unlock();
-                return Err(VideoError::os(
-                    0,
-                    format!(
-                        "an NV12 output of {len} bytes, pitch {pitch}, for {}x{}",
-                        l.alloc_w, l.alloc_h
-                    ),
-                ));
+                // SAFETY: the lock maps `len` bytes from `start`, so the
+                // `avail` bytes from `scan0` are inside it, valid until the
+                // guard unlocks (after this copy).
+                let src = unsafe { std::slice::from_raw_parts(scan0 as *const u8, avail) };
+                copy_nv12(src, pitch, &l)?
             }
-            let src = std::slice::from_raw_parts(p, len);
-            for row in 0..h {
-                let at = (y + row) * pitch_u + x;
-                out.extend_from_slice(&src[at..at + w]);
+            Err(_) => {
+                let (mut p, mut cur) = (std::ptr::null_mut(), 0u32);
+                // SAFETY: a read of the buffer's current bytes; unlocked by
+                // the guard after the copy.
+                unsafe { buf.Lock(&mut p, None, Some(&mut cur)) }
+                    .map_err(|e| map_error(&e, "Lock"))?;
+                let _unlock = Unlock(&buf);
+                if p.is_null() {
+                    return Err(VideoError::os(0, "a locked NV12 buffer with no memory"));
+                }
+                // SAFETY: the lock maps the buffer's `cur` current bytes,
+                // valid until the guard unlocks.
+                let src = unsafe { std::slice::from_raw_parts(p as *const u8, cur as usize) };
+                copy_nv12(src, l.stride as usize, &l)?
             }
-            for row in 0..ch {
-                let at = uv_at + (y / 2 + row) * pitch_u + (x & !1);
-                out.extend_from_slice(&src[at..at + cw * 2]);
-            }
-            unlock();
-        }
+        };
         Planes::tight(PixelFormat::Nv12, l.w, l.h, out)
     }
 
     fn decode_inner(&mut self, input: &EncodedInput) -> Result<Option<VideoFrame>, VideoError> {
         com_on_this_thread()?;
-        let time =
-            ((input.capture_us.min(i64::MAX as u64 / 10) * 10) as i64).max(self.last_time + 1);
+        let time = ((input.capture_us.min(i64::MAX as u64 / 10) * 10) as i64)
+            .max(self.last_time.saturating_add(1));
         self.last_time = time;
         let sample = sample_from(&input.data, time, 333_333)?;
         let out_id = self.mft.out_id();
         let mut changed = false;
-        let outs = self.mft.process(&sample, NoOutput::Wait, &mut |t| {
+        let result = self.mft.process(&sample, NoOutput::Wait, &mut |t| {
             changed = true;
             set_nv12_output(t, out_id)
-        })?;
+        });
+        // Before anything can fail: a change seen at all makes the cached
+        // layout stale, error or not.
         if changed {
             self.layout = None;
         }
-        // Low latency gives one frame per access unit; should more come out
-        // together, the newest is the one to show.
-        let Some(last) = outs.last() else {
+        let outs = result?;
+        // Only outputs in the current type can be read with its layout;
+        // any that came out before a change are dropped (real time: the
+        // newest frame is the one to show anyway).
+        let fresh = outs.get(self.mft.fresh_from()..).unwrap_or_default();
+        let Some(last) = fresh.last() else {
             return Ok(None);
         };
         let layout = match self.layout {
@@ -244,7 +319,7 @@ impl MfDecoder {
                 l
             }
         };
-        let planes = self.copy_out(last, layout)?;
+        let planes = MfDecoder::copy_out(last, layout)?;
         Ok(Some(VideoFrame::from_planes(
             planes,
             layout.w,
@@ -300,5 +375,153 @@ impl DecoderCore for MfDecoder {
         } else {
             Implementation::Software
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout(alloc: (u32, u32), at: (u32, u32), size: (u32, u32)) -> Layout {
+        Layout {
+            alloc_w: alloc.0,
+            alloc_h: alloc.1,
+            x: at.0,
+            y: at.1,
+            w: size.0,
+            h: size.1,
+            stride: alloc.0,
+        }
+    }
+
+    /// An NV12 buffer of `alloc_w` x `alloc_h` with `pitch`-byte rows:
+    /// luma byte = row * 16 + column, chroma byte = 200 + row * 16 + column.
+    fn buffer(pitch: usize, alloc_w: usize, alloc_h: usize) -> Vec<u8> {
+        let mut b = vec![0xEEu8; pitch * (alloc_h + alloc_h.div_ceil(2))];
+        for r in 0..alloc_h {
+            for c in 0..alloc_w {
+                b[r * pitch + c] = (r * 16 + c) as u8;
+            }
+        }
+        for r in 0..alloc_h.div_ceil(2) {
+            for c in 0..alloc_w {
+                b[(alloc_h + r) * pitch + c] = (200 + r * 16 + c) as u8;
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn the_picture_comes_out_tight_and_cropped() {
+        let src = buffer(6, 4, 4);
+        let out = copy_nv12(&src, 6, &layout((4, 4), (0, 0), (4, 4))).expect("copy");
+        assert_eq!(
+            out,
+            [
+                0, 1, 2, 3, 16, 17, 18, 19, 32, 33, 34, 35, 48, 49, 50, 51, // Y
+                200, 201, 202, 203, 216, 217, 218, 219, // UV
+            ]
+        );
+        // A 2x2 crop at (2, 2): the second chroma row, the second pair.
+        let out = copy_nv12(&src, 6, &layout((4, 4), (2, 2), (2, 2))).expect("copy");
+        assert_eq!(out, [34, 35, 50, 51, 218, 219]);
+        // An odd origin starts on the even column and row before it, so
+        // luma and chroma stay the same block.
+        let out = copy_nv12(&src, 6, &layout((4, 4), (3, 3), (1, 1))).expect("copy");
+        assert_eq!(out, [34, 218, 219]);
+    }
+
+    /// A sample around a real Media Foundation 2D NV12 buffer (what a
+    /// hardware decoder hands out), filled as `buffer` fills its bytes.
+    fn sample_2d(w: u32, h: u32) -> IMFSample {
+        type Create2D = unsafe extern "system" fn(
+            u32,
+            u32,
+            u32,
+            windows::core::BOOL,
+            *mut *mut std::ffi::c_void,
+        ) -> windows::core::HRESULT;
+        super::super::camera::init().expect("Media Foundation");
+        let m = super::super::mfdll::load("mfplat.dll").expect("mfplat");
+        // SAFETY: MFCreate2DMediaBuffer's signature.
+        let create: Create2D =
+            unsafe { super::super::mfdll::sym(m, c"MFCreate2DMediaBuffer") }.expect("export");
+        let mut p = std::ptr::null_mut();
+        // SAFETY: an NV12 FourCC, top-down; an out pointer for a buffer we
+        // then own.
+        unsafe { create(w, h, MFVideoFormat_NV12.data1, false.into(), &mut p) }
+            .ok()
+            .expect("MFCreate2DMediaBuffer");
+        // SAFETY: an owned IMFMediaBuffer reference.
+        let buf = unsafe { IMFMediaBuffer::from_raw(p) };
+        let b2: IMF2DBuffer2 = buf.cast().expect("IMF2DBuffer2");
+        let (mut scan0, mut start) = (std::ptr::null_mut(), std::ptr::null_mut());
+        let (mut pitch, mut len) = (0i32, 0u32);
+        // SAFETY: a write lock of a buffer we own; we write inside the
+        // `len` bytes it reports, then unlock.
+        unsafe {
+            b2.Lock2DSize(
+                MF2DBuffer_LockFlags_Write,
+                &mut scan0,
+                &mut pitch,
+                &mut start,
+                &mut len,
+            )
+            .expect("lock");
+            let fill = buffer(pitch as usize, w as usize, h as usize);
+            assert!(fill.len() <= len as usize, "{} > {len}", fill.len());
+            std::ptr::copy_nonoverlapping(fill.as_ptr(), scan0, fill.len());
+            b2.Unlock2D().expect("unlock");
+            buf.SetCurrentLength(len).expect("length");
+        }
+        let s = super::super::mfdll::mfplat()
+            .expect("mfplat")
+            .create_sample()
+            .expect("sample");
+        // SAFETY: a new sample and a live buffer.
+        unsafe { s.AddBuffer(&buf) }.expect("add");
+        s
+    }
+
+    #[test]
+    fn a_2d_buffer_is_read_within_the_length_its_lock_reports() {
+        let s = sample_2d(64, 48);
+        let ok = MfDecoder::copy_out(&s, layout((64, 48), (0, 0), (64, 48))).expect("copy");
+        let tight = ok.to_tight(64, 48);
+        assert_eq!(tight.data[64 + 2], 16 + 2, "row 1, column 2");
+        assert_eq!(
+            tight.data[64 * 48 + 64 + 2],
+            (200 + 16 + 2) as u8,
+            "UV row 1"
+        );
+        // The same buffer read as a far taller frame (a sample from before
+        // a size change): refused against the lock's real length.
+        let tall = layout((64, 2160), (0, 0), (64, 2160));
+        assert!(MfDecoder::copy_out(&s, tall).is_err());
+        let wide = layout((4096, 48), (0, 0), (4096, 48));
+        assert!(MfDecoder::copy_out(&s, wide).is_err());
+    }
+
+    #[test]
+    fn a_layout_bigger_than_the_buffer_is_an_error_not_a_read_past_it() {
+        // The buffer a small frame came in, read with a larger frame's
+        // layout (a size change between the sample and its layout).
+        let small = buffer(1280, 1280, 16);
+        let big = layout((1280, 2160), (0, 0), (1280, 2160));
+        assert!(copy_nv12(&small, 1280, &big).is_err());
+        // Just short of the last chroma row's end.
+        let src = buffer(6, 4, 4);
+        let short = &src[..src.len() - 3];
+        assert!(copy_nv12(short, 6, &layout((4, 4), (0, 0), (4, 4))).is_err());
+        // The UV plane said to start past the end.
+        assert!(copy_nv12(&src, 6, &layout((4, 40), (0, 0), (4, 4))).is_err());
+        // Rows wider than the pitch would run into the next row.
+        assert!(copy_nv12(&src, 3, &layout((4, 4), (0, 0), (4, 4))).is_err());
+        assert!(copy_nv12(&src, 6, &layout((8, 4), (4, 0), (4, 4))).is_err());
+        // Sizes whose offsets overflow: an error, no panic.
+        let huge = layout((u32::MAX, u32::MAX), (0, u32::MAX - 1), (2, 2));
+        assert!(copy_nv12(&src, usize::MAX / 2, &huge).is_err());
+        assert!(copy_nv12(&src, 6, &layout((4, 4), (0, 0), (0, 4))).is_err());
+        assert!(copy_nv12(&[], 6, &layout((4, 4), (0, 0), (4, 4))).is_err());
     }
 }

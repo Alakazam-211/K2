@@ -69,8 +69,7 @@ unsafe fn sample_to_annexb(sb: CMSampleBufferRef) -> Result<CoreFrame, VideoErro
     if !atts.is_null() && CFArrayGetCount(atts) > 0 {
         let d = CFArrayGetValueAtIndex(atts, 0);
         if let Some(not_sync) = cf_const(c"kCMSampleAttachmentKey_NotSync") {
-            let v = CFDictionaryGetValue(d, not_sync);
-            if !v.is_null() && CFBooleanGetValue(v) != 0 {
+            if bool_value(dict_value(d, not_sync)) == Some(true) {
                 key = false;
             }
         }
@@ -358,7 +357,7 @@ impl VtEncoder {
                 return None;
             }
             let owned = Cf(v);
-            Some(CFBooleanGetValue(owned.0) != 0)
+            bool_value(owned.0)
         }
     }
 
@@ -386,14 +385,17 @@ impl VtEncoder {
                 return None;
             }
             let list = Cf(list);
+            if !cf_is(list.0, CFArrayGetTypeID) {
+                return None;
+            }
             for i in 0..CFArrayGetCount(list.0) {
                 let entry = CFArrayGetValueAtIndex(list.0, i);
-                let entry_id = CFDictionaryGetValue(entry, list_id);
+                let entry_id = dict_value(entry, list_id);
                 if entry_id.is_null() || CFEqual(entry_id, id.0) == 0 {
                     continue;
                 }
-                let hw = list_hw.map_or(ptr::null(), |k| CFDictionaryGetValue(entry, k));
-                return Some(!hw.is_null() && CFBooleanGetValue(hw) != 0);
+                let hw = list_hw.map_or(ptr::null(), |k| dict_value(entry, k));
+                return Some(bool_value(hw) == Some(true));
             }
             None
         }

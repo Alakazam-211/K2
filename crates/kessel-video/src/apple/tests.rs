@@ -1474,3 +1474,28 @@ fn convert_timings_from_native_pixel_buffers() {
         );
     }
 }
+
+#[test]
+fn cf_values_are_read_only_as_the_type_they_are() {
+    use super::ffi::{bool_value, dict, dict_value, no, num_i32, number_i64, set_named, yes};
+    let key = c"kVTEncodeFrameOptionKey_ForceKeyFrame";
+    let d = dict();
+    assert!(set_named(&d, key, yes()));
+    let k = super::ffi::cf_const(key).expect("key");
+    let n = num_i32(7);
+    // SAFETY: live CF objects (or null) throughout.
+    unsafe {
+        assert_eq!(bool_value(yes()), Some(true));
+        assert_eq!(bool_value(no()), Some(false));
+        assert_eq!(bool_value(std::ptr::null()), None);
+        // A number where a boolean is wanted, a dictionary lookup in a
+        // number: refused, not read as the wrong type.
+        assert_eq!(bool_value(n.0), None);
+        assert!(dict_value(n.0, k).is_null());
+        assert!(dict_value(std::ptr::null(), k).is_null());
+        assert_eq!(bool_value(dict_value(d.0, k)), Some(true));
+    }
+    assert_eq!(number_i64(n.0), Some(7));
+    assert_eq!(number_i64(yes()), None);
+    assert_eq!(number_i64(d.0), None);
+}

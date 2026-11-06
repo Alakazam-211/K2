@@ -157,6 +157,11 @@ extern "C" {
     pub fn CFArrayGetCount(a: CFArrayRef) -> isize;
     pub fn CFArrayGetValueAtIndex(a: CFArrayRef, i: isize) -> *const c_void;
     pub fn CFBooleanGetValue(b: CFBooleanRef) -> u8;
+    pub fn CFGetTypeID(cf: CFTypeRef) -> usize;
+    pub fn CFBooleanGetTypeID() -> usize;
+    pub fn CFNumberGetTypeID() -> usize;
+    pub fn CFDictionaryGetTypeID() -> usize;
+    pub fn CFArrayGetTypeID() -> usize;
     pub fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
     pub fn CFRelease(cf: CFTypeRef);
     pub fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
@@ -476,8 +481,47 @@ pub fn num_f64(v: f64) -> Cf {
     })
 }
 
+/// Is `cf` a live CF object of the type `type_id` gives? `false` for null.
+/// The OS hands back values by key as untyped `CFTypeRef`s; each is checked
+/// before a typed call reads it.
+///
+/// # Safety
+/// `cf` is null or a live CF object.
+pub unsafe fn cf_is(cf: CFTypeRef, type_id: unsafe extern "C" fn() -> usize) -> bool {
+    // SAFETY: the caller's contract; the type ID functions take nothing.
+    !cf.is_null() && unsafe { CFGetTypeID(cf) == type_id() }
+}
+
+/// A CFBoolean's value; `None` for null or any other type.
+///
+/// # Safety
+/// `v` is null or a live CF object.
+pub unsafe fn bool_value(v: CFTypeRef) -> Option<bool> {
+    // SAFETY: the caller's contract; read only once the type is checked.
+    unsafe { cf_is(v, CFBooleanGetTypeID).then(|| CFBooleanGetValue(v) != 0) }
+}
+
+/// `d[k]` when `d` is a CFDictionary; null for a missing key or when `d`
+/// is null or not a dictionary.
+///
+/// # Safety
+/// `d` is null or a live CF object; `k` a live CF key.
+pub unsafe fn dict_value(d: CFTypeRef, k: CFTypeRef) -> CFTypeRef {
+    // SAFETY: the caller's contract; read only once the type is checked.
+    unsafe {
+        if cf_is(d, CFDictionaryGetTypeID) {
+            CFDictionaryGetValue(d, k)
+        } else {
+            ptr::null()
+        }
+    }
+}
+
+/// A CFNumber's value as an i64; `None` for null, any other type, or a
+/// value that doesn't fit.
 pub fn number_i64(n: CFNumberRef) -> Option<i64> {
-    if n.is_null() {
+    // SAFETY: CF values reach here from the OS (a live object or null).
+    if !unsafe { cf_is(n, CFNumberGetTypeID) } {
         return None;
     }
     let mut v = 0i64;

@@ -352,8 +352,8 @@ impl EncoderCore for MfEncoder {
             }
         }
         // 100 ns units, strictly increasing.
-        let time =
-            ((frame.capture_us.min(i64::MAX as u64 / 10) * 10) as i64).max(self.last_time + 1);
+        let time = ((frame.capture_us.min(i64::MAX as u64 / 10) * 10) as i64)
+            .max(self.last_time.saturating_add(1));
         self.last_time = time;
         let duration = 10_000_000 / self.cfg.fps.max(1) as i64;
         let sample = sample_from(&tight.data, time, duration)?;

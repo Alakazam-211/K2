@@ -4,7 +4,7 @@
 //! API 29), through the functions [`late`] finds.
 
 use super::ffi::*;
-use crate::android::screen::{rgba_tight, to_nv12, ScreenImage};
+use crate::android::screen::{plane_span, rgba_span, rgba_tight, to_nv12, ScreenImage};
 use crate::convert::{PlaneView, SourceView, ViewFn};
 use crate::error::{invalid, unsupported, VideoError};
 use crate::frame::{FrameBuffer, NativeBuffer, NativeFrame, PixelFormat, Planes, VideoFrame};
@@ -77,10 +77,10 @@ impl HwFrame {
                 return Err(lock_failed("AHardwareBuffer_lock", st));
             }
             let _unlock = Locked(self);
-            let row_stride = self.desc.stride as usize * 4;
-            let len = row_stride * (h as usize - 1) + w as usize * 4;
-            // SAFETY: a locked RGBA buffer of `stride` pixels per row holds
-            // at least `len` bytes, valid until it is unlocked (after `f`).
+            let (row_stride, len) = rgba_span(self.desc.stride, w, h)?;
+            // SAFETY: a locked RGBA buffer of `stride` pixels per row (at
+            // least `w`, checked) holds at least `len` bytes, valid until it
+            // is unlocked (after `f`).
             let data = unsafe { std::slice::from_raw_parts(addr as *const u8, len) };
             let plane = PlaneView::new(data, row_stride, 4);
             return f(&SourceView::Rgb { plane, bgra: false }, w, h);
@@ -153,10 +153,19 @@ impl HwFrame {
             } else {
                 (cw, ch)
             };
-            if p.data.is_null() || p.pixelStride == 0 || cols == 0 || rows == 0 {
+            if p.data.is_null() {
                 return Err(VideoError::os(0, format!("plane {i} is empty")));
             }
-            let len = (rows - 1) * p.rowStride as usize + (cols - 1) * p.pixelStride as usize + 1;
+            let len = plane_span(cols, rows, p.rowStride as usize, p.pixelStride as usize)
+                .ok_or_else(|| {
+                    VideoError::os(
+                        0,
+                        format!(
+                            "plane {i}: {cols}x{rows} pixels, row stride {}, pixel stride {}",
+                            p.rowStride, p.pixelStride
+                        ),
+                    )
+                })?;
             *v = Plane {
                 // SAFETY: a locked plane of `rows` rows of `rowStride` bytes
                 // holds the `len` bytes its pixels span, valid while the
@@ -191,11 +200,10 @@ impl HwFrame {
                 return Err(lock_failed("AHardwareBuffer_lock", st));
             }
             let _unlock = Locked(self);
-            let row_stride = self.desc.stride as usize * 4;
-            let len = row_stride * (h as usize - 1) + w as usize * 4;
-            // SAFETY: a locked RGBA buffer of `stride` pixels per row holds
-            // at least `len` bytes, valid until it is unlocked (after this
-            // copy).
+            let (row_stride, len) = rgba_span(self.desc.stride, w, h)?;
+            // SAFETY: a locked RGBA buffer of `stride` pixels per row (at
+            // least `w`, checked) holds at least `len` bytes, valid until it
+            // is unlocked (after this copy).
             let data = unsafe { std::slice::from_raw_parts(addr as *const u8, len) };
             let opaque = self.desc.format == AHB_FORMAT_R8G8B8X8_UNORM;
             let tight = rgba_tight(data, w, h, row_stride, opaque)?;

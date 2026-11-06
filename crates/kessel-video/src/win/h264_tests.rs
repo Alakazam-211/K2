@@ -220,6 +220,34 @@ fn frames_round_trip_at_360p_and_720p() {
 }
 
 #[test]
+fn size_changes_mid_stream_decode_at_each_new_size() {
+    // One decoder, then IDRs with new SPSes: a strip 48 rows high (the
+    // least Microsoft's encoder makes), a picture 45 times taller, smaller,
+    // larger, the smallest. Each change must be read with its own layout,
+    // never the cached one: a small frame's buffer read with a tall
+    // frame's layout would run far past it.
+    let b = backend().expect("backend");
+    let mut dec = b
+        .decoder(DecoderConfig::new(VideoCodec::H264), no_wake())
+        .expect("decoder");
+    for (w, h) in [(1280, 48), (1280, 2160), (320, 180), (1920, 1080), (48, 48)] {
+        let bps = (w * h * 2).max(100_000);
+        let mut enc = b
+            .encoder(EncoderConfig::h264(w, h, 30, bps), no_wake())
+            .unwrap_or_else(|e| panic!("{w}x{h} encoder: {e}"));
+        for t in 0..3 {
+            let src = picture(w, h, t, false);
+            let e = encode_one(&mut enc, &src);
+            assert_eq!(e.keyframe, t == 0);
+            let out = decode_one(&mut dec, &e);
+            assert_eq!((out.width, out.height), (w, h), "frame {t}");
+            let q = psnr_y(&src, &out).expect("psnr");
+            assert!(q > 30.0, "{w}x{h} frame {t}: {q:.1} dB");
+        }
+    }
+}
+
+#[test]
 fn constrained_high_round_trips_with_no_b_frames() {
     let b = backend().expect("backend");
     let mut cfg = EncoderConfig::h264(640, 360, 30, 800_000);

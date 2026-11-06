@@ -193,6 +193,8 @@ pub(super) struct Mft {
     streaming: bool,
     /// An asynchronous MFT was drained and has taken no input since.
     drained: bool,
+    /// See [`Mft::fresh_from`].
+    fresh_from: usize,
 }
 
 // SAFETY: MFTs are free-threaded COM objects (Microsoft's are registered
@@ -220,6 +222,7 @@ impl Mft {
             out_size_hint: 1 << 20,
             streaming: false,
             drained: false,
+            fresh_from: 0,
         };
         // SAFETY: attribute reads and writes on the MFT's own store; the
         // event generator is the same object (asynchronous MFTs must have
@@ -300,6 +303,13 @@ impl Mft {
         Ok(())
     }
 
+    /// Of the last [`Mft::process`] call's outputs, the index of the first
+    /// one in the current output type: those before it came out before a
+    /// type change, in the old type (0 when nothing changed).
+    pub(super) fn fresh_from(&self) -> usize {
+        self.fresh_from
+    }
+
     /// One input sample in; the output samples it gave out. `on_change` is
     /// called when the output type changes (a decoder learning the stream's
     /// size); it must set a new output type.
@@ -309,6 +319,7 @@ impl Mft {
         no_output: NoOutput,
         on_change: &mut dyn FnMut(&IMFTransform) -> Result<(), VideoError>,
     ) -> Result<Vec<IMFSample>, VideoError> {
+        self.fresh_from = 0;
         if self.events.is_some() {
             self.process_async(input, no_output, on_change)
         } else {
@@ -361,7 +372,7 @@ impl Mft {
         for _ in 0..64 {
             match self.pull_one(on_change)? {
                 Pulled::Sample(s) => out.push(s),
-                Pulled::Changed => {}
+                Pulled::Changed => self.fresh_from = out.len(),
                 Pulled::NeedInput => return Ok(()),
             }
         }
@@ -539,8 +550,10 @@ impl Mft {
         if t == METransformNeedInput {
             self.credits += 1;
         } else if t == METransformHaveOutput {
-            if let Pulled::Sample(s) = self.pull_one(on_change)? {
-                out.push(s);
+            match self.pull_one(on_change)? {
+                Pulled::Sample(s) => out.push(s),
+                Pulled::Changed => self.fresh_from = out.len(),
+                Pulled::NeedInput => {}
             }
         }
         Ok(())

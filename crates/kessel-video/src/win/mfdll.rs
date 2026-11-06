@@ -73,7 +73,10 @@ pub(super) fn load(dll: &str) -> Option<windows::Win32::Foundation::HMODULE> {
 ///
 /// # Safety
 /// `F` must be the export's real signature (an `extern "system" fn`).
-unsafe fn sym<F: Copy>(m: windows::Win32::Foundation::HMODULE, name: &std::ffi::CStr) -> Option<F> {
+pub(super) unsafe fn sym<F: Copy>(
+    m: windows::Win32::Foundation::HMODULE,
+    name: &std::ffi::CStr,
+) -> Option<F> {
     // SAFETY: a loaded module and a NUL-terminated name.
     let p = unsafe { GetProcAddress(m, PCSTR(name.as_ptr() as *const u8)) }?;
     debug_assert_eq!(std::mem::size_of::<F>(), std::mem::size_of_val(&p));

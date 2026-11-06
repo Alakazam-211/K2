@@ -432,7 +432,7 @@ unsafe fn frame_complete(sb: ffi::CMSampleBufferRef) -> bool {
     let Some(key) = cf_const(c"SCStreamFrameInfoStatus") else {
         return true;
     };
-    let v = ffi::CFDictionaryGetValue(d, key);
+    let v = ffi::dict_value(d, key);
     ffi::number_i64(v).is_none_or(|s| s == 0)
 }
 

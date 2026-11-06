@@ -138,6 +138,51 @@ pub(crate) fn to_nv12(img: &ScreenImage<'_>, capture_us: u64) -> Result<VideoFra
 }
 
 /// An RGBA image's pixels as tight RGBA (alpha made opaque for RGBX).
+/// A locked RGBA buffer of `width` x `height` pixels with rows of
+/// `stride_px` pixels: its row stride in bytes, and the bytes its pixels
+/// span (every row but the last at full stride, then one row of pixels).
+/// Checked: an empty frame, a stride shorter than a row, or sizes that
+/// overflow are errors, before any slice is made over the buffer.
+pub(crate) fn rgba_span(
+    stride_px: u32,
+    width: u32,
+    height: u32,
+) -> Result<(usize, usize), VideoError> {
+    let bad = || {
+        VideoError::os(
+            0,
+            format!("an RGBA buffer of {width}x{height} with a stride of {stride_px} pixels"),
+        )
+    };
+    if width == 0 || height == 0 || stride_px < width {
+        return Err(bad());
+    }
+    let row_stride = (stride_px as usize).checked_mul(4).ok_or_else(bad)?;
+    let len = row_stride
+        .checked_mul(height as usize - 1)
+        .and_then(|n| n.checked_add(width as usize * 4))
+        .ok_or_else(bad)?;
+    Ok((row_stride, len))
+}
+
+/// The bytes a locked plane's pixels span: `rows` rows `row_stride` apart,
+/// each `cols` pixels `pixel_stride` apart. Checked as [`rgba_span`].
+pub(crate) fn plane_span(
+    cols: usize,
+    rows: usize,
+    row_stride: usize,
+    pixel_stride: usize,
+) -> Option<usize> {
+    if cols == 0 || rows == 0 || pixel_stride == 0 {
+        return None;
+    }
+    let row = (cols - 1).checked_mul(pixel_stride)?.checked_add(1)?;
+    if row_stride < row && rows > 1 {
+        return None;
+    }
+    (rows - 1).checked_mul(row_stride)?.checked_add(row)
+}
+
 pub(crate) fn rgba_tight(
     data: &[u8],
     width: u32,

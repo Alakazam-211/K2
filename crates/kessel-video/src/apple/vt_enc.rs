@@ -331,7 +331,7 @@ impl EncoderCore for VtEncoder {
         if st != 0 {
             return Err(VideoError::os(st as i64, "VTCompressionSessionEncodeFrame"));
         }
-        let mut got: Vec<_> = self.outbox.lock().unwrap_or_else(|e| e.into_inner()).out.drain(..).collect();
+        let mut got = std::mem::take(&mut self.outbox.lock().unwrap_or_else(|e| e.into_inner()).out);
         // CompleteFrames flushed: this is the frame just given (or nothing if
         // rate control dropped it). More would mean frame delay we turned
         // off; dropping one would break the reference chain, so fail loudly.

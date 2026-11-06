@@ -368,7 +368,7 @@ unsafe fn frame_complete(sb: ffi::CMSampleBufferRef) -> bool {
     let d = ffi::CFArrayGetValueAtIndex(atts, 0);
     let Some(key) = cf_const(c"SCStreamFrameInfoStatus") else { return true };
     let v = ffi::CFDictionaryGetValue(d, key);
-    ffi::number_i64(v).map_or(true, |s| s == 0)
+    ffi::number_i64(v).is_none_or(|s| s == 0)
 }
 
 unsafe extern "C-unwind" fn did_output(this: *mut AnyObject, _: Sel, _stream: *mut AnyObject, sb: SampleBufferArg, kind: isize) {

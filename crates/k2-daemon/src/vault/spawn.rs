@@ -904,7 +904,19 @@ pub fn follow_and_top_up(vault: &k2_vault::LocalVault) -> usize {
 /// files it no longer gets come out. After a destroy, a disable or a revoke
 /// this is what takes the file back at once; the vault's minute tick catches
 /// a grant or a secret whose time ran out.
+///
+/// Only the served vault ([`super::get`]) sweeps: every live session got
+/// its secrets from it ([`materialize`]), so another vault can't say what
+/// a session may keep. A vault that isn't served (one a restore just
+/// replaced, or a test's own) taking files back would take what the
+/// served vault still grants: route tests on their own vaults took live
+/// sessions' files from other tests (soak, shuffled vault runs). The
+/// minute ticker already stops for a vault that isn't served.
 pub fn sweep_live(vault: &k2_vault::LocalVault) -> LiveSweep {
+    if !super::get().is_ok_and(|served| std::ptr::eq(&*served, vault)) {
+        k2_core::log_debug!("[vault] live sweep skipped: this vault isn't the one served");
+        return LiveSweep::default();
+    }
     let _turn = TOPUP.lock();
     let dirs: Vec<(String, PathBuf)> = DIRS.lock().clone();
     let mut out = LiveSweep::default();

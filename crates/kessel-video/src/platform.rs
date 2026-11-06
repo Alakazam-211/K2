@@ -25,32 +25,45 @@ pub struct SystemConfig {
 }
 
 /// The OS backend for this target (feature `system`, or the per-OS
-/// feature). `Unsupported` on a target whose backend isn't built yet
-/// (macOS is; Windows and Linux are next).
+/// feature). `Unsupported` on a target whose backend isn't built.
 #[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
 pub fn system(config: SystemConfig) -> Result<Arc<dyn VideoBackend>, VideoError> {
     let _ = config;
-    #[cfg(all(feature = "apple", target_os = "macos"))]
-    {
-        crate::apple::backend()
-    }
-    #[cfg(not(all(feature = "apple", target_os = "macos")))]
-    {
-        Err(crate::error::unsupported(format!(
-            "no kessel-video backend for {} yet",
-            std::env::consts::OS
-        )))
-    }
+    os::backend()
 }
 
 /// The OS and version, for logs.
 pub(crate) fn os_name() -> String {
-    #[cfg(all(feature = "apple", target_os = "macos"))]
-    {
-        crate::apple::os_name()
+    os::name()
+}
+
+#[cfg(all(feature = "apple", target_os = "macos"))]
+mod os {
+    pub(super) use crate::apple::{backend, os_name as name};
+}
+
+#[cfg(all(feature = "windows", windows))]
+mod os {
+    pub(super) use crate::win::{backend, os_name as name};
+}
+
+#[cfg(all(feature = "linux", target_os = "linux"))]
+mod os {
+    pub(super) use crate::linux::{backend, os_name as name};
+}
+
+#[cfg(not(any(
+    all(feature = "apple", target_os = "macos"),
+    all(feature = "windows", windows),
+    all(feature = "linux", target_os = "linux")
+)))]
+mod os {
+    #[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
+    pub(super) fn backend() -> Result<std::sync::Arc<dyn crate::api::VideoBackend>, crate::error::VideoError> {
+        Err(crate::error::unsupported(format!("no kessel-video backend for {}", std::env::consts::OS)))
     }
-    #[cfg(not(all(feature = "apple", target_os = "macos")))]
-    {
+
+    pub(super) fn name() -> String {
         std::env::consts::OS.to_string()
     }
 }

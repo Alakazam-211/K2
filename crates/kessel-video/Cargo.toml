@@ -26,12 +26,12 @@ fake = []
 # macOS (and later iOS): AVFoundation, ScreenCaptureKit, VideoToolbox. System
 # frameworks through FFI; no codec library is linked or shipped.
 apple = ["dep:objc2", "dep:block2"]
-# Media Foundation capture and H.264 MFTs, Windows Graphics Capture (not
-# built yet).
-windows = []
-# V4L2 cameras, the xdg-desktop-portal ScreenCast and PipeWire (not built
-# yet). No H.264: Linux has no OS codec.
-linux = []
+# Media Foundation cameras and Windows Graphics Capture screens (H.264
+# MFTs later). OS components through the `windows` crate.
+windows = ["dep:windows"]
+# V4L2 cameras (raw ioctls) and the xdg-desktop-portal ScreenCast with
+# PipeWire. No H.264: Linux has no OS codec.
+linux = ["dep:libc"]
 # Camera2/CameraX, MediaCodec, MediaProjection (not built yet).
 android = []
 # Whichever of the above matches the target.
@@ -45,6 +45,33 @@ thiserror = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
 block2 = { version = "0.6", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_SystemInformation",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 serde_json = "1"

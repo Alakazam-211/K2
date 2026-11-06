@@ -559,3 +559,12 @@ export function MoreIcon(props: K2IconProps = {}): React.JSX.Element {
     </svg>
   )
 }
+
+/** Open a list (the call's "Choose screen"): Lucide `chevron-down`, squared. */
+export function ChevronDownIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('chevron-down', props)}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}

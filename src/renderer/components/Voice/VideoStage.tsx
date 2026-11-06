@@ -39,7 +39,9 @@ export interface VideoStageProps {
   ctl: VideoController
   people: readonly CallPerson[]
   title: string
-  /** Extra buttons in the footer (Mute, Leave). */
+  /** Buttons before the camera and screen ones (the call view's Mute). */
+  footerStart?: React.ReactNode
+  /** Extra buttons in the footer after them (the call view's Leave). */
   footer?: React.ReactNode
   /** The demo closes itself. */
   onClose?: () => void
@@ -48,7 +50,7 @@ export interface VideoStageProps {
   onHide?: () => void
 }
 
-export default function VideoStage({ ctl, people, title, footer, onClose, onHide }: VideoStageProps): React.JSX.Element | null {
+export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, onHide }: VideoStageProps): React.JSX.Element | null {
   const tracks = useStore(ctl.store, (s) => s.tracks)
   const local = useStore(ctl.store, (s) => s.local)
   const availability = useStore(ctl.store, (s) => s.availability)
@@ -104,7 +106,8 @@ export default function VideoStage({ ctl, people, title, footer, onClose, onHide
         ))}
       </div>
       <footer className="border-t border-[var(--color-border)] px-2 py-1">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          {footerStart}
           <VideoCallButtons ctl={ctl} />
           {footer}
         </div>

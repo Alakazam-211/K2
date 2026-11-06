@@ -8,6 +8,7 @@ import {
   LOCAL_CAMERA_TRACK,
   LOCAL_SCREEN_TRACK,
   LOCAL_VIDEO_OFF,
+  type CapturePermission,
   type LocalVideo,
   type ScreenSource,
   type SinkInfo,
@@ -42,6 +43,10 @@ export interface FakeVideoOptions {
   decodedTracks?: string[]
   /** The call's media policy in the snapshot (default: everything allowed). */
   policy?: VideoPolicy | null
+  /** The OS camera permission (default `granted`). */
+  cameraPermission?: CapturePermission
+  /** What the OS prompt answers (default `granted`). */
+  cameraPrompt?: CapturePermission
 }
 
 export const FAKE_POLICY: VideoPolicy = { videoEnabled: true, cameraAllowed: true, screenAllowed: true }
@@ -51,6 +56,9 @@ export const FAKE_CAPS: VideoCaps = {
   screen: { supported: true, systemPicker: false, list: true, windows: true },
   publishCodecs: ['vp8'],
   decodeCodecs: ['vp8', 'h264'],
+  receive: true,
+  selfView: true,
+  liveSwitch: true,
   backend: 'fake',
 }
 
@@ -86,10 +94,13 @@ export class FakeVideoEngine implements VideoEngine {
   private events: VideoEvents | null = null
   private nextSink = 1
   private readonly caps_: VideoCaps
+  /** The OS camera permission, as `camera_permission` reads it. */
+  permission: CapturePermission
 
   constructor(private readonly opts: FakeVideoOptions = {}) {
     this.caps_ = { ...FAKE_CAPS, ...opts.caps }
     this.joinPolicy = opts.policy === undefined ? FAKE_POLICY : opts.policy
+    this.permission = opts.cameraPermission ?? 'granted'
   }
 
   private log(name: string, args?: unknown): void {
@@ -121,6 +132,18 @@ export class FakeVideoEngine implements VideoEngine {
     this.log('set_video_device', { camera })
   }
 
+  async cameraPermission(): Promise<CapturePermission> {
+    this.log('camera_permission')
+    return this.permission
+  }
+
+  /** As the plugin: the OS asks only while it's `prompt`. */
+  async requestCameraPermission(): Promise<CapturePermission> {
+    this.log('request_camera_permission')
+    if (this.permission === 'prompt') this.permission = this.opts.cameraPrompt ?? 'granted'
+    return this.permission
+  }
+
   /** The next `command` rejects with `{code, detail}`. */
   refuseNext(command: 'camera' | 'screen' | 'screen_sources', code: string, detail: unknown = null): void {
     this.refusals.push({ command, code, detail })
@@ -136,7 +159,11 @@ export class FakeVideoEngine implements VideoEngine {
   async camera(on: boolean, device?: string): Promise<void> {
     this.log('camera', { on, ...(device ? { device } : {}) })
     this.refused('camera')
-    this.setLocal({ ...this.local, camera: on ? 'on' : 'off', reason: null })
+    // As the plugin: no prompt of its own, and the camera needs the permission.
+    if (on && this.permission === 'prompt') throw new NativeVoiceError('camera_permission_not_determined', null)
+    if (on && this.permission === 'denied') throw new NativeVoiceError('camera_permission_denied', null)
+    // The plugin says `unpublished` when the person turns it off.
+    this.setLocal({ ...this.local, camera: on ? 'on' : 'off', reason: on ? null : 'unpublished' })
   }
 
   async screenSources(): Promise<ScreenSource[]> {

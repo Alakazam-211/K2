@@ -5,6 +5,7 @@ import {
   LOCAL_SCREEN_TRACK,
   ROOM_CAMERA_LIMIT,
   ROOM_SCREEN_LIMIT,
+  type CapturePermission,
   type LocalVideo,
   type VideoPause,
   type VideoPolicy,
@@ -41,7 +42,10 @@ export function videoRefusalText(code: string, detail: unknown, what: VideoSourc
     case 'video_disabled':
       return { line: 'Video is turned off for this room.', kind: 'error' }
     case 'camera_denied':
+    case 'camera_permission_denied':
       return { line: "K2 isn't allowed to use your camera. Allow K2 in your system's privacy settings.", kind: 'error', settings: 'camera' }
+    case 'camera_permission_not_determined':
+      return { line: 'Allow K2 to use your camera when your system asks, then turn your camera on again.', kind: 'error' }
     case 'screen_denied':
       return { line: "K2 isn't allowed to record your screen. Allow K2 in your system's privacy settings, then restart K2.", kind: 'error', settings: 'screen' }
     case 'camera_busy':
@@ -62,8 +66,27 @@ export function videoRefusalText(code: string, detail: unknown, what: VideoSourc
       return { line: "This computer can't send video in a format this room uses.", kind: 'error' }
     case 'screen_unsupported':
       return { line: "Screen sharing doesn't work on this system yet.", kind: 'error' }
+    case 'screen_not_found':
+      return { line: "That screen or window isn't there any more. Pick another one.", kind: 'error' }
+    case 'capture_failed':
+      return { line: what === 'camera' ? "Your camera didn't start. Try again." : "Screen sharing didn't start. Try again.", kind: 'error' }
+    case 'video_unsupported':
+      return { line: "Video isn't in this version of K2 yet.", kind: 'error' }
     default:
       return { line: what === 'camera' ? "K2 couldn't turn on your camera." : "K2 couldn't share your screen.", kind: 'error' }
+  }
+}
+
+/** The OS camera permission when it isn't granted (`camera_permission`, or
+ *  after the OS prompt). */
+export function cameraPermissionText(p: Exclude<CapturePermission, 'granted'>): VideoNoticeText {
+  switch (p) {
+    case 'denied':
+      return videoRefusalText('camera_permission_denied', null, 'camera') as VideoNoticeText
+    case 'prompt':
+      return videoRefusalText('camera_permission_not_determined', null, 'camera') as VideoNoticeText
+    case 'unsupported':
+      return { line: "This computer has no camera K2 can use.", kind: 'error' }
   }
 }
 
@@ -83,9 +106,16 @@ export function localVideoReasonText(reason: string | null, what: VideoSource): 
   switch (reason) {
     case null:
     case 'user_stopped':
+    // The person turned it off here, or from the phone's call screen.
+    case 'unpublished':
+    case 'system_ui':
       return null
     case 'background':
       return { line: 'Your camera is paused while K2 is in the background.', kind: 'info' }
+    case 'hidden':
+      return { line: 'Screen sharing is paused while the window you shared is minimised or hidden.', kind: 'info' }
+    case 'paused':
+      return { line: what === 'camera' ? 'Your system paused your camera.' : 'Your system paused screen sharing.', kind: 'info' }
     case 'thermal':
       return { line: 'Your camera is paused to let this computer cool down.', kind: 'info' }
     case 'source_closed':
@@ -112,8 +142,10 @@ export function videoEngineErrorText(code: string): VideoNoticeText | null {
 }
 
 /** What a tile says over a paused track. */
-export function pausedText(p: VideoPause | 'background' | 'thermal'): string {
+export function pausedText(p: VideoPause | 'background' | 'thermal' | 'hidden'): string {
   switch (p) {
+    case 'hidden':
+      return 'Sharing paused (window hidden)'
     case 'background':
       return 'Camera paused (in the background)'
     case 'thermal':
@@ -148,7 +180,7 @@ export interface VideoTile {
   audioMuted: boolean
   state: TileState
   /** Set while `state` is `paused`. */
-  paused: VideoPause | 'background' | 'thermal' | null
+  paused: VideoPause | 'background' | 'thermal' | 'hidden' | null
   /** Self-view is mirrored, in CSS only. */
   mirrored: boolean
   /** Screens draw large. */
@@ -208,7 +240,7 @@ export function videoTiles(tracks: readonly VideoTrack[], local: LocalVideo, peo
       speaking: false,
       audioMuted: false,
       state: local.screen === 'paused' ? 'paused' : 'live',
-      paused: local.screen === 'paused' ? 'background' : null,
+      paused: local.screen === 'paused' ? (local.reason === 'hidden' ? 'hidden' : 'background') : null,
       mirrored: false,
       large: false,
     })

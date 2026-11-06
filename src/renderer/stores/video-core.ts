@@ -23,11 +23,12 @@ import {
   type VideoEngine,
   type VideoPolicy,
   type VideoTrack,
-  NO_VIDEO_BACKEND,
+  videoUsable,
 } from '@/lib/voice/video-engine'
 import { canvasSurface, probeDecode, SinkDecoder, type FrameSurface, type WebCodecsEnv } from '@/lib/voice/video-decoder'
 import { NativeVoiceError } from '@/lib/voice/native-voice-engine'
 import {
+  cameraPermissionText,
   localVideoReasonText,
   policyBlockText,
   videoEngineErrorText,
@@ -51,8 +52,9 @@ export interface VideoNotice extends VideoNoticeText {
 }
 
 export interface VideoState {
-  /** `unavailable`: this build's plugin has no video (backend `null`, or an
-   *  older plugin with no `video_caps`), or the engine failed. */
+  /** `unavailable`: this build's plugin has no video (backend `null`, an
+   *  older plugin with no `video_caps`, or `video_caps` says it can neither
+   *  receive nor send), or the engine failed. */
   availability: VideoAvailability
   caps: VideoCaps | null
   tracks: VideoTrack[]
@@ -454,8 +456,9 @@ export function createVideoController(deps: VideoDeps): VideoController {
         return null
       }
       if (myGen !== gen) return null
-      if (caps.backend === NO_VIDEO_BACKEND) {
-        // Built without video: it answers with everything off.
+      if (!videoUsable(caps)) {
+        // Built without video (everything off), or video that can neither
+        // receive nor send yet: the room stays voice only.
         store.setState({ availability: 'unavailable', caps })
         return null
       }
@@ -511,6 +514,20 @@ export function createVideoController(deps: VideoDeps): VideoController {
     notice(videoRefusalText(e.code, e.detail, what))
   }
 
+  /** The camera permission before `camera {on}`. The plugin never asks by
+   *  itself: this runs from the person's own button press, so it may show the
+   *  OS prompt. False: no camera now (the notice says why). */
+  const cameraAllowed = async (e: VideoEngine): Promise<boolean> => {
+    let p = await e.cameraPermission()
+    if (p === 'prompt') p = await e.requestCameraPermission()
+    // The Camera row and the notice line read the permission from `devices`.
+    const devices = store.getState().devices
+    if (devices && devices.permission.camera !== p) store.setState({ devices: { ...devices, permission: { ...devices.permission, camera: p } } })
+    if (p === 'granted') return true
+    notice(cameraPermissionText(p))
+    return false
+  }
+
   const setCamera = async (on: boolean): Promise<void> => {
     const e = engine
     if (!e || store.getState().pending.camera) return
@@ -521,6 +538,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
     }
     store.setState((s) => ({ pending: { ...s.pending, camera: true }, notice: null }))
     try {
+      if (on && !(await cameraAllowed(e))) return
       await e.camera(on, on && prefs.cameraId ? prefs.cameraId : undefined)
     } catch (err) {
       refusal(err, 'camera')
@@ -573,6 +591,12 @@ export function createVideoController(deps: VideoDeps): VideoController {
       await e.setDevice(id ?? 'default')
     } catch (err) {
       refusal(err, 'camera')
+      return
+    }
+    // An older plugin keeps sending the camera it opened until it's turned on again.
+    const s = store.getState()
+    if (s.local.camera === 'on' && s.caps && !s.caps.liveSwitch) {
+      notice({ line: 'Turn your camera off and on again to switch to that camera.', kind: 'info' })
     }
   }
 

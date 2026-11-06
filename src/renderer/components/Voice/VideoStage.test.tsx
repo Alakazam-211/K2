@@ -143,7 +143,9 @@ describe('the controls', () => {
     await waitFor(() => expect(screen.getByTestId('video-camera').textContent).toBe('Camera off'))
     fireEvent.click(screen.getByTestId('video-camera'))
     await waitFor(() => expect(screen.getByTestId('video-camera').textContent).toBe('Camera on'))
-    expect(s.engine.calls.filter((c) => c.startsWith('camera'))).toEqual(['camera {"on":true}', 'camera {"on":false}'])
+    // The permission is read first; it's granted, so nothing is asked.
+    expect(s.engine.calls.filter((c) => c.startsWith('camera'))).toEqual(['camera_permission', 'camera {"on":true}', 'camera {"on":false}'])
+    expect(screen.queryByTestId('video-notice')).toBeNull()
   })
 
   it('Share screen opens the OS picker (no source), and stops', async () => {
@@ -183,6 +185,9 @@ describe('the controls', () => {
       screen: { supported: true, systemPicker: true, list: false, windows: true },
       publishCodecs: ['vp8'],
       decodeCodecs: ['vp8'],
+      receive: true,
+      selfView: true,
+      liveSwitch: true,
       backend: 'fake',
     })
     render(<Controls s={s} />)

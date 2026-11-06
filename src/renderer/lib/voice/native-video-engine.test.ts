@@ -1,4 +1,5 @@
-// The adapter over the plugin's DRAFT video API, held to native-video-contract.json.
+// The adapter over the plugin's video API (Sew 0.8.2), held to native-video-contract.json
+// (which src-tauri's native_voice tests hold to the plugin's real types).
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -16,7 +17,8 @@ import {
   parseVideoTracks,
   type NativeVideoBridge,
 } from './native-video-engine'
-import type { LocalVideo, VideoTrack } from './video-engine'
+import { videoUsable, type LocalVideo, type VideoTrack } from './video-engine'
+import { localVideoReasonText, videoEngineErrorText, videoRefusalText } from './video-labels'
 
 const contract = JSON.parse(readFileSync(resolve(__dirname, 'native-video-contract.json'), 'utf8'))
 const P = PLUGIN_COMMAND_PREFIX
@@ -45,14 +47,17 @@ function bridge(answers: Record<string, unknown> = {}, rejects: Record<string, u
   return { b, calls, listeners, channels }
 }
 
-describe('parsing the draft shapes', () => {
+describe('parsing the plugin shapes', () => {
   it('reads video_caps and video_devices', () => {
     expect(parseVideoCaps(contract.videoCaps)).toEqual({
       camera: true,
-      screen: { supported: true, systemPicker: false, list: true, windows: true },
+      screen: { supported: true, systemPicker: true, list: true, windows: true },
       publishCodecs: ['vp8'],
       decodeCodecs: ['vp8', 'h264'],
-      backend: 'avfoundation',
+      receive: true,
+      selfView: true,
+      liveSwitch: true,
+      backend: 'apple',
     })
     expect(parseVideoDevices(contract.videoDevices)).toEqual({
       cameras: [
@@ -75,8 +80,29 @@ describe('parsing the draft shapes', () => {
       screen: { supported: false, systemPicker: false, list: false, windows: false },
       publishCodecs: [],
       decodeCodecs: [],
+      receive: false,
+      selfView: false,
+      liveSwitch: false,
       backend: 'null',
     })
+  })
+
+  it('reads an older video_caps without receive, self_view and live_switch as false', () => {
+    expect(parseVideoCaps(contract.videoCapsOld)).toMatchObject({ receive: false, selfView: false, liveSwitch: false, backend: 'apple' })
+    expect(() => parseVideoCaps({ ...contract.videoCaps, receive: 'yes' })).toThrow(/video_caps.receive/)
+  })
+
+  it('uses video when the engine receives or can send, and not otherwise', () => {
+    const caps = parseVideoCaps(contract.videoCaps)
+    expect(videoUsable(caps)).toBe(true)
+    expect(videoUsable(parseVideoCaps(contract.videoCapsWithoutVideo))).toBe(false)
+    // Receive only (no camera, no screen).
+    expect(videoUsable({ ...caps, camera: false, screen: { ...caps.screen, supported: false }, publishCodecs: [] })).toBe(true)
+    // Send only, from an older payload.
+    expect(videoUsable(parseVideoCaps(contract.videoCapsOld))).toBe(true)
+    // A backend whose receive and send aren't wired yet: every other command would answer video_unsupported.
+    expect(videoUsable({ ...caps, receive: false, publishCodecs: [] })).toBe(false)
+    expect(videoUsable({ ...caps, receive: false, camera: false, screen: { ...caps.screen, supported: false } })).toBe(false)
   })
 
   it('reads the video list, paused and muted tracks included', () => {
@@ -92,6 +118,36 @@ describe('parsing the draft shapes', () => {
     const on: LocalVideo = parseLocalVideo(contract.localVideo.on)
     expect(on).toEqual({ camera: 'on', screen: 'off', reason: null })
     expect(parseLocalVideo(contract.localVideo.paused)).toEqual({ camera: 'paused', screen: 'off', reason: 'background' })
+    expect(parseLocalVideo(contract.localVideo.hidden)).toEqual({ camera: 'off', screen: 'paused', reason: 'hidden' })
+  })
+
+  it('has words for every refusal code and stop reason the plugin names', () => {
+    const generic = new Set(["K2 couldn't turn on your camera.", "K2 couldn't share your screen."])
+    // Codes that never reach camera or screen: sinks, and the engine errors.
+    const notRefusals = new Set(['unknown_track', 'unknown_sink', 'decoded_unsupported', 'decoded_tiles_full', 'video_stalled', 'encoder_lost', 'camera_lost'])
+    for (const code of contract.codes as string[]) {
+      if (code === 'picker_cancelled') {
+        expect(videoRefusalText(code, null, 'screen')).toBeNull()
+        continue
+      }
+      if (notRefusals.has(code)) continue
+      for (const what of ['camera', 'screen'] as const) {
+        const t = videoRefusalText(code, null, what)
+        expect(t, code).not.toBeNull()
+        expect(generic.has(t?.line ?? ''), `${code} falls back to the generic line`).toBe(false)
+      }
+    }
+    for (const code of ['video_stalled', 'encoder_lost', 'camera_lost']) expect(videoEngineErrorText(code), code).not.toBeNull()
+    for (const reason of [...(contract.reasons as string[]), ...(contract.engineReasons as string[])]) {
+      for (const what of ['camera', 'screen'] as const) {
+        const t = localVideoReasonText(reason, what)
+        if (t !== null) expect(generic.has(t.line), `${reason} falls back to the generic line`).toBe(false)
+      }
+    }
+    // The person's own off says nothing; a hidden window says why.
+    expect(localVideoReasonText('unpublished', 'camera')).toBeNull()
+    expect(localVideoReasonText('user_stopped', 'screen')).toBeNull()
+    expect(localVideoReasonText('hidden', 'screen')?.line).toMatch(/minimised or hidden/)
   })
 
   it('turns the standard base64 thumbnail into a data URL, and takes only display or window', () => {
@@ -103,7 +159,10 @@ describe('parsing the draft shapes', () => {
 
   it('reads the sink answer: a u32 id, and no codec in decoded mode', () => {
     expect(parseSinkInfo(contract.videoSinkResultDecoded)).toEqual({ sinkId: 4, codec: null, mode: 'decoded' })
-    expect(() => parseSinkInfo({ sink_id: 1, codec: null, mode: 'encoded' })).toThrow(/video_sink answer/)
+    expect(parseSinkInfo(contract.videoSinkResult)).toEqual({ sinkId: 3, codec: 'vp8', mode: 'encoded' })
+    // A self-view sink opened before the camera runs: encoded, codec not known yet.
+    expect(parseSinkInfo(contract.videoSinkResultSelfViewEarly)).toEqual({ sinkId: 5, codec: null, mode: 'encoded' })
+    expect(() => parseSinkInfo({ sink_id: 1, codec: 7, mode: 'encoded' })).toThrow(/video_sink answer/)
     expect(() => parseSinkInfo({ sink_id: 1, codec: 'vp8', mode: 'decoded' })).toThrow(/video_sink answer/)
     expect(() => parseSinkInfo({ sink_id: 2 ** 32, codec: 'vp8', mode: 'encoded' })).toThrow(/video_sink answer/)
     expect(() => parseSinkInfo({ sink_id: '3', codec: 'vp8', mode: 'encoded' })).toThrow(/video_sink answer/)
@@ -133,7 +192,7 @@ describe('parsing the draft shapes', () => {
 })
 
 describe('commands', () => {
-  it('sends the draft command names with snake_case arguments', async () => {
+  it('sends the plugin command names with snake_case arguments', async () => {
     const { b, calls, channels } = bridge({
       video_sink: contract.videoSinkResult,
       video_sink_update: null,
@@ -143,6 +202,8 @@ describe('commands', () => {
       screen: null,
       set_video_device: null,
       preview: contract.previewResult,
+      camera_permission: 'prompt',
+      request_camera_permission: 'granted',
     })
     const e = new NativeVideoEngine(b)
     const frames: ArrayBuffer[] = []
@@ -163,6 +224,8 @@ describe('commands', () => {
     await e.screen(true, 'display:1')
     await e.setDevice('default')
     expect(await e.preview(true)).toBe('local:camera')
+    expect(await e.cameraPermission()).toBe('prompt')
+    expect(await e.requestCameraPermission()).toBe('granted')
     expect(calls.slice(2)).toEqual([
       [`${P}request_keyframe`, { sink_id: 3 }],
       [`${P}video_sink_close`, { sink_id: 3 }],
@@ -170,7 +233,12 @@ describe('commands', () => {
       [`${P}screen`, { on: true, source: 'display:1' }],
       [`${P}set_video_device`, { camera: 'default' }],
       [`${P}preview`, { on: true }],
+      [`${P}camera_permission`, undefined],
+      [`${P}request_camera_permission`, undefined],
     ])
+    // Every command the adapter sends is one of the plugin's video commands.
+    const sent = new Set(calls.map(([c]) => c.slice(P.length)))
+    for (const c of sent) expect(contract.commands, c).toContain(c)
   })
 
   it("rejects with the plugin's code and detail", async () => {

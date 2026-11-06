@@ -23,12 +23,28 @@ export interface VideoCaps {
   }
   publishCodecs: VideoCodec[]
   decodeCodecs: string[]
+  /** The engine receives other people's cameras and screens (Sew 0.8.2). */
+  receive: boolean
+  /** `local:camera` and `local:screen` show this device's own camera and
+   *  screen during a call, not only the preview. */
+  selfView: boolean
+  /** Picking another camera switches the one being sent now. */
+  liveSwitch: boolean
   /** `null`: a plugin built without video (everything above is off). */
   backend: string
 }
 
 /** The backend a plugin built without video reports. */
 export const NO_VIDEO_BACKEND = 'null'
+
+/** This build can show or send video: the engine receives, or it can send a
+ *  camera or a screen in a codec it encodes. Otherwise the room stays voice
+ *  only (a plugin built without video, or one whose video isn't wired yet). */
+export function videoUsable(caps: VideoCaps): boolean {
+  if (caps.backend === NO_VIDEO_BACKEND) return false
+  const send = (caps.camera || caps.screen.supported) && caps.publishCodecs.length > 0
+  return caps.receive || send
+}
 
 export interface CameraDevice {
   id: string
@@ -112,7 +128,8 @@ export interface SinkRequest {
 export interface SinkInfo {
   /** u32, the frame header's `sink_id`. */
   sinkId: number
-  /** Null in decoded mode. */
+  /** Null in decoded mode, and for a self-view sink opened before the camera
+   *  runs (every frame header names the codec too). */
   codec: string | null
   /** `encoded` frames go to WebCodecs; `decoded` frames are I420 or RGBA. */
   mode: 'encoded' | 'decoded'
@@ -170,6 +187,11 @@ export interface VideoEngine {
   devices(): Promise<VideoDevicesInfo>
   /** `default` follows the OS default. */
   setDevice(camera: string): Promise<void>
+  /** The OS camera permission, without asking. */
+  cameraPermission(): Promise<CapturePermission>
+  /** Asks the OS for the camera (its prompt). Only on the person's own button
+   *  press: the plugin never asks by itself. */
+  requestCameraPermission(): Promise<CapturePermission>
   /** Resolves once publishing (or off). Rejects with a `NativeVoiceError`. */
   camera(on: boolean, device?: string): Promise<void>
   screenSources(): Promise<ScreenSource[]>

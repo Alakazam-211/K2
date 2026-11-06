@@ -6,6 +6,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Resumable uploads and downloads against a K2 transfer door (/_k2/transfers/): ranges in any order, retry with backoff, sha256 checks. For a Tauri app's Rust side."
 authors = ["Alakazam Labs"]
+readme = "README.md"
 keywords = ["upload", "resumable", "download", "tauri", "k2"]
 categories = ["network-programming"]
 # Not published until the API settles and the release is approved.

@@ -101,9 +101,10 @@ impl OpusEnc {
 
 /// Whether an Opus packet carries in-band FEC (SILK LBRR data) for the
 /// frame before it. Mono, single-frame (code 0) packets only, which is what
-/// this crate's encoder sends; anything else reports false. Mirrors
-/// libopus' `opus_packet_has_lbrr` for that case: the LBRR flag follows the
-/// VAD flags at the top of the first payload byte.
+/// this crate's encoder sends; anything else reports false. Written from
+/// the bitstream layout in RFC 6716 (Section 4.2.3, header bits): the LBRR
+/// flag follows the VAD flags at the top of the first payload byte. Gives
+/// the same answer as libopus' `opus_packet_has_lbrr` for these packets.
 pub(crate) fn has_lbrr(packet: &[u8]) -> bool {
     if packet.len() < 2 {
         return false;

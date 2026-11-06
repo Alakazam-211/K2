@@ -24,6 +24,15 @@
 - The `os-voice` feature, on by default; it does nothing on other targets.
 - docs.rs builds for iOS and Android too, so the phone API is documented.
 
+### Packaging
+
+- Ready for crates.io: `repository` is set, `publish = false` is gone, and
+  `include` ships only `src/`, the README and the licences.
+- The README has a platforms table (tested or only type-checked), a
+  security contact and the licence notes for sonora and ropus.
+- `scripts/check-targets.sh` type-checks the iOS and Android targets (or any
+  other) on a toolchain that can't add targets.
+
 ### Unchanged
 
 - Desktop backends and their defaults behave as before.

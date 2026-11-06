@@ -9,15 +9,14 @@ description = "A real-time voice audio pipeline in pure Rust: devices, echo canc
 authors = ["Alakazam Labs"]
 readme = "README.md"
 documentation = "https://docs.rs/kessel-audio"
-# repository = TODO: set when the public repository's home is decided.
+repository = "https://github.com/Alakazam-211/K2"
 keywords = ["audio", "voice", "opus", "echo-cancellation", "jitter-buffer"]
 categories = ["multimedia::audio"]
-# Not published until the API settles and the release is approved.
-publish = false
-# Both stay in the repository. tests/data is CC BY 4.0 speech for the metric
-# tests (see the `speech-tests` feature); tests/scrub.rs is the repository's own
-# publish check.
-exclude = ["tests/data/", "tests/scrub.rs"]
+# Only the code, the README and the licences ship. Everything else stays in the
+# repository: tests/ (tests/data is CC BY 4.0 speech for the metric tests, see
+# the `speech-tests` feature; tests/scrub.rs is the repository's own publish
+# check), scripts/, deny.toml and the changelog.
+include = ["src/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
 [features]
 default = ["cpal", "os-voice"]

@@ -67,8 +67,19 @@ fn may_name_product(file_name: &str, line: &str) -> bool {
     file_name == "README.md" && line.trim_start().starts_with(&format!("Used in {}", product()))
 }
 
+/// The manifest's `repository` line, exactly. crates.io and docs.rs link the
+/// source from it, and the source lives in the product's own repository, so
+/// this one line names the organisation and the product. Nothing else may:
+/// not another line of Cargo.toml, not a variant of this one, not another file.
+fn repository_line() -> String {
+    format!("repository = \"https://github.com/{}-211/{}\"", "Alakazam", product())
+}
+
 /// What's wrong with one line of one file.
 fn line_hits(file_name: &str, line: &str, banned: &[String]) -> Vec<String> {
+    if file_name == "Cargo.toml" && line == repository_line() {
+        return Vec::new();
+    }
     let k = product();
     let mut hits: Vec<String> = banned
         .iter()
@@ -142,4 +153,22 @@ fn only_the_used_in_line_of_the_readme_may_name_the_product() {
     // The allowance covers the word, not the other names.
     let host = format!("{used_in} See {}.dev.", k.to_lowercase());
     assert_eq!(line_hits("README.md", &host, &banned).len(), 1);
+}
+
+#[test]
+fn only_the_exact_repository_line_of_the_manifest_may_name_the_organisation() {
+    let banned = banned();
+    let line = repository_line();
+    assert_eq!(line_hits("Cargo.toml", &line, &banned), Vec::<String>::new());
+
+    // The same line anywhere else, or changed at all, is still caught: once
+    // for the organisation and once for the product.
+    assert_eq!(line_hits("README.md", &line, &banned).len(), 2);
+    assert_eq!(line_hits("lib.rs", &line, &banned).len(), 2);
+    assert_eq!(line_hits("Cargo.toml", &format!("  {line}"), &banned).len(), 2);
+    assert_eq!(line_hits("Cargo.toml", &format!("{line} # note"), &banned).len(), 2);
+    let homepage = line.replacen("repository", "homepage", 1);
+    assert_eq!(line_hits("Cargo.toml", &homepage, &banned).len(), 2);
+    let org_only = format!("homepage = \"https://github.com/{}-211\"", "Alakazam");
+    assert_eq!(line_hits("Cargo.toml", &org_only, &banned).len(), 1);
 }

@@ -3,9 +3,23 @@
 A real-time voice pipeline in pure Rust (microphone to Opus frames and back)
 for apps that bring their own network transport.
 
-It stands alone: it needs no other Kessel crate, and it is separate from the
-Kessel terminal and CRDT/sync crates. See [`kessel`](https://crates.io/crates/kessel)
-for the family. Licensed MIT OR Apache-2.0.
+It is one of the Kessel crates, and it stands alone: it needs no other Kessel
+crate. Licensed MIT OR Apache-2.0.
+
+## Platforms
+
+| Platform | Backend | Status |
+|---|---|---|
+| Linux (x86-64) | cpal: ALSA, or PulseAudio with the `pulseaudio` feature | Tested: the test suite passes. |
+| macOS (Apple Silicon) | cpal: CoreAudio | Tested: the test suite passes. |
+| Windows (x86-64) | cpal: WASAPI | Type-checked only. |
+| iOS (arm64) | The OS's voice processing (VoiceProcessingIO) | Type-checked only. The state machine behind it is tested on a fake OS. |
+| Android (arm64, API 28+) | The OS's voice processing (AAudio) | Type-checked only. The state machine behind it is tested on a fake OS. |
+| Any | The null device (no hardware) | Tested on Linux and macOS. |
+
+"Type-checked" means `cargo check` and `cargo clippy` pass for that target;
+the tests have not run on it. The test suite needs no audio hardware: the
+null device and fake devices stand in for it.
 
 ## What it does
 
@@ -257,15 +271,18 @@ speech by about 1 dB.
 
 | Command | Runs |
 |---|---|
-| `cargo test` | Everything that needs no test data. Works from the published package. |
+| `cargo test` | Everything that needs no test data. From the published package, that is the unit tests and the README's examples; `tests/` (the interface and licence checks) is in the repository only. |
 | `cargo test --features speech-tests` | Also the metric tests above. Needs `tests/data`, which is in the repository but not in the published package, so it won't compile from the package. |
 | `cargo test --release --features speech-tests` | Also the CPU bars. |
 | `cargo test --features cpu-bars` | The CPU bars in a debug build. Turn this on only if your root manifest sets `opt-level = 3` for `sonora*`, `ropus` and `rubato` in `[profile.dev.package]`. Otherwise the DSP runs unoptimised and misses the bars by a long way. |
 
-None of them need audio hardware.
+None of them need audio hardware. `scripts/check-targets.sh` (in the
+repository) type-checks the iOS and Android targets, or any target you name,
+from a machine that can't run them.
 
 ## Building
 
+- Needs Rust 1.91 or later (sonora's minimum).
 - Linux needs the ALSA development headers (`alsa-lib` / `libasound2-dev`)
   for the default `cpal` feature. Build with `--no-default-features` for the
   null device only.
@@ -282,6 +299,31 @@ None of them need audio hardware.
 - `deny.toml` lists the licence allowlist; `tests/licences.rs` checks the
   same rules without needing cargo-deny.
 
+## Security
+
+kessel-audio decodes Opus packets that arrive from the network, so treat a
+crash, hang or memory blow-up on a crafted packet as a security bug. Please
+report it privately, not in a public issue: open the Security tab of this
+crate's repository (the `repository` link on its crates.io page) and choose
+"Report a vulnerability" (GitHub's private vulnerability reporting). The
+repository's SECURITY.md has the policy.
+
 ## Licence
 
-MIT OR Apache-2.0, at your option.
+kessel-audio's own code is MIT OR Apache-2.0, at your option. It contains no
+third-party code, so it has no NOTICE file.
+
+Its signal processing comes from two dependencies under BSD-3-Clause:
+
+- **sonora** (a Rust port of WebRTC's audio processing), copyright the
+  WebRTC Project Authors and others;
+- **ropus** (a Rust port of the Xiph.Org Opus codec), copyright Xiph.Org,
+  Skype Limited and others.
+
+**If you distribute binaries** that include kessel-audio, BSD-3-Clause
+requires you to reproduce those crates' copyright notices and licence
+text. They are in each crate's `LICENSE` file (sonora's sub-crates, such as
+sonora-aec3, carry the same licence as sonora). Tools such as
+`cargo about` collect them. The rest of the dependency tree is MIT,
+Apache-2.0, BSD, ISC, Zlib or Unicode-3.0, checked by `deny.toml` and
+`tests/licences.rs` in the repository.

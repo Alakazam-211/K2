@@ -105,10 +105,11 @@ archive_check() {
     options=$(otool -l "$1" | awk '/cmd LC_LINKER_OPTION/ { n = 1; next } n && /string #/ { print $3 } /cmd LC_/ && !/LC_LINKER_OPTION/ { n = 0 }' |
         grep -v '^-framework$' | sort -u)
     echo "linker options in the archive: $(echo $options)"
-    # Apple's nm can't read the bitcode in compiler_builtins' members and
-    # says so; anything else it says fails the check.
-    nm -u -j "$1" >"$work/undefined" 2>"$work/nm.err" || true
-    if grep -v -e 'Unknown attribute kind' -e 'no symbols$' -e '^$' "$work/nm.err" | grep -q .; then
+    # --no-llvm-bc: the members also carry Rust's LLVM bitcode, which an
+    # older LLVM in Apple's nm can't read; the machine code is what links.
+    # nm says "no symbols" for empty members; anything else fails the check.
+    nm --no-llvm-bc -u -j "$1" >"$work/undefined" 2>"$work/nm.err" || true
+    if grep -v -e 'no symbols$' -e '^$' "$work/nm.err" | grep -q .; then
         cat "$work/nm.err" >&2
         exit 1
     fi

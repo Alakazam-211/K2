@@ -204,3 +204,8 @@ impl Encoder {
         &self.core.cfg
     }
 }
+
+// The README's examples are compiled as doc tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -33,7 +33,9 @@ mod frame;
 pub mod ivf;
 
 // Shared with the vp8-encoder crate. Not a stable API: it may change in any
-// release, and vp8-encoder pins this crate's exact version.
+// release, and vp8-encoder pins this crate's exact version. Lockstep rule:
+// any vp8-decoder release that touches these modules ships with a matching
+// vp8-encoder release that bumps its `=` pin.
 #[doc(hidden)]
 pub mod bool_encoder;
 #[doc(hidden)]
@@ -49,3 +51,8 @@ pub mod tables;
 
 pub use decoder::{frame_info, DecodeError, Decoder, Dimensions, FrameInfo, DEFAULT_MAX_PIXELS};
 pub use frame::Picture;
+
+// The README's examples are compiled as doc tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -21,13 +21,23 @@ Input is one raw VP8 frame at a time, starting at the frame tag: no IVF,
 WebM or RTP framing. That is what an RTP depacketiser (RFC 7741) produces.
 
 ```rust
-let mut decoder = vp8_decoder::Decoder::new();
-let frame: &[u8] = next_frame(); // one raw VP8 frame
-match decoder.decode(frame) {
-    Ok(Some(picture)) => { /* picture.y, .u, .v with their strides */ }
-    Ok(None) => { /* a hidden frame: references updated, nothing to show */ }
-    Err(vp8_decoder::DecodeError::NeedKeyframe) => { /* drop until a keyframe */ }
-    Err(_) => { /* corrupt: ask the sender for a keyframe */ }
+use vp8_decoder::{DecodeError, Decoder};
+
+// Your app: draw a frame, or ask the sender for a keyframe (PLI).
+fn show(_i420: Vec<u8>, _width: u32, _height: u32) {}
+fn request_keyframe() {}
+
+fn receive(frames: &[Vec<u8>]) {
+    let mut decoder = Decoder::new();
+    for frame in frames {
+        // One raw VP8 frame, as an RTP depacketiser hands it over.
+        match decoder.decode(frame) {
+            Ok(Some(picture)) => show(picture.to_i420(), picture.width, picture.height),
+            Ok(None) => {} // a hidden frame: references updated, nothing to show
+            Err(DecodeError::NeedKeyframe) => {} // dropped until a keyframe
+            Err(_) => request_keyframe(), // corrupt
+        }
+    }
 }
 ```
 

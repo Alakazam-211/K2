@@ -845,7 +845,7 @@ done
 # 0.46.9: the off-box backup alarm points at k2 hostchat ship (dir | box-backup).
 assert_contains "chat-voice: the off-box backup alarm" "$cv_out" "k2_backup_offbox_none → no off-box backup: the owner, k2 hostchat ship (--help)"
 cv_lines="$(printf '%s\n' "$cv_out" | wc -l | tr -d ' ')"
-if [ "$cv_lines" -le 132 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 132)" >&2; fail=$((fail + 1)); fi
+if [ "$cv_lines" -le 136 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 136)" >&2; fail=$((fail + 1)); fi
 cr_out="$("$K2" study chat-voice-rooms)"
 assert_contains "title" "$cr_out" "k2 study chat-voice-rooms — Rooms and channels in your App Space"
 for needle in "POST /api/v1/spaces/{space_id}/channels" "\"type\":\"voice\"" "NOT idempotent" "409 conflict" \

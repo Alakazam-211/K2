@@ -492,3 +492,54 @@ async fn a_secret_job_without_an_answer_never_runs() {
     let s = last(&fr, "w2");
     assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some(k2_node_proto::secret::codes::NOT_GRANTED)), "{s:?}");
 }
+
+/// T9 (U2–U4, the live drill's core, as root with real systemd): a walled
+/// job keeps running in its unit when the k2-node process detaches for an
+/// update (here: the process's runtime ends, as the process would), and
+/// the next process adopts it from its run facts. Its output is complete
+/// (spool files, no gap, no repeat), its exit code is its own, and its unit
+/// is released after. Each node process has its own runtime; the root
+/// executor (thread) stays, as `KillMode=process` keeps its helpers.
+#[test]
+#[ignore = "root + systemd: run on a Linux box with --ignored"]
+fn a_walled_job_keeps_running_through_a_node_restart_and_is_adopted() {
+    let rt = || tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let r = rig("adopt");
+    let main = rt();
+    let mut fake = main.block_on(Fake::start());
+    let rt_a = rt();
+    let a = rt_a.block_on(walled_node(&fake, &r, ""));
+    let mut c1 = main.block_on(fake.next_conn());
+    main.block_on(ready(&mut c1));
+    let script = "i=0; while [ $i -lt 20 ]; do i=$((i+1)); echo out-$i; echo err-$i >&2; sleep 0.25; done; exit 7";
+    c1.send(Frame::Assign(assign(plan("wa1", &["/bin/sh", "-c", script]), 1)));
+    let mut seen = String::new();
+    main.block_on(c1.until(|f| {
+        if let Frame::Log(l) = f {
+            if l.stream == LogStream::Out {
+                seen.push_str(&String::from_utf8_lossy(&k2_node_proto::crypto::unb64(&l.data).unwrap()));
+            }
+        }
+        seen.contains("out-3\n")
+    }));
+    let node = a.node.clone();
+    assert_eq!(rt_a.block_on(async move { node.detach_for_update().await }), (1, 0));
+    drop(a);
+    rt_a.shutdown_timeout(std::time::Duration::from_secs(5));
+    assert!(unit_loaded("k2job-wa1-g1.service"), "the unit outlived its k2-node process");
+    let rt_b = rt();
+    let b = rt_b.block_on(walled_node(&fake, &r, ""));
+    let mut c2 = main.block_on(fake.next_conn());
+    let fr = main.block_on(run_to_receipt(&mut c2, "wa1"));
+    let logs = logs_of(&fr, "wa1");
+    let want = |s: &str| (1..=20).map(|i| format!("{s}-{i}\n")).collect::<String>();
+    assert_eq!(text(&logs, LogStream::Out), want("out"));
+    assert_eq!(text(&logs, LogStream::Err), want("err"));
+    assert!(text(&logs, LogStream::Sys).contains("adopted by k2-node"));
+    let end = last(&fr, "wa1");
+    assert_eq!((end.state, end.exit.as_ref().and_then(|e| e.code)), (JobState::Done, Some(7)), "{end:?}");
+    assert!(!unit_loaded("k2job-wa1-g1.service"), "released after the job");
+    drop(b);
+    rt_b.shutdown_timeout(std::time::Duration::from_secs(5));
+}
+

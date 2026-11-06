@@ -230,6 +230,16 @@ impl Node {
         Ok((Held { dir, ws_dir, name: name.to_string(), uid }, notes))
     }
 
+    /// An adopted job still holds its cache (update continuity): hold it
+    /// again in this process.
+    pub(crate) fn job_cache_readopt(&self, slot: Slot, job: &str, gen: u32, h: &super::adopt::HeldFacts) {
+        self.job_caches_busy.lock().unwrap().take(&h.dir);
+        self.job_cache_holds
+            .lock()
+            .unwrap()
+            .insert((slot, job.to_string(), gen), Held { dir: h.dir.clone(), ws_dir: h.ws_dir.clone(), name: h.name.clone(), uid: h.uid });
+    }
+
     /// A job that held a cache ended: measure it, note its use, give it
     /// back, then keep all caches under [`cap`].
     pub(crate) async fn job_cache_close(self: &Arc<Self>, h: Held) {

@@ -25,6 +25,8 @@ pub struct RecPlatform {
     /// Runs on every `restart_unit` (the owner-change tests: the node's
     /// half swaps its files as a real restart would).
     pub on_restart: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// What `jobs_outlive_node` says (false: today's drain/restart paths).
+    pub adopt: std::sync::atomic::AtomicBool,
 }
 
 /// The node pid [`RecPlatform`] reports: this test process, so the mark
@@ -59,6 +61,9 @@ impl Platform for RecPlatform {
     }
     fn node_pid(&self) -> Option<u32> {
         Some(node_pid())
+    }
+    fn jobs_outlive_node(&self, _paths: &ExecPaths) -> bool {
+        self.adopt.load(Ordering::SeqCst)
     }
     /// Fake builds aren't executable: answer what the staged build's marker says.
     /// No real units: the machine running the tests may be a node itself.
@@ -133,6 +138,7 @@ impl Rig {
             fail_preflight: Mutex::new(false),
             walls: Mutex::new(vec![]),
             on_restart: Mutex::new(None),
+            adopt: std::sync::atomic::AtomicBool::new(false),
         });
         let mut exec = Executor::new(paths, plat.clone());
         exec.drain_settle = std::time::Duration::from_millis(60);
@@ -538,6 +544,48 @@ fn good_update_swaps_restarts_and_passes_the_health_gate() {
     assert_eq!(res.state, "done", "{res:?}");
     assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old);
     assert_eq!(code_of(&r.run(&r.sign(&r.cmd("node.rollback", json!({}))))), code::NO_PREVIOUS);
+}
+
+/// U4 (§5.5, T4): where jobs outlive the node (macOS holders, the Linux
+/// wall's units), an update never drains or stops them: it restarts at
+/// once with a `keep` mark naming the node process. A gate rollback keeps
+/// them too, but only into a `.prev` that adopts (`ADOPTS_FROM`); an older
+/// one stops what it finds, so its restart keeps nothing.
+#[test]
+fn updates_keep_running_jobs_where_they_outlive_the_node() {
+    let mark_step = |r: &Rig, nth: usize| -> String {
+        let rec = super::update::load(&r.exec);
+        rec.steps.iter().filter(|s| s.step == "mark").nth(nth).and_then(|s| s.detail.clone()).expect("a mark step")
+    };
+    for (prev, keeps_on_rollback) in [(super::update::ROLLBACK_FLOOR, false), (super::update::ADOPTS_FROM, true)] {
+        let (r, _) = update_rig();
+        std::fs::write(&r.exec.paths.binary, fake_build(prev)).unwrap();
+        r.plat.adopt.store(true, Ordering::SeqCst);
+        crate::status::write(&r.exec.paths.layout().status(), &crate::status::Status { running: vec!["j1-g1".into()], ..Default::default() }).unwrap();
+        let new = fake_build("99.0.0");
+        let res = r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &build_sig(&new, "99.0.0"), &new);
+        assert_eq!(res.state, "done", "{res:?}");
+        assert_eq!(res.result["phase"], "swapped", "no drain: the running job keeps running");
+        assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string()]);
+        let mark = super::update::read_update_mark(&r.exec.paths.config_dir).expect("marked");
+        let pid = node_pid();
+        assert!(mark.keep && mark.keeps_jobs_of(pid, crate::util::process_start_time(pid), r.exec.now()), "{mark:?}");
+        let rec = super::update::load(&r.exec);
+        let decide = rec.steps.iter().find(|s| s.step == "decide").and_then(|s| s.detail.clone());
+        assert_eq!(decide.as_deref(), Some("adopt running=1"));
+        assert!(mark_step(&r, 0).ends_with("keep=true"), "{}", mark_step(&r, 0));
+        // The new build never says it's healthy: the gate rolls back.
+        r.plat.now.store(NOW + super::update::HEALTH_GATE_SECS + 1, Ordering::SeqCst);
+        wait_phase(&r, "rolled_back");
+        wait_calls(&r, 2);
+        for _ in 0..250 {
+            if super::update::load(&r.exec).steps.iter().filter(|s| s.step == "mark").count() == 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(mark_step(&r, 1).ends_with(&format!("keep={keeps_on_rollback}")), "rollback to {prev}: {}", mark_step(&r, 1));
+    }
 }
 
 #[test]

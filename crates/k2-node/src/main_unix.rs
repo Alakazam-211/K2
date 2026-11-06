@@ -122,6 +122,7 @@ const SWITCHES: &[&str] = &[
     "--exclusive",
     "--wipe",
     "--allow-fake-clock",
+    "--test-job-holder",
     "--toolchains",
     "--no-wait",
     "--resume",
@@ -260,6 +261,15 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     }
     let mut opts = NodeOptions::new(a.layout());
     opts.dev = a.has("--dev");
+    // Tests only: hold each job in a `job-hold` process on Linux too, so a
+    // dev node exercises adoption without root (a debug build, --dev, no
+    // installed config; production Linux nodes use the job wall's units).
+    if a.has("--test-job-holder") {
+        if !k2_node::node::dev_test_exemption(opts.dev, &a.layout().config) {
+            return Err("--test-job-holder is for test nodes only (a debug build with --dev)".into());
+        }
+        opts.job_holder = std::env::current_exe().ok();
+    }
     if let Some(off) = fake_clock_offset(std::env::var(FAKE_CLOCK_ENV).ok().as_deref(), opts.dev, a.has("--allow-fake-clock"))? {
         eprintln!("WARNING: {FAKE_CLOCK_ENV}={off}: this test node's clock is off by {off} s (tests only)");
         opts.clock = std::sync::Arc::new(OffsetClock { inner: k2_node::ledger::SystemClock::new(), offset: off });
@@ -288,26 +298,36 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
         _ = tokio::signal::ctrl_c() => {}
         _ = runner => {}
     }
-    k2_node::nlog!("shutting down: stopping running jobs");
     // A restart the executor made (update, rollback, unit.restart: it marks
-    // every one, naming this process's pid, C3): the jobs it stops end
-    // `node_update`, infra without a strike (V55). An owner's stop, or any
-    // stop of a later process, is a shutdown (Q2). U3: the detach decision
-    // (`UpdateMark::keeps_jobs_of`) goes here, per job.
+    // every one, naming this process's pid and start time, C3): the jobs it
+    // stops end `node_update`, infra without a strike (V55). With `keep`
+    // (the executor decided the next k2-node adopts, §5.5) this process
+    // detaches instead: every job that can be found again (a wall unit or a
+    // holder) keeps running and is left to the next process; the rest stop
+    // with `node_update` (§5.4). An owner's stop, or any stop of a later
+    // process, is a shutdown that stops every job (Q2).
     let me = std::process::id();
-    let mark = k2_node::admin::update::update_mark_for(&node.layout().config, me, k2_node::util::process_start_time(me), k2_node::util::now());
+    let my_start = k2_node::util::process_start_time(me);
+    let now = k2_node::util::now();
+    let mark = k2_node::admin::update::update_mark_for(&node.layout().config, me, my_start, now);
     if let Some(m) = &mark {
         k2_node::nlog!("stopped by k2-node-admin ({}, cmd {})", m.what, m.cmd_id.as_deref().unwrap_or("-"));
     }
-    let why = if mark.is_some() {
-        k2_node_proto::share::codes::NODE_UPDATE
-    } else {
-        "node_shutdown"
-    };
     // Nothing new starts from here: the capacity the stops free must not
     // start queued work during the shutdown.
     node.begin_shutdown();
-    node.stop_all(k2_node_proto::frames::JobState::Interrupted, why);
+    if mark.as_ref().is_some_and(|m| m.keeps_jobs_of(me, my_start, now)) {
+        let (kept, stopped) = node.detach_for_update().await;
+        k2_node::nlog!("detached {kept} job(s) for the next k2-node to adopt; stopped {stopped} that can't be adopted");
+    } else {
+        k2_node::nlog!("shutting down: stopping running jobs");
+        let why = if mark.is_some() {
+            k2_node_proto::share::codes::NODE_UPDATE
+        } else {
+            "node_shutdown"
+        };
+        node.stop_all(k2_node_proto::frames::JobState::Interrupted, why);
+    }
     // Give jobs their SIGTERM grace (10 s) to finish and record a receipt.
     for _ in 0..60 {
         if node.running_ids().is_empty() {
@@ -418,6 +438,18 @@ fn cmd_status(a: &Args) -> Result<(), String> {
     }
     println!("running: {}", if s.running.is_empty() { "-".to_string() } else { s.running.join(", ") });
     println!("caps: {}", if s.caps_hard { "hard (cgroups)" } else { "soft" });
+    if !s.adopted.is_empty() {
+        let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for a in &s.adopted {
+            *by.entry(a.from.as_str()).or_default() += 1;
+        }
+        for (v, n) in by {
+            println!("{n} job(s) started by k2-node {v} kept running through the update and were adopted");
+        }
+    }
+    if let Some(e) = &s.spool_punch_error {
+        println!("warning: this disk can't punch holes in job output files ({e}); a job's output file grows until the job ends");
+    }
     if let Some(k) = s.clock_skew_secs.filter(|k| k.abs() > k2_node::status::SKEW_WARN_SECS) {
         println!("clock skew: this machine's clock is {k:+} s off the owner server's");
     }
@@ -1170,9 +1202,28 @@ fn cmd_homes(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
-#[tokio::main]
-pub async fn main() -> ExitCode {
+/// `k2-node`: `job-hold` runs before any thread exists (it forks; the
+/// holder must never be a fork of a threaded runtime, §5.2); everything
+/// else in the tokio runtime.
+pub fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("job-hold") {
+        let Some(dir) = raw.get(1) else {
+            eprintln!("k2-node job-hold <dir>");
+            return ExitCode::from(2);
+        };
+        return ExitCode::from(k2_node::hold::main(std::path::Path::new(dir)) as u8);
+    }
+    match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt.block_on(main_async(raw)),
+        Err(e) => {
+            eprintln!("k2-node: runtime: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn main_async(raw: Vec<String>) -> ExitCode {
     // The Linux job unit's shim (runs as the job user): exec or fail.
     if raw.first().map(String::as_str) == Some("job-exec") {
         let Some(spec) = raw.get(1) else {

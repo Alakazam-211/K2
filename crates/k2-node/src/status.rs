@@ -52,6 +52,22 @@ pub struct Status {
     /// one): it has no job wall and may still be shared for tests.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dev: bool,
+    /// Running jobs an earlier k2-node process started and this one
+    /// adopted after an update (prd-compute-update-continuity-v1 §5.13).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adopted: Vec<AdoptedJob>,
+    /// Hole punching failed on a job's output file (R4): it grows until
+    /// the job ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spool_punch_error: Option<String>,
+}
+
+/// One running job that kept running through a k2-node update.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdoptedJob {
+    pub job: String,
+    /// The k2-node version that started it.
+    pub from: String,
 }
 
 /// A skew worth telling people about (§14).

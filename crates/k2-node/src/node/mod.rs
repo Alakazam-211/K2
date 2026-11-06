@@ -44,6 +44,7 @@ use crate::status::Status;
 use crate::sync::Git;
 use crate::wall::Wall;
 
+pub mod adopt;
 mod assign;
 mod disk;
 pub mod job_cache;
@@ -96,6 +97,23 @@ pub struct NodeOptions {
     pub exec_stdin: Option<bool>,
     /// How long a job waits for its secret env (SE18; tests shorten it).
     pub secret_wait: Duration,
+    /// The `k2-node` binary that runs `job-hold` (§5.2): set, jobs not
+    /// behind the Linux wall's units are held by a holder process and kept
+    /// through updates. macOS nodes (the installed binary); test nodes.
+    pub job_holder: Option<PathBuf>,
+    /// How long a tenant slot that should open again may take before the
+    /// jobs it left running are stopped (C2; tests shorten it).
+    pub tenant_adopt_wait: Duration,
+}
+
+/// The installed `k2-node` this process runs from, when it is one (a test
+/// binary isn't): macOS nodes hold their jobs with it.
+fn default_job_holder() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let exe = std::env::current_exe().ok()?;
+    (exe.file_name().is_some_and(|n| n == "k2-node")).then_some(exe)
 }
 
 impl NodeOptions {
@@ -125,6 +143,8 @@ impl NodeOptions {
             disk_free: None,
             exec_stdin: None,
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
+            job_holder: default_job_holder(),
+            tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
         }
     }
 }
@@ -226,6 +246,12 @@ struct RunningJob {
     /// Its loopback port block (`K2_JOB_PORT_BASE`), unique among running
     /// jobs; none for a stand-in.
     port_block: Option<u16>,
+    /// Its run facts say `unit` or `holder`: an update's detach leaves it
+    /// running for the next k2-node process (§5.4).
+    adoptable: bool,
+    /// The Rust channels it resolved (a moving one is never updated under
+    /// it, `Toolchains::busy_channels`).
+    rust: Vec<String>,
 }
 
 /// The lowest port block no running job holds (`None`: all taken).
@@ -362,7 +388,8 @@ impl Node {
             Wall::JobUser { user } => format!(" (jobs run as {user})"),
             Wall::Seatbelt => String::new(),
         });
-        let lingering = tenant::reconcile(&owner, &opts, &wall).await?;
+        // Phase 1 (C1): this boot's adoptable rows stay open; the rest end.
+        let (lingering, adoptable) = tenant::reconcile(&owner, &opts, &wall, true).await?;
         let exec_stdin = match (opts.exec_stdin, &wall) {
             (Some(v), _) => v,
             (None, Wall::JobUser { .. }) => probe_exec_stdin(&opts.admin_socket).await,
@@ -409,6 +436,14 @@ impl Node {
         });
         node.hold_lingering(OWNER_SLOT, lingering);
         node.refresh_local(true);
+        // Phase 2 (C1): before the queue, the disk guard and the session
+        // start (the caller spawns them after `open`), and before the
+        // healthy mark, so the update's health gate covers the owner's
+        // adoption.
+        let owner = node.owner();
+        node.adopt_rows(&owner, adoptable).await;
+        // C2: tenant slots that won't open again stop their jobs now.
+        node.settle_tenant_slots().await;
         node.probe_tools().await;
         {
             let mut s = node.status.lock().unwrap();
@@ -516,6 +551,8 @@ impl Node {
                         workspace: LINGER_WORKSPACE.to_string(),
                         secret: true,
                         port_block: None,
+                        adoptable: false,
+                        rust: Vec::new(),
                     },
                 );
                 self.fairq.set_lingering(slot, &it.key, true);

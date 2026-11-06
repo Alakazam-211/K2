@@ -223,7 +223,7 @@ pub fn spawn(argv: &[String], env: &[(String, String)], cwd: &Path, leaf: Option
 }
 
 /// Raise the open-files soft limit (builds open many files).
-fn raise_nofile() {
+pub(crate) fn raise_nofile() {
     unsafe {
         let mut rl: libc::rlimit = std::mem::zeroed();
         if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {

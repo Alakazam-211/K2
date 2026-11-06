@@ -84,6 +84,14 @@ pub trait Platform: Send + Sync {
         let list = super::jobs::systemctl(&["list-units", "--plain", "--no-legend", "--state=active,activating,deactivating", &pattern]).ok()?;
         Some(list.lines().filter(|l| l.trim_start().starts_with(super::jobs::UNIT_PREFIX)).count())
     }
+    /// Can a restarted k2-node adopt the jobs running now (§5.5)? Its jobs
+    /// must be held outside the node process: macOS holds every job in a
+    /// `job-hold` process; Linux only behind the job wall (`jobs.toml`:
+    /// each job is its own unit). Linux without the wall keeps today's
+    /// drain (N2).
+    fn jobs_outlive_node(&self, paths: &ExecPaths) -> bool {
+        cfg!(target_os = "macos") || (cfg!(target_os = "linux") && matches!(super::jobs::read_jobs_file(&paths.config_dir), Ok(Some(_))))
+    }
     /// `wall.enable`'s root half: the job user, the home ACL, jobs.toml.
     fn enable_job_wall(&self, paths: &ExecPaths, node_user: &str, job_user: &str) -> Result<super::jobs::WallSetup, AdminRefusal> {
         super::jobs::system_enable_job_wall(paths, node_user, job_user)

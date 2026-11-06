@@ -657,6 +657,7 @@ async fn w7_a_colliding_job_id_never_touches_the_other_servers_job() {
         tenant,
         no_lan: false,
         stdin: false,
+        max_secs: None,
     };
     for (s, why) in [
         (base("w7-g1", &t1_root, 1), "a tenant naming the owner's key"),

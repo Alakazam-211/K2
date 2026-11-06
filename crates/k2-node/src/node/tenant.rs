@@ -487,7 +487,11 @@ pub fn job_key(slot: Slot, job_id: &str, generation: u32) -> String {
 /// folder is deleted here, all but its 0600 log, once nothing runs that
 /// could still write it). Until each is gone the node holds the slot as if
 /// a secret job of an unknown workspace still ran there (SE26).
-pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Result<Vec<super::Linger>, String> {
+///
+/// With `adopt` (update continuity, C1 phase 1), this boot's open rows whose
+/// run facts this build can use stay open and are returned for phase 2
+/// ([`Node::adopt_rows`]); their units are neither released nor held.
+pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall, adopt: bool) -> Result<(Vec<super::Linger>, Vec<(crate::ledger::Row, super::adopt::RunFacts)>), String> {
     // A restart the executor made for an update, rollback or k2-node
     // restart: `node_update` (infra, no node-health strike, V55).
     let why = if crate::admin::update::recent_update_mark(&opts.layout.config, opts.clock.now()) {
@@ -495,13 +499,30 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
     } else {
         "node_restart"
     };
-    let (changed, interrupted) = {
+    let (changed, sorted, interrupted) = {
         let ledger = t.ledger.lock().unwrap();
         let changed = ledger.reconcile_boot(opts.clock.as_ref())?;
-        // Same boot, new process: the old process's jobs can't be re-adopted.
-        let interrupted = ledger.interrupt_open(why, opts.clock.as_ref())?;
-        (changed, interrupted)
+        // Same boot, new process: rows with usable run facts are adopted;
+        // every other open row ends (its pipes died with the old process).
+        let mut sorted = super::adopt::sort(ledger.open_runs(&opts.clock.boot_id())?, wall);
+        if !adopt {
+            sorted.stop.extend(sorted.adoptable.drain(..).map(|(r, f)| (r, Some(f))));
+        }
+        let keep: Vec<(String, u32)> = sorted.adoptable.iter().map(|(r, _)| (r.job_id.clone(), r.generation)).collect();
+        let interrupted = ledger.interrupt_open_except(why, &keep, opts.clock.as_ref())?;
+        (changed, sorted, interrupted)
     };
+    // A provisional row (a crash between the spawn and the facts), facts
+    // this build can't use, or a slot that won't be adopted: whatever its
+    // facts name is stopped (C18). Its unit goes below like every
+    // interrupted row's.
+    for (r, f) in &sorted.stop {
+        if let Some(f) = f {
+            crate::nlog!("job {} gen {}: stopping what the last k2-node left running ({:?})", r.job_id, r.generation, f.kind);
+            super::adopt::stop_named(f);
+        }
+    }
+    let adopted_units: Vec<String> = sorted.adoptable.iter().filter_map(|(_, f)| f.unit.clone()).collect();
     for (j, g) in &changed {
         crate::nlog!("job {j} gen {g}: interrupted by a node reboot");
     }
@@ -547,6 +568,9 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
     // Any other live job unit of this slot (released again: it belongs to
     // no running attempt of this process).
     for u in &live {
+        if adopted_units.contains(u) {
+            continue;
+        }
         if !lingering.iter().any(|l| l.unit.as_deref() == Some(u.as_str())) {
             crate::nlog!("{u}: a job unit from before this k2-node still runs; releasing it and holding slot {}", t.slot);
             let (sock, op) = (opts.admin_socket.clone(), crate::admin::jobs::JobOp::Release { unit: u.clone() });
@@ -584,7 +608,7 @@ pub(super) async fn reconcile(t: &Tenant, opts: &NodeOptions, wall: &Wall) -> Re
             }
         }
     }
-    Ok(lingering)
+    Ok((lingering, sorted.adoptable))
 }
 
 /// A job folder with anything besides its journal.
@@ -615,7 +639,10 @@ impl Node {
             return Ok(t);
         }
         let t = Arc::new(Tenant::open(self.layout(), slot)?);
-        let lingering = reconcile(&t, &self.opts, &self.wall).await?;
+        let (lingering, adoptable) = reconcile(&t, &self.opts, &self.wall, true).await?;
+        // C2: adopted before the tenant joins the map, so the disk guard's
+        // orphan sweep (open tenants only) never sees its rows unowned.
+        self.adopt_rows(&t, adoptable).await;
         let t = {
             let mut m = self.tenants.write().unwrap();
             m.entry(slot).or_insert(t).clone()

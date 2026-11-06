@@ -51,10 +51,32 @@ pub const UPDATE_MARK_FILE: &str = "node-update.json";
 /// A mark older than this is stale (a restart that never came).
 pub const UPDATE_MARK_SECS: i64 = 600;
 
-/// The first k2-node whose executor writes mark v2 and step logs. U4's
-/// `decide` keeps jobs only when the running and the incoming build are at
-/// least this (prd-compute-update-continuity-v1 §5.5, `ADOPT_MIN`).
+/// The first k2-node whose executor writes mark v2 and step logs (the
+/// updater fix, U1). The rollback floor.
 pub const ADOPT_MIN: &str = "0.46.4";
+
+/// The first k2-node that detaches from and adopts running jobs (U2–U4).
+/// A rollback to an older `.prev` keeps nothing: that build stops what it
+/// finds.
+pub const ADOPTS_FROM: &str = "0.46.9";
+
+thread_local! {
+    /// Set while a [`Decision::Adopt`] action runs on this thread: the
+    /// restart it makes writes a `keep` mark.
+    static KEEP_JOBS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn keep_requested() -> bool {
+    KEEP_JOBS.with(|k| k.get())
+}
+
+/// Does `build` (a version string) detach and adopt?
+fn adopts(build: Option<&str>) -> bool {
+    match (build.and_then(Semver::parse), Semver::parse(ADOPTS_FROM)) {
+        (Some(v), Some(min)) => v >= min,
+        _ => false,
+    }
+}
 
 /// The macOS Developer ID team that signs K2 (release.sh).
 pub const APPLE_TEAM_ID: &str = "36B8R93HXV";
@@ -422,16 +444,18 @@ fn swap_and_restart(e: &Executor, mut s: Staged) -> Result<Value, AdminRefusal> 
     rec_step(e, &mut rec, "swap", true, format!(".prev = {from}"));
     // A crash from here on resumes the gate.
     save(e, &rec)?;
-    restart_into_gate(e, &mut rec)?;
+    restart_into_gate(e, &mut rec, keep_requested())?;
     Ok(json!({"phase": "swapped", "from": from, "to": rec.to, "key": s.key, "health_gate_secs": HEALTH_GATE_SECS}))
 }
 
 /// After the swap (recorded `swapped`): restart the node with the mark and
 /// start the health gate; a failed restart rolls back.
-fn restart_into_gate(e: &Executor, rec: &mut UpdateRecord) -> Result<(), AdminRefusal> {
+fn restart_into_gate(e: &Executor, rec: &mut UpdateRecord, keep: bool) -> Result<(), AdminRefusal> {
     let _ = std::fs::remove_file(healthy_path(&e.paths.home));
     let cmd = rec.cmd_id.clone().unwrap_or_else(|| "-".into());
-    let named = mark_restart(e, "node.update", &cmd);
+    // The new build adopts (it is newer than this executor's own, which
+    // does): the node it restarts may leave its jobs running (§5.5).
+    let named = mark_restart(e, "node.update", &cmd, keep);
     rec_step(e, rec, "mark", true, mark_detail(named));
     if let Err(x) = e.platform.restart_node() {
         rec_step(e, rec, "restart", false, x.clone());
@@ -496,11 +520,13 @@ fn running_in_status(p: &Path) -> Result<usize, String> {
     serde_json::from_str::<RunningOnly>(&s).map(|r| r.running.len()).map_err(|x| format!("{}: {x}", p.display()))
 }
 
-/// How a node restart goes (§5.5). U4 adds `Adopt` (keep running jobs and
-/// restart at once) beside these; until then running jobs either wait
-/// (`Drain`) or are stopped by the restart.
+/// How a node restart goes (§5.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
+    /// Running jobs keep running: restart at once with a `keep` mark; the
+    /// stopped node leaves them and the next one adopts them (U4). Solo
+    /// and shared nodes alike: nobody waits, nothing is stopped.
+    Adopt,
     /// A solo node, or nothing running: restart now (today's path).
     Restart,
     /// `now: true` on a node that would drain.
@@ -512,6 +538,7 @@ pub enum Decision {
 impl Decision {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Decision::Adopt => "adopt",
             Decision::Restart => "restart",
             Decision::Now => "now",
             Decision::Drain => "drain",
@@ -522,6 +549,13 @@ impl Decision {
 /// The decision and the running count it saw. `always_drain`: wait for
 /// running jobs on a solo node too (`wall.enable`).
 pub fn decide(e: &Executor, now: bool, always_drain: bool) -> (Decision, usize) {
+    // §5.5: this build detaches and the next adopts, so jobs held outside
+    // the node keep running. `now` changes nothing then (it never forces a
+    // kill). `wall.enable` and an owner change still drain (their restart
+    // changes who runs the jobs).
+    if !always_drain && e.platform.jobs_outlive_node(&e.paths) {
+        return (Decision::Adopt, running_jobs(e));
+    }
     if !always_drain && !shared_node(e) {
         return (Decision::Restart, 0);
     }
@@ -818,22 +852,19 @@ fn write_update_mark(e: &Executor, m: &UpdateMark) {
 }
 
 /// Write the mark for a restart about to happen; returns the process it names.
-fn mark_restart(e: &Executor, what: &str, cmd_id: &str) -> (Option<u32>, Option<u64>) {
+fn mark_restart(e: &Executor, what: &str, cmd_id: &str, keep: bool) -> (Option<u32>, Option<u64>, bool) {
     let node_pid = e.platform.node_pid();
     let node_start = node_pid.and_then(crate::util::process_start_time);
     if node_pid.is_none() {
         crate::nlog!("admin: the node's main pid is unknown; the restart mark names no process");
     }
-    write_update_mark(
-        e,
-        &UpdateMark { v: MARK_V, what: what.to_string(), at: e.now(), keep: false, cmd_id: Some(cmd_id.to_string()), node_pid, node_start, ended: false },
-    );
-    (node_pid, node_start)
+    write_update_mark(e, &UpdateMark { v: MARK_V, what: what.to_string(), at: e.now(), keep, cmd_id: Some(cmd_id.to_string()), node_pid, node_start, ended: false });
+    (node_pid, node_start, keep)
 }
 
-fn mark_detail((pid, start): (Option<u32>, Option<u64>)) -> String {
+fn mark_detail((pid, start, keep): (Option<u32>, Option<u64>, bool)) -> String {
     let s = |v: Option<String>| v.unwrap_or_else(|| "unknown".into());
-    format!("node_pid={} node_start={} keep=false", s(pid.map(|p| p.to_string())), s(start.map(|p| p.to_string())))
+    format!("node_pid={} node_start={} keep={keep}", s(pid.map(|p| p.to_string())), s(start.map(|p| p.to_string())))
 }
 
 /// A restart is over (a healthy gate, a rollback's restart, a failed
@@ -861,7 +892,7 @@ fn retire_update_mark(e: &Executor) {
 /// restart, solo nodes too, C3), then `restart`. A failed restart retires
 /// the mark at once: the process it names is still running (B-M4).
 pub fn restart_marked(e: &Executor, what: &str, cmd_id: &str, restart: impl FnOnce(&Executor) -> Result<(), String>) -> Result<Option<u32>, String> {
-    let named = mark_restart(e, what, cmd_id);
+    let named = mark_restart(e, what, cmd_id, keep_requested());
     crate::nlog!("admin: restart k2-node what={what} cmd={cmd_id} {}", mark_detail(named));
     if let Err(x) = restart(e) {
         retire_update_mark(e);
@@ -1028,6 +1059,14 @@ where
     // Any update or rollback that acts (now, or a new drain) supersedes a
     // drain still waiting to act; a refused one changes nothing.
     let supersede = || e.drain_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    if d == Decision::Adopt {
+        supersede();
+        crate::nlog!("admin: {what} cmd={cmd_id}: running jobs ({running}) keep running; the next k2-node adopts them");
+        KEEP_JOBS.with(|k| k.set(true));
+        let r = act(e);
+        KEEP_JOBS.with(|k| k.set(false));
+        return r;
+    }
     if d != Decision::Drain {
         supersede();
         return act(e);
@@ -1199,7 +1238,8 @@ pub fn resume_pending(e: &Executor) {
                 rec.deadline = now + HEALTH_GATE_SECS;
                 rec_step(e, &mut rec, "swap", true, "found in place after an executor restart");
                 if save(e, &rec).is_ok() {
-                    if let Err(x) = restart_into_gate(e, &mut rec) {
+                    let keep = e.platform.jobs_outlive_node(&e.paths);
+                    if let Err(x) = restart_into_gate(e, &mut rec, keep) {
                         crate::nlog!("admin: resuming the update to {}: {}", rec.to, x.message);
                     }
                 }
@@ -1289,7 +1329,12 @@ fn rollback_inner(e: &Executor, why: &str, gate_steps: bool) -> Result<Value, Ad
         return Err(fail(format!("rollback swap: {x}")));
     }
     fsync_dir(&bin);
-    let named = mark_restart(e, "node.rollback", rec.cmd_id.as_deref().unwrap_or("-"));
+    // The build going back in adopts only if it is new enough; a gate's
+    // rollback runs on the gate's thread (no decision there): it keeps
+    // jobs whenever they outlive the node here.
+    let keep_asked = if gate_steps { e.platform.jobs_outlive_node(&e.paths) } else { keep_requested() };
+    let keep = keep_asked && adopts(Some(back_to.as_str()));
+    let named = mark_restart(e, "node.rollback", rec.cmd_id.as_deref().unwrap_or("-"), keep);
     rec_step(e, &mut rec, "mark", true, mark_detail(named));
     let restarted = e.platform.restart_node();
     rec_step(e, &mut rec, "restart", restarted.is_ok(), restarted.as_ref().err().cloned().unwrap_or_default());
@@ -1394,6 +1439,29 @@ mod drain_tests {
         assert_eq!(control(&n), Control::Active);
     }
 
+    /// U4 (§5.5): where jobs outlive the node, a K2 restart of k2-node on
+    /// a shared node with running jobs doesn't drain: it restarts at once
+    /// with a `keep` mark naming the node process. `wall.enable` and an
+    /// owner change still drain (their restart changes who runs jobs).
+    #[test]
+    fn where_jobs_outlive_the_node_a_restart_never_drains_and_keeps_them() {
+        let r = Rig::new("full");
+        r.plat.adopt.store(true, Ordering::SeqCst);
+        share_node(&r, 2);
+        running(&r, &["j1", "t1-0123456789abcdef"]);
+        let res = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.state, "done", "{res:?}");
+        assert_eq!(calls(&r), vec!["restart-unit k2-node".to_string()], "at once");
+        assert_eq!(control(&r), Control::Active, "never drained");
+        let pid = crate::admin::tests::node_pid();
+        let m = read_update_mark(&r.exec.paths.config_dir).expect("marked");
+        assert!(m.keeps_jobs_of(pid, crate::util::process_start_time(pid), r.exec.now()), "{m:?}");
+        assert_eq!(decide(&r.exec, false, true).0, Decision::Drain, "wall.enable and owner changes still drain");
+        assert_eq!(decide(&r.exec, true, false).0, Decision::Adopt, "`now` never forces a stop where jobs are kept");
+        r.plat.adopt.store(false, Ordering::SeqCst);
+        assert_eq!(decide(&r.exec, false, false).0, Decision::Drain, "Linux without the wall: today's drain (N2)");
+    }
+
     /// C3/T5, B-M4: the mark names one process, by pid and start time. Only
     /// that process is "stopped by K2"; a later stop of the next node (an
     /// owner's `systemctl stop`, another pid, or the same pid reused) is
@@ -1416,7 +1484,7 @@ mod drain_tests {
         assert!(update_mark_for(cfg, pid, start.map(|s| s + 1), now).is_none(), "a reused pid (another start time) is not");
         assert!(update_mark_for(cfg, pid, start, now + UPDATE_MARK_SECS).is_none(), "a stale mark names nobody");
         assert!(recent_update_mark(cfg, now + 5), "the next node's start-time reconcile still reads the reason");
-        assert!(!m.keeps_jobs_of(pid, start, now), "U1 never keeps jobs (keep=false until U4)");
+        assert!(!m.keeps_jobs_of(pid, start, now), "no keep where the jobs die with the node (Linux without the wall)");
         let keep = UpdateMark { keep: true, ..m.clone() };
         assert!(keep.keeps_jobs_of(pid, start, now));
         assert!(!keep.keeps_jobs_of(pid + 1, start, now), "an owner stop of another process stops its jobs (Q2)");

@@ -116,7 +116,17 @@ pub struct Toolchains {
     pub arch: &'static str,
     /// The approved-packages file (root-owned; see [`crate::packages`]).
     pub packages_file: PathBuf,
+    /// Rust channels a running job uses now (update continuity, Rosson
+    /// 2026-11-04): a moving channel (`stable`, `beta`) is never moved to a
+    /// newer release under them; the next job after they end gets it.
+    pub busy_channels: Vec<String>,
 }
+
+/// Rust channels that move to a new release over time.
+pub const MOVING_CHANNELS: &[&str] = &["stable", "beta"];
+/// A moving channel is brought to its newest release at most this often,
+/// and after every k2-node update (new jobs after an update get the newest).
+pub const RUST_REFRESH_SECS: i64 = 24 * 3600;
 
 /// What a job gets after resolving.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -139,7 +149,31 @@ impl Toolchains {
             os: crate::sysinfo::os_label(),
             arch: std::env::consts::ARCH,
             packages_file: PathBuf::from(crate::packages::APPROVED_FILE),
+            busy_channels: Vec::new(),
         }
+    }
+
+    fn refresh_mark(&self, channel: &str) -> PathBuf {
+        self.root.join(format!("rust-refreshed-{channel}"))
+    }
+
+    /// Is a moving channel due for its newest release? Never refreshed,
+    /// refreshed by another k2-node build (this one was installed since),
+    /// or over [`RUST_REFRESH_SECS`] ago.
+    pub fn rust_refresh_due(&self, channel: &str, now: i64) -> bool {
+        if !MOVING_CHANNELS.contains(&channel) {
+            return false;
+        }
+        let mark = std::fs::read_to_string(self.refresh_mark(channel)).unwrap_or_default();
+        let mut w = mark.split_whitespace();
+        match (w.next(), w.next().and_then(|t| t.parse::<i64>().ok())) {
+            (Some(v), Some(at)) => v != crate::PRODUCT_VERSION || now - at >= RUST_REFRESH_SECS,
+            _ => true,
+        }
+    }
+
+    fn mark_refreshed(&self, channel: &str, now: i64) {
+        let _ = crate::util::atomic_write(&self.refresh_mark(channel), format!("{} {now}\n", crate::PRODUCT_VERSION).as_bytes(), 0o644);
     }
 
     pub fn mise_dir(&self) -> PathBuf {
@@ -349,6 +383,31 @@ impl Toolchains {
             let name = l.split_whitespace().next().unwrap_or("");
             name == rt.channel || name.starts_with(&format!("{}-", rt.channel))
         });
+        // A moving channel gets its newest release for new jobs (after a
+        // k2-node update, or once a day), never while a running job uses it:
+        // `rustup toolchain install` replaces it in place.
+        if have && self.rust_refresh_due(&rt.channel, unix_now()) {
+            if self.busy_channels.iter().any(|c| *c == rt.channel) {
+                log(&format!("Rust {} stays at its installed release while a running job uses it; the next job after it ends gets the newest", rt.channel));
+            } else {
+                log(&format!("updating Rust {} to its newest release (rustup)", rt.channel));
+                let mut args: Vec<String> =
+                    vec!["toolchain".into(), "install".into(), rt.channel.clone(), "--profile".into(), "minimal".into(), "--no-self-update".into()];
+                for c in &rt.components {
+                    args.push("--component".into());
+                    args.push(rustup_component_name(c).to_string());
+                }
+                let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+                let o = self.run(&rustup, &argv, INSTALL_LIMIT).await?;
+                if !o.ok {
+                    // The installed release still works: the job goes on with it.
+                    log(&format!("updating Rust {} failed (the installed release is used): {}", rt.channel, last_lines(&o.stderr, 4)));
+                } else {
+                    self.mark_refreshed(&rt.channel, unix_now());
+                    return Ok(true);
+                }
+            }
+        }
         if have && rt.components.is_empty() && rt.targets.is_empty() {
             return Ok(false);
         }
@@ -396,6 +455,9 @@ impl Toolchains {
         let o = self.run(&rustup, &argv, INSTALL_LIMIT).await?;
         if !o.ok {
             return Err(format!("rustup toolchain install {} failed: {}", rt.channel, last_lines(&o.stderr, 6)));
+        }
+        if MOVING_CHANNELS.contains(&rt.channel.as_str()) {
+            self.mark_refreshed(&rt.channel, unix_now());
         }
         Ok(!have)
     }
@@ -1409,5 +1471,47 @@ esac
         assert!(e.1.contains("zig@0.13") && e.1.contains("no such tool"), "{}", e.1);
         let ok = tc.resolve(&[], &[(needs::parse("zig@0.13").unwrap(), ".tool-versions".into())], None, &mut |_| {}).await.unwrap();
         assert!(ok.notes.iter().any(|n| n.contains("warning") && n.contains(".tool-versions")), "{:?}", ok.notes);
+    }
+
+    /// Rosson 2026-11-04: new jobs after a k2-node update get the newest
+    /// `rust@stable`, while running jobs keep theirs. A fake rustup records
+    /// each install: the first job installs; a job right after doesn't; a
+    /// new k2-node build (another version in the mark) brings stable to its
+    /// newest for the next job, but never while a running job uses stable.
+    #[tokio::test]
+    async fn stable_moves_forward_for_new_jobs_never_under_a_running_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = crate::util::temp_dir("tc-rust-refresh");
+        let mut tc = Toolchains::new(&home, vec![("PATH".into(), "/usr/bin:/bin".into()), ("HOME".into(), home.display().to_string())]);
+        let rustup = tc.cargo_home().join("bin/rustup");
+        std::fs::create_dir_all(rustup.parent().unwrap()).unwrap();
+        let log = home.join("rustup.log");
+        let script = format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n  'toolchain list') [ -f '{h}/installed' ] && echo 'stable-x86_64-unknown-linux-gnu (default)' ;;\n  'toolchain install') echo \"$*\" >> '{l}'; touch '{h}/installed' ;;\n  *) exit 9 ;;\nesac\n",
+            h = home.display(),
+            l = log.display()
+        );
+        std::fs::write(&rustup, script).unwrap();
+        std::fs::set_permissions(&rustup, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stable = RustToolchain { channel: "stable".into(), components: vec![], targets: vec![] };
+        let installs = || std::fs::read_to_string(&log).unwrap_or_default().lines().count();
+        let mut notes = Vec::new();
+        assert!(tc.ensure_rust(&stable, &mut |l| notes.push(l.to_string())).await.unwrap(), "the first job installs stable");
+        assert_eq!(installs(), 1);
+        assert!(!tc.ensure_rust(&stable, &mut |_| {}).await.unwrap(), "the next job uses it as it is");
+        assert_eq!(installs(), 1);
+        // k2-node was updated since stable last moved (another version in the mark).
+        std::fs::write(tc.refresh_mark("stable"), format!("0.0.1 {}\n", unix_now())).unwrap();
+        tc.busy_channels = vec!["stable".into()];
+        let mut notes = Vec::new();
+        assert!(!tc.ensure_rust(&stable, &mut |l| notes.push(l.to_string())).await.unwrap());
+        assert_eq!(installs(), 1, "never moved under a running job");
+        assert!(notes.iter().any(|n| n.contains("stays at its installed release while a running job uses it")), "{notes:?}");
+        tc.busy_channels.clear();
+        assert!(tc.ensure_rust(&stable, &mut |_| {}).await.unwrap(), "the next job after it ends gets the newest");
+        assert_eq!(installs(), 2);
+        assert!(!tc.rust_refresh_due("stable", unix_now()), "fresh for this build");
+        assert!(tc.rust_refresh_due("stable", unix_now() + RUST_REFRESH_SECS), "and again a day later");
+        assert!(!tc.rust_refresh_due("1.82.0", unix_now()), "a pinned release never moves");
     }
 }

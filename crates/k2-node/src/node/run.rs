@@ -23,8 +23,10 @@ use k2_node_proto::results::Outputs;
 use k2_node_proto::share::{codes, Network, Trust};
 use tokio::sync::watch;
 
+use super::adopt::{HeldFacts, LeaseFacts, RunFacts, RunKind, DETACH, RUN_V};
 use super::{Node, StopReason, Tenant};
 use crate::cgroup::Leaf;
+use crate::spool;
 use crate::journal::JournalWriter;
 use crate::paths::safe_relative;
 use crate::runner::{self, JobDirs};
@@ -34,12 +36,27 @@ use crate::wall::Wall;
 /// A job's stdout or stderr, read by the journal pumps.
 type OutPipe = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
 
-/// A running job: our child (no wall / Seatbelt) or a unit (Linux wall).
-enum Proc {
+/// A running job: our child (no wall / Seatbelt), a unit (Linux wall),
+/// or a `job-hold` process's (macOS, test nodes; §5.2).
+pub(super) enum Proc {
     Local { child: tokio::process::Child, pgid: i32, leaf: Option<Leaf> },
     /// `cg`: the unit's cgroup dir under `/sys/fs/cgroup`, once the
     /// executor said it (CE-14, the CE-10 stall rule).
     Unit { unit: String, last: Option<crate::admin::jobs::UnitStatus>, cg: Option<PathBuf> },
+    /// `facts` as the holder said them once (never re-read). `gone`: the
+    /// holder ended without an `exit.json`; `timeout`: it stopped the job
+    /// at its own deadline.
+    Holder { facts: crate::hold::HoldFacts, dir: PathBuf, gone: bool, timeout: bool },
+}
+
+/// SIGKILL a job's process group the node recorded, never its own group
+/// or pid, never pgid 0 or 1 (the node user can only signal its own
+/// processes).
+pub(super) fn kill_job_group(pgid: i32) {
+    let own = unsafe { (libc::getpid(), libc::getpgrp()) };
+    if pgid > 1 && pgid != own.0 && pgid != own.1 {
+        runner::signal_group(pgid, libc::SIGKILL);
+    }
 }
 
 impl Proc {
@@ -48,11 +65,26 @@ impl Proc {
         match self {
             Proc::Local { pgid, .. } => *pgid,
             Proc::Unit { .. } => 0,
+            Proc::Holder { facts, .. } => facts.pgid,
         }
     }
 
     fn needs_rss_sampler(&self) -> bool {
-        matches!(self, Proc::Local { leaf: None, .. })
+        matches!(self, Proc::Local { leaf: None, .. } | Proc::Holder { .. })
+    }
+
+    /// It ended at its time limit while no node watched (the unit's
+    /// `RuntimeMaxSec`, or the holder's own deadline).
+    fn timed_out(&self) -> bool {
+        match self {
+            Proc::Holder { timeout, .. } => *timeout,
+            Proc::Unit { last: Some(s), .. } => s.result == "timeout",
+            _ => false,
+        }
+    }
+
+    fn holder_gone(&self) -> bool {
+        matches!(self, Proc::Holder { gone: true, .. })
     }
 
     /// Where the job's memory and CPU are read.
@@ -63,6 +95,7 @@ impl Proc {
             Proc::Local { leaf: None, pgid, .. } => Source::Group(*pgid),
             Proc::Unit { cg: Some(c), .. } => Source::Cgroup(c.clone()),
             Proc::Unit { cg: None, .. } => Source::None,
+            Proc::Holder { facts, .. } => Source::Group(facts.pgid),
         }
     }
 
@@ -73,7 +106,7 @@ impl Proc {
             Proc::Local { leaf: Some(l), .. } => std::fs::read_to_string(l.dir.join("memory.events"))
                 .map(|t| crate::admin::jobs::parse_oom_kills(&t) > 0)
                 .unwrap_or(false),
-            Proc::Local { leaf: None, .. } => false,
+            Proc::Local { leaf: None, .. } | Proc::Holder { .. } => false,
             Proc::Unit { last, .. } => last.as_ref().is_some_and(|s| s.oom()),
         }
     }
@@ -83,6 +116,112 @@ impl Proc {
             l.remove();
         }
     }
+}
+
+/// Where a job's stdout or stderr comes from.
+pub(super) enum OutSrc {
+    Pipe(OutPipe),
+    Spool(spool::Tail),
+}
+
+/// What the spool tailers do next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TailCmd {
+    Run,
+    /// The job is over: read to the end, flush everything.
+    Finish,
+    /// k2-node stops for an update: record how far the journal got (whole
+    /// lines only) and stop reading; the next process reads on (§5.4).
+    Detach,
+}
+
+/// Everything [`Node::supervise`] needs about one started job.
+pub(super) struct Live {
+    pub dirs: JobDirs,
+    pub cwd: PathBuf,
+    pub target: PathBuf,
+    pub src_ran: Option<SrcRan>,
+    pub lease: Option<Lease>,
+    pub proc: Proc,
+    pub outs: Vec<(OutSrc, k2_node_proto::frames::LogStream)>,
+    pub journal: JournalWriter,
+    pub redactor: Option<Arc<k2_redact::Redactor>>,
+    pub mem_limit: u64,
+    pub easy: bool,
+    pub tools_used: std::collections::BTreeMap<String, String>,
+    pub deadline: std::time::Instant,
+    pub facts: Option<Arc<Mutex<RunFacts>>>,
+    /// An adopted job that already ended while no node watched (or whose
+    /// holder is gone): end it this way at once, with this detail.
+    pub preset: Option<StopReason>,
+    pub preset_detail: Option<String>,
+    pub adopted: bool,
+}
+
+/// One spool tailer's inputs.
+pub(super) struct TailCtx {
+    t: Arc<Tenant>,
+    journal: Arc<Mutex<JournalWriter>>,
+    last: Arc<AtomicU64>,
+    t0: std::time::Instant,
+    stream: k2_node_proto::frames::LogStream,
+    facts: Option<Arc<Mutex<RunFacts>>>,
+    cmd: watch::Receiver<TailCmd>,
+    job: String,
+    gen: u32,
+    tail: spool::Tail,
+}
+
+/// Pump one pipe (a secret job's or an unspooled one's) into the journal.
+fn spawn_pipe_pump(
+    mut pipe: OutPipe,
+    stream: k2_node_proto::frames::LogStream,
+    j: Arc<Mutex<JournalWriter>>,
+    tenant: Arc<Tenant>,
+    last: Arc<AtomicU64>,
+    t0: std::time::Instant,
+    red: Option<Arc<k2_redact::Redactor>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; k2_node_proto::frames::MAX_LOG_CHUNK];
+        // SE23: a secret job's output is stream-redacted before
+        // the journal (a value split across reads is caught).
+        let mut sr = red.as_ref().map(|r| r.stream());
+        // Line-atomic journal (0.46.7): whole lines only, so
+        // stdout and stderr never interleave mid-line; a partial
+        // line goes after LINE_IDLE quiet or at LINE_MAX bytes.
+        let mut lines = LineBuf::default();
+        let flush = |b: &[u8]| {
+            if !b.is_empty() {
+                let _ = j.lock().unwrap().append(stream, b);
+                tenant.ship.notify_one();
+            }
+        };
+        loop {
+            let read = if lines.pending() { tokio::time::timeout(LINE_IDLE, pipe.read(&mut buf)).await } else { Ok(pipe.read(&mut buf).await) };
+            match read {
+                Err(_) => flush(&lines.take_all()),
+                Ok(Ok(0)) | Ok(Err(_)) => break,
+                Ok(Ok(n)) => {
+                    let out: std::borrow::Cow<[u8]> = match sr.as_mut() {
+                        Some(s) => std::borrow::Cow::Owned(s.push(&buf[..n])),
+                        None => std::borrow::Cow::Borrowed(&buf[..n]),
+                    };
+                    flush(&lines.push(&out));
+                    last.store(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+                }
+            }
+        }
+        if let Some(s) = sr.as_mut() {
+            let rest = s.finish();
+            flush(&lines.push(&rest));
+        }
+        flush(&lines.take_all());
+        drop(sr);
+        lines.wipe();
+        k2_redact::wipe(&mut buf);
+    })
 }
 
 /// The `mem_cap` detail: the cap and how to ask for more.
@@ -159,6 +298,11 @@ impl LineBuf {
 
     pub fn pending(&self) -> bool {
         !self.held.is_empty()
+    }
+
+    /// Bytes held back (a partial line not in the journal yet).
+    pub fn held_len(&self) -> usize {
+        self.held.len()
     }
 
     pub fn take_all(&mut self) -> Vec<u8> {
@@ -402,7 +546,7 @@ impl Node {
         stopped
     }
 
-    async fn unit_status(&self, unit: &str) -> Option<crate::admin::jobs::UnitStatus> {
+    pub(super) async fn unit_status(&self, unit: &str) -> Option<crate::admin::jobs::UnitStatus> {
         match self.job_op(crate::admin::jobs::JobOp::Status { unit: unit.to_string() }, vec![], Duration::from_secs(30)).await {
             Ok(crate::admin::jobs::JobAnswer::Status(s)) => Some(s),
             _ => None,
@@ -669,6 +813,63 @@ impl Node {
         // Smoke lock + spawn, behind the wall.
         let mem_limit = a.plan.limits.mem_bytes.unwrap_or_else(|| self.local.lock().unwrap().policy.mem_cap_bytes);
         self.take_smoke_lock(&job);
+        let key = t.job_key(&job, gen);
+        // Update continuity (prd-compute-update-continuity-v1 §5.1–§5.3):
+        // stdout/stderr go to spool files and the run facts go in the
+        // ledger before the spawn, so a later k2-node process finds this job
+        // again and adopts it. Behind the Linux wall the job's unit holds it;
+        // elsewhere a `job-hold` process does. A secret-env job keeps its
+        // pipes and is never adopted (SE25): a restart interrupts it and the
+        // retry asks for its secrets again.
+        let holder_bin = if unit_mode { None } else { self.opts.job_holder.clone() };
+        let spooled = !secret_job && (unit_mode || holder_bin.is_some());
+        let spools = if spooled {
+            let dir = self.spool_dir(&t, &dirs);
+            match spool::create(&dir, &key, "out").and_then(|o| spool::create(&dir, &key, "err").map(|e| (o, e))) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    sys(&mut journal, &format!("output files: {e}"));
+                    self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some("spawn_failed"), Some(&e), src_ran, None, Some(journal), lease, None).await;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let deadline_unix = self.now().saturating_add(a.plan.limits.max_secs.max(1) as i64);
+        let hold_dir = self.hold_dir(&t, &key);
+        let mut facts = spools.as_ref().map(|(o, e)| RunFacts {
+            v: RUN_V,
+            kind: RunKind::Provisional,
+            node_version: super::NODE_VERSION.to_string(),
+            unit: if unit_mode { crate::admin::jobs::unit_name(&key) } else { None },
+            hold_dir: (!unit_mode).then(|| hold_dir.clone()),
+            holder: None,
+            out: Some(o.facts.clone()),
+            err: Some(e.facts.clone()),
+            cwd: cwd.clone(),
+            target: target.clone(),
+            lease: lease.as_ref().map(LeaseFacts::of),
+            mem_limit,
+            deadline: deadline_unix,
+            smoke: self.smoke.lock().unwrap().owned(),
+            port_block,
+            job_cache: self.job_cache_holds.lock().unwrap().get(&(t.slot, job.clone(), gen)).map(HeldFacts::of),
+            easy,
+            tools_used: tools_used.clone(),
+            log_dropped: 0,
+            rust: self.jobs.lock().unwrap().get(&(t.slot, job.clone())).map(|j| j.rust.clone()).unwrap_or_default(),
+        });
+        // C18: the provisional facts are on disk before anything starts, so
+        // a crash between the spawn and `set_running` still leaves what the
+        // next process needs to find and stop it.
+        if let Some(f) = &facts {
+            self.save_run(&t, &job, gen, f);
+        }
+        let (writers, readers) = match spools {
+            Some((o, e)) => (Some((o.writer, e.writer)), Some((o.reader, e.reader))),
+            None => (None, None),
+        };
         let started = if unit_mode {
             let mut rw = vec![target.clone(), sccache.clone(), cargo_home.clone()];
             // The slot's shared tmp (its sccache socket) only for other jobs.
@@ -680,14 +881,16 @@ impl Node {
             if let Some(c) = &job_cache_dir {
                 rw.push(c.clone());
             }
-            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref()).await
+            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref(), writers).await
+        } else if let (Some(bin), Some((out_w, err_w))) = (holder_bin.as_ref(), writers) {
+            self.start_held(&t, &a, &cwd, &env, network, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None))
         } else {
             self.start_local(&t, &a, &cwd, &env, network)
         };
         // SE19: the plaintext goes as soon as the unit has it (the
         // redactor's copy stays until the job ends).
         drop(secrets.take());
-        let (mut proc, out_pipe, err_pipe) = match started {
+        let (proc, out_pipe, err_pipe) = match started {
             Ok(s) => s,
             Err(e) => {
                 sys(&mut journal, &e);
@@ -700,71 +903,99 @@ impl Node {
             let l = t.ledger.lock().unwrap();
             let _ = l.set_running(&job, gen, pgid.max(0) as u32, src_ran.as_ref(), self.now());
         }
+        if let Some(f) = facts.as_mut() {
+            match &proc {
+                Proc::Unit { unit, .. } => {
+                    f.kind = RunKind::Unit;
+                    f.unit = Some(unit.clone());
+                }
+                Proc::Holder { facts: h, .. } => {
+                    f.kind = RunKind::Holder;
+                    f.holder = Some(h.clone());
+                }
+                Proc::Local { .. } => {}
+            }
+            self.save_run(&t, &job, gen, f);
+            self.set_adoptable(t.slot, &job, gen);
+        }
         t.ship.notify_one();
+        let mut outs: Vec<(OutSrc, k2_node_proto::frames::LogStream)> = Vec::new();
+        if let Some((o, e)) = readers {
+            outs.push((OutSrc::Spool(spool::Tail::new(o, 0)), k2_node_proto::frames::LogStream::Out));
+            outs.push((OutSrc::Spool(spool::Tail::new(e, 0)), k2_node_proto::frames::LogStream::Err));
+        }
+        if let Some(p) = out_pipe {
+            outs.push((OutSrc::Pipe(p), k2_node_proto::frames::LogStream::Out));
+        }
+        if let Some(p) = err_pipe {
+            outs.push((OutSrc::Pipe(p), k2_node_proto::frames::LogStream::Err));
+        }
+        let live = Live {
+            dirs,
+            cwd,
+            target,
+            src_ran,
+            lease,
+            proc,
+            outs,
+            journal,
+            redactor,
+            mem_limit,
+            easy,
+            tools_used,
+            deadline: std::time::Instant::now() + Duration::from_secs(a.plan.limits.max_secs.max(1)),
+            facts: facts.map(|f| Arc::new(Mutex::new(f))),
+            preset: None,
+            preset_detail: None,
+            adopted: false,
+        };
+        self.supervise(t, a, live, stop).await;
+    }
+
+    /// One job's life after its spawn (fresh, or adopted from an earlier
+    /// k2-node process, §5.6): the output, the wait (exit, stop, timeout,
+    /// stall, memory), a detach for an update, the artifacts and the end.
+    pub(super) async fn supervise(self: Arc<Self>, t: Arc<Tenant>, a: Assign, live: Live, mut stop: watch::Receiver<Option<StopReason>>) {
+        let Live { dirs, cwd, target, src_ran, lease, mut proc, outs, journal, redactor, mem_limit, easy, tools_used, deadline, facts, preset, preset_detail, adopted } = live;
+        let job = a.fence.job_id.clone();
+        let gen = a.fence.generation;
         if let Proc::Unit { unit, cg, .. } = &mut proc {
             *cg = self.unit_status(unit).await.and_then(|s| s.control_group).map(|c| PathBuf::from("/sys/fs/cgroup").join(c.trim_start_matches('/')));
         }
         let mut usage = crate::jobstat::ResWatch::new(proc.usage_source());
         let watch_usage = usage.source != crate::jobstat::Source::None;
 
-        // Pump output into the journal. `last_out` = ms after `t0` of the
-        // last stdout/stderr bytes (the stall watch reads it).
+        // Output into the journal: pipes are pumped, spool files tailed.
+        // `last_out` = ms after `t0` of the last stdout/stderr bytes (the
+        // stall watch reads it).
         let journal = Arc::new(Mutex::new(journal));
         let t0 = std::time::Instant::now();
         let last_out = Arc::new(AtomicU64::new(0));
+        let (tail_tx, tail_rx) = watch::channel(TailCmd::Run);
         let mut pumps = Vec::new();
-        for (pipe, stream) in [(out_pipe, k2_node_proto::frames::LogStream::Out), (err_pipe, k2_node_proto::frames::LogStream::Err)] {
-            if let Some(mut pipe) = pipe {
-                let j = journal.clone();
-                let tenant = t.clone();
-                let last = last_out.clone();
-                let red = redactor.clone();
-                pumps.push(tokio::spawn(async move {
-                    use tokio::io::AsyncReadExt;
-                    let mut buf = vec![0u8; k2_node_proto::frames::MAX_LOG_CHUNK];
-                    // SE23: a secret job's output is stream-redacted before
-                    // the journal (a value split across reads is caught).
-                    let mut sr = red.as_ref().map(|r| r.stream());
-                    // Line-atomic journal (0.46.7): whole lines only, so
-                    // stdout and stderr never interleave mid-line; a partial
-                    // line goes after LINE_IDLE quiet or at LINE_MAX bytes.
-                    let mut lines = LineBuf::default();
-                    let flush = |b: &[u8]| {
-                        if !b.is_empty() {
-                            let _ = j.lock().unwrap().append(stream, b);
-                            tenant.ship.notify_one();
-                        }
-                    };
-                    loop {
-                        let read = if lines.pending() { tokio::time::timeout(LINE_IDLE, pipe.read(&mut buf)).await } else { Ok(pipe.read(&mut buf).await) };
-                        match read {
-                            Err(_) => flush(&lines.take_all()),
-                            Ok(Ok(0)) | Ok(Err(_)) => break,
-                            Ok(Ok(n)) => {
-                                let out: std::borrow::Cow<[u8]> = match sr.as_mut() {
-                                    Some(s) => std::borrow::Cow::Owned(s.push(&buf[..n])),
-                                    None => std::borrow::Cow::Borrowed(&buf[..n]),
-                                };
-                                flush(&lines.push(&out));
-                                last.store(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-                            }
-                        }
-                    }
-                    if let Some(s) = sr.as_mut() {
-                        let rest = s.finish();
-                        flush(&lines.push(&rest));
-                    }
-                    flush(&lines.take_all());
-                    drop(sr);
-                    lines.wipe();
-                    k2_redact::wipe(&mut buf);
-                }));
+        let mut tailers = Vec::new();
+        for (src, stream) in outs {
+            match src {
+                OutSrc::Pipe(pipe) => pumps.push(spawn_pipe_pump(pipe, stream, journal.clone(), t.clone(), last_out.clone(), t0, redactor.clone())),
+                OutSrc::Spool(tail) => tailers.push(self.spawn_tailer(TailCtx {
+                    t: t.clone(),
+                    journal: journal.clone(),
+                    last: last_out.clone(),
+                    t0,
+                    stream,
+                    facts: facts.clone(),
+                    cmd: tail_rx.clone(),
+                    job: job.clone(),
+                    gen,
+                    tail,
+                })),
             }
         }
 
         // CE-19: the host at the start, off the job's path (the steal
-        // window); its line lands in the log when it's read.
-        let host_start = easy.then(|| {
+        // window); its line lands in the log when it's read. An adopted job
+        // started long ago: no start stamp.
+        let host_start = (easy && !adopted).then(|| {
             let (j, at, cpus, others) = (journal.clone(), self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32);
             tokio::spawn(async move {
                 let h = tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, Duration::from_secs(1))).await.ok()?;
@@ -774,7 +1005,7 @@ impl Node {
         });
 
         // Wait: exit, stop, timeout, memory.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(a.plan.limits.max_secs.max(1));
+        let deadline = tokio::time::Instant::from_std(deadline);
         // Only a plain process without a cgroup leaf needs the RSS cap
         // (macOS); a leaf or a job unit has a hard `memory.max`.
         let mem_cap = proc.needs_rss_sampler().then_some(mem_limit);
@@ -800,14 +1031,24 @@ impl Node {
         // or half the window when that's shorter), again only after it
         // printed or worked in between.
         let mut stall_warned = false;
-        let mut ended_by: Option<StopReason> = None;
+        // An adopted job that ended while no node watched (or whose holder
+        // is gone) has nothing to wait for.
+        let mut ended_by: Option<StopReason> = preset.clone();
         let mut status = None;
-        loop {
+        let mut detach = false;
+        while preset.is_none() {
             tokio::select! {
                 s = self.proc_wait(&mut proc) => { status = s; break; }
                 r = stop.changed() => {
                     if r.is_ok() {
-                        if let Some(s) = stop.borrow().clone() { ended_by = Some(s); break; }
+                        if let Some(s) = stop.borrow().clone() {
+                            if s.reason == DETACH {
+                                detach = true;
+                            } else {
+                                ended_by = Some(s);
+                            }
+                            break;
+                        }
                     }
                 }
                 _ = tokio::time::sleep_until(deadline) => {
@@ -866,7 +1107,41 @@ impl Node {
                 }
             }
         }
-        if let Some(s) = &ended_by {
+        if detach {
+            // §5.4: the job keeps running for the next k2-node process. Its
+            // output files stay as they are; what the journal has (whole
+            // lines only: a partial line is read again) is recorded.
+            let _ = tail_tx.send(TailCmd::Detach);
+            for p in tailers {
+                let _ = tokio::time::timeout(Duration::from_secs(10), p).await;
+            }
+            for p in pumps {
+                p.abort();
+            }
+            // The journal lock is never held while the facts lock is taken
+            // (the tailers take them the other way round).
+            let dropped = {
+                let mut j = journal.lock().unwrap();
+                let _ = j.append(
+                    k2_node_proto::frames::LogStream::Sys,
+                    format!("[k2-node] k2-node {} is restarting for an update; this job keeps running and the next k2-node picks it up\n", super::NODE_VERSION).as_bytes(),
+                );
+                j.dropped
+            };
+            if let Some(f) = &facts {
+                f.lock().unwrap().log_dropped = dropped;
+            }
+            if let Some(f) = &facts {
+                let snapshot = f.lock().unwrap().clone();
+                self.save_run(&t, &job, gen, &snapshot);
+            }
+            t.ship.notify_one();
+            crate::nlog!("job {job} gen {gen}: detached; it keeps running for the next k2-node");
+            self.jobs.lock().unwrap().remove(&(t.slot, job.clone()));
+            self.jobs_changed();
+            return;
+        }
+        if let Some(s) = ended_by.as_ref().filter(|_| preset.is_none()) {
             {
                 let mut j = journal.lock().unwrap();
                 let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] stopping job: {}\n", s.reason).as_bytes());
@@ -895,7 +1170,13 @@ impl Node {
         // V24: an OOM kill is `mem_cap` on every platform (the leaf's or
         // the unit's `memory.events`, or the unit's `oom-kill` result).
         let oom = proc.oom();
+        // The wall rule (C9): the unit or the holder's group is gone before
+        // anything the job wrote is read (its output's last bytes, artifacts).
         self.proc_reap(&mut proc).await;
+        let _ = tail_tx.send(TailCmd::Finish);
+        for p in tailers {
+            let _ = tokio::time::timeout(Duration::from_secs(60), p).await;
+        }
         for mut p in pumps {
             if tokio::time::timeout(Duration::from_secs(2), &mut p).await.is_err() {
                 // Something outside the group still holds the pipe.
@@ -915,6 +1196,10 @@ impl Node {
         let (state, reason) = match ended_by {
             Some(s) => (s.state, Some(s.reason)),
             None if oom => (JobState::Failed, Some("mem_cap".to_string())),
+            // Ended at its limit while no node watched: the unit's
+            // `RuntimeMaxSec` or the holder's own deadline.
+            None if proc.timed_out() => (JobState::Timeout, Some("timeout".to_string())),
+            None if proc.holder_gone() => (JobState::Interrupted, Some(k2_node_proto::share::codes::NODE_UPDATE.to_string())),
             None => (JobState::Done, None),
         };
         if reason.as_deref() == Some("mem_cap") {
@@ -980,7 +1265,10 @@ impl Node {
         } else {
             collected
         };
-        let detail = match reason.as_deref() {
+        let detail = if preset_detail.is_some() {
+            preset_detail
+        } else {
+            match reason.as_deref() {
             Some("stalled") => Some(format!("no output for {}s", a.plan.stall_secs.unwrap_or(0))),
             Some("mem_cap") => Some(mem_cap_detail_used(mem_limit, peak_shown)),
             Some(refusal::DISK_LOW) => {
@@ -990,13 +1278,20 @@ impl Node {
                 }
                 Some(d)
             }
+            Some(k2_node_proto::share::codes::NODE_UPDATE) if proc.holder_gone() => Some("the job's holder ended without saying how the job ended; its group was stopped".to_string()),
             _ => None,
+            }
         };
+        if adopted {
+            let key = t.job_key(&job, gen);
+            self.status.lock().unwrap().adopted.retain(|x| x.job != key);
+        }
         self.finish_job(&t, &a, Some(&dirs), state, reason.as_deref(), detail.as_deref(), src_ran, exit, journal, lease, outputs).await;
     }
 
-    /// A plain child process (no wall, or the Seatbelt profile around it).
-    fn start_local(&self, t: &Tenant, a: &Assign, cwd: &Path, env: &[(String, String)], network: Network) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+    /// The argv of a job that runs as the node user: the plan's, inside
+    /// its Seatbelt profile on macOS. Refuses what this node can't wall.
+    fn local_argv(&self, t: &Tenant, a: &Assign, network: Network) -> Result<Vec<String>, String> {
         let network_none = network != Network::On;
         if network_none && !self.wall.network_none() {
             return Err(refusal::NETWORK_NONE_MESSAGE.to_string());
@@ -1004,18 +1299,55 @@ impl Node {
         if !t.is_owner() && !matches!(self.wall, Wall::Seatbelt) && !self.dev_unwalled() {
             return Err(format!("{}: a tenant's job never runs without its wall", codes::TENANT_WALL_MISSING));
         }
-        let key = t.job_key(&a.fence.job_id, a.fence.generation);
-        let leaf: Option<Leaf> = self.cgroups.as_ref().and_then(|cg| {
-            cg.create_leaf(&key, a.plan.limits.cpu_millis, a.plan.limits.mem_bytes).map_err(|e| crate::nlog!("cgroup leaf for {key}: {e}")).ok()
-        });
-        let argv = match &self.wall {
+        Ok(match &self.wall {
             Wall::Seatbelt => {
                 let (dirs, sockets) = self.seatbelt_deny();
                 let who = crate::wall::SeatbeltTenant { slot: t.slot, home: self.layout().home.clone(), tenants_root: self.layout().tenants_root() };
                 crate::wall::seatbelt_argv(&crate::wall::seatbelt_tenant_profile(&dirs, &sockets, network_none, &who), &a.plan.argv)
             }
             _ => a.plan.argv.clone(),
+        })
+    }
+
+    /// A job held by a `job-hold` process (§5.2): it outlives this k2-node.
+    /// stdout/stderr are the spool files' write fds.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_held(
+        &self,
+        t: &Tenant,
+        a: &Assign,
+        cwd: &Path,
+        env: &[(String, String)],
+        network: Network,
+        bin: &Path,
+        dir: &Path,
+        out: std::os::fd::OwnedFd,
+        err: std::os::fd::OwnedFd,
+        deadline_unix: i64,
+    ) -> Result<Proc, String> {
+        let argv = self.local_argv(t, a, network)?;
+        let spec = crate::hold::HoldSpec {
+            v: crate::hold::HOLD_V,
+            argv,
+            env: env.to_vec(),
+            cwd: cwd.to_path_buf(),
+            deadline: deadline_unix.saturating_add(crate::hold::DEADLINE_SLACK_SECS),
+            grace_ms: self.opts.cancel_grace.as_millis() as u64,
         };
+        let (bin, dir2) = (bin.to_path_buf(), dir.to_path_buf());
+        let facts = tokio::task::spawn_blocking(move || crate::hold::spawn(&bin, &dir2, &spec, out, err, Duration::from_secs(10)))
+            .await
+            .map_err(|e| format!("job holder: {e}"))??;
+        Ok(Proc::Holder { facts, dir: dir.to_path_buf(), gone: false, timeout: false })
+    }
+
+    /// A plain child process (no wall, or the Seatbelt profile around it).
+    fn start_local(&self, t: &Tenant, a: &Assign, cwd: &Path, env: &[(String, String)], network: Network) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+        let argv = self.local_argv(t, a, network)?;
+        let key = t.job_key(&a.fence.job_id, a.fence.generation);
+        let leaf: Option<Leaf> = self.cgroups.as_ref().and_then(|cg| {
+            cg.create_leaf(&key, a.plan.limits.cpu_millis, a.plan.limits.mem_bytes).map_err(|e| crate::nlog!("cgroup leaf for {key}: {e}")).ok()
+        });
         match runner::spawn(&argv, env, cwd, leaf.as_ref()) {
             Ok(runner::Spawned { mut child, pgid }) => {
                 let out = child.stdout.take().map(|p| Box::new(p) as OutPipe);
@@ -1050,13 +1382,21 @@ impl Node {
         network: Network,
         mem_limit: u64,
         secrets: Option<&k2_node_proto::secret::Plain>,
+        spool: Option<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)>,
     ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
         use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
         crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf(), stdin_env: secrets.is_some() })?;
-        let (out_r, out_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
-        let (err_r, err_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
-        let mut fds: Vec<std::os::fd::OwnedFd> = vec![out_w.into(), err_w.into()];
+        // Spool files (§5.1) where the node gave them; pipes otherwise (a
+        // secret job). Either way root only relays the fds.
+        let (mut fds, readers): (Vec<std::os::fd::OwnedFd>, Option<(std::io::PipeReader, std::io::PipeReader)>) = match spool {
+            Some((o, e)) => (vec![o, e], None),
+            None => {
+                let (out_r, out_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
+                let (err_r, err_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
+                (vec![out_w.into(), err_w.into()], Some((out_r, err_r)))
+            }
+        };
         if let Some(p) = secrets {
             let mut body = secret_pipe_body(p)?;
             let (in_r, mut in_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
@@ -1080,6 +1420,9 @@ impl Node {
             tenant: t.slot,
             no_lan: network == Network::NoLan,
             stdin: secrets.is_some(),
+            // C11: the unit's own limit (`RuntimeMaxSec`), so a job no node
+            // watches still ends at its time limit.
+            max_secs: Some(a.plan.limits.max_secs.max(1)),
         };
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.
@@ -1093,7 +1436,10 @@ impl Node {
         let rx = |r: std::io::PipeReader| -> Option<OutPipe> {
             tokio::net::unix::pipe::Receiver::from_owned_fd(std::os::fd::OwnedFd::from(r)).ok().map(|p| Box::new(p) as OutPipe)
         };
-        Ok((Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r)))
+        Ok(match readers {
+            Some((out_r, err_r)) => (Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r)),
+            None => (Proc::Unit { unit, last: None, cg: None }, None, None),
+        })
     }
 
     /// The command ended: its exit (code or signal).
@@ -1109,6 +1455,23 @@ impl Node {
                 *last = Some(s);
                 e
             }
+            Proc::Holder { facts, dir, gone, timeout } => loop {
+                // The holder writes `exit.json` when the job ended; a holder
+                // that's gone without one ends the wait too (C7).
+                if let Some(x) = crate::hold::read_exit(dir) {
+                    *timeout = x.timeout;
+                    return (x.code.is_some() || x.signal.is_some()).then_some(ExitInfo { code: x.code, signal: x.signal });
+                }
+                if !crate::hold::alive(facts.pid, facts.start) {
+                    if let Some(x) = crate::hold::read_exit(dir) {
+                        *timeout = x.timeout;
+                        return (x.code.is_some() || x.signal.is_some()).then_some(ExitInfo { code: x.code, signal: x.signal });
+                    }
+                    *gone = true;
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_millis(spool::POLL_MS)).await;
+            },
         }
     }
 
@@ -1118,6 +1481,12 @@ impl Node {
             Proc::Local { child, pgid, leaf } => runner::stop_group(child, *pgid, leaf.as_ref(), self.opts.cancel_grace).await,
             Proc::Unit { unit, .. } => {
                 let _ = self.job_op(crate::admin::jobs::JobOp::Stop { unit: unit.clone() }, vec![], Duration::from_secs(30)).await;
+            }
+            // The holder does the grace (SIGTERM, then SIGKILL).
+            Proc::Holder { facts, .. } => {
+                if !crate::hold::terminate(facts.pid, facts.start) {
+                    crate::hold::kill_job_group(facts);
+                }
             }
         }
     }
@@ -1132,6 +1501,24 @@ impl Node {
     async fn proc_reap(&self, p: &mut Proc) {
         match p {
             Proc::Local { pgid, leaf, .. } => runner::reap_group(*pgid, leaf.as_ref()),
+            Proc::Holder { facts, dir, .. } => {
+                // A holder kills what's left of the group before it writes
+                // `exit.json` and exits. One still there is stopped (it
+                // does the grace); one gone without `exit.json` left the
+                // group to us.
+                let deadline = tokio::time::Instant::now() + self.opts.cancel_grace + Duration::from_secs(5);
+                while crate::hold::alive(facts.pid, facts.start) && tokio::time::Instant::now() < deadline {
+                    crate::hold::terminate(facts.pid, facts.start);
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                if crate::hold::alive(facts.pid, facts.start) {
+                    // SAFETY: a checked pid (alive with its start time just above).
+                    unsafe { libc::kill(facts.pid as i32, libc::SIGKILL) };
+                    crate::hold::kill_job_group(facts);
+                } else if crate::hold::read_exit(dir).is_none() {
+                    crate::hold::kill_job_group(facts);
+                }
+            }
             Proc::Unit { unit, .. } => {
                 // `release` doesn't wait (V58): poll until the unit is
                 // stopped, so nothing of the job still runs while the node
@@ -1198,7 +1585,11 @@ impl Node {
             .collect();
         log(&format!("toolchains: {}", wanted.join(", ")));
         let _guard = self.tool_lock.lock().await;
-        let tc = self.toolchains();
+        let mut tc = self.toolchains();
+        // A moving channel isn't moved under another running job (this
+        // job's own entry doesn't count).
+        let me = (a.plan.job_id.clone(), a.fence.generation);
+        tc.busy_channels = self.jobs.lock().unwrap().iter().filter(|((_, id), j)| !(*id == me.0 && j.generation == me.1)).flat_map(|(_, j)| j.rust.clone()).collect();
         let r = {
             let fut = tc.resolve(&explicit, &repo, rust_file.as_ref(), &mut log);
             tokio::pin!(fut);
@@ -1222,6 +1613,15 @@ impl Node {
         };
         match r {
             Ok(res) => {
+                // What this job uses now: never moved under it.
+                let mut used: Vec<String> = explicit.iter().filter_map(|n| match n {
+                    k2_node_proto::needs::Need::Rust { channel, .. } => Some(channel.clone()),
+                    _ => None,
+                }).collect();
+                used.extend(rust_file.as_ref().map(|r| r.channel.clone()));
+                if let Some((_, j)) = self.jobs.lock().unwrap().iter_mut().find(|((_, id), j)| *id == me.0 && j.generation == me.1 && j.workspace == a.plan.workspace_id) {
+                    j.rust = used;
+                }
                 for n in &res.notes {
                     log(&format!("toolchains: {n}"));
                 }
@@ -1379,6 +1779,164 @@ impl Node {
         }
     }
 
+    /// Where a job's spool files live: node-only state (Linux; the wall's
+    /// units can't reach it), or the job's own folder behind Seatbelt (the
+    /// profile denies `state/` to the job, and its writes go through an fd
+    /// it inherited; the node never follows a link there and checks the
+    /// inode on every reopen).
+    pub(super) fn spool_dir(&self, t: &Tenant, dirs: &JobDirs) -> PathBuf {
+        if matches!(self.wall, Wall::Seatbelt) {
+            dirs.root.join(".k2-spool")
+        } else {
+            t.paths.state().join("spool")
+        }
+    }
+
+    /// A job's holder folder (node-only).
+    pub(super) fn hold_dir(&self, t: &Tenant, key: &str) -> PathBuf {
+        t.paths.state().join("hold").join(key)
+    }
+
+    /// Record a job's run facts (best effort: a failed write only means
+    /// a restart can't adopt it, which is today's behaviour).
+    pub(super) fn save_run(&self, t: &Tenant, job: &str, gen: u32, f: &RunFacts) {
+        match serde_json::to_string(f) {
+            Ok(j) => {
+                if let Err(e) = t.ledger.lock().unwrap().set_run(job, gen, &j) {
+                    crate::nlog!("job {job} gen {gen}: run facts: {e}");
+                }
+            }
+            Err(e) => crate::nlog!("job {job} gen {gen}: run facts: {e}"),
+        }
+    }
+
+    /// The job can be left running for the next k2-node process (§5.4).
+    pub(super) fn set_adoptable(&self, slot: k2_node_proto::share::Slot, job: &str, gen: u32) {
+        if let Some(j) = self.jobs.lock().unwrap().get_mut(&(slot, job.to_string())).filter(|j| j.generation == gen) {
+            j.adoptable = true;
+        }
+    }
+
+    /// Delete an attempt's spool files and holder folder.
+    pub(super) fn forget_run_files(&self, t: &Tenant, job: &str, gen: u32) {
+        let key = t.job_key(job, gen);
+        let dirs = JobDirs::new(t.paths.job_dir(job, gen));
+        let sd = self.spool_dir(t, &dirs);
+        for ext in ["out", "err"] {
+            let p = sd.join(format!("{key}.{ext}"));
+            if std::fs::symlink_metadata(&p).is_ok() {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+        let hd = self.hold_dir(t, &key);
+        if std::fs::symlink_metadata(&hd).is_ok_and(|m| m.is_dir()) {
+            let _ = std::fs::remove_dir_all(&hd);
+        }
+    }
+
+    /// Tail one spool file into the journal (§5.1).
+    pub(super) fn spawn_tailer(self: &Arc<Self>, c: TailCtx) -> tokio::task::JoinHandle<()> {
+        let node = self.clone();
+        tokio::spawn(async move {
+            let TailCtx { t, journal, last, t0, stream, facts, mut cmd, job, gen, mut tail } = c;
+            let mut lines = LineBuf::default();
+            let mut persisted = tail.read;
+            let name = if stream == k2_node_proto::frames::LogStream::Err { "stderr" } else { "stdout" };
+            let note = |m: String| {
+                let _ = journal.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {m}
+").as_bytes());
+            };
+            loop {
+                let mode = *cmd.borrow();
+                // Everything there now (bounded per pass while the job runs:
+                // a flooding job never keeps the tailer from its checks).
+                let mut passes = 0;
+                loop {
+                    passes += 1;
+                    let seen = tail.poll(k2_node_proto::frames::MAX_LOG_CHUNK * 4);
+                    let flush = |b: &[u8]| {
+                        if !b.is_empty() {
+                            let _ = journal.lock().unwrap().append(stream, b);
+                            t.ship.notify_one();
+                        }
+                    };
+                    match seen {
+                        Ok(spool::Seen::Data(b)) => {
+                            flush(&lines.push(&b));
+                            last.store(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+                        }
+                        Ok(spool::Seen::Shrunk { from, to }) => {
+                            flush(&lines.take_all());
+                            note(format!("the job's {name} file shrank from {from} to {to} bytes (the job truncated it); reading on from there"));
+                        }
+                        Ok(spool::Seen::Jumped { from, to }) => {
+                            flush(&lines.take_all());
+                            note(format!("the job's {name} file jumped ahead by {} bytes; that part was skipped", to - from));
+                        }
+                        Ok(spool::Seen::Nothing) => break,
+                        Err(e) => {
+                            note(format!("reading the job's {name}: {e}"));
+                            break;
+                        }
+                    }
+                    if mode != TailCmd::Finish && passes >= 64 {
+                        break;
+                    }
+                }
+                if mode == TailCmd::Finish {
+                    let rest = lines.take_all();
+                    if !rest.is_empty() {
+                        let _ = journal.lock().unwrap().append(stream, &rest);
+                        t.ship.notify_one();
+                    }
+                }
+                // How far the journal really got: a held partial line is
+                // read again by the next process (≤ one repeated chunk on a
+                // crash between the journal and this write, §5.1).
+                let flushed = tail.read - lines.held_len() as u64;
+                if flushed != persisted {
+                    if let Some(f) = &facts {
+                        let dropped = journal.lock().unwrap().dropped;
+                        let snapshot = {
+                            let mut g = f.lock().unwrap();
+                            match stream {
+                                k2_node_proto::frames::LogStream::Err => {
+                                    if let Some(s) = g.err.as_mut() {
+                                        s.off = flushed;
+                                    }
+                                }
+                                _ => {
+                                    if let Some(s) = g.out.as_mut() {
+                                        s.off = flushed;
+                                    }
+                                }
+                            }
+                            g.log_dropped = dropped;
+                            g.clone()
+                        };
+                        node.save_run(&t, &job, gen, &snapshot);
+                    }
+                    persisted = flushed;
+                    if let Some(e) = tail.give_back(flushed) {
+                        crate::nlog!("job {job}: can't punch holes in its {name} file ({e}); it grows until the job ends");
+                        node.status.lock().unwrap().spool_punch_error = Some(e);
+                    }
+                }
+                if mode != TailCmd::Run {
+                    return;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(spool::POLL_MS)) => {}
+                    r = cmd.changed() => {
+                        if r.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     fn take_smoke_lock(&self, job: &str) {
         let path = self.local.lock().unwrap().policy.write_smoke_lock.clone();
         if let Some(p) = path {
@@ -1404,6 +1962,9 @@ impl Node {
     ) {
         let job = &a.fence.job_id;
         let gen = a.fence.generation;
+        // Its output files and holder folder (§5.1, §5.2) go with it: the
+        // journal has what was in them.
+        self.forget_run_files(t, job, gen);
         // Review B-H1: a secret attempt's tree (home, checkout, target,
         // caches, tmp) goes now, while the job still counts as running, so
         // no other workspace's job (same uid) starts before it's gone. Only

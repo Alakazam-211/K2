@@ -292,7 +292,20 @@ pub struct JobStart {
     /// sends one unless `Ready` said `stdin` (SV18).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stdin: bool,
+    /// The job's time limit (C11, update continuity): the unit gets
+    /// `RuntimeMaxSec` = this + [`RUNTIME_MAX_SLACK_SECS`], clamped to
+    /// [`RUNTIME_MAX_CAP_SECS`], so a job no node watches still ends at its
+    /// limit. An older node sends none (no `RuntimeMaxSec`); an older
+    /// executor ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_secs: Option<u64>,
 }
+
+/// `RuntimeMaxSec` is the job's limit plus this: while a node runs, it
+/// always stops the job at its own limit first (a `timeout` with its log).
+pub const RUNTIME_MAX_SLACK_SECS: u64 = 60;
+/// No unit runs longer than 7 days, whatever a node asks.
+pub const RUNTIME_MAX_CAP_SECS: u64 = 7 * 24 * 3600;
 
 /// What `Tenants` answers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -605,6 +618,14 @@ pub struct UnitPlan {
     /// says. The owner's and `own` tenants' units keep them (Chromium's
     /// sandbox in Playwright tests needs a user namespace).
     pub restrict_userns: bool,
+    /// `RuntimeMaxSec` (already clamped), or none.
+    pub runtime_max_secs: Option<u64>,
+}
+
+/// The unit's `RuntimeMaxSec` for a node's `max_secs` (C11): an integer,
+/// the limit plus the slack, never over the cap; 0 or none = none.
+pub fn runtime_max(max_secs: Option<u64>) -> Option<u64> {
+    max_secs.filter(|m| *m > 0).map(|m| m.saturating_add(RUNTIME_MAX_SLACK_SECS).min(RUNTIME_MAX_CAP_SECS))
 }
 
 /// What a `team` tenant's unit may never create (SB-A1): the kernel's
@@ -674,6 +695,9 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         prop(TEAM_RESTRICT_NAMESPACES.into());
     }
     prop(format!("TimeoutStopSec={}", p.stop_grace_secs.clamp(1, 600)));
+    if let Some(m) = p.runtime_max_secs {
+        prop(format!("RuntimeMaxSec={m}"));
+    }
     // The job's /tmp and /var/tmp are its own folders in its job root (not
     // PrivateTmp, whose /var/tmp/systemd-private-* sits outside the slot):
     // what a job writes there is counted in its server's disk use and
@@ -1269,6 +1293,7 @@ impl Executor {
             lan_extra: if network == Network::NoLan { lan_deny_extra() } else { Vec::new() },
             no_core: s.stdin,
             restrict_userns,
+            runtime_max_secs: runtime_max(s.max_secs),
         };
         {
             let mut g = starting().lock().unwrap_or_else(|e| e.into_inner());
@@ -1543,7 +1568,25 @@ mod tests {
             lan_extra: Vec::new(),
             no_core: false,
             restrict_userns: false,
+            runtime_max_secs: None,
         }
+    }
+
+    /// C11: a node's time limit becomes the unit's `RuntimeMaxSec` (+ the
+    /// slack, capped at 7 days, an integer); none from an older node.
+    #[test]
+    fn the_unit_carries_the_jobs_time_limit() {
+        assert_eq!(runtime_max(Some(600)), Some(660));
+        assert_eq!(runtime_max(Some(u64::MAX)), Some(RUNTIME_MAX_CAP_SECS));
+        assert_eq!(runtime_max(Some(0)), None);
+        assert_eq!(runtime_max(None), None);
+        let mut p = plan();
+        assert!(!systemd_run_argv(&p).iter().any(|a| a.starts_with("RuntimeMaxSec")), "an older node's start: no limit");
+        p.runtime_max_secs = runtime_max(Some(3600));
+        let argv = systemd_run_argv(&p);
+        assert!(argv.iter().any(|a| a == "RuntimeMaxSec=3660"), "{argv:?}");
+        let old: JobStart = serde_json::from_str(r#"{"key":"j-g1","root":"/r","rw":[],"network_none":false,"mem_bytes":null,"cpu_millis":null,"stop_grace_secs":10}"#).unwrap();
+        assert_eq!(old.max_secs, None);
     }
 
     /// SB-A1: a team tenant's unit can't make user or network namespaces;
@@ -1963,8 +2006,8 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false }),
-            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60) }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None }),
             JobOp::Tenants,
             JobOp::TenantPrepare(share::TenantPrepare { slot: 1, trust: share::Trust::Own, weight: 1, network: Network::On }),
             JobOp::TenantWipe(share::TenantWipe { slot: 1 }),
@@ -1982,7 +2025,7 @@ mod tests {
         let JobOp::Start(s) = old else { panic!() };
         assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
         // A start without stdin is the 0.46.3 wire, byte for byte.
-        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false });
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None });
         assert!(!serde_json::to_string(&plain).unwrap().contains("stdin"));
         // An older executor's Ready (no stdin) reads as "can't relay stdin".
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();

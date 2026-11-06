@@ -660,6 +660,7 @@ fn nothing_acts_beside_an_unfinished_change() {
         tenant: 0,
         no_lan: false,
         stdin: false,
+        max_secs: None,
     });
     match r.exec.handle_job(&start, vec![]) {
         crate::admin::jobs::JobAnswer::Refused(e) => assert_eq!(e.code, IN_PROGRESS, "{e:?}"),

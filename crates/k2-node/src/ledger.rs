@@ -16,6 +16,11 @@
 //! Upgrades find columns with `pragma_table_info`, never by trusting
 //! `user_version`: a node rolled back to 0.46.4 stamps 3 again over a v4
 //! file, and this build then finds `tier` already there (T17).
+//!
+//! v5 (update continuity, prd-compute-update-continuity-v1 §5.3) adds
+//! `run_json`: how a running attempt can be found again by the next
+//! k2-node process (its unit or holder, spool files and offsets, lease).
+//! A row without it is never adopted.
 
 use std::path::Path;
 
@@ -81,6 +86,8 @@ pub struct Row {
     pub enqueued_at: Option<i64>,
     /// Insert order in this ledger (SQLite rowid).
     pub seq: i64,
+    /// Run facts for adoption (v5; `crate::node::adopt::RunFacts` JSON).
+    pub run_json: Option<String>,
 }
 
 impl Row {
@@ -107,7 +114,7 @@ pub struct Ledger {
 }
 
 const COLS: &str = "job_id, generation, attempt, plan_digest, plan_json, state, reason, detail, created_at, \
-    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json, enqueued_at, rowid";
+    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json, enqueued_at, rowid, run_json";
 
 /// The ended states, as SQL: one list for every guard (finish, set_state,
 /// the open-row queries); a test keeps it equal to
@@ -151,6 +158,7 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         outputs: r.get::<_, Option<String>>(18)?.and_then(|s| serde_json::from_str(&s).ok()),
         enqueued_at: r.get(19)?,
         seq: r.get(20)?,
+        run_json: r.get(21)?,
     })
 }
 
@@ -218,7 +226,16 @@ impl Ledger {
         if !has_tier {
             conn.execute_batch("ALTER TABLE jobs ADD COLUMN tier TEXT;").map_err(sqlerr)?;
         }
-        conn.execute_batch("PRAGMA user_version = 4;").map_err(sqlerr)?;
+        // v5: run facts, so the next k2-node process adopts a running job
+        // (prd-compute-update-continuity-v1 §5.3). Found by column, like v2–v4.
+        let has_run = conn
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'run_json'")
+            .and_then(|mut st| st.exists([]))
+            .map_err(sqlerr)?;
+        if !has_run {
+            conn.execute_batch("ALTER TABLE jobs ADD COLUMN run_json TEXT;").map_err(sqlerr)?;
+        }
+        conn.execute_batch("PRAGMA user_version = 5;").map_err(sqlerr)?;
         let id: Option<String> = conn
             .query_row("SELECT v FROM meta WHERE k = 'ledger_id'", [], |r| r.get(0))
             .optional()
@@ -529,6 +546,12 @@ impl Ledger {
     /// what's left of each process group. Queued rows never started:
     /// they stay queued (V47).
     pub fn interrupt_open(&self, reason: &str, clock: &dyn Clock) -> Result<Vec<(String, u32, Option<i32>)>, String> {
+        self.interrupt_open_except(reason, &[], clock)
+    }
+
+    /// [`Self::interrupt_open`], leaving the attempts in `keep` open (the
+    /// ones the new process adopts).
+    pub fn interrupt_open_except(&self, reason: &str, keep: &[(String, u32)], clock: &dyn Clock) -> Result<Vec<(String, u32, Option<i32>)>, String> {
         let mut st = self
             .conn
             .prepare(&format!("SELECT job_id, generation, pid, log_seq FROM jobs WHERE state NOT IN {TERMINAL} AND state != 'queued'"))
@@ -541,10 +564,37 @@ impl Ledger {
         drop(st);
         let mut out = Vec::new();
         for (job, gen, pid, seq) in rows {
+            if keep.iter().any(|(j, g)| *j == job && *g == gen) {
+                continue;
+            }
             self.finish(&job, gen, JobState::Interrupted, Some(reason), None, None, seq as u64, clock.now())?;
             out.push((job, gen, pid.map(|p| p as i32)));
         }
         Ok(out)
+    }
+
+    /// Record (or replace) an attempt's run facts (v5). Only an open row:
+    /// an ended attempt is never made adoptable again.
+    pub fn set_run(&self, job_id: &str, generation: u32, run_json: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                &format!("UPDATE jobs SET run_json = ?3 WHERE job_id = ?1 AND generation = ?2 AND state NOT IN {TERMINAL}"),
+                params![job_id, generation, run_json],
+            )
+            .map_err(sqlerr)?;
+        Ok(())
+    }
+
+    /// Open (started, not queued) rows of `boot` that carry run facts.
+    pub fn open_runs(&self, boot: &str) -> Result<Vec<Row>, String> {
+        let mut st = self
+            .conn
+            .prepare(&format!(
+                "SELECT {COLS} FROM jobs WHERE state NOT IN {TERMINAL} AND state != 'queued' AND boot_id = ?1 AND run_json IS NOT NULL ORDER BY rowid"
+            ))
+            .map_err(sqlerr)?;
+        let rows = st.query_map(params![boot], row_of).map_err(sqlerr)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sqlerr)
     }
 
     /// Delete terminal rows that ended before `before`.
@@ -823,7 +873,7 @@ pub mod tests {
         l.insert(&assign("plain", 1), &clock).unwrap();
         drop(l);
         let c = Connection::open(&path).unwrap();
-        assert_eq!(version(&c), 4);
+        assert_eq!(version(&c), 5);
         assert_eq!(tier_of(&c, "p").as_deref(), Some("priority"));
         assert_eq!(tier_of(&c, "old-gate").as_deref(), Some("ci"), "an old server's gate plan is CI");
         assert_eq!(tier_of(&c, "plain").as_deref(), Some("normal"));
@@ -835,7 +885,7 @@ pub mod tests {
         assert_eq!((row.state, row.plan.tier), (JobState::Queued, Some(k2_node_proto::tiers::Tier::Priority)), "queued tiers survive the restart");
         drop(l);
         let c = Connection::open(&path).unwrap();
-        assert_eq!(version(&c), 4);
+        assert_eq!(version(&c), 5);
         let cols: i64 = c.query_row("SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'tier'", [], |r| r.get(0)).unwrap();
         assert_eq!(cols, 1, "the column is added once");
         // The 0.46.4 reader: its column list (this build's, without `tier`)
@@ -844,5 +894,41 @@ pub mod tests {
         let mut v: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         v["a_field_from_the_future"] = serde_json::json!(1);
         assert!(serde_json::from_value::<Plan>(v).is_ok(), "Plan has no deny_unknown_fields: an older binary reads a tiered row");
+    }
+
+    /// Ledger v5 (update continuity, §5.3): a v4 file gains `run_json`
+    /// once; run facts land only on open rows; `open_runs` lists this
+    /// boot's started rows that have them; `interrupt_open_except` keeps
+    /// exactly the rows the new process adopts and ends the rest.
+    #[test]
+    fn run_facts_mark_the_rows_a_new_process_may_adopt() {
+        let d = crate::util::temp_dir("ledger-v5");
+        let path = d.join("l.sqlite");
+        let clock = FakeClock { t: Mutex::new(10), boot: Mutex::new("b1".into()) };
+        {
+            let l = Ledger::open(&path).unwrap();
+            for j in ["keep", "plain", "done"] {
+                l.insert(&assign(j, 1), &clock).unwrap();
+                l.set_running(j, 1, 4242, None, 11).unwrap();
+            }
+            l.set_run("keep", 1, r#"{"v":1}"#).unwrap();
+            assert!(l.finish("done", 1, JobState::Done, None, None, None, 0, 12).unwrap());
+            l.set_run("done", 1, r#"{"v":1}"#).unwrap();
+            l.insert_queued(&assign("q", 1), &clock).unwrap();
+        }
+        let l = Ledger::open(&path).unwrap();
+        let c = Connection::open(&path).unwrap();
+        let cols: i64 = c.query_row("SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'run_json'", [], |r| r.get(0)).unwrap();
+        assert_eq!(cols, 1, "the column is added once");
+        assert_eq!(l.get("done", 1).unwrap().unwrap().run_json, None, "an ended row never gets run facts");
+        let runs = l.open_runs("b1").unwrap();
+        assert_eq!(runs.iter().map(|r| r.job_id.as_str()).collect::<Vec<_>>(), vec!["keep"]);
+        assert_eq!(runs[0].run_json.as_deref(), Some(r#"{"v":1}"#));
+        assert!(l.open_runs("another-boot").unwrap().is_empty(), "another boot's rows are never adopted");
+        let ended = l.interrupt_open_except("node_update", &[("keep".into(), 1)], &clock).unwrap();
+        assert_eq!(ended.iter().map(|x| (x.0.as_str(), x.2)).collect::<Vec<_>>(), vec![("plain", Some(4242))]);
+        assert_eq!(l.get("keep", 1).unwrap().unwrap().state, JobState::Running);
+        assert_eq!(l.get("plain", 1).unwrap().unwrap().reason.as_deref(), Some("node_update"));
+        assert_eq!(l.get("q", 1).unwrap().unwrap().state, JobState::Queued, "queued rows stay queued");
     }
 }

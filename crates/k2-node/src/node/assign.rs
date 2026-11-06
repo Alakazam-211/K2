@@ -182,6 +182,8 @@ impl Node {
                 workspace: a.plan.workspace_id.clone(),
                 secret: !a.plan.secret_env.is_empty(),
                 port_block,
+                adoptable: false,
+                rust: Vec::new(),
             },
         );
         drop(jobs);
@@ -569,6 +571,8 @@ impl Node {
                     workspace: String::new(),
                     secret: false,
                     port_block: None,
+                    adoptable: false,
+                    rust: Vec::new(),
                 },
             );
         }

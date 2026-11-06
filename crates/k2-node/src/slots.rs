@@ -71,6 +71,11 @@ impl Slots {
         }
     }
 
+    /// An adopted job still holds slot `n` (update continuity, C9).
+    pub fn mark_busy(&mut self, project_key: &str, n: u32) {
+        self.busy.insert((project_key.to_string(), n));
+    }
+
     pub fn is_busy(&self, project_key: &str, n: u32) -> bool {
         self.busy.contains(&(project_key.to_string(), n))
     }

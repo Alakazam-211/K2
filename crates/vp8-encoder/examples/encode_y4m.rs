@@ -43,7 +43,10 @@ fn main() {
                 i += 2;
             }
             w => {
-                size = Some((w.parse().expect("width"), args[i + 1].parse().expect("height")));
+                size = Some((
+                    w.parse().expect("width"),
+                    args[i + 1].parse().expect("height"),
+                ));
                 i += 2;
             }
         }
@@ -87,13 +90,19 @@ fn main() {
     let count_pos = ivf.len();
     ivf.extend_from_slice(&0u32.to_le_bytes());
     ivf.extend_from_slice(&0u32.to_le_bytes());
-    let mut decoded_yuv = std::io::BufWriter::new(std::fs::File::create(format!("{output}.dec.yuv")).expect("create .dec.yuv"));
+    let mut decoded_yuv = std::io::BufWriter::new(
+        std::fs::File::create(format!("{output}.dec.yuv")).expect("create .dec.yuv"),
+    );
 
     // Where each frame's pixels start.
     let mut starts = Vec::new();
     let mut pos = header_end + 1;
     while pos < data.len() {
-        let line_end = pos + data[pos..].iter().position(|&b| b == b'\n').expect("FRAME line");
+        let line_end = pos
+            + data[pos..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .expect("FRAME line");
         pos = line_end + 1;
         assert!(pos + frame_len <= data.len(), "truncated frame");
         starts.push(pos);
@@ -146,11 +155,23 @@ fn main() {
         ivf.extend_from_slice(&(n as u64 - 1).to_le_bytes());
         ivf.extend_from_slice(&out.data);
         out_frames += 1;
-        let p = dec.decode(&out.data).expect("own output decodes").expect("shown");
+        let p = dec
+            .decode(&out.data)
+            .expect("own output decodes")
+            .expect("shown");
         let got = p.to_i420();
         decoded_yuv.write_all(&got).expect("write .dec.yuv");
-        let mse: f64 = got.iter().zip(&reference).map(|(&a, &b)| (a as f64 - b as f64).powi(2)).sum::<f64>() / got.len() as f64;
-        psnr_sum += if mse == 0.0 { 99.0 } else { 10.0 * (65025.0 / mse).log10() };
+        let mse: f64 = got
+            .iter()
+            .zip(&reference)
+            .map(|(&a, &b)| (a as f64 - b as f64).powi(2))
+            .sum::<f64>()
+            / got.len() as f64;
+        psnr_sum += if mse == 0.0 {
+            99.0
+        } else {
+            10.0 * (65025.0 / mse).log10()
+        };
     }
     qs.sort_unstable();
     let q_range = match (qs.first(), qs.last()) {
@@ -158,7 +179,10 @@ fn main() {
         _ => "no frames".to_string(),
     };
     let steady = if n > 2 * fps as usize {
-        format!("{:.0} kbit/s after the first second", steady_bytes as f64 * 8.0 / ((n - fps as usize) as f64 / fps as f64) / 1000.0)
+        format!(
+            "{:.0} kbit/s after the first second",
+            steady_bytes as f64 * 8.0 / ((n - fps as usize) as f64 / fps as f64) / 1000.0
+        )
     } else {
         "too short for a steady rate".to_string()
     };

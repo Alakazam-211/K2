@@ -31,7 +31,9 @@ impl Rng {
 }
 
 fn lattice(x: i32, y: i32, seed: u32) -> f32 {
-    let mut h = (x as u32).wrapping_mul(374_761_393) ^ (y as u32).wrapping_mul(668_265_263) ^ seed.wrapping_mul(2_246_822_519);
+    let mut h = (x as u32).wrapping_mul(374_761_393)
+        ^ (y as u32).wrapping_mul(668_265_263)
+        ^ seed.wrapping_mul(2_246_822_519);
     h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
     h ^= h >> 16;
     (h & 0xffff) as f32 / 65535.0 * 2.0 - 1.0
@@ -62,7 +64,14 @@ impl Scene {
         // Scale features with the frame, so 360p and 720p show the same
         // scene at two resolutions (the 720p one has more fine detail).
         let s = h as f32 / 360.0;
-        let octaves = [(96.0, 46.0), (48.0, 30.0), (24.0, 20.0), (12.0, 13.0), (6.0, 8.0), (3.0, 5.0)];
+        let octaves = [
+            (96.0, 46.0),
+            (48.0, 30.0),
+            (24.0, 20.0),
+            (12.0, 13.0),
+            (6.0, 8.0),
+            (3.0, 5.0),
+        ];
         let mut luma = vec![0f32; w * h];
         for y in 0..h {
             for x in 0..w {
@@ -87,8 +96,12 @@ impl Scene {
         for y in 0..ch {
             for x in 0..cw {
                 let (fx, fy) = (x as f32, y as f32);
-                cb[y * cw + x] = 128.0 + 18.0 * value_noise(fx, fy, 40.0 * s, seed + 200) + 5.0 * value_noise(fx, fy, 6.0 * s, seed + 201);
-                cr[y * cw + x] = 128.0 + 14.0 * value_noise(fx, fy, 50.0 * s, seed + 300) + 4.0 * value_noise(fx, fy, 5.0 * s, seed + 301);
+                cb[y * cw + x] = 128.0
+                    + 18.0 * value_noise(fx, fy, 40.0 * s, seed + 200)
+                    + 5.0 * value_noise(fx, fy, 6.0 * s, seed + 201);
+                cr[y * cw + x] = 128.0
+                    + 14.0 * value_noise(fx, fy, 50.0 * s, seed + 300)
+                    + 4.0 * value_noise(fx, fy, 5.0 * s, seed + 301);
             }
         }
         Scene { w, luma, cb, cr }
@@ -142,7 +155,12 @@ impl Camera {
                 let (dx, dy) = (x as f32 - cx, y as f32 - cy);
                 let v = if dx * dx + dy * dy < r * r {
                     // The object: the scene's texture from far away, brighter.
-                    30.0 + bilinear(&sc.luma, sc.w, (dx + r + 3.0).max(0.0) * 1.7 + 2.0, (dy + r + 3.0).max(0.0) * 1.1 + 2.0)
+                    30.0 + bilinear(
+                        &sc.luma,
+                        sc.w,
+                        (dx + r + 3.0).max(0.0) * 1.7 + 2.0,
+                        (dy + r + 3.0).max(0.0) * 1.1 + 2.0,
+                    )
                 } else {
                     bilinear(&sc.luma, sc.w, x as f32 + ox, y as f32 + oy)
                 };
@@ -155,8 +173,10 @@ impl Camera {
         for y in 0..ch {
             for x in 0..cw {
                 let (sx, sy) = (x as f32 + ox / 2.0, y as f32 + oy / 2.0);
-                out[w * h + y * cw + x] = bilinear(&sc.cb, csw, sx, sy).round().clamp(0.0, 255.0) as u8;
-                out[w * h + cw * ch + y * cw + x] = bilinear(&sc.cr, csw, sx, sy).round().clamp(0.0, 255.0) as u8;
+                out[w * h + y * cw + x] =
+                    bilinear(&sc.cb, csw, sx, sy).round().clamp(0.0, 255.0) as u8;
+                out[w * h + cw * ch + y * cw + x] =
+                    bilinear(&sc.cr, csw, sx, sy).round().clamp(0.0, 255.0) as u8;
             }
         }
         out
@@ -174,7 +194,11 @@ fn fake_pattern(w: usize, h: usize, n: usize) -> Vec<u8> {
     for y in 0..h {
         for x in 0..w {
             let in_bar = x >= bar_x && x < bar_x + bar_w && y > h / 4;
-            buf[y * w + x] = if in_bar { 200 } else { (40 + (x * 100 / w.max(1)) + (y * 60 / h.max(1))) as u8 };
+            buf[y * w + x] = if in_bar {
+                200
+            } else {
+                (40 + (x * 100 / w.max(1)) + (y * 60 / h.max(1))) as u8
+            };
         }
     }
     let code = n as u32;
@@ -263,12 +287,22 @@ fn camera_content_hits_the_target() {
                 let m = measure(cfg, |t| cam.frame(t));
                 let off = report("camera", w, h, layers, rate, &m);
                 if off.abs() > TOLERANCE {
-                    failures.push(format!("{w}x{h} {layers:?} at {} kbit/s: {:.0} kbit/s ({:+.1}%)", rate / 1000, m.kbps, off * 100.0));
+                    failures.push(format!(
+                        "{w}x{h} {layers:?} at {} kbit/s: {:.0} kbit/s ({:+.1}%)",
+                        rate / 1000,
+                        m.kbps,
+                        off * 100.0
+                    ));
                 }
             }
         }
     }
-    assert!(failures.is_empty(), "off target by more than {:.0}%:\n{}", TOLERANCE * 100.0, failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "off target by more than {:.0}%:\n{}",
+        TOLERANCE * 100.0,
+        failures.join("\n")
+    );
 }
 
 /// The fake camera's pattern is mostly flat: it may undershoot, but only
@@ -283,7 +317,11 @@ fn easy_content_undershoots_only_at_the_quantizer_floor() {
             let m = measure(cfg, |t| fake_pattern(w as usize, h as usize, t));
             let off = report("fake pattern", w, h, layers, rate, &m);
             if off > TOLERANCE {
-                failures.push(format!("{layers:?} at {} kbit/s: overshoot {:+.1}%", rate / 1000, off * 100.0));
+                failures.push(format!(
+                    "{layers:?} at {} kbit/s: overshoot {:+.1}%",
+                    rate / 1000,
+                    off * 100.0
+                ));
             }
             if off < -TOLERANCE && m.q_median > Q_FLOOR {
                 failures.push(format!(

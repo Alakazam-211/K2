@@ -263,6 +263,7 @@ fn run_script(inner: Arc<Inner>) {
 impl VideoBackend for FakeBackend {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::new("fake", crate::platform::os_name());
+        crate::rust_codecs::add_capabilities(&mut caps);
         caps.camera = true;
         caps.screen = ScreenCapability {
             supported: true,
@@ -388,6 +389,9 @@ impl VideoBackend for FakeBackend {
 
     fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
+            return r;
+        }
         if self.inner.cfg.codec != FakeCodec::Structural || config.codec != VideoCodec::H264 {
             return Err(unsupported(format!("the fake has no {:?} decoder", config.codec)));
         }

@@ -34,13 +34,17 @@ windows = ["dep:windows"]
 linux = ["dep:libc"]
 # Camera2/CameraX, MediaCodec, MediaProjection (not built yet).
 android = []
-# Whichever of the above matches the target.
-system = ["apple", "windows", "linux", "android"]
+# VP8 decoding in pure Rust (the vp8-decoder crate) as a software codec in
+# every backend.
+vp8 = ["dep:vp8-decoder"]
+# Whichever of the OS backends matches the target, plus VP8.
+system = ["apple", "windows", "linux", "android", "vp8"]
 
 [dependencies]
 bytes = "1"
 crossbeam-queue = "0.3"
 thiserror = "2"
+vp8-decoder = { version = "0.1", path = "../vp8-decoder", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.10
+
+### Compute nodes
+- **Compute jobs can read your private GitHub repos.** `k2 compute git-access grant --github <owner>/<repo>` lets a workspace's jobs `git clone` and `git fetch` those repos, sibling repos included, and the node fetches the job's own source itself, so a big private repo no longer stops at the 50 MB relay cap. Tokens are read-only and short-lived: set up a GitHub App once (`k2 compute git-access setup --github-app <id> --key-file <app.pem>`) and each job gets 1-hour tokens for one repo. A fine-grained token works too. The token never sits in the job's environment, so these jobs keep `--cache`, their warm slot and sccache (a `--secret` job doesn't). Only a person grants (an agent asks on a card), `revoke` takes it back at once, and a node another server owns gets tokens only when you name it with `--shared`. More: `k2 compute git-access --help`.
+
 ## 0.46.9 — Voice calls in the desktop app
 
 ### Voice rooms (preview)

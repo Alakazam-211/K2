@@ -25010,6 +25010,13 @@ Agents:
                  from a terminal outside K2 (an agent gets allow_nodes_needs_person,
                  exit 3, and asks on a card). Nodes by name; a node removed and
                  enrolled again is a new node, off the list until added
+  k2 compute git-access [--json] | grant --github <owner>/<repo>[,…] | revoke … | setup …
+                 let this workspace's jobs read private GitHub repos: git clone
+                 and fetch just work, with short-lived read-only tokens, and the
+                 node fetches the job's source itself (no relay cap). No --secret,
+                 so jobs keep --cache and warm slots. A person grants (an agent
+                 gets git_access_needs_person, exit 3, and asks on a card);
+                 k2 compute git-access --help
   k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
                  No node: K2 picks one of the nodes granted to you that can
                  start the job now (a warm one if it isn't busier), else the
@@ -28592,6 +28599,183 @@ if v.get("withdrawn"):
     print("  asked %d job(s) back from a shared node'"'"'s queue (they never start there)" % v["withdrawn"])'
 }
 
+# k2 compute git-access (0.46.10, GH#78): short-lived, read-only git tokens
+# for a workspace's compute jobs, for the GitHub repos a person granted.
+# The daemon decides who may: setup is the owner's or an Admin's (outside
+# K2); grant is a person's (an agent gets git_access_needs_person, exit 3,
+# and asks on a card); an agent may list and revoke its own workspace's.
+_compute_git_access_usage() {
+    cat <<'EOF'
+k2 compute git-access — let compute jobs read private GitHub repos
+
+  k2 compute git-access [--workspace WS] [--json]
+        the workspace's grants and this server's GitHub credential (its
+        kind and App id; never a key or token). WS defaults to the
+        workspace of the folder you run from; an agent always gets its own.
+
+  k2 compute git-access setup --github-app <app id> --key-file <app.pem>
+  k2 compute git-access setup --github-token-file <file> | --github-token-stdin
+  k2 compute git-access setup --clear
+        the server's GitHub credential, one per server. The owner or an
+        Admin, from a terminal outside K2 (a plain shell on this machine,
+        where k2 uses the owner's token; a K2 tab sends the tab's passport
+        and is refused). Preferred: a GitHub App you create (Repository
+        permissions: Contents read-only; install it on every repo you'll
+        grant; download a private key). The key goes into this server's
+        vault: delete the .pem afterwards. Each ask gets a 1-hour token that
+        reads one repo. A fine-grained token (github_pat_…) also works, but
+        GitHub can't mint short-lived tokens from it, so nodes get the
+        token itself: make it read-only, for just these repos, with an
+        expiry. Your gh login and classic tokens (ghp_…) are refused: they
+        reach every repo you can, with write access.
+
+  k2 compute git-access grant --github <owner>/<repo>[,<owner>/<repo>…]
+        [--nodes all|<node>[,<node>…]] [--shared] [--workspace WS]
+        let the workspace's jobs read these repos. Grant the job's own repo
+        too when it's a private GitHub repo: the node then fetches it
+        itself, so the 50 MB relay cap no longer applies. --nodes all (the
+        default) is every node this server owns, now and enrolled later
+        (k2 compute nodes lists them; a node another server shares with you
+        says "shared by …"). Such a node needs its name and --shared: the
+        token then reaches that machine (its admin can read it while a job
+        uses it); App tokens only. Access is read-only; there's no write
+        (--read-only is accepted and changes nothing). The grant checks each
+        repo with GitHub first. It reaches jobs placed after it.
+        A person grants. An agent gets git_access_needs_person (exit 3) and
+        asks: k2 permission request compute.git-access repos=<owner>/<repo> --why "…"
+        When a person approves that card, the grant is made (every node this
+        server owns); run the job again.
+
+  k2 compute git-access revoke --github <owner>/<repo>[,…] [--nodes …] | --all [--workspace WS]
+        new asks are refused at once; an App's tokens already handed out are
+        deleted at GitHub. Running jobs keep running; their next git call
+        for the repo fails. A fine-grained token stays valid at GitHub until
+        you rotate it there. An agent may revoke its own workspace's.
+
+What a job sees: plain `git clone/fetch https://github.com/<owner>/<repo>`
+works (submodules too; ssh URLs to github.com are read as https), through
+git's own credential helper. Cargo git dependencies: add
+--env CARGO_NET_GIT_FETCH_WITH_CLI=true so cargo uses git. Inside the job
+this needs a Linux node with the job wall (sudo k2-node setup); on a Mac or
+an unwalled node only the node's own fetch of your source uses the grant.
+The token is never in the job's env, so the job keeps --cache, its warm
+slot and sccache. A job can read a token it's handed while it runs.
+More: k2 study compute (GIT ACCESS).
+EOF
+}
+
+cmd_compute_git_access() {
+    local verb="list"
+    case "${1:-}" in
+        setup|grant|revoke|list) verb="$1"; shift ;;
+    esac
+    local github="" nodes="" workspace="" shared="" all="" clear="" app_id="" key_file="" token_file="" token_stdin="" as_json=0
+    local usage="usage: k2 compute git-access [setup|grant|revoke] … (k2 compute git-access --help)"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --github|--nodes|--workspace|--github-app|--key-file|--github-token-file)
+                [ $# -ge 2 ] && [ -n "$2" ] || { echo "$usage ($1 needs a value)" >&2; exit 2; }
+                case "$1" in
+                    --github) github="${github:+$github,}$2" ;;
+                    --nodes) nodes="${nodes:+$nodes,}$2" ;;
+                    --workspace) workspace="$2" ;;
+                    --github-app) app_id="$2" ;;
+                    --key-file) key_file="$2" ;;
+                    --github-token-file) token_file="$2" ;;
+                esac
+                shift 2 ;;
+            --github-token-stdin) token_stdin=1; shift ;;
+            --shared) shared=1; shift ;;
+            --read-only) shift ;;
+            --all) all=1; shift ;;
+            --clear) clear=1; shift ;;
+            --json) as_json=1; shift ;;
+            *) echo "$usage (unknown argument '$1')" >&2; exit 2 ;;
+        esac
+    done
+    local ws
+    ws="$(_compute_ws "$workspace")"
+    case "$verb" in
+        list)
+            local q=""
+            [ -n "$ws" ] && q="workspace=$(urlencode "$ws")"
+            _compute_call GET /cli/compute/git-access "$q"
+            ;;
+        setup)
+            local body
+            if [ -n "$clear" ]; then
+                body='{"clear":true}'
+            elif [ -n "$app_id" ]; then
+                [ -n "$key_file" ] || { echo "usage: k2 compute git-access setup --github-app <app id> --key-file <app.pem>" >&2; exit 2; }
+                [ -r "$key_file" ] || { echo "k2 compute git-access: can't read $key_file" >&2; exit 2; }
+                body="$(K2_GA_ID="$app_id" K2_GA_FILE="$key_file" python3 -c '
+import json, os
+print(json.dumps({"app_id": os.environ["K2_GA_ID"], "key_pem": open(os.environ["K2_GA_FILE"]).read()}))')"
+            elif [ -n "$token_file" ] || [ -n "$token_stdin" ]; then
+                if [ -n "$token_file" ]; then
+                    [ -r "$token_file" ] || { echo "k2 compute git-access: can't read $token_file" >&2; exit 2; }
+                fi
+                body="$(K2_GA_FILE="$token_file" python3 -c '
+import json, os, sys
+f = os.environ.get("K2_GA_FILE")
+t = (open(f).read() if f else sys.stdin.read()).strip()
+print(json.dumps({"token": t}))')"
+            else
+                echo "usage: k2 compute git-access setup --github-app <app id> --key-file <app.pem> | --github-token-file <file> | --github-token-stdin | --clear" >&2
+                exit 2
+            fi
+            _compute_call POST /cli/compute/git-access/setup "$body"
+            ;;
+        grant)
+            [ -n "$github" ] || { echo "usage: k2 compute git-access grant --github <owner>/<repo>[,…] [--nodes all|<node>,…] [--shared] [--workspace WS]" >&2; exit 2; }
+            _compute_call POST /cli/compute/git-access/grant "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_github="$github" K2_CJ_nodes="$nodes" K2_CJ_shared_b="$shared")"
+            ;;
+        revoke)
+            [ -n "$github$all" ] || { echo "usage: k2 compute git-access revoke --github <owner>/<repo>[,…] [--nodes …] | --all [--workspace WS]" >&2; exit 2; }
+            _compute_call POST /cli/compute/git-access/revoke "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_github="$github" K2_CJ_nodes="$nodes" K2_CJ_all_b="$all")"
+            ;;
+    esac
+    [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if "workspace" not in v:
+    c = v.get("credential")
+    if c is None:
+        print("GitHub credential cleared: every later ask for a git token is refused; grants stay")
+    else:
+        print("GitHub credential set: %s%s" % ("App " + str(c.get("appId")) + (" (" + c["app"] + ")" if c.get("app") else "") if c.get("kind") == "app" else "fine-grained token", ""))
+    if v.get("note"):
+        print("  " + v["note"])
+    sys.exit(0)
+c = v.get("credential")
+if c:
+    print("credential: %s" % ("GitHub App " + str(c.get("appId")) if c.get("kind") == "app" else "a fine-grained token (nodes get the token itself)"))
+else:
+    print("credential: none (a person runs: k2 compute git-access setup --github-app <id> --key-file <app.pem>)")
+for w in v.get("warnings") or []:
+    print("warning: " + w)
+if v.get("granted"):
+    print("granted: %s" % ", ".join(v["granted"]))
+if v.get("revoked"):
+    print("revoked: %s (%d grant%s removed)" % (", ".join(v["revoked"]), v.get("removed", 0), "" if v.get("removed") == 1 else "s"))
+    if v.get("tokensDeleted"):
+        print("  %d token(s) already handed out were deleted at GitHub" % v["tokensDeleted"])
+    for j in v.get("runningJobs") or []:
+        print("  running job %s had a token for %s: it keeps running; its next git call for it fails" % (j["job"], j["repo"]))
+    if v.get("note"):
+        print("  " + v["note"])
+gs = v.get("grants") or []
+if gs:
+    print("%s: jobs may read" % v["workspace"])
+    for g in gs:
+        print("  %-40s nodes: %s%s" % (g["repo"], g["nodes"], " (shared: another server owns it)" if g.get("shared") else ""))
+else:
+    print("%s: no git access (k2 compute git-access grant --github <owner>/<repo>)" % v["workspace"])
+if v.get("tokenNote"):
+    print("note: " + v["tokenNote"])'
+}
+
 # k2 compute retier <job> --tier T [--why "…"] [--json] (0.46.6, prd
 # job tiers v2 L2): a queued job's tier. The job's own workspace, or the
 # owner / an Admin for any job.
@@ -28907,6 +29091,11 @@ cmd_compute() {
             _compute_node_packages_usage
             return 0
         fi
+        # k2 compute git-access --help: its own page (0.46.10).
+        if [ "$sub" = "git-access" ]; then
+            _compute_git_access_usage
+            return 0
+        fi
         _compute_usage
         return 0
     fi
@@ -28933,6 +29122,7 @@ cmd_compute() {
         retier|tier) cmd_compute_retier "$@" ;;
         move) cmd_compute_move "$@" ;;
         allow-nodes) cmd_compute_allow_nodes "$@" ;;
+        git-access) cmd_compute_git_access "$@" ;;
         cache) cmd_compute_cache "$@" ;;
         queue)
             [ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || { echo "usage: k2 compute queue <node> [--json]" >&2; exit 2; }
@@ -53283,6 +53473,24 @@ NODE LIST (0.46.8)
   --remove N). Adding a node or --clear is a person's (the owner or an
   Admin): allow_nodes_needs_person, exit 3; ask on the card it names.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
+
+GIT ACCESS (0.46.10)
+  k2 compute git-access   the private GitHub repos your jobs may read.
+  With a grant, plain git clone/fetch of https://github.com/<o>/<r> in
+  a job just works (ssh URLs to github.com too). Grant your own repo
+  too: the node then fetches it itself, so no 50 MB relay cap. Tokens
+  are read-only and short-lived (1 hour with a GitHub App), handed to
+  git by its credential helper on Linux nodes with the job wall (on a
+  Mac only the node's fetch of your source uses them). Not in your
+  env, so the job keeps --cache, its warm slot and sccache (--secret
+  doesn't). Cargo git deps: --env CARGO_NET_GIT_FETCH_WITH_CLI=true.
+  A job can still read a token it's handed (git credential fill):
+  don't print it (the log redacts it), don't store it anywhere.
+  Missing one: the log says "<repo> isn't granted" with the command.
+  Only a person grants: git_access_needs_person (exit 3); ask with
+  k2 permission request compute.git-access repos=<o>/<r> --why "…".
+  Once approved, run the job again. You may revoke your own
+  (k2 compute git-access revoke --github …).
 
 RUN
   Attached (default): output streams; the exit code is the command's.

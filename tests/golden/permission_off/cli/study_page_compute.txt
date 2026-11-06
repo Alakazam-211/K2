@@ -94,6 +94,24 @@ NODE LIST (0.46.8)
   Admin): allow_nodes_needs_person, exit 3; ask on the card it names.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
 
+GIT ACCESS (0.46.10)
+  k2 compute git-access   the private GitHub repos your jobs may read.
+  With a grant, plain git clone/fetch of https://github.com/<o>/<r> in
+  a job just works (ssh URLs to github.com too). Grant your own repo
+  too: the node then fetches it itself, so no 50 MB relay cap. Tokens
+  are read-only and short-lived (1 hour with a GitHub App), handed to
+  git by its credential helper on Linux nodes with the job wall (on a
+  Mac only the node's fetch of your source uses them). Not in your
+  env, so the job keeps --cache, its warm slot and sccache (--secret
+  doesn't). Cargo git deps: --env CARGO_NET_GIT_FETCH_WITH_CLI=true.
+  A job can still read a token it's handed (git credential fill):
+  don't print it (the log redacts it), don't store it anywhere.
+  Missing one: the log says "<repo> isn't granted" with the command.
+  Only a person grants: git_access_needs_person (exit 3); ask with
+  k2 permission request compute.git-access repos=<o>/<r> --why "…".
+  Once approved, run the job again. You may revoke your own
+  (k2 compute git-access revoke --github …).
+
 RUN
   Attached (default): output streams; the exit code is the command's.
   --detach prints a job id and returns. When it ends you get one line:

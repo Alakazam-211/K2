@@ -13,5 +13,14 @@
 	     and the same `com.apple.security.device.audio-input` entitlement. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>K2 uses your microphone for voice rooms, and for macOS Dictation in terminal panes.</string>
+	<!-- 0.46.9: video in voice rooms (behind videoRoomsPreview). Sew's plugin
+	     opens the camera through AVFoundation; without this key macOS refuses
+	     it with no prompt. Goes with `com.apple.security.device.camera` in
+	     entitlements.plist. Screen sharing (ScreenCaptureKit) has no usage
+	     string: macOS asks with its own Screen Recording prompt, and the
+	     grant lives in System Settings → Privacy & Security → Screen &
+	     System Audio Recording. -->
+	<key>NSCameraUsageDescription</key>
+	<string>K2 uses your camera for video in voice rooms, only while you turn it on.</string>
 </dict>
 </plist>

@@ -123,6 +123,46 @@ pub fn permissions_open_microphone_settings() -> Result<bool, String> {
     }
 }
 
+/// Open the OS's camera privacy page (video in voice rooms, behind
+/// `videoRoomsPreview`). `false`: this OS has none (Linux has no permission
+/// to grant).
+#[tauri::command]
+pub fn permissions_open_camera_settings() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        open_settings_pane("com.apple.preference.security?Privacy_Camera")?;
+        Ok(true)
+    }
+    #[cfg(windows)]
+    {
+        k2_client::bg_proc::command("explorer")
+            .arg("ms-settings:privacy-webcam")
+            .spawn()
+            .map(|_| true)
+            .map_err(|e| format!("failed to open Settings: {e}"))
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        Ok(false)
+    }
+}
+
+/// Open the OS's screen recording privacy page (screen sharing in voice
+/// rooms). Only macOS has one: Windows has no such permission, and Linux asks
+/// per share through its portal. `false` there.
+#[tauri::command]
+pub fn permissions_open_screen_settings() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        open_settings_pane("com.apple.preference.security?Privacy_ScreenCapture")?;
+        Ok(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(false)
+    }
+}
+
 #[tauri::command]
 pub fn permissions_get_status() -> PermissionStatus {
     PermissionStatus {

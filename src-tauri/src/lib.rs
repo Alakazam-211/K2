@@ -1554,6 +1554,10 @@ pub fn run() {
             commands::permissions::permissions_request_accessibility,
             commands::permissions::permissions_request_microphone,
             commands::permissions::permissions_open_microphone_settings,
+            // Video in voice rooms (behind videoRoomsPreview): the camera and
+            // screen recording privacy panes, for the call panel's refusals.
+            commands::permissions::permissions_open_camera_settings,
+            commands::permissions::permissions_open_screen_settings,
             commands::native_voice::voice_native_status,
             commands::permissions::permissions_request_apple_events,
             commands::permissions::permissions_request_local_network,

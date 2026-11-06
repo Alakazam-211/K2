@@ -27,6 +27,13 @@
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
 
+	<!-- 0.46.9: video in voice rooms. Hardened runtime denies the camera by
+	     default; this plus `NSCameraUsageDescription` in Info.plist let macOS
+	     prompt. Screen recording needs no entitlement (TCC asks at the first
+	     capture), so there is none to add for screen sharing. -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+
 	<!-- REMOVED in 0.40.7 — DO NOT re-add. A `keychain-access-groups` entitlement
 	     was added in 0.40.6 to try to persist the keychain "Always Allow" grant.
 	     It was BOTH fatal and inert:

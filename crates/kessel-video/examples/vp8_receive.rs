@@ -10,6 +10,8 @@
 //! Native, and an I420 to NV12 interleave as an app might do it. On Apple
 //! it also reports the QoS class of the decoder's thread (read from inside
 //! the wake callback), whether it inherits one, and what each class costs.
+// The QoS probe is Apple-only; elsewhere its static and import go unused.
+#![cfg_attr(not(target_vendor = "apple"), allow(dead_code, unused_imports))]
 
 #[path = "../../vp8-encoder/tests/common/camera.rs"]
 mod camera;

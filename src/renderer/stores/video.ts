@@ -1,7 +1,7 @@
 // Video in K2's voice rooms: the app's video controller over Sew's plugin. The
 // logic and its tests live in `stores/video-core.ts`.
 //
-// Dark behind the server's `videoRoomsPreview` setting (off by default): with it
+// Dark behind the server's `videoRoomsPreview` setting (on by default): with it
 // off, nothing loads and no video command is ever sent.
 
 import { useStore } from 'zustand'

@@ -7,7 +7,7 @@
 // here is per-window view state (which tiles this window draws, at what size)
 // and nothing a headless daemon needs.
 //
-// Dark behind the `videoRoomsPreview` setting: off, nothing here loads.
+// Behind the `videoRoomsPreview` setting (on by default): off, nothing here loads.
 
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import {

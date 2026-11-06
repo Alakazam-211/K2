@@ -38,6 +38,8 @@ members = [
     "crates/kessel-video",
     # A pure-Rust VP8 decoder (RFC 6386) for receiving browser video.
     "crates/vp8-decoder",
+    # A pure-Rust real-time VP8 encoder for sending video.
+    "crates/vp8-encoder",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos
@@ -85,6 +87,8 @@ opt-level = 3
 opt-level = 3
 # Video decoding is real time too.
 [profile.dev.package.vp8-decoder]
+opt-level = 3
+[profile.dev.package.vp8-encoder]
 opt-level = 3
 
 [profile.release]

@@ -4848,9 +4848,11 @@ dependencies = [
  "block2",
  "bytes",
  "crossbeam-queue",
+ "libc",
  "objc2",
  "serde_json",
  "thiserror 2.0.18",
+ "windows 0.62.2",
 ]
 
 [[package]]

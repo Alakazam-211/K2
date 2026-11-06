@@ -130,6 +130,9 @@ pub(crate) struct Core {
     started: bool,
 }
 
+/// A 4x4-mode luma candidate: the workspace, the modes, the levels and the cost.
+type BPred = ([u8; LUMA_WS_SIZE], [u8; 16], [i16; 256], u32);
+
 /// What one macroblock decision produced, for the cost comparisons.
 struct Coded {
     info: MbInfo,
@@ -316,7 +319,7 @@ impl Core {
         }
 
         // 4x4 modes, coded as we go so later subblocks predict from them.
-        let mut bpred: Option<([u8; LUMA_WS_SIZE], [u8; 16], [i16; 256], u32)> = None;
+        let mut bpred: Option<BPred> = None;
         if allow_bpred {
             let stride = self.mb_cols + 1;
             let i = (row + 1) * stride + col + 1;
@@ -378,16 +381,16 @@ impl Core {
         let cst = CHROMA_WS_STRIDE;
         let caw = aw / 2;
         let mut cws = [[0u8; CHROMA_WS_SIZE]; 2];
-        for p in 0..2 {
-            predict::fill_ws_border(&mut cws[p], cst, &self.rec[1 + p], caw, 8, col, row, false, false);
+        for (p, w) in cws.iter_mut().enumerate() {
+            predict::fill_ws_border(w, cst, &self.rec[1 + p], caw, 8, col, row, false, false);
         }
         let csrc = row * 8 * caw + col * 8;
         let uv_probs: &[u8] = if key { &KF_UV_MODE_PROBS } else { &DEFAULT_UV_MODE_PROBS };
         let mut best_uv = (u32::MAX, DC_PRED);
         for mode in [DC_PRED, V_PRED, H_PRED, TM_PRED] {
             let mut sad = 0;
-            for p in 0..2 {
-                let mut w = cws[p];
+            for (p, ws) in cws.iter().enumerate() {
+                let mut w = *ws;
                 predict::predict_block(&mut w, cst, 8, mode, row > 0, col > 0);
                 sad += sad16(&w[cst + 1..], cst, &self.src[1 + p][csrc..], caw, 8);
             }
@@ -397,8 +400,7 @@ impl Core {
             }
         }
         info.uv_mode = best_uv.1;
-        for p in 0..2 {
-            let w = &mut cws[p];
+        for (p, w) in cws.iter_mut().enumerate() {
             predict::predict_block(w, cst, 8, best_uv.1, row > 0, col > 0);
             for j in 0..4 {
                 let pos = (1 + (j >> 1) * 4) * cst + 1 + (j & 1) * 4;
@@ -660,10 +662,9 @@ impl Core {
         // Frame-level probabilities from this frame's counts.
         let n = (cols * self.mb_rows) as u64;
         let prob_of = |zeros: u64, total: u64| -> u8 {
-            if total == 0 {
-                128
-            } else {
-                ((zeros * 256 + total / 2) / total).clamp(1, 255) as u8
+            match (zeros * 256 + total / 2).checked_div(total) {
+                Some(p) => p.clamp(1, 255) as u8,
+                None => 128,
             }
         };
         let mut n_noskip = 0u64;
@@ -741,10 +742,8 @@ impl Core {
             h.write_literal(prob_golden as u32, 8);
             h.write_bit(false); // no luma mode probability update
             h.write_bit(false); // no chroma mode probability update
-            for i in 0..2 {
-                for j in 0..MV_PROB_COUNT {
-                    h.write(MV_UPDATE_PROBS[i][j], false);
-                }
+            for &p in MV_UPDATE_PROBS.iter().flatten() {
+                h.write(p, false);
             }
         }
         for row in 0..self.mb_rows {
@@ -826,14 +825,14 @@ impl Core {
         let mut above = vec![[0u8; 9]; cols];
         for row in 0..self.mb_rows {
             let mut left = [0u8; 9];
-            for col in 0..cols {
+            for (col, above) in above.iter_mut().enumerate() {
                 let k = row * cols + col;
                 let mb = &self.mbs[(row + 1) * stride + col + 1];
                 let has_y2 = mb.y_mode != B_PRED && mb.y_mode != SPLITMV;
                 if self.skips[k] {
-                    tokens::skip_mb(has_y2, &mut above[col], &mut left);
+                    tokens::skip_mb(has_y2, above, &mut left);
                 } else {
-                    tokens::write_mb(sink, &self.levels[k], has_y2, &mut above[col], &mut left);
+                    tokens::write_mb(sink, &self.levels[k], has_y2, above, &mut left);
                 }
             }
         }

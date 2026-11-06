@@ -1,6 +1,7 @@
 //! CVPixelBuffers: as native frames, and copies to and from CPU planes.
 
 use super::ffi::*;
+use crate::convert::{PlaneView, SourceView, ViewFn};
 use crate::error::{invalid, VideoError};
 use crate::frame::{
     ColorSpace, FrameBuffer, NativeBuffer, NativeFrame, PixelFormat, Planes, VideoFrame,
@@ -202,6 +203,91 @@ pub(crate) fn tag_color(pb: CVPixelBufferRef, color: ColorSpace) {
             unsafe { CVBufferSetAttachment(pb, k, v, ATTACH_PROPAGATE) };
         }
     }
+}
+
+impl CvFrame {
+    /// Hand the buffer's planes to `f` while it is locked for reading
+    /// (no copy): NV12 (`420v`, `420f`) as Y and interleaved UV, BGRA as
+    /// one packed plane. Other pixel formats are `Unsupported`.
+    pub(crate) fn read_view(&self, f: ViewFn<'_>) -> Result<VideoFrame, VideoError> {
+        let pb = self.raw();
+        let format = format_of(pb);
+        let (w, h) = self.size();
+        if format == PixelFormat::Native {
+            // SAFETY: a live pixel buffer.
+            let t = unsafe { CVPixelBufferGetPixelFormatType(pb) };
+            return Err(VideoError::Unsupported(format!(
+                "pixel format {:?}",
+                t.to_be_bytes()
+            )));
+        }
+        // SAFETY: a live pixel buffer, locked read-only until the end of
+        // this block. Each slice covers a plane's reported rows times its
+        // bytes per row, which the lock keeps mapped, and no slice outlives
+        // the lock: `f` only borrows them for its call.
+        unsafe {
+            if CVPixelBufferLockBaseAddress(pb, LOCK_READ_ONLY) != 0 {
+                return Err(VideoError::os(0, "CVPixelBufferLockBaseAddress failed"));
+            }
+            let plane = |i: Option<usize>| locked_plane(self, i);
+            let r = if format == PixelFormat::Bgra {
+                match plane(None) {
+                    Some(p) => f(
+                        &SourceView::Rgb {
+                            plane: PlaneView::new(p, CVPixelBufferGetBytesPerRow(pb), 4),
+                            bgra: true,
+                        },
+                        w,
+                        h,
+                    ),
+                    None => Err(VideoError::os(0, "a BGRA pixel buffer with no memory")),
+                }
+            } else {
+                match (plane(Some(0)), plane(Some(1))) {
+                    (Some(y), Some(uv)) if uv.len() > 1 => {
+                        let (ys, uvs) = (
+                            CVPixelBufferGetBytesPerRowOfPlane(pb, 0),
+                            CVPixelBufferGetBytesPerRowOfPlane(pb, 1),
+                        );
+                        f(
+                            &SourceView::Yuv([
+                                PlaneView::new(y, ys, 1),
+                                PlaneView::new(uv, uvs, 2),
+                                PlaneView::new(&uv[1..], uvs, 2),
+                            ]),
+                            w,
+                            h,
+                        )
+                    }
+                    _ => Err(VideoError::os(0, "an NV12 pixel buffer plane is missing")),
+                }
+            };
+            CVPixelBufferUnlockBaseAddress(pb, LOCK_READ_ONLY);
+            r
+        }
+    }
+}
+
+/// A locked pixel buffer's plane `i` (`None`: the one plane of a packed
+/// buffer), as its rows times its bytes per row.
+///
+/// # Safety
+/// `cv`'s buffer must be locked for reading while the slice is used.
+unsafe fn locked_plane(cv: &CvFrame, i: Option<usize>) -> Option<&[u8]> {
+    let pb = cv.raw();
+    let (base, bpr, rows) = match i {
+        Some(i) => (
+            CVPixelBufferGetBaseAddressOfPlane(pb, i) as *const u8,
+            CVPixelBufferGetBytesPerRowOfPlane(pb, i),
+            CVPixelBufferGetHeightOfPlane(pb, i),
+        ),
+        None => (
+            CVPixelBufferGetBaseAddress(pb) as *const u8,
+            CVPixelBufferGetBytesPerRow(pb),
+            CVPixelBufferGetHeight(pb),
+        ),
+    };
+    (!base.is_null() && bpr > 0 && rows > 0).then(|| std::slice::from_raw_parts(base, bpr * rows))
 }
 
 impl NativeFrame for CvFrame {

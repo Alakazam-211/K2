@@ -324,6 +324,12 @@ pub(crate) type SetParameters =
     unsafe extern "C" fn(*mut AMediaCodec, *const AMediaFormat) -> media_status_t;
 /// `AMediaCodec_getInputFormat` (API 28).
 pub(crate) type GetInputFormat = unsafe extern "C" fn(*mut AMediaCodec) -> *mut AMediaFormat;
+/// `AMediaCodec_getName` (API 28): the component's name, released with
+/// `AMediaCodec_releaseName`.
+pub(crate) type GetName =
+    unsafe extern "C" fn(*mut AMediaCodec, *mut *mut c_char) -> media_status_t;
+/// `AMediaCodec_releaseName` (API 28).
+pub(crate) type ReleaseName = unsafe extern "C" fn(*mut AMediaCodec, *mut c_char);
 
 /// `ANativeWindow_toSurface` (API 26): a Java `Surface` (a local reference)
 /// for a native window.
@@ -398,6 +404,8 @@ pub(crate) struct Ahb {
 pub(crate) struct Late {
     pub(crate) set_parameters: Option<SetParameters>,
     pub(crate) get_input_format: Option<GetInputFormat>,
+    /// `AMediaCodec_getName` and `AMediaCodec_releaseName`, together.
+    pub(crate) name: Option<(GetName, ReleaseName)>,
     pub(crate) to_surface: Option<ToSurface>,
     pub(crate) ahb: Option<Ahb>,
 }
@@ -425,6 +433,8 @@ pub(crate) fn late() -> &'static Late {
         };
         let set = find(c"AMediaCodec_setParameters");
         let get = find(c"AMediaCodec_getInputFormat");
+        let get_name = find(c"AMediaCodec_getName");
+        let release_name = find(c"AMediaCodec_releaseName");
         // SAFETY: a constant, NUL-terminated name; libnativewindow is a
         // system library (libmediandk loads it).
         let nw = unsafe { dlopen(c"libnativewindow.so".as_ptr(), now) };
@@ -471,6 +481,13 @@ pub(crate) fn late() -> &'static Late {
             // SAFETY: as above.
             get_input_format: (!get.is_null())
                 .then(|| unsafe { std::mem::transmute::<*mut c_void, GetInputFormat>(get) }),
+            // SAFETY: as above.
+            name: (!get_name.is_null() && !release_name.is_null()).then(|| unsafe {
+                (
+                    std::mem::transmute::<*mut c_void, GetName>(get_name),
+                    std::mem::transmute::<*mut c_void, ReleaseName>(release_name),
+                )
+            }),
         }
     })
 }

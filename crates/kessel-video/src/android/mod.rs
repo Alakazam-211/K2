@@ -36,6 +36,7 @@ use crate::platform::{
     AndroidContext, BackgroundListener, HostState, ScreenChange, ScreenListener,
 };
 use crate::types::*;
+use codec::AvcProbe;
 use image::{oriented_box, to_i420, upright_rotation, Yuv420};
 use meta::{CamDesc, Lost};
 use screen::ScreenImage;
@@ -71,6 +72,18 @@ pub unsafe fn hardware_buffer_frame(
     unsafe { ndk::hardware_buffer_frame(buffer, capture_us) }
 }
 
+/// Read a host AHardwareBuffer frame in place, for `convert`; `None` for
+/// another kind of native buffer.
+#[cfg(target_os = "android")]
+pub(crate) fn read_native_view(
+    n: &crate::frame::NativeBuffer,
+    f: crate::convert::ViewFn<'_>,
+) -> Option<Result<VideoFrame, VideoError>> {
+    n.0.as_any()
+        .downcast_ref::<ndk::HwFrame>()
+        .map(|hw| hw.read_view(f))
+}
+
 /// The Android backend for the host app's `ctx`.
 #[cfg(target_os = "android")]
 pub(crate) fn backend(ctx: AndroidContext) -> Result<Arc<dyn VideoBackend>, VideoError> {
@@ -101,9 +114,11 @@ pub(crate) trait Platform: Send + Sync + 'static {
         fps_range: Option<(u32, u32)>,
         sink: Arc<dyn ImageSink>,
     ) -> Result<Box<dyn Capture>, VideoError>;
-    /// The H.264 encoder entry, if the device has one.
-    fn h264_encode_capability(&self) -> Option<CodecCapability>;
-    /// An H.264 encoder core for `cfg` (already validated).
+    /// Create the AVC encoders once to see what the device has (the
+    /// backend asks once and keeps the answer).
+    fn h264_probe(&self) -> AvcProbe;
+    /// An H.264 encoder core for `cfg` (already validated). Its
+    /// `implementation()` is the created component's, by name.
     fn h264_encoder(&self, cfg: &EncoderConfig) -> Result<Box<dyn EncoderCore>, VideoError>;
     /// A virtual display of `width` x `height` at `dpi` from the host's
     /// MediaProjection (a JNI global reference, as an address), mirroring
@@ -161,6 +176,8 @@ struct Inner {
     shut: AtomicBool,
     cams: Mutex<Vec<Weak<Cam>>>,
     screens: Mutex<Vec<Weak<Screen>>>,
+    /// What the AVC encoder probe found, once asked.
+    avc: std::sync::OnceLock<AvcProbe>,
 }
 
 pub(crate) struct AndroidBackend {
@@ -179,6 +196,7 @@ impl AndroidBackend {
             shut: AtomicBool::new(false),
             cams: Mutex::new(Vec::new()),
             screens: Mutex::new(Vec::new()),
+            avc: std::sync::OnceLock::new(),
         });
         let weak = Arc::downgrade(&inner);
         let listener: Arc<BackgroundListener> = Arc::new(move |background| {
@@ -211,6 +229,11 @@ impl AndroidBackend {
 }
 
 impl Inner {
+    /// The AVC encoder probe: run on first use, then kept.
+    fn avc(&self) -> &AvcProbe {
+        self.avc.get_or_init(|| self.platform.h264_probe())
+    }
+
     fn live_cams(&self) -> Vec<Arc<Cam>> {
         let mut cams = lock(&self.cams);
         cams.retain(|w| w.strong_count() > 0);
@@ -287,8 +310,9 @@ impl VideoBackend for AndroidBackend {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::new("android", self.inner.platform.os_name());
         crate::rust_codecs::add_capabilities(&mut caps);
-        caps.codecs
-            .extend(self.inner.platform.h264_encode_capability());
+        // H.264 is listed as hardware only when the probe found a hardware
+        // encoder by name; software when the platform's own one exists.
+        caps.codecs.extend(self.inner.avc().capabilities());
         caps.camera = true;
         // One screen, while the app's MediaProjection lasts.
         let projected = self.inner.projected();
@@ -501,7 +525,16 @@ impl VideoBackend for AndroidBackend {
         self.live()?;
         if let CodecConfig::H264 { .. } = config.codec {
             config.validate()?;
+            let hardware_only = config.implementation == ImplPreference::HardwareOnly;
+            if hardware_only && self.inner.avc().hardware().is_none() {
+                return Err(unsupported("no hardware H.264 encoder on this device"));
+            }
             let core = self.inner.platform.h264_encoder(&config)?;
+            // The device has one, but this open got a software codec (the
+            // hardware one is taken) or one it can't name.
+            if hardware_only && core.implementation() != Implementation::Hardware {
+                return Err(VideoError::NoResources);
+            }
             return Ok(Box::new(ThreadedEncoder::start(core, config, wake)?));
         }
         if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {

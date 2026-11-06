@@ -91,7 +91,8 @@ pub(crate) struct VtDecoder {
     params: Option<(Vec<u8>, Vec<u8>)>,
     outbox: Box<Mutex<Outbox>>,
     pref: ImplPreference,
-    hardware: Option<bool>,
+    /// What the open session runs; `None` while there is none.
+    implementation: Option<Implementation>,
 }
 
 // SAFETY: the session is driven from one thread at a time (&mut self);
@@ -118,7 +119,7 @@ impl VtDecoder {
             params: None,
             outbox: Box::default(),
             pref: config.implementation,
-            hardware: None,
+            implementation: None,
         })
     }
 
@@ -132,6 +133,7 @@ impl VtDecoder {
             }
             self.session = ptr::null_mut();
         }
+        self.implementation = None;
         self.outbox
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -183,20 +185,26 @@ impl VtDecoder {
 
     fn open_session(&mut self) -> Result<(), DecodeError> {
         let spec = dict();
+        // A binding ask, where the key is there (macOS, iOS 17+): required
+        // hardware fails the create rather than fall back, and disabled
+        // hardware is never used.
+        let mut asked = None;
         match self.pref {
             ImplPreference::HardwareOnly => {
-                set_named(
+                asked = set_named(
                     &spec,
                     c"kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder",
                     yes(),
-                );
+                )
+                .then_some(true);
             }
             ImplPreference::SoftwareOnly => {
-                set_named(
+                asked = set_named(
                     &spec,
                     c"kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder",
                     no(),
-                );
+                )
+                .then_some(false);
             }
             _ => {
                 set_named(
@@ -234,16 +242,19 @@ impl VtDecoder {
             });
         }
         self.session = session;
-        let hw =
-            self.copy_bool(c"kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder");
-        // iOS decodes H.264 in hardware; an OS without the key doesn't say.
-        let hw = hw.or(cfg!(target_os = "ios").then_some(true));
-        self.hardware = hw;
-        if self.pref == ImplPreference::HardwareOnly && hw == Some(false) {
+        const KEY: &std::ffi::CStr =
+            c"kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder";
+        let implementation =
+            super::vt_enc::session_implementation(self.copy_bool(KEY), asked, None);
+        self.implementation = Some(implementation);
+        if self.pref == ImplPreference::HardwareOnly && implementation != Implementation::Hardware {
             self.close_session();
-            return Err(DecodeError::Video(unsupported(
-                "VideoToolbox gave a software decoder when hardware was required",
-            )));
+            return Err(DecodeError::Video(unsupported(match implementation {
+                Implementation::Software => {
+                    "VideoToolbox gave a software decoder when hardware was required"
+                }
+                _ => "this OS can't require or confirm a hardware H.264 decoder (iOS 17+ can)",
+            })));
         }
         if let Some(k) = cf_const(c"kVTDecompressionPropertyKey_RealTime") {
             // SAFETY: a live session, a framework key, a CF boolean.
@@ -429,11 +440,11 @@ impl DecoderCore for VtDecoder {
     }
 
     fn implementation(&self) -> Implementation {
-        match (self.hardware, self.pref) {
-            (Some(true), _) => Implementation::Hardware,
-            (Some(false), _) | (None, ImplPreference::SoftwareOnly) => Implementation::Software,
-            (None, _) => Implementation::Hardware,
-        }
+        self.implementation.unwrap_or(Implementation::Unknown)
+    }
+
+    fn session_implementation(&self) -> Option<Implementation> {
+        self.implementation
     }
 }
 

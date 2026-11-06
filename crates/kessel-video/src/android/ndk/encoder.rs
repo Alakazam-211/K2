@@ -5,7 +5,8 @@
 
 use super::ffi::*;
 use crate::android::codec::{
-    access_unit, avc_level, input_format, parameter_sets, InputLayout, COLOR_I420, COLOR_NV12,
+    access_unit, avc_level, implementation_of, input_format, parameter_sets, AvcProbe, InputLayout,
+    COLOR_I420, COLOR_NV12,
 };
 use crate::android::meta::media_result;
 use crate::error::VideoError;
@@ -27,28 +28,42 @@ const AVC_PROFILE_HIGH: i32 = 8;
 const INPUT_WAIT_US: i64 = 20_000;
 const OUTPUT_WAIT: Duration = Duration::from_millis(100);
 
-/// The H.264 entry every Android device lists: the compatibility
-/// definition requires an AVC encoder, and nothing short of JNI can ask
-/// MediaCodecList for its limits, so 1080p30 at level 4.0.
-pub(crate) fn capability() -> CodecCapability {
-    let mut c = CodecCapability::new(
-        VideoCodec::H264,
-        CodecDirection::Encode,
-        Implementation::Hardware,
-        "MediaCodec video/avc",
-        1920,
-        1080,
-        30,
-    );
-    c.h264 = Some(H264Capability::new(
-        vec![
-            H264Profile::ConstrainedBaseline,
-            H264Profile::ConstrainedHigh,
-        ],
-        H264Level::L4_0,
-    ));
-    c.formats = vec![PixelFormat::Nv12, PixelFormat::I420];
-    c
+/// Creates the encoders once, without configuring them, to see what the
+/// device has: the component `video/avc` resolves to (by name), and the
+/// platform's software encoder.
+pub(crate) fn probe() -> AvcProbe {
+    let default_name = create(false).and_then(|c| name_of(&c));
+    let software = SOFTWARE.iter().find_map(|name| {
+        // SAFETY: a NUL-terminated name; null when absent.
+        let c = unsafe { AMediaCodec_createCodecByName(name.as_ptr()) };
+        (!c.is_null()).then(|| {
+            // SAFETY: created just above, never started; deleted once.
+            unsafe { AMediaCodec_delete(c) };
+            name.to_string_lossy().into_owned()
+        })
+    });
+    AvcProbe {
+        default_name,
+        software,
+    }
+}
+
+/// The component's name (`AMediaCodec_getName`, API 28).
+fn name_of(codec: &Codec) -> Option<String> {
+    let (get, release) = late().name?;
+    let mut out: *mut std::ffi::c_char = std::ptr::null_mut();
+    // SAFETY: a live codec and a valid out pointer.
+    if unsafe { get(codec.0, &mut out) } != 0 || out.is_null() {
+        return None;
+    }
+    // SAFETY: a NUL-terminated name the codec owns until released, copied
+    // first and released once.
+    let name = unsafe { CStr::from_ptr(out) }
+        .to_string_lossy()
+        .into_owned();
+    // SAFETY: as above.
+    unsafe { release(codec.0, out) };
+    Some(name)
 }
 
 /// An `AMediaFormat`, deleted on drop.
@@ -109,7 +124,10 @@ pub(crate) struct McEncoder {
     codec: Codec,
     cfg: EncoderConfig,
     layout: InputLayout,
-    software: bool,
+    /// What the component is, by its name.
+    implementation: Implementation,
+    /// For logs: the component's name, when the device tells it.
+    component: Option<String>,
     /// SPS and PPS from the codec-config output.
     sets: Vec<Vec<u8>>,
 }
@@ -223,12 +241,28 @@ impl McEncoder {
                 "no H.264 encoder on this device".into()
             })
         })?;
+        let component = name_of(&codec);
+        // A software codec asked for by name is software even where the
+        // device can't name it.
+        let implementation = if software {
+            Implementation::Software
+        } else {
+            implementation_of(component.as_deref())
+        };
+        // Before configuring anything: `video/avc` resolved to a software
+        // codec (the hardware one is busy) or to one that can't be named.
+        if cfg.implementation == ImplPreference::HardwareOnly
+            && implementation != Implementation::Hardware
+        {
+            return Err(VideoError::NoResources);
+        }
         let layout = start(&codec, cfg)?;
         Ok(McEncoder {
             codec,
             cfg: *cfg,
             layout,
-            software,
+            implementation,
+            component,
             sets: Vec::new(),
         })
     }
@@ -381,16 +415,13 @@ impl EncoderCore for McEncoder {
     }
 
     fn implementation(&self) -> Implementation {
-        if self.software {
-            Implementation::Software
-        } else {
-            Implementation::Hardware
-        }
+        self.implementation
     }
 
     fn name(&self) -> String {
         format!(
-            "MediaCodec video/avc ({:?})",
+            "MediaCodec {} ({:?})",
+            self.component.as_deref().unwrap_or("video/avc"),
             input_format(self.layout.color)
         )
     }

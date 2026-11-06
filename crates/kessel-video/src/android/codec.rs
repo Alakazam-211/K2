@@ -6,6 +6,114 @@
 use crate::error::VideoError;
 use crate::frame::{PixelFormat, Planes};
 use crate::h264::{annexb_nals, nal_type, push_annexb, NAL_IDR, NAL_PPS, NAL_SPS};
+use crate::types::*;
+
+/// Is a MediaCodec component name a software codec? The platform's own
+/// (`c2.android.*`, `OMX.google.*`, and Google's media module, `c2.google.*`),
+/// FFmpeg wrappers, the emulator's (`goldfish`, `ranchu`), vendor
+/// components marked `.sw`, and anything not named like a vendor component
+/// (`OMX.*` or `c2.*`) all count as software. Only what is left, a vendor's
+/// own component, counts as hardware: never hardware by guess.
+pub(crate) fn software_codec_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    const SOFTWARE_PREFIXES: [&str; 4] =
+        ["omx.google.", "c2.android.", "c2.google.", "omx.ffmpeg."];
+    if SOFTWARE_PREFIXES.iter().any(|p| n.starts_with(p)) {
+        return true;
+    }
+    if !(n.starts_with("omx.") || n.starts_with("c2.")) {
+        return true;
+    }
+    n.contains(".sw.")
+        || n.ends_with(".sw")
+        || n.contains("swvdec")
+        || n.contains(".goldfish.")
+        || n.contains(".ranchu.")
+}
+
+/// What a codec reports, from its component name (`AMediaCodec_getName`,
+/// API 28). No name (an older device): `Unknown`.
+pub(crate) fn implementation_of(name: Option<&str>) -> Implementation {
+    match name {
+        Some(n) if software_codec_name(n) => Implementation::Software,
+        Some(_) => Implementation::Hardware,
+        None => Implementation::Unknown,
+    }
+}
+
+/// What the AVC encoder probe found: the component `video/avc` resolves to
+/// by default (its name, when the device tells it), and a software one the
+/// platform has.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AvcProbe {
+    /// The name of the component `createEncoderByType("video/avc")`
+    /// created; `None` when it created none, or the device can't name it.
+    pub(crate) default_name: Option<String>,
+    /// The software AVC encoder that could be created by name, if any.
+    pub(crate) software: Option<String>,
+}
+
+impl AvcProbe {
+    /// The hardware encoder found, by name: the default component, when it
+    /// is named and isn't a software codec.
+    pub(crate) fn hardware(&self) -> Option<&str> {
+        self.default_name
+            .as_deref()
+            .filter(|n| implementation_of(Some(n)) == Implementation::Hardware)
+    }
+
+    /// The H.264 encode entries: `Hardware` only for a hardware encoder the
+    /// probe found by name, `Software` when the platform's software encoder
+    /// exists (or the default one is software). Nothing otherwise.
+    pub(crate) fn capabilities(&self) -> Vec<CodecCapability> {
+        let mut out = Vec::new();
+        if let Some(name) = self.hardware() {
+            // Nothing short of JNI can ask MediaCodecList for its limits,
+            // so 1080p30 at level 4.0, as before.
+            let mut c = CodecCapability::new(
+                VideoCodec::H264,
+                CodecDirection::Encode,
+                Implementation::Hardware,
+                format!("MediaCodec {name}"),
+                1920,
+                1080,
+                30,
+            );
+            c.h264 = Some(H264Capability::new(
+                vec![
+                    H264Profile::ConstrainedBaseline,
+                    H264Profile::ConstrainedHigh,
+                ],
+                H264Level::L4_0,
+            ));
+            c.formats = vec![PixelFormat::Nv12, PixelFormat::I420];
+            out.push(c);
+        }
+        let software = self.software.as_deref().or(self
+            .default_name
+            .as_deref()
+            .filter(|n| software_codec_name(n)));
+        if let Some(name) = software {
+            // The platform's software encoder: Baseline, 720p30.
+            let mut c = CodecCapability::new(
+                VideoCodec::H264,
+                CodecDirection::Encode,
+                Implementation::Software,
+                format!("MediaCodec {name}"),
+                1280,
+                720,
+                30,
+            );
+            c.h264 = Some(H264Capability::new(
+                vec![H264Profile::ConstrainedBaseline],
+                H264Level::L3_1,
+            ));
+            c.formats = vec![PixelFormat::Nv12, PixelFormat::I420];
+            out.push(c);
+        }
+        out
+    }
+}
 
 /// `COLOR_FormatYUV420Planar` (I420).
 pub(crate) const COLOR_I420: i32 = 19;

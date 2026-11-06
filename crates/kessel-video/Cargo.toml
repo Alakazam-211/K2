@@ -56,7 +56,9 @@ system = ["apple", "windows", "linux", "android", "vp8"]
 # users get patch and security releases (vp8-decoder decodes frames that come
 # from the network); apps pin through their Cargo.lock.
 [dependencies]
-bytes = "1"
+# 1.9: `Bytes::from_owner`, which hands converted frames' memory back to
+# their pool.
+bytes = "1.9"
 crossbeam-queue = "0.3"
 thiserror = "2"
 # The published VP8 crates. vp8-encoder pins vp8-decoder exactly (they share

@@ -63,6 +63,15 @@ struct Mock {
     cams: Vec<CamDesc>,
     permission: Permission,
     script: Mutex<Script>,
+    /// What the AVC probe finds (a phone with a hardware encoder by
+    /// default).
+    avc: Mutex<AvcProbe>,
+    /// How many times the backend probed.
+    probes: std::sync::atomic::AtomicUsize,
+    /// What the next H.264 encoders turn out to be, in order (then
+    /// `Hardware`), and the preferences they were opened with.
+    encoders: Mutex<Vec<Implementation>>,
+    opened_prefs: Mutex<Vec<ImplPreference>>,
 }
 
 struct MockCapture {
@@ -77,8 +86,9 @@ impl Drop for MockCapture {
     }
 }
 
-/// A fake H.264 core: one byte per frame, the keyframe flag kept.
-struct MockH264;
+/// A fake H.264 core: one byte per frame, the keyframe flag kept, and the
+/// implementation the script gave it.
+struct MockH264(Implementation);
 
 impl EncoderCore for MockH264 {
     fn input_format(&self) -> PixelFormat {
@@ -97,7 +107,7 @@ impl EncoderCore for MockH264 {
         Ok(())
     }
     fn implementation(&self) -> Implementation {
-        Implementation::Hardware
+        self.0
     }
     fn name(&self) -> String {
         "mock MediaCodec".into()
@@ -146,20 +156,20 @@ impl Platform for Mock {
         Ok(Box::new(MockCapture { alive }))
     }
 
-    fn h264_encode_capability(&self) -> Option<CodecCapability> {
-        Some(CodecCapability::new(
-            VideoCodec::H264,
-            CodecDirection::Encode,
-            Implementation::Hardware,
-            "mock MediaCodec",
-            1920,
-            1080,
-            30,
-        ))
+    fn h264_probe(&self) -> AvcProbe {
+        self.probes.fetch_add(1, Ordering::SeqCst);
+        lock(&self.avc).clone()
     }
 
-    fn h264_encoder(&self, _cfg: &EncoderConfig) -> Result<Box<dyn EncoderCore>, VideoError> {
-        Ok(Box::new(MockH264))
+    fn h264_encoder(&self, cfg: &EncoderConfig) -> Result<Box<dyn EncoderCore>, VideoError> {
+        lock(&self.opened_prefs).push(cfg.implementation);
+        let mut next = lock(&self.encoders);
+        let imp = if next.is_empty() {
+            Implementation::Hardware
+        } else {
+            next.remove(0)
+        };
+        Ok(Box::new(MockH264(imp)))
     }
 
     fn open_projection(
@@ -211,6 +221,13 @@ fn phone(permission: Permission) -> Arc<Mock> {
         cams,
         permission,
         script: Mutex::new(Script::default()),
+        avc: Mutex::new(AvcProbe {
+            default_name: Some("c2.acme.avc.encoder".into()),
+            software: Some("c2.android.avc.encoder".into()),
+        }),
+        probes: std::sync::atomic::AtomicUsize::new(0),
+        encoders: Mutex::new(Vec::new()),
+        opened_prefs: Mutex::new(Vec::new()),
     })
 }
 
@@ -616,6 +633,208 @@ fn h264_goes_to_the_platform_encoder() {
             .err(),
         Some(VideoError::Unsupported(_))
     ));
+}
+
+/// The H.264 entries `capabilities()` lists, with their names.
+fn h264_entries(caps: &Capabilities) -> Vec<(Implementation, String)> {
+    caps.codecs
+        .iter()
+        .filter(|c| c.codec == VideoCodec::H264)
+        .map(|c| {
+            assert_eq!(c.direction, CodecDirection::Encode, "no H.264 decoder");
+            (c.implementation, c.name.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn h264_is_listed_as_hardware_only_after_a_real_probe_kept_once() {
+    let mock = phone(Permission::Granted);
+    let (b, _ctx) = start(&mock);
+    assert_eq!(
+        mock.probes.load(Ordering::SeqCst),
+        0,
+        "nothing probed before asked"
+    );
+    let caps = b.capabilities();
+    assert_eq!(
+        h264_entries(&caps),
+        vec![
+            (
+                Implementation::Hardware,
+                "MediaCodec c2.acme.avc.encoder".to_string()
+            ),
+            (
+                Implementation::Software,
+                "MediaCodec c2.android.avc.encoder".to_string()
+            ),
+        ]
+    );
+    let best = caps
+        .best(VideoCodec::H264, CodecDirection::Encode)
+        .expect("H.264");
+    assert_eq!(best.implementation, Implementation::Hardware);
+    for _ in 0..3 {
+        b.capabilities();
+    }
+    let mut hw = EncoderConfig::h264(640, 360, 30, 600_000);
+    hw.implementation = ImplPreference::HardwareOnly;
+    let enc = b.encoder(hw, no_wake()).expect("hardware");
+    assert_eq!(enc.implementation(), Implementation::Hardware);
+    assert_eq!(mock.probes.load(Ordering::SeqCst), 1, "probed once, kept");
+    #[cfg(feature = "vp8")]
+    assert!(
+        caps.best(VideoCodec::Vp8, CodecDirection::Encode).is_some(),
+        "VP8 as before"
+    );
+}
+
+#[test]
+fn a_software_only_or_missing_avc_encoder_is_never_listed_as_hardware() {
+    // What video/avc resolves to, the platform's software one, the entries.
+    type Case = (
+        Option<&'static str>,
+        Option<&'static str>,
+        Vec<Implementation>,
+    );
+    let cases: [Case; 6] = [
+        // The default is the platform's own: software, listed once.
+        (
+            Some("c2.android.avc.encoder"),
+            Some("c2.android.avc.encoder"),
+            vec![Implementation::Software],
+        ),
+        // An older platform's OMX software encoder.
+        (
+            Some("OMX.google.h264.encoder"),
+            None,
+            vec![Implementation::Software],
+        ),
+        // The emulator's.
+        (
+            Some("c2.goldfish.h264.encoder"),
+            Some("c2.android.avc.encoder"),
+            vec![Implementation::Software],
+        ),
+        // A device that can't name its codec (before API 28): not hardware.
+        (
+            None,
+            Some("OMX.google.h264.encoder"),
+            vec![Implementation::Software],
+        ),
+        // No AVC encoder at all: VP8 only.
+        (None, None, vec![]),
+        // A vendor component marked software.
+        (
+            Some("OMX.acme.video.encoder.avc.sw"),
+            None,
+            vec![Implementation::Software],
+        ),
+    ];
+    for (default_name, software, want) in cases {
+        let mock = phone(Permission::Granted);
+        *lock(&mock.avc) = AvcProbe {
+            default_name: default_name.map(Into::into),
+            software: software.map(Into::into),
+        };
+        let (b, _ctx) = start(&mock);
+        let caps = b.capabilities();
+        let got: Vec<Implementation> = h264_entries(&caps).into_iter().map(|e| e.0).collect();
+        assert_eq!(got, want, "{default_name:?} / {software:?}");
+        // HardwareOnly is refused before any codec is created.
+        let mut hw = EncoderConfig::h264(640, 360, 30, 600_000);
+        hw.implementation = ImplPreference::HardwareOnly;
+        assert!(
+            matches!(
+                b.encoder(hw, no_wake()).err(),
+                Some(VideoError::Unsupported(_))
+            ),
+            "{default_name:?}: no hardware to require"
+        );
+        assert!(lock(&mock.opened_prefs).is_empty());
+        #[cfg(feature = "vp8")]
+        assert!(caps.best(VideoCodec::Vp8, CodecDirection::Encode).is_some());
+    }
+}
+
+#[test]
+fn the_opened_encoder_reports_what_was_created() {
+    let mock = phone(Permission::Granted);
+    let (b, _ctx) = start(&mock);
+    // video/avc resolves to the software codec (the hardware one is busy),
+    // then to one the device can't name.
+    lock(&mock.encoders).extend([
+        Implementation::Software,
+        Implementation::Unknown,
+        Implementation::Software,
+        Implementation::Unknown,
+    ]);
+    let mut hw = EncoderConfig::h264(640, 360, 30, 600_000);
+    hw.implementation = ImplPreference::HardwareOnly;
+    assert_eq!(
+        b.encoder(hw, no_wake()).err(),
+        Some(VideoError::NoResources)
+    );
+    assert_eq!(
+        b.encoder(hw, no_wake()).err(),
+        Some(VideoError::NoResources)
+    );
+    // Preferring hardware takes what came, and says so.
+    let cfg = EncoderConfig::h264(640, 360, 30, 600_000);
+    let enc = b.encoder(cfg, no_wake()).expect("software");
+    assert_eq!(enc.info().implementation, Implementation::Software);
+    assert_eq!(enc.implementation(), Implementation::Software);
+    let enc = b.encoder(cfg, no_wake()).expect("unnamed");
+    assert_eq!(enc.implementation(), Implementation::Unknown);
+    let enc = b.encoder(hw, no_wake()).expect("hardware again");
+    assert_eq!(enc.implementation(), Implementation::Hardware);
+    assert_eq!(
+        *lock(&mock.opened_prefs),
+        vec![
+            ImplPreference::HardwareOnly,
+            ImplPreference::HardwareOnly,
+            ImplPreference::PreferHardware,
+            ImplPreference::PreferHardware,
+            ImplPreference::HardwareOnly,
+        ]
+    );
+}
+
+#[test]
+fn codec_names_classify_conservatively() {
+    use super::codec::{implementation_of, software_codec_name};
+    for sw in [
+        "c2.android.avc.encoder",
+        "C2.Android.AVC.Encoder",
+        "OMX.google.h264.encoder",
+        "c2.google.avc.encoder",
+        "OMX.ffmpeg.h264.encoder",
+        "c2.goldfish.h264.encoder",
+        "OMX.acme.video.encoder.avc.sw",
+        "c2.acme.avc.encoder.sw",
+        "acme.h264.encoder",
+        "",
+    ] {
+        assert!(software_codec_name(sw), "{sw}");
+        assert_eq!(
+            implementation_of(Some(sw)),
+            Implementation::Software,
+            "{sw}"
+        );
+    }
+    for hw in [
+        "c2.acme.avc.encoder",
+        "OMX.acme.video.encoder.avc",
+        "c2.globex.h264.encoder",
+    ] {
+        assert!(!software_codec_name(hw), "{hw}");
+        assert_eq!(
+            implementation_of(Some(hw)),
+            Implementation::Hardware,
+            "{hw}"
+        );
+    }
+    assert_eq!(implementation_of(None), Implementation::Unknown);
 }
 
 #[cfg(feature = "vp8")]

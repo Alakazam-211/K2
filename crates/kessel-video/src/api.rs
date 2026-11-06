@@ -59,6 +59,10 @@ pub trait VideoEncoder: Send {
     fn info(&self) -> EncoderInfo;
     /// Counters.
     fn stats(&self) -> EncoderStats;
+    /// What the open session runs, read back from the OS (`info().implementation`).
+    fn implementation(&self) -> Implementation {
+        self.info().implementation
+    }
 }
 
 /// A video decoder (one remote track).
@@ -74,6 +78,11 @@ pub trait VideoDecoder: Send {
     fn set_fit(&mut self, fit: Option<(u32, u32)>);
     /// Counters.
     fn stats(&self) -> DecoderStats;
+    /// What the open session runs, read back from the OS
+    /// (`stats().implementation`); `None` until a session is open.
+    fn implementation(&self) -> Option<Implementation> {
+        self.stats().implementation
+    }
 }
 
 /// The video side of one app. One per process; shared as
@@ -131,6 +140,13 @@ pub trait VideoBackend: Send + Sync + 'static {
     ) -> Result<Box<dyn VideoDecoder>, VideoError>;
 
     /// Scale and convert a frame.
+    ///
+    /// From any frame to I420 or NV12, as [`crate::convert`] does: a
+    /// native buffer of this backend (a CVPixelBuffer, an AHardwareBuffer)
+    /// is read in place while it is locked, scaled straight into the
+    /// output, and the output's memory comes from a pool that gets it back
+    /// when the frame drops, so a steady stream of frames allocates no
+    /// pixel memory.
     ///
     /// To `PixelFormat::Native`: the Apple backend gives a CVPixelBuffer
     /// (see `apple_pixel_buffer`), copying CPU planes into an

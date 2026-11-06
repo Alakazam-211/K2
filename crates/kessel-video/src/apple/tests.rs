@@ -1172,3 +1172,305 @@ fn codec_threads_run_at_user_initiated_qos() {
         assert_eq!(q, QOS_CLASS_USER_INITIATED, "{what} thread QoS");
     }
 }
+
+// ───────────────────── what the sessions really are ─────────────────────
+
+/// The session's own word wins; then a binding ask (hardware required,
+/// which fails the create otherwise, or disabled, which is never used);
+/// then VideoToolbox's encoder list. Nothing said is `Unknown`, never a
+/// guess.
+#[test]
+fn session_implementation_never_guesses() {
+    use vt_enc::session_implementation as imp;
+    let opt = [Some(true), Some(false), None];
+    for asked in opt {
+        for listed in opt {
+            assert_eq!(imp(Some(true), asked, listed), Implementation::Hardware);
+            assert_eq!(imp(Some(false), asked, listed), Implementation::Software);
+        }
+    }
+    for listed in opt {
+        assert_eq!(imp(None, Some(true), listed), Implementation::Hardware);
+        assert_eq!(imp(None, Some(false), listed), Implementation::Software);
+    }
+    assert_eq!(imp(None, None, Some(true)), Implementation::Hardware);
+    assert_eq!(imp(None, None, Some(false)), Implementation::Software);
+    assert_eq!(imp(None, None, None), Implementation::Unknown);
+}
+
+/// The capability entry comes from a real hardware-only session, probed
+/// once and kept.
+#[test]
+fn the_hardware_h264_probe_opens_a_session_once() {
+    let hw = hardware_h264();
+    let probes = PROBES.load(Ordering::SeqCst);
+    assert!(probes >= 1, "a real probe ran");
+    for _ in 0..5 {
+        assert_eq!(hardware_h264(), hw);
+    }
+    let b = backend().expect("backend");
+    let caps = b.capabilities();
+    assert_eq!(
+        PROBES.load(Ordering::SeqCst),
+        probes,
+        "kept, not probed again"
+    );
+    let listed_hw = caps.codecs.iter().any(|c| {
+        c.codec == VideoCodec::H264
+            && c.direction == CodecDirection::Encode
+            && c.implementation == Implementation::Hardware
+    });
+    assert_eq!(
+        listed_hw, hw,
+        "listed as hardware exactly when the probe found it"
+    );
+    // The probe's answer is what a hardware-only open gives now.
+    let mut cfg = EncoderConfig::h264(1280, 720, 30, 1_000_000);
+    cfg.implementation = ImplPreference::HardwareOnly;
+    let open = vt_enc::VtEncoder::open(&cfg);
+    assert_eq!(open.is_ok(), hw, "{:?}", open.as_ref().err());
+    eprintln!("[apple] hardware H.264 encoder: {hw}");
+}
+
+#[test]
+fn opened_encoders_report_the_session_videotoolbox_made() {
+    let b = backend().expect("backend");
+    let hw = hardware_h264();
+    let mut cfg = EncoderConfig::h264(640, 360, 30, 600_000);
+
+    cfg.implementation = ImplPreference::HardwareOnly;
+    match b.encoder(cfg, no_wake()) {
+        Ok(enc) => {
+            assert!(hw, "a hardware-only open where the probe found none");
+            assert_eq!(enc.implementation(), Implementation::Hardware);
+            assert!(enc.info().name.contains("(hardware"), "{}", enc.info().name);
+        }
+        Err(e) => {
+            assert!(!hw, "hardware-only refused where the probe found one: {e}");
+            assert!(matches!(e, VideoError::Unsupported(_)), "{e:?}");
+        }
+    }
+
+    // macOS has Apple's software encoder; it says so.
+    #[cfg(target_os = "macos")]
+    {
+        cfg.implementation = ImplPreference::SoftwareOnly;
+        let enc = b.encoder(cfg, no_wake()).expect("software encoder");
+        assert_eq!(enc.implementation(), Implementation::Software);
+        assert_eq!(enc.info().implementation, Implementation::Software);
+        assert!(enc.info().name.contains("(software"), "{}", enc.info().name);
+    }
+
+    // Preferring hardware: what was made, before and after a resize.
+    cfg.implementation = ImplPreference::PreferHardware;
+    let mut enc = b.encoder(cfg, no_wake()).expect("encoder");
+    let want = if hw {
+        Implementation::Hardware
+    } else {
+        Implementation::Software
+    };
+    assert_eq!(enc.implementation(), want);
+    enc.set_size(480, 270).expect("set_size");
+    let f = pattern_frame(480, 270, 3, 1).expect("frame");
+    encode_one(&mut enc, &f, EncodeOptions::default()).expect("out");
+    assert_eq!(enc.info().config.width, 480);
+    assert_eq!(enc.implementation(), want, "the reopened session's");
+}
+
+#[test]
+fn opened_decoders_report_the_session_once_it_exists() {
+    let b = backend().expect("backend");
+    let hw = hardware_h264();
+    let mut enc = b
+        .encoder(EncoderConfig::h264(320, 180, 30, 400_000), no_wake())
+        .expect("encoder");
+    let key = encode_one(
+        &mut enc,
+        &pattern_frame(320, 180, 4, 10).expect("frame"),
+        EncodeOptions::default(),
+    )
+    .expect("key");
+
+    let prefs: &[(ImplPreference, Implementation)] = &[
+        (
+            ImplPreference::PreferHardware,
+            if hw {
+                Implementation::Hardware
+            } else {
+                Implementation::Software
+            },
+        ),
+        #[cfg(target_os = "macos")]
+        (ImplPreference::SoftwareOnly, Implementation::Software),
+    ];
+    for &(pref, want) in prefs {
+        let mut cfg = DecoderConfig::new(VideoCodec::H264);
+        cfg.implementation = pref;
+        let mut dec = b.decoder(cfg, no_wake()).expect("decoder");
+        assert_eq!(
+            dec.implementation(),
+            None,
+            "{pref:?}: no session before a keyframe"
+        );
+        assert_eq!(dec.stats().implementation, None);
+        let out = decode_one(&mut dec, h264_input(&key));
+        assert_eq!(read_frame_code(&out), Some(4));
+        assert_eq!(dec.implementation(), Some(want), "{pref:?}");
+        dec.reset();
+        let gone = wait_for(Duration::from_secs(5), || {
+            (dec.implementation().is_none()).then_some(())
+        });
+        assert!(gone.is_some(), "{pref:?}: a reset closes the session");
+        eprintln!("[apple] decoder {pref:?}: {want:?}");
+    }
+}
+
+// ───────────────────── convert from native buffers ─────────────────────
+
+/// An IOSurface-backed BGRA pixel buffer holding `frame`'s pixels.
+fn bgra_pixel_buffer(frame: &VideoFrame) -> VideoFrame {
+    let bgra =
+        crate::convert::convert(frame, frame.width, frame.height, PixelFormat::Bgra).expect("bgra");
+    let p = bgra.planes().expect("planes");
+    let (w, h) = (frame.width as usize, frame.height as usize);
+    let attrs = ffi::pixel_buffer_attributes(ffi::PIX_BGRA, Some((frame.width, frame.height)));
+    let mut pb: ffi::CVPixelBufferRef = std::ptr::null_mut();
+    // SAFETY: valid attributes and an out pointer; the buffer is locked
+    // while its rows are written within its bytes per row, then wrapped
+    // (retained) and our reference released.
+    unsafe {
+        let st = ffi::CVPixelBufferCreate(std::ptr::null(), w, h, ffi::PIX_BGRA, attrs.0, &mut pb);
+        assert!(st == 0 && !pb.is_null(), "CVPixelBufferCreate {st}");
+        let owned = ffi::Cf(pb as ffi::CFTypeRef);
+        assert_eq!(ffi::CVPixelBufferLockBaseAddress(pb, 0), 0);
+        let base = ffi::CVPixelBufferGetBaseAddress(pb) as *mut u8;
+        let bpr = ffi::CVPixelBufferGetBytesPerRow(pb);
+        assert!(!base.is_null() && bpr >= w * 4);
+        for y in 0..h {
+            let row = p.row(0, y, frame.width, frame.height);
+            std::slice::from_raw_parts_mut(base.add(y * bpr), w * 4).copy_from_slice(row);
+        }
+        ffi::CVPixelBufferUnlockBaseAddress(pb, 0);
+        let out = pixel::native_frame(pb, frame.capture_us);
+        drop(owned);
+        out
+    }
+}
+
+/// CPU planes of a native frame, copied out the old way.
+fn cpu_copy(native: &VideoFrame) -> VideoFrame {
+    // SAFETY: a live pixel buffer, held by `native`.
+    let mut f =
+        unsafe { pixel::cpu_frame(pixel_buffer_of(native), native.capture_us) }.expect("read back");
+    f.color = native.color;
+    f
+}
+
+/// One hardware capture, two encoders: CVPixelBuffers (NV12 video and full
+/// range, BGRA) convert in place to I420 or NV12 at the VP8 backup's
+/// sizes, with exactly the pixels a CPU copy converts to.
+#[test]
+fn native_pixel_buffers_convert_in_place() {
+    use crate::frame::ColorSpace;
+    let b = backend().expect("backend");
+    for (w, h) in [(1280, 720), (720, 1280), (33, 17)] {
+        let i420 = pattern_frame(w, h, 0x0BAD_CAFE, 5).expect("frame");
+        let mut full = i420.clone();
+        full.color = ColorSpace::Bt709Full;
+        let sources = [
+            b.convert(&i420, w, h, PixelFormat::Native).expect("420v"),
+            b.convert(&full, w, h, PixelFormat::Native).expect("420f"),
+            bgra_pixel_buffer(&i420),
+        ];
+        let pix: Vec<u32> = sources
+            .iter()
+            .map(|s| describe(pixel_buffer_of(s)).2)
+            .collect();
+        assert_eq!(pix, vec![ffi::PIX_420V, ffi::PIX_420F, ffi::PIX_BGRA]);
+        let (dw, dh) = crate::convert::fit_within(w, h, 640, 640);
+        let (sw2, sh2) = crate::convert::fit_within(w, h, 320, 320);
+        for src in &sources {
+            let cpu = cpu_copy(src);
+            for (tw, th) in [(dw, dh), (sw2, sh2), (w, h)] {
+                for to in [PixelFormat::I420, PixelFormat::Nv12] {
+                    let got = b.convert(src, tw, th, to).expect("from native");
+                    let want = crate::convert::convert(&cpu, tw, th, to).expect("from cpu");
+                    assert_eq!((got.width, got.height, got.capture_us), (tw, th, 5));
+                    assert_eq!(got.color, src.color);
+                    assert_eq!(
+                        got.planes().expect("planes"),
+                        want.planes().expect("planes"),
+                        "{:?} {w}x{h} -> {to:?} {tw}x{th}",
+                        describe(pixel_buffer_of(src)).2.to_be_bytes()
+                    );
+                }
+            }
+        }
+        // The frame code survives the backup's size.
+        let small = b
+            .convert(&sources[0], dw, dh, PixelFormat::I420)
+            .expect("small");
+        assert_eq!(read_frame_code(&small), Some(0x0BAD_CAFE));
+    }
+    // A frame whose size doesn't match its buffer is refused.
+    let mut lying = b
+        .convert(
+            &pattern_frame(64, 48, 1, 0).expect("frame"),
+            64,
+            48,
+            PixelFormat::Native,
+        )
+        .expect("native");
+    lying.width = 128;
+    assert!(matches!(
+        b.convert(&lying, 64, 48, PixelFormat::I420),
+        Err(VideoError::Invalid(_))
+    ));
+}
+
+/// ms per frame for the conversions the VP8 backup needs, from a camera's
+/// CVPixelBuffer. Run with `--release -- --ignored --nocapture`.
+#[test]
+#[ignore = "a timing run: cargo test --release, by hand"]
+fn convert_timings_from_native_pixel_buffers() {
+    let b = backend().expect("backend");
+    let land = pattern_frame(1280, 720, 1, 0).expect("frame");
+    let port = pattern_frame(720, 1280, 1, 0).expect("frame");
+    let nv12_land = b
+        .convert(&land, 1280, 720, PixelFormat::Native)
+        .expect("420v");
+    let nv12_port = b
+        .convert(&port, 720, 1280, PixelFormat::Native)
+        .expect("420v");
+    let bgra_land = bgra_pixel_buffer(&land);
+    let runs: [(&str, &VideoFrame, u32, u32); 7] = [
+        ("420v 1280x720 -> I420 640x360", &nv12_land, 640, 360),
+        ("420v 1280x720 -> I420 320x180", &nv12_land, 320, 180),
+        ("420v 1280x720 -> I420 1280x720", &nv12_land, 1280, 720),
+        ("420v 720x1280 -> I420 360x640", &nv12_port, 360, 640),
+        ("BGRA 1280x720 -> I420 640x360", &bgra_land, 640, 360),
+        ("BGRA 1280x720 -> I420 1280x720", &bgra_land, 1280, 720),
+        ("420v 1280x720 -> I420 960x540", &nv12_land, 960, 540),
+    ];
+    for (what, src, w, h) in runs {
+        for _ in 0..20 {
+            drop(b.convert(src, w, h, PixelFormat::I420).expect("warm"));
+        }
+        let mut ms: Vec<f64> = (0..300)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                let out = b.convert(src, w, h, PixelFormat::I420).expect("convert");
+                let e = t.elapsed().as_secs_f64() * 1000.0;
+                drop(out);
+                e
+            })
+            .collect();
+        ms.sort_by(|a, b| a.total_cmp(b));
+        let mean = ms.iter().sum::<f64>() / ms.len() as f64;
+        eprintln!(
+            "[timing] {what}: median {:.3} ms, mean {mean:.3} ms, p95 {:.3} ms",
+            ms[ms.len() / 2],
+            ms[ms.len() * 95 / 100]
+        );
+    }
+}

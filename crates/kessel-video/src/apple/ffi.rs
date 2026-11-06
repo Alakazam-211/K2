@@ -188,6 +188,7 @@ extern "C" {
         value_out: *mut CFTypeRef,
     ) -> OSStatus;
     pub fn VTCompressionSessionPrepareToEncodeFrames(session: VTSessionRef) -> OSStatus;
+    pub fn VTCopyVideoEncoderList(options: CFDictionaryRef, list_out: *mut CFTypeRef) -> OSStatus;
     pub fn VTCompressionSessionEncodeFrame(
         session: VTSessionRef,
         image: CVPixelBufferRef,

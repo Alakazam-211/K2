@@ -46,6 +46,10 @@ pub enum CodecDirection {
 }
 
 /// Who runs the codec.
+///
+/// An open encoder or decoder reports what the OS actually created
+/// ([`EncoderInfo::implementation`], [`DecoderStats::implementation`]), read
+/// back from the session, never what was asked for or listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Implementation {
@@ -53,6 +57,11 @@ pub enum Implementation {
     Hardware,
     /// The CPU.
     Software,
+    /// The OS doesn't say which (an iOS before 17.4, an Android before
+    /// API 28). Only an open session reports it; capability entries are
+    /// always `Hardware` or `Software`. Treat it as not known to be
+    /// hardware.
+    Unknown,
 }
 
 /// The caller's preference when creating a codec.
@@ -903,7 +912,9 @@ impl EncodedFrame {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct EncoderInfo {
-    /// Hardware or software.
+    /// What the open session runs, read back from the OS: `Hardware`,
+    /// `Software`, or `Unknown` when the OS doesn't say. Follows a
+    /// `set_size` that reopens the session.
     pub implementation: Implementation,
     /// For logs.
     pub name: String,
@@ -1016,7 +1027,9 @@ pub struct DecoderStats {
     pub dropped_out: u64,
     /// Errors (including inputs refused for want of a keyframe).
     pub errors: u64,
-    /// Hardware or software, once open.
+    /// What the open session runs, read back from the OS (`Unknown` when
+    /// the OS doesn't say). `None` until a session is open: a decoder that
+    /// opens on its first keyframe.
     pub implementation: Option<Implementation>,
 }
 

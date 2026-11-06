@@ -141,7 +141,7 @@ pub(crate) struct VtEncoder {
     session: VTSessionRef,
     outbox: Box<Mutex<Outbox>>,
     cfg: EncoderConfig,
-    hardware: bool,
+    implementation: Implementation,
     low_latency: bool,
     last_pts: i64,
 }
@@ -176,45 +176,66 @@ impl VtEncoder {
                 "iOS has no software-only H.264 encoder to ask for",
             ));
         }
-        let outbox: Box<Mutex<Outbox>> = Box::default();
         let attrs = pixel_buffer_attributes(PIX_420V, Some((cfg.width, cfg.height)));
-        let spec_for = |low_latency: bool| {
+        // The sessions to try, in order: how to ask for hardware, and
+        // whether to ask for low-latency rate control (not there for every
+        // size and mode; without it the session still runs in real time).
+        // Preferring hardware first requires it, so a session that runs in
+        // hardware is known to (VideoToolbox's low-latency encoder doesn't
+        // answer "using hardware", and isn't in its encoder list).
+        let plan: &[(Ask, bool)] = match cfg.implementation {
+            ImplPreference::HardwareOnly => &[(Ask::Require, true), (Ask::Require, false)],
+            ImplPreference::SoftwareOnly => &[(Ask::Disable, false)],
+            _ => &[
+                (Ask::Require, true),
+                (Ask::Require, false),
+                (Ask::Enable, true),
+                (Ask::Enable, false),
+            ],
+        };
+        let mut last_status: OSStatus = 0;
+        let mut unconfirmed = false;
+        let mut chosen = None;
+        for &(ask, want_low_latency) in plan {
             let spec = dict();
-            match cfg.implementation {
-                ImplPreference::HardwareOnly => {
-                    set_named(
-                        &spec,
-                        c"kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder",
-                        yes(),
-                    );
-                }
-                ImplPreference::SoftwareOnly => {
-                    set_named(
-                        &spec,
-                        c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder",
-                        no(),
-                    );
-                }
-                _ => {
-                    set_named(
-                        &spec,
-                        c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder",
-                        yes(),
-                    );
-                }
-            }
-            let ll = low_latency
+            let (key, value) = match ask {
+                Ask::Require => (
+                    c"kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder",
+                    yes(),
+                ),
+                Ask::Enable => (
+                    c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder",
+                    yes(),
+                ),
+                Ask::Disable => (
+                    c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder",
+                    no(),
+                ),
+            };
+            // A binding ask, where the key is there (macOS, iOS 17.4+):
+            // required hardware fails the create rather than fall back to
+            // software, and disabled hardware is never used.
+            let asked = match (set_named(&spec, key, value), ask) {
+                (true, Ask::Require) => Some(true),
+                (true, Ask::Disable) => Some(false),
+                _ => None,
+            };
+            let low_latency = want_low_latency
                 && set_named(
                     &spec,
                     c"kVTVideoEncoderSpecification_EnableLowLatencyRateControl",
                     yes(),
                 );
-            (spec, ll)
-        };
-        let refcon = &*outbox as *const Mutex<Outbox> as *mut c_void;
-        let create = |spec: &Cf, out: &mut VTSessionRef| -> OSStatus {
-            // SAFETY: valid dictionaries, a live refcon, an out pointer.
-            unsafe {
+            if want_low_latency && !low_latency {
+                // The same session as the next attempt's.
+                continue;
+            }
+            let outbox: Box<Mutex<Outbox>> = Box::default();
+            let refcon = &*outbox as *const Mutex<Outbox> as *mut c_void;
+            let mut session: VTSessionRef = ptr::null_mut();
+            // SAFETY: valid dictionaries, a live refcon (the outbox moves
+            // into the encoder with the session), an out pointer.
+            let st = unsafe {
                 VTCompressionSessionCreate(
                     ptr::null(),
                     cfg.width as i32,
@@ -225,49 +246,52 @@ impl VtEncoder {
                     ptr::null(),
                     Some(on_output),
                     refcon,
-                    out,
+                    &mut session,
                 )
+            };
+            if st != 0 || session.is_null() {
+                last_status = st;
+                continue;
             }
-        };
-        let mut session: VTSessionRef = ptr::null_mut();
-        // Low-latency rate control isn't there for every size and mode;
-        // without it the session still runs in real time.
-        let (spec, mut low_latency) = spec_for(cfg.implementation != ImplPreference::SoftwareOnly);
-        let mut st = create(&spec, &mut session);
-        if (st != 0 || session.is_null()) && low_latency {
-            low_latency = false;
-            session = ptr::null_mut();
-            st = create(&spec_for(false).0, &mut session);
+            let mut enc = VtEncoder {
+                session,
+                outbox,
+                cfg: *cfg,
+                implementation: Implementation::Unknown,
+                low_latency,
+                last_pts: -1,
+            };
+            let reported =
+                enc.copy_bool(c"kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder");
+            let listed = if reported.is_none() && asked.is_none() {
+                enc.listed_hardware()
+            } else {
+                None
+            };
+            enc.implementation = session_implementation(reported, asked, listed);
+            if ask == Ask::Require && enc.implementation != Implementation::Hardware {
+                // Asked for hardware and not confirmed: drop it and go on.
+                unconfirmed = true;
+                continue;
+            }
+            chosen = Some(enc);
+            break;
         }
-        if st != 0 || session.is_null() {
+        let Some(mut enc) = chosen else {
             return Err(match cfg.implementation {
+                ImplPreference::HardwareOnly if unconfirmed => unsupported(
+                    "VideoToolbox made an H.264 encoder that can't be confirmed as hardware",
+                ),
                 ImplPreference::HardwareOnly => unsupported(format!(
-                    "no hardware H.264 encoder for {}x{} (OSStatus {st})",
+                    "no hardware H.264 encoder for {}x{} (OSStatus {last_status})",
                     cfg.width, cfg.height
                 )),
                 _ => VideoError::os(
-                    st as i64,
+                    last_status as i64,
                     format!("VTCompressionSessionCreate {}x{}", cfg.width, cfg.height),
                 ),
             });
-        }
-        let mut enc = VtEncoder {
-            session,
-            outbox,
-            cfg: *cfg,
-            hardware: false,
-            low_latency,
-            last_pts: -1,
         };
-        // iOS encodes H.264 in hardware; an iOS without the key doesn't say.
-        enc.hardware = enc
-            .copy_bool(c"kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder")
-            .unwrap_or(cfg!(target_os = "ios"));
-        if cfg.implementation == ImplPreference::HardwareOnly && !enc.hardware {
-            return Err(unsupported(
-                "VideoToolbox gave a software encoder when hardware was required",
-            ));
-        }
         enc.prop(c"kVTCompressionPropertyKey_RealTime", yes());
         enc.prop(c"kVTCompressionPropertyKey_AllowFrameReordering", no());
         let [want, fallback] = profile_keys(profile);
@@ -335,6 +359,43 @@ impl VtEncoder {
             }
             let owned = Cf(v);
             Some(CFBooleanGetValue(owned.0) != 0)
+        }
+    }
+
+    /// Is this session's encoder hardware, as VideoToolbox's encoder list
+    /// says? `None` when the session doesn't name its encoder or the list
+    /// doesn't have it. A listed encoder without the hardware flag is
+    /// software (the list's own rule).
+    fn listed_hardware(&self) -> Option<bool> {
+        let id_key = cf_const(c"kVTCompressionPropertyKey_EncoderID")?;
+        let list_id = cf_const(c"kVTVideoEncoderList_EncoderID")?;
+        let list_hw = cf_const(c"kVTVideoEncoderList_IsHardwareAccelerated");
+        let mut id: CFTypeRef = ptr::null();
+        let mut list: CFTypeRef = ptr::null();
+        // SAFETY: a live session and framework keys, out pointers; we own
+        // the copied ID and list (released by `Cf`), and read the list's
+        // dictionaries only while it lives.
+        unsafe {
+            if VTSessionCopyProperty(self.session, id_key, ptr::null(), &mut id) != 0
+                || id.is_null()
+            {
+                return None;
+            }
+            let id = Cf(id);
+            if VTCopyVideoEncoderList(ptr::null(), &mut list) != 0 || list.is_null() {
+                return None;
+            }
+            let list = Cf(list);
+            for i in 0..CFArrayGetCount(list.0) {
+                let entry = CFArrayGetValueAtIndex(list.0, i);
+                let entry_id = CFDictionaryGetValue(entry, list_id);
+                if entry_id.is_null() || CFEqual(entry_id, id.0) == 0 {
+                    continue;
+                }
+                let hw = list_hw.map_or(ptr::null(), |k| CFDictionaryGetValue(entry, k));
+                return Some(!hw.is_null() && CFBooleanGetValue(hw) != 0);
+            }
+            None
         }
     }
 
@@ -480,20 +541,16 @@ impl EncoderCore for VtEncoder {
     }
 
     fn implementation(&self) -> Implementation {
-        if self.hardware {
-            Implementation::Hardware
-        } else {
-            Implementation::Software
-        }
+        self.implementation
     }
 
     fn name(&self) -> String {
         format!(
             "VideoToolbox H.264 ({}{})",
-            if self.hardware {
-                "hardware"
-            } else {
-                "software"
+            match self.implementation {
+                Implementation::Hardware => "hardware",
+                Implementation::Software => "software",
+                _ => "hardware or software: the OS doesn't say",
             },
             if self.low_latency {
                 ", low-latency rate control"
@@ -501,6 +558,37 @@ impl EncoderCore for VtEncoder {
                 ""
             }
         )
+    }
+}
+
+/// How a session asks for hardware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ask {
+    Require,
+    Enable,
+    Disable,
+}
+
+/// What a VideoToolbox session runs, from what the OS tells, in order:
+///
+/// - `reported`: the session's own "using hardware" property, when it
+///   answers (many encoders and decoders don't);
+/// - `asked`: a binding ask the session was created under: `Some(true)`,
+///   hardware required (VideoToolbox fails the create without it);
+///   `Some(false)`, hardware disabled ("never used", Apple's headers say);
+/// - `listed`: what VideoToolbox's encoder list says about the session's
+///   encoder, when it lists it.
+///
+/// Nothing said: `Unknown`, never a guess.
+pub(crate) fn session_implementation(
+    reported: Option<bool>,
+    asked: Option<bool>,
+    listed: Option<bool>,
+) -> Implementation {
+    match reported.or(asked).or(listed) {
+        Some(true) => Implementation::Hardware,
+        Some(false) => Implementation::Software,
+        None => Implementation::Unknown,
     }
 }
 

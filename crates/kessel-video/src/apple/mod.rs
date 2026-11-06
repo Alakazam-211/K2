@@ -269,18 +269,39 @@ fn monitor(inner: Weak<Inner>) {
     }
 }
 
-/// Whether there is a hardware H.264 encoder (probed once on macOS; every
-/// iPhone and iPad has one, and probing from the background would fail).
+/// Whether there is a hardware H.264 encoder: a hardware-only 720p30
+/// VideoToolbox session opens, and the session says it runs in hardware.
+/// Probed once, on macOS and iOS alike, and never assumed. An iOS app in
+/// the background can't open one, so a probe there answers `false` without
+/// keeping the answer; the next one in the foreground decides. An iOS
+/// before 17.4 can't require or confirm hardware, so it lists none.
 fn hardware_h264() -> bool {
-    if cfg!(target_os = "ios") {
-        return true;
-    }
     static HW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *HW.get_or_init(|| {
-        let mut cfg = EncoderConfig::h264(1280, 720, 30, 1_000_000);
-        cfg.implementation = ImplPreference::HardwareOnly;
-        vt_enc::VtEncoder::open(&cfg).is_ok()
-    })
+    if let Some(hw) = HW.get() {
+        return *hw;
+    }
+    if in_background() {
+        return false;
+    }
+    let hw = probe_hardware_h264();
+    // A failure is kept only if the app was in front for all of it.
+    if hw || !in_background() {
+        let _ = HW.set(hw);
+    }
+    HW.get().copied().unwrap_or(hw)
+}
+
+/// How many times the probe ran (tests).
+#[cfg(test)]
+static PROBES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn probe_hardware_h264() -> bool {
+    #[cfg(test)]
+    PROBES.fetch_add(1, Ordering::SeqCst);
+    let mut cfg = EncoderConfig::h264(1280, 720, 30, 1_000_000);
+    cfg.implementation = ImplPreference::HardwareOnly;
+    vt_enc::VtEncoder::open(&cfg)
+        .is_ok_and(|e| crate::kit::EncoderCore::implementation(&e) == Implementation::Hardware)
 }
 
 #[cfg(target_os = "ios")]

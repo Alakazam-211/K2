@@ -84,7 +84,8 @@ pub trait EncoderCore: Send + 'static {
     fn set_rates(&mut self, rates: Rates) -> Result<(), VideoError>;
     /// A new coded size (may reopen the session).
     fn set_size(&mut self, width: u32, height: u32) -> Result<(), VideoError>;
-    /// Hardware or software.
+    /// What the open session runs, read back from the OS (`Unknown` when
+    /// the OS doesn't say). Asked again after `set_size`.
     fn implementation(&self) -> Implementation;
     /// For logs.
     fn name(&self) -> String;
@@ -191,7 +192,11 @@ fn encoder_main(s: Arc<EncShared>, mut core: Box<dyn EncoderCore>) {
             }
             key = true;
             since_key = 0;
-            lock(&s.state).keyframe = frame.is_none();
+            let mut st = lock(&s.state);
+            st.keyframe = frame.is_none();
+            // A new size may be a new session, and another implementation.
+            st.implementation = core.implementation();
+            st.name = core.name();
         }
         if let (Some(r), None) = (rates, &fail) {
             if let Err(e) = core.set_rates(r) {
@@ -355,8 +360,15 @@ pub trait DecoderCore: Send + 'static {
     fn decode(&mut self, input: &EncodedInput) -> Result<Option<VideoFrame>, DecodeError>;
     /// Forget all state; reopen a lost session.
     fn reset(&mut self) -> Result<(), VideoError>;
-    /// Hardware or software.
+    /// What the open session runs, read back from the OS (`Unknown` when
+    /// the OS doesn't say, or before a session opens).
     fn implementation(&self) -> Implementation;
+    /// What the open session runs, or `None` while no session is open (a
+    /// decoder that opens on its first keyframe). Asked after every decode
+    /// and reset, for [`DecoderStats::implementation`].
+    fn session_implementation(&self) -> Option<Implementation> {
+        Some(self.implementation())
+    }
 }
 
 struct DecState {
@@ -398,7 +410,7 @@ impl ThreadedDecoder {
         wake: Wake,
     ) -> Result<ThreadedDecoder, VideoError> {
         let stats = DecoderStats {
-            implementation: Some(core.implementation()),
+            implementation: core.session_implementation(),
             ..DecoderStats::default()
         };
         let shared = Arc::new(DecShared {
@@ -473,9 +485,13 @@ fn decoder_main(s: Arc<DecShared>, mut core: Box<dyn DecoderCore>) {
             }
         };
         let Some(input) = input else {
-            if let Err(e) = core.reset() {
+            let r = core.reset();
+            let mut st = lock(&s.state);
+            st.stats.implementation = core.session_implementation();
+            if let Err(e) = r {
                 s.out.force_push(Err(DecodeError::Video(e)));
-                lock(&s.state).stats.errors += 1;
+                st.stats.errors += 1;
+                drop(st);
                 (s.wake)();
             }
             continue;
@@ -487,6 +503,8 @@ fn decoder_main(s: Arc<DecShared>, mut core: Box<dyn DecoderCore>) {
             None => Ok(None),
         });
         let mut st = lock(&s.state);
+        // The session may have opened, or reopened as another kind.
+        st.stats.implementation = core.session_implementation();
         if st.reset {
             // A reset came in while this decoded: its output is stale.
             continue;

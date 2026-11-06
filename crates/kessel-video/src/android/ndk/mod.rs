@@ -11,8 +11,9 @@ mod hwbuf;
 mod jni;
 mod projection;
 
-pub(crate) use hwbuf::hardware_buffer_frame;
+pub(crate) use hwbuf::{hardware_buffer_frame, HwFrame};
 
+use super::codec::AvcProbe;
 use super::meta::{self, camera_result, CamDesc, RawCharacteristics};
 use super::{Capture, ImageSink, Platform, ProjectionCapture, ScreenSink};
 use crate::error::{unsupported, VideoError};
@@ -207,8 +208,8 @@ impl Platform for Ndk {
         )?))
     }
 
-    fn h264_encode_capability(&self) -> Option<CodecCapability> {
-        Some(encoder::capability())
+    fn h264_probe(&self) -> AvcProbe {
+        encoder::probe()
     }
 
     fn h264_encoder(&self, cfg: &EncoderConfig) -> Result<Box<dyn EncoderCore>, VideoError> {

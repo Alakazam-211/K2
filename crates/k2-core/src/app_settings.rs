@@ -502,6 +502,12 @@ pub struct AppSettings {
     /// only: it doesn't turn on for customers until held edits survive a restart.
     #[serde(default)]
     pub board_file_preview: bool,
+    /// Video in voice rooms preview: camera tiles, screen share and the
+    /// camera picker in the desktop app's call panel. The daemon only stores
+    /// and returns it; the desktop app reads it. Owner only, off by default:
+    /// it stays dark until Sew's plugin video lands and a real call is tested.
+    #[serde(default)]
+    pub video_rooms_preview: bool,
     /// Voice through the tunnel preview (lane A): the `tunnel` TURN tier,
     /// `frpc-voice` and the cert `turn-tunnel` request. Persisted mirror of
     /// `K2_VOICE_TUNNEL` ([`crate::voice_rooms::tunnel_enabled`]).
@@ -1285,6 +1291,7 @@ impl Default for AppSettings {
             compute_preview: false,
             voice_rooms_preview: false,
             board_file_preview: false,
+            video_rooms_preview: false,
             voice_tunnel_preview: false,
             voice_rooms_count: default_voice_rooms_count(),
             compute_placement: default_compute_placement(),
@@ -2754,5 +2761,23 @@ mod tests {
         assert!(e.contains("voiceRoomsCount must be 0-10"), "{e}");
         assert!(update(json!({"voiceRoomsCount": -1})).is_err(), "negative is refused");
         assert_eq!(load().voice_rooms_count, 0, "a refused write keeps the old value");
+    }
+
+    /// Video in voice rooms: off by default, an old file without the key
+    /// reads off, and the owner's write keeps true.
+    #[test]
+    fn video_rooms_preview_defaults_off_and_keeps_true() {
+        use serde_json::json;
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let d = AppSettings::default();
+        assert!(!d.video_rooms_preview, "the preview defaults OFF");
+        assert_eq!(serde_json::to_value(&d).unwrap()["videoRoomsPreview"], json!(false));
+        ensure_dir();
+        fs::write(settings_file(), r#"{"apps": true}"#).unwrap();
+        assert!(!load().video_rooms_preview, "a file without the key reads off");
+        let s = update(json!({"videoRoomsPreview": true})).expect("the write is kept");
+        assert!(s.video_rooms_preview);
+        assert!(load().video_rooms_preview, "true survives a reload");
     }
 }

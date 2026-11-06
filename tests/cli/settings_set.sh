@@ -47,7 +47,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
 LOG = sys.argv[1]
-DEFAULTS = {"voiceRoomsPreview": False, "voiceTunnelPreview": False, "computePreview": False, "boardFilePreview": False}
+DEFAULTS = {"voiceRoomsPreview": False, "voiceTunnelPreview": False, "computePreview": False, "boardFilePreview": False, "videoRoomsPreview": False}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -121,10 +121,10 @@ run() {
     ERR="$(cat "$SANDBOX/err")"
 }
 
-KEYS_LINE="voiceRoomsPreview, voiceTunnelPreview, computePreview, boardFilePreview"
+KEYS_LINE="voiceRoomsPreview, voiceTunnelPreview, computePreview, boardFilePreview, videoRoomsPreview"
 
 # ── each allowed key, both values ─────────────────────────────────────────
-for key in voiceRoomsPreview voiceTunnelPreview computePreview boardFilePreview; do
+for key in voiceRoomsPreview voiceTunnelPreview computePreview boardFilePreview videoRoomsPreview; do
     run owner-tok settings set "$key" true
     [ "$RC" = 0 ] || bad "$key true: exit $RC ($ERR)"
     [ "$(cat "$LOG")" = "POST /cli/settings/update {\"$key\":true}" ] || bad "$key true: wrong request: $(cat "$LOG")"
@@ -191,7 +191,7 @@ grep -q "no answer from the K2 daemon" "$SANDBOX/err" && ok || bad "no daemon: s
 # ── help ──────────────────────────────────────────────────────────────────
 run owner-tok settings set --help
 [ "$RC" = 0 ] || bad "set --help: exit $RC"
-for line in "k2 settings set <key> <true|false>" "voiceRoomsPreview" "voiceTunnelPreview" "computePreview" "boardFilePreview"; do
+for line in "k2 settings set <key> <true|false>" "voiceRoomsPreview" "voiceTunnelPreview" "computePreview" "boardFilePreview" "videoRoomsPreview"; do
     printf '%s\n' "$OUT" | grep -qF "$line" || bad "set --help: missing '$line'"
 done
 [ ! -s "$LOG" ] && ok || bad "set --help sent a request: $(cat "$LOG")"

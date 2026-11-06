@@ -41741,7 +41741,7 @@ cmd_settings() {
 # on POST /cli/settings/update (settings_routes OWNER_ONLY_KEYS); the daemon
 # refuses agents and every other login, so this CLI decides nothing but the
 # allowlist and the value. Order = the order help prints them.
-_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview boardFilePreview)
+_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview boardFilePreview videoRoomsPreview)
 
 _settings_set_keys_line() {
     local IFS=","
@@ -41807,6 +41807,7 @@ nxt = {
     "voiceTunnelPreview": "k2 hostchat media tier tunnel moves voice onto K2'"'"'s tunnel.",
     "computePreview": "k2 compute nodes lists the machines.",
     "boardFilePreview": "Board files open in a tab in the K2 app.",
+    "videoRoomsPreview": "Video in voice rooms shows in the K2 desktop app'"'"'s call panel (preview).",
 }
 if want:
     print("Next: " + nxt[key])
@@ -46179,7 +46180,7 @@ cmd_schema() {
     {
       "name": "settings",
       "usage": "k2 settings [--mode <off|custom|manager|k2>] | k2 settings set <key> <true|false>",
-      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview or boardFilePreview (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
+      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview, boardFilePreview or videoRoomsPreview (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
       "args": [],
       "flags": []
     },
@@ -57973,6 +57974,8 @@ SERVER SWITCHES (the owner only)
                             (k2 hostchat media tier tunnel)
     computePreview          compute nodes (same as k2 compute preview on|off)
     boardFilePreview        board files open in a tab
+    videoRoomsPreview       video in voice rooms: camera and screen share
+                            in the K2 desktop app's call panel
   Run it as the owner in a plain terminal on the server (not a K2 tab): the
   CLI picks up the owner's credential there by itself. These are the only
   keys it takes: any other key, or a value that isn't true/false/on/off,

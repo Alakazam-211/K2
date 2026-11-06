@@ -258,6 +258,8 @@ interface SettingsState {
   voiceRoomsPreview: boolean
   /** Board files in a tab (the `board_file_preview` setting). Off by default. */
   boardFilePreview: boolean
+  /** Video in voice rooms (the `video_rooms_preview` setting): camera and screen share in the call panel. Off by default. */
+  videoRoomsPreview: boolean
 
   // Apps (beta) on the focused server (Settings → Apps → This server).
   // Owner-only server-side, default ON since 0.46.3. While off every
@@ -558,6 +560,7 @@ async function persistAndApply(
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
+      videoRoomsPreview: result.videoRoomsPreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -610,6 +613,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   computePreview: false,
   voiceRoomsPreview: false,
   boardFilePreview: false,
+  videoRoomsPreview: false,
   apps: true,
   apiEnabled: false,
   useLlmHitlDetection: false,
@@ -1034,6 +1038,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
+      videoRoomsPreview: result.videoRoomsPreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -1104,6 +1109,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
+      videoRoomsPreview: result.videoRoomsPreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,

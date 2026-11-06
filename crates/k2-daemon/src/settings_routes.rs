@@ -117,6 +117,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // Board files preview (prd-board-tab-v1). Dogfood only: it doesn't turn on
     // for customers until held edits survive a restart.
     "boardFilePreview",
+    // Video in voice rooms preview: camera tiles and screen share in the
+    // desktop app's call panel. The daemon only stores it. Owner only.
+    "videoRoomsPreview",
     // How compute auto-placement ranks nodes (prd-compute-auto-placement-v1
     // CP-A18): `k2 compute placement v1|v2`, the owner's switch.
     "computePlacement",

@@ -151,6 +151,7 @@ export interface AppSettingsResponse {
   // the K2 Admin Space + rooms, and voice through the tunnel. Optional:
   // an older daemon omits them → readers treat absent as false.
   voiceRoomsPreview?: boolean
+  videoRoomsPreview?: boolean
   /** Board files preview. Dogfood only: doesn't turn on for customers until held edits survive a restart. */
   boardFilePreview?: boolean
   voiceTunnelPreview?: boolean

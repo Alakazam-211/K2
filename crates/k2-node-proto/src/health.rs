@@ -47,6 +47,32 @@ pub struct Health {
     /// Facts that failed to read and why (short codes).
     #[serde(default)]
     pub errors: BTreeMap<String, String>,
+    /// Protocol 7 (prd-compute-self-serve-environments §10): the package
+    /// manager's upkeep facts. `None` from older nodes and Macs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packages: Option<PkgHealth>,
+}
+
+/// What K2 knows about the node's package manager (§10). K2 refreshes a
+/// stale apt or zypper index itself; a full OS upgrade and a reboot stay
+/// the owner's.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PkgHealth {
+    /// `apt` | `dnf` | `pacman` | `zypper`.
+    pub manager: String,
+    /// Seconds since the package index (or pacman's sync database) changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_age_secs: Option<u64>,
+    /// The last install found the database out of date and K2 won't sync it
+    /// alone (Arch: a full upgrade first). The owner runs the upgrade.
+    #[serde(default)]
+    pub index_stale: bool,
+    /// The manager's signature check is off: K2 installs nothing.
+    #[serde(default)]
+    pub signing_off: bool,
+    /// A distro wrapper the owner should upgrade with (`omarchy-update`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapper: Option<String>,
 }
 
 /// The job wall and the machine's open home folders (`k2 compute node

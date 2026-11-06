@@ -241,7 +241,16 @@ pub const VERBS: &[VerbSpec] = &[
     // Touch ID). Linux only; argument `{package}` checked with
     // `needs::valid_package`. An older executor answers `verb_not_allowed`.
     VerbSpec { name: VERB_PACKAGES_ALLOW, base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
+    // Protocol 7 (prd-compute-self-serve-environments §3.4): set one
+    // server's package policy in root's `/etc/k2-node-package-policy.toml`.
+    // Operate when it only narrows (applies at once); the executor re-classes
+    // a widening as privileged (the owner's approval, `full`), like
+    // `servers.limits`. Arguments: `crate::pkgpolicy::check_policy_args`.
+    VerbSpec { name: VERB_PACKAGES_POLICY, base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
 ];
+
+/// Protocol 7: one server's package policy.
+pub const VERB_PACKAGES_POLICY: &str = "packages.policy";
 
 /// The CE-24 verb.
 pub const VERB_PACKAGES_ALLOW: &str = "packages.allow";

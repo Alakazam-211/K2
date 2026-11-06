@@ -67,7 +67,20 @@ use crate::crypto::{self, SigningKey};
 /// `job-resources`, `stall-cpu`, `rust-components`, `toolchain-budget`,
 /// `cpu-hints`, `job-ports`) only for a server that said protocol ≥ 6
 /// ([`PROTOCOL_EASY`]). An older server sees its own release's frames.
-pub const PROTOCOL: u32 = 6;
+///
+/// 7 = self-serve environments (prd-compute-self-serve-environments-v1):
+/// host facts (`Offer.host`, the `distro`/`distro_version`/`pkg`/`libc`/
+/// `gpu` labels, feature `host-facts`), the package status (`Offer.pkg`,
+/// `pkg-status`), distro-neutral names and profiles (`Plan.packages`,
+/// `pkg-map`), package requests relayed to the node's owner
+/// (`pkg_request`, `pkg_request_fwd`, `pkg_request_decide`,
+/// `pkg_request_done`, `pkg-requests`) and complete Rust toolchains
+/// (`rust-default-components`). Additive: a node sends the new offer
+/// fields and features only to a server that said protocol ≥ 7
+/// ([`crate::host::PROTOCOL_HOST`]), and a server sends the new plan field
+/// and frames only to a node offering the feature. An older peer sees
+/// exactly its own release's frames.
+pub const PROTOCOL: u32 = 7;
 
 /// The first server protocol that gets the easy-mode job work and features.
 pub const PROTOCOL_EASY: u32 = 6;
@@ -355,6 +368,11 @@ pub enum Frame {
     /// (only in answer to `secret_need`).
     SecretEnv(SecretEnv),
     SecretRefused(SecretRefused),
+    /// Protocol 7: ask the node's owner for system packages (only to nodes
+    /// offering `pkg-requests`).
+    PkgRequest(crate::pkgpolicy::PkgRequest),
+    /// Protocol 7, the owner server only: deny a forwarded request.
+    PkgRequestDecide(crate::pkgpolicy::PkgRequestDecide),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -377,6 +395,10 @@ pub enum Frame {
     /// Protocol 4: right before spawn, a job's secret env, for one fresh
     /// public key (only to a server that said protocol ≥ 4).
     SecretNeed(SecretNeed),
+    /// Protocol 7: a package request for the owner server to decide.
+    PkgRequestFwd(crate::pkgpolicy::PkgRequestFwd),
+    /// Protocol 7: a request's outcome, to the server that asked.
+    PkgRequestDone(crate::pkgpolicy::PkgRequestDone),
 }
 
 impl Frame {
@@ -397,7 +419,9 @@ impl Frame {
             | Frame::QueueGet(_)
             | Frame::CacheGet(_)
             | Frame::SecretEnv(_)
-            | Frame::SecretRefused(_) => Direction::ControllerToNode,
+            | Frame::SecretRefused(_)
+            | Frame::PkgRequest(_)
+            | Frame::PkgRequestDecide(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -412,7 +436,9 @@ impl Frame {
             | Frame::ArtifactFailed(_)
             | Frame::QueueView(_)
             | Frame::CacheView(_)
-            | Frame::SecretNeed(_) => Direction::NodeToController,
+            | Frame::SecretNeed(_)
+            | Frame::PkgRequestFwd(_)
+            | Frame::PkgRequestDone(_) => Direction::NodeToController,
         }
     }
 
@@ -449,6 +475,10 @@ impl Frame {
             Frame::SecretNeed(_) => "secret_need",
             Frame::SecretEnv(_) => "secret_env",
             Frame::SecretRefused(_) => "secret_refused",
+            Frame::PkgRequest(_) => "pkg_request",
+            Frame::PkgRequestDecide(_) => "pkg_request_decide",
+            Frame::PkgRequestFwd(_) => "pkg_request_fwd",
+            Frame::PkgRequestDone(_) => "pkg_request_done",
         }
     }
 }
@@ -628,6 +658,16 @@ pub struct Plan {
     /// `submitter_max_running`; absent = no cap). CI never counts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submitter_max_running: Option<u32>,
+    /// Protocol 7 (`pkg-map`): every system name the job needs, canonical
+    /// (or `<manager>:<name>`), its `profile:` needs expanded and its `sys:`
+    /// needs added, sorted and unique, at most
+    /// [`crate::profiles::MAX_PLAN_PACKAGES`]. A profile counts as one need
+    /// against the 32-need cap; its names ride here. Absent when empty, so
+    /// every older plan and digest is unchanged; sent only to nodes
+    /// offering [`crate::pkgmap::FEATURE_PKG_MAP`]. The node still checks
+    /// every name against its own policy, deny list and dry run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<String>,
 }
 
 impl Plan {
@@ -988,6 +1028,15 @@ pub struct Offer {
     /// said protocol < 3, and on a node nobody shares.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<crate::share::ShareView>,
+    /// Protocol 7: what this node is ([`crate::host`]). Absent for an older
+    /// server (the solo goldens hold it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<crate::host::HostFacts>,
+    /// Protocol 7: this server's view of the node's system packages
+    /// ([`crate::pkgpolicy::PkgStatus`]). Linux nodes with the package
+    /// installer only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pkg: Option<crate::pkgpolicy::PkgStatus>,
 }
 
 /// Job states shared by the controller registry and the node ledger.
@@ -1392,9 +1441,42 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
             with: Vec::new(),
         }
+    }
+
+    /// Protocol 7 with older peers (prd-compute-self-serve-environments
+    /// §6.5, §13): an empty `packages` leaves a plan's wire form (and so its
+    /// digest) as before; an older node's offer (no `host`, no `pkg`)
+    /// parses; the new frames carry their own tags and directions.
+    #[test]
+    fn protocol_seven_is_additive_for_older_peers() {
+        let p = plan();
+        let text = serde_json::to_string(&p).unwrap();
+        assert!(!text.contains("packages"), "{text}");
+        let mut q = plan();
+        q.packages = vec!["libssl-dev".into()];
+        assert!(serde_json::to_string(&q).unwrap().contains("\"packages\":[\"libssl-dev\"]"));
+        let old_plan: Plan = serde_json::from_str(&text).unwrap();
+        assert!(old_plan.packages.is_empty());
+        // A 0.46.8 offer: no host, no pkg.
+        let old = r#"{"revision":1,"control":"active","control_by":null,"control_at":null,"availability":{"ok":true,"reasons":[]},
+            "caps":{"cpu_millis":1000,"mem_bytes":1,"disk_budget_bytes":1,"hard":true},"free":{"cpu_millis":1,"mem_bytes":1,"disk_free_bytes":1},
+            "slots":[],"running":0,"parallel_max":1,"refusal":null,"labels":{"os":"linux","arch":"x86_64"},"tools":{},"protocol":6,
+            "boot_id":"b","ledger_id":"l","node_version":"0.46.8","features":["needs"]}"#;
+        let o: Offer = serde_json::from_str(old).unwrap();
+        assert!(o.host.is_none() && o.pkg.is_none());
+        let back = serde_json::to_string(&o).unwrap();
+        assert!(!back.contains("\"host\"") && !back.contains("\"pkg\""), "an older server sees no new keys: {back}");
+        let f = Frame::PkgRequest(crate::pkgpolicy::PkgRequest { id: "cpr_1".into(), names: vec!["libssl-dev".into()], job_id: None, why: None, asked_by: "tests".into() });
+        assert_eq!((f.kind(), f.direction()), ("pkg_request", Direction::ControllerToNode));
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["t"], "pkg_request");
+        let d = Frame::PkgRequestDone(crate::pkgpolicy::PkgRequestDone { server_request: "cpr_1".into(), state: "denied".into(), note: None, installed: vec![], owner: "acme.k2.dev".into() });
+        assert_eq!((d.kind(), d.direction()), ("pkg_request_done", Direction::NodeToController));
+        // The request frame refuses unknown keys (a node never guesses).
+        assert!(serde_json::from_str::<crate::pkgpolicy::PkgRequest>(r#"{"id":"x","names":[],"asked_by":"a","shell":"x"}"#).is_err());
     }
 
     #[test]

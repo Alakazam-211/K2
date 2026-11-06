@@ -4667,6 +4667,7 @@ dependencies = [
  "quick-xml 0.38.4",
  "serde",
  "serde_json",
+ "toml 0.8.2",
 ]
 
 [[package]]

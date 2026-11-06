@@ -17,3 +17,5 @@ aws-lc-rs = "1"
 base64 = "0.22"
 # JUnit reports from compute jobs (results::parse_junit).
 quick-xml = "0.38"
+# The package policy file (pkgpolicy).
+toml = "0.8"

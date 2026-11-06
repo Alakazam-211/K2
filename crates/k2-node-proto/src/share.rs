@@ -1244,8 +1244,10 @@ pub fn check_verb_args(verb: &str, args: &Value) -> Result<(), String> {
             if !valid_fp_prefix(&a.fp_prefix) {
                 return Err(format!("{verb}: fp_prefix is the code's 16 hex"));
             }
-            if a.for_secs.is_some_and(|s| !(3600..=366 * 24 * 3600).contains(&s)) {
-                return Err(format!("{verb}: for is 1 h to 366 days"));
+            // 0 = no end date (`--for none`, protocol 7 nodes); absent = the
+            // trust's default (7 days for `team`).
+            if a.for_secs.is_some_and(|s| s != 0 && !(3600..=366 * 24 * 3600).contains(&s)) {
+                return Err(format!("{verb}: for is 1 h to 366 days, or 0 for none"));
             }
             a.limits.apply(&ShareLimits::new_server(a.trust, false)).validate().map_err(|e| format!("{verb}: {e}"))
         }

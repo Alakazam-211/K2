@@ -12,9 +12,15 @@
 //!   `rust@nightly+llvm-tools` ([`RUST_COMPONENTS`]; nodes offering
 //!   [`FEATURE_RUST_COMPONENTS`] only).
 //! - `cargo-nextest` (or `nextest`) — the prebuilt nextest binary.
-//! - `sys:<package>` — a system package (`libssl-dev`, `pkg-config`).
-//!   Needs root: the node installs it only when the machine's owner put
-//!   the name on the node's approved list (`/etc/k2-node/packages.toml`).
+//! - `sys:<package>` — a system package by its Debian name (`libssl-dev`,
+//!   `pkg-config`), mapped per distro ([`crate::pkgmap`]); or a native
+//!   name for one package manager (`sys:pacman:protobuf`, nodes offering
+//!   `pkg-map` only). Needs root: the node installs it when the machine's
+//!   owner put the name on the node's approved list
+//!   (`/etc/k2-node-packages.toml`) or the owner's package policy for the
+//!   job's server covers it ([`crate::pkgpolicy`]).
+//! - `profile:<name>[@<version>]` — a K2-shipped bundle of system names and
+//!   tools ([`crate::profiles`]); one need, nodes offering `pkg-map` only.
 //!
 //! Names and versions are a small charset so a need can never become a
 //! shell word, a flag or a path.
@@ -70,7 +76,7 @@ pub fn expected_bins(tool: &str) -> &'static [&'static str] {
 /// What `--needs` takes, for help text and refusals.
 pub fn supported_list() -> String {
     let mut v: Vec<String> = SUPPORTED_TOOLS.iter().map(|(t, _)| format!("{t}@<v>")).collect();
-    v.extend(["rust@<channel>[+<component>…]", "cargo-nextest", "sys:<package>"].map(String::from));
+    v.extend(["rust@<channel>[+<component>…]", "cargo-nextest", "sys:<package>", "sys:<apt|pacman|dnf|zypper>:<package>", "profile:<name>"].map(String::from));
     v.join(", ")
 }
 
@@ -136,6 +142,19 @@ pub const FEATURE_RUST_COMPONENTS: &str = "rust-components";
 /// used versions no running or queued job needs. An older node has no cap.
 pub const FEATURE_TOOLCHAIN_BUDGET: &str = "toolchain-budget";
 
+/// Offer feature (protocol 7, prd-compute-self-serve-environments §8): a
+/// bare `rust@<channel>` brings clippy and rustfmt ([`DEFAULT_RUST_COMPONENTS`]),
+/// and `rust@<channel>+minimal` opts out. The controller expects the two
+/// components only from nodes offering this; an older node is unchanged.
+pub const FEATURE_RUST_DEFAULT_COMPONENTS: &str = "rust-default-components";
+
+/// What a bare `rust@<channel>` installs on a node offering
+/// [`FEATURE_RUST_DEFAULT_COMPONENTS`].
+pub const DEFAULT_RUST_COMPONENTS: &[&str] = &["clippy", "rustfmt"];
+
+/// `rust@stable+minimal`: no default components (a size-sensitive node).
+pub const RUST_MINIMAL: &str = "minimal";
+
 /// Rust components a need may name (`rust@stable+clippy`). `llvm-tools`
 /// is rustup's `llvm-tools-preview` on older toolchains (rustup renames
 /// it); with it the job's PATH gains the toolchain's LLVM bin dir.
@@ -172,8 +191,16 @@ pub enum Need {
     },
     /// The prebuilt `cargo-nextest`.
     Nextest,
-    /// A distro package; root, owner-approved.
+    /// A distro package; root, owner-approved. `package` is a canonical
+    /// (Debian) name, or `<manager>:<name>` for a native one.
     System { package: String },
+    /// A K2-shipped profile (`profile:tauri-linux@1`); `version` absent =
+    /// the newest the server knows.
+    Profile {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<u32>,
+    },
 }
 
 impl Need {
@@ -185,7 +212,14 @@ impl Need {
             Need::Rust { channel, components } => format!("rust@{channel}+{}", components.join("+")),
             Need::Nextest => "cargo-nextest".into(),
             Need::System { package } => format!("sys:{package}"),
+            Need::Profile { name, version: None } => format!("profile:{name}"),
+            Need::Profile { name, version: Some(v) } => format!("profile:{name}@{v}"),
         }
+    }
+
+    /// Does a bare Rust need get the default components (not `+minimal`)?
+    pub fn rust_wants_defaults(&self) -> bool {
+        matches!(self, Need::Rust { components, .. } if !components.iter().any(|c| c == RUST_MINIMAL))
     }
 
     /// The tool a need is about, for "explicit beats repo file" merging.
@@ -195,6 +229,7 @@ impl Need {
             Need::Rust { .. } => "rust".into(),
             Need::Nextest => "cargo-nextest".into(),
             Need::System { package } => format!("sys:{package}"),
+            Need::Profile { name, .. } => format!("profile:{name}"),
         }
     }
 }
@@ -245,11 +280,16 @@ pub fn parse(token: &str) -> Result<Need, String> {
         return Err("empty need".into());
     }
     if let Some(p) = t.strip_prefix("sys:") {
-        return if valid_package(p) {
-            Ok(Need::System { package: p.to_string() })
-        } else {
-            Err(format!("{t:?}: a system package is sys:<name> with a-z 0-9 . _ + - (e.g. sys:libssl-dev)"))
+        return match crate::pkgmap::SysName::parse(p) {
+            Some(n) => Ok(Need::System { package: n.as_str() }),
+            None => Err(format!(
+                "{t:?}: a system package is sys:<name> with a-z 0-9 . _ + - (e.g. sys:libssl-dev), or a native name sys:<apt|pacman|dnf|zypper>:<name>"
+            )),
         };
+    }
+    if let Some(p) = t.strip_prefix("profile:") {
+        let (name, version) = crate::profiles::parse_ref(p)?;
+        return Ok(Need::Profile { name, version });
     }
     if matches!(t, "cargo-nextest" | "nextest" | "cargo-nextest@latest" | "nextest@latest") {
         return Ok(Need::Nextest);
@@ -283,9 +323,9 @@ fn parse_rust(t: &str, version: &str) -> Result<Need, String> {
     let mut components: Vec<String> = Vec::new();
     for c in parts {
         let c = canonical_component(c);
-        if !RUST_COMPONENTS.contains(&c) {
+        if !RUST_COMPONENTS.contains(&c) && c != RUST_MINIMAL {
             return Err(format!(
-                "{t:?}: {c:?} isn't a Rust component K2 installs (one of {}; join them with +, e.g. rust@stable+clippy+rustfmt)",
+                "{t:?}: {c:?} isn't a Rust component K2 installs (one of {}, or minimal for none; join them with +, e.g. rust@stable+clippy+rustfmt)",
                 RUST_COMPONENTS.join(", ")
             ));
         }
@@ -313,6 +353,12 @@ pub fn parse_all<S: AsRef<str>>(tokens: &[S]) -> Result<Vec<Need>, NeedError> {
     for t in tokens {
         let n = parse(t.as_ref()).map_err(invalid)?;
         check_supported(&n).map_err(|message| NeedError { code: TOOL_UNSUPPORTED, message })?;
+        if let Need::Profile { name, version } = &n {
+            if crate::profiles::get(name, *version).is_none() {
+                let message = crate::profiles::resolve(&n.token()["profile:".len()..]).err().unwrap_or_default();
+                return Err(NeedError { code: crate::profiles::PROFILE_UNKNOWN, message });
+            }
+        }
         if out.iter().any(|o| o.key() == n.key()) {
             return Err(invalid(format!("{} is listed twice", n.key())));
         }
@@ -365,6 +411,28 @@ mod tests {
         assert_eq!(old, Need::Rust { channel: "1.99".into(), components: vec![] });
         assert_eq!(canonical_component("llvm-tools-preview"), "llvm-tools");
         assert!(supported_list().contains("rust@<channel>[+<component>…]"));
+    }
+
+    /// prd-compute-self-serve-environments §5.1, §7.1, §8.
+    #[test]
+    fn native_profile_and_minimal_tokens_parse() {
+        assert_eq!(parse("sys:pacman:protobuf").unwrap(), Need::System { package: "pacman:protobuf".into() });
+        assert_eq!(parse("sys:pacman:protobuf").unwrap().token(), "sys:pacman:protobuf");
+        assert!(parse("sys:brew:protobuf").is_err(), "brew is no manager here");
+        assert!(parse("sys:apt:-y").is_err());
+        let p = parse("profile:tauri-linux@1").unwrap();
+        assert_eq!(p, Need::Profile { name: "tauri-linux".into(), version: Some(1) });
+        assert_eq!(p.token(), "profile:tauri-linux@1");
+        assert_eq!(parse("profile:tauri-linux").unwrap().key(), "profile:tauri-linux");
+        let e = parse_all(&["profile:nope"]).unwrap_err();
+        assert_eq!(e.code, crate::profiles::PROFILE_UNKNOWN, "{e}");
+        assert_eq!(parse_all(&["profile:tauri-linux@99"]).unwrap_err().code, crate::profiles::PROFILE_UNKNOWN);
+        let m = parse("rust@stable+minimal").unwrap();
+        assert_eq!(m.token(), "rust@stable+minimal");
+        assert!(!m.rust_wants_defaults());
+        assert!(parse("rust@stable").unwrap().rust_wants_defaults());
+        assert!(parse("rust@stable+clippy").unwrap().rust_wants_defaults());
+        assert!(supported_list().contains("profile:<name>"));
     }
 
     #[test]

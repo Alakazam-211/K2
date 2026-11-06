@@ -27,6 +27,12 @@
 //!   rules every orderer shares, and their codes.
 //! - [`cache`]: per-workspace job caches (protocol 6): names, the
 //!   workspace key, `cache_get` / `cache_view`.
+//! - [`host`]: host facts (protocol 7): distro, version, package manager,
+//!   kernel, libc, GPU; `--distro`.
+//! - [`pkgmap`]: distro-neutral package names (protocol 7).
+//! - [`profiles`]: K2-shipped package profiles (protocol 7).
+//! - [`pkgpolicy`]: the per-server package policy, the deny list, package
+//!   requests and their frames (protocol 7).
 
 pub mod admin;
 pub mod cache;
@@ -35,8 +41,12 @@ pub mod crypto;
 pub mod env;
 pub mod frames;
 pub mod health;
+pub mod host;
 pub mod needs;
 pub mod pairing;
+pub mod pkgmap;
+pub mod pkgpolicy;
+pub mod profiles;
 pub mod queue;
 pub mod refusal;
 pub mod results;

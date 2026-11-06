@@ -46,7 +46,19 @@ pub const NODE_SET_VARS: &[&str] = &[
     "SHELL",
     // Toolchains the node resolved for the job (`needs`).
     "RUSTUP_TOOLCHAIN",
+    // Host facts (protocol 7, prd-compute-self-serve-environments §4.5).
+    ENV_NODE_OS,
+    ENV_NODE_DISTRO,
+    ENV_NODE_DISTRO_VERSION,
+    ENV_NODE_PKG,
 ];
+
+/// Protocol 7 (§4.5): what the node is, for the job: `linux`, `ubuntu`,
+/// `24.04` (`rolling` on Arch), `apt`. Node-set; `--env` can't set them.
+pub const ENV_NODE_OS: &str = "K2_NODE_OS";
+pub const ENV_NODE_DISTRO: &str = "K2_NODE_DISTRO";
+pub const ENV_NODE_DISTRO_VERSION: &str = "K2_NODE_DISTRO_VERSION";
+pub const ENV_NODE_PKG: &str = "K2_NODE_PKG";
 
 /// 0.46.7 (CE-15): the CPUs a job may use, as the node reserved them
 /// (`--cpus` rounded up, else the node's default share `caps.cpu ÷

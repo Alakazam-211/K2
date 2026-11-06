@@ -220,6 +220,34 @@ fn frames_round_trip_at_360p_and_720p() {
 }
 
 #[test]
+fn constrained_high_round_trips_with_no_b_frames() {
+    let b = backend().expect("backend");
+    let mut cfg = EncoderConfig::h264(640, 360, 30, 800_000);
+    cfg.codec = CodecConfig::H264 {
+        profile: H264Profile::ConstrainedHigh,
+        level: H264Level::L3_1,
+    };
+    let mut enc = b.encoder(cfg, no_wake()).expect("encoder");
+    let mut dec = b
+        .decoder(DecoderConfig::new(VideoCodec::H264), no_wake())
+        .expect("decoder");
+    for t in 0..10 {
+        let src = picture(640, 360, t, false);
+        let e = encode_one(&mut enc, &src);
+        if t == 0 {
+            let nals = h264::annexb_nals(&e.data);
+            let codec = h264::codec_string(&nals).expect("codec string");
+            eprintln!("Constrained High: {codec}, {}", enc.info().name);
+            assert_eq!(nals[0][1], 100, "profile_idc of {codec}");
+        }
+        // No reordering: each output is the frame just given.
+        let out = decode_one(&mut dec, &e);
+        assert_eq!(out.capture_us, src.capture_us);
+        assert!(psnr_y(&src, &out).expect("psnr") > 30.0);
+    }
+}
+
+#[test]
 fn a_bitrate_change_takes_effect_without_a_keyframe() {
     let b = backend().expect("backend");
     let (w, h) = (640, 360);

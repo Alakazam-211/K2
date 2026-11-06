@@ -66,7 +66,8 @@ fn load(buf: &[u8], pos: usize, across: usize, along: usize, count: usize) -> Se
 }
 
 /// Writes back taps `first..last` (the ones a filter may change).
-#[allow(clippy::too_many_arguments)]
+// The segment index walks the transposed array, so a range loop is clearest.
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 fn store(buf: &mut [u8], pos: usize, across: usize, along: usize, count: usize, seg: &Segments, first: usize, last: usize) {
     if across == 1 {
         for i in 0..count {

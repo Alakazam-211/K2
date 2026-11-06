@@ -13,9 +13,12 @@ pub(crate) trait TokenSink {
     fn fixed(&mut self, prob: u8, bit: bool);
 }
 
+/// Zeros and ones seen per coefficient probability.
+pub(crate) type Counts = [[[[[u32; 2]; 11]; 3]; 8]; 4];
+
 /// Counts zeros and ones per probability, for choosing updates.
 pub(crate) struct Counter {
-    pub(crate) counts: Box<[[[[[u32; 2]; 11]; 3]; 8]; 4]>,
+    pub(crate) counts: Box<Counts>,
 }
 
 impl Counter {

@@ -32,8 +32,8 @@ caller has already decrypted and verified.
 | | Cameras | Screens | H.264 encode | Decode |
 |---|---|---|---|---|
 | macOS | AVFoundation | ScreenCaptureKit (12.3+): list, system picker (14+), window exclusion | VideoToolbox | not yet |
-| Windows | not yet | not yet | not yet | not yet |
-| Linux | not yet | not yet | none: no OS codec | not yet |
+| Windows | Media Foundation (NV12 through the source reader) | Windows Graphics Capture: displays and windows; no system picker or window exclusion yet | not yet | not yet |
+| Linux | V4L2 through raw ioctls (NV12, I420, YUYV modes; MJPEG not yet) | not yet (the ScreenCast portal with PipeWire is next) | none: no OS codec | not yet |
 
 VP8 comes from pure-Rust encoder and decoder crates behind a feature, once
 they land. Every platform has the API, `null()` and the fake backend today.

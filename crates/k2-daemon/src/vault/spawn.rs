@@ -250,20 +250,26 @@ pub fn linux_secrets_candidates(
 
 /// Make `dir` 0700 owned by us (create if missing); refuse symlinks and
 /// foreign owners.
+///
+/// Create first, then check what is there. "Look, then create" lost a
+/// race: two spawns (or a spawn and a live top-up) that both saw no dir
+/// both created it, the second got `AlreadyExists`, and its session
+/// silently had no secrets dir (soak, shuffled seed 4).
 fn ensure_private(dir: &Path) -> std::io::Result<()> {
-    match std::fs::symlink_metadata(dir) {
-        Ok(m) => {
-            if m.file_type().is_symlink() || !m.is_dir() || !private_fs::owned_by_me(dir, &m) {
-                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "unsafe secrets dir"));
-            }
-            if !private_fs::is_private(dir, &m) {
-                private_fs::make_private_dir(dir)?;
-            }
-            Ok(())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => private_fs::create_private_dir(dir),
-        Err(e) => Err(e),
+    match private_fs::create_private_dir(dir) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
     }
+    // A symlink (even a dangling one) is `AlreadyExists` too: refused here.
+    let m = std::fs::symlink_metadata(dir)?;
+    if m.file_type().is_symlink() || !m.is_dir() || !private_fs::owned_by_me(dir, &m) {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "unsafe secrets dir"));
+    }
+    if !private_fs::is_private(dir, &m) {
+        private_fs::make_private_dir(dir)?;
+    }
+    Ok(())
 }
 
 /// Write one file `O_CREAT|O_EXCL|O_NOFOLLOW` 0600.
@@ -1118,6 +1124,40 @@ mod tests {
         }
     }
 
+    /// Many callers making the same missing dir at once all get it (one
+    /// creates it, the rest find it), and the dir is 0700. "Look, then
+    /// create" gave the losers `AlreadyExists`, so a spawn racing another
+    /// one had no secrets dir. A symlink there is still refused.
+    #[test]
+    fn ensure_private_holds_when_callers_race_to_make_the_dir() {
+        let t = k2_vault::fsutil::TestDir::new("ensure-race");
+        for round in 0..50 {
+            let dir = t.path().join(format!("root-{round}"));
+            let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (dir, start) = (dir.clone(), start.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        ensure_private(&dir).map_err(|e| e.kind())
+                    })
+                })
+                .collect();
+            for h in handles {
+                assert_eq!(h.join().expect("thread"), Ok(()), "round {round}: every caller gets the dir");
+            }
+            assert_private(&dir, 0o700);
+        }
+        #[cfg(unix)]
+        {
+            let link = t.path().join("link");
+            std::os::unix::fs::symlink(t.path().join("elsewhere"), &link).expect("symlink");
+            assert_eq!(ensure_private(&link).map_err(|e| e.kind()), Err(std::io::ErrorKind::PermissionDenied), "a dangling symlink is refused");
+            std::fs::create_dir(t.path().join("elsewhere")).expect("target");
+            assert_eq!(ensure_private(&link).map_err(|e| e.kind()), Err(std::io::ErrorKind::PermissionDenied), "a symlink to a dir is refused");
+        }
+    }
+
     /// k2-ptyd P36: boot keeps the secrets dir of a session that survived
     /// in k2-ptyd (and re-registers it so it goes with the session); every
     /// other dir goes; a keep entry outside the root, or not named for its
@@ -1739,12 +1779,24 @@ mod tests {
     /// to restart.
     #[test]
     fn a_file_granted_mid_session_reaches_the_live_session() {
-        let (_env, _t, _over, v, ws, other) =
+        let (_env, t, _over, v, ws, other) =
             late_grant_setup("spawn-late", &[("LATE_FILE", Delivery::File, "late-file-value-1"), ("LATE_ENV", Delivery::Env, "late-env-value-2")]);
         let sid = uuid::Uuid::new_v4().to_string();
         let mut env = HashMap::new();
         let out = materialize(&mut env, &ws, &sid, false, &SpawnRefs::default());
-        let dir = out.dir.clone().expect("a session with nothing to deliver still gets its secrets dir");
+        let dir = out.dir.clone().unwrap_or_else(|| {
+            let vault = match super::super::get() {
+                Ok(v) => format!("open at {}", v.dir().display()),
+                Err(e) => format!("closed ({})", e.code),
+            };
+            panic!(
+                "a session with nothing to deliver still gets its secrets dir; vault {vault}, secrets root {:?}, {}={:?}, test dir exists {}, out {out:?}",
+                secrets_root(),
+                k2_core::runtime_dir::RUNTIME_DIR_ENV,
+                std::env::var_os(k2_core::runtime_dir::RUNTIME_DIR_ENV),
+                t.path().is_dir(),
+            )
+        });
         assert_eq!(env.get(SECRETS_DIR_ENV).map(String::as_str), Some(dir.display().to_string().as_str()));
         assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0, "empty at spawn");
         assert_private(&&dir, 0o700);

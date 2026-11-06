@@ -48,23 +48,23 @@ const TEST_MARKER_ENV: &str = "K2_TEST_AGENT_SHIM_DIR";
 
 #[cfg(unix)]
 fn ensure_private(dir: &Path) -> bool {
+    // Create first, then check what is there: "look, then create" gave a
+    // caller that lost the race to another one `AlreadyExists`, and no dir.
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => return true,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return false,
+    }
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
-    match std::fs::symlink_metadata(dir) {
-        Ok(m) => {
-            if m.file_type().is_symlink() || !m.is_dir() || m.uid() != me {
-                return false;
-            }
-            if m.permissions().mode() & 0o077 != 0 {
-                return std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_ok();
-            }
-            true
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::DirBuilder::new().mode(0o700).create(dir).is_ok()
-        }
-        Err(_) => false,
+    let Ok(m) = std::fs::symlink_metadata(dir) else { return false };
+    if m.file_type().is_symlink() || !m.is_dir() || m.uid() != me {
+        return false;
     }
+    if m.permissions().mode() & 0o077 != 0 {
+        return std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_ok();
+    }
+    true
 }
 
 /// Windows: a real directory we own whose DACL is owner-only (the 0700 of
@@ -657,6 +657,33 @@ mod tests {
         assert!(err.contains(&real.display().to_string()), "{err}");
         check_not_real_under_test(&mine, true, &reals).expect("own dir is fine");
         check_not_real_under_test(&real, false, &reals).expect("production uses the real dir");
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    /// Callers racing to make the same missing runtime dir all get it, 0700.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_holds_when_callers_race_to_make_the_dir() {
+        let root = crate::test_env::unique_temp_path("rt-race");
+        std::fs::create_dir_all(&root).expect("mkdir root");
+        for round in 0..50 {
+            let dir = root.join(format!("run-{round}"));
+            let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (dir, start) = (dir.clone(), start.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        ensure_private(&dir)
+                    })
+                })
+                .collect();
+            for h in handles {
+                assert!(h.join().expect("thread"), "round {round}: every caller gets the dir");
+            }
+            let mode = std::fs::metadata(&dir).expect("dir").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "round {round}");
+        }
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
 

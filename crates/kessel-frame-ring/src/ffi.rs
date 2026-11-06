@@ -16,8 +16,12 @@
 //! `broadcastFinished` on different queues, so hop to one serial queue.
 //!
 //! **Panics:** no argument should make these functions panic, and each
-//! one catches a panic and returns its error value instead of unwinding
-//! into the caller. A build with `panic = "abort"` aborts instead.
+//! one catches a panic instead of unwinding into the caller:
+//! [`kfr_producer_attach`] returns null with error -6,
+//! [`kfr_producer_start`] and [`kfr_producer_push_nv12`] return -6, the two
+//! `bool` functions false, [`kfr_monotonic_ns`] 0, and
+//! [`kfr_producer_finish`] nothing. A build with `panic = "abort"` aborts
+//! instead.
 
 use crate::{Color, EndReason, Nv12Frame, Producer, Pushed};
 use std::ffi::{c_char, CStr};

@@ -2,54 +2,8 @@
 
 ## 0.1.1
 
-- `apple_pixel_buffer` (macOS and iOS): the `CVPixelBufferRef` inside an
-  Apple native frame (a VideoToolbox decoder's `Native` output), borrowed
-  while the buffer lives, for an `AVSampleBufferDisplayLayer`.
-- Frame-in sources and phone screens: `frame_in()` makes a `FrameSource`
-  the host pushes frames into (CPU planes, or a native buffer through
-  `pixel_buffer_frame` on Apple and `hardware_buffer_frame` on Android),
-  with timestamps and a `Rotation` that turns them upright; it never pauses
-  for the app's background. iOS screens come in this way
-  (`ScreenCapability::frame_in`, new); Android screens come from a
-  MediaProjection the app hands over (`AndroidContext::set_media_projection`,
-  `set_screen_size`, `media_projection_stopped`), as NV12 from a
-  `VirtualDisplay` and `ImageReader`, resized when the display turns, and
-  `Ended(SourceClosed)` when the projection stops.
-
-## 0.1.0
-
-The first release: the codec-neutral API (`VideoBackend`, `FrameSource`,
-`VideoEncoder`, `VideoDecoder`), the null and fake backends, the macOS
-backend (AVFoundation cameras, ScreenCaptureKit screens, VideoToolbox H.264
-encoding and decoding), the iOS backend (AVFoundation cameras, VideoToolbox
-H.264 encoding and decoding), the Windows backend (Media Foundation cameras,
-Windows Graphics Capture screens), the Linux backend (V4L2 cameras, ScreenCast portal and
-PipeWire screens), the Android backend (Camera2 cameras, MediaCodec H.264
-encoding), and VP8 through vp8-encoder and vp8-decoder in every backend.
-
-### Android backend
-
-- `system()` on Android: Camera2 cameras through the NDK (`libcamera2ndk`
-  with `AImageReader`), front and back selection (the front camera is the
-  default), the sensor modes at 30 fps with the auto-exposure range set to
-  match, frames rotated upright for the sensor orientation and the device's
-  turn, and size boxes that fit portrait and landscape frames alike.
-- `AndroidContext` holds the host's JNI handles (`AndroidContext::new`,
-  unsafe: the `JavaVM*` and a `Context` global reference) for reading the
-  CAMERA permission, and the app's lifecycle: `set_background` closes
-  cameras on pause (`Interrupted(Background)`) and reopens them on resume
-  (`Resumed`); `set_device_orientation` turns frames upright.
-- A denied CAMERA permission answers `NoPermission`; asking for it stays the
-  app's job. A camera another app takes reports
-  `Interrupted(InUseByAnother)` and reopens on resume or unpause.
-- H.264 encoding through `AMediaCodec` (NV12 or I420 input, SPS and PPS
-  before every IDR, Constrained Baseline flags set in the SPS). VP8 encodes
-  and decodes through the Rust crates. No H.264 decoder yet.
-- Screen capture answers `Unsupported`: MediaProjection needs a Java
-  foreground service.
-- The backend's logic runs over a scripted platform in the host tests; only
-  the NDK calls need a device. Type-checked for `aarch64-linux-android` and
-  `x86_64-linux-android`; not yet run on a device or an emulator.
+Adds the iOS and Android backends, VideoToolbox H.264 decoding and frame-in
+sources. Nothing in 0.1.0's API changes.
 
 ### iOS backend
 
@@ -72,17 +26,75 @@ encoding), and VP8 through vp8-encoder and vp8-decoder in every backend.
   answers `ShutDown`, and so does an H.264 encoder whose session iOS takes
   away. iOS offers no software-only H.264, so `SoftwareOnly` is
   `Unsupported` there.
-- No screen capture on iOS (it needs a broadcast upload extension):
-  `pick_screen` and `open_screen` answer `Unsupported`.
+- Screens come in through frame-in (below), from the app's broadcast upload
+  extension: `pick_screen` and `open_screen` answer `Unsupported`.
+- The objc2 and block2 dependencies apply to iOS as well as macOS.
+
+### Android backend
+
+- `system()` on Android: Camera2 cameras through the NDK (`libcamera2ndk`
+  with `AImageReader`), front and back selection (the front camera is the
+  default), the sensor modes at 30 fps with the auto-exposure range set to
+  match, frames rotated upright for the sensor orientation and the device's
+  turn, and size boxes that fit portrait and landscape frames alike.
+- `AndroidContext` holds the host's JNI handles (`AndroidContext::new`,
+  unsafe: the `JavaVM*` and a `Context` global reference) for reading the
+  CAMERA permission, and the app's lifecycle: `set_background` closes
+  cameras on pause (`Interrupted(Background)`) and reopens them on resume
+  (`Resumed`); `set_device_orientation` turns frames upright.
+- A denied CAMERA permission answers `NoPermission`; asking for it stays the
+  app's job. A camera another app takes reports
+  `Interrupted(InUseByAnother)` and reopens on resume or unpause.
+- H.264 encoding through `AMediaCodec` (NV12 or I420 input, SPS and PPS
+  before every IDR, Constrained Baseline flags set in the SPS). VP8 encodes
+  and decodes through the Rust crates. No H.264 decoder yet.
+- Screens come from a MediaProjection the app hands over
+  (`AndroidContext::set_media_projection`, `set_screen_size`,
+  `media_projection_stopped`; API 26+), as NV12 from a `VirtualDisplay` and
+  `ImageReader`, resized when the display turns, and `Ended(SourceClosed)`
+  when the projection stops. Asking for the projection and its foreground
+  service stay the app's Java or Kotlin.
+- The backend's logic runs over a scripted platform in the host tests; only
+  the NDK and JNI calls need a device. Type-checked for
+  `aarch64-linux-android` and `x86_64-linux-android`; not yet run on a
+  device or an emulator.
+
+### Everywhere
+
+- Frame-in sources: `frame_in()` makes a `FrameSource` the host pushes
+  frames into (CPU planes, or a native buffer through `pixel_buffer_frame`
+  on Apple and `hardware_buffer_frame` on Android), with timestamps and a
+  `Rotation` that turns them upright; it never pauses for the app's
+  background. `ScreenCapability::frame_in` (new) says a platform's screens
+  come in this way (iOS).
 - H.264 decoding through VideoToolbox, on macOS and iOS: in-band SPS and PPS
   set up or replace the session, outputs are NV12 pixel buffers (`Native`,
   or converted to the asked format), and a session iOS takes away is
   `DecodeError::SessionLost`. The capabilities list it.
+- `apple_pixel_buffer` (macOS and iOS): the `CVPixelBufferRef` inside an
+  Apple native frame (a VideoToolbox decoder's `Native` output), borrowed
+  while the buffer lives, for an `AVSampleBufferDisplayLayer`.
 - macOS also honours `CaptureConstraints::facing` when no camera id is
   given (the first camera facing that way, else the default).
 - `kit::SourceShared::set_box_follows_frame` turns the asked box to the
   frame's orientation before fitting (phone cameras use it).
-- The objc2 and block2 dependencies apply to iOS as well as macOS.
+
+### Packaging
+
+- The package ships this changelog.
+- The README's platform table says iOS and Android are type-checked and
+  unit-tested only, never run on a device, and the README says where an
+  iPhone broadcast extension's frames can come from.
+
+## 0.1.0
+
+The first release: the codec-neutral API (`VideoBackend`, `FrameSource`,
+`VideoEncoder`, `VideoDecoder`), the null and fake backends, the macOS
+backend (AVFoundation cameras, ScreenCaptureKit screens, VideoToolbox H.264
+encoding), the Windows backend (Media Foundation cameras, Windows Graphics
+Capture screens), the Linux backend (V4L2 cameras, ScreenCast portal and
+PipeWire screens), and VP8 through vp8-encoder and vp8-decoder in every
+backend.
 
 ### Packaging
 

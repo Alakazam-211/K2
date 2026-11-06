@@ -588,3 +588,11 @@ fn the_c_surface_works_end_to_end() {
         assert_eq!(kfr_producer_start(std::ptr::null_mut()), KFR_ERR_INVALID);
     }
 }
+
+/// The README says both sides are `Send` (and not `Sync`).
+#[test]
+fn both_sides_can_move_to_another_thread() {
+    fn send<T: Send>() {}
+    send::<Consumer>();
+    send::<Producer>();
+}

@@ -5,7 +5,8 @@ shared-memory file, for handing frames from one process to another on the
 same machine. It was made for screen sharing from an iPhone: the broadcast
 upload extension writes each screen frame in, and the app reads it out and
 encodes it. Pure Rust on `std` and `libc` (declarations only: no C is built,
-no build script). Unix only: macOS, iOS, Linux and Android.
+no build script). Unix only: macOS, iOS, Linux and Android. On Windows the
+crate builds (its types only) but the ring itself is unsupported.
 
 Kessel is Alakazam Labs' family of open-source Rust crates for real-time
 apps. kessel-frame-ring stands alone: it needs no other Kessel crate. Its
@@ -19,7 +20,7 @@ MIT OR Apache-2.0.
 may change the API or the file format, as Cargo allows for 0.x versions; a
 patch release (0.1.x) won't. The app and its extension must use the same
 format version (`VERSION`): a producer refuses a ring of another version.
-Each change is listed in the changelog in the repository.
+Each change is listed in CHANGELOG.md.
 
 ## Platforms
 
@@ -29,6 +30,7 @@ Each change is listed in the changelog in the repository.
 | macOS (Apple Silicon) | The test suite passes. |
 | iOS | **Type-checked, and the static library is checked** (members and symbols). **Never run on an iPhone**: a broadcast upload extension needs a device and a person to start it. |
 | Android | **Type-checked only.** |
+| Windows | **Unsupported.** Type-checked so a cross-platform app still builds: only the types are there, no ring. |
 
 ## How it works
 
@@ -42,6 +44,9 @@ Each change is listed in the changelog in the repository.
 - **The extension (producer) maps it read-write** and writes each frame
   into the slot after the newest, scaled down to fit the box (a box filter,
   so text stays readable). It never blocks and allocates nothing per frame.
+  iOS caps a broadcast upload extension at about 50 MB of memory; the ring
+  is mapped from the file rather than allocated, and a 720p ring is about
+  4 MB of it.
 - **Each frame carries its own** width, height, rotation (the clockwise
   turn to upright), colour (BT.601 or BT.709, limited or full range) and
   timestamp. A turn or a new size is just the next frame; only the capacity
@@ -53,6 +58,9 @@ Each change is listed in the changelog in the repository.
 - **Control words** in the header: the producer's state (waiting, running,
   ended with a reason), the consumer's wishes (wants frames, please stop,
   gone, the highest rate) and a heartbeat the consumer bumps on every read.
+  A consumer that hasn't looked for 2 seconds (the app suspended) counts as
+  away: the producer drops frames without copying them until it reads
+  again (or calls `Consumer::touch`).
   The producer holds an advisory lock (`flock`) while attached, so the app
   can tell an extension that was killed (`ProducerState::Gone`) from a
   quiet one.
@@ -76,7 +84,7 @@ typedef struct KfrProducer KfrProducer;
 // -1 invalid, -2 no ring (the app isn't in a call), -3 another producer,
 // -4 not a matching ring, -5 an OS error, -6 an internal error.
 KfrProducer *kfr_producer_attach(const char *path, int32_t *error);
-// Before the first push.
+// Before the first push. 0, or -1 (p is null) or -6 (an internal error).
 int32_t kfr_producer_start(KfrProducer *p);
 // One frame: planes 0 and 1 of a locked 420v/420f CVPixelBuffer.
 // rotation: 0, 90, 180, 270 (clockwise to upright). color: 0 BT.601 limited,
@@ -126,10 +134,19 @@ broadcast when it is true. Call `kfr_producer_finish(p, 1)` in
   describe a frame inside those lengths returns -1; the lengths themselves
   can't be checked.
 - **No panics cross the boundary.** Each function catches a panic and
-  returns its error value (-6, false, or null). An extension built with
-  `panic = "abort"` aborts instead, as Rust requires.
+  returns its error value instead: `kfr_producer_attach` null with error
+  -6, `kfr_producer_start` and `kfr_producer_push_nv12` -6, the two `bool`
+  functions false, `kfr_monotonic_ns` 0, and `kfr_producer_finish` nothing.
+  An extension built with `panic = "abort"` aborts instead, as Rust
+  requires.
 
 ## The app's side (Rust)
+
+The ring's path comes from the app: on iOS, the App Group container
+(`FileManager.containerURL(forSecurityApplicationGroupIdentifier:)` in
+Swift), handed to the Rust side, and the same path to the extension. A
+`Consumer` is `Send` but not `Sync`: keep it on one thread, or behind a
+lock.
 
 ```rust,ignore
 let mut ring = Consumer::create(container.join("screen.ring"), Layout::hd720())?;
@@ -160,7 +177,8 @@ so the app treats everything in the file as untrusted: a bug, a kill
 mid-write or a compromised extension can leave any bytes there. What the
 consumer guarantees, whatever the file holds:
 
-- **No panic, no out-of-range read, no overflow.** The slot index, size,
+- **No panic, no out-of-range read, no overflow**, except the shrink race
+  below (a fault, not a wrong read). The slot index, size,
   rotation, colour and length of a frame are checked against the
   consumer's own layout (never the file's copy) before a byte is copied,
   and all size maths is checked. A frame handed out fits the box (either
@@ -215,7 +233,7 @@ the other process scribbles on; `attach`: a producer opening any file),
 and VP8, `scripts/check-staticlib.sh` checks that the static library holds
 only this crate, libc's declarations and Rust's standard library and
 exports exactly the C surface above, `scripts/check-targets.sh`
-type-checks iOS, Android and Windows from any machine, and
+type-checks iOS, Android and Windows (types only) from any machine, and
 `scripts/check-package.sh` builds
 the package as crates.io would and runs its tests outside the repository.
 

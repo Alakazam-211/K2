@@ -24,7 +24,7 @@ Apache-2.0.
 
 **Version 0.1** is the first release. Until 1.0, a minor release (0.2, 0.3)
 may change the API, as Cargo allows for 0.x versions; a patch release (0.1.x)
-won't. Each change is listed in the changelog in the repository.
+won't. Each change is listed in CHANGELOG.md.
 
 ## Platforms
 

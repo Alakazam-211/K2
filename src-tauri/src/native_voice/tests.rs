@@ -10,10 +10,12 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri_plugin_sew_voice::fake::{FakeEngine, RecordingSink};
-use tauri_plugin_sew_voice::wire::{consent, RecordingInfo, EVENT_NAMES, EVENT_PREFIX};
+use tauri_plugin_sew_voice::wire::{consent, video_code, RecordingInfo, EVENT_NAMES, EVENT_PREFIX};
 use tauri_plugin_sew_voice::{
-    CallEvent, CallState, DeviceList, EngineError, ErrorInfo, JoinArgs, JoinProvider, JoinRequest, JoinResult, MuteArgs, Participant, ProviderError, RejoinReason,
-    SetDeviceArgs, Spawn, Speaking, StateEvent, StateSnapshot, VoiceService, COMMANDS, DEFAULT_DEVICE, PLUGIN_NAME,
+    CallEvent, CallState, CameraArgs, DeviceList, EngineError, ErrorInfo, JoinArgs, JoinProvider, JoinRequest, JoinResult, LocalVideo, LocalVideoState, MuteArgs,
+    Participant, PermissionState, PreviewAnswer, PreviewArgs, ProviderError, RejoinReason, ScreenArgs, ScreenSource, SetDeviceArgs, SetVideoDeviceArgs, SinkIdArgs,
+    SinkMode, Spawn, Speaking, StateEvent, StateSnapshot, VideoCaps, VideoDevices, VideoSinkAnswer, VideoSinkArgs, VideoSinkUpdateArgs, VideoTrack, VoiceService,
+    COMMANDS, DEFAULT_DEVICE, PLUGIN_NAME, VIDEO_COMMANDS,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -28,24 +30,51 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("repo root").to_path_buf()
 }
 
-/// A file of one of Sew's crates, from the pinned commit cargo checked out (the
-/// root Cargo.toml's rev). Offline: this build already fetched it.
-fn sew_crate_file(krate: &str, rel: &str) -> Vec<u8> {
+/// The repository and commit the root Cargo.toml's `tauri-plugin-sew-voice`
+/// row pins: Sew's public mirror for a release, Sew's own repository for a
+/// pre-release.
+fn sew_pin() -> (String, String) {
     let root_manifest = std::fs::read_to_string(repo_root().join("Cargo.toml")).expect("root Cargo.toml");
-    let rev = root_manifest.split("sew-crates\", rev = \"").nth(1).expect("the root Cargo.toml pins sew-crates by rev");
+    let row = root_manifest
+        .lines()
+        .find(|l| l.starts_with("tauri-plugin-sew-voice = { git = \""))
+        .expect("the root Cargo.toml's [patch] has a git row for tauri-plugin-sew-voice");
+    let field = |name: &str| -> String {
+        let rest = row.split(&format!("{name} = \"")).nth(1).unwrap_or_else(|| panic!("no {name} in {row}"));
+        rest.split('"').next().expect("closing quote").to_string()
+    };
+    let url = field("git");
+    let repo = url.trim_end_matches('/').rsplit('/').next().expect("repository name").trim_end_matches(".git").to_string();
+    (repo, field("rev"))
+}
+
+/// A file of one of Sew's crates, from the pinned commit cargo checked out (the
+/// root Cargo.toml's rev). Offline: this build already fetched it. The mirror
+/// has each crate at its root; Sew's own repository under `crates/`.
+fn sew_crate_file(krate: &str, rel: &str) -> Vec<u8> {
+    let (repo, rev) = sew_pin();
     let short = &rev[..7];
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| dirs::home_dir().expect("home").join(".cargo"));
     let checkouts = cargo_home.join("git/checkouts");
+    let prefix = format!("{repo}-");
     for entry in std::fs::read_dir(&checkouts).unwrap_or_else(|e| panic!("read {}: {e}", checkouts.display())) {
         let dir = entry.expect("entry").path();
-        if dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("sew-crates-")) {
-            let path = dir.join(short).join(krate).join(rel);
+        // `<repo>-<hash>`, and not a longer name that starts the same (sew-crates-…).
+        let ours = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix(&prefix))
+            .is_some_and(|hash| hash.chars().all(|c| c.is_ascii_hexdigit()));
+        if !ours {
+            continue;
+        }
+        for path in [dir.join(short).join(krate).join(rel), dir.join(short).join("crates").join(krate).join(rel)] {
             if path.exists() {
                 return std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             }
         }
     }
-    panic!("{krate}/{rel} at {short} isn't under {}", checkouts.display())
+    panic!("{krate}/{rel} of {repo} at {short} isn't under {}", checkouts.display())
 }
 
 fn fixture() -> Value {
@@ -67,7 +96,8 @@ fn the_renderers_contract_file_matches_the_plugin() {
     let f = fixture();
     assert_eq!(f["plugin"], PLUGIN_NAME);
     assert_eq!(f["eventPrefix"], EVENT_PREFIX);
-    assert_eq!(f["events"], json!(EVENT_NAMES));
+    // The six of voice come first; video's four follow (the video contract).
+    assert_eq!(f["events"], json!(EVENT_NAMES[..6]));
     assert_eq!(f["commands"], json!(COMMANDS));
     assert_eq!(DEFAULT_DEVICE, "default", "the renderer sends this for System default");
     assert_eq!(exact::<CallState>(&f["states"]["idle"]), CallState::Idle);
@@ -144,6 +174,115 @@ fn sews_contract_matches_the_plugin_and_the_renderers_copy() {
         let _: RecordingInfo = exact(&f["recording"][name]);
     }
     assert_eq!(exact::<Option<RecordingInfo>>(&f["recording"]["stopped"]), None);
+}
+
+fn video_fixture() -> Value {
+    let path = repo_root().join("src/renderer/lib/voice/native-video-contract.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_json::from_str(&text).expect("video contract file is JSON")
+}
+
+/// `v` parses to a `T` (argument shapes, which serialize their absent options
+/// as null and so don't round-trip; the plugin's types refuse unknown keys).
+fn parses<T: DeserializeOwned>(v: &Value) -> T {
+    serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{v} doesn't parse: {e}"))
+}
+
+/// The video file the TS adapter is tested against (native-video-engine.test.ts)
+/// matches the plugin's real commands, events and types (Sew 0.8.2).
+#[test]
+fn the_renderers_video_contract_file_matches_the_plugin() {
+    let f = video_fixture();
+    assert_eq!(f["plugin"], PLUGIN_NAME);
+    assert_eq!(f["eventPrefix"], EVENT_PREFIX);
+    assert_eq!(f["commands"], json!(VIDEO_COMMANDS));
+    // The renderer's video listeners: video's four events, and `errors` (shared
+    // with voice) for the video engine errors.
+    let mut want: Vec<&str> = EVENT_NAMES[6..].to_vec();
+    want.push("errors");
+    assert_eq!(f["events"], json!(want));
+
+    let caps: VideoCaps = exact(&f["videoCaps"]);
+    assert!(caps.receive && caps.self_view && caps.live_switch, "{caps:?}");
+    assert_eq!(exact::<VideoCaps>(&f["videoCapsWithoutVideo"]), VideoCaps::default());
+    let old: VideoCaps = parses(&f["videoCapsOld"]);
+    assert!(!old.receive && !old.self_view && !old.live_switch, "an older payload reads as false");
+    let devices: VideoDevices = exact(&f["videoDevices"]);
+    assert_eq!(devices.permission.camera, PermissionState::Granted);
+    for p in f["cameraPermission"].as_array().expect("cameraPermission") {
+        let _: PermissionState = exact(p);
+    }
+    let tracks: Vec<VideoTrack> = exact(&f["video"]);
+    assert!(tracks[2].is_self);
+    for name in ["on", "paused", "refused", "hidden"] {
+        let _: LocalVideo = exact(&f["localVideo"][name]);
+    }
+    assert_eq!(exact::<LocalVideo>(&f["localVideo"]["hidden"]).screen, LocalVideoState::Paused);
+    let sources: Vec<ScreenSource> = exact(&f["screenSources"]);
+    assert_eq!(sources[1].app.as_deref(), Some("Acme Docs"));
+    let _: PreviewAnswer = exact(&f["previewResult"]);
+    let _: VideoSinkArgs = parses(&f["videoSinkArgs"]);
+    assert_eq!(exact::<VideoSinkAnswer>(&f["videoSinkResult"]).mode, SinkMode::Encoded);
+    assert_eq!(exact::<VideoSinkAnswer>(&f["videoSinkResultDecoded"]).mode, SinkMode::Decoded);
+    let early: VideoSinkAnswer = exact(&f["videoSinkResultSelfViewEarly"]);
+    assert_eq!((early.mode, early.codec), (SinkMode::Encoded, None), "a self-view sink opened before the camera has no codec yet");
+    let _: VideoSinkUpdateArgs = parses(&f["videoSinkUpdateArgs"]);
+    let _: SinkIdArgs = parses(&json!({"sink_id": 3}));
+    let _: CameraArgs = parses(&json!({"on": true, "device": "cam:1"}));
+    let _: ScreenArgs = parses(&json!({"on": true, "source": "display:1"}));
+    let _: PreviewArgs = parses(&json!({"on": false}));
+    let _: SetVideoDeviceArgs = parses(&json!({"camera": DEFAULT_DEVICE}));
+    for group in ["rejects", "errors"] {
+        for (_, e) in f[group].as_object().expect(group) {
+            let _: ErrorInfo = exact(e);
+        }
+    }
+    let snap: StateSnapshot = exact(&f["snapshotWithVideo"]);
+    assert!(snap.has_video && snap.local_video.camera == LocalVideoState::On && snap.policy.is_some());
+    let bare: StateSnapshot = exact(&f["snapshotWithoutVideo"]);
+    assert!(bare.video.is_empty() && !bare.has_video && bare.policy.is_none());
+
+    // Every refusal and stop reason the plugin names; the renderer has words
+    // for each one (native-video-engine.test.ts).
+    let codes = [
+        video_code::VIDEO_UNSUPPORTED,
+        video_code::UNKNOWN_TRACK,
+        video_code::UNKNOWN_SINK,
+        video_code::DECODED_UNSUPPORTED,
+        video_code::DECODED_TILES_FULL,
+        video_code::VIDEO_NOT_ALLOWED,
+        video_code::VIDEO_DISABLED,
+        video_code::CAMERA_DENIED,
+        video_code::CAMERA_PERMISSION_DENIED,
+        video_code::CAMERA_PERMISSION_NOT_DETERMINED,
+        video_code::CAMERA_BUSY,
+        video_code::CAMERA_NOT_FOUND,
+        video_code::VIDEO_SLOTS_FULL,
+        video_code::MEDIA_BUSY,
+        video_code::MEDIA_CAPACITY,
+        video_code::CODEC_UNAVAILABLE,
+        video_code::SCREEN_DENIED,
+        video_code::SCREEN_SLOTS_FULL,
+        video_code::PICKER_CANCELLED,
+        video_code::SCREEN_UNSUPPORTED,
+        video_code::VIDEO_STALLED,
+        video_code::ENCODER_LOST,
+        video_code::CAMERA_LOST,
+        video_code::SCREEN_NOT_FOUND,
+        video_code::CAPTURE_FAILED,
+    ];
+    assert_eq!(f["codes"], json!(codes));
+    let reasons = [
+        tauri_plugin_sew_voice::wire::video_reason::HIDDEN,
+        tauri_plugin_sew_voice::wire::video_reason::BACKGROUND,
+        tauri_plugin_sew_voice::wire::video_reason::THERMAL,
+        tauri_plugin_sew_voice::wire::video_reason::PAUSED,
+        tauri_plugin_sew_voice::wire::video_reason::USER_STOPPED,
+        tauri_plugin_sew_voice::wire::video_reason::SOURCE_CLOSED,
+        tauri_plugin_sew_voice::wire::video_reason::VIDEO_DISABLED,
+        tauri_plugin_sew_voice::video::SYSTEM_UI,
+    ];
+    assert_eq!(f["reasons"], json!(reasons));
 }
 
 /// Lane C's `POST /cli/voice/join` answer around Sew's `VoiceJoinResponse`.

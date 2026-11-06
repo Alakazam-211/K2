@@ -1,16 +1,18 @@
 {
-  "_": "The JSON K2 reads from tauri-plugin-sew-voice's video commands and events (prd-sew-62 §B7), with the open points Sew settled on 2026-11-06 (decisions). native-video-engine.test.ts holds the TS adapter to this file; once Sew's tests/contract.rs covers video, src-tauri's native_voice::tests should hold this file to the plugin's real types, as native-voice-contract.json is.",
+  "_": "The JSON K2 reads from tauri-plugin-sew-voice's video commands and events (prd-sew-62 §B7). src-tauri's native_voice::tests holds this file to the plugin's real types at the pinned commit (Sew 0.8.2: commands, events, every payload, the refusal codes and the stop reasons); native-video-engine.test.ts holds the TS adapter to this file.",
   "decisions": [
     "command arguments are snake_case (sink_id)",
-    "video_sink's sink_id is a u32 number (the frame header's); codec is null in decoded mode",
+    "video_sink's sink_id is a u32 number (the frame header's); codec is null in decoded mode, and also in encoded mode for a self-view sink opened before the camera or preview runs",
     "permission is 'granted' | 'denied' (covers the OS's restricted case) | 'prompt' | 'unsupported' (no such capture on this OS or build)",
+    "the plugin never asks for the camera itself: camera_permission reads it, request_camera_permission (only on the person's button press) asks; camera {on} without it rejects camera_permission_not_determined or camera_permission_denied",
     "screen_sources[].thumbnail_png is standard base64 with no data: prefix, at most 320 px wide; kind is 'display' | 'window'",
     "policy is sew-proto's MediaPolicy JSON; the UI reads video_enabled, camera_allowed and screen_allowed (absent reads as true)",
     "there is no pick_screen: screen {on: true} with no source opens the OS picker; with a source it shares that id; the plugin passes the Windows window handle itself",
-    "video_caps always exists; a build without video answers with everything off and backend 'null' (older plugins reject it)",
+    "video_caps always exists; a build without video answers with everything off and backend 'null' (older plugins reject it); receive, self_view and live_switch are missing in an older payload and read as false",
     "every start of frames (open, visible false to true, unmute, layer change, request_keyframe, loss recovery) begins at a keyframe with the discontinuity flag",
     "stats are cumulative; every 10 s is fine",
-    "the renderer draws straight to a canvas; there is no MediaStream, so no picture-in-picture from it"
+    "the renderer draws straight to a canvas; there is no MediaStream, so no picture-in-picture from it (native sinks and PiP are phone-only)",
+    "a hidden or minimised window pauses a screen share: local_video {screen: 'paused', reason: 'hidden'}"
   ],
   "plugin": "sew-voice",
   "eventPrefix": "sew-voice://",
@@ -32,13 +34,15 @@
     "video_sink",
     "video_sink_update",
     "video_sink_close",
-    "request_keyframe"
+    "request_keyframe",
+    "camera_permission",
+    "request_camera_permission"
   ],
   "videoCaps": {
     "camera": true,
     "screen": {
       "supported": true,
-      "system_picker": false,
+      "system_picker": true,
       "list": true,
       "windows": true
     },
@@ -49,7 +53,10 @@
       "vp8",
       "h264"
     ],
-    "backend": "avfoundation"
+    "receive": true,
+    "self_view": true,
+    "live_switch": true,
+    "backend": "apple"
   },
   "videoDevices": {
     "cameras": [
@@ -104,8 +111,7 @@
       "width": 640,
       "height": 360,
       "muted": true,
-      "paused": null,
-      "unsupported": false
+      "paused": null
     }
   ],
   "localVideo": {
@@ -122,6 +128,11 @@
       "camera": "off",
       "screen": "off",
       "reason": "video_slots_full"
+    },
+    "hidden": {
+      "camera": "off",
+      "screen": "paused",
+      "reason": "hidden"
     }
   },
   "screenSources": [
@@ -185,6 +196,14 @@
     "camera_denied": {
       "code": "camera_denied",
       "detail": null
+    },
+    "camera_permission_not_determined": {
+      "code": "camera_permission_not_determined",
+      "detail": null
+    },
+    "video_unsupported": {
+      "code": "video_unsupported",
+      "detail": null
     }
   },
   "errors": {
@@ -244,7 +263,8 @@
       "adaptive_stream": true,
       "camera_allowed": false,
       "screen_allowed": true
-    }
+    },
+    "has_video": true
   },
   "snapshotWithoutVideo": {
     "state": "connected",
@@ -261,6 +281,9 @@
     },
     "publish_codecs": [],
     "decode_codecs": [],
+    "receive": false,
+    "self_view": false,
+    "live_switch": false,
     "backend": "null"
   },
   "videoSinkResultDecoded": {
@@ -351,5 +374,72 @@
       "tier": "full",
       "video_enabled": true
     }
-  }
+  },
+  "videoCapsOld": {
+    "camera": true,
+    "screen": {
+      "supported": true,
+      "system_picker": false,
+      "list": true,
+      "windows": true
+    },
+    "publish_codecs": [
+      "vp8"
+    ],
+    "decode_codecs": [
+      "vp8"
+    ],
+    "backend": "apple"
+  },
+  "cameraPermission": [
+    "granted",
+    "denied",
+    "prompt",
+    "unsupported"
+  ],
+  "videoSinkResultSelfViewEarly": {
+    "sink_id": 5,
+    "codec": null,
+    "mode": "encoded"
+  },
+  "codes": [
+    "video_unsupported",
+    "unknown_track",
+    "unknown_sink",
+    "decoded_unsupported",
+    "decoded_tiles_full",
+    "video_not_allowed",
+    "video_disabled",
+    "camera_denied",
+    "camera_permission_denied",
+    "camera_permission_not_determined",
+    "camera_busy",
+    "camera_not_found",
+    "video_slots_full",
+    "media_busy",
+    "media_capacity",
+    "codec_unavailable",
+    "screen_denied",
+    "screen_slots_full",
+    "picker_cancelled",
+    "screen_unsupported",
+    "video_stalled",
+    "encoder_lost",
+    "camera_lost",
+    "screen_not_found",
+    "capture_failed"
+  ],
+  "reasons": [
+    "hidden",
+    "background",
+    "thermal",
+    "paused",
+    "user_stopped",
+    "source_closed",
+    "video_disabled",
+    "system_ui"
+  ],
+  "engineReasons": [
+    "unpublished"
+  ]
 }

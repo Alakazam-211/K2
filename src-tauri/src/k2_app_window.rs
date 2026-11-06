@@ -730,6 +730,8 @@ mod tests {
         assert_eq!(v["webviews"], serde_json::json!(["main", "window-*", "focus-*"]));
         assert!(v.get("windows").is_none(), "child webviews must not inherit through windows");
         assert!(v.get("remote").is_none(), "no remote origin may call the plugin");
-        assert_eq!(v["permissions"], serde_json::json!(["sew-voice:default"]));
+        // Video (0.46.9) and the call details are their own sets, outside
+        // `sew-voice:default`; nothing else of the plugin's (no device keys).
+        assert_eq!(v["permissions"], serde_json::json!(["sew-voice:default", "sew-voice:call-details", "sew-voice:video"]));
     }
 }

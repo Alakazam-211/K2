@@ -18,8 +18,13 @@ gives screen thumbnails their size. Nothing in 0.1.1's API changes.
   CoreMedia, CoreVideo, Foundation and VideoToolbox. Apps need no extra
   framework settings for kessel-video. ScreenCaptureKit and CoreGraphics
   are still opened at run time.
-- Foundation is now linked by name too: its classes were looked up at run
-  time and only loaded because AVFoundation pulls it in.
+- A linker drops an auto-linked framework that it takes no symbol from, and
+  AVFoundation's classes are looked up at run time. So the camera code now
+  reads `AVMediaTypeVideo` by name instead of through `dlsym`, which keeps
+  AVFoundation in the app. Before, a static-library app with no AVFoundation
+  of its own would link and then fail when the camera code looked for its
+  classes. Foundation, whose classes are also looked up at run time, comes
+  in with AVFoundation and is now linked by name as well.
 - `examples/link_check.rs` with `scripts/check-apple-link.sh` links the
   crate as such an app does (a static library, `cc`, no `-framework` flags)
   and runs it on macOS, and for iOS links it with an iPhoneOS SDK or checks

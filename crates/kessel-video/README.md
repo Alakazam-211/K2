@@ -310,8 +310,10 @@ undefined symbols allowed on Android) and run it on macOS.
   `#[link]` frameworks to that link, so the Apple backend also writes them
   into its object code as linker options, as Clang does for `@import`:
   AVFoundation, CoreFoundation, CoreMedia, CoreVideo, Foundation and
-  VideoToolbox. An app built with `-ignore_auto_link`, or an older linker
-  that skips these options, must list those six itself.
+  VideoToolbox. The linker keeps each one the crate takes a symbol from
+  (AVFoundation through `AVMediaTypeVideo`; Foundation comes with it). An
+  app built with `-ignore_auto_link`, or with a linker that skips these
+  options, must list those six itself.
   ScreenCaptureKit and CoreGraphics (macOS screens) are opened at run time.
 - Features: `system` (default) is the OS backend for the target plus `vp8`.
   `apple`, `windows`, `linux` and `android` pick backends one by one; `vp8` adds the

@@ -24,10 +24,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-// No AVFoundation function is called by name: its classes are looked up at
-// run time, so the framework must be loaded. Linking it does that.
+// AVFoundation's classes are looked up at run time, so the framework must be
+// loaded. Reading one of its constants by name keeps it in the app: a
+// linker drops an auto-linked framework (`autolink!`) that no symbol is
+// taken from.
 #[link(name = "AVFoundation", kind = "framework")]
-extern "C" {}
+extern "C" {
+    static AVMediaTypeVideo: *const AnyObject;
+}
 
 autolink!(
     "AVFoundation",
@@ -38,7 +42,10 @@ autolink!(
 );
 
 fn media_type_video() -> Option<*const AnyObject> {
-    cf_const(c"AVMediaTypeVideo").map(|p| p as *const AnyObject)
+    // SAFETY: an NSString constant AVFoundation exports (iOS 4, macOS 10.7),
+    // set before any code of ours runs and never written.
+    let p = unsafe { AVMediaTypeVideo };
+    (!p.is_null()).then_some(p)
 }
 
 /// `AVAuthorizationStatus` for video, raw.

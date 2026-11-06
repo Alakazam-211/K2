@@ -19,8 +19,10 @@
 #   archive check below runs, and the script says so.
 # Both: the archive check. Every framework symbol the archive leaves
 #   undefined (VT*, CM*, CV*, CF*, and their k constants) must have that
-#   framework among the archive's linker options, and so must AVFoundation
-#   and Foundation, whose classes are looked up at run time.
+#   framework among the archive's linker options (AV* is AVFoundation), and
+#   so must Foundation, whose classes are looked up at run time. A linker
+#   keeps an auto-linked framework only when it takes a symbol from it, so
+#   the program check also wants AVFoundation in the program's load list.
 #
 # The iOS standard library is fetched into $TMPDIR when rustup lacks it, so
 # a read-only rustup is fine.
@@ -40,10 +42,10 @@ cat >"$work/main.c" <<'EOF'
 void *objc_getClass(const char *name);
 int kessel_video_link_check(void);
 int main(void) {
-    /* AVFoundation has no function the crate calls by name: only the
-       linker options load it. */
-    if (!objc_getClass("AVCaptureDevice")) {
-        fprintf(stderr, "AVFoundation is not loaded: no AVCaptureDevice class\n");
+    /* The crate looks AVFoundation's and Foundation's classes up at run
+       time: the frameworks must be loaded. */
+    if (!objc_getClass("AVCaptureDevice") || !objc_getClass("NSString")) {
+        fprintf(stderr, "AVFoundation or Foundation is not loaded\n");
         return 1;
     }
     return kessel_video_link_check();
@@ -103,7 +105,15 @@ archive_check() {
     options=$(otool -l "$1" | awk '/cmd LC_LINKER_OPTION/ { n = 1; next } n && /string #/ { print $3 } /cmd LC_/ && !/LC_LINKER_OPTION/ { n = 0 }' |
         grep -v '^-framework$' | sort -u)
     echo "linker options in the archive: $(echo $options)"
-    nm -u -j "$1" | sed -E -n 's/^_k?(VT|CM|CV|CF)[A-Z].*/\1/p' | sort -u >"$work/prefixes"
+    # Apple's nm can't read the bitcode in compiler_builtins' members and
+    # says so; anything else it says fails the check.
+    nm -u -j "$1" >"$work/undefined" 2>"$work/nm.err" || true
+    if grep -v -e 'Unknown attribute kind' -e 'no symbols$' -e '^$' "$work/nm.err" | grep -q .; then
+        cat "$work/nm.err" >&2
+        exit 1
+    fi
+    sed -E -n -e 's/^_k?(VT|CM|CV|CF)[A-Z].*/\1/p' -e 's/^_(AV)[A-Z].*/\1/p' "$work/undefined" |
+        sort -u >"$work/prefixes"
     missing=
     for prefix in $(cat "$work/prefixes"); do
         case $prefix in
@@ -111,6 +121,7 @@ archive_check() {
             CM) fw=CoreMedia ;;
             CV) fw=CoreVideo ;;
             CF) fw=CoreFoundation ;;
+            AV) fw=AVFoundation ;;
         esac
         echo "$options" | grep -qx "$fw" || missing="$missing $fw"
     done
@@ -119,7 +130,7 @@ archive_check() {
     done
     if [ -n "$missing" ]; then
         echo "the archive needs these frameworks but doesn't ask for them:$missing" >&2
-        nm -u -j "$1" | grep -E '^_k?(VT|CM|CV|CF)[A-Z]' | sort -u >&2
+        grep -E '^_(k?(VT|CM|CV|CF)|AV)[A-Z]' "$work/undefined" | sort -u >&2
         exit 1
     fi
     echo "archive check: every framework symbol it leaves undefined has its linker option"
@@ -134,11 +145,11 @@ for os in "$@"; do
         # shellcheck disable=SC2046
         cc "$work/main.c" "$lib" $(plain_libs "$work/macos.log") -o "$work/link_check"
         archive_check "$lib"
-        for fw in VideoToolbox CoreMedia CoreVideo CoreFoundation AVFoundation Foundation; do
+        for fw in VideoToolbox CoreMedia CoreVideo CoreFoundation AVFoundation; do
             otool -L "$work/link_check" | grep -q "/$fw.framework/" ||
                 { echo "the program does not load $fw" >&2; exit 1; }
         done
-        echo "linked: the program loads VideoToolbox, CoreMedia, CoreVideo, CoreFoundation, AVFoundation and Foundation"
+        echo "linked: the program loads VideoToolbox, CoreMedia, CoreVideo, CoreFoundation and AVFoundation"
         "$work/link_check"
         ;;
     ios)
@@ -164,7 +175,7 @@ for os in "$@"; do
             # shellcheck disable=SC2046
             xcrun --sdk iphoneos clang -target arm64-apple-ios13.0 -isysroot "$sdk" \
                 "$work/main.c" "$lib" $(plain_libs "$work/ios.log") -o "$work/link_check-ios"
-            for fw in VideoToolbox CoreMedia CoreVideo CoreFoundation AVFoundation Foundation; do
+            for fw in VideoToolbox CoreMedia CoreVideo CoreFoundation AVFoundation; do
                 otool -L "$work/link_check-ios" | grep -q "/$fw.framework/" ||
                     { echo "the iOS program does not load $fw" >&2; exit 1; }
             done

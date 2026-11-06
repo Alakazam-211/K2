@@ -150,7 +150,7 @@ impl Consumer {
     /// Change the producer's highest rate (0: no limit). Applies from its
     /// next frame.
     pub fn set_max_fps(&mut self, fps: u32) -> Result<(), RingError> {
-        if fps > 240 {
+        if fps > MAX_FPS {
             return Err(RingError::Invalid(format!("{fps} fps")));
         }
         self.layout.max_fps = fps;

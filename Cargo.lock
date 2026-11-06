@@ -4859,7 +4859,7 @@ dependencies = [
 
 [[package]]
 name = "kessel-frame-ring"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kessel-video",
  "libc",

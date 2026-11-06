@@ -4,7 +4,7 @@ version = "0.0.0"
 license = "MIT OR Apache-2.0"
 edition = "2021"
 publish = false
-description = "cargo-fuzz targets for kessel-frame-ring: a ring file the other process corrupts, and files a producer attaches to. A panic, a fault or a frame outside the layout is a finding."
+description = "cargo-fuzz targets for kessel-frame-ring: a ring file corrupted under the consumer, a ring file corrupted under the producer, and files a producer attaches to. A panic, a fault, a frame outside the layout or a written frame that isn't whole is a finding."
 
 [package.metadata]
 cargo-fuzz = true
@@ -28,6 +28,13 @@ bench = false
 [[bin]]
 name = "attach"
 path = "fuzz_targets/attach.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "producer"
+path = "fuzz_targets/producer.rs"
 test = false
 doc = false
 bench = false

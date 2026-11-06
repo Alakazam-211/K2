@@ -2,12 +2,16 @@
 //! read-write, so every word of the file may be corrupt, torn or chosen to
 //! hurt: the consumer must never panic, never fault, and never hand out a
 //! frame that doesn't fit its own layout. The producer gets the same
-//! treatment from a corrupt file, and the C surface from bad arguments: an
-//! error code, never a panic or an abort.
+//! treatment the other way round: the consumer has the file open
+//! read-write too, so the producer must never panic, fault or write outside
+//! its slot, whatever the file holds before it attaches, between its pushes
+//! or during them. The C surface gets bad arguments: an error code, never a
+//! panic or an abort.
 //!
-//! The cases first, then a seeded random test (not a coverage-guided
-//! fuzzer: it runs the same inputs every time). `KFR_HOSTILE_ITERS` sets
-//! its rounds (default 20,000) and `KFR_HOSTILE_SEED` its seed.
+//! The consumer's cases and its seeded random test come first, then the
+//! producer's (seeded random tests, not a coverage-guided fuzzer: they run
+//! the same inputs every time). `KFR_HOSTILE_ITERS` sets their rounds
+//! (default 20,000) and `KFR_HOSTILE_SEED` the seed.
 
 use crate::ffi::*;
 use crate::layout::*;
@@ -636,4 +640,581 @@ fn the_producer_survives_random_files() {
         c.file().set_len(len as u64).expect("restore");
         drop(c);
     }
+}
+
+// The producer's side. The consumer (the app) is another process with the
+// file open read-write too, so the producer must never panic, fault or
+// write outside its slot whatever the file holds, and a frame it says it
+// wrote must be whole in the file.
+
+/// A uniform `w` x `h` frame of `shade` (planes tight).
+fn planes(w: u32, h: u32, shade: u8) -> (Vec<u8>, Vec<u8>) {
+    (
+        vec![shade; (w * h) as usize],
+        vec![shade; nv12_len(w, h) - (w * h) as usize],
+    )
+}
+
+/// A tight `w` x `h` frame over `planes`, stamped `ts`.
+fn frame<'a>(y: &'a [u8], uv: &'a [u8], w: u32, h: u32, ts: u64) -> Nv12Frame<'a> {
+    let mut f = Nv12Frame::new(y, w as usize, uv, 2 * (w as usize).div_ceil(2), w, h);
+    f.timestamp_ns = ts;
+    f
+}
+
+/// The address of `slot`'s sequence word.
+fn seq_at(l: &Layout, slot: usize) -> usize {
+    HEADER + slot * l.slot_stride() + SL_SEQ
+}
+
+/// The consumer wants frames and has just looked.
+fn want(c: &Consumer) {
+    c.raw_map().u32(H_FLAGS).store(F_WANTS, Ordering::Relaxed);
+    c.touch();
+}
+
+/// Push through the C surface, as an extension does.
+fn push_c(p: &mut Producer, f: &Nv12Frame<'_>) -> i32 {
+    // SAFETY: a live producer used from this thread alone; the planes are
+    // the frame's own slices, of the lengths given.
+    unsafe {
+        kfr_producer_push_nv12(
+            p,
+            f.y.as_ptr(),
+            f.y.len(),
+            f.y_stride,
+            f.uv.as_ptr(),
+            f.uv.len(),
+            f.uv_stride,
+            f.width,
+            f.height,
+            f.rotation,
+            f.color as u32,
+            f.timestamp_ns,
+        )
+    }
+}
+
+/// A frame the producer says it wrote is whole in the file: `H_LATEST`
+/// names it and a slot inside the layout, the slot's sequence word is even
+/// and the producer's own, and the slot's words are the frame's. When the
+/// producer's box is the consumer's (the header's box wasn't rewritten
+/// before the producer attached), the consumer reads it back, every byte
+/// `shade` when given.
+fn check_written(
+    c: &mut Consumer,
+    p: &Producer,
+    frame_no: u64,
+    w: u32,
+    h: u32,
+    shade: Option<u8>,
+) {
+    let pl = p.layout();
+    let m = c.raw_map();
+    let latest = m.u64(H_LATEST).load(Ordering::Acquire);
+    assert_eq!(latest >> 8, frame_no, "H_LATEST names the frame");
+    let slot = (latest & 0xff) as usize;
+    assert!(slot < pl.slots as usize, "slot {slot} in {pl:?}");
+    let base = HEADER + slot * pl.slot_stride();
+    let seq = m.u64(base + SL_SEQ).load(Ordering::Acquire);
+    assert_eq!(seq % 2, 0, "slot {slot}'s sequence {seq:#x} is even");
+    assert!(seq <= MAX_SEQ + 2, "slot {slot}'s sequence {seq:#x} in range");
+    assert_eq!(seq, p.own_seq(slot), "the producer's own count");
+    assert_eq!(m.u64(base + SL_FRAME_NO).load(Ordering::Relaxed), frame_no);
+    assert_eq!(m.u32(base + SL_WIDTH).load(Ordering::Relaxed), w);
+    assert_eq!(m.u32(base + SL_HEIGHT).load(Ordering::Relaxed), h);
+    assert_eq!(
+        m.u64(base + SL_LEN).load(Ordering::Relaxed),
+        nv12_len(w, h) as u64
+    );
+    assert!(pl.fits(w, h), "{w}x{h} outside {pl:?}");
+    let l = c.layout();
+    if (pl.max_width, pl.max_height, pl.slots) != (l.max_width, l.max_height, l.slots) {
+        return;
+    }
+    let mut buf = Vec::new();
+    let info = c.read_latest(&mut buf).expect("the frame just written");
+    check_frame(c, &info, &buf);
+    assert_eq!((info.frame_no, info.width, info.height), (frame_no, w, h));
+    if let Some(shade) = shade {
+        assert!(buf.iter().all(|&b| b == shade), "frame {frame_no} is whole");
+    }
+}
+
+/// Regression: slots' sequence words at the top of their range (all ones,
+/// or just below), set before the producer attaches or between its pushes.
+/// The producer overwrites a sequence word it didn't write with its own
+/// count, through the Rust API and the C surface, and each frame is whole.
+#[test]
+fn a_sequence_word_at_the_top_of_its_range_is_overwritten_not_added_to() {
+    let layout = no_limit(64, 48, 3);
+    let tops = [
+        u64::MAX,
+        u64::MAX - 1,
+        u64::MAX - 2,
+        u64::MAX - 3,
+        1 << 63,
+        (1 << 63) - 1,
+        MAX_SEQ + 1,
+        MAX_SEQ,
+        MAX_SEQ - 1,
+    ];
+    for top in tops {
+        for before_attach in [true, false] {
+            let path = temp_ring("seq-top");
+            let mut c = Consumer::create(&path, layout).expect("create");
+            let scribble = |c: &Consumer| {
+                for slot in 0..layout.slots as usize {
+                    c.raw_map()
+                        .u64(seq_at(&layout, slot))
+                        .store(top, Ordering::Relaxed);
+                }
+            };
+            if before_attach {
+                scribble(&c);
+            }
+            let mut p = Producer::attach(&path).expect("attach");
+            p.start();
+            if !before_attach {
+                scribble(&c);
+            }
+            // Around the slots more than twice, scribbled again on the way.
+            for n in 1..=8u64 {
+                let shade = 16 + n as u8;
+                let (y, uv) = planes(64, 48, shade);
+                let pushed = p.push(&frame(&y, &uv, 64, 48, 0)).expect("push");
+                assert_eq!(
+                    pushed,
+                    Pushed::Written {
+                        frame_no: n,
+                        width: 64,
+                        height: 48
+                    },
+                    "top {top:#x}, before attach {before_attach}"
+                );
+                check_written(&mut c, &p, n, 64, 48, Some(shade));
+                if n % 3 == 0 {
+                    scribble(&c);
+                }
+            }
+            scribble(&c);
+            let (y, uv) = planes(64, 48, 99);
+            assert_eq!(
+                push_c(&mut p, &frame(&y, &uv, 64, 48, 0)),
+                KFR_OK,
+                "top {top:#x}"
+            );
+            check_written(&mut c, &p, 9, 64, 48, Some(99));
+        }
+    }
+}
+
+/// The consumer shrinks the file: every producer call is an error or does
+/// nothing, never a fault, and the producer works again once the file is
+/// whole.
+#[test]
+fn a_shrunk_file_is_refused_by_the_producer_instead_of_faulting() {
+    // Several pages, so a shrunk file leaves whole pages unbacked.
+    let layout = Layout::hd720();
+    let path = temp_ring("p-shrunk");
+    let mut c = Consumer::create(&path, layout).expect("create");
+    let mut p = Producer::attach(&path).expect("attach");
+    p.start();
+    let (y, uv) = planes(64, 48, 40);
+    // A second apart: never too soon for the rate.
+    let at = |n: u64| frame(&y, &uv, 64, 48, n * 1_000_000_000);
+    assert!(matches!(p.push(&at(1)).expect("push"), Pushed::Written { .. }));
+    let full = layout.file_len() as u64;
+    let mut n = 1;
+    for len in [0, 100, HEADER as u64, 4096, full / 2, full - 1] {
+        c.file().set_len(len).expect("shrink");
+        let err = p.push(&at(n + 1)).expect_err("a shrunk ring");
+        assert!(matches!(err, RingError::Mismatch(_)), "{len} bytes: {err}");
+        assert_eq!(err.code(), -4);
+        assert_eq!(push_c(&mut p, &at(n + 1)), -4, "{len} bytes");
+        assert!(!p.wants_frames() && !p.consumer_present() && !p.stop_requested());
+        assert_eq!(p.layout(), layout, "the layout as attached");
+        p.start();
+        c.file().set_len(full).expect("restore");
+        // A shrink zeroes what it cut: say the consumer wants frames.
+        want(&c);
+        n += 1;
+        let pushed = p.push(&at(n)).expect("whole again");
+        assert_eq!(
+            pushed,
+            Pushed::Written {
+                frame_no: n,
+                width: 64,
+                height: 48
+            },
+            "{len} bytes"
+        );
+        check_written(&mut c, &p, n, 64, 48, Some(40));
+    }
+    // Shrunk as the producer goes: its end and drop don't fault.
+    c.file().set_len(0).expect("shrink");
+    drop(p);
+    drop(c);
+    // The same through the C surface, on a new ring.
+    let path = temp_ring("p-shrunk-c");
+    let c = Consumer::create(&path, layout).expect("create");
+    let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("c path");
+    let mut err = 0;
+    // SAFETY: a NUL-terminated path and a valid error slot.
+    let cp = unsafe { kfr_producer_attach(cpath.as_ptr(), &mut err) };
+    assert!(!cp.is_null(), "attach: {err}");
+    c.file().set_len(0).expect("shrink");
+    // SAFETY: a live producer, used from this thread, finished once.
+    unsafe {
+        assert_eq!(kfr_producer_start(cp), KFR_OK);
+        assert!(!kfr_producer_wants_frames(cp));
+        assert!(!kfr_producer_stop_requested(cp));
+        kfr_producer_finish(cp, 1);
+    }
+    drop(c);
+    // A file larger than any ring is refused before it is mapped.
+    let big = temp_ring("p-huge");
+    std::fs::File::create(&big)
+        .expect("create")
+        .set_len(2 * 4096 * 4096 * u64::from(MAX_SLOTS))
+        .expect("a sparse file");
+    let err = Producer::attach(&big).expect_err("too large");
+    assert!(matches!(err, RingError::Mismatch(_)), "{err}");
+    std::fs::remove_file(&big).expect("clean up");
+}
+
+/// Wild words in the header after attach: the rate is held to the range a
+/// layout allows, the newest slot and the frame number are the producer's
+/// own, and a rewritten layout is ignored (the producer writes by the one
+/// it checked).
+#[test]
+fn wild_header_words_are_held_to_the_producers_own_layout() {
+    let layout = no_limit(64, 48, 3);
+    let path = temp_ring("p-wild");
+    let mut c = Consumer::create(&path, layout).expect("create");
+    let mut p = Producer::attach(&path).expect("attach");
+    p.start();
+    let (y, uv) = planes(64, 48, 50);
+    let at = |ns: u64| frame(&y, &uv, 64, 48, ns);
+    // A rate past the layout's highest counts as the highest (240 fps).
+    c.raw_map().u32(H_MAX_FPS).store(u32::MAX, Ordering::Relaxed);
+    assert_eq!(p.layout().max_fps, 240);
+    assert!(matches!(
+        p.push(&at(1_000_000_000)).expect("push"),
+        Pushed::Written { .. }
+    ));
+    assert_eq!(p.push(&at(1_001_000_000)).expect("push"), Pushed::TooSoon);
+    assert!(matches!(
+        p.push(&at(1_005_000_000)).expect("push"),
+        Pushed::Written { .. }
+    ));
+    c.raw_map().u32(H_MAX_FPS).store(0, Ordering::Relaxed);
+    // The newest slot and frame number in the file, anything: the producer
+    // numbers and places frames by its own count.
+    let mut next = 3;
+    for latest in [u64::MAX, 0xff, 7 << 8 | 200, 1 << 63, 0] {
+        c.raw_map().u64(H_LATEST).store(latest, Ordering::Release);
+        let pushed = p.push(&at(2_000_000_000 + next)).expect("push");
+        assert_eq!(
+            pushed,
+            Pushed::Written {
+                frame_no: next,
+                width: 64,
+                height: 48
+            },
+            "{latest:#x}"
+        );
+        check_written(&mut c, &p, next, 64, 48, Some(50));
+        next += 1;
+    }
+    // The layout rewritten after attach (more slots and a larger box than
+    // the file holds): ignored. The frame is scaled into the producer's box.
+    let m = c.raw_map();
+    m.u32(H_SLOTS).store(255, Ordering::Relaxed);
+    m.u32(H_MAX_WIDTH).store(u32::MAX, Ordering::Relaxed);
+    m.u32(H_MAX_HEIGHT).store(u32::MAX, Ordering::Relaxed);
+    m.u64(H_SLOT_BYTES).store(u64::MAX, Ordering::Relaxed);
+    let (by, buv) = planes(640, 480, 60);
+    let pushed = p
+        .push(&frame(&by, &buv, 640, 480, 3_000_000_000))
+        .expect("push");
+    assert_eq!(
+        pushed,
+        Pushed::Written {
+            frame_no: next,
+            width: 64,
+            height: 48
+        }
+    );
+    assert_eq!(p.layout().slots, 3);
+    check_written(&mut c, &p, next, 64, 48, Some(60));
+    // A heartbeat from the future counts as present; the gone flag wins
+    // over wants; every flag set asks for a stop.
+    c.raw_map().u64(H_BEAT).store(u64::MAX, Ordering::Relaxed);
+    assert!(p.consumer_present());
+    c.raw_map().u32(H_FLAGS).store(u32::MAX, Ordering::Relaxed);
+    assert!(!p.wants_frames() && p.stop_requested());
+    assert_eq!(
+        p.push(&at(9_000_000_000)).expect("push"),
+        Pushed::NotWanted
+    );
+}
+
+/// A seeded random test of the producer: between pushes the file gets
+/// random and edge-value words in the header and the slot headers,
+/// sequence words at the top of their range, a newest slot past the
+/// layout, wild rates, random frame bytes, a shrunk file, and producers
+/// attaching again to whatever is there. The producer never panics, refuses
+/// only a shrunk file, and every frame it says it wrote is whole in the
+/// file. Pushes go through the Rust API and the C surface. The gates run it
+/// in debug and release builds (where an overflow wraps instead of
+/// panicking, so the checks on the file catch it).
+#[test]
+fn the_producer_survives_random_hostile_rings() {
+    let mut rng = Rng(seed() ^ 0x7f4a_7c15_9e37_79b9);
+    let layouts = [
+        no_limit(64, 48, 3),
+        no_limit(16, 16, 2),
+        no_limit(64, 32, 8),
+        no_limit(48, 64, 4),
+    ];
+    let tops = [
+        u64::MAX,
+        u64::MAX - 1,
+        u64::MAX - 2,
+        1 << 63,
+        MAX_SEQ - 1,
+        MAX_SEQ,
+        MAX_SEQ + 1,
+        0,
+        1,
+    ];
+    let fresh = |l: Layout| {
+        let c = Consumer::create(temp_ring("p-random"), l).expect("create");
+        let p = Producer::attach(c.path()).expect("attach");
+        p.start();
+        (c, Some(p))
+    };
+    let mut rings: Vec<(Consumer, Option<Producer>)> = layouts.iter().map(|l| fresh(*l)).collect();
+    let (mut written, mut refused) = (0u64, 0u64);
+    for round in 0..rounds() {
+        let ring = rng.below(rings.len());
+        let l = rings[ring].0.layout();
+        let stride = l.slot_stride();
+        let mut shrunk = false;
+        for _ in 0..1 + rng.below(3) {
+            let (c, p) = &mut rings[ring];
+            let m = c.raw_map();
+            match rng.below(10) {
+                0 => {
+                    let off = rng.below(HEADER / 8) * 8;
+                    m.u64(off).store(rng.pick(), Ordering::Relaxed);
+                }
+                1 => {
+                    let off = rng.below(HEADER / 4) * 4;
+                    m.u32(off).store(rng.pick() as u32, Ordering::Relaxed);
+                }
+                2 => {
+                    let base = HEADER + rng.below(l.slots as usize) * stride;
+                    let off = rng.below(SLOT_HEADER / 8) * 8;
+                    m.u64(base + off).store(rng.pick(), Ordering::Relaxed);
+                }
+                3 | 4 => {
+                    let seq = if rng.below(2) == 0 {
+                        tops[rng.below(tops.len())]
+                    } else {
+                        rng.pick()
+                    };
+                    m.u64(seq_at(&l, rng.below(l.slots as usize)))
+                        .store(seq, Ordering::Relaxed);
+                }
+                5 => m.u64(H_LATEST).store(rng.pick(), Ordering::Release),
+                6 => m
+                    .u32(H_MAX_FPS)
+                    .store(rng.pick() as u32, Ordering::Relaxed),
+                7 => {
+                    let base = HEADER + rng.below(l.slots as usize) * stride + SLOT_HEADER;
+                    let at = rng.below(l.slot_bytes());
+                    let n = rng.below(l.slot_bytes() - at + 1);
+                    let byte = rng.next_u64() as u8;
+                    // SAFETY: `n` bytes of the slot's frame area, which this
+                    // thread alone uses.
+                    unsafe { std::ptr::write_bytes(m.bytes(base + at, n), byte, n) };
+                }
+                8 => {
+                    let full = l.file_len() as u64;
+                    let len = [0, 100, 4096, full / 2, full - 1][rng.below(5)].min(full - 1);
+                    c.file().set_len(len).expect("shrink");
+                    shrunk = true;
+                    break;
+                }
+                _ => {
+                    // The producer goes and another attaches, to whatever
+                    // the file holds now.
+                    drop(p.take());
+                    *p = Producer::attach(c.path()).ok();
+                    if let Some(p) = p {
+                        p.start();
+                    }
+                }
+            }
+        }
+        if rings[ring].1.is_none() {
+            // The header no longer describes a ring: make a new one.
+            rings[ring] = fresh(l);
+            continue;
+        }
+        let (c, p) = &mut rings[ring];
+        let p = p.as_mut().expect("a producer");
+        // Usually the consumer wants frames; sometimes the scribbled flags
+        // and heartbeat stand.
+        let wants = !shrunk && rng.below(4) != 0;
+        if wants {
+            want(c);
+        }
+        let side = 2 * l.max_width.max(l.max_height) as usize;
+        let (w, h) = (1 + rng.below(side) as u32, 1 + rng.below(side) as u32);
+        let shade = rng.next_u64() as u8;
+        let (y, uv) = planes(w, h, shade);
+        // A second apart: no rate a layout allows drops it.
+        let mut f = frame(&y, &uv, w, h, (round + 1) * 1_000_000_000);
+        f.rotation = [0, 90, 180, 270][rng.below(4)];
+        f.color = Color::from_u32(rng.below(3) as u32).expect("a colour");
+        let frame_no = p.next_frame_no();
+        let pushed = if rng.below(4) == 0 {
+            match push_c(p, &f) {
+                KFR_OK => Ok(None),
+                KFR_NOT_WANTED => Ok(Some(Pushed::NotWanted)),
+                KFR_TOO_SOON => Ok(Some(Pushed::TooSoon)),
+                code => Err(code),
+            }
+        } else {
+            match p.push(&f) {
+                Ok(Pushed::Written { .. }) => Ok(None),
+                Ok(other) => Ok(Some(other)),
+                Err(e) => Err(e.code()),
+            }
+        };
+        match pushed {
+            Ok(None) => {
+                assert!(!shrunk, "round {round}: written into a shrunk file");
+                let pl = p.layout();
+                let (dw, dh) = crate::scale::fit(w, h, pl.max_width, pl.max_height);
+                // Scaled, a frame of one shade stays that shade.
+                check_written(c, p, frame_no, dw, dh, Some(shade));
+                written += 1;
+            }
+            Ok(Some(other)) => {
+                assert!(!shrunk, "round {round}: {other:?} from a shrunk file");
+                assert!(!wants, "round {round}: {other:?} though wanted");
+            }
+            Err(code) => {
+                assert!(shrunk, "round {round}: error {code} from a whole file");
+                assert_eq!(code, -4, "round {round}");
+                refused += 1;
+            }
+        }
+        if shrunk {
+            assert!(!p.wants_frames() && !p.stop_requested());
+            c.file().set_len(l.file_len() as u64).expect("restore");
+        }
+    }
+    eprintln!(
+        "hostile rings, producer side: {} rounds, {written} frames written, {refused} refused",
+        rounds()
+    );
+    assert!(written > rounds() / 4, "only {written} frames written");
+    assert!(refused > 0, "no round shrank the file");
+}
+
+/// Another thread rewrites header and slot-header words while the producer
+/// pushes, as the app's process could at any moment: the producer never
+/// panics, numbers its frames by its own count, keeps each frame in its
+/// box, and writes a whole frame once the scribbling stops.
+#[test]
+fn the_producer_survives_a_ring_scribbled_during_pushes() {
+    use std::sync::atomic::AtomicBool;
+    let layout = no_limit(64, 48, 3);
+    let path = temp_ring("p-race");
+    let mut c = Consumer::create(&path, layout).expect("create");
+    let mut p = Producer::attach(&path).expect("attach");
+    p.start();
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open as the other process");
+    let other = crate::shm::Map::new(&file, layout.file_len()).expect("map");
+    let stop = AtomicBool::new(false);
+    let pushes = (rounds() / 4).max(3_000);
+    let mut written = 0u64;
+    std::thread::scope(|s| {
+        let stop = &stop;
+        s.spawn(move || {
+            let mut rng = Rng(seed() ^ 0x2545_f491);
+            let tops = [u64::MAX, u64::MAX - 1, 1 << 63, MAX_SEQ + 1, MAX_SEQ];
+            while !stop.load(Ordering::Relaxed) {
+                match rng.below(6) {
+                    0 => {
+                        let off = rng.below(HEADER / 8) * 8;
+                        other.u64(off).store(rng.pick(), Ordering::Relaxed);
+                    }
+                    1 => {
+                        let off = rng.below(HEADER / 4) * 4;
+                        other
+                            .u32(off)
+                            .store(rng.pick() as u32, Ordering::Relaxed);
+                    }
+                    2 | 3 => {
+                        let seq = tops[rng.below(tops.len())];
+                        other
+                            .u64(seq_at(&layout, rng.below(3)))
+                            .store(seq, Ordering::Relaxed);
+                    }
+                    4 => {
+                        let base = HEADER + rng.below(3) * layout.slot_stride();
+                        let off = rng.below(SLOT_HEADER / 8) * 8;
+                        other.u64(base + off).store(rng.pick(), Ordering::Relaxed);
+                    }
+                    _ => {
+                        // Wanted, now: most pushes get through.
+                        other.u32(H_FLAGS).store(F_WANTS, Ordering::Relaxed);
+                        other.u64(H_BEAT).store(monotonic_ns(), Ordering::Relaxed);
+                    }
+                }
+            }
+        });
+        let mut next = 1;
+        let (y, uv) = planes(96, 72, 70);
+        for n in 0..pushes {
+            let f = frame(&y, &uv, 96, 72, (n + 1) * 1_000_000_000);
+            match p.push(&f).expect("push into a whole file") {
+                Pushed::Written {
+                    frame_no,
+                    width,
+                    height,
+                } => {
+                    assert_eq!(frame_no, next, "numbered by its own count");
+                    assert_eq!((width, height), (64, 48), "scaled into its box");
+                    next = frame_no + 1;
+                    written += 1;
+                }
+                Pushed::NotWanted | Pushed::TooSoon => {}
+            }
+            let _ = (p.wants_frames(), p.stop_requested(), p.layout());
+        }
+        stop.store(true, Ordering::Relaxed);
+    });
+    eprintln!("scribbled during pushes: {pushes} pushes, {written} written");
+    assert!(written > 0, "no push got through");
+    // The scribbling stopped: the next frame is whole.
+    want(&c);
+    let (y, uv) = planes(64, 48, 80);
+    let pushed = p
+        .push(&frame(&y, &uv, 64, 48, (pushes + 1) * 1_000_000_000))
+        .expect("push");
+    let Pushed::Written { frame_no, .. } = pushed else {
+        panic!("{pushed:?}");
+    };
+    check_written(&mut c, &p, frame_no, 64, 48, Some(80));
 }

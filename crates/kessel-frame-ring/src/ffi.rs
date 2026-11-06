@@ -6,8 +6,15 @@
 //! Return codes: 0 written (or done), 1 dropped because the consumer
 //! doesn't want frames, 2 dropped because it came too soon; below 0 an
 //! error: -1 invalid argument, -2 no ring (the app isn't in a call), -3
-//! another producer is attached, -4 not a matching ring, -5 an OS error,
-//! -6 an internal error (a bug in this crate, caught at the boundary).
+//! another producer is attached, -4 not a matching ring (from a push: the
+//! ring's file has shrunk under it, so finish the broadcast), -5 an OS
+//! error, -6 an internal error (a bug in this crate, caught at the
+//! boundary).
+//!
+//! **The ring's file:** the app can write it at any time, so nothing in it
+//! is trusted on this side either. Whatever it holds, these functions
+//! return one of the codes above; they never write outside the ring's
+//! slots.
 //!
 //! **Threads:** a producer is not thread-safe. Make every call on one
 //! producer from one serial queue (or otherwise one at a time), and call
@@ -104,7 +111,9 @@ pub unsafe extern "C" fn kfr_producer_start(p: *mut Producer) -> i32 {
 /// (`420f`); `timestamp_ns` on [`kfr_monotonic_ns`]'s clock, or 0 for now.
 /// Frames larger than the ring's box are scaled down. Never blocks. Returns
 /// 0, 1 or 2 (see the module), or an error: -1 for any argument that
-/// doesn't describe a frame (sizes, strides, lengths, rotation, colour).
+/// doesn't describe a frame (sizes, strides, lengths, rotation, colour), -4
+/// when the ring's file has shrunk under the producer (finish the
+/// broadcast).
 ///
 /// # Safety
 ///

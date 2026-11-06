@@ -36,6 +36,12 @@
 //!   (see [`FrameInfo`]), and the file's length before each use of the
 //!   mapping. The README's "Trust boundary" says what that covers and
 //!   what it can't.
+//! - **The producer trusts nothing in the file either.** The consumer is
+//!   another process too: the producer checks the layout once, at attach,
+//!   writes by its own copy, keeps its own count of each slot's sequence
+//!   word and of the newest slot (a word in the file is never added to),
+//!   holds the rate to a layout's range, and checks the file's length
+//!   before each use of the mapping.
 //!
 //! The producer's whole surface is also a small `extern "C"` API ([`ffi`]),
 //! for an app extension written in Swift that links this crate as a static
@@ -139,7 +145,7 @@ impl Layout {
         if !(2..=MAX_SLOTS).contains(&self.slots) {
             return Err(RingError::Invalid(format!("{} slots", self.slots)));
         }
-        if self.max_fps > 240 {
+        if self.max_fps > layout::MAX_FPS {
             return Err(RingError::Invalid(format!("{} fps", self.max_fps)));
         }
         Ok(())
@@ -510,6 +516,12 @@ pub(crate) mod layout {
     /// The largest frame number (56 bits, beside the slot in `H_LATEST`).
     /// After it the producer starts again at 1.
     pub(crate) const MAX_FRAME_NO: u64 = (1 << 56) - 1;
+    /// The highest rate a layout may ask for.
+    pub(crate) const MAX_FPS: u32 = 240;
+    /// The largest sequence word a producer writes counts from: it starts
+    /// again at 0 after (2^61 frames, never reached). A larger word in the
+    /// file is corruption, and the producer never adds to it.
+    pub(crate) const MAX_SEQ: u64 = 1 << 62;
     pub(crate) const H_WRITTEN: usize = 72; // u64
     pub(crate) const H_DROPPED: usize = 80; // u64
     pub(crate) const H_ATTACHES: usize = 88; // u64

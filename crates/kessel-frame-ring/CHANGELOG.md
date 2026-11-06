@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1
+
+Hardening of the producer's side. No change to the API or the file format.
+
+- The producer treats the whole ring file as untrusted, as the consumer
+  already did: it keeps its own state rather than relying on values read
+  back from the file, holds the rate to the range a layout allows, and
+  refuses a file larger than any ring before mapping it.
+- The producer checks the file's length before each use of the mapping.
+  When the file has shrunk, `Producer::push` returns `RingError::Mismatch`
+  (-4 from `kfr_producer_push_nv12`: finish the broadcast),
+  `wants_frames` and `stop_requested` return false, and ending the
+  producer leaves the file alone.
+- More hostile-input tests on the producer's side, and a `producer`
+  cargo-fuzz target in the repository.
+
 ## 0.1.0
 
 The first release.

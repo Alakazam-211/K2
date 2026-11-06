@@ -91,16 +91,19 @@ int32_t kfr_producer_start(KfrProducer *p);
 // 1 BT.709 limited (420v), 2 BT.709 full (420f). timestamp_ns: on
 // kfr_monotonic_ns's clock, or 0 for now. Returns 0 written, 1 dropped (the
 // app doesn't want frames now), 2 dropped (too soon for the rate), -1 for
-// any argument that doesn't describe a frame, or another code below 0.
+// any argument that doesn't describe a frame, -4 when the ring's file has
+// shrunk under the extension (finish the broadcast), or another code below 0.
 int32_t kfr_producer_push_nv12(KfrProducer *p,
                                const uint8_t *y, size_t y_len, size_t y_stride,
                                const uint8_t *uv, size_t uv_len, size_t uv_stride,
                                uint32_t width, uint32_t height,
                                uint32_t rotation, uint32_t color,
                                uint64_t timestamp_ns);
-// False: skip locking and copying pixel buffers.
+// False: skip locking and copying pixel buffers. False too once the ring's
+// file has shrunk.
 bool kfr_producer_wants_frames(const KfrProducer *p);
-// True: the call ended in the app; finish the broadcast.
+// True: the call ended in the app; finish the broadcast. (A shrunk file
+// gives false here; the next push returns -4.)
 bool kfr_producer_stop_requested(const KfrProducer *p);
 // reason: 1 the person stopped (broadcastFinished), 2 closed, 3 failed.
 // Frees p. Call it last, once.
@@ -206,6 +209,33 @@ What it can't guarantee:
 - **A producer can deny service:** stop writing, write nonstop, or claim to
   be running. The app decides when a share has gone on too long.
 
+The other way round, the app also has the file open read-write, so the
+extension treats everything in it as untrusted too. What the producer
+guarantees, whatever the file holds before it attaches or while it runs:
+
+- **No panic, no overflow, no write outside its slot**, except the shrink
+  race below. The layout is read once, at attach, and checked against
+  itself and the file's length; a file larger than any ring is refused
+  before it is mapped. After that the producer writes by its own copy of
+  the layout and never reads the file's again.
+- **The producer keeps its own counts.** Each slot's sequence word and the
+  newest slot are tracked by the producer, so nothing it reads back from
+  the file is added to: a sequence word it didn't write is overwritten
+  with its own, and a newest slot or frame number out of range is ignored.
+  The counters it bumps in the file (written, dropped, attaches) wrap.
+- **The app's words are hints.** Wants frames, stop and the heartbeat only
+  decide whether a frame is dropped, and the rate is held to 0 to 240 fps.
+- **A frame it says it wrote is whole in the file**, with its sequence
+  word even and the header's newest-frame word naming it, unless the app
+  writes over it afterwards.
+
+What it can't guarantee: **the app can shrink the file** too. The producer
+checks the file's length before each use of the mapping, then refuses
+pushes (`RingError::Mismatch`; -4 from the C surface: finish the
+broadcast) and answers false to `wants_frames` and `stop_requested`; its
+end and drop leave the file alone. A shrink between that check and the
+write still faults, as on the consumer's side.
+
 On iOS, the system ends a suspended process that holds a file lock in a
 shared container (exception code `0xdead10cc`). The extension holds its
 lock while attached and the app holds one for a moment in
@@ -223,12 +253,18 @@ match, bad frames, the control words, scaling and the C surface. Its
 hostile-input tests run 20,000 seeded rounds of corrupt, torn and hostile
 rings (random and edge-value header and slot words, slots that claim
 anything, random frame bytes, shrunk files) and check that the consumer
-never panics and hands out only frames that fit; producers attach to
+never panics and hands out only frames that fit. The producer gets the
+same: 20,000 seeded rounds of a ring scribbled on between pushes
+(sequence words at the top of their range, a newest slot past the layout,
+wild rates, a rewritten layout, shrunk files, producers attaching again)
+and a second thread scribbling during pushes, checking that every frame
+the producer says it wrote is whole in the file. Producers attach to
 corrupt files, and the C surface gets bad sizes, strides and lengths.
 `KFR_HOSTILE_ITERS` and `KFR_HOSTILE_SEED` change the rounds and the seed.
 
-In the repository, `fuzz/` has two cargo-fuzz targets (`consumer`: a ring
-the other process scribbles on; `attach`: a producer opening any file),
+In the repository, `fuzz/` has three cargo-fuzz targets (`consumer`: a
+ring the producer's side scribbles on; `producer`: a ring the consumer's
+side scribbles on between pushes; `attach`: a producer opening any file),
 `tests/frame_in_vp8.rs` runs the whole path through kessel-video's frame-in
 and VP8, `scripts/check-staticlib.sh` checks that the static library holds
 only this crate, libc's declarations and Rust's standard library and
@@ -239,9 +275,9 @@ the package as crates.io would and runs its tests outside the repository.
 
 ## Security
 
-The consumer reads memory another process writes, so treat a crash, hang
-or out-of-range access on a crafted ring file as a security bug, and the
-same for the C surface on arguments within its safety rules. Please report
+Both sides read memory another process writes, so treat a crash, hang or
+out-of-range access on a crafted ring file as a security bug, on either
+side, and the same for the C surface on arguments within its safety rules. Please report
 it privately, not in a public issue, through GitHub's private
 vulnerability reporting: <https://github.com/Alakazam-211/K2/security>, then
 "Report a vulnerability". The repository's SECURITY.md has the policy.

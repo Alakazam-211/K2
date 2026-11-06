@@ -45,6 +45,18 @@ pub struct Git {
     pub env: Vec<(String, String)>,
 }
 
+/// A git token for one fetch (git access, GH#78): `http.<url>.extraHeader`
+/// through `GIT_CONFIG_*` in the git child's environment. Never on the
+/// command line (other users can read argv), never in the mirror's config,
+/// never in a URL (so not in `FETCH_HEAD`). Git sends it only to URLs that
+/// match `url` (`git_env` sets no other `GIT_CONFIG_*`).
+pub fn auth_env(env: &mut Vec<(String, String)>, url: &str, cred: &k2_node_proto::gitcred::Cred) {
+    env.retain(|(k, _)| !k.starts_with("GIT_CONFIG_COUNT") && !k.starts_with("GIT_CONFIG_KEY_") && !k.starts_with("GIT_CONFIG_VALUE_"));
+    env.push(("GIT_CONFIG_COUNT".into(), "1".into()));
+    env.push(("GIT_CONFIG_KEY_0".into(), format!("http.{url}.extraHeader")));
+    env.push(("GIT_CONFIG_VALUE_0".into(), cred.basic_header()));
+}
+
 fn check(what: &str, out: CmdOut) -> Result<CmdOut, String> {
     if out.ok {
         Ok(out)
@@ -189,6 +201,13 @@ impl Git {
     /// other protocol. `Err` = refused or failed; the caller asks the
     /// server for a bundle instead.
     pub async fn fetch_public(&self, mirror: &Path, url: &str) -> Result<String, String> {
+        self.fetch_public_auth(mirror, url, None).await
+    }
+
+    /// [`Git::fetch_public`] with a git token for `url` (git access, GH#78):
+    /// the same guards, plus the token as a header scoped to that URL
+    /// ([`auth_env`]).
+    pub async fn fetch_public_auth(&self, mirror: &Path, url: &str, auth: Option<&k2_node_proto::gitcred::Cred>) -> Result<String, String> {
         let (host, port) = https_host_port(url)?;
         let want = (host.clone(), port);
         let addrs: Vec<IpAddr> = tokio::task::spawn_blocking(move || {
@@ -222,6 +241,9 @@ impl Git {
         ];
         let mut env = self.env.clone();
         env.push(("GIT_PROTOCOL_FROM_USER".into(), "0".into()));
+        if let Some(c) = auth {
+            auth_env(&mut env, url, c);
+        }
         let mut all: Vec<&str> = HARDEN.to_vec();
         all.extend_from_slice(&args);
         check("git fetch", run_cmd(&self.program, &all, &env, None, FETCH_LIMIT).await?)?;
@@ -246,15 +268,31 @@ impl Git {
     }
 
     pub async fn fetch_remote(&self, mirror: &Path, url: &str) -> Result<(), String> {
+        self.fetch_remote_auth(mirror, url, None).await
+    }
+
+    /// [`Git::fetch_remote`] with a git token for `url` (git access,
+    /// GH#78): the token rides as an HTTP header scoped to exactly `url`,
+    /// in the git child's environment only ([`auth_env`]); redirects are
+    /// off so it never follows one to another host.
+    pub async fn fetch_remote_auth(&self, mirror: &Path, url: &str, auth: Option<&k2_node_proto::gitcred::Cred>) -> Result<(), String> {
         if url.starts_with('-') {
             return Err("remote url can't start with '-'".into());
         }
         let m = mirror.display().to_string();
-        check(
-            "git fetch",
-            self.git(&["--git-dir", &m, "fetch", "-q", "--no-tags", url, "+refs/heads/*:refs/remotes/origin/*"], None, FETCH_LIMIT)
-                .await?,
-        )?;
+        let args = ["--git-dir", &m, "fetch", "-q", "--no-tags", url, "+refs/heads/*:refs/remotes/origin/*"];
+        let out = match auth {
+            None => self.git(&args, None, FETCH_LIMIT).await?,
+            Some(c) => {
+                let mut env = self.env.clone();
+                auth_env(&mut env, url, c);
+                let mut all: Vec<&str> = HARDEN.to_vec();
+                all.extend_from_slice(&["-c", "http.followRedirects=false"]);
+                all.extend_from_slice(&args);
+                run_cmd(&self.program, &all, &env, None, FETCH_LIMIT).await?
+            }
+        };
+        check("git fetch", out)?;
         Ok(())
     }
 
@@ -623,6 +661,61 @@ pub mod tests {
             assert!(e.contains("https") || e.contains("public"), "{url}: {e}");
         }
         assert!(!g.has_commit(&mirror, &second).await, "nothing came in");
+    }
+
+    /// Git access (GH#78): the token reaches only the granted repo's URL,
+    /// as basic auth, and lands nowhere in the mirror. A loopback listener
+    /// stands in for the forge: it records each request's Authorization
+    /// header and answers 404, so git fails after one request.
+    #[tokio::test]
+    async fn an_authenticated_fetch_sends_the_token_only_to_its_repo() {
+        use std::io::{Read, Write};
+        let token = "ghs_k2testSYNCFETCH0123456789";
+        let cred = k2_node_proto::gitcred::Cred { username: "x-access-token".into(), password: token.into(), expires_at: 1_900_000_000 };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>> = Default::default();
+        let s2 = seen.clone();
+        std::thread::spawn(move || {
+            for c in listener.incoming() {
+                let Ok(mut c) = c else { continue };
+                let mut buf = vec![0u8; 16 * 1024];
+                let n = c.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let path = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("").to_string();
+                let auth = req.lines().find_map(|l| l.strip_prefix("Authorization: ").or_else(|| l.strip_prefix("authorization: ")).map(str::to_string));
+                s2.lock().unwrap().push((path, auth));
+                let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let home = crate::util::temp_dir("sync-auth-home");
+        let g = git(&home);
+        let mirror = home.join("m.git");
+        g.ensure_mirror(&mirror).await.unwrap();
+        let granted = format!("http://127.0.0.1:{port}/acme/app.git");
+        let other = format!("http://127.0.0.1:{port}/acme/other.git");
+        assert!(g.fetch_remote_auth(&mirror, &granted, Some(&cred)).await.is_err(), "the stand-in answers 404");
+        // The header is scoped to the granted URL: a fetch of another repo
+        // with the same env shape carries nothing.
+        let mut env = g.env.clone();
+        auth_env(&mut env, &granted, &cred);
+        let g_other = Git { program: g.program.clone(), env };
+        assert!(g_other.fetch_remote(&mirror, &other).await.is_err());
+        let seen = seen.lock().unwrap().clone();
+        let want = "Basic eC1hY2Nlc3MtdG9rZW46Z2hzX2sydGVzdFNZTkNGRVRDSDAxMjM0NTY3ODk=";
+        let to_app: Vec<_> = seen.iter().filter(|(p, _)| p.starts_with("/acme/app.git/")).collect();
+        let to_other: Vec<_> = seen.iter().filter(|(p, _)| p.starts_with("/acme/other.git/")).collect();
+        assert!(!to_app.is_empty() && !to_other.is_empty(), "both fetches reached the stand-in: {seen:?}");
+        assert!(to_app.iter().all(|(_, a)| a.as_deref() == Some(want)), "the granted repo gets the token: {seen:?}");
+        assert!(to_other.iter().all(|(_, a)| a.is_none()), "another repo gets no token: {seen:?}");
+        // Nothing of the token in the mirror (config, FETCH_HEAD, logs).
+        let mut hits = Vec::new();
+        crate::util::walk_files(&mirror, &mut |p: &Path| {
+            if std::fs::read(p).is_ok_and(|b| b.windows(token.len()).any(|w| w == token.as_bytes()) || b.windows(20).any(|w| w == &want.as_bytes()[6..26])) {
+                hits.push(p.to_path_buf());
+            }
+        });
+        assert!(hits.is_empty(), "the token was written to {hits:?}");
     }
 
     /// The dirty blob's untracked files never go through a link the

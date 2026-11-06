@@ -80,7 +80,17 @@ use crate::crypto::{self, SigningKey};
 /// ([`crate::host::PROTOCOL_HOST`]), and a server sends the new plan field
 /// and frames only to a node offering the feature. An older peer sees
 /// exactly its own release's frames.
-pub const PROTOCOL: u32 = 7;
+///
+/// 8 = compute git access (0.46.10, prd-compute-git-access-v1; GH#78;
+/// [`crate::gitcred`]): `Plan.git_access`, `git_cred_need` / `git_cred` /
+/// `git_cred_refused`, the `git-access` feature. Additive: a node offers
+/// `git-access` and sends `git_cred_need` only to a server that said
+/// protocol ≥ [`PROTOCOL_GIT`], and a server writes `Plan.git_access` only
+/// for a node offering the feature.
+pub const PROTOCOL: u32 = 8;
+
+/// The first server protocol that gets the `git-access` feature and frames.
+pub const PROTOCOL_GIT: u32 = 8;
 
 /// The first server protocol that gets the easy-mode job work and features.
 pub const PROTOCOL_EASY: u32 = 6;
@@ -373,6 +383,10 @@ pub enum Frame {
     PkgRequest(crate::pkgpolicy::PkgRequest),
     /// Protocol 7, the owner server only: deny a forwarded request.
     PkgRequestDecide(crate::pkgpolicy::PkgRequestDecide),
+    /// Protocol 8: a git token for one repo, sealed to the node's one-time
+    /// key (only in answer to `git_cred_need`).
+    GitCred(GitCred),
+    GitCredRefused(GitCredRefused),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -399,6 +413,9 @@ pub enum Frame {
     PkgRequestFwd(crate::pkgpolicy::PkgRequestFwd),
     /// Protocol 7: a request's outcome, to the server that asked.
     PkgRequestDone(crate::pkgpolicy::PkgRequestDone),
+    /// Protocol 8: a git token for one granted repo of a job (only to a
+    /// server that said protocol ≥ 8).
+    GitCredNeed(GitCredNeed),
 }
 
 impl Frame {
@@ -421,7 +438,9 @@ impl Frame {
             | Frame::SecretEnv(_)
             | Frame::SecretRefused(_)
             | Frame::PkgRequest(_)
-            | Frame::PkgRequestDecide(_) => Direction::ControllerToNode,
+            | Frame::PkgRequestDecide(_)
+            | Frame::GitCred(_)
+            | Frame::GitCredRefused(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -438,7 +457,8 @@ impl Frame {
             | Frame::CacheView(_)
             | Frame::SecretNeed(_)
             | Frame::PkgRequestFwd(_)
-            | Frame::PkgRequestDone(_) => Direction::NodeToController,
+            | Frame::PkgRequestDone(_)
+            | Frame::GitCredNeed(_) => Direction::NodeToController,
         }
     }
 
@@ -479,6 +499,9 @@ impl Frame {
             Frame::PkgRequestDecide(_) => "pkg_request_decide",
             Frame::PkgRequestFwd(_) => "pkg_request_fwd",
             Frame::PkgRequestDone(_) => "pkg_request_done",
+            Frame::GitCredNeed(_) => "git_cred_need",
+            Frame::GitCred(_) => "git_cred",
+            Frame::GitCredRefused(_) => "git_cred_refused",
         }
     }
 }
@@ -668,6 +691,15 @@ pub struct Plan {
     /// every name against its own policy, deny list and dry run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub packages: Vec<String>,
+    /// Protocol 8 (`git-access`, GH#78): the repos this job may read with a
+    /// short-lived token (`github.com/<owner>/<repo>`, lowercase, sorted,
+    /// unique, at most [`crate::gitcred::MAX_REPOS`]): its workspace's live
+    /// grants that cover this node, filled per node at assign. Names only:
+    /// a token comes sealed in `git_cred`, never in a plan. Absent when
+    /// empty, so every older plan and digest is unchanged; sent only to
+    /// nodes offering [`crate::gitcred::FEATURE_GIT_ACCESS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_access: Vec<String>,
 }
 
 impl Plan {
@@ -712,6 +744,44 @@ pub struct SecretEnv {
 pub struct SecretRefused {
     pub job_id: String,
     pub generation: u32,
+    pub code: String,
+    pub message: String,
+}
+
+/// `git_cred_need` (node → server, protocol 8): a git token for `repo`
+/// (one of the plan's `git_access`), sealed to `epk` (base64 X25519, fresh
+/// for this ask). `req` is the node's own counter: one job may wait on
+/// several repos at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitCredNeed {
+    pub job_id: String,
+    pub generation: u32,
+    pub attempt: u32,
+    pub plan_digest: String,
+    pub req: u64,
+    pub repo: String,
+    pub purpose: crate::gitcred::Purpose,
+    pub epk: String,
+}
+
+/// `git_cred` (server → node): `ct` = AES-256-GCM of the credential under
+/// the key both one-time halves give ([`crate::gitcred`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitCred {
+    pub job_id: String,
+    pub generation: u32,
+    pub req: u64,
+    pub epk: String,
+    pub ct: String,
+}
+
+/// `git_cred_refused` (server → node): no token; `code` is one of
+/// [`crate::gitcred::codes`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitCredRefused {
+    pub job_id: String,
+    pub generation: u32,
+    pub req: u64,
     pub code: String,
     pub message: String,
 }
@@ -1441,7 +1511,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(),
             with: Vec::new(),
         }
     }

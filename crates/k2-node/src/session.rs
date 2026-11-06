@@ -671,6 +671,15 @@ where
                 let (job, gen) = (r.job_id.clone(), r.generation);
                 tenant.hub.route_secret(&job, gen, crate::node::tenant::SecretAnswer::Refused(r));
             }
+            // Git access (protocol 8): only to the request waiting for it.
+            Frame::GitCred(c) => {
+                let (job, gen, req) = (c.job_id.clone(), c.generation, c.req);
+                tenant.hub.route_git(&job, gen, req, crate::node::git_access::GitAnswer::Cred(c));
+            }
+            Frame::GitCredRefused(r) => {
+                let (job, gen, req) = (r.job_id.clone(), r.generation, r.req);
+                tenant.hub.route_git(&job, gen, req, crate::node::git_access::GitAnswer::Refused(r));
+            }
             Frame::Transfer(t) => tenant.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Chunk(t)),
             Frame::TransferFailed(t) => tenant.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Failed(t)),
             Frame::Cancel(c) => node.cancel(&tenant, &c.job_id, c.generation, &c.reason),

@@ -162,6 +162,12 @@ impl Node {
         if self.secret_env_refusal(t).is_none() {
             f.push(k2_node_proto::secret::FEATURE_SECRET_ENV.to_string());
         }
+        // Git access (protocol 8, GH#78): `Plan.git_access` and the git
+        // frames, to a server that speaks 8; to one that isn't the owner
+        // only while the node's policy allows it (`tenant_git_access`).
+        if self.git_access_refusal(t).is_none() && !f.iter().any(|x| x == k2_node_proto::gitcred::FEATURE_GIT_ACCESS) {
+            f.push(k2_node_proto::gitcred::FEATURE_GIT_ACCESS.to_string());
+        }
         // Job tiers (protocol 5): `Plan.tier`, the tier ledger column, the
         // tier-first queue, `servers.limits priority=`. Only to a server
         // that speaks protocol 5; an older one keeps sending `class`.

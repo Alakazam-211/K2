@@ -33,6 +33,8 @@
 //! - [`profiles`]: K2-shipped package profiles (protocol 7).
 //! - [`pkgpolicy`]: the per-server package policy, the deny list, package
 //!   requests and their frames (protocol 7).
+//! - [`gitcred`]: compute git access (protocol 8): repo keys, the sealed
+//!   git token, its codes.
 
 pub mod admin;
 pub mod cache;
@@ -40,6 +42,7 @@ pub mod canonical;
 pub mod crypto;
 pub mod env;
 pub mod frames;
+pub mod gitcred;
 pub mod health;
 pub mod host;
 pub mod needs;

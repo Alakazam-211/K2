@@ -74,6 +74,11 @@ pub struct PolicyFile {
     /// `disk_budget_gb`, at most 60. Over it after an install, the least
     /// recently used versions no running or queued job needs go.
     pub toolchain_budget_gb: Option<u64>,
+    /// 0.46.10 (git access, GH#78): may servers other than this node's
+    /// owner get short-lived git tokens for their jobs here? Default on;
+    /// `false` and the node never offers `git-access` to them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_git_access: Option<bool>,
 }
 
 /// The default tool-cache cap: 15% of the disk budget, 1–60 GB.
@@ -112,6 +117,14 @@ pub struct Policy {
     pub repo_toolchains: bool,
     /// CE-18: the tool-cache cap in bytes.
     pub toolchain_budget_bytes: u64,
+    /// Git access for other servers' jobs (default on; shown only when off,
+    /// so the default policy reads as it did).
+    #[serde(skip_serializing_if = "is_true")]
+    pub tenant_git_access: bool,
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 impl Policy {
@@ -177,6 +190,7 @@ impl Policy {
                 Some(g) => g * GIB,
                 None => default_toolchain_budget_bytes(f.disk_budget_gb.unwrap_or(150) * GIB),
             },
+            tenant_git_access: f.tenant_git_access.unwrap_or(true),
         })
     }
 

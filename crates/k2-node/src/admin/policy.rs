@@ -36,6 +36,7 @@ pub const FIELDS: &[&str] = &[
     "repo_toolchains",
     "gate_reserved_slots",
     "toolchain_budget_gb",
+    "tenant_git_access",
 ];
 
 fn bad(m: impl Into<String>) -> AdminRefusal {
@@ -188,6 +189,10 @@ pub fn widened(old: &Policy, new: &Policy) -> Vec<&'static str> {
     if !old.repo_toolchains && new.repo_toolchains {
         w.push("repo_toolchains");
     }
+    // Other servers' jobs getting git tokens here again.
+    if !old.tenant_git_access && new.tenant_git_access {
+        w.push("tenant_git_access");
+    }
     w
 }
 
@@ -332,6 +337,22 @@ mod tests {
         assert_eq!(class(&l, &m, json!({"workspaces": ["k2"]})), Class::Operate);
         assert_eq!(class(&l, &m, json!({"workspaces": ["k2", "other"]})), Class::Privileged);
         assert_eq!(class(&l, &m, json!({"workspaces": null})), Class::Privileged);
+    }
+
+    /// Git access (GH#78): refusing other servers' git tokens narrows;
+    /// letting them back widens. The default policy JSON doesn't show it.
+    #[test]
+    fn tenant_git_access_off_narrows_and_on_again_widens() {
+        let (l, m) = rig();
+        let default = Policy::resolve(&PolicyFile::default(), &m).unwrap();
+        assert!(default.tenant_git_access, "on by default");
+        assert!(serde_json::to_value(&default).unwrap().get("tenant_git_access").is_none(), "the default policy reads as before");
+        assert_eq!(class(&l, &m, json!({"tenant_git_access": false})), Class::Operate);
+        apply_set_with(&l, &json!({"tenant_git_access": false}), &m).unwrap();
+        assert_eq!(config::read_policy_file(&l.policy()).unwrap().tenant_git_access, Some(false));
+        assert_eq!(show(&l, &m, &NodeLimits::default())["policy"]["tenant_git_access"], json!(false));
+        assert_eq!(class(&l, &m, json!({"tenant_git_access": true})), Class::Privileged);
+        assert_eq!(class(&l, &m, json!({"tenant_git_access": null})), Class::Privileged, "back to the default widens too");
     }
 
     /// Without the job wall `network = "none"` isn't enforced: policy.set

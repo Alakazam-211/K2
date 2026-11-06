@@ -102,6 +102,7 @@ const POLICY_KEYS: &[(&str, &str)] = &[
     ("network", "enum"),
     ("repo_toolchains", "bool"),
     ("toolchain_budget_gb", "int"),
+    ("tenant_git_access", "bool"),
 ];
 
 fn enum_ok(key: &str, v: &str) -> bool {

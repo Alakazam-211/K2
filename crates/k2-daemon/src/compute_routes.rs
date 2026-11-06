@@ -59,6 +59,11 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/cache/clear",
     compute_ws::ENROLL_PATH,
     "/cli/compute/events",
+    // Git access for jobs (0.46.10, GH#78, `compute_git`).
+    crate::compute_git::SHOW,
+    crate::compute_git::GRANT,
+    crate::compute_git::REVOKE,
+    crate::compute_git::SETUP,
     "/cli/compute/grants",
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
@@ -126,6 +131,9 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/agents/set",
     crate::compute_allow::SET,
     "/cli/compute/cache/clear",
+    crate::compute_git::GRANT,
+    crate::compute_git::REVOKE,
+    crate::compute_git::SETUP,
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
     "/cli/compute/jobs/cancel",
@@ -632,6 +640,12 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         // or an agent narrowing its own).
         crate::compute_allow::SHOW => crate::compute_allow::show(&who, params),
         crate::compute_allow::SET => crate::compute_allow::set(&who, body),
+        // Git access for jobs (0.46.10): read; grant (a person); revoke (a
+        // person, or an agent for its own workspace); setup (owner/Admin).
+        crate::compute_git::SHOW => crate::compute_git::show(&who, params),
+        crate::compute_git::GRANT => crate::compute_git::grant(&who, body),
+        crate::compute_git::REVOKE => crate::compute_git::revoke(&who, body),
+        crate::compute_git::SETUP => crate::compute_git::setup(&who, body),
         "/cli/compute/run" => run(&who, body),
         // `k2 compute prewarm` (CE-18): tools onto matching granted nodes.
         "/cli/compute/prewarm" => prewarm(&who, body),
@@ -2221,6 +2235,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         stall_secs,
         // Names only (SE5): the values come sealed at spawn.
         secret_env: crate::compute_secrets::pins(&secret_envs).1,
+        // Protocol 8 (GH#78): filled per node at every assign
+        // (`compute_ws::fit_plan_to`), from the grants live then.
+        git_access: Vec::new(),
         // Protocol 6: only ever placed on nodes offering `job-cache` (above,
         // and `required_features` for --any and moves).
         cache: cache.clone(),
@@ -3474,7 +3491,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(),
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

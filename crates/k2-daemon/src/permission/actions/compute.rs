@@ -875,8 +875,105 @@ fn apply_packages_policy(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> A
     super::switches::applied(&r, message)
 }
 
+// ── compute.git-access (0.46.10, GH#78, `crate::compute_git`) ────────
+
+const GIT_PARAMS: &[ParamSpec] = &[ParamSpec { key: "repos", kind: ParamKind::Text, required: true, list: true, choices: &[] }];
+
+/// `compute.git-access repos=`: give the asking workspace's compute jobs
+/// read access to GitHub repos on every node this server owns (short-lived,
+/// read-only tokens through git's credential helper). A person decides
+/// (the owner or an Admin); revoking is the agent's own.
+pub(crate) static GIT_ACCESS: ActionSpec = ActionSpec {
+    id: "compute.git-access",
+    area: Area::Compute,
+    params: GIT_PARAMS,
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Compute git access",
+        what_changes: "Let {ws}'s compute jobs read {repos} on GitHub",
+        consequences: "Jobs from {ws} on this server's own nodes can then fetch and clone {repos} with short-lived, read-only tokens (and keep their caches). A job can read a token it's handed while it runs.",
+        scope: "{ws}'s jobs on this server's own nodes",
+        duration: "until someone revokes it (k2 compute git-access revoke)",
+        retry: "run your command again",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "compute", path: "k2 compute git-access (a terminal outside K2)" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::compute_git::NEEDS_PERSON },
+        route_prefix: crate::compute_git::GRANT,
+        method: WallMethod::Post,
+        params: &[("repos", ParamFrom::Response("/error/repos"))],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// The `repos=` as repo keys, each checked.
+fn git_repos(ctx: &Ctx) -> Result<Vec<String>, String> {
+    let raw: Vec<String> = match ctx.params.get("repos") {
+        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Some(serde_json::Value::String(s)) => s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
+        _ => Vec::new(),
+    };
+    if raw.is_empty() {
+        return Err("name the repos: repos=<owner>/<repo>[,<owner>/<repo>…]".into());
+    }
+    raw.iter()
+        .map(|r| k2_core::compute::proto::gitcred::parse_repo_arg(r).ok_or_else(|| format!("{r:?} isn't a GitHub repo (<owner>/<repo>)")))
+        .collect()
+}
+
+fn check_git_access(ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    let repos = match git_repos(ctx) {
+        Ok(r) => r,
+        Err(m) => return Check::Moved(m),
+    };
+    let have: Vec<String> = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::compute::git::grants_of(&conn, &ctx.workspace_id)
+            .into_iter()
+            .filter(|g| g.nodes == k2_core::compute::git::ALL_NODES)
+            .map(|g| g.repo)
+            .collect()
+    };
+    if repos.iter().all(|r| have.contains(r)) {
+        Check::AlreadyDone
+    } else {
+        Check::Needed
+    }
+}
+
+/// Through the grant route as the answerer (its person check runs again
+/// at the click), on every node this server owns.
+fn apply_git_access(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let repos = match git_repos(ctx) {
+        Ok(r) => r,
+        Err(m) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    let path = crate::compute_git::GRANT;
+    if let Err(r) = super::switches::route_floor(who, path) {
+        return super::switches::applied(&r, "");
+    }
+    let body = json!({ "workspace": ctx.workspace_id, "github": repos, "nodes": "all" });
+    let r = crate::compute_routes::handle(path, who_of(who), body.to_string().as_bytes(), &HashMap::new());
+    let shown: Vec<String> = repos.iter().filter_map(|r| k2_core::compute::proto::gitcred::owner_repo(r).map(|(o, n)| format!("{o}/{n}"))).collect();
+    super::switches::applied(&r, format!("{}'s compute jobs may read {} now.", ctx.workspace_handle, shown.join(", ")))
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
     vec![
+        Registered { spec: &GIT_ACCESS, check: check_git_access, apply: apply_git_access },
         Registered { spec: &ADMIN_APPROVE, check, apply },
         Registered { spec: &CI, check: check_ci, apply: apply_ci },
         Registered { spec: &CI_OFF, check: check_ci_off, apply: apply_ci_off },

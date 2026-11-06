@@ -346,6 +346,20 @@ pub fn write_executable(path: &std::path::Path, body: &str) {
     assert!(status.success(), "writing {} failed: {status}", path.display());
 }
 
+/// Test helper: every regular file under `dir` (links not followed).
+#[cfg(test)]
+pub fn walk_files(dir: &std::path::Path, f: &mut dyn FnMut(&std::path::Path)) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        match e.file_type() {
+            Ok(t) if t.is_dir() => walk_files(&p, f),
+            Ok(t) if t.is_file() => f(&p),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

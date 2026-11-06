@@ -656,6 +656,8 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         Frame::JobsSnapshot(s) => on_snapshot(&node_id, s, snapshot_seen),
         Frame::Need(n) => on_need(&node_id, route, n),
         Frame::SecretNeed(n) => on_secret_need(&node_id, conn_id, n),
+        // Git access (protocol 8, GH#78): a token for one granted repo.
+        Frame::GitCredNeed(n) => on_git_need(&node_id, conn_id, n),
         Frame::State(s) => {
             if let Some(t) = tallies.remove(&(s.job_id.clone(), s.generation)) {
                 flush_tally(&s.job_id, &t);
@@ -809,6 +811,37 @@ fn on_secret_need(node_id: &str, conn_id: u64, n: frames::SecretNeed) {
                 if recorded.is_ok() {
                     crate::compute_secrets::belt_disarm(&n.job_id, n.generation);
                 }
+            }
+            notify_change();
+        }
+    });
+}
+
+/// `git_cred_need` (protocol 8, GH#78): on its own thread like a secret
+/// release (minting may call GitHub). Only a job of the asking node takes
+/// a place; one release per (job, generation, repo) at a time; the answer
+/// goes only to the connection that asked.
+fn on_git_need(node_id: &str, conn_id: u64, n: frames::GitCredNeed) {
+    let node = node_id.to_string();
+    RELEASES.fetch_add(1, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let _counted = ReleaseCount;
+        if !crate::compute_secrets::job_on_node(&node, &n.job_id) {
+            return;
+        }
+        let Some(_place) = crate::compute_git::begin(&n) else { return };
+        let answer = match crate::compute_git::release(&node, &n) {
+            Ok((cred, kind, exp)) => Some((Frame::GitCred(cred), Ok((kind, exp)))),
+            Err(Some((code, message))) => Some((
+                Frame::GitCredRefused(frames::GitCredRefused { job_id: n.job_id.clone(), generation: n.generation, req: n.req, code: code.to_string(), message: message.clone() }),
+                Err((code, message)),
+            )),
+            Err(None) => None,
+        };
+        if let Some((frame, recorded)) = answer {
+            crate::compute_git::record(&node, &n, &recorded);
+            if !send_to_conn(&node, conn_id, frame) {
+                log_debug!("[compute] git token answer for {} dropped: node {node} reconnected or left", n.job_id);
             }
             notify_change();
         }
@@ -2070,7 +2103,17 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
             }
             return fail(
                 "relay_cap",
-                format!("{} MB is over the relay cap of {} MB; use the LAN, a tailnet route, or give the node fetch access to the remote", bytes >> 20, compute::RELAY_MAX_BUNDLE_BYTES >> 20),
+                format!(
+                    "{} MB is over the relay cap of {} MB; use the LAN, a tailnet route, or give the node fetch access to the remote{}",
+                    bytes >> 20,
+                    compute::RELAY_MAX_BUNDLE_BYTES >> 20,
+                    if n.kind == TransferKind::Bundle {
+                        let sibling = plan.with.iter().find(|w| w.commit == n.want && n.want != src.commit);
+                        crate::compute_git::relay_hint(sibling.map_or(src.remote_url.as_deref(), |w| w.remote_url.as_deref()))
+                    } else {
+                        String::new()
+                    }
+                ),
             );
         }
         if let Some(d) = src.dirty.as_ref().filter(|_| n.kind == TransferKind::Dirty) {
@@ -2538,16 +2581,18 @@ pub fn kick(node_id: &str) {
 fn fit_plan_to(conn: &rusqlite::Connection, job: store::JobRow, plan: frames::Plan, features: &[String]) -> Option<(store::JobRow, frames::Plan)> {
     // L5 (T23): the workspace's cap as its grant says right now.
     let caps = store::grant(conn, &job.node_id, &job.workspace_id).map(|g| crate::compute_place::GrantCaps::of(&g));
-    match crate::compute_place::fit_plan(&plan, &job, features, caps) {
-        None => Some((job, plan)),
-        Some(p) => {
-            if store::rewrite_queued_plan(conn, &job.id, &p, &job.ctl) != Ok(true) {
-                return None;
-            }
-            let job = store::job_by_id(conn, &job.id)?;
-            Some((job, p))
-        }
+    let mut fitted = crate::compute_place::fit_plan(&plan, &job, features, caps).unwrap_or_else(|| plan.clone());
+    // Git access (protocol 8, GH#78): the workspace's grants covering this
+    // node right now, only for a node offering `git-access`.
+    fitted.git_access = crate::compute_git::plan_repos_for(conn, &job, features);
+    if fitted == plan {
+        return Some((job, plan));
     }
+    if store::rewrite_queued_plan(conn, &job.id, &fitted, &job.ctl) != Ok(true) {
+        return None;
+    }
+    let job = store::job_by_id(conn, &job.id)?;
+    Some((job, fitted))
 }
 
 /// A node-queued job a newer `--supersede` replaced, whose cancel the
@@ -2761,7 +2806,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(),
             with: Vec::new(),
         };
         store::insert_job(

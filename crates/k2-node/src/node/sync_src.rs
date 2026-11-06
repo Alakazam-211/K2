@@ -135,10 +135,32 @@ impl Node {
         git.ensure_mirror(&mirror).await.map_err(|e| fail("sync_failed", e))?;
         if !git.has_commit(&mirror, commit).await {
             if let Some(url) = remote_url {
+                // Git access (protocol 8, GH#78): a GitHub repo the plan
+                // grants is fetched with a short-lived read-only token, a
+                // header scoped to its URL in git's env only.
+                let github = k2_node_proto::gitcred::repo_of_remote(url);
+                let granted = github.clone().filter(|r| a.plan.git_access.contains(r));
+                let cred = match &granted {
+                    Some(repo) => match self.pull_git_cred(t, a, repo, k2_node_proto::gitcred::Purpose::Sync).await {
+                        Ok(c) => {
+                            sys(format!("git access: a read-only token for {repo} (this fetch only)"));
+                            Some(c)
+                        }
+                        Err((code, d)) => {
+                            sys(format!("git access for {repo}: {code}: {d}; fetching without a token"));
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                let hint = match (&github, &granted) {
+                    (Some(r), None) => format!(". If {r} is private, a person runs: {}", super::git_access::grant_hint(r)),
+                    _ => String::new(),
+                };
                 if t.is_owner() {
-                    match git.fetch_remote(&mirror, url).await {
+                    match git.fetch_remote_auth(&mirror, url, cred.as_ref()).await {
                         Ok(()) => sys(format!("fetched history from {url}")),
-                        Err(e) => sys(format!("couldn't fetch from the remote ({e}); asking the controller")),
+                        Err(e) => sys(format!("couldn't fetch from the remote ({e}); asking the controller{hint}")),
                     }
                 } else {
                     // V49: another server's remote is fetched only over
@@ -146,7 +168,7 @@ impl Node {
                     // network is no-lan or none (the fetch runs outside its
                     // job's wall). Otherwise its server sends a bundle.
                     match self.job_network(t) {
-                        Ok(k2_node_proto::share::Network::On) => match git.fetch_public(&mirror, url).await {
+                        Ok(k2_node_proto::share::Network::On) => match git.fetch_public_auth(&mirror, url, cred.as_ref()).await {
                             Ok(at) => sys(format!("fetched history over https from {at}")),
                             Err(e) => sys(format!("not fetching this remote ({e}); asking the controller for a bundle")),
                         },

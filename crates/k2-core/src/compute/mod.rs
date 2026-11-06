@@ -18,6 +18,7 @@ pub mod admin;
 pub mod allow;
 pub mod advertise;
 pub mod enroll;
+pub mod git;
 pub mod local;
 pub mod logs;
 pub mod message;

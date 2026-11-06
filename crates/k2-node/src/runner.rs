@@ -110,16 +110,6 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
 /// macOS `/var` is `/private/var`). A `GIT_CONFIG_COUNT` that isn't a number
 /// is the submitter's own (git refuses it anyway): left as it is.
 pub fn git_safe_directory(env: &mut Vec<(String, String)>, src: &Path) {
-    let get = |env: &[(String, String)], k: &str| env.iter().rev().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
-    let count = match get(env, "GIT_CONFIG_COUNT") {
-        None => 0usize,
-        Some(c) => match c.trim().parse::<usize>() {
-            Ok(n) => n,
-            Err(_) => return,
-        },
-    };
-    // Never reuse an index the job already names, inside its count or not.
-    let used = |n: usize, env: &[(String, String)]| get(env, &format!("GIT_CONFIG_KEY_{n}")).is_some() || get(env, &format!("GIT_CONFIG_VALUE_{n}")).is_some();
     let mut paths = vec![src.display().to_string()];
     if let Ok(real) = std::fs::canonicalize(src) {
         let real = real.display().to_string();
@@ -127,17 +117,38 @@ pub fn git_safe_directory(env: &mut Vec<(String, String)>, src: &Path) {
             paths.push(real);
         }
     }
+    let entries: Vec<(String, String)> = paths.into_iter().map(|p| ("safe.directory".to_string(), p)).collect();
+    git_config_append(env, &entries);
+}
+
+/// Append git config `entries` (key, value; in order) for the job through
+/// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`: after
+/// any entries the job already sets, never over one. Returns false (and
+/// adds nothing) when the job's own `GIT_CONFIG_COUNT` isn't a number
+/// (git refuses it anyway).
+pub fn git_config_append(env: &mut Vec<(String, String)>, entries: &[(String, String)]) -> bool {
+    let get = |env: &[(String, String)], k: &str| env.iter().rev().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
+    let count = match get(env, "GIT_CONFIG_COUNT") {
+        None => 0usize,
+        Some(c) => match c.trim().parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => return false,
+        },
+    };
+    // Never reuse an index the job already names, inside its count or not.
+    let used = |n: usize, env: &[(String, String)]| get(env, &format!("GIT_CONFIG_KEY_{n}")).is_some() || get(env, &format!("GIT_CONFIG_VALUE_{n}")).is_some();
     let mut n = count;
-    for p in paths {
+    for (k, v) in entries {
         while used(n, env) {
             n += 1;
         }
-        env.push((format!("GIT_CONFIG_KEY_{n}"), "safe.directory".into()));
-        env.push((format!("GIT_CONFIG_VALUE_{n}"), p));
+        env.push((format!("GIT_CONFIG_KEY_{n}"), k.clone()));
+        env.push((format!("GIT_CONFIG_VALUE_{n}"), v.clone()));
         n += 1;
     }
     env.retain(|(k, _)| k != "GIT_CONFIG_COUNT");
     env.push(("GIT_CONFIG_COUNT".into(), n.to_string()));
+    true
 }
 
 /// `(SCCACHE_DIR, CARGO_HOME)` inside a cache dir.

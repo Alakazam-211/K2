@@ -56,6 +56,8 @@ pub struct Hub {
     /// Jobs waiting for their secret env (secret-env SE18), by (job,
     /// generation): the answer goes to exactly one waiter, once.
     pub(super) secrets: Mutex<HashMap<(String, u32), tokio::sync::oneshot::Sender<SecretAnswer>>>,
+    /// Git tokens being waited for (protocol 8), by (job, generation, req).
+    pub(super) git: Mutex<HashMap<(String, u32, u64), tokio::sync::oneshot::Sender<super::git_access::GitAnswer>>>,
 }
 
 /// The controller's answer to `secret_need`.
@@ -72,6 +74,7 @@ impl Hub {
             connected: watch::channel(0).0,
             transfers: Mutex::new(HashMap::new()),
             secrets: Mutex::new(HashMap::new()),
+            git: Mutex::new(HashMap::new()),
         }
     }
 
@@ -79,6 +82,14 @@ impl Hub {
     /// (dropped when nobody waits: a stale or unasked answer).
     pub fn route_secret(&self, job_id: &str, generation: u32, a: SecretAnswer) {
         if let Some(tx) = self.secrets.lock().unwrap().remove(&(job_id.to_string(), generation)) {
+            let _ = tx.send(a);
+        }
+    }
+
+    /// Route a `git_cred` / `git_cred_refused` to the request waiting for
+    /// it (dropped when nobody waits).
+    pub fn route_git(&self, job_id: &str, generation: u32, req: u64, a: super::git_access::GitAnswer) {
+        if let Some(tx) = self.git.lock().unwrap().remove(&(job_id.to_string(), generation, req)) {
             let _ = tx.send(a);
         }
     }
@@ -330,6 +341,11 @@ impl Tenant {
     /// May this session get secret-env frames (protocol 4)?
     pub fn speaks_secrets(&self) -> bool {
         self.protocol() >= k2_node_proto::frames::PROTOCOL_SECRETS
+    }
+
+    /// May this session get the `git-access` feature and frames (protocol 8)?
+    pub fn speaks_git(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_GIT
     }
 
     /// May this session see the job-tier fields and the `tiers` feature

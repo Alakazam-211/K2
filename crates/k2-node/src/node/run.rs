@@ -783,6 +783,29 @@ impl Node {
                 return;
             }
         };
+        // Git access (protocol 8, GH#78): the plan's granted repos through
+        // git's own credential helper, a socket in the job's root. The token
+        // is never in the env (only the helper's address is), so this job
+        // keeps its warm slot, sccache and `--cache` (unlike `--secret`).
+        let env = if a.plan.git_access.is_empty() {
+            env
+        } else {
+            let mut env = env;
+            let late: crate::journal::LateRedactor = Default::default();
+            journal.set_late_redactor(late.clone());
+            let repos: Vec<String> = a.plan.git_access.iter().filter_map(|r| k2_node_proto::gitcred::owner_repo(r).map(|(o, n)| format!("{o}/{n}"))).collect();
+            match self.git_helper_for(&t, &a, &dirs.root, unit_mode, late) {
+                Ok(cfg) if runner::git_config_append(&mut env, &cfg) => {
+                    sys(&mut journal, &format!("git access: {} (read-only, short-lived tokens through git's credential helper; plain git clone/fetch of https://github.com/<repo> works)", repos.join(", ")));
+                }
+                Ok(_) => {
+                    self.git_helper_drop(&t, &job, gen);
+                    sys(&mut journal, "git access inside the job: off (its own GIT_CONFIG_COUNT isn't a number)");
+                }
+                Err(why) => sys(&mut journal, &format!("git access inside the job: off ({why}); the node's own fetch of the source still uses it ({})", repos.join(", "))),
+            }
+            env
+        };
         // The easy-mode job work (protocol 6) only for a server that speaks it:
         // an older one gets its own release's job, frames and log.
         let easy = t.speaks_easy();
@@ -998,6 +1021,8 @@ impl Node {
         // `last_out` = ms after `t0` of the last stdout/stderr bytes (the
         // stall watch reads it).
         let journal = Arc::new(Mutex::new(journal));
+        // Git access: the credential helper's lines go into the shared journal.
+        self.git_helper_attach(&t, &job, gen, &journal);
         let t0 = std::time::Instant::now();
         let last_out = Arc::new(AtomicU64::new(0));
         let (tail_tx, tail_rx) = watch::channel(TailCmd::Run);
@@ -1994,6 +2019,8 @@ impl Node {
     ) {
         let job = &a.fence.job_id;
         let gen = a.fence.generation;
+        // Git access: its credential helper stops and its socket goes.
+        self.git_helper_drop(t, job, gen);
         // Its output files and holder folder (§5.1, §5.2) go with it: the
         // journal has what was in them.
         self.forget_run_files(t, job, gen);

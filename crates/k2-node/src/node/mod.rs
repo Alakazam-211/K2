@@ -20,6 +20,7 @@
 //! - `sync_src.rs`: the job's code (mirror, fetch, bundle, dirty) and blob
 //!   transfers;
 //! - [`job_cache`]: `--cache NAME` folders that outlive a job (protocol 6).
+//! - [`git_access`]: git tokens for a job's granted repos (protocol 8).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -47,6 +48,7 @@ use crate::wall::Wall;
 pub mod adopt;
 mod assign;
 mod disk;
+pub mod git_access;
 pub mod job_cache;
 mod offer;
 pub mod owner_swap;
@@ -335,6 +337,9 @@ pub struct Node {
     /// Which running attempt holds which job cache, by (slot, job, gen):
     /// `finish_job` gives it back.
     job_cache_holds: Mutex<HashMap<(Slot, String, u32), job_cache::Held>>,
+    /// Running jobs' git credential helpers (protocol 8), by (slot, job,
+    /// gen): `finish_job` drops each (its socket goes with it).
+    git_helpers: Mutex<HashMap<(Slot, String, u32), git_access::GitHelper>>,
 }
 
 /// The running-jobs key prefix of a stand-in for a lingering unit, and the
@@ -457,6 +462,7 @@ impl Node {
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
+            git_helpers: Mutex::new(HashMap::new()),
             opts,
         });
         node.hold_lingering(OWNER_SLOT, lingering);
@@ -1252,7 +1258,7 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(),
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

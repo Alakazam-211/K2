@@ -148,7 +148,13 @@ impl Drop for Plain {
 }
 
 fn key_for(shared: &[u8], info: &[u8]) -> Result<aead::LessSafeKey, ()> {
-    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, DOMAIN.as_bytes()).extract(shared);
+    key_for_domain(DOMAIN, shared, info)
+}
+
+/// The AES-256-GCM key for one seal: HKDF-SHA256 with `domain` as the salt
+/// (secret-env's own, or another seal's such as [`crate::gitcred`]).
+pub(crate) fn key_for_domain(domain: &str, shared: &[u8], info: &[u8]) -> Result<aead::LessSafeKey, ()> {
+    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, domain.as_bytes()).extract(shared);
     let mut k = [0u8; 32];
     prk.expand(&[info], hkdf::HKDF_SHA256).map_err(|_| ())?.fill(&mut k).map_err(|_| ())?;
     let key = aead::UnboundKey::new(&aead::AES_256_GCM, &k).map_err(|_| ());

@@ -13,6 +13,11 @@ use k2_node_proto::frames::{LogStream, MAX_LOG_CHUNK};
 
 const HEADER: usize = 13;
 
+/// A redactor that grows while the job runs (git access, GH#78: a token is
+/// added the moment the node hands it to the job's git). Shared between
+/// the journal and whoever learns the values.
+pub type LateRedactor = std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<k2_redact::Redactor>>>>;
+
 fn stream_byte(s: LogStream) -> u8 {
     match s {
         LogStream::Out => 1,
@@ -54,6 +59,8 @@ pub struct JournalWriter {
     /// (the stdout/stderr pumps also stream-redact first, so a value split
     /// across reads is caught too).
     redactor: Option<std::sync::Arc<k2_redact::Redactor>>,
+    /// Values learned mid-job ([`LateRedactor`]), applied after `redactor`.
+    late: Option<LateRedactor>,
 }
 
 impl JournalWriter {
@@ -63,12 +70,17 @@ impl JournalWriter {
             .append(true)
             .open(path)
             .map_err(|e| format!("open journal {}: {e}", path.display()))?;
-        Ok(Self { file, seq: 0, bytes: 0, dropped: 0, cap, out_bytes: 0, sys_bytes: 0, sys_dropped: 0, hash: Some(Sha256Stream::default()), redactor: None })
+        Ok(Self { file, seq: 0, bytes: 0, dropped: 0, cap, out_bytes: 0, sys_bytes: 0, sys_dropped: 0, hash: Some(Sha256Stream::default()), redactor: None, late: None })
     }
 
     /// From now on, redact every append with `r` (a secret job, SE23).
     pub fn set_redactor(&mut self, r: std::sync::Arc<k2_redact::Redactor>) {
         self.redactor = Some(r);
+    }
+
+    /// From now on, also redact with whatever `late` holds at each append.
+    pub fn set_late_redactor(&mut self, late: LateRedactor) {
+        self.late = Some(late);
     }
 
     /// The redactor in force, if any (the job's other text uses it too).
@@ -128,6 +140,15 @@ impl JournalWriter {
             Some(r) => {
                 redacted = r.redact(data);
                 &redacted[..]
+            }
+            None => data,
+        };
+        let late_redacted;
+        let late = self.late.as_ref().and_then(|l| l.lock().unwrap_or_else(|p| p.into_inner()).clone());
+        let data = match late.as_ref().filter(|r| r.hits(data)) {
+            Some(r) => {
+                late_redacted = r.redact(data);
+                &late_redacted[..]
             }
             None => data,
         };
@@ -247,6 +268,25 @@ mod tests {
         r2.skip_to(2);
         let rest = r2.read_more(100).unwrap();
         assert_eq!(rest.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![3, 4]);
+    }
+
+    /// Git access (GH#78): a value learned after the journal opened is
+    /// redacted from every later append, and was never in the file.
+    #[test]
+    fn a_late_redactor_catches_values_learned_mid_job() {
+        let d = crate::util::temp_dir("journal-late");
+        let p = d.join("log");
+        let mut w = JournalWriter::create(&p, 1 << 20).unwrap();
+        let late: LateRedactor = Default::default();
+        w.set_late_redactor(late.clone());
+        w.append(LogStream::Out, b"before any token\n").unwrap();
+        *late.lock().unwrap() = Some(std::sync::Arc::new(k2_redact::Redactor::empty().with("github.com/acme/app", b"ghs_k2testJOURNAL0123456789")));
+        w.append(LogStream::Out, b"password=ghs_k2testJOURNAL0123456789\n").unwrap();
+        drop(w);
+        let raw = std::fs::read(&p).unwrap();
+        assert!(!raw.windows(17).any(|x| x == b"ghs_k2testJOURNAL"), "the token reached the journal file");
+        let recs = JournalReader::new(p).read_more(10).unwrap();
+        assert_eq!(recs[1].data, b"password=[k2v:github.com/acme/app]\n");
     }
 
     #[test]

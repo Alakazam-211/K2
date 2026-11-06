@@ -195,6 +195,35 @@ impl Redactor {
         Redactor { ac: None, replacements: vec![], max_len: 0, pats: vec![], first: [false; 256] }
     }
 
+    /// This redactor plus one more value (a value learned mid-stream, such
+    /// as a compute job's git token the moment the node hands it out).
+    pub fn with(&self, name: &str, value: &[u8]) -> Redactor {
+        let mut pats = self.pats.clone();
+        let mut reps = self.replacements.clone();
+        if !value.is_empty() {
+            let rep = format!("[k2v:{name}]").into_bytes();
+            for p in variants(value) {
+                pats.push(p);
+                reps.push(rep.clone());
+            }
+        }
+        Self::from_parts(pats, reps)
+    }
+
+    fn from_parts(pats: Vec<Vec<u8>>, reps: Vec<Vec<u8>>) -> Redactor {
+        let max_len = pats.iter().map(Vec::len).max().unwrap_or(0);
+        let ac = if pats.is_empty() {
+            None
+        } else {
+            Some(AhoCorasickBuilder::new().match_kind(MatchKind::LeftmostLongest).build(&pats).expect("redactor patterns build"))
+        };
+        let mut first = [false; 256];
+        for p in &pats {
+            first[p[0] as usize] = true;
+        }
+        Redactor { ac, replacements: reps, max_len, pats, first }
+    }
+
     /// Length of the longest tail of `buf` that is the start of some
     /// pattern (but not a whole one): only that much has to wait for the
     /// next chunk. Text that can't begin a match goes out at once, so a
@@ -317,6 +346,18 @@ mod tests {
     use base64::Engine as _;
 
     const KEY: &[u8] = b"k2test_fake_key_4eC39HqLyjWDarjt";
+
+    /// `with` keeps every earlier value and adds the new one.
+    #[test]
+    fn with_adds_a_value_and_keeps_the_others() {
+        let first = Redactor::new([("A", KEY)]);
+        let both = first.with("github.com/acme/app", b"ghs_k2testLATE0123456789");
+        let out = both.redact_str(&format!("{} and ghs_k2testLATE0123456789 and {}", std::str::from_utf8(KEY).unwrap(), STANDARD.encode(b"ghs_k2testLATE0123456789")));
+        assert!(!out.contains("k2test_fake_key") && !out.contains("ghs_k2testLATE"), "{out}");
+        assert!(out.contains("[k2v:A]") && out.contains("[k2v:github.com/acme/app]"), "{out}");
+        assert!(!first.hits(b"ghs_k2testLATE0123456789"), "the original is unchanged");
+        assert!(Redactor::empty().with("x", b"ghs_k2testLATE0123456789").hits(b"..ghs_k2testLATE0123456789.."));
+    }
 
     /// Round 2 (VM root test): no base64 character that carries any bit of
     /// the value survives, at either edge, with or without padding, in both

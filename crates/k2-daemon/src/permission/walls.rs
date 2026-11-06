@@ -156,7 +156,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 56] = [
+pub(crate) const V1_ACTIONS: [&str; 57] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -249,6 +249,9 @@ pub(crate) const V1_ACTIONS: [&str; 56] = [
     // packages a filed request names, and set a node's package policy.
     "compute.packages",
     "compute.packages-policy",
+    // 0.46.10 (GH#78): give the agent's own workspace's compute jobs
+    // read access to GitHub repos (short-lived tokens, a person's grant).
+    "compute.git-access",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -415,6 +418,12 @@ pub(crate) const ROWS: &[Row] = &[
             ("level", &[ParamFrom::Body("/level")]),
         ],
         ..row(ask("compute.packages-policy", Floor::Owner), code(403, "operate_off"), "/cli/compute/nodes/packages/policy", POST)
+    },
+    // Git access for compute jobs (0.46.10, GH#78): an agent's grant for
+    // its own workspace teaches `compute.git-access repos=<the repos>`.
+    Row {
+        params: &[("repos", &[ParamFrom::Response("/error/repos")])],
+        ..row(ask("compute.git-access", Floor::Admin), code(403, "git_access_needs_person"), "/cli/compute/git-access/grant", POST)
     },
     // ── Sew (0.46.6)───────────────────────────────────────────────────
     // An agent's own call to the owner handoff: agents never become Sew's
@@ -1313,6 +1322,8 @@ mod tests {
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
             (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
+            // 0.46.10 (GH#78): an agent's git-access grant.
+            (403, "POST", "/cli/compute/git-access/grant", vec![], Some(json!({"github":"acme/app"})), json!({"error":{"code":"git_access_needs_person","hint":"x","workspace":"k2","repos":"acme/app"}}), "compute.git-access"),
             // 0.46.9: a filed package request, and the package policy to an agent that can't operate nodes.
             (200, "POST", "/cli/compute/nodes/packages/request", vec![], Some(json!({"nodes":["k2n7"],"names":["libgtk-3-dev"]})), json!({"pkgHeld":true,"request":{"id":"cpr_0123456789abcdef"}}), "compute.packages"),
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n7"})), json!({"error":{"code":"package_not_approved","hint":"x","request":"cpr_0123456789abcdef","node":"k2n7"}}), "compute.packages"),
@@ -1572,6 +1583,17 @@ mod tests {
         assert_eq!(p["command"], "k2 permission request compute.allow-nodes-clear --why \"<what you need it for>\"");
     }
 
+    /// Git access (0.46.10, GH#78): an agent's grant teaches
+    /// `compute.git-access repos=<the repos>`, for the owner or an Admin.
+    #[test]
+    fn the_git_access_wall_names_the_repos() {
+        let body = json!({"error":{"code":"git_access_needs_person","hint":"x","workspace":"k2","repos":"acme/app,acme/lib"}});
+        let p = teach_of(403, "POST", "/cli/compute/git-access/grant", &[], Some(json!({"github":"acme/app,acme/lib"})), body).unwrap();
+        assert_eq!(action_of(&p), "compute.git-access", "{p}");
+        assert_eq!(p["approvers"], "owner or admin");
+        assert_eq!(p["command"], "k2 permission request compute.git-access repos=acme/app,acme/lib --why \"<what you need it for>\"");
+    }
+
     /// `sew.space-governance`: the App, the Space and the side come from the
     /// refused call's body; only `person_only` on that route teaches it.
     #[test]
@@ -1802,7 +1824,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 56);
+        assert_eq!(V1_ACTIONS.len(), 57);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

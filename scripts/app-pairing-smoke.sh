@@ -14,7 +14,7 @@
 #
 # Exits non-zero at the first answer that isn't what the contract says.
 # Never prints a code, a pass or a refresh token. crates/k2-daemon/tests/
-# app_pairing_integration.rs runs it against an in-process daemon.
+# it_apps/app_pairing_integration.rs runs it against an in-process daemon.
 set -euo pipefail
 
 : "${K2_URL:?set K2_URL (the daemon main port)}"

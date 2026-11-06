@@ -3122,7 +3122,7 @@ mod tests {
     // GH#22 close-guard decision table (pure logic; no PTY needed).
     // The spawn-backed end-to-end variant (real session + real grid-WS
     // subscriber drives `subscriber_count`) lives in
-    // crates/k2so-daemon/tests/reaper_close_guard_integration.rs.
+    // crates/k2-daemon/tests/it_sessions/reaper_close_guard_integration.rs.
     #[test]
     fn close_allowed_proceeds_when_no_subscribers() {
         // Nobody attached → safe to reap.

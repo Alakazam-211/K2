@@ -7,16 +7,17 @@
 use vp8_decoder::tables::{AC_QUANT, DC_QUANT};
 
 // sqrt(2) * cos(pi / 8) and sqrt(2) * sin(pi / 8), scaled by 2^12.
-const C: i64 = 5352;
-const S: i64 = 2217;
+// Residuals are within +-255, so every intermediate fits an i32.
+const C: i32 = 5352;
+const S: i32 = 2217;
 
 #[inline(always)]
-fn round_shift(v: i64, shift: u32) -> i32 {
-    let half = 1i64 << (shift - 1);
+fn round_shift(v: i32, shift: u32) -> i32 {
+    let half = 1i32 << (shift - 1);
     if v >= 0 {
-        ((v + half) >> shift) as i32
+        (v + half) >> shift
     } else {
-        -((-v + half) >> shift) as i32
+        -((-v + half) >> shift)
     }
 }
 
@@ -34,17 +35,17 @@ pub(crate) fn fdct4x4(src: &[i32; 16], out: &mut [i32; 16]) {
         let d1 = x[1] - x[2];
         tmp[r * 4] = (a0 + a1) << 3;
         tmp[r * 4 + 2] = (a0 - a1) << 3;
-        tmp[r * 4 + 1] = round_shift(C * d0 as i64 + S * d1 as i64, 9);
-        tmp[r * 4 + 3] = round_shift(S * d0 as i64 - C * d1 as i64, 9);
+        tmp[r * 4 + 1] = round_shift(C * d0 + S * d1, 9);
+        tmp[r * 4 + 3] = round_shift(S * d0 - C * d1, 9);
     }
     for c in 0..4 {
         let a0 = tmp[c] + tmp[12 + c];
         let a1 = tmp[4 + c] + tmp[8 + c];
-        let d0 = (tmp[c] - tmp[12 + c]) as i64;
-        let d1 = (tmp[4 + c] - tmp[8 + c]) as i64;
+        let d0 = tmp[c] - tmp[12 + c];
+        let d1 = tmp[4 + c] - tmp[8 + c];
         // Scale 2^3 from the rows, 2^12 from the column constants, and the final halving.
-        out[c] = round_shift(((a0 + a1) as i64) << 12, 16);
-        out[8 + c] = round_shift(((a0 - a1) as i64) << 12, 16);
+        out[c] = round_shift((a0 + a1) << 12, 16);
+        out[8 + c] = round_shift((a0 - a1) << 12, 16);
         out[4 + c] = round_shift(C * d0 + S * d1, 16);
         out[12 + c] = round_shift(S * d0 - C * d1, 16);
     }
@@ -102,9 +103,10 @@ pub(crate) fn quantize(v: i32, step: i32, bias: i32) -> i32 {
     // Division by a multiply with 2^32 / divisor rounded up. Just below a
     // boundary it can round up by one, which only nudges the rounding
     // offset; the decoder sees whatever level we choose.
+    static RECIPROCALS: std::sync::OnceLock<[u64; 512]> = std::sync::OnceLock::new();
+    let inv = RECIPROCALS.get_or_init(|| std::array::from_fn(|d| (1u64 << 32).div_ceil(d.max(1) as u64 * 256)));
     let num = (a * 256 + bias * step) as u64;
-    let inv = (1u64 << 32).div_ceil((step * 256) as u64);
-    let l = ((num * inv) >> 32).min(MAX_LEVEL as u64) as i32;
+    let l = ((num * inv[step as usize]) >> 32).min(MAX_LEVEL as u64) as i32;
     if v < 0 {
         -l
     } else {

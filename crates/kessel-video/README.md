@@ -169,9 +169,11 @@ On macOS:
 | `cargo test` | The unit tests and the README's example. On a Mac, also the VideoToolbox H.264 tests. From the repository, also `tests/` (the VP8 end-to-end test and the licence and publish checks), which is not in the published package. |
 | `cargo test -- --ignored` | Also the tests that need a real camera, a desktop session or a person to answer a permission prompt or a picker. Run by hand; see the platform table for what has been run. |
 
-None of the default tests need a camera, screen or GPU.
-`scripts/check-targets.sh` (in the repository) type-checks Windows, iOS and
-Android, or any target you name, from a machine that can't run them.
+None of the default tests need a camera, screen or GPU. In the repository,
+`scripts/check-targets.sh` type-checks Windows, iOS and Android, or any
+target you name, from a machine that can't run them, and
+`scripts/check-package.sh` builds the package as crates.io would and runs
+its tests outside the repository.
 
 ## Building
 

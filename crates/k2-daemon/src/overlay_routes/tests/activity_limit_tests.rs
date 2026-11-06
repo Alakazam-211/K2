@@ -172,8 +172,15 @@ fn fifteen_rooms_catch_up_in_one_read_and_one_token() {
 /// hears no turn (the room is left out); a bad `rooms` is usage; an
 /// agent's passport is refused (one Thread at a time); the owner token
 /// reads every pinned room and is never limited.
+///
+/// Its own DB: the owner's `rooms=all` is every pinned room on the server,
+/// capped at `MAX_ROOMS` (200) in room-id order. On the binary's shared DB
+/// that is every other test's pinned rooms too: a full run pins well over
+/// 200, and this test's random-id room was left out whenever it sorted
+/// past the 200th (nightly soak, shuffled seeds 3 to 6).
 #[test]
 fn the_batched_catch_up_keeps_the_ear_rules() {
+    let _db = k2_core::db::scoped_for_test();
     let handle = format!("ovlrn{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let (project_id, _) = seed(&handle);
     pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -191,6 +198,8 @@ fn the_batched_catch_up_keeps_the_ear_rules() {
     for _ in 0..15 {
         let r = dispatch(THREAD_ACTIVITY_ROOMS_ROUTE, &params_of(&[("rooms", "all")])).expect("route");
         assert_eq!(r.status, "200 OK", "{}", r.body);
-        assert!(json_body(&r)["turns"].as_object().is_some_and(|m| m.contains_key(&project_id)), "{}", r.body);
+        let v = json_body(&r);
+        let rooms: Vec<&String> = v["turns"].as_object().expect("turns").keys().collect();
+        assert_eq!(rooms, vec![&project_id], "the one pinned room on this DB: {v}");
     }
 }

@@ -185,7 +185,7 @@ fn offer(features: &[&str], running: u32, share: Option<ShareView>) -> Offer {
         boot_id: "b".into(),
         ledger_id: "l".into(),
         node_version: "0.46.3".into(),
-        features: features.iter().map(|f| f.to_string()).collect(),
+        features: features.iter().map(|f| f.to_string()).collect(), host: None, pkg: None,
     }
 }
 

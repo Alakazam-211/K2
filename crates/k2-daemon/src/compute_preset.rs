@@ -59,6 +59,8 @@ pub mod codes {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Settings {
     pub os: Option<String>,
+    /// `ubuntu@24.04` (protocol 7, `--distro`).
+    pub distro: Option<String>,
     pub arch: Option<String>,
     pub mem_bytes: Option<u64>,
     pub cpus: Option<f64>,
@@ -87,7 +89,7 @@ pub struct Loaded {
     pub file: File,
 }
 
-const KEYS: &[&str] = &["os", "arch", "mem", "cpus", "needs", "env", "timeout", "stall_timeout", "tier", "cache"];
+const KEYS: &[&str] = &["os", "arch", "distro", "mem", "cpus", "needs", "env", "timeout", "stall_timeout", "tier", "cache"];
 
 /// The 1-based line of `key` in `[section]` (`None` = top level), for a
 /// refusal that names it. Best effort: 0 when not found.
@@ -164,10 +166,14 @@ fn section(text: &str, name: Option<&str>, t: &toml::Table) -> Result<Settings, 
     for (k, v) in t {
         let bad = |what: &str| format!("{}: {what}", at(text, name, k));
         match k.as_str() {
-            "os" | "arch" | "cache" | "tier" => {
+            "os" | "arch" | "cache" | "tier" | "distro" => {
                 let s = v.as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| bad("a string"))?.to_string();
                 match k.as_str() {
                     "os" => out.os = Some(s),
+                    "distro" => {
+                        k2_core::compute::proto::host::parse_distro(&s).map_err(|e| bad(&e))?;
+                        out.distro = Some(s)
+                    }
                     "arch" => out.arch = Some(s),
                     "cache" => {
                         if !k2_core::compute::proto::cache::valid_name(&s) {
@@ -411,9 +417,10 @@ pub fn apply(v: &mut Value, loaded: Option<&Loaded>, preset: Option<&str>) -> Re
         "preset": preset,
     });
     // os / arch / cache: strings, under the same key in the body.
-    for key in ["os", "arch", "cache"] {
+    for key in ["os", "arch", "cache", "distro"] {
         let get = |s: &Settings| match key {
             "os" => s.os.clone(),
+            "distro" => s.distro.clone(),
             "arch" => s.arch.clone(),
             _ => s.cache.clone(),
         };

@@ -49,6 +49,19 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     v["nodeQueued"] = serde_json::Value::Null;
     // CE-8: idle CPU beside unreserved CPU ("8 idle, 0 unreserved").
     v["idleCpuMillis"] = idle_cpu_millis(&n.id, offer.as_ref()).into();
+    // Protocol 7 (§4.3): what the node is, and its short column
+    // (`ubuntu24.04-x86_64`; an older node: `linux-x86_64`).
+    if let Some(h) = offer.as_ref().and_then(|o| o.host.as_ref()) {
+        v["host"] = crate::compute_pkg::host_json(h);
+        v["platform"] = h.short().into();
+        v["rebootPending"] = h.reboot_required.into();
+    } else {
+        v["host"] = serde_json::Value::Null;
+        v["platform"] = format!("{}-{}", n.os.as_deref().unwrap_or("?"), n.arch.as_deref().unwrap_or("?")).into();
+    }
+    if let Some(p) = offer.as_ref().and_then(|o| o.pkg.as_ref()) {
+        v["packages"] = serde_json::json!({"manager": p.manager, "policy": p.policy().summary(), "openRequests": p.open_requests, "indexAgeSecs": p.index_age_secs});
+    }
     if let Some(o) = offer {
         v["offer"] = serde_json::json!({
             "control": o.control.as_str(),

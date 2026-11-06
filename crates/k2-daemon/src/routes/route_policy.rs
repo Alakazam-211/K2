@@ -657,6 +657,15 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/enroll-code", Owner),
     get("/cli/compute/nodes/health", Member),
     get("/cli/compute/nodes/info", Member),
+    // Package requests (0.46.9, prd-compute-self-serve-environments §12.2):
+    // members with a grant read and ask; the owner or an Admin, in person,
+    // decide (the handler refuses passports); the policy is an operator's
+    // (narrowing at once, widening held).
+    get("/cli/compute/nodes/packages", Member),
+    post("/cli/compute/nodes/packages/decide", Admin),
+    post("/cli/compute/nodes/packages/policy", Member),
+    post("/cli/compute/nodes/packages/request", Member),
+    get("/cli/compute/nodes/packages/requests", Member),
     post("/cli/compute/nodes/pause", Admin),
     get("/cli/compute/nodes/policy", Admin),
     post("/cli/compute/nodes/policy/set", Admin),

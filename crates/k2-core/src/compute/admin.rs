@@ -606,7 +606,8 @@ pub fn classify_policy_change(current: &Map<String, Value>, changes: &Map<String
 /// carries the owner signature).
 pub fn step_class(verb: &str) -> Option<Class> {
     let v = wire::verb(verb)?;
-    Some(if v.name == "policy.set" || v.name == super::proto::share::VERB_LIMITS { Class::Privileged } else { v.base })
+    // A held `packages.policy` is a widening (a narrowing is sent at once).
+    Some(if v.name == "policy.set" || v.name == super::proto::share::VERB_LIMITS || v.name == super::proto::admin::VERB_PACKAGES_POLICY { Class::Privileged } else { v.base })
 }
 
 /// `servers.limits` against the share the node last listed (§4.3, §9):
@@ -727,6 +728,12 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
         }
         // Node sharing (protocol 3): one checker on both ends.
         v if v.starts_with("servers.") => super::proto::share::check_verb_args(v, args).map_err(|e| (codes::BAD_ARGS, e))?,
+        super::proto::admin::VERB_PACKAGES_ALLOW => {
+            super::proto::pkgpolicy::check_allow_args(args).map_err(|e| (codes::BAD_ARGS, e))?;
+        }
+        super::proto::admin::VERB_PACKAGES_POLICY => {
+            super::proto::pkgpolicy::check_policy_args(args).map_err(|e| (codes::BAD_ARGS, e))?;
+        }
         "homes.private" => {
             // Absent = every open home the node reports; else named ones.
             only_keys(a, &["homes"]).map_err(bad)?;
@@ -769,6 +776,7 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
         "gc" => format!("clean old job folders on {node}{}", a.get("older_days").map(|d| format!(" (older than {d} days)")).unwrap_or_default()),
         "jobs.kill" => format!("kill job {} on {node}", s("job_id")),
         "unit.restart" => format!("restart {} on {node} (as root)", s("unit")),
+        "packages.policy" => format!("set {node}'s package policy for {}: {}", s("server"), arg_list(a)),
         "wall.enable" => format!(
             "turn on the job wall on {node} (as root): create the k2job user, let it into the node home, run jobs as k2job; {}",
             if a.get("restart").and_then(Value::as_bool) == Some(true) {

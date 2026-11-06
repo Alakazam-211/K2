@@ -440,6 +440,25 @@ fn send_direct(who: &Who, node: &store::NodeRow, class: Class, verb: &str, args:
     Ok((cmd.cmd_id, result))
 }
 
+/// An Operate command sent now (no request, no approval key): the
+/// package card's `packages.allow`, which a person already decided.
+pub(crate) fn send_operate_now(who: &Who, node: &store::NodeRow, verb: &str, args: &Value) -> R<String> {
+    send_operate(who, node, verb, args)
+}
+
+/// An Operate command from an operator (owner, Admin, or an agent with
+/// "operate compute nodes"), waiting briefly for the node's answer.
+pub(crate) fn send_and_wait(who: &Who, node: &store::NodeRow, verb: &str, args: &Value) -> R<Option<wire::AdminResult>> {
+    operator(who)?;
+    not_tenant(node)?;
+    send_direct(who, node, Class::Operate, verb, args, Some(ANSWER_WAIT)).map(|(_, r)| r)
+}
+
+/// A note to an agent (its live session, else its inbox).
+pub(crate) fn deliver_note(ws_id: Option<&str>, session: Option<&str>, title: &str, text: &str) {
+    deliver(ws_id, session, title, text)
+}
+
 fn send_operate(who: &Who, node: &store::NodeRow, verb: &str, args: &Value) -> R<String> {
     send_direct(who, node, Class::Operate, verb, args, None).map(|(id, _)| id)
 }
@@ -1195,6 +1214,11 @@ fn track_pin(node_id: &str, r: &wire::AdminResult) {
 /// output tails stay in the request for humans to read.
 pub fn on_admin_result(node_id: &str, r: wire::AdminResult) {
     track_pin(node_id, &r);
+    // Protocol 7: root's answer to an approved package request.
+    if crate::compute_pkg::on_admin_result(node_id, &r) {
+        crate::compute_ws::notify_change();
+        return;
+    }
     if wait_deliver(&r) {
         crate::compute_ws::notify_change();
         return;
@@ -1803,6 +1827,8 @@ pub fn watch_once() {
 }
 
 fn watch_pass() {
+    // Package requests nobody answered (0271).
+    crate::compute_pkg::expire_pass();
     let now = compute::now();
     let due: Vec<(String, String)> = {
         let db = k2_core::db::shared();
@@ -2397,7 +2423,20 @@ fn servers_add(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
     let code = s(&v, "code").ok_or_else(|| no(acodes::BAD_ARGS, 400, "--code is the CODE.FP the new server's `k2 compute node add` printed"))?;
     let (binding, fp_prefix) = share::split_add_code(code).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
     let for_secs = match crate::compute_routes::n(&v, "forSecs") {
-        Some(0) => None,
+        // `--for none`: no end date (Rosson, Q8). The node reads 0 as none
+        // from protocol 7 (`host-facts`); an older one refuses 0, and a
+        // missing `for` would give a team server 7 days, so say so here.
+        Some(0) if !features(&node.id).iter().any(|f| f == k2_core::compute::proto::host::FEATURE_HOST_FACTS) => {
+            return Err(no(
+                acodes::BAD_ARGS,
+                409,
+                format!(
+                    "{}'s k2-node is too old to add a server with no end date: update k2-node (k2 compute node update {}), or add it now and clear the end date later with k2 compute node servers {} limits <server> --for none",
+                    node.name, node.name, node.name
+                ),
+            ))
+        }
+        Some(0) => Some(0),
         Some(x) => Some(x),
         // §7 defaults: 7 days for other people's servers, none for your own.
         None if trust == pshare::Trust::Team => Some(7 * 86_400),

@@ -165,9 +165,9 @@ impl Want {
         }
     }
 
-    /// The command needs a system package (`--needs sys:…`).
+    /// The command needs a system package (`--needs sys:…` or a profile).
     fn wants_sys(&self) -> bool {
-        self.needs.iter().any(|n| n.starts_with("sys:"))
+        self.needs.iter().any(|n| n.starts_with("sys:") || n.starts_with("profile:"))
     }
 }
 
@@ -317,9 +317,9 @@ impl Cand {
         self.eta(w).map(|e| (e + self.held_wait, "quote")).or_else(|| self.est_wait.map(|e| (e, "estimate")))
     }
 
-    /// Each need's state here (CE-1).
+    /// Each need's state here (CE-1), profiles expanded.
     pub fn needs(&self, w: &Want) -> Vec<NeedStatus> {
-        need_states(&self.offer, &w.needs)
+        need_states(&self.offer, &expand_profiles(&w.needs))
     }
 
     /// A `sys:` need this node can't install (macOS): ranked last.
@@ -437,6 +437,10 @@ pub const FEATURE_RUST_COMPONENTS: &str = "rust-components";
 /// The components `rust@<channel>+<component>` may name.
 pub const RUST_COMPONENTS: &[&str] = &["clippy", "rustfmt", "rust-src", "llvm-tools", "rust-analyzer", "miri"];
 
+/// Offer feature (protocol 7, §8): a bare `rust@<channel>` brings clippy
+/// and rustfmt there; `+minimal` opts out (and needs this feature).
+pub const FEATURE_RUST_DEFAULT_COMPONENTS: &str = needs::FEATURE_RUST_DEFAULT_COMPONENTS;
+
 /// rustup's older names fold to the ones a need uses (`llvm-tools-preview`
 /// → `llvm-tools`, `clippy-preview` → `clippy`), as k2-node folds them.
 pub fn fold_component(c: &str) -> &str {
@@ -458,7 +462,7 @@ pub fn split_rust_components(token: &str) -> Result<(String, Vec<String>), Strin
     let mut comps: Vec<String> = Vec::new();
     for c in tail.split('+') {
         let c = fold_component(c);
-        if !RUST_COMPONENTS.contains(&c) {
+        if !RUST_COMPONENTS.contains(&c) && c != needs::RUST_MINIMAL {
             return Err(format!(
                 "{t:?}: Rust components are {} joined to the channel with + (e.g. rust@stable+clippy+rustfmt); {c:?} isn't one",
                 RUST_COMPONENTS.join(", ")
@@ -497,7 +501,61 @@ pub fn need_components(token: &str) -> Vec<String> {
 /// Any need names Rust components (the node must offer
 /// [`FEATURE_RUST_COMPONENTS`]).
 pub fn wants_components(needs: &[String]) -> bool {
-    needs.iter().any(|t| !need_components(t).is_empty())
+    needs.iter().any(|t| need_components(t).iter().any(|c| c != needs::RUST_MINIMAL))
+}
+
+/// A need says `rust@…+minimal` (the node must offer
+/// [`FEATURE_RUST_DEFAULT_COMPONENTS`]).
+pub fn wants_minimal(needs: &[String]) -> bool {
+    needs.iter().any(|t| need_components(t).iter().any(|c| c == needs::RUST_MINIMAL))
+}
+
+/// A need only protocol 7 nodes read: a `profile:` or a native
+/// `sys:<manager>:<name>` (feature `pkg-map`).
+pub fn wants_pkg_map(needs: &[String]) -> bool {
+    needs.iter().any(|t| t.starts_with("profile:") || t.strip_prefix("sys:").is_some_and(|p| p.contains(':')))
+}
+
+/// Every system name a needs list asks for, canonical (or
+/// `<manager>:<name>`), its profiles expanded, sorted and unique: the
+/// plan's `packages` for a `pkg-map` node, and what placement checks.
+pub fn plan_packages(needs: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in needs {
+        if let Some(p) = t.strip_prefix("profile:") {
+            if let Ok(pr) = k2_core::compute::proto::profiles::resolve(p) {
+                out.extend(pr.all_sys());
+            }
+        } else if let Some(p) = t.strip_prefix("sys:") {
+            out.push(p.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The needs with every `profile:` replaced by its tools and `sys:` names
+/// (an explicit need for the same tool wins), for placement and `--plan`.
+pub fn expand_profiles(needs: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = needs.iter().filter(|t| !t.starts_with("profile:")).cloned().collect();
+    let key = |t: &str| t.split(['@', '+']).next().unwrap_or(t).to_string();
+    for t in needs {
+        let Some(p) = t.strip_prefix("profile:") else { continue };
+        let Ok(pr) = k2_core::compute::proto::profiles::resolve(p) else { continue };
+        for tool in pr.all_tools() {
+            if !out.iter().any(|o| key(o) == key(&tool)) {
+                out.push(tool);
+            }
+        }
+        for s in pr.all_sys() {
+            let tok = format!("sys:{s}");
+            if !out.contains(&tok) {
+                out.push(tok);
+            }
+        }
+    }
+    out
 }
 
 /// Offer feature (k2-node 0.46.7, CE-18 cap): the node keeps its tool
@@ -519,9 +577,17 @@ pub enum NeedState {
     /// The node can install it, but it isn't there yet (also: every need
     /// on an older node without a tools map).
     Install,
-    /// A `sys:` package on macOS (no system packages there). Ranks the
-    /// node last, never filters it: the package may be installed already.
+    /// A `sys:` package on macOS (no system packages there). Auto-placement
+    /// skips the node (protocol 7, §5.3); a job pinned to a Mac runs and
+    /// fails with the `brew install` line unless it's there already.
     UnsupportedOnOs,
+    /// Protocol 7: mappable, but this server's package policy on the node
+    /// doesn't cover it: a request to the node's owner (a card).
+    Ask,
+    /// Protocol 7: no name for this node's package manager.
+    NoMapping,
+    /// Protocol 7: on K2's deny list (never installed by K2).
+    Denied,
 }
 
 impl NeedState {
@@ -530,6 +596,9 @@ impl NeedState {
             NeedState::Ready => "ready",
             NeedState::Install => "install",
             NeedState::UnsupportedOnOs => "unsupported_on_os",
+            NeedState::Ask => "ask",
+            NeedState::NoMapping => "no_mapping",
+            NeedState::Denied => "denied",
         }
     }
 }
@@ -541,12 +610,20 @@ pub struct NeedStatus {
     pub state: NeedState,
     /// The version (or Rust toolchain) found, when ready.
     pub have: Option<String>,
+    /// A system name as this node installs it (`openssl` for
+    /// `sys:libssl-dev` on Arch), protocol 7 nodes only.
+    pub native: Option<String>,
 }
 
 impl NeedStatus {
-    /// `{"need","state","have"}` (stable keys; `have` null when absent).
+    /// `{"need","state","have"}` (stable keys; `have` null when absent),
+    /// plus `native` from a protocol 7 node only.
     pub fn json(&self) -> serde_json::Value {
-        serde_json::json!({"need": self.need, "state": self.state.as_str(), "have": self.have})
+        let mut v = serde_json::json!({"need": self.need, "state": self.state.as_str(), "have": self.have});
+        if let Some(n) = &self.native {
+            v["native"] = n.clone().into();
+        }
+        v
     }
 }
 
@@ -572,6 +649,38 @@ fn offer_is_macos(o: &Offer) -> bool {
     label_matches("os", "macos", o.labels.get("os").map(String::as_str))
 }
 
+/// One `sys:` name on a node (§5.3): an older node (no package status)
+/// reads `install`, as before; a protocol 7 node says whether it is
+/// installed, covered by this server's policy, to be asked for, or not
+/// satisfiable there.
+fn sys_state(offer: &Offer, token: &str, package: &str) -> NeedStatus {
+    use k2_core::compute::proto::{pkgmap, pkgpolicy};
+    let st = |state: NeedState, native: Option<String>| NeedStatus { need: token.to_string(), state, have: None, native };
+    let (Some(pkg), Some(host)) = (offer.pkg.as_ref(), offer.host.as_ref()) else { return st(NeedState::Install, None) };
+    let Some(mgr) = pkgmap::Mgr::parse(&pkg.manager) else { return st(NeedState::Install, None) };
+    let Some(natives) = pkgmap::SysName::parse(package).and_then(|n| n.native(mgr, &host.distro, &host.distro_version)) else {
+        return st(NeedState::NoMapping, None);
+    };
+    let native = Some(natives.join(" "));
+    if pkg.installed.iter().any(|i| i == package) {
+        return NeedStatus { need: token.to_string(), state: NeedState::Ready, have: Some("installed".into()), native };
+    }
+    match pkgpolicy::coverage(&pkg.policy(), &pkg.approved, package, &natives) {
+        pkgpolicy::Coverage::Denied(_) => st(NeedState::Denied, native),
+        pkgpolicy::Coverage::Ask => st(NeedState::Ask, native),
+        _ => st(NeedState::Install, native),
+    }
+}
+
+/// The `sys:` names a node can't give without asking, and the ones it
+/// can't give at all (no map row, denied).
+pub fn package_gaps(states: &[NeedStatus]) -> (Vec<String>, Vec<String>) {
+    let name = |s: &NeedStatus| s.need.strip_prefix("sys:").unwrap_or(&s.need).to_string();
+    let ask = states.iter().filter(|s| s.state == NeedState::Ask).map(name).collect();
+    let never = states.iter().filter(|s| matches!(s.state, NeedState::NoMapping | NeedState::Denied)).map(name).collect();
+    (ask, never)
+}
+
 /// Each need's state on the node behind `offer` (CE-1). Tool keys the node
 /// reports: `mise:<tool>` (installed versions, comma list),
 /// `rust-toolchains` (toolchain dirs), `rust-components:<toolchain>`
@@ -582,11 +691,12 @@ pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
     needs
         .iter()
         .map(|token| {
-            let st = |state: NeedState, have: Option<String>| NeedStatus { need: token.clone(), state, have };
+            let st = |state: NeedState, have: Option<String>| NeedStatus { need: token.clone(), state, have, native: None };
             let Ok((base, comps)) = split_rust_components(token) else { return st(NeedState::Install, None) };
             match needs::parse(&base) {
                 Ok(needs::Need::System { .. }) if mac => st(NeedState::UnsupportedOnOs, None),
-                Ok(needs::Need::System { .. }) => st(NeedState::Install, None),
+                Ok(needs::Need::System { package }) => sys_state(offer, token, &package),
+                Ok(needs::Need::Profile { .. }) => st(NeedState::Install, None),
                 Ok(needs::Need::Nextest) => match offer.tools.get("cargo-nextest") {
                     Some(v) => st(NeedState::Ready, Some(v.clone())),
                     None => st(NeedState::Install, None),
@@ -599,6 +709,16 @@ pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
                         .find(|(k, _)| k.strip_prefix("rust-components:").is_some_and(|x| x == tc || toolchain_is(x, &channel)))
                         .map(|(_, v)| v.split(',').map(|c| fold_component(c.trim()).to_string()).collect())
                         .unwrap_or_default();
+                    // Protocol 7 (§8): a bare need brings clippy and
+                    // rustfmt on nodes that install them by default.
+                    let mut comps: Vec<String> = comps.into_iter().filter(|c| c != needs::RUST_MINIMAL).collect();
+                    if offer.features.iter().any(|f| f == FEATURE_RUST_DEFAULT_COMPONENTS) && !need_components(token).iter().any(|c| c == needs::RUST_MINIMAL) {
+                        for d in needs::DEFAULT_RUST_COMPONENTS {
+                            if !comps.iter().any(|c| c == d) {
+                                comps.push(d.to_string());
+                            }
+                        }
+                    }
                     if comps.iter().all(|c| have_comps.contains(c)) {
                         st(NeedState::Ready, Some(tc))
                     } else {
@@ -629,9 +749,16 @@ pub fn tools_words(states: &[NeedStatus]) -> Option<String> {
     }
     let of = |s: NeedState| states.iter().filter(|x| x.state == s).map(|x| x.need.as_str()).collect::<Vec<_>>();
     let (install, unsupported) = (of(NeedState::Install), of(NeedState::UnsupportedOnOs));
+    let (ask, never) = (of(NeedState::Ask), [of(NeedState::NoMapping), of(NeedState::Denied)].concat());
     let mut parts = Vec::new();
-    if install.is_empty() && unsupported.is_empty() {
+    if install.is_empty() && unsupported.is_empty() && ask.is_empty() && never.is_empty() {
         parts.push("tools ready".to_string());
+    }
+    if !ask.is_empty() {
+        parts.push(format!("{}: the node's owner must approve (a request)", ask.join(", ")));
+    }
+    if !never.is_empty() {
+        parts.push(format!("{}: not installable there", never.join(", ")));
     }
     if !install.is_empty() {
         parts.push(format!("installs {} first (~minutes)", install.join(", ")));
@@ -650,6 +777,12 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     }
     if wants_components(&w.needs) {
         f.push(FEATURE_RUST_COMPONENTS);
+    }
+    if wants_minimal(&w.needs) {
+        f.push(FEATURE_RUST_DEFAULT_COMPONENTS);
+    }
+    if wants_pkg_map(&w.needs) {
+        f.push(k2_core::compute::proto::pkgmap::FEATURE_PKG_MAP);
     }
     if w.artifacts {
         f.push(results::FEATURE_ARTIFACTS);
@@ -703,6 +836,19 @@ pub mod skip {
     pub const NOT_ALLOWED: &str = crate::compute_allow::SKIP;
     /// Granted, but the job says `--avoid` it (0.46.8).
     pub const AVOIDED: &str = "avoided";
+    /// Protocol 7: another distro than `--distro` (or an older node that
+    /// doesn't say).
+    pub const DISTRO: &str = "distro";
+    /// Protocol 7: a `sys:` name with no name for its package manager, or
+    /// one on K2's deny list.
+    pub const NO_PACKAGE_MAPPING: &str = "no_package_mapping";
+    /// Protocol 7: a `sys:` name its owner must approve first, while
+    /// another node can take the job without asking.
+    pub const PACKAGE_ASK: &str = "package_ask";
+    /// A `sys:` need on a Mac (auto-placement only).
+    pub const UNSUPPORTED_ON_OS: &str = "unsupported_on_os";
+    /// Not on the job's `--only` list (0.46.9).
+    pub const NOT_ONLY: &str = "not_only";
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -746,6 +892,16 @@ pub fn candidates(w: &Want, exclude: &[String], now: i64) -> Vec<Cand> {
 /// grant on is never listed or counted in auto mode (S2): an agent never
 /// learns it exists.
 pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
+    let mut out = candidates_report_raw(w, exclude, now);
+    if w.auto {
+        skip_package_gaps(w, &mut out);
+    }
+    out
+}
+
+/// [`candidates_report`] without the package step (prewarm reports every
+/// node's package states itself and files one batched request).
+pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandReport {
     let (rows, cache_at, waits, permit) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -780,6 +936,11 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
             skipped(&mut out, skip::AVOIDED);
             continue;
         }
+        // `--only` (0.46.9): never a node off the job's own list.
+        if w.auto && !w.filter.only.is_empty() && !w.filter.only.contains(&n.id) {
+            skipped(&mut out, skip::NOT_ONLY);
+            continue;
+        }
         if !permit.allows(&n.id) {
             skipped(&mut out, skip::NOT_ALLOWED);
             continue;
@@ -812,6 +973,13 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
         {
             skipped(&mut out, skip::OS_ARCH_LABEL);
             continue;
+        }
+        // `--distro` (protocol 7): ID or ID_LIKE, the version on a dot.
+        if let Some(spec) = w.filter.distro.as_deref().and_then(|d| k2_core::compute::proto::host::parse_distro(d).ok()) {
+            if !offer.host.as_ref().is_some_and(|h| h.matches(&spec)) {
+                skipped(&mut out, skip::DISTRO);
+                continue;
+            }
         }
         // Over the node's caps (--cpus/--mem): it would never start there
         // (compute DX slice A: never queued where it can't ever fit).
@@ -852,6 +1020,39 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
         out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait, held_wait });
     }
     out
+}
+
+/// Auto-placement and system packages (protocol 7, §5.3): a node that can
+/// never give a `sys:` name (no map row, denied, a Mac) is skipped; a node
+/// whose owner must approve one is skipped while another node can take the
+/// job without asking. When every node must ask, they stay: submit files
+/// the request on the best one and refuses (`package_not_approved`).
+fn skip_package_gaps(w: &Want, out: &mut CandReport) {
+    if !w.wants_sys() {
+        return;
+    }
+    let mut keep: Vec<(Cand, bool)> = Vec::new();
+    for c in std::mem::take(&mut out.cands) {
+        let states = c.needs(w);
+        if states.iter().any(|s| s.state == NeedState::UnsupportedOnOs) {
+            *out.skipped.entry(skip::UNSUPPORTED_ON_OS).or_insert(0) += 1;
+            continue;
+        }
+        let (ask, never) = package_gaps(&states);
+        if !never.is_empty() {
+            *out.skipped.entry(skip::NO_PACKAGE_MAPPING).or_insert(0) += 1;
+            continue;
+        }
+        keep.push((c, !ask.is_empty()));
+    }
+    let any_free = keep.iter().any(|(_, ask)| !ask);
+    for (c, ask) in keep {
+        if ask && any_free {
+            *out.skipped.entry(skip::PACKAGE_ASK).or_insert(0) += 1;
+        } else {
+            out.cands.push(c);
+        }
+    }
 }
 
 // ── resume affinity and solo waits (CE-6, P2) ────────────────────────
@@ -1192,6 +1393,11 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::UNAVAILABLE => "unavailable now (paused, draining, window, disk or lock)".to_string(),
         skip::NOT_ALLOWED => "off this workspace's node list".to_string(),
         skip::AVOIDED => "you avoid (--avoid)".to_string(),
+        skip::DISTRO => format!("of another --distro{}", w.filter.distro.as_deref().map(|d| format!(" than {d}")).unwrap_or_default()),
+        skip::NO_PACKAGE_MAPPING => "that can't install a sys: package you need (no name for their distro, or K2 never installs it)".to_string(),
+        skip::PACKAGE_ASK => "that need their owner's approval for a sys: package".to_string(),
+        skip::UNSUPPORTED_ON_OS => "Macs (no system packages)".to_string(),
+        skip::NOT_ONLY => "off your --only list".to_string(),
         other => other.to_string(),
     };
     format!("{n} {what}")
@@ -1373,6 +1579,9 @@ pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&G
     let tiers2 = offers_tiers2(features);
     p.tier = offers_tiers(features).then(|| base.tier_or_class().for_peer(tiers2));
     set_submitter_fields(&mut p, features, grant.map(|g| g.submitter_max_running.max(0) as u32).unwrap_or(0));
+    // Protocol 7: the expanded system names only to a `pkg-map` node (an
+    // older one would compute another digest and refuse).
+    p.packages = if features.iter().any(|f| f == k2_core::compute::proto::pkgmap::FEATURE_PKG_MAP) { plan_packages(&p.needs) } else { Vec::new() };
     p
 }
 
@@ -2065,7 +2274,7 @@ mod tests {
             boot_id: "b".into(),
             ledger_id: "l".into(),
             node_version: "0.46.6".into(),
-            features: vec![],
+            features: vec![], host: None, pkg: None,
         };
         let mut load = scheduler::Load::default();
         if running > 0 {
@@ -2459,6 +2668,124 @@ mod tests {
         ("mise:cmake", "3.30.2,3.31.1"),
         ("mise:node", "22.23.3"),
     ];
+
+    /// A protocol 7 node: host facts and this server's package view.
+    fn with_pkg(mut c: Cand, distro: &str, version: &str, mgr: &str, level: k2_node_proto::pkgpolicy::Level, approved: &[&str], installed: &[&str]) -> Cand {
+        c.offer.host = Some(k2_node_proto::host::HostFacts {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            distro: distro.into(),
+            distro_like: if distro == "ubuntu" { vec!["debian".into()] } else { vec![] },
+            distro_version: version.into(),
+            distro_name: distro.into(),
+            pkg: Some(mgr.into()),
+            ..Default::default()
+        });
+        c.offer.pkg = Some(k2_node_proto::pkgpolicy::PkgStatus {
+            manager: mgr.into(),
+            level,
+            profiles: if level == k2_node_proto::pkgpolicy::Level::Profiles { vec!["tauri-linux@1".into()] } else { vec![] },
+            max_install_mb: 2048,
+            approved: approved.iter().map(|s| s.to_string()).collect(),
+            installed: installed.iter().map(|s| s.to_string()).collect(),
+            index_age_secs: None,
+            open_requests: 0,
+        });
+        c
+    }
+
+    /// prd-compute-self-serve-environments §5.3: the five states.
+    #[test]
+    fn package_states_follow_the_nodes_policy_and_map() {
+        use k2_node_proto::pkgpolicy::Level;
+        let toks = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ub = with_pkg(cand("ub", 32, 32, 0, 4), "ubuntu", "24.04", "apt", Level::List, &["libssl-dev"], &["zlib1g-dev"]);
+        let got: Vec<(String, &str, Option<String>)> =
+            need_states(&ub.offer, &toks(&["sys:zlib1g-dev", "sys:libssl-dev", "sys:libgtk-3-dev", "sys:openssh-server", "sys:pacman:protobuf"]))
+                .into_iter()
+                .map(|s| (s.need, s.state.as_str(), s.native))
+                .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("sys:zlib1g-dev".into(), "ready", Some("zlib1g-dev".into())),
+                ("sys:libssl-dev".into(), "install", Some("libssl-dev".into())),
+                ("sys:libgtk-3-dev".into(), "ask", Some("libgtk-3-dev".into())),
+                ("sys:openssh-server".into(), "denied", Some("openssh-server".into())),
+                ("sys:pacman:protobuf".into(), "no_mapping", None),
+            ]
+        );
+        // Arch: the Debian name maps; one with no row is not satisfiable.
+        let arch = with_pkg(cand("ar", 32, 32, 0, 4), "arch", "rolling", "pacman", Level::Official, &[], &[]);
+        let s = need_states(&arch.offer, &toks(&["sys:libssl-dev", "sys:libfoo-dev"]));
+        assert_eq!((s[0].state, s[0].native.as_deref()), (NeedState::Install, Some("openssl")));
+        assert_eq!(s[1].state, NeedState::NoMapping);
+        // Profiles level: the profile's names install, others ask.
+        let pr = with_pkg(cand("pr", 32, 32, 0, 4), "ubuntu", "24.04", "apt", Level::Profiles, &[], &[]);
+        let s = need_states(&pr.offer, &expand_profiles(&toks(&["profile:tauri-linux"])));
+        assert!(s.iter().filter(|x| x.need.starts_with("sys:")).all(|x| x.state == NeedState::Install), "{s:?}");
+        assert_eq!(need_states(&pr.offer, &toks(&["sys:libpq-dev"]))[0].state, NeedState::Ask);
+        // An older node (no package status) installs as before.
+        let old = cand("old", 32, 32, 0, 4);
+        assert_eq!(need_states(&old.offer, &toks(&["sys:libgtk-3-dev"]))[0].state, NeedState::Install);
+    }
+
+    /// §5.3: auto-placement skips nodes that can't give a name, and nodes
+    /// that must ask while another can take the job; all asking: kept.
+    #[test]
+    fn placement_skips_package_gaps_with_reasons() {
+        use k2_node_proto::pkgpolicy::Level;
+        let mut w = want(1);
+        w.auto = true;
+        w.needs = vec!["sys:libgtk-3-dev".into()];
+        let free = with_pkg(cand("free", 32, 32, 0, 4), "ubuntu", "24.04", "apt", Level::Official, &[], &[]);
+        let asks = with_pkg(cand("asks", 32, 32, 0, 4), "ubuntu", "24.04", "apt", Level::List, &[], &[]);
+        let mut mac = cand("mac", 32, 32, 0, 4);
+        mac.offer.labels.insert("os".into(), "macos".into());
+        let mut nomap = with_pkg(cand("nomap", 32, 32, 0, 4), "arch", "rolling", "pacman", Level::Official, &[], &[]);
+        nomap.offer.pkg.as_mut().unwrap().approved.clear();
+        let mut out = CandReport { cands: vec![free.clone(), asks.clone(), mac, nomap], ..Default::default() };
+        w.needs = vec!["sys:libgtk-3-dev".into(), "sys:libfoo-dev".into()];
+        skip_package_gaps(&w, &mut out);
+        assert!(out.cands.iter().all(|c| c.node.id != "nomap" && c.node.id != "mac"));
+        assert_eq!(out.skipped.get(skip::UNSUPPORTED_ON_OS), Some(&1));
+        // libfoo-dev has no Arch row: nomap is skipped as no_package_mapping.
+        assert_eq!(out.skipped.get(skip::NO_PACKAGE_MAPPING), Some(&1));
+        assert_eq!(out.cands.iter().map(|c| c.node.id.as_str()).collect::<Vec<_>>(), vec!["free"], "the asking node waits while a free one fits");
+        assert_eq!(out.skipped.get(skip::PACKAGE_ASK), Some(&1));
+        // Every node must ask: they stay (submit files the request).
+        let mut only = CandReport { cands: vec![asks], ..Default::default() };
+        skip_package_gaps(&w, &mut only);
+        assert_eq!(only.cands.len(), 1);
+        assert!(skip_words(skip::PACKAGE_ASK, 1, &w).contains("owner's approval"));
+    }
+
+    /// §4.4, §8: `--distro`, `+minimal`, profiles and native names need a
+    /// protocol 7 node.
+    #[test]
+    fn protocol_seven_needs_ask_for_protocol_seven_nodes() {
+        let n = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(wants_pkg_map(&n(&["profile:tauri-linux"])) && wants_pkg_map(&n(&["sys:pacman:protobuf"])));
+        assert!(!wants_pkg_map(&n(&["sys:libssl-dev", "rust@stable"])));
+        assert!(wants_minimal(&n(&["rust@stable+minimal"])) && !wants_components(&n(&["rust@stable+minimal"])));
+        let mut w = want(1);
+        w.needs = n(&["profile:build-base"]);
+        assert!(required_features(&w).contains(&k2_node_proto::pkgmap::FEATURE_PKG_MAP));
+        assert_eq!(check_needs(&n(&["rust@stable+minimal", "profile:tauri-linux@1"])).unwrap(), n(&["rust@stable+minimal", "profile:tauri-linux@1"]));
+        let p = plan_packages(&n(&["profile:build-base", "sys:zlib1g-dev"]));
+        assert!(p.contains(&"build-essential".to_string()) && p.contains(&"zlib1g-dev".to_string()));
+        let e = expand_profiles(&n(&["profile:rust-gui-ci", "rust@1.99"]));
+        assert!(e.contains(&"rust@1.99".to_string()) && !e.iter().any(|t| t.starts_with("rust@stable")), "an explicit need wins: {e:?}");
+        assert!(e.contains(&"cargo-nextest".to_string()) && e.contains(&"sys:xvfb".to_string()));
+        // A bare rust need expects clippy and rustfmt only from nodes that
+        // install them by default.
+        let mut c = with_tools(cand("n", 32, 32, 0, 4), LINUX_RUST);
+        assert_eq!(need_states(&c.offer, &n(&["rust@stable"]))[0].state, NeedState::Ready, "an older node: unchanged");
+        c.offer.features.push(FEATURE_RUST_DEFAULT_COMPONENTS.into());
+        assert_eq!(need_states(&c.offer, &n(&["rust@stable"]))[0].state, NeedState::Install, "clippy and rustfmt still to add");
+        assert_eq!(need_states(&c.offer, &n(&["rust@stable+minimal"]))[0].state, NeedState::Ready);
+        assert_eq!(FEATURE_RUST_DEFAULT_COMPONENTS, k2_node_proto::needs::FEATURE_RUST_DEFAULT_COMPONENTS);
+    }
 
     /// CE-1: each need's state from the offer's tools map.
     #[test]

@@ -329,6 +329,8 @@ pub mod compute_local;
 pub mod compute_manage;
 // `k2 compute move` and `--avoid` (0.46.8): queued jobs to auto or a node.
 pub mod compute_move;
+// Package requests through nodes (0.46.9, self-serve environments).
+pub mod compute_pkg;
 pub mod compute_place;
 // `.k2/compute.toml` defaults and presets (prd-compute-easy-mode-0467 CE-3).
 pub mod compute_preset;

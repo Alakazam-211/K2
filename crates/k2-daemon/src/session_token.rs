@@ -833,6 +833,13 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // allow_nodes_needs_person).
         "/cli/compute/allow-nodes",
         "/cli/compute/allow-nodes/set",
+        // 0.46.9: an agent reads a node's packages, asks for missing ones
+        // (the owner decides), lists its own requests, and (with "operate
+        // compute nodes") narrows a node's package policy.
+        "/cli/compute/nodes/packages",
+        "/cli/compute/nodes/packages/request",
+        "/cli/compute/nodes/packages/requests",
+        "/cli/compute/nodes/packages/policy",
         "/cli/compute/jobs",
         "/cli/compute/jobs/get",
         "/cli/compute/jobs/logs",

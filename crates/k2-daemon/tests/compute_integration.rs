@@ -877,7 +877,7 @@ fn running_job(job: &str, node: &str, ws: &str) {
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None,
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
         with: Vec::new(),
     };
     let client = format!("client-{job:0>16}");

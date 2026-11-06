@@ -21,6 +21,7 @@ pub mod enroll;
 pub mod local;
 pub mod logs;
 pub mod message;
+pub mod pkgreq;
 pub mod result;
 pub mod retry;
 pub mod rollout;

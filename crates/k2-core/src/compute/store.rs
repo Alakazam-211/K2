@@ -780,6 +780,14 @@ pub struct AnyFilter {
     /// retry on another node. Ids, so a rename keeps it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub avoid: Vec<String>,
+    /// `--distro ubuntu@24.04` (protocol 7): `ID` or `ID_LIKE`, the version
+    /// on a dot prefix. A node that doesn't report its distro never fits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    /// `--only NODE` (0.46.9): auto-placement picks only among these node
+    /// ids (every move and retry too). Empty = any granted node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only: Vec<String>,
 }
 
 /// One attempt that ended in an infrastructure failure.
@@ -1745,7 +1753,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
             with: Vec::new(),
         }
     }
@@ -1996,7 +2004,7 @@ mod tests {
             boot_id: "b".into(),
             ledger_id: "l".into(),
             node_version: "0.46.4".into(),
-            features: features.iter().map(|f| f.to_string()).collect(),
+            features: features.iter().map(|f| f.to_string()).collect(), host: None, pkg: None,
         };
         let owner_feats = ["queue", "servers", "admin", "health", "self-update"];
         assert!(!node_by_id(&c, "n1").unwrap().owner_claim(), "no offer yet: no claim");

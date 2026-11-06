@@ -70,7 +70,7 @@ fn offer(running: u32, slots: u32) -> Offer {
         boot_id: "b".into(),
         ledger_id: "l".into(),
         node_version: "0.46.8".into(),
-        features: vec![],
+        features: vec![], host: None, pkg: None,
     }
 }
 

@@ -214,7 +214,7 @@ fn offer(rev: u64, free_gb: u64, caps_gb: u64, running: u32) -> Offer {
         boot_id: "b".into(),
         ledger_id: "l".into(),
         node_version: "0.46.6".into(),
-        features: vec!["artifacts".into(), "stall".into(), k2_core::compute::proto::cache::FEATURE_JOB_CACHE.into()],
+        features: vec!["artifacts".into(), "stall".into(), k2_core::compute::proto::cache::FEATURE_JOB_CACHE.into()], host: None, pkg: None,
     }
 }
 

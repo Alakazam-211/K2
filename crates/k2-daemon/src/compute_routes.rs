@@ -85,6 +85,11 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/enroll-code",
     "/cli/compute/nodes/health",
     "/cli/compute/nodes/info",
+    crate::compute_pkg::STATUS,
+    crate::compute_pkg::DECIDE,
+    crate::compute_pkg::POLICY,
+    crate::compute_pkg::REQUEST,
+    crate::compute_pkg::REQUESTS,
     "/cli/compute/nodes/pause",
     "/cli/compute/nodes/policy",
     "/cli/compute/nodes/policy/set",
@@ -137,6 +142,9 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/nodes/alerts",
     "/cli/compute/nodes/confirm",
     "/cli/compute/nodes/enroll-code",
+    crate::compute_pkg::DECIDE,
+    crate::compute_pkg::POLICY,
+    crate::compute_pkg::REQUEST,
     "/cli/compute/nodes/pause",
     "/cli/compute/nodes/policy/set",
     "/cli/compute/nodes/remove",
@@ -613,6 +621,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/nodes/rename" => node_rename(&who, body, mgr),
         "/cli/compute/nodes/pause" => node_pause(&who, body, mgr),
         "/cli/compute/nodes/routes" => node_routes(&who, body, mgr),
+        // Package requests (protocol 7, prd-compute-self-serve-environments).
+        p if crate::compute_pkg::is_route(p) => crate::compute_pkg::handle(p, &who, body, params),
         "/cli/compute/grants" => grants_list(&who, params, mgr),
         "/cli/compute/grants/set" => grant_set(&who, body, mgr),
         "/cli/compute/grants/revoke" => grant_revoke(&who, body, mgr),
@@ -1257,6 +1267,14 @@ fn valid_cwd(c: &str) -> bool {
 
 /// `needs` from a run body: an array of tokens (or one comma string),
 /// checked with the same parser the node uses; canonical tokens out.
+/// `--distro ubuntu@24.04` (protocol 7), checked.
+fn distro_from(v: &serde_json::Value) -> R<Option<String>> {
+    match s(v, "distro").map(str::trim).filter(|x| !x.is_empty()) {
+        None => Ok(None),
+        Some(d) => k2_core::compute::proto::host::parse_distro(d).map(|_| Some(d.to_ascii_lowercase())).map_err(|e| no(codes::BAD_REQUEST, 400, e)),
+    }
+}
+
 fn needs_from(v: &serde_json::Value) -> R<Vec<String>> {
     let raw: Vec<String> = match v.get("needs") {
         None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
@@ -1385,6 +1403,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             .and_then(|l| l.as_object())
             .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
             .unwrap_or_default(),
+        distro: distro_from(&v)?,
         ..Default::default()
     };
     // `--node N` (repeatable): only these (full name or a unique prefix).
@@ -1420,9 +1439,13 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         cache: None,
         multi_repo: false,
     };
-    let report = place::candidates_report(&want, &[], compute::now());
+    // Every matching node: each one's package states are reported, and the
+    // names their owners must approve go out as ONE batched request (§7.3).
+    let report = place::candidates_report_raw(&want, &[], compute::now());
     let mut rows: Vec<serde_json::Value> = Vec::new();
     let mut jobs: Vec<String> = Vec::new();
+    let mut ask_nodes: Vec<store::NodeRow> = Vec::new();
+    let mut ask_names: Vec<String> = Vec::new();
     let mut cands: Vec<&place::Cand> = report.cands.iter().filter(|c| named.as_ref().is_none_or(|ids| ids.contains(&c.node.id))).collect();
     cands.sort_by(|a, b| a.node.name.cmp(&b.node.name));
     for c in cands {
@@ -1437,6 +1460,25 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         }
         if installs.is_empty() {
             row["state"] = "ready".into();
+            rows.push(row);
+            continue;
+        }
+        let (ask, never) = place::package_gaps(&states);
+        if !never.is_empty() || states.iter().any(|x| x.state == place::NeedState::UnsupportedOnOs) {
+            row["state"] = "cant_install".into();
+            row["note"] = format!("can't install {} there (no name for its distro, K2's deny list, or a Mac)", [never, states.iter().filter(|x| x.state == place::NeedState::UnsupportedOnOs).map(|x| x.need.clone()).collect()].concat().join(", ")).into();
+            rows.push(row);
+            continue;
+        }
+        if !ask.is_empty() {
+            row["state"] = if dry { "would_ask" } else { "asked" }.into();
+            row["ask"] = ask.clone().into();
+            for a in ask {
+                if !ask_names.contains(&a) {
+                    ask_names.push(a);
+                }
+            }
+            ask_nodes.push(c.node.clone());
             rows.push(row);
             continue;
         }
@@ -1478,8 +1520,26 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     if rows.is_empty() {
         return Err(no(codes::NO_NODE_FITS, 404, no_fit_hint(&ws, &want, &report)));
     }
+    // One card for every name on every node that must ask. `pkgHeld` only
+    // when this server's people decide part of it (a request that went only
+    // to other servers' owners is no card here).
+    let mut pkg_held = false;
+    let request = if !dry && !ask_nodes.is_empty() {
+        let session = who.passport().map(|(_, sid)| sid.to_string());
+        match crate::compute_pkg::file(who, &ws, session.as_deref(), &ws.handle, &ask_nodes, &ask_names, Some("k2 compute prewarm"), None) {
+            Ok(v) => {
+                pkg_held = v["pkgHeld"] == true;
+                v.get("request").cloned()
+            }
+            Err(r) => Some(serde_json::json!({"error": {"code": r.code, "hint": r.hint}})),
+        }
+    } else {
+        None
+    };
     let skipped: BTreeMap<String, u32> = report.skipped.iter().map(|(k, n)| (k.to_string(), *n)).collect();
     Ok(serde_json::json!({
+        "pkgHeld": pkg_held,
+        "request": request,
         "plan": dry,
         "needs": needs,
         "nodes": rows,
@@ -1644,6 +1704,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     if !avoid.is_empty() && !any {
         return Err(crate::compute_move::avoid_with_pinned(s(&v, "node").unwrap_or("--same-node-as")));
     }
+    // `--only NODE` (0.46.9): the auto-placement allow list.
+    let only = crate::compute_move::only_from(who, v, &ws.id)?;
+    if !only.is_empty() && !any {
+        return Err(no(codes::BAD_REQUEST, 400, "--only is for auto-placement; this job names a node, which pins it there. Leave the node off, or drop --only"));
+    }
     let filter = store::AnyFilter {
         os: s(&v, "os").map(str::to_string),
         arch: s(&v, "arch").map(str::to_string),
@@ -1653,6 +1718,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
             .unwrap_or_default(),
         avoid,
+        distro: distro_from(v)?,
+        only,
     };
     let want = crate::compute_place::Want {
         ws_id: ws.id.clone(),
@@ -1782,12 +1849,69 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                 ),
             ));
         }
-        let wants_sys = needs.iter().any(|n| n.starts_with("sys:"));
+        let wants_sys = needs.iter().any(|n| n.starts_with("sys:") || n.starts_with("profile:"));
         if wants_sys && !feats.iter().any(|f| f == needs::FEATURE_SYSTEM_PACKAGES) {
             warnings.push(format!(
                 "'{}' can't install system packages itself (macOS, or no sudo rule): the job fails if one is missing, with the command its owner should run",
                 node.name
             ));
+        }
+        if crate::compute_place::wants_pkg_map(&needs) && !feats.iter().any(|f| f == k2_core::compute::proto::pkgmap::FEATURE_PKG_MAP) {
+            return Err(no(
+                "node_upgrade_required",
+                409,
+                format!(
+                    "'{}' runs a k2-node older than 0.46.9, which knows no profile: or sys:<manager>:<name> needs; update it (k2 compute node update {}), pick another node, or name Debian sys: packages",
+                    node.name, node.name
+                ),
+            ));
+        }
+        if crate::compute_place::wants_minimal(&needs) && !feats.iter().any(|f| f == crate::compute_place::FEATURE_RUST_DEFAULT_COMPONENTS) {
+            return Err(no(
+                "node_upgrade_required",
+                409,
+                format!("'{}' runs a k2-node older than 0.46.9, where rust@<channel> is already minimal: drop +minimal, or update it (k2 compute node update {})", node.name, node.name),
+            ));
+        }
+        if crate::compute_place::plan_packages(&needs).len() > k2_core::compute::proto::profiles::MAX_PLAN_PACKAGES {
+            return Err(no(needs::NEED_INVALID, 400, format!("at most {} system packages per job, profiles included", k2_core::compute::proto::profiles::MAX_PLAN_PACKAGES)));
+        }
+        // Protocol 7 (§5.3, §6.1): what this node can give. A name it can
+        // never give is refused; one its owner must approve becomes a
+        // request (a card for the owner) and the job isn't queued.
+        if let Some(o) = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone()) {
+            let states = crate::compute_place::need_states(&o, &crate::compute_place::expand_profiles(&needs));
+            let (ask, never) = crate::compute_place::package_gaps(&states);
+            if !never.is_empty() {
+                let mgr = o.pkg.as_ref().map(|p| p.manager.clone()).unwrap_or_else(|| "its".into());
+                return Err(no(
+                    k2_core::compute::proto::pkgpolicy::codes::NO_PACKAGE_MAPPING,
+                    409,
+                    format!(
+                        "'{}' can't install {} ({} names it nothing, or K2 never installs it). It can't be requested: use a native name (sys:{mgr}:<name>), pick another distro (--distro ubuntu), or another node",
+                        node.name,
+                        never.join(", "),
+                        o.host.as_ref().map(|h| h.short()).unwrap_or_else(|| "this distro".into())
+                    ),
+                ));
+            }
+            if !ask.is_empty() && !opts.dry {
+                let filed = crate::compute_pkg::file(who, ws, opts.session.as_deref(), &ws.handle, std::slice::from_ref(&node), &ask, Some("a job's --needs"), None)?;
+                let id = filed["request"]["id"].as_str().unwrap_or_default().to_string();
+                let to = if node.is_tenant() { format!("{}'s owner ({})", node.name, node.owner_label.as_deref().unwrap_or("another server")) } else { "this server's owner or an Admin".to_string() };
+                return Err(no(
+                    k2_core::compute::proto::pkgpolicy::codes::PACKAGE_NOT_APPROVED,
+                    403,
+                    format!(
+                        "'{}' needs its owner's approval to install {}: request {id} is filed for {to}. Run the job again once it's installed (k2 compute node packages requests shows it)",
+                        node.name,
+                        ask.join(", ")
+                    ),
+                )
+                .with("request", id)
+                .with("node", node.name.clone())
+                .with("packages", ask));
+            }
         }
     }
     // Grant (owner/admin may run on any active node without one).
@@ -2068,6 +2192,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         // cap (refreshed before every send).
         submitter: (tiers2_node && queue_node).then(|| submitter.clone()),
         submitter_max_running: grant.as_ref().filter(|g| tiers2_node && queue_node && g.submitter_max_running > 0).map(|g| g.submitter_max_running as u32),
+        // Protocol 7: profiles expanded, only to a `pkg-map` node.
+        packages: if node_features(&node).iter().any(|f| f == k2_core::compute::proto::pkgmap::FEATURE_PKG_MAP) { crate::compute_place::plan_packages(&needs) } else { Vec::new() },
         session_id: opts.session.clone().filter(|_| queue_node),
         est_secs: est.filter(|_| queue_node).map(|(m, _)| m.max(0) as u64),
         est_p90_secs: est.filter(|_| queue_node).map(|(_, p)| p.max(0) as u64),
@@ -2627,11 +2753,11 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     // candidates the ranking saw (P2).
     let need_states = match (cand, offer.as_ref()) {
         (Some(c), _) => c.needs(f.want),
-        (None, Some(o)) => crate::compute_place::need_states(o, f.needs),
+        (None, Some(o)) => crate::compute_place::need_states(o, &crate::compute_place::expand_profiles(f.needs)),
         (None, None) => f
             .needs
             .iter()
-            .map(|t| crate::compute_place::NeedStatus { need: t.clone(), state: crate::compute_place::NeedState::Install, have: None })
+            .map(|t| crate::compute_place::NeedStatus { need: t.clone(), state: crate::compute_place::NeedState::Install, have: None, native: None })
             .collect(),
     };
     let (pk, commit) = warm_key(f.ws, f.v).map(|(p, c)| (Some(p), c)).unwrap_or((None, None));
@@ -3348,7 +3474,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None,
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

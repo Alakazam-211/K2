@@ -678,6 +678,9 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         Frame::ArtifactFailed(f) => on_artifact_failed(&node_id, f),
         Frame::QueueView(v) => on_queue_view(&node_id, v),
         Frame::CacheView(v) => on_cache_view(&node_id, v),
+        // Protocol 7: package requests through the node.
+        Frame::PkgRequestFwd(f) => crate::compute_pkg::on_fwd(&node_id, f),
+        Frame::PkgRequestDone(r) => crate::compute_pkg::on_done(&node_id, r),
         other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
     }
 }
@@ -2758,7 +2761,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
             with: Vec::new(),
         };
         store::insert_job(

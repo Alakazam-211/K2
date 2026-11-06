@@ -1,6 +1,6 @@
 #!/bin/sh
-# TEST ONLY. Build K2's Tauri --voice template into a real app (stock Tauri
-# 2.12+ from crates.io) and check the webview: WebRTC, the E2EE transform,
+# TEST ONLY. Build K2's Tauri --voice template into a real app (Tauri 2.12.5+
+# from crates.io, K2's patched wry) and check the webview: WebRTC, the E2EE transform,
 # an AudioWorklet with WebAssembly under the README's CSP, IndexedDB that
 # survives a restart, call audio that keeps flowing in a hidden window, and
 # (with a mic) the mic for the App's origin only.
@@ -22,12 +22,18 @@ cd "$here/src-tauri"
 export CARGO_TARGET_DIR="${K2_JOB_CACHE:-$here/src-tauri}/target"
 
 if [ "$(uname -s)" = Darwin ]; then
-  plutil -lint Info.plist Entitlements.plist
+  plutil -lint Info.plist Info.ios.plist PrivacyInfo.xcprivacy Entitlements.plist
 fi
-cargo test   # k2_voice.rs's own test: allow and refuse by origin
+cargo test   # k2_voice.rs (allow and refuse by origin) and k2_http.rs (one client)
 cargo build
 echo "tauri: $(cargo tree -i tauri --depth 0 2>/dev/null | head -1)"
-echo "wry:   $(cargo tree -i wry --depth 0 2>/dev/null | head -1)"
+echo "tao:   $(cargo tree -i tao --depth 0 2>/dev/null | head -1)"
+wry=$(cargo tree -i wry --depth 0 2>/dev/null | head -1)
+echo "wry:   $wry"
+case "$wry" in
+  *Alakazam-211/K2*) echo "PASS  wry is K2's patched copy" ;;
+  *) echo "FAIL: wry is not K2's patched copy (the [patch.crates-io] row)"; exit 1 ;;
+esac
 bin="$CARGO_TARGET_DIR/debug/k2-voice-check"
 
 if [ "$(uname -s)" = Darwin ]; then

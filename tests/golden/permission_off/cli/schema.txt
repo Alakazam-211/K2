@@ -2632,7 +2632,7 @@ exit: 0
     {
       "name": "app init",
       "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name> | --app <app>] [--voice] [--dry-run] [--json]",
-      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). With --voice: the mic and camera keys, src-tauri/src/k2_voice.rs (media for the App's own origin only) and the first window's call settings. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
+      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). Every tauri run also writes the store files (src-tauri/PrivacyInfo.xcprivacy, src-tauri/Info.ios.plist with the scene manifest iOS 27 requires and the export answer), src-tauri/src/k2_http.rs (one HTTP client) and the README's store and user-data sections, and prints the Cargo lines (Tauri 2.12.5+, K2's patched wry) and Android lines it lacks. With --voice: the mic and camera keys, background audio, src-tauri/src/k2_voice.rs (media for the App's own origin only) and the first window's call settings. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
       "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
       "flags": [
         {"name": "--template", "arg": "tauri|static|node-api", "description": "What to write."},
@@ -2641,6 +2641,18 @@ exit: 0
         {"name": "--voice", "arg": null, "description": "tauri only: what calls in the webview need: the mic and camera keys (macOS, iOS), k2_voice.rs (media for the App's own origin), the first window's call settings; the Android lines are printed."},
         {"name": "--dry-run", "arg": null, "description": "Print every file and change; write nothing."},
         {"name": "--json", "arg": null, "description": "{template, folder, name, files[{path, action, note, content?}], next[], notes[], applied?}."}
+      ]
+    },
+    {
+      "name": "app doctor store",
+      "usage": "k2 app doctor --store [<folder>] [--voice | --no-voice] [--json]",
+      "description": "Is a Tauri App's repo ready for App Store and Play review? Checks Tauri 2.12.5+ and K2's patched wry (Cargo.lock or Cargo.toml), the iOS privacy manifest (its reasons, and that the iOS target includes it), UIApplicationSceneManifest (iOS 27), ITSAppUsesNonExemptEncryption, and with calls the usage strings, background audio, the macOS mic entitlement and the Android permissions. Prints each problem with its fix; only reads. Exit 1 on an error. POST /cli/app/doctor/store {folder, voice}. Who: as k2 app init.",
+      "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
+      "flags": [
+        {"name": "--store", "arg": null, "description": "Check a Tauri repo for the stores (without it, k2 app doctor checks this box for Apps)."},
+        {"name": "--voice", "arg": null, "description": "Check calls too (default: when the repo has them)."},
+        {"name": "--no-voice", "arg": null, "description": "Skip the call checks."},
+        {"name": "--json", "arg": null, "description": "{folder, voice, voiceWhy, tauri, tao, wry, findings[{id, level, platform, path, problem, fix}], passed[], notes[], ok}."}
       ]
     },
     {

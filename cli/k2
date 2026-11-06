@@ -8809,6 +8809,12 @@ The box (Linux):
                                        v2, Podman 5+, pasta, crun/youki, the k2app
                                        user and its ids, linger, delegation,
                                        io.cost, reserved ports, nft, helper.
+  k2 app doctor --store [<folder>] [--voice|--no-voice] [--json]
+                                       Is this Tauri App's repo ready for App
+                                       Store and Play review? Privacy manifest,
+                                       usage strings, export answer, Tauri and
+                                       wry versions (any OS; k2 app doctor
+                                       --store --help).
   k2 app box prepare [--runtime crun|youki] [--install-podman|--yes]
                      [--dry-run] [--podman-from DIR] [--json]
                                        Owner: run the root helper's box prep
@@ -8944,15 +8950,97 @@ print("    %s" % b.get("distroPodman", ""))
 '
 }
 
+# ── k2 app doctor --store (0.46.9, the Tauri App SDK) ──────────────
+_app_store_doctor_usage() {
+    cat <<'EOF'
+k2 app doctor --store — is this Tauri App ready for App Store and Play review?
+
+  k2 app doctor --store [<folder>] [--voice | --no-voice] [--json]
+      Checks a Tauri v2 app's repo (default: this folder) and prints each
+      problem with its fix. It only reads; it never changes a file.
+
+  What it checks:
+    all       Tauri 2.12.5 or newer (older: the 2.10 deadlock, a launch crash
+              on iOS 27, an IPC request that aborts the app); K2's patched wry
+              (without it, any iframe in your page can call your Tauri
+              commands)
+    iOS       src-tauri/PrivacyInfo.xcprivacy, its reasons, and that the iOS
+              target includes it; UIApplicationSceneManifest (iOS 27);
+              ITSAppUsesNonExemptEncryption (the export answer)
+    calls     the mic and camera usage strings (iOS and macOS), background
+              audio (iOS), the mic entitlement (macOS), and on Android the
+              mic, camera and foreground-service permissions
+    Android   POST_NOTIFICATIONS
+  iOS checks run when src-tauri/Info.ios.plist or src-tauri/gen/apple is
+  there; Android checks when src-tauri/gen/android is. The rest are skipped,
+  and it says so.
+
+  --voice / --no-voice   check calls, or don't. Default: it checks calls when
+                         the repo has them (src-tauri/src/k2_voice.rs, a mic
+                         usage string, or Sew's voice plugin).
+  --json                 {voice, voiceWhy, tauri, tao, wry, findings[{id,
+                         level, platform, path, problem, fix}], passed[],
+                         notes[], ok}
+
+  Exit: 0 when nothing is an error (warnings may remain), 1 otherwise.
+  Fix a missing file with k2 app init --template tauri [--voice] (it never
+  overwrites a file). Why each one matters: k2/README.md, and k2 study tauri.
+EOF
+}
+
+_app_store_doctor() {
+    local folder="$1" voice="$2" json_out="$3"
+    [ -d "$folder" ] || { echo "k2 app doctor --store: $folder is not a folder" >&2; exit 2; }
+    _app_rt_post /cli/app/doctor/store "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_voice_b="$voice")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Store check: %s" % v.get("folder"))
+print("  calls: %s (%s)" % ("checked" if v.get("voice") else "not checked", v.get("voiceWhy")))
+for k in ("tauri", "tao", "wry"):
+    if v.get(k):
+        print("  %s %s" % (k, v[k]))
+fs = v.get("findings") or []
+for f in fs:
+    print("%-5s [%s] %s: %s" % (f["level"].upper(), f["platform"], f["path"], f["problem"]))
+    print("      fix: %s" % f["fix"])
+for n in v.get("notes") or []:
+    print("note: " + n)
+errs = sum(1 for f in fs if f["level"] == "error")
+warns = len(fs) - errs
+passed = v.get("passed") or []
+if v.get("ok"):
+    print("Ready: no errors (%d warning%s), %d check%s passed." % (warns, "" if warns == 1 else "s", len(passed), "" if len(passed) == 1 else "s"))
+else:
+    print("Not ready: %d error%s, %d warning%s." % (errs, "" if errs == 1 else "s", warns, "" if warns == 1 else "s"))'
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok") else 1)' || exit 1
+}
+
 cmd_app_doctor() {
-    local json_out=0
+    local json_out=0 store=0 folder="" voice=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            -h|--help) _app_rt_usage; return 0 ;;
-            *) echo "Unknown argument: $1" >&2; exit 2 ;;
+            --store) store=1; shift ;;
+            --voice) voice=1; shift ;;
+            --no-voice) voice=0; shift ;;
+            -h|--help) if [ "$store" = 1 ]; then _app_store_doctor_usage; else _app_rt_usage; fi; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app doctor --help)" >&2; exit 2 ;;
+            *) if [ -z "$folder" ]; then folder="$1"; shift; else echo "Unexpected argument: $1 (k2 app doctor --help)" >&2; exit 2; fi ;;
         esac
     done
+    if [ "$store" = 1 ]; then
+        _app_store_doctor "${folder:-.}" "$voice" "$json_out"
+        return $?
+    fi
+    if [ -n "$voice" ] || [ -n "$folder" ]; then
+        echo "k2 app doctor: a folder, --voice and --no-voice go with --store (k2 app doctor --store --help)" >&2; exit 2
+    fi
     _compute_call GET /cli/app/box ""
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | _app_box_print; fi
     if printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ready") else 1)'; then
@@ -14534,10 +14622,24 @@ file: one that is already there is listed as skipped and left as it is.
                                 Only missing keys are added; tauri.conf.json5
                                 and Tauri.toml are not edited (the lines to
                                 add are printed).
-        k2/README.md            the next commands, and where the signing
-                                keys live (your own Mac, never K2)
+        k2/README.md            the next commands, where the signing keys
+                                live (your own Mac, never K2), the runtime
+                                fixes, store review, and what user data
+                                your App stores and how to declare it
+        src-tauri/PrivacyInfo.xcprivacy
+                                Apple's privacy manifest (add it to the iOS
+                                target: the README says how)
+        src-tauri/Info.ios.plist
+                                the scene manifest iOS 27 requires, and the
+                                export answer (no encryption beyond HTTPS)
+        src-tauri/src/k2_http.rs
+                                one shared HTTP client for your Rust code
         .k2/compute.toml        a tauri-linux preset, if the file already
                                 has presets
+      Printed for you to add (K2 never edits these files): the Cargo lines
+      it lacks (Tauri 2.12.5 or newer, K2's patched wry, reqwest), and the
+      AndroidManifest lines (POST_NOTIFICATIONS). Then check it all with
+      k2 app doctor --store.
       --app <app>   a thin shell over an App already on this box, loading its
                     live site: no web manifest and no <name>-web. The updater
                     asks that App's host first, then the download host. The
@@ -14545,7 +14647,9 @@ file: one that is already there is listed as skipped and left as it is.
                     (app_not_found, needs_k2_front otherwise).
       --voice       what calls in the webview need. New files:
                     src-tauri/Info.plist (macOS: mic and camera sentences,
-                    no App Nap), Info.ios.plist (iOS), Entitlements.plist
+                    no App Nap), Info.ios.plist (iOS: the same sentences,
+                    background audio, and the export answer "yes": calls
+                    are end-to-end encrypted), Entitlements.plist
                     (macOS), and src-tauri/src/k2_voice.rs (the mic and
                     camera for your App's own origin only; you add two lines
                     to lib.rs, printed under Next). In tauri.conf.json:
@@ -14553,8 +14657,9 @@ file: one that is already there is listed as skipped and left as it is.
                     backgroundThrottling and additionalBrowserArgs
                     (WebView2). A plist that is there is left alone and the
                     keys it lacks are printed. So are the AndroidManifest
-                    lines. k2/README.md has the CSP; k2 study tauri-voice
-                    says what is tested where.
+                    lines (mic, camera, and the foreground-service types a
+                    call needs). k2/README.md has the CSP and the export
+                    rules; k2 study tauri-voice says what is tested where.
   k2 app init --template static [<folder>] [--name <name>]
       k2/web.manifest.json only, for any built site (docs, a PWA).
   k2 app init --template node-api [<folder>] [--name <name>]
@@ -44946,7 +45051,7 @@ cmd_schema() {
     {
       "name": "app init",
       "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name> | --app <app>] [--voice] [--dry-run] [--json]",
-      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). With --voice: the mic and camera keys, src-tauri/src/k2_voice.rs (media for the App's own origin only) and the first window's call settings. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
+      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). Every tauri run also writes the store files (src-tauri/PrivacyInfo.xcprivacy, src-tauri/Info.ios.plist with the scene manifest iOS 27 requires and the export answer), src-tauri/src/k2_http.rs (one HTTP client) and the README's store and user-data sections, and prints the Cargo lines (Tauri 2.12.5+, K2's patched wry) and Android lines it lacks. With --voice: the mic and camera keys, background audio, src-tauri/src/k2_voice.rs (media for the App's own origin only) and the first window's call settings. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
       "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
       "flags": [
         {"name": "--template", "arg": "tauri|static|node-api", "description": "What to write."},
@@ -44955,6 +45060,18 @@ cmd_schema() {
         {"name": "--voice", "arg": null, "description": "tauri only: what calls in the webview need: the mic and camera keys (macOS, iOS), k2_voice.rs (media for the App's own origin), the first window's call settings; the Android lines are printed."},
         {"name": "--dry-run", "arg": null, "description": "Print every file and change; write nothing."},
         {"name": "--json", "arg": null, "description": "{template, folder, name, files[{path, action, note, content?}], next[], notes[], applied?}."}
+      ]
+    },
+    {
+      "name": "app doctor store",
+      "usage": "k2 app doctor --store [<folder>] [--voice | --no-voice] [--json]",
+      "description": "Is a Tauri App's repo ready for App Store and Play review? Checks Tauri 2.12.5+ and K2's patched wry (Cargo.lock or Cargo.toml), the iOS privacy manifest (its reasons, and that the iOS target includes it), UIApplicationSceneManifest (iOS 27), ITSAppUsesNonExemptEncryption, and with calls the usage strings, background audio, the macOS mic entitlement and the Android permissions. Prints each problem with its fix; only reads. Exit 1 on an error. POST /cli/app/doctor/store {folder, voice}. Who: as k2 app init.",
+      "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
+      "flags": [
+        {"name": "--store", "arg": null, "description": "Check a Tauri repo for the stores (without it, k2 app doctor checks this box for Apps)."},
+        {"name": "--voice", "arg": null, "description": "Check calls too (default: when the repo has them)."},
+        {"name": "--no-voice", "arg": null, "description": "Skip the call checks."},
+        {"name": "--json", "arg": null, "description": "{folder, voice, voiceWhy, tauri, tao, wry, findings[{id, level, platform, path, problem, fix}], passed[], notes[], ok}."}
       ]
     },
     {
@@ -50339,6 +50456,21 @@ START (A BUNDLED WEB BUILD)
   pass: it talks to that door and to TURN directly, with the TURN host taken
   from the call's join, never hard-coded. Setup: k2 study chat-voice (NATIVE APPS).
 
+11. BEFORE THE STORES (every Tauri App)
+  init --template tauri also writes src-tauri/PrivacyInfo.xcprivacy (Apple's
+  privacy manifest: add it to the iOS target), src-tauri/Info.ios.plist (the
+  scene manifest iOS 27 requires; ITSAppUsesNonExemptEncryption false, true
+  with --voice) and src-tauri/src/k2_http.rs (one shared HTTP client). It
+  prints what it won't edit: Cargo lines (Tauri 2.12.5 or newer; K2's
+  patched wry, so an iframe can't call your Tauri commands) and Android
+  lines (POST_NOTIFICATIONS; with --voice the mic, camera and
+  foreground-service types). k2/README.md says why each matters, the export
+  rules for calls, and what user data your App stores (on the App owner's
+  own K2 server) and how to declare what you add. Before each submission:
+    k2 app doctor --store [<folder>]
+  Still yours: in-app account deletion (no self-delete for an App's people
+  yet), a review login that lasts, Play's foreground-service video.
+
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
 k2 study app-profile, k2 app init --help, k2 app links --help.
 EOF
@@ -50371,7 +50503,8 @@ that file lacks, for you to paste in.
 - src-tauri/Info.plist (macOS): NSMicrophoneUsageDescription and
   NSCameraUsageDescription (without them WKWebView has no
   navigator.mediaDevices at all), NSAppSleepDisabled (macOS's App Nap would
-  slow a hidden app). Info.ios.plist: the two usage keys. Android: printed.
+  slow a hidden app). Info.ios.plist: the two usage keys, and more (Stores,
+  below). Android: printed.
 - src-tauri/Entitlements.plist and bundle.macOS.entitlements:
   com.apple.security.device.audio-input and .camera, which a signed,
   notarised build (hardened runtime) needs for the mic.
@@ -50398,10 +50531,14 @@ that file lacks, for you to paste in.
   application/wasm). CSP doesn't cover TURN. 'wasm-unsafe-eval' needs
   macOS 13+; on macOS 12 WebAssembly needs 'unsafe-eval' instead.
 Windows: the person turns on Settings > Privacy > Microphone > "Let
-desktop apps access your microphone". Calls answer on every live host of
-your App once Sew is 0.7.2+ and your kit server sets behindK2Front (k2
-hostchat home shows Sew's version; k2 study app-chat); otherwise only on
-the primary host (k2 app domain primary <app> <host>).
+desktop apps access your microphone".
+Calls answer on every live host of your App once Sew is 0.7.2+ and your
+kit server sets behindK2Front (k2 hostchat home shows Sew's version; k2
+study app-chat); otherwise only on the primary host (k2 app domain primary
+<app> <host>).
+Stores: --voice sets ITSAppUsesNonExemptEncryption true (calls are end-to-end
+encrypted; k2/README.md has the export rules) and iOS background audio, and
+prints Android's foreground-service lines. Check: k2 app doctor --store.
 If the mic fails: no navigator.mediaDevices → Info.plist lacks the keys;
 NotAllowedError → the page's origin isn't in APP_ORIGINS, or macOS said no
 (System Settings > Privacy & Security > Microphone).
@@ -91103,7 +91240,8 @@ EOF
             # 0.46.7: `k2 app init` and `k2 app links` own their --help.
             # 0.46.8: `k2 app push`, `k2 app pairing` and `k2 app login` too
             # (their pages say --help; it printed the whole family before).
-            init|links|push|pairing|login)
+            # 0.46.9: `k2 app doctor` (--store has its own page).
+            init|links|push|pairing|login|doctor)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

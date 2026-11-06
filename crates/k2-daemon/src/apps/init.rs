@@ -22,8 +22,10 @@ use serde_json::{json, Value as J};
 use super::routes::{json_body, need_build, no, resolve_folder, s, Refusal, Who, R};
 
 pub const ROUTE: &str = "/cli/app/init";
-pub const ROUTES: &[&str] = &[ROUTE];
-pub const POST_ROUTES: &[&str] = &[ROUTE];
+/// 0.46.9: `k2 app doctor --store` (read only; POST for the folder).
+pub const STORE_ROUTE: &str = "/cli/app/doctor/store";
+pub const ROUTES: &[&str] = &[ROUTE, STORE_ROUTE];
+pub const POST_ROUTES: &[&str] = &[ROUTE, STORE_ROUTE];
 
 fn refusal(e: app_templates::TemplateError) -> Refusal {
     let status = match e.code {
@@ -75,4 +77,22 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
         out["applied"] = json!(applied);
     }
     Ok(out)
+}
+
+/// POST `/cli/app/doctor/store` `{folder, voice?}` (0.46.9): what App Store
+/// and Play review, and iOS 27, need from a Tauri App's repo
+/// (`k2_core::app_templates::doctor`). It only reads the folder.
+/// `voice`: true or false; absent, the check works it out from the repo.
+/// Who: as `/cli/app/init` (an agent only inside its own workspace).
+pub(crate) fn store_route(who: &Who, body: &[u8]) -> R<J> {
+    need_build(who)?;
+    let v = json_body(body)?;
+    let raw = s(&v, "folder").ok_or_else(|| no(codes::BAD_REQUEST, 400, "folder is required (an absolute path)"))?;
+    let folder = resolve_folder(who, raw)?;
+    if !folder.is_dir() {
+        return Err(no(codes::BAD_REQUEST, 400, format!("{} is not a folder", folder.display())));
+    }
+    let voice = v.get("voice").and_then(J::as_bool);
+    let report = app_templates::doctor::check(&folder, voice).map_err(refusal)?;
+    Ok(json!(report))
 }

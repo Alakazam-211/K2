@@ -6,13 +6,24 @@ publish = false
 description = "TEST ONLY: K2's Tauri --voice template built into a real app, checking the webview"
 license = "MIT"
 
-# Its own workspace: stock Tauri from crates.io, as an App team builds it
-# (K2's patched wry and tauri-runtime-wry never apply here).
+# Its own workspace, as an App team builds it: Tauri from crates.io with the
+# lines k2 app init asks an App for (Tauri 2.12.5+, reqwest for k2_http.rs,
+# K2's patched wry from K2's public repo). K2's own [patch] rows (its root
+# Cargo.toml) never apply here.
 [workspace]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2.12", features = [] }
+tauri = { version = "2.12.5", features = [] }
 serde_json = "1"
+
+# k2_http.rs. Not on Windows: check-windows.sh type-checks from Linux, where
+# ring can't build for the MSVC target.
+[target.'cfg(not(windows))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# K2's patched wry, as k2 app init prints it (store::wry_patch_row).
+[patch.crates-io]
+wry = { git = "https://github.com/Alakazam-211/K2", rev = "afe5ccfb0a41eda114f9e849be3aab359e641cc5" }

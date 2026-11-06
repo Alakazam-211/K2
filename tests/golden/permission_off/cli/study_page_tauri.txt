@@ -204,6 +204,21 @@ START (A BUNDLED WEB BUILD)
   pass: it talks to that door and to TURN directly, with the TURN host taken
   from the call's join, never hard-coded. Setup: k2 study chat-voice (NATIVE APPS).
 
+11. BEFORE THE STORES (every Tauri App)
+  init --template tauri also writes src-tauri/PrivacyInfo.xcprivacy (Apple's
+  privacy manifest: add it to the iOS target), src-tauri/Info.ios.plist (the
+  scene manifest iOS 27 requires; ITSAppUsesNonExemptEncryption false, true
+  with --voice) and src-tauri/src/k2_http.rs (one shared HTTP client). It
+  prints what it won't edit: Cargo lines (Tauri 2.12.5 or newer; K2's
+  patched wry, so an iframe can't call your Tauri commands) and Android
+  lines (POST_NOTIFICATIONS; with --voice the mic, camera and
+  foreground-service types). k2/README.md says why each matters, the export
+  rules for calls, and what user data your App stores (on the App owner's
+  own K2 server) and how to declare what you add. Before each submission:
+    k2 app doctor --store [<folder>]
+  Still yours: in-app account deletion (no self-delete for an App's people
+  yet), a review login that lasts, Play's foreground-service video.
+
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
 k2 study app-profile, k2 app init --help, k2 app links --help.
 --- stderr

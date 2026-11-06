@@ -91,6 +91,27 @@ sent_has "dry run goes" '"dryRun": true'
 run app init --template tauri "$SANDBOX/repo"
 if sent | grep -q '"app"\|"voice"'; then bad "a plain run names neither: $(sent)"; else ok "a plain run names neither"; fi
 
+echo "== k2 app doctor --store (0.46.9) =="
+: >"$LOG"
+expect "its own help page" 0 "k2 app doctor --store — is this Tauri App ready" app doctor --store --help
+expect "the app help names it" 0 "k2 app doctor --store [<folder>]" app --help
+expect "--voice needs --store" 2 "go with --store" app doctor --voice
+expect "a folder needs --store" 2 "go with --store" app doctor "$SANDBOX/repo"
+expect "not a folder" 2 "is not a folder" app doctor --store "$SANDBOX/nope"
+nothing_sent "none of those reached the daemon"
+printf '{"folder":"/r","voice":true,"voiceWhy":"--voice","tauri":"2.10.3","tao":null,"wry":"0.57.0 (crates.io)","findings":[{"id":"tauri_too_old","level":"error","platform":"all","path":"src-tauri/Cargo.lock","problem":"Cargo.lock builds tauri 2.10.3","fix":"tauri = \\"2.12.5\\""},{"id":"wry_unpatched","level":"warn","platform":"all","path":"src-tauri/Cargo.toml","problem":"wry is not K2s","fix":"add the row"}],"passed":[],"notes":["Android skipped"],"ok":false}' >"$ANSWER"
+expect "an error exits 1 and shows the fix" 1 "fix: tauri = \"2.12.5\"" app doctor --store --voice "$SANDBOX/repo"
+printf '%s' "$OUT" | grep -Fq "Not ready: 1 error, 1 warning." && ok "the tally" || bad "the tally: $OUT"
+printf '%s' "$OUT" | grep -Fq "note: Android skipped" && ok "notes are shown" || bad "notes are shown: $OUT"
+sent_has "POST /cli/app/doctor/store" "POST /cli/app/doctor/store"
+sent_has "voice goes" '"voice": true'
+run app doctor --store --no-voice "$SANDBOX/repo"
+sent_has "--no-voice sends false" '"voice": false'
+run app doctor --store "$SANDBOX/repo"
+if sent | grep -q '"voice"'; then bad "no flag: the daemon decides: $(sent)"; else ok "no flag: the daemon decides"; fi
+printf '{"folder":"/r","voice":false,"voiceWhy":"no sign of calls","findings":[],"passed":["tauri_version"],"notes":[],"ok":true}' >"$ANSWER"
+expect "ready exits 0" 0 "Ready: no errors (0 warnings), 1 check passed." app doctor --store "$SANDBOX/repo"
+
 echo "== k2 app login settings --max-devices =="
 : >"$LOG"
 expect "help is its own page" 0 "usage: k2 app login settings <app> [flags]" app login settings --help

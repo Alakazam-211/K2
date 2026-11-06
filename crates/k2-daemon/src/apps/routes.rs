@@ -485,6 +485,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         p if super::link_files::ROUTES.contains(&p) => super::link_files::handle(p, &who, body, params),
         // 0.46.7: k2 app init --template tauri|static|node-api (init.rs).
         super::init::ROUTE => super::init::route(&who, body),
+        // 0.46.9: k2 app doctor --store, a Tauri repo's store checklist.
+        super::init::STORE_ROUTE => super::init::store_route(&who, body),
         // 0.46.7: the update feed, k2 app updates … (updates_routes.rs).
         p if super::updates_routes::ROUTES.contains(&p) => super::updates_routes::handle(p, &who, body, params),
         "/cli/app/validate" => validate(&who, body),

@@ -197,11 +197,6 @@ pub fn voice_entitlements() -> Vec<(String, String)> {
     ]
 }
 
-/// `--voice`: the Android manifest lines.
-pub fn android_permissions() -> Vec<String> {
-    ["RECORD_AUDIO", "MODIFY_AUDIO_SETTINGS", "CAMERA"].iter().map(|p| format!("<uses-permission android:name=\"android.permission.{p}\" />")).collect()
-}
-
 /// `<key>`/value lines, to paste inside a plist's `<dict>`.
 pub fn plist_entries(entries: &[(String, String)]) -> String {
     entries.iter().map(|(k, v)| format!("  <key>{k}</key>\n  {v}\n")).collect()
@@ -231,8 +226,9 @@ macOS, WebView2 on Windows. `k2 app init --template tauri --voice` wrote:
   `NSCameraUsageDescription` (without them WKWebView hides
   `navigator.mediaDevices` altogether), and `NSAppSleepDisabled` (App Nap
   would slow a call while the window is hidden). `src-tauri/Info.ios.plist`:
-  the two usage keys. Change the sentences to your own words; Apple shows
-  them to people.
+  the two usage keys, background audio and the export answer (Store
+  review, below). Change the sentences to your own words; Apple shows them
+  to people.
 - `src-tauri/Entitlements.plist` with `bundle.macOS.entitlements`:
   `com.apple.security.device.audio-input` and `.camera` (the hardened
   runtime refuses the mic without them).
@@ -244,7 +240,8 @@ macOS, WebView2 on Windows. `k2 app init --template tauri --voice` wrote:
 - `src-tauri/src/k2_voice.rs`: the mic and camera for your App's own origin
   (`https://{{HOST}}`) without a second prompt; any other page is refused.
 - On Android: the manifest lines it printed, once `tauri android init` has
-  made the manifest. Ask for the mic and camera at run time there.
+  made the manifest (Store review, below). Ask for the mic and camera at run
+  time there.
 
 ### Wire it (once)
 

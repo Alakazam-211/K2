@@ -248,6 +248,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/deploy", Admin),
     // Litmus L3: who, commit, live/failed/stalled of one deployment.
     get("/cli/app/deployment", Member),
+    // 0.46.9: k2 app doctor --store reads a repo folder, as init does.
+    post("/cli/app/doctor/store", Admin),
     // 0.46.4: any subdomain of the App's workspace onto the App (handler:
     // as label take; passports their own workspace's Apps and labels).
     post("/cli/app/domain/add", Admin),

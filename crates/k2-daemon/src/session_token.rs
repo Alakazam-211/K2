@@ -993,6 +993,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/config",
         "/cli/app/deploy",
         "/cli/app/deployment",
+        // 0.46.9: k2 app doctor --store (read only, as init: switch 1,
+        // own workspace's folders; the handler).
+        "/cli/app/doctor/store",
         "/cli/app/errors",
         // `on` refuses passports (owner_only, with the command for their
         // human); `off` is a tightening under the manage switch.

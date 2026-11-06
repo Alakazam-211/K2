@@ -770,11 +770,13 @@ for needle in "k2 app init --template tauri" "k2 app deploy <name>-web dist --ma
     "THIN SHELL OVER A LIVE SITE" "k2 app init --template tauri --app <app>" "app.windows[0].url" "endpoints.fallback" \
     "k2dl_" "dl_token_missing" "k2 app updates token <name>-web --file <file>" "k2 connect status" \
     "--max-devices 5" "One id" "--voice" "not yet tested" "k2 app domain" "push.viewing" "signCommand" \
-    "tauri-plugin-sew-voice" "sewcc_" "https://<your App's host>/_k2/voice/sew/" "never hard-coded"; do
+    "tauri-plugin-sew-voice" "sewcc_" "https://<your App's host>/_k2/voice/sew/" "never hard-coded" \
+    "BEFORE THE STORES" "PrivacyInfo.xcprivacy" "ITSAppUsesNonExemptEncryption" "Tauri 2.12.5 or newer" "K2's" \
+    "k2_http.rs" "POST_NOTIFICATIONS" "k2 app doctor --store" "account deletion"; do
     assert_contains "tauri: $needle" "$ta_out" "$needle"
 done
 ta_lines="$(printf '%s\n' "$ta_out" | wc -l | tr -d ' ')"
-if [ "$ta_lines" -le 216 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 216)" >&2; fail=$((fail + 1)); fi
+if [ "$ta_lines" -le 232 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 232)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: tauri row" "$("$K2" study)" "  tauri               A Tauri app on K2"
 assert_contains "tauri points at tauri-voice" "$ta_out" "k2 study tauri-voice"
 echo "== k2 study tauri-voice (calls in a Tauri window, 0.46.9) =="
@@ -783,7 +785,8 @@ assert_contains "title" "$tv_out" "k2 study tauri-voice — calls inside a Tauri
 for needle in "@sew/voice" "tauri-plugin-sew-voice" "remote.urls" "ipc: http://ipc.localhost" "NSMicrophoneUsageDescription" \
     "com.apple.security.device.audio-input" "backgroundThrottling" "additionalBrowserArgs" \
     ".on_permission_request(k2_voice::on_permission_request)" "k2_voice::APP_ORIGINS" "k2_voice::voice_window(builder)" "NotAllowedError" "'wasm-unsafe-eval'" \
-    "Let" "WHAT K2 HAS TESTED" "compiles (cargo check); never run" "not tested" "K2_CHECK_MIC=1" "tccutil reset Microphone"; do
+    "Let" "WHAT K2 HAS TESTED" "compiles (cargo check); never run" "not tested" "K2_CHECK_MIC=1" "tccutil reset Microphone" \
+    "ITSAppUsesNonExemptEncryption true" "k2 app doctor --store"; do
     assert_contains "tauri-voice: $needle" "$tv_out" "$needle"
 done
 tv_lines="$(printf '%s\n' "$tv_out" | wc -l | tr -d ' ')"

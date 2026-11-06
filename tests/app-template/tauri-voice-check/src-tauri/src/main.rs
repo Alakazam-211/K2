@@ -18,6 +18,8 @@
 //!   K2_CHECK_MIC=1              this Mac has a mic and a person answers the
 //!                               macOS prompt: the mic checks become required
 
+#[cfg(not(windows))]
+mod k2_http;
 #[allow(dead_code)]
 mod k2_voice;
 

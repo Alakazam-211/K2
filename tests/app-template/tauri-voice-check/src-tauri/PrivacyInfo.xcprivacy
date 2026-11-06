@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Apple's privacy manifest. k2 app init --template tauri wrote it; it is
+       yours to change. Add it to the iOS target (k2/README.md, Store review).
+       k2 app doctor --store checks it. -->
+  <key>NSPrivacyTracking</key>
+  <false/>
+  <key>NSPrivacyTrackingDomains</key>
+  <array/>
+  <!-- What your App keeps about its people. A K2 App keeps it on the App
+       owner's own K2 server. Keep this list the same as App Store Connect's
+       App Privacy answers (k2/README.md, What user data your App stores
+       and why). -->
+  <key>NSPrivacyCollectedDataTypes</key>
+  <array>
+    <!-- The sign-in: the email address a person signs in with. -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeEmailAddress</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <true/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+    <!-- The person's account id on the App. -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeUserID</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <true/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+    <!-- The install id your server passes in guests.login, so each
+         device keeps its own sign-in. -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeDeviceID</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <true/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+    <!-- Add a dict like the ones above for each kind your App keeps:
+         messages, notes, files: NSPrivacyCollectedDataTypeOtherUserContent
+         call recordings or voice notes: NSPrivacyCollectedDataTypeAudioData
+         photos or videos people upload: NSPrivacyCollectedDataTypePhotosorVideos
+         a display name: NSPrivacyCollectedDataTypeName
+         your own crash reports: NSPrivacyCollectedDataTypeCrashData
+         your own analytics: NSPrivacyCollectedDataTypeProductInteraction
+         (purpose NSPrivacyCollectedDataTypePurposeAnalytics) -->
+  </array>
+  <!-- APIs that need a reason, for what the template's crates call.
+       Add one if you or a crate you add calls more:
+         UserDefaults (NSPrivacyAccessedAPICategoryUserDefaults): CA92.1
+         free disk space (NSPrivacyAccessedAPICategoryDiskSpace): E174.1
+         timestamps of files the person picked (FileTimestamp): 3B52.1 -->
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array>
+    <!-- Rust's std reads file metadata (stat) for files in the app's own
+         container. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>C617.1</string>
+      </array>
+    </dict>
+    <!-- Calls: the native call plugin's audio (cpal) reads
+         mach_absolute_time to time audio between events in the app. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>35F9.1</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

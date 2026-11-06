@@ -19,6 +19,14 @@
 //!   parts of at most 16 MiB and the server calls `files.uploadChunk` per
 //!   part, TC-27).
 //!
+//! **Every Tauri App (0.46.9, the Tauri App SDK):** the store files
+//! ([`store`]): `src-tauri/PrivacyInfo.xcprivacy`, `src-tauri/Info.ios.plist`
+//! (the scene manifest iOS 27 requires, the export answer), the Android
+//! lines (printed), `src-tauri/src/k2_http.rs` (one HTTP client), and the
+//! Cargo lines it lacks (printed: Tauri 2.12.5+, K2's patched wry). The
+//! README says what user data the App stores and how to declare it.
+//! `k2 app doctor --store` ([`doctor`]) checks a repo for all of it.
+//!
 //! **Never overwrites a file** (TA-17; the 10-27 file-overwrite bug): a file
 //! that exists is `skipped` with a diff hint, and new files are created
 //! with `create_new`. The Tauri config is edited only when it is
@@ -37,7 +45,9 @@
 //! init`. `tests/app-template/tauri-voice-check` builds these files into a
 //! real Tauri app and checks the webview.
 
+pub mod doctor;
 mod json_insert;
+pub mod store;
 mod text;
 
 use std::path::{Path, PathBuf};
@@ -380,7 +390,10 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
     if t.voice {
         readme.push_str(&text::voice_readme(host));
     }
+    readme.push_str(&store::store_readme(t.voice));
     new_file(folder, "k2/README.md", &readme, p);
+    let cargo_lines = plan_runtime(folder, p);
+    plan_store(folder, base, t.voice, p);
     if t.voice {
         plan_voice(folder, base, host, entitlements.as_deref(), p);
     }
@@ -434,7 +447,127 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
     if t.voice {
         p.next.insert(0, VOICE_WIRE_STEP.into());
     }
+    if cargo_lines {
+        p.next.insert(0, CARGO_STEP.into());
+    }
+    p.next.push(DOCTOR_STEP.into());
     Ok(())
+}
+
+/// The Cargo lines K2 printed (it never edits a Cargo.toml).
+const CARGO_STEP: &str =
+    "add the Cargo lines printed above (Tauri 2.12.5 or newer, K2's patched wry, reqwest for k2_http.rs), then cargo update -p tauri -p wry (k2/README.md, Runtime fixes)";
+
+/// Last: the store checklist.
+const DOCTOR_STEP: &str =
+    "k2 app doctor --store   (before you submit to the App Store or Play: the privacy manifest, usage strings, export answer, Tauri and wry; k2/README.md, Store review)";
+
+/// The runtime fixes every Tauri App needs: `k2_http.rs`, and the Cargo
+/// lines a manifest lacks (printed: K2 never edits a Cargo.toml). True when
+/// it printed Cargo lines.
+fn plan_runtime(folder: &Path, p: &mut Plan) -> bool {
+    new_file(folder, "src-tauri/src/k2_http.rs", store::K2_HTTP_RS, p);
+    let crate_rel = "src-tauri/Cargo.toml";
+    let Ok(crate_toml) = std::fs::read_to_string(folder.join(crate_rel)) else {
+        p.notes.push(format!(
+            "no {crate_rel}: when it exists, it needs tauri {} or newer and K2's patched wry (k2/README.md, Runtime fixes; k2 app doctor --store checks)",
+            store::TAURI_FLOOR_STR
+        ));
+        return false;
+    };
+    let old = tauri_older_than(&crate_toml, store::TAURI_FLOOR);
+    let reqwest = !doctor::has_dependency(&crate_toml, "reqwest");
+    // [patch] applies only from the workspace root.
+    let root_rel = match std::fs::read_to_string(folder.join("Cargo.toml")) {
+        Ok(t) if doctor::is_workspace_root(&t) => "Cargo.toml",
+        _ => crate_rel,
+    };
+    let same = root_rel == crate_rel;
+    let root_toml = if same { crate_toml.clone() } else { std::fs::read_to_string(folder.join(root_rel)).unwrap_or_default() };
+    let patch = match doctor::wry_patch(&root_toml) {
+        doctor::WryPatch::K2 => None,
+        doctor::WryPatch::Other(row) => {
+            p.notes.push(format!(
+                "{root_rel} patches wry its own way ({row}): K2 leaves it. Make sure it answers IPC from the main frame only (k2/README.md, Runtime fixes)"
+            ));
+            None
+        }
+        doctor::WryPatch::Missing => Some(!root_toml.contains("[patch.crates-io]")),
+    };
+    let mut why = Vec::new();
+    if let Some(req) = &old {
+        why.push(format!("tauri {req} is older than {}", store::TAURI_FLOOR_STR));
+    }
+    if reqwest {
+        why.push("k2_http.rs needs reqwest".to_string());
+    }
+    if patch.is_some() && same {
+        why.push("K2's patched wry".to_string());
+    }
+    let here = store::cargo_snippet(if same { patch } else { None }, old.is_some(), reqwest);
+    let mut printed = false;
+    if here.is_empty() {
+        p.files.push(FilePlan {
+            path: crate_rel.into(),
+            action: Action::Skipped,
+            note: format!("already asks for tauri {}+ and reqwest{}", store::TAURI_FLOOR_STR, if same { ", and patches wry" } else { "" }),
+            content: String::new(),
+            before: None,
+        });
+    } else {
+        printed = true;
+        p.files.push(FilePlan {
+            path: crate_rel.into(),
+            action: Action::Snippet,
+            note: format!("K2 doesn't edit a Cargo.toml: add these ({})", why.join("; ")),
+            content: here,
+            before: None,
+        });
+    }
+    if let (false, Some(header)) = (same, patch) {
+        printed = true;
+        p.files.push(FilePlan {
+            path: root_rel.into(),
+            action: Action::Snippet,
+            note: "your workspace root, the only place [patch] works: add K2's patched wry".into(),
+            content: store::cargo_snippet(Some(header), false, false),
+            before: None,
+        });
+    }
+    printed
+}
+
+/// What every Tauri App needs for the stores: the privacy manifest, the iOS
+/// keys (`voice`: and the call ones), the Android lines.
+fn plan_store(folder: &Path, name: &str, voice: bool, p: &mut Plan) {
+    new_file(folder, "src-tauri/PrivacyInfo.xcprivacy", &store::privacy_manifest(voice), p);
+    let ios = "src-tauri/Info.ios.plist";
+    let what = if voice { "iOS's call keys, scene manifest and export answer" } else { "iOS's scene manifest and export answer" };
+    plist_keys(folder, ios, &store::ios_keys(name, voice), what, p);
+    if voice {
+        let said = std::fs::read_to_string(folder.join(ios)).ok().and_then(|t| doctor::plist_bool(&t, "ITSAppUsesNonExemptEncryption"));
+        if said == Some(false) {
+            p.notes.push(format!(
+                "{ios} says ITSAppUsesNonExemptEncryption is false, but calls are end-to-end encrypted: set it to true (k2/README.md, Export compliance)"
+            ));
+        }
+    }
+    let android = "src-tauri/gen/android/app/src/main/AndroidManifest.xml";
+    let lines = store::android_permissions(voice);
+    let has = std::fs::read_to_string(folder.join(android)).ok();
+    let missing: Vec<&String> = lines.iter().filter(|l| has.as_deref().is_none_or(|t| !t.contains(android_name(l)))).collect();
+    if missing.is_empty() {
+        p.files.push(FilePlan { path: android.into(), action: Action::Skipped, note: "already has the permissions".into(), content: String::new(), before: None });
+    } else {
+        let ask = if voice { "ask for notifications, the mic and the camera at run time" } else { "ask for notifications at run time" };
+        p.files.push(FilePlan {
+            path: android.into(),
+            action: Action::Snippet,
+            note: format!("tauri android init writes this file and K2 doesn't edit it: put these inside <manifest>, and {ask}"),
+            content: missing.iter().map(|l| format!("{l}\n")).collect(),
+            before: None,
+        });
+    }
 }
 
 /// `--voice`: the one change K2 leaves to the person (it never edits Rust).
@@ -443,24 +576,17 @@ const VOICE_WIRE_STEP: &str =
 
 /// `--voice`: the mic and camera keys, per platform.
 fn plan_voice(folder: &Path, name: &str, host: &str, entitlements: Option<&str>, p: &mut Plan) {
-    let usage = text::voice_usage_keys(name);
-    let mut macos = usage.clone();
+    let mut macos = text::voice_usage_keys(name);
     macos.extend(text::voice_macos_keys());
-    plist_keys(folder, "src-tauri/Info.plist", &macos, "macOS's", p);
-    plist_keys(folder, "src-tauri/Info.ios.plist", &usage, "iOS's", p);
+    plist_keys(folder, "src-tauri/Info.plist", &macos, "macOS's mic and camera keys", p);
     new_file(folder, "src-tauri/src/k2_voice.rs", &text::k2_voice_rs(host), p);
-    if let Some(old) = std::fs::read_to_string(folder.join("src-tauri/Cargo.toml")).ok().as_deref().and_then(tauri_older_than_2_12) {
-        p.notes.push(format!(
-            "src-tauri/Cargo.toml asks for tauri {old}: k2_voice.rs needs 2.12 or newer (on_permission_request). Set tauri = \"2.12\" and run cargo update -p tauri"
-        ));
-    }
     let ents = text::voice_entitlements();
     // A path inside src-tauri/ K2 may write; one outside gets the keys printed.
     let inside = entitlements.filter(|e| !Path::new(e).is_absolute() && !e.split(['/', '\\']).any(|c| c == ".."));
     match inside {
         Some(e) => {
             let rel = format!("src-tauri/{}", e.trim_start_matches("./"));
-            plist_keys(folder, &rel, &ents, "the macOS hardened runtime's", p);
+            plist_keys(folder, &rel, &ents, "the macOS hardened runtime's mic and camera entitlements", p);
         }
         None => {
             let shown = entitlements.unwrap_or("your entitlements file");
@@ -473,39 +599,16 @@ fn plan_voice(folder: &Path, name: &str, host: &str, entitlements: Option<&str>,
             });
         }
     }
-    let android = "src-tauri/gen/android/app/src/main/AndroidManifest.xml";
-    let lines = text::android_permissions();
-    let has = std::fs::read_to_string(folder.join(android)).ok();
-    let missing: Vec<&String> = lines.iter().filter(|l| has.as_deref().is_none_or(|t| !t.contains(android_name(l)))).collect();
-    if missing.is_empty() {
-        p.files.push(FilePlan { path: android.into(), action: Action::Skipped, note: "already has the mic and camera permissions".into(), content: String::new(), before: None });
-    } else {
-        p.files.push(FilePlan {
-            path: android.into(),
-            action: Action::Snippet,
-            note: "tauri android init writes this file and K2 doesn't edit it: put these inside <manifest>, and ask for the mic and camera at run time".into(),
-            content: missing.iter().map(|l| format!("{l}\n")).collect(),
-            before: None,
-        });
-    }
 }
 
-/// The `tauri` requirement in a `Cargo.toml` when it is a 2.x below 2.12
-/// (`"2"`, `"2.11"`, `"^2.10.1"`); `None` when it is newer, absent or not
-/// plain. `"2"` allows 2.12 but a lock file may hold an older one: named too.
-fn tauri_older_than_2_12(cargo_toml: &str) -> Option<String> {
-    let line = cargo_toml.lines().map(str::trim).find(|l| l.starts_with("tauri ") || l.starts_with("tauri="))?;
-    let rest = line.split_once('=')?.1.trim();
-    let req = if rest.starts_with('{') { rest.split("version").nth(1)?.split('"').nth(1)? } else { rest.split('"').nth(1)? };
-    let v = req.trim_start_matches(['^', '~', '=', ' ']);
-    let mut parts = v.split('.');
-    if parts.next()? != "2" {
-        return None;
-    }
-    match parts.next() {
-        None => Some(req.to_string()),
-        Some(minor) => (minor.parse::<u32>().ok()? < 12).then(|| req.to_string()),
-    }
+/// The `tauri` requirement in a `Cargo.toml` when the lowest 2.x it allows
+/// is below `floor` (`"2"`, `"2.12"`, `"^2.10.1"` against 2.12.5); `None`
+/// when it is new enough, absent or not plain (a repository or workspace
+/// row). `"2"` allows 2.12.5 but a lock file may hold an older one: named.
+pub(crate) fn tauri_older_than(cargo_toml: &str, floor: (u32, u32, u32)) -> Option<String> {
+    let req = doctor::dependency_req(cargo_toml, "tauri")?;
+    let v = doctor::lowest_version(&req)?;
+    (v.0 == floor.0 && v < floor).then_some(req)
 }
 
 /// `android.permission.X` of a `<uses-permission>` line.
@@ -515,16 +618,16 @@ fn android_name(line: &str) -> &str {
 
 /// A new plist with `entries`, or (it exists: never edited) the entries it
 /// lacks to add by hand.
-fn plist_keys(folder: &Path, rel: &str, entries: &[(String, String)], whose: &str, p: &mut Plan) {
+fn plist_keys(folder: &Path, rel: &str, entries: &[(String, String)], what: &str, p: &mut Plan) {
     let path = folder.join(rel);
     if !path.exists() {
-        p.files.push(FilePlan { path: rel.to_string(), action: Action::Write, note: format!("new: {whose} mic and camera keys"), content: text::plist(entries), before: None });
+        p.files.push(FilePlan { path: rel.to_string(), action: Action::Write, note: format!("new: {what}"), content: text::plist(entries), before: None });
         return;
     }
     let has = std::fs::read_to_string(&path).unwrap_or_default();
     let missing: Vec<(String, String)> = entries.iter().filter(|(k, _)| !has.contains(&format!("<key>{k}</key>"))).cloned().collect();
     if missing.is_empty() {
-        p.files.push(FilePlan { path: rel.to_string(), action: Action::Skipped, note: format!("already has {whose} mic and camera keys"), content: String::new(), before: None });
+        p.files.push(FilePlan { path: rel.to_string(), action: Action::Skipped, note: format!("already has {what}"), content: String::new(), before: None });
     } else {
         p.files.push(FilePlan {
             path: rel.to_string(),

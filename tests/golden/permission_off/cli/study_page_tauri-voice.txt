@@ -26,7 +26,8 @@ that file lacks, for you to paste in.
 - src-tauri/Info.plist (macOS): NSMicrophoneUsageDescription and
   NSCameraUsageDescription (without them WKWebView has no
   navigator.mediaDevices at all), NSAppSleepDisabled (macOS's App Nap would
-  slow a hidden app). Info.ios.plist: the two usage keys. Android: printed.
+  slow a hidden app). Info.ios.plist: the two usage keys, and more (Stores,
+  below). Android: printed.
 - src-tauri/Entitlements.plist and bundle.macOS.entitlements:
   com.apple.security.device.audio-input and .camera, which a signed,
   notarised build (hardened runtime) needs for the mic.
@@ -53,10 +54,14 @@ that file lacks, for you to paste in.
   application/wasm). CSP doesn't cover TURN. 'wasm-unsafe-eval' needs
   macOS 13+; on macOS 12 WebAssembly needs 'unsafe-eval' instead.
 Windows: the person turns on Settings > Privacy > Microphone > "Let
-desktop apps access your microphone". Calls answer on every live host of
-your App once Sew is 0.7.2+ and your kit server sets behindK2Front (k2
-hostchat home shows Sew's version; k2 study app-chat); otherwise only on
-the primary host (k2 app domain primary <app> <host>).
+desktop apps access your microphone".
+Calls answer on every live host of your App once Sew is 0.7.2+ and your
+kit server sets behindK2Front (k2 hostchat home shows Sew's version; k2
+study app-chat); otherwise only on the primary host (k2 app domain primary
+<app> <host>).
+Stores: --voice sets ITSAppUsesNonExemptEncryption true (calls are end-to-end
+encrypted; k2/README.md has the export rules) and iOS background audio, and
+prints Android's foreground-service lines. Check: k2 app doctor --store.
 If the mic fails: no navigator.mediaDevices → Info.plist lacks the keys;
 NotAllowedError → the page's origin isn't in APP_ORIGINS, or macOS said no
 (System Settings > Privacy & Security > Microphone).

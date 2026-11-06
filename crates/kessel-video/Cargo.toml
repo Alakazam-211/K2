@@ -29,9 +29,10 @@ apple = ["dep:objc2", "dep:block2"]
 # Media Foundation cameras and Windows Graphics Capture screens (H.264
 # MFTs later). OS components through the `windows` crate.
 windows = ["dep:windows"]
-# V4L2 cameras (raw ioctls) and the xdg-desktop-portal ScreenCast with
-# PipeWire. No H.264: Linux has no OS codec.
-linux = ["dep:libc"]
+# V4L2 cameras (raw ioctls) and the xdg-desktop-portal ScreenCast (zbus,
+# pure Rust) with PipeWire (the system's libpipewire, loaded at run time:
+# nothing to install at build time). No H.264: Linux has no OS codec.
+linux = ["dep:libc", "dep:zbus", "dep:serde"]
 # Camera2/CameraX, MediaCodec, MediaProjection (not built yet).
 android = []
 # VP8 encoding and decoding in pure Rust (the vp8-encoder and vp8-decoder
@@ -56,6 +57,8 @@ block2 = { version = "0.6", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2", optional = true }
+serde = { version = "1", optional = true }
+zbus = { version = "5", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", optional = true, features = [

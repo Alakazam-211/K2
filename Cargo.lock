@@ -4863,11 +4863,13 @@ dependencies = [
  "crossbeam-queue",
  "libc",
  "objc2",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "vp8-decoder",
  "vp8-encoder",
  "windows 0.62.2",
+ "zbus",
 ]
 
 [[package]]

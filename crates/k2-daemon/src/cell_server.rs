@@ -1023,7 +1023,15 @@ mod unix_impl {
                 if body.len() > crate::voice::routes::MAX_BODY {
                     return from_cli(crate::voice::routes::too_large());
                 }
-                from_cli(crate::voice::routes::handle(p, crate::voice::routes::Caller::Passport, "", is_post, body))
+                // An agent whose workspace has Manage Chat / Voice Hosting
+                // may also run `repair`; any other cell caller is a passport.
+                let caller = match crate::compute_routes::who_from_cell(this_session_id, principal) {
+                    who @ (crate::compute_routes::Who::Agent { .. } | crate::compute_routes::Who::Shell { .. }) => {
+                        crate::voice::routes::Caller::from_who(who, String::new())
+                    }
+                    _ => crate::voice::routes::Caller::Passport,
+                };
+                from_cli(crate::voice::routes::handle(p, caller, "", is_post, body))
             }
             // Sew chat S30: EVERY `/cli/sew/chat/*` (incl. `manage/`),
             // `/cli/sew/approvals*` and `/cli/sew/admin/*` path for THIS

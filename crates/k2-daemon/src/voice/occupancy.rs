@@ -468,6 +468,7 @@ fn run() {
     let mut feed = Feed::default();
     let mut backoff = Duration::from_secs(1);
     let mut last_hosting = String::new();
+    let mut logged: Option<String> = None;
     loop {
         let seen = kick_count();
         let h = super::hosting_state();
@@ -490,6 +491,9 @@ fn run() {
         match rt.block_on(feed.step(&client, &space, FEED_WAIT_S)) {
             Ok((step, notes)) => {
                 backoff = Duration::from_secs(1);
+                if logged.take().is_some() {
+                    k2_core::log_debug!("[voice-rooms] occupancy feed: live again on Space {space}");
+                }
                 set_status(|s| {
                     s.state = "live".into();
                     s.space_id = Some(space.clone());
@@ -506,7 +510,22 @@ fn run() {
                 }
             }
             Err(e) => {
-                k2_core::log_debug!("[voice-rooms] occupancy feed: {e} (again in {}s)", backoff.as_secs());
+                // mgmt is unmasked: Sew doesn't hold the Space K2 follows.
+                // Ask for a check (rate-limited; the check is the proof).
+                let gone = k2_core::tool_hook::admin_space::says_not_found(&e) || e.contains(": not_found");
+                if gone {
+                    crate::voice_admin::suspect(&format!("the voice feed got {e}"));
+                }
+                // One warning per change of state, never one per retry.
+                if logged.as_deref() != Some(e.as_str()) {
+                    let fix = if gone {
+                        "the K5 Space may be gone from Sew: K2 checks and re-makes it on its own; k2 voice repair runs it now"
+                    } else {
+                        "retrying quietly until this changes"
+                    };
+                    k2_core::log_debug!("[voice-rooms] occupancy feed: {e} ({fix})");
+                    logged = Some(e.clone());
+                }
                 set_status(|s| {
                     s.state = "retrying".into();
                     s.space_id = Some(space.clone());

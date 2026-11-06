@@ -821,6 +821,17 @@ fn routes_refuse_the_owner_token_agents_and_apps_where_the_prd_says() {
         (routes::RECORDING_CONSENT, Caller::App, true, "403 Forbidden", "app_pass_not_allowed"),
         (routes::RECORDING_CONSENT, Caller::DeviceEnded, true, "403 Forbidden", "device_session_ended"),
         (routes::RECORDING_CONSENT, Caller::Invalid, true, "401 Unauthorized", "unauthenticated"),
+        // Repair: the owner, an Admin, or an agent with Manage Chat / Voice
+        // Hosting; any other agent is told which switch it needs.
+        (routes::REPAIR, Caller::Passport, true, "403 Forbidden", "chat_manage_off"),
+        (routes::REPAIR, Caller::App, true, "403 Forbidden", "app_pass_not_allowed"),
+        (routes::REPAIR, Caller::Invalid, true, "401 Unauthorized", "unauthenticated"),
+        (routes::REPAIR, Caller::DeviceEnded, true, "403 Forbidden", "device_session_ended"),
+        (routes::REPAIR, Caller::Login { username: "mo".into(), role: Role::Member, token: "t".into() }, true, "403 Forbidden", "owner_or_admin_only"),
+        // A Manage Chat agent is still an agent everywhere else.
+        (routes::SETTINGS, Caller::ChatManager, true, "403 Forbidden", "owner_or_admin_only"),
+        (routes::JOIN, Caller::ChatManager, true, "403 Forbidden", "agents_not_in_voice"),
+        (routes::MODERATE, Caller::ChatManager, true, "403 Forbidden", "agents_cannot_moderate"),
     ];
     for (path, caller, post, status, code) in cases {
         let r = routes::handle(path, caller.clone(), "owner", post, br#"{"room":"room-1","count":1,"name":"x"}"#);
@@ -831,6 +842,7 @@ fn routes_refuse_the_owner_token_agents_and_apps_where_the_prd_says() {
     }
     // POST-only and GET-only.
     assert_eq!(routes::handle(routes::JOIN, Caller::OwnerToken, "owner", false, b"").status, "405 Method Not Allowed");
+    assert_eq!(routes::handle(routes::REPAIR, Caller::OwnerToken, "owner", false, b"").status, "405 Method Not Allowed");
     assert_eq!(routes::handle(routes::ROOMS, Caller::OwnerToken, "owner", true, b"{}").status, "405 Method Not Allowed");
     // A body that isn't an object.
     let r = routes::handle(routes::SETTINGS, Caller::OwnerToken, "owner", true, b"[1]");
@@ -846,6 +858,32 @@ fn routes_refuse_the_owner_token_agents_and_apps_where_the_prd_says() {
     // A Member login can't read status (the route floor says the same).
     let m = Caller::Login { username: "mo".into(), role: Role::Member, token: "t".into() };
     assert_eq!(body(&routes::handle(routes::STATUS, m, "owner", false, b""))["error"]["code"], "owner_or_admin_only");
+}
+
+/// voicetest 11-04: `k2 voice status` said "ready" for a Space Sew no longer
+/// held. It never says ready while K2 doubts it, and names the fix.
+#[test]
+fn space_health_never_says_ready_while_k2_doubts_the_space() {
+    use super::occupancy::FeedStatus;
+    let ready = SpaceRow { space_id: Some("7001".into()), state: "ready".into(), ..Default::default() };
+    let live = FeedStatus { state: "live".into(), space_id: Some("7001".into()), ..Default::default() };
+    let h = |sp: Option<&SpaceRow>, f: &FeedStatus| routes::space_health(sp, f);
+    assert_eq!(h(Some(&ready), &live)["state"], "ready");
+    assert_eq!(h(None, &live)["state"], "none");
+    let checking = SpaceRow { verify: Some("space".into()), suspect: Some("the voice feed got not_found".into()), ..ready.clone() };
+    let v = h(Some(&checking), &live);
+    assert_eq!(v["state"], "checking");
+    assert!(v["line"].as_str().unwrap().contains("the voice feed got not_found"), "{v}");
+    assert_eq!(v["fix"], "k2 voice repair runs it now");
+    let gone = FeedStatus { state: "retrying".into(), last_error: Some("voice/states: not_found: no such space".into()), ..live.clone() };
+    let v = h(Some(&ready), &gone);
+    assert_eq!((v["state"].as_str(), v["fix"].as_str()), (Some("suspect"), Some("k2 voice repair")), "{v}");
+    let other = FeedStatus { last_error: Some("voice/states: transport: refused".into()), ..gone.clone() };
+    assert_eq!(h(Some(&ready), &other)["state"], "ready", "only a not_found doubts the Space");
+    let blocked = SpaceRow { state: "blocked".into(), why: Some("409 slug_taken".into()), ..ready };
+    let v = h(Some(&blocked), &live);
+    assert_eq!((v["state"].as_str(), v["line"].as_str()), (Some("blocked"), Some("409 slug_taken")));
+    assert!(v["fix"].as_str().unwrap().contains("k2 voice repair"));
 }
 
 #[test]

@@ -796,7 +796,7 @@ fn disable_pauses_uninstall_pauses_or_drops_and_purge_drops_the_grant_hook() {
     t.ops.hook_calls.lock().unwrap().clear();
     t.ops.hook_calls.lock().unwrap().push("on (earlier)".into());
     assert_eq!(purge(&t.env(), "lumon", false).unwrap()["grantHook"]["target"], "off");
-    assert_eq!(&hook_calls(&t)[1..], ["drop", "off"]);
+    assert_eq!(&hook_calls(&t)[1..], ["drop", "off", "forget ids"], "a purge also sets aside the Sew ids K2 kept");
 }
 
 #[test]

@@ -224,6 +224,11 @@ pub trait SewOps: Send + Sync {
     fn hook_drop(&self) -> Result<Value, String> {
         k2_core::tool_hook::drop_target_grants(k2_core::tool_hook::CHAT_KIND).map(|r| json!(r))
     }
+    /// A purge: the Sew ids K2 kept (agent Spaces, hub cursors, the K5
+    /// Space's install stamp) belong to an install that is gone.
+    fn chat_ids_forget(&self, why: &str) -> Result<Value, String> {
+        crate::sew_chat::install::forget(why).map(|r| json!(r))
+    }
 
     // ── the keyring mirror tied to the ship folder (0.46.8, SW-8) ────────
     /// Make Sew's keyring mirror folder `path` (absolute, under the owner's
@@ -1446,6 +1451,13 @@ pub mod fake {
                 return k2_core::tool_hook::drop_target_grants(k2_core::tool_hook::CHAT_KIND).map(|r| json!(r));
             }
             Ok(json!({"grantsDeleted": 0, "rowsSkipped": 0}))
+        }
+        fn chat_ids_forget(&self, why: &str) -> Result<Value, String> {
+            self.hook_calls.lock().unwrap().push("forget ids".into());
+            if self.real_hook {
+                return crate::sew_chat::install::forget(why).map(|r| json!(r));
+            }
+            Ok(json!({"stale": [], "cursorsReset": 0}))
         }
         fn linux(&self) -> bool {
             self.linux

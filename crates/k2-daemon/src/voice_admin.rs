@@ -65,6 +65,16 @@ pub fn prepare() -> Result<Option<Facts>, String> {
     let space = hook::admin_space_id()?;
     let agents = match space.as_deref() {
         Some(id) => {
+            // A re-linked Space (made again, or K2's id was stale): the
+            // agents' access rows follow the id Sew holds.
+            let moved = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::sew_chat::install::relink_k5_access(&conn, id, k2_core::tool_hook::outbox::now_secs())?
+            };
+            if moved > 0 {
+                log_debug!("[voice-rooms] {moved} agent access row(s) moved to the K5 Space's id {id}");
+            }
             sync_default_space(id)?;
             if hook::admin_space_store_count()? {
                 log_debug!("[voice-rooms] voiceRoomsCount stored at set-up");
@@ -177,6 +187,174 @@ pub fn sweep() -> Result<(), String> {
         log_debug!("[voice-rooms] {}", serde_json::to_value(&s).unwrap_or_default());
     }
     Ok(())
+}
+
+// ── a lost K5 Space: the check and `k2 voice repair` ──────────────────
+
+/// Something saw Sew answer `not_found` for the K5 Space or a room (the
+/// voice feed, a join). Asks for a check by mgmt (`admin_space::mark_verify`:
+/// at most once per 10 minutes, never with the preview off). The check is
+/// the confirmation: a masked 404 alone never re-makes anything.
+pub fn suspect(why: &str) {
+    if !k2_core::voice_preview::enabled() {
+        return;
+    }
+    match hook::admin_space_check(admin_space::VERIFY_SPACE, why, false) {
+        Ok(true) => log_debug!("[voice-rooms] {why}: K2 is checking the K5 Space with Sew (k2 voice repair runs it now)"),
+        Ok(false) => {}
+        Err(e) => log_debug!("[voice-rooms] asking for a K5 Space check: {e}"),
+    }
+}
+
+/// What `k2 voice repair` saw before it asked for the check.
+#[derive(Debug, Clone)]
+pub struct RepairStart {
+    pub started_at: i64,
+    pub before: admin_space::View,
+    pub install: Option<k2_core::sew_chat::install::InstallReport>,
+    /// A check was asked for (`false`: no K5 Space to check).
+    pub checking: bool,
+}
+
+/// `k2 voice repair`, first half: set aside what an earlier Sew install
+/// left in the main DB, and ask for a full check of the K5 Space (members
+/// re-sent too; a blocked Space is tried again). The worker does the rest.
+pub fn repair_begin(why: &str) -> Result<RepairStart, String> {
+    let started_at = k2_core::tool_hook::outbox::now_secs();
+    let before = hook::admin_space_view()?;
+    let install = match hook::get_target(hook::CHAT_KIND)?.and_then(|t| t.install_id) {
+        Some(id) => Some(crate::sew_chat::install::sync(&id)?),
+        None => None,
+    };
+    let checking = hook::admin_space_check(admin_space::VERIFY_FULL, why, true)?;
+    Ok(RepairStart { started_at, before, install, checking })
+}
+
+/// Has the repair settled: the check answered, nothing of the K5 Space is
+/// still queued, and every open room has its channel again?
+pub fn repair_settled(start: &RepairStart, v: &admin_space::View) -> bool {
+    if !start.checking {
+        return true;
+    }
+    let Some(sp) = v.space.as_ref() else { return false };
+    let hosts = hosting_now() == Hosting::Ok;
+    if sp.verify.is_some() || (sp.verify_rooms && hosts) || hook::reconcile_requested() {
+        return false;
+    }
+    if sp.state == admin_space::SPACE_BLOCKED {
+        return true;
+    }
+    if v.holds.iter().any(|h| h.state == "pending") {
+        return false;
+    }
+    let count = k2_core::app_settings::load().voice_rooms_count;
+    let rooms_wait = hosts && v.rooms.iter().any(|r| r.n <= count && r.state == admin_space::ROOM_PENDING);
+    let members_wait = v.members.iter().any(|m| m.state == admin_space::PENDING_ADD && !m.why.as_deref().is_some_and(|w| w.starts_with(admin_space::HELD_MARK)));
+    !rooms_wait && !members_wait
+}
+
+/// What Sew can't bring back when it makes the K5 Space again (Sew's mgmt
+/// docs, "The K5 Space").
+pub const NOT_RESTORED: &str = "Sew made the K5 Space again under a new id: its rooms are back and everyone is in it again, \
+    but Sew can't bring back the old Space's message history, uploads, recordings, people's read positions and \
+    preferences, or channels and roles someone made in it by hand. DMs are not affected.";
+
+/// `k2 voice repair`, second half: what it found and what it fixed.
+pub fn repair_report(start: &RepairStart, after: &admin_space::View, settled: bool) -> Result<serde_json::Value, String> {
+    let before_space = start.before.space.clone();
+    let after_space = after.space.clone();
+    // The check this repair asked for (or none: nothing to check).
+    let check = after_space
+        .as_ref()
+        .and_then(|s| s.last_check.clone())
+        .filter(|c| c["at"].as_i64().is_some_and(|at| at >= start.started_at));
+    let outcome = check.as_ref().and_then(|c| c["outcome"].as_str().map(str::to_string));
+    let before_rooms: std::collections::BTreeMap<String, Option<String>> =
+        start.before.rooms.iter().map(|r| (r.slug.clone(), r.channel_id.clone())).collect();
+    let rooms: Vec<serde_json::Value> = after
+        .rooms
+        .iter()
+        .filter_map(|r| {
+            let was = before_rooms.get(&r.slug).cloned().flatten();
+            (was != r.channel_id && r.channel_id.is_some()).then(|| json!({"room": r.slug, "from": was, "to": r.channel_id}))
+        })
+        .collect();
+    let held = |m: &admin_space::MemberRow| m.why.as_deref().is_some_and(|w| w.starts_with(admin_space::HELD_MARK));
+    let members = json!({
+        "added": after.members.iter().filter(|m| m.state == admin_space::ADDED).count(),
+        "pending": after.members.iter().filter(|m| m.state == admin_space::PENDING_ADD && !held(m)).count(),
+        "held": after.members.iter().filter(|m| held(m)).map(|m| json!({"externalId": m.external_id, "why": m.why})).collect::<Vec<_>>(),
+    });
+    let blocked_before = start.before.holds.iter().filter(|h| h.state == "blocked").count();
+    // Each set-aside Space with its agents by workspace handle (who made it
+    // again, and who gets access back).
+    let stale: Vec<serde_json::Value> = crate::sew_chat::install::stale_spaces()?
+        .into_iter()
+        .map(|s| {
+            let access: Vec<serde_json::Value> = s
+                .access
+                .iter()
+                .map(|a| json!({"projectId": a.project_id, "workspace": crate::compute_routes::ws_handle(&a.project_id), "level": a.level, "approval": a.approval}))
+                .collect();
+            json!({"spaceId": s.space_id, "slug": s.slug, "access": access, "install": s.install, "since": s.since, "why": s.why})
+        })
+        .collect();
+    let moved_now: Vec<String> = start.install.as_ref().map(|r| r.stale.iter().map(|s| s.slug.clone()).collect()).unwrap_or_default();
+    let space_line = match (after_space.as_ref(), outcome.as_deref()) {
+        (None, _) => "no K5 Space to check: voice rooms haven't made one on this server (k2 voice status says why)".to_string(),
+        (Some(s), _) if s.state == admin_space::SPACE_BLOCKED => {
+            format!("the K5 Space is blocked: {} (fix that, then run k2 voice repair again)", s.why.as_deref().unwrap_or("Sew refused it"))
+        }
+        (Some(_), Some("same")) => "the K5 Space is there; K2 retried what Sew had refused and re-sent every member".to_string(),
+        (Some(s), Some("remade")) => format!(
+            "the K5 Space was gone from Sew; Sew made it again as {} (was {})",
+            s.space_id.as_deref().unwrap_or("?"),
+            check.as_ref().and_then(|c| c["from"].as_str()).unwrap_or("?")
+        ),
+        (Some(s), Some("relinked")) => format!(
+            "K2 held a stale id; the K5 Space Sew holds is {} (was {})",
+            s.space_id.as_deref().unwrap_or("?"),
+            check.as_ref().and_then(|c| c["from"].as_str()).unwrap_or("?")
+        ),
+        (Some(_), _) if !start.checking => "no K5 Space to check".to_string(),
+        (Some(_), _) => "the check hasn't answered yet: K2 keeps at it (k2 voice status shows progress)".to_string(),
+    };
+    let mut fixes: Vec<String> = Vec::new();
+    if !rooms.is_empty() {
+        fixes.push(format!("{} room(s) re-linked to new channels", rooms.len()));
+    }
+    if blocked_before > 0 && matches!(outcome.as_deref(), Some("same" | "remade" | "relinked")) {
+        fixes.push(format!("{blocked_before} blocked change(s) retried or replaced"));
+    }
+    if !moved_now.is_empty() {
+        fixes.push(format!("{} agent Space(s) from an earlier Sew install set aside ({})", moved_now.len(), moved_now.join(", ")));
+    }
+    if let Some(n) = start.install.as_ref().map(|r| r.cursors_reset).filter(|n| *n > 0) {
+        fixes.push(format!("{n} agent chat feed(s) restarted"));
+    }
+    Ok(json!({
+        "ok": true,
+        "settled": settled,
+        "found": {
+            "space": before_space.as_ref().map(|s| json!({"state": s.state, "spaceId": s.space_id, "why": s.why})),
+            "blocked": blocked_before,
+            "pending": start.before.holds.iter().filter(|h| h.state == "pending").count(),
+        },
+        "space": space_line,
+        "check": check,
+        "rooms": rooms,
+        "members": members,
+        "fixed": fixes,
+        "staleSpaces": stale,
+        "staleHint": (!stale.is_empty()).then_some(
+            "these agent Spaces were on a Sew install that is gone, and Sew can't give a Space its id back. \
+             One of the agents listed (the one at level manage made it) makes it again with k2 chat space create <slug> --name \"<Name>\"; \
+             then the owner or an Admin gives the others back the level shown: k2 chat access grant <slug> <workspace> --level <level>."
+        ),
+        "notRestored": (outcome.as_deref() == Some("remade")).then_some(NOT_RESTORED),
+        "holds": after.holds,
+        "next": if settled { serde_json::Value::Null } else { json!("still working: k2 voice status shows progress") },
+    }))
 }
 
 #[cfg(test)]

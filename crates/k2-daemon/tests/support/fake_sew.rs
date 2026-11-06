@@ -616,6 +616,29 @@ impl FakeSew {
         self.with(|s| server_space(s).map(|(id, _)| id))
     }
 
+    /// voicetest 11-04: Sew loses a Space and its channels (a purge and a
+    /// fresh install, or a restore from before it). Its calls end.
+    pub fn drop_space(&self, space_id: &str) {
+        self.with(|s| {
+            assert!(s.spaces.remove(space_id).is_some(), "no Space {space_id} to drop");
+            s.voice_states.retain(|v| v.space_id != space_id);
+        })
+    }
+
+    /// Sew loses one channel of a Space (a partial restore).
+    pub fn drop_channel(&self, space_id: &str, slug: &str) {
+        self.with(|s| {
+            let sp = s.spaces.get_mut(space_id).unwrap_or_else(|| panic!("no Space {space_id}"));
+            let c = sp.channels.remove(slug).unwrap_or_else(|| panic!("no channel {slug} in {space_id}"));
+            s.voice_states.retain(|v| v.channel_id != c.id);
+        })
+    }
+
+    /// How many server Spaces this install holds (never more than one).
+    pub fn server_space_count(&self) -> usize {
+        self.with(|s| s.spaces.values().filter(|sp| sp.governance.as_deref() == Some(sew_wire::GOVERNANCE_SERVER)).count())
+    }
+
     /// SW-1: a Space someone else already made with slug `slug` (a
     /// non-server Space; K2's server create then answers `slug_taken`).
     pub fn add_sew_space_with_slug(&self, space_id: &str, slug: &str) {

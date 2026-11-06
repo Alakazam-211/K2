@@ -908,6 +908,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/voice/session/keys/join",
         "/cli/voice/moderate",
         "/cli/voice/recording/consent",
+        "/cli/voice/repair",
         "/cli/sew/media/preflight",
         "/cli/sew/media/install",
         "/cli/sew/media/url",

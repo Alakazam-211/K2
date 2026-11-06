@@ -28,6 +28,7 @@
 #[cfg(unix)]
 pub mod client;
 pub mod hub;
+pub mod install;
 pub mod routes;
 pub mod routes_admin;
 pub mod routes_approvals;

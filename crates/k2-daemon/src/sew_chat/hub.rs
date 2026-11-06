@@ -387,10 +387,31 @@ impl Poller {
             let c = self.cursor.as_ref().expect("checked above");
             (c.member.clone(), c.after)
         };
-        let step = self
-            .sew
-            .deliveries(&self.act, &member, after, wait_ms)
-            .map_err(|e| format!("sew deliveries: {} {}", e.status, e.code))?;
+        let step = match self.sew.deliveries(&self.act, &member, after, wait_ms) {
+            Ok(step) => step,
+            // The member id the cursor names is gone (voicetest 11-04: Sew
+            // was purged and installed again; a restore can do the same).
+            // mgmt is unmasked: start again from this agent's member now,
+            // at the head, and say so once.
+            Err(e) if e.status == 404 => {
+                {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    core::clear_cursor(&conn, &self.pid).map_err(db_err)?;
+                }
+                self.cursor = None;
+                self.held.clear();
+                self.notice(Notice::Reset("member_gone"));
+                k2_core::log_debug!(
+                    "[sew-hub] {}: Sew doesn't know member {member} any more ({}); starting again from the agent's member now",
+                    self.pid,
+                    e.code
+                );
+                self.start_at_head(at)?;
+                return self.flush(at);
+            }
+            Err(e) => return Err(format!("sew deliveries: {} {}", e.status, e.code)),
+        };
         let stored_epoch = self.cursor.as_ref().and_then(|c| c.epoch.clone());
         match step {
             Step::Page { entries, next_after, head, sync_epoch, .. } => {
@@ -623,6 +644,7 @@ fn run(pid: &str, path: &str, stop: &AtomicBool) {
     let inj: Arc<dyn Injector> = Arc::new(LiveInjector);
     let mut poller: Option<Poller> = None;
     let mut backoff = Duration::from_secs(2);
+    let mut logged: Option<String> = None;
     while !stop.load(Ordering::SeqCst) {
         let Some(sew) = super::sew::backend() else { break };
         if poller.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.sew, &sew)) {
@@ -639,10 +661,17 @@ fn run(pid: &str, path: &str, stop: &AtomicBool) {
         match p.step(now(), core::POLL_MS) {
             Ok(()) => {
                 backoff = Duration::from_secs(2);
+                if logged.take().is_some() {
+                    k2_core::log_debug!("[sew-hub] {pid}: deliveries flow again");
+                }
                 with_status(pid, |s| s.last_error = None);
             }
             Err(e) => {
-                k2_core::log_debug!("[sew-hub] {pid}: {e}");
+                // One line per change of error, never one per retry.
+                if logged.as_deref() != Some(e.as_str()) {
+                    k2_core::log_debug!("[sew-hub] {pid}: {e} (retrying quietly until this changes)");
+                    logged = Some(e.clone());
+                }
                 with_status(pid, |s| s.last_error = Some(e));
                 std::thread::sleep(backoff);
                 backoff = (backoff * 2).min(Duration::from_secs(60));

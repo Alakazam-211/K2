@@ -2321,6 +2321,10 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     // S27: Sew's members are gone with it; so are the chat grants and any
     // row that would still try to reach it.
     let hook = grant_hook_off(env, true);
+    // Every Sew id K2 kept names nothing now (voicetest 11-04): agent Spaces
+    // are set aside, hub cursors dropped, and the K5 Space is checked (and
+    // made again) before anything is sent to it. The next install starts clean.
+    let chat_ids = env.ops.chat_ids_forget("Sew was purged (k2 hostchat purge)").unwrap_or_else(|e| json!({"error": e}));
     changed("purged");
     // What the teardown left on the box (K2's path: the kept recovery
     // file, a sysctl it could not restore, a login-like `sew` account).
@@ -2331,6 +2335,7 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
         "purged": true,
         "teardown": teardown,
         "grantHook": hook,
+        "chatIds": chat_ids,
         "keptBackups": keep_backups,
         "backupsAt": backups_at,
         "voiceLeftovers": voice_left,
@@ -3865,7 +3870,18 @@ pub fn doctor(env: &Env) -> R<Value> {
     // A person (or a Manage-Sew agent) re-runs the S29 §19 JWKS check here
     // after a `k2_jwks_url_drift` alarm.
     let jwks = jwks_drift_check(env);
-    Ok(json!({"ok": true, "exit": exit, "report": report, "verdict": verdict, "at": now, "jwks": jwks}))
+    // Agent Spaces set aside because their Sew install is gone (voicetest
+    // 11-04): listed until someone makes them again.
+    let mut out = json!({"ok": true, "exit": exit, "report": report, "verdict": verdict, "at": now, "jwks": jwks});
+    match crate::sew_chat::install::stale_spaces() {
+        Ok(s) if s.is_empty() => {}
+        Ok(s) => {
+            out["staleSpaces"] = json!(s.iter().map(|x| format!("{} (old id {})", x.slug, x.space_id)).collect::<Vec<_>>());
+            out["staleSpacesFix"] = json!("agent Spaces from an earlier Sew install: k2 voice repair lists who had them and how to make them again");
+        }
+        Err(e) => out["staleSpaces"] = json!({"error": e}),
+    }
+    Ok(out)
 }
 
 pub fn job(env: &Env, id: &str) -> R<Value> {

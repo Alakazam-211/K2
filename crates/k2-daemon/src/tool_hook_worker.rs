@@ -1150,6 +1150,14 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         let id = status.install_id.clone();
         blocking(move || hook::note_install_id(&k, &id)).await?;
     }
+    // The main DB's chat ids (agent Spaces, hub cursors) follow the install
+    // too (voicetest 11-04). Its failure is logged, never the sweep's.
+    if kind == hook::CHAT_KIND {
+        let id = status.install_id.clone();
+        if let Err(e) = blocking(move || crate::sew_chat::install::sync(&id)).await {
+            log_debug!("[sew-install] {e}");
+        }
+    }
     let mut actual = Vec::new();
     let mut after: Option<String> = None;
     loop {

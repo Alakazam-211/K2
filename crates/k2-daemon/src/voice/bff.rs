@@ -691,6 +691,19 @@ pub fn join(p: &Person, room_key: &str, join_body: &Value, rooms: &[RoomRow], d:
             .retry(RETRY_SECS));
     }
     let a = as_person(p, d, &paths::channel_join(&channel), join_body)?;
+    if a.status == 404 {
+        // The client API masks "gone" and "not yours" alike. Ask K2 to
+        // check the K5 Space over mgmt (unmasked); it re-makes the room if
+        // Sew lost it (voicetest 11-04).
+        crate::voice_admin::suspect(&format!("Sew answered 404 to a join of {}", room.slug));
+        return Err(Refusal::new(
+            503,
+            "voice_unavailable",
+            "Sew doesn't know this room right now: K2 is checking the K5 Space and makes the room again if it's gone. \
+             Try again in a minute (the owner can run k2 voice repair to do it now)",
+        )
+        .retry(RETRY_SECS));
+    }
     if !a.ok() {
         return Err(sew_refusal(&a));
     }

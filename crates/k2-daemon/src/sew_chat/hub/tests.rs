@@ -281,6 +281,26 @@ fn a_trimmed_feed_resets_to_the_head_with_one_status_line() {
     assert!(e.rec.take().is_empty());
 }
 
+/// voicetest 11-04: Sew was purged and installed again, and the saved
+/// cursor named a member id the new install never had. A 404 on the feed
+/// starts again from the agent's member now, with one status line.
+#[test]
+fn a_feed_404_starts_again_from_the_agents_member_with_one_status_line() {
+    let e = env();
+    let mut p = poller(&e);
+    p.step(T0, 0).unwrap();
+    mention(&e, "after the restart");
+    e.fake.fail_next(super::super::sew::SewError::new(404, "not_found", "no such member"));
+    p.step(T0, 0).expect("a 404 is handled, not an error");
+    let c = e.rec.take();
+    assert_eq!(c.len(), 1, "one status line, nothing replayed: {c:?}");
+    assert_eq!(c[0].text, core::status_line(core::Notice::Reset("member_gone")));
+    assert!(c[0].text.contains("new install or a restore"), "{}", c[0].text);
+    assert_eq!(cursor(&e), Some(Cursor { member: e.alpha.clone(), after: 1, epoch: None, held: 0 }), "at the head again");
+    p.step(T0, 0).unwrap();
+    assert!(e.rec.take().is_empty());
+}
+
 #[test]
 fn a_restore_changes_the_epoch_and_the_page_is_dropped() {
     let e = env();

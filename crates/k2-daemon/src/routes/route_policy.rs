@@ -2088,6 +2088,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/voice/join", Member),
     post("/cli/voice/moderate", Admin),
     post("/cli/voice/recording/consent", Member),
+    post("/cli/voice/repair", Admin),
     get("/cli/voice/rooms", Member),
     post("/cli/voice/rooms/close", Admin),
     post("/cli/voice/rooms/rename", Admin),

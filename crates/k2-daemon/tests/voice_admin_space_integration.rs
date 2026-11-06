@@ -74,6 +74,9 @@ async fn setup(flags: &[&str], preview: bool, hosting: Hosting) -> Env {
         let conn = db.lock();
         store::set_default_space(&conn, None, "test", 0).expect("clear default space");
         conn.execute("DELETE FROM sew_chat_access", []).expect("clear access");
+        // The install stamp, stale Space records and hub cursors too.
+        conn.execute("DELETE FROM sew_chat_settings WHERE key LIKE 'sew.%' OR key LIKE 'hub.cursor/%'", [])
+            .expect("clear install stamp");
     }
     Env { _home: home, sew }
 }
@@ -510,6 +513,294 @@ async fn another_default_carries_agents_access_over_and_agents_join_over_mgmt() 
     assert!(k2_daemon::voice_admin::default_space_fixed(Some("hearth")).unwrap().is_some());
     assert!(k2_daemon::voice_admin::default_space_fixed(None).unwrap().is_some(), "clearing it is refused too");
     assert_eq!(k2_daemon::voice_admin::default_space_fixed(Some("k5-admin")).unwrap(), None);
+    env.sew.assert_clean();
+}
+
+// ── a lost K5 Space (voicetest 11-04) ────────────────────────────────
+
+/// An agent workspace with a chat grant and access to the K5 Space `sp`.
+fn agent_in(sp: &str) -> String {
+    let ws = uuid::Uuid::new_v4().to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, 'Bobbin', ?2, ?3)",
+            rusqlite::params![ws, format!("/tmp/k2-va-{ws}"), format!("bobbin-{}", &ws[..8])],
+        )
+        .expect("project");
+        store::set_access(
+            &conn,
+            &store::Access {
+                project_id: ws.clone(),
+                space_id: sp.into(),
+                space_slug: sew_wire::ADMIN_SPACE_SLUG.into(),
+                level: Level::Reply,
+                approval: ApprovalMode::None,
+                updated_by: "user:owner".into(),
+                updated_at: 1,
+            },
+        )
+        .expect("access");
+    }
+    skin::create_grant(&SkinGrantWrite {
+        subject_kind: "workspace".into(),
+        subject_id: ws.clone(),
+        kind: CHAT_KIND.into(),
+        target_id: String::new(),
+        role: None,
+        scope: Some("coworker".into()),
+        created_by: Some("user:owner".into()),
+    })
+    .expect("agent chat grant");
+    ws
+}
+
+fn access_spaces(ws: &str) -> Vec<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::list_access(&conn, ws).expect("access").into_iter().map(|a| a.space_id).collect()
+}
+
+/// The ledger's rooms and the fake's channels agree, room by room.
+fn assert_rooms_linked(env: &Env, sp: &str, slugs: &[&str]) {
+    let ch = env.sew.channels(sp);
+    let v = hook::admin_space_view().unwrap();
+    for slug in slugs {
+        let c = ch.get(*slug).unwrap_or_else(|| panic!("{slug} in Sew:\n{}", env.sew.log()));
+        let r = v.rooms.iter().find(|r| r.slug == *slug).unwrap_or_else(|| panic!("{slug} in the ledger"));
+        assert_eq!((r.channel_id.clone(), r.state.as_str()), (Some(c.id.to_string()), "active"), "{slug} re-linked");
+        assert!(!c.archived && c.kind == "voice");
+    }
+}
+
+fn check_outcome() -> (String, Option<String>, Option<String>) {
+    let s = hook::admin_space_view().unwrap().space.expect("space row");
+    let c = s.last_check.clone().unwrap_or_else(|| panic!("no check recorded: {s:?}"));
+    (c["outcome"].as_str().expect("outcome").to_string(), c["from"].as_str().map(str::to_string), c["to"].as_str().map(str::to_string))
+}
+
+/// Sew loses the Space: the first add that hits it (an unmasked mgmt 404)
+/// asks for a check, the check (the idempotent create) answers a new Space,
+/// and K2 re-makes the rooms, re-adds every member (the blocked add too),
+/// moves the agents' access, and skips what named the old id. `k2 voice
+/// repair` after it finds the Space there and changes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_space_is_confirmed_over_mgmt_then_made_again_and_relinked() {
+    let env = setup(&SEW_070, true, Hosting::Ok).await;
+    k2_core::app_settings::update(serde_json::json!({"voiceRoomsCount": 2})).expect("count 2");
+    let ada = login("ada", Role::Admin);
+    let mo = login("mo", Role::Member);
+    settle(&env).await;
+    let old = space(&env);
+    let ws = agent_in(&old);
+    hook::kick_reconcile();
+    settle(&env).await;
+    let agent = format!("k2:workspace:{ws}");
+    assert!(env.sew.space(&old).unwrap().members.contains(&agent), "the agent joined");
+    let old_rooms = env.sew.channels(&old);
+    // Made long ago: a not_found may ask for a check now.
+    hook::admin_space_rewind_for_tests(3600, false).unwrap();
+
+    // Sew loses the Space and its channels.
+    env.sew.drop_space(&old);
+    // A new login's add hits the gone Space: 404 over mgmt (blocked).
+    let cy = login("cy", Role::Member);
+    let _ = hook::take_reconcile_request();
+    worker::reconcile_once().await.expect("sweep");
+    for _ in 0..20 {
+        hook::force_due_for_tests().unwrap();
+        worker::pass_once(&cfg()).await.expect("pass");
+    }
+    let blocked: Vec<_> = rows().into_iter().filter(|r| r.state == "blocked" && r.subject_key.starts_with(&format!("admin:m:{old}:"))).collect();
+    assert!(!blocked.is_empty(), "the add to the gone Space is blocked:\n{}", env.sew.log());
+    let s = hook::admin_space_view().unwrap().space.unwrap();
+    assert_eq!(s.verify.as_deref(), Some(admin_space::VERIFY_SPACE), "the 404 asked for a check: {s:?}");
+    assert!(s.suspect.as_deref().is_some_and(|w| w.contains("not_found")), "{s:?}");
+    assert_eq!(k2_daemon::voice::routes::space_health(Some(&s), &k2_daemon::voice::occupancy::FeedStatus::default())["state"], "checking", "never 'ready' now");
+
+    // The check, the re-link and everything after it.
+    settle(&env).await;
+    let new = space(&env);
+    assert_ne!(new, old, "Sew made it again under a new id");
+    assert_eq!(env.sew.server_space_count(), 1);
+    assert_eq!(hook::admin_space_id().unwrap().as_deref(), Some(new.as_str()));
+    assert_eq!(check_outcome(), ("remade".to_string(), Some(old.clone()), Some(new.clone())));
+    // Every room again, linked to its new channel.
+    assert_rooms_linked(&env, &new, &["room-1", "room-2"]);
+    for (slug, c) in &old_rooms {
+        assert_ne!(env.sew.channels(&new)[slug].id, c.id, "{slug} has a new channel id");
+    }
+    // Every member again at their level, the blocked add included.
+    let sp = env.sew.space(&new).unwrap();
+    for (ext, level) in [("k2:owner", "moderator"), (ada.as_str(), "moderator"), (mo.as_str(), "member"), (cy.as_str(), "member"), (agent.as_str(), "member")] {
+        assert!(sp.members.contains(ext), "{ext} in the new Space:\n{}", env.sew.log());
+        assert_eq!(env.sew.level(&new, ext).as_deref(), Some(level), "{ext}");
+    }
+    // What named the old id was skipped; nothing holds the sync.
+    let old_rows: Vec<_> = rows().into_iter().filter(|r| r.subject_key.contains(&old)).filter(|r| r.state == "pending" || r.state == "blocked").collect();
+    assert!(old_rows.is_empty(), "rows naming the old Space are closed: {old_rows:?}");
+    let v = hook::admin_space_view().unwrap();
+    assert!(v.holds.is_empty(), "{:?}", v.holds);
+    assert!(v.members.iter().all(|m| m.state == "added"), "{:?}", v.members);
+    // The agent's access followed the id; the default Space is still k5-admin.
+    assert_eq!(access_spaces(&ws), [new.clone()]);
+    assert_eq!(default_space().as_deref(), Some("k5-admin"));
+
+    // `k2 voice repair` now: the Space is there, nothing changes.
+    let ids = |env: &Env| -> Vec<(String, u64)> { env.sew.channels(&new).iter().map(|(k, c)| (k.clone(), c.id)).collect() };
+    let before_ids = ids(&env);
+    let start = k2_daemon::voice_admin::repair_begin("test repair").expect("repair");
+    assert!(start.checking);
+    settle(&env).await;
+    let after = hook::admin_space_view().unwrap();
+    assert!(k2_daemon::voice_admin::repair_settled(&start, &after));
+    let rep = k2_daemon::voice_admin::repair_report(&start, &after, true).expect("report");
+    assert_eq!(check_outcome().0, "same", "{rep}");
+    assert!(rep["space"].as_str().unwrap().contains("is there"), "{rep}");
+    assert_eq!(rep["rooms"], serde_json::json!([]), "no room moved: {rep}");
+    assert_eq!(rep["notRestored"], serde_json::Value::Null);
+    assert_eq!(rep["members"]["added"], 5, "{rep}");
+    assert_eq!(space(&env), new);
+    assert_eq!(ids(&env), before_ids, "same channels");
+    assert_eq!(env.sew.server_space_count(), 1);
+    env.sew.assert_clean();
+    k2_core::app_settings::update(serde_json::json!({"voiceRoomsCount": 1})).expect("count back");
+}
+
+/// One room's channel is gone but the Space is there: `k2 voice repair`
+/// makes just that room again and re-links it; the Space and the other
+/// room keep their ids. A second run changes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_room_is_made_again_alone() {
+    let env = setup(&SEW_070, true, Hosting::Ok).await;
+    k2_core::app_settings::update(serde_json::json!({"voiceRoomsCount": 2})).expect("count 2");
+    login("ada", Role::Admin);
+    settle(&env).await;
+    let sp = space(&env);
+    let room1 = env.sew.channels(&sp)["room-1"].id;
+    let room2 = env.sew.channels(&sp)["room-2"].id;
+    env.sew.drop_channel(&sp, "room-2");
+
+    let start = k2_daemon::voice_admin::repair_begin("test repair").expect("repair");
+    settle(&env).await;
+    let rep = k2_daemon::voice_admin::repair_report(&start, &hook::admin_space_view().unwrap(), true).expect("report");
+    assert_eq!(check_outcome().0, "same");
+    assert_eq!(space(&env), sp, "the Space keeps its id");
+    let ch = env.sew.channels(&sp);
+    assert_eq!(ch["room-1"].id, room1, "room-1 untouched");
+    assert_ne!(ch["room-2"].id, room2, "room-2 made again");
+    assert_rooms_linked(&env, &sp, &["room-1", "room-2"]);
+    assert_eq!(rep["rooms"], serde_json::json!([{"room": "room-2", "from": room2.to_string(), "to": ch["room-2"].id.to_string()}]), "{rep}");
+
+    // Twice is a no-op.
+    let posts = env.sew.posts().iter().filter(|c| c.path == sew_wire::MGMT_SPACES_CREATE).count();
+    let start = k2_daemon::voice_admin::repair_begin("again").expect("repair");
+    settle(&env).await;
+    let rep = k2_daemon::voice_admin::repair_report(&start, &hook::admin_space_view().unwrap(), true).expect("report");
+    assert_eq!(rep["rooms"], serde_json::json!([]), "{rep}");
+    assert_eq!(env.sew.channels(&sp)["room-2"].id, ch["room-2"].id);
+    assert_eq!(env.sew.posts().iter().filter(|c| c.path == sew_wire::MGMT_SPACES_CREATE).count(), posts + 1, "one check, no second Space");
+    assert_eq!(env.sew.server_space_count(), 1);
+    env.sew.assert_clean();
+    k2_core::app_settings::update(serde_json::json!({"voiceRoomsCount": 1})).expect("count back");
+}
+
+/// voicetest 11-04 itself: Sew purged and installed again. The new install
+/// id alone makes K2 check the Space (re-made, re-linked), set aside agent
+/// Spaces from the old install (recorded, audited, access gone) and drop
+/// hub cursors keyed to old member ids.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_sew_install_relinks_the_space_and_sets_aside_old_agent_spaces() {
+    use rusqlite::OptionalExtension;
+    let env = setup(&SEW_070, true, Hosting::Ok).await;
+    login("ada", Role::Admin);
+    settle(&env).await;
+    let old = space(&env);
+    let ws = agent_in(&old);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_access(
+            &conn,
+            &store::Access {
+                project_id: ws.clone(),
+                space_id: "6060".into(),
+                space_slug: "u1".into(),
+                level: Level::Manage,
+                approval: ApprovalMode::None,
+                updated_by: "user:owner".into(),
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sew_chat_settings (key, value, updated_by, updated_at) VALUES (?1, '{\"member\":\"1\",\"after\":0,\"held\":0}', 'hub', 1)",
+            rusqlite::params![format!("hub.cursor/{ws}")],
+        )
+        .unwrap();
+    }
+    settle(&env).await;
+    assert_eq!(access_spaces(&ws).len(), 2, "the same install keeps everything");
+
+    env.sew.reinstall("2002");
+    env.sew.drop_space(&old);
+    settle(&env).await;
+    let new = space(&env);
+    assert_ne!(new, old);
+    assert_eq!(check_outcome(), ("remade".to_string(), Some(old.clone()), Some(new.clone())));
+    let s = hook::admin_space_view().unwrap().space.unwrap();
+    assert_eq!(s.install_id.as_deref(), Some("2002"), "stamped with the new install");
+    assert!(env.sew.space(&new).unwrap().members.contains("k2:owner"));
+    assert_rooms_linked(&env, &new, &["room-1"]);
+    // The old agent Space: recorded, access gone; the K5 access followed.
+    assert_eq!(access_spaces(&ws), [new.clone()]);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let stale = k2_core::sew_chat::install::stale_spaces(&conn).unwrap();
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert_eq!((stale[0].space_id.as_str(), stale[0].slug.as_str(), stale[0].install.as_deref()), ("6060", "u1", Some("1001")));
+    assert_eq!(stale[0].access[0].project_id, ws);
+    assert_eq!(stale[0].access[0].level, "manage");
+    let cursor: Option<String> = conn
+        .query_row("SELECT value FROM sew_chat_settings WHERE key = ?1", rusqlite::params![format!("hub.cursor/{ws}")], |r| r.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(cursor, None, "the hub cursor keyed to an old member id is gone");
+    assert_eq!(k2_core::sew_chat::install::stamp(&conn).unwrap().as_deref(), Some("2002"));
+    drop(conn);
+    env.sew.assert_clean();
+}
+
+/// A box a K2 from before the install stamp left with a lost Space (the
+/// state voicetest is in after an upgrade): the first sweep checks it,
+/// re-makes it and re-links it, with no signal and no repair.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unstamped_space_is_checked_once_after_an_upgrade() {
+    let env = setup(&SEW_070, true, Hosting::Ok).await;
+    let ada = login("ada", Role::Admin);
+    settle(&env).await;
+    let old = space(&env);
+    let creates = || env.sew.posts().iter().filter(|c| c.path == sew_wire::MGMT_SPACES_CREATE).count();
+    let n = creates();
+    // A healthy unstamped Space: one check, nothing else changes.
+    hook::admin_space_rewind_for_tests(0, true).unwrap();
+    hook::kick_reconcile();
+    settle(&env).await;
+    assert_eq!((creates(), space(&env)), (n + 1, old.clone()), "one check");
+    assert_eq!(check_outcome().0, "same");
+    settle(&env).await;
+    assert_eq!(creates(), n + 1, "stamped now: no second check");
+    // The lost one.
+    hook::admin_space_rewind_for_tests(0, true).unwrap();
+    env.sew.drop_space(&old);
+    hook::kick_reconcile();
+    settle(&env).await;
+    let new = space(&env);
+    assert_ne!(new, old);
+    assert_eq!(check_outcome().0, "remade");
+    assert!(env.sew.space(&new).unwrap().members.contains(&ada));
+    assert_rooms_linked(&env, &new, &["room-1"]);
     env.sew.assert_clean();
 }
 

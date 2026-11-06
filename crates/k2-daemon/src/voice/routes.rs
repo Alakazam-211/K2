@@ -12,6 +12,8 @@
 //! POST /cli/voice/moderate {room, person, action}   kick|mute|unmute|deafen|undeafen (owner/Admin login)
 //! POST /cli/voice/recording/consent {recording_id, consent, notice_version?}
 //!                                          a person's own login only → Sew's recording
+//! POST /cli/voice/repair {}                check the K5 Space with Sew and repair it
+//!                                          (owner/Admin, or an agent with Manage Chat / Voice Hosting)
 //! ```
 //!
 //! Every route answers 404 `voice_rooms_off` while the preview is off (the
@@ -25,6 +27,7 @@
 //! | Owner/Admin login | ✓ | ✓ | ✓ | ✓ | ✓ (own Sew session) |
 //! | Member login | ✓ | route floor | route floor | ✓ | `moderator_only` |
 //! | agent or K2 terminal passport | ✓ | ✓ (read) | `owner_or_admin_only` | `agents_not_in_voice` | `agents_cannot_moderate` |
+//! | ...whose workspace has Manage Chat / Voice Hosting | as above, and `repair` | | | | |
 //! | App pass, API key | `app_pass_not_allowed` | … | … | … | … |
 //! | an ended phone pairing | `device_session_ended` (403) on every route | | | | |
 //!
@@ -75,6 +78,7 @@ pub const SESSION_KEY_PACKAGES: &str = "/cli/voice/session/keys/key_packages";
 pub const SESSION_KEYS_JOIN: &str = "/cli/voice/session/keys/join";
 pub const MODERATE: &str = "/cli/voice/moderate";
 pub const RECORDING_CONSENT: &str = "/cli/voice/recording/consent";
+pub const REPAIR: &str = "/cli/voice/repair";
 
 pub const GET_ROUTES: &[&str] = &[ROOMS, STATUS];
 pub const POST_ROUTES: &[&str] = &[
@@ -89,6 +93,7 @@ pub const POST_ROUTES: &[&str] = &[
     SESSION_KEYS_JOIN,
     MODERATE,
     RECORDING_CONSENT,
+    REPAIR,
 ];
 
 /// Largest body (KeyPackages ride `session/keys/key_packages`).
@@ -177,6 +182,10 @@ pub enum Caller {
     Login { username: String, role: Role, token: String },
     /// An agent's or a K2 terminal's passport.
     Passport,
+    /// A passport whose workspace has "Manage Chat / Voice Hosting"
+    /// (`chat_manage`) on: a [`Caller::Passport`] that may also run
+    /// `repair` (the box's chat server upkeep is that switch's).
+    ChatManager,
     /// An App pass or API key.
     App,
     /// A paired phone's device session that ended (revoked, unpaired,
@@ -192,10 +201,22 @@ impl Caller {
             .or_else(|| bearer.map(str::trim).filter(|s| !s.is_empty()))
             .unwrap_or("")
             .to_string();
-        match crate::compute_routes::who_from_tcp(query, bearer, owner_token) {
+        Caller::from_who(crate::compute_routes::who_from_tcp(query, bearer, owner_token), presented)
+    }
+
+    /// The caller for a resolved [`Who`] (`presented`: the token, for a
+    /// login and an ended phone pairing).
+    pub fn from_who(who: Who, presented: String) -> Caller {
+        match who {
             Who::Owner => Caller::OwnerToken,
             Who::Login { username, role } => Caller::Login { username, role, token: presented },
-            Who::Agent { .. } | Who::Shell { .. } => Caller::Passport,
+            Who::Agent { project_id, .. } | Who::Shell { project_id, .. } => {
+                if k2_core::workspace::settings::agents_can_manage_chat(&project_id) {
+                    Caller::ChatManager
+                } else {
+                    Caller::Passport
+                }
+            }
             Who::Wrong => Caller::App,
             Who::Invalid if k2_core::connect_users::token_state(&presented) == k2_core::connect_users::TokenState::DeviceEnded => {
                 Caller::DeviceEnded
@@ -228,7 +249,7 @@ fn need_manager(c: &Caller) -> Result<(), CliResponse> {
     }
     match c {
         _ if c.manages() => Ok(()),
-        Caller::Passport => Err(no(
+        Caller::Passport | Caller::ChatManager => Err(no(
             403,
             "owner_or_admin_only",
             "agents read voice rooms (k2 voice rooms, k2 voice status); the owner or an Admin changes them. Ask your human in your Thread.",
@@ -249,7 +270,7 @@ fn not_a_person(c: &Caller) -> Option<CliResponse> {
             "owner_token_cannot_join",
             "the bare owner token can't join a voice room (agents can read it): join from your own login on this server",
         )),
-        Caller::Passport => Some(no(403, "agents_not_in_voice", "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)")),
+        Caller::Passport | Caller::ChatManager => Some(no(403, "agents_not_in_voice", "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)")),
         Caller::Login { .. } => None,
         Caller::App | Caller::DeviceEnded | Caller::Invalid => Some(no(401, "unauthenticated", "invalid or missing token")),
     }
@@ -422,6 +443,11 @@ fn status_view() -> CliResponse {
     let (sessions, calls) = bff::counts();
     let carried = view.space.as_ref().map(|s| s.carried.clone()).unwrap_or_default();
     let count = k2_core::app_settings::load().voice_rooms_count;
+    let feed = occupancy::feed_status();
+    let stale = match crate::sew_chat::install::stale_spaces() {
+        Ok(s) => s,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the stale Spaces: {e}")),
+    };
     ok(json!({
         "ok": true,
         "server": label(),
@@ -435,16 +461,46 @@ fn status_view() -> CliResponse {
         "media": { "tier": crate::sew::voice::current_tier(&crate::sew::supervisor::live()) },
         "features": flags,
         "space": view.space,
+        "spaceHealth": space_health(view.space.as_ref(), &feed),
+        "staleSpaces": stale,
         "members": view.members,
         "rooms": view.rooms,
         "holds": view.holds,
         "lastPlan": k2_core::tool_hook::admin_space_last_summary(),
         "carriedAgents": carried,
         "lane": super::lane::state(),
-        "feed": occupancy::feed_status(),
+        "feed": feed,
         "bff": { "sessions": sessions, "calls": calls },
         "closeNow": close_now_pending(),
     }))
+}
+
+/// What `k2 voice status` says about the K5 Space: `state` none | ready |
+/// checking | suspect | blocked, a `line`, and the `fix` to run. Never
+/// "ready" while K2 doubts it.
+pub fn space_health(sp: Option<&admin_space::SpaceRow>, feed: &occupancy::FeedStatus) -> Value {
+    let Some(sp) = sp else {
+        return json!({"state": "none", "line": "not made yet"});
+    };
+    if sp.state == admin_space::SPACE_BLOCKED {
+        return json!({"state": "blocked", "line": sp.why.clone().unwrap_or_else(|| "Sew refused it".into()),
+            "fix": "fix what blocked it, then run k2 voice repair"});
+    }
+    if sp.verify.is_some() {
+        return json!({"state": "checking",
+            "line": format!("K2 is asking Sew whether it still holds this Space ({}); if it's gone, K2 makes it again",
+                sp.suspect.as_deref().unwrap_or("a routine check")),
+            "fix": "k2 voice repair runs it now"});
+    }
+    let feed_gone = feed.state == "retrying"
+        && feed.last_error.as_deref().is_some_and(admin_space::says_not_found)
+        && feed.space_id.as_deref() == sp.space_id.as_deref();
+    if feed_gone {
+        return json!({"state": "suspect",
+            "line": format!("Sew answered {} for this Space", feed.last_error.as_deref().unwrap_or("not_found")),
+            "fix": "k2 voice repair"});
+    }
+    json!({"state": "ready", "line": "ready"})
 }
 
 // ── owner actions ────────────────────────────────────────────────────
@@ -678,7 +734,7 @@ fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
                 "the bare owner token doesn't moderate (Sew's audit names a person): moderate from your own owner or Admin login",
             )
         }
-        Caller::Passport => return no(403, "agents_cannot_moderate", "agents don't moderate voice rooms"),
+        Caller::Passport | Caller::ChatManager => return no(403, "agents_cannot_moderate", "agents don't moderate voice rooms"),
         _ => {}
     }
     let p = match need_person(c, owner_token) {
@@ -699,6 +755,63 @@ fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     match bff::moderate(&p, &room, &who, &action, &space, &view.rooms, &occ, &bff::deps()) {
         Ok(v) => ok(v),
         Err(r) => refuse(&r),
+    }
+}
+
+// ── repair ───────────────────────────────────────────────────────────
+
+static REPAIR_WAIT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(30_000);
+
+/// Tests: how long `repair` waits for the worker before it answers.
+pub fn set_repair_wait_for_tests(ms: u64) {
+    REPAIR_WAIT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `POST /cli/voice/repair`: check the K5 Space with Sew (the idempotent
+/// create), re-link what moved, re-make what's gone, re-add every member,
+/// retry what Sew refused, and set aside agent Spaces from an earlier Sew
+/// install. Waits (up to 30 s) for the worker, then says what it found and
+/// fixed. Safe to run twice: a second run finds the Space there and
+/// changes nothing.
+fn repair(c: &Caller) -> CliResponse {
+    if let Some(r) = not_a_caller(c) {
+        return r;
+    }
+    match c {
+        _ if c.manages() => {}
+        Caller::ChatManager => {}
+        Caller::Passport => {
+            return no(
+                403,
+                "chat_manage_off",
+                "k2 voice repair is the owner's, an Admin's, or an agent's whose workspace has \"Manage Chat / Voice Hosting\" on \
+                 (the owner or an Admin runs k2 agent access set <workspace> chat_manage on). Ask your human in your Thread.",
+            )
+        }
+        _ => return no(403, "owner_or_admin_only", "only the owner or an Admin repairs voice rooms"),
+    }
+    let start = match crate::voice_admin::repair_begin("k2 voice repair") {
+        Ok(s) => s,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not start the repair: {e}")),
+    };
+    let wait = Duration::from_millis(REPAIR_WAIT_MS.load(std::sync::atomic::Ordering::Relaxed));
+    let deadline = std::time::Instant::now() + wait;
+    let (view, settled) = loop {
+        let v = match k2_core::tool_hook::admin_space_view() {
+            Ok(v) => v,
+            Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the K5 Space: {e}")),
+        };
+        let done = crate::voice_admin::repair_settled(&start, &v);
+        if done || std::time::Instant::now() >= deadline {
+            break (v, done);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    occupancy::emit_rooms_changed();
+    occupancy::kick();
+    match crate::voice_admin::repair_report(&start, &view, settled) {
+        Ok(v) => ok(v),
+        Err(e) => no(500, "internal", &format!("repair report: {e}")),
     }
 }
 
@@ -744,6 +857,7 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
         SESSION_KEYS_JOIN => session(&caller, owner_token, Forward::KeysJoin, &b),
         MODERATE => moderate(&caller, owner_token, &b),
         RECORDING_CONSENT => consent(&caller, owner_token, &b),
+        REPAIR => repair(&caller),
         _ => CliResponse::not_found(),
     }
 }

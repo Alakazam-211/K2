@@ -75,7 +75,7 @@ impl Request {
             return Err("controller must be an http(s) URL".into());
         }
         for k in self.labels.keys() {
-            if matches!(k.as_str(), "os" | "arch" | "name" | "vm") {
+            if k2_node_proto::host::shadows_host_label(k.as_str()) {
                 return Err(format!("label {k} is set by the node itself"));
             }
         }

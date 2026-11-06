@@ -239,6 +239,19 @@ pub fn mem_cap_detail_used(cap: u64, peak: Option<u64>) -> String {
     }
 }
 
+/// Protocol 7 (§4.5): the host facts as node-set job variables.
+pub fn with_host_env(mut env: Vec<(String, String)>, h: &k2_node_proto::host::HostFacts) -> Vec<(String, String)> {
+    use k2_node_proto::env as e;
+    let vars = [(e::ENV_NODE_OS, h.os.clone()), (e::ENV_NODE_DISTRO, h.distro.clone()), (e::ENV_NODE_DISTRO_VERSION, h.distro_version.clone()), (e::ENV_NODE_PKG, h.pkg.clone().unwrap_or_default())];
+    env.retain(|(k, _)| !vars.iter().any(|(v, _)| v == k));
+    for (k, v) in vars {
+        if !v.is_empty() {
+            env.push((k.to_string(), v));
+        }
+    }
+    env
+}
+
 /// CE-15 + loopback ports (0.46.7): the job's CPUs as thread-count hints
 /// (each only when the plan's env doesn't set it: a caller's `--env` or a
 /// controller's hint wins), `K2_JOB_CPUS`, and its own port block.
@@ -651,9 +664,23 @@ impl Node {
                 }
             }
         }
+        // Protocol 7 (§4.3): what this node is, first in the log.
+        if t.speaks_host() {
+            let line = self.host.lock().unwrap().line();
+            sys(&mut journal, &format!("host: {line}"));
+        }
         // Toolchains: explicit needs (required) + what the repo declares
-        // (best effort), installed into the node home, cached.
-        let resolved = match self.resolve_toolchains(&a, &dirs, &mut journal, &mut stop).await {
+        // (best effort), installed into the node home, cached. The job's
+        // packages fall under its server's package policy.
+        {
+            let mut asked: Vec<String> = a.plan.packages.clone();
+            asked.extend(a.plan.needs.iter().filter_map(|n| n.strip_prefix("sys:").map(str::to_string)));
+            if !asked.is_empty() {
+                self.note_pkg_asked(t.slot, &asked);
+            }
+        }
+        let server = crate::packages::RequestServer { owner: t.is_owner(), fp: t.pin.lock().unwrap().as_ref().map(|p| p.controller_fp.clone()).unwrap_or_default() };
+        let resolved = match self.resolve_toolchains(&a, &dirs, &mut journal, &mut stop, server).await {
             Ok(r) => r,
             Err((state, code, detail)) => {
                 sys(&mut journal, &format!("toolchains: {detail}"));
@@ -763,6 +790,8 @@ impl Node {
         let job_cpus = self.job_cpus(&t, &a);
         let port_block = self.jobs.lock().unwrap().get(&(t.slot, job.clone())).and_then(|j| j.port_block);
         let env = if easy { with_job_hints(env, &a.plan.env, job_cpus, port_block) } else { env };
+        // Protocol 7 (§4.5): K2_NODE_OS / _DISTRO / _DISTRO_VERSION / _PKG.
+        let env = if t.speaks_host() { with_host_env(env, &self.host.lock().unwrap()) } else { env };
         if easy {
             let ports = port_block.map(|b| {
                 let base = k2_node_proto::env::JOB_PORT_FIRST + b * k2_node_proto::env::JOB_PORT_BLOCK;
@@ -1555,6 +1584,7 @@ impl Node {
         dirs: &JobDirs,
         journal: &mut JournalWriter,
         stop: &mut watch::Receiver<Option<StopReason>>,
+        server: crate::packages::RequestServer,
     ) -> Result<crate::toolchain::Resolved, (JobState, String, String)> {
         use crate::toolchain;
         // Same parser as the controller: an unsupported or malformed need
@@ -1574,7 +1604,7 @@ impl Node {
         for s in &skipped {
             log(&format!("toolchains: skipped {s}"));
         }
-        if explicit.is_empty() && repo.is_empty() && rust_file.is_none() {
+        if explicit.is_empty() && repo.is_empty() && rust_file.is_none() && a.plan.packages.is_empty() {
             return Ok(toolchain::Resolved::default());
         }
         let wanted: Vec<String> = explicit
@@ -1590,6 +1620,8 @@ impl Node {
         // job's own entry doesn't count).
         let me = (a.plan.job_id.clone(), a.fence.generation);
         tc.busy_channels = self.jobs.lock().unwrap().iter().filter(|((_, id), j)| !(*id == me.0 && j.generation == me.1)).flat_map(|(_, j)| j.rust.clone()).collect();
+        tc.server = server;
+        tc.plan_packages = a.plan.packages.clone();
         let r = {
             let fut = tc.resolve(&explicit, &repo, rust_file.as_ref(), &mut log);
             tokio::pin!(fut);
@@ -2021,6 +2053,9 @@ impl Node {
         let mut env_names: Vec<String> = k2_node_proto::env::NODE_SET_VARS
             .iter()
             .filter(|n| !matches!(**n, "K2_SECRETS_DIR"))
+            // Protocol 7's host variables only where the job got them (an
+            // older server's receipts stay as they were).
+            .filter(|n| t.speaks_host() || !n.starts_with("K2_NODE_"))
             .map(|s| s.to_string())
             .chain(a.plan.env.keys().cloned())
             .collect();

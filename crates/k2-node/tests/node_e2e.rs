@@ -259,9 +259,14 @@ async fn job_env_is_scrubbed_and_home_is_the_job_home() {
     for v in k2_node_proto::env::PROD_REACH_VARS {
         assert!(!env.contains_key(*v), "{v} leaked into the job");
     }
-    let k2: Vec<&String> = env.keys().filter(|k| k.starts_with("K2")).collect();
+    let k2: Vec<&String> = env.keys().filter(|k| k.starts_with("K2") && !k.starts_with("K2_NODE_")).collect();
     // 0.46.7: the job's CPUs and its own port range (node-set, never --env).
     assert_eq!(k2, vec!["K2_COMPUTE_JOB", "K2_JOB_CPUS", "K2_JOB_PORT_BASE", "K2_JOB_PORT_COUNT"]);
+    // Protocol 7 (§4.5): what the node is.
+    assert_eq!(env["K2_NODE_OS"], k2_node::sysinfo::os_label());
+    assert!(!env["K2_NODE_DISTRO"].is_empty() && !env["K2_NODE_DISTRO_VERSION"].is_empty(), "{env:?}");
+    let host_vars: Vec<&String> = env.keys().filter(|k| k.starts_with("K2_NODE_")).collect();
+    assert!(host_vars.iter().all(|k| k2_node_proto::env::NODE_SET_VARS.contains(&k.as_str())), "every K2_NODE_ var is node-set: {host_vars:?}");
     assert_eq!(env["K2_COMPUTE_JOB"], "env1");
     assert_eq!(env["RUST_LOG"], "debug");
     assert_eq!(env["HOME"], n.layout.job_dir("env1", 1).join("home").display().to_string());

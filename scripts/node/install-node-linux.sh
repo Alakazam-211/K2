@@ -2,7 +2,7 @@
 # Turn this Linux machine into a K2 compute node (prd-k2-compute-nodes-v1 §8.3).
 #
 #   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
-#        [--allow-packages "libssl-dev pkg-config"] [--tools "node@22 rust@stable"]
+#        [--allow-packages "libssl-dev pkg-config"] [--package-policy list|profiles|official] [--tools "node@22 rust@stable"]
 #        [--remote-admin off|policy|full] [--no-job-wall]
 #        [--controller https://you.k2.dev --enroll - --name NAME < code-file]
 #        (--enroll - reads the code from stdin; K2_NODE_ENROLL_CODE works too)
@@ -45,6 +45,7 @@ HUMAN="${SUDO_USER:-}"
 REENROLL=0
 PRIVATE_HOME=""
 ALLOW_PACKAGES=""
+PACKAGE_POLICY=""
 PACKAGE_RULE=1
 TOOLS=""
 REMOTE_ADMIN=""
@@ -70,6 +71,7 @@ while [ $# -gt 0 ]; do
         --private-home) PRIVATE_HOME=1; shift ;;
         --no-private-home) PRIVATE_HOME=0; shift ;;
         --allow-packages) ALLOW_PACKAGES="${2:-}"; shift 2 ;;
+        --package-policy) PACKAGE_POLICY="${2:-}"; shift 2 ;;
         --no-package-installs) PACKAGE_RULE=0; shift ;;
         --tools) TOOLS="${2:-}"; shift 2 ;;
         --remote-admin) REMOTE_ADMIN="${2:-}"; shift 2 ;;
@@ -280,6 +282,15 @@ if [ "$PACKAGE_RULE" = "1" ]; then
     if [ -n "$ALLOW_PACKAGES" ]; then
         # shellcheck disable=SC2086
         "$BIN" packages allow $ALLOW_PACKAGES >/dev/null
+    fi
+    # The owner's package policy for this node's own server (protocol 7):
+    # --package-policy sets it; a first enrol with none written yet gets
+    # `official` (the distro's signed repos minus K2's deny list). A re-run
+    # on an upgraded node changes nothing.
+    if [ -n "$PACKAGE_POLICY" ]; then
+        "$BIN" packages policy own "level=$PACKAGE_POLICY" >/dev/null
+    elif [ -n "$CONTROLLER" ] && [ ! -e /etc/k2-node-package-policy.toml ]; then
+        "$BIN" packages policy own level=official >/dev/null
     fi
     install -d -m 0755 -o "$NODE_USER" -g "$NODE_USER" "$HOME_DIR/run"
     install -d -m 0700 -o "$NODE_USER" -g "$NODE_USER" "$HOME_DIR/run/pkg-requests"

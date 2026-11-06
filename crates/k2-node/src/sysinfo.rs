@@ -116,6 +116,113 @@ pub fn arch_label() -> &'static str {
     }
 }
 
+/// The running kernel's release (`uname -r`, through libc, no shell).
+pub fn kernel_release() -> String {
+    let mut u: libc::utsname = unsafe { std::mem::zeroed() };
+    if unsafe { libc::uname(&mut u) } != 0 {
+        return String::new();
+    }
+    let raw: Vec<u8> = u.release.iter().take_while(|c| **c != 0).map(|c| *c as u8).collect();
+    String::from_utf8_lossy(&raw).into_owned()
+}
+
+/// `glibc 2.39`, `musl`, `apple`.
+pub fn libc_label() -> String {
+    if cfg!(target_os = "macos") {
+        return "apple".into();
+    }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        extern "C" {
+            fn gnu_get_libc_version() -> *const libc::c_char;
+        }
+        let p = unsafe { gnu_get_libc_version() };
+        if !p.is_null() {
+            let v = unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned();
+            return format!("glibc {v}");
+        }
+    }
+    if cfg!(target_env = "musl") {
+        return "musl".into();
+    }
+    String::new()
+}
+
+/// The GPU, from sysfs (Linux) or the chip (Apple silicon).
+pub fn gpu_label() -> Option<String> {
+    if cfg!(target_os = "macos") {
+        return (std::env::consts::ARCH == "aarch64").then(|| "apple".into());
+    }
+    let mut vendors: Vec<&str> = Vec::new();
+    for e in std::fs::read_dir("/sys/class/drm").ok()?.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !n.starts_with("card") || n.contains('-') {
+            continue;
+        }
+        if let Some(v) = std::fs::read_to_string(e.path().join("device/vendor")).ok().and_then(|v| k2_node_proto::host::gpu_vendor(&v)) {
+            if !vendors.contains(&v) {
+                vendors.push(v);
+            }
+        }
+    }
+    // A discrete GPU wins over the integrated one.
+    let v = ["nvidia", "amd", "intel"].into_iter().find(|x| vendors.contains(x))?;
+    if v == "nvidia" {
+        if let Some(d) = std::fs::read_to_string("/proc/driver/nvidia/version").ok().and_then(|t| k2_node_proto::host::nvidia_driver(&t)) {
+            return Some(format!("nvidia {d}"));
+        }
+    }
+    Some(v.into())
+}
+
+/// A kernel update waits for a reboot: Debian's flag file, or the running
+/// kernel's modules folder is gone (Arch removes it on upgrade).
+pub fn reboot_required() -> bool {
+    if cfg!(target_os = "macos") {
+        return false;
+    }
+    if std::path::Path::new("/var/run/reboot-required").exists() {
+        return true;
+    }
+    let k = kernel_release();
+    // Only when the folder is readable here: a user that can't list it
+    // can't tell (z13flow's job users can't), and a guess would cry wolf.
+    let Ok(rd) = std::fs::read_dir("/usr/lib/modules") else { return false };
+    let names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    !k.is_empty() && !names.is_empty() && !names.iter().any(|n| *n == k) && !std::path::Path::new("/lib/modules").join(&k).is_dir()
+}
+
+/// What this node is (protocol 7, §4.1), from files and libc, never a
+/// shell. `macos_version` is the tools probe's `sw_vers` answer.
+pub fn host_facts(macos_version: Option<&str>) -> k2_node_proto::host::HostFacts {
+    use k2_node_proto::host::HostFacts;
+    let mut h = HostFacts {
+        os: os_label().into(),
+        arch: arch_label().into(),
+        kernel: kernel_release(),
+        libc: libc_label(),
+        gpu: gpu_label(),
+        reboot_required: reboot_required(),
+        ..Default::default()
+    };
+    if cfg!(target_os = "macos") {
+        let v = macos_version.unwrap_or("").to_string();
+        h.distro = "macos".into();
+        h.distro_name = if v.is_empty() { "macOS".into() } else { format!("macOS {v}") };
+        h.distro_version = v;
+        h.pkg = std::path::Path::new("/opt/homebrew/bin/brew").is_file().then(|| "brew".into()).or_else(|| std::path::Path::new("/usr/local/bin/brew").is_file().then(|| "brew".into()));
+        return h;
+    }
+    let o = k2_node_proto::host::parse_os_release(&std::fs::read_to_string("/etc/os-release").or_else(|_| std::fs::read_to_string("/usr/lib/os-release")).unwrap_or_default());
+    h.distro = if o.id.is_empty() { "linux".into() } else { o.id.clone() };
+    h.distro_like = o.id_like.clone();
+    h.distro_version = o.version_id.clone().unwrap_or_else(|| "rolling".into());
+    h.distro_name = o.pretty_name.clone().unwrap_or_else(|| h.distro.clone());
+    h.distro_flavor = crate::pkgsys::flavor();
+    h.pkg = crate::pkgsys::detect().map(|m| m.name().to_string());
+    h
+}
+
 fn first_version(s: &str) -> Option<String> {
     s.split_whitespace()
         .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()) && w.contains('.'))
@@ -191,6 +298,24 @@ mod tests {
         let (free, total) = disk(&std::env::temp_dir());
         assert!(total > 0 && free <= total);
         assert!(!boot_id().is_empty());
+    }
+
+    /// Protocol 7: the host facts this machine reports are filled in.
+    #[test]
+    fn host_facts_are_filled_in() {
+        let h = host_facts(Some("15.5"));
+        assert_eq!(h.os, os_label());
+        assert_eq!(h.arch, arch_label());
+        assert!(!h.kernel.is_empty(), "uname -r");
+        assert!(!h.distro.is_empty() && !h.distro_version.is_empty() && !h.distro_name.is_empty(), "{h:?}");
+        if cfg!(target_os = "macos") {
+            assert_eq!((h.distro.as_str(), h.distro_version.as_str(), h.libc.as_str()), ("macos", "15.5", "apple"));
+        } else {
+            assert!(h.libc.starts_with("glibc ") || h.libc == "musl", "{}", h.libc);
+            assert!(h.pkg.is_some(), "a Linux test node has a package manager: {h:?}");
+            assert_ne!(h.distro, "linux", "/etc/os-release names the distro");
+        }
+        assert!(!h.line().is_empty() && !h.short().is_empty());
     }
 
     #[tokio::test]

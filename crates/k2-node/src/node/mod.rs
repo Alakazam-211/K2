@@ -50,6 +50,7 @@ mod disk;
 pub mod job_cache;
 mod offer;
 pub mod owner_swap;
+pub mod pkgreq;
 mod run;
 mod sync_src;
 pub mod tenant;
@@ -104,6 +105,10 @@ pub struct NodeOptions {
     /// How long a tenant slot that should open again may take before the
     /// jobs it left running are stopped (C2; tests shorten it).
     pub tenant_adopt_wait: Duration,
+    /// Tests only: a scripted package manager and the host it pretends to
+    /// be (both, or neither). A real node never sets them.
+    pub pkg_backend: Option<Arc<dyn crate::pkgsys::Backend>>,
+    pub pkg_host: Option<crate::pkgsys::HostCtx>,
 }
 
 /// The installed `k2-node` this process runs from, when it is one (a test
@@ -145,6 +150,8 @@ impl NodeOptions {
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
+            pkg_backend: None,
+            pkg_host: None,
         }
     }
 }
@@ -286,6 +293,12 @@ pub struct Node {
     slots: Mutex<Slots>,
     smoke: Mutex<SmokeLock>,
     pub tools: Mutex<BTreeMap<String, String>>,
+    /// What this node is (protocol 7; refreshed with the tools probe).
+    pub host: Mutex<k2_node_proto::host::HostFacts>,
+    /// Root's package files and what is installed (protocol 7).
+    pub pkg: Mutex<pkgreq::PkgCache>,
+    /// Package requests waiting for the owner (protocol 7).
+    pub pkg_reqs: Mutex<pkgreq::Ledger>,
     cgroups: Option<Cgroups>,
     /// The job wall (fixed for the process; the installer restarts us).
     pub wall: Wall,
@@ -342,6 +355,15 @@ pub struct Linger {
 
 /// The easy-mode features (prd-compute-easy-mode-0467 §3.2), offered only
 /// to a server that speaks protocol 6 ([`Tenant::speaks_easy`]).
+/// Protocol 7 (prd-compute-self-serve-environments): offered only to a
+/// server that said protocol ≥ 7. `pkg-status` and `pkg-requests` only on
+/// a node that can install packages.
+pub const HOST_FEATURES: &[&str] = &[
+    k2_node_proto::host::FEATURE_HOST_FACTS,
+    k2_node_proto::pkgmap::FEATURE_PKG_MAP,
+    k2_node_proto::needs::FEATURE_RUST_DEFAULT_COMPONENTS,
+];
+
 pub const EASY_FEATURES: &[&str] = &[
     results::FEATURE_TOOLS_USED,
     results::FEATURE_JOB_RESOURCES,
@@ -415,6 +437,9 @@ impl Node {
             slots: Mutex::new(Slots::default()),
             smoke: Mutex::new(SmokeLock::default()),
             tools: Mutex::new(BTreeMap::new()),
+            host: Mutex::new(k2_node_proto::host::HostFacts::default()),
+            pkg: Mutex::new(pkgreq::PkgCache::default()),
+            pkg_reqs: Mutex::new(pkgreq::Ledger::default()),
             cgroups,
             wall,
             status: Mutex::new(Status::default()),
@@ -435,6 +460,8 @@ impl Node {
             opts,
         });
         node.hold_lingering(OWNER_SLOT, lingering);
+        *node.pkg_reqs.lock().unwrap() = pkgreq::Ledger::load(&node);
+        crate::pkgsys::NoServices::clear_stale_if_root();
         node.refresh_local(true);
         // Phase 2 (C1): before the queue, the disk guard and the session
         // start (the caller spawns them after `open`), and before the
@@ -699,10 +726,17 @@ impl Node {
         crate::toolchain::Toolchains::new(&self.layout().home, self.job_env_base())
     }
 
-    pub async fn probe_tools(&self) {
+    pub async fn probe_tools(self: &Arc<Self>) {
         let mut tools = crate::sysinfo::probe_tools(&self.job_env_base()).await;
         tools.extend(self.toolchains().installed_tools());
         *self.tools.lock().unwrap() = tools;
+        // Protocol 7: host facts and the package view, off the async path.
+        let me = self.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            me.refresh_host();
+            me.refresh_pkg_cache();
+        })
+        .await;
         self.notify_offers();
     }
 
@@ -1040,6 +1074,9 @@ impl Node {
                 if n % 5 == 0 {
                     node.write_status();
                 }
+                if n % 15 == 0 {
+                    node.pkg_sweep();
+                }
                 crate::admin::housekeeping::process_gc_request(&node).await;
             }
         });
@@ -1215,7 +1252,7 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(),
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

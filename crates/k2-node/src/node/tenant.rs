@@ -356,6 +356,12 @@ impl Tenant {
         self.protocol() >= k2_node_proto::frames::PROTOCOL_EASY
     }
 
+    /// Does this session get host facts, the package status and the
+    /// package request frames (protocol 7)?
+    pub fn speaks_host(&self) -> bool {
+        self.protocol() >= k2_node_proto::host::PROTOCOL_HOST
+    }
+
     pub fn share(&self) -> Option<ShareInfo> {
         self.share.lock().unwrap().clone()
     }

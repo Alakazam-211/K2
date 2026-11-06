@@ -12,7 +12,7 @@ const USAGE: &str = r#"k2-node — K2 compute node runtime
 
 Install (root, once; the installers are inside this binary):
   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
-                     [--allow-packages "libssl-dev pkg-config"]
+                     [--allow-packages "libssl-dev pkg-config"] [--package-policy list|profiles|official]
                      [--controller URL --enroll - --name NAME < code-file]
                      [--remote-admin off|policy|full] [--no-job-wall]
   Remote admin defaults to policy (asked, policy preselected; a first install
@@ -38,7 +38,13 @@ Install (root, once; the installers are inside this binary):
   --enroll CODE.FP / --code CODE.FP still work but are visible in ps while they run.
   k2-node tools install <need>... [--home DIR]   (as the node user: node@22 python@3.12 rust@stable cargo-nextest sys:pkg-config)
   k2-node tools list [--home DIR] [--json]
-  k2-node packages list | allow <pkg>... | disallow <pkg>...   (allow/disallow: root)
+  k2-node packages list | allow <pkg>... | disallow <pkg>... | install <pkg>...   (all but list: root)
+  sudo k2-node packages policy <own|server> [level=list|profiles|official] [profiles=a,b] [max_install_mb=N]
+                 which packages each server's jobs may install here without asking you:
+                 list = only the approved list; profiles = plus K2's profiles you name
+                 (tauri-linux, rust-gui-ci, build-base, k2-workspace); official = anything
+                 from the distro's signed repos except K2's deny list. Anything else
+                 reaches you as a request in K2 (Settings → Compute → Approvals).
   k2-node status [--home DIR] [--json]
   k2-node pause [--now] [--by NAME] [--config-dir DIR]     (machine owner: root or k2nodectl)
   k2-node drain [--by NAME] [--config-dir DIR]
@@ -370,7 +376,7 @@ async fn cmd_enroll(a: &Args) -> Result<(), String> {
     let mut labels = BTreeMap::new();
     for l in a.flags.get("label").cloned().unwrap_or_default() {
         let (k, v) = l.split_once('=').ok_or_else(|| format!("--label {l:?}: use key=value"))?;
-        if matches!(k, "os" | "arch" | "name" | "vm") {
+        if k2_node_proto::host::shadows_host_label(k) {
             return Err(format!("--label {k} is set by the node itself"));
         }
         labels.insert(k.to_string(), v.to_string());
@@ -667,8 +673,10 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
                     pairs.push((k.to_string(), v.to_string()));
                 }
             }
+            // `--for none` is 0: no end date (an absent `--for` keeps the
+            // trust default, 7 days for `team`).
             let for_secs = match a.get("for") {
-                Some(v) => parse_for(v)?,
+                Some(v) => Some(parse_for(v)?.unwrap_or(0)),
                 None => None,
             };
             let args = share::AddArgs {
@@ -1037,6 +1045,12 @@ fn cmd_packages(a: &Args) -> Result<(), String> {
         Some("list") | None => {
             let l = k2_node::packages::read_approved(std::path::Path::new(k2_node::packages::APPROVED_FILE))?;
             let m = k2_node::packages::detect().map(|m| m.name()).unwrap_or("none");
+            println!("host: {}", k2_node::sysinfo::host_facts(None).line());
+            let pf = k2_node::packages::read_policy(std::path::Path::new(k2_node::packages::POLICY_FILE))?;
+            println!("policy own: {}", pf.own.clone().unwrap_or_default().summary());
+            for (label, line) in &pf.servers {
+                println!("policy {label}: {}", line.policy.summary());
+            }
             let unit = k2_node::packages::installer_present();
             println!(
                 "package manager: {m}; installer: {}",
@@ -1062,9 +1076,52 @@ fn cmd_packages(a: &Args) -> Result<(), String> {
             Ok(())
         }
         Some("install") => k2_node::packages::cmd_install(&names),
+        Some("policy") => cmd_packages_policy(&names),
         Some("serve") => k2_node::packages::cmd_serve(&a.layout().home),
-        Some(o) => Err(format!("packages {o:?}: use list, allow, disallow")),
+        Some(o) => Err(format!("packages {o:?}: use list, allow, disallow, install, policy")),
     }
+}
+
+/// `k2-node packages policy <own|server> key=value…` at the machine (root):
+/// narrowing or widening, both the owner's.
+fn cmd_packages_policy(names: &[String]) -> Result<(), String> {
+    let server = names.first().ok_or("packages policy <own|server> [level=…] [profiles=a,b] [max_install_mb=N]")?.clone();
+    let mut args = serde_json::json!({"server": server});
+    for kv in names.iter().skip(1) {
+        let (k, v) = kv.split_once('=').ok_or_else(|| format!("{kv:?}: use key=value"))?;
+        match k {
+            "level" => args["level"] = serde_json::json!(v),
+            "profiles" => args["profiles"] = serde_json::json!(v.split(',').map(str::trim).filter(|x| !x.is_empty()).collect::<Vec<_>>()),
+            "max_install_mb" => args["max_install_mb"] = serde_json::json!(v.parse::<u64>().map_err(|_| "max_install_mb is a whole number")?),
+            _ => return Err(format!("{k}: level, profiles or max_install_mb")),
+        }
+    }
+    let a = k2_node_proto::pkgpolicy::check_policy_args(&args)?;
+    if !k2_node::packages::is_root() {
+        return Err("run as root: sudo k2-node packages policy …".into());
+    }
+    let path = std::path::Path::new(k2_node::packages::POLICY_FILE);
+    let mut f = k2_node::packages::read_policy(path)?;
+    if a.server == "own" {
+        f.own = Some(a.apply(&f.own.clone().unwrap_or_default()));
+    } else {
+        let fp = match f.servers.get(&a.server) {
+            Some(l) => l.fp.clone(),
+            None => k2_node::admin::servers::read_file(std::path::Path::new(k2_node::paths::DEFAULT_CONFIG_DIR))?
+                .map(|sf| sf.servers)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|e| e.label == a.server && e.slot != 0)
+                .map(|e| e.fp_prefix)
+                .ok_or_else(|| format!("no server {:?} on this node (own, or a label from k2-node servers list)", a.server))?,
+        };
+        let cur = f.servers.get(&a.server).map(|l| l.policy.clone()).unwrap_or_default();
+        f.servers.insert(a.server.clone(), k2_node_proto::pkgpolicy::ServerLine { fp, policy: a.apply(&cur) });
+    }
+    k2_node::packages::write_policy(path, &f, true)?;
+    let shown = if a.server == "own" { f.own.clone().unwrap_or_default() } else { f.servers[&a.server].policy.clone() };
+    println!("policy {}: {}", a.server, shown.summary());
+    Ok(())
 }
 
 fn cmd_install_files(a: &Args) -> Result<(), String> {

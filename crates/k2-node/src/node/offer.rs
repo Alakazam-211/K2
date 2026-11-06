@@ -14,6 +14,9 @@
 //!   node is set up for sharing (`servers.toml`), with `priority` (does its
 //!   Priority count here) when it speaks protocol 5;
 //! - `tiers` (protocol 5) in `features` to a server that speaks 5;
+//! - protocol 7: the host labels (`distro`, `distro_version`, `pkg`,
+//!   `libc`, `gpu`), `host` and `pkg` (this server's package view), and
+//!   their features, only to a server that speaks 7;
 //! - revision and dedupe per session; `share.expires_in_secs` and the
 //!   quotes don't count as a change (they ride the 30 s offer).
 
@@ -74,6 +77,11 @@ impl Node {
         if crate::sysinfo::is_vm() {
             labels.insert("vm".into(), "true".into());
         }
+        let host = t.speaks_host().then(|| self.host.lock().unwrap().clone()).filter(|h| !h.distro.is_empty());
+        if let Some(h) = &host {
+            // Host facts win over any owner label of the same name.
+            labels.extend(h.labels());
+        }
         let ledger_id = t.ledger_id();
         let mut o = Offer {
             share: self.share_view(t),
@@ -95,6 +103,8 @@ impl Node {
             ledger_id,
             node_version: NODE_VERSION.to_string(),
             features: self.session_features(t),
+            host,
+            pkg: if t.speaks_host() { self.pkg_status(t) } else { None },
         };
         let mut last = t.last_offer.lock().unwrap();
         let same = last.as_ref().is_some_and(|p| {
@@ -173,6 +183,20 @@ impl Node {
         // speaks protocol 6 (a 0.46.5 parser rejects `batch`).
         if t.speaks_tiers2() && !f.iter().any(|x| x == k2_node_proto::tiers::FEATURE_TIERS2) {
             f.push(k2_node_proto::tiers::FEATURE_TIERS2.to_string());
+        }
+        // Self-serve environments (protocol 7): host facts, the name map,
+        // profiles and complete Rust toolchains; the package status and
+        // requests where this node can install packages.
+        if t.speaks_host() {
+            let mut add: Vec<&str> = super::HOST_FEATURES.to_vec();
+            if self.pkg_backend().is_some() {
+                add.extend([k2_node_proto::pkgpolicy::FEATURE_PKG_STATUS, k2_node_proto::pkgpolicy::FEATURE_PKG_REQUESTS]);
+            }
+            for feat in add {
+                if !f.iter().any(|x| x == feat) {
+                    f.push(feat.to_string());
+                }
+            }
         }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.

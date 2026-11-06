@@ -553,6 +553,8 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     e.uid = None;
     e.set_limits(&limits);
     e.expires_at = match (a.for_secs, a.trust) {
+        // `--for none` (0): no end date, even for `team` (Rosson, Q8).
+        (Some(0), _) => None,
         (Some(s), _) => Some(ctx.now + s),
         (None, Trust::Team) => Some(ctx.now + 7 * 24 * 3600),
         (None, Trust::Own) => None,
@@ -586,6 +588,25 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
             x.uid = uid;
         }
         write_file(&ctx.config_dir, &f).map_err(failed)?;
+    }
+    // Protocol 7 (§3.4, Rosson Q1/Q2): the new server's package policy, set
+    // once at share time when the owner hasn't written one: K2's profiles
+    // for other people's servers, official repos for the owner's own.
+    // Best effort: a failure leaves it at `list` (today's rule), said so.
+    let (_, policy_path) = crate::packages::files_for(&ctx.config_dir);
+    match crate::packages::read_policy(&policy_path) {
+        Ok(mut pf) if !pf.servers.contains_key(&label) => {
+            let policy = match a.trust {
+                Trust::Team => k2_node_proto::pkgpolicy::ServerPolicy::team_default(),
+                Trust::Own => k2_node_proto::pkgpolicy::ServerPolicy::own_default(),
+            };
+            pf.servers.insert(label.clone(), k2_node_proto::pkgpolicy::ServerLine { fp: a.fp_prefix.clone(), policy });
+            if let Err(x) = crate::packages::write_policy(&policy_path, &pf, ctx.config_dir == Path::new(crate::paths::DEFAULT_CONFIG_DIR)) {
+                crate::nlog!("package policy for {label}: {x} (it stays at list)");
+            }
+        }
+        Ok(_) => {}
+        Err(x) => crate::nlog!("package policy for {label}: {x} (it stays at list)"),
     }
     // Last: the credential the node enrols with.
     let enroll = ServerEnroll {

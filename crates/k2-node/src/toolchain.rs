@@ -120,6 +120,15 @@ pub struct Toolchains {
     /// 2026-11-04): a moving channel (`stable`, `beta`) is never moved to a
     /// newer release under them; the next job after they end gets it.
     pub busy_channels: Vec<String>,
+    /// The owner's package policy file (root-owned; protocol 7).
+    pub policy_file: PathBuf,
+    /// Whose policy the job's packages fall under (its server).
+    pub server: crate::packages::RequestServer,
+    /// The root package installer is set up here.
+    pub pkg_installer: bool,
+    /// Protocol 7 (`pkg-map`): the plan's system names, profiles expanded
+    /// by the server. Empty from an older server.
+    pub plan_packages: Vec<String>,
 }
 
 /// Rust channels that move to a new release over time.
@@ -150,6 +159,10 @@ impl Toolchains {
             arch: std::env::consts::ARCH,
             packages_file: PathBuf::from(crate::packages::APPROVED_FILE),
             busy_channels: Vec::new(),
+            policy_file: PathBuf::from(crate::packages::POLICY_FILE),
+            server: crate::packages::RequestServer::owner(),
+            pkg_installer: crate::packages::installer_present(),
+            plan_packages: Vec::new(),
         }
     }
 
@@ -507,6 +520,25 @@ impl Toolchains {
     pub async fn resolve(&self, explicit: &[Need], repo: &[(Need, String)], rust_file: Option<&RustToolchain>, log: &mut (dyn FnMut(&str) + Send)) -> Result<Resolved, Fail> {
         let _installing = Installing::start(&self.root);
         let mut out = Resolved::default();
+        // Profiles (protocol 7): their tools join the explicit needs (an
+        // explicit need for the same tool wins), their system names the
+        // package list. This node's own copy decides what a profile holds.
+        let mut explicit: Vec<Need> = explicit.to_vec();
+        let mut profile_sys: Vec<String> = Vec::new();
+        for n in explicit.clone() {
+            if let Need::Profile { name, version } = &n {
+                let p = k2_node_proto::profiles::get(name, *version)
+                    .ok_or_else(|| (k2_node_proto::profiles::PROFILE_UNKNOWN, k2_node_proto::profiles::resolve(&n.token()["profile:".len()..]).err().unwrap_or_default()))?;
+                profile_sys.extend(p.all_sys());
+                for t in p.all_tools() {
+                    let tn = needs::parse(&t).map_err(|e| (codes::TOOL_INSTALL_FAILED, format!("{}: {e}", n.token())))?;
+                    if !explicit.iter().any(|x| x.key() == tn.key()) {
+                        explicit.push(tn);
+                    }
+                }
+            }
+        }
+        let explicit = &explicit[..];
         let explicit_keys: Vec<String> = explicit.iter().map(Need::key).collect();
         let mut work: Vec<(Need, Option<String>)> = explicit.iter().cloned().map(|n| (n, None)).collect();
         for (n, src) in repo {
@@ -515,13 +547,21 @@ impl Toolchains {
             }
         }
         // System packages first, all at once (one root call).
-        let sys: Vec<String> = work
+        let mut sys: Vec<String> = work
             .iter()
             .filter_map(|(n, src)| match n {
                 Need::System { package } if src.is_none() => Some(package.clone()),
                 _ => None,
             })
             .collect();
+        // The plan's list (the server expanded the profiles) and this
+        // node's own expansion: every name still goes through this node's
+        // policy and root's guards.
+        for p in self.plan_packages.iter().chain(profile_sys.iter()) {
+            if !sys.contains(p) {
+                sys.push(p.clone());
+            }
+        }
         if !sys.is_empty() {
             let did = crate::packages::ensure(self, &sys, log).await?;
             out.installed_any |= did;
@@ -550,7 +590,17 @@ impl Toolchains {
                     Err(e) => Err(e),
                 },
                 Need::Rust { channel, components } => {
-                    let rt = RustToolchain { channel: channel.clone(), components: components.clone(), targets: vec![] };
+                    // Protocol 7 (§8): clippy and rustfmt come by default;
+                    // `+minimal` opts out.
+                    let mut comps: Vec<String> = components.iter().filter(|c| *c != needs::RUST_MINIMAL).cloned().collect();
+                    if n.rust_wants_defaults() {
+                        for d in needs::DEFAULT_RUST_COMPONENTS {
+                            if !comps.iter().any(|c| c == d) {
+                                comps.push(d.to_string());
+                            }
+                        }
+                    }
+                    let rt = RustToolchain { channel: channel.clone(), components: comps, targets: vec![] };
                     let r = self.ensure_rust(&rt, log).await;
                     if r.is_ok() && required {
                         rust_env = Some(channel.clone());
@@ -574,6 +624,8 @@ impl Toolchains {
                     r
                 }
                 Need::Nextest => self.ensure_nextest(log).await,
+                // Expanded above.
+                Need::Profile { .. } => Ok(false),
             };
             match r {
                 Ok(did) => out.installed_any |= did,

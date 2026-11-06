@@ -429,6 +429,9 @@ pub struct Executor {
     /// How long `servers.owner` waits, after its marked restart, for the
     /// node to show it swapped its files (its owner pin; review F3).
     pub node_swap_wait: std::time::Duration,
+    /// Tests only: the package manager a scratch executor installs with.
+    /// A real executor (`/etc/k2-node`) always uses the machine's own.
+    pub pkg_backend: Arc<Mutex<Option<(crate::pkgsys::HostCtx, Arc<dyn crate::pkgsys::Backend>)>>>,
 }
 
 type Refused = (String, String, AdminRefusal);
@@ -454,6 +457,27 @@ impl Executor {
             reexec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             drain_settle: std::time::Duration::from_secs(super::update::DRAIN_SETTLE_SECS),
             node_swap_wait: std::time::Duration::from_secs(OWNER_SWAP_WAIT_SECS),
+            pkg_backend: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Tests: install packages with `b` on `h` (a scratch executor only).
+    pub fn set_pkg_backend(&self, h: crate::pkgsys::HostCtx, b: Arc<dyn crate::pkgsys::Backend>) {
+        *self.pkg_backend.lock().unwrap_or_else(|e| e.into_inner()) = Some((h, b));
+    }
+
+    /// The real machine (`/etc/k2-node`), or a scratch test executor.
+    fn real_node(&self) -> bool {
+        self.paths.config_dir == Path::new("/etc/k2-node")
+    }
+
+    /// Root's approved list and policy file (a scratch executor's own
+    /// copies beside its config).
+    fn pkg_files(&self) -> (PathBuf, PathBuf, bool) {
+        if self.real_node() {
+            (PathBuf::from(crate::packages::APPROVED_FILE), PathBuf::from(crate::packages::POLICY_FILE), true)
+        } else {
+            (self.paths.config_dir.join("k2-node-packages.toml"), self.paths.config_dir.join("k2-node-package-policy.toml"), false)
         }
     }
 
@@ -472,6 +496,7 @@ impl Executor {
             reexec: self.reexec.clone(),
             drain_settle: self.drain_settle,
             node_swap_wait: self.node_swap_wait,
+            pkg_backend: self.pkg_backend.clone(),
         }
     }
 
@@ -555,6 +580,13 @@ impl Executor {
             // The owner's own wall choice stands (A-L2 / B-L8).
             "wall.enable" if super::jobs::wall_needs_owner(&self.paths) => Ok(Class::Privileged),
             k2_node_proto::share::VERB_LIMITS => super::servers::classify_limits(&self.paths.config_dir, args, self.now()),
+            // Narrowing applies at once; widening is the owner's (§3.4).
+            k2_node_proto::admin::VERB_PACKAGES_POLICY => {
+                let a = k2_node_proto::pkgpolicy::check_policy_args(args).map_err(|m| AdminRefusal::new(code::BAD_ARGS, m))?;
+                let f = crate::packages::read_policy(&self.pkg_files().1).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
+                let cur = self.pkg_policy_of(&f, &a.server)?;
+                Ok(if cur.widened_by(&a.apply(&cur)) { Class::Privileged } else { Class::Operate })
+            }
             _ => Ok(spec.base),
         }
     }
@@ -732,6 +764,7 @@ impl Executor {
             }
             "homes.private" => self.homes_private(args),
             k2_node_proto::admin::VERB_PACKAGES_ALLOW => self.packages_allow(args),
+            k2_node_proto::admin::VERB_PACKAGES_POLICY => self.packages_policy(args),
             "wall.enable" => self.wall_enable(args, &c.opened.cmd.cmd_id, c.class == Class::Privileged && c.approval_key.is_some()),
             "policy.set" => super::policy::apply_set(&self.paths.layout(), args),
             "policy.narrow" => super::policy::apply_narrow(&self.paths.config_dir, args),
@@ -758,30 +791,108 @@ impl Executor {
         }
     }
 
-    /// CE-24 `packages.allow {package}`: one validated name onto the
-    /// machine owner's approved list (root's file); the job's next run
-    /// installs it as today. The executor of a real node edits
-    /// `/etc/k2-node-packages.toml`; a scratch one (another config dir)
-    /// its own file beside it.
+    /// `packages.allow`: CE-24's `{package}` (one name onto the machine
+    /// owner's approved list, root's file; the job's next run installs it),
+    /// or protocol 7's `{packages, install, add, request}`: the owner's
+    /// approval of a request. `add` puts the names on the approved list;
+    /// `install` runs root's guarded install now (dry run, deny list,
+    /// origins, size cap, no services started; never a removal). The
+    /// owner's approval is the authority here, not the policy: the guards
+    /// still run.
     fn packages_allow(&self, args: &Value) -> Result<Value, AdminRefusal> {
-        only_keys(args, &["package"])?;
-        let p = str_arg(args, "package")?;
-        if !k2_node_proto::needs::valid_package(&p) {
-            return Err(AdminRefusal::new(code::BAD_ARGS, "package must be a plain package name (a-z 0-9 . _ + -)"));
-        }
-        if !cfg!(target_os = "linux") {
+        let a = k2_node_proto::pkgpolicy::check_allow_args(args).map_err(|m| AdminRefusal::new(code::BAD_ARGS, m))?;
+        if !cfg!(target_os = "linux") && self.pkg_backend.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
             return Err(AdminRefusal::new(
                 k2_node_proto::admin::PACKAGES_LINUX_ONLY,
                 "macOS nodes don't install system packages; at the Mac: brew install <name>",
             ));
         }
-        let (file, root_checks) = if self.paths.config_dir == Path::new("/etc/k2-node") {
-            (PathBuf::from(crate::packages::APPROVED_FILE), true)
+        let names = a.names();
+        for n in &names {
+            if let Some(d) = k2_node_proto::pkgpolicy::denied(n) {
+                return Err(AdminRefusal::new(k2_node_proto::pkgpolicy::codes::PACKAGE_DENIED, format!("{n} is on K2's deny list ({d}); the machine's owner installs it by hand if they want it")));
+            }
+        }
+        let (file, _, root_checks) = self.pkg_files();
+        let mut out = json!({});
+        if a.package.is_some() || a.add {
+            let list = crate::packages::edit_approved(&file, &names, true, root_checks).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
+            out["approved"] = json!(list);
+            if let Some(p) = &a.package {
+                out["package"] = json!(p);
+            }
+        }
+        if a.install {
+            let (h, b): (crate::pkgsys::HostCtx, Arc<dyn crate::pkgsys::Backend>) = match self.pkg_backend.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                Some(x) => x,
+                None if self.real_node() => (
+                    crate::pkgsys::host_ctx().ok_or_else(|| AdminRefusal::new(code::FAILED, "no supported package manager (apt, dnf, pacman, zypper)"))?,
+                    Arc::new(crate::pkgsys::system().ok_or_else(|| AdminRefusal::new(code::FAILED, "no supported package manager"))?),
+                ),
+                None => return Err(AdminRefusal::new(code::FAILED, "a test executor installs nothing without a package backend")),
+            };
+            crate::pkgsys::NoServices::clear_stale_if_root();
+            let max = crate::packages::read_policy(&self.pkg_files().1).ok().and_then(|f| f.own).map(|p| p.max_install_mb).unwrap_or(k2_node_proto::pkgpolicy::DEFAULT_MAX_INSTALL_MB);
+            let mut lines: Vec<String> = Vec::new();
+            let r = crate::pkgsys::guarded_install(b.as_ref(), &h, &names, &crate::pkgsys::Guards { max_install_mb: max }, &mut |l| lines.push(l.to_string()));
+            let log = if self.real_node() { PathBuf::from(k2_node_proto::pkgpolicy::LOG_FILE) } else { self.paths.state_dir.join("packages.log") };
+            crate::packages::audit_line_to(&log, &json!({"request": a.request, "names": names, "via": "owner approval"}), &r);
+            let rep = r.map_err(|(c, m)| AdminRefusal::new(c, m))?;
+            out["installed"] = json!(names);
+            out["natives"] = json!(rep.natives);
+            out["dry"] = json!(rep.dry);
+            out["log"] = json!(lines);
+        }
+        if let Some(r) = &a.request {
+            out["pkg_request"] = json!(r);
+        }
+        Ok(out)
+    }
+
+    /// One server's line in the policy file (`own` or a label).
+    fn pkg_policy_of(&self, f: &k2_node_proto::pkgpolicy::PolicyFile, server: &str) -> Result<k2_node_proto::pkgpolicy::ServerPolicy, AdminRefusal> {
+        if server == "own" {
+            return Ok(f.own.clone().unwrap_or_default());
+        }
+        if let Some(l) = f.servers.get(server) {
+            return Ok(l.policy.clone());
+        }
+        // A server the node shares with but with no line yet: `list`.
+        self.server_fp(server).map(|_| k2_node_proto::pkgpolicy::ServerPolicy::default())
+    }
+
+    /// A shared server's key fingerprint prefix, from root's `servers.toml`.
+    fn server_fp(&self, label: &str) -> Result<String, AdminRefusal> {
+        let servers = super::servers::read_file(&self.paths.config_dir).map_err(|e| AdminRefusal::new(code::FAILED, e))?.map(|f| f.servers).unwrap_or_default();
+        servers
+            .iter()
+            .find(|e| e.label == label && e.slot != 0)
+            .map(|e| e.fp_prefix.clone())
+            .ok_or_else(|| AdminRefusal::new(code::BAD_ARGS, format!("no server {label:?} on this node (own, or a label from k2-node servers list)")))
+    }
+
+    /// `packages.policy {server, level, profiles, max_install_mb}`: set one
+    /// server's package policy in root's file. The class was already
+    /// decided (`classify`): a widening only gets here with the owner's
+    /// approval.
+    fn packages_policy(&self, args: &Value) -> Result<Value, AdminRefusal> {
+        let a = k2_node_proto::pkgpolicy::check_policy_args(args).map_err(|m| AdminRefusal::new(code::BAD_ARGS, m))?;
+        let (_, path, root_checks) = self.pkg_files();
+        let mut f = crate::packages::read_policy(&path).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
+        let cur = self.pkg_policy_of(&f, &a.server)?;
+        let next = a.apply(&cur);
+        next.check().map_err(|m| AdminRefusal::new(code::BAD_ARGS, m))?;
+        if a.server == "own" {
+            f.own = Some(next.clone());
         } else {
-            (self.paths.config_dir.join("k2-node-packages.toml"), false)
-        };
-        let list = crate::packages::edit_approved(&file, std::slice::from_ref(&p), true, root_checks).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
-        Ok(json!({"package": p, "approved": list}))
+            let fp = match f.servers.get(&a.server) {
+                Some(l) => l.fp.clone(),
+                None => self.server_fp(&a.server)?,
+            };
+            f.servers.insert(a.server.clone(), k2_node_proto::pkgpolicy::ServerLine { fp, policy: next.clone() });
+        }
+        crate::packages::write_policy(&path, &f, root_checks).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
+        Ok(json!({"server": a.server, "policy": next, "was": cur}))
     }
 
     fn level_lower(&self, _c: &Checked, args: &Value) -> Result<Value, AdminRefusal> {

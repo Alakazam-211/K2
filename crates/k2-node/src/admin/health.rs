@@ -324,12 +324,32 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
         executor,
         stuck_jobs: node.stuck_jobs(),
         errors,
+        packages: pkg_health(node),
     };
+    if let (Some(u), true) = (h.updates.as_mut(), node.host.lock().unwrap().reboot_required) {
+        u.reboot_required = Some(true);
+    }
     if !h.fits() {
         h.stuck_jobs.truncate(16);
         h.errors.clear();
     }
     h
+}
+
+/// Protocol 7 (§10): the package manager's upkeep facts. K2 refreshes a
+/// stale apt or zypper index itself; an Arch database that is out of date
+/// and the OS upgrade are the owner's (`index_stale`, with the distro's
+/// wrapper when there is one).
+pub fn pkg_health(node: &Node) -> Option<k2_node_proto::health::PkgHealth> {
+    let (_, b) = node.pkg_backend()?;
+    let c = node.pkg.lock().unwrap();
+    Some(k2_node_proto::health::PkgHealth {
+        manager: b.mgr().name().to_string(),
+        index_age_secs: c.index_age_secs,
+        index_stale: c.index_stale,
+        signing_off: b.signing_off().is_some(),
+        wrapper: b.wrapper(),
+    })
 }
 
 /// The job wall and the open home folders (0.46.3, V15/V16): the node

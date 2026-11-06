@@ -67,7 +67,7 @@ rm -f "$BIN.prev" "$BIN.bad" "$BIN.new"
 [ "$(readlink /usr/local/bin/k2-node 2>/dev/null)" = "$BIN" ] && rm -f /usr/local/bin/k2-node
 if [ "$KEEP_CONFIG" = "0" ]; then
     safe_rm "$CONFIG_DIR"
-    rm -f /etc/k2-node-packages.toml
+    rm -f /etc/k2-node-packages.toml /etc/k2-node-package-policy.toml
     safe_rm /var/lib/k2-node-admin
     getent group k2nodectl >/dev/null && groupdel k2nodectl || true
 fi

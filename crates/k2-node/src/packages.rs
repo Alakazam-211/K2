@@ -25,11 +25,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use k2_node_proto::needs::valid_package;
+use k2_node_proto::pkgmap::{Mgr, SysName};
+use k2_node_proto::pkgpolicy::{codes as pcodes, coverage, Coverage, PolicyFile};
 use serde::{Deserialize, Serialize};
 
 use crate::toolchain::{codes, Fail, Toolchains};
 
 pub const APPROVED_FILE: &str = "/etc/k2-node-packages.toml";
+/// The owner's package policy per server (root's; protocol 7).
+pub const POLICY_FILE: &str = k2_node_proto::pkgpolicy::POLICY_FILE;
 /// The root path unit that serves package requests (Linux).
 pub const PATH_UNIT: &str = "/etc/systemd/system/k2-node-packages.path";
 /// Requests, relative to the node home (owned by the node user).
@@ -42,6 +46,9 @@ pub const RESULT_DIR: &str = "/run/k2-node-packages";
 pub struct PkgRequest {
     pub id: String,
     pub packages: Vec<String>,
+    /// Whose policy covers it (protocol 7; absent = the owner's, as before).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<RequestServer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +56,9 @@ pub struct PkgResult {
     pub id: String,
     pub ok: bool,
     pub message: String,
+    /// The refusal code when `ok` is false (protocol 7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 fn valid_req_id(id: &str) -> bool {
@@ -60,88 +70,64 @@ pub fn installer_present() -> bool {
     cfg!(target_os = "linux") && Path::new(PATH_UNIT).is_file() && detect().is_some()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Manager {
-    Apt,
-    Dnf,
-    Pacman,
-    Zypper,
-}
-
-impl Manager {
-    pub fn name(self) -> &'static str {
-        match self {
-            Manager::Apt => "apt",
-            Manager::Dnf => "dnf",
-            Manager::Pacman => "pacman",
-            Manager::Zypper => "zypper",
-        }
-    }
-
-    pub fn program(self) -> &'static str {
-        match self {
-            Manager::Apt => "/usr/bin/apt-get",
-            Manager::Dnf => "/usr/bin/dnf",
-            Manager::Pacman => "/usr/bin/pacman",
-            Manager::Zypper => "/usr/bin/zypper",
-        }
-    }
-
-    /// Fixed argv; the names come last, after `--`.
-    pub fn install_args(self, pkgs: &[String]) -> Vec<String> {
-        let mut a: Vec<String> = match self {
-            Manager::Apt => vec!["install", "-y", "-q", "--no-install-recommends"],
-            Manager::Dnf => vec!["install", "-y", "-q"],
-            Manager::Pacman => vec!["-S", "--needed", "--noconfirm"],
-            Manager::Zypper => vec!["--non-interactive", "install"],
-        }
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-        a.push("--".into());
-        a.extend(pkgs.iter().cloned());
-        a
-    }
-}
-
 /// The distro package manager, by absolute path (never PATH).
-pub fn detect() -> Option<Manager> {
-    [Manager::Apt, Manager::Dnf, Manager::Pacman, Manager::Zypper].into_iter().find(|m| Path::new(m.program()).is_file())
+pub fn detect() -> Option<Mgr> {
+    crate::pkgsys::detect()
 }
 
-fn quiet(program: &str, args: &[&str]) -> bool {
-    std::process::Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .map(|o| {
-            o.status.success() && {
-                let s = String::from_utf8_lossy(&o.stdout);
-                // dpkg-query prints a status even for removed packages.
-                !program.ends_with("dpkg-query") || s.contains("install ok installed")
-            }
-        })
-        .unwrap_or(false)
+/// Which server a job (or a request) is for: its policy line. The node's
+/// own server is `owner`; another is matched by its key fingerprint.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestServer {
+    pub owner: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fp: String,
 }
 
-/// Is `pkg` installed? Read-only, no root.
+impl RequestServer {
+    pub fn owner() -> Self {
+        RequestServer { owner: true, fp: String::new() }
+    }
+}
+
+/// Is `pkg` (canonical, or `<manager>:<name>`) installed? Read-only, no
+/// root. Virtual names count through their one provider (§5.2).
 pub fn installed(os: &str, pkg: &str) -> bool {
-    if !valid_package(pkg) {
-        return false;
-    }
     if os == "macos" {
-        return ["/opt/homebrew/opt", "/usr/local/opt"].iter().any(|d| Path::new(d).join(pkg).exists());
+        return valid_package(pkg) && ["/opt/homebrew/opt", "/usr/local/opt"].iter().any(|d| Path::new(d).join(pkg).exists());
     }
-    match detect() {
-        Some(Manager::Apt) => quiet("/usr/bin/dpkg-query", &["-W", "-f=${Status}", pkg]),
-        Some(Manager::Dnf) | Some(Manager::Zypper) => quiet("/usr/bin/rpm", &["-q", "--", pkg]),
-        Some(Manager::Pacman) => quiet("/usr/bin/pacman", &["-Q", "--", pkg]),
-        None => false,
+    match (crate::pkgsys::host_ctx(), crate::pkgsys::system()) {
+        (Some(h), Some(b)) => crate::pkgsys::name_installed(&b, &h, pkg),
+        _ => false,
     }
+}
+
+/// The owner's package policy file (missing = every server at `list`,
+/// today's rule).
+pub fn read_policy(path: &Path) -> Result<PolicyFile, String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => PolicyFile::parse(&s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PolicyFile::default()),
+        Err(e) => Err(format!("read {}: {e}", path.display())),
+    }
+}
+
+/// Root's approved list and policy file for a config dir: the real ones
+/// for `/etc/k2-node`, a test's own copies beside any other.
+pub fn files_for(config_dir: &Path) -> (PathBuf, PathBuf) {
+    if config_dir == Path::new(crate::paths::DEFAULT_CONFIG_DIR) {
+        (PathBuf::from(APPROVED_FILE), PathBuf::from(POLICY_FILE))
+    } else {
+        (config_dir.join("k2-node-packages.toml"), config_dir.join("k2-node-package-policy.toml"))
+    }
+}
+
+/// Root: write the policy file atomically (root's, 0644).
+pub fn write_policy(path: &Path, f: &PolicyFile, root_checks: bool) -> Result<(), String> {
+    if root_checks {
+        trusted_owner_only(path)?;
+    }
+    crate::util::atomic_write(path, f.render().as_bytes(), 0o644)
 }
 
 /// Parse `approved = ["a", "b"]`; bad names are refused, not skipped.
@@ -203,13 +189,15 @@ fn trusted_owner_only(path: &Path) -> Result<(), String> {
 }
 
 /// What the job side does (as `k2node`): install what's missing, if the
-/// owner approved it. `Ok(true)` when something was installed.
+/// owner's list or this server's package policy covers it. `Ok(true)` when
+/// something was installed. `pkgs` are canonical (Debian) names or
+/// `<manager>:<name>`.
 pub async fn ensure(tc: &Toolchains, pkgs: &[String], log: &mut (dyn FnMut(&str) + Send)) -> Result<bool, Fail> {
-    let missing: Vec<String> = pkgs.iter().filter(|p| !installed(tc.os, p)).cloned().collect();
-    if missing.is_empty() {
-        return Ok(false);
-    }
     if tc.os == "macos" {
+        let missing: Vec<String> = pkgs.iter().filter(|p| !installed(tc.os, p)).cloned().collect();
+        if missing.is_empty() {
+            return Ok(false);
+        }
         return Err((
             codes::PACKAGE_MISSING,
             format!(
@@ -218,51 +206,109 @@ pub async fn ensure(tc: &Toolchains, pkgs: &[String], log: &mut (dyn FnMut(&str)
             ),
         ));
     }
+    let (Some(h), Some(b)) = (crate::pkgsys::host_ctx(), crate::pkgsys::system()) else {
+        return Err((codes::PACKAGE_INSTALL_FAILED, "no supported package manager (apt, dnf, pacman, zypper) on this node".into()));
+    };
+    ensure_with(tc, &h, &b, pkgs, log).await
+}
+
+/// [`ensure`] on a given host and backend (tests pass a fake one).
+pub async fn ensure_with(tc: &Toolchains, h: &crate::pkgsys::HostCtx, b: &dyn crate::pkgsys::Backend, pkgs: &[String], log: &mut (dyn FnMut(&str) + Send)) -> Result<bool, Fail> {
+    let unmapped: Vec<&String> = pkgs.iter().filter(|p| h.natives(p).is_none()).collect();
+    if !unmapped.is_empty() {
+        return Err((
+            pcodes::NO_PACKAGE_MAPPING,
+            format!(
+                "no {m} name for {u} on this {d} node. It can't be requested: use a native name (sys:{m}:<name>), pick another distro (--distro ubuntu), or another node",
+                m = h.mgr.name(),
+                u = unmapped.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                d = h.distro
+            ),
+        ));
+    }
+    let missing: Vec<String> = pkgs.iter().filter(|p| !crate::pkgsys::name_installed(b, h, p)).cloned().collect();
+    if missing.is_empty() {
+        return Ok(false);
+    }
     let approved = read_approved(&tc.packages_file).map_err(|e| (codes::PACKAGE_NOT_APPROVED, e))?;
-    let refused: Vec<String> = missing.iter().filter(|p| !approved.contains(p)).cloned().collect();
+    let policy = read_policy(&tc.policy_file).map_err(|e| (codes::PACKAGE_NOT_APPROVED, e))?.for_server(tc.server.owner, &tc.server.fp);
+    let mut refused = Vec::new();
+    for p in &missing {
+        match coverage(&policy, &approved, p, &h.natives(p).unwrap_or_default()) {
+            Coverage::Denied(d) => {
+                return Err((
+                    pcodes::PACKAGE_DENIED,
+                    format!("{p} is on K2's deny list ({d}): it changes how the machine boots, logs in or starts services. It can't be requested; the machine's owner installs it by hand if they want it"),
+                ))
+            }
+            Coverage::Ask => refused.push(p.clone()),
+            _ => {}
+        }
+    }
     if !refused.is_empty() {
         return Err((
             codes::PACKAGE_NOT_APPROVED,
             format!(
-                "{r} isn't on this node's approved package list ({f}). The machine's owner approves it once with: sudo k2-node packages allow {r}",
+                "{r} isn't on this node's approved package list ({f}) or in its package policy for this server ({l}). Ask the node's owner from K2: k2 compute node packages request <node> {c} --why \"…\"; or the machine's owner approves it once with: sudo k2-node packages allow {r}",
                 r = refused.join(" "),
-                f = tc.packages_file.display()
+                c = refused.join(","),
+                f = tc.packages_file.display(),
+                l = policy.summary()
             ),
         ));
     }
-    let Some(m) = detect() else {
-        return Err((codes::PACKAGE_INSTALL_FAILED, "no supported package manager (apt, dnf, pacman, zypper) on this node".into()));
-    };
-    if !installer_present() {
+    if !tc.pkg_installer {
         return Err((
             codes::PACKAGE_INSTALL_FAILED,
             format!(
-                "this node has no package installer ({PATH_UNIT}); re-run `sudo k2-node setup` on it, or its owner installs by hand: {} {}",
-                m.program(),
-                m.install_args(&missing).join(" ")
+                "this node has no package installer ({PATH_UNIT}); re-run `sudo k2-node setup` on it, or its owner installs by hand: sudo k2-node packages install {}",
+                missing.join(" ")
             ),
         ));
     }
-    log(&format!("installing system packages ({}): {}", m.name(), missing.join(" ")));
+    log(&format!("installing system packages ({}): {}", h.mgr.name(), missing.join(" ")));
     let home = tc.root.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let r = request_and_wait(&home, Path::new(RESULT_DIR), &missing, Duration::from_secs(15 * 60))
+    let r = request_and_wait(&home, Path::new(RESULT_DIR), &missing, &tc.server, Duration::from_secs(45 * 60))
         .await
         .map_err(|e| (codes::PACKAGE_INSTALL_FAILED, e))?;
     if !r.ok {
-        return Err((codes::PACKAGE_INSTALL_FAILED, r.message));
+        let code = r.code.as_deref().and_then(known_code).unwrap_or(codes::PACKAGE_INSTALL_FAILED);
+        return Err((code, r.message));
     }
-    let still: Vec<String> = missing.iter().filter(|p| !installed(tc.os, p)).cloned().collect();
+    for line in r.message.lines().skip(1) {
+        log(line);
+    }
+    let still: Vec<String> = missing.iter().filter(|p| !crate::pkgsys::name_installed(b, h, p)).cloned().collect();
     if !still.is_empty() {
         return Err((codes::PACKAGE_INSTALL_FAILED, format!("{} still not installed after the package manager ran", still.join(" "))));
     }
     Ok(true)
 }
 
+/// A root answer's code, as one of ours (never a string from the file).
+fn known_code(c: &str) -> Option<&'static str> {
+    [
+        pcodes::PACKAGE_NOT_APPROVED,
+        pcodes::NO_PACKAGE_MAPPING,
+        pcodes::PACKAGE_AMBIGUOUS,
+        pcodes::PACKAGE_DENIED,
+        pcodes::PACKAGE_REMOVES,
+        pcodes::PACKAGE_THIRD_PARTY,
+        pcodes::PACKAGE_TOO_BIG,
+        pcodes::PKG_SIGNING_OFF,
+        pcodes::INDEX_STALE,
+        pcodes::PACKAGE_BUSY,
+        pcodes::PACKAGE_INSTALL_FAILED,
+    ]
+    .into_iter()
+    .find(|k| *k == c)
+}
+
 /// Job side: drop a request where the root path unit looks, wait for its
 /// answer in `result_dir`.
-pub async fn request_and_wait(home: &Path, result_dir: &Path, pkgs: &[String], limit: Duration) -> Result<PkgResult, String> {
+pub async fn request_and_wait(home: &Path, result_dir: &Path, pkgs: &[String], server: &RequestServer, limit: Duration) -> Result<PkgResult, String> {
     let id = format!("pkg-{}", k2_node_proto::crypto::random_id()?);
-    let req = PkgRequest { id: id.clone(), packages: pkgs.to_vec() };
+    let req = PkgRequest { id: id.clone(), packages: pkgs.to_vec(), server: Some(server.clone()) };
     let body = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
     let dir = home.join(REQUEST_DIR);
     // Stage outside the watched dir, then rename in: the path unit must
@@ -322,6 +368,8 @@ pub fn cmd_serve(home: &Path) -> Result<(), String> {
     if !is_root() {
         return Err("packages serve runs as root (k2-node-packages.service)".into());
     }
+    // A policy-rc.d a crash left behind must not block the owner's services.
+    crate::pkgsys::NoServices::clear_stale();
     let owner = std::fs::metadata(home).map_err(|e| format!("{}: {e}", home.display()))?.uid();
     if owner == 0 {
         return Err(format!("{} is owned by root; refusing", home.display()));
@@ -352,14 +400,17 @@ pub fn cmd_serve(home: &Path) -> Result<(), String> {
                 continue;
             }
         };
-        let r = cmd_install(&req.packages);
+        let server = req.server.clone().unwrap_or_else(RequestServer::owner);
+        let mut lines: Vec<String> = Vec::new();
+        let r = root_install(&req.packages, &server, &mut |l| lines.push(l.to_string()));
         let res = PkgResult {
             id: req.id.clone(),
             ok: r.is_ok(),
             message: match &r {
-                Ok(()) => format!("installed {}", req.packages.join(" ")),
-                Err(e) => e.clone(),
+                Ok(_) => std::iter::once(format!("installed {}", req.packages.join(" "))).chain(lines).collect::<Vec<_>>().join("\n"),
+                Err((_, e)) => e.clone(),
             },
+            code: r.as_ref().err().map(|(c, _)| c.to_string()),
         };
         eprintln!("k2-node packages: {} → {}", req.packages.join(" "), res.message);
         let body = serde_json::to_vec(&res).map_err(|e| e.to_string())?;
@@ -370,55 +421,84 @@ pub fn cmd_serve(home: &Path) -> Result<(), String> {
 
 // ── root side: `k2-node packages …` ──────────────────────────────────
 
-fn is_root() -> bool {
+pub fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-/// `k2-node packages install <name>…` (root: an admin by hand, or `serve`).
+/// `k2-node packages install <name>…` (root: an admin by hand) — the
+/// owner's own policy, with every guard.
 pub fn cmd_install(names: &[String]) -> Result<(), String> {
+    root_install(names, &RequestServer::owner(), &mut |l| eprintln!("k2-node packages: {l}")).map(|_| ()).map_err(|(c, m)| format!("{c}: {m}"))
+}
+
+/// One install, as root: re-read root's list and policy, refuse anything
+/// they don't cover for `server`, then [`crate::pkgsys::guarded_install`]
+/// with the real manager. Every outcome goes to root's install log.
+pub fn root_install(names: &[String], server: &RequestServer, log: &mut dyn FnMut(&str)) -> Result<crate::pkgsys::Report, crate::pkgsys::Refusal> {
+    let fail = |e: String| (codes::PACKAGE_INSTALL_FAILED, e);
     if !is_root() {
-        return Err("packages install runs as root (k2-node calls it through sudo)".into());
+        return Err(fail("packages install runs as root (k2-node calls it through its root unit)".into()));
     }
-    if names.is_empty() || names.len() > k2_node_proto::needs::MAX_NEEDS {
-        return Err("packages install <name>… (1–32 names)".into());
+    if names.is_empty() || names.len() > k2_node_proto::profiles::MAX_PLAN_PACKAGES {
+        return Err(fail(format!("packages install <name>… (1–{} names)", k2_node_proto::profiles::MAX_PLAN_PACKAGES)));
     }
     for n in names {
-        if !valid_package(n) {
-            return Err(format!("{n:?} isn't a package name"));
+        if SysName::parse(n).is_none() {
+            return Err(fail(format!("{n:?} isn't a package name")));
         }
     }
     let path = PathBuf::from(APPROVED_FILE);
-    trusted_owner_only(&path)?;
-    let approved = read_approved(&path)?;
-    let refused: Vec<&String> = names.iter().filter(|n| !approved.contains(n)).collect();
+    trusted_owner_only(&path).map_err(fail)?;
+    let ppath = PathBuf::from(POLICY_FILE);
+    trusted_owner_only(&ppath).map_err(fail)?;
+    let approved = read_approved(&path).map_err(fail)?;
+    let policy = read_policy(&ppath).map_err(fail)?.for_server(server.owner, &server.fp);
+    let h = crate::pkgsys::host_ctx().ok_or_else(|| fail("no supported package manager (apt, dnf, pacman, zypper)".into()))?;
+    let b = crate::pkgsys::system().ok_or_else(|| fail("no supported package manager".into()))?;
+    let refused: Vec<&String> = names.iter().filter(|n| !coverage(&policy, &approved, n, &h.natives(n).unwrap_or_default()).covered()).collect();
     if !refused.is_empty() {
-        return Err(format!(
-            "not approved on this node: {} (sudo k2-node packages allow <name>)",
-            refused.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
-        ));
+        let r = refused.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+        let e = (pcodes::PACKAGE_NOT_APPROVED, format!("not approved on this node for this server: {r} (sudo k2-node packages allow {r})"));
+        audit_line(server, names, &Err(e.clone()));
+        return Err(e);
     }
-    let m = detect().ok_or("no supported package manager (apt, dnf, pacman, zypper)")?;
-    let run = |args: &[String]| -> Result<bool, String> {
-        let st = std::process::Command::new(m.program())
-            .args(args)
-            .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-            .env("DEBIAN_FRONTEND", "noninteractive")
-            .env("LANG", "C")
-            .current_dir("/")
-            .stdin(std::process::Stdio::null())
-            .status()
-            .map_err(|e| format!("{}: {e}", m.program()))?;
-        Ok(st.success())
-    };
-    if run(&m.install_args(names))? {
-        return Ok(());
+    let r = crate::pkgsys::guarded_install(&b, &h, names, &crate::pkgsys::Guards { max_install_mb: policy.max_install_mb }, log);
+    audit_line(server, names, &r);
+    r
+}
+
+/// One JSON line per install in root's log (append-only, root's).
+pub fn audit_line(server: &RequestServer, names: &[String], r: &Result<crate::pkgsys::Report, crate::pkgsys::Refusal>) {
+    audit_line_to(Path::new(k2_node_proto::pkgpolicy::LOG_FILE), &serde_json::json!({
+        "server": if server.owner { "own".to_string() } else { server.fp.chars().take(16).collect() },
+        "names": names,
+    }), r);
+}
+
+/// [`audit_line`] with the request id and file (tests, the executor).
+pub fn audit_line_to(path: &Path, base: &serde_json::Value, r: &Result<crate::pkgsys::Report, crate::pkgsys::Refusal>) {
+    use std::io::Write;
+    let mut v = base.clone();
+    v["at"] = serde_json::json!(crate::util::now());
+    match r {
+        Ok(rep) => {
+            v["result"] = serde_json::json!(if rep.nothing { "already" } else { "installed" });
+            v["natives"] = serde_json::json!(rep.natives);
+            v["installs"] = serde_json::json!(rep.dry.installs);
+            v["size_mb"] = serde_json::json!(rep.dry.size_mb);
+        }
+        Err((c, m)) => {
+            v["result"] = serde_json::json!("refused");
+            v["code"] = serde_json::json!(c);
+            v["message"] = serde_json::json!(m);
+        }
     }
-    // apt: a stale index is the usual reason; refresh once and retry.
-    if m == Manager::Apt && run(&["update".into(), "-q".into()])? && run(&m.install_args(names))? {
-        return Ok(());
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
     }
-    Err(format!("{} couldn't install {}", m.name(), names.join(" ")))
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{v}");
+    }
 }
 
 /// `k2-node packages allow|disallow <name>…` (root).
@@ -473,15 +553,6 @@ mod tests {
     }
 
     #[test]
-    fn install_argv_puts_names_after_double_dash() {
-        let a = Manager::Apt.install_args(&["libssl-dev".into()]);
-        assert_eq!(a, vec!["install", "-y", "-q", "--no-install-recommends", "--", "libssl-dev"]);
-        let p = Manager::Pacman.install_args(&["protobuf".into()]);
-        assert_eq!(p.last().map(String::as_str), Some("protobuf"));
-        assert_eq!(p[p.len() - 2], "--");
-    }
-
-    #[test]
     fn root_commands_refuse_non_root_and_unapproved() {
         let ghost = "k2-test-no-such-package-xyz".to_string();
         if is_root() {
@@ -508,7 +579,8 @@ mod tests {
             for _ in 0..200 {
                 for e in std::fs::read_dir(h2.join(REQUEST_DIR)).unwrap().flatten() {
                     let req = take_request(&e.path(), uid).unwrap();
-                    let res = PkgResult { id: req.id.clone(), ok: true, message: format!("installed {}", req.packages.join(" ")) };
+                    assert_eq!(req.server, Some(RequestServer { owner: false, fp: "c41f00aa11bb22cc".into() }), "the server rides the request");
+                    let res = PkgResult { id: req.id.clone(), ok: true, message: format!("installed {}", req.packages.join(" ")), code: None };
                     std::fs::write(r2.join(format!("{}.json", req.id)), serde_json::to_vec(&res).unwrap()).unwrap();
                     return;
                 }
@@ -516,7 +588,8 @@ mod tests {
             }
             panic!("no request arrived");
         });
-        let r = request_and_wait(&home, &results, &["pkg-config".into()], Duration::from_secs(10)).await.unwrap();
+        let srv = RequestServer { owner: false, fp: "c41f00aa11bb22cc".into() };
+        let r = request_and_wait(&home, &results, &["pkg-config".into()], &srv, Duration::from_secs(10)).await.unwrap();
         server.await.unwrap();
         assert!(r.ok);
         assert_eq!(r.message, "installed pkg-config");
@@ -554,15 +627,66 @@ mod tests {
         let home = crate::util::temp_dir("pkg-refuse");
         let mut tc = Toolchains::new(&home, vec![("PATH".into(), "/usr/bin:/bin".into())]);
         tc.packages_file = home.join("approved.toml");
+        tc.policy_file = home.join("policy.toml");
         std::fs::write(&tc.packages_file, render_approved(&["pkg-config".into()])).unwrap();
         let ghost = "k2-test-no-such-package-xyz".to_string();
         let e = ensure(&tc, &[ghost.clone()], &mut |_| {}).await.unwrap_err();
-        if tc.os == "macos" {
+        let mgr = detect();
+        if tc.os != "macos" && mgr != Some(Mgr::Apt) {
+            // No map row and not apt: not satisfiable here, said so.
+            assert_eq!(e.0, pcodes::NO_PACKAGE_MAPPING, "{}", e.1);
+            assert!(e.1.contains("It can't be requested"), "{}", e.1);
+        } else if tc.os == "macos" {
             assert_eq!(e.0, codes::PACKAGE_MISSING);
             assert!(e.1.contains(&format!("brew install {ghost}")), "{}", e.1);
         } else {
             assert_eq!(e.0, codes::PACKAGE_NOT_APPROVED);
             assert!(e.1.contains(&format!("sudo k2-node packages allow {ghost}")), "{}", e.1);
+            assert!(e.1.contains(&format!("k2 compute node packages request <node> {ghost}")), "{}", e.1);
         }
+    }
+
+    /// A team server's policy covers its profile and nothing else; a
+    /// denied name is refused as denied (§3.4), whatever the distro.
+    #[tokio::test]
+    async fn the_policy_for_the_jobs_server_decides() {
+        let home = crate::util::temp_dir("pkg-policy");
+        let mut tc = Toolchains::new(&home, vec![("PATH".into(), "/usr/bin:/bin".into())]);
+        tc.packages_file = home.join("approved.toml");
+        tc.policy_file = home.join("policy.toml");
+        let mut f = PolicyFile::default();
+        f.servers.insert(
+            "acme.k2.dev".into(),
+            k2_node_proto::pkgpolicy::ServerLine {
+                fp: "c41f00aa11bb22cc".into(),
+                policy: k2_node_proto::pkgpolicy::ServerPolicy { level: k2_node_proto::pkgpolicy::Level::Profiles, profiles: vec!["build-base@1".into()], max_install_mb: 10 },
+            },
+        );
+        std::fs::write(&tc.policy_file, f.render()).unwrap();
+        tc.server = RequestServer { owner: false, fp: "c41f00aa11bb22cc0011".into() };
+        // A test home has no root installer, even on a machine that does.
+        tc.pkg_installer = false;
+        let h = crate::pkgsys::HostCtx { mgr: Mgr::Apt, distro: "ubuntu".into(), version: "24.04".into(), like: vec!["debian".into()] };
+        let b = crate::pkgsys::fake::FakeBackend::new(Mgr::Apt);
+        b.add("libpq-dev", &[], 10);
+        b.add("cmake", &[], 10);
+        b.add("lightdm", &[], 10);
+        let e = ensure_with(&tc, &h, &b, &["libpq-dev".to_string()], &mut |_| {}).await.unwrap_err();
+        assert_eq!(e.0, codes::PACKAGE_NOT_APPROVED, "{}", e.1);
+        assert!(e.1.contains("profiles (build-base@1)"), "the refusal names the server's level: {}", e.1);
+        let e = ensure_with(&tc, &h, &b, &["lightdm".to_string()], &mut |_| {}).await.unwrap_err();
+        assert_eq!(e.0, pcodes::PACKAGE_DENIED, "{}", e.1);
+        // In the profile: covered, so it goes on to the root installer
+        // (absent in a test home: said so, nothing else ran).
+        let e = ensure_with(&tc, &h, &b, &["cmake".to_string()], &mut |_| {}).await.unwrap_err();
+        assert_eq!(e.0, codes::PACKAGE_INSTALL_FAILED, "{}", e.1);
+        assert!(e.1.contains("no package installer"), "{}", e.1);
+        // Installed already: nothing to do, whatever the policy.
+        b.state.lock().unwrap().installed.insert("libpq-dev".into());
+        assert!(!ensure_with(&tc, &h, &b, &["libpq-dev".to_string()], &mut |_| {}).await.unwrap());
+        // Not satisfiable on this manager: refused before any coverage.
+        let arch = crate::pkgsys::HostCtx { mgr: Mgr::Pacman, distro: "arch".into(), version: "rolling".into(), like: vec![] };
+        let e = ensure_with(&tc, &arch, &b, &["libfoo-dev".to_string()], &mut |_| {}).await.unwrap_err();
+        assert_eq!(e.0, pcodes::NO_PACKAGE_MAPPING, "{}", e.1);
     }
 }

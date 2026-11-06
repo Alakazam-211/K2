@@ -678,9 +678,25 @@ where
             Frame::Admin(a) => {
                 let (n, t) = (node.clone(), tx.clone());
                 tokio::spawn(async move {
-                    let r = crate::admin::courier::handle(n, a.cmd).await;
+                    let r = crate::admin::courier::handle(n.clone(), a.cmd).await;
+                    // Protocol 7: root answered a package request.
+                    n.on_pkg_admin_result(&r);
                     let _ = t.send(Frame::AdminResult(r)).await;
                 });
+            }
+            // Package requests (protocol 7): any server with a session may
+            // ask; only the owner's server denies (an approval is a signed
+            // admin command).
+            Frame::PkgRequest(r) => {
+                if tenant.speaks_host() {
+                    let (n, t) = (node.clone(), tenant.clone());
+                    tokio::spawn(async move { n.on_pkg_request(&t, r).await });
+                }
+            }
+            Frame::PkgRequestDecide(d) => {
+                if tenant.speaks_host() {
+                    node.on_pkg_decide(&tenant, d);
+                }
             }
             Frame::AdminKeys(k) => {
                 let (n, t) = (node.clone(), tx.clone());

@@ -188,6 +188,11 @@ pub const ROUTES: &[Route] = &[
     get("/cli/api-keys/hire-ceiling-options", Owner),
     get("/cli/api-keys/list", Owner),
     post("/cli/api-keys/revoke", Owner),
+    // 0.46.9: `k2 app account-deletion` (the handler holds writes to the owner,
+    // an Admin or the App's own agent with the App-user switch).
+    get("/cli/app/account-deletion", Member),
+    post("/cli/app/account-deletion/cancel", Admin),
+    post("/cli/app/account-deletion/complete", Admin),
     // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Passport rules
     // (own workspace + the two App switches, prd-agent-app-permissions-v1)
     // in the handler. Q7 (Rosson 2026-10-20): Members are read-only, so
@@ -232,6 +237,8 @@ pub const ROUTES: &[Route] = &[
     // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);
     // off is held unless the owner turns it off.
     post("/cli/app/clean-mode", Admin),
+    // 0.46.9: `k2 app logs <app> --client`, read like the App's own logs.
+    get("/cli/app/client-logs", Member),
     // S13: narrowing applies now, widening fields are held.
     post("/cli/app/config", Admin),
     // 0.46.4: read back, list, remove and rename inside an App's data
@@ -378,16 +385,6 @@ pub const ROUTES: &[Route] = &[
     // app-user-profile (0.46.5): an App's profile settings. The owner or an
     // Admin; the App's own agent (passport) lowers only, in the handler.
     both("/cli/app/profile-settings", Admin),
-    // 0.46.9: `k2 app set` (account deletion mode and grace, client log
-    // retention) and `k2 app account-deletion`. Reads: any login; the
-    // handler holds writes to the owner, an Admin or the App's own agent
-    // with the App-user switch.
-    both("/cli/app/settings", Member),
-    get("/cli/app/account-deletion", Member),
-    post("/cli/app/account-deletion/complete", Admin),
-    post("/cli/app/account-deletion/cancel", Admin),
-    // `k2 app logs <app> --client`: like the App's own logs.
-    get("/cli/app/client-logs", Member),
     // prd-custom-app-push-v1 CP36: status, devices, send are Admin-floor
     // (the App's agent by its passport); keys and check are the Owner's.
     get("/cli/app/push", Admin),
@@ -450,6 +447,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/seal/rotate", Owner),
     // Room-scope R16: an App's self (id, live Seed, health, deploy time).
     get("/cli/app/self", Member),
+    // 0.46.9: `k2 app set` (account deletion, client log retention): any login
+    // reads; the owner, an Admin or the App's agent (users switch) writes.
+    split("/cli/app/settings", Member, Admin),
     // S28 `k2 app shell` (WebSocket; same rules as exec).
     get("/cli/app/shell", Admin),
     post("/cli/app/start", Admin),
@@ -1746,10 +1746,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/access/profile/image/clear", Owner),
     post("/cli/skin/access/sessions/revoke", Owner),
     post("/cli/skin/access/settings", Owner),
+    // 0.46.9: account deletion and client logs, a person's own session pass only.
+    post("/cli/skin/account/delete", NoLogin),
     get("/cli/skin/agents", NoLogin),
     get("/cli/skin/app-info", Public),
     // prd-app-caps-0464-v1 AC5 (0.46.4): app.rooms, an App's own pass only.
     get("/cli/skin/app-rooms", NoLogin),
+    post("/cli/skin/client-logs", NoLogin),
     get("/cli/skin/devices", NoLogin),
     post("/cli/skin/devices/revoke", NoLogin),
     // Email Notifications (0.46.5): the App's own email.* on its link
@@ -1844,10 +1847,6 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skin/sessions", NoLogin),
     post("/cli/skin/sessions/revoke", NoLogin),
     post("/cli/skin/sessions/revoke-others", NoLogin),
-    // App account deletion and client logs (0.46.9): a person's own session
-    // pass only (the handlers check); no login uses them.
-    post("/cli/skin/account/delete", NoLogin),
-    post("/cli/skin/client-logs", NoLogin),
     both("/cli/skin/templates", Owner),
     post("/cli/skin/templates/apply", Owner),
     post("/cli/skin/templates/delete", Owner),

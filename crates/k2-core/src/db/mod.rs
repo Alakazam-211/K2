@@ -3937,6 +3937,9 @@ mod tests {
             // 0270 (k2-node rollouts, 0.46.9) is the newest: its record goes
             // (its tables and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0270_compute_node_rollouts'", []).unwrap();
+            // 0269 (App client logs, 0.46.9) came before it: its record goes
+            // (its tables and indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0269_app_client_logs'", []).unwrap();
             // 0268 (Sew ship kind box-backup, 0.46.9) came before it: its
             // record goes (a re-run copies sew_server into a fresh table again).
             conn.execute("DELETE FROM _migrations WHERE name = '0268_sew_ship_box_backup'", []).unwrap();

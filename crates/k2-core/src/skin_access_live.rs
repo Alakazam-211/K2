@@ -251,6 +251,11 @@ mod tests {
         ("app_push_config", "push settings"),
         ("app_push_devices", "push devices"),
         ("app_test_guests", "marks test guests"),
+        // 0.46.9: account deletion. A request turns the person's grants off
+        // and ends their sessions through the access writers; its own rows
+        // only remember the request.
+        ("app_account_deletion_settings", "an App's deletion mode and grace period"),
+        ("app_account_deletions", "pending deletion requests (the grant change is the access write)"),
         ("app_user_invites", "invites not yet consumed; consuming writes principals"),
         ("device_login_pairings", "pairing state"),
         ("device_logins", "device refresh state; its session is a tokens row"),

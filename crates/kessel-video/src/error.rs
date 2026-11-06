@@ -111,8 +111,14 @@ mod tests {
     #[test]
     fn errors_print_their_codes() {
         assert_eq!(VideoError::NoPermission.to_string(), "no_permission");
-        assert_eq!(VideoError::Unsupported("VP9".into()).to_string(), "unsupported: VP9");
-        assert_eq!(VideoError::os(-12902, "VTDecompressionSessionCreate").to_string(), "os -12902: VTDecompressionSessionCreate");
+        assert_eq!(
+            VideoError::Unsupported("VP9".into()).to_string(),
+            "unsupported: VP9"
+        );
+        assert_eq!(
+            VideoError::os(-12902, "VTDecompressionSessionCreate").to_string(),
+            "os -12902: VTDecompressionSessionCreate"
+        );
         assert_eq!(VideoError::os(1, "x").code(), "os");
         assert_eq!(DecodeError::NeedKeyframe.to_string(), "need_keyframe");
         assert_eq!(DecodeError::from(VideoError::Busy).to_string(), "busy");

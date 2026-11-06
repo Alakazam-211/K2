@@ -6,7 +6,9 @@
 mod camera;
 mod screen;
 
-use crate::api::{Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake};
+use crate::api::{
+    Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
+};
 use crate::error::{unsupported, VideoError};
 use crate::frame::{PixelFormat, VideoFrame};
 use crate::kit::{lock, now_us};
@@ -43,7 +45,10 @@ pub(crate) fn os_name() -> String {
     // SAFETY: a correctly sized OSVERSIONINFOW that RtlGetVersion fills.
     let st = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut v) };
     if st.0 >= 0 {
-        format!("Windows {}.{} {}", v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber)
+        format!(
+            "Windows {}.{} {}",
+            v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber
+        )
     } else {
         "Windows".to_string()
     }
@@ -142,7 +147,12 @@ impl VideoBackend for WinBackend {
         done(camera::permission())
     }
 
-    fn open_camera(&self, id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_camera(
+        &self,
+        id: Option<&str>,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         camera::open(id, c, wake)
     }
@@ -167,28 +177,53 @@ impl VideoBackend for WinBackend {
         screen::pick(opts, done)
     }
 
-    fn open_screen(&self, source: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_screen(
+        &self,
+        source: &ScreenSelection,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         screen::open(source, c, wake)
     }
 
-    fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    fn encoder(
+        &self,
+        config: EncoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
             return r;
         }
-        Err(unsupported(format!("no {:?} encoder on Windows yet", config.codec.codec())))
+        Err(unsupported(format!(
+            "no {:?} encoder on Windows yet",
+            config.codec.codec()
+        )))
     }
 
-    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(
+        &self,
+        config: DecoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
             return r;
         }
-        Err(unsupported(format!("no {:?} decoder on Windows yet (the webview's WebCodecs decodes)", config.codec)))
+        Err(unsupported(format!(
+            "no {:?} decoder on Windows yet (the webview's WebCodecs decodes)",
+            config.codec
+        )))
     }
 
-    fn convert(&self, frame: &VideoFrame, width: u32, height: u32, format: PixelFormat) -> Result<VideoFrame, VideoError> {
+    fn convert(
+        &self,
+        frame: &VideoFrame,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<VideoFrame, VideoError> {
         self.live()?;
         crate::convert::convert(frame, width, height, format)
     }
@@ -205,7 +240,10 @@ impl VideoBackend for WinBackend {
 /// A Windows error as a [`VideoError`], mapping the codes callers act on.
 pub(crate) fn map_error(e: &windows::core::Error, what: &str) -> VideoError {
     use windows::Win32::Foundation::E_ACCESSDENIED;
-    use windows::Win32::Media::MediaFoundation::{MF_E_HW_MFT_FAILED_START_STREAMING, MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED, MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED};
+    use windows::Win32::Media::MediaFoundation::{
+        MF_E_HW_MFT_FAILED_START_STREAMING, MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED,
+        MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED,
+    };
     /// `HRESULT_FROM_WIN32(ERROR_BUSY)`.
     const E_BUSY: i32 = 0x8007_00AA_u32 as i32;
     let code = e.code();
@@ -213,7 +251,10 @@ pub(crate) fn map_error(e: &windows::core::Error, what: &str) -> VideoError {
         VideoError::NoPermission
     } else if code == MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED {
         VideoError::DeviceLost
-    } else if code == MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED || code == MF_E_HW_MFT_FAILED_START_STREAMING || code.0 == E_BUSY {
+    } else if code == MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED
+        || code == MF_E_HW_MFT_FAILED_START_STREAMING
+        || code.0 == E_BUSY
+    {
         VideoError::DeviceBusy
     } else {
         VideoError::os(code.0 as i64, format!("{what}: {}", e.message()))
@@ -228,12 +269,23 @@ mod tests {
     #[test]
     fn errors_map_to_what_callers_act_on() {
         use windows::Win32::Foundation::E_ACCESSDENIED;
-        use windows::Win32::Media::MediaFoundation::{MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED, MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED};
+        use windows::Win32::Media::MediaFoundation::{
+            MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED, MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED,
+        };
         let e = |h| windows::core::Error::new(h, "test");
         assert_eq!(map_error(&e(E_ACCESSDENIED), "x"), VideoError::NoPermission);
-        assert_eq!(map_error(&e(MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED), "x"), VideoError::DeviceLost);
-        assert_eq!(map_error(&e(MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED), "x"), VideoError::DeviceBusy);
-        assert!(matches!(map_error(&e(windows::core::HRESULT(0x8000_4005_u32 as i32)), "x"), VideoError::Os { .. }));
+        assert_eq!(
+            map_error(&e(MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED), "x"),
+            VideoError::DeviceLost
+        );
+        assert_eq!(
+            map_error(&e(MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED), "x"),
+            VideoError::DeviceBusy
+        );
+        assert!(matches!(
+            map_error(&e(windows::core::HRESULT(0x8000_4005_u32 as i32)), "x"),
+            VideoError::Os { .. }
+        ));
     }
 
     #[test]
@@ -242,7 +294,10 @@ mod tests {
         let caps = b.capabilities();
         assert_eq!(caps.backend, "windows");
         assert!(caps.os.starts_with("Windows"), "{}", caps.os);
-        assert!(caps.codecs.iter().all(|c| c.codec != VideoCodec::H264), "phase 1: no OS H.264");
+        assert!(
+            caps.codecs.iter().all(|c| c.codec != VideoCodec::H264),
+            "phase 1: no OS H.264"
+        );
         assert_eq!(caps.screen.system_picker, caps.screen.supported);
         assert!(!caps.screen.exclude_own_windows);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -252,13 +307,25 @@ mod tests {
                 let _ = tx.send(r.err());
             }),
         );
-        let refused = rx.recv_timeout(Duration::from_secs(1)).expect("answered at once");
-        assert!(matches!(refused, Some(VideoError::Invalid(_)) | Some(VideoError::Unsupported(_))), "{refused:?}");
+        let refused = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("answered at once");
+        assert!(
+            matches!(
+                refused,
+                Some(VideoError::Invalid(_)) | Some(VideoError::Unsupported(_))
+            ),
+            "{refused:?}"
+        );
         let cams = b.cameras();
         for c in &cams {
             assert!(!c.id.is_empty());
         }
-        assert!(matches!(b.encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake()).err(), Some(VideoError::Unsupported(_))));
+        assert!(matches!(
+            b.encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake())
+                .err(),
+            Some(VideoError::Unsupported(_))
+        ));
         b.shutdown();
         assert_eq!(b.screen_sources().err(), Some(VideoError::ShutDown));
     }
@@ -269,8 +336,11 @@ mod tests {
     #[ignore = "needs a camera"]
     fn real_camera_delivers_frames() {
         let b = backend().expect("backend");
-        let mut src = b.open_camera(None, CaptureConstraints::new(1280, 720, 30), no_wake()).expect("camera");
-        let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv()).expect("a frame in 5 s");
+        let mut src = b
+            .open_camera(None, CaptureConstraints::new(1280, 720, 30), no_wake())
+            .expect("camera");
+        let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv())
+            .expect("a frame in 5 s");
         assert_eq!(f.format(), PixelFormat::Nv12);
     }
 
@@ -280,9 +350,19 @@ mod tests {
     fn real_screen_delivers_frames() {
         let b = backend().expect("backend");
         let list = b.screen_sources().expect("sources");
-        let display = list.iter().find(|s| s.kind == ScreenKind::Display).expect("a display");
-        let mut src = b.open_screen(&ScreenSelection::Listed(display.id.clone()), CaptureConstraints::new(1280, 720, 15), no_wake()).expect("screen");
-        let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv()).expect("a frame in 5 s");
+        let display = list
+            .iter()
+            .find(|s| s.kind == ScreenKind::Display)
+            .expect("a display");
+        let mut src = b
+            .open_screen(
+                &ScreenSelection::Listed(display.id.clone()),
+                CaptureConstraints::new(1280, 720, 15),
+                no_wake(),
+            )
+            .expect("screen");
+        let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv())
+            .expect("a frame in 5 s");
         assert!(f.width <= 1280 && f.height <= 720);
     }
 
@@ -304,9 +384,15 @@ mod tests {
                 let _ = tx.send(r);
             }),
         );
-        let sel = rx.recv_timeout(Duration::from_secs(120)).expect("an answer within 2 minutes").expect("a pick");
-        let mut src = b.open_screen(&sel, CaptureConstraints::new(1280, 720, 15), no_wake()).expect("screen");
-        let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv()).expect("a frame in 5 s");
+        let sel = rx
+            .recv_timeout(Duration::from_secs(120))
+            .expect("an answer within 2 minutes")
+            .expect("a pick");
+        let mut src = b
+            .open_screen(&sel, CaptureConstraints::new(1280, 720, 15), no_wake())
+            .expect("screen");
+        let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv())
+            .expect("a frame in 5 s");
         assert!(f.width <= 1280 && f.height <= 720);
     }
 }

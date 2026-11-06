@@ -134,7 +134,10 @@ pub struct H264Capability {
 impl H264Capability {
     /// Profiles and the highest level.
     pub fn new(profiles: Vec<H264Profile>, max_level: H264Level) -> H264Capability {
-        H264Capability { profiles, max_level }
+        H264Capability {
+            profiles,
+            max_level,
+        }
     }
 }
 
@@ -331,7 +334,12 @@ pub struct CameraInfo {
 
 impl CameraInfo {
     /// A camera with no modes listed.
-    pub fn new(id: impl Into<String>, name: impl Into<String>, facing: Facing, is_default: bool) -> CameraInfo {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        facing: Facing,
+        is_default: bool,
+    ) -> CameraInfo {
         CameraInfo {
             id: id.into(),
             name: name.into(),
@@ -395,7 +403,11 @@ impl CaptureConstraints {
 /// Pick the mode for `c`: the smallest at or above the wanted size and rate,
 /// else the largest. Ties go to the higher rate.
 pub fn nearest_mode(modes: &[CaptureMode], c: &CaptureConstraints) -> Option<CaptureMode> {
-    let (w, h, fps) = (c.max_width.unwrap_or(1280), c.max_height.unwrap_or(720), c.fps.unwrap_or(30));
+    let (w, h, fps) = (
+        c.max_width.unwrap_or(1280),
+        c.max_height.unwrap_or(720),
+        c.fps.unwrap_or(30),
+    );
     let area = |m: &CaptureMode| m.width as u64 * m.height as u64;
     modes
         .iter()
@@ -513,7 +525,13 @@ pub struct ScreenSourceInfo {
 
 impl ScreenSourceInfo {
     /// A source with no app and no thumbnail.
-    pub fn new(id: impl Into<String>, kind: ScreenKind, title: impl Into<String>, width: u32, height: u32) -> ScreenSourceInfo {
+    pub fn new(
+        id: impl Into<String>,
+        kind: ScreenKind,
+        title: impl Into<String>,
+        width: u32,
+        height: u32,
+    ) -> ScreenSourceInfo {
         ScreenSourceInfo {
             id: id.into(),
             kind,
@@ -638,7 +656,13 @@ pub struct EncoderConfig {
 impl EncoderConfig {
     /// `codec` at `width` x `height`, `fps`, `bitrate_bps` (max 1.5x),
     /// keyframes on request, one temporal layer, camera, hardware preferred.
-    pub fn new(codec: CodecConfig, width: u32, height: u32, fps: u32, bitrate_bps: u32) -> EncoderConfig {
+    pub fn new(
+        codec: CodecConfig,
+        width: u32,
+        height: u32,
+        fps: u32,
+        bitrate_bps: u32,
+    ) -> EncoderConfig {
         EncoderConfig {
             codec,
             width,
@@ -686,17 +710,33 @@ impl EncoderConfig {
         if self.keyframe_interval == Some(0) {
             return Err(invalid("a keyframe interval of 0 frames"));
         }
-        let max_tl = if self.codec.codec() == VideoCodec::H264 { 1 } else { 3 };
+        let max_tl = if self.codec.codec() == VideoCodec::H264 {
+            1
+        } else {
+            3
+        };
         if self.temporal_layers == 0 || self.temporal_layers > max_tl {
-            return Err(invalid(format!("{} temporal layers for {:?}", self.temporal_layers, self.codec.codec())));
+            return Err(invalid(format!(
+                "{} temporal layers for {:?}",
+                self.temporal_layers,
+                self.codec.codec()
+            )));
         }
         Ok(())
     }
 }
 
 pub(crate) fn validate_size(width: u32, height: u32) -> Result<(), VideoError> {
-    if width < 16 || height < 16 || width > 8192 || height > 8192 || width % 2 != 0 || height % 2 != 0 {
-        return Err(invalid(format!("coded size {width}x{height} (even, 16 to 8192)")));
+    if width < 16
+        || height < 16
+        || width > 8192
+        || height > 8192
+        || width % 2 != 0
+        || height % 2 != 0
+    {
+        return Err(invalid(format!(
+            "coded size {width}x{height} (even, 16 to 8192)"
+        )));
     }
     Ok(())
 }
@@ -719,7 +759,10 @@ impl Rates {
 
     pub(crate) fn validate(&self) -> Result<(), VideoError> {
         if self.bitrate_bps < 10_000 || !(1..=240).contains(&self.fps) {
-            return Err(invalid(format!("rates {} bit/s at {} fps", self.bitrate_bps, self.fps)));
+            return Err(invalid(format!(
+                "rates {} bit/s at {} fps",
+                self.bitrate_bps, self.fps
+            )));
         }
         Ok(())
     }
@@ -787,7 +830,14 @@ pub struct EncodedFrame {
 
 impl EncodedFrame {
     /// A frame in the base layer with no encode time.
-    pub fn new(codec: VideoCodec, data: impl Into<Bytes>, keyframe: bool, capture_us: u64, width: u32, height: u32) -> EncodedFrame {
+    pub fn new(
+        codec: VideoCodec,
+        data: impl Into<Bytes>,
+        keyframe: bool,
+        capture_us: u64,
+        width: u32,
+        height: u32,
+    ) -> EncodedFrame {
         EncodedFrame {
             codec,
             data: data.into(),
@@ -815,7 +865,11 @@ pub struct EncoderInfo {
 
 impl EncoderInfo {
     /// Info.
-    pub fn new(implementation: Implementation, name: impl Into<String>, config: EncoderConfig) -> EncoderInfo {
+    pub fn new(
+        implementation: Implementation,
+        name: impl Into<String>,
+        config: EncoderConfig,
+    ) -> EncoderInfo {
         EncoderInfo {
             implementation,
             name: name.into(),
@@ -887,7 +941,12 @@ pub struct EncodedInput {
 
 impl EncodedInput {
     /// An input.
-    pub fn new(codec: VideoCodec, data: impl Into<Bytes>, keyframe: bool, capture_us: u64) -> EncodedInput {
+    pub fn new(
+        codec: VideoCodec,
+        data: impl Into<Bytes>,
+        keyframe: bool,
+        capture_us: u64,
+    ) -> EncodedInput {
         EncodedInput {
             codec,
             data: data.into(),
@@ -964,7 +1023,13 @@ mod tests {
         let c = EncoderConfig::h264(1280, 720, 30, 1_500_000);
         assert!(c.validate().is_ok());
         assert_eq!(c.max_bitrate_bps, 2_250_000);
-        assert_eq!(c.codec, CodecConfig::H264 { profile: H264Profile::ConstrainedBaseline, level: H264Level(31) });
+        assert_eq!(
+            c.codec,
+            CodecConfig::H264 {
+                profile: H264Profile::ConstrainedBaseline,
+                level: H264Level(31)
+            }
+        );
         let mut odd = c;
         odd.width = 1281;
         assert!(matches!(odd.validate(), Err(VideoError::Invalid(_))));
@@ -985,22 +1050,65 @@ mod tests {
     #[test]
     fn best_prefers_hardware_then_size() {
         let mut caps = Capabilities::new("fake", "test");
-        caps.codecs.push(CodecCapability::new(VideoCodec::H264, CodecDirection::Encode, Implementation::Software, "sw", 3840, 2160, 30));
-        caps.codecs.push(CodecCapability::new(VideoCodec::H264, CodecDirection::Encode, Implementation::Hardware, "hw", 1920, 1080, 30));
-        caps.codecs.push(CodecCapability::new(VideoCodec::H264, CodecDirection::Decode, Implementation::Software, "dec", 1920, 1080, 30));
-        assert_eq!(caps.best(VideoCodec::H264, CodecDirection::Encode).map(|c| c.name.as_str()), Some("hw"));
-        assert_eq!(caps.best(VideoCodec::H264, CodecDirection::Decode).map(|c| c.name.as_str()), Some("dec"));
+        caps.codecs.push(CodecCapability::new(
+            VideoCodec::H264,
+            CodecDirection::Encode,
+            Implementation::Software,
+            "sw",
+            3840,
+            2160,
+            30,
+        ));
+        caps.codecs.push(CodecCapability::new(
+            VideoCodec::H264,
+            CodecDirection::Encode,
+            Implementation::Hardware,
+            "hw",
+            1920,
+            1080,
+            30,
+        ));
+        caps.codecs.push(CodecCapability::new(
+            VideoCodec::H264,
+            CodecDirection::Decode,
+            Implementation::Software,
+            "dec",
+            1920,
+            1080,
+            30,
+        ));
+        assert_eq!(
+            caps.best(VideoCodec::H264, CodecDirection::Encode)
+                .map(|c| c.name.as_str()),
+            Some("hw")
+        );
+        assert_eq!(
+            caps.best(VideoCodec::H264, CodecDirection::Decode)
+                .map(|c| c.name.as_str()),
+            Some("dec")
+        );
         assert!(caps.best(VideoCodec::Vp8, CodecDirection::Encode).is_none());
     }
 
     #[test]
     fn nearest_mode_covers_the_ask() {
         let f = PixelFormat::Nv12;
-        let ms = [CaptureMode::new(1920, 1080, 30, f), CaptureMode::new(1280, 720, 60, f), CaptureMode::new(640, 480, 30, f)];
+        let ms = [
+            CaptureMode::new(1920, 1080, 30, f),
+            CaptureMode::new(1280, 720, 60, f),
+            CaptureMode::new(640, 480, 30, f),
+        ];
         let at = |w, h, fps| nearest_mode(&ms, &CaptureConstraints::new(w, h, fps)).expect("one");
-        assert_eq!((at(1280, 720, 30).width, at(1280, 720, 30).max_fps), (1280, 60));
+        assert_eq!(
+            (at(1280, 720, 30).width, at(1280, 720, 30).max_fps),
+            (1280, 60)
+        );
         assert_eq!(at(640, 360, 30).width, 640);
-        assert_eq!(at(1920, 1080, 60).width, 1280, "nothing covers 1080p60: the largest at 60");
+        assert_eq!(
+            at(1920, 1080, 60).width,
+            1280,
+            "nothing covers 1080p60: the largest at 60"
+        );
         assert_eq!(at(4000, 3000, 30).width, 1920);
         assert_eq!(nearest_mode(&[], &CaptureConstraints::default()), None);
         assert!(CaptureConstraints::new(8, 8, 30).validate().is_err());

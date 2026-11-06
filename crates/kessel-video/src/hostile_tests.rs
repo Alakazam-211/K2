@@ -76,7 +76,11 @@ fn mutate(rng: &mut Rng, valid: &[Vec<u8>]) -> Vec<u8> {
             if p.len() >= 10 {
                 // Mostly small sizes that decode; now and then any 16 bits.
                 for at in [6, 8] {
-                    let v = if rng.below(4) == 0 { rng.next_u64() as u16 } else { 1 + rng.below(640) as u16 };
+                    let v = if rng.below(4) == 0 {
+                        rng.next_u64() as u16
+                    } else {
+                        1 + rng.below(640) as u16
+                    };
                     p[at..at + 2].copy_from_slice(&v.to_le_bytes());
                 }
             }
@@ -93,7 +97,10 @@ fn h264_helpers_survive_hostile_bytes() {
     let mut au = Vec::new();
     h264::push_annexb(&mut au, &[0x67, 0x42, 0xc0, 0x1f, 0xda, 0x01, 0x40]);
     h264::push_annexb(&mut au, &[0x68, 0xce, 0x3c, 0x80]);
-    h264::push_annexb(&mut au, &[0x65, 0x88, 0x84, 0x00, 0x00, 0x03, 0x00, 0x21, 0x7f]);
+    h264::push_annexb(
+        &mut au,
+        &[0x65, 0x88, 0x84, 0x00, 0x00, 0x03, 0x00, 0x21, 0x7f],
+    );
     let valid = vec![au.clone(), h264::annexb_to_avcc(&au)];
     let mut parsed = 0;
     for _ in 0..5_000 {
@@ -111,7 +118,10 @@ fn h264_helpers_survive_hostile_bytes() {
         assert_eq!(avcc.len(), nals.iter().map(|n| n.len() + 4).sum::<usize>());
         for len_size in 0..=5 {
             if let Ok(found) = h264::avcc_nals(&data, len_size) {
-                assert_eq!(found.iter().map(|n| n.len() + len_size).sum::<usize>(), data.len());
+                assert_eq!(
+                    found.iter().map(|n| n.len() + len_size).sum::<usize>(),
+                    data.len()
+                );
                 parsed += 1;
             }
             let mut out = Vec::new();
@@ -120,7 +130,10 @@ fn h264_helpers_survive_hostile_bytes() {
             }
         }
     }
-    assert!(parsed > 500, "the AVCC parser accepted only {parsed} inputs");
+    assert!(
+        parsed > 500,
+        "the AVCC parser accepted only {parsed} inputs"
+    );
 }
 
 #[cfg(feature = "vp8")]
@@ -186,10 +199,17 @@ mod vp8 {
             // inter-prediction paths with a reference in place.
             if i % 40 == 0 {
                 let key = EncodedInput::new(VideoCodec::Vp8, valid[0].clone(), true, i);
-                let f = core.decode(&key).expect("a valid keyframe decodes").expect("and is shown");
+                let f = core
+                    .decode(&key)
+                    .expect("a valid keyframe decodes")
+                    .expect("and is shown");
                 check(&f);
             }
-            let data = if rng.below(4) == 0 { valid[rng.below(valid.len())].clone() } else { mutate(&mut rng, &valid) };
+            let data = if rng.below(4) == 0 {
+                valid[rng.below(valid.len())].clone()
+            } else {
+                mutate(&mut rng, &valid)
+            };
             let keyframe = rng.below(2) == 0;
             match core.decode(&EncodedInput::new(VideoCodec::Vp8, data, keyframe, i)) {
                 Ok(Some(f)) => {
@@ -200,7 +220,10 @@ mod vp8 {
                 Err(_) => errors += 1,
             }
         }
-        assert!(frames > 200 && errors > 200, "both paths reached: {frames} frames, {errors} errors");
+        assert!(
+            frames > 200 && errors > 200,
+            "both paths reached: {frames} frames, {errors} errors"
+        );
         // The stream decodes again from a keyframe.
         core.reset().expect("reset");
         let key = EncodedInput::new(VideoCodec::Vp8, valid[0].clone(), true, 1);
@@ -237,12 +260,22 @@ mod vp8 {
         }
         // A panic would have ended the thread, and nothing would come out.
         dec.reset();
-        dec.submit(EncodedInput::new(VideoCodec::Vp8, valid[0].clone(), true, 7)).expect("submit");
+        dec.submit(EncodedInput::new(
+            VideoCodec::Vp8,
+            valid[0].clone(),
+            true,
+            7,
+        ))
+        .expect("submit");
         let f = wait_for(Duration::from_secs(10), || dec.poll())
             .expect("a frame within 10 s: the decoder thread is alive")
             .expect("the valid keyframe decodes");
         assert_eq!((f.width, f.height, f.capture_us), (W, H, 7));
         assert_eq!(read_frame_code(&f), Some(0));
-        assert!(dec.stats().errors > 0, "some hostile frames failed: {:?}", dec.stats());
+        assert!(
+            dec.stats().errors > 0,
+            "some hostile frames failed: {:?}",
+            dec.stats()
+        );
     }
 }

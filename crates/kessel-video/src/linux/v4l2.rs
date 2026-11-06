@@ -217,7 +217,12 @@ impl Fd {
     pub fn open(path: &str) -> io::Result<Fd> {
         let c = CString::new(path).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // SAFETY: a NUL-terminated path; plain flags.
-        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+        let fd = unsafe {
+            libc::open(
+                c.as_ptr(),
+                libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
         if fd < 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -253,9 +258,15 @@ impl Fd {
         let r = unsafe { libc::poll(&mut p, 1, ms) };
         if r < 0 {
             let e = io::Error::last_os_error();
-            return if e.raw_os_error() == Some(libc::EINTR) { Ok(false) } else { Err(e) };
+            return if e.raw_os_error() == Some(libc::EINTR) {
+                Ok(false)
+            } else {
+                Err(e)
+            };
         }
-        if p.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 && p.revents & libc::POLLIN == 0 {
+        if p.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
+            && p.revents & libc::POLLIN == 0
+        {
             return Err(io::Error::from_raw_os_error(libc::ENODEV));
         }
         Ok(r > 0 && p.revents & libc::POLLIN != 0)
@@ -282,11 +293,23 @@ impl Mapped {
     pub fn map(fd: &Fd, offset: u64, len: usize) -> io::Result<Mapped> {
         // SAFETY: a shared read/write mapping of the driver's buffer at the
         // offset QUERYBUF gave.
-        let p = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd.0, offset as libc::off_t) };
+        let p = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.0,
+                offset as libc::off_t,
+            )
+        };
         if p == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
         }
-        Ok(Mapped { ptr: p as *mut u8, len })
+        Ok(Mapped {
+            ptr: p as *mut u8,
+            len,
+        })
     }
 
     /// The first `n` bytes.

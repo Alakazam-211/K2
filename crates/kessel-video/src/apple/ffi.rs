@@ -37,7 +37,10 @@ pub struct CMTime {
 
 // SAFETY: CMTime is `{?=qiIq}` in the Objective-C runtime.
 unsafe impl Encode for CMTime {
-    const ENCODING: Encoding = Encoding::Struct("?", &[i64::ENCODING, i32::ENCODING, u32::ENCODING, i64::ENCODING]);
+    const ENCODING: Encoding = Encoding::Struct(
+        "?",
+        &[i64::ENCODING, i32::ENCODING, u32::ENCODING, i64::ENCODING],
+    );
 }
 // SAFETY: a pointer to the struct above.
 unsafe impl RefEncode for CMTime {
@@ -90,7 +93,8 @@ unsafe impl Encode for SampleBufferArg {
 pub struct FormatDescriptionArg(pub CMFormatDescriptionRef);
 // SAFETY: a pointer to the opaque struct, as the runtime describes it.
 unsafe impl Encode for FormatDescriptionArg {
-    const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("opaqueCMFormatDescription", &[]));
+    const ENCODING: Encoding =
+        Encoding::Pointer(&Encoding::Struct("opaqueCMFormatDescription", &[]));
 }
 
 #[repr(C)]
@@ -106,8 +110,10 @@ pub struct CFArrayCallBacks {
     _p: [usize; 5],
 }
 
-pub type CompressionOutputCallback = extern "C" fn(*mut c_void, *mut c_void, OSStatus, u32, CMSampleBufferRef);
-pub type DecompressionOutputCallback = extern "C" fn(*mut c_void, *mut c_void, OSStatus, u32, CVPixelBufferRef, CMTime, CMTime);
+pub type CompressionOutputCallback =
+    extern "C" fn(*mut c_void, *mut c_void, OSStatus, u32, CMSampleBufferRef);
+pub type DecompressionOutputCallback =
+    extern "C" fn(*mut c_void, *mut c_void, OSStatus, u32, CVPixelBufferRef, CMTime, CMTime);
 
 #[repr(C)]
 pub struct VTDecompressionOutputCallbackRecord {
@@ -123,12 +129,26 @@ extern "C" {
     pub static kCFTypeDictionaryKeyCallBacks: CFDictionaryKeyCallBacks;
     pub static kCFTypeDictionaryValueCallBacks: CFDictionaryValueCallBacks;
     pub static kCFTypeArrayCallBacks: CFArrayCallBacks;
-    pub fn CFDictionaryCreateMutable(a: CFAllocatorRef, cap: isize, k: *const c_void, v: *const c_void) -> CFMutableDictionaryRef;
+    pub fn CFDictionaryCreateMutable(
+        a: CFAllocatorRef,
+        cap: isize,
+        k: *const c_void,
+        v: *const c_void,
+    ) -> CFMutableDictionaryRef;
     pub fn CFDictionarySetValue(d: CFMutableDictionaryRef, k: *const c_void, v: *const c_void);
     pub fn CFDictionaryGetValue(d: CFDictionaryRef, k: *const c_void) -> *const c_void;
-    pub fn CFNumberCreate(a: CFAllocatorRef, number_type: isize, value: *const c_void) -> CFNumberRef;
+    pub fn CFNumberCreate(
+        a: CFAllocatorRef,
+        number_type: isize,
+        value: *const c_void,
+    ) -> CFNumberRef;
     pub fn CFNumberGetValue(n: CFNumberRef, number_type: isize, value: *mut c_void) -> u8;
-    pub fn CFArrayCreate(a: CFAllocatorRef, values: *const *const c_void, n: isize, cb: *const CFArrayCallBacks) -> CFArrayRef;
+    pub fn CFArrayCreate(
+        a: CFAllocatorRef,
+        values: *const *const c_void,
+        n: isize,
+        cb: *const CFArrayCallBacks,
+    ) -> CFArrayRef;
     pub fn CFArrayGetCount(a: CFArrayRef) -> isize;
     pub fn CFArrayGetValueAtIndex(a: CFArrayRef, i: isize) -> *const c_void;
     pub fn CFBooleanGetValue(b: CFBooleanRef) -> u8;
@@ -151,8 +171,17 @@ extern "C" {
         refcon: *mut c_void,
         session_out: *mut VTSessionRef,
     ) -> OSStatus;
-    pub fn VTSessionSetProperty(session: VTSessionRef, key: CFStringRef, value: CFTypeRef) -> OSStatus;
-    pub fn VTSessionCopyProperty(session: VTSessionRef, key: CFStringRef, allocator: CFAllocatorRef, value_out: *mut CFTypeRef) -> OSStatus;
+    pub fn VTSessionSetProperty(
+        session: VTSessionRef,
+        key: CFStringRef,
+        value: CFTypeRef,
+    ) -> OSStatus;
+    pub fn VTSessionCopyProperty(
+        session: VTSessionRef,
+        key: CFStringRef,
+        allocator: CFAllocatorRef,
+        value_out: *mut CFTypeRef,
+    ) -> OSStatus;
     pub fn VTCompressionSessionPrepareToEncodeFrames(session: VTSessionRef) -> OSStatus;
     pub fn VTCompressionSessionEncodeFrame(
         session: VTSessionRef,
@@ -183,14 +212,28 @@ extern "C" {
         info_flags_out: *mut u32,
     ) -> OSStatus;
     pub fn VTDecompressionSessionWaitForAsynchronousFrames(session: VTSessionRef) -> OSStatus;
-    pub fn VTDecompressionSessionCanAcceptFormatDescription(session: VTSessionRef, format: CMFormatDescriptionRef) -> u8;
+    pub fn VTDecompressionSessionCanAcceptFormatDescription(
+        session: VTSessionRef,
+        format: CMFormatDescriptionRef,
+    ) -> u8;
     pub fn VTDecompressionSessionInvalidate(session: VTSessionRef);
 }
 
 #[link(name = "CoreVideo", kind = "framework")]
 extern "C" {
-    pub fn CVPixelBufferPoolCreatePixelBuffer(a: CFAllocatorRef, pool: CVPixelBufferPoolRef, out: *mut CVPixelBufferRef) -> i32;
-    pub fn CVPixelBufferCreate(a: CFAllocatorRef, w: usize, h: usize, format: u32, attrs: CFDictionaryRef, out: *mut CVPixelBufferRef) -> i32;
+    pub fn CVPixelBufferPoolCreatePixelBuffer(
+        a: CFAllocatorRef,
+        pool: CVPixelBufferPoolRef,
+        out: *mut CVPixelBufferRef,
+    ) -> i32;
+    pub fn CVPixelBufferCreate(
+        a: CFAllocatorRef,
+        w: usize,
+        h: usize,
+        format: u32,
+        attrs: CFDictionaryRef,
+        out: *mut CVPixelBufferRef,
+    ) -> i32;
     pub fn CVPixelBufferLockBaseAddress(pb: CVPixelBufferRef, flags: u64) -> i32;
     pub fn CVPixelBufferUnlockBaseAddress(pb: CVPixelBufferRef, flags: u64) -> i32;
     pub fn CVPixelBufferGetBaseAddress(pb: CVPixelBufferRef) -> *mut c_void;
@@ -203,8 +246,17 @@ extern "C" {
     pub fn CVPixelBufferGetWidth(pb: CVPixelBufferRef) -> usize;
     pub fn CVPixelBufferGetHeight(pb: CVPixelBufferRef) -> usize;
     pub fn CVPixelBufferGetPixelFormatType(pb: CVPixelBufferRef) -> u32;
-    pub fn CVBufferSetAttachment(buffer: CVPixelBufferRef, key: CFStringRef, value: CFTypeRef, mode: u32);
-    pub fn CVBufferGetAttachment(buffer: CVPixelBufferRef, key: CFStringRef, mode_out: *mut u32) -> CFTypeRef;
+    pub fn CVBufferSetAttachment(
+        buffer: CVPixelBufferRef,
+        key: CFStringRef,
+        value: CFTypeRef,
+        mode: u32,
+    );
+    pub fn CVBufferGetAttachment(
+        buffer: CVPixelBufferRef,
+        key: CFStringRef,
+        mode_out: *mut u32,
+    ) -> CFTypeRef;
 }
 
 #[link(name = "CoreMedia", kind = "framework")]
@@ -212,9 +264,15 @@ extern "C" {
     pub fn CMSampleBufferGetDataBuffer(sb: CMSampleBufferRef) -> CMBlockBufferRef;
     pub fn CMSampleBufferGetImageBuffer(sb: CMSampleBufferRef) -> CVPixelBufferRef;
     pub fn CMSampleBufferGetFormatDescription(sb: CMSampleBufferRef) -> CMFormatDescriptionRef;
-    pub fn CMSampleBufferGetSampleAttachmentsArray(sb: CMSampleBufferRef, create: u8) -> CFArrayRef;
+    pub fn CMSampleBufferGetSampleAttachmentsArray(sb: CMSampleBufferRef, create: u8)
+        -> CFArrayRef;
     pub fn CMBlockBufferGetDataLength(bb: CMBlockBufferRef) -> usize;
-    pub fn CMBlockBufferCopyDataBytes(bb: CMBlockBufferRef, offset: usize, len: usize, dest: *mut c_void) -> OSStatus;
+    pub fn CMBlockBufferCopyDataBytes(
+        bb: CMBlockBufferRef,
+        offset: usize,
+        len: usize,
+        dest: *mut c_void,
+    ) -> OSStatus;
     pub fn CMBlockBufferCreateWithMemoryBlock(
         a: CFAllocatorRef,
         memory: *mut c_void,
@@ -253,7 +311,8 @@ extern "C" {
         nal_header_len: i32,
         out: *mut CMFormatDescriptionRef,
     ) -> OSStatus;
-    pub fn CMVideoFormatDescriptionGetDimensions(desc: CMFormatDescriptionRef) -> CMVideoDimensions;
+    pub fn CMVideoFormatDescriptionGetDimensions(desc: CMFormatDescriptionRef)
+        -> CMVideoDimensions;
     pub fn CMFormatDescriptionGetMediaSubType(desc: CMFormatDescriptionRef) -> u32;
 }
 
@@ -352,17 +411,35 @@ pub fn dict() -> Cf {
 
 pub fn num_i32(v: i32) -> Cf {
     // SAFETY: a pointer to a live i32.
-    Cf(unsafe { CFNumberCreate(ptr::null(), K_CFNUMBER_SINT32, &v as *const i32 as *const c_void) })
+    Cf(unsafe {
+        CFNumberCreate(
+            ptr::null(),
+            K_CFNUMBER_SINT32,
+            &v as *const i32 as *const c_void,
+        )
+    })
 }
 
 pub fn num_i64(v: i64) -> Cf {
     // SAFETY: a pointer to a live i64.
-    Cf(unsafe { CFNumberCreate(ptr::null(), K_CFNUMBER_SINT64, &v as *const i64 as *const c_void) })
+    Cf(unsafe {
+        CFNumberCreate(
+            ptr::null(),
+            K_CFNUMBER_SINT64,
+            &v as *const i64 as *const c_void,
+        )
+    })
 }
 
 pub fn num_f64(v: f64) -> Cf {
     // SAFETY: a pointer to a live f64.
-    Cf(unsafe { CFNumberCreate(ptr::null(), K_CFNUMBER_FLOAT64, &v as *const f64 as *const c_void) })
+    Cf(unsafe {
+        CFNumberCreate(
+            ptr::null(),
+            K_CFNUMBER_FLOAT64,
+            &v as *const f64 as *const c_void,
+        )
+    })
 }
 
 pub fn number_i64(n: CFNumberRef) -> Option<i64> {
@@ -377,7 +454,14 @@ pub fn number_i64(n: CFNumberRef) -> Option<i64> {
 
 pub fn array(values: &[CFTypeRef]) -> Cf {
     // SAFETY: a slice of live CF objects; CF retains them.
-    Cf(unsafe { CFArrayCreate(ptr::null(), values.as_ptr(), values.len() as isize, &kCFTypeArrayCallBacks) })
+    Cf(unsafe {
+        CFArrayCreate(
+            ptr::null(),
+            values.as_ptr(),
+            values.len() as isize,
+            &kCFTypeArrayCallBacks,
+        )
+    })
 }
 
 pub fn set(d: &Cf, key: CFStringRef, value: CFTypeRef) {
@@ -410,7 +494,11 @@ pub fn no() -> CFTypeRef {
 /// IOSurface.
 pub fn pixel_buffer_attributes(format: u32, width: Option<(u32, u32)>) -> Cf {
     let attrs = dict();
-    set_named(&attrs, c"kCVPixelBufferPixelFormatTypeKey", num_i32(format as i32).0);
+    set_named(
+        &attrs,
+        c"kCVPixelBufferPixelFormatTypeKey",
+        num_i32(format as i32).0,
+    );
     if let Some((w, h)) = width {
         set_named(&attrs, c"kCVPixelBufferWidthKey", num_i32(w as i32).0);
         set_named(&attrs, c"kCVPixelBufferHeightKey", num_i32(h as i32).0);

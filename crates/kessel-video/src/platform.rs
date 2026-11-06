@@ -1,10 +1,25 @@
 //! Choosing the OS backend.
 
-#[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
+#[cfg(any(
+    feature = "apple",
+    feature = "windows",
+    feature = "linux",
+    feature = "android"
+))]
 use crate::api::VideoBackend;
-#[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
+#[cfg(any(
+    feature = "apple",
+    feature = "windows",
+    feature = "linux",
+    feature = "android"
+))]
 use crate::error::VideoError;
-#[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
+#[cfg(any(
+    feature = "apple",
+    feature = "windows",
+    feature = "linux",
+    feature = "android"
+))]
 use std::sync::Arc;
 
 /// The host's Android JNI handles (reserved: the Android backend isn't
@@ -26,7 +41,12 @@ pub struct SystemConfig {
 
 /// The OS backend for this target (feature `system`, or the per-OS
 /// feature). `Unsupported` on a target whose backend isn't built.
-#[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
+#[cfg(any(
+    feature = "apple",
+    feature = "windows",
+    feature = "linux",
+    feature = "android"
+))]
 pub fn system(config: SystemConfig) -> Result<Arc<dyn VideoBackend>, VideoError> {
     let _ = config;
     os::backend()
@@ -58,9 +78,18 @@ mod os {
     all(feature = "linux", target_os = "linux")
 )))]
 mod os {
-    #[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
-    pub(super) fn backend() -> Result<std::sync::Arc<dyn crate::api::VideoBackend>, crate::error::VideoError> {
-        Err(crate::error::unsupported(format!("no kessel-video backend for {}", std::env::consts::OS)))
+    #[cfg(any(
+        feature = "apple",
+        feature = "windows",
+        feature = "linux",
+        feature = "android"
+    ))]
+    pub(super) fn backend(
+    ) -> Result<std::sync::Arc<dyn crate::api::VideoBackend>, crate::error::VideoError> {
+        Err(crate::error::unsupported(format!(
+            "no kessel-video backend for {}",
+            std::env::consts::OS
+        )))
     }
 
     pub(super) fn name() -> String {

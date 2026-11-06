@@ -64,7 +64,10 @@ fn has_pattern(line: &str, pattern: &str) -> bool {
 
 /// The README's one line saying where the crate is used may name the product.
 fn may_name_product(file_name: &str, line: &str) -> bool {
-    file_name == "README.md" && line.trim_start().starts_with(&format!("Used in {}", product()))
+    file_name == "README.md"
+        && line
+            .trim_start()
+            .starts_with(&format!("Used in {}", product()))
 }
 
 /// The manifest's `repository` line, exactly. crates.io and docs.rs link the
@@ -115,7 +118,10 @@ fn without_repository_urls(file_name: &str, line: &str) -> String {
     while let Some(at) = rest.find(&url) {
         out.push_str(&rest[..at]);
         let from = &rest[at..];
-        match allowed.iter().find(|a| from.starts_with(a.as_str()) && ends_url(&from[a.len()..])) {
+        match allowed
+            .iter()
+            .find(|a| from.starts_with(a.as_str()) && ends_url(&from[a.len()..]))
+        {
             Some(a) => {
                 out.push_str("<repository>");
                 rest = &from[a.len()..];
@@ -143,7 +149,9 @@ fn line_hits(file_name: &str, line: &str, banned: &[String]) -> Vec<String> {
         .map(|b| format!("{b:?}"))
         .collect();
     // The product name as a word.
-    let named = line.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == k);
+    let named = line
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == k);
     if named && !may_name_product(file_name, line) {
         hits.push(format!("the word {k:?}"));
     }
@@ -168,7 +176,11 @@ fn no_internal_names() {
             }
         }
     }
-    assert!(hits.is_empty(), "internal names found:\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "internal names found:\n{}",
+        hits.join("\n")
+    );
 }
 
 #[test]
@@ -178,7 +190,10 @@ fn a_pattern_matches_the_whole_word_not_the_tail_of_a_name() {
     assert!(has_pattern(&format!("use {path}thing;"), &path));
     assert!(has_pattern(&format!("{path}thing"), &path));
     assert!(has_pattern(&format!("({path}thing)"), &path));
-    assert!(!has_pattern(&format!("use bloc{path}Thing;"), &path), "the tail of a crate name");
+    assert!(
+        !has_pattern(&format!("use bloc{path}Thing;"), &path),
+        "the tail of a crate name"
+    );
     assert!(!has_pattern(&format!("use a_{path}Thing;"), &path));
     // Either occurrence counts.
     assert!(has_pattern(&format!("bloc{path}a and {path}b"), &path));
@@ -195,12 +210,22 @@ fn only_the_used_in_line_of_the_readme_may_name_the_product() {
     let k = product();
     let banned = banned();
     let used_in = format!("Used in {k}.");
-    assert_eq!(line_hits("README.md", &used_in, &banned), Vec::<String>::new());
-    assert_eq!(line_hits("README.md", &format!("  {used_in}"), &banned), Vec::<String>::new());
+    assert_eq!(
+        line_hits("README.md", &used_in, &banned),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("  {used_in}"), &banned),
+        Vec::<String>::new()
+    );
 
     let elsewhere = format!("Works well with {k}.");
     assert_eq!(line_hits("README.md", &elsewhere, &banned).len(), 1);
-    assert_eq!(line_hits("lib.rs", &used_in, &banned).len(), 1, "README only");
+    assert_eq!(
+        line_hits("lib.rs", &used_in, &banned).len(),
+        1,
+        "README only"
+    );
 
     // The allowance covers the word, not the other names.
     let host = format!("{used_in} See {}.dev.", k.to_lowercase());
@@ -211,14 +236,23 @@ fn only_the_used_in_line_of_the_readme_may_name_the_product() {
 fn only_the_exact_repository_line_of_the_manifest_may_name_the_organisation() {
     let banned = banned();
     let line = repository_line();
-    assert_eq!(line_hits("Cargo.toml", &line, &banned), Vec::<String>::new());
+    assert_eq!(
+        line_hits("Cargo.toml", &line, &banned),
+        Vec::<String>::new()
+    );
 
     // The same line in another file, or changed at all, is still caught: once
     // for the organisation and once for the product. (The README is the
     // other place the URL itself may appear; see the next test.)
     assert_eq!(line_hits("lib.rs", &line, &banned).len(), 2);
-    assert_eq!(line_hits("Cargo.toml", &format!("  {line}"), &banned).len(), 2);
-    assert_eq!(line_hits("Cargo.toml", &format!("{line} # note"), &banned).len(), 2);
+    assert_eq!(
+        line_hits("Cargo.toml", &format!("  {line}"), &banned).len(),
+        2
+    );
+    assert_eq!(
+        line_hits("Cargo.toml", &format!("{line} # note"), &banned).len(),
+        2
+    );
     let homepage = line.replacen("repository", "homepage", 1);
     assert_eq!(line_hits("Cargo.toml", &homepage, &banned).len(), 2);
     let org_only = format!("homepage = \"https://github.com/{}-211\"", "Alakazam");
@@ -234,32 +268,99 @@ fn the_readme_may_link_the_repository_and_security_urls_and_nothing_else_by_thos
     // The two URLs, bare, in a Markdown link, in angle brackets, or at the
     // end of a sentence; both on one line.
     assert_eq!(line_hits("README.md", &url, &banned), none);
-    assert_eq!(line_hits("README.md", &format!("{url}/security"), &banned), none);
-    assert_eq!(line_hits("README.md", &format!("See {url}/security."), &banned), none);
-    assert_eq!(line_hits("README.md", &format!("[the repository]({url})"), &banned), none);
-    assert_eq!(line_hits("README.md", &format!("<{url}/security>"), &banned), none);
-    assert_eq!(line_hits("README.md", &format!("Source: {url}."), &banned), none);
-    assert_eq!(line_hits("README.md", &format!("{url}, and {url}/security: both."), &banned), none);
+    assert_eq!(
+        line_hits("README.md", &format!("{url}/security"), &banned),
+        none
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("See {url}/security."), &banned),
+        none
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("[the repository]({url})"), &banned),
+        none
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("<{url}/security>"), &banned),
+        none
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("Source: {url}."), &banned),
+        none
+    );
+    assert_eq!(
+        line_hits(
+            "README.md",
+            &format!("{url}, and {url}/security: both."),
+            &banned
+        ),
+        none
+    );
 
     // Only the URLs are exempt: the names elsewhere on the same line are caught.
     let k = product();
     let org = format!("{}-211", "Alakazam");
-    assert_eq!(line_hits("README.md", &format!("{url} is {k}'s."), &banned).len(), 1);
-    assert_eq!(line_hits("README.md", &format!("{url} by {org}"), &banned).len(), 1);
-    assert_eq!(line_hits("README.md", &format!("{url}/security, or {url}/issues"), &banned).len(), 2);
+    assert_eq!(
+        line_hits("README.md", &format!("{url} is {k}'s."), &banned).len(),
+        1
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("{url} by {org}"), &banned).len(),
+        1
+    );
+    assert_eq!(
+        line_hits(
+            "README.md",
+            &format!("{url}/security, or {url}/issues"),
+            &banned
+        )
+        .len(),
+        2
+    );
 
     // Any other page of the repository is caught: once for the organisation
     // and once for the product.
-    for page in ["/", "/tree/main/crates", "/issues", "/security/advisories", "/securityx", "/security.md"] {
-        assert_eq!(line_hits("README.md", &format!("{url}{page}"), &banned).len(), 2, "{page}");
+    for page in [
+        "/",
+        "/tree/main/crates",
+        "/issues",
+        "/security/advisories",
+        "/securityx",
+        "/security.md",
+    ] {
+        assert_eq!(
+            line_hits("README.md", &format!("{url}{page}"), &banned).len(),
+            2,
+            "{page}"
+        );
     }
 
     // A longer name that starts like the URL is another repository.
-    assert_eq!(line_hits("README.md", &format!("{url}-private"), &banned).len(), 2);
-    assert_eq!(line_hits("README.md", &format!("{url}SO/security"), &banned).len(), 1);
-    assert_eq!(line_hits("README.md", &format!("{url}.example"), &banned).len(), 2);
+    assert_eq!(
+        line_hits("README.md", &format!("{url}-private"), &banned).len(),
+        2
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("{url}SO/security"), &banned).len(),
+        1
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("{url}.example"), &banned).len(),
+        2
+    );
 
     // Outside the README the URLs are still caught.
-    assert_eq!(line_hits("lib.rs", &format!("// {url}/security"), &banned).len(), 2);
-    assert_eq!(line_hits("Cargo.toml", &format!("homepage = \"{url}/security\""), &banned).len(), 2);
+    assert_eq!(
+        line_hits("lib.rs", &format!("// {url}/security"), &banned).len(),
+        2
+    );
+    assert_eq!(
+        line_hits(
+            "Cargo.toml",
+            &format!("homepage = \"{url}/security\""),
+            &banned
+        )
+        .len(),
+        2
+    );
 }

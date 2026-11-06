@@ -51,7 +51,11 @@ pub fn annexb_nals(stream: &[u8]) -> Vec<&[u8]> {
     }
     let mut out = Vec::with_capacity(starts.len());
     for (k, &s) in starts.iter().enumerate() {
-        let mut end = if k + 1 < starts.len() { starts[k + 1] - 3 } else { stream.len() };
+        let mut end = if k + 1 < starts.len() {
+            starts[k + 1] - 3
+        } else {
+            stream.len()
+        };
         // Trailing zeros belong to the next start code (or are padding).
         while end > s && stream[end - 1] == 0 {
             end -= 1;
@@ -67,13 +71,18 @@ pub fn annexb_nals(stream: &[u8]) -> Vec<&[u8]> {
 /// bytes, 1 to 4) into NAL units.
 pub fn avcc_nals(sample: &[u8], len_size: usize) -> Result<Vec<&[u8]>, VideoError> {
     if !(1..=4).contains(&len_size) {
-        return Err(invalid(format!("AVCC length size {len_size} is not 1 to 4")));
+        return Err(invalid(format!(
+            "AVCC length size {len_size} is not 1 to 4"
+        )));
     }
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < sample.len() {
         if i + len_size > sample.len() {
-            return Err(invalid(format!("AVCC sample truncated at {i} of {}", sample.len())));
+            return Err(invalid(format!(
+                "AVCC sample truncated at {i} of {}",
+                sample.len()
+            )));
         }
         let mut n = 0usize;
         for b in &sample[i..i + len_size] {
@@ -178,7 +187,12 @@ mod tests {
         let nals = annexb_nals(&out);
         assert_eq!(
             nals,
-            vec![&[0x67, 0x42, 0xe0, 0x1f, 0xac][..], &[0x68, 0xee][..], &[0x65, 0xaa, 0xbb][..], &[0x41, 0xcc][..]]
+            vec![
+                &[0x67, 0x42, 0xe0, 0x1f, 0xac][..],
+                &[0x68, 0xee][..],
+                &[0x65, 0xaa, 0xbb][..],
+                &[0x41, 0xcc][..]
+            ]
         );
         assert!(is_keyframe(&nals));
         assert_eq!(codec_string(&nals).as_deref(), Some("avc1.42E01F"));
@@ -186,7 +200,10 @@ mod tests {
         let avcc = annexb_to_avcc(&out);
         assert_eq!(avcc_nals(&avcc, 4).expect("split"), nals);
         // Three-byte start codes split too.
-        assert_eq!(annexb_nals(&[0, 0, 1, 0x41, 1, 0, 0, 1, 0x41, 2]), vec![&[0x41, 1][..], &[0x41, 2][..]]);
+        assert_eq!(
+            annexb_nals(&[0, 0, 1, 0x41, 1, 0, 0, 1, 0x41, 2]),
+            vec![&[0x41, 1][..], &[0x41, 2][..]]
+        );
     }
 
     #[test]
@@ -207,12 +224,20 @@ mod tests {
 
     #[test]
     fn emulation_prevention_round_trips_and_hides_start_codes() {
-        let payloads: [&[u8]; 4] = [&[0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 7], &[0, 0], &[], &[0, 0, 0, 0, 0, 0]];
+        let payloads: [&[u8]; 4] = [
+            &[0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 7],
+            &[0, 0],
+            &[],
+            &[0, 0, 0, 0, 0, 0],
+        ];
         for p in payloads {
             let mut esc = Vec::new();
             escape_rbsp(p, &mut esc);
             for w in esc.windows(3) {
-                assert!(!(w[0] == 0 && w[1] == 0 && w[2] <= 2), "a start code survived in {esc:?}");
+                assert!(
+                    !(w[0] == 0 && w[1] == 0 && w[2] <= 2),
+                    "a start code survived in {esc:?}"
+                );
             }
             assert_eq!(unescape_rbsp(&esc), p);
         }

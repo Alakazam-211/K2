@@ -12,7 +12,9 @@ mod portal;
 mod screen;
 mod v4l2;
 
-use crate::api::{Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake};
+use crate::api::{
+    Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
+};
 use crate::error::{unsupported, VideoError};
 use crate::frame::{PixelFormat, VideoFrame};
 use crate::kit::{lock, now_us};
@@ -45,11 +47,15 @@ pub(crate) fn os_name() -> String {
     let pretty = std::fs::read_to_string("/etc/os-release")
         .ok()
         .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_string()))
+            s.lines().find_map(|l| {
+                l.strip_prefix("PRETTY_NAME=")
+                    .map(|v| v.trim_matches('"').to_string())
+            })
         })
         .unwrap_or_else(|| "Linux".into());
-    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").map(|s| s.trim().to_string()).unwrap_or_default();
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     if kernel.is_empty() {
         pretty
     } else {
@@ -146,7 +152,12 @@ impl VideoBackend for LinuxBackend {
         camera::request_permission(done)
     }
 
-    fn open_camera(&self, id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_camera(
+        &self,
+        id: Option<&str>,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         camera::open(id, c, wake)
     }
@@ -173,28 +184,53 @@ impl VideoBackend for LinuxBackend {
         screen::pick(opts, done)
     }
 
-    fn open_screen(&self, s: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_screen(
+        &self,
+        s: &ScreenSelection,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         screen::open(s, c, wake)
     }
 
-    fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    fn encoder(
+        &self,
+        config: EncoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
             return r;
         }
-        Err(unsupported(format!("no {:?} encoder on Linux yet", config.codec.codec())))
+        Err(unsupported(format!(
+            "no {:?} encoder on Linux yet",
+            config.codec.codec()
+        )))
     }
 
-    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(
+        &self,
+        config: DecoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
             return r;
         }
-        Err(unsupported(format!("no {:?} decoder on Linux yet", config.codec)))
+        Err(unsupported(format!(
+            "no {:?} decoder on Linux yet",
+            config.codec
+        )))
     }
 
-    fn convert(&self, frame: &VideoFrame, width: u32, height: u32, format: PixelFormat) -> Result<VideoFrame, VideoError> {
+    fn convert(
+        &self,
+        frame: &VideoFrame,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<VideoFrame, VideoError> {
         self.live()?;
         crate::convert::convert(frame, width, height, format)
     }
@@ -220,13 +256,25 @@ mod tests {
         eprintln!("[linux] {}", caps.os);
         assert_eq!(caps.backend, "linux");
         assert!(caps.camera);
-        assert!(caps.codecs.iter().all(|c| c.codec != VideoCodec::H264), "no H.264 on Linux");
-        assert!(matches!(b.encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake()).err(), Some(VideoError::Unsupported(_))));
+        assert!(
+            caps.codecs.iter().all(|c| c.codec != VideoCodec::H264),
+            "no H.264 on Linux"
+        );
+        assert!(matches!(
+            b.encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake())
+                .err(),
+            Some(VideoError::Unsupported(_))
+        ));
         assert!(b.screen_sources().expect("list").is_empty());
         assert!(!caps.screen.list && !caps.screen.exclude_own_windows);
         eprintln!("[linux] screen capture here: {}", caps.screen.supported);
         assert_eq!(
-            b.open_screen(&ScreenSelection::Listed("display:0".into()), CaptureConstraints::default(), no_wake()).err(),
+            b.open_screen(
+                &ScreenSelection::Listed("display:0".into()),
+                CaptureConstraints::default(),
+                no_wake()
+            )
+            .err(),
             Some(VideoError::NotFound),
             "Linux has no list: only the portal picks"
         );
@@ -241,7 +289,10 @@ mod tests {
     #[ignore = "needs a desktop session with the ScreenCast portal and a person to pick"]
     fn real_portal_screen_delivers_frames() {
         let b = backend().expect("backend");
-        assert!(b.capabilities().screen.supported, "no portal or no libpipewire here");
+        assert!(
+            b.capabilities().screen.supported,
+            "no portal or no libpipewire here"
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         b.pick_screen(
             PickOptions::default(),
@@ -249,7 +300,10 @@ mod tests {
                 let _ = tx.send(r);
             }),
         );
-        let sel = rx.recv_timeout(Duration::from_secs(120)).expect("an answer within 2 minutes").expect("a pick");
+        let sel = rx
+            .recv_timeout(Duration::from_secs(120))
+            .expect("an answer within 2 minutes")
+            .expect("a pick");
         let mut c = CaptureConstraints::new(1280, 720, 15);
         c.cursor = true;
         let mut src = b.open_screen(&sel, c, no_wake()).expect("screen");
@@ -257,7 +311,12 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while frames < 30 && std::time::Instant::now() < deadline {
             if let Some(f) = src.try_recv() {
-                assert!(f.width <= 1280 && f.height <= 720, "{}x{}", f.width, f.height);
+                assert!(
+                    f.width <= 1280 && f.height <= 720,
+                    "{}x{}",
+                    f.width,
+                    f.height
+                );
                 frames += 1;
             }
             while let Some(e) = src.try_event() {
@@ -266,7 +325,13 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         eprintln!("[linux] {frames} frames, stats {:?}", src.stats());
-        assert!(frames >= 5, "the stream delivered only {frames} frames in 10 s");
-        assert!(b.open_screen(&sel, c, no_wake()).is_err(), "a pick opens once");
+        assert!(
+            frames >= 5,
+            "the stream delivered only {frames} frames in 10 s"
+        );
+        assert!(
+            b.open_screen(&sel, c, no_wake()).is_err(),
+            "a pick opens once"
+        );
     }
 }

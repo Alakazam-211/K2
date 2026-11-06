@@ -1,6 +1,8 @@
 //! The null backend: no cameras, no screens, no codecs.
 
-use crate::api::{Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake};
+use crate::api::{
+    Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
+};
 use crate::error::{unsupported, VideoError};
 use crate::frame::{PixelFormat, VideoFrame};
 use crate::types::*;
@@ -51,7 +53,12 @@ impl VideoBackend for NullBackend {
         done(Permission::Denied)
     }
 
-    fn open_camera(&self, _id: Option<&str>, _c: CaptureConstraints, _wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_camera(
+        &self,
+        _id: Option<&str>,
+        _c: CaptureConstraints,
+        _wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         Err(unsupported("the null backend has no cameras"))
     }
@@ -73,22 +80,47 @@ impl VideoBackend for NullBackend {
         done(Err(unsupported("the null backend has no screens")))
     }
 
-    fn open_screen(&self, _s: &ScreenSelection, _c: CaptureConstraints, _wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_screen(
+        &self,
+        _s: &ScreenSelection,
+        _c: CaptureConstraints,
+        _wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         Err(unsupported("the null backend has no screens"))
     }
 
-    fn encoder(&self, config: EncoderConfig, _wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    fn encoder(
+        &self,
+        config: EncoderConfig,
+        _wake: Wake,
+    ) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
-        Err(unsupported(format!("the null backend has no {:?} encoder", config.codec.codec())))
+        Err(unsupported(format!(
+            "the null backend has no {:?} encoder",
+            config.codec.codec()
+        )))
     }
 
-    fn decoder(&self, config: DecoderConfig, _wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(
+        &self,
+        config: DecoderConfig,
+        _wake: Wake,
+    ) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
-        Err(unsupported(format!("the null backend has no {:?} decoder", config.codec)))
+        Err(unsupported(format!(
+            "the null backend has no {:?} decoder",
+            config.codec
+        )))
     }
 
-    fn convert(&self, frame: &VideoFrame, width: u32, height: u32, format: PixelFormat) -> Result<VideoFrame, VideoError> {
+    fn convert(
+        &self,
+        frame: &VideoFrame,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<VideoFrame, VideoError> {
         self.live()?;
         crate::convert::convert(frame, width, height, format)
     }
@@ -114,9 +146,16 @@ mod tests {
         assert_eq!(caps.backend, "null");
         assert!(caps.codecs.is_empty() && !caps.camera && !caps.screen.supported);
         assert!(b.cameras().is_empty());
-        let e = b.encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake()).err().expect("no encoder");
+        let e = b
+            .encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake())
+            .err()
+            .expect("no encoder");
         assert!(matches!(e, VideoError::Unsupported(_)), "{e}");
-        assert!(matches!(b.open_camera(None, CaptureConstraints::default(), no_wake()).err(), Some(VideoError::Unsupported(_))));
+        assert!(matches!(
+            b.open_camera(None, CaptureConstraints::default(), no_wake())
+                .err(),
+            Some(VideoError::Unsupported(_))
+        ));
         let got = Arc::new(std::sync::Mutex::new(None));
         let g = got.clone();
         b.request_camera_permission(Box::new(move |p| *g.lock().expect("lock") = Some(p)));

@@ -67,19 +67,29 @@ pub(crate) fn cameras() -> Vec<CameraInfo> {
     if init().is_err() {
         return Vec::new();
     }
-    let Ok(attrs) = attributes(1) else { return Vec::new() };
+    let Ok(attrs) = attributes(1) else {
+        return Vec::new();
+    };
     let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
     let mut count = 0u32;
     // SAFETY: a video-capture source-type attribute; MF allocates the array
     // of activation objects, which we take over one by one and free.
     let devices: Vec<IMFActivate> = unsafe {
-        if attrs.SetGUID(&MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID).is_err() {
+        if attrs
+            .SetGUID(
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+            )
+            .is_err()
+        {
             return Vec::new();
         }
         if MFEnumDeviceSources(&attrs, &mut list, &mut count).is_err() || list.is_null() {
             return Vec::new();
         }
-        let out = (0..count as usize).filter_map(|i| std::ptr::read(list.add(i))).collect();
+        let out = (0..count as usize)
+            .filter_map(|i| std::ptr::read(list.add(i)))
+            .collect();
         CoTaskMemFree(Some(list as *const core::ffi::c_void));
         out
     };
@@ -88,9 +98,13 @@ pub(crate) fn cameras() -> Vec<CameraInfo> {
         .enumerate()
         .filter_map(|(i, d)| {
             let id = string_attr(d, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK)?;
-            let name = string_attr(d, &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME).unwrap_or_else(|| "Camera".into());
+            let name = string_attr(d, &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME)
+                .unwrap_or_else(|| "Camera".into());
             let lower = name.to_lowercase();
-            let facing = if lower.contains("integrated") || lower.contains("front") || lower.contains("internal") {
+            let facing = if lower.contains("integrated")
+                || lower.contains("front")
+                || lower.contains("internal")
+            {
                 Facing::Front
             } else {
                 Facing::External
@@ -116,10 +130,19 @@ fn native_modes(reader: &IMFSourceReader) -> Vec<(CaptureMode, IMFMediaType)> {
     let mut out: Vec<(CaptureMode, IMFMediaType)> = Vec::new();
     for i in 0..512u32 {
         // SAFETY: a live reader; MF_E_NO_MORE_TYPES ends the list.
-        let Ok(t) = (unsafe { reader.GetNativeMediaType(stream, i) }) else { break };
+        let Ok(t) = (unsafe { reader.GetNativeMediaType(stream, i) }) else {
+            break;
+        };
         // SAFETY: attribute reads on a live media type.
-        let (size, rate) = unsafe { (t.GetUINT64(&MF_MT_FRAME_SIZE), t.GetUINT64(&MF_MT_FRAME_RATE)) };
-        let (Ok(size), Ok(rate)) = (size, rate) else { continue };
+        let (size, rate) = unsafe {
+            (
+                t.GetUINT64(&MF_MT_FRAME_SIZE),
+                t.GetUINT64(&MF_MT_FRAME_RATE),
+            )
+        };
+        let (Ok(size), Ok(rate)) = (size, rate) else {
+            continue;
+        };
         let (w, h) = unpack(size);
         let (num, den) = unpack(rate);
         if w == 0 || h == 0 || den == 0 {
@@ -138,19 +161,36 @@ fn native_modes(reader: &IMFSourceReader) -> Vec<(CaptureMode, IMFMediaType)> {
 
 /// Open the device and set it to `c`; gives the reader and the delivered
 /// size and rate.
-fn open_reader(id: Option<&str>, c: &CaptureConstraints) -> Result<(IMFSourceReader, u32, u32, u32), VideoError> {
+fn open_reader(
+    id: Option<&str>,
+    c: &CaptureConstraints,
+) -> Result<(IMFSourceReader, u32, u32, u32), VideoError> {
     init()?;
     let id = match id {
         Some(id) => id.to_string(),
-        None => cameras().into_iter().find(|c| c.is_default).map(|c| c.id).ok_or(VideoError::NotFound)?,
+        None => cameras()
+            .into_iter()
+            .find(|c| c.is_default)
+            .map(|c| c.id)
+            .ok_or(VideoError::NotFound)?,
     };
     let attrs = attributes(2)?;
     let link: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: attribute writes on a live store; MFCreateDeviceSource reads
     // them and opens the device.
     let source = unsafe {
-        attrs.SetGUID(&MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID).map_err(|e| map_error(&e, "SetGUID"))?;
-        attrs.SetString(&MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, PCWSTR(link.as_ptr())).map_err(|e| map_error(&e, "SetString"))?;
+        attrs
+            .SetGUID(
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+            )
+            .map_err(|e| map_error(&e, "SetGUID"))?;
+        attrs
+            .SetString(
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
+                PCWSTR(link.as_ptr()),
+            )
+            .map_err(|e| map_error(&e, "SetString"))?;
         MFCreateDeviceSource(&attrs)
     }
     .map_err(|e| match map_error(&e, "MFCreateDeviceSource") {
@@ -160,7 +200,9 @@ fn open_reader(id: Option<&str>, c: &CaptureConstraints) -> Result<(IMFSourceRea
     let rattrs = attributes(2)?;
     // SAFETY: attribute writes, then the reader over the live source.
     let reader = unsafe {
-        rattrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1).map_err(|e| map_error(&e, "SetUINT32"))?;
+        rattrs
+            .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
+            .map_err(|e| map_error(&e, "SetUINT32"))?;
         let _ = rattrs.SetUINT32(&MF_LOW_LATENCY, 1);
         MFCreateSourceReaderFromMediaSource(&source, &rattrs)
     }
@@ -172,7 +214,8 @@ fn open_reader(id: Option<&str>, c: &CaptureConstraints) -> Result<(IMFSourceRea
     if let Some(m) = chosen {
         if let Some((_, native)) = modes.iter().find(|(x, _)| *x == m) {
             // SAFETY: a native type the device offered.
-            unsafe { reader.SetCurrentMediaType(stream, None, native) }.map_err(|e| map_error(&e, "SetCurrentMediaType (native)"))?;
+            unsafe { reader.SetCurrentMediaType(stream, None, native) }
+                .map_err(|e| map_error(&e, "SetCurrentMediaType (native)"))?;
         }
     }
     let fps = match (chosen, c.fps) {
@@ -183,20 +226,31 @@ fn open_reader(id: Option<&str>, c: &CaptureConstraints) -> Result<(IMFSourceRea
     // SAFETY: the current type gives the device's size; then an NV12
     // output of that size, converted by the reader's video processing.
     unsafe {
-        let current = reader.GetCurrentMediaType(stream).map_err(|e| map_error(&e, "GetCurrentMediaType"))?;
-        let size = current.GetUINT64(&MF_MT_FRAME_SIZE).map_err(|e| map_error(&e, "MF_MT_FRAME_SIZE"))?;
+        let current = reader
+            .GetCurrentMediaType(stream)
+            .map_err(|e| map_error(&e, "GetCurrentMediaType"))?;
+        let size = current
+            .GetUINT64(&MF_MT_FRAME_SIZE)
+            .map_err(|e| map_error(&e, "MF_MT_FRAME_SIZE"))?;
         let out = MFCreateMediaType().map_err(|e| map_error(&e, "MFCreateMediaType"))?;
-        out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(|e| map_error(&e, "SetGUID"))?;
-        out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).map_err(|e| map_error(&e, "SetGUID"))?;
-        out.SetUINT64(&MF_MT_FRAME_SIZE, size).map_err(|e| map_error(&e, "SetUINT64"))?;
+        out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+            .map_err(|e| map_error(&e, "SetGUID"))?;
+        out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)
+            .map_err(|e| map_error(&e, "SetGUID"))?;
+        out.SetUINT64(&MF_MT_FRAME_SIZE, size)
+            .map_err(|e| map_error(&e, "SetUINT64"))?;
         if let Ok(rate) = current.GetUINT64(&MF_MT_FRAME_RATE) {
             let _ = out.SetUINT64(&MF_MT_FRAME_RATE, rate);
         } else {
             let _ = out.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1));
         }
-        reader.SetCurrentMediaType(stream, None, &out).map_err(|e| map_error(&e, "SetCurrentMediaType (NV12)"))?;
+        reader
+            .SetCurrentMediaType(stream, None, &out)
+            .map_err(|e| map_error(&e, "SetCurrentMediaType (NV12)"))?;
         let _ = reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false);
-        reader.SetStreamSelection(stream, true).map_err(|e| map_error(&e, "SetStreamSelection"))?;
+        reader
+            .SetStreamSelection(stream, true)
+            .map_err(|e| map_error(&e, "SetStreamSelection"))?;
         let (w, h) = unpack(size);
         Ok((reader, w, h, fps))
     }
@@ -210,11 +264,14 @@ fn copy_sample(sample: &IMFSample, width: u32, height: u32) -> Result<Planes, Vi
     // SAFETY: the buffer is locked while we read rows inside the locked
     // region (pitch x (rows of Y + rows of UV)), then unlocked.
     unsafe {
-        let buf = sample.ConvertToContiguousBuffer().map_err(|e| map_error(&e, "ConvertToContiguousBuffer"))?;
+        let buf = sample
+            .ConvertToContiguousBuffer()
+            .map_err(|e| map_error(&e, "ConvertToContiguousBuffer"))?;
         if let Ok(b2) = buf.cast::<IMF2DBuffer>() {
             let mut p: *mut u8 = std::ptr::null_mut();
             let mut pitch = 0i32;
-            b2.Lock2D(&mut p, &mut pitch).map_err(|e| map_error(&e, "Lock2D"))?;
+            b2.Lock2D(&mut p, &mut pitch)
+                .map_err(|e| map_error(&e, "Lock2D"))?;
             let ok = !p.is_null() && pitch as usize >= w;
             if ok {
                 let pitch = pitch as usize;
@@ -228,12 +285,16 @@ fn copy_sample(sample: &IMFSample, width: u32, height: u32) -> Result<Planes, Vi
             }
             let _ = b2.Unlock2D();
             if !ok {
-                return Err(VideoError::os(0, format!("an NV12 buffer with pitch {pitch} for width {w}")));
+                return Err(VideoError::os(
+                    0,
+                    format!("an NV12 buffer with pitch {pitch} for width {w}"),
+                ));
             }
         } else {
             let mut p: *mut u8 = std::ptr::null_mut();
             let mut len = 0u32;
-            buf.Lock(&mut p, None, Some(&mut len as *mut u32)).map_err(|e| map_error(&e, "Lock"))?;
+            buf.Lock(&mut p, None, Some(&mut len as *mut u32))
+                .map_err(|e| map_error(&e, "Lock"))?;
             let need = PixelFormat::Nv12.frame_len(width, height);
             let ok = !p.is_null() && len as usize >= need;
             if ok {
@@ -241,20 +302,38 @@ fn copy_sample(sample: &IMFSample, width: u32, height: u32) -> Result<Planes, Vi
             }
             let _ = buf.Unlock();
             if !ok {
-                return Err(VideoError::os(0, format!("an NV12 buffer of {len} bytes for {width}x{height}")));
+                return Err(VideoError::os(
+                    0,
+                    format!("an NV12 buffer of {len} bytes for {width}x{height}"),
+                ));
             }
         }
     }
     Planes::tight(PixelFormat::Nv12, width, height, out)
 }
 
-fn capture_loop(reader: IMFSourceReader, width: u32, height: u32, shared: Arc<SourceShared>, stop: Arc<AtomicBool>) {
+fn capture_loop(
+    reader: IMFSourceReader,
+    width: u32,
+    height: u32,
+    shared: Arc<SourceShared>,
+    stop: Arc<AtomicBool>,
+) {
     let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
     while !stop.load(Ordering::Acquire) {
         let mut flags = 0u32;
         let mut sample: Option<IMFSample> = None;
         // SAFETY: a synchronous read on our reader, with out pointers.
-        let r = unsafe { reader.ReadSample(stream, 0, None, Some(&mut flags as *mut u32), None, Some(&mut sample as *mut Option<IMFSample>)) };
+        let r = unsafe {
+            reader.ReadSample(
+                stream,
+                0,
+                None,
+                Some(&mut flags as *mut u32),
+                None,
+                Some(&mut sample as *mut Option<IMFSample>),
+            )
+        };
         if stop.load(Ordering::Acquire) {
             return;
         }
@@ -266,7 +345,8 @@ fn capture_loop(reader: IMFSourceReader, width: u32, height: u32, shared: Arc<So
             shared.event(SourceEvent::Ended(reason));
             return;
         }
-        if flags & (MF_SOURCE_READERF_ERROR.0 as u32 | MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
+        if flags & (MF_SOURCE_READERF_ERROR.0 as u32 | MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0
+        {
             shared.event(SourceEvent::Ended(EndReason::DeviceLost));
             return;
         }
@@ -274,7 +354,9 @@ fn capture_loop(reader: IMFSourceReader, width: u32, height: u32, shared: Arc<So
         if shared.idle() {
             continue;
         }
-        match copy_sample(&sample, width, height).and_then(|p| VideoFrame::from_planes(p, width, height, now_us())) {
+        match copy_sample(&sample, width, height)
+            .and_then(|p| VideoFrame::from_planes(p, width, height, now_us()))
+        {
             Ok(f) => shared.deliver(f),
             Err(e) => shared.event(SourceEvent::Error(e)),
         }
@@ -299,7 +381,11 @@ impl Drop for CameraControl {
     }
 }
 
-pub(crate) fn open(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+pub(crate) fn open(
+    id: Option<&str>,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
     c.validate()?;
     let (tx, rx) = sync_channel::<Result<(u32, u32, u32), VideoError>>(1);
     let stop = Arc::new(AtomicBool::new(false));

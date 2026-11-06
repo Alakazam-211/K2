@@ -78,16 +78,27 @@ mod linux;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-pub use api::{no_wake, Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake, EVENT_QUEUE};
+pub use api::{
+    no_wake, Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
+    EVENT_QUEUE,
+};
 /// The `bytes` crate, re-exported so callers use the same version.
 pub use bytes;
 pub use bytes::Bytes;
 pub use convert::{convert, fit_within, psnr_y};
 pub use error::{DecodeError, VideoError};
-pub use frame::{tight_layout, ColorSpace, FrameBuffer, NativeBuffer, NativeFrame, PixelFormat, Planes, VideoFrame};
+pub use frame::{
+    tight_layout, ColorSpace, FrameBuffer, NativeBuffer, NativeFrame, PixelFormat, Planes,
+    VideoFrame,
+};
 pub use kit::now_us;
 pub use null::null;
-pub use platform::{AndroidContext, SystemConfig};
-#[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
+#[cfg(any(
+    feature = "apple",
+    feature = "windows",
+    feature = "linux",
+    feature = "android"
+))]
 pub use platform::system;
+pub use platform::{AndroidContext, SystemConfig};
 pub use types::*;

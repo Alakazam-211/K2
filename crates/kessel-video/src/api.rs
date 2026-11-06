@@ -92,7 +92,12 @@ pub trait VideoBackend: Send + Sync + 'static {
     fn request_camera_permission(&self, done: Done<Permission>);
     /// Opens a camera (`None`: the default). Returns when the device is open;
     /// frames follow on `wake`. Denied permission: `Err(NoPermission)`.
-    fn open_camera(&self, id: Option<&str>, constraints: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError>;
+    fn open_camera(
+        &self,
+        id: Option<&str>,
+        constraints: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError>;
 
     /// The screen-recording permission. Never prompts.
     fn screen_permission(&self) -> Permission;
@@ -105,15 +110,34 @@ pub trait VideoBackend: Send + Sync + 'static {
     /// cancelled.
     fn pick_screen(&self, opts: PickOptions, done: Done<Result<ScreenSelection, VideoError>>);
     /// Starts capturing a display or window.
-    fn open_screen(&self, source: &ScreenSelection, constraints: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError>;
+    fn open_screen(
+        &self,
+        source: &ScreenSelection,
+        constraints: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError>;
 
     /// A new encoder.
-    fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError>;
+    fn encoder(
+        &self,
+        config: EncoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoEncoder>, VideoError>;
     /// A new decoder.
-    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError>;
+    fn decoder(
+        &self,
+        config: DecoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoDecoder>, VideoError>;
 
     /// Scale and convert a frame.
-    fn convert(&self, frame: &VideoFrame, width: u32, height: u32, format: PixelFormat) -> Result<VideoFrame, VideoError>;
+    fn convert(
+        &self,
+        frame: &VideoFrame,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<VideoFrame, VideoError>;
 
     /// Machine-wide events (hot-plug, thermal, background).
     fn subscribe(&self) -> EventRx;
@@ -144,7 +168,9 @@ impl EventRx {
 
 impl std::fmt::Debug for EventRx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EventRx").field("len", &self.q.len()).finish()
+        f.debug_struct("EventRx")
+            .field("len", &self.q.len())
+            .finish()
     }
 }
 
@@ -176,10 +202,13 @@ impl EventHub {
             q: Arc::new(ArrayQueue::new(EVENT_QUEUE)),
             dropped: Arc::new(AtomicU64::new(0)),
         };
-        self.subs.lock().unwrap_or_else(PoisonError::into_inner).push(Subscriber {
-            q: Arc::downgrade(&rx.q),
-            dropped: Arc::downgrade(&rx.dropped),
-        });
+        self.subs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Subscriber {
+                q: Arc::downgrade(&rx.q),
+                dropped: Arc::downgrade(&rx.dropped),
+            });
         rx
     }
 

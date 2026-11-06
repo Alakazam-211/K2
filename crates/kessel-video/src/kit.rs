@@ -75,7 +75,11 @@ pub trait EncoderCore: Send + 'static {
     /// Encode one frame of the coded size (CPU planes in
     /// [`EncoderCore::input_format`], or a native buffer it accepted).
     /// `Ok(None)`: rate control skipped it. An error kills the encoder.
-    fn encode(&mut self, frame: &VideoFrame, keyframe: bool) -> Result<Option<CoreFrame>, VideoError>;
+    fn encode(
+        &mut self,
+        frame: &VideoFrame,
+        keyframe: bool,
+    ) -> Result<Option<CoreFrame>, VideoError>;
     /// New rates, without a keyframe.
     fn set_rates(&mut self, rates: Rates) -> Result<(), VideoError>;
     /// A new coded size (may reopen the session).
@@ -124,7 +128,11 @@ impl std::fmt::Debug for ThreadedEncoder {
 impl ThreadedEncoder {
     /// Start the thread. `config` must already be checked and `core` open at
     /// its size.
-    pub fn start(core: Box<dyn EncoderCore>, config: EncoderConfig, wake: Wake) -> Result<ThreadedEncoder, VideoError> {
+    pub fn start(
+        core: Box<dyn EncoderCore>,
+        config: EncoderConfig,
+        wake: Wake,
+    ) -> Result<ThreadedEncoder, VideoError> {
         let shared = Arc::new(EncShared {
             state: Mutex::new(EncState {
                 input: None,
@@ -147,7 +155,9 @@ impl ThreadedEncoder {
         let thread = std::thread::Builder::new()
             .name("kessel-video-enc".into())
             .spawn(move || encoder_main(s, core))
-            .map_err(|e| VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}")))?;
+            .map_err(|e| {
+                VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}"))
+            })?;
         Ok(ThreadedEncoder {
             shared,
             thread: Some(thread),
@@ -195,7 +205,8 @@ fn encoder_main(s: Arc<EncShared>, mut core: Box<dyn EncoderCore>) {
             // At the encoder's size, a native buffer the encoder takes, or
             // planes in its input format, go in as they are.
             let same_size = (frame.width, frame.height) == (cfg.width, cfg.height);
-            let native = matches!(frame.buffer, crate::frame::FrameBuffer::Native(_)) && core.accepts_native(&frame);
+            let native = matches!(frame.buffer, crate::frame::FrameBuffer::Native(_))
+                && core.accepts_native(&frame);
             let prepared = if same_size && (native || frame.format() == core.input_format()) {
                 Ok(frame.clone())
             } else {
@@ -204,7 +215,14 @@ fn encoder_main(s: Arc<EncShared>, mut core: Box<dyn EncoderCore>) {
             match prepared.and_then(|f| core.encode(&f, key)) {
                 Ok(Some(cf)) => {
                     since_key = if cf.keyframe { 0 } else { since_key + 1 };
-                    let mut ef = EncodedFrame::new(cfg.codec.codec(), cf.data, cf.keyframe, frame.capture_us, cfg.width, cfg.height);
+                    let mut ef = EncodedFrame::new(
+                        cfg.codec.codec(),
+                        cf.data,
+                        cf.keyframe,
+                        frame.capture_us,
+                        cfg.width,
+                        cfg.height,
+                    );
                     ef.layer = cf.layer;
                     ef.encode_us = t0.elapsed().as_micros().min(u32::MAX as u128) as u32;
                     out = Some(ef);
@@ -371,7 +389,11 @@ impl std::fmt::Debug for ThreadedDecoder {
 
 impl ThreadedDecoder {
     /// Start the thread.
-    pub fn start(core: Box<dyn DecoderCore>, config: DecoderConfig, wake: Wake) -> Result<ThreadedDecoder, VideoError> {
+    pub fn start(
+        core: Box<dyn DecoderCore>,
+        config: DecoderConfig,
+        wake: Wake,
+    ) -> Result<ThreadedDecoder, VideoError> {
         let stats = DecoderStats {
             implementation: Some(core.implementation()),
             ..DecoderStats::default()
@@ -394,7 +416,9 @@ impl ThreadedDecoder {
         let thread = std::thread::Builder::new()
             .name("kessel-video-dec".into())
             .spawn(move || decoder_main(s, core))
-            .map_err(|e| VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}")))?;
+            .map_err(|e| {
+                VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}"))
+            })?;
         Ok(ThreadedDecoder {
             shared,
             thread: Some(thread),
@@ -402,7 +426,11 @@ impl ThreadedDecoder {
     }
 }
 
-fn shape(frame: VideoFrame, output: PixelFormat, fit: Option<(u32, u32)>) -> Result<VideoFrame, VideoError> {
+fn shape(
+    frame: VideoFrame,
+    output: PixelFormat,
+    fit: Option<(u32, u32)>,
+) -> Result<VideoFrame, VideoError> {
     let (w, h) = match fit {
         Some((bw, bh)) => fit_within(frame.width, frame.height, bw.max(2), bh.max(2)),
         None => (frame.width, frame.height),
@@ -447,7 +475,9 @@ fn decoder_main(s: Arc<DecShared>, mut core: Box<dyn DecoderCore>) {
             continue;
         };
         let result = core.decode(&input).and_then(|f| match f {
-            Some(f) => shape(f, s.output, fit).map(Some).map_err(DecodeError::Video),
+            Some(f) => shape(f, s.output, fit)
+                .map(Some)
+                .map_err(DecodeError::Video),
             None => Ok(None),
         });
         let mut st = lock(&s.state);
@@ -558,7 +588,9 @@ pub struct SourceShared {
 
 impl std::fmt::Debug for SourceShared {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SourceShared").field("stats", &*lock(&self.stats)).finish_non_exhaustive()
+        f.debug_struct("SourceShared")
+            .field("stats", &*lock(&self.stats))
+            .finish_non_exhaustive()
     }
 }
 
@@ -612,7 +644,10 @@ impl SourceShared {
             }
         }
         self.last_kept_us.store(frame.capture_us, Ordering::Release);
-        let (bw, bh) = (c.max_width.unwrap_or(u32::MAX), c.max_height.unwrap_or(u32::MAX));
+        let (bw, bh) = (
+            c.max_width.unwrap_or(u32::MAX),
+            c.max_height.unwrap_or(u32::MAX),
+        );
         let frame = if frame.width > bw || frame.height > bh {
             let (w, h) = fit_within(frame.width, frame.height, bw, bh);
             let format = match frame.format() {
@@ -639,7 +674,8 @@ impl SourceShared {
             changed.then_some((frame.width, frame.height, fps))
         };
         if let Some((width, height, fps)) = started {
-            self.events.force_push(SourceEvent::Started { width, height, fps });
+            self.events
+                .force_push(SourceEvent::Started { width, height, fps });
         }
         if self.frames.force_push(frame).is_some() {
             lock(&self.stats).dropped += 1;
@@ -680,7 +716,9 @@ pub struct QueuedSource<C: SourceControl> {
 
 impl<C: SourceControl> std::fmt::Debug for QueuedSource<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QueuedSource").field("shared", &self.shared).finish_non_exhaustive()
+        f.debug_struct("QueuedSource")
+            .field("shared", &self.shared)
+            .finish_non_exhaustive()
     }
 }
 

@@ -9,7 +9,9 @@ mod pixel;
 mod screen;
 mod vt_enc;
 
-use crate::api::{Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake};
+use crate::api::{
+    Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
+};
 use crate::error::{unsupported, VideoError};
 use crate::frame::{PixelFormat, VideoFrame};
 use crate::kit::{lock, now_us, ThreadedEncoder};
@@ -160,15 +162,45 @@ impl VideoBackend for AppleBackend {
             cursor: screen::supported(),
             exclude_own_windows: screen::supported(),
         };
-        let h264 = || Some(H264Capability::new(vec![H264Profile::ConstrainedBaseline, H264Profile::ConstrainedHigh], H264Level(52)));
-        let formats = vec![PixelFormat::Nv12, PixelFormat::I420, PixelFormat::Bgra, PixelFormat::Rgba, PixelFormat::Native];
+        let h264 = || {
+            Some(H264Capability::new(
+                vec![
+                    H264Profile::ConstrainedBaseline,
+                    H264Profile::ConstrainedHigh,
+                ],
+                H264Level(52),
+            ))
+        };
+        let formats = vec![
+            PixelFormat::Nv12,
+            PixelFormat::I420,
+            PixelFormat::Bgra,
+            PixelFormat::Rgba,
+            PixelFormat::Native,
+        ];
         if hardware_h264() {
-            let mut c = CodecCapability::new(VideoCodec::H264, CodecDirection::Encode, Implementation::Hardware, "VideoToolbox", 4096, 2304, 60);
+            let mut c = CodecCapability::new(
+                VideoCodec::H264,
+                CodecDirection::Encode,
+                Implementation::Hardware,
+                "VideoToolbox",
+                4096,
+                2304,
+                60,
+            );
             c.h264 = h264();
             c.formats = formats.clone();
             caps.codecs.push(c);
         }
-        let mut c = CodecCapability::new(VideoCodec::H264, CodecDirection::Encode, Implementation::Software, "VideoToolbox (software)", 1920, 1080, 30);
+        let mut c = CodecCapability::new(
+            VideoCodec::H264,
+            CodecDirection::Encode,
+            Implementation::Software,
+            "VideoToolbox (software)",
+            1920,
+            1080,
+            30,
+        );
         c.h264 = h264();
         c.formats = formats;
         caps.codecs.push(c);
@@ -191,7 +223,12 @@ impl VideoBackend for AppleBackend {
         camera::request_permission(done)
     }
 
-    fn open_camera(&self, id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_camera(
+        &self,
+        id: Option<&str>,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         camera::open(id, c, wake)
     }
@@ -216,12 +253,21 @@ impl VideoBackend for AppleBackend {
         screen::pick(opts, done)
     }
 
-    fn open_screen(&self, source: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_screen(
+        &self,
+        source: &ScreenSelection,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         screen::open(source, c, wake)
     }
 
-    fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    fn encoder(
+        &self,
+        config: EncoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
             return r;
@@ -230,21 +276,41 @@ impl VideoBackend for AppleBackend {
         match config.codec {
             CodecConfig::H264 { .. } => {
                 let core = vt_enc::VtEncoder::open(&config)?;
-                Ok(Box::new(ThreadedEncoder::start(Box::new(core), config, wake)?))
+                Ok(Box::new(ThreadedEncoder::start(
+                    Box::new(core),
+                    config,
+                    wake,
+                )?))
             }
-            _ => Err(unsupported(format!("no {:?} encoder on this Mac yet", config.codec.codec()))),
+            _ => Err(unsupported(format!(
+                "no {:?} encoder on this Mac yet",
+                config.codec.codec()
+            ))),
         }
     }
 
-    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(
+        &self,
+        config: DecoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
             return r;
         }
-        Err(unsupported(format!("no {:?} decoder on this Mac yet (the webview's WebCodecs decodes)", config.codec)))
+        Err(unsupported(format!(
+            "no {:?} decoder on this Mac yet (the webview's WebCodecs decodes)",
+            config.codec
+        )))
     }
 
-    fn convert(&self, frame: &VideoFrame, width: u32, height: u32, format: PixelFormat) -> Result<VideoFrame, VideoError> {
+    fn convert(
+        &self,
+        frame: &VideoFrame,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<VideoFrame, VideoError> {
         self.live()?;
         crate::convert::convert(frame, width, height, format)
     }

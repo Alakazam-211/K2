@@ -252,16 +252,39 @@ describe('sinks', () => {
 })
 
 describe("the room's media policy", () => {
-  it("keeps the join answer's camera_allowed for the whole call, follows video_enabled, and forgets both when the call ends", async () => {
-    const s = setup(new FakeVideoEngine({ policy: { videoEnabled: true, cameraAllowed: false, screenAllowed: true } }))
+  it("keeps the join answer's camera_allowed and screen_allowed for the whole join; later copies change only video_enabled", async () => {
+    // The join answer: this person's pass has no voice:video.
+    const s = setup(new FakeVideoEngine({ policy: { videoEnabled: true, cameraAllowed: false, screenAllowed: false } }))
+    s.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    expect(s.ctl.store.getState().policy).toEqual({ videoEnabled: true, cameraAllowed: false, screenAllowed: false })
+    // READY and media_policy_updated always say true (sew-proto): the join's no stands.
+    s.engine.setPolicy({ videoEnabled: true, cameraAllowed: true, screenAllowed: true })
+    expect(s.ctl.store.getState().policy).toEqual({ videoEnabled: true, cameraAllowed: false, screenAllowed: false })
+    s.engine.setPolicy({ videoEnabled: false, cameraAllowed: true, screenAllowed: true })
+    expect(s.ctl.store.getState().policy).toEqual({ videoEnabled: false, cameraAllowed: false, screenAllowed: false })
+    await s.ctl.setCamera(true)
+    await s.ctl.setScreen(true)
+    expect(s.engine.calls.filter((c) => c.startsWith('camera') || c.startsWith('screen'))).toEqual([])
+    // The call ends: the policy goes with it.
+    s.ctl.setActive({ enabled: true, inCall: false })
+    expect(s.ctl.store.getState().policy).toBeNull()
+  })
+
+  it("a new call in the same window reads its own join answer, and an update before it can't open the camera", async () => {
+    const s = setup(new FakeVideoEngine({ policy: null }))
+    s.ctl.setActive({ enabled: true, inCall: false })
+    await settle()
+    expect(s.ctl.store.getState().policy).toBeNull()
+    // The next call's join answer says no to the camera.
+    s.engine.joinPolicy = { videoEnabled: true, cameraAllowed: false, screenAllowed: true }
+    // A copy arrives first (it says true), then the call starts.
+    s.engine.setPolicy({ videoEnabled: true, cameraAllowed: true, screenAllowed: true })
     s.ctl.setActive({ enabled: true, inCall: true })
     await settle()
     expect(s.ctl.store.getState().policy).toEqual({ videoEnabled: true, cameraAllowed: false, screenAllowed: true })
-    // Later copies always say true (sew-proto): the join answer's no stands.
-    s.engine.setPolicy({ videoEnabled: false, cameraAllowed: true, screenAllowed: true })
-    expect(s.ctl.store.getState().policy).toEqual({ videoEnabled: false, cameraAllowed: false, screenAllowed: true })
-    s.ctl.setActive({ enabled: true, inCall: false })
-    expect(s.ctl.store.getState().policy).toBeNull()
+    s.engine.setPolicy({ videoEnabled: true, cameraAllowed: true, screenAllowed: true })
+    expect(s.ctl.store.getState().policy?.cameraAllowed).toBe(false)
   })
 
   it('does not ask the plugin for what the policy forbids, and says why', async () => {

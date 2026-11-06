@@ -367,9 +367,32 @@ export function createVideoController(deps: VideoDeps): VideoController {
     store.setState({ tracks })
   }
 
+  /** The join answer's policy, from the plugin's `state` (a window opened
+   *  mid-call, or a new call in this window). */
+  const readJoinPolicy = async (): Promise<void> => {
+    const e = engine
+    if (!e) return
+    const myGen = gen
+    const snap = await e.snapshot()
+    if (myGen !== gen || !snap.policy) return
+    const now = store.getState().policy
+    // A media_policy_updated that came in meanwhile has the newer video_enabled.
+    store.setState({ policy: now ? { ...snap.policy, videoEnabled: now.videoEnabled } : snap.policy })
+  }
+
+  /** READY and media_policy_updated always say camera and screen are allowed
+   *  (sew-proto): only the join answer can say no. So a later copy changes
+   *  `videoEnabled` only, and the join's two leases hold for the whole join. */
   const onPolicy = (p: VideoPolicy): void => {
     const prev = store.getState().policy
-    store.setState({ policy: prev ? { ...prev, videoEnabled: p.videoEnabled } : p })
+    if (prev) {
+      store.setState({ policy: { ...prev, videoEnabled: p.videoEnabled } })
+      return
+    }
+    // No join answer held yet: this copy's video_enabled for now, and the
+    // leases from the join answer in the plugin's state.
+    store.setState({ policy: p })
+    void readJoinPolicy().catch((err: unknown) => console.warn("[video] reading the join's media policy failed:", err))
   }
 
   const onLocalVideo = (local: LocalVideo): void => {
@@ -471,6 +494,10 @@ export function createVideoController(deps: VideoDeps): VideoController {
       return
     }
     if (!loading) void load()
+    // A new call: its join answer's policy.
+    if (!was.inCall && next.inCall && engine) {
+      void readJoinPolicy().catch((err: unknown) => console.warn("[video] reading the join's media policy failed:", err))
+    }
     // The call ended: its video went with it.
     if (was.inCall && !next.inCall) {
       closeAllSinks()

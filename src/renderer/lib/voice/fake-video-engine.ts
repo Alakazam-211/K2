@@ -78,6 +78,8 @@ export class FakeVideoEngine implements VideoEngine {
   readonly calls: string[] = []
   readonly sinks = new Map<number, FakeSink>()
   local: LocalVideo = LOCAL_VIDEO_OFF
+  /** The join answer's policy, as the plugin's `state` holds it for the call. */
+  joinPolicy: VideoPolicy | null
   tracks: VideoTrack[] = []
   /** The next `camera` / `screen` command rejects with this. */
   private refusals: Array<{ command: string; code: string; detail: unknown }> = []
@@ -87,6 +89,7 @@ export class FakeVideoEngine implements VideoEngine {
 
   constructor(private readonly opts: FakeVideoOptions = {}) {
     this.caps_ = { ...FAKE_CAPS, ...opts.caps }
+    this.joinPolicy = opts.policy === undefined ? FAKE_POLICY : opts.policy
   }
 
   private log(name: string, args?: unknown): void {
@@ -103,7 +106,7 @@ export class FakeVideoEngine implements VideoEngine {
   }
 
   async snapshot(): Promise<VideoSnapshot> {
-    return { tracks: this.tracks, local: this.local, policy: this.opts.policy === undefined ? FAKE_POLICY : this.opts.policy }
+    return { tracks: this.tracks, local: this.local, policy: this.joinPolicy }
   }
 
   async caps(): Promise<VideoCaps> {

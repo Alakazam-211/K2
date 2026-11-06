@@ -823,9 +823,11 @@ mod tests {
 
     #[test]
     fn busy_instead_of_blocking_and_scripted_faults() {
-        let mut cfg = FakeConfig::default();
-        cfg.encoder_faults = vec![(2, EncoderFault::Busy), (4, EncoderFault::SessionLost)];
-        cfg.max_instances = Some(2);
+        let cfg = FakeConfig {
+            encoder_faults: vec![(2, EncoderFault::Busy), (4, EncoderFault::SessionLost)],
+            max_instances: Some(2),
+            ..FakeConfig::default()
+        };
         let b = FakeBackend::new(cfg);
         let mut e1 = b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("one");
         let e2 = b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("two");
@@ -895,8 +897,10 @@ mod tests {
 
     #[test]
     fn sources_deliver_coded_frames_at_the_asked_size_and_pause() {
-        let mut cfg = FakeConfig::default();
-        cfg.source_events = vec![(Duration::from_millis(300), SourceEvent::Interrupted(Interruption::Thermal))];
+        let cfg = FakeConfig {
+            source_events: vec![(Duration::from_millis(300), SourceEvent::Interrupted(Interruption::Thermal))],
+            ..FakeConfig::default()
+        };
         let b = FakeBackend::new(cfg);
         let (wake, wakes) = counting_wake();
         let mut src = b.open_camera(None, CaptureConstraints::new(640, 360, 30), wake).expect("camera");
@@ -927,9 +931,11 @@ mod tests {
 
     #[test]
     fn permissions_hotplug_and_events_follow_the_script() {
-        let mut cfg = FakeConfig::default();
-        cfg.camera_permission = FakePermission::Prompt { answer: Permission::Granted, after: Duration::from_millis(50) };
-        cfg.screen_permission = FakePermission::Denied;
+        let mut cfg = FakeConfig {
+            camera_permission: FakePermission::Prompt { answer: Permission::Granted, after: Duration::from_millis(50) },
+            screen_permission: FakePermission::Denied,
+            ..FakeConfig::default()
+        };
         let usb = CameraInfo::new("fake:camera:usb", "USB Camera", Facing::External, false);
         let mut both = cfg.cameras.clone();
         both.push(usb.clone());

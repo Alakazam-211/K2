@@ -243,6 +243,10 @@ unsafe impl Send for Lib {}
 // SAFETY: as above.
 unsafe impl Sync for Lib {}
 
+// Each transmute's target is the type of the `Lib` field it initialises, which
+// spells out the C signature; repeating it at each call would only add a
+// second copy that could drift.
+#[allow(clippy::missing_transmute_annotations)]
 fn load() -> Result<&'static Lib, VideoError> {
     static LIB: OnceLock<Result<Lib, String>> = OnceLock::new();
     LIB.get_or_init(|| {

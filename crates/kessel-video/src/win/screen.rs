@@ -216,8 +216,11 @@ pub(crate) fn sources() -> Result<Vec<ScreenSourceInfo>, VideoError> {
 /// thread-safe; every use goes through the mutex.
 struct Gpu {
     device: ID3D11Device,
-    context: Mutex<(ID3D11DeviceContext, Option<(ID3D11Texture2D, u32, u32)>)>,
+    context: Mutex<(ID3D11DeviceContext, Option<Staging>)>,
 }
+
+/// The CPU-readable staging texture, with its width and height.
+type Staging = (ID3D11Texture2D, u32, u32);
 
 // SAFETY: ID3D11Device is free-threaded; the context and the staging
 // texture are only used under the mutex.

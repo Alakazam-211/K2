@@ -314,8 +314,8 @@ pub(crate) fn to_frame(data: &[u8], pixfmt: u32, width: u32, height: u32, stride
                     let next = if y + 1 < h { &data[(y + 1) * s..][..w * 2] } else { row };
                     for cx in 0..cw {
                         let i = (4 * cx).min(w * 2 - 4);
-                        u[(y / 2) * cw + cx] = ((row[i + 1] as u16 + next[i + 1] as u16 + 1) / 2) as u8;
-                        v[(y / 2) * cw + cx] = ((row[i + 3] as u16 + next[i + 3] as u16 + 1) / 2) as u8;
+                        u[(y / 2) * cw + cx] = (row[i + 1] as u16 + next[i + 1] as u16).div_ceil(2) as u8;
+                        v[(y / 2) * cw + cx] = (row[i + 3] as u16 + next[i + 3] as u16).div_ceil(2) as u8;
                     }
                 }
             }

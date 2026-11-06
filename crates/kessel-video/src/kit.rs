@@ -192,9 +192,11 @@ fn encoder_main(s: Arc<EncShared>, mut core: Box<dyn EncoderCore>) {
                 key |= since_key + 1 >= n as u64;
             }
             let t0 = Instant::now();
-            let prepared = if matches!(frame.buffer, crate::frame::FrameBuffer::Native(_)) && core.accepts_native(&frame) && (frame.width, frame.height) == (cfg.width, cfg.height) {
-                Ok(frame.clone())
-            } else if (frame.width, frame.height) == (cfg.width, cfg.height) && frame.format() == core.input_format() {
+            // At the encoder's size, a native buffer the encoder takes, or
+            // planes in its input format, go in as they are.
+            let same_size = (frame.width, frame.height) == (cfg.width, cfg.height);
+            let native = matches!(frame.buffer, crate::frame::FrameBuffer::Native(_)) && core.accepts_native(&frame);
+            let prepared = if same_size && (native || frame.format() == core.input_format()) {
                 Ok(frame.clone())
             } else {
                 convert(&frame, cfg.width, cfg.height, core.input_format())

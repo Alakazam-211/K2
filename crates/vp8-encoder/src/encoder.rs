@@ -364,7 +364,7 @@ impl Core {
                 total += best_b.0;
                 predict::predict_subblock(&mut w, st, pos, best_b.1);
                 let lv = &mut blv[b * 16..b * 16 + 16];
-                code_block(&self.src[0], sp, aw, &mut w, pos, st, quant.y1, 112, 0, lv);
+                code_block(&self.src[0], sp, aw, &mut w, pos, st, quant.y1, 112, 0, false, lv);
                 if total > best.0 {
                     break;
                 }
@@ -383,7 +383,7 @@ impl Core {
             info.y_mode = best.1;
             info.bmodes = [implied_bmode(best.1); 16];
             predict::predict_block(&mut ws, st, 16, best.1, row > 0, col > 0);
-            code_luma_y2(&self.src[0], src_pos, aw, &mut ws, st, 1, quant, if key { 112 } else { 96 }, &mut levels);
+            code_luma_y2(&self.src[0], src_pos, aw, &mut ws, st, 1, quant, if key { 112 } else { 96 }, false, &mut levels);
             predict::store_ws(&ws, st, &mut self.rec[0], aw, 16, col, row);
         }
 
@@ -416,7 +416,7 @@ impl Core {
                 let pos = (1 + (j >> 1) * 4) * cst + 1 + (j & 1) * 4;
                 let sp = csrc + (j >> 1) * 4 * caw + (j & 1) * 4;
                 let b = 16 + p * 4 + j;
-                code_block(&self.src[1 + p], sp, caw, w, pos, cst, quant.uv, 112, 0, &mut levels[b * 16..b * 16 + 16]);
+                code_block(&self.src[1 + p], sp, caw, w, pos, cst, quant.uv, 112, 0, false, &mut levels[b * 16..b * 16 + 16]);
             }
             predict::store_ws(w, cst, &mut self.rec[1 + p], caw, 8, col, row);
         }
@@ -603,7 +603,7 @@ impl Core {
             &predict::SIXTAP_FILTERS,
             false,
         );
-        code_luma_y2(&self.src[0], src_pos, aw, &mut self.rec[0], src_pos, 0, quant, 96, &mut levels);
+        code_luma_y2(&self.src[0], src_pos, aw, &mut self.rec[0], src_pos, 0, quant, 80, true, &mut levels);
         // Chroma with the decoder's derived MV.
         let cx = mv.x as i32;
         let cy = mv.y as i32;
@@ -636,7 +636,7 @@ impl Core {
                 let off = (j >> 1) * 4 * caw + (j & 1) * 4;
                 let b = 16 + p * 4 + j;
                 let (src_plane, rec_plane) = (&self.src[1 + p], &mut self.rec[1 + p]);
-                code_block(src_plane, cpos + off, caw, rec_plane, cpos + off, caw, quant.uv, 96, 0, &mut levels[b * 16..b * 16 + 16]);
+                code_block(src_plane, cpos + off, caw, rec_plane, cpos + off, caw, quant.uv, 80, 0, true, &mut levels[b * 16..b * 16 + 16]);
             }
         }
         Coded { info, levels }
@@ -958,6 +958,7 @@ fn code_block(
     q: [i32; 2],
     ac_bias: i32,
     first: usize,
+    drop_weak: bool,
     levels: &mut [i16],
 ) {
     let mut res = [0i32; 16];
@@ -968,19 +969,42 @@ fn code_block(
     }
     let mut co = [0i32; 16];
     fdct4x4(&res, &mut co);
+    for k in first..16 {
+        let (step, bias) = if k == 0 { (q[0], 128) } else { (q[1], ac_bias) };
+        levels[k] = quantize(co[k], step, bias) as i16;
+    }
+    if drop_weak {
+        drop_weak_block(&mut levels[..16], first);
+    }
     let mut deq = [0i16; 16];
     let mut any = false;
     for k in first..16 {
-        let (step, bias) = if k == 0 { (q[0], 128) } else { (q[1], ac_bias) };
-        let l = quantize(co[k], step, bias);
-        levels[k] = l as i16;
+        let l = levels[k] as i32;
         if l != 0 {
             any = true;
-            deq[k] = (l * step) as i16;
+            deq[k] = (l * q[(k > 0) as usize]) as i16;
         }
     }
     if any {
         idct::idct_add(&deq, rec, rpos, rstride);
+    }
+}
+
+/// Zeroes a block whose only non-zero levels are one or two +-1s: they cost
+/// more bits (and decode time) than the detail they add. For predicted
+/// blocks only.
+fn drop_weak_block(levels: &mut [i16], first: usize) {
+    let mut count = 0;
+    for &l in &levels[first..16] {
+        if l != 0 {
+            if l.abs() > 1 {
+                return;
+            }
+            count += 1;
+        }
+    }
+    if count <= 2 {
+        levels[first..16].fill(0);
     }
 }
 
@@ -996,6 +1020,7 @@ fn code_luma_y2(
     rstride_sel: usize,
     quant: &Quant,
     ac_bias: i32,
+    drop_weak: bool,
     levels: &mut [i16; 400],
 ) {
     // `rec` is either the luma workspace (stride LUMA_WS_STRIDE, offset to
@@ -1033,15 +1058,20 @@ fn code_luma_y2(
         idct::inverse_wht(&y2_deq, &mut dc_out);
     }
     for b in 0..16 {
+        let lv = &mut levels[b * 16..b * 16 + 16];
+        for (l, &c) in lv[1..].iter_mut().zip(&coeffs[b][1..]) {
+            *l = quantize(c, quant.y1[1], ac_bias) as i16;
+        }
+        if drop_weak {
+            drop_weak_block(lv, 1);
+        }
         let mut deq = [0i16; 16];
         deq[0] = dc_out[b * 16];
         let mut any = deq[0] != 0;
-        for k in 1..16 {
-            let l = quantize(coeffs[b][k], quant.y1[1], ac_bias);
-            levels[b * 16 + k] = l as i16;
+        for (d, &l) in deq[1..].iter_mut().zip(&lv[1..]) {
             if l != 0 {
                 any = true;
-                deq[k] = (l * quant.y1[1]) as i16;
+                *d = (l as i32 * quant.y1[1]) as i16;
             }
         }
         if any {

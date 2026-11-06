@@ -137,6 +137,19 @@ describe("mountLiveEditor", () => {
     expect(ts[0].closedByEditor).toBe(true);
   });
 
+  it("undo and redo after destroy do nothing: no throw from the closed LiveText, no frame", async () => {
+    const { net, eds, ts } = setup("abc\n");
+    const [h] = eds;
+    await settle(net);
+    type(h, 0, "x");
+    await settle(net);
+    h.destroy();
+    const sentBefore = ts[0].sent.length;
+    h.undo();
+    h.redo();
+    expect(ts[0].sent.length).toBe(sentBefore);
+  });
+
   it("is read-only without the edit right, and goes read-only when a rights event takes it", async () => {
     const ro = setup("text", 1, { rights: "read" });
     await settle(ro.net);

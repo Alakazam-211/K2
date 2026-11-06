@@ -1,4 +1,4 @@
-//! A VP8 video decoder in pure, safe Rust (RFC 6386).
+//! A VP8 video decoder in pure Rust (RFC 6386).
 //!
 //! It decodes every VP8 bitstream version (0 to 3): keyframes and
 //! interframes, all intra and inter prediction modes including split motion
@@ -25,12 +25,26 @@
 //!
 //! See PROVENANCE.md for how this crate was written.
 
-#![forbid(unsafe_code)]
+// The only `unsafe` code is in the SIMD modules (NEON on aarch64, SSE2 on
+// x86_64), which allow it for themselves; see the comments at their tops.
+#![deny(unsafe_code)]
 
 mod bool_decoder;
 mod decoder;
 mod frame;
 pub mod ivf;
+#[cfg(all(target_arch = "aarch64", not(vp8_portable)))]
+#[allow(unsafe_code)]
+mod neon;
+#[cfg(all(target_arch = "aarch64", not(vp8_portable)))]
+use neon as simd;
+#[cfg(all(target_arch = "x86_64", not(vp8_portable)))]
+#[allow(unsafe_code)]
+mod sse2;
+#[cfg(all(target_arch = "x86_64", not(vp8_portable)))]
+use sse2 as simd;
+#[cfg(test)]
+mod reference;
 
 // Shared with the vp8-encoder crate. Not a stable API: it may change in any
 // release, and vp8-encoder pins this crate's exact version. Lockstep rule:
@@ -51,6 +65,10 @@ pub mod tables;
 
 pub use decoder::{frame_info, DecodeError, Decoder, Dimensions, FrameInfo, DEFAULT_MAX_PIXELS};
 pub use frame::Picture;
+
+#[cfg(vp8_stage_timers)]
+#[doc(hidden)]
+pub use decoder::StageTimes;
 
 // The README's examples are compiled as doc tests.
 #[cfg(doctest)]

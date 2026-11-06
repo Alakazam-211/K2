@@ -1,12 +1,12 @@
 [package]
 name = "vp8-decoder"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.80"
 # A port of the RFC 6386 Section 20 reference decoder (BSD-3-Clause, see
 # NOTICE and PROVENANCE.md); our own code is MIT OR Apache-2.0.
 license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
-description = "A VP8 video decoder in pure, safe Rust (RFC 6386), conformance-tested on the WebM test vectors."
+description = "A VP8 video decoder in pure Rust (RFC 6386), conformance-tested on the WebM test vectors, with NEON and SSE2 loop filters."
 authors = ["Alakazam Labs"]
 readme = "README.md"
 repository = "https://github.com/Alakazam-211/K2"
@@ -35,3 +35,6 @@ harness = false
 
 [lints.rust]
 missing_docs = "warn"
+# `--cfg vp8_stage_timers`: per-stage timers for profiling (decode_speed).
+# `--cfg vp8_portable`: no NEON on aarch64, to compare the two paths.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(vp8_stage_timers)", "cfg(vp8_portable)"] }

@@ -1,0 +1,525 @@
+//! Intra prediction (RFC 6386 Section 12) and inter prediction with
+//! sub-pixel interpolation (Section 18).
+//!
+//! Intra prediction works in a small workspace that holds the block plus a
+//! one-pixel border: row 0 is the row above (index 0 is the above-left
+//! pixel, then the pixels above, then for luma four above-right pixels) and
+//! column 0 of the following rows is the column to the left.
+
+use crate::tables::*;
+
+/// Stride of the luma workspace: P, 16 above, 4 above-right.
+pub const LUMA_WS_STRIDE: usize = 21;
+pub const LUMA_WS_SIZE: usize = LUMA_WS_STRIDE * 17;
+/// Stride of a chroma workspace: P and 8 above.
+pub const CHROMA_WS_STRIDE: usize = 9;
+pub const CHROMA_WS_SIZE: usize = CHROMA_WS_STRIDE * 9;
+
+#[inline(always)]
+fn clamp255(v: i32) -> u8 {
+    v.clamp(0, 255) as u8
+}
+
+/// Whole-block prediction (16x16 luma or 8x8 chroma) for the four
+/// macroblock-level modes. `n` is the block size; the block starts at
+/// `ws[stride + 1]`.
+pub fn predict_block(
+    ws: &mut [u8],
+    stride: usize,
+    n: usize,
+    mode: u8,
+    have_above: bool,
+    have_left: bool,
+) {
+    let base = stride + 1;
+    match mode {
+        DC_PRED => {
+            let shift = if n == 16 { 3 } else { 2 };
+            let mut sum = 0u32;
+            let mut count_shift = shift;
+            if have_above {
+                sum += ws[1..1 + n].iter().map(|&p| p as u32).sum::<u32>();
+                count_shift += 1;
+            }
+            if have_left {
+                sum += (0..n).map(|r| ws[(r + 1) * stride] as u32).sum::<u32>();
+                count_shift += 1;
+            }
+            let dc = if have_above || have_left {
+                ((sum + (1 << (count_shift - 1))) >> count_shift) as u8
+            } else {
+                128
+            };
+            for r in 0..n {
+                ws[base + r * stride..base + r * stride + n].fill(dc);
+            }
+        }
+        V_PRED => {
+            let (top, rest) = ws.split_at_mut(stride);
+            for r in 0..n {
+                rest[1 + r * stride..1 + r * stride + n].copy_from_slice(&top[1..1 + n]);
+            }
+        }
+        H_PRED => {
+            for r in 0..n {
+                let l = ws[(r + 1) * stride];
+                ws[base + r * stride..base + r * stride + n].fill(l);
+            }
+        }
+        TM_PRED => {
+            let p = ws[0] as i32;
+            for r in 0..n {
+                let l = ws[(r + 1) * stride] as i32 - p;
+                for c in 0..n {
+                    let a = ws[1 + c] as i32;
+                    ws[base + r * stride + c] = clamp255(l + a);
+                }
+            }
+        }
+        _ => unreachable!("not a whole-block intra mode"),
+    }
+}
+
+/// One 4x4 subblock prediction (Section 12.3). `pos` is the block's top-left
+/// in the workspace; the row above (from `pos - stride - 1`, 9 pixels with
+/// the above-left and four above-right) and the column to the left must be
+/// filled in.
+pub fn predict_subblock(ws: &mut [u8], stride: usize, pos: usize, mode: u8) {
+    let a = pos - stride; // above row: a-1 is the above-left pixel
+    let above = |i: isize| ws[(a as isize + i) as usize] as i32;
+    // Edge pixels as the RFC names them: E[0..9] runs from the bottom of the
+    // left column, through the corner, along the top to the above-right.
+    let l = |i: usize| ws[pos - 1 + i * stride] as i32;
+    let p = above(-1);
+    let t: [i32; 8] = [
+        above(0),
+        above(1),
+        above(2),
+        above(3),
+        above(4),
+        above(5),
+        above(6),
+        above(7),
+    ];
+    let lf: [i32; 4] = [l(0), l(1), l(2), l(3)];
+    let mut b = [0u8; 16];
+    let avg3 = |x: i32, y: i32, z: i32| ((x + 2 * y + z + 2) >> 2) as u8;
+    let avg2 = |x: i32, y: i32| ((x + y + 1) >> 1) as u8;
+    match mode {
+        B_DC_PRED => {
+            let s: i32 = t[..4].iter().sum::<i32>() + lf.iter().sum::<i32>();
+            b = [((s + 4) >> 3) as u8; 16];
+        }
+        B_TM_PRED => {
+            for r in 0..4 {
+                for c in 0..4 {
+                    b[r * 4 + c] = clamp255(lf[r] + t[c] - p);
+                }
+            }
+        }
+        B_VE_PRED => {
+            let row = [
+                avg3(p, t[0], t[1]),
+                avg3(t[0], t[1], t[2]),
+                avg3(t[1], t[2], t[3]),
+                avg3(t[2], t[3], t[4]),
+            ];
+            for r in 0..4 {
+                b[r * 4..r * 4 + 4].copy_from_slice(&row);
+            }
+        }
+        B_HE_PRED => {
+            let v = [
+                avg3(p, lf[0], lf[1]),
+                avg3(lf[0], lf[1], lf[2]),
+                avg3(lf[1], lf[2], lf[3]),
+                avg3(lf[2], lf[3], lf[3]),
+            ];
+            for r in 0..4 {
+                b[r * 4..r * 4 + 4].fill(v[r]);
+            }
+        }
+        B_LD_PRED => {
+            for r in 0..4 {
+                for c in 0..4 {
+                    let i = r + c;
+                    b[r * 4 + c] = if i < 6 {
+                        avg3(t[i], t[i + 1], t[i + 2])
+                    } else {
+                        avg3(t[6], t[7], t[7])
+                    };
+                }
+            }
+        }
+        B_RD_PRED => {
+            // e[0..9]: left bottom to top, P, then above.
+            let e = [lf[3], lf[2], lf[1], lf[0], p, t[0], t[1], t[2], t[3]];
+            for r in 0..4 {
+                for c in 0..4 {
+                    let i = 3 - r + c;
+                    b[r * 4 + c] = avg3(e[i], e[i + 1], e[i + 2]);
+                }
+            }
+        }
+        B_VR_PRED => {
+            let e = [lf[3], lf[2], lf[1], lf[0], p, t[0], t[1], t[2], t[3]];
+            b[12] = avg3(e[1], e[2], e[3]);
+            b[8] = avg3(e[2], e[3], e[4]);
+            let v = avg3(e[3], e[4], e[5]);
+            b[13] = v;
+            b[4] = v;
+            let v = avg2(e[4], e[5]);
+            b[9] = v;
+            b[0] = v;
+            let v = avg3(e[4], e[5], e[6]);
+            b[14] = v;
+            b[5] = v;
+            let v = avg2(e[5], e[6]);
+            b[10] = v;
+            b[1] = v;
+            let v = avg3(e[5], e[6], e[7]);
+            b[15] = v;
+            b[6] = v;
+            let v = avg2(e[6], e[7]);
+            b[11] = v;
+            b[2] = v;
+            b[7] = avg3(e[6], e[7], e[8]);
+            b[3] = avg2(e[7], e[8]);
+        }
+        B_VL_PRED => {
+            b[0] = avg2(t[0], t[1]);
+            b[4] = avg3(t[0], t[1], t[2]);
+            let v = avg2(t[1], t[2]);
+            b[8] = v;
+            b[1] = v;
+            let v = avg3(t[1], t[2], t[3]);
+            b[5] = v;
+            b[12] = v;
+            let v = avg2(t[2], t[3]);
+            b[9] = v;
+            b[2] = v;
+            let v = avg3(t[2], t[3], t[4]);
+            b[13] = v;
+            b[6] = v;
+            let v = avg2(t[3], t[4]);
+            b[10] = v;
+            b[3] = v;
+            let v = avg3(t[3], t[4], t[5]);
+            b[14] = v;
+            b[7] = v;
+            // The last two break the pattern (Section 12.3).
+            b[11] = avg3(t[4], t[5], t[6]);
+            b[15] = avg3(t[5], t[6], t[7]);
+        }
+        B_HD_PRED => {
+            let e = [lf[3], lf[2], lf[1], lf[0], p, t[0], t[1], t[2], t[3]];
+            b[12] = avg2(e[0], e[1]);
+            b[13] = avg3(e[0], e[1], e[2]);
+            let v = avg2(e[1], e[2]);
+            b[8] = v;
+            b[14] = v;
+            let v = avg3(e[1], e[2], e[3]);
+            b[9] = v;
+            b[15] = v;
+            let v = avg3(e[2], e[3], e[4]);
+            b[11] = v;
+            b[5] = v;
+            let v = avg2(e[2], e[3]);
+            b[4] = v;
+            b[10] = v;
+            let v = avg2(e[3], e[4]);
+            b[6] = v;
+            b[0] = v;
+            let v = avg3(e[3], e[4], e[5]);
+            b[7] = v;
+            b[1] = v;
+            b[2] = avg3(e[4], e[5], e[6]);
+            b[3] = avg3(e[5], e[6], e[7]);
+        }
+        B_HU_PRED => {
+            b[0] = avg2(lf[0], lf[1]);
+            b[1] = avg3(lf[0], lf[1], lf[2]);
+            let v = avg2(lf[1], lf[2]);
+            b[2] = v;
+            b[4] = v;
+            let v = avg3(lf[1], lf[2], lf[3]);
+            b[3] = v;
+            b[5] = v;
+            let v = avg2(lf[2], lf[3]);
+            b[6] = v;
+            b[8] = v;
+            let v = avg3(lf[2], lf[3], lf[3]);
+            b[7] = v;
+            b[9] = v;
+            let v = lf[3] as u8;
+            for i in [10, 11, 12, 13, 14, 15] {
+                b[i] = v;
+            }
+        }
+        _ => unreachable!("not a subblock mode"),
+    }
+    for r in 0..4 {
+        ws[pos + r * stride..pos + r * stride + 4].copy_from_slice(&b[r * 4..r * 4 + 4]);
+    }
+}
+
+/// Fills the border of an intra-prediction workspace from the frame
+/// (Section 12.2): 127 above the frame, 129 left of it, the above-left
+/// pixel 127 on the top row and 129 on the left column.
+#[allow(clippy::too_many_arguments)]
+pub fn fill_ws_border(
+    ws: &mut [u8],
+    ws_stride: usize,
+    plane: &[u8],
+    s: usize,
+    n: usize,
+    mbx: usize,
+    mby: usize,
+    above_right: bool,
+    last_col: bool,
+) {
+    let x = mbx * n;
+    let y = mby * n;
+    let extra = if above_right { 4 } else { 0 };
+    if mby == 0 {
+        ws[..1 + n + extra].fill(127);
+    } else {
+        let a = (y - 1) * s + x;
+        ws[1..1 + n].copy_from_slice(&plane[a..a + n]);
+        if above_right {
+            if last_col {
+                let v = plane[a + n - 1];
+                ws[1 + n..1 + n + 4].fill(v);
+            } else {
+                ws[1 + n..1 + n + 4].copy_from_slice(&plane[a + n..a + n + 4]);
+            }
+        }
+        ws[0] = if mbx == 0 { 129 } else { plane[a - 1] };
+    }
+    for r in 0..n {
+        ws[(r + 1) * ws_stride] = if mbx == 0 {
+            129
+        } else {
+            plane[(y + r) * s + x - 1]
+        };
+    }
+}
+
+/// Copies the predicted block out of a workspace into a plane of stride `s`.
+pub fn store_ws(
+    ws: &[u8],
+    ws_stride: usize,
+    plane: &mut [u8],
+    s: usize,
+    n: usize,
+    mbx: usize,
+    mby: usize,
+) {
+    for r in 0..n {
+        let d = (mby * n + r) * s + mbx * n;
+        plane[d..d + n].copy_from_slice(&ws[(r + 1) * ws_stride + 1..(r + 1) * ws_stride + 1 + n]);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Inter prediction.
+
+pub type Filter = [i32; 6];
+
+pub const SIXTAP_FILTERS: [Filter; 8] = [
+    [0, 0, 128, 0, 0, 0],
+    [0, -6, 123, 12, -1, 0],
+    [2, -11, 108, 36, -8, 1],
+    [0, -9, 93, 50, -6, 0],
+    [3, -16, 77, 77, -16, 3],
+    [0, -6, 50, 93, -9, 0],
+    [1, -8, 36, 108, -11, 2],
+    [0, -1, 12, 123, -6, 0],
+];
+
+pub const BILINEAR_FILTERS: [Filter; 8] = [
+    [0, 0, 128, 0, 0, 0],
+    [0, 0, 112, 16, 0, 0],
+    [0, 0, 96, 32, 0, 0],
+    [0, 0, 80, 48, 0, 0],
+    [0, 0, 64, 64, 0, 0],
+    [0, 0, 48, 80, 0, 0],
+    [0, 0, 32, 96, 0, 0],
+    [0, 0, 16, 112, 0, 0],
+];
+
+/// A reference plane: `w` x `h` pixels, stride `w`.
+pub struct RefPlane<'a> {
+    pub data: &'a [u8],
+    pub w: usize,
+    pub h: usize,
+}
+
+/// One output row of a filter pass. `taps[k]` is the source row for tap
+/// `k` (its first element lines up with output 0).
+#[inline(always)]
+fn filter_row<const BILINEAR: bool>(out: &mut [u8], taps: [&[u8]; 6], f: &Filter) {
+    let n = out.len();
+    if BILINEAR {
+        // Only taps 2 and 3 are non-zero, and the result never needs clamping.
+        let (a, b) = (&taps[2][..n], &taps[3][..n]);
+        let (f2, f3) = (f[2] as u16, f[3] as u16);
+        for c in 0..n {
+            out[c] = ((a[c] as u16 * f2 + b[c] as u16 * f3 + 64) >> 7) as u8;
+        }
+    } else {
+        let (t0, t1, t2) = (&taps[0][..n], &taps[1][..n], &taps[2][..n]);
+        let (t3, t4, t5) = (&taps[3][..n], &taps[4][..n], &taps[5][..n]);
+        for c in 0..n {
+            let v = t0[c] as i32 * f[0]
+                + t1[c] as i32 * f[1]
+                + t2[c] as i32 * f[2]
+                + t3[c] as i32 * f[3]
+                + t4[c] as i32 * f[4]
+                + t5[c] as i32 * f[5];
+            out[c] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        }
+    }
+}
+
+/// The six source rows for a horizontal pass whose output 0 is at `p`.
+#[inline(always)]
+fn h_taps(src: &[u8], p: usize, n: usize) -> [&[u8]; 6] {
+    let s = &src[p - 2..p + n + 3];
+    [
+        &s[0..n],
+        &s[1..n + 1],
+        &s[2..n + 2],
+        &s[3..n + 3],
+        &s[4..n + 4],
+        &s[5..n + 5],
+    ]
+}
+
+/// The six source rows for a vertical pass whose output 0 is at `p`.
+#[inline(always)]
+fn v_taps(src: &[u8], p: usize, stride: usize, n: usize) -> [&[u8]; 6] {
+    let row = |k: usize| &src[p + k * stride - 2 * stride..p + k * stride - 2 * stride + n];
+    [row(0), row(1), row(2), row(3), row(4), row(5)]
+}
+
+/// Predicts a `bw` x `bh` block at (`x`, `y`) of the current plane from
+/// `refp`, displaced by (`mvx`, `mvy`) in eighth pixels of this plane, into
+/// `dst` at `dst_pos` (stride `dst_stride`). Pixels outside the reference
+/// plane repeat its edge pixels, without limit.
+#[allow(clippy::too_many_arguments)]
+pub fn inter_predict(
+    dst: &mut [u8],
+    dst_pos: usize,
+    dst_stride: usize,
+    refp: &RefPlane<'_>,
+    x: i32,
+    y: i32,
+    bw: usize,
+    bh: usize,
+    mvx: i32,
+    mvy: i32,
+    filters: &[Filter; 8],
+    bilinear: bool,
+) {
+    let ix = x + (mvx >> 3);
+    let iy = y + (mvy >> 3);
+    let fx = (mvx & 7) as usize;
+    let fy = (mvy & 7) as usize;
+
+    // The source window is (ix - 2, iy - 2) to (ix + bw + 2, iy + bh + 2).
+    let mut emu = [0u8; 21 * 21];
+    let (src, sstride, origin): (&[u8], usize, usize) = if ix >= 2
+        && iy >= 2
+        && (ix as usize) + bw + 3 <= refp.w
+        && (iy as usize) + bh + 3 <= refp.h
+    {
+        (refp.data, refp.w, iy as usize * refp.w + ix as usize)
+    } else {
+        let ew = bw + 5;
+        let max_x = refp.w as i32 - 1;
+        let max_y = refp.h as i32 - 1;
+        for r in 0..bh + 5 {
+            let sy = (iy - 2 + r as i32).clamp(0, max_y) as usize * refp.w;
+            for c in 0..ew {
+                let sx = (ix - 2 + c as i32).clamp(0, max_x) as usize;
+                emu[r * ew + c] = refp.data[sy + sx];
+            }
+        }
+        (&emu[..], ew, 2 * ew + 2)
+    };
+
+    if fx == 0 && fy == 0 {
+        for r in 0..bh {
+            let s = origin + r * sstride;
+            dst[dst_pos + r * dst_stride..dst_pos + r * dst_stride + bw]
+                .copy_from_slice(&src[s..s + bw]);
+        }
+        return;
+    }
+    if bilinear {
+        filter_block::<true>(
+            dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters,
+        );
+    } else {
+        filter_block::<false>(
+            dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters,
+        );
+    }
+}
+
+/// The sub-pixel filter passes, specialised per filter kind so the taps
+/// inline.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn filter_block<const BILINEAR: bool>(
+    dst: &mut [u8],
+    dst_pos: usize,
+    dst_stride: usize,
+    src: &[u8],
+    sstride: usize,
+    origin: usize,
+    bw: usize,
+    bh: usize,
+    fx: usize,
+    fy: usize,
+    filters: &[Filter; 8],
+) {
+    if fy == 0 {
+        let f = &filters[fx];
+        for r in 0..bh {
+            let d = dst_pos + r * dst_stride;
+            filter_row::<BILINEAR>(
+                &mut dst[d..d + bw],
+                h_taps(src, origin + r * sstride, bw),
+                f,
+            );
+        }
+        return;
+    }
+    if fx == 0 {
+        let f = &filters[fy];
+        for r in 0..bh {
+            let d = dst_pos + r * dst_stride;
+            filter_row::<BILINEAR>(
+                &mut dst[d..d + bw],
+                v_taps(src, origin + r * sstride, sstride, bw),
+                f,
+            );
+        }
+        return;
+    }
+    // Two passes: horizontal over rows -2..bh+3, then vertical.
+    let mut tmp = [0u8; 16 * 21];
+    let fh = &filters[fx];
+    for r in 0..bh + 5 {
+        let s = origin - 2 * sstride + r * sstride;
+        filter_row::<BILINEAR>(&mut tmp[r * bw..r * bw + bw], h_taps(src, s, bw), fh);
+    }
+    let fv = &filters[fy];
+    for r in 0..bh {
+        let d = dst_pos + r * dst_stride;
+        filter_row::<BILINEAR>(&mut dst[d..d + bw], v_taps(&tmp, (r + 2) * bw, bw, bw), fv);
+    }
+}
+

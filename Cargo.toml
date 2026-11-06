@@ -158,6 +158,7 @@ dimpl = { git = "https://github.com/Alakazam-211/dimpl", rev = "a3481943e8e3fa27
 kessel-audio = { path = "crates/kessel-audio" }
 # kessel-video names the VP8 crates by version only (crates.io); in this
 # workspace they resolve to the in-tree copies, so one of each is built. The
-# in-tree 0.1.0 is the published 0.1.0 (same source).
+# in-tree copies are 0.1.1 (faster loop filter and inter prediction), ahead
+# of the published 0.1.0 until they are released.
 vp8-decoder = { path = "crates/vp8-decoder" }
 vp8-encoder = { path = "crates/vp8-encoder" }

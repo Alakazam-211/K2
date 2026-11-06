@@ -10841,14 +10841,14 @@ dependencies = [
 
 [[package]]
 name = "vp8-decoder"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "vp8-encoder"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "vp8-decoder",

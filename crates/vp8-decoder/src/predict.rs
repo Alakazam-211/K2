@@ -355,31 +355,46 @@ pub struct RefPlane<'a> {
     pub h: usize,
 }
 
-/// One output row of a filter pass. `taps[k]` is the source row for tap
-/// `k` (its first element lines up with output 0).
+/// One output row of `N` pixels of a filter pass. `taps[k]` is the source
+/// row for tap `k` (its first element lines up with output 0).
+///
+/// The six-tap filters have non-negative taps 0, 2, 3 and 5 and
+/// non-positive taps 1 and 4 (checked by a test), so the sum splits into
+/// a positive and a negative part that each fit in 16 bits (at most 160 *
+/// 255). `(pos - neg + 64) >> 7` clamped to 0..=255 is then exactly the
+/// RFC's result: when `pos < neg` the RFC's value is negative or rounds to
+/// 0, and the saturating subtraction gives 0 too. 16-bit lanes let the
+/// compiler use twice as many per vector as 32-bit ones.
 #[inline(always)]
-fn filter_row<const BILINEAR: bool>(out: &mut [u8], taps: [&[u8]; 6], f: &Filter) {
-    let n = out.len();
+fn filter_row<const N: usize, const BILINEAR: bool>(
+    out: &mut [u8],
+    taps: [&[u8]; 6],
+    f: &Filter,
+) {
+    let out: &mut [u8; N] = (&mut out[..N]).try_into().expect("N pixels");
+    let row = |k: usize| fixed::<N>(taps[k]);
     if BILINEAR {
         // Only taps 2 and 3 are non-zero, and the result never needs clamping.
-        let (a, b) = (&taps[2][..n], &taps[3][..n]);
+        let (a, b) = (row(2), row(3));
         let (f2, f3) = (f[2] as u16, f[3] as u16);
-        for c in 0..n {
+        for c in 0..N {
             out[c] = ((a[c] as u16 * f2 + b[c] as u16 * f3 + 64) >> 7) as u8;
         }
     } else {
-        let (t0, t1, t2) = (&taps[0][..n], &taps[1][..n], &taps[2][..n]);
-        let (t3, t4, t5) = (&taps[3][..n], &taps[4][..n], &taps[5][..n]);
-        for c in 0..n {
-            let v = t0[c] as i32 * f[0]
-                + t1[c] as i32 * f[1]
-                + t2[c] as i32 * f[2]
-                + t3[c] as i32 * f[3]
-                + t4[c] as i32 * f[4]
-                + t5[c] as i32 * f[5];
-            out[c] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        let (t0, t1, t2, t3, t4, t5) = (row(0), row(1), row(2), row(3), row(4), row(5));
+        let (f0, f2, f3, f5) = (f[0] as u16, f[2] as u16, f[3] as u16, f[5] as u16);
+        let (f1, f4) = ((-f[1]) as u16, (-f[4]) as u16);
+        for c in 0..N {
+            let pos = t0[c] as u16 * f0 + t2[c] as u16 * f2 + t3[c] as u16 * f3 + t5[c] as u16 * f5;
+            let neg = t1[c] as u16 * f1 + t4[c] as u16 * f4;
+            out[c] = ((pos.saturating_sub(neg) + 64) >> 7).min(255) as u8;
         }
     }
+}
+
+#[inline(always)]
+fn fixed<const N: usize>(s: &[u8]) -> &[u8; N] {
+    s[..N].try_into().expect("N pixels")
 }
 
 /// The six source rows for a horizontal pass whose output 0 is at `p`.
@@ -399,14 +414,16 @@ fn h_taps(src: &[u8], p: usize, n: usize) -> [&[u8]; 6] {
 /// The six source rows for a vertical pass whose output 0 is at `p`.
 #[inline(always)]
 fn v_taps(src: &[u8], p: usize, stride: usize, n: usize) -> [&[u8]; 6] {
-    let row = |k: usize| &src[p + k * stride - 2 * stride..p + k * stride - 2 * stride + n];
+    let block = &src[p - 2 * stride..p + 3 * stride + n];
+    let row = |k: usize| &block[k * stride..k * stride + n];
     [row(0), row(1), row(2), row(3), row(4), row(5)]
 }
 
 /// Predicts a `bw` x `bh` block at (`x`, `y`) of the current plane from
 /// `refp`, displaced by (`mvx`, `mvy`) in eighth pixels of this plane, into
 /// `dst` at `dst_pos` (stride `dst_stride`). Pixels outside the reference
-/// plane repeat its edge pixels, without limit.
+/// plane repeat its edge pixels, without limit. `bw` is 4, 8 or 16 and
+/// `bh` at most 16.
 #[allow(clippy::too_many_arguments)]
 pub fn inter_predict(
     dst: &mut [u8],
@@ -422,76 +439,127 @@ pub fn inter_predict(
     filters: &[Filter; 8],
     bilinear: bool,
 ) {
-    let ix = x + (mvx >> 3);
-    let iy = y + (mvy >> 3);
-    let fx = (mvx & 7) as usize;
-    let fy = (mvy & 7) as usize;
-
-    // The source window is (ix - 2, iy - 2) to (ix + bw + 2, iy + bh + 2).
-    let mut emu = [0u8; 21 * 21];
-    let (src, sstride, origin): (&[u8], usize, usize) = if ix >= 2
-        && iy >= 2
-        && (ix as usize) + bw + 3 <= refp.w
-        && (iy as usize) + bh + 3 <= refp.h
-    {
-        (refp.data, refp.w, iy as usize * refp.w + ix as usize)
-    } else {
-        let ew = bw + 5;
-        let max_x = refp.w as i32 - 1;
-        let max_y = refp.h as i32 - 1;
-        for r in 0..bh + 5 {
-            let sy = (iy - 2 + r as i32).clamp(0, max_y) as usize * refp.w;
-            for c in 0..ew {
-                let sx = (ix - 2 + c as i32).clamp(0, max_x) as usize;
-                emu[r * ew + c] = refp.data[sy + sx];
-            }
-        }
-        (&emu[..], ew, 2 * ew + 2)
+    assert!(bh <= 16, "block height {bh}");
+    let m = Motion {
+        ix: x + (mvx >> 3),
+        iy: y + (mvy >> 3),
+        fx: (mvx & 7) as usize,
+        fy: (mvy & 7) as usize,
     };
-
-    if fx == 0 && fy == 0 {
-        for r in 0..bh {
-            let s = origin + r * sstride;
-            dst[dst_pos + r * dst_stride..dst_pos + r * dst_stride + bw]
-                .copy_from_slice(&src[s..s + bw]);
-        }
-        return;
-    }
-    if bilinear {
-        filter_block::<true>(
-            dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters,
-        );
-    } else {
-        filter_block::<false>(
-            dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters,
-        );
+    match (bw, bilinear) {
+        (16, false) => predict_n::<16, false>(dst, dst_pos, dst_stride, refp, &m, bh, filters),
+        (16, true) => predict_n::<16, true>(dst, dst_pos, dst_stride, refp, &m, bh, filters),
+        (8, false) => predict_n::<8, false>(dst, dst_pos, dst_stride, refp, &m, bh, filters),
+        (8, true) => predict_n::<8, true>(dst, dst_pos, dst_stride, refp, &m, bh, filters),
+        (4, false) => predict_n::<4, false>(dst, dst_pos, dst_stride, refp, &m, bh, filters),
+        (4, true) => predict_n::<4, true>(dst, dst_pos, dst_stride, refp, &m, bh, filters),
+        _ => panic!("block width {bw}"),
     }
 }
 
-/// The sub-pixel filter passes, specialised per filter kind so the taps
-/// inline.
+/// A block's whole-pixel source position and its eighth-pixel fractions.
+struct Motion {
+    ix: i32,
+    iy: i32,
+    fx: usize,
+    fy: usize,
+}
+
+#[inline(always)]
+fn predict_n<const N: usize, const BILINEAR: bool>(
+    dst: &mut [u8],
+    dst_pos: usize,
+    dst_stride: usize,
+    refp: &RefPlane<'_>,
+    m: &Motion,
+    bh: usize,
+    filters: &[Filter; 8],
+) {
+    // The source window is (ix - 2, iy - 2) to (ix + N + 2, iy + bh + 2).
+    if m.ix >= 2
+        && m.iy >= 2
+        && (m.ix as usize) + N + 3 <= refp.w
+        && (m.iy as usize) + bh + 3 <= refp.h
+    {
+        let origin = m.iy as usize * refp.w + m.ix as usize;
+        filter_block::<N, BILINEAR>(
+            dst, dst_pos, dst_stride, refp.data, refp.w, origin, bh, m.fx, m.fy, filters,
+        );
+    } else {
+        predict_near_edge::<N, BILINEAR>(dst, dst_pos, dst_stride, refp, m, bh, filters);
+    }
+}
+
+/// [`predict_n`] for a window that crosses the reference plane's edge: the
+/// window is first copied out with the edge pixels repeated.
+#[inline(never)]
+fn predict_near_edge<const N: usize, const BILINEAR: bool>(
+    dst: &mut [u8],
+    dst_pos: usize,
+    dst_stride: usize,
+    refp: &RefPlane<'_>,
+    m: &Motion,
+    bh: usize,
+    filters: &[Filter; 8],
+) {
+    let mut emu = [0u8; 21 * 21];
+    let ew = N + 5;
+    let max_x = refp.w as i32 - 1;
+    let max_y = refp.h as i32 - 1;
+    for r in 0..bh + 5 {
+        let sy = (m.iy - 2 + r as i32).clamp(0, max_y) as usize * refp.w;
+        for c in 0..ew {
+            let sx = (m.ix - 2 + c as i32).clamp(0, max_x) as usize;
+            emu[r * ew + c] = refp.data[sy + sx];
+        }
+    }
+    filter_block::<N, BILINEAR>(
+        dst,
+        dst_pos,
+        dst_stride,
+        &emu,
+        ew,
+        2 * ew + 2,
+        bh,
+        m.fx,
+        m.fy,
+        filters,
+    );
+}
+
+/// The sub-pixel filter passes (or a copy at whole-pixel positions),
+/// specialised per block width and filter kind so the loops unroll.
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn filter_block<const BILINEAR: bool>(
+fn filter_block<const N: usize, const BILINEAR: bool>(
     dst: &mut [u8],
     dst_pos: usize,
     dst_stride: usize,
     src: &[u8],
     sstride: usize,
     origin: usize,
-    bw: usize,
     bh: usize,
     fx: usize,
     fy: usize,
     filters: &[Filter; 8],
 ) {
+    if fx == 0 && fy == 0 {
+        for r in 0..bh {
+            let s: &[u8; N] = src[origin + r * sstride..origin + r * sstride + N]
+                .try_into()
+                .expect("N pixels");
+            let d = dst_pos + r * dst_stride;
+            dst[d..d + N].copy_from_slice(s);
+        }
+        return;
+    }
     if fy == 0 {
         let f = &filters[fx];
         for r in 0..bh {
             let d = dst_pos + r * dst_stride;
-            filter_row::<BILINEAR>(
-                &mut dst[d..d + bw],
-                h_taps(src, origin + r * sstride, bw),
+            filter_row::<N, BILINEAR>(
+                &mut dst[d..d + N],
+                h_taps(src, origin + r * sstride, N),
                 f,
             );
         }
@@ -501,9 +569,9 @@ fn filter_block<const BILINEAR: bool>(
         let f = &filters[fy];
         for r in 0..bh {
             let d = dst_pos + r * dst_stride;
-            filter_row::<BILINEAR>(
-                &mut dst[d..d + bw],
-                v_taps(src, origin + r * sstride, sstride, bw),
+            filter_row::<N, BILINEAR>(
+                &mut dst[d..d + N],
+                v_taps(src, origin + r * sstride, sstride, N),
                 f,
             );
         }
@@ -514,18 +582,88 @@ fn filter_block<const BILINEAR: bool>(
     let fh = &filters[fx];
     for r in 0..bh + 5 {
         let s = origin - 2 * sstride + r * sstride;
-        filter_row::<BILINEAR>(&mut tmp[r * bw..r * bw + bw], h_taps(src, s, bw), fh);
+        filter_row::<N, BILINEAR>(&mut tmp[r * N..r * N + N], h_taps(src, s, N), fh);
     }
     let fv = &filters[fy];
     for r in 0..bh {
         let d = dst_pos + r * dst_stride;
-        filter_row::<BILINEAR>(&mut dst[d..d + bw], v_taps(&tmp, (r + 2) * bw, bw, bw), fv);
+        filter_row::<N, BILINEAR>(&mut dst[d..d + N], v_taps(&tmp, (r + 2) * N, N, N), fv);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reference::predict as reference;
+
+    /// The split into positive and negative parts in `filter_row` relies
+    /// on these signs.
+    #[test]
+    fn sixtap_tap_signs() {
+        for f in SIXTAP_FILTERS.iter().chain(BILINEAR_FILTERS.iter()) {
+            assert!(f[0] >= 0 && f[2] >= 0 && f[3] >= 0 && f[5] >= 0, "{f:?}");
+            assert!(f[1] <= 0 && f[4] <= 0, "{f:?}");
+            assert!(f[0] + f[2] + f[3] + f[5] <= 160, "{f:?}");
+        }
+    }
+
+    /// Every block size, filter kind and sub-pixel phase, inside the plane
+    /// and across all its edges, matches the 0.1.0 code byte for byte.
+    #[test]
+    fn inter_prediction_matches_the_reference() {
+        let (w, h) = (48usize, 40usize);
+        let mut seed = 0x2545_f491u32;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let data: Vec<u8> = (0..w * h)
+            .map(|i| {
+                // Extremes as well as texture, so the clamps are exercised.
+                let r = rnd();
+                match r % 5 {
+                    0 => 0,
+                    1 => 255,
+                    _ => ((i * 37 + (r as usize >> 8)) % 256) as u8,
+                }
+            })
+            .collect();
+        let refp = RefPlane { data: &data, w, h };
+        let rp = reference::RefPlane { data: &data, w, h };
+        let mut checked = 0;
+        for (bw, bh) in [(16, 16), (8, 8), (4, 4)] {
+            for bilinear in [false, true] {
+                let (ours, theirs) = if bilinear {
+                    (&BILINEAR_FILTERS, &reference::BILINEAR_FILTERS)
+                } else {
+                    (&SIXTAP_FILTERS, &reference::SIXTAP_FILTERS)
+                };
+                for (x, y) in [(0, 0), (16, 16), (w as i32 - bw as i32, 8), (8, h as i32 - bh as i32)] {
+                    for mvy in -40..40 {
+                        for mvx in [-200, -37, -9, -8, -3, 0, 1, 5, 7, 13, 26, 99, 300] {
+                            let (mvx, mvy) = (mvx + (mvy & 7) * 3, mvy * 3 + (mvx & 3));
+                            let mut a = vec![0x5au8; 24 * 24];
+                            let mut b = a.clone();
+                            inter_predict(
+                                &mut a, 24 + 2, 24, &refp, x, y, bw, bh, mvx, mvy, ours, bilinear,
+                            );
+                            reference::inter_predict(
+                                &mut b, 24 + 2, 24, &rp, x, y, bw, bh, mvx, mvy, theirs, bilinear,
+                            );
+                            assert!(
+                                a == b,
+                                "{bw}x{bh} bilinear {bilinear} at ({x}, {y}) mv ({mvx}, {mvy})"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 3 * 2 * 4 * 80 * 13);
+    }
 
     #[test]
     fn identity_filters_copy() {

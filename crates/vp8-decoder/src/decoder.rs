@@ -181,6 +181,61 @@ struct Header {
     prob_golden: u8,
 }
 
+/// Time spent in each decoding stage, summed over frames. Only with
+/// `RUSTFLAGS="--cfg vp8_stage_timers"`, for profiling; not a stable API.
+#[cfg(vp8_stage_timers)]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StageTimes {
+    /// Macroblock headers: segment, skip flag, modes and motion vectors.
+    pub modes: std::time::Duration,
+    /// Coefficient tokens.
+    pub tokens: std::time::Duration,
+    /// Intra macroblocks: prediction and residual (they interleave).
+    pub intra: std::time::Duration,
+    /// Inter prediction (motion compensation).
+    pub inter_predict: std::time::Duration,
+    /// Inter residual: inverse WHT and DCT, added to the prediction.
+    pub inter_residual: std::time::Duration,
+    /// The loop filter.
+    pub loop_filter: std::time::Duration,
+    /// Frames decoded.
+    pub frames: u64,
+}
+
+/// A point in time for the stage timers (nothing without them).
+#[cfg(vp8_stage_timers)]
+type Mark = std::time::Instant;
+#[cfg(not(vp8_stage_timers))]
+struct Mark;
+
+#[cfg(vp8_stage_timers)]
+#[inline(always)]
+fn mark() -> Mark {
+    std::time::Instant::now()
+}
+#[cfg(not(vp8_stage_timers))]
+#[inline(always)]
+fn mark() -> Mark {
+    Mark
+}
+
+/// Adds the time since `$t` to `$field` and restarts `$t`.
+macro_rules! lap {
+    ($field:expr, $t:ident) => {
+        #[cfg(vp8_stage_timers)]
+        {
+            let now = std::time::Instant::now();
+            $field += now - $t;
+            let _ = std::mem::replace(&mut $t, now);
+        }
+        #[cfg(not(vp8_stage_timers))]
+        {
+            let _ = &mut $t;
+        }
+    };
+}
+
 /// The default frame size limit: 4096x2304 pixels.
 pub const DEFAULT_MAX_PIXELS: u64 = 4096 * 2304;
 
@@ -209,6 +264,8 @@ pub struct Decoder {
     ready: bool,
     max_pixels: u64,
     coeffs: Box<[i16; 400]>,
+    #[cfg(vp8_stage_timers)]
+    stages: StageTimes,
 }
 
 impl Default for Decoder {
@@ -239,6 +296,8 @@ impl Decoder {
             ready: false,
             max_pixels: DEFAULT_MAX_PIXELS,
             coeffs: Box::new([0; 400]),
+            #[cfg(vp8_stage_timers)]
+            stages: StageTimes::default(),
         }
     }
 
@@ -247,6 +306,13 @@ impl Decoder {
     /// default, [`DEFAULT_MAX_PIXELS`], allows 4096x2304.
     pub fn set_max_pixels(&mut self, max_pixels: u64) {
         self.max_pixels = max_pixels;
+    }
+
+    /// The stage timers so far. Only with `--cfg vp8_stage_timers`.
+    #[cfg(vp8_stage_timers)]
+    #[doc(hidden)]
+    pub fn stage_times(&self) -> StageTimes {
+        self.stages
     }
 
     /// Forgets the stream: the next frame must be a keyframe.
@@ -289,6 +355,10 @@ impl Decoder {
         }
         self.ready = true;
         self.info = Some(info);
+        #[cfg(vp8_stage_timers)]
+        {
+            self.stages.frames += 1;
+        }
         if !info.show_frame {
             return Ok(None);
         }
@@ -615,12 +685,14 @@ impl Decoder {
         };
         let full_pixel = hdr.version == 3;
         let num_parts = parts.len();
+        let mut t = mark();
         for row in 0..rows {
             let mut left_ctx = [0u8; 9];
             let tbd = &mut parts[row % num_parts];
             for col in 0..cols {
                 let i = (row + 1) * stride + col + 1;
                 let (mut mb, skip) = self.read_modes(bd, hdr, i, row, col);
+                lap!(self.stages.modes, t);
                 let has_y2 = mb.y_mode != B_PRED && mb.y_mode != SPLITMV;
                 let mut eobs = [0u8; 25];
                 let ctx_above = &mut self.above_ctx[col];
@@ -650,34 +722,29 @@ impl Decoder {
                         &mut eobs,
                     );
                 }
+                lap!(self.stages.tokens, t);
                 let x = col * 16;
                 let y = row * 16;
                 if mb.ref_frame == INTRA_FRAME {
                     recon_intra(cur, &mb, col, row, cols, &mut self.coeffs, &eobs, has_y2);
+                    lap!(self.stages.intra, t);
                 } else {
                     let refb = &self.bufs[self.refs[mb.ref_frame as usize]];
-                    recon_inter(
-                        cur,
-                        refb,
-                        &mb,
-                        x,
-                        y,
-                        &mut self.coeffs,
-                        &eobs,
-                        has_y2,
-                        filters,
-                        bilinear,
-                        full_pixel,
-                    );
+                    predict_inter(cur, refb, &mb, x, y, filters, bilinear, full_pixel);
+                    lap!(self.stages.inter_predict, t);
+                    add_inter_residual(cur, x, y, &mut self.coeffs, &eobs, has_y2);
+                    lap!(self.stages.inter_residual, t);
                 }
                 self.mbs[i] = mb;
             }
             if hdr.filter_level != 0 && row > 0 {
                 self.filter_row(cur, row - 1, hdr);
+                lap!(self.stages.loop_filter, t);
             }
         }
         if hdr.filter_level != 0 && rows > 0 {
             self.filter_row(cur, rows - 1, hdr);
+            lap!(self.stages.loop_filter, t);
         }
         Ok(())
     }
@@ -1160,16 +1227,14 @@ fn eobs_any(eobs: &[u8; 25]) -> bool {
     eobs[24] > 0
 }
 
+/// Motion compensation for one inter macroblock (luma and chroma).
 #[allow(clippy::too_many_arguments)]
-fn recon_inter(
+fn predict_inter(
     cur: &mut FrameBuf,
     refb: &FrameBuf,
     mb: &MbInfo,
     x: usize,
     y: usize,
-    coeffs: &mut [i16; 400],
-    eobs: &[u8; 25],
-    has_y2: bool,
     filters: &[predict::Filter; 8],
     bilinear: bool,
     full_pixel: bool,
@@ -1219,19 +1284,6 @@ fn recon_inter(
                 );
             }
         }
-        if has_y2 && eobs_any(eobs) {
-            apply_y2(coeffs);
-        }
-        for b in 0..16 {
-            let pos = (y + (b >> 2) * 4) * s + x + (b & 3) * 4;
-            add_residual(
-                &mut coeffs[b * 16..b * 16 + 16],
-                eobs[b],
-                &mut cur.y.data,
-                pos,
-                s,
-            );
-        }
     }
 
     // Chroma motion vectors (Section 17.4 of the reference decoder).
@@ -1264,10 +1316,7 @@ fn recon_inter(
     }
     let cx0 = x / 2;
     let cy0 = y / 2;
-    for (plane, refplane, first) in [
-        (&mut cur.u, &refb.u, 16usize),
-        (&mut cur.v, &refb.v, 20usize),
-    ] {
+    for (plane, refplane) in [(&mut cur.u, &refb.u), (&mut cur.v, &refb.v)] {
         let refp = RefPlane {
             data: &refplane.data,
             w: refplane.w,
@@ -1309,6 +1358,35 @@ fn recon_inter(
                 );
             }
         }
+    }
+}
+
+/// Adds an inter macroblock's residual to its prediction.
+fn add_inter_residual(
+    cur: &mut FrameBuf,
+    x: usize,
+    y: usize,
+    coeffs: &mut [i16; 400],
+    eobs: &[u8; 25],
+    has_y2: bool,
+) {
+    if has_y2 && eobs_any(eobs) {
+        apply_y2(coeffs);
+    }
+    let s = cur.y.w;
+    for b in 0..16 {
+        let pos = (y + (b >> 2) * 4) * s + x + (b & 3) * 4;
+        add_residual(
+            &mut coeffs[b * 16..b * 16 + 16],
+            eobs[b],
+            &mut cur.y.data,
+            pos,
+            s,
+        );
+    }
+    let (cx0, cy0) = (x / 2, y / 2);
+    for (plane, first) in [(&mut cur.u, 16usize), (&mut cur.v, 20usize)] {
+        let s = plane.w;
         for j in 0..4 {
             let b = first + j;
             let pos = (cy0 + (j >> 1) * 4) * s + cx0 + (j & 1) * 4;

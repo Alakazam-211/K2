@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
+
+### vp8-decoder 0.1.1
+
+- Pins vp8-decoder `=0.1.1`, whose faster loop filter and inter
+  prediction this encoder shares for its own reconstruction. The output is
+  the same byte for byte, so encoded streams don't change.
+- `examples/decode_speed` (in the repository): vp8-decoder's speed on
+  camera-like streams made by this encoder at several sizes and bitrates,
+  with a checksum of the decoded frames. The camera-like content moves
+  from `tests/bitrate.rs` to `tests/common/camera.rs` so both use it.
 
 ### Documentation
 

@@ -154,6 +154,61 @@ fn main() {
                 decoded as f64 / secs,
                 secs * 1000.0 / decoded as f64,
             );
+            #[cfg(vp8_stage_timers)]
+            stages(&stream, args.seconds);
         }
     }
+}
+
+/// Per-stage milliseconds per frame (built with `--cfg vp8_stage_timers`).
+/// The timers themselves add a little to every stage.
+#[cfg(vp8_stage_timers)]
+fn stages(stream: &[Vec<u8>], seconds: f64) {
+    let mut total = vp8_decoder::StageTimes::default();
+    let mut all = Duration::ZERO;
+    let mut output = Duration::ZERO;
+    let mut out = Vec::new();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs_f64(seconds) {
+        let mut dec = Decoder::new();
+        for f in stream {
+            let t = Instant::now();
+            let pic = dec.decode(f).expect("decode");
+            all += t.elapsed();
+            if let Some(p) = pic {
+                // The copy out of the decoder, as kessel-video makes it.
+                let t = Instant::now();
+                out.clear();
+                p.write_i420(&mut out);
+                output += t.elapsed();
+            }
+        }
+        let s = dec.stage_times();
+        total.modes += s.modes;
+        total.tokens += s.tokens;
+        total.intra += s.intra;
+        total.inter_predict += s.inter_predict;
+        total.inter_residual += s.inter_residual;
+        total.loop_filter += s.loop_filter;
+        total.frames += s.frames;
+    }
+    let per = |d: Duration| d.as_secs_f64() * 1000.0 / total.frames as f64;
+    let staged = total.modes
+        + total.tokens
+        + total.intra
+        + total.inter_predict
+        + total.inter_residual
+        + total.loop_filter;
+    println!(
+        "|  | stages ms/frame: modes {:.3}, tokens {:.3}, intra {:.3}, inter predict {:.3}, inter residual {:.3}, loop filter {:.3}, other {:.3} (decode total {:.3}); I420 copy out {:.3} | | | | | | |",
+        per(total.modes),
+        per(total.tokens),
+        per(total.intra),
+        per(total.inter_predict),
+        per(total.inter_residual),
+        per(total.loop_filter),
+        per(all.saturating_sub(staged)),
+        per(all),
+        per(output),
+    );
 }

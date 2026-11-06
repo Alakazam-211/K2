@@ -1,7 +1,8 @@
 # vp8-decoder
 
-A VP8 video decoder in pure, safe Rust (`#![forbid(unsafe_code)]`, no
-dependencies), following RFC 6386.
+A VP8 video decoder in pure Rust (no dependencies, no C), following
+RFC 6386. Safe code throughout, except for small NEON (aarch64) and SSE2
+(x86_64) loop-filter kernels (see Security).
 
 It decodes every bitstream version (0 to 3), with:
 - keyframes and interframes;
@@ -86,8 +87,21 @@ it. A plain `cargo test -p vp8-decoder` runs the unit tests only.
 
 ## Security
 
-The decoder is meant for untrusted input: it has no `unsafe` code, and
-malformed frames return errors rather than panicking. Please report a crash
+The decoder is meant for untrusted input: malformed frames return errors
+rather than panicking.
+
+Its only `unsafe` code is in two modules, `neon.rs` (aarch64) and
+`sse2.rs` (x86_64): the loop filter's SIMD kernels, written with
+`std::arch` intrinsics. The rest of the crate is `deny(unsafe_code)`. Each
+kernel works on a slice that ordinary, bounds-checked indexing has already
+cut to the exact size it reads and writes, so a bad stream can't make it
+touch memory outside the frame. Their output matches the portable code
+byte for byte (tests compare them with the 0.1.0 scalar filter on random
+pictures at every filter level and sharpness). Build with
+`RUSTFLAGS="--cfg vp8_portable"` to leave them out; the decoder is then
+entirely safe Rust, and about half as fast on aarch64.
+
+Please report a crash
 or hang on a malicious stream privately, through GitHub's "Report a
 vulnerability" on the Security tab of
 [Alakazam-211/K2](https://github.com/Alakazam-211/K2/security).

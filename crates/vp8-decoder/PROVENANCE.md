@@ -22,6 +22,28 @@ checked.
   were then checked value for value against the same tables in the
   `image-webp` crate (MIT OR Apache-2.0).
 
+## The faster code in 0.1.1
+
+Version 0.1.1 adds the NEON (`src/neon.rs`) and SSE2 (`src/sse2.rs`) loop
+filters, rewrites the portable loop filter in 8-bit saturating lanes, and
+reworks the inter-prediction filters (16-bit lanes, block sizes as
+constants). All of it is our own code, written from:
+- the RFC's formulas in Sections 15.2 to 15.4 (loop filter) and 18
+  (sub-pixel filters), and this crate's own 0.1.0 code, which follows the
+  Section 20 reference decoder as recorded above;
+- the `std::arch` intrinsic names and their documented behaviour (Arm's
+  and Intel's intrinsic references), and general knowledge of standard
+  SIMD techniques (byte transposes with unzip and unpack steps, saturating
+  arithmetic in place of clamps, widening to 16 bits).
+
+No other implementation's SIMD code was opened or copied: not libvpx's
+NEON or SSE2 loop filters, not libwebp's, not zvidlib-vp8's. The design
+drew on general prior knowledge that SIMD VP8 filters commonly work in
+saturating 8-bit lanes and widen to 16 bits for the filter value, as the
+note on libvpx above describes for 0.1.0; no code was consulted. The 0.1.0
+scalar code is kept in `src/reference/` (test builds only), and the tests
+check that every new path gives the same bytes.
+
 ## Sources not used
 
 - **libvpx source was not opened.** Some design reasoning drew on prior

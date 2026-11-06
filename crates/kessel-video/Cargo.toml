@@ -1,0 +1,53 @@
+[package]
+name = "kessel-video"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+description = "Cameras, screen capture, pixels and video codecs for apps that bring their own transport: H.264 through the operating system's codecs, a codec-neutral submit-and-poll API, and a scripted fake backend for tests."
+authors = ["Alakazam Labs"]
+readme = "README.md"
+documentation = "https://docs.rs/kessel-video"
+# repository = TODO: set when the public repository's home is decided.
+keywords = ["video", "camera", "screen-capture", "h264", "webrtc"]
+categories = ["multimedia::video"]
+# Not published until the API settles and the release is approved.
+publish = false
+# tests/scrub.rs is the repository's own publish check.
+exclude = ["tests/scrub.rs"]
+
+[features]
+# The API types and traits, `null()` and `fake` need no feature, no OS
+# library and no `unsafe`.
+default = ["system"]
+# `fake::FakeBackend` is always compiled; this feature exists so a
+# consumer's own test feature can name it.
+fake = []
+# macOS (and later iOS): AVFoundation, ScreenCaptureKit, VideoToolbox. System
+# frameworks through FFI; no codec library is linked or shipped.
+apple = ["dep:objc2", "dep:block2"]
+# Media Foundation capture and H.264 MFTs, Windows Graphics Capture (not
+# built yet).
+windows = []
+# V4L2 cameras, the xdg-desktop-portal ScreenCast and PipeWire (not built
+# yet). No H.264: Linux has no OS codec.
+linux = []
+# Camera2/CameraX, MediaCodec, MediaProjection (not built yet).
+android = []
+# Whichever of the above matches the target.
+system = ["apple", "windows", "linux", "android"]
+
+[dependencies]
+bytes = "1"
+crossbeam-queue = "0.3"
+thiserror = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+missing_docs = "warn"

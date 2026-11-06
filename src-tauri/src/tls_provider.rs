@@ -80,9 +80,28 @@ pub fn install_with(cpu_supported: impl FnOnce() -> bool) -> TlsChoice {
     })
 }
 
-/// The real check (`graviola::util::is_cpu_supported`) and install.
+/// The real CPU check: graviola's own, plus the x86_64 features its code
+/// uses that 0.4.4's check leaves out. Its `low/x86_64/cpu.rs` tests bmi1,
+/// but the bignum code uses BMI2 (`mulx`) and ML-KEM uses BMI2 `pext` and
+/// POPCNT. No real CPU has ADX and AVX2 without them, but a VM can hide
+/// them, so check here too (review of the 0.4.3 to 0.4.4 diff, 11-05).
+pub fn cpu_supported() -> bool {
+    graviola::util::is_cpu_supported() && extra_cpu_features()
+}
+
+#[cfg(target_arch = "x86_64")]
+fn extra_cpu_features() -> bool {
+    std::arch::is_x86_feature_detected!("bmi2") && std::arch::is_x86_feature_detected!("popcnt")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn extra_cpu_features() -> bool {
+    true
+}
+
+/// The real check ([`cpu_supported`]) and install.
 pub fn install() -> TlsChoice {
-    install_with(graviola::util::is_cpu_supported)
+    install_with(cpu_supported)
 }
 
 /// What startup decided, if it ran yet.
@@ -108,7 +127,7 @@ pub fn startup_with(cpu_supported: impl FnOnce() -> bool, refuse: impl FnOnce(&s
 /// this CPU isn't supported and exit (status 1) before any TLS. Never
 /// returns on an unsupported CPU.
 pub fn install_or_exit() {
-    if !startup_with(graviola::util::is_cpu_supported, show_unsupported_cpu_message) {
+    if !startup_with(cpu_supported, show_unsupported_cpu_message) {
         std::process::exit(1);
     }
 }

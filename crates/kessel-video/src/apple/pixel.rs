@@ -17,7 +17,9 @@ impl CvFrame {
     /// # Safety
     /// `pb` must be a live CVPixelBuffer.
     pub(crate) unsafe fn retain(pb: CVPixelBufferRef) -> CvFrame {
-        CvFrame { pb: Cf::retain(pb as CFTypeRef) }
+        CvFrame {
+            pb: Cf::retain(pb as CFTypeRef),
+        }
     }
 
     pub(crate) fn raw(&self) -> CVPixelBufferRef {
@@ -26,7 +28,12 @@ impl CvFrame {
 
     pub(crate) fn size(&self) -> (u32, u32) {
         // SAFETY: a live pixel buffer.
-        unsafe { (CVPixelBufferGetWidth(self.raw()) as u32, CVPixelBufferGetHeight(self.raw()) as u32) }
+        unsafe {
+            (
+                CVPixelBufferGetWidth(self.raw()) as u32,
+                CVPixelBufferGetHeight(self.raw()) as u32,
+            )
+        }
     }
 }
 
@@ -64,12 +71,18 @@ pub(crate) fn planes_from(pb: CVPixelBufferRef) -> Result<(Planes, u32, u32), Vi
     if format == PixelFormat::Native {
         // SAFETY: a live pixel buffer.
         let t = unsafe { CVPixelBufferGetPixelFormatType(pb) };
-        return Err(VideoError::Unsupported(format!("pixel format {:?}", t.to_be_bytes())));
+        return Err(VideoError::Unsupported(format!(
+            "pixel format {:?}",
+            t.to_be_bytes()
+        )));
     }
     // SAFETY: a live pixel buffer, locked read-only while we copy rows within
     // each plane's reported size.
     unsafe {
-        let (w, h) = (CVPixelBufferGetWidth(pb) as u32, CVPixelBufferGetHeight(pb) as u32);
+        let (w, h) = (
+            CVPixelBufferGetWidth(pb) as u32,
+            CVPixelBufferGetHeight(pb) as u32,
+        );
         if CVPixelBufferLockBaseAddress(pb, LOCK_READ_ONLY) != 0 {
             return Err(VideoError::os(0, "CVPixelBufferLockBaseAddress failed"));
         }
@@ -78,9 +91,15 @@ pub(crate) fn planes_from(pb: CVPixelBufferRef) -> Result<(Planes, u32, u32), Vi
         for i in 0..format.plane_count() {
             let (row, rows) = format.plane_size(i, w, h);
             let (base, bpr) = if format == PixelFormat::Bgra {
-                (CVPixelBufferGetBaseAddress(pb) as *const u8, CVPixelBufferGetBytesPerRow(pb))
+                (
+                    CVPixelBufferGetBaseAddress(pb) as *const u8,
+                    CVPixelBufferGetBytesPerRow(pb),
+                )
             } else {
-                (CVPixelBufferGetBaseAddressOfPlane(pb, i) as *const u8, CVPixelBufferGetBytesPerRowOfPlane(pb, i))
+                (
+                    CVPixelBufferGetBaseAddressOfPlane(pb, i) as *const u8,
+                    CVPixelBufferGetBytesPerRowOfPlane(pb, i),
+                )
             };
             if base.is_null() || bpr < row {
                 ok = false;
@@ -92,14 +111,22 @@ pub(crate) fn planes_from(pb: CVPixelBufferRef) -> Result<(Planes, u32, u32), Vi
         }
         CVPixelBufferUnlockBaseAddress(pb, LOCK_READ_ONLY);
         if !ok {
-            return Err(VideoError::os(0, "a pixel buffer plane is missing or too narrow"));
+            return Err(VideoError::os(
+                0,
+                "a pixel buffer plane is missing or too narrow",
+            ));
         }
         Ok((Planes::tight(format, w, h, out)?, w, h))
     }
 }
 
 /// Fill an NV12 pixel buffer from NV12 planes of the same size.
-pub(crate) fn fill_nv12(pb: CVPixelBufferRef, planes: &Planes, width: u32, height: u32) -> Result<(), VideoError> {
+pub(crate) fn fill_nv12(
+    pb: CVPixelBufferRef,
+    planes: &Planes,
+    width: u32,
+    height: u32,
+) -> Result<(), VideoError> {
     if planes.format != PixelFormat::Nv12 {
         return Err(invalid(format!("fill_nv12 with {:?}", planes.format)));
     }
@@ -117,7 +144,12 @@ pub(crate) fn fill_nv12(pb: CVPixelBufferRef, planes: &Planes, width: u32, heigh
             let bpr = CVPixelBufferGetBytesPerRowOfPlane(pb, i);
             let have_rows = CVPixelBufferGetHeightOfPlane(pb, i);
             if base.is_null() || bpr < row || have_rows < rows {
-                res = Err(VideoError::os(0, format!("pixel buffer plane {i} ({bpr} x {have_rows}) can't hold {row} x {rows}")));
+                res = Err(VideoError::os(
+                    0,
+                    format!(
+                        "pixel buffer plane {i} ({bpr} x {have_rows}) can't hold {row} x {rows}"
+                    ),
+                ));
                 break;
             }
             for y in 0..rows {
@@ -197,7 +229,10 @@ pub(crate) unsafe fn native_frame(pb: CVPixelBufferRef, capture_us: u64) -> Vide
 ///
 /// # Safety
 /// `pb` must be a live CVPixelBuffer.
-pub(crate) unsafe fn cpu_frame(pb: CVPixelBufferRef, capture_us: u64) -> Result<VideoFrame, VideoError> {
+pub(crate) unsafe fn cpu_frame(
+    pb: CVPixelBufferRef,
+    capture_us: u64,
+) -> Result<VideoFrame, VideoError> {
     let (planes, w, h) = planes_from(pb)?;
     let mut v = VideoFrame::from_planes(planes, w, h, capture_us)?;
     v.color = color_of(pb);

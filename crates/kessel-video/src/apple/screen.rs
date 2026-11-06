@@ -35,7 +35,10 @@ struct CGRect {
 unsafe impl Encode for CGRect {
     const ENCODING: Encoding = Encoding::Struct(
         "CGRect",
-        &[Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]), Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING])],
+        &[
+            Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]),
+            Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]),
+        ],
     );
 }
 
@@ -68,7 +71,9 @@ fn preflight() -> bool {
     if !loaded() {
         return false;
     }
-    let Some(f) = ffi::symbol(c"CGPreflightScreenCaptureAccess") else { return false };
+    let Some(f) = ffi::symbol(c"CGPreflightScreenCaptureAccess") else {
+        return false;
+    };
     // SAFETY: `bool CGPreflightScreenCaptureAccess(void)`; doesn't prompt.
     let f: extern "C" fn() -> bool = unsafe { std::mem::transmute(f) };
     f()
@@ -107,7 +112,11 @@ pub(crate) fn request_permission(done: Done<Permission>) {
             // SAFETY: NSWorkspace / NSURL class methods with documented
             // signatures; nil is checked.
             unsafe {
-                let Some(s) = super::objc::nsstring("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return };
+                let Some(s) = super::objc::nsstring(
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                ) else {
+                    return;
+                };
                 let url: *mut AnyObject = msg_send![class!(NSURL), URLWithString: &*s];
                 if let Some(ws) = AnyClass::get(c"NSWorkspace") {
                     let shared: *mut AnyObject = msg_send![ws, sharedWorkspace];
@@ -126,7 +135,8 @@ fn shareable() -> Result<ObjSend, VideoError> {
     if !loaded() {
         return Err(unsupported("ScreenCaptureKit needs macOS 12.3"));
     }
-    let cls = AnyClass::get(c"SCShareableContent").ok_or_else(|| unsupported("no SCShareableContent"))?;
+    let cls =
+        AnyClass::get(c"SCShareableContent").ok_or_else(|| unsupported("no SCShareableContent"))?;
     let (tx, rx) = sync_channel::<Result<ObjSend, VideoError>>(1);
     let tx = Mutex::new(Some(tx));
     let block = RcBlock::new(move |content: *mut AnyObject, error: *mut AnyObject| {
@@ -153,7 +163,8 @@ fn shareable() -> Result<ObjSend, VideoError> {
             ];
         }
     });
-    rx.recv_timeout(Duration::from_secs(5)).map_err(|_| VideoError::os(0, "ScreenCaptureKit didn't list the screens in 5 s"))?
+    rx.recv_timeout(Duration::from_secs(5))
+        .map_err(|_| VideoError::os(0, "ScreenCaptureKit didn't list the screens in 5 s"))?
 }
 
 unsafe fn sck_error(e: *mut AnyObject) -> VideoError {
@@ -194,7 +205,13 @@ pub(crate) fn sources() -> Result<Vec<ScreenSourceInfo>, VideoError> {
                 let id: u32 = msg_send![d, displayID];
                 let w: isize = msg_send![d, width];
                 let h: isize = msg_send![d, height];
-                out.push(ScreenSourceInfo::new(format!("display:{id}"), ScreenKind::Display, format!("Display {}", i + 1), w as u32, h as u32));
+                out.push(ScreenSourceInfo::new(
+                    format!("display:{id}"),
+                    ScreenKind::Display,
+                    format!("Display {}", i + 1),
+                    w as u32,
+                    h as u32,
+                ));
             }
             for w in windows(&content) {
                 if !window_ok(w) {
@@ -204,7 +221,13 @@ pub(crate) fn sources() -> Result<Vec<ScreenSourceInfo>, VideoError> {
                 let title: *mut AnyObject = msg_send![w, title];
                 let frame: CGRect = msg_send![w, frame];
                 let app: *mut AnyObject = msg_send![w, owningApplication];
-                let mut info = ScreenSourceInfo::new(format!("window:{id}"), ScreenKind::Window, string_of(title), frame.w as u32, frame.h as u32);
+                let mut info = ScreenSourceInfo::new(
+                    format!("window:{id}"),
+                    ScreenKind::Window,
+                    string_of(title),
+                    frame.w as u32,
+                    frame.h as u32,
+                );
                 if !app.is_null() {
                     let name: *mut AnyObject = msg_send![app, applicationName];
                     info.app = Some(string_of(name)).filter(|s| !s.is_empty());
@@ -229,7 +252,9 @@ const PICK_IVAR: &std::ffi::CStr = c"kesselVideoPick";
 static PICK_OBSERVER: Mutex<Option<ObjSend>> = Mutex::new(None);
 
 unsafe fn finish_pick(this: &AnyObject, r: Result<ScreenSelection, VideoError>) {
-    let Some(ivar) = this.class().instance_variable(PICK_IVAR) else { return };
+    let Some(ivar) = this.class().instance_variable(PICK_IVAR) else {
+        return;
+    };
     let slot = ivar.load_ptr::<*mut c_void>(this);
     let p = std::mem::replace(&mut *slot, std::ptr::null_mut());
     if p.is_null() {
@@ -249,7 +274,13 @@ unsafe fn finish_pick(this: &AnyObject, r: Result<ScreenSelection, VideoError>) 
     *PICK_OBSERVER.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-unsafe extern "C-unwind" fn picker_updated(this: *mut AnyObject, _: Sel, _picker: *mut AnyObject, filter: *mut AnyObject, _stream: *mut AnyObject) {
+unsafe extern "C-unwind" fn picker_updated(
+    this: *mut AnyObject,
+    _: Sel,
+    _picker: *mut AnyObject,
+    filter: *mut AnyObject,
+    _stream: *mut AnyObject,
+) {
     let this: &AnyObject = &*this;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = match Retained::retain(filter) {
@@ -260,20 +291,30 @@ unsafe extern "C-unwind" fn picker_updated(this: *mut AnyObject, _: Sel, _picker
     }));
 }
 
-unsafe extern "C-unwind" fn picker_cancelled(this: *mut AnyObject, _: Sel, _picker: *mut AnyObject, _stream: *mut AnyObject) {
+unsafe extern "C-unwind" fn picker_cancelled(
+    this: *mut AnyObject,
+    _: Sel,
+    _picker: *mut AnyObject,
+    _stream: *mut AnyObject,
+) {
     let this: &AnyObject = &*this;
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| finish_pick(this, Err(VideoError::NotFound))));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        finish_pick(this, Err(VideoError::NotFound))
+    }));
 }
 
 unsafe extern "C-unwind" fn picker_failed(this: *mut AnyObject, _: Sel, error: *mut AnyObject) {
     let this: &AnyObject = &*this;
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| finish_pick(this, Err(sck_error(error)))));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        finish_pick(this, Err(sck_error(error)))
+    }));
 }
 
 fn observer_class() -> &'static AnyClass {
     static CLS: OnceLock<&'static AnyClass> = OnceLock::new();
     CLS.get_or_init(|| {
-        let mut b = ClassBuilder::new(c"KesselVideoPickerObserver", class!(NSObject)).expect("the observer class name is free");
+        let mut b = ClassBuilder::new(c"KesselVideoPickerObserver", class!(NSObject))
+            .expect("the observer class name is free");
         b.add_ivar::<*mut c_void>(PICK_IVAR);
         if let Some(p) = objc2::runtime::AnyProtocol::get(c"SCContentSharingPickerObserver") {
             b.add_protocol(p);
@@ -282,11 +323,24 @@ fn observer_class() -> &'static AnyClass {
         unsafe {
             b.add_method(
                 sel!(contentSharingPicker:didUpdateWithFilter:forStream:),
-                picker_updated as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut AnyObject),
+                picker_updated
+                    as unsafe extern "C-unwind" fn(
+                        *mut AnyObject,
+                        Sel,
+                        *mut AnyObject,
+                        *mut AnyObject,
+                        *mut AnyObject,
+                    ),
             );
             b.add_method(
                 sel!(contentSharingPicker:didCancelForStream:),
-                picker_cancelled as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject),
+                picker_cancelled
+                    as unsafe extern "C-unwind" fn(
+                        *mut AnyObject,
+                        Sel,
+                        *mut AnyObject,
+                        *mut AnyObject,
+                    ),
             );
             b.add_method(
                 sel!(contentSharingPickerStartDidFailWithError:),
@@ -329,14 +383,19 @@ fn present(opts: PickOptions, done: Done<Result<ScreenSelection, VideoError>>) {
                 return done(Err(VideoError::os(0, "the screen picker didn't start")));
             };
             // SCContentSharingPickerMode: single window 1, single display 16.
-            let (d, w) = (opts.displays || !opts.windows, opts.windows || !opts.displays);
+            let (d, w) = (
+                opts.displays || !opts.windows,
+                opts.windows || !opts.displays,
+            );
             let modes: usize = if d { 16 } else { 0 } | if w { 1 } else { 0 };
             let _: () = msg_send![&*cfg, setAllowedPickerModes: modes];
             let obs: Option<Retained<AnyObject>> = msg_send![observer_class(), new];
             let Some(obs) = obs else {
                 return done(Err(VideoError::os(0, "picker observer new")));
             };
-            let ctx = Box::into_raw(Box::new(PickCtx { done: Mutex::new(Some(done)) }));
+            let ctx = Box::into_raw(Box::new(PickCtx {
+                done: Mutex::new(Some(done)),
+            }));
             if let Some(ivar) = obs.class().instance_variable(PICK_IVAR) {
                 *ivar.load_ptr::<*mut c_void>(&obs) = ctx as *mut c_void;
             }
@@ -366,18 +425,28 @@ unsafe fn frame_complete(sb: ffi::CMSampleBufferRef) -> bool {
         return true;
     }
     let d = ffi::CFArrayGetValueAtIndex(atts, 0);
-    let Some(key) = cf_const(c"SCStreamFrameInfoStatus") else { return true };
+    let Some(key) = cf_const(c"SCStreamFrameInfoStatus") else {
+        return true;
+    };
     let v = ffi::CFDictionaryGetValue(d, key);
     ffi::number_i64(v).map_or(true, |s| s == 0)
 }
 
-unsafe extern "C-unwind" fn did_output(this: *mut AnyObject, _: Sel, _stream: *mut AnyObject, sb: SampleBufferArg, kind: isize) {
+unsafe extern "C-unwind" fn did_output(
+    this: *mut AnyObject,
+    _: Sel,
+    _stream: *mut AnyObject,
+    sb: SampleBufferArg,
+    kind: isize,
+) {
     let this: &AnyObject = &*this;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if kind != 0 {
             return;
         }
-        let Some(ivar) = this.class().instance_variable(IVAR) else { return };
+        let Some(ivar) = this.class().instance_variable(IVAR) else {
+            return;
+        };
         let p = *ivar.load_ptr::<*mut c_void>(this);
         if p.is_null() {
             return;
@@ -402,10 +471,17 @@ unsafe extern "C-unwind" fn did_output(this: *mut AnyObject, _: Sel, _stream: *m
     }));
 }
 
-unsafe extern "C-unwind" fn did_stop(this: *mut AnyObject, _: Sel, _stream: *mut AnyObject, error: *mut AnyObject) {
+unsafe extern "C-unwind" fn did_stop(
+    this: *mut AnyObject,
+    _: Sel,
+    _stream: *mut AnyObject,
+    error: *mut AnyObject,
+) {
     let this: &AnyObject = &*this;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let Some(ivar) = this.class().instance_variable(IVAR) else { return };
+        let Some(ivar) = this.class().instance_variable(IVAR) else {
+            return;
+        };
         let p = *ivar.load_ptr::<*mut c_void>(this);
         if p.is_null() {
             return;
@@ -428,7 +504,8 @@ unsafe extern "C-unwind" fn did_stop(this: *mut AnyObject, _: Sel, _stream: *mut
 fn stream_class() -> &'static AnyClass {
     static CLS: OnceLock<&'static AnyClass> = OnceLock::new();
     CLS.get_or_init(|| {
-        let mut b = ClassBuilder::new(c"KesselVideoStreamOutput", class!(NSObject)).expect("the output class name is free");
+        let mut b = ClassBuilder::new(c"KesselVideoStreamOutput", class!(NSObject))
+            .expect("the output class name is free");
         b.add_ivar::<*mut c_void>(IVAR);
         for name in [c"SCStreamOutput", c"SCStreamDelegate"] {
             if let Some(p) = objc2::runtime::AnyProtocol::get(name) {
@@ -440,11 +517,24 @@ fn stream_class() -> &'static AnyClass {
         unsafe {
             b.add_method(
                 sel!(stream:didOutputSampleBuffer:ofType:),
-                did_output as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, SampleBufferArg, isize),
+                did_output
+                    as unsafe extern "C-unwind" fn(
+                        *mut AnyObject,
+                        Sel,
+                        *mut AnyObject,
+                        SampleBufferArg,
+                        isize,
+                    ),
             );
             b.add_method(
                 sel!(stream:didStopWithError:),
-                did_stop as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject),
+                did_stop
+                    as unsafe extern "C-unwind" fn(
+                        *mut AnyObject,
+                        Sel,
+                        *mut AnyObject,
+                        *mut AnyObject,
+                    ),
             );
         }
         b.register()
@@ -465,18 +555,25 @@ unsafe impl Send for StreamControl {}
 impl SourceControl for StreamControl {}
 
 /// Wait for a ScreenCaptureKit completion handler `(NSError *)`.
-fn wait_completion(start: impl FnOnce(&block2::Block<dyn Fn(*mut AnyObject)>)) -> Result<(), VideoError> {
+fn wait_completion(
+    start: impl FnOnce(&block2::Block<dyn Fn(*mut AnyObject)>),
+) -> Result<(), VideoError> {
     let (tx, rx) = sync_channel::<Result<(), VideoError>>(1);
     let tx = Mutex::new(Some(tx));
     let block = RcBlock::new(move |error: *mut AnyObject| {
         // SAFETY: nil or an NSError.
-        let r = if error.is_null() { Ok(()) } else { Err(unsafe { sck_error(error) }) };
+        let r = if error.is_null() {
+            Ok(())
+        } else {
+            Err(unsafe { sck_error(error) })
+        };
         if let Some(tx) = tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = tx.send(r);
         }
     });
     start(&block);
-    rx.recv_timeout(Duration::from_secs(5)).map_err(|_| VideoError::os(0, "ScreenCaptureKit didn't answer in 5 s"))?
+    rx.recv_timeout(Duration::from_secs(5))
+        .map_err(|_| VideoError::os(0, "ScreenCaptureKit didn't answer in 5 s"))?
 }
 
 impl Drop for StreamControl {
@@ -503,16 +600,25 @@ impl Drop for StreamControl {
 }
 
 /// The content filter and its size in pixels for a selection.
-unsafe fn filter_for(sel_: &ScreenSelection, c: &CaptureConstraints) -> Result<(Retained<AnyObject>, u32, u32), VideoError> {
-    let filter_cls = AnyClass::get(c"SCContentFilter").ok_or_else(|| unsupported("no SCContentFilter"))?;
+unsafe fn filter_for(
+    sel_: &ScreenSelection,
+    c: &CaptureConstraints,
+) -> Result<(Retained<AnyObject>, u32, u32), VideoError> {
+    let filter_cls =
+        AnyClass::get(c"SCContentFilter").ok_or_else(|| unsupported("no SCContentFilter"))?;
     let (filter, w, h): (Retained<AnyObject>, f64, f64) = match sel_ {
         ScreenSelection::Picked(any) => {
-            let p = any.downcast_ref::<PickedFilter>().ok_or(VideoError::NotFound)?;
+            let p = any
+                .downcast_ref::<PickedFilter>()
+                .ok_or(VideoError::NotFound)?;
             (p.0 .0.clone(), 0.0, 0.0)
         }
         ScreenSelection::Listed(id) => {
             let content = shareable()?;
-            if let Some(n) = id.strip_prefix("display:").and_then(|n| n.parse::<u32>().ok()) {
+            if let Some(n) = id
+                .strip_prefix("display:")
+                .and_then(|n| n.parse::<u32>().ok())
+            {
                 let d = displays(&content)
                     .into_iter()
                     .find(|d| {
@@ -539,8 +645,15 @@ unsafe fn filter_for(sel_: &ScreenSelection, c: &CaptureConstraints) -> Result<(
                 } else {
                     msg_send![alloc, initWithDisplay: d, excludingWindows: empty.0 as *const AnyObject]
                 };
-                (f.ok_or_else(|| VideoError::os(0, "SCContentFilter for a display"))?, dw as f64, dh as f64)
-            } else if let Some(n) = id.strip_prefix("window:").and_then(|n| n.parse::<u32>().ok()) {
+                (
+                    f.ok_or_else(|| VideoError::os(0, "SCContentFilter for a display"))?,
+                    dw as f64,
+                    dh as f64,
+                )
+            } else if let Some(n) = id
+                .strip_prefix("window:")
+                .and_then(|n| n.parse::<u32>().ok())
+            {
                 let w = windows(&content)
                     .into_iter()
                     .find(|w| {
@@ -550,8 +663,13 @@ unsafe fn filter_for(sel_: &ScreenSelection, c: &CaptureConstraints) -> Result<(
                     .ok_or(VideoError::NotFound)?;
                 let frame: CGRect = msg_send![w, frame];
                 let alloc: Allocated<AnyObject> = msg_send![filter_cls, alloc];
-                let f: Option<Retained<AnyObject>> = msg_send![alloc, initWithDesktopIndependentWindow: w];
-                (f.ok_or_else(|| VideoError::os(0, "SCContentFilter for a window"))?, frame.w, frame.h)
+                let f: Option<Retained<AnyObject>> =
+                    msg_send![alloc, initWithDesktopIndependentWindow: w];
+                (
+                    f.ok_or_else(|| VideoError::os(0, "SCContentFilter for a window"))?,
+                    frame.w,
+                    frame.h,
+                )
             } else {
                 return Err(VideoError::NotFound);
             }
@@ -564,13 +682,20 @@ unsafe fn filter_for(sel_: &ScreenSelection, c: &CaptureConstraints) -> Result<(
         let s: f32 = msg_send![&*filter, pointPixelScale];
         (pw, ph, scale) = (r.w, r.h, s as f64);
     }
-    let (pw, ph) = ((pw * scale).round().max(16.0) as u32, (ph * scale).round().max(16.0) as u32);
+    let (pw, ph) = (
+        (pw * scale).round().max(16.0) as u32,
+        (ph * scale).round().max(16.0) as u32,
+    );
     let (bw, bh) = (c.max_width.unwrap_or(1920), c.max_height.unwrap_or(1080));
     let (fw, fh) = fit_within(pw, ph, bw, bh);
     Ok((filter, (fw & !1).max(16), (fh & !1).max(16)))
 }
 
-pub(crate) fn open(sel_: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+pub(crate) fn open(
+    sel_: &ScreenSelection,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
     c.validate()?;
     if !loaded() {
         return Err(unsupported("ScreenCaptureKit needs macOS 12.3"));
@@ -581,10 +706,15 @@ pub(crate) fn open(sel_: &ScreenSelection, c: CaptureConstraints, wake: Wake) ->
     autoreleasepool(|_| unsafe { open_in_pool(sel_, c, wake) })
 }
 
-unsafe fn open_in_pool(sel_: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+unsafe fn open_in_pool(
+    sel_: &ScreenSelection,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
     let (filter, width, height) = filter_for(sel_, &c)?;
     let fps = c.fps.unwrap_or(30);
-    let cfg_cls = AnyClass::get(c"SCStreamConfiguration").ok_or_else(|| unsupported("no SCStreamConfiguration"))?;
+    let cfg_cls = AnyClass::get(c"SCStreamConfiguration")
+        .ok_or_else(|| unsupported("no SCStreamConfiguration"))?;
     let cfg: Option<Retained<AnyObject>> = msg_send![cfg_cls, new];
     let cfg = cfg.ok_or_else(|| VideoError::os(0, "SCStreamConfiguration new"))?;
     let _: () = msg_send![&*cfg, setWidth: width as usize];
@@ -606,7 +736,8 @@ unsafe fn open_in_pool(sel_: &ScreenSelection, c: CaptureConstraints, wake: Wake
     }
     let stream_cls = AnyClass::get(c"SCStream").ok_or_else(|| unsupported("no SCStream"))?;
     let alloc: Allocated<AnyObject> = msg_send![stream_cls, alloc];
-    let stream: Option<Retained<AnyObject>> = msg_send![alloc, initWithFilter: &*filter, configuration: &*cfg, delegate: &*handler];
+    let stream: Option<Retained<AnyObject>> =
+        msg_send![alloc, initWithFilter: &*filter, configuration: &*cfg, delegate: &*handler];
     let Some(stream) = stream else {
         drop(Box::from_raw(ctx));
         return Err(VideoError::os(0, "SCStream init"));
@@ -622,7 +753,12 @@ unsafe fn open_in_pool(sel_: &ScreenSelection, c: CaptureConstraints, wake: Wake
     let started = wait_completion(|block| {
         let _: () = msg_send![&*stream, startCaptureWithCompletionHandler: block];
     });
-    let control = StreamControl { stream, handler, queue, ctx };
+    let control = StreamControl {
+        stream,
+        handler,
+        queue,
+        ctx,
+    };
     started?;
     Ok(Box::new(QueuedSource::new(shared, control)))
 }

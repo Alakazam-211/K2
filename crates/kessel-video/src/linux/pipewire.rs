@@ -73,12 +73,42 @@ fn prop(key: u32, value: Vec<u8>) -> Vec<u8> {
 /// 8192, any rate up to `max_fps`.
 pub(crate) fn enum_format(max_fps: u32, want: (u32, u32)) -> Vec<u8> {
     let mut body = words(&[SPA_TYPE_OBJECT_FORMAT, SPA_PARAM_ENUM_FORMAT]);
-    body.extend(prop(SPA_FORMAT_MEDIA_TYPE, pod(SPA_TYPE_ID, &words(&[SPA_MEDIA_TYPE_VIDEO]))));
-    body.extend(prop(SPA_FORMAT_MEDIA_SUBTYPE, pod(SPA_TYPE_ID, &words(&[SPA_MEDIA_SUBTYPE_RAW]))));
+    body.extend(prop(
+        SPA_FORMAT_MEDIA_TYPE,
+        pod(SPA_TYPE_ID, &words(&[SPA_MEDIA_TYPE_VIDEO])),
+    ));
+    body.extend(prop(
+        SPA_FORMAT_MEDIA_SUBTYPE,
+        pod(SPA_TYPE_ID, &words(&[SPA_MEDIA_SUBTYPE_RAW])),
+    ));
     // Enum choice: the default first, then the alternatives.
-    body.extend(prop(SPA_FORMAT_VIDEO_FORMAT, choice(SPA_CHOICE_ENUM, SPA_TYPE_ID, 4, &[VIDEO_BGRX, VIDEO_BGRX, VIDEO_BGRA, VIDEO_RGBX, VIDEO_RGBA])));
-    body.extend(prop(SPA_FORMAT_VIDEO_SIZE, choice(SPA_CHOICE_RANGE, SPA_TYPE_RECTANGLE, 8, &[want.0.max(1), want.1.max(1), 1, 1, 8192, 8192])));
-    body.extend(prop(SPA_FORMAT_VIDEO_FRAMERATE, choice(SPA_CHOICE_RANGE, SPA_TYPE_FRACTION, 8, &[max_fps.max(1), 1, 0, 1, max_fps.max(1), 1])));
+    body.extend(prop(
+        SPA_FORMAT_VIDEO_FORMAT,
+        choice(
+            SPA_CHOICE_ENUM,
+            SPA_TYPE_ID,
+            4,
+            &[VIDEO_BGRX, VIDEO_BGRX, VIDEO_BGRA, VIDEO_RGBX, VIDEO_RGBA],
+        ),
+    ));
+    body.extend(prop(
+        SPA_FORMAT_VIDEO_SIZE,
+        choice(
+            SPA_CHOICE_RANGE,
+            SPA_TYPE_RECTANGLE,
+            8,
+            &[want.0.max(1), want.1.max(1), 1, 1, 8192, 8192],
+        ),
+    ));
+    body.extend(prop(
+        SPA_FORMAT_VIDEO_FRAMERATE,
+        choice(
+            SPA_CHOICE_RANGE,
+            SPA_TYPE_FRACTION,
+            8,
+            &[max_fps.max(1), 1, 0, 1, max_fps.max(1), 1],
+        ),
+    ));
     pod(SPA_TYPE_OBJECT, &body)
 }
 
@@ -91,7 +121,8 @@ pub(crate) struct RawFormat {
 }
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    b.get(at..at + 4).map(|s| u32::from_ne_bytes([s[0], s[1], s[2], s[3]]))
+    b.get(at..at + 4)
+        .map(|s| u32::from_ne_bytes([s[0], s[1], s[2], s[3]]))
 }
 
 /// A property value's payload: the value itself, or a choice's first value.
@@ -141,7 +172,12 @@ pub(crate) fn parse_format(p: &[u8]) -> Option<RawFormat> {
 
 /// One mapped buffer's pixels as a frame (BGRx/BGRA as Bgra, RGBx/RGBA as
 /// Rgba; the x byte is ignored downstream).
-pub(crate) fn to_frame(data: &[u8], stride: usize, f: &RawFormat, capture_us: u64) -> Result<VideoFrame, VideoError> {
+pub(crate) fn to_frame(
+    data: &[u8],
+    stride: usize,
+    f: &RawFormat,
+    capture_us: u64,
+) -> Result<VideoFrame, VideoError> {
     let format = match f.format {
         VIDEO_BGRX | VIDEO_BGRA => PixelFormat::Bgra,
         VIDEO_RGBX | VIDEO_RGBA => PixelFormat::Rgba,
@@ -149,7 +185,14 @@ pub(crate) fn to_frame(data: &[u8], stride: usize, f: &RawFormat, capture_us: u6
     };
     let row = f.width as usize * 4;
     let stride = if stride == 0 { row } else { stride };
-    let planes = Planes::new(format, f.width, f.height, data.to_vec(), [stride as u32, 0, 0], [0, 0, 0])?;
+    let planes = Planes::new(
+        format,
+        f.width,
+        f.height,
+        data.to_vec(),
+        [stride as u32, 0, 0],
+        [0, 0, 0],
+    )?;
     VideoFrame::from_planes(planes, f.width, f.height, capture_us)
 }
 
@@ -230,8 +273,10 @@ struct Lib {
     core_disconnect: unsafe extern "C" fn(*mut c_void) -> c_int,
     properties_new_string: unsafe extern "C" fn(*const c_char) -> *mut c_void,
     stream_new: unsafe extern "C" fn(*mut c_void, *const c_char, *mut c_void) -> *mut c_void,
-    stream_add_listener: unsafe extern "C" fn(*mut c_void, *mut SpaHook, *const StreamEvents, *mut c_void),
-    stream_connect: unsafe extern "C" fn(*mut c_void, u32, u32, u32, *mut *const c_void, u32) -> c_int,
+    stream_add_listener:
+        unsafe extern "C" fn(*mut c_void, *mut SpaHook, *const StreamEvents, *mut c_void),
+    stream_connect:
+        unsafe extern "C" fn(*mut c_void, u32, u32, u32, *mut *const c_void, u32) -> c_int,
     stream_disconnect: unsafe extern "C" fn(*mut c_void) -> c_int,
     stream_destroy: unsafe extern "C" fn(*mut c_void),
     stream_dequeue_buffer: unsafe extern "C" fn(*mut c_void) -> *mut PwBuffer,
@@ -248,7 +293,12 @@ fn load() -> Result<&'static Lib, VideoError> {
     LIB.get_or_init(|| {
         // SAFETY: dlopen of the system's libpipewire by soname; the handle is
         // never closed, so the symbols stay valid.
-        let h = unsafe { libc::dlopen(c"libpipewire-0.3.so.0".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        let h = unsafe {
+            libc::dlopen(
+                c"libpipewire-0.3.so.0".as_ptr(),
+                libc::RTLD_NOW | libc::RTLD_LOCAL,
+            )
+        };
         if h.is_null() {
             return Err("libpipewire-0.3.so.0 isn't installed".into());
         }
@@ -267,24 +317,48 @@ fn load() -> Result<&'static Lib, VideoError> {
             Ok(Lib {
                 init: std::mem::transmute::<*mut c_void, _>(sym(c"pw_init")?),
                 thread_loop_new: std::mem::transmute::<*mut c_void, _>(sym(c"pw_thread_loop_new")?),
-                thread_loop_get_loop: std::mem::transmute::<*mut c_void, _>(sym(c"pw_thread_loop_get_loop")?),
-                thread_loop_start: std::mem::transmute::<*mut c_void, _>(sym(c"pw_thread_loop_start")?),
-                thread_loop_stop: std::mem::transmute::<*mut c_void, _>(sym(c"pw_thread_loop_stop")?),
-                thread_loop_destroy: std::mem::transmute::<*mut c_void, _>(sym(c"pw_thread_loop_destroy")?),
-                thread_loop_lock: std::mem::transmute::<*mut c_void, _>(sym(c"pw_thread_loop_lock")?),
-                thread_loop_unlock: std::mem::transmute::<*mut c_void, _>(sym(c"pw_thread_loop_unlock")?),
+                thread_loop_get_loop: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_thread_loop_get_loop",
+                )?),
+                thread_loop_start: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_thread_loop_start",
+                )?),
+                thread_loop_stop: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_thread_loop_stop",
+                )?),
+                thread_loop_destroy: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_thread_loop_destroy",
+                )?),
+                thread_loop_lock: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_thread_loop_lock",
+                )?),
+                thread_loop_unlock: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_thread_loop_unlock",
+                )?),
                 context_new: std::mem::transmute::<*mut c_void, _>(sym(c"pw_context_new")?),
                 context_destroy: std::mem::transmute::<*mut c_void, _>(sym(c"pw_context_destroy")?),
-                context_connect_fd: std::mem::transmute::<*mut c_void, _>(sym(c"pw_context_connect_fd")?),
+                context_connect_fd: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_context_connect_fd",
+                )?),
                 core_disconnect: std::mem::transmute::<*mut c_void, _>(sym(c"pw_core_disconnect")?),
-                properties_new_string: std::mem::transmute::<*mut c_void, _>(sym(c"pw_properties_new_string")?),
+                properties_new_string: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_properties_new_string",
+                )?),
                 stream_new: std::mem::transmute::<*mut c_void, _>(sym(c"pw_stream_new")?),
-                stream_add_listener: std::mem::transmute::<*mut c_void, _>(sym(c"pw_stream_add_listener")?),
+                stream_add_listener: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_stream_add_listener",
+                )?),
                 stream_connect: std::mem::transmute::<*mut c_void, _>(sym(c"pw_stream_connect")?),
-                stream_disconnect: std::mem::transmute::<*mut c_void, _>(sym(c"pw_stream_disconnect")?),
+                stream_disconnect: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_stream_disconnect",
+                )?),
                 stream_destroy: std::mem::transmute::<*mut c_void, _>(sym(c"pw_stream_destroy")?),
-                stream_dequeue_buffer: std::mem::transmute::<*mut c_void, _>(sym(c"pw_stream_dequeue_buffer")?),
-                stream_queue_buffer: std::mem::transmute::<*mut c_void, _>(sym(c"pw_stream_queue_buffer")?),
+                stream_dequeue_buffer: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_stream_dequeue_buffer",
+                )?),
+                stream_queue_buffer: std::mem::transmute::<*mut c_void, _>(sym(
+                    c"pw_stream_queue_buffer",
+                )?),
             })
         }
     })
@@ -331,11 +405,17 @@ extern "C" fn on_param(data: *mut c_void, id: u32, param: *const c_void) {
         // body size, valid for the call.
         let (ctx, bytes) = unsafe {
             let size = *(param as *const u32) as usize;
-            (&*(data as *const Ctx), std::slice::from_raw_parts(param as *const u8, 8 + size))
+            (
+                &*(data as *const Ctx),
+                std::slice::from_raw_parts(param as *const u8, 8 + size),
+            )
         };
         let f = parse_format(bytes);
         if f.is_none() {
-            ctx.shared.event(SourceEvent::Error(VideoError::os(0, "an unreadable PipeWire format")));
+            ctx.shared.event(SourceEvent::Error(VideoError::os(
+                0,
+                "an unreadable PipeWire format",
+            )));
         }
         *ctx.format.lock().unwrap_or_else(|e| e.into_inner()) = f;
     }));
@@ -362,7 +442,8 @@ extern "C" fn on_process(data: *mut c_void) {
                         let start = (c.offset as usize).min(d.maxsize as usize);
                         let len = (c.size as usize).min(d.maxsize as usize - start);
                         if len > 0 {
-                            let bytes = std::slice::from_raw_parts((d.data as *const u8).add(start), len);
+                            let bytes =
+                                std::slice::from_raw_parts((d.data as *const u8).add(start), len);
                             match to_frame(bytes, c.stride.max(0) as usize, &f, now_us()) {
                                 Ok(frame) => ctx.shared.deliver(frame),
                                 Err(e) => ctx.shared.event(SourceEvent::Error(e)),
@@ -408,7 +489,14 @@ unsafe impl Send for Capture {}
 
 impl Capture {
     /// Connect to the portal's PipeWire remote and stream `node_id`.
-    pub(crate) fn start(remote: OwnedFd, node_id: u32, max_fps: u32, want: (u32, u32), window: bool, shared: Arc<SourceShared>) -> Result<Capture, VideoError> {
+    pub(crate) fn start(
+        remote: OwnedFd,
+        node_id: u32,
+        max_fps: u32,
+        want: (u32, u32),
+        window: bool,
+        shared: Arc<SourceShared>,
+    ) -> Result<Capture, VideoError> {
         let lib = load()?;
         let params = enum_format(max_fps, want);
         // SAFETY: the documented libpipewire set-up order: init, a thread
@@ -420,7 +508,8 @@ impl Capture {
             if tl.is_null() {
                 return Err(VideoError::os(0, "pw_thread_loop_new"));
             }
-            let context = (lib.context_new)((lib.thread_loop_get_loop)(tl), std::ptr::null_mut(), 0);
+            let context =
+                (lib.context_new)((lib.thread_loop_get_loop)(tl), std::ptr::null_mut(), 0);
             if context.is_null() {
                 (lib.thread_loop_destroy)(tl);
                 return Err(VideoError::os(0, "pw_context_new"));
@@ -442,16 +531,21 @@ impl Capture {
                     format: Mutex::new(None),
                     window,
                 }),
-                hook: Box::new(SpaHook { _p: [std::ptr::null_mut(); 6] }),
+                hook: Box::new(SpaHook {
+                    _p: [std::ptr::null_mut(); 6],
+                }),
             };
             (lib.thread_loop_lock)(tl);
             // pw_context_connect_fd takes the descriptor.
-            cap.core = (lib.context_connect_fd)(context, remote.into_raw_fd(), std::ptr::null_mut(), 0);
+            cap.core =
+                (lib.context_connect_fd)(context, remote.into_raw_fd(), std::ptr::null_mut(), 0);
             if cap.core.is_null() {
                 (lib.thread_loop_unlock)(tl);
                 return Err(VideoError::os(0, "pw_context_connect_fd"));
             }
-            let props = (lib.properties_new_string)(c"media.type=Video media.category=Capture media.role=Screen".as_ptr());
+            let props = (lib.properties_new_string)(
+                c"media.type=Video media.category=Capture media.role=Screen".as_ptr(),
+            );
             let stream = (lib.stream_new)(cap.core, c"kessel-video".as_ptr(), props);
             if stream.is_null() {
                 (lib.thread_loop_unlock)(tl);
@@ -461,7 +555,14 @@ impl Capture {
             let data = &*cap.ctx as *const Ctx as *mut c_void;
             (lib.stream_add_listener)(stream, &mut *cap.hook, &EVENTS, data);
             let mut list = [params.as_ptr() as *const c_void];
-            let r = (lib.stream_connect)(stream, SPA_DIRECTION_INPUT, node_id, PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS, list.as_mut_ptr(), 1);
+            let r = (lib.stream_connect)(
+                stream,
+                SPA_DIRECTION_INPUT,
+                node_id,
+                PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS,
+                list.as_mut_ptr(),
+                1,
+            );
             (lib.thread_loop_unlock)(tl);
             if r < 0 {
                 return Err(VideoError::os(r as i64, "pw_stream_connect"));
@@ -512,27 +613,67 @@ mod tests {
     fn the_enum_format_pod_is_well_formed_and_reads_back() {
         let p = enum_format(30, (1920, 1080));
         assert_eq!(p.len() % 8, 0, "PODs are 8-byte padded");
-        assert_eq!(u32_at(&p, 0), Some((p.len() - 8) as u32), "the size is the body's");
+        assert_eq!(
+            u32_at(&p, 0),
+            Some((p.len() - 8) as u32),
+            "the size is the body's"
+        );
         assert_eq!(u32_at(&p, 4), Some(SPA_TYPE_OBJECT));
         assert_eq!(u32_at(&p, 8), Some(SPA_TYPE_OBJECT_FORMAT));
         assert_eq!(u32_at(&p, 12), Some(SPA_PARAM_ENUM_FORMAT));
         // The first property: mediaType = Id video, padded to 8.
-        assert_eq!(&p[16..40], &words(&[SPA_FORMAT_MEDIA_TYPE, 0, 4, SPA_TYPE_ID, SPA_MEDIA_TYPE_VIDEO, 0])[..]);
+        assert_eq!(
+            &p[16..40],
+            &words(&[
+                SPA_FORMAT_MEDIA_TYPE,
+                0,
+                4,
+                SPA_TYPE_ID,
+                SPA_MEDIA_TYPE_VIDEO,
+                0
+            ])[..]
+        );
         // Reading it back takes each choice's default.
         let f = parse_format(&p).expect("readable");
-        assert_eq!(f, RawFormat { format: VIDEO_BGRX, width: 1920, height: 1080 });
+        assert_eq!(
+            f,
+            RawFormat {
+                format: VIDEO_BGRX,
+                width: 1920,
+                height: 1080
+            }
+        );
     }
 
     #[test]
     fn a_fixed_format_parses() {
         let mut body = words(&[SPA_TYPE_OBJECT_FORMAT, SPA_PARAM_FORMAT]);
-        body.extend(prop(SPA_FORMAT_MEDIA_TYPE, pod(SPA_TYPE_ID, &words(&[SPA_MEDIA_TYPE_VIDEO]))));
-        body.extend(prop(SPA_FORMAT_VIDEO_FORMAT, pod(SPA_TYPE_ID, &words(&[VIDEO_RGBA]))));
-        body.extend(prop(SPA_FORMAT_VIDEO_SIZE, pod(SPA_TYPE_RECTANGLE, &words(&[1280, 800]))));
+        body.extend(prop(
+            SPA_FORMAT_MEDIA_TYPE,
+            pod(SPA_TYPE_ID, &words(&[SPA_MEDIA_TYPE_VIDEO])),
+        ));
+        body.extend(prop(
+            SPA_FORMAT_VIDEO_FORMAT,
+            pod(SPA_TYPE_ID, &words(&[VIDEO_RGBA])),
+        ));
+        body.extend(prop(
+            SPA_FORMAT_VIDEO_SIZE,
+            pod(SPA_TYPE_RECTANGLE, &words(&[1280, 800])),
+        ));
         let p = pod(SPA_TYPE_OBJECT, &body);
-        assert_eq!(parse_format(&p), Some(RawFormat { format: VIDEO_RGBA, width: 1280, height: 800 }));
+        assert_eq!(
+            parse_format(&p),
+            Some(RawFormat {
+                format: VIDEO_RGBA,
+                width: 1280,
+                height: 800
+            })
+        );
         assert_eq!(parse_format(&p[..12]), None, "a truncated POD fails");
-        let no_size = pod(SPA_TYPE_OBJECT, &words(&[SPA_TYPE_OBJECT_FORMAT, SPA_PARAM_FORMAT]));
+        let no_size = pod(
+            SPA_TYPE_OBJECT,
+            &words(&[SPA_TYPE_OBJECT_FORMAT, SPA_PARAM_FORMAT]),
+        );
         assert_eq!(parse_format(&no_size), None);
     }
 
@@ -542,11 +683,50 @@ mod tests {
         let mut data = vec![0u8; 24];
         data[..8].copy_from_slice(&[255, 0, 0, 0, 0, 255, 0, 0]);
         data[12..20].copy_from_slice(&[0, 0, 255, 0, 255, 255, 255, 0]);
-        let f = to_frame(&data, 12, &RawFormat { format: VIDEO_BGRX, width: 2, height: 2 }, 9).expect("frame");
-        assert_eq!((f.format(), f.width, f.height, f.capture_us), (PixelFormat::Bgra, 2, 2, 9));
+        let f = to_frame(
+            &data,
+            12,
+            &RawFormat {
+                format: VIDEO_BGRX,
+                width: 2,
+                height: 2,
+            },
+            9,
+        )
+        .expect("frame");
+        assert_eq!(
+            (f.format(), f.width, f.height, f.capture_us),
+            (PixelFormat::Bgra, 2, 2, 9)
+        );
         assert_eq!(f.planes().expect("planes").strides[0], 12);
-        assert!(to_frame(&data[..10], 12, &RawFormat { format: VIDEO_BGRX, width: 2, height: 2 }, 0).is_err(), "short buffers fail");
-        assert!(to_frame(&data, 12, &RawFormat { format: 23, width: 2, height: 2 }, 0).is_err(), "NV12 isn't offered");
+        assert!(
+            to_frame(
+                &data[..10],
+                12,
+                &RawFormat {
+                    format: VIDEO_BGRX,
+                    width: 2,
+                    height: 2
+                },
+                0
+            )
+            .is_err(),
+            "short buffers fail"
+        );
+        assert!(
+            to_frame(
+                &data,
+                12,
+                &RawFormat {
+                    format: 23,
+                    width: 2,
+                    height: 2
+                },
+                0
+            )
+            .is_err(),
+            "NV12 isn't offered"
+        );
     }
 
     #[test]

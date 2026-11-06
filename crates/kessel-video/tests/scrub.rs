@@ -64,7 +64,10 @@ fn has_pattern(line: &str, pattern: &str) -> bool {
 
 /// The README's one line saying where the crate is used may name the product.
 fn may_name_product(file_name: &str, line: &str) -> bool {
-    file_name == "README.md" && line.trim_start().starts_with(&format!("Used in {}", product()))
+    file_name == "README.md"
+        && line
+            .trim_start()
+            .starts_with(&format!("Used in {}", product()))
 }
 
 /// What's wrong with one line of one file.
@@ -76,7 +79,9 @@ fn line_hits(file_name: &str, line: &str, banned: &[String]) -> Vec<String> {
         .map(|b| format!("{b:?}"))
         .collect();
     // The product name as a word.
-    let named = line.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == k);
+    let named = line
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == k);
     if named && !may_name_product(file_name, line) {
         hits.push(format!("the word {k:?}"));
     }
@@ -101,7 +106,11 @@ fn no_internal_names() {
             }
         }
     }
-    assert!(hits.is_empty(), "internal names found:\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "internal names found:\n{}",
+        hits.join("\n")
+    );
 }
 
 #[test]
@@ -111,7 +120,10 @@ fn a_pattern_matches_the_whole_word_not_the_tail_of_a_name() {
     assert!(has_pattern(&format!("use {path}thing;"), &path));
     assert!(has_pattern(&format!("{path}thing"), &path));
     assert!(has_pattern(&format!("({path}thing)"), &path));
-    assert!(!has_pattern(&format!("use bloc{path}Thing;"), &path), "the tail of a crate name");
+    assert!(
+        !has_pattern(&format!("use bloc{path}Thing;"), &path),
+        "the tail of a crate name"
+    );
     assert!(!has_pattern(&format!("use a_{path}Thing;"), &path));
     // Either occurrence counts.
     assert!(has_pattern(&format!("bloc{path}a and {path}b"), &path));
@@ -128,12 +140,22 @@ fn only_the_used_in_line_of_the_readme_may_name_the_product() {
     let k = product();
     let banned = banned();
     let used_in = format!("Used in {k}.");
-    assert_eq!(line_hits("README.md", &used_in, &banned), Vec::<String>::new());
-    assert_eq!(line_hits("README.md", &format!("  {used_in}"), &banned), Vec::<String>::new());
+    assert_eq!(
+        line_hits("README.md", &used_in, &banned),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        line_hits("README.md", &format!("  {used_in}"), &banned),
+        Vec::<String>::new()
+    );
 
     let elsewhere = format!("Works well with {k}.");
     assert_eq!(line_hits("README.md", &elsewhere, &banned).len(), 1);
-    assert_eq!(line_hits("lib.rs", &used_in, &banned).len(), 1, "README only");
+    assert_eq!(
+        line_hits("lib.rs", &used_in, &banned).len(),
+        1,
+        "README only"
+    );
 
     // The allowance covers the word, not the other names.
     let host = format!("{used_in} See {}.dev.", k.to_lowercase());

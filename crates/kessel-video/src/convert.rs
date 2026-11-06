@@ -28,12 +28,19 @@ impl Yuv {
 /// `frame` scaled to `width` x `height` and converted to `format` (I420,
 /// NV12, BGRA or RGBA), as tight planes. A native buffer is read back
 /// first. The same size and format: a cheap clone.
-pub fn convert(frame: &VideoFrame, width: u32, height: u32, format: PixelFormat) -> Result<VideoFrame, VideoError> {
+pub fn convert(
+    frame: &VideoFrame,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+) -> Result<VideoFrame, VideoError> {
     if width == 0 || height == 0 || width > 16_384 || height > 16_384 {
         return Err(invalid(format!("convert to {width}x{height}")));
     }
     if format == PixelFormat::Native {
-        return Err(invalid("convert to Native: only a backend makes native buffers"));
+        return Err(invalid(
+            "convert to Native: only a backend makes native buffers",
+        ));
     }
     let src = cpu_planes(frame, format)?;
     let same_size = (width, height) == (frame.width, frame.height);
@@ -43,7 +50,11 @@ pub fn convert(frame: &VideoFrame, width: u32, height: u32, format: PixelFormat)
         return Ok(out);
     }
     let yuv = to_yuv(&src, frame.width, frame.height, frame.color)?;
-    let yuv = if same_size { yuv } else { scale_yuv(&yuv, width as usize, height as usize) };
+    let yuv = if same_size {
+        yuv
+    } else {
+        scale_yuv(&yuv, width as usize, height as usize)
+    };
     let planes = from_yuv(&yuv, format, frame.color);
     let mut out = VideoFrame::from_planes(planes, width, height, frame.capture_us)?;
     out.color = frame.color;
@@ -56,7 +67,11 @@ fn cpu_planes(frame: &VideoFrame, prefer: PixelFormat) -> Result<Planes, VideoEr
     let p = match &frame.buffer {
         FrameBuffer::Planes(p) => p.clone(),
         FrameBuffer::Native(n) => {
-            let want = if prefer == PixelFormat::Native { n.0.format() } else { prefer };
+            let want = if prefer == PixelFormat::Native {
+                n.0.format()
+            } else {
+                prefer
+            };
             n.0.to_planes(want)?
         }
     };
@@ -95,20 +110,37 @@ fn yuv_to_rgb(cs: ColorSpace, y: u8, u: u8, v: u8) -> (u8, u8, u8) {
     match cs {
         ColorSpace::Bt709Limited => {
             let c = 298 * (y as i32 - 16);
-            (clamp((c + 459 * e + 128) >> 8), clamp((c - 55 * d - 136 * e + 128) >> 8), clamp((c + 541 * d + 128) >> 8))
+            (
+                clamp((c + 459 * e + 128) >> 8),
+                clamp((c - 55 * d - 136 * e + 128) >> 8),
+                clamp((c + 541 * d + 128) >> 8),
+            )
         }
         ColorSpace::Bt709Full => {
             let c = 256 * y as i32;
-            (clamp((c + 403 * e + 128) >> 8), clamp((c - 48 * d - 120 * e + 128) >> 8), clamp((c + 475 * d + 128) >> 8))
+            (
+                clamp((c + 403 * e + 128) >> 8),
+                clamp((c - 48 * d - 120 * e + 128) >> 8),
+                clamp((c + 475 * d + 128) >> 8),
+            )
         }
         _ => {
             let c = 298 * (y as i32 - 16);
-            (clamp((c + 409 * e + 128) >> 8), clamp((c - 100 * d - 208 * e + 128) >> 8), clamp((c + 516 * d + 128) >> 8))
+            (
+                clamp((c + 409 * e + 128) >> 8),
+                clamp((c - 100 * d - 208 * e + 128) >> 8),
+                clamp((c + 516 * d + 128) >> 8),
+            )
         }
     }
 }
 
-pub(crate) fn to_yuv(p: &Planes, width: u32, height: u32, cs: ColorSpace) -> Result<Yuv, VideoError> {
+pub(crate) fn to_yuv(
+    p: &Planes,
+    width: u32,
+    height: u32,
+    cs: ColorSpace,
+) -> Result<Yuv, VideoError> {
     p.validate(width, height)?;
     let (w, h) = (width as usize, height as usize);
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
@@ -138,10 +170,18 @@ pub(crate) fn to_yuv(p: &Planes, width: u32, height: u32, cs: ColorSpace) -> Res
             }
         }
         PixelFormat::Bgra | PixelFormat::Rgba => {
-            let (ri, bi) = if p.format == PixelFormat::Bgra { (2, 0) } else { (0, 2) };
+            let (ri, bi) = if p.format == PixelFormat::Bgra {
+                (2, 0)
+            } else {
+                (0, 2)
+            };
             let px = |x: usize, y: usize| {
                 let r = p.row(0, y, width, height);
-                (r[4 * x + ri] as i32, r[4 * x + 1] as i32, r[4 * x + bi] as i32)
+                (
+                    r[4 * x + ri] as i32,
+                    r[4 * x + 1] as i32,
+                    r[4 * x + bi] as i32,
+                )
             };
             for y in 0..h {
                 for x in 0..w {
@@ -280,11 +320,28 @@ pub fn fit_within(width: u32, height: u32, box_w: u32, box_h: u32) -> (u32, u32)
 /// identical frames). For tests and quality checks.
 pub fn psnr_y(a: &VideoFrame, b: &VideoFrame) -> Result<f64, VideoError> {
     if (a.width, a.height) != (b.width, b.height) {
-        return Err(invalid(format!("{}x{} vs {}x{}", a.width, a.height, b.width, b.height)));
+        return Err(invalid(format!(
+            "{}x{} vs {}x{}",
+            a.width, a.height, b.width, b.height
+        )));
     }
-    let ya = to_yuv(&cpu_planes(a, PixelFormat::I420)?, a.width, a.height, a.color)?;
-    let yb = to_yuv(&cpu_planes(b, PixelFormat::I420)?, b.width, b.height, b.color)?;
-    let sse: u64 = ya.y.iter().zip(&yb.y).map(|(p, q)| ((*p as i64 - *q as i64).pow(2)) as u64).sum();
+    let ya = to_yuv(
+        &cpu_planes(a, PixelFormat::I420)?,
+        a.width,
+        a.height,
+        a.color,
+    )?;
+    let yb = to_yuv(
+        &cpu_planes(b, PixelFormat::I420)?,
+        b.width,
+        b.height,
+        b.color,
+    )?;
+    let sse: u64 =
+        ya.y.iter()
+            .zip(&yb.y)
+            .map(|(p, q)| ((*p as i64 - *q as i64).pow(2)) as u64)
+            .sum();
     if sse == 0 {
         return Ok(100.0);
     }
@@ -294,7 +351,12 @@ pub fn psnr_y(a: &VideoFrame, b: &VideoFrame) -> Result<f64, VideoError> {
 
 /// Luma at (`x`, `y`) of a CPU frame (tests and the fake's frame code).
 pub(crate) fn luma_plane(frame: &VideoFrame) -> Result<(Vec<u8>, usize), VideoError> {
-    let yuv = to_yuv(&cpu_planes(frame, PixelFormat::I420)?, frame.width, frame.height, frame.color)?;
+    let yuv = to_yuv(
+        &cpu_planes(frame, PixelFormat::I420)?,
+        frame.width,
+        frame.height,
+        frame.color,
+    )?;
     Ok((yuv.y, yuv.w))
 }
 
@@ -320,7 +382,13 @@ mod tests {
                 buf.push((140 + y / 2 + x % 3) as u8);
             }
         }
-        VideoFrame::from_planes(Planes::tight(PixelFormat::I420, w, h, buf).expect("planes"), w, h, 5).expect("frame")
+        VideoFrame::from_planes(
+            Planes::tight(PixelFormat::I420, w, h, buf).expect("planes"),
+            w,
+            h,
+            5,
+        )
+        .expect("frame")
     }
 
     #[test]
@@ -348,7 +416,12 @@ mod tests {
         let white = VideoFrame::filled(PixelFormat::Bgra, 4, 4, [235, 128, 128], 0).expect("white");
         assert!(white.planes().expect("p").data.iter().all(|&b| b == 255));
         let black = VideoFrame::filled(PixelFormat::Rgba, 4, 4, [16, 128, 128], 0).expect("black");
-        assert!(black.planes().expect("p").data.chunks(4).all(|px| px == [0, 0, 0, 255]));
+        assert!(black
+            .planes()
+            .expect("p")
+            .data
+            .chunks(4)
+            .all(|px| px == [0, 0, 0, 255]));
     }
 
     #[test]
@@ -367,7 +440,10 @@ mod tests {
         let half = convert(&g, 32, 32, PixelFormat::I420).expect("half");
         let up = convert(&half, 64, 64, PixelFormat::I420).expect("up");
         let p = psnr_y(&g, &up).expect("psnr");
-        assert!(p > 25.0, "a smooth gradient survives half and back: {p:.1} dB");
+        assert!(
+            p > 25.0,
+            "a smooth gradient survives half and back: {p:.1} dB"
+        );
         assert!(convert(&g, 0, 4, PixelFormat::I420).is_err());
         assert!(convert(&g, 4, 4, PixelFormat::Native).is_err());
     }
@@ -376,7 +452,11 @@ mod tests {
     fn fit_keeps_the_aspect_and_even_sizes() {
         assert_eq!(fit_within(1280, 720, 640, 640), (640, 360));
         assert_eq!(fit_within(1280, 720, 320, 100), (178, 100));
-        assert_eq!(fit_within(320, 240, 640, 480), (320, 240), "never scales up");
+        assert_eq!(
+            fit_within(320, 240, 640, 480),
+            (320, 240),
+            "never scales up"
+        );
     }
 
     #[test]

@@ -13,25 +13,64 @@ pub(crate) const ENCODER_NAME: &str = "vp8-encoder 0.1 (Rust)";
 
 /// The VP8 entries every backend lists.
 pub(crate) fn capabilities() -> Vec<CodecCapability> {
-    let mut e = CodecCapability::new(VideoCodec::Vp8, CodecDirection::Encode, Implementation::Software, ENCODER_NAME, 1920, 1080, 30);
+    let mut e = CodecCapability::new(
+        VideoCodec::Vp8,
+        CodecDirection::Encode,
+        Implementation::Software,
+        ENCODER_NAME,
+        1920,
+        1080,
+        30,
+    );
     e.max_temporal_layers = 3;
-    e.formats = vec![PixelFormat::I420, PixelFormat::Nv12, PixelFormat::Bgra, PixelFormat::Rgba, PixelFormat::Native];
-    let mut d = CodecCapability::new(VideoCodec::Vp8, CodecDirection::Decode, Implementation::Software, DECODER_NAME, 1920, 1080, 30);
-    d.formats = vec![PixelFormat::I420, PixelFormat::Nv12, PixelFormat::Bgra, PixelFormat::Rgba];
+    e.formats = vec![
+        PixelFormat::I420,
+        PixelFormat::Nv12,
+        PixelFormat::Bgra,
+        PixelFormat::Rgba,
+        PixelFormat::Native,
+    ];
+    let mut d = CodecCapability::new(
+        VideoCodec::Vp8,
+        CodecDirection::Decode,
+        Implementation::Software,
+        DECODER_NAME,
+        1920,
+        1080,
+        30,
+    );
+    d.formats = vec![
+        PixelFormat::I420,
+        PixelFormat::Nv12,
+        PixelFormat::Bgra,
+        PixelFormat::Rgba,
+    ];
     vec![e, d]
 }
 
 /// A VP8 encoder, if `config` asks for one this crate can make.
-pub(crate) fn encoder(config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+pub(crate) fn encoder(
+    config: EncoderConfig,
+    wake: Wake,
+) -> Result<Box<dyn VideoEncoder>, VideoError> {
     config.validate()?;
     if config.codec != CodecConfig::Vp8 {
-        return Err(VideoError::Unsupported(format!("vp8::encoder for {:?}", config.codec.codec())));
+        return Err(VideoError::Unsupported(format!(
+            "vp8::encoder for {:?}",
+            config.codec.codec()
+        )));
     }
     if config.implementation == ImplPreference::HardwareOnly {
-        return Err(VideoError::Unsupported("no hardware VP8 encoder here".into()));
+        return Err(VideoError::Unsupported(
+            "no hardware VP8 encoder here".into(),
+        ));
     }
     let core = Vp8Encoder::open(&config)?;
-    Ok(Box::new(ThreadedEncoder::start(Box::new(core), config, wake)?))
+    Ok(Box::new(ThreadedEncoder::start(
+        Box::new(core),
+        config,
+        wake,
+    )?))
 }
 
 struct Vp8Encoder {
@@ -54,7 +93,8 @@ fn settings(cfg: &EncoderConfig) -> vp8_encoder::EncoderConfig {
 
 impl Vp8Encoder {
     fn open(cfg: &EncoderConfig) -> Result<Vp8Encoder, VideoError> {
-        let enc = vp8_encoder::Encoder::new(settings(cfg)).map_err(|e| VideoError::Unsupported(format!("VP8: {e}")))?;
+        let enc = vp8_encoder::Encoder::new(settings(cfg))
+            .map_err(|e| VideoError::Unsupported(format!("VP8: {e}")))?;
         Ok(Vp8Encoder { enc, cfg: *cfg })
     }
 }
@@ -64,15 +104,28 @@ impl EncoderCore for Vp8Encoder {
         PixelFormat::I420
     }
 
-    fn encode(&mut self, frame: &VideoFrame, keyframe: bool) -> Result<Option<CoreFrame>, VideoError> {
+    fn encode(
+        &mut self,
+        frame: &VideoFrame,
+        keyframe: bool,
+    ) -> Result<Option<CoreFrame>, VideoError> {
         let FrameBuffer::Planes(p) = &frame.buffer else {
-            return Err(VideoError::Invalid("the VP8 encoder takes CPU planes".into()));
+            return Err(VideoError::Invalid(
+                "the VP8 encoder takes CPU planes".into(),
+            ));
         };
         let tight = p.to_tight(frame.width, frame.height);
         let pic = vp8_encoder::Picture::from_i420(&tight.data, frame.width, frame.height)
-            .ok_or_else(|| VideoError::Invalid(format!("an I420 picture of {}x{}", frame.width, frame.height)))?;
+            .ok_or_else(|| {
+                VideoError::Invalid(format!(
+                    "an I420 picture of {}x{}",
+                    frame.width, frame.height
+                ))
+            })?;
         let out = self.enc.encode(&pic, keyframe).map_err(|e| match e {
-            vp8_encoder::EncodeError::Internal(why) => VideoError::os(0, format!("VP8 encoder: {why}")),
+            vp8_encoder::EncodeError::Internal(why) => {
+                VideoError::os(0, format!("VP8 encoder: {why}"))
+            }
             other => VideoError::Invalid(other.to_string()),
         })?;
         Ok(out.map(|f| {
@@ -107,12 +160,20 @@ impl EncoderCore for Vp8Encoder {
 }
 
 /// A VP8 decoder, if `config` asks for one this crate can make.
-pub(crate) fn decoder(config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+pub(crate) fn decoder(
+    config: DecoderConfig,
+    wake: Wake,
+) -> Result<Box<dyn VideoDecoder>, VideoError> {
     if config.codec != VideoCodec::Vp8 {
-        return Err(VideoError::Unsupported(format!("vp8::decoder for {:?}", config.codec)));
+        return Err(VideoError::Unsupported(format!(
+            "vp8::decoder for {:?}",
+            config.codec
+        )));
     }
     if config.implementation == ImplPreference::HardwareOnly {
-        return Err(VideoError::Unsupported("no hardware VP8 decoder here".into()));
+        return Err(VideoError::Unsupported(
+            "no hardware VP8 decoder here".into(),
+        ));
     }
     Ok(Box::new(ThreadedDecoder::start(
         Box::new(Vp8Core {
@@ -131,8 +192,12 @@ fn map_err(e: vp8_decoder::DecodeError) -> DecodeError {
     match e {
         vp8_decoder::DecodeError::NeedKeyframe => DecodeError::NeedKeyframe,
         vp8_decoder::DecodeError::Truncated => DecodeError::Corrupt("truncated VP8 frame".into()),
-        vp8_decoder::DecodeError::Invalid(why) => DecodeError::Corrupt(format!("invalid VP8 frame: {why}")),
-        vp8_decoder::DecodeError::Unsupported(what) => DecodeError::Video(VideoError::Unsupported(format!("VP8: {what}"))),
+        vp8_decoder::DecodeError::Invalid(why) => {
+            DecodeError::Corrupt(format!("invalid VP8 frame: {why}"))
+        }
+        vp8_decoder::DecodeError::Unsupported(what) => {
+            DecodeError::Video(VideoError::Unsupported(format!("VP8: {what}")))
+        }
         other => DecodeError::Corrupt(other.to_string()),
     }
 }
@@ -143,8 +208,11 @@ impl DecoderCore for Vp8Core {
             return Ok(None);
         };
         let (w, h) = (p.width, p.height);
-        let planes = Planes::tight(PixelFormat::I420, w, h, p.to_i420()).map_err(DecodeError::Video)?;
-        VideoFrame::from_planes(planes, w, h, input.capture_us).map(Some).map_err(DecodeError::Video)
+        let planes =
+            Planes::tight(PixelFormat::I420, w, h, p.to_i420()).map_err(DecodeError::Video)?;
+        VideoFrame::from_planes(planes, w, h, input.capture_us)
+            .map(Some)
+            .map_err(DecodeError::Video)
     }
 
     fn reset(&mut self) -> Result<(), VideoError> {
@@ -165,7 +233,11 @@ mod tests {
     use crate::kit::wait_for;
     use std::time::Duration;
 
-    fn encode(enc: &mut Box<dyn VideoEncoder>, f: &VideoFrame, opts: EncodeOptions) -> Option<EncodedFrame> {
+    fn encode(
+        enc: &mut Box<dyn VideoEncoder>,
+        f: &VideoFrame,
+        opts: EncodeOptions,
+    ) -> Option<EncodedFrame> {
         let skipped = enc.stats().dropped_by_rc;
         enc.submit(f, opts).expect("submit");
         let r = wait_for(Duration::from_secs(10), || match enc.poll() {
@@ -194,9 +266,15 @@ mod tests {
                 enc.set_rates(Rates::new(600_000, 30)).expect("rates");
             }
             let f = pattern_frame(1280, 720, n, 1_000 + n as u64 * 33_333).expect("frame");
-            let Some(e) = encode(&mut enc, &f, EncodeOptions::default()) else { continue };
+            let Some(e) = encode(&mut enc, &f, EncodeOptions::default()) else {
+                continue;
+            };
             assert_eq!(e.codec, VideoCodec::Vp8);
-            assert_eq!(e.capture_us, 1_000 + n as u64 * 33_333, "capture_us passes through");
+            assert_eq!(
+                e.capture_us,
+                1_000 + n as u64 * 33_333,
+                "capture_us passes through"
+            );
             assert_eq!((e.width, e.height), (640, 360));
             // RFC 6386: the P bit (bit 0 of the frame tag) is 0 on a
             // keyframe, which also carries the start code 9d 01 2a.
@@ -206,14 +284,29 @@ mod tests {
                 keys.push(n);
             }
             tids.push(e.layer.temporal_id);
-            dec.submit(EncodedInput::new(VideoCodec::Vp8, e.data.clone(), e.keyframe, e.capture_us)).expect("decode submit");
-            let d = wait_for(Duration::from_secs(10), || dec.poll()).expect("decoded").expect("decode");
+            dec.submit(EncodedInput::new(
+                VideoCodec::Vp8,
+                e.data.clone(),
+                e.keyframe,
+                e.capture_us,
+            ))
+            .expect("decode submit");
+            let d = wait_for(Duration::from_secs(10), || dec.poll())
+                .expect("decoded")
+                .expect("decode");
             assert_eq!((d.width, d.height), (640, 360));
             assert_eq!(d.capture_us, e.capture_us);
-            assert_eq!(read_frame_code(&d), Some(n), "the frame code survives VP8 at frame {n}");
+            assert_eq!(
+                read_frame_code(&d),
+                Some(n),
+                "the frame code survives VP8 at frame {n}"
+            );
         }
         // A skipped keyframe is owed to the next frame, so 20 or 21.
-        assert!(keys.len() == 2 && keys[0] == 0 && (20..=21).contains(&keys[1]), "the first and the requested keyframe only; set_rates made none: {keys:?}");
+        assert!(
+            keys.len() == 2 && keys[0] == 0 && (20..=21).contains(&keys[1]),
+            "the first and the requested keyframe only; set_rates made none: {keys:?}"
+        );
         assert_eq!(&tids[..4], &[0, 2, 1, 2], "L1T3's pattern");
         let st = enc.stats();
         assert_eq!(st.keyframes, 2);
@@ -225,7 +318,12 @@ mod tests {
         let mut dec = decoder(DecoderConfig::new(VideoCodec::Vp8), no_wake()).expect("decoder");
         let delta = EncodedInput::new(VideoCodec::Vp8, vec![0x01u8, 0, 0, 0, 0, 0], false, 1);
         assert_eq!(dec.submit(delta), Err(DecodeError::NeedKeyframe));
-        let bad = EncodedInput::new(VideoCodec::Vp8, vec![0x00u8, 0x01, 0x00, 0xff, 0xff, 0xff, 16, 0, 16, 0], true, 2);
+        let bad = EncodedInput::new(
+            VideoCodec::Vp8,
+            vec![0x00u8, 0x01, 0x00, 0xff, 0xff, 0xff, 16, 0, 16, 0],
+            true,
+            2,
+        );
         dec.submit(bad).expect("queued");
         let r = wait_for(Duration::from_secs(2), || dec.poll()).expect("an answer");
         assert!(matches!(r, Err(DecodeError::Corrupt(_))), "{r:?}");
@@ -237,12 +335,17 @@ mod tests {
     fn capabilities_and_refusals() {
         let caps = capabilities();
         assert_eq!(caps.len(), 2);
-        assert!(caps.iter().all(|c| c.codec == VideoCodec::Vp8 && c.implementation == Implementation::Software));
+        assert!(caps
+            .iter()
+            .all(|c| c.codec == VideoCodec::Vp8 && c.implementation == Implementation::Software));
         assert_eq!(caps[0].max_temporal_layers, 3);
         assert!(decoder(DecoderConfig::new(VideoCodec::H264), no_wake()).is_err());
         assert!(encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake()).is_err());
         let mut hw = EncoderConfig::new(CodecConfig::Vp8, 640, 360, 30, 500_000);
         hw.implementation = ImplPreference::HardwareOnly;
-        assert!(matches!(encoder(hw, no_wake()).err(), Some(VideoError::Unsupported(_))));
+        assert!(matches!(
+            encoder(hw, no_wake()).err(),
+            Some(VideoError::Unsupported(_))
+        ));
     }
 }

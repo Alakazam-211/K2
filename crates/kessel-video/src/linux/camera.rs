@@ -23,23 +23,35 @@ fn nodes() -> Vec<(String, String)> {
     if let Ok(dir) = std::fs::read_dir("/dev/v4l/by-id") {
         for e in dir.flatten() {
             if let Ok(target) = std::fs::canonicalize(e.path()) {
-                by_id.push((target.to_string_lossy().into_owned(), e.path().to_string_lossy().into_owned()));
+                by_id.push((
+                    target.to_string_lossy().into_owned(),
+                    e.path().to_string_lossy().into_owned(),
+                ));
             }
         }
     }
     let mut out: Vec<(String, String)> = Vec::new();
-    let Ok(dir) = std::fs::read_dir("/dev") else { return out };
+    let Ok(dir) = std::fs::read_dir("/dev") else {
+        return out;
+    };
     for e in dir.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         if let Some(n) = name.strip_prefix("video") {
             if n.parse::<u32>().is_ok() {
                 let path = format!("/dev/{name}");
-                let id = by_id.iter().find(|(t, _)| *t == path).map_or(path.clone(), |(_, id)| id.clone());
+                let id = by_id
+                    .iter()
+                    .find(|(t, _)| *t == path)
+                    .map_or(path.clone(), |(_, id)| id.clone());
                 out.push((path, id));
             }
         }
     }
-    out.sort_by_key(|(p, _)| p.trim_start_matches("/dev/video").parse::<u32>().unwrap_or(u32::MAX));
+    out.sort_by_key(|(p, _)| {
+        p.trim_start_matches("/dev/video")
+            .parse::<u32>()
+            .unwrap_or(u32::MAX)
+    });
     out
 }
 
@@ -50,7 +62,11 @@ fn caps(fd: &Fd) -> io::Result<Capability> {
 }
 
 fn is_capture(c: &Capability) -> bool {
-    let caps = if c.capabilities & CAP_DEVICE_CAPS != 0 { c.device_caps } else { c.capabilities };
+    let caps = if c.capabilities & CAP_DEVICE_CAPS != 0 {
+        c.device_caps
+    } else {
+        c.capabilities
+    };
     caps & CAP_VIDEO_CAPTURE != 0 && caps & CAP_STREAMING != 0
 }
 
@@ -72,10 +88,24 @@ fn modes(fd: &Fd) -> Vec<(CaptureMode, u32)> {
             if fps == 0 {
                 continue;
             }
-            let mode = CaptureMode::new(w, h, fps, if d.pixelformat == PIX_NV12 { PixelFormat::Nv12 } else { PixelFormat::I420 });
+            let mode = CaptureMode::new(
+                w,
+                h,
+                fps,
+                if d.pixelformat == PIX_NV12 {
+                    PixelFormat::Nv12
+                } else {
+                    PixelFormat::I420
+                },
+            );
             let rank = |f: u32| FORMATS.iter().position(|x| *x == f).unwrap_or(9);
             match out.iter_mut().find(|(m, _)| (m.width, m.height) == (w, h)) {
-                Some(slot) if slot.0.max_fps < fps || (slot.0.max_fps == fps && rank(d.pixelformat) < rank(slot.1)) => *slot = (mode, d.pixelformat),
+                Some(slot)
+                    if slot.0.max_fps < fps
+                        || (slot.0.max_fps == fps && rank(d.pixelformat) < rank(slot.1)) =>
+                {
+                    *slot = (mode, d.pixelformat)
+                }
                 Some(_) => {}
                 None => out.push((mode, d.pixelformat)),
             }
@@ -100,8 +130,18 @@ fn sizes(fd: &Fd, pixfmt: u32) -> Vec<(u32, u32)> {
             // Stepwise or continuous: the largest, and the common sizes in
             // range.
             let (min_w, max_w, min_h, max_h) = (s.size[0], s.size[1], s.size[3], s.size[4]);
-            for (w, h) in [(max_w, max_h), (1920, 1080), (1280, 720), (640, 480), (640, 360), (320, 240)] {
-                if (min_w..=max_w).contains(&w) && (min_h..=max_h).contains(&h) && !out.contains(&(w, h)) {
+            for (w, h) in [
+                (max_w, max_h),
+                (1920, 1080),
+                (1280, 720),
+                (640, 480),
+                (640, 360),
+                (320, 240),
+            ] {
+                if (min_w..=max_w).contains(&w)
+                    && (min_h..=max_h).contains(&h)
+                    && !out.contains(&(w, h))
+                {
                     out.push((w, h));
                 }
             }
@@ -147,12 +187,23 @@ fn info(path: &str, id: &str, first: bool) -> Option<CameraInfo> {
     }
     let name = text(&c.card);
     let lower = name.to_lowercase();
-    let facing = if lower.contains("integrated") || lower.contains("built-in") || lower.contains("internal") {
-        Facing::Front
-    } else {
-        Facing::External
-    };
-    let mut cam = CameraInfo::new(id, if name.is_empty() { path.to_string() } else { name }, facing, first);
+    let facing =
+        if lower.contains("integrated") || lower.contains("built-in") || lower.contains("internal")
+        {
+            Facing::Front
+        } else {
+            Facing::External
+        };
+    let mut cam = CameraInfo::new(
+        id,
+        if name.is_empty() {
+            path.to_string()
+        } else {
+            name
+        },
+        facing,
+        first,
+    );
     cam.modes = modes(&fd).into_iter().map(|(m, _)| m).collect();
     // A metadata node of the same camera lists no image formats.
     (!cam.modes.is_empty()).then_some(cam)
@@ -172,7 +223,12 @@ pub(crate) fn permission() -> Permission {
     for (path, _) in nodes() {
         match Fd::open(&path) {
             Ok(_) => return Permission::Granted,
-            Err(e) if e.raw_os_error() == Some(libc::EACCES) || e.raw_os_error() == Some(libc::EPERM) => return Permission::Denied,
+            Err(e)
+                if e.raw_os_error() == Some(libc::EACCES)
+                    || e.raw_os_error() == Some(libc::EPERM) =>
+            {
+                return Permission::Denied
+            }
             Err(_) => {}
         }
     }
@@ -212,7 +268,12 @@ struct Stream {
     fmt: Negotiated,
 }
 
-fn start_stream(path: &str, mode: CaptureMode, pixfmt: u32, fps: u32) -> Result<Stream, VideoError> {
+fn start_stream(
+    path: &str,
+    mode: CaptureMode,
+    pixfmt: u32,
+    fps: u32,
+) -> Result<Stream, VideoError> {
     let fd = Fd::open(path).map_err(|e| os_err(e, "open"))?;
     let mut f: Format = zeroed();
     f.type_ = BUF_TYPE_VIDEO_CAPTURE;
@@ -221,13 +282,21 @@ fn start_stream(path: &str, mode: CaptureMode, pixfmt: u32, fps: u32) -> Result<
     f.fmt.pix.height = mode.height;
     f.fmt.pix.pixelformat = pixfmt;
     f.fmt.pix.field = FIELD_ANY;
-    fd.ioctl(VIDIOC_S_FMT, &mut f).map_err(|e| os_err(e, "VIDIOC_S_FMT"))?;
+    fd.ioctl(VIDIOC_S_FMT, &mut f)
+        .map_err(|e| os_err(e, "VIDIOC_S_FMT"))?;
     // SAFETY: the driver filled the pix member for a capture format.
     let pix = unsafe { f.fmt.pix };
     if !FORMATS.contains(&pix.pixelformat) {
-        return Err(unsupported(format!("the camera switched to pixel format {:?}", pix.pixelformat.to_le_bytes())));
+        return Err(unsupported(format!(
+            "the camera switched to pixel format {:?}",
+            pix.pixelformat.to_le_bytes()
+        )));
     }
-    let min_stride = if pix.pixelformat == PIX_YUYV { pix.width * 2 } else { pix.width };
+    let min_stride = if pix.pixelformat == PIX_YUYV {
+        pix.width * 2
+    } else {
+        pix.width
+    };
     let fmt = Negotiated {
         pixfmt: pix.pixelformat,
         width: pix.width,
@@ -243,9 +312,13 @@ fn start_stream(path: &str, mode: CaptureMode, pixfmt: u32, fps: u32) -> Result<
     rb.count = 4;
     rb.type_ = BUF_TYPE_VIDEO_CAPTURE;
     rb.memory = MEMORY_MMAP;
-    fd.ioctl(VIDIOC_REQBUFS, &mut rb).map_err(|e| os_err(e, "VIDIOC_REQBUFS"))?;
+    fd.ioctl(VIDIOC_REQBUFS, &mut rb)
+        .map_err(|e| os_err(e, "VIDIOC_REQBUFS"))?;
     if rb.count < 2 {
-        return Err(VideoError::os(0, format!("the camera gave {} buffers", rb.count)));
+        return Err(VideoError::os(
+            0,
+            format!("the camera gave {} buffers", rb.count),
+        ));
     }
     let mut bufs = Vec::new();
     for i in 0..rb.count {
@@ -253,22 +326,35 @@ fn start_stream(path: &str, mode: CaptureMode, pixfmt: u32, fps: u32) -> Result<
         b.index = i;
         b.type_ = BUF_TYPE_VIDEO_CAPTURE;
         b.memory = MEMORY_MMAP;
-        fd.ioctl(VIDIOC_QUERYBUF, &mut b).map_err(|e| os_err(e, "VIDIOC_QUERYBUF"))?;
+        fd.ioctl(VIDIOC_QUERYBUF, &mut b)
+            .map_err(|e| os_err(e, "VIDIOC_QUERYBUF"))?;
         bufs.push(Mapped::map(&fd, b.m, b.length as usize).map_err(|e| os_err(e, "mmap"))?);
-        fd.ioctl(VIDIOC_QBUF, &mut b).map_err(|e| os_err(e, "VIDIOC_QBUF"))?;
+        fd.ioctl(VIDIOC_QBUF, &mut b)
+            .map_err(|e| os_err(e, "VIDIOC_QBUF"))?;
     }
     let mut t = BUF_TYPE_VIDEO_CAPTURE as i32;
-    fd.ioctl(VIDIOC_STREAMON, &mut t).map_err(|e| os_err(e, "VIDIOC_STREAMON"))?;
+    fd.ioctl(VIDIOC_STREAMON, &mut t)
+        .map_err(|e| os_err(e, "VIDIOC_STREAMON"))?;
     Ok(Stream { fd, bufs, fmt })
 }
 
 /// One captured buffer as a tight frame.
-pub(crate) fn to_frame(data: &[u8], pixfmt: u32, width: u32, height: u32, stride: u32, capture_us: u64) -> Result<VideoFrame, VideoError> {
+pub(crate) fn to_frame(
+    data: &[u8],
+    pixfmt: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+    capture_us: u64,
+) -> Result<VideoFrame, VideoError> {
     let (w, h, s) = (width as usize, height as usize, stride as usize);
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
     let need = |n: usize| {
         if data.len() < n {
-            Err(VideoError::os(0, format!("a {}-byte frame, {n} expected", data.len())))
+            Err(VideoError::os(
+                0,
+                format!("a {}-byte frame, {n} expected", data.len()),
+            ))
         } else {
             Ok(())
         }
@@ -311,19 +397,35 @@ pub(crate) fn to_frame(data: &[u8], pixfmt: u32, width: u32, height: u32, stride
                 }
                 if y % 2 == 0 {
                     // 4:2:2 to 4:2:0: average this row's chroma with the next.
-                    let next = if y + 1 < h { &data[(y + 1) * s..][..w * 2] } else { row };
+                    let next = if y + 1 < h {
+                        &data[(y + 1) * s..][..w * 2]
+                    } else {
+                        row
+                    };
                     for cx in 0..cw {
                         let i = (4 * cx).min(w * 2 - 4);
-                        u[(y / 2) * cw + cx] = ((row[i + 1] as u16 + next[i + 1] as u16 + 1) / 2) as u8;
-                        v[(y / 2) * cw + cx] = ((row[i + 3] as u16 + next[i + 3] as u16 + 1) / 2) as u8;
+                        u[(y / 2) * cw + cx] =
+                            ((row[i + 1] as u16 + next[i + 1] as u16 + 1) / 2) as u8;
+                        v[(y / 2) * cw + cx] =
+                            ((row[i + 3] as u16 + next[i + 3] as u16 + 1) / 2) as u8;
                     }
                 }
             }
             PixelFormat::I420
         }
-        other => return Err(unsupported(format!("pixel format {:?}", other.to_le_bytes()))),
+        other => {
+            return Err(unsupported(format!(
+                "pixel format {:?}",
+                other.to_le_bytes()
+            )))
+        }
     };
-    VideoFrame::from_planes(Planes::tight(format, width, height, out)?, width, height, capture_us)
+    VideoFrame::from_planes(
+        Planes::tight(format, width, height, out)?,
+        width,
+        height,
+        capture_us,
+    )
 }
 
 struct CameraControl {
@@ -367,7 +469,14 @@ fn capture(stream: Stream, shared: Arc<SourceShared>, stop: Arc<AtomicBool>) {
         }
         if !shared.idle() {
             if let Some(m) = bufs.get(b.index as usize) {
-                match to_frame(m.bytes(b.bytesused as usize), fmt.pixfmt, fmt.width, fmt.height, fmt.stride, now_us()) {
+                match to_frame(
+                    m.bytes(b.bytesused as usize),
+                    fmt.pixfmt,
+                    fmt.width,
+                    fmt.height,
+                    fmt.stride,
+                    now_us(),
+                ) {
                     Ok(f) => shared.deliver(f),
                     Err(e) => shared.event(SourceEvent::Error(e)),
                 }
@@ -383,14 +492,27 @@ fn capture(stream: Stream, shared: Arc<SourceShared>, stop: Arc<AtomicBool>) {
     drop(bufs);
 }
 
-pub(crate) fn open(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+pub(crate) fn open(
+    id: Option<&str>,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
     c.validate()?;
     let all = nodes();
     let (path, _) = match id {
-        Some(id) => all.iter().find(|(p, i)| i == id || p == id).cloned().ok_or(VideoError::NotFound)?,
+        Some(id) => all
+            .iter()
+            .find(|(p, i)| i == id || p == id)
+            .cloned()
+            .ok_or(VideoError::NotFound)?,
         None => all
             .iter()
-            .find(|(p, _)| Fd::open(p).ok().and_then(|fd| caps(&fd).ok()).is_some_and(|c| is_capture(&c)))
+            .find(|(p, _)| {
+                Fd::open(p)
+                    .ok()
+                    .and_then(|fd| caps(&fd).ok())
+                    .is_some_and(|c| is_capture(&c))
+            })
             .cloned()
             .ok_or(VideoError::NotFound)?,
     };
@@ -398,9 +520,16 @@ pub(crate) fn open(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Resul
     let list = modes(&probe);
     drop(probe);
     let plain: Vec<CaptureMode> = list.iter().map(|(m, _)| *m).collect();
-    let mode = nearest_mode(&plain, &c).ok_or_else(|| unsupported("the camera offers no NV12, I420 or YUYV mode"))?;
-    let pixfmt = list.iter().find(|(m, _)| *m == mode).map(|(_, f)| *f).ok_or(VideoError::NotFound)?;
-    let fps = c.fps.map_or(mode.max_fps.min(30), |f| f.min(mode.max_fps).max(1));
+    let mode = nearest_mode(&plain, &c)
+        .ok_or_else(|| unsupported("the camera offers no NV12, I420 or YUYV mode"))?;
+    let pixfmt = list
+        .iter()
+        .find(|(m, _)| *m == mode)
+        .map(|(_, f)| *f)
+        .ok_or(VideoError::NotFound)?;
+    let fps = c
+        .fps
+        .map_or(mode.max_fps.min(30), |f| f.min(mode.max_fps).max(1));
     let stream = start_stream(&path, mode, pixfmt, fps)?;
     let shared = SourceShared::new(c, fps, wake);
     let stop = Arc::new(AtomicBool::new(false));
@@ -446,7 +575,10 @@ mod tests {
         let f = to_frame(&yu12, PIX_YU12, 2, 2, 2, 0).expect("yu12");
         assert_eq!(&f.planes().expect("p").data[..], &yu12);
 
-        assert!(to_frame(&[0u8; 5], PIX_YUYV, 4, 2, 8, 0).is_err(), "a short buffer fails loudly");
+        assert!(
+            to_frame(&[0u8; 5], PIX_YUYV, 4, 2, 8, 0).is_err(),
+            "a short buffer fails loudly"
+        );
         assert!(to_frame(&[0u8; 64], fourcc(b"MJPG"), 4, 2, 8, 0).is_err());
     }
 
@@ -462,7 +594,10 @@ mod tests {
         let p = permission();
         assert!(matches!(p, Permission::Granted | Permission::Denied));
         if cams.is_empty() {
-            assert_eq!(open(None, CaptureConstraints::default(), crate::api::no_wake()).err(), Some(VideoError::NotFound));
+            assert_eq!(
+                open(None, CaptureConstraints::default(), crate::api::no_wake()).err(),
+                Some(VideoError::NotFound)
+            );
         }
     }
 }

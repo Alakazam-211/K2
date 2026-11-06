@@ -7,8 +7,9 @@
 
 use kessel_video::fake::{read_frame_code, FakeBackend, FakeConfig};
 use kessel_video::{
-    no_wake, system, CaptureConstraints, CodecConfig, CodecDirection, DecoderConfig, EncodeOptions, EncodedFrame, EncodedInput, EncoderConfig,
-    FrameSource, Implementation, PixelFormat, SystemConfig, VideoBackend, VideoCodec, VideoEncoder, VideoFrame,
+    no_wake, system, CaptureConstraints, CodecConfig, CodecDirection, DecoderConfig, EncodeOptions,
+    EncodedFrame, EncodedInput, EncoderConfig, FrameSource, Implementation, PixelFormat,
+    SystemConfig, VideoBackend, VideoCodec, VideoEncoder, VideoFrame,
 };
 use std::time::{Duration, Instant};
 
@@ -44,15 +45,26 @@ fn encode(enc: &mut Box<dyn VideoEncoder>, f: &VideoFrame) -> Option<EncodedFram
 fn vp8_simulcast_round_trip_on_the_system_backend() {
     let backend = system(SystemConfig::default()).expect("this OS's backend");
     let caps = backend.capabilities();
-    let enc_cap = caps.best(VideoCodec::Vp8, CodecDirection::Encode).expect("a VP8 encoder");
+    let enc_cap = caps
+        .best(VideoCodec::Vp8, CodecDirection::Encode)
+        .expect("a VP8 encoder");
     assert_eq!(enc_cap.implementation, Implementation::Software);
-    assert!(caps.best(VideoCodec::Vp8, CodecDirection::Decode).is_some(), "a VP8 decoder");
+    assert!(
+        caps.best(VideoCodec::Vp8, CodecDirection::Decode).is_some(),
+        "a VP8 decoder"
+    );
     eprintln!("[vp8] {} on {}: {}", caps.backend, caps.os, enc_cap.name);
 
     let camera = FakeBackend::new(FakeConfig::default());
-    let mut src = camera.open_camera(None, CaptureConstraints::new(1280, 720, 30), no_wake()).expect("fake camera");
+    let mut src = camera
+        .open_camera(None, CaptureConstraints::new(1280, 720, 30), no_wake())
+        .expect("fake camera");
     // q, h, f: one encoder per layer, all fed the same captures.
-    let layers = [(320, 180, 250_000), (640, 360, 700_000), (1280, 720, 2_000_000)];
+    let layers = [
+        (320, 180, 250_000),
+        (640, 360, 700_000),
+        (1280, 720, 2_000_000),
+    ];
     let mut encoders: Vec<Box<dyn VideoEncoder>> = layers
         .iter()
         .map(|&(w, h, bps)| {
@@ -75,21 +87,44 @@ fn vp8_simulcast_round_trip_on_the_system_backend() {
         let frame = next_frame(&mut src);
         let code = read_frame_code(&frame).expect("a coded capture");
         for (i, enc) in encoders.iter_mut().enumerate() {
-            let Some(e) = encode(enc, &frame) else { continue };
-            assert_eq!(e.capture_us, frame.capture_us, "every layer keeps the capture time");
+            let Some(e) = encode(enc, &frame) else {
+                continue;
+            };
+            assert_eq!(
+                e.capture_us, frame.capture_us,
+                "every layer keeps the capture time"
+            );
             assert_eq!((e.width, e.height), (layers[i].0, layers[i].1));
             decoders[i]
-                .submit(EncodedInput::new(VideoCodec::Vp8, e.data, e.keyframe, e.capture_us))
+                .submit(EncodedInput::new(
+                    VideoCodec::Vp8,
+                    e.data,
+                    e.keyframe,
+                    e.capture_us,
+                ))
                 .expect("decode submit");
-            let d = wait(Duration::from_secs(10), || decoders[i].poll()).expect("decoded").expect("decode");
+            let d = wait(Duration::from_secs(10), || decoders[i].poll())
+                .expect("decoded")
+                .expect("decode");
             assert_eq!(d.format(), PixelFormat::Rgba);
             assert_eq!((d.width, d.height), (layers[i].0, layers[i].1));
-            assert_eq!(read_frame_code(&d), Some(code), "layer {i} lost the frame code");
+            assert_eq!(
+                read_frame_code(&d),
+                Some(code),
+                "layer {i} lost the frame code"
+            );
             checked[i] += 1;
         }
     }
-    assert!(checked.iter().all(|&n| n >= 25), "frames checked per layer: {checked:?}");
+    assert!(
+        checked.iter().all(|&n| n >= 25),
+        "frames checked per layer: {checked:?}"
+    );
     for enc in &encoders {
-        assert_eq!(enc.stats().keyframes, 1, "one keyframe per layer, no surprise ones");
+        assert_eq!(
+            enc.stats().keyframes,
+            1,
+            "one keyframe per layer, no surprise ones"
+        );
     }
 }

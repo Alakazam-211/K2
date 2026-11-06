@@ -99,8 +99,16 @@ pub unsafe fn responds(obj: *const AnyObject, sel: objc2::runtime::Sel) -> bool 
 // libdispatch (libSystem).
 extern "C" {
     pub fn dispatch_queue_create(label: *const c_char, attr: *mut c_void) -> *mut AnyObject;
-    pub fn dispatch_sync_f(queue: *mut AnyObject, context: *mut c_void, work: extern "C" fn(*mut c_void));
-    pub fn dispatch_async_f(queue: *mut AnyObject, context: *mut c_void, work: extern "C" fn(*mut c_void));
+    pub fn dispatch_sync_f(
+        queue: *mut AnyObject,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+    pub fn dispatch_async_f(
+        queue: *mut AnyObject,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
     pub fn dispatch_release(object: *mut AnyObject);
     static _dispatch_main_q: u8;
 }

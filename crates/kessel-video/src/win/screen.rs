@@ -10,7 +10,9 @@ use crate::types::*;
 use std::sync::{Arc, Mutex};
 use windows::core::{IInspectable, Interface, BOOL};
 use windows::Foundation::TypedEventHandler;
-use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession};
+use windows::Graphics::Capture::{
+    Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
+};
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Graphics::SizeInt32;
@@ -20,12 +22,16 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
-use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
-use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
+};
+use windows::Win32::System::WinRT::Direct3D11::{
+    CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
+};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, MONITORINFOF_PRIMARY,
-    WS_EX_TOOLWINDOW,
+    EnumWindows, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, MONITORINFOF_PRIMARY, WS_EX_TOOLWINDOW,
 };
 
 // ───────────────────────────── the picker ─────────────────────────────
@@ -44,23 +50,34 @@ unsafe impl Sync for PickedItem {}
 /// choice, `NotFound` when cancelled.
 pub(crate) fn pick(opts: PickOptions, done: crate::api::Done<Result<ScreenSelection, VideoError>>) {
     let Some(hwnd) = opts.parent_window else {
-        return done(Err(VideoError::Invalid("the Windows screen picker needs PickOptions::with_parent_window (the app's HWND)".into())));
+        return done(Err(VideoError::Invalid(
+            "the Windows screen picker needs PickOptions::with_parent_window (the app's HWND)"
+                .into(),
+        )));
     };
     if !supported() {
-        return done(Err(unsupported("Windows Graphics Capture needs Windows 10 1903 or later")));
+        return done(Err(unsupported(
+            "Windows Graphics Capture needs Windows 10 1903 or later",
+        )));
     }
     // `done` runs exactly once: on the thread, or here if it can't start.
     let slot = Arc::new(Mutex::new(Some(done)));
     let s = slot.clone();
-    let spawned = std::thread::Builder::new().name("kessel-video-picker".into()).spawn(move || {
-        let r = run_picker(hwnd).map(|item| ScreenSelection::Picked(Arc::new(PickedItem(item))));
-        if let Some(done) = lock(&s).take() {
-            done(r);
-        }
-    });
+    let spawned = std::thread::Builder::new()
+        .name("kessel-video-picker".into())
+        .spawn(move || {
+            let r =
+                run_picker(hwnd).map(|item| ScreenSelection::Picked(Arc::new(PickedItem(item))));
+            if let Some(done) = lock(&s).take() {
+                done(r);
+            }
+        });
     if let Err(e) = spawned {
         if let Some(done) = lock(&slot).take() {
-            done(Err(VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}"))));
+            done(Err(VideoError::os(
+                e.raw_os_error().unwrap_or(0) as i64,
+                format!("spawn: {e}"),
+            )));
         }
     }
 }
@@ -69,16 +86,25 @@ fn run_picker(hwnd: u64) -> Result<GraphicsCaptureItem, VideoError> {
     use windows::Graphics::Capture::GraphicsCapturePicker;
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::IInitializeWithWindow;
-    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage, MSG,
+        PM_REMOVE, QS_ALLINPUT,
+    };
     use windows_future::AsyncStatus;
 
     // SAFETY: this thread's own apartment, for the picker's UI.
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    let picker = GraphicsCapturePicker::new().map_err(|e| map_error(&e, "GraphicsCapturePicker"))?;
-    let init: IInitializeWithWindow = picker.cast().map_err(|e| map_error(&e, "IInitializeWithWindow"))?;
+    let picker =
+        GraphicsCapturePicker::new().map_err(|e| map_error(&e, "GraphicsCapturePicker"))?;
+    let init: IInitializeWithWindow = picker
+        .cast()
+        .map_err(|e| map_error(&e, "IInitializeWithWindow"))?;
     // SAFETY: the caller's window handle; a stale one fails with an error.
-    unsafe { init.Initialize(HWND(hwnd as usize as *mut core::ffi::c_void)) }.map_err(|e| map_error(&e, "IInitializeWithWindow.Initialize"))?;
-    let op = picker.PickSingleItemAsync().map_err(|e| map_error(&e, "PickSingleItemAsync"))?;
+    unsafe { init.Initialize(HWND(hwnd as usize as *mut core::ffi::c_void)) }
+        .map_err(|e| map_error(&e, "IInitializeWithWindow.Initialize"))?;
+    let op = picker
+        .PickSingleItemAsync()
+        .map_err(|e| map_error(&e, "PickSingleItemAsync"))?;
     loop {
         let mut msg = MSG::default();
         // SAFETY: this thread's message queue; MSG is a plain out struct.
@@ -88,7 +114,10 @@ fn run_picker(hwnd: u64) -> Result<GraphicsCaptureItem, VideoError> {
                 DispatchMessageW(&msg);
             }
         }
-        match op.Status().map_err(|e| map_error(&e, "the picker's status"))? {
+        match op
+            .Status()
+            .map_err(|e| map_error(&e, "the picker's status"))?
+        {
             AsyncStatus::Started => {
                 // SAFETY: waits for a message or 50 ms; no handles.
                 unsafe { MsgWaitForMultipleObjects(None, false, 50, QS_ALLINPUT) };
@@ -96,7 +125,12 @@ fn run_picker(hwnd: u64) -> Result<GraphicsCaptureItem, VideoError> {
             // A cancelled pick completes with no item.
             AsyncStatus::Completed => return op.GetResults().map_err(|_| VideoError::NotFound),
             AsyncStatus::Canceled => return Err(VideoError::NotFound),
-            _ => return Err(op.ErrorCode().map_or_else(|e| map_error(&e, "the picker"), |c| VideoError::os(c.0 as i64, "the screen picker failed"))),
+            _ => {
+                return Err(op.ErrorCode().map_or_else(
+                    |e| map_error(&e, "the picker"),
+                    |c| VideoError::os(c.0 as i64, "the screen picker failed"),
+                ))
+            }
         }
     }
 }
@@ -133,7 +167,12 @@ fn monitors() -> Vec<Monitor> {
     let mut out: Vec<Monitor> = Vec::new();
     // SAFETY: the callback only writes to `out` through the LPARAM.
     unsafe {
-        let _ = EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut out as *mut Vec<Monitor> as isize));
+        let _ = EnumDisplayMonitors(
+            None,
+            None,
+            Some(each),
+            LPARAM(&mut out as *mut Vec<Monitor> as isize),
+        );
     }
     out
 }
@@ -163,7 +202,12 @@ fn windows_list() -> Vec<Window> {
                 return BOOL(1);
             }
             let mut cloaked = 0u32;
-            let cloak = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut core::ffi::c_void, 4);
+            let cloak = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut u32 as *mut core::ffi::c_void,
+                4,
+            );
             if cloak.is_ok() && cloaked != 0 {
                 return BOOL(1);
             }
@@ -178,11 +222,19 @@ fn windows_list() -> Vec<Window> {
             if GetWindowRect(hwnd, &mut r).is_err() {
                 return BOOL(1);
             }
-            let (w, h) = ((r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32);
+            let (w, h) = (
+                (r.right - r.left).max(0) as u32,
+                (r.bottom - r.top).max(0) as u32,
+            );
             if title.trim().is_empty() || w < 64 || h < 64 {
                 return BOOL(1);
             }
-            out.push(Window { hwnd, title, width: w, height: h });
+            out.push(Window {
+                hwnd,
+                title,
+                width: w,
+                height: h,
+            });
         }
         BOOL(1)
     }
@@ -196,16 +248,37 @@ fn windows_list() -> Vec<Window> {
 
 pub(crate) fn sources() -> Result<Vec<ScreenSourceInfo>, VideoError> {
     if !supported() {
-        return Err(unsupported("Windows Graphics Capture needs Windows 10 1903"));
+        return Err(unsupported(
+            "Windows Graphics Capture needs Windows 10 1903",
+        ));
     }
     let mut out = Vec::new();
     for (i, m) in monitors().iter().enumerate() {
-        let (w, h) = ((m.rect.right - m.rect.left).max(0) as u32, (m.rect.bottom - m.rect.top).max(0) as u32);
-        let title = if m.primary { format!("Display {} (main)", i + 1) } else { format!("Display {}", i + 1) };
-        out.push(ScreenSourceInfo::new(format!("monitor:{i}"), ScreenKind::Display, title, w, h));
+        let (w, h) = (
+            (m.rect.right - m.rect.left).max(0) as u32,
+            (m.rect.bottom - m.rect.top).max(0) as u32,
+        );
+        let title = if m.primary {
+            format!("Display {} (main)", i + 1)
+        } else {
+            format!("Display {}", i + 1)
+        };
+        out.push(ScreenSourceInfo::new(
+            format!("monitor:{i}"),
+            ScreenKind::Display,
+            title,
+            w,
+            h,
+        ));
     }
     for w in windows_list() {
-        out.push(ScreenSourceInfo::new(format!("window:{}", w.hwnd.0 as isize), ScreenKind::Window, w.title, w.width, w.height));
+        out.push(ScreenSourceInfo::new(
+            format!("window:{}", w.hwnd.0 as isize),
+            ScreenKind::Window,
+            w.title,
+            w.width,
+            w.height,
+        ));
     }
     Ok(out)
 }
@@ -262,19 +335,30 @@ fn item_for(sel: &ScreenSelection) -> Result<GraphicsCaptureItem, VideoError> {
     let id = match sel {
         ScreenSelection::Listed(id) => id.clone(),
         ScreenSelection::Picked(any) => {
-            let picked = any.downcast_ref::<PickedItem>().ok_or(VideoError::NotFound)?;
+            let picked = any
+                .downcast_ref::<PickedItem>()
+                .ok_or(VideoError::NotFound)?;
             return Ok(picked.0.clone());
         }
     };
-    let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>().map_err(|e| map_error(&e, "IGraphicsCaptureItemInterop"))?;
-    if let Some(n) = id.strip_prefix("monitor:").and_then(|n| n.parse::<usize>().ok()) {
+    let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+        .map_err(|e| map_error(&e, "IGraphicsCaptureItemInterop"))?;
+    if let Some(n) = id
+        .strip_prefix("monitor:")
+        .and_then(|n| n.parse::<usize>().ok())
+    {
         let m = monitors().into_iter().nth(n).ok_or(VideoError::NotFound)?;
         // SAFETY: a live monitor handle from the enumeration.
-        unsafe { interop.CreateForMonitor::<GraphicsCaptureItem>(m.handle) }.map_err(|e| map_error(&e, "CreateForMonitor"))
-    } else if let Some(h) = id.strip_prefix("window:").and_then(|n| n.parse::<isize>().ok()) {
+        unsafe { interop.CreateForMonitor::<GraphicsCaptureItem>(m.handle) }
+            .map_err(|e| map_error(&e, "CreateForMonitor"))
+    } else if let Some(h) = id
+        .strip_prefix("window:")
+        .and_then(|n| n.parse::<isize>().ok())
+    {
         let hwnd = HWND(h as *mut core::ffi::c_void);
         // SAFETY: a window handle; a stale one fails with an error.
-        unsafe { interop.CreateForWindow::<GraphicsCaptureItem>(hwnd) }.map_err(|_| VideoError::NotFound)
+        unsafe { interop.CreateForWindow::<GraphicsCaptureItem>(hwnd) }
+            .map_err(|_| VideoError::NotFound)
     } else {
         Err(VideoError::NotFound)
     }
@@ -296,7 +380,10 @@ fn read_frame(gpu: &Gpu, texture: &ID3D11Texture2D) -> Result<(Planes, u32, u32)
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             Usage: D3D11_USAGE_STAGING,
             BindFlags: 0,
             CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
@@ -304,8 +391,16 @@ fn read_frame(gpu: &Gpu, texture: &ID3D11Texture2D) -> Result<(Planes, u32, u32)
         };
         let mut t: Option<ID3D11Texture2D> = None;
         // SAFETY: a valid description; an out pointer.
-        unsafe { gpu.device.CreateTexture2D(&sdesc, None, Some(&mut t as *mut Option<ID3D11Texture2D>)) }.map_err(|e| map_error(&e, "CreateTexture2D"))?;
-        *staging = Some((t.ok_or_else(|| VideoError::os(0, "no staging texture"))?, w, h));
+        unsafe {
+            gpu.device
+                .CreateTexture2D(&sdesc, None, Some(&mut t as *mut Option<ID3D11Texture2D>))
+        }
+        .map_err(|e| map_error(&e, "CreateTexture2D"))?;
+        *staging = Some((
+            t.ok_or_else(|| VideoError::os(0, "no staging texture"))?,
+            w,
+            h,
+        ));
     }
     let Some((st, _, _)) = staging.as_ref() else {
         return Err(VideoError::os(0, "no staging texture"));
@@ -316,18 +411,32 @@ fn read_frame(gpu: &Gpu, texture: &ID3D11Texture2D) -> Result<(Planes, u32, u32)
     unsafe {
         context.CopyResource(st, texture);
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        context.Map(st, 0, D3D11_MAP_READ, 0, Some(&mut mapped as *mut D3D11_MAPPED_SUBRESOURCE)).map_err(|e| map_error(&e, "Map"))?;
+        context
+            .Map(
+                st,
+                0,
+                D3D11_MAP_READ,
+                0,
+                Some(&mut mapped as *mut D3D11_MAPPED_SUBRESOURCE),
+            )
+            .map_err(|e| map_error(&e, "Map"))?;
         let row = w as usize * 4;
         let ok = !mapped.pData.is_null() && mapped.RowPitch as usize >= row;
         if ok {
             let base = mapped.pData as *const u8;
             for y in 0..h as usize {
-                out.extend_from_slice(std::slice::from_raw_parts(base.add(y * mapped.RowPitch as usize), row));
+                out.extend_from_slice(std::slice::from_raw_parts(
+                    base.add(y * mapped.RowPitch as usize),
+                    row,
+                ));
             }
         }
         context.Unmap(st, 0);
         if !ok {
-            return Err(VideoError::os(0, format!("a mapped frame with row pitch {}", mapped.RowPitch)));
+            return Err(VideoError::os(
+                0,
+                format!("a mapped frame with row pitch {}", mapped.RowPitch),
+            ));
         }
     }
     Ok((Planes::tight(PixelFormat::Bgra, w, h, out)?, w, h))
@@ -352,10 +461,16 @@ impl Drop for ScreenControl {
     }
 }
 
-pub(crate) fn open(sel: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+pub(crate) fn open(
+    sel: &ScreenSelection,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
     c.validate()?;
     if !supported() {
-        return Err(unsupported("Windows Graphics Capture needs Windows 10 1903"));
+        return Err(unsupported(
+            "Windows Graphics Capture needs Windows 10 1903",
+        ));
     }
     let item = item_for(sel)?;
     let (device, context) = d3d_device()?;
@@ -364,10 +479,19 @@ pub(crate) fn open(sel: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> 
     let winrt_device: IDirect3DDevice = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi) }
         .and_then(|i| i.cast())
         .map_err(|e| map_error(&e, "CreateDirect3D11DeviceFromDXGIDevice"))?;
-    let size = item.Size().map_err(|e| map_error(&e, "GraphicsCaptureItem.Size"))?;
-    let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)
-        .map_err(|e| map_error(&e, "CreateFreeThreaded"))?;
-    let session = pool.CreateCaptureSession(&item).map_err(|e| map_error(&e, "CreateCaptureSession"))?;
+    let size = item
+        .Size()
+        .map_err(|e| map_error(&e, "GraphicsCaptureItem.Size"))?;
+    let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+        &winrt_device,
+        DirectXPixelFormat::B8G8R8A8UIntNormalized,
+        2,
+        size,
+    )
+    .map_err(|e| map_error(&e, "CreateFreeThreaded"))?;
+    let session = pool
+        .CreateCaptureSession(&item)
+        .map_err(|e| map_error(&e, "CreateCaptureSession"))?;
     let _ = session.SetIsCursorCaptureEnabled(c.cursor);
     // Windows 11 lets us drop the yellow border; older systems refuse.
     let _ = session.SetIsBorderRequired(false);
@@ -379,47 +503,75 @@ pub(crate) fn open(sel: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> 
         context: Mutex::new((context, None)),
     });
     let last_size = Arc::new(Mutex::new(size));
-    let (s, g, d, ls) = (shared.clone(), gpu.clone(), AgileDevice(winrt_device.clone()), last_size.clone());
+    let (s, g, d, ls) = (
+        shared.clone(),
+        gpu.clone(),
+        AgileDevice(winrt_device.clone()),
+        last_size.clone(),
+    );
     let frame_token = pool
-        .FrameArrived(&TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |sender, _| {
-            // Capture the whole wrapper (not just its field) so the closure is Send.
-            let d = &d;
-            let Some(pool) = sender.as_ref() else { return Ok(()) };
-            let Ok(frame) = pool.TryGetNextFrame() else { return Ok(()) };
-            // The content changed size (a window resized): recreate the pool
-            // at the new size; the next frame comes at it.
-            if let Ok(cs) = frame.ContentSize() {
-                let mut last = lock(&ls);
-                if (cs.Width, cs.Height) != (last.Width, last.Height) && cs.Width > 0 && cs.Height > 0 {
-                    *last = cs;
-                    let _ = pool.Recreate(&d.0, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, SizeInt32 { Width: cs.Width, Height: cs.Height });
-                    return Ok(());
-                }
-            }
-            if s.idle() {
-                return Ok(());
-            }
-            let texture = frame
-                .Surface()
-                .and_then(|surface| surface.cast::<IDirect3DDxgiInterfaceAccess>())
-                // SAFETY: the surface's own D3D11 texture.
-                .and_then(|access| unsafe { access.GetInterface::<ID3D11Texture2D>() });
-            match texture {
-                Ok(t) => match read_frame(&g, &t).and_then(|(p, w, h)| VideoFrame::from_planes(p, w, h, now_us())) {
-                    Ok(f) => s.deliver(f),
-                    Err(e) => s.event(SourceEvent::Error(e)),
+        .FrameArrived(
+            &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
+                move |sender, _| {
+                    // Capture the whole wrapper (not just its field) so the closure is Send.
+                    let d = &d;
+                    let Some(pool) = sender.as_ref() else {
+                        return Ok(());
+                    };
+                    let Ok(frame) = pool.TryGetNextFrame() else {
+                        return Ok(());
+                    };
+                    // The content changed size (a window resized): recreate the pool
+                    // at the new size; the next frame comes at it.
+                    if let Ok(cs) = frame.ContentSize() {
+                        let mut last = lock(&ls);
+                        if (cs.Width, cs.Height) != (last.Width, last.Height)
+                            && cs.Width > 0
+                            && cs.Height > 0
+                        {
+                            *last = cs;
+                            let _ = pool.Recreate(
+                                &d.0,
+                                DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                                2,
+                                SizeInt32 {
+                                    Width: cs.Width,
+                                    Height: cs.Height,
+                                },
+                            );
+                            return Ok(());
+                        }
+                    }
+                    if s.idle() {
+                        return Ok(());
+                    }
+                    let texture = frame
+                        .Surface()
+                        .and_then(|surface| surface.cast::<IDirect3DDxgiInterfaceAccess>())
+                        // SAFETY: the surface's own D3D11 texture.
+                        .and_then(|access| unsafe { access.GetInterface::<ID3D11Texture2D>() });
+                    match texture {
+                        Ok(t) => match read_frame(&g, &t)
+                            .and_then(|(p, w, h)| VideoFrame::from_planes(p, w, h, now_us()))
+                        {
+                            Ok(f) => s.deliver(f),
+                            Err(e) => s.event(SourceEvent::Error(e)),
+                        },
+                        Err(e) => s.event(SourceEvent::Error(map_error(&e, "frame surface"))),
+                    }
+                    Ok(())
                 },
-                Err(e) => s.event(SourceEvent::Error(map_error(&e, "frame surface"))),
-            }
-            Ok(())
-        }))
+            ),
+        )
         .map_err(|e| map_error(&e, "FrameArrived"))?;
     let s = shared.clone();
     let closed_token = item
-        .Closed(&TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
-            s.event(SourceEvent::Ended(EndReason::SourceClosed));
-            Ok(())
-        }))
+        .Closed(
+            &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
+                s.event(SourceEvent::Ended(EndReason::SourceClosed));
+                Ok(())
+            }),
+        )
         .map_err(|e| map_error(&e, "Closed"))?;
     let control = ScreenControl {
         session,
@@ -428,6 +580,9 @@ pub(crate) fn open(sel: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> 
         frame_token,
         closed_token,
     };
-    control.session.StartCapture().map_err(|e| map_error(&e, "StartCapture"))?;
+    control
+        .session
+        .StartCapture()
+        .map_err(|e| map_error(&e, "StartCapture"))?;
     Ok(Box::new(QueuedSource::new(shared, control)))
 }

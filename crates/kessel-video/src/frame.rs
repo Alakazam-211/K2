@@ -109,7 +109,12 @@ impl Planes {
     }
 
     /// Tightly packed planes (one after another, no row padding).
-    pub fn tight(format: PixelFormat, width: u32, height: u32, data: impl Into<Bytes>) -> Result<Planes, VideoError> {
+    pub fn tight(
+        format: PixelFormat,
+        width: u32,
+        height: u32,
+        data: impl Into<Bytes>,
+    ) -> Result<Planes, VideoError> {
         let data = data.into();
         let want = format.frame_len(width, height);
         if data.len() != want || format == PixelFormat::Native {
@@ -134,11 +139,16 @@ impl Planes {
             let (row, rows) = self.format.plane_size(i, width, height);
             let stride = self.strides[i] as usize;
             if stride < row {
-                return Err(invalid(format!("plane {i}: stride {stride} is shorter than its {row}-byte row")));
+                return Err(invalid(format!(
+                    "plane {i}: stride {stride} is shorter than its {row}-byte row"
+                )));
             }
             let end = self.offsets[i] + stride * (rows - 1) + row;
             if end > self.data.len() {
-                return Err(invalid(format!("plane {i} ends at {end}, past the {}-byte buffer", self.data.len())));
+                return Err(invalid(format!(
+                    "plane {i} ends at {end}, past the {}-byte buffer",
+                    self.data.len()
+                )));
             }
         }
         Ok(())
@@ -154,7 +164,10 @@ impl Planes {
     /// The same pixels, tightly packed (a cheap clone when they already are).
     pub fn to_tight(&self, width: u32, height: u32) -> Planes {
         let (strides, offsets) = tight_layout(self.format, width, height);
-        if strides == self.strides && offsets == self.offsets && self.data.len() == self.format.frame_len(width, height) {
+        if strides == self.strides
+            && offsets == self.offsets
+            && self.data.len() == self.format.frame_len(width, height)
+        {
             return self.clone();
         }
         let mut out = Vec::with_capacity(self.format.frame_len(width, height));
@@ -207,7 +220,9 @@ pub struct NativeBuffer(pub Arc<dyn NativeFrame>);
 
 impl std::fmt::Debug for NativeBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("NativeBuffer").field(&self.0.format()).finish()
+        f.debug_tuple("NativeBuffer")
+            .field(&self.0.format())
+            .finish()
     }
 }
 
@@ -254,7 +269,12 @@ impl std::fmt::Debug for VideoFrame {
 
 impl VideoFrame {
     /// A frame from CPU planes, checked.
-    pub fn from_planes(planes: Planes, width: u32, height: u32, capture_us: u64) -> Result<VideoFrame, VideoError> {
+    pub fn from_planes(
+        planes: Planes,
+        width: u32,
+        height: u32,
+        capture_us: u64,
+    ) -> Result<VideoFrame, VideoError> {
         planes.validate(width, height)?;
         Ok(VideoFrame {
             width,
@@ -266,7 +286,12 @@ impl VideoFrame {
     }
 
     /// A frame from an OS buffer.
-    pub fn from_native(buffer: NativeBuffer, width: u32, height: u32, capture_us: u64) -> VideoFrame {
+    pub fn from_native(
+        buffer: NativeBuffer,
+        width: u32,
+        height: u32,
+        capture_us: u64,
+    ) -> VideoFrame {
         VideoFrame {
             width,
             height,
@@ -278,14 +303,25 @@ impl VideoFrame {
 
     /// A tight frame of one colour (`y`, `u`, `v`), in I420, NV12, or (as
     /// RGB from the same YUV) BGRA / RGBA.
-    pub fn filled(format: PixelFormat, width: u32, height: u32, yuv: [u8; 3], capture_us: u64) -> Result<VideoFrame, VideoError> {
+    pub fn filled(
+        format: PixelFormat,
+        width: u32,
+        height: u32,
+        yuv: [u8; 3],
+        capture_us: u64,
+    ) -> Result<VideoFrame, VideoError> {
         let i420 = {
             let (cw, ch) = ((width as usize).div_ceil(2), (height as usize).div_ceil(2));
             let luma = width as usize * height as usize;
             let mut buf = vec![yuv[0]; luma + 2 * cw * ch];
             buf[luma..luma + cw * ch].fill(yuv[1]);
             buf[luma + cw * ch..].fill(yuv[2]);
-            VideoFrame::from_planes(Planes::tight(PixelFormat::I420, width, height, buf)?, width, height, capture_us)?
+            VideoFrame::from_planes(
+                Planes::tight(PixelFormat::I420, width, height, buf)?,
+                width,
+                height,
+                capture_us,
+            )?
         };
         if format == PixelFormat::I420 {
             return Ok(i420);
@@ -321,8 +357,14 @@ mod tests {
         assert_eq!(PixelFormat::Bgra.frame_len(3, 3), 36);
         assert_eq!(PixelFormat::Nv12.plane_size(1, 3, 3), (4, 2));
         assert_eq!(PixelFormat::I420.plane_size(2, 3, 3), (2, 2));
-        assert_eq!(tight_layout(PixelFormat::I420, 4, 4), ([4, 2, 2], [0, 16, 20]));
-        assert_eq!(tight_layout(PixelFormat::Nv12, 4, 4), ([4, 4, 0], [0, 16, 0]));
+        assert_eq!(
+            tight_layout(PixelFormat::I420, 4, 4),
+            ([4, 2, 2], [0, 16, 20])
+        );
+        assert_eq!(
+            tight_layout(PixelFormat::Nv12, 4, 4),
+            ([4, 4, 0], [0, 16, 0])
+        );
     }
 
     #[test]
@@ -346,17 +388,28 @@ mod tests {
         assert!(Planes::tight(PixelFormat::I420, 0, 4, vec![]).is_err());
         assert!(Planes::tight(PixelFormat::Native, 4, 4, vec![]).is_err());
         let p = Planes::tight(PixelFormat::I420, 4, 4, vec![0u8; 24]).expect("ok");
-        assert!(VideoFrame::from_planes(p, 8, 8, 0).is_err(), "planes too small for the frame");
+        assert!(
+            VideoFrame::from_planes(p, 8, 8, 0).is_err(),
+            "planes too small for the frame"
+        );
     }
 
     #[test]
     fn filled_frames_in_every_cpu_format() {
-        for f in [PixelFormat::I420, PixelFormat::Nv12, PixelFormat::Bgra, PixelFormat::Rgba] {
+        for f in [
+            PixelFormat::I420,
+            PixelFormat::Nv12,
+            PixelFormat::Bgra,
+            PixelFormat::Rgba,
+        ] {
             let v = VideoFrame::filled(f, 6, 4, [81, 90, 240], 7).expect("filled");
             assert_eq!((v.format(), v.width, v.height, v.capture_us), (f, 6, 4, 7));
         }
         let rgba = VideoFrame::filled(PixelFormat::Rgba, 2, 2, [81, 90, 240], 0).expect("red");
         let px = &rgba.planes().expect("planes").data[..4];
-        assert!(px[0] > 230 && px[1] < 20 && px[2] < 20 && px[3] == 255, "BT.601 red: {px:?}");
+        assert!(
+            px[0] > 230 && px[1] < 20 && px[2] < 20 && px[3] == 255,
+            "BT.601 red: {px:?}"
+        );
     }
 }

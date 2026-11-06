@@ -28,7 +28,9 @@ fn media_type_video() -> Option<*const AnyObject> {
 
 /// `AVAuthorizationStatus` for video, raw.
 fn status_raw() -> isize {
-    let Some(mt) = media_type_video() else { return 2 };
+    let Some(mt) = media_type_video() else {
+        return 2;
+    };
     // SAFETY: a class method taking an AVMediaType and returning NSInteger;
     // it doesn't prompt.
     unsafe { msg_send![class!(AVCaptureDevice), authorizationStatusForMediaType: mt] }
@@ -54,11 +56,17 @@ pub(crate) fn request_permission(done: Done<Permission>) {
     if now != Permission::NotDetermined {
         return done(now);
     }
-    let Some(mt) = media_type_video() else { return done(Permission::Denied) };
+    let Some(mt) = media_type_video() else {
+        return done(Permission::Denied);
+    };
     let slot = Mutex::new(Some(done));
     let block = RcBlock::new(move |granted: Bool| {
         if let Some(done) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            done(if granted.as_bool() { Permission::Granted } else { Permission::Denied });
+            done(if granted.as_bool() {
+                Permission::Granted
+            } else {
+                Permission::Denied
+            });
         }
     });
     autoreleasepool(|_| {
@@ -92,7 +100,9 @@ fn device_types() -> ffi::Cf {
 
 /// The video devices now (autoreleased; call inside a pool).
 unsafe fn devices() -> Vec<*mut AnyObject> {
-    let Some(mt) = media_type_video() else { return Vec::new() };
+    let Some(mt) = media_type_video() else {
+        return Vec::new();
+    };
     let types = device_types();
     let Some(cls) = AnyClass::get(c"AVCaptureDeviceDiscoverySession") else {
         let all: *mut AnyObject = msg_send![class!(AVCaptureDevice), devicesWithMediaType: mt];
@@ -130,8 +140,16 @@ unsafe fn modes(device: *mut AnyObject) -> Vec<(CaptureMode, *mut AnyObject)> {
         if d.width <= 0 || d.height <= 0 || max_fps < 1.0 {
             continue;
         }
-        let mode = CaptureMode::new(d.width as u32, d.height as u32, max_fps.round() as u32, PixelFormat::Nv12);
-        match out.iter_mut().find(|(m, _)| (m.width, m.height) == (mode.width, mode.height)) {
+        let mode = CaptureMode::new(
+            d.width as u32,
+            d.height as u32,
+            max_fps.round() as u32,
+            PixelFormat::Nv12,
+        );
+        match out
+            .iter_mut()
+            .find(|(m, _)| (m.width, m.height) == (mode.width, mode.height))
+        {
             Some(slot) if slot.0.max_fps < mode.max_fps => *slot = (mode, f),
             Some(_) => {}
             None => out.push((mode, f)),
@@ -155,10 +173,15 @@ unsafe fn info_of(device: *mut AnyObject, default_id: &str) -> CameraInfo {
     let id = string_of(id);
     let ty: *mut AnyObject = msg_send![device, deviceType];
     let position: isize = msg_send![device, position];
-    let external = [c"AVCaptureDeviceTypeExternal", c"AVCaptureDeviceTypeExternalUnknown", c"AVCaptureDeviceTypeContinuityCamera"]
-        .iter()
-        .any(|n| cf_const(n).is_some_and(|t| is_equal(ty, t as *const AnyObject)));
-    let built_in = cf_const(c"AVCaptureDeviceTypeBuiltInWideAngleCamera").is_some_and(|t| is_equal(ty, t as *const AnyObject));
+    let external = [
+        c"AVCaptureDeviceTypeExternal",
+        c"AVCaptureDeviceTypeExternalUnknown",
+        c"AVCaptureDeviceTypeContinuityCamera",
+    ]
+    .iter()
+    .any(|n| cf_const(n).is_some_and(|t| is_equal(ty, t as *const AnyObject)));
+    let built_in = cf_const(c"AVCaptureDeviceTypeBuiltInWideAngleCamera")
+        .is_some_and(|t| is_equal(ty, t as *const AnyObject));
     let facing = match position {
         1 => Facing::Back,
         2 => Facing::Front,
@@ -172,7 +195,9 @@ unsafe fn info_of(device: *mut AnyObject, default_id: &str) -> CameraInfo {
 }
 
 unsafe fn default_id() -> String {
-    let Some(mt) = media_type_video() else { return String::new() };
+    let Some(mt) = media_type_video() else {
+        return String::new();
+    };
     let d: *mut AnyObject = msg_send![class!(AVCaptureDevice), defaultDeviceWithMediaType: mt];
     if d.is_null() {
         return String::new();
@@ -201,10 +226,18 @@ struct Ctx {
 
 const IVAR: &std::ffi::CStr = c"kesselVideoCtx";
 
-unsafe extern "C-unwind" fn did_output(this: *mut AnyObject, _sel: Sel, _output: *mut AnyObject, sb: SampleBufferArg, _conn: *mut AnyObject) {
+unsafe extern "C-unwind" fn did_output(
+    this: *mut AnyObject,
+    _sel: Sel,
+    _output: *mut AnyObject,
+    sb: SampleBufferArg,
+    _conn: *mut AnyObject,
+) {
     let this: &AnyObject = &*this;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let Some(ivar) = this.class().instance_variable(IVAR) else { return };
+        let Some(ivar) = this.class().instance_variable(IVAR) else {
+            return;
+        };
         let p = *ivar.load_ptr::<*mut c_void>(this);
         if p.is_null() {
             return;
@@ -232,9 +265,12 @@ unsafe extern "C-unwind" fn did_output(this: *mut AnyObject, _sel: Sel, _output:
 fn delegate_class() -> &'static AnyClass {
     static CLS: OnceLock<&'static AnyClass> = OnceLock::new();
     CLS.get_or_init(|| {
-        let mut b = ClassBuilder::new(c"KesselVideoCameraDelegate", class!(NSObject)).expect("the delegate class name is free");
+        let mut b = ClassBuilder::new(c"KesselVideoCameraDelegate", class!(NSObject))
+            .expect("the delegate class name is free");
         b.add_ivar::<*mut c_void>(IVAR);
-        if let Some(p) = objc2::runtime::AnyProtocol::get(c"AVCaptureVideoDataOutputSampleBufferDelegate") {
+        if let Some(p) =
+            objc2::runtime::AnyProtocol::get(c"AVCaptureVideoDataOutputSampleBufferDelegate")
+        {
             b.add_protocol(p);
         }
         // SAFETY: the signature AVFoundation calls:
@@ -242,7 +278,14 @@ fn delegate_class() -> &'static AnyClass {
         unsafe {
             b.add_method(
                 sel!(captureOutput:didOutputSampleBuffer:fromConnection:),
-                did_output as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, SampleBufferArg, *mut AnyObject),
+                did_output
+                    as unsafe extern "C-unwind" fn(
+                        *mut AnyObject,
+                        Sel,
+                        *mut AnyObject,
+                        SampleBufferArg,
+                        *mut AnyObject,
+                    ),
             );
         }
         b.register()
@@ -303,7 +346,11 @@ fn av_error(e: *mut AnyObject, what: &str) -> VideoError {
     }
 }
 
-pub(crate) fn open(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+pub(crate) fn open(
+    id: Option<&str>,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
     c.validate()?;
     if permission() != Permission::Granted {
         return Err(VideoError::NoPermission);
@@ -311,8 +358,13 @@ pub(crate) fn open(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Resul
     autoreleasepool(|_| unsafe { open_in_pool(id, c, wake) })
 }
 
-unsafe fn open_in_pool(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
-    let mt = media_type_video().ok_or_else(|| VideoError::Unsupported("AVFoundation has no video media type".into()))?;
+unsafe fn open_in_pool(
+    id: Option<&str>,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
+    let mt = media_type_video()
+        .ok_or_else(|| VideoError::Unsupported("AVFoundation has no video media type".into()))?;
     let device: *mut AnyObject = match id {
         Some(id) => {
             let s = nsstring(id).ok_or(VideoError::NotFound)?;
@@ -337,7 +389,8 @@ unsafe fn open_in_pool(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> R
     let session: Option<Retained<AnyObject>> = msg_send![class!(AVCaptureSession), new];
     let session = ObjSend(session.ok_or_else(|| VideoError::os(0, "AVCaptureSession new"))?);
     let mut err: *mut AnyObject = std::ptr::null_mut();
-    let input: *mut AnyObject = msg_send![class!(AVCaptureDeviceInput), deviceInputWithDevice: &*device, error: &mut err];
+    let input: *mut AnyObject =
+        msg_send![class!(AVCaptureDeviceInput), deviceInputWithDevice: &*device, error: &mut err];
     if input.is_null() {
         return Err(av_error(err, "AVCaptureDeviceInput"));
     }
@@ -352,7 +405,11 @@ unsafe fn open_in_pool(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> R
     let output: Option<Retained<AnyObject>> = msg_send![class!(AVCaptureVideoDataOutput), new];
     let output = ObjSend(output.ok_or_else(|| VideoError::os(0, "AVCaptureVideoDataOutput new"))?);
     let settings = ffi::dict();
-    ffi::set_named(&settings, c"kCVPixelBufferPixelFormatTypeKey", ffi::num_i32(ffi::PIX_420V as i32).0);
+    ffi::set_named(
+        &settings,
+        c"kCVPixelBufferPixelFormatTypeKey",
+        ffi::num_i32(ffi::PIX_420V as i32).0,
+    );
     let _: () = msg_send![&*output, setVideoSettings: settings.0 as *const AnyObject];
     let _: () = msg_send![&*output, setAlwaysDiscardsLateVideoFrames: Bool::YES];
 
@@ -386,7 +443,10 @@ unsafe fn open_in_pool(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> R
     let ok: Bool = msg_send![&*control.session, canAddOutput: &*control.output];
     if !ok.as_bool() {
         let _: () = msg_send![&*control.session, commitConfiguration];
-        return Err(VideoError::os(0, "the capture session won't take a video output"));
+        return Err(VideoError::os(
+            0,
+            "the capture session won't take a video output",
+        ));
     }
     let _: () = msg_send![&*control.session, addOutput: &*control.output];
     let _: () = msg_send![&*control.session, commitConfiguration];
@@ -421,7 +481,12 @@ unsafe fn open_in_pool(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> R
     }
 
     // Unplugged, or the session died: end the source.
-    let (stop, s, dev, sess) = (control.stop.clone(), shared.clone(), device, ObjSend(control.session.0.clone()));
+    let (stop, s, dev, sess) = (
+        control.stop.clone(),
+        shared.clone(),
+        device,
+        ObjSend(control.session.0.clone()),
+    );
     control.watch = Some(
         std::thread::Builder::new()
             .name("kessel-video-camera-watch".into())
@@ -445,7 +510,9 @@ unsafe fn open_in_pool(id: Option<&str>, c: CaptureConstraints, wake: Wake) -> R
                     }
                 }
             })
-            .map_err(|e| VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}")))?,
+            .map_err(|e| {
+                VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}"))
+            })?,
     );
     Ok(Box::new(QueuedSource::new(shared, control)))
 }

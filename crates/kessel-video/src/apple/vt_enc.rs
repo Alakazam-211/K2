@@ -24,7 +24,13 @@ struct Outbox {
     out: Vec<Result<Option<CoreFrame>, VideoError>>,
 }
 
-extern "C" fn on_output(refcon: *mut c_void, _frame: *mut c_void, status: OSStatus, flags: u32, sb: CMSampleBufferRef) {
+extern "C" fn on_output(
+    refcon: *mut c_void,
+    _frame: *mut c_void,
+    status: OSStatus,
+    flags: u32,
+    sb: CMSampleBufferRef,
+) {
     // SAFETY: refcon is the encoder's boxed Mutex<Outbox>, alive until the
     // session is invalidated (Drop invalidates first).
     let outbox = unsafe { &*(refcon as *const Mutex<Outbox>) };
@@ -54,11 +60,21 @@ unsafe fn sample_to_annexb(sb: CMSampleBufferRef) -> Result<CoreFrame, VideoErro
     }
     let desc = CMSampleBufferGetFormatDescription(sb);
     if desc.is_null() {
-        return Err(VideoError::os(0, "an encoded sample with no format description"));
+        return Err(VideoError::os(
+            0,
+            "an encoded sample with no format description",
+        ));
     }
     let mut count = 0usize;
     let mut nal_len = 0i32;
-    let st = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(desc, 0, ptr::null_mut(), ptr::null_mut(), &mut count, &mut nal_len);
+    let st = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+        desc,
+        0,
+        ptr::null_mut(),
+        ptr::null_mut(),
+        &mut count,
+        &mut nal_len,
+    );
     if st != 0 {
         return Err(VideoError::os(st as i64, "H.264 parameter sets unreadable"));
     }
@@ -67,9 +83,19 @@ unsafe fn sample_to_annexb(sb: CMSampleBufferRef) -> Result<CoreFrame, VideoErro
         for i in 0..count {
             let mut p: *const u8 = ptr::null();
             let mut n = 0usize;
-            let st = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(desc, i, &mut p, &mut n, ptr::null_mut(), ptr::null_mut());
+            let st = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                desc,
+                i,
+                &mut p,
+                &mut n,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            );
             if st != 0 || p.is_null() {
-                return Err(VideoError::os(st as i64, format!("H.264 parameter set {i} unreadable")));
+                return Err(VideoError::os(
+                    st as i64,
+                    format!("H.264 parameter set {i} unreadable"),
+                ));
             }
             h264::push_annexb(&mut data, std::slice::from_raw_parts(p, n));
         }
@@ -109,15 +135,24 @@ unsafe impl Send for VtEncoder {}
 
 fn profile_keys(p: H264Profile) -> [&'static std::ffi::CStr; 2] {
     match p {
-        H264Profile::ConstrainedHigh => [c"kVTProfileLevel_H264_ConstrainedHigh_AutoLevel", c"kVTProfileLevel_H264_High_AutoLevel"],
-        _ => [c"kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel", c"kVTProfileLevel_H264_Baseline_AutoLevel"],
+        H264Profile::ConstrainedHigh => [
+            c"kVTProfileLevel_H264_ConstrainedHigh_AutoLevel",
+            c"kVTProfileLevel_H264_High_AutoLevel",
+        ],
+        _ => [
+            c"kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel",
+            c"kVTProfileLevel_H264_Baseline_AutoLevel",
+        ],
     }
 }
 
 impl VtEncoder {
     pub(crate) fn open(cfg: &EncoderConfig) -> Result<VtEncoder, VideoError> {
         let CodecConfig::H264 { profile, .. } = cfg.codec else {
-            return Err(unsupported(format!("VideoToolbox here encodes H.264, not {:?}", cfg.codec.codec())));
+            return Err(unsupported(format!(
+                "VideoToolbox here encodes H.264, not {:?}",
+                cfg.codec.codec()
+            )));
         };
         let outbox: Box<Mutex<Outbox>> = Box::default();
         let attrs = pixel_buffer_attributes(PIX_420V, Some((cfg.width, cfg.height)));
@@ -125,16 +160,33 @@ impl VtEncoder {
             let spec = dict();
             match cfg.implementation {
                 ImplPreference::HardwareOnly => {
-                    set_named(&spec, c"kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder", yes());
+                    set_named(
+                        &spec,
+                        c"kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder",
+                        yes(),
+                    );
                 }
                 ImplPreference::SoftwareOnly => {
-                    set_named(&spec, c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder", no());
+                    set_named(
+                        &spec,
+                        c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder",
+                        no(),
+                    );
                 }
                 _ => {
-                    set_named(&spec, c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder", yes());
+                    set_named(
+                        &spec,
+                        c"kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder",
+                        yes(),
+                    );
                 }
             }
-            let ll = low_latency && set_named(&spec, c"kVTVideoEncoderSpecification_EnableLowLatencyRateControl", yes());
+            let ll = low_latency
+                && set_named(
+                    &spec,
+                    c"kVTVideoEncoderSpecification_EnableLowLatencyRateControl",
+                    yes(),
+                );
             (spec, ll)
         };
         let refcon = &*outbox as *const Mutex<Outbox> as *mut c_void;
@@ -167,8 +219,14 @@ impl VtEncoder {
         }
         if st != 0 || session.is_null() {
             return Err(match cfg.implementation {
-                ImplPreference::HardwareOnly => unsupported(format!("no hardware H.264 encoder for {}x{} (OSStatus {st})", cfg.width, cfg.height)),
-                _ => VideoError::os(st as i64, format!("VTCompressionSessionCreate {}x{}", cfg.width, cfg.height)),
+                ImplPreference::HardwareOnly => unsupported(format!(
+                    "no hardware H.264 encoder for {}x{} (OSStatus {st})",
+                    cfg.width, cfg.height
+                )),
+                _ => VideoError::os(
+                    st as i64,
+                    format!("VTCompressionSessionCreate {}x{}", cfg.width, cfg.height),
+                ),
             });
         }
         let mut enc = VtEncoder {
@@ -179,35 +237,57 @@ impl VtEncoder {
             low_latency,
             last_pts: -1,
         };
-        enc.hardware = enc.copy_bool(c"kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder");
+        enc.hardware =
+            enc.copy_bool(c"kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder");
         if cfg.implementation == ImplPreference::HardwareOnly && !enc.hardware {
-            return Err(unsupported("VideoToolbox gave a software encoder when hardware was required"));
+            return Err(unsupported(
+                "VideoToolbox gave a software encoder when hardware was required",
+            ));
         }
         enc.prop(c"kVTCompressionPropertyKey_RealTime", yes());
         enc.prop(c"kVTCompressionPropertyKey_AllowFrameReordering", no());
         let [want, fallback] = profile_keys(profile);
-        let set_profile = |enc: &mut VtEncoder, key| cf_const(key).is_some_and(|p| enc.prop(c"kVTCompressionPropertyKey_ProfileLevel", p));
+        let set_profile = |enc: &mut VtEncoder, key| {
+            cf_const(key).is_some_and(|p| enc.prop(c"kVTCompressionPropertyKey_ProfileLevel", p))
+        };
         if !set_profile(&mut enc, want) && !set_profile(&mut enc, fallback) {
-            return Err(unsupported(format!("VideoToolbox refused the {profile:?} profile")));
+            return Err(unsupported(format!(
+                "VideoToolbox refused the {profile:?} profile"
+            )));
         }
         match cfg.keyframe_interval {
             Some(n) => {
-                enc.prop(c"kVTCompressionPropertyKey_MaxKeyFrameInterval", num_i32(n.min(i32::MAX as u32) as i32).0);
+                enc.prop(
+                    c"kVTCompressionPropertyKey_MaxKeyFrameInterval",
+                    num_i32(n.min(i32::MAX as u32) as i32).0,
+                );
             }
             None => {
                 // Keyframes come on request; this is only a safety net.
-                enc.prop(c"kVTCompressionPropertyKey_MaxKeyFrameInterval", num_i32(i32::MAX).0);
-                enc.prop(c"kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration", num_f64(3600.0).0);
+                enc.prop(
+                    c"kVTCompressionPropertyKey_MaxKeyFrameInterval",
+                    num_i32(i32::MAX).0,
+                );
+                enc.prop(
+                    c"kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration",
+                    num_f64(3600.0).0,
+                );
             }
         }
         if cfg.content == ContentHint::Camera {
-            enc.prop(c"kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality", yes());
+            enc.prop(
+                c"kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality",
+                yes(),
+            );
         }
         enc.apply_rates(Rates::new(cfg.bitrate_bps, cfg.fps))?;
         // SAFETY: a live session.
         let st = unsafe { VTCompressionSessionPrepareToEncodeFrames(enc.session) };
         if st != 0 {
-            return Err(VideoError::os(st as i64, "VTCompressionSessionPrepareToEncodeFrames"));
+            return Err(VideoError::os(
+                st as i64,
+                "VTCompressionSessionPrepareToEncodeFrames",
+            ));
         }
         Ok(enc)
     }
@@ -237,13 +317,19 @@ impl VtEncoder {
         // The ceiling keeps its ratio to the target as BWE moves it.
         let ratio = self.cfg.max_bitrate_bps as f64 / self.cfg.bitrate_bps.max(1) as f64;
         let max_bps = (r.bitrate_bps as f64 * ratio.max(1.0)) as i64;
-        if !self.prop(c"kVTCompressionPropertyKey_AverageBitRate", num_i32(r.bitrate_bps.min(i32::MAX as u32) as i32).0) {
+        if !self.prop(
+            c"kVTCompressionPropertyKey_AverageBitRate",
+            num_i32(r.bitrate_bps.min(i32::MAX as u32) as i32).0,
+        ) {
             return Err(VideoError::os(0, "VideoToolbox refused the bitrate"));
         }
         // [bytes, seconds]: no one-second window over the ceiling.
         let limits = array(&[num_i64(max_bps / 8).0, num_f64(1.0).0]);
         self.prop(c"kVTCompressionPropertyKey_DataRateLimits", limits.0);
-        self.prop(c"kVTCompressionPropertyKey_ExpectedFrameRate", num_i32(r.fps as i32).0);
+        self.prop(
+            c"kVTCompressionPropertyKey_ExpectedFrameRate",
+            num_i32(r.fps as i32).0,
+        );
         let max_bitrate = (max_bps as u64).min(u32::MAX as u64) as u32;
         self.cfg.max_bitrate_bps = max_bitrate.max(r.bitrate_bps);
         self.cfg.bitrate_bps = r.bitrate_bps;
@@ -258,7 +344,14 @@ impl VtEncoder {
             let pool = VTCompressionSessionGetPixelBufferPool(self.session);
             if pool.is_null() {
                 let attrs = pixel_buffer_attributes(PIX_420V, None);
-                CVPixelBufferCreate(ptr::null(), self.cfg.width as usize, self.cfg.height as usize, PIX_420V, attrs.0, &mut pb)
+                CVPixelBufferCreate(
+                    ptr::null(),
+                    self.cfg.width as usize,
+                    self.cfg.height as usize,
+                    PIX_420V,
+                    attrs.0,
+                    &mut pb,
+                )
             } else {
                 CVPixelBufferPoolCreatePixelBuffer(ptr::null(), pool, &mut pb)
             }
@@ -282,7 +375,11 @@ impl EncoderCore for VtEncoder {
         }
     }
 
-    fn encode(&mut self, frame: &VideoFrame, keyframe: bool) -> Result<Option<CoreFrame>, VideoError> {
+    fn encode(
+        &mut self,
+        frame: &VideoFrame,
+        keyframe: bool,
+    ) -> Result<Option<CoreFrame>, VideoError> {
         let owned;
         let pb: CVPixelBufferRef = match &frame.buffer {
             FrameBuffer::Native(n) => match n.0.as_any().downcast_ref::<CvFrame>() {
@@ -326,17 +423,29 @@ impl EncoderCore for VtEncoder {
             }
         };
         if st == VT_INVALID_SESSION {
-            return Err(VideoError::os(st as i64, "the VideoToolbox session was lost"));
+            return Err(VideoError::os(
+                st as i64,
+                "the VideoToolbox session was lost",
+            ));
         }
         if st != 0 {
             return Err(VideoError::os(st as i64, "VTCompressionSessionEncodeFrame"));
         }
-        let mut got: Vec<_> = self.outbox.lock().unwrap_or_else(|e| e.into_inner()).out.drain(..).collect();
+        let mut got: Vec<_> = self
+            .outbox
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .out
+            .drain(..)
+            .collect();
         // CompleteFrames flushed: this is the frame just given (or nothing if
         // rate control dropped it). More would mean frame delay we turned
         // off; dropping one would break the reference chain, so fail loudly.
         if got.len() > 1 {
-            return Err(VideoError::os(0, format!("VideoToolbox gave {} frames for one input", got.len())));
+            return Err(VideoError::os(
+                0,
+                format!("VideoToolbox gave {} frames for one input", got.len()),
+            ));
         }
         got.pop().transpose().map(Option::flatten)
     }
@@ -364,8 +473,16 @@ impl EncoderCore for VtEncoder {
     fn name(&self) -> String {
         format!(
             "VideoToolbox H.264 ({}{})",
-            if self.hardware { "hardware" } else { "software" },
-            if self.low_latency { ", low-latency rate control" } else { "" }
+            if self.hardware {
+                "hardware"
+            } else {
+                "software"
+            },
+            if self.low_latency {
+                ", low-latency rate control"
+            } else {
+                ""
+            }
         )
     }
 }

@@ -17,12 +17,17 @@
 //! and RTP tests run without an OS codec. Its decoder returns a grey frame
 //! with the code drawn on it.
 
-use crate::api::{Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake};
+use crate::api::{
+    Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
+};
 use crate::convert::luma_plane;
 use crate::error::{unsupported, DecodeError, VideoError};
 use crate::frame::{PixelFormat, Planes, VideoFrame};
 use crate::h264::{self, NAL_IDR, NAL_PPS, NAL_SLICE, NAL_SPS};
-use crate::kit::{lock, now_us, CoreFrame, DecoderCore, EncoderCore, QueuedSource, SourceControl, SourceShared, ThreadedDecoder, ThreadedEncoder};
+use crate::kit::{
+    lock, now_us, CoreFrame, DecoderCore, EncoderCore, QueuedSource, SourceControl, SourceShared,
+    ThreadedDecoder, ThreadedEncoder,
+};
 use crate::types::*;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -116,11 +121,21 @@ impl Default for FakeConfig {
             CaptureMode::new(1280, 720, 30, PixelFormat::I420),
             CaptureMode::new(640, 480, 30, PixelFormat::I420),
         ];
-        let mut window = ScreenSourceInfo::new("fake:window:1", ScreenKind::Window, "Fake Window", 800, 600);
+        let mut window =
+            ScreenSourceInfo::new("fake:window:1", ScreenKind::Window, "Fake Window", 800, 600);
         window.app = Some("Fake App".into());
         FakeConfig {
             cameras: vec![cam],
-            screens: vec![ScreenSourceInfo::new("fake:display:0", ScreenKind::Display, "Fake Display", 1920, 1080), window],
+            screens: vec![
+                ScreenSourceInfo::new(
+                    "fake:display:0",
+                    ScreenKind::Display,
+                    "Fake Display",
+                    1920,
+                    1080,
+                ),
+                window,
+            ],
             hotplug: Vec::new(),
             camera_permission: FakePermission::Granted,
             screen_permission: FakePermission::Granted,
@@ -205,7 +220,12 @@ impl FakeBackend {
         }
     }
 
-    fn request(&self, slot: &Mutex<PermSlot>, done: Done<Permission>, which: fn(&Inner) -> &Mutex<PermSlot>) {
+    fn request(
+        &self,
+        slot: &Mutex<PermSlot>,
+        done: Done<Permission>,
+        which: fn(&Inner) -> &Mutex<PermSlot>,
+    ) {
         let (now, script) = {
             let s = lock(slot);
             (s.now, s.script)
@@ -275,13 +295,29 @@ impl VideoBackend for FakeBackend {
         };
         if self.inner.cfg.codec == FakeCodec::Structural {
             for dir in [CodecDirection::Encode, CodecDirection::Decode] {
-                let mut c = CodecCapability::new(VideoCodec::H264, dir, Implementation::Software, "fake-structural", 3840, 2160, 60);
+                let mut c = CodecCapability::new(
+                    VideoCodec::H264,
+                    dir,
+                    Implementation::Software,
+                    "fake-structural",
+                    3840,
+                    2160,
+                    60,
+                );
                 c.max_instances = self.inner.cfg.max_instances;
                 c.h264 = Some(H264Capability::new(
-                    vec![H264Profile::ConstrainedBaseline, H264Profile::ConstrainedHigh],
+                    vec![
+                        H264Profile::ConstrainedBaseline,
+                        H264Profile::ConstrainedHigh,
+                    ],
                     H264Level::L5_1,
                 ));
-                c.formats = vec![PixelFormat::I420, PixelFormat::Nv12, PixelFormat::Bgra, PixelFormat::Rgba];
+                c.formats = vec![
+                    PixelFormat::I420,
+                    PixelFormat::Nv12,
+                    PixelFormat::Bgra,
+                    PixelFormat::Rgba,
+                ];
                 caps.codecs.push(c);
             }
         }
@@ -304,7 +340,12 @@ impl VideoBackend for FakeBackend {
         self.request(&self.inner.camera_perm, done, |i| &i.camera_perm);
     }
 
-    fn open_camera(&self, id: Option<&str>, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_camera(
+        &self,
+        id: Option<&str>,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         c.validate()?;
         if self.camera_permission() != Permission::Granted {
@@ -316,7 +357,12 @@ impl VideoBackend for FakeBackend {
             None => cams.iter().find(|c| c.is_default).or(cams.first()),
         }
         .ok_or(VideoError::NotFound)?;
-        let mode = nearest_mode(&cam.modes, &c).unwrap_or(CaptureMode::new(1280, 720, 30, PixelFormat::I420));
+        let mode = nearest_mode(&cam.modes, &c).unwrap_or(CaptureMode::new(
+            1280,
+            720,
+            30,
+            PixelFormat::I420,
+        ));
         open_source(&self.inner, mode.width, mode.height, mode.max_fps, c, wake)
     }
 
@@ -343,7 +389,12 @@ impl VideoBackend for FakeBackend {
         }
     }
 
-    fn open_screen(&self, source: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+    fn open_screen(
+        &self,
+        source: &ScreenSelection,
+        c: CaptureConstraints,
+        wake: Wake,
+    ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
         c.validate()?;
         if self.screen_permission() != Permission::Granted {
@@ -351,21 +402,38 @@ impl VideoBackend for FakeBackend {
         }
         let id = match source {
             ScreenSelection::Listed(id) => id.clone(),
-            ScreenSelection::Picked(any) => any.downcast_ref::<String>().cloned().ok_or(VideoError::NotFound)?,
+            ScreenSelection::Picked(any) => any
+                .downcast_ref::<String>()
+                .cloned()
+                .ok_or(VideoError::NotFound)?,
         };
-        let s = self.inner.cfg.screens.iter().find(|s| s.id == id).ok_or(VideoError::NotFound)?;
+        let s = self
+            .inner
+            .cfg
+            .screens
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or(VideoError::NotFound)?;
         let fps = c.fps.unwrap_or(30);
         open_source(&self.inner, s.width & !1, s.height & !1, fps, c, wake)
     }
 
-    fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    fn encoder(
+        &self,
+        config: EncoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
             return r;
         }
         config.validate()?;
-        if self.inner.cfg.codec != FakeCodec::Structural || config.codec.codec() != VideoCodec::H264 {
-            return Err(unsupported(format!("the fake has no {:?} encoder", config.codec.codec())));
+        if self.inner.cfg.codec != FakeCodec::Structural || config.codec.codec() != VideoCodec::H264
+        {
+            return Err(unsupported(format!(
+                "the fake has no {:?} encoder",
+                config.codec.codec()
+            )));
         }
         if config.implementation == ImplPreference::HardwareOnly {
             return Err(unsupported("the fake has no hardware encoder"));
@@ -390,21 +458,38 @@ impl VideoBackend for FakeBackend {
         }))
     }
 
-    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(
+        &self,
+        config: DecoderConfig,
+        wake: Wake,
+    ) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
         if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
             return r;
         }
         if self.inner.cfg.codec != FakeCodec::Structural || config.codec != VideoCodec::H264 {
-            return Err(unsupported(format!("the fake has no {:?} decoder", config.codec)));
+            return Err(unsupported(format!(
+                "the fake has no {:?} decoder",
+                config.codec
+            )));
         }
         if config.implementation == ImplPreference::HardwareOnly {
             return Err(unsupported("the fake has no hardware decoder"));
         }
-        Ok(Box::new(ThreadedDecoder::start(Box::new(StructuralDecoder), config, wake)?))
+        Ok(Box::new(ThreadedDecoder::start(
+            Box::new(StructuralDecoder),
+            config,
+            wake,
+        )?))
     }
 
-    fn convert(&self, frame: &VideoFrame, width: u32, height: u32, format: PixelFormat) -> Result<VideoFrame, VideoError> {
+    fn convert(
+        &self,
+        frame: &VideoFrame,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<VideoFrame, VideoError> {
         self.live()?;
         crate::convert::convert(frame, width, height, format)
     }
@@ -436,10 +521,22 @@ impl Drop for FakeControl {
     }
 }
 
-fn open_source(inner: &Arc<Inner>, width: u32, height: u32, fps: u32, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
+fn open_source(
+    inner: &Arc<Inner>,
+    width: u32,
+    height: u32,
+    fps: u32,
+    c: CaptureConstraints,
+    wake: Wake,
+) -> Result<Box<dyn FrameSource>, VideoError> {
     let shared = SourceShared::new(c, fps, wake);
     let stop = Arc::new(AtomicBool::new(false));
-    let (s, st, events, backend) = (shared.clone(), stop.clone(), inner.cfg.source_events.clone(), inner.clone());
+    let (s, st, events, backend) = (
+        shared.clone(),
+        stop.clone(),
+        inner.cfg.source_events.clone(),
+        inner.clone(),
+    );
     let thread = std::thread::Builder::new()
         .name("kessel-video-fake-source".into())
         .spawn(move || {
@@ -513,7 +610,12 @@ fn draw_code(y_plane: &mut [u8], stride: usize, width: u32, height: u32, code: u
 
 /// An I420 test frame: a gradient, a bar that moves with `n`, and `n` as
 /// the frame code.
-pub fn pattern_frame(width: u32, height: u32, n: u32, capture_us: u64) -> Result<VideoFrame, VideoError> {
+pub fn pattern_frame(
+    width: u32,
+    height: u32,
+    n: u32,
+    capture_us: u64,
+) -> Result<VideoFrame, VideoError> {
     let (w, h) = (width as usize, height as usize);
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
     let mut buf = vec![0u8; w * h + 2 * cw * ch];
@@ -522,7 +624,11 @@ pub fn pattern_frame(width: u32, height: u32, n: u32, capture_us: u64) -> Result
     for y in 0..h {
         for x in 0..w {
             let in_bar = x >= bar_x && x < bar_x + bar_w && y > h / 4;
-            buf[y * w + x] = if in_bar { 200 } else { (40 + (x * 100 / w.max(1)) + (y * 60 / h.max(1))) as u8 };
+            buf[y * w + x] = if in_bar {
+                200
+            } else {
+                (40 + (x * 100 / w.max(1)) + (y * 60 / h.max(1))) as u8
+            };
         }
     }
     draw_code(&mut buf[..w * h], w, width, height, n);
@@ -530,7 +636,12 @@ pub fn pattern_frame(width: u32, height: u32, n: u32, capture_us: u64) -> Result
         buf[w * h + i] = 110 + ((i % cw) * 30 / cw.max(1)) as u8;
         buf[w * h + cw * ch + i] = 140;
     }
-    VideoFrame::from_planes(Planes::tight(PixelFormat::I420, width, height, buf)?, width, height, capture_us)
+    VideoFrame::from_planes(
+        Planes::tight(PixelFormat::I420, width, height, buf)?,
+        width,
+        height,
+        capture_us,
+    )
 }
 
 /// Read the frame code back (`None` if a block is neither clearly black nor
@@ -542,7 +653,10 @@ pub fn read_frame_code(frame: &VideoFrame) -> Option<u32> {
         let (x0, y0, bw, bh) = block_rect(frame.width, frame.height, bit);
         // The middle half of the block, away from blurred edges.
         let (mx0, my0) = (x0 + bw / 4, y0 + bh / 4);
-        let (mx1, my1) = ((x0 + bw * 3 / 4).max(mx0 + 1), (y0 + bh * 3 / 4).max(my0 + 1));
+        let (mx1, my1) = (
+            (x0 + bw * 3 / 4).max(mx0 + 1),
+            (y0 + bh * 3 / 4).max(my0 + 1),
+        );
         let mut sum = 0u64;
         let mut n = 0u64;
         for yy in my0..my1.min(frame.height as usize) {
@@ -620,8 +734,15 @@ impl EncoderCore for StructuralEncoder {
         PixelFormat::I420
     }
 
-    fn encode(&mut self, frame: &VideoFrame, keyframe: bool) -> Result<Option<CoreFrame>, VideoError> {
-        if self.faults.contains(&(self.submits.load(Ordering::Acquire), EncoderFault::SessionLost)) {
+    fn encode(
+        &mut self,
+        frame: &VideoFrame,
+        keyframe: bool,
+    ) -> Result<Option<CoreFrame>, VideoError> {
+        if self.faults.contains(&(
+            self.submits.load(Ordering::Acquire),
+            EncoderFault::SessionLost,
+        )) {
             return Err(VideoError::os(-1, "the fake session was lost (scripted)"));
         }
         let code = read_frame_code(frame).unwrap_or(0);
@@ -630,12 +751,29 @@ impl EncoderCore for StructuralEncoder {
             _ => 31,
         };
         let (profile_idc, constraints) = match self.config.codec {
-            CodecConfig::H264 { profile: H264Profile::ConstrainedHigh, .. } => (100u8, 0x0cu8),
+            CodecConfig::H264 {
+                profile: H264Profile::ConstrainedHigh,
+                ..
+            } => (100u8, 0x0cu8),
             _ => (66, 0xe0),
         };
         let mut au = Vec::new();
         if keyframe {
-            h264::push_annexb(&mut au, &[0x67, profile_idc, constraints, level, 0xda, 0x01, 0x40, 0x16, 0xe8, 0x40]);
+            h264::push_annexb(
+                &mut au,
+                &[
+                    0x67,
+                    profile_idc,
+                    constraints,
+                    level,
+                    0xda,
+                    0x01,
+                    0x40,
+                    0x16,
+                    0xe8,
+                    0x40,
+                ],
+            );
             h264::push_annexb(&mut au, &[0x68, 0xce, 0x3c, 0x80]);
         }
         let mut payload = Vec::new();
@@ -687,15 +825,28 @@ impl DecoderCore for StructuralDecoder {
     fn decode(&mut self, input: &EncodedInput) -> Result<Option<VideoFrame>, DecodeError> {
         let nals = h264::annexb_nals(&input.data);
         let types: Vec<u8> = nals.iter().filter_map(|n| h264::nal_type(n)).collect();
-        let Some(slice) = nals.iter().find(|n| matches!(h264::nal_type(n), Some(NAL_IDR | NAL_SLICE))) else {
-            return if types.iter().all(|t| matches!(*t, NAL_SPS | NAL_PPS | h264::NAL_SEI | h264::NAL_AUD)) && !types.is_empty() {
+        let Some(slice) = nals
+            .iter()
+            .find(|n| matches!(h264::nal_type(n), Some(NAL_IDR | NAL_SLICE)))
+        else {
+            return if types
+                .iter()
+                .all(|t| matches!(*t, NAL_SPS | NAL_PPS | h264::NAL_SEI | h264::NAL_AUD))
+                && !types.is_empty()
+            {
                 Ok(None)
             } else {
-                Err(DecodeError::Corrupt(format!("no slice in NAL types {types:?}")))
+                Err(DecodeError::Corrupt(format!(
+                    "no slice in NAL types {types:?}"
+                )))
             };
         };
-        if h264::nal_type(slice) == Some(NAL_IDR) && !(types.contains(&NAL_SPS) && types.contains(&NAL_PPS)) {
-            return Err(DecodeError::Corrupt("an IDR without SPS and PPS in band".into()));
+        if h264::nal_type(slice) == Some(NAL_IDR)
+            && !(types.contains(&NAL_SPS) && types.contains(&NAL_PPS))
+        {
+            return Err(DecodeError::Corrupt(
+                "an IDR without SPS and PPS in band".into(),
+            ));
         }
         let payload = h264::unescape_rbsp(&slice[1..]);
         if payload.len() < 12 || &payload[..4] != MAGIC {
@@ -711,8 +862,12 @@ impl DecoderCore for StructuralDecoder {
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
         let mut buf = vec![128u8; w * h + 2 * cw * ch];
         draw_code(&mut buf[..w * h], w, width, height, code);
-        let planes = Planes::tight(PixelFormat::I420, width, height, buf).map_err(DecodeError::Video)?;
-        Ok(Some(VideoFrame::from_planes(planes, width, height, input.capture_us).map_err(DecodeError::Video)?))
+        let planes =
+            Planes::tight(PixelFormat::I420, width, height, buf).map_err(DecodeError::Video)?;
+        Ok(Some(
+            VideoFrame::from_planes(planes, width, height, input.capture_us)
+                .map_err(DecodeError::Video)?,
+        ))
     }
 
     fn reset(&mut self) -> Result<(), VideoError> {
@@ -734,9 +889,12 @@ mod tests {
     fn counting_wake() -> (Wake, Arc<AtomicU64>) {
         let n = Arc::new(AtomicU64::new(0));
         let m = n.clone();
-        (Arc::new(move || {
-            m.fetch_add(1, Ordering::Relaxed);
-        }), n)
+        (
+            Arc::new(move || {
+                m.fetch_add(1, Ordering::Relaxed);
+            }),
+            n,
+        )
     }
 
     #[test]
@@ -744,21 +902,39 @@ mod tests {
         for code in [0u32, 1, 0xdead_beef, u32::MAX, 123_456] {
             let f = pattern_frame(1280, 720, code, 0).expect("frame");
             assert_eq!(read_frame_code(&f), Some(code));
-            for (w, h, fmt) in [(640, 360, PixelFormat::Nv12), (320, 180, PixelFormat::I420), (1920, 1080, PixelFormat::Rgba), (256, 144, PixelFormat::Bgra)] {
+            for (w, h, fmt) in [
+                (640, 360, PixelFormat::Nv12),
+                (320, 180, PixelFormat::I420),
+                (1920, 1080, PixelFormat::Rgba),
+                (256, 144, PixelFormat::Bgra),
+            ] {
                 let s = convert(&f, w, h, fmt).expect("convert");
-                assert_eq!(read_frame_code(&s), Some(code), "{code:#x} at {w}x{h} {fmt:?}");
+                assert_eq!(
+                    read_frame_code(&s),
+                    Some(code),
+                    "{code:#x} at {w}x{h} {fmt:?}"
+                );
             }
         }
-        let grey = VideoFrame::filled(PixelFormat::I420, 256, 144, [128, 128, 128], 0).expect("grey");
-        assert_eq!(read_frame_code(&grey), None, "grey is neither black nor white");
+        let grey =
+            VideoFrame::filled(PixelFormat::I420, 256, 144, [128, 128, 128], 0).expect("grey");
+        assert_eq!(
+            read_frame_code(&grey),
+            None,
+            "grey is neither black nor white"
+        );
     }
 
     #[test]
     fn structural_h264_follows_the_bitstream_rules_and_round_trips() {
         let b = FakeBackend::new(FakeConfig::default());
         let (wake, wakes) = counting_wake();
-        let mut enc = b.encoder(EncoderConfig::h264(640, 360, 30, 600_000), wake).expect("encoder");
-        let mut dec = b.decoder(DecoderConfig::new(VideoCodec::H264), no_wake()).expect("decoder");
+        let mut enc = b
+            .encoder(EncoderConfig::h264(640, 360, 30, 600_000), wake)
+            .expect("encoder");
+        let mut dec = b
+            .decoder(DecoderConfig::new(VideoCodec::H264), no_wake())
+            .expect("decoder");
         let mut outs = Vec::new();
         for n in 0..12u32 {
             let f = pattern_frame(1280, 720, n, 1_000 + n as u64 * 33_333).expect("frame");
@@ -766,14 +942,27 @@ mod tests {
                 enc.request_keyframe();
             }
             enc.submit(&f, EncodeOptions::default()).expect("submit");
-            let ef = wait_for(Duration::from_secs(2), || enc.poll()).expect("an output").expect("ok");
+            let ef = wait_for(Duration::from_secs(2), || enc.poll())
+                .expect("an output")
+                .expect("ok");
             outs.push(ef);
         }
         assert!(wakes.load(Ordering::Relaxed) >= 12, "a wake per output");
         for (n, ef) in outs.iter().enumerate() {
-            assert_eq!(ef.capture_us, 1_000 + n as u64 * 33_333, "capture_us passes through");
-            assert_eq!((ef.width, ef.height), (640, 360), "scaled to the coded size");
-            assert!(ef.data.starts_with(&[0, 0, 0, 1]), "4-byte start code first");
+            assert_eq!(
+                ef.capture_us,
+                1_000 + n as u64 * 33_333,
+                "capture_us passes through"
+            );
+            assert_eq!(
+                (ef.width, ef.height),
+                (640, 360),
+                "scaled to the coded size"
+            );
+            assert!(
+                ef.data.starts_with(&[0, 0, 0, 1]),
+                "4-byte start code first"
+            );
             let nals = h264::annexb_nals(&ef.data);
             let types: Vec<u8> = nals.iter().filter_map(|n| h264::nal_type(n)).collect();
             if ef.keyframe {
@@ -787,11 +976,24 @@ mod tests {
             let fours = ef.data.windows(4).filter(|w| *w == [0, 0, 0, 1]).count();
             assert_eq!(starts, fours, "only 4-byte start codes");
         }
-        let keys: Vec<usize> = outs.iter().enumerate().filter(|(_, e)| e.keyframe).map(|(i, _)| i).collect();
+        let keys: Vec<usize> = outs
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.keyframe)
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(keys, vec![0, 6], "first frame and the requested one");
         for (n, ef) in outs.iter().enumerate() {
-            dec.submit(EncodedInput::new(VideoCodec::H264, ef.data.clone(), ef.keyframe, ef.capture_us)).expect("submit");
-            let f = wait_for(Duration::from_secs(2), || dec.poll()).expect("decoded").expect("ok");
+            dec.submit(EncodedInput::new(
+                VideoCodec::H264,
+                ef.data.clone(),
+                ef.keyframe,
+                ef.capture_us,
+            ))
+            .expect("submit");
+            let f = wait_for(Duration::from_secs(2), || dec.poll())
+                .expect("decoded")
+                .expect("ok");
             assert_eq!(read_frame_code(&f), Some(n as u32));
             assert_eq!(f.capture_us, ef.capture_us);
         }
@@ -802,23 +1004,43 @@ mod tests {
     #[test]
     fn set_rates_never_forces_a_keyframe_and_sizes_follow_the_bitrate() {
         let b = FakeBackend::new(FakeConfig::default());
-        let mut enc = b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("encoder");
+        let mut enc = b
+            .encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+            .expect("encoder");
         let mut sizes = Vec::new();
         for n in 0..6u32 {
             if n == 3 {
                 enc.set_rates(Rates::new(900_000, 30)).expect("rates");
             }
-            enc.submit(&pattern_frame(320, 180, n, n as u64).expect("f"), EncodeOptions::default()).expect("submit");
-            let ef = wait_for(Duration::from_secs(2), || enc.poll()).expect("out").expect("ok");
+            enc.submit(
+                &pattern_frame(320, 180, n, n as u64).expect("f"),
+                EncodeOptions::default(),
+            )
+            .expect("submit");
+            let ef = wait_for(Duration::from_secs(2), || enc.poll())
+                .expect("out")
+                .expect("ok");
             assert_eq!(ef.keyframe, n == 0, "frame {n}");
             sizes.push(ef.data.len());
         }
-        assert!(sizes[4] > sizes[2] * 2, "the bitrate change took effect: {sizes:?}");
+        assert!(
+            sizes[4] > sizes[2] * 2,
+            "the bitrate change took effect: {sizes:?}"
+        );
         assert_eq!(enc.info().config.bitrate_bps, 900_000);
         enc.set_size(640, 360).expect("size");
-        enc.submit(&pattern_frame(320, 180, 9, 9).expect("f"), EncodeOptions::default()).expect("submit");
-        let ef = wait_for(Duration::from_secs(2), || enc.poll()).expect("out").expect("ok");
-        assert!(ef.keyframe && (ef.width, ef.height) == (640, 360), "a new size starts with a keyframe");
+        enc.submit(
+            &pattern_frame(320, 180, 9, 9).expect("f"),
+            EncodeOptions::default(),
+        )
+        .expect("submit");
+        let ef = wait_for(Duration::from_secs(2), || enc.poll())
+            .expect("out")
+            .expect("ok");
+        assert!(
+            ef.keyframe && (ef.width, ef.height) == (640, 360),
+            "a new size starts with a keyframe"
+        );
     }
 
     #[test]
@@ -827,29 +1049,56 @@ mod tests {
         cfg.encoder_faults = vec![(2, EncoderFault::Busy), (4, EncoderFault::SessionLost)];
         cfg.max_instances = Some(2);
         let b = FakeBackend::new(cfg);
-        let mut e1 = b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("one");
-        let e2 = b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("two");
-        assert_eq!(b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).err(), Some(VideoError::NoResources));
+        let mut e1 = b
+            .encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+            .expect("one");
+        let e2 = b
+            .encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+            .expect("two");
+        assert_eq!(
+            b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+                .err(),
+            Some(VideoError::NoResources)
+        );
         drop(e2);
-        let _e3 = b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("a slot came free");
+        let _e3 = b
+            .encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+            .expect("a slot came free");
         let f = pattern_frame(320, 180, 1, 1).expect("f");
         e1.submit(&f, EncodeOptions::default()).expect("1");
-        assert!(wait_for(Duration::from_secs(2), || e1.poll()).expect("out").is_ok());
-        assert_eq!(e1.submit(&f, EncodeOptions::default()), Err(VideoError::Busy), "scripted busy");
+        assert!(wait_for(Duration::from_secs(2), || e1.poll())
+            .expect("out")
+            .is_ok());
+        assert_eq!(
+            e1.submit(&f, EncodeOptions::default()),
+            Err(VideoError::Busy),
+            "scripted busy"
+        );
         e1.submit(&f, EncodeOptions::default()).expect("3");
-        assert!(wait_for(Duration::from_secs(2), || e1.poll()).expect("out").is_ok());
+        assert!(wait_for(Duration::from_secs(2), || e1.poll())
+            .expect("out")
+            .is_ok());
         e1.submit(&f, EncodeOptions::default()).expect("4");
         let lost = wait_for(Duration::from_secs(2), || e1.poll()).expect("out");
         assert!(matches!(lost, Err(VideoError::Os { .. })), "{lost:?}");
-        assert!(e1.submit(&f, EncodeOptions::default()).is_err(), "dead after a terminal error");
+        assert!(
+            e1.submit(&f, EncodeOptions::default()).is_err(),
+            "dead after a terminal error"
+        );
 
         // A full pipeline answers Busy without blocking.
         let other = FakeBackend::new(FakeConfig::default());
-        let mut e = other.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("encoder");
+        let mut e = other
+            .encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+            .expect("encoder");
         let t = Instant::now();
         let mut busy = 0;
         for n in 0..200 {
-            if e.submit(&pattern_frame(320, 180, n, n as u64).expect("f"), EncodeOptions::default()) == Err(VideoError::Busy) {
+            if e.submit(
+                &pattern_frame(320, 180, n, n as u64).expect("f"),
+                EncodeOptions::default(),
+            ) == Err(VideoError::Busy)
+            {
                 busy += 1;
             }
         }
@@ -866,29 +1115,79 @@ mod tests {
     #[test]
     fn the_decoder_waits_for_a_keyframe_after_reset_and_errors() {
         let b = FakeBackend::new(FakeConfig::default());
-        let mut enc = b.encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake()).expect("enc");
-        let mut dec = b.decoder(DecoderConfig::new(VideoCodec::H264), no_wake()).expect("dec");
+        let mut enc = b
+            .encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+            .expect("enc");
+        let mut dec = b
+            .decoder(DecoderConfig::new(VideoCodec::H264), no_wake())
+            .expect("dec");
         let mut frames = Vec::new();
         for n in 0..3u32 {
-            enc.submit(&pattern_frame(320, 180, n, n as u64).expect("f"), EncodeOptions::default()).expect("submit");
-            frames.push(wait_for(Duration::from_secs(2), || enc.poll()).expect("out").expect("ok"));
+            enc.submit(
+                &pattern_frame(320, 180, n, n as u64).expect("f"),
+                EncodeOptions::default(),
+            )
+            .expect("submit");
+            frames.push(
+                wait_for(Duration::from_secs(2), || enc.poll())
+                    .expect("out")
+                    .expect("ok"),
+            );
         }
-        let input = |e: &EncodedFrame| EncodedInput::new(VideoCodec::H264, e.data.clone(), e.keyframe, e.capture_us);
-        assert_eq!(dec.submit(input(&frames[1])), Err(DecodeError::NeedKeyframe), "a delta first");
+        let input = |e: &EncodedFrame| {
+            EncodedInput::new(VideoCodec::H264, e.data.clone(), e.keyframe, e.capture_us)
+        };
+        assert_eq!(
+            dec.submit(input(&frames[1])),
+            Err(DecodeError::NeedKeyframe),
+            "a delta first"
+        );
         dec.submit(input(&frames[0])).expect("key");
-        assert!(wait_for(Duration::from_secs(2), || dec.poll()).expect("out").is_ok());
+        assert!(wait_for(Duration::from_secs(2), || dec.poll())
+            .expect("out")
+            .is_ok());
         dec.reset();
-        assert_eq!(dec.submit(input(&frames[2])), Err(DecodeError::NeedKeyframe), "a delta after reset");
+        assert_eq!(
+            dec.submit(input(&frames[2])),
+            Err(DecodeError::NeedKeyframe),
+            "a delta after reset"
+        );
         dec.submit(input(&frames[0])).expect("key again");
-        assert!(wait_for(Duration::from_secs(2), || dec.poll()).expect("out").is_ok());
-        dec.submit(EncodedInput::new(VideoCodec::H264, vec![0, 0, 0, 1, 0x41, 1, 2, 3], false, 9)).expect("garbage is queued");
+        assert!(wait_for(Duration::from_secs(2), || dec.poll())
+            .expect("out")
+            .is_ok());
+        dec.submit(EncodedInput::new(
+            VideoCodec::H264,
+            vec![0, 0, 0, 1, 0x41, 1, 2, 3],
+            false,
+            9,
+        ))
+        .expect("garbage is queued");
         let bad = wait_for(Duration::from_secs(2), || dec.poll()).expect("out");
         assert!(matches!(bad, Err(DecodeError::Corrupt(_))), "{bad:?}");
-        assert_eq!(dec.submit(input(&frames[1])), Err(DecodeError::NeedKeyframe), "a delta after an error");
-        let mut fitted = b.decoder(DecoderConfig { fit: Some((160, 160)), output: PixelFormat::Rgba, ..DecoderConfig::new(VideoCodec::H264) }, no_wake()).expect("dec");
+        assert_eq!(
+            dec.submit(input(&frames[1])),
+            Err(DecodeError::NeedKeyframe),
+            "a delta after an error"
+        );
+        let mut fitted = b
+            .decoder(
+                DecoderConfig {
+                    fit: Some((160, 160)),
+                    output: PixelFormat::Rgba,
+                    ..DecoderConfig::new(VideoCodec::H264)
+                },
+                no_wake(),
+            )
+            .expect("dec");
         fitted.submit(input(&frames[0])).expect("key");
-        let f = wait_for(Duration::from_secs(2), || fitted.poll()).expect("out").expect("ok");
-        assert_eq!((f.width, f.height, f.format()), (160, 90, PixelFormat::Rgba));
+        let f = wait_for(Duration::from_secs(2), || fitted.poll())
+            .expect("out")
+            .expect("ok");
+        assert_eq!(
+            (f.width, f.height, f.format()),
+            (160, 90, PixelFormat::Rgba)
+        );
         assert_eq!(read_frame_code(&f), Some(0));
         assert!(dec.stats().errors >= 3);
     }
@@ -896,15 +1195,31 @@ mod tests {
     #[test]
     fn sources_deliver_coded_frames_at_the_asked_size_and_pause() {
         let mut cfg = FakeConfig::default();
-        cfg.source_events = vec![(Duration::from_millis(300), SourceEvent::Interrupted(Interruption::Thermal))];
+        cfg.source_events = vec![(
+            Duration::from_millis(300),
+            SourceEvent::Interrupted(Interruption::Thermal),
+        )];
         let b = FakeBackend::new(cfg);
         let (wake, wakes) = counting_wake();
-        let mut src = b.open_camera(None, CaptureConstraints::new(640, 360, 30), wake).expect("camera");
+        let mut src = b
+            .open_camera(None, CaptureConstraints::new(640, 360, 30), wake)
+            .expect("camera");
         let first = wait_for(Duration::from_secs(2), || src.try_recv()).expect("a frame");
-        assert_eq!((first.width, first.height), (480, 360), "the 640x480 mode, fitted into 640x360");
+        assert_eq!(
+            (first.width, first.height),
+            (480, 360),
+            "the 640x480 mode, fitted into 640x360"
+        );
         assert!(read_frame_code(&first).is_some());
         let started = wait_for(Duration::from_secs(1), || src.try_event()).expect("event");
-        assert_eq!(started, SourceEvent::Started { width: 480, height: 360, fps: 30 });
+        assert_eq!(
+            started,
+            SourceEvent::Started {
+                width: 480,
+                height: 360,
+                fps: 30
+            }
+        );
         let interrupted = wait_for(Duration::from_secs(2), || src.try_event()).expect("event");
         assert_eq!(interrupted, SourceEvent::Interrupted(Interruption::Thermal));
         src.set_paused(true);
@@ -913,45 +1228,91 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         assert!(src.try_recv().is_none(), "paused");
         src.set_paused(false);
-        assert!(wait_for(Duration::from_secs(1), || src.try_recv()).is_some(), "resumed");
+        assert!(
+            wait_for(Duration::from_secs(1), || src.try_recv()).is_some(),
+            "resumed"
+        );
         assert!(wakes.load(Ordering::Relaxed) > 0);
         assert!(src.stats().frames > 3);
-        let mut slow = b.open_camera(Some("fake:camera:0"), CaptureConstraints::new(320, 240, 10), no_wake()).expect("camera");
+        let mut slow = b
+            .open_camera(
+                Some("fake:camera:0"),
+                CaptureConstraints::new(320, 240, 10),
+                no_wake(),
+            )
+            .expect("camera");
         std::thread::sleep(Duration::from_millis(550));
         let st = slow.stats();
-        assert!((3..=8).contains(&st.frames), "10 fps from a 30 fps mode: {st:?}");
+        assert!(
+            (3..=8).contains(&st.frames),
+            "10 fps from a 30 fps mode: {st:?}"
+        );
         assert!(st.dropped >= 6);
         assert!(slow.try_recv().is_some());
-        assert_eq!(b.open_camera(Some("nope"), CaptureConstraints::default(), no_wake()).err(), Some(VideoError::NotFound));
+        assert_eq!(
+            b.open_camera(Some("nope"), CaptureConstraints::default(), no_wake())
+                .err(),
+            Some(VideoError::NotFound)
+        );
     }
 
     #[test]
     fn permissions_hotplug_and_events_follow_the_script() {
         let mut cfg = FakeConfig::default();
-        cfg.camera_permission = FakePermission::Prompt { answer: Permission::Granted, after: Duration::from_millis(50) };
+        cfg.camera_permission = FakePermission::Prompt {
+            answer: Permission::Granted,
+            after: Duration::from_millis(50),
+        };
         cfg.screen_permission = FakePermission::Denied;
         let usb = CameraInfo::new("fake:camera:usb", "USB Camera", Facing::External, false);
         let mut both = cfg.cameras.clone();
         both.push(usb.clone());
         cfg.hotplug = vec![(Duration::from_millis(100), both.clone())];
-        cfg.backend_events = vec![(Duration::from_millis(150), BackendEvent::Thermal(ThermalLevel::Serious))];
+        cfg.backend_events = vec![(
+            Duration::from_millis(150),
+            BackendEvent::Thermal(ThermalLevel::Serious),
+        )];
         cfg.pick = FakePick::Cancel;
         let b = FakeBackend::new(cfg);
         let events = b.subscribe();
         assert_eq!(b.camera_permission(), Permission::NotDetermined);
-        assert_eq!(b.open_camera(None, CaptureConstraints::default(), no_wake()).err(), Some(VideoError::NoPermission));
+        assert_eq!(
+            b.open_camera(None, CaptureConstraints::default(), no_wake())
+                .err(),
+            Some(VideoError::NoPermission)
+        );
         let answer = Arc::new(Mutex::new(None));
         let a = answer.clone();
         b.request_camera_permission(Box::new(move |p| *lock(&a) = Some(p)));
-        assert_eq!(wait_for(Duration::from_secs(2), || *lock(&answer)), Some(Permission::Granted));
+        assert_eq!(
+            wait_for(Duration::from_secs(2), || *lock(&answer)),
+            Some(Permission::Granted)
+        );
         assert_eq!(b.camera_permission(), Permission::Granted);
-        assert_eq!(wait_for(Duration::from_secs(2), || events.try_recv()), Some(BackendEvent::Cameras(both.clone())));
-        assert_eq!(wait_for(Duration::from_secs(2), || events.try_recv()), Some(BackendEvent::Thermal(ThermalLevel::Serious)));
+        assert_eq!(
+            wait_for(Duration::from_secs(2), || events.try_recv()),
+            Some(BackendEvent::Cameras(both.clone()))
+        );
+        assert_eq!(
+            wait_for(Duration::from_secs(2), || events.try_recv()),
+            Some(BackendEvent::Thermal(ThermalLevel::Serious))
+        );
         assert_eq!(b.cameras(), both);
-        assert_eq!(b.open_screen(&ScreenSelection::Listed("fake:display:0".into()), CaptureConstraints::default(), no_wake()).err(), Some(VideoError::NoPermission));
+        assert_eq!(
+            b.open_screen(
+                &ScreenSelection::Listed("fake:display:0".into()),
+                CaptureConstraints::default(),
+                no_wake()
+            )
+            .err(),
+            Some(VideoError::NoPermission)
+        );
         let picked = Arc::new(Mutex::new(None));
         let p = picked.clone();
-        b.pick_screen(PickOptions::default(), Box::new(move |r| *lock(&p) = Some(r.err())));
+        b.pick_screen(
+            PickOptions::default(),
+            Box::new(move |r| *lock(&p) = Some(r.err())),
+        );
         assert_eq!(*lock(&picked), Some(Some(VideoError::NotFound)));
         b.shutdown();
         assert_eq!(b.screen_sources().err(), Some(VideoError::ShutDown));
@@ -963,14 +1324,27 @@ mod tests {
         assert_eq!(b.screen_sources().expect("list").len(), 2);
         let picked = Arc::new(Mutex::new(None));
         let p = picked.clone();
-        b.pick_screen(PickOptions::default(), Box::new(move |r| *lock(&p) = Some(r)));
+        b.pick_screen(
+            PickOptions::default(),
+            Box::new(move |r| *lock(&p) = Some(r)),
+        );
         let sel = lock(&picked).take().expect("answered").expect("chosen");
         let mut c = CaptureConstraints::new(1280, 720, 15);
         c.cursor = true;
         let mut src = b.open_screen(&sel, c, no_wake()).expect("screen");
         let f = wait_for(Duration::from_secs(2), || src.try_recv()).expect("frame");
-        assert_eq!((f.width, f.height), (1280, 720), "1920x1080 fitted into 1280x720");
-        let mut w = b.open_screen(&ScreenSelection::Listed("fake:window:1".into()), CaptureConstraints::default(), no_wake()).expect("window");
+        assert_eq!(
+            (f.width, f.height),
+            (1280, 720),
+            "1920x1080 fitted into 1280x720"
+        );
+        let mut w = b
+            .open_screen(
+                &ScreenSelection::Listed("fake:window:1".into()),
+                CaptureConstraints::default(),
+                no_wake(),
+            )
+            .expect("window");
         let f = wait_for(Duration::from_secs(2), || w.try_recv()).expect("frame");
         assert_eq!((f.width, f.height), (800, 600));
     }

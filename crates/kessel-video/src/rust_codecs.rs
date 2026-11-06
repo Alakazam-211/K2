@@ -13,7 +13,10 @@ pub(crate) fn add_capabilities(caps: &mut Capabilities) {
 }
 
 /// A Rust encoder for `config`, or `None` when no Rust codec handles it.
-pub(crate) fn encoder(config: &EncoderConfig, wake: &Wake) -> Option<Result<Box<dyn VideoEncoder>, VideoError>> {
+pub(crate) fn encoder(
+    config: &EncoderConfig,
+    wake: &Wake,
+) -> Option<Result<Box<dyn VideoEncoder>, VideoError>> {
     #[cfg(feature = "vp8")]
     if config.codec == crate::types::CodecConfig::Vp8 {
         return Some(crate::vp8::encoder(*config, wake.clone()));
@@ -23,7 +26,10 @@ pub(crate) fn encoder(config: &EncoderConfig, wake: &Wake) -> Option<Result<Box<
 }
 
 /// A Rust decoder for `config`, or `None` when no Rust codec handles it.
-pub(crate) fn decoder(config: &DecoderConfig, wake: &Wake) -> Option<Result<Box<dyn VideoDecoder>, VideoError>> {
+pub(crate) fn decoder(
+    config: &DecoderConfig,
+    wake: &Wake,
+) -> Option<Result<Box<dyn VideoDecoder>, VideoError>> {
     #[cfg(feature = "vp8")]
     if config.codec == crate::types::VideoCodec::Vp8 {
         return Some(crate::vp8::decoder(*config, wake.clone()));

@@ -1,5 +1,5 @@
 # cargo-deny policy for kessel-video:
-#   cargo deny check licenses bans
+#   cargo deny check licenses bans advisories
 # tests/licences.rs enforces the same licence rules in `cargo test`.
 
 [graph]
@@ -34,4 +34,11 @@ deny = [
     { crate = "env-libvpx-sys" },
     { crate = "ffmpeg-sys-next" },
     { crate = "ffmpeg-next" },
+]
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained: notice only, via zbus 5; clears with zbus 6" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained: notice only, via zbus 5; clears with zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained: notice only, via zbus 5; clears with zbus 6" },
 ]

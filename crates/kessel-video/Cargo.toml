@@ -2,8 +2,9 @@
 name = "kessel-video"
 version = "0.1.0"
 edition = "2021"
-# The windows crate's minimum (0.62, for the Windows backend).
-rust-version = "1.82"
+# zbus 5's minimum (with zvariant and zbus_macros), for the Linux backend.
+# The windows crate (0.62) needs 1.82.
+rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 description = "Cameras, screen capture, pixels and video codecs for apps that bring their own transport: H.264 through the operating system's codecs, VP8 in pure Rust, a codec-neutral submit-and-poll API, and a scripted fake backend for tests."
 authors = ["Alakazam Labs"]

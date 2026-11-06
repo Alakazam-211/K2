@@ -38,8 +38,8 @@ pub enum VideoError {
     #[error("shut_down")]
     ShutDown,
     /// A bad argument from the caller: a frame whose planes don't fit its
-    /// buffer, an odd or zero coded size, a zero rate. Not in Sew's §A4
-    /// draft; added because none of the others fits a caller's mistake.
+    /// buffer, an odd or zero coded size, a zero rate. None of the other
+    /// variants fits a caller's mistake.
     #[error("invalid: {0}")]
     Invalid(String),
 }

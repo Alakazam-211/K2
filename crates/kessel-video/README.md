@@ -138,7 +138,8 @@ decoder. Each access unit is SPS + PPS (keyframes only) and one slice NAL
 that holds the frame code, sized to the target bitrate. It follows every
 bitstream rule above, so packetiser, encryption and RTP tests run on any
 machine. Its decoder returns a grey frame with the code drawn on it, at the
-size the slice names: it is a test tool, so don't give it untrusted input.
+size the slice names, up to 8192 x 8192 (larger is `corrupt`). It is a test
+tool, so don't give it untrusted input.
 
 ## Platform notes
 
@@ -177,7 +178,8 @@ its tests outside the repository.
 
 ## Building
 
-- Needs Rust 1.82 or later (the `windows` crate's minimum).
+- Needs Rust 1.87 or later (zbus 5's minimum, for the Linux backend; the
+  `windows` crate needs 1.82).
 - No system libraries or headers at build time on any platform. The OS
   backends reach the OS through system frameworks (macOS), OS DLLs through
   the `windows` crate (Windows), and raw ioctls, D-Bus in pure Rust and a

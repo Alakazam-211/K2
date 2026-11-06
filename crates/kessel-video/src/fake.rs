@@ -15,7 +15,11 @@
 //! with 4-byte start codes, sized to the target bitrate. It follows every
 //! bitstream rule of a real H.264 encoder here, so packetisers, encryption
 //! and RTP tests run without an OS codec. Its decoder returns a grey frame
-//! with the code drawn on it.
+//! with the code drawn on it, at the size the slice names (up to 8192 x
+//! 8192; larger is `Corrupt`).
+//!
+//! **Not for untrusted input.** The fake backend is a test tool: don't give
+//! its decoder frames from the network.
 
 use crate::api::{
     Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
@@ -680,6 +684,11 @@ pub fn read_frame_code(frame: &VideoFrame) -> Option<u32> {
 
 const MAGIC: &[u8; 4] = b"KVFK";
 
+/// The structural decoder refuses a frame wider or taller than this, so a
+/// slice can't make it allocate more than about 100 MB (the slice names its
+/// own size, up to 65535 x 65535).
+const MAX_DECODE_SIDE: u32 = 8192;
+
 struct InstanceSlot(Arc<AtomicU32>);
 
 impl Drop for InstanceSlot {
@@ -856,7 +865,7 @@ impl DecoderCore for StructuralDecoder {
         let width = u16::from_be_bytes([payload[8], payload[9]]) as u32;
         let height = u16::from_be_bytes([payload[10], payload[11]]) as u32;
         let (w, h) = (width as usize, height as usize);
-        if w == 0 || h == 0 {
+        if w == 0 || h == 0 || width > MAX_DECODE_SIDE || height > MAX_DECODE_SIDE {
             return Err(DecodeError::Corrupt(format!("a {width}x{height} frame")));
         }
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
@@ -1353,5 +1362,33 @@ mod tests {
             .expect("window");
         let f = wait_for(Duration::from_secs(2), || w.try_recv()).expect("frame");
         assert_eq!((f.width, f.height), (800, 600));
+    }
+
+    #[test]
+    fn the_structural_decoder_refuses_frames_over_8192_a_side() {
+        // A keyframe access unit whose slice names its own size.
+        let au = |width: u16, height: u16| {
+            let mut payload = MAGIC.to_vec();
+            payload.extend_from_slice(&7u32.to_be_bytes());
+            payload.extend_from_slice(&width.to_be_bytes());
+            payload.extend_from_slice(&height.to_be_bytes());
+            let mut slice = vec![0x65];
+            h264::escape_rbsp(&payload, &mut slice);
+            slice.push(0x80);
+            let mut au = Vec::new();
+            h264::push_annexb(&mut au, &[0x67, 0x42, 0xc0, 0x1f]);
+            h264::push_annexb(&mut au, &[0x68, 0xce, 0x3c, 0x80]);
+            h264::push_annexb(&mut au, &slice);
+            EncodedInput::new(VideoCodec::H264, au, true, 1)
+        };
+        let mut dec = StructuralDecoder;
+        let f = crate::kit::DecoderCore::decode(&mut dec, &au(8192, 16))
+            .expect("8192 wide decodes")
+            .expect("a frame");
+        assert_eq!((f.width, f.height), (8192, 16));
+        for (w, h) in [(8193, 16), (16, 8193), (65535, 65535), (0, 16)] {
+            let r = crate::kit::DecoderCore::decode(&mut dec, &au(w, h));
+            assert!(matches!(r, Err(DecodeError::Corrupt(_))), "{w}x{h}: {r:?}");
+        }
     }
 }

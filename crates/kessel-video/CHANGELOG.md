@@ -16,13 +16,18 @@ backend.
   `include` ships only `src/`, the README and the licences.
 - vp8-decoder and vp8-encoder come from crates.io (`0.1`, caret
   requirements), not from a path.
-- The minimum Rust version is 1.82, the `windows` crate's.
+- The minimum Rust version is 1.87: zbus 5 and its zvariant crates need it
+  on Linux (the `windows` crate needs 1.82).
 - The README has a platforms table (tested, untested on hardware, or only
   type-checked), the security contact, untrusted input, `unsafe` code,
   system libraries only, the BSD-3-Clause notice duty for the VP8 crates,
   patents, and what 0.x means for API stability.
 - A seeded hostile-input test sends random and mutated frames through the
   VP8 decoder (directly and through its thread) and the H.264 helpers.
+- The fake backend's structural decoder refuses frames over 8192 x 8192
+  (`Corrupt`), and its docs say it is not for untrusted input.
+- `deny.toml` ignores three unmaintained notices for zbus 5's dependencies
+  (RUSTSEC-2026-0370, -0371, -0372); they clear with zbus 6.
 - `h264::avcc_nals` checks a NAL's length without an addition that could
   overflow on a 32-bit target.
 - `scripts/check-targets.sh` (was `check-windows.sh`) type-checks Windows,

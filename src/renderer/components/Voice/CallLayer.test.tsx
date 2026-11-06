@@ -244,14 +244,14 @@ afterEach(() => {
 })
 
 describe('voice only: the controls are in the top bar, and there is no tile', () => {
-  it('shows Mute, Deafen, Camera and Hang up beside the headset', async () => {
+  it('shows Mute, Deafen, Camera and Leave call beside the headset', async () => {
     await inCall()
     const bar = await screen.findByTestId('call-topbar-controls')
     expect(bar.querySelectorAll('button')).toHaveLength(4)
     expect(screen.getByTestId('call-topbar-mute').getAttribute('aria-label')).toBe('Mute')
     expect(screen.getByTestId('call-topbar-deafen').getAttribute('aria-label')).toBe('Deafen')
     expect(screen.getByTestId('call-topbar-camera').getAttribute('aria-label')).toBe('Turn camera on')
-    expect(screen.getByTestId('call-topbar-leave').getAttribute('aria-label')).toBe('Hang up')
+    expect(screen.getByTestId('call-topbar-leave').getAttribute('aria-label')).toBe('Leave call')
     expect(screen.queryByTestId('call-tile')).toBeNull()
   })
 
@@ -291,7 +291,7 @@ describe('video on: the tile with its strip, and the top bar gives way', () => {
     const tile = await cameraOn()
     expect(tile.dataset.picture).toBe('local:camera')
     expect(screen.getByTestId('call-tile-strip')).toBeTruthy()
-    // Mute, Deafen, Camera, Share screen, Hang up.
+    // Mute, Deafen, Camera, Share screen, Leave call.
     expect(screen.getByTestId('call-tile-controls').querySelectorAll('button')).toHaveLength(5)
     expect(screen.queryByTestId('call-topbar-controls')).toBeNull()
     // The call's time, in the band under the picture.

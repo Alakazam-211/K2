@@ -29,16 +29,66 @@ export type CallControlsVariant = 'topbar' | 'tile'
 
 /** The tile strip's button (px). */
 export const CALL_TILE_BUTTON = 28
+/** The icon inside a tile-strip or headset-list button (px). */
+export const CALL_PANEL_ICON = 15
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
 
 const TOPBAR_ON = 'text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)]'
-const TOPBAR_DANGER = 'text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-danger-hover)]'
+const TOPBAR_DANGER = 'text-[var(--color-danger)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-danger-hover)]'
 const TILE_BASE = 'border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]'
 /** Engaged (muted, deafened, the camera on): inverted, as Companion's white. */
 const TILE_ON = 'border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg)]'
-const TILE_DANGER = 'border border-[var(--color-status-error)] bg-[var(--color-status-error)] text-white hover:opacity-90'
+/** Hang up: the app's danger color (as the danger Button). */
+const TILE_DANGER =
+  'border border-[var(--color-danger)] bg-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)]'
+
+/** The headset list's call row (VoicePopover, VideoCallButtons): the tile
+ *  strip's square buttons, but a real `disabled` (the list has no drag). */
+export function CallPanelButton({
+  label,
+  title,
+  on,
+  danger,
+  disabled,
+  testId,
+  onPress,
+  children,
+  ...data
+}: {
+  /** The action and its state ("Mute" / "Unmute"). */
+  label: string
+  /** The tooltip, when it should say more than the label (why it's blocked). */
+  title?: string
+  /** A toggle's state (muted, deafened, the camera on, sharing): the engaged
+   *  look and aria-pressed. Leave it out on a one-shot button. */
+  on?: boolean
+  danger?: boolean
+  disabled?: boolean
+  testId: string
+  onPress: () => void
+  children: ReactNode
+} & { [k: `data-${string}`]: string | undefined }): React.JSX.Element {
+  const look = danger ? TILE_DANGER : on ? TILE_ON : TILE_BASE
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      // Toggles only (Mute, Deafen, Camera, Share); undefined on one-shots.
+      aria-pressed={on}
+      title={title ?? label}
+      data-testid={testId}
+      {...data}
+      disabled={disabled}
+      className={`flex shrink-0 items-center justify-center transition-colors disabled:cursor-default disabled:opacity-50 ${look}`}
+      style={{ width: CALL_TILE_BUTTON, height: CALL_TILE_BUTTON, ...noDrag }}
+      onClick={onPress}
+    >
+      {children}
+    </button>
+  )
+}
 
 function CallButton({
   variant,
@@ -204,7 +254,7 @@ export default function CallControls({ variant, call, actions, video }: CallCont
       </CallButton>
       {video ? <CameraButton variant={variant} video={video} busy={busy} /> : null}
       {video ? <ScreenButton variant={variant} video={video} busy={busy} /> : null}
-      <CallButton variant={variant} label="Hang up" danger testId={`call-${variant}-leave`} onPress={() => void actions.leave()}>
+      <CallButton variant={variant} label="Leave call" danger testId={`call-${variant}-leave`} onPress={() => void actions.leave()}>
         <PhoneOffIcon size={size} />
       </CallButton>
     </div>

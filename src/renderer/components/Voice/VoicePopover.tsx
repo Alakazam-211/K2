@@ -19,6 +19,8 @@ import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
 import { video } from '@/stores/video'
 import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
+import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
+import { HeadphonesIcon, MicIcon, MicOffIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -73,6 +75,8 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
           : callDuration(call.connectedAt, Date.now())
   const busy = call.phase === 'joining'
   const micBlocked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
+  // Deafen mutes too (the store sets `muted`), so this covers it.
+  const micOff = call.muted || call.micDenied || micBlocked !== null
   return (
     <section data-testid="voice-call" data-phase={call.phase} className="border-b border-[var(--color-border)] -mx-3 px-3 pb-2 mb-2">
       <div className="flex items-center justify-between">
@@ -109,17 +113,30 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
           />
         </div>
       ) : null}
-      <div className="mt-2 flex items-center gap-1">
-        <button type="button" data-testid="voice-mute" disabled={busy || micBlocked !== null} title={micBlocked ?? undefined} className={SMALL_BTN} onClick={() => voice.setMuted(!call.muted)}>
-          {call.muted || call.micDenied ? 'Unmute' : 'Mute'}
-        </button>
-        <button type="button" data-testid="voice-deafen" disabled={busy} className={SMALL_BTN} onClick={() => voice.setDeafened(!call.deafened)}>
-          {call.deafened ? 'Undeafen' : 'Deafen'}
-        </button>
+      <div data-testid="voice-call-controls" role="group" aria-label="Call controls" className="mt-2 flex items-center gap-1.5">
+        <CallPanelButton
+          testId="voice-mute"
+          label={micOff ? 'Unmute' : 'Mute'}
+          title={micBlocked ?? undefined}
+          on={micOff}
+          disabled={busy || micBlocked !== null}
+          onPress={() => voice.setMuted(!call.muted)}
+        >
+          {micOff ? <MicOffIcon size={CALL_PANEL_ICON} /> : <MicIcon size={CALL_PANEL_ICON} />}
+        </CallPanelButton>
+        <CallPanelButton
+          testId="voice-deafen"
+          label={call.deafened ? 'Undeafen' : 'Deafen'}
+          on={call.deafened}
+          disabled={busy}
+          onPress={() => voice.setDeafened(!call.deafened)}
+        >
+          <HeadphonesIcon off={call.deafened} size={CALL_PANEL_ICON} />
+        </CallPanelButton>
         {videoOn ? <VideoCallButtons ctl={video} disabled={busy} /> : null}
-        <button type="button" data-testid="voice-leave" className={`${SMALL_BTN} ml-auto text-[var(--color-status-error-soft)]`} onClick={() => void voice.leave()}>
-          Leave
-        </button>
+        <CallPanelButton testId="voice-leave" label="Leave call" danger onPress={() => void voice.leave()}>
+          <PhoneOffIcon size={CALL_PANEL_ICON} />
+        </CallPanelButton>
       </div>
       {videoOn ? <ScreenPicker ctl={video} /> : null}
       {videoOn ? <VideoNoticeLine ctl={video} /> : null}

@@ -10,12 +10,15 @@ import { useStore } from 'zustand'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { policyBlockText } from '@/lib/voice/video-labels'
 import type { VideoController } from '@/stores/video-core'
+import { ChevronDownIcon, ScreenShareIcon, VideoIcon } from '@/components/icons/K2Icons'
+import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 
 const SMALL_BTN =
   'border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50'
 
-/** Camera and Share screen, beside Mute and Deafen. Share screen opens the OS's
- *  own picker; where the OS lists what can be shared, "Pick" offers that list
+/** Camera and Share screen, beside Mute and Deafen (icon buttons, as the top
+ *  bar's and the tile's). Share screen opens the OS's own picker; where the OS
+ *  lists what can be shared, "Choose screen" (a chevron) offers that list
  *  too. The room's media policy greys out what this person may not turn on. */
 export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoController; disabled?: boolean }): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
@@ -33,42 +36,41 @@ export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoControll
   return (
     <>
       {caps.camera ? (
-        <button
-          type="button"
-          data-testid="video-camera"
+        <CallPanelButton
+          testId="video-camera"
           data-on={cameraOn ? 'true' : 'false'}
-          disabled={disabled || pending.camera || local.camera === 'asking' || cameraBlock !== null}
+          label={cameraOn ? 'Turn camera off' : 'Turn camera on'}
           title={cameraBlock ?? undefined}
-          className={SMALL_BTN}
-          onClick={() => void ctl.setCamera(!cameraOn)}
+          on={cameraOn}
+          disabled={disabled || pending.camera || local.camera === 'asking' || cameraBlock !== null}
+          onPress={() => void ctl.setCamera(!cameraOn)}
         >
-          {cameraOn ? 'Camera off' : 'Camera on'}
-        </button>
+          <VideoIcon off={!cameraOn} size={CALL_PANEL_ICON} />
+        </CallPanelButton>
       ) : null}
       {caps.screen.supported ? (
-        <button
-          type="button"
-          data-testid="video-screen"
+        <CallPanelButton
+          testId="video-screen"
           data-on={screenOn ? 'true' : 'false'}
-          disabled={disabled || pending.screen || local.screen === 'asking' || screenBlock !== null}
+          label={screenOn ? 'Stop sharing' : 'Share screen'}
           title={screenBlock ?? undefined}
-          className={SMALL_BTN}
-          onClick={share}
+          on={screenOn}
+          disabled={disabled || pending.screen || local.screen === 'asking' || screenBlock !== null}
+          onPress={share}
         >
-          {screenOn ? 'Stop sharing' : 'Share screen'}
-        </button>
+          <ScreenShareIcon stop={screenOn} size={CALL_PANEL_ICON} />
+        </CallPanelButton>
       ) : null}
       {caps.screen.supported && caps.screen.list && !screenOn ? (
-        <button
-          type="button"
-          data-testid="video-screen-pick"
-          title="Pick a screen or window from a list"
+        <CallPanelButton
+          testId="video-screen-pick"
+          label="Choose screen"
+          title="Choose a screen or window to share from a list"
           disabled={disabled || pending.screen || screenBlock !== null}
-          className={SMALL_BTN}
-          onClick={() => void ctl.loadScreenSources()}
+          onPress={() => void ctl.loadScreenSources()}
         >
-          Pick…
-        </button>
+          <ChevronDownIcon size={CALL_PANEL_ICON} />
+        </CallPanelButton>
       ) : null}
     </>
   )

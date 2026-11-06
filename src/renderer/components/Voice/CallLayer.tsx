@@ -20,6 +20,8 @@ import type { VoiceCall } from '@/stores/voice-core'
 import type { CallPerson } from '@/lib/voice/video-labels'
 import CallTile, { useCallVideoLive } from './CallTile'
 import VideoStage from './VideoStage'
+import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
+import { MicIcon, MicOffIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
 
 const NO_PEOPLE: CallPerson[] = []
 
@@ -60,25 +62,15 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
         people={call.participants}
         title={call.roomName}
         onHide={() => useCallScreen.getState().close()}
+        footerStart={
+          <CallPanelButton testId="video-stage-mute" label={call.muted ? 'Unmute' : 'Mute'} on={call.muted} onPress={() => voice.setMuted(!call.muted)}>
+            {call.muted ? <MicOffIcon size={CALL_PANEL_ICON} /> : <MicIcon size={CALL_PANEL_ICON} />}
+          </CallPanelButton>
+        }
         footer={
-          <>
-            <button
-              type="button"
-              data-testid="video-stage-mute"
-              className="border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              onClick={() => voice.setMuted(!call.muted)}
-            >
-              {call.muted ? 'Unmute' : 'Mute'}
-            </button>
-            <button
-              type="button"
-              data-testid="video-stage-leave"
-              className="ml-auto border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-status-error-soft)]"
-              onClick={() => void voice.leave()}
-            >
-              Leave
-            </button>
-          </>
+          <CallPanelButton testId="video-stage-leave" label="Leave call" danger onPress={() => void voice.leave()}>
+            <PhoneOffIcon size={CALL_PANEL_ICON} />
+          </CallPanelButton>
         }
       />,
       document.body,

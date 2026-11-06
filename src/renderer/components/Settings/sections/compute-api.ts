@@ -72,6 +72,23 @@ export interface ComputeNode {
   /** Job tiers (0.46.5): this server's queued jobs on the node, by tier.
    *  Absent on older daemons. */
   queueTiers?: TierCounts
+  /** Self-serve environments (protocol 7): `ubuntu24.04-x86_64`, or
+   *  `linux-x86_64` from an older node. */
+  platform?: string
+  /** What the node is (null from an older node). */
+  host?: NodeHostJson | null
+  rebootPending?: boolean
+  /** This server's package policy on the node, as the node reports it. */
+  packages?: { manager: string | null; policy: string; openRequests: number; indexAgeSecs?: number | null }
+}
+
+/** A node's host facts (prd-compute-self-serve-environments-v1 §4). */
+export interface NodeHostJson {
+  /** One line: "Ubuntu 24.04.1 LTS · apt · …". */
+  line?: string
+  short?: string
+  rebootRequired?: boolean | null
+  [key: string]: unknown
 }
 
 /** A compute job's tier (prd-compute-job-tiers-v1): CI, then Priority (the

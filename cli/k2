@@ -24956,7 +24956,12 @@ _compute_usage() {
 k2 compute — run commands on your own machines (compute nodes)
 
 Agents:
-  k2 compute nodes [--json]                  nodes granted to this workspace
+  k2 compute nodes [--json]                  nodes granted to this workspace. The
+                 second column is the platform (ubuntu24.04-x86_64, arch-x86_64,
+                 macos15.5-arm64; a k2-node older than 0.46.9: linux-x86_64);
+                 "reboot pending" ends the row when a kernel update waits.
+                 --json: a host object per node (distro, distroVersion,
+                 pkgManager, kernel, libc, gpu, rebootRequired, line)
   k2 compute status [--json]                 every node at a glance: state, waits
                  (foreign locks), run/queue and the jobs, free CPU/mem, load,
                  disk free vs floor; plus this controller (disk, Time Machine
@@ -24964,6 +24969,9 @@ Agents:
                  long-runners need node reporting, which nodes don't send yet.
                  (k2 compute status <job> is get)
   k2 compute info <node> [--json]
+                 adds a host: line (Ubuntu 24.04.1 LTS · apt · kernel … · glibc
+                 2.39 · x86_64 · no GPU) and a packages: line (manager · the
+                 policy for this server · open requests)
   k2 compute allow-nodes [--workspace WS] [--json]
                  this workspace's node list. With one, its jobs go ONLY to those
                  nodes: a node named off it is refused (node_not_allowed, exit 3),
@@ -24984,6 +24992,11 @@ Agents:
                  a start that fits two or more: node_ambiguous, exit 2).
                  It prefers a node that already has the --needs tools.
                  --label k=v picks nodes by a label the node has.
+                 [--distro ubuntu|ubuntu@24.04|debian|arch]  only nodes of that
+                                distro: its /etc/os-release ID or ID_LIKE (Ubuntu
+                                counts as debian), the version on a dot prefix
+                                (ubuntu@24 fits 24.04). A skipped node says "of
+                                another --distro"
                  A pinned job never moves, even when other nodes are idle:
                  leave the node off unless the job needs that machine. When
                  the named node can't start it now and another could, run
@@ -24994,6 +25007,11 @@ Agents:
                                 named node (avoid_with_pinned_node, exit 2). When
                                 every node that fits is avoided: avoid_leaves_no_node,
                                 exit 3, nothing queued
+                 [--only <node>]...  K2 picks only among these nodes (repeatable; a
+                                name or a start of one): keep private work on your
+                                own nodes without listing every node to --avoid.
+                                Not with a named node. A node left out shows as
+                                "off your --only list" in the placed-on line
                  [--preset NAME] settings from .k2/compute.toml, a TOML file in
                                 the folder or git worktree you run from (else the
                                 --repo folder, else the workspace folder; .k2/ isn't
@@ -25002,7 +25020,7 @@ Agents:
                                 flag beats both. --needs and --env merge: a flag
                                 replaces the file's entry for the same tool or name
                                 (--needs rust@stable over rust@1.99.1) and the
-                                file's others stay. Keys: os arch mem
+                                file's others stay. Keys: os arch distro mem
                                 cpus needs env timeout stall_timeout tier cache.
                                 --plan shows what came from where
                  [--now]        start at once or fail (exit 3 not_now, naming the
@@ -25107,9 +25125,16 @@ Agents:
                                 came from (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
-                  rust@<ch> (components with +: rust@stable+clippy+rustfmt;
-                  clippy rustfmt rust-src llvm-tools rust-analyzer miri),
-                  cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
+                  rust@<ch> (clippy and rustfmt come with it on a 0.46.9 node;
+                  rust@stable+minimal leaves them out; more with +:
+                  rust@stable+rust-src+llvm-tools; rust-analyzer miri),
+                  cargo-nextest, or aqua:owner/repo@v;
+                  system packages (Linux): sys:<debian-name> (sys:libssl-dev; K2
+                  maps it to each distro's own name), sys:<apt|pacman|dnf|zypper>:<name>
+                  (that manager's nodes only), or profile:<name>[@N], a bundle
+                  K2 ships (build-base, tauri-linux, rust-gui-ci, k2-workspace).
+                  A package the node's owner hasn't approved: package_not_approved,
+                  exit 3, and a request for it is filed (k2 compute node packages);
                   anything else is refused: tool_unsupported, exit 2)
                  -- <command…>
   k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]
@@ -25117,14 +25142,22 @@ Agents:
                  JUnit kept and parsed, one combined result; --profile P to use
                  the repo's own nextest profile, --runner to replace cargo nextest run
                  (--preset NAME is the .k2/compute.toml preset, as for run)
-  k2 compute prewarm [--preset NAME | --needs …] [--os …] [--arch …] [--node N]...
+  k2 compute prewarm [--preset NAME | --needs …] [--os …] [--distro …] [--arch …] [--node N]...
                  [--plan] [--wait] [--json]
                  install the tools ahead of time: one idle-time (Batch) job on
                  each node granted to you that matches (--os/--arch/--node, or
                  the preset's os/arch; none: every granted node) and lacks one
                  of them; a node that has them all is only reported. The jobs
                  are detached and wait for an idle node; --wait waits for them
-                 (exit as k2 compute wait)
+                 (exit as k2 compute wait). System packages their owners must
+                 approve go out as one request for every node (--plan: would ask)
+  k2 compute node packages <node> [--json]   the node's package manager, the
+                 policy for this server, approved and installed names, requests
+  k2 compute node packages request <node>[,<node>…] <name>[,<name>…] --why "…" [--job ID]
+                 ask the node's owner to install them (Debian names, native
+                 pacman:… names, or profile:…); you hear back in a [compute] message
+  k2 compute node packages requests [--node N] [--state S] [--json]
+                 your requests and their state (the owner: every request)
   k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--tag T] [--limit N] [--workspace WS] [--json]
                  TAG and WHO columns: the job's --tag, and who sent it
                  ("(owner token)" when a shell had no passport: it ran as the owner)
@@ -25367,6 +25400,14 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
 Node admin, owner only (refused for agents and inside K2 terminals):
   k2 compute node admin approve <id>           Touch ID / your password, then signed + sent
   k2 compute node admin deny <id> [--why "…"]
+  k2 compute node packages approve|deny <request> [--add] [--note "…"]
+                   a package request (the card in chat is the main path);
+                   --add also puts the names on that server's approved list
+  k2 compute node packages policy <node> [<server>] [level=list|profiles|official]
+                   [profiles=a,b] [max_install_mb=N] [--reason "…"]
+                   what a server (own, or another server's label) may install
+                   without asking; no key=value shows it. Narrowing applies at
+                   once, widening is held for you
   k2 compute node alerts <node> [--after 10m|off]   offline alert after N minutes
   k2 compute node alerts --to <workspace>|none      where alerts go (an IT agent)
   k2 compute operate on|off --workspace WS
@@ -25404,8 +25445,10 @@ Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 3 = infra, with a JSON code on stderr (node_offline, not_granted,
 compute_off, queue_full, owner_only, job_started, …); 130 = you detached
 with Ctrl-C (the job keeps running). run --json prints one result object
-on stdout (logs go to stderr). Jobs see K2_COMPUTE_JOB=<id> (set by the
-node; the only K2_* variable in a job). --secret: the job gets a vault
+on stdout (logs go to stderr). Jobs see K2_COMPUTE_JOB=<id>, K2_JOB_CPUS,
+K2_JOB_PORT_BASE, K2_JOB_PORT_COUNT and K2_NODE_OS, K2_NODE_DISTRO,
+K2_NODE_DISTRO_VERSION, K2_NODE_PKG (all set by the node; --env can't set
+them; no K2 token or socket). --secret: the job gets a vault
 secret as env; only a person grants it (k2 vault grant NAME --to
 compute:<ws>/<node> --as env), and the job can print or send what it's
 given. Read `k2 study compute` first.
@@ -25653,7 +25696,9 @@ def node_line(n):
             status = "unavailable: " + ",".join(o.get("unavailable") or [])
     if n.get("controllerPause"):
         status += " (server: %s)" % n["controllerPause"]
-    os_arch = "%s-%s" % (n.get("os") or "?", n.get("arch") or "?")
+    # 0.46.9 (protocol 7): the short platform column (ubuntu24.04-x86_64,
+    # arch-x86_64, macos15.5-arm64); an older node: linux-x86_64 as before.
+    os_arch = n.get("platform") or "%s-%s" % (n.get("os") or "?", n.get("arch") or "?")
     caps = o.get("caps") or {}
     free = o.get("free") or {}
     # free CPU = the cap minus what running K2 jobs reserved (not idle CPU);
@@ -25674,7 +25719,8 @@ def node_line(n):
     node_runs = (" · node runs %d" % nr) if nr is not None and nr != n.get("running", 0) else ""
     g = n.get("grant")
     grant = ("  grant %s/job %s parallel %s queued%s" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"), " ci" if g.get("allowCi") else "")) if isinstance(g, dict) else ""
-    return "%-14s %-16s %-24s %-64s %s · %s%s%s%s  seen %s" % (n["name"], os_arch, status[:24], res, run, queued, tier_counts(n.get("queueTiers")), node_runs, grant, ago(n.get("lastSeen")))
+    reboot = "  reboot pending" if n.get("rebootPending") else ""
+    return "%-14s %-19s %-24s %-64s %s · %s%s%s%s  seen %s%s" % (n["name"], os_arch, status[:24], res, run, queued, tier_counts(n.get("queueTiers")), node_runs, grant, ago(n.get("lastSeen")), reboot)
 def tier_counts(t, bare=False):
     # Tiers (0.46.5): `CI 1 · P 0 · N 3`; nothing when none are queued.
     if not isinstance(t, dict) or not any(t.get(k) for k in ("ci", "priority", "normal", "batch")):
@@ -25749,6 +25795,18 @@ elif verb == "info":
     print(node_line(v))
     for l in share_lines(v):
         print(l)
+    # 0.46.9 (protocol 7): what the machine is, and its package manager.
+    h = v.get("host")
+    if isinstance(h, dict) and h.get("line"):
+        print("host: " + h["line"])
+    pk = v.get("packages")
+    if isinstance(pk, dict):
+        n_open = pk.get("openRequests") or 0
+        bits = [pk.get("manager") or "?"]
+        if pk.get("policy"):
+            bits.append("policy for this server: " + pk["policy"])
+        bits.append("%d open request%s" % (n_open, "" if n_open == 1 else "s"))
+        print("packages: %s (k2 compute node packages %s)" % (" · ".join(bits), v.get("name")))
     o = v.get("offer") or {}
     nv = v.get("nodeVersion") or o.get("node_version")
     if nv or o.get("features") is not None:
@@ -26186,8 +26244,8 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node=""
-    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=()
+    local preset="" now=0 tag="" same_node="" distro=""
+    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
@@ -26195,6 +26253,10 @@ cmd_compute_run() {
             # this job (submit, moves, retries). Not with a named node.
             --avoid) avoids+=("${2:-}"); shift 2
                 [ -n "${avoids[${#avoids[@]}-1]}" ] || { echo "usage: --avoid <node> (a node K2 must not pick; repeatable)" >&2; exit 2; } ;;
+            # --only NODE (0.46.9, repeatable): K2 picks only among these
+            # nodes. Not with a named node.
+            --only) onlys+=("${2:-}"); shift 2
+                [ -n "${onlys[${#onlys[@]}-1]}" ] || { echo "usage: --only <node> (K2 picks only among the nodes you list; repeatable)" >&2; exit 2; } ;;
             # --preset NAME: [presets.NAME] from .k2/compute.toml (0.46.7;
             # the daemon reads the file, flags still win).
             --preset) preset="${2:-}"; shift 2
@@ -26258,6 +26320,9 @@ sys.exit(0 if ok else 1)'; then
             --max-wait) max_wait="${2:-}"; shift 2 ;;
             --any) any=1; shift ;;
             --os) os="${2:-}"; shift 2 ;;
+            # --distro ubuntu|ubuntu@24.04|debian (0.46.9): the node's
+            # /etc/os-release ID or ID_LIKE, the version on a dot prefix.
+            --distro) distro="$(_compute_distro_arg "${2:-}")" || exit 2; shift 2 ;;
             --arch) arch="${2:-}"; shift 2 ;;
             --label) labels+=("${2:-}"); shift 2 ;;
             --detach|-d) detach=1; shift ;;
@@ -26421,10 +26486,14 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
     if [ "${#avoids[@]}" -gt 0 ]; then
         avoid_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${avoids[@]}")"
     fi
+    local only_json=""
+    if [ "${#onlys[@]}" -gt 0 ]; then
+        only_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${onlys[@]}")"
+    fi
     local ws_name
     ws_name="$(_compute_ws "$workspace")"
     local body
-    body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" \
+    body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
         K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
@@ -26768,7 +26837,7 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid)
+            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
@@ -26821,13 +26890,14 @@ print("\n".join(lines))' "${targs[@]+"${targs[@]}"}")" || exit 2
 # daemon submits one Batch `sh -c true` job with the needs to each granted
 # matching node where a need isn't ready, and reports the ready ones.
 cmd_compute_prewarm() {
-    local preset="" os="" arch="" tag="" workspace="" plan=0 wait=0 as_json=0
+    local preset="" os="" arch="" tag="" workspace="" plan=0 wait=0 as_json=0 distro=""
     local -a needs=() nodes=() labels=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --preset) preset="${2:-}"; shift 2 ;;
             --needs|--need) needs+=("${2:-}"); shift 2 ;;
             --os) os="${2:-}"; shift 2 ;;
+            --distro) distro="$(_compute_distro_arg "${2:-}")" || exit 2; shift 2 ;;
             --arch) arch="${2:-}"; shift 2 ;;
             --label) labels+=("${2:-}"); shift 2 ;;
             --node) nodes+=("${2:-}"); shift 2 ;;
@@ -26836,7 +26906,7 @@ cmd_compute_prewarm() {
             --plan|--dry-run) plan=1; shift ;;
             --wait) wait=1; shift ;;
             --json) as_json=1; shift ;;
-            *) echo "usage: k2 compute prewarm [--preset NAME | --needs rust@stable,cmake@3] [--os linux|macos] [--arch A] [--label k=v] [--node N]... [--tag T] [--plan] [--wait] [--json] (unknown '$1')" >&2; exit 2 ;;
+            *) echo "usage: k2 compute prewarm [--preset NAME | --needs rust@stable,cmake@3] [--os linux|macos] [--distro ubuntu@24.04] [--arch A] [--label k=v] [--node N]... [--tag T] [--plan] [--wait] [--json] (unknown '$1')" >&2; exit 2 ;;
         esac
     done
     # No --preset or --needs: the needs come from .k2/compute.toml's
@@ -26867,7 +26937,7 @@ print(json.dumps(out))' "${labels[@]}")" || exit 2
     # The daemon reads .k2/compute.toml from this checkout (or the workspace).
     _k2_git_usable && repo_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
     local body
-    body="$(_compute_json K2_CJ_preset="$preset" K2_CJ_needs_j="$needs_json" K2_CJ_os="$os" K2_CJ_arch="$arch" \
+    body="$(_compute_json K2_CJ_preset="$preset" K2_CJ_needs_j="$needs_json" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" \
         K2_CJ_labels_j="$labels_json" K2_CJ_nodes_j="$nodes_json" K2_CJ_tag="$tag" K2_CJ_plan_b="${plan#0}" \
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$(_compute_ws "$workspace")")"
     _compute_call POST /cli/compute/prewarm "$body"
@@ -26886,12 +26956,22 @@ for r in v.get("nodes") or []:
         s = "installing %s (job %s)" % (", ".join(r.get("installs") or []), r.get("short"))
     elif st == "would_install":
         s = "would install %s" % ", ".join(r.get("installs") or [])
+    elif st in ("asked", "would_ask"):
+        # 0.46.9: system packages its owner must approve first.
+        s = "%s its owner for %s" % ("asked" if st == "asked" else "would ask", ", ".join(r.get("ask") or []))
+    elif st == "cant_install":
+        s = "cannot install there"
     else:
         e = r.get("error") or {}
         s = "refused: %s: %s" % (e.get("code"), e.get("hint"))
     if r.get("note"): s += " · " + r["note"]
     sys.stderr.write("[k2 compute] %s: %s\n" % (r.get("node"), s))
 if v.get("fits"): sys.stderr.write("[k2 compute] %s\n" % v["fits"])
+rq = v.get("request")
+if isinstance(rq, dict) and rq.get("id"):
+    sys.stderr.write("[k2 compute] package request %s: %s. Prewarm again once it is installed (k2 compute node packages requests)\n" % (rq["id"], rq.get("summary") or ""))
+elif isinstance(rq, dict) and isinstance(rq.get("error"), dict):
+    sys.stderr.write("[k2 compute] package request not filed: %s: %s\n" % (rq["error"].get("code"), rq["error"].get("hint")))
 print(" ".join(v.get("jobs") or []))')"
     if [ "$wait" = "1" ] && [ -n "$ids" ]; then
         local -a wargs=()
@@ -26900,6 +26980,8 @@ print(" ".join(v.get("jobs") or []))')"
         cmd_compute_wait "${wargs[@]}"
     fi
     [ "$as_json" = "1" ] && printf '%s\n' "$_CP_BODY"
+    # 0.46.9: a package request it filed for this server's owner is a hold.
+    _compute_pkg_held_exit
     exit 0
 }
 
@@ -27463,6 +27545,7 @@ print(json.dumps({"code": v["enroll"], "expiresAt": v["expiresAt"], "name": v["n
             ;;
         admin) cmd_compute_node_admin "$@" ;;
         servers) cmd_compute_node_servers "$@" ;;
+        packages|pkg) cmd_compute_node_packages "$@" ;;
         take-owner)
             # MT36 (0.46.4): a node that says this server owns it now (an
             # owner change on it) is taken over only by the owner, in person.
@@ -27640,7 +27723,7 @@ if "node" in v:
     print("%s: %s" % (v["node"], ("offline alert after %dm" % (a // 60)) if a else "no offline alert"))'
             ;;
         *)
-            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers …" >&2
+            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …" >&2
             exit 2
             ;;
     esac
@@ -27666,6 +27749,325 @@ for n in r.get("nodes") or []:
     why=(" " + n["code"]) if n.get("code") else ""
     print("  %-14s %s%s%s" % (n["node"], n["state"], why, (": " + n["detail"]) if n.get("detail") and n["state"] in ("skipped","failed","refused","timed_out") else ""))
 if v.get("note"): print(v["note"])'
+}
+
+# A package request held for this server's owner (`pkgHeld`): say so and
+# exit 2, like every held change. With permission cards on, the daemon's
+# Ask with: line (k2 permission request compute.packages request=<id> …)
+# prints last, at exit, and brings the request to the owner as a card.
+_compute_pkg_held_exit() {
+    printf '%s' "$_CP_BODY" | grep -q '"pkgHeld": *true' || return 0
+    local id
+    id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("request") or {}).get("id") or "")')"
+    echo "held for the owner: package request $id" >&2
+    echo "  the owner approves it on the card, in Settings → Compute → Approvals, or outside K2: k2 compute node packages approve $id" >&2
+    if _permission_in_body "$_CP_BODY"; then
+        echo "  to ask the owner in chat now, run the Ask with: line below: it puts this same request on a card." >&2
+    fi
+    echo "  you get a [compute] message when it's decided; then run your job again" >&2
+    exit 2
+}
+
+# `k2 compute node packages …` (0.46.9, prd-compute-self-serve-environments-v1
+# §6.3): what a node can install for this server, and asking its owner for
+# more. Thin: every rule lives in the daemon (compute_pkg.rs).
+_compute_node_packages_usage() {
+    cat <<'EOF'
+k2 compute node packages — system packages on a compute node (0.46.9)
+
+  k2 compute node packages <node> [--json]
+        the node's host line, its package manager, the policy for this
+        server there, the approved and installed names, and your recent
+        requests
+  k2 compute node packages request <node>[,<node>…] <name>[,<name>…] --why "…" [--job ID] [--json]
+        ask the node's owner to install them: one request for every name
+        on every node named. A name is a Debian name (libssl-dev; K2 maps
+        it for each distro), a native one (pacman:openssl, dnf:openssl-devel)
+        or a K2 profile (profile:tauri-linux). A job whose --needs aren't
+        covered files the same request by itself. Held for this server's
+        owner: exit 2, and the Ask with: line puts it on their card. You
+        get a [compute] message when the owner decides; then run your job
+        again
+  k2 compute node packages requests [--node N] [--state S] [--limit N] [--json]
+        your requests (the owner or an Admin outside K2: every request).
+        S: pending, approved, installed, denied, failed, expired or all.
+        installed = run your job again; denied, failed, expired = it won't
+  k2 compute node packages approve|deny <request> [--add] [--note "…"]
+        the owner or an Admin, from a terminal outside K2 (an agent never
+        decides). <request> is the cpr_… id that requests shows (a start of
+        it that fits one is enough). The card in chat and Settings →
+        Compute → Approvals are the main path. approve --add also puts the
+        names on that server's approved list, so the next ask for them
+        needs no card
+  k2 compute node packages policy <node> [--json]
+        what this server may install there without asking
+  k2 compute node packages policy <node> [<server>] [level=list|profiles|official]
+        [profiles=a,b] [max_install_mb=N] [--reason "…"]
+        change it for <server>: own (this server, the default), or another
+        server's label as k2 compute node servers <node> shows it. The
+        node's owner only. profiles= takes bare K2 profile names
+        (build-base, tauri-linux, rust-gui-ci, k2-workspace) and replaces
+        the server's list. Narrowing applies at once; widening is held for
+        the owner's approval (exit 2). Every server's policy, at the
+        machine: k2-node packages list
+EOF
+}
+
+cmd_compute_node_packages() {
+    local first="${1:-}"
+    case "$first" in
+        ""|help|--help|-h) _compute_node_packages_usage; return 0 ;;
+    esac
+    local as_json=0 a
+    for a in "$@"; do [ "$a" = "--json" ] && as_json=1; done
+    case "$first" in
+        request)
+            shift
+            local nodes="" why="" job="" ask_usage='usage: k2 compute node packages request <node>[,<node>…] <name>[,<name>…] --why "…" [--job ID]'
+            local -a names=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --why) why="${2:-}"; shift 2 ;;
+                    --job) job="${2:-}"; shift 2 ;;
+                    --json) shift ;;
+                    -*) echo "$ask_usage (unknown flag '$1')" >&2; exit 2 ;;
+                    *) if [ -z "$nodes" ]; then nodes="$1"; else names+=("$1"); fi; shift ;;
+                esac
+            done
+            [ -n "$nodes" ] && [ "${#names[@]}" -gt 0 ] || { echo "$ask_usage" >&2; exit 2; }
+            [ -n "$why" ] || { echo "$ask_usage (--why: one line the owner reads on the card, e.g. \"tauri build needs webkit2gtk\")" >&2; exit 2; }
+            local nodes_json names_json
+            nodes_json="$(python3 -c 'import json,sys; print(json.dumps([x.strip() for x in sys.argv[1].split(",") if x.strip()]))' "$nodes")"
+            names_json="$(python3 -c '
+import json, sys
+out = []
+for a in sys.argv[1:]:
+    out += [x.strip() for x in a.split(",") if x.strip()]
+print(json.dumps(out))' "${names[@]}")"
+            _compute_call POST /cli/compute/nodes/packages/request "$(_compute_json K2_CJ_nodes_j="$nodes_json" K2_CJ_names_j="$names_json" K2_CJ_why="$why" K2_CJ_job="$job" K2_CJ_workspace="$(_compute_ws "")")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; _compute_pkg_held_exit; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("request") or {}
+print("request %s: %s" % (r.get("id"), r.get("summary") or ""))
+for row in r.get("rows") or []:
+    d = row.get("dry") or {}
+    extra = ""
+    if d.get("installs"):
+        extra = " · installs %d package(s)%s" % (len(d["installs"]), (", %s MB" % d["size_mb"]) if d.get("size_mb") is not None else "")
+    if d.get("refusal"):
+        extra += " · would be refused: " + d["refusal"]
+    print("  %-14s %-9s %s%s" % (row.get("node"), row.get("state"), " ".join(row.get("names") or []), extra))
+for c in v.get("cant") or []:
+    print("  not asked: " + c)
+if v.get("hint"):
+    print(v["hint"])'
+            # Held for this server's owner: exit 2 (sent to another
+            # server's owner only: exit 0, you hear back by message).
+            _compute_pkg_held_exit
+            ;;
+        requests|list|ls)
+            shift
+            local q=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --node) q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
+                    --state) q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
+                    --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
+                    --json) shift ;;
+                    *) echo "usage: k2 compute node packages requests [--node N] [--state pending|approved|installed|denied|failed|expired|all] [--limit N] [--json]" >&2; exit 2 ;;
+                esac
+            done
+            # The owner's view needs no passport: outside K2 it goes over TCP.
+            if _compute_in_session; then
+                _compute_call GET /cli/compute/nodes/packages/requests "${q#&}"
+            else
+                _compute_call GET /cli/compute/nodes/packages/requests "${q#&}" tcp
+            fi
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+rows = v.get("requests") or []
+if not rows:
+    print("no package requests")
+def ago(t):
+    d = max(int(time.time()) - int(t or 0), 0)
+    return "now" if d < 60 else ("%dm ago" % (d // 60) if d < 3600 else ("%dh ago" % (d // 3600) if d < 86400 else "%dd ago" % (d // 86400)))
+seen = set()
+for r in rows:
+    origin = {"own": "", "sent": "asked %s" % r.get("server"), "fwd": "from %s" % r.get("server")}.get(r.get("origin"), r.get("origin") or "")
+    print("%-21s %-9s %-14s %-8s %s%s" % (r.get("batchId"), r.get("state"), r.get("node"), ago(r.get("createdAt")), " ".join(r.get("names") or []), ("  (" + origin + ")") if origin else ""))
+    who = r.get("askedBy") or "?"
+    print("%21s asked by %s%s%s" % ("", who, (" for job " + r["jobId"][:8]) if r.get("jobId") else "", (": " + r["why"]) if r.get("why") else ""))
+    d = r.get("dry") or {}
+    if d.get("installs"):
+        print("%21s installs %d package(s)%s" % ("", len(d["installs"]), (", %s MB" % d["size_mb"]) if d.get("size_mb") is not None else ""))
+    if d.get("refusal"):
+        print("%21s would be refused: %s" % ("", d["refusal"]))
+    if r.get("note") or r.get("decidedBy"):
+        print("%21s %s%s" % ("", ("by " + r["decidedBy"] + " ") if r.get("decidedBy") else "", r.get("note") or ""))
+if v.get("canDecide") and any(r.get("state") == "pending" and r.get("origin") != "sent" for r in rows):
+    print("decide: k2 compute node packages approve|deny <request> [--add] [--note \"…\"]")'
+            ;;
+        approve|deny)
+            shift
+            local id="" note="" add=0 dec_usage="usage: k2 compute node packages $first <request> [--note \"…\"]"
+            [ "$first" = "approve" ] && dec_usage="usage: k2 compute node packages approve <request> [--add] [--note \"…\"]"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --note|--why) note="${2:-}"; shift 2 ;;
+                    --add) add=1; shift ;;
+                    --json) shift ;;
+                    -*) echo "$dec_usage (unknown flag '$1')" >&2; exit 2 ;;
+                    *) [ -z "$id" ] || { echo "$dec_usage (one request)" >&2; exit 2; }; id="$1"; shift ;;
+                esac
+            done
+            [ -n "$id" ] || { echo "$dec_usage" >&2; exit 2; }
+            [ "$first" = "deny" ] && [ "$add" = "1" ] && { echo "usage: --add goes with approve (it puts the names on the server's approved list)" >&2; exit 2; }
+            if _compute_in_session; then
+                echo '{"error":"owner_only","hint":"only the owner or an Admin decides package requests, in person: the card in chat, Settings → Compute → Approvals, or this command from a terminal outside K2. An agent can never approve."}' >&2
+                exit 3
+            fi
+            # Show what is decided first: the names, nodes and install set.
+            _compute_call GET /cli/compute/nodes/packages/requests "state=pending&limit=500" tcp
+            local full
+            full="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+want = sys.argv[1]
+rows = [r for r in json.load(sys.stdin).get("requests") or [] if r.get("origin") != "sent"]
+ids = sorted({r["batchId"] for r in rows if r["batchId"] == want or r["id"] == want or r["batchId"].startswith(want)})
+if len(ids) != 1:
+    sys.exit(1)
+b = ids[0]
+print(b)
+for r in rows:
+    if r["batchId"] != b:
+        continue
+    d = r.get("dry") or {}
+    sys.stderr.write("  %s on %s (%s), for %s%s\n" % (" ".join(r.get("names") or []), r.get("node"), r.get("host") or "?", r.get("askedBy") or "?", (" via " + r["server"]) if r.get("origin") == "fwd" else ""))
+    if r.get("why"):
+        sys.stderr.write("    why: %s\n" % r["why"])
+    if d.get("installs"):
+        sys.stderr.write("    installs %d package(s)%s: %s\n" % (len(d["installs"]), (", %s MB" % d["size_mb"]) if d.get("size_mb") is not None else "", " ".join(d["installs"])))
+' "$id")" || full="$id"
+            local approve_j=false
+            [ "$first" = "approve" ] && approve_j=true
+            local add_j=""
+            [ "$add" = "1" ] && add_j=true
+            _compute_call POST /cli/compute/nodes/packages/decide "$(_compute_json K2_CJ_request="$full" K2_CJ_approve_j="$approve_j" K2_CJ_add_j="$add_j" K2_CJ_note="$note")" tcp
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for r in v.get("rows") or []:
+    print("%s %s on %s%s" % (r.get("state"), r.get("request"), r.get("node"), (": " + r["note"]) if r.get("note") else ""))'
+            ;;
+        policy)
+            shift
+            local node="" server="" reason="" pol_usage='usage: k2 compute node packages policy <node> [<server>] [level=list|profiles|official] [profiles=a,b] [max_install_mb=N] [--reason "…"]'
+            local -a pairs=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --reason) reason="${2:-}"; shift 2 ;;
+                    --json) shift ;;
+                    -*) echo "$pol_usage (unknown flag '$1')" >&2; exit 2 ;;
+                    *=*) pairs+=("$1"); shift ;;
+                    *)
+                        if [ -z "$node" ]; then node="$1"
+                        elif [ -z "$server" ]; then server="$1"
+                        else echo "$pol_usage" >&2; exit 2
+                        fi
+                        shift ;;
+                esac
+            done
+            [ -n "$node" ] || { echo "$pol_usage" >&2; exit 2; }
+            if [ "${#pairs[@]}" -eq 0 ]; then
+                # Show: this server's policy there (the node reports only
+                # the caller's; every server's is at the machine).
+                _compute_call GET /cli/compute/nodes/packages "node=$(urlencode "$node")"
+                [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+                printf '%s' "$_CP_BODY" | K2_CP_SERVER="$server" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+p = v.get("packages")
+if not isinstance(p, dict):
+    print("%s: %s" % (v.get("node"), v.get("note") or "no package status"))
+    sys.exit(0)
+print("%s: %s for this server" % (v.get("node"), p.get("policy")))
+if os.environ.get("K2_CP_SERVER") not in ("", "own"):
+    print("  (a node reports only the asking server'"'"'s policy; every server'"'"'s, at the machine: k2-node packages list)")'
+                exit 0
+            fi
+            local body
+            body="$(K2_PP_NODE="$node" K2_PP_SERVER="${server:-own}" K2_PP_REASON="$reason" python3 -c '
+import json, os, sys
+out = {"node": os.environ["K2_PP_NODE"], "server": os.environ["K2_PP_SERVER"]}
+if os.environ.get("K2_PP_REASON"):
+    out["reason"] = os.environ["K2_PP_REASON"]
+for kv in sys.argv[1:]:
+    k, _, v = kv.partition("=")
+    if k == "level":
+        if v not in ("list", "profiles", "official"):
+            sys.stderr.write("usage: level=list|profiles|official\n"); sys.exit(2)
+        out["level"] = v
+    elif k == "profiles":
+        out["profiles"] = [x.strip() for x in v.split(",") if x.strip()]
+    elif k == "max_install_mb":
+        if not v.isdigit():
+            sys.stderr.write("usage: max_install_mb=N (megabytes per request, 1 to 65536)\n"); sys.exit(2)
+        out["maxInstallMb"] = int(v)
+    else:
+        sys.stderr.write("usage: %s: the keys are level, profiles and max_install_mb\n" % k); sys.exit(2)
+print(json.dumps(out))' "${pairs[@]}")" || exit 2
+            _compute_call POST /cli/compute/nodes/packages/policy "$body"
+            if printf '%s' "$_CP_BODY" | grep -q '"held": *true'; then
+                _compute_admin_held_or_approve
+            fi
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: %s" % (v.get("node"), v.get("note") or "ok"))'
+            ;;
+        -*)
+            echo "usage: k2 compute node packages <node> | request | requests | approve | deny | policy … (k2 compute node packages --help)" >&2
+            exit 2
+            ;;
+        *)
+            # k2 compute node packages <node> [--json]
+            local node="$first"
+            shift
+            for a in "$@"; do
+                [ "$a" = "--json" ] || { echo "usage: k2 compute node packages <node> [--json]" >&2; exit 2; }
+            done
+            _compute_call GET /cli/compute/nodes/packages "node=$(urlencode "$node")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+print("%s%s" % (v.get("node"), ("  host: " + v["hostLine"]) if v.get("hostLine") else ""))
+p = v.get("packages")
+if not isinstance(p, dict):
+    print("  " + (v.get("note") or "no package status from this node"))
+else:
+    print("  manager    %s" % (p.get("manager") or "?"))
+    print("  policy     %s (for this server; set by %s)" % (p.get("policy"), v.get("owner") or "its owner"))
+    ap = p.get("approved") or []
+    print("  approved   %s" % (" ".join(ap) if ap else "(none)"))
+    ins = p.get("installed") or []
+    print("  installed  %s" % (" ".join(ins) if ins else "(none of those reported)"))
+    age = p.get("indexAgeSecs")
+    if isinstance(age, (int, float)) and age > 86400:
+        print("  index      %dd old (K2 refreshes apt/zypper before an install; an Arch node needs its owner to upgrade first)" % (age // 86400))
+    if p.get("openRequests"):
+        print("  open       %s request(s) wait for its owner" % p["openRequests"])
+if not v.get("takesRequests"):
+    print("  requests   this node takes none from K2 (older k2-node, or a Mac): its owner installs at the machine")
+rows = v.get("requests") or []
+for r in rows:
+    print("  %-21s %-9s %s" % (r.get("batchId"), r.get("state"), " ".join(r.get("names") or [])))
+print("ask for more: k2 compute node packages request %s <name>[,<name>…] --why \"…\"" % v.get("node"))'
+            ;;
+    esac
 }
 
 # `k2 compute node servers <node> [add|approve|deny|limits|pause|resume|revoke|owner …]`
@@ -28455,6 +28857,17 @@ if v.get("command"):
     esac
 }
 
+# --distro VALUE (0.46.9): ubuntu, ubuntu@24.04, debian, arch, fedora…
+# (the node's ID or ID_LIKE; the version matches on a dot prefix).
+_compute_distro_arg() {
+    if [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]{0,39}(@[0-9A-Za-z][0-9A-Za-z._-]{0,19})?$ ]]; then
+        printf '%s' "$1"
+    else
+        echo "usage: --distro ID[@VERSION] (ubuntu, ubuntu@24.04, debian, arch, fedora: the ID or ID_LIKE in the node's /etc/os-release; k2 compute nodes shows each node's)" >&2
+        return 2
+    fi
+}
+
 cmd_compute() {
     local sub="${1:-}"
     case "$sub" in
@@ -28462,6 +28875,11 @@ cmd_compute() {
     esac
     shift
     if _wants_help "$@"; then
+        # k2 compute node packages --help: its own page (0.46.9).
+        if [ "$sub" = "node" ] && { [ "${1:-}" = "packages" ] || [ "${1:-}" = "pkg" ]; }; then
+            _compute_node_packages_usage
+            return 0
+        fi
         _compute_usage
         return 0
     fi
@@ -52812,6 +53230,12 @@ AVOID A NODE (0.46.8)
   refused (avoid_with_pinned_node, exit 2). When every node that could
   take the job is avoided, nothing is queued (avoid_leaves_no_node,
   exit 3).
+  --only <node> (repeatable, run and test; 0.46.9) is the other way round:
+  K2 picks only among the nodes you list. Use it to keep private work on
+  your own nodes without listing every node to avoid:
+    k2 compute run --only k2n8 --only k2n10 --mem 24G -- cargo nextest run
+  Other nodes show as "off your --only list" in the placed-on line. With
+  a node named it is refused, as --avoid is.
 
 FIRST
   k2 compute nodes      what this workspace may use, and why one waits.
@@ -53199,7 +53623,12 @@ TOOLCHAINS (what the job needs installed)
     --needs cmake@3,ninja,protoc   (C/C++ builds: llama.cpp, prost-build, …)
   Supported tools: node python go java bun deno zig cmake ninja protoc uv
   pnpm (from mise, pinned, checksum-checked; never asdf/vfox plugins),
-  rust@<channel> + cargo-nextest (rustup), sys:<package> (root, below).
+  rust@<channel> + cargo-nextest (rustup). System packages (sys:,
+  profile:) need root: ENVIRONMENT, below.
+  rust@stable comes complete: clippy and rustfmt install with it (on a
+  0.46.9 node; placement prefers nodes that have them). rust@stable+minimal
+  leaves them out (a small node). Add components with +:
+  rust@stable+clippy+rustfmt, rust@1.95.0+rust-src+llvm-tools.
   Anything else is refused before the job starts (tool_unsupported,
   exit 2), never silently skipped; for the long tail name a mise backend:
   aqua:owner/repo@1, ubi:owner/repo@1, npm:pkg@1, pipx:pkg@1, cargo:crate@1.
@@ -53209,12 +53638,108 @@ TOOLCHAINS (what the job needs installed)
   are skipped with a note in the log):
   mise.toml, .tool-versions, .nvmrc, .node-version, .python-version,
   rust-toolchain(.toml), .k2/compute.toml (needs = ["node@22"]).
-  System packages need root: --needs sys:libssl-dev,sys:pkg-config.
-  Linux installs only names the machine's owner approved; otherwise the
-  job fails before starting with package_not_approved and the exact
-  line for the owner (sudo k2-node packages allow <name>). macOS never
-  installs them: package_missing says which brew install to ask for.
+  Repo files never ask for system packages; only an explicit --needs does.
   k2 compute info <node> lists tools already there (mise:node, …).
+
+ENVIRONMENT (0.46.9: what each machine is, and its system packages)
+  Every node says what it is. Look before you pick:
+    k2 compute nodes          the platform column: ubuntu24.04-x86_64,
+                              arch-x86_64, macos15.5-arm64 (linux-x86_64 =
+                              a k2-node older than 0.46.9, which reports none
+                              of this); "reboot pending" ends the row when a
+                              kernel update waits for its owner
+    k2 compute info <node>    host: Ubuntu 24.04.1 LTS · apt · kernel
+                              6.8.0-48-generic · glibc 2.39 · x86_64 · no GPU
+    k2 compute nodes --json   every node at once: host {os, arch, distro,
+                              distroLike, distroVersion, distroName,
+                              distroFlavor, pkgManager, kernel, libc, gpu,
+                              rebootRequired, line} (null: an older k2-node)
+  Every job log starts with that line ([k2-node] host: …), and the job
+  gets K2_NODE_OS (linux), K2_NODE_DISTRO (ubuntu), K2_NODE_DISTRO_VERSION
+  (24.04; rolling on Arch) and K2_NODE_PKG (apt).
+  Pick a distro with --distro (run, test, prewarm), or distro =
+  "ubuntu@24.04" in .k2/compute.toml ([defaults] or a preset):
+    k2 compute run --distro ubuntu@24.04 --mem 12G -- ./build.sh
+  It matches the node's /etc/os-release ID or ID_LIKE, so --distro debian
+  fits Debian and Ubuntu nodes. The version matches on a dot prefix
+  (ubuntu@24 fits 24.04). A node it leaves out shows as "of another
+  --distro" in the placed-on line.
+
+  System packages (Linux only; root installs them for every job there):
+    --needs sys:libssl-dev,sys:pkg-config
+  A sys: name is a Debian name. K2 maps it to each distro's own name
+  (libssl-dev is openssl on Arch and openssl-devel on Fedora), so one
+  --needs line works on every Linux node. For a name K2 can't map, give
+  the native name. It fits only nodes with that package manager:
+    --needs sys:pacman:protobuf     (also sys:apt:…, sys:dnf:…, sys:zypper:…)
+  Placement prefers a node that already has the packages, and skips one
+  that can't give a name ("that can't install a sys: package you need").
+  Macs install no system packages ("Macs (no system packages)"): add
+  --os linux. A job pinned to a Mac fails with package_missing, which
+  names the brew install to ask its owner for.
+
+  Profiles are bundles of system packages that K2 ships and reviews:
+    --needs profile:tauri-linux     the newest version (profile:tauri-linux@1
+                                    pins one)
+      build-base     compilers and the common build tools (build-essential,
+                     pkg-config, cmake, clang, lld, git, curl, unzip,
+                     libssl-dev)
+      tauri-linux    build-base, plus WebKitGTK, GTK and the GUI test set
+                     for a Tauri app on Linux (system packages only: add
+                     rust@stable, and node@22 for the front end)
+      rust-gui-ci    build-base, plus the X11/Wayland/GL/font/audio dev
+                     set, xvfb, and the tools rust@stable+clippy+rustfmt
+                     and cargo-nextest (don't name those again)
+      k2-workspace   what K2's own cargo --workspace build needs
+  A job names at most 32 needs; a profile counts as one, however many
+  packages it holds. A Tauri build on Ubuntu:
+    k2 compute run --distro ubuntu@24.04 --mem 16G \
+        --needs profile:tauri-linux,rust@stable,node@22 -- cargo build --release
+  k2 compute node packages <node> shows which profiles the node's owner
+  lets this server install.
+
+  Who decides: the node's owner sets a policy for each server on it.
+    list       only the names on the node's approved list
+    profiles   the list, plus the K2 profiles the owner turned on (the
+               default for another person's server: every K2 profile)
+    official   anything from the distro's signed official repos, except
+               K2's deny list (the default for the owner's own server)
+  Covered: the node installs it before your job starts. It runs a dry run
+  first, never removes or downgrades anything, and starts no service.
+  Not covered:
+    1 the run is refused with package_not_approved (exit 3). Nothing is
+      queued. One request for the missing names is filed for you, and the
+      error names it (request cpr_…).
+    2 the node's owner gets a card in their chat: what installs, on which
+      machine, for whom, and the size. They allow it or deny it.
+    3 you get a [compute] message with the answer. Installed: run the
+      same command again. No session to receive it? Look:
+      k2 compute node packages requests (state installed = run again;
+      denied, failed or expired = it won't install).
+  Ask ahead, one request for many nodes and names:
+    k2 compute node packages request k2n11,k2n12 libgtk-3-dev,profile:build-base \
+        --why "Tauri build for the Acme desktop app"
+  Held for this server's owner, it exits 2 like any held change, and the
+  Ask with: line it ends with puts the request on the owner's card.
+    k2 compute node packages requests     yours, and where each stands
+    k2 compute node packages <node>       manager, your policy there, the
+                                          approved and installed names
+  Prewarm asks the same way: k2 compute prewarm --needs profile:tauri-linux
+  --os linux files one request for every node that must ask. With --plan
+  it files nothing and only says "would ask".
+  It can't be requested (exit 3) when no package for that distro exists
+  (no_package_mapping: use a native name, --distro ubuntu or another
+  node), when the name is on K2's deny list (package_denied: kernels, boot,
+  login, sudo, SSH servers, container runtimes…), or on a Mac.
+
+  Three words that sound alike:
+    profile:NAME              in --needs: K2's bundle of system packages
+    --preset NAME             your own saved flags, [presets.NAME] in
+                              .k2/compute.toml: os, distro, mem, needs, …
+                              e.g. distro = "ubuntu@24.04" and
+                              needs = ["profile:tauri-linux", "node@22"]
+    compute test --profile P  cargo-nextest's own profile (the repo's
+                              .config/nextest.toml)
 
 RESULTS (one object, artifacts, test lists)
   k2 compute run … --json         logs go to stderr; stdout = one result object
@@ -53358,10 +53883,19 @@ WORKTREES
   From a folder outside the workspace, pass --workspace <handle>.
 
 IN THE JOB
-  The node sets K2_COMPUTE_JOB=<job id> in every job. It's the only
-  K2_* variable a job sees, it reaches no daemon, and K2's own test
-  guard ignores it. If your command refuses any K2_* variable, exclude
-  it: env | grep -E '^K2(SO)?_' | grep -v '^K2_COMPUTE_JOB='
+  The node sets these K2_* variables in every job, and --env can't set
+  them:
+    K2_COMPUTE_JOB=<job id>
+    K2_JOB_CPUS            the CPUs the job may use
+    K2_JOB_PORT_BASE, K2_JOB_PORT_COUNT
+                           loopback ports for this job alone (start a test
+                           server on $K2_JOB_PORT_BASE, not a fixed port)
+    K2_NODE_OS, K2_NODE_DISTRO, K2_NODE_DISTRO_VERSION, K2_NODE_PKG
+                           what the machine is (ENVIRONMENT)
+  None of them reaches a daemon, no K2 token or socket ever does, and
+  K2's own test guard ignores them. If your command refuses any K2_*
+  variable, exclude them: env | grep -E '^K2(SO)?_' | grep -vE
+  '^K2_(COMPUTE_JOB|JOB_|NODE_)'
   Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
   so a failing a looks green).
   --exclusive waits for an idle node and holds other K2 jobs while it
@@ -53463,7 +53997,8 @@ COMMON ERRORS
   relay_cap              an artifact over 100 MB through the relay: fetch --over-relay (≤ 500 MB)
   operate_off            ask your owner for "Allow this agent to operate compute nodes"
   node_lacks_admin       that k2-node predates node admin: someone re-runs setup there
-  too_many_pending       10 requests already wait for the owner; withdraw some
+  too_many_pending       10 requests (admin, or package requests from this server)
+                         already wait for the owner on that node; wait or withdraw
   approval_expired       the owner didn't decide in 24 h, or the node stayed offline
   verb_not_allowed       not an admin verb; a root script is the escape hatch
   node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup);
@@ -53487,7 +54022,30 @@ COMMON ERRORS
                          use a supported one, a backend (aqua:owner/repo@1), or ask
                          the owner (Linux: sys:<package> once approved)
   need_invalid           a --needs token isn't tool@version or sys:<name>
-  package_not_approved   ask the owner: sudo k2-node packages allow <name>
+  package_not_approved   the node's owner must approve a sys: package first: nothing
+                         queued, a request is filed for you (the error names it,
+                         cpr_…); run again once installed (ENVIRONMENT); exit 3
+  no_package_mapping     no package for that name on that node's distro, or K2
+                         never installs it: use sys:<manager>:<name>, --distro, or
+                         another node. It can't be requested; exit 3
+  package_denied         on K2's deny list (boot, login, sudo, SSH servers,
+                         container runtimes…). It can't be requested; exit 3
+  package_ambiguous      a virtual name with several providers: name one of them
+  package_removes        the dry run would remove or downgrade a package: refused
+  package_third_party    it comes from a repo the owner added, not the distro's
+                         own: only the owner installs it, at the machine
+  package_too_big        bigger than that server's max_install_mb on the node
+  pkg_signing_off        the package manager's signature check is off there; the
+                         node installs nothing until its owner turns it on
+  profile_unknown        not a K2 profile, or a version that node doesn't know:
+                         build-base, tauri-linux, rust-gui-ci, k2-workspace
+  index_stale            the node's package database is out of date (Arch: its
+                         owner runs a full upgrade first); infrastructure
+  package_busy           the package manager stayed locked (unattended upgrades);
+                         infrastructure, retried
+  pkg_requests_unsupported  that node takes no package requests (older k2-node,
+                         remote admin off, or a Mac): its owner installs at the
+                         machine. It can't be requested; exit 3
   private_home_choice    enable: say --private-home or --no-private-home
   owner_only             owner verb from an agent or a K2 terminal: use Settings
                          (or ask for "Allow managing compute nodes")
@@ -53594,6 +54152,28 @@ CODES (exit 3 with a JSON code)
   team_needs_tenant_wall other people's servers need the tenant wall
                          (Linux nodes; Macs in 0.46.4)
 
+SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
+  What you may install: the node's owner sets a package policy for each
+  server on it. Another person's server gets `profiles` by default: every
+  K2 profile (build-base, tauri-linux, rust-gui-ci, k2-workspace) and the
+  names on the node's approved list. The owner may narrow or widen it.
+  See yours: k2 compute node packages <node>.
+  Anything else, the NODE'S OWNER approves, never you or your own server's
+  people. Your run is refused with package_not_approved (exit 3), and one
+  request goes through the node to the owner's server, which shows them a
+  card. You never see who they are, only their server's label. You get a
+  [compute] message when they decide (installed, denied, or no answer in
+  24 h); then run again. At most 10 open requests per server per node.
+  Ask ahead: k2 compute node packages request <node> <name>,… --why "…".
+  A node whose k2-node is older than 0.46.9 takes no requests from other
+  servers (pkg_requests_unsupported): its owner installs at the machine.
+  Packages are host-wide: once installed they are in /usr for every job on
+  the node, from every server. Your policy decides what you may trigger,
+  not who may use the result.
+  Every server sees the same host facts: distro, kernel, libc, GPU and
+  "reboot pending" (k2 compute info <node>, and the [k2-node] host: line
+  at the top of each job log). A job could read them anyway.
+
 WHAT THE WALL DOES NOT STOP (say so before you share)
   Each server's jobs get their own folders (and on Linux their own user).
   They can't read each other's code, caches, results or logs. They still
@@ -53619,6 +54199,18 @@ FOR THE NODE'S OWNER
   for running jobs (≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set
   to `policy`, add servers at the machine: sudo k2-node servers add …
+  servers add --for none: a share with no end date.
+  Package requests from other servers come to you as cards (or k2 compute
+  node packages requests / approve|deny outside K2). What each server may
+  install without asking:
+    k2 compute node packages policy <node> <server> level=list|profiles|official
+                                   [profiles=a,b] [max_install_mb=N]
+    at the machine: sudo k2-node packages policy <own|server> level=…
+  <server> is own, or the label k2 compute node servers <node> shows.
+  profiles= takes bare names (profiles=build-base,tauri-linux) and
+  replaces that server's profile list. Only two profiles, for example:
+    k2 compute node packages policy k2n11 globex.k2.dev level=profiles profiles=build-base,tauri-linux
+  Narrowing applies at once; widening waits for your approval.
 
 CHANGING THE NODE'S OWNER (0.46.4)
   k2 compute node servers <node> owner <server> [--old keep|revoke]
@@ -80859,6 +81451,16 @@ A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat nee
     k2 permission request chat.refresh notes=<hash> --why "<what you need it for>"
 
 Save your work before you ask: once you've asked, this chat can end at any moment. Run it as printed. The owner or an admin allows it once, or from now on (that turns the switch on, and you then run `k2 agent refresh` yourself). The card makes the change: don't run it again. You won't see the approved line in this chat, because this chat ends: the new one gets a summary, your note, then the line. Denied: a `[permission:]` line says so here. To change your note: `k2 permission cancel <id>`, run `k2 agent refresh` again, and ask with its new line. `k2 study chat-refresh`.
+
+## System packages on compute nodes
+
+A job whose `--needs` asks for a system package its node's owner hasn't approved is refused with `package_not_approved` (exit 3). The refusal already filed one request for the missing names, and ends with:
+
+    k2 permission request compute.packages request=<cpr_… id> --why "<what you need it for>"
+
+Run it as printed. `k2 compute node packages request <node> <names> --why "..."` (before a job) and `k2 compute prewarm` file the same kind of request and print the same line. The owner or an admin sees exactly what installs, on which machine, the number of packages with dependencies and the size. Several of your package requests can share one card; other kinds never join it. When the `[permission:]` turn says approved, root installs them on the node, and a `[compute]` message says when it's done: then run your job again. A node another server owns is that server's owner's to decide: you hear back in a `[compute]` message, and there is nothing to ask here.
+
+What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
 
 ## Apps
 

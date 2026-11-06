@@ -49,6 +49,18 @@ vi.mock('./compute-admin-api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('./compute-admin-api')>()
   return { ...orig, fetchAdminRequests: vi.fn(async () => ({ requests: [], canApprove: true })), fetchNodeHealth: vi.fn() }
 })
+// Package requests read their own routes (ComputePackagesParts.test.tsx
+// covers them); here they are empty and the sync signal is a no-op.
+vi.mock('./compute-packages-api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./compute-packages-api')>()
+  return {
+    ...orig,
+    fetchPkgRequests: vi.fn(async () => ({ requests: [], canDecide: true })),
+    fetchNodePackages: vi.fn(),
+    decidePkgRequest: vi.fn(),
+    onComputeSync: vi.fn(() => () => {}),
+  }
+})
 vi.mock('../lib/compute-account', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/compute-account')>()
   return {
@@ -68,6 +80,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { getAccountAccessToken } from './K2ConnectSection'
 import { listAccountServers, requestEnrollTicket } from '../lib/compute-account'
+import * as pkgApi from './compute-packages-api'
 
 const m = vi.mocked(api)
 
@@ -815,5 +828,77 @@ describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
     const row = await screen.findByTestId('compute-grant-sales')
     expect(within(row).queryByRole('switch')).toBeNull()
     expect(screen.queryByTestId('compute-grant-ci-help')).toBeNull()
+  })
+})
+
+describe('package requests and host facts (prd-compute-self-serve-environments-v1 §12.3)', () => {
+  const HOSTED: ComputeNode = {
+    ...ONLINE,
+    host: { line: 'Ubuntu 24.04.1 LTS · apt · x86_64', rebootRequired: true },
+    rebootPending: true,
+    packages: { manager: 'apt', policy: 'official, ≤ 2048 MB per request', openRequests: 1 },
+  }
+
+  it('each node shows its host line, manager, policy, open requests and the reboot badge; Package requests sit under Approvals', async () => {
+    m.fetchComputeNodes.mockResolvedValue({ nodes: [HOSTED], waitingCodes: [], controller: 'rosson.k2.dev' })
+    render(<ComputeSection />)
+    const card = await screen.findByTestId('compute-node-mini-2')
+    const pkg = within(card).getByTestId('compute-node-packages-mini-2')
+    expect(pkg.textContent).toContain('Ubuntu 24.04.1 LTS · apt · x86_64')
+    expect(pkg.textContent).toContain('policy official, ≤ 2048 MB per request')
+    expect(within(card).getByTestId('compute-node-reboot').textContent).toBe('reboot pending')
+    expect(within(card).getByTestId('compute-node-open-requests').textContent).toBe('1 open request')
+    expect(await screen.findByTestId('compute-pkg-requests')).toBeTruthy()
+  })
+
+  it('this machine, when it is one of the listed nodes, shows its policy and open requests beside the approved list', async () => {
+    m.fetchComputeNodes.mockResolvedValue({ nodes: [HOSTED], waitingCodes: [], controller: 'rosson.k2.dev' })
+    m.fetchLocalStatus.mockResolvedValue({
+      ...LOCAL_OFF,
+      installed: true,
+      platform: 'linux',
+      node: { state: 'online', name: 'mini-2', node_fp: 'fp1', controller: 'https://rosson.k2.dev', control: 'active', running: [] },
+      packages: { manager: 'apt', approved: ['cmake'], installer: true },
+    })
+    vi.mocked(pkgApi.fetchNodePackages).mockResolvedValue({
+      node: 'mini-2',
+      host: null,
+      hostLine: null,
+      packages: {
+        manager: 'apt',
+        level: 'official',
+        profiles: [],
+        maxInstallMb: 2048,
+        policy: 'official, ≤ 2048 MB per request',
+        approved: ['cmake'],
+        installed: [],
+        indexAgeSecs: null,
+        openRequests: 1,
+      },
+      takesRequests: true,
+      owner: 'this server',
+      requests: [],
+      note: null,
+    })
+    render(<ComputeSection />)
+    const panel = await screen.findByTestId('compute-local-node')
+    expect(panel.textContent).toContain('cmake')
+    const local = await within(panel).findByTestId('compute-local-packages')
+    await waitFor(() => expect(local.textContent).toContain('Package policy for mini-2: official, ≤ 2048 MB per request'))
+    expect(local.textContent).toContain('1 open package request')
+    expect(pkgApi.fetchNodePackages).toHaveBeenCalledWith('mini-2')
+  })
+
+  it('this machine under another server: no package summary for it', async () => {
+    m.fetchComputeNodes.mockResolvedValue({ nodes: [HOSTED], waitingCodes: [], controller: 'rosson.k2.dev' })
+    m.fetchLocalStatus.mockResolvedValue({
+      ...LOCAL_OFF,
+      installed: true,
+      node: { state: 'online', name: 'mac-1', node_fp: 'fp-other', controller: 'https://other.k2.dev', control: 'active', running: [] },
+      packages: { manager: 'brew', approved: [] },
+    })
+    render(<ComputeSection />)
+    const panel = await screen.findByTestId('compute-local-node')
+    expect(within(panel).queryByTestId('compute-local-packages')).toBeNull()
   })
 })

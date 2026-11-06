@@ -67,6 +67,12 @@ AVOID A NODE (0.46.8)
   refused (avoid_with_pinned_node, exit 2). When every node that could
   take the job is avoided, nothing is queued (avoid_leaves_no_node,
   exit 3).
+  --only <node> (repeatable, run and test; 0.46.9) is the other way round:
+  K2 picks only among the nodes you list. Use it to keep private work on
+  your own nodes without listing every node to avoid:
+    k2 compute run --only k2n8 --only k2n10 --mem 24G -- cargo nextest run
+  Other nodes show as "off your --only list" in the placed-on line. With
+  a node named it is refused, as --avoid is.
 
 FIRST
   k2 compute nodes      what this workspace may use, and why one waits.
@@ -454,7 +460,12 @@ TOOLCHAINS (what the job needs installed)
     --needs cmake@3,ninja,protoc   (C/C++ builds: llama.cpp, prost-build, …)
   Supported tools: node python go java bun deno zig cmake ninja protoc uv
   pnpm (from mise, pinned, checksum-checked; never asdf/vfox plugins),
-  rust@<channel> + cargo-nextest (rustup), sys:<package> (root, below).
+  rust@<channel> + cargo-nextest (rustup). System packages (sys:,
+  profile:) need root: ENVIRONMENT, below.
+  rust@stable comes complete: clippy and rustfmt install with it (on a
+  0.46.9 node; placement prefers nodes that have them). rust@stable+minimal
+  leaves them out (a small node). Add components with +:
+  rust@stable+clippy+rustfmt, rust@1.95.0+rust-src+llvm-tools.
   Anything else is refused before the job starts (tool_unsupported,
   exit 2), never silently skipped; for the long tail name a mise backend:
   aqua:owner/repo@1, ubi:owner/repo@1, npm:pkg@1, pipx:pkg@1, cargo:crate@1.
@@ -464,12 +475,108 @@ TOOLCHAINS (what the job needs installed)
   are skipped with a note in the log):
   mise.toml, .tool-versions, .nvmrc, .node-version, .python-version,
   rust-toolchain(.toml), .k2/compute.toml (needs = ["node@22"]).
-  System packages need root: --needs sys:libssl-dev,sys:pkg-config.
-  Linux installs only names the machine's owner approved; otherwise the
-  job fails before starting with package_not_approved and the exact
-  line for the owner (sudo k2-node packages allow <name>). macOS never
-  installs them: package_missing says which brew install to ask for.
+  Repo files never ask for system packages; only an explicit --needs does.
   k2 compute info <node> lists tools already there (mise:node, …).
+
+ENVIRONMENT (0.46.9: what each machine is, and its system packages)
+  Every node says what it is. Look before you pick:
+    k2 compute nodes          the platform column: ubuntu24.04-x86_64,
+                              arch-x86_64, macos15.5-arm64 (linux-x86_64 =
+                              a k2-node older than 0.46.9, which reports none
+                              of this); "reboot pending" ends the row when a
+                              kernel update waits for its owner
+    k2 compute info <node>    host: Ubuntu 24.04.1 LTS · apt · kernel
+                              6.8.0-48-generic · glibc 2.39 · x86_64 · no GPU
+    k2 compute nodes --json   every node at once: host {os, arch, distro,
+                              distroLike, distroVersion, distroName,
+                              distroFlavor, pkgManager, kernel, libc, gpu,
+                              rebootRequired, line} (null: an older k2-node)
+  Every job log starts with that line ([k2-node] host: …), and the job
+  gets K2_NODE_OS (linux), K2_NODE_DISTRO (ubuntu), K2_NODE_DISTRO_VERSION
+  (24.04; rolling on Arch) and K2_NODE_PKG (apt).
+  Pick a distro with --distro (run, test, prewarm), or distro =
+  "ubuntu@24.04" in .k2/compute.toml ([defaults] or a preset):
+    k2 compute run --distro ubuntu@24.04 --mem 12G -- ./build.sh
+  It matches the node's /etc/os-release ID or ID_LIKE, so --distro debian
+  fits Debian and Ubuntu nodes. The version matches on a dot prefix
+  (ubuntu@24 fits 24.04). A node it leaves out shows as "of another
+  --distro" in the placed-on line.
+
+  System packages (Linux only; root installs them for every job there):
+    --needs sys:libssl-dev,sys:pkg-config
+  A sys: name is a Debian name. K2 maps it to each distro's own name
+  (libssl-dev is openssl on Arch and openssl-devel on Fedora), so one
+  --needs line works on every Linux node. For a name K2 can't map, give
+  the native name. It fits only nodes with that package manager:
+    --needs sys:pacman:protobuf     (also sys:apt:…, sys:dnf:…, sys:zypper:…)
+  Placement prefers a node that already has the packages, and skips one
+  that can't give a name ("that can't install a sys: package you need").
+  Macs install no system packages ("Macs (no system packages)"): add
+  --os linux. A job pinned to a Mac fails with package_missing, which
+  names the brew install to ask its owner for.
+
+  Profiles are bundles of system packages that K2 ships and reviews:
+    --needs profile:tauri-linux     the newest version (profile:tauri-linux@1
+                                    pins one)
+      build-base     compilers and the common build tools (build-essential,
+                     pkg-config, cmake, clang, lld, git, curl, unzip,
+                     libssl-dev)
+      tauri-linux    build-base, plus WebKitGTK, GTK and the GUI test set
+                     for a Tauri app on Linux (system packages only: add
+                     rust@stable, and node@22 for the front end)
+      rust-gui-ci    build-base, plus the X11/Wayland/GL/font/audio dev
+                     set, xvfb, and the tools rust@stable+clippy+rustfmt
+                     and cargo-nextest (don't name those again)
+      k2-workspace   what K2's own cargo --workspace build needs
+  A job names at most 32 needs; a profile counts as one, however many
+  packages it holds. A Tauri build on Ubuntu:
+    k2 compute run --distro ubuntu@24.04 --mem 16G \
+        --needs profile:tauri-linux,rust@stable,node@22 -- cargo build --release
+  k2 compute node packages <node> shows which profiles the node's owner
+  lets this server install.
+
+  Who decides: the node's owner sets a policy for each server on it.
+    list       only the names on the node's approved list
+    profiles   the list, plus the K2 profiles the owner turned on (the
+               default for another person's server: every K2 profile)
+    official   anything from the distro's signed official repos, except
+               K2's deny list (the default for the owner's own server)
+  Covered: the node installs it before your job starts. It runs a dry run
+  first, never removes or downgrades anything, and starts no service.
+  Not covered:
+    1 the run is refused with package_not_approved (exit 3). Nothing is
+      queued. One request for the missing names is filed for you, and the
+      error names it (request cpr_…).
+    2 the node's owner gets a card in their chat: what installs, on which
+      machine, for whom, and the size. They allow it or deny it.
+    3 you get a [compute] message with the answer. Installed: run the
+      same command again. No session to receive it? Look:
+      k2 compute node packages requests (state installed = run again;
+      denied, failed or expired = it won't install).
+  Ask ahead, one request for many nodes and names:
+    k2 compute node packages request k2n11,k2n12 libgtk-3-dev,profile:build-base \
+        --why "Tauri build for the Acme desktop app"
+  Held for this server's owner, it exits 2 like any held change, and the
+  Ask with: line it ends with puts the request on the owner's card.
+    k2 compute node packages requests     yours, and where each stands
+    k2 compute node packages <node>       manager, your policy there, the
+                                          approved and installed names
+  Prewarm asks the same way: k2 compute prewarm --needs profile:tauri-linux
+  --os linux files one request for every node that must ask. With --plan
+  it files nothing and only says "would ask".
+  It can't be requested (exit 3) when no package for that distro exists
+  (no_package_mapping: use a native name, --distro ubuntu or another
+  node), when the name is on K2's deny list (package_denied: kernels, boot,
+  login, sudo, SSH servers, container runtimes…), or on a Mac.
+
+  Three words that sound alike:
+    profile:NAME              in --needs: K2's bundle of system packages
+    --preset NAME             your own saved flags, [presets.NAME] in
+                              .k2/compute.toml: os, distro, mem, needs, …
+                              e.g. distro = "ubuntu@24.04" and
+                              needs = ["profile:tauri-linux", "node@22"]
+    compute test --profile P  cargo-nextest's own profile (the repo's
+                              .config/nextest.toml)
 
 RESULTS (one object, artifacts, test lists)
   k2 compute run … --json         logs go to stderr; stdout = one result object
@@ -613,10 +720,19 @@ WORKTREES
   From a folder outside the workspace, pass --workspace <handle>.
 
 IN THE JOB
-  The node sets K2_COMPUTE_JOB=<job id> in every job. It's the only
-  K2_* variable a job sees, it reaches no daemon, and K2's own test
-  guard ignores it. If your command refuses any K2_* variable, exclude
-  it: env | grep -E '^K2(SO)?_' | grep -v '^K2_COMPUTE_JOB='
+  The node sets these K2_* variables in every job, and --env can't set
+  them:
+    K2_COMPUTE_JOB=<job id>
+    K2_JOB_CPUS            the CPUs the job may use
+    K2_JOB_PORT_BASE, K2_JOB_PORT_COUNT
+                           loopback ports for this job alone (start a test
+                           server on $K2_JOB_PORT_BASE, not a fixed port)
+    K2_NODE_OS, K2_NODE_DISTRO, K2_NODE_DISTRO_VERSION, K2_NODE_PKG
+                           what the machine is (ENVIRONMENT)
+  None of them reaches a daemon, no K2 token or socket ever does, and
+  K2's own test guard ignores them. If your command refuses any K2_*
+  variable, exclude them: env | grep -E '^K2(SO)?_' | grep -vE
+  '^K2_(COMPUTE_JOB|JOB_|NODE_)'
   Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
   so a failing a looks green).
   --exclusive waits for an idle node and holds other K2 jobs while it
@@ -718,7 +834,8 @@ COMMON ERRORS
   relay_cap              an artifact over 100 MB through the relay: fetch --over-relay (≤ 500 MB)
   operate_off            ask your owner for "Allow this agent to operate compute nodes"
   node_lacks_admin       that k2-node predates node admin: someone re-runs setup there
-  too_many_pending       10 requests already wait for the owner; withdraw some
+  too_many_pending       10 requests (admin, or package requests from this server)
+                         already wait for the owner on that node; wait or withdraw
   approval_expired       the owner didn't decide in 24 h, or the node stayed offline
   verb_not_allowed       not an admin verb; a root script is the escape hatch
   node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup);
@@ -742,7 +859,30 @@ COMMON ERRORS
                          use a supported one, a backend (aqua:owner/repo@1), or ask
                          the owner (Linux: sys:<package> once approved)
   need_invalid           a --needs token isn't tool@version or sys:<name>
-  package_not_approved   ask the owner: sudo k2-node packages allow <name>
+  package_not_approved   the node's owner must approve a sys: package first: nothing
+                         queued, a request is filed for you (the error names it,
+                         cpr_…); run again once installed (ENVIRONMENT); exit 3
+  no_package_mapping     no package for that name on that node's distro, or K2
+                         never installs it: use sys:<manager>:<name>, --distro, or
+                         another node. It can't be requested; exit 3
+  package_denied         on K2's deny list (boot, login, sudo, SSH servers,
+                         container runtimes…). It can't be requested; exit 3
+  package_ambiguous      a virtual name with several providers: name one of them
+  package_removes        the dry run would remove or downgrade a package: refused
+  package_third_party    it comes from a repo the owner added, not the distro's
+                         own: only the owner installs it, at the machine
+  package_too_big        bigger than that server's max_install_mb on the node
+  pkg_signing_off        the package manager's signature check is off there; the
+                         node installs nothing until its owner turns it on
+  profile_unknown        not a K2 profile, or a version that node doesn't know:
+                         build-base, tauri-linux, rust-gui-ci, k2-workspace
+  index_stale            the node's package database is out of date (Arch: its
+                         owner runs a full upgrade first); infrastructure
+  package_busy           the package manager stayed locked (unattended upgrades);
+                         infrastructure, retried
+  pkg_requests_unsupported  that node takes no package requests (older k2-node,
+                         remote admin off, or a Mac): its owner installs at the
+                         machine. It can't be requested; exit 3
   private_home_choice    enable: say --private-home or --no-private-home
   owner_only             owner verb from an agent or a K2 terminal: use Settings
                          (or ask for "Allow managing compute nodes")

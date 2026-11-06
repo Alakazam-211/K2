@@ -85,6 +85,8 @@ import { listAccountServers, requestEnrollTicket } from '../lib/compute-account'
 import { MachinesPart } from './ComputeAccessParts'
 import { ApprovalsPanel, NodeAdminPanel } from './ComputeAdminParts'
 import { NodeSharingPanel } from './ComputeServersParts'
+import { LocalPackagesSummary, NodePackagesSummary, PackageRequestsPanel } from './ComputePackagesParts'
+import { findLocalNode, onComputeSync } from './compute-packages-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
@@ -226,6 +228,17 @@ export function ComputeSection(): React.JSX.Element {
     }
   }, [refresh, activeHost])
 
+  // The daemon says something on Compute changed (a package request filed or
+  // decided, an admin request, a node confirmed): re-read now, not at the
+  // next poll.
+  useEffect(() => onComputeSync(() => void refresh()), [refresh])
+
+  // This machine as one of the focused server's nodes, when it is one.
+  const localListedNode = useMemo(
+    () => findLocalNode(local, nodesList?.nodes ?? [], nodesList?.controller ?? null),
+    [local, nodesList],
+  )
+
   const togglePreview = async (next: boolean): Promise<void> => {
     await setComputePreview(next)
     void refresh()
@@ -285,6 +298,7 @@ export function ComputeSection(): React.JSX.Element {
           error={localError}
           status={local}
           controllerLabel={nodesList?.controller ?? null}
+          listedNode={localListedNode}
           onChanged={refresh}
         />
       ) : null}
@@ -398,6 +412,7 @@ function ControllerPart({
           ) : null}
           {state === 'error' && error ? <Callout tone="error">{error}</Callout> : null}
           {list && nodes.length > 0 ? <ApprovalsPanel onChanged={() => void onChanged()} /> : null}
+          {list && nodes.length > 0 ? <PackageRequestsPanel onChanged={() => void onChanged()} /> : null}
           {list && nodes.length === 0 ? (
             <p className="text-[11px] text-[var(--color-text-muted)]">
               No nodes yet. Add one below, or make another computer a node from its own K2.
@@ -594,6 +609,7 @@ function NodeCard({
       {offer && !offer.available && offer.unavailable.length > 0 ? (
         <div className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Not taking jobs: {offer.unavailable.join(', ')}</div>
       ) : null}
+      <NodePackagesSummary node={node} />
       {tools.length > 0 || features.length > 0 ? (
         <div className="text-[10px] text-[var(--color-text-muted)] flex flex-wrap gap-x-2">
           {tools.map(([name, ver]) => (
@@ -878,12 +894,14 @@ function ThisComputerPart({
   error,
   status,
   controllerLabel,
+  listedNode,
   onChanged,
 }: {
   state: LoadState
   error: string | null
   status: LocalStatus | null
   controllerLabel: string | null
+  listedNode: ComputeNode | null
   onChanged: () => Promise<void>
 }): React.JSX.Element {
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -974,7 +992,7 @@ function ThisComputerPart({
         {status ? <EnrollProgress status={status} /> : null}
 
         {status && isOn && !flowActive ? (
-          <LocalNodePanel status={status} controllerLabel={controllerLabel} onChanged={onChanged} />
+          <LocalNodePanel status={status} controllerLabel={controllerLabel} listedNode={listedNode} onChanged={onChanged} />
         ) : null}
       </div>
     </SettingsGroup>
@@ -1390,10 +1408,13 @@ const OWNER_RETURN_OPTIONS = [
 function LocalNodePanel({
   status,
   controllerLabel,
+  listedNode,
   onChanged,
 }: {
   status: LocalStatus
   controllerLabel: string | null
+  /** This machine as a node of the focused server, when it is one. */
+  listedNode: ComputeNode | null
   onChanged: () => Promise<void>
 }): React.JSX.Element {
   const { busy, error, run } = useAction(onChanged)
@@ -1507,6 +1528,7 @@ function LocalNodePanel({
           ) : (
             <p className="text-[11px] text-[var(--color-text-muted)]">None.</p>
           )}
+          {listedNode ? <LocalPackagesSummary node={listedNode} /> : null}
           <p className="text-[10px] text-[var(--color-text-muted)]">
             Approve with: <span className="font-mono">sudo k2-node packages allow &lt;name&gt;</span>
           </p>
@@ -1516,6 +1538,8 @@ function LocalNodePanel({
             </p>
           ) : null}
         </div>
+      ) : listedNode ? (
+        <LocalPackagesSummary node={listedNode} />
       ) : null}
 
       <div className="space-y-2">

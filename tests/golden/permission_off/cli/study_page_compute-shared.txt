@@ -84,6 +84,28 @@ CODES (exit 3 with a JSON code)
   team_needs_tenant_wall other people's servers need the tenant wall
                          (Linux nodes; Macs in 0.46.4)
 
+SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
+  What you may install: the node's owner sets a package policy for each
+  server on it. Another person's server gets `profiles` by default: every
+  K2 profile (build-base, tauri-linux, rust-gui-ci, k2-workspace) and the
+  names on the node's approved list. The owner may narrow or widen it.
+  See yours: k2 compute node packages <node>.
+  Anything else, the NODE'S OWNER approves, never you or your own server's
+  people. Your run is refused with package_not_approved (exit 3), and one
+  request goes through the node to the owner's server, which shows them a
+  card. You never see who they are, only their server's label. You get a
+  [compute] message when they decide (installed, denied, or no answer in
+  24 h); then run again. At most 10 open requests per server per node.
+  Ask ahead: k2 compute node packages request <node> <name>,… --why "…".
+  A node whose k2-node is older than 0.46.9 takes no requests from other
+  servers (pkg_requests_unsupported): its owner installs at the machine.
+  Packages are host-wide: once installed they are in /usr for every job on
+  the node, from every server. Your policy decides what you may trigger,
+  not who may use the result.
+  Every server sees the same host facts: distro, kernel, libc, GPU and
+  "reboot pending" (k2 compute info <node>, and the [k2-node] host: line
+  at the top of each job log). A job could read them anyway.
+
 WHAT THE WALL DOES NOT STOP (say so before you share)
   Each server's jobs get their own folders (and on Linux their own user).
   They can't read each other's code, caches, results or logs. They still
@@ -109,6 +131,18 @@ FOR THE NODE'S OWNER
   for running jobs (≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set
   to `policy`, add servers at the machine: sudo k2-node servers add …
+  servers add --for none: a share with no end date.
+  Package requests from other servers come to you as cards (or k2 compute
+  node packages requests / approve|deny outside K2). What each server may
+  install without asking:
+    k2 compute node packages policy <node> <server> level=list|profiles|official
+                                   [profiles=a,b] [max_install_mb=N]
+    at the machine: sudo k2-node packages policy <own|server> level=…
+  <server> is own, or the label k2 compute node servers <node> shows.
+  profiles= takes bare names (profiles=build-base,tauri-linux) and
+  replaces that server's profile list. Only two profiles, for example:
+    k2 compute node packages policy k2n11 globex.k2.dev level=profiles profiles=build-base,tauri-linux
+  Narrowing applies at once; widening waits for your approval.
 
 CHANGING THE NODE'S OWNER (0.46.4)
   k2 compute node servers <node> owner <server> [--old keep|revoke]

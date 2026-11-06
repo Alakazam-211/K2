@@ -108,13 +108,14 @@ impl VideoBackend for WinBackend {
         crate::rust_codecs::add_capabilities(&mut caps);
         caps.camera = true;
         let wgc = screen::supported();
-        // No system picker yet: GraphicsCapturePicker needs an owner HWND
-        // from the app (IInitializeWithWindow) and a UI thread. No window
-        // exclusion yet: WDA_EXCLUDEFROMCAPTURE hides our windows from every
-        // capture and screenshot, not just ours.
+        // The system picker (GraphicsCapturePicker) needs the app's HWND:
+        // PickOptions::with_parent_window. No window exclusion: Windows' only
+        // way (SetWindowDisplayAffinity with WDA_EXCLUDEFROMCAPTURE) hides
+        // our windows from every capture and screenshot on the machine, not
+        // just from this one.
         caps.screen = ScreenCapability {
             supported: wgc,
-            system_picker: false,
+            system_picker: wgc,
             list: wgc,
             windows: wgc,
             cursor: wgc,
@@ -159,11 +160,11 @@ impl VideoBackend for WinBackend {
         screen::sources()
     }
 
-    fn pick_screen(&self, _opts: PickOptions, done: Done<Result<ScreenSelection, VideoError>>) {
+    fn pick_screen(&self, opts: PickOptions, done: Done<Result<ScreenSelection, VideoError>>) {
         if self.live().is_err() {
             return done(Err(VideoError::ShutDown));
         }
-        done(Err(unsupported("no system screen picker on Windows yet; use screen_sources")))
+        screen::pick(opts, done)
     }
 
     fn open_screen(&self, source: &ScreenSelection, c: CaptureConstraints, wake: Wake) -> Result<Box<dyn FrameSource>, VideoError> {
@@ -241,8 +242,18 @@ mod tests {
         let caps = b.capabilities();
         assert_eq!(caps.backend, "windows");
         assert!(caps.os.starts_with("Windows"), "{}", caps.os);
-        assert!(caps.codecs.is_empty(), "phase 1: no OS codecs");
-        assert!(!caps.screen.system_picker);
+        assert!(caps.codecs.iter().all(|c| c.codec != VideoCodec::H264), "phase 1: no OS H.264");
+        assert_eq!(caps.screen.system_picker, caps.screen.supported);
+        assert!(!caps.screen.exclude_own_windows);
+        let (tx, rx) = std::sync::mpsc::channel();
+        b.pick_screen(
+            PickOptions::new(),
+            Box::new(move |r| {
+                let _ = tx.send(r.err());
+            }),
+        );
+        let refused = rx.recv_timeout(Duration::from_secs(1)).expect("answered at once");
+        assert!(matches!(refused, Some(VideoError::Invalid(_)) | Some(VideoError::Unsupported(_))), "{refused:?}");
         let cams = b.cameras();
         for c in &cams {
             assert!(!c.id.is_empty());
@@ -271,6 +282,30 @@ mod tests {
         let list = b.screen_sources().expect("sources");
         let display = list.iter().find(|s| s.kind == ScreenKind::Display).expect("a display");
         let mut src = b.open_screen(&ScreenSelection::Listed(display.id.clone()), CaptureConstraints::new(1280, 720, 15), no_wake()).expect("screen");
+        let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv()).expect("a frame in 5 s");
+        assert!(f.width <= 1280 && f.height <= 720);
+    }
+
+    /// By hand from a terminal on a Windows desktop: the picker opens over
+    /// the terminal's window; pick a display or a window within 2 minutes.
+    /// `cargo test -p kessel-video --lib real_picker -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs a desktop session and a person to pick"]
+    fn real_picker_delivers_frames() {
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        let b = backend().expect("backend");
+        // SAFETY: a plain query.
+        let hwnd = unsafe { GetForegroundWindow() };
+        assert!(!hwnd.0.is_null(), "no foreground window to own the picker");
+        let (tx, rx) = std::sync::mpsc::channel();
+        b.pick_screen(
+            PickOptions::new().with_parent_window(hwnd.0 as usize as u64),
+            Box::new(move |r| {
+                let _ = tx.send(r);
+            }),
+        );
+        let sel = rx.recv_timeout(Duration::from_secs(120)).expect("an answer within 2 minutes").expect("a pick");
+        let mut src = b.open_screen(&sel, CaptureConstraints::new(1280, 720, 15), no_wake()).expect("screen");
         let f = crate::kit::wait_for(Duration::from_secs(5), || src.try_recv()).expect("a frame in 5 s");
         assert!(f.width <= 1280 && f.height <= 720);
     }

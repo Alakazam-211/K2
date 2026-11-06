@@ -28,6 +28,79 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW,
 };
 
+// ───────────────────────────── the picker ─────────────────────────────
+
+/// What the system picker chose (a GraphicsCaptureItem).
+pub(crate) struct PickedItem(GraphicsCaptureItem);
+
+// SAFETY: GraphicsCaptureItem is an agile WinRT object (usable from any
+// thread).
+unsafe impl Send for PickedItem {}
+// SAFETY: as above.
+unsafe impl Sync for PickedItem {}
+
+/// Show the system picker over `opts.parent_window` on a thread of its own
+/// (an STA that pumps messages while the picker is open); `done` gets the
+/// choice, `NotFound` when cancelled.
+pub(crate) fn pick(opts: PickOptions, done: crate::api::Done<Result<ScreenSelection, VideoError>>) {
+    let Some(hwnd) = opts.parent_window else {
+        return done(Err(VideoError::Invalid("the Windows screen picker needs PickOptions::with_parent_window (the app's HWND)".into())));
+    };
+    if !supported() {
+        return done(Err(unsupported("Windows Graphics Capture needs Windows 10 1903 or later")));
+    }
+    // `done` runs exactly once: on the thread, or here if it can't start.
+    let slot = Arc::new(Mutex::new(Some(done)));
+    let s = slot.clone();
+    let spawned = std::thread::Builder::new().name("kessel-video-picker".into()).spawn(move || {
+        let r = run_picker(hwnd).map(|item| ScreenSelection::Picked(Arc::new(PickedItem(item))));
+        if let Some(done) = lock(&s).take() {
+            done(r);
+        }
+    });
+    if let Err(e) = spawned {
+        if let Some(done) = lock(&slot).take() {
+            done(Err(VideoError::os(e.raw_os_error().unwrap_or(0) as i64, format!("spawn: {e}"))));
+        }
+    }
+}
+
+fn run_picker(hwnd: u64) -> Result<GraphicsCaptureItem, VideoError> {
+    use windows::Graphics::Capture::GraphicsCapturePicker;
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::IInitializeWithWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT};
+    use windows_future::AsyncStatus;
+
+    // SAFETY: this thread's own apartment, for the picker's UI.
+    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let picker = GraphicsCapturePicker::new().map_err(|e| map_error(&e, "GraphicsCapturePicker"))?;
+    let init: IInitializeWithWindow = picker.cast().map_err(|e| map_error(&e, "IInitializeWithWindow"))?;
+    // SAFETY: the caller's window handle; a stale one fails with an error.
+    unsafe { init.Initialize(HWND(hwnd as usize as *mut core::ffi::c_void)) }.map_err(|e| map_error(&e, "IInitializeWithWindow.Initialize"))?;
+    let op = picker.PickSingleItemAsync().map_err(|e| map_error(&e, "PickSingleItemAsync"))?;
+    loop {
+        let mut msg = MSG::default();
+        // SAFETY: this thread's message queue; MSG is a plain out struct.
+        unsafe {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        match op.Status().map_err(|e| map_error(&e, "the picker's status"))? {
+            AsyncStatus::Started => {
+                // SAFETY: waits for a message or 50 ms; no handles.
+                unsafe { MsgWaitForMultipleObjects(None, false, 50, QS_ALLINPUT) };
+            }
+            // A cancelled pick completes with no item.
+            AsyncStatus::Completed => return op.GetResults().map_err(|_| VideoError::NotFound),
+            AsyncStatus::Canceled => return Err(VideoError::NotFound),
+            _ => return Err(op.ErrorCode().map_or_else(|e| map_error(&e, "the picker"), |c| VideoError::os(c.0 as i64, "the screen picker failed"))),
+        }
+    }
+}
+
 pub(crate) fn supported() -> bool {
     GraphicsCaptureSession::IsSupported().unwrap_or(false)
 }
@@ -188,7 +261,10 @@ fn d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), VideoError> {
 fn item_for(sel: &ScreenSelection) -> Result<GraphicsCaptureItem, VideoError> {
     let id = match sel {
         ScreenSelection::Listed(id) => id.clone(),
-        ScreenSelection::Picked(_) => return Err(unsupported("no system screen picker on Windows yet")),
+        ScreenSelection::Picked(any) => {
+            let picked = any.downcast_ref::<PickedItem>().ok_or(VideoError::NotFound)?;
+            return Ok(picked.0.clone());
+        }
     };
     let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>().map_err(|e| map_error(&e, "IGraphicsCaptureItemInterop"))?;
     if let Some(n) = id.strip_prefix("monitor:").and_then(|n| n.parse::<usize>().ok()) {

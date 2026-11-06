@@ -553,6 +553,22 @@ pub struct PickOptions {
     pub displays: bool,
     /// Offer windows.
     pub windows: bool,
+    /// The app window that owns the picker. Windows needs it (an `HWND`,
+    /// as an integer): the system picker opens over it. Ignored elsewhere.
+    pub parent_window: Option<u64>,
+}
+
+impl PickOptions {
+    /// Displays and windows, no owner window.
+    pub fn new() -> PickOptions {
+        PickOptions::default()
+    }
+
+    /// The window that owns the picker (an `HWND` on Windows).
+    pub fn with_parent_window(mut self, handle: u64) -> PickOptions {
+        self.parent_window = Some(handle);
+        self
+    }
 }
 
 // ───────────────────────────── encoder ─────────────────────────────

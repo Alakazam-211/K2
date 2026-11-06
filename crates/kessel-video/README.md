@@ -32,7 +32,7 @@ caller has already decrypted and verified.
 | | Cameras | Screens | Encode | Decode |
 |---|---|---|---|---|
 | macOS | AVFoundation | ScreenCaptureKit (12.3+): list, system picker (14+), window exclusion | VP8 (Rust); H.264 (VideoToolbox) | VP8 (Rust) |
-| Windows | Media Foundation (NV12 through the source reader) | Windows Graphics Capture: displays and windows; no system picker or window exclusion yet | VP8 (Rust) | VP8 (Rust) |
+| Windows | Media Foundation (NV12 through the source reader) | Windows Graphics Capture: displays and windows, the system picker (pass the app's HWND with `PickOptions::with_parent_window`); no window exclusion (Windows can only hide our windows from every capture) | VP8 (Rust) | VP8 (Rust) |
 | Linux | V4L2 through raw ioctls (NV12, I420, YUYV modes; MJPEG not yet) | the ScreenCast portal (its picker is the only way to choose) with a PipeWire stream; no window exclusion | VP8 (Rust); no H.264 (no OS codec) | VP8 (Rust) |
 
 VP8 comes from the pure-Rust `vp8-encoder` and `vp8-decoder` crates (feature

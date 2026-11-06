@@ -28,7 +28,7 @@ fake = []
 apple = ["dep:objc2", "dep:block2"]
 # Media Foundation cameras and Windows Graphics Capture screens (H.264
 # MFTs later). OS components through the `windows` crate.
-windows = ["dep:windows"]
+windows = ["dep:windows", "dep:windows-future"]
 # V4L2 cameras (raw ioctls) and the xdg-desktop-portal ScreenCast (zbus,
 # pure Rust) with PipeWire (the system's libpipewire, loaded at run time:
 # nothing to install at build time). No H.264: Linux has no OS codec.
@@ -81,8 +81,10 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+windows-future = { version = "0.3", optional = true }
 
 [dev-dependencies]
 serde_json = "1"

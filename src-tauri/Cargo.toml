@@ -105,8 +105,8 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 # script), Apache-2.0 OR ISC OR MIT-0. 0.4.4 is the first release with
 # `util::is_cpu_supported`, which R10 requires before any TLS. 64-bit only
 # (x86_64, aarch64).
-graviola = "=0.4.4"
-rustls-graviola = "=0.4.0"
+graviola = "0.4.4"
+rustls-graviola = "0.4.0"
 tauri-plugin-drag = "2.1.0"
 tauri-plugin-opener = "2.6"
 notify = { version = "7", features = ["macos_fsevent"] }

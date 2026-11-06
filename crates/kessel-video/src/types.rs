@@ -524,8 +524,15 @@ pub struct ScreenSourceInfo {
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// A small preview, if cheap (at most 320 px wide, RGBA).
+    /// A small preview, if cheap (at most 320 px wide, RGBA). Its size is
+    /// in `thumbnail_width` and `thumbnail_height`
+    /// ([`ScreenSourceInfo::thumbnail_size`]); set all three with
+    /// [`ScreenSourceInfo::with_thumbnail`].
     pub thumbnail: Option<Planes>,
+    /// The thumbnail's width in pixels, 0 with no thumbnail.
+    pub thumbnail_width: u32,
+    /// The thumbnail's height in pixels, 0 with no thumbnail.
+    pub thumbnail_height: u32,
 }
 
 impl ScreenSourceInfo {
@@ -545,7 +552,43 @@ impl ScreenSourceInfo {
             width,
             height,
             thumbnail: None,
+            thumbnail_width: 0,
+            thumbnail_height: 0,
         }
+    }
+
+    /// The same source with a `width` x `height` RGBA thumbnail, at most 320
+    /// px wide. Errors if the planes aren't RGBA, are wider than that, or
+    /// don't hold a frame of that size.
+    pub fn with_thumbnail(
+        mut self,
+        planes: Planes,
+        width: u32,
+        height: u32,
+    ) -> Result<ScreenSourceInfo, VideoError> {
+        if planes.format != PixelFormat::Rgba {
+            return Err(invalid(format!(
+                "a thumbnail is RGBA, not {:?}",
+                planes.format
+            )));
+        }
+        if width > 320 {
+            return Err(invalid(format!(
+                "a thumbnail is at most 320 px wide, not {width}"
+            )));
+        }
+        planes.validate(width, height)?;
+        self.thumbnail = Some(planes);
+        self.thumbnail_width = width;
+        self.thumbnail_height = height;
+        Ok(self)
+    }
+
+    /// The thumbnail's width and height, when there is a thumbnail and its
+    /// size is set.
+    pub fn thumbnail_size(&self) -> Option<(u32, u32)> {
+        let sized = self.thumbnail_width > 0 && self.thumbnail_height > 0;
+        (self.thumbnail.is_some() && sized).then_some((self.thumbnail_width, self.thumbnail_height))
     }
 }
 
@@ -1117,5 +1160,33 @@ mod tests {
         assert_eq!(at(4000, 3000, 30).width, 1920);
         assert_eq!(nearest_mode(&[], &CaptureConstraints::default()), None);
         assert!(CaptureConstraints::new(8, 8, 30).validate().is_err());
+    }
+
+    #[test]
+    fn a_thumbnail_carries_its_size() {
+        let info = ScreenSourceInfo::new("d1", ScreenKind::Display, "Main", 2560, 1440);
+        assert_eq!(info.thumbnail_size(), None);
+        // 160x90 RGBA with rows padded to 768 bytes: the stride alone would
+        // say 192 px wide.
+        let planes = Planes::new(
+            PixelFormat::Rgba,
+            160,
+            90,
+            vec![0u8; 768 * 90],
+            [768, 0, 0],
+            [0, 0, 0],
+        )
+        .expect("padded planes");
+        let info = info.with_thumbnail(planes, 160, 90).expect("thumbnail");
+        assert_eq!(info.thumbnail_size(), Some((160, 90)));
+        assert_eq!((info.thumbnail_width, info.thumbnail_height), (160, 90));
+
+        let base = ScreenSourceInfo::new("d1", ScreenKind::Display, "Main", 2560, 1440);
+        let bgra = Planes::tight(PixelFormat::Bgra, 4, 4, vec![0u8; 64]).expect("bgra");
+        assert!(base.clone().with_thumbnail(bgra, 4, 4).is_err());
+        let wide = Planes::tight(PixelFormat::Rgba, 321, 1, vec![0u8; 321 * 4]).expect("wide");
+        assert!(base.clone().with_thumbnail(wide, 321, 1).is_err());
+        let small = Planes::tight(PixelFormat::Rgba, 4, 4, vec![0u8; 64]).expect("small");
+        assert!(base.with_thumbnail(small, 8, 8).is_err());
     }
 }

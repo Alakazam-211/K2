@@ -54,9 +54,14 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 
-vi.mock('@/stores/settings', () => ({
-  useSettingsStore: (sel: (s: { openSettings: () => void }) => unknown) => sel({ openSettings: () => {} }),
-}))
+vi.mock('@/stores/settings', () => {
+  const state = { openSettings: () => {} }
+  const useSettingsStore = (sel: (s: typeof state) => unknown) => sel(state)
+  // The headset follows the video preview switch (off here).
+  useSettingsStore.getState = () => state
+  useSettingsStore.subscribe = () => () => {}
+  return { useSettingsStore }
+})
 vi.mock('@/lib/remote-session', () => ({ reviveRemoteSession: vi.fn() }))
 // Static or window-only elements: not what this file checks.
 vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-testid="timer-stub" /> }))

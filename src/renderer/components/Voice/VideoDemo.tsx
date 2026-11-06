@@ -4,7 +4,8 @@
 // WebCodecs decoder, keyframe requests, canvas) with no plugin, no call and no
 // camera. Camera on, Share screen and the refusals work against the fake.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { FakeVideoEngine, fakeTrack } from '@/lib/voice/fake-video-engine'
 import { canMakeSyntheticVideo, syntheticVp8Source } from '@/lib/voice/synthetic-video-source'
 import { webCodecsEnv } from '@/lib/voice/video-decoder'
@@ -48,6 +49,20 @@ function demoController() {
   return { engine, ctl }
 }
 
+/** The demo needs `VideoEncoder` to make its frames. */
+function NoEncoderNote({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: true, ref, kind: 'popover' })
+  return (
+    <div ref={ref} data-testid="video-demo-unsupported" className="fixed bottom-3 right-3 z-40 border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[11px] text-[var(--color-text-secondary)] shadow-lg">
+      This webview has no VideoEncoder, so the demo can't make video.{' '}
+      <button type="button" className="underline" onClick={onClose}>
+        Close
+      </button>
+    </div>
+  )
+}
+
 export default function VideoDemo({ onClose }: { onClose: () => void }): React.JSX.Element {
   const { engine, ctl } = useMemo(demoController, [])
   const [speaker, setSpeaker] = useState(0)
@@ -66,16 +81,7 @@ export default function VideoDemo({ onClose }: { onClose: () => void }): React.J
     ],
     [speaker],
   )
-  if (!canMakeSyntheticVideo()) {
-    return (
-      <div data-testid="video-demo-unsupported" className="fixed bottom-3 right-3 z-40 border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[11px] text-[var(--color-text-secondary)] shadow-lg">
-        This webview has no VideoEncoder, so the demo can't make video.{' '}
-        <button type="button" className="underline" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    )
-  }
+  if (!canMakeSyntheticVideo()) return <NoEncoderNote onClose={onClose} />
   return (
     <VideoStage
       ctl={ctl}

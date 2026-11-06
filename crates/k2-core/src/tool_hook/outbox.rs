@@ -488,6 +488,29 @@ pub fn skip_blocked_subject(conn: &Connection, tool: &str, subject: &str, now: i
     .map_err(|e| format!("tool_outbox skip blocked: {e}"))
 }
 
+/// `pending` / `blocked` rows of one tool whose subject starts with
+/// `prefix` → `skipped` (a K5 Space re-linked to a new id: rows naming the
+/// old id would 404 forever). Returns how many.
+pub fn skip_open_prefix(conn: &Connection, tool: &str, prefix: &str, now: i64, why: &str) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE tool_outbox SET state = ?1, last_error = ?2, updated_at = ?3, done_at = ?3
+         WHERE tool = ?4 AND state IN ('pending','blocked') AND substr(subject_key, 1, ?6) = ?5",
+        params![STATE_SKIPPED, why, now, tool, prefix, prefix.chars().count() as i64],
+    )
+    .map_err(|e| format!("tool_outbox skip prefix: {e}"))
+}
+
+/// `blocked` rows of one tool whose subject starts with `prefix` →
+/// `pending`, due now (what blocked them is fixed). Returns how many.
+pub fn retry_blocked_prefix(conn: &Connection, tool: &str, prefix: &str, now: i64) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE tool_outbox SET state = ?1, next_attempt_at = ?2, updated_at = ?2
+         WHERE tool = ?3 AND state = 'blocked' AND substr(subject_key, 1, ?5) = ?4",
+        params![STATE_PENDING, now, tool, prefix, prefix.chars().count() as i64],
+    )
+    .map_err(|e| format!("tool_outbox retry prefix: {e}"))
+}
+
 /// `pending` / `blocked` rows of one tool → `skipped` (target dropped).
 pub fn skip_open_rows(conn: &Connection, tool: &str, now: i64, why: &str) -> Result<usize, String> {
     conn.execute(

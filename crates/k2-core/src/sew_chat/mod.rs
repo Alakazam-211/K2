@@ -15,6 +15,8 @@
 
 /// The chat delivery hub's pure half and store (S31 K22).
 pub mod hub;
+/// Which Sew install the main DB's chat ids belong to (stale Spaces, hub cursors).
+pub mod install;
 pub mod person;
 pub mod store;
 /// What agents are taught about `k2 chat` / `k2 hostchat` (K21 gates).

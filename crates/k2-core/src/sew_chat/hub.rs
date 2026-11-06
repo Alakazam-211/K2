@@ -561,6 +561,7 @@ pub fn status_line(n: Notice) -> String {
             match r {
                 "epoch_changed" => "Sew was restored from a backup",
                 "ahead_of_head" => "Sew's history moved back",
+                "member_gone" => "Sew no longer knows your old chat account; this is a new install or a restore",
                 _ => "older deliveries were trimmed",
             }
         ),

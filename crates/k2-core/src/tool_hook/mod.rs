@@ -1452,6 +1452,45 @@ pub fn admin_level_pending(ext: &sew_wire::ExternalId) -> Result<bool, String> {
     crate::skin::with_skin_conn(|conn| admin_space::level_sync_pending(conn, &ext.to_string()))
 }
 
+/// Ask for a check of the K5 Space (admin_space module doc, "A lost
+/// Space"): `mode` `space` or `full`, `why` shown in `k2 voice status`.
+/// `force` (a person's repair) skips the rate limit and retries a blocked
+/// Space. Returns whether a check is due; kicks a sweep when it is.
+pub fn admin_space_check(mode: &str, why: &str, force: bool) -> Result<bool, String> {
+    if !skin_store_exists() {
+        return Ok(false);
+    }
+    let due = crate::skin::with_skin_conn(|conn| admin_space::mark_verify(conn, mode, why, outbox::now_secs(), force))?;
+    if due {
+        kick_reconcile();
+    }
+    Ok(due)
+}
+
+/// A purge (or anything that drops the Sew install): the K5 Space K2 holds
+/// is checked before anything is sent to it again.
+pub fn admin_space_forget_install(why: &str) -> Result<bool, String> {
+    if !skin_store_exists() {
+        return Ok(false);
+    }
+    crate::skin::with_skin_conn(|conn| admin_space::forget_install(conn, why, outbox::now_secs()))
+}
+
+/// Tests: as if the K5 Space's last check was `secs` ago, and (with
+/// `unstamped`) as if a K2 from before the install stamp had made it.
+#[cfg(any(test, feature = "test-util"))]
+pub fn admin_space_rewind_for_tests(secs: i64, unstamped: bool) -> Result<(), String> {
+    crate::skin::with_skin_conn(|conn| {
+        conn.execute(
+            "UPDATE tool_admin_space SET checked_at = checked_at - ?1,
+                install_id = CASE WHEN ?2 THEN NULL ELSE install_id END WHERE id = 1",
+            rusqlite::params![secs, unstamped],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("admin space rewind: {e}"))
+    })
+}
+
 /// Retry a blocked Admin Space create (after the owner fixed its cause).
 pub fn admin_space_retry() -> Result<bool, String> {
     let n = crate::skin::with_skin_conn(|conn| admin_space::clear_blocked(conn, outbox::now_secs()))?;
@@ -1994,6 +2033,9 @@ pub fn note_install_id(kind: &str, install_id: &str) -> Result<bool, String> {
             // Sew 0.6.0: no channel id, sync or leaving box user carries
             // over to a new install.
             governed::forget_all(&tx)?;
+            // Voice rooms: the K5 Space and its rooms are checked (and
+            // re-made under new ids) before anything is sent to them.
+            admin_space::forget_install(&tx, &format!("Sew install changed to {install_id}"), now)?;
         }
         tx.commit().map_err(|e| format!("install id commit: {e}"))?;
         Ok(changed)

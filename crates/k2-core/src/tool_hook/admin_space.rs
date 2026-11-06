@@ -40,6 +40,26 @@
 //!
 //! Tables live in `skin.db` (idempotent DDL like `tool_outbox`), so this
 //! needs no main-DB migration.
+//!
+//! **A lost Space** (voicetest 11-04: Sew was purged and installed again,
+//! and every id K2 held named nothing). Sew assigns every Space and channel
+//! id; mgmt never takes K2's. So K2 checks the Space it holds with the same
+//! idempotent create (`spaces/create` answers the Space that has the slug:
+//! `created: false` with its id, or `created: true` with a new one when it
+//! was gone) and re-links to what Sew answers. A check runs when:
+//! - the Space was made under another Sew install than the one K2 sees now
+//!   (the row is stamped with the install id; no stamp = made by an earlier
+//!   K2, so it is checked once);
+//! - something saw Sew answer `not_found` for it ([`mark_verify`]: the voice
+//!   feed, a blocked add, a join; at most once per [`SUSPECT_GAP_SECS`]);
+//! - `k2 voice repair` asked ([`VERIFY_FULL`]: members are re-sent too);
+//! - [`VERIFY_EVERY_SECS`] went by since the last one.
+//!
+//! The answer: the same id → blocked rows of the Space are retried and the
+//! rooms are ensured again (one gone is re-made and re-linked). Another id
+//! ([`relink`]) → every room is re-made, every member re-added, and the
+//! rows that named the old id are skipped. Until the check lands nothing
+//! else is planned against the old id.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -81,6 +101,14 @@ pub const ROOM_CLOSING: &str = "closing";
 pub const ROOM_ARCHIVED: &str = "archived";
 /// The `why` prefix of a member whose add Sew held.
 pub const HELD_MARK: &str = "held: ";
+/// A check of the Space (`verify`): the Space and its rooms.
+pub const VERIFY_SPACE: &str = "space";
+/// A check that also re-sends every member's add (`k2 voice repair`).
+pub const VERIFY_FULL: &str = "full";
+/// The slow cadence of the check.
+pub const VERIFY_EVERY_SECS: i64 = 6 * 3600;
+/// A `not_found` seen elsewhere asks for a check at most this often.
+pub const SUSPECT_GAP_SECS: i64 = 600;
 
 pub fn member_subject(space_id: &str, ext: &str) -> String {
     format!("{MEMBER_PREFIX}{space_id}:{ext}")
@@ -133,7 +161,13 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             default_at    INTEGER,
             carried       TEXT,
             count_stored  INTEGER NOT NULL DEFAULT 0,
-            updated_at    INTEGER NOT NULL
+            updated_at    INTEGER NOT NULL,
+            install_id    TEXT,
+            verify        TEXT,
+            verify_rooms  INTEGER NOT NULL DEFAULT 0,
+            suspect       TEXT,
+            checked_at    INTEGER,
+            last_check    TEXT
          );
          CREATE TABLE IF NOT EXISTS tool_admin_members (
             external_id   TEXT PRIMARY KEY NOT NULL,
@@ -155,7 +189,27 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             updated_at    INTEGER NOT NULL
          );",
     )
-    .map_err(|e| format!("skin.db admin space schema: {e}"))
+    .map_err(|e| format!("skin.db admin space schema: {e}"))?;
+    // The lost-Space check's columns, on a table an earlier build made.
+    let have: HashSet<String> = {
+        let mut st = conn.prepare("PRAGMA table_info(tool_admin_space)").map_err(|e| format!("admin space columns: {e}"))?;
+        let rows = st.query_map([], |r| r.get::<_, String>(1)).map_err(|e| format!("admin space columns: {e}"))?;
+        rows.collect::<Result<_, _>>().map_err(|e| format!("admin space columns: {e}"))?
+    };
+    for (col, ty) in [
+        ("install_id", "TEXT"),
+        ("verify", "TEXT"),
+        ("verify_rooms", "INTEGER NOT NULL DEFAULT 0"),
+        ("suspect", "TEXT"),
+        ("checked_at", "INTEGER"),
+        ("last_check", "TEXT"),
+    ] {
+        if !have.contains(col) {
+            conn.execute_batch(&format!("ALTER TABLE tool_admin_space ADD COLUMN {col} {ty}"))
+                .map_err(|e| format!("admin space column {col}: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 // ── facts from outside skin.db ───────────────────────────────────────
@@ -221,14 +275,28 @@ pub struct SpaceRow {
     /// `voiceRoomsCount` was written to the settings at set-up (§3.1:
     /// "written as 1 at setup").
     pub count_stored: bool,
+    /// The Sew install the Space was made (or last checked) under. `None`:
+    /// made by a K2 from before the stamp, so it is checked once.
+    pub install_id: Option<String>,
+    /// A check is due: [`VERIFY_SPACE`] or [`VERIFY_FULL`].
+    pub verify: Option<String>,
+    /// The rooms are ensured again at the next plan (after a check).
+    pub verify_rooms: bool,
+    /// What asked for the check (`voice feed: not_found`, ...).
+    pub suspect: Option<String>,
+    pub checked_at: Option<i64>,
+    /// The last check's answer: `{at, outcome: same|relinked|remade, from, to, why}`.
+    pub last_check: Option<Value>,
 }
 
 pub fn space_row(conn: &Connection) -> Result<Option<SpaceRow>, String> {
     conn.query_row(
-        "SELECT space_id, name, state, why, default_from, default_at, carried, count_stored FROM tool_admin_space WHERE id = 1",
+        "SELECT space_id, name, state, why, default_from, default_at, carried, count_stored,
+                install_id, verify, verify_rooms, suspect, checked_at, last_check FROM tool_admin_space WHERE id = 1",
         [],
         |r| {
             let carried: Option<String> = r.get(6)?;
+            let last: Option<String> = r.get(13)?;
             Ok(SpaceRow {
                 space_id: r.get(0)?,
                 name: r.get(1)?,
@@ -238,6 +306,12 @@ pub fn space_row(conn: &Connection) -> Result<Option<SpaceRow>, String> {
                 default_at: r.get(5)?,
                 carried: carried.and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default(),
                 count_stored: r.get::<_, i64>(7)? != 0,
+                install_id: r.get(8)?,
+                verify: r.get(9)?,
+                verify_rooms: r.get::<_, i64>(10)? != 0,
+                suspect: r.get(11)?,
+                checked_at: r.get(12)?,
+                last_check: last.and_then(|t| serde_json::from_str(&t).ok()),
             })
         },
     )
@@ -377,7 +451,8 @@ fn set_room_state(conn: &Connection, slug: &str, state: &str, now: i64) -> Resul
 pub struct Summary {
     /// Why nothing was planned, if so: `preview_off`, `chat_off`,
     /// `sew_too_old` (no `server_governed_space`), `space_pending`,
-    /// `space_blocked`.
+    /// `space_blocked`, `space_check` (K2 is asking Sew which Space holds
+    /// the slug before it sends anything else).
     pub waiting: Option<String>,
     pub create: bool,
     pub adds: usize,
@@ -465,7 +540,21 @@ pub fn plan(conn: &Connection, facts: &Facts, busy: &HashSet<String>, now: i64) 
             s.waiting = Some("space_blocked".into());
             return Ok((out, s));
         }
-        Some(r) if r.state == SPACE_READY && r.space_id.is_some() => r.space_id.clone().expect("checked"),
+        Some(r) if r.state == SPACE_READY && r.space_id.is_some() => {
+            if check_due(conn, r, now)? {
+                // Nothing goes to an id Sew may not hold until Sew says
+                // which Space has the slug (module doc, "A lost Space").
+                if !busy.contains(SUBJECT_SPACE) {
+                    let body = ServerSpaceCreateRequest::admin(&space_name(&facts.name));
+                    body.validate()?;
+                    out.push(op(Op::AdminSpaceCreate, SUBJECT_SPACE.into(), serde_json::to_value(body).map_err(|e| e.to_string())?, None));
+                    s.create = true;
+                }
+                s.waiting = Some("space_check".into());
+                return Ok((out, s));
+            }
+            r.space_id.clone().expect("checked")
+        }
         _ => {
             if !busy.contains(SUBJECT_SPACE) {
                 let body = ServerSpaceCreateRequest::admin(&space_name(&facts.name));
@@ -609,6 +698,11 @@ fn plan_rooms(
         }
     };
     let have: BTreeMap<u32, RoomRow> = rooms(conn)?.into_iter().map(|r| (r.n, r)).collect();
+    let verify_rooms = space_row(conn)?.is_some_and(|r| r.verify_rooms);
+    if verify_rooms {
+        conn.execute("UPDATE tool_admin_space SET verify_rooms = 0 WHERE id = 1", [])
+            .map_err(|e| format!("admin space verify rooms: {e}"))?;
+    }
     let mut ops: Vec<ChannelOp> = Vec::new();
     let mut closings: Vec<(String, bool)> = Vec::new();
     for n in 1..=target {
@@ -632,6 +726,12 @@ fn plan_rooms(
                     }
                     (ROOM_ARCHIVED, Some(id)) => ops.push(room_op(channel_ops::UNARCHIVE, &slug, Some(id), None)),
                     (ROOM_CLOSING, Some(id)) => closings.push((id.to_string(), false)),
+                    // After a check: ensure the open room again (idempotent
+                    // on the slug). One Sew lost comes back under a new id,
+                    // and the answer re-links it.
+                    (ROOM_ACTIVE, Some(_)) if verify_rooms => {
+                        ops.push(room_op(channel_ops::ENSURE, &slug, None, Some(desired.clone())));
+                    }
                     _ => {}
                 }
                 if let Some(id) = r.channel_id.as_deref() {
@@ -689,13 +789,50 @@ pub fn after_done(conn: &Connection, id: &str, result: &str, now: i64) -> Result
             // replay of the same body, `created: false`: both are success.
             // 409 server_space_exists: read `details.space_id` back.
             let created: Option<sew_wire::SpaceCreateResponse> = serde_json::from_str(result).ok();
+            let made_now = created.as_ref().is_some_and(|c| c.created);
             let space_id = created.map(|c| c.space_id).or_else(|| error_detail(result, "space_id"));
             let Some(space_id) = space_id.filter(|s| sew_wire::is_sew_id(s)) else {
                 set_space(conn, None, None, SPACE_BLOCKED, Some("Sew named no space_id for the K5 Space"), now)?;
                 return Ok(false);
             };
+            let prior = space_row(conn)?;
             let name = serde_json::from_str::<Value>(&row.payload_raw).ok().and_then(|v| v["name"].as_str().map(str::to_string));
             set_space(conn, Some(&space_id), name.as_deref(), SPACE_READY, None, now)?;
+            let old = prior.as_ref().and_then(|p| p.space_id.clone());
+            let why = prior.as_ref().and_then(|p| p.suspect.clone());
+            let outcome = match old.as_deref() {
+                None => "made",
+                Some(o) if o == space_id => {
+                    // The Space is there: what Sew refused while K2 doubted
+                    // it goes again, and the rooms are ensured again.
+                    outbox::retry_blocked_prefix(conn, CHAT_KIND, &format!("{MEMBER_PREFIX}{space_id}:"), now)?;
+                    outbox::retry_blocked_prefix(conn, CHAT_KIND, &rooms_subject(&space_id), now)?;
+                    if prior.as_ref().and_then(|p| p.verify.as_deref()) == Some(VERIFY_FULL) {
+                        // `k2 voice repair`: every member's add again (Sew
+                        // answers `already` for the ones it holds).
+                        conn.execute("DELETE FROM tool_admin_members WHERE why IS NULL OR why NOT LIKE 'held: %'", [])
+                            .map_err(|e| format!("admin members re-send: {e}"))?;
+                    }
+                    "same"
+                }
+                Some(o) => {
+                    relink(conn, o, now)?;
+                    if made_now {
+                        "remade"
+                    } else {
+                        "relinked"
+                    }
+                }
+            };
+            let install = outbox::get_target(conn, CHAT_KIND)?.and_then(|t| t.install_id);
+            let check = serde_json::json!({"at": now, "outcome": outcome, "from": old, "to": space_id, "why": why});
+            conn.execute(
+                "UPDATE tool_admin_space SET install_id = ?1, verify = NULL, suspect = NULL, checked_at = ?2,
+                    verify_rooms = CASE WHEN ?3 = 'same' THEN 1 ELSE 0 END,
+                    last_check = CASE WHEN ?3 = 'made' THEN last_check ELSE ?4 END, updated_at = ?2 WHERE id = 1",
+                params![install, now, outcome, check.to_string()],
+            )
+            .map_err(|e| format!("admin space checked: {e}"))?;
             Ok(true)
         }
         Some(Op::AdminMemberAdd) => {
@@ -811,7 +948,13 @@ pub fn after_blocked(conn: &Connection, id: &str, error: &str, now: i64) -> Resu
     match Op::parse(&row.op) {
         Some(Op::AdminSpaceCreate) => set_space(conn, None, None, SPACE_BLOCKED, Some(error), now),
         Some(Op::AdminMemberAdd | Op::AdminMemberLevel | Op::AdminMemberRemove) => {
-            let Some((_, ext)) = parse_member_subject(&row.subject_key) else { return Ok(()) };
+            let Some((space, ext)) = parse_member_subject(&row.subject_key) else { return Ok(()) };
+            // mgmt is unmasked: a 404 on the Space's own member route says
+            // Sew may not hold it. Ask for a check (never more often than
+            // SUSPECT_GAP_SECS).
+            if says_not_found(error) && ready_space_id(conn)?.as_deref() == Some(space.as_str()) {
+                mark_verify(conn, VERIFY_SPACE, &format!("Sew answered {error} to {}", row.op), now, false)?;
+            }
             conn.execute(
                 "UPDATE tool_admin_members SET why = ?2, updated_at = ?3 WHERE external_id = ?1",
                 params![ext.to_string(), error, now],
@@ -853,14 +996,116 @@ pub fn note_room_state(conn: &Connection, channel_id: &str, state: &str, now: i6
 
 /// A blocked create may be retried: the owner fixed what blocked it (e.g.
 /// renamed the Space that held `k5-admin`). Clears the blocked state so
-/// the next sweep creates again. Returns whether it was blocked.
+/// the next sweep creates again. A Space K2 held before (a check that was
+/// blocked) keeps its id and is checked again, so the answer can re-link
+/// its rooms and members. Returns whether it was blocked.
 pub fn clear_blocked(conn: &Connection, now: i64) -> Result<bool, String> {
-    let n = conn
-        .execute("DELETE FROM tool_admin_space WHERE id = 1 AND state = 'blocked'", [])
+    let kept = conn
+        .execute(
+            "UPDATE tool_admin_space SET state = 'ready', why = NULL, verify = COALESCE(verify, 'space'), updated_at = ?1
+             WHERE id = 1 AND state = 'blocked' AND space_id IS NOT NULL",
+            params![now],
+        )
         .map_err(|e| format!("admin space clear: {e}"))?;
+    let n = kept
+        + conn
+            .execute("DELETE FROM tool_admin_space WHERE id = 1 AND state = 'blocked'", [])
+            .map_err(|e| format!("admin space clear: {e}"))?;
     if n > 0 {
         outbox::skip_blocked_subject(conn, CHAT_KIND, SUBJECT_SPACE, now, "the K5 Space create is retried")?;
     }
+    Ok(n > 0)
+}
+
+// ── a lost Space (module doc) ────────────────────────────────────────
+
+/// Sew's `404 not_found` in a recorded error (`404 not_found: ...`,
+/// `not_found: ...`).
+pub fn says_not_found(error: &str) -> bool {
+    let e = error.trim_start();
+    e.starts_with("404") || e.starts_with("not_found") || e.contains(" not_found")
+}
+
+/// Is a check of the ready Space due (module doc)?
+fn check_due(conn: &Connection, r: &SpaceRow, now: i64) -> Result<bool, String> {
+    if r.verify.is_some() {
+        return Ok(true);
+    }
+    let install = outbox::get_target(conn, CHAT_KIND)?.and_then(|t| t.install_id);
+    // No install id read yet: nothing to compare with.
+    let Some(install) = install else { return Ok(false) };
+    if r.install_id.as_deref() != Some(install.as_str()) {
+        return Ok(true);
+    }
+    Ok(r.checked_at.is_none_or(|t| now - t >= VERIFY_EVERY_SECS))
+}
+
+/// Ask for a check of the ready Space (`mode` [`VERIFY_SPACE`] or
+/// [`VERIFY_FULL`]), noting `why`. `force` (a person's `k2 voice repair`)
+/// always asks; otherwise at most once per [`SUSPECT_GAP_SECS`] since the
+/// last check. A blocked Space is cleared to try again when forced.
+/// Returns whether a check is now due.
+pub fn mark_verify(conn: &Connection, mode: &str, why: &str, now: i64, force: bool) -> Result<bool, String> {
+    if ![VERIFY_SPACE, VERIFY_FULL].contains(&mode) {
+        return Err(format!("check mode is space|full (got {mode})"));
+    }
+    let Some(r) = space_row(conn)? else { return Ok(false) };
+    if r.space_id.is_none() {
+        return Ok(false);
+    }
+    if r.state == SPACE_BLOCKED {
+        if !force {
+            return Ok(false);
+        }
+        clear_blocked(conn, now)?;
+    }
+    if !force && (r.verify.is_some() || r.checked_at.is_some_and(|t| now - t < SUSPECT_GAP_SECS)) {
+        return Ok(r.verify.is_some());
+    }
+    // A full check is never narrowed by a later plain one.
+    conn.execute(
+        "UPDATE tool_admin_space SET verify = CASE WHEN verify = 'full' THEN 'full' ELSE ?1 END,
+            suspect = ?2, updated_at = ?3 WHERE id = 1",
+        params![mode, why, now],
+    )
+    .map_err(|e| format!("admin space check: {e}"))?;
+    Ok(true)
+}
+
+/// The Space Sew holds is another id (it was re-made, or K2's id was
+/// stale): the rooms are made again (their old channel ids name nothing),
+/// every member is added again, and every open row that names the old
+/// Space or an old room is skipped. The caller already wrote the new id.
+fn relink(conn: &Connection, old_space: &str, now: i64) -> Result<(), String> {
+    let why = format!("the K5 Space {old_space} is gone from Sew; K2 re-linked to the Space Sew holds");
+    for r in rooms(conn)? {
+        if let Some(ch) = r.channel_id.as_deref() {
+            outbox::skip_open_prefix(conn, CHAT_KIND, &room_subject(ch), now, &why)?;
+        }
+    }
+    outbox::skip_open_prefix(conn, CHAT_KIND, &format!("{MEMBER_PREFIX}{old_space}:"), now, &why)?;
+    outbox::skip_open_prefix(conn, CHAT_KIND, &rooms_subject(old_space), now, &why)?;
+    conn.execute(
+        "UPDATE tool_admin_rooms SET channel_id = NULL, name = NULL, close_now = 0, why = NULL, updated_at = ?1,
+            state = CASE WHEN state IN ('archived','closing') THEN 'archived' ELSE 'pending' END",
+        params![now],
+    )
+    .map_err(|e| format!("admin rooms relink: {e}"))?;
+    conn.execute("DELETE FROM tool_admin_members", []).map_err(|e| format!("admin members relink: {e}"))?;
+    Ok(())
+}
+
+/// A purge or a new Sew install: the Space K2 holds is checked before
+/// anything else is sent to it (the install stamp is dropped). Returns
+/// whether there was a Space to check.
+pub fn forget_install(conn: &Connection, why: &str, now: i64) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE tool_admin_space SET install_id = NULL, verify = COALESCE(verify, 'space'), suspect = ?1, updated_at = ?2
+             WHERE id = 1 AND space_id IS NOT NULL",
+            params![why, now],
+        )
+        .map_err(|e| format!("admin space forget install: {e}"))?;
     Ok(n > 0)
 }
 

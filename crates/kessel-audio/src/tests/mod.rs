@@ -31,6 +31,8 @@ pub(crate) fn shared_cpu() -> std::sync::RwLockReadGuard<'static, ()> {
     HEAVY.read().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+// Only the CPU bars use it, and a debug build without `cpu-bars` skips them.
+#[cfg_attr(all(debug_assertions, not(feature = "cpu-bars")), allow(dead_code))]
 pub(crate) fn exclusive_cpu() -> std::sync::RwLockWriteGuard<'static, ()> {
     HEAVY.write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -121,7 +123,8 @@ pub(crate) struct CallRun {
     /// Our encoded capture, decoded by a remote decoder, on the capture
     /// timeline (DTX gaps concealed as a receiver would).
     pub(crate) out: Vec<f32>,
-    /// Wall time per 10 ms block (render + capture).
+    /// Wall time per 10 ms block (render + capture). Read by the CPU bars only.
+    #[cfg_attr(all(debug_assertions, not(feature = "cpu-bars")), allow(dead_code))]
     pub(crate) block_ns: Vec<u64>,
     pub(crate) stats: Stats,
 }

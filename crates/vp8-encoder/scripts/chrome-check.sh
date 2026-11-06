@@ -18,11 +18,11 @@ if [ ! -f "$clip" ]; then
 fi
 
 cargo build --locked --release -p vp8-encoder --example encode_y4m 2>&1 | grep -E "^(warning|error)" || true
-bin="$PWD/target/release/examples/encode_y4m"
-"$bin" "$clip" "$work/720p.ivf" 2000000 --frames 30
-"$bin" "$clip" "$work/720p-l1t3.ivf" 1000000 --layers 3 --frames 30
-"$bin" "$clip" "$work/360p.ivf" 600000 640 360 --frames 30
-"$bin" "$clip" "$work/odd.ivf" 300000 321 179 --frames 15
+enc() { cargo run --locked --release -q -p vp8-encoder --example encode_y4m -- "$@"; }
+enc "$clip" "$work/720p.ivf" 2000000 --frames 30
+enc "$clip" "$work/720p-l1t3.ivf" 1000000 --layers 3 --frames 30
+enc "$clip" "$work/360p.ivf" 600000 640 360 --frames 30
+enc "$clip" "$work/odd.ivf" 300000 321 179 --frames 15
 
 cd "$work"
 [ -f package.json ] || echo '{"private":true,"type":"module"}' > package.json

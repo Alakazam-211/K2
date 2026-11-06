@@ -22,6 +22,12 @@ const REDACTED: &str = "***";
 const SECRET_PREFIXES: &[&str] = &[
     "k2skn_",
     "k2sk_",
+    // 0.46.9 (sign-in door vs-live V9): the door's one-time code, the
+    // set-password tokens and a device's refresh token.
+    "k2lgn_",
+    "k2chg_",
+    "k2inv_",
+    "k2skr_",
     "k2rs_",
     "sk-",
     "ghp_",

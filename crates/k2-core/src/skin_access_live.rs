@@ -243,6 +243,8 @@ mod tests {
         ("access_templates", "same"),
         ("app_chat_grants", "guests-chat: chat rests on the person's grants row"),
         ("app_chat_keys", "Sew's App key, not a person's access"),
+        ("app_auth_door", "the sign-in door's per-App switch and page origins; a pass never reads it"),
+        ("app_auth_door_box", "the sign-in door's box switch"),
         ("app_handover_journal", "the handover's own log; what it moves is in watched tables"),
         ("app_link_files", "where a link's pass file lives"),
         ("app_login_settings", "login form settings"),

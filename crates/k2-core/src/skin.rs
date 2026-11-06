@@ -96,6 +96,11 @@ pub mod invites;
 /// one-time change token a flagged login gets instead of a pass.
 #[path = "skin_must_change.rs"]
 pub mod must_change;
+/// The sign-in door's skin.db half (prd-app-hosted-sign-in-v1, 0.46.9):
+/// per-App door settings, token targets, the dry run and the mint a
+/// one-time code turns into.
+#[path = "skin_auth_door.rs"]
+pub mod auth_door;
 
 #[path = "skin_link.rs"]
 pub mod link;
@@ -1674,6 +1679,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // App account deletion (0.46.9): settings and pending requests.
     // Additive, no numbered step.
     account_deletion::ensure_schema(&conn)?;
+    // The sign-in door (0.46.9): per-App door settings. Additive, no
+    // numbered step.
+    auth_door::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
@@ -4030,6 +4038,14 @@ pub fn login_throttle_subject(presented: &str) -> String {
 }
 
 pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcome {
+    check_and_record_login_hashed(username, password).0
+}
+
+/// [`check_and_record_login`] plus the stored hash the password was
+/// checked against (on `Ok` and `MustChange` only). The sign-in door
+/// (`auth_door`, 0.46.9) keeps it beside its one-time code, so a code
+/// dies if the password changes before the code is swapped.
+pub fn check_and_record_login_hashed(username: &str, password: &str) -> (SkinLoginOutcome, Option<String>) {
     // Lockout 3/15. `@` → email lookup; else username. Invalid email is a
     // miss, not 400. A name that resolves to a principal is counted on
     // that principal (see [`LoginLockSlot`]); anything else on the
@@ -4063,9 +4079,7 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
     });
     let (principal, slot) = match looked_up {
         Ok((_, _, Some(left))) => {
-            return SkinLoginOutcome::LockedOut {
-                retry_after_secs: left.max(1),
-            };
+            return (SkinLoginOutcome::LockedOut { retry_after_secs: left.max(1) }, None);
         }
         Ok((principal, slot, None)) => (principal, slot),
         Err(_) => (None, login_lock_slot(&key, None)),
@@ -4129,15 +4143,16 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
     });
 
     if !ok {
-        return SkinLoginOutcome::BadCreds;
+        return (SkinLoginOutcome::BadCreds, None);
     }
     let Some(principal) = principal else {
-        return SkinLoginOutcome::BadCreds;
+        return (SkinLoginOutcome::BadCreds, None);
     };
+    let hash = principal.password_hash.clone();
     match with_conn(|conn| principal_by_username(conn, &principal.username)) {
-        Ok(Some(p)) if principal.must_change => SkinLoginOutcome::MustChange(attach_principal_handles(p)),
-        Ok(Some(p)) => SkinLoginOutcome::Ok(attach_principal_handles(p)),
-        _ => SkinLoginOutcome::BadCreds,
+        Ok(Some(p)) if principal.must_change => (SkinLoginOutcome::MustChange(attach_principal_handles(p)), hash),
+        Ok(Some(p)) => (SkinLoginOutcome::Ok(attach_principal_handles(p)), hash),
+        _ => (SkinLoginOutcome::BadCreds, None),
     }
 }
 

@@ -5143,6 +5143,24 @@ async fn handle_one_request(
             )
             .await;
         }
+        // POST /cli/skin/auth/exchange (0.46.9, catalog auth.exchange): an
+        // App's server swaps a sign-in door code for the person's pass on
+        // its gateway link. The App is the link's; off a link: 404 (a
+        // server elsewhere uses /v1/apps/<id>/auth/exchange with its key).
+        crate::apps::auth_door::LINK_EXCHANGE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let link_app = if ingress == Ingress::App { crate::apps::gateway::current().map(|l| l.service_id.clone()) } else { None };
+            let r = match link_app {
+                Some(app) => tokio::task::spawn_blocking(move || crate::apps::auth_door::exchange_response(&app, &body_bytes))
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))),
+                None => crate::cli_response::CliResponse::not_found(),
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // POST /cli/skin/login — PUBLIC (NO token gate). Exact arm before
         // the `/cli/skin*` prefix so the roster stays owner-gated.
         "/cli/skin/login" => {

@@ -18,6 +18,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { K2Error, fromResponse } from "./errors.js";
 import { APP_VERBS } from "./generated/verbs.js";
+import { beginSignIn, clearSignInCookie, verifierFromCookieHeader, SIGN_IN_COOKIE } from "./auth.js";
 import { SecretFile } from "./pass.js";
 import { watchAccess, watchGuestAccess } from "./access.js";
 import { openSocket } from "./socket.js";
@@ -25,6 +26,8 @@ import { watchThreadActivity } from "./activity.js";
 import { buildRequest, project } from "./wire.js";
 /** The verbs a call needs no pass's identity for, beyond reaching the link. */
 const LOGIN_VERB = 'guests.login';
+/** The sign-in door's code swap (K2 0.46.9): the App's own pass, like a login. */
+const EXCHANGE_VERB = 'auth.exchange';
 /** The must-change answer inside a `password_change_required` refusal, or
  *  null for any other error. A malformed one is rethrown (never a login). */
 function mustChangeOf(e) {
@@ -83,7 +86,22 @@ export class K2App {
         this.WebSocketImpl = cfg.WebSocket ?? globalThis.WebSocket ?? null;
         this.defaultActor = this.actor({ kind: 'default' });
         this.appActor = this.actor({ kind: 'app' });
-        Object.assign(this, surfacesOf(this.defaultActor), { thread: this.defaultActor.thread });
+        Object.assign(this, surfacesOf(this.defaultActor), { thread: this.defaultActor.thread, auth: this.authApi() });
+    }
+    // ── the sign-in door (K2 0.46.9) ───────────────────────────────────
+    authApi() {
+        return {
+            begin: (opts) => beginSignIn(opts),
+            verifierFrom: (req, cookie = SIGN_IN_COOKIE) => verifierFromCookieHeader(header(req, 'cookie'), cookie),
+            clearCookie: (cookie = SIGN_IN_COOKIE) => clearSignInCookie(cookie),
+            exchange: async (args) => {
+                if (this.passFile && this.passFile.exists())
+                    return (await this.callAs({ kind: 'app' }, EXCHANGE_VERB, args));
+                const raw = await this.appKey('POST', 'auth/exchange', args);
+                const row = this.row(EXCHANGE_VERB);
+                return project(row.response, raw, row.responseNames);
+            },
+        };
     }
     // ── actors ─────────────────────────────────────────────────────────
     /** Calls as the App itself (its pass file). Written out on purpose. */
@@ -240,7 +258,7 @@ export class K2App {
     }
     /** The pass a call presents, or null (a login on a --cmd service: no pass needed). */
     passFor(cred, verb) {
-        if (verb === LOGIN_VERB) {
+        if (verb === LOGIN_VERB || verb === EXCHANGE_VERB) {
             // A login opens the link with the App's pass when it has one.
             return this.passFile && this.passFile.exists() ? this.passFile.read() : null;
         }
@@ -271,7 +289,7 @@ export class K2App {
         if (verb === LOGIN_VERB && this.appId && (args?.app === undefined || args.app === ''))
             callArgs = { ...args, app: this.appId };
         const req = buildRequest(row.http, callArgs);
-        const usesAppPass = verb === LOGIN_VERB || cred.kind === 'app';
+        const usesAppPass = verb === LOGIN_VERB || verb === EXCHANGE_VERB || cred.kind === 'app';
         for (let attempt = 0;; attempt++) {
             const pass = this.passFor(cred, verb);
             const headers = { ...extraHeaders };

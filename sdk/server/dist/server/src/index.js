@@ -20,6 +20,8 @@ export * from "./generated/verbs.js";
 export { qrSvg } from "./pairing.js";
 // 0.46.9 resumable transfers: the bytes of files.uploadCreate's upload, through the door.
 export { backoffMs, downloadLink, missingParts, uploadToDoor, MAX_PART, TransferError, } from "./transfer.js";
+// 0.46.9: the sign-in door's PKCE helpers (k2.auth uses them).
+export { beginSignIn, clearSignInCookie, pkce, verifierFromCookieHeader, SIGN_IN_COOKIE } from "./auth.js";
 export { applyChannelOps, channelOp, setAllChannels, CHANNEL_OPS_PER_CALL, CHANNELS_PER_PERSON, MEMBER_CHANNELS_PER_CALL, } from "./chat.js";
 /** Where a wall mounts the App pass (runtime §5.2). */
 export const DEFAULT_PASS_FILE = '/run/k2/pass';

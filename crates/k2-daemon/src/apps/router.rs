@@ -206,16 +206,18 @@ pub async fn splice<S>(client: &mut S, be: Arc<Backend>, mode: Option<crate::cli
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    splice_with(client, be, mode, None).await
+    splice_with(client, be, mode, None, None).await
 }
 
 /// [`splice`] with K2's own answers for some requests on the rewrite path
-/// (`local`, the App's pairing link files; ignored for a raw splice).
+/// (`local`, the App's pairing link files; `door`, the sign-in door on
+/// every request; both ignored for a raw splice).
 pub async fn splice_with<S>(
     client: &mut S,
     be: Arc<Backend>,
     mode: Option<crate::client_ip::Mode>,
     local: Option<crate::client_ip::LocalAnswer>,
+    door: Option<crate::client_ip::DoorHook>,
 ) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -260,7 +262,7 @@ where
         // connection carries the visitor (`apps::guard`).
         let gate = Some(crate::apps::guard::write_gate(&be.app_id));
         tokio::select! {
-            _ = crate::client_ip::forward_guarded(&mut *client, &mut upstream, mode, local, gate) => {}
+            _ = crate::client_ip::forward_doored(&mut *client, &mut upstream, mode, local, gate, door) => {}
             _ = cut.changed() => {}
         }
     } else {
@@ -357,7 +359,7 @@ where
     match live(app_id) {
         None => {
             let local = super::local_answers::for_app(app_id);
-            match read_first(client, app_id, local.as_ref(), crate::client_ip::visitor_of(mode)).await {
+            match read_first(client, app_id, local.as_ref(), crate::client_ip::visitor_of(mode), None).await {
                 Some(FirstRequest::Answered) => return,
                 Some(FirstRequest::Pass(_)) => {}
                 None => consume_request_head(client).await,
@@ -405,12 +407,15 @@ where
     let visitor = crate::client_ip::visitor_of(mode);
     let mode = rewrite_mode(&be, label, mode);
     let local = mode.and_then(|_| super::local_answers::for_app(label));
-    match read_first(client, label, local.as_ref(), visitor).await {
+    // The sign-in door (0.46.9, `auth_door`): only where every request is
+    // parsed (the rewrite), never on a raw splice.
+    let door = mode.and_then(|m| super::auth_door::hook_for(&be.app_id).map(|h| (m, h)));
+    match read_first(client, label, local.as_ref(), visitor, door.as_ref()).await {
         Some(FirstRequest::Answered) => TlsAppOutcome::Answered,
         Some(FirstRequest::Pass(bytes)) => {
             let r = {
                 let mut r = crate::client_ip::Replay::new(bytes, client);
-                splice_with(&mut r, be, mode, local).await
+                splice_with(&mut r, be, mode, local, door.map(|(_, h)| h)).await
             };
             match r {
                 Ok(()) => TlsAppOutcome::Spliced,
@@ -425,11 +430,46 @@ where
 }
 
 /// A connection's first request, when K2 may answer it before the App is
-/// dialed: the native call door on a box with voice (`voice_door`, App up or
-/// down, raw splice or not), else `local`'s answers. `None`: K2 reads
-/// nothing and the App gets the connection as it comes. `visitor`: the
-/// client address K2 derived (the signalling door sends it on).
+/// dialed: the sign-in door (`door`, on the rewrite path only), the native
+/// call door on a box with voice (`voice_door`, App up or down, raw splice
+/// or not), else `local`'s answers. `None`: K2 reads nothing and the App
+/// gets the connection as it comes. `visitor`: the client address K2
+/// derived (the signalling door sends it on).
 async fn read_first<S>(
+    client: &mut S,
+    app_id: &str,
+    local: Option<&crate::client_ip::LocalAnswer>,
+    visitor: Option<std::net::IpAddr>,
+    door: Option<&(crate::client_ip::Mode, crate::client_ip::DoorHook)>,
+) -> Option<FirstRequest>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    if let Some((mode, hook)) = door {
+        let p = crate::client_ip::peek_head(client).await;
+        if crate::client_ip::first_target(&p.bytes).is_some_and(|t| (hook.claims)(&t)) {
+            crate::client_ip::serve_door_first(client, p.bytes, *mode, hook).await;
+            return Some(FirstRequest::Answered);
+        }
+        // Not the door's: the call door and the local answers read the
+        // same bytes again.
+        let mut r = crate::client_ip::Replay::new(p.bytes, client);
+        let got = read_first_plain(&mut r, app_id, local, visitor).await;
+        let rest = r.unread();
+        return Some(match got {
+            Some(FirstRequest::Answered) => FirstRequest::Answered,
+            Some(FirstRequest::Pass(mut b)) => {
+                b.extend_from_slice(&rest);
+                FirstRequest::Pass(b)
+            }
+            None => FirstRequest::Pass(rest),
+        });
+    }
+    read_first_plain(client, app_id, local, visitor).await
+}
+
+/// [`read_first`] without the sign-in door.
+async fn read_first_plain<S>(
     client: &mut S,
     app_id: &str,
     local: Option<&crate::client_ip::LocalAnswer>,

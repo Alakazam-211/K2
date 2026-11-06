@@ -791,6 +791,19 @@ api_out="$("$K2" study app-api)"
 for needle in "profile.deleteAccount" "diagnostics.send" "CLIENT LOGS (diagnostics.send" "k2 app logs <app> --client" "429 rate_limited"; do
     assert_contains "app-api: $needle" "$api_out" "$needle"
 done
+echo "== k2 study auth-pages (prd-app-hosted-sign-in-v1, 0.46.9) =="
+ap_out="$("$K2" study auth-pages)"
+assert_contains "title" "$ap_out" "k2 study auth-pages — your own sign-in page, passwords straight to K2"
+for needle in "/.k2/auth/ping" "/.k2/auth/sign-in" "k2.auth.begin()" "k2.auth.exchange" "/v1/apps/<service id>/auth/exchange" "/cli/skin/auth/exchange" \
+    "password_change_required" "bad_origin" "k2 app auth door on" "tauri://localhost" "send no password" "authAt"; do
+    assert_contains "auth-pages: $needle" "$ap_out" "$needle"
+done
+# The responsibility statement waits for its legal review (vs-live V30):
+# the public CLI never carries the draft.
+assert_absent "auth-pages: no draft statement" "$ap_out" "DRAFT WORDING"
+ap_lines="$(printf '%s\n' "$ap_out" | wc -l | tr -d ' ')"
+if [ "$ap_lines" -le 80 ]; then echo "  PASS: auth-pages is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: auth-pages is $ap_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: auth-pages row" "$("$K2" study)" "  auth-pages          Your own sign-in page posts passwords to K2"
 echo "== k2 study tauri (prd-tauri-core-0467-v1 TC-14, 0.46.7) =="
 ta_out="$("$K2" study tauri)"
 assert_contains "title" "$ta_out" "k2 study tauri — the K2 side of a Tauri app, end to end"

@@ -1,5 +1,5 @@
 import { K2App, type K2Config } from './client.ts';
-export { K2App, type AppGuestMustChange, type K2Actor, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts';
+export { K2App, type AppGuestMustChange, type K2Actor, type K2Auth, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts';
 export type { AccessChange, OnAccessChangedOptions, OnGuestAccessChangedOptions } from './access.ts';
 export type { ActivityState, Turn, WatchActivityOptions, WatchActivityTarget } from './activity.ts';
 export { coerceTurn, describe as describeTurn, reduceTurn } from '../../activity/src/core.ts';
@@ -8,6 +8,7 @@ export { K2Error, fromResponse } from './errors.ts';
 export * from './generated/verbs.ts';
 export { qrSvg, type QrSvgOptions } from './pairing.ts';
 export { backoffMs, downloadLink, missingParts, uploadToDoor, MAX_PART, TransferError, type DoorUploadDone, type DoorUploadStatus, type UploadToDoorOptions, } from './transfer.ts';
+export { beginSignIn, clearSignInCookie, pkce, verifierFromCookieHeader, SIGN_IN_COOKIE, type BeginOptions, type Pkce, type SignInStart } from './auth.ts';
 export { applyChannelOps, channelOp, setAllChannels, CHANNEL_OPS_PER_CALL, CHANNELS_PER_PERSON, MEMBER_CHANNELS_PER_CALL, type ChannelRef, type ChatChannelsActor, type ChatSpaceOptions, type EnsureOptions, } from './chat.ts';
 /** Where a wall mounts the App pass (runtime §5.2). */
 export declare const DEFAULT_PASS_FILE = "/run/k2/pass";

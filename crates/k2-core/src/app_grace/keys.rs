@@ -31,8 +31,13 @@ pub const SCOPE_PUSH: &str = "push";
 /// Send email from the App's own sender (`/v1/apps/<id>/email/*`,
 /// prd-email-notifications-core-v1, 0.46.5).
 pub const SCOPE_EMAIL: &str = "email";
+/// Swap a sign-in door code for a person's pass
+/// (`/v1/apps/<id>/auth/exchange`, prd-app-hosted-sign-in-v1 Q5, 0.46.9):
+/// all a server hosted elsewhere needs to sign people in. `users` opens it
+/// too, so existing keys work.
+pub const SCOPE_SIGNIN: &str = "signin";
 /// Scopes a key can hold today.
-pub const SCOPES: &[&str] = &[SCOPE_USERS, SCOPE_ROOMS, SCOPE_FETCH, SCOPE_PUSH, SCOPE_EMAIL];
+pub const SCOPES: &[&str] = &[SCOPE_USERS, SCOPE_ROOMS, SCOPE_FETCH, SCOPE_PUSH, SCOPE_EMAIL, SCOPE_SIGNIN];
 /// Named for later: refused at mint with a pointer.
 pub const LATER_SCOPES: &[&str] = &["spaces"];
 /// Rooms one key may name.
@@ -81,8 +86,9 @@ impl AppKeyGrant {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
     }
 
+    /// `users` also opens `signin` (it can already set passwords).
     pub fn has(&self, scope: &str) -> bool {
-        self.scopes.iter().any(|s| s == scope)
+        self.scopes.iter().any(|s| s == scope || (scope == SCOPE_SIGNIN && s == SCOPE_USERS))
     }
 
     /// Every room in `rooms` is inside the ceiling (an empty list is

@@ -110,6 +110,10 @@ pub mod updates_routes;
 pub mod updates_serve;
 /// `/_k2/voice/sew/` on an App's hosts: the native call door (0.46.9).
 pub mod voice_door;
+/// The sign-in door on an App's own hosts (0.46.9, prd-app-hosted-sign-in-v1).
+pub mod auth_door;
+/// `k2 app auth`: the door's box switch, per-App switch and page origins.
+pub mod auth_routes;
 pub mod open;
 /// The delete guard, hand over / park / unpark, the orphan sweep (Q8).
 pub mod ownership;

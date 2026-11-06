@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 52
+export const CATALOG_VERSION = 53
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -82,6 +82,17 @@ export const APP_VERBS = {
     socket: null,
     responseNames: { 'pass': 'token' },
     response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"device":{"additionalProperties":false,"properties":{"id":{"type":"string"},"name":{"type":"string"}},"type":"object"},"ok":{"type":"boolean"},"pass":{"type":"string"},"passExpiresAt":{"type":"integer"},"principalId":{"type":"string"},"refresh":{"type":"string"},"refreshExpiresAt":{"type":"integer"},"role":{"type":["string","null"]},"roomAccess":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"handle":{"type":"string"}},"type":"object"},"type":"array"},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"}},"type":"object"},
+  },
+  'auth.exchange': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-hosted-sign-in-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/skin/auth/exchange', params: {}, query: [] },
+    socket: null,
+    responseNames: { 'pass': 'token' },
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"authAt":{"type":"integer"},"caps":{"items":{"type":"string"},"type":"array"},"device":{"additionalProperties":false,"properties":{"id":{"type":"string"},"name":{"type":"string"}},"type":"object"},"mustChangePassword":{"type":"boolean"},"ok":{"type":"boolean"},"pass":{"type":"string"},"passExpiresAt":{"type":"integer"},"principalId":{"type":"string"},"refresh":{"type":"string"},"refreshExpiresAt":{"type":"integer"},"role":{"type":["string","null"]},"roomAccess":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"handle":{"type":"string"}},"type":"object"},"type":"array"},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"},"via":{"type":"string"}},"type":"object"},
   },
   'guests.rooms': {
     cap: 'guests:rooms',
@@ -1780,6 +1791,36 @@ export interface AppGuestLogin {
   /** Project ids. */
   readonly rooms: string[]
   readonly username: string
+}
+
+export interface AppAuthSession {
+  /** host or the App's service id. */
+  readonly app: string
+  /** When K2 checked the password, seconds since the epoch: the recent-auth stamp (a pass this young starts pairing.start with no password). */
+  readonly authAt: number
+  /** Every cap in any room. */
+  readonly caps: string[]
+  readonly device?: AppDeviceRef
+  /** Always false: a password someone else set never reaches a code (the door answers password_change_required first). */
+  readonly mustChangePassword: boolean
+  readonly ok: boolean
+  /** The guest's session pass (k2skn_…): send it as Authorization: Bearer. */
+  readonly pass: string
+  /** With device: when the pass ends, seconds since the epoch. */
+  readonly passExpiresAt?: number
+  readonly principalId: string
+  /** With device: the refresh token (k2skr_...). Store it; guests.refresh trades it. */
+  readonly refresh?: string
+  /** With device: when the refresh token ends unless used, seconds since the epoch. */
+  readonly refreshExpiresAt?: number
+  readonly role: string | null
+  readonly roomAccess: AppRoomAccess[]
+  readonly roomHandles: string[]
+  /** Project ids. */
+  readonly rooms: string[]
+  readonly username: string
+  /** Which door verb made the code: sign-in, set-password or change-password. */
+  readonly via: string
 }
 
 export interface AppGuestRooms {
@@ -3933,7 +3974,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'access_lost', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'chat_key_required', 'sew_unreachable', 'sew_refused', 'space_unbound', 'app_mismatch', 'channel_type_mismatch', 'client_msg_id_reused', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'push_server_only', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'not_a_repo', 'attachment_secret', 'sidecar_live', 'sidecar_attached', 'worktree_sidecar', 'guest_pass_required', 'too_many_transfers', 'no_space', 'transfer_expired', 'transfer_token_expired', 'transfer_token_invalid', 'transfer_token_required', 'upload_done', 'upload_incomplete', 'checksum_mismatch', 'bad_range'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'access_lost', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'chat_key_required', 'sew_unreachable', 'sew_refused', 'space_unbound', 'app_mismatch', 'channel_type_mismatch', 'client_msg_id_reused', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'push_server_only', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'bad_code', 'app_suspended', 'not_a_repo', 'attachment_secret', 'sidecar_live', 'sidecar_attached', 'worktree_sidecar', 'guest_pass_required', 'too_many_transfers', 'no_space', 'transfer_expired', 'transfer_token_expired', 'transfer_token_invalid', 'transfer_token_required', 'upload_done', 'upload_incomplete', 'checksum_mismatch', 'bad_range'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -3943,6 +3984,7 @@ export interface AppVerbs {
   'me.events': { args: { scope: 'me' | 'guests' }; value: AppAccessFrame }
   'roomAgents.list': { args: Record<string, never>; value: AppRoomAgents }
   'guests.login': { args: { app?: string; device?: AppDevice; password: string; username: string }; value: AppGuestLogin }
+  'auth.exchange': { args: { code: string; device?: AppDevice; verifier: string }; value: AppAuthSession }
   'guests.rooms': { args: { app?: string; username: string }; value: AppGuestRooms }
   'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
   'app.rooms': { args: { app?: string }; value: AppRooms }
@@ -4084,7 +4126,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -4120,6 +4162,10 @@ export interface AppSurfaces {
     chat(args: { app?: string; username: string }): Promise<AppGuestChat>
     /** Give one of this App's guests chat (member or guest) or take it away; only grants this App made, within its ceiling; idempotent, audited. cap guests:chat · POST /cli/skin/guests/chat. e.g. `await k2.asApp().guests.setChat({username: 'dana', scope: 'member'})` */
     setChat(args: { app?: string; scope: 'member' | 'guest' | 'none'; username: string }): Promise<AppGuestChat>
+  }
+  readonly auth: {
+    /** Swap a sign-in door code for the person's pass: your page posted the password to /.k2/auth/* on your own host, K2 answered with a one-time code, and your server sends it here with its PKCE verifier. No password reaches your server. no cap · POST /cli/skin/auth/exchange. e.g. `const s = await k2.auth.exchange({code, verifier})` */
+    exchange(args: { code: string; device?: AppDevice; verifier: string }): Promise<AppAuthSession>
   }
   readonly app: {
     /** This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it). no cap · GET /cli/skin/app-rooms. e.g. `const {ceiling, granted} = await k2.asApp().app.rooms()` */
@@ -4406,4 +4452,4 @@ export interface AppSurfaces {
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'password', 'profile', 'diagnostics', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'auth', 'app', 'password', 'profile', 'diagnostics', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const

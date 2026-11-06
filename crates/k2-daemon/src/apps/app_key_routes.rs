@@ -14,6 +14,7 @@
 //! GET  /v1/apps/<id>/push/status?sendId=                                         push
 //! POST /v1/apps/<id>/email/send  {to, subject, text|html, …}                    email (prd-email-notifications-core-v1)
 //! GET  /v1/apps/<id>/email/status?id=  ·  GET /v1/apps/<id>/email/log            email
+//! POST /v1/apps/<id>/auth/exchange {code, verifier, device?}                   signin (users opens it; the sign-in door, 0.46.9)
 //! ```
 //!
 //! Rules:
@@ -117,6 +118,8 @@ fn scope_for(method_post: bool, verb: &str) -> Option<&'static str> {
         (true, "users/rooms") => Some(keys::SCOPE_ROOMS),
         (true, "users/disable" | "users/enable" | "users/remove" | "users/unlock" | "users/password-reset") => Some(keys::SCOPE_USERS),
         (true, "fetch") => Some(keys::SCOPE_FETCH),
+        // 0.46.9: swap a sign-in door code (`apps::auth_door`).
+        (true, "auth/exchange") => Some(keys::SCOPE_SIGNIN),
         (true, "push/send") | (false, "push/status") => Some(keys::SCOPE_PUSH),
         // Email Notifications (0.46.5): the App's own sender; with the box
         // switch off, unknown verbs as before (security review L9).
@@ -203,6 +206,13 @@ pub fn handle(path: &str, is_post: bool, presented: Option<&str>, body: &[u8], p
         }
     };
     let c = Ctx { key_id: key.id.clone(), app: app.to_string(), workspace, grant };
+    // The sign-in door's exchange keeps its own answers (`bad_code`, the
+    // login answer).
+    if verb == super::auth_door::KEY_EXCHANGE_VERB {
+        let r = super::auth_door::exchange_response(&c.app, body);
+        audit(&c, verb, if r.status.starts_with('2') { "ok" } else { r.status });
+        return r;
+    }
     // App push keeps its own answers (202, sendId, the push refusal codes).
     if verb == "push/send" || verb == "push/status" {
         let r = push(&c, verb, body, params);

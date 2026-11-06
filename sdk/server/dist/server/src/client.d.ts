@@ -1,5 +1,6 @@
 import { K2Error } from './errors.ts';
-import { type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts';
+import { type AppAuthSession, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts';
+import { type BeginOptions, type SignInStart } from './auth.ts';
 import { type AccessChange, type OnAccessChangedOptions, type OnGuestAccessChangedOptions } from './access.ts';
 import { type WebSocketCtor } from './socket.ts';
 import { type ActivityState, type WatchActivityOptions, type WatchActivityTarget } from './activity.ts';
@@ -16,6 +17,30 @@ export interface K2Config {
     appKeyFile?: string | null;
     fetch?: typeof fetch;
     WebSocket?: WebSocketCtor;
+}
+/** `k2.auth`: the sign-in door's server half (K2 0.46.9; see auth.ts). */
+export interface K2Auth {
+    /** One sign-in attempt: a fresh PKCE pair, and a Set-Cookie value keeping the verifier. Give the page only `challenge`. */
+    begin(opts?: BeginOptions): SignInStart;
+    /** The verifier `begin`'s cookie holds on this request, or null. */
+    verifierFrom(req: RequestLike, cookie?: string): string | null;
+    /** A Set-Cookie value that removes `begin`'s cookie. */
+    clearCookie(cookie?: string): string;
+    /**
+     * Swap the door's one-time code for the person's pass: through your link
+     * with the App pass, else with the App key (`/v1/apps/<id>/auth/exchange`,
+     * scope signin or users). `device` asks for a device sign-in (a refresh
+     * token too, when the App's "Stay signed in" is on). Fails `bad_code` for
+     * a code that is used, expired, another App's, or whose verifier differs.
+     */
+    exchange(args: {
+        code: string;
+        verifier: string;
+        device?: {
+            id: string;
+            name?: string;
+        };
+    }): Promise<AppAuthSession>;
 }
 /**
  * A login whose password someone else set (K2 0.46.6: the owner, an
@@ -92,6 +117,7 @@ export declare class K2App {
     private readonly defaultActor;
     private readonly appActor;
     constructor(cfg: K2Config);
+    private authApi;
     /** Calls as the App itself (its pass file). Written out on purpose. */
     asApp(): K2Actor;
     /** Calls as one guest (their session pass, from `login`). */
@@ -207,6 +233,8 @@ export interface AppKeyWhoami {
     readonly roomHandles: string[];
     readonly roleIds: string[];
 }
-export interface K2App extends Omit<AppSurfaces, 'thread'> {
+export interface K2App extends Omit<AppSurfaces, 'thread' | 'auth'> {
     readonly thread: K2Actor['thread'];
+    /** The sign-in door's server half: begin, verifierFrom, clearCookie, exchange (K2 0.46.9). */
+    readonly auth: K2Auth;
 }

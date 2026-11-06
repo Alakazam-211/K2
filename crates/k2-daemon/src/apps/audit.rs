@@ -245,7 +245,7 @@ pub fn log_safe(raw: &str) -> String {
 
 fn secret_shaped(part: &str) -> bool {
     let bare = part.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
-    ["k2skn_", "k2sk_", "k2skr_", "k2hs_"].iter().any(|p| bare.starts_with(p))
+    ["k2skn_", "k2sk_", "k2skr_", "k2hs_", "k2lgn_", "k2chg_", "k2inv_"].iter().any(|p| bare.starts_with(p))
         || (bare.starts_with("eyJ") && bare.len() >= 16)
         || (bare.len() >= 32 && bare.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
 }

@@ -111,6 +111,8 @@ pub fn is_route(p: &str) -> bool {
         || super::sdk::ROUTES.contains(&p)
         || super::expose::ROUTES.contains(&p)
         || super::link_files::ROUTES.contains(&p)
+        // 0.46.9: k2 app auth, the sign-in door's switches (auth_routes.rs).
+        || super::auth_routes::ROUTES.contains(&p)
         || super::init::ROUTES.contains(&p)
         || super::updates_routes::ROUTES.contains(&p)
         // 0.46.7 (prd-tauri-core-0467-v1 TC-15): k2 app status.
@@ -142,6 +144,7 @@ pub fn is_post_route(p: &str) -> bool {
         || super::expose::POST_ROUTES.contains(&p)
         // 0.46.7: link files as an App setting (link_files.rs).
         || super::link_files::POST_ROUTES.contains(&p)
+        || super::auth_routes::POST_ROUTES.contains(&p)
         // 0.46.7: k2 app init --template (init.rs).
         || super::init::POST_ROUTES.contains(&p)
         // 0.46.7: k2 app updates key|token set, push, promote, rollback, pull.
@@ -483,6 +486,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         p if super::sdk::ROUTES.contains(&p) => super::sdk::handle(p, &who, body, params),
         // 0.46.7: k2 app links (link_files.rs).
         p if super::link_files::ROUTES.contains(&p) => super::link_files::handle(p, &who, body, params),
+        // 0.46.9: k2 app auth (auth_routes.rs).
+        p if super::auth_routes::ROUTES.contains(&p) => super::auth_routes::handle(p, &who, body, params),
         // 0.46.7: k2 app init --template tauri|static|node-api (init.rs).
         super::init::ROUTE => super::init::route(&who, body),
         // 0.46.9: k2 app doctor --store, a Tauri repo's store checklist.

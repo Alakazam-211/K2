@@ -479,6 +479,9 @@ struct RequestHead {
     origin: Option<String>,
     accept: Option<String>,
     sec_fetch_dest: Option<String>,
+    /// `Content-Type` and `User-Agent`, for the sign-in door ([`DoorHook`]).
+    content_type: Option<String>,
+    user_agent: Option<String>,
 }
 
 /// One request, as K2's gate sees it ([`GateHooks`]).
@@ -556,6 +559,131 @@ pub struct GateHooks {
 /// path and query, Host)` → the whole response (it must end the
 /// connection: `Connection: close`), or `None` for the App to answer.
 pub type LocalAnswer = std::sync::Arc<dyn Fn(&str, &str, Option<&str>) -> Option<Vec<u8>> + Send + Sync>;
+
+/// The body of a request on the sign-in door, as K2 read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoorBody {
+    /// The whole `Content-Length` body (empty when there was none).
+    Bytes(Vec<u8>),
+    /// `Content-Length` over [`DoorHook::max_body`]: nothing was read.
+    TooLarge,
+    /// A chunked body: refused (the door takes `Content-Length` only).
+    LengthRequired,
+    /// The body didn't arrive by [`DoorHook::body_deadline`].
+    Timeout,
+    /// The client closed mid-body.
+    Cut,
+    /// An upgrade (a WebSocket) on the door: refused.
+    Upgrade,
+}
+
+/// One request on K2's sign-in door (`apps::auth_door`): never a byte of
+/// it reaches the App.
+#[derive(Debug, Clone)]
+pub struct DoorCall {
+    pub method: String,
+    /// The path and query, as sent.
+    pub path: String,
+    pub host: Option<String>,
+    pub origin: Option<String>,
+    pub content_type: Option<String>,
+    pub user_agent: Option<String>,
+    /// The address K2 vouches for (PROXY v2), never a header's.
+    pub visitor: Option<IpAddr>,
+    pub body: DoorBody,
+}
+
+/// The door's answer to one [`DoorCall`]: the whole response, which must
+/// end the connection (`Connection: close`).
+pub type DoorAnswer =
+    std::sync::Arc<dyn Fn(DoorCall) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<u8>> + Send>> + Send + Sync>;
+
+/// The sign-in door on an App's rewrite path (0.46.9,
+/// prd-app-hosted-sign-in-v1 vs-live V1): checked on **every** request of
+/// the connection, ahead of the gate, G2 and the local answers, so a door
+/// request never reaches the App, first or mid keep-alive.
+#[derive(Clone)]
+pub struct DoorHook {
+    /// Is this request target the door's (its whole namespace, matched
+    /// canonically)?
+    pub claims: fn(&str) -> bool,
+    pub answer: DoorAnswer,
+    /// The largest body the door reads.
+    pub max_body: u64,
+    /// One deadline over the whole body.
+    pub body_deadline: std::time::Duration,
+}
+
+/// Read a door request's body per the hook's rules.
+async fn door_body<R: AsyncRead + Unpin>(rd: &mut Reader<R>, head: &RequestHead, hook: &DoorHook) -> DoorBody {
+    if head.upgrade {
+        return DoorBody::Upgrade;
+    }
+    match head.body {
+        Body::None => DoorBody::Bytes(Vec::new()),
+        Body::Chunked => DoorBody::LengthRequired,
+        Body::Length(n) if n > hook.max_body => DoorBody::TooLarge,
+        Body::Length(n) => {
+            let mut out: Vec<u8> = Vec::with_capacity(n as usize);
+            match tokio::time::timeout(hook.body_deadline, rd.copy_exact(n, &mut out)).await {
+                Ok(Ok(())) => DoorBody::Bytes(out),
+                Ok(Err(_)) => DoorBody::Cut,
+                Err(_) => DoorBody::Timeout,
+            }
+        }
+    }
+}
+
+/// The door's call for one parsed request (its body read).
+async fn door_call<R: AsyncRead + Unpin>(rd: &mut Reader<R>, head: &RequestHead, hook: &DoorHook, visitor: Option<IpAddr>) -> DoorCall {
+    let body = door_body(rd, head, hook).await;
+    DoorCall {
+        method: head.method.clone(),
+        path: head.path.clone(),
+        host: head.host.clone(),
+        origin: head.origin.clone(),
+        content_type: head.content_type.clone(),
+        user_agent: head.user_agent.clone(),
+        visitor,
+        body,
+    }
+}
+
+/// The target of the first request line in `bytes` (`None` when there
+/// isn't a whole line yet).
+pub fn first_target(bytes: &[u8]) -> Option<String> {
+    let end = bytes.windows(2).position(|w| w == b"\r\n")?;
+    let line = std::str::from_utf8(&bytes[..end]).ok()?;
+    line.split(' ').nth(1).map(str::to_string)
+}
+
+/// Serve a connection whose first request is the door's (read with
+/// [`peek_head`]; `pre` is every byte read so far): parse it exactly as
+/// the forwarder would (the same refusals), answer it, close. Nothing is
+/// dialed.
+pub async fn serve_door_first<S>(client: &mut S, pre: Vec<u8>, mode: Mode, hook: &DoorHook)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let rule = resolve(mode);
+    let answer = {
+        let mut rd = Reader::new(Replay::new(pre, &mut *client));
+        match read_request(&mut rd, rule, &[]).await {
+            Ok(ReadRequest::Head(head)) if (hook.claims)(&head.path) => {
+                let call = door_call(&mut rd, &head, hook, rule.visitor()).await;
+                Some((hook.answer)(call).await)
+            }
+            Ok(ReadRequest::Refuse(status)) => Some(refusal(status)),
+            // Not the door's after all, or the client left: nothing for
+            // the App, nothing to say.
+            _ => None,
+        }
+    };
+    if let Some(bytes) = answer {
+        let _ = client.write_all(&bytes).await;
+    }
+    let _ = client.shutdown().await;
+}
 
 #[derive(Debug)]
 enum ReadRequest {
@@ -650,6 +778,8 @@ fn rewrite_request(req: &httparse::Request, rule: Rule, strip: &[&str]) -> Resul
     let mut origin: Option<String> = None;
     let mut accept: Option<String> = None;
     let mut sec_fetch_dest: Option<String> = None;
+    let mut content_type: Option<String> = None;
+    let mut user_agent: Option<String> = None;
     for h in req.headers.iter() {
         let norm = normalized(h.name);
         let underscored = h.name.contains('_');
@@ -681,6 +811,8 @@ fn rewrite_request(req: &httparse::Request, rule: Rule, strip: &[&str]) -> Resul
                     "origin" => origin = Some(text()),
                     "accept" => accept = Some(text()),
                     "sec-fetch-dest" => sec_fetch_dest = Some(text()),
+                    "content-type" => content_type = Some(text()),
+                    "user-agent" => user_agent = Some(text()),
                     _ => {}
                 }
                 out.extend_from_slice(h.name.as_bytes());
@@ -738,6 +870,8 @@ fn rewrite_request(req: &httparse::Request, rule: Rule, strip: &[&str]) -> Resul
         origin,
         accept,
         sec_fetch_dest,
+        content_type,
+        user_agent,
     })
 }
 
@@ -820,6 +954,7 @@ async fn requests<R, W>(
     local: Option<&LocalAnswer>,
     gate: Option<&WriteGate>,
     access: Option<&GateHooks>,
+    door: Option<&DoorHook>,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -847,6 +982,15 @@ where
             }
             ReadRequest::Head(h) => h,
         };
+        // The sign-in door (0.46.9): first, on every request, any method.
+        // Its body is read here and never forwarded.
+        if let Some(door) = door {
+            if (door.claims)(&head.path) {
+                let call = door_call(&mut rd, &head, door, r.visitor()).await;
+                shared.push(Expect::Own((door.answer)(call).await));
+                return Ok(());
+            }
+        }
         // K2's gate on a published site: before anything of this request
         // moves. Every request on the connection comes through here.
         if let Some(access) = access {
@@ -1084,7 +1228,7 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, None, None, Some(&hooks)).await
+    run_forward(client, upstream, mode, None, None, Some(&hooks), None).await
 }
 
 /// [`forward_with`] plus G2's write gate (`apps::guard::write_gate`).
@@ -1099,7 +1243,24 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, local, gate, None).await
+    run_forward(client, upstream, mode, local, gate, None, None).await
+}
+
+/// [`forward_guarded`] plus the sign-in door on every request
+/// ([`DoorHook`], 0.46.9).
+pub async fn forward_doored<C, U>(
+    client: C,
+    upstream: U,
+    mode: Mode,
+    local: Option<LocalAnswer>,
+    gate: Option<WriteGate>,
+    door: Option<DoorHook>,
+) -> io::Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    run_forward(client, upstream, mode, local, gate, None, door.as_ref()).await
 }
 
 async fn run_forward<C, U>(
@@ -1109,6 +1270,7 @@ async fn run_forward<C, U>(
     local: Option<LocalAnswer>,
     gate: Option<WriteGate>,
     access: Option<&GateHooks>,
+    door: Option<&DoorHook>,
 ) -> io::Result<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -1118,7 +1280,7 @@ where
     let (ur, uw) = tokio::io::split(upstream);
     let shared = Shared { queue: Mutex::new(VecDeque::new()), pushed: Notify::new() };
     let (decide, decided) = watch::channel::<Decision>((0, false));
-    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref(), access);
+    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref(), access, door);
     let lines = access.map_or(&[][..], |a| a.response_lines.as_slice());
     let resp = responses(Reader::new(ur), cw, &shared, decide, lines);
     tokio::pin!(req, resp);
@@ -1241,6 +1403,11 @@ pub struct Replay<'a, S> {
 impl<'a, S> Replay<'a, S> {
     pub fn new(pre: Vec<u8>, inner: &'a mut S) -> Self {
         Self { pre, pos: 0, inner }
+    }
+
+    /// The bytes given at [`Replay::new`] not read yet.
+    pub fn unread(self) -> Vec<u8> {
+        self.pre[self.pos..].to_vec()
     }
 }
 

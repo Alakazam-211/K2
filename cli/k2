@@ -8139,6 +8139,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   (host.mode "static"; k2 app init --template static). A site already on
   k2 publish run --skin keeps working; new static sites are Apps.
   Desktop binary updates are k2 update --app. See k2 study apps (leftover: k2 study skins).
+  Your own sign-in page: post passwords straight to K2 at /.k2/auth/* on the
+  App's host, never to your server (k2 app auth --help, k2 study auth-pages).
 
   Leftover aliases (still work): k2 skin …    k2 skin-token …
 
@@ -15026,6 +15028,122 @@ for w in v.get("warnings") or []:
     print("note: " + w)'
 }
 
+# ── k2 app auth (0.46.9, prd-app-hosted-sign-in-v1) ─────────────────
+_app_auth_usage() {
+    cat <<'EOF'
+k2 app auth — the sign-in door: your App's own sign-in page posts the
+password straight to K2 at /.k2/auth/* on the App's own host, never to your
+server. K2 answers that path before your App sees it and gives back a
+one-time code; your server swaps the code for the person's pass
+(k2.auth.exchange). How to build the page: k2 study auth-pages.
+
+  k2 app auth [<app>] [--json]          Is the door on for this server? With
+                                        <app>: that App's door, its extra page
+                                        origins and its hosts.
+  k2 app auth door on|off [<app>] [--json]
+                                        No <app>: turn the door on or off for
+                                        every App on this server (the owner;
+                                        it starts off). With <app>: that App
+                                        only. off hands /.k2/auth/* back to the
+                                        App (one that serves the path itself);
+                                        on undoes that. An App has a door only
+                                        while the server's switch is on too.
+  k2 app auth origins <app> [--origin O]… [--clear] [--json]
+                                        The page origins, beyond the App's own
+                                        host, whose posts the door takes and
+                                        answers with CORS: a bundled Tauri
+                                        page (tauri://localhost,
+                                        http://tauri.localhost). Each call
+                                        replaces the whole list; --clear
+                                        empties it. The webview origins the
+                                        App's phone pairing lists count too.
+
+Who: door on|off for the server is the owner's. One App's door and origins:
+the owner, an Admin, or the App's own agent with "Build and run Apps"
+(Settings → Apps). Every change is recorded. Exit codes: 0 ok, 2 bad usage,
+3 refused (JSON with a code on stderr).
+EOF
+}
+
+cmd_app_auth() {
+    local sub="${1:-}"
+    case "$sub" in
+        -h|--help|help) _app_auth_usage; return 0 ;;
+        door|origins) shift ;;
+        ""|--json) sub=status ;;
+        -*) echo "Unknown flag: $sub (k2 app auth --help)" >&2; exit 2 ;;
+        *) sub=status ;;
+    esac
+    local app="" json_out=0 onoff="" origins="" clear=0
+    local nl='
+'
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --origin) [ "$sub" = origins ] || { echo "--origin goes with k2 app auth origins" >&2; exit 2; }; origins="$origins${2:-}$nl"; shift 2 ;;
+            --clear) [ "$sub" = origins ] || { echo "--clear goes with k2 app auth origins" >&2; exit 2; }; clear=1; shift ;;
+            -h|--help) _app_auth_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app auth --help)" >&2; exit 2 ;;
+            on|off)
+                if [ "$sub" = door ] && [ -z "$onoff" ]; then onoff="$1"; shift
+                elif [ -z "$app" ]; then app="$1"; shift
+                else echo "Unexpected argument: $1 (k2 app auth --help)" >&2; exit 2; fi ;;
+            *) if [ -z "$app" ]; then app="$1"; shift; else echo "Unexpected argument: $1 (k2 app auth --help)" >&2; exit 2; fi ;;
+        esac
+    done
+    case "$sub" in
+        status)
+            if [ -n "$app" ]; then _compute_call GET /cli/app/auth "app=$(urlencode "$app")"; else _compute_call GET /cli/app/auth ""; fi
+            ;;
+        door)
+            [ -n "$onoff" ] || { echo "usage: k2 app auth door on|off [<app>] (k2 app auth --help)" >&2; exit 2; }
+            _app_rt_post /cli/app/auth/set "$(_compute_json K2_CJ_door="$onoff" K2_CJ_app="$app")"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            ;;
+        origins)
+            [ -n "$app" ] || { echo "usage: k2 app auth origins <app> [--origin O]… [--clear] (k2 app auth --help)" >&2; exit 2; }
+            if [ -z "$origins" ] && [ "$clear" = 0 ]; then
+                _compute_call GET /cli/app/auth "app=$(urlencode "$app")"
+            else
+                [ -n "$origins" ] && [ "$clear" = 1 ] && { echo "--origin and --clear don't go together (k2 app auth --help)" >&2; exit 2; }
+                local body
+                body="$(K2_AA_APP="$app" K2_AA_ORIGINS="$origins" python3 -c '
+import json, os
+e = os.environ
+print(json.dumps({"app": e["K2_AA_APP"], "origins": [x.strip() for x in e.get("K2_AA_ORIGINS", "").split("\n") if x.strip()]}))')" || exit 2
+                _app_rt_post /cli/app/auth/set "$body"
+                [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            fi
+            ;;
+    esac
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+b = v.get("box") or {}
+line = "sign-in door on this server: " + ("on" if b.get("on") else "off")
+if b.get("envOverride"):
+    line += " (K2_APP_AUTH_DOOR=%s on the daemon wins over the stored switch)" % b.get("envOverride")
+elif not b.get("on"):
+    line += " (the owner turns it on: k2 app auth door on)"
+print(line)
+a = v.get("app")
+if a:
+    print("%s: door %s%s" % (a.get("name") or a.get("app"), a.get("door"), " (turned off for this App)" if a.get("appOff") else ""))
+    o = a.get("origins") or []
+    print("  extra page origins:    " + (", ".join(o) if o else "-"))
+    po = a.get("pairingOrigins") or []
+    if po:
+        print("  from phone pairing:    " + ", ".join(po))
+    print("  hosts:                 " + (", ".join(a.get("hosts") or []) or "- (no public host yet)"))
+    if a.get("labelNote"):
+        print("  note: " + a["labelNote"])
+    if a.get("notRuntime"):
+        print("  note: not a runtime App: K2 answers /.k2/auth/* only in front of a runtime App (k2 app deploy)")
+for w in v.get("warnings") or []:
+    print("note: " + w)'
+}
+
 _app_pairing_usage() {
     cat <<'EOF'
 k2 app pairing — let people pair a custom App's own phone app by QR from
@@ -18370,6 +18488,7 @@ cmd_app() {
         push) shift; cmd_app_push "$@" ;;
         pairing) shift; cmd_app_pairing "$@" ;;
         links) shift; cmd_app_links "$@" ;;
+        auth) shift; cmd_app_auth "$@" ;;
         email) shift; cmd_app_email "$@" ;;
         approvals) shift; cmd_app_approvals "$@" ;;
         approve) shift; cmd_app_approve "$@" ;;
@@ -46049,6 +46168,17 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app auth",
+      "usage": "k2 app auth [<app>] | k2 app auth door on|off [<app>] | k2 app auth origins <app> [--origin O]… [--clear] [--json]",
+      "description": "The sign-in door: an App's own page posts passwords to K2 at /.k2/auth/* on the App's host and gets a one-time code its server swaps (k2.auth.exchange). door on|off with no app is the server's switch (the owner; it starts off); with an app, that App only. origins lists extra page origins (a bundled Tauri page). k2 study auth-pages.",
+      "args": [{"name": "app", "required": false}],
+      "flags": [
+        {"name": "--origin", "arg": "origin", "description": "origins: one page origin, such as tauri://localhost (repeat; replaces the list)."},
+        {"name": "--clear", "arg": null, "description": "origins: empty the list."},
+        {"name": "--json", "arg": null, "description": "{box{on, stored, envOverride, door}, app?{app, appId, name, door, appOff, origins[], pairingOrigins[], hosts[], labelHasDoor}, warnings?}."}
+      ]
+    },
+    {
       "name": "app updates push",
       "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]",
       "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps.",
@@ -47636,7 +47766,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
 
 _study_usage() {
     cat <<'EOF'
@@ -47653,7 +47783,7 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
-  app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
+  app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  auth-pages  app-profile
   app-account-deletion  app-transfers
   app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
@@ -47695,6 +47825,7 @@ _study_title() {
         app-handover) echo "Handing an App to another agent" ;;
         app-push) echo "Notifications to a custom App's own phone app" ;;
         app-pairing) echo "Pairing a custom App's own phone app by QR" ;;
+        auth-pages) echo "Your own sign-in pages: passwords straight to K2" ;;
         app-profile) echo "A person's own profile, picture and sessions in an App" ;;
         app-account-deletion) echo "A person deletes their own App account: store rules, modes, what stays" ;;
         app-transfers) echo "Big files that survive the app in the background" ;;
@@ -47815,6 +47946,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-handover        Hand an App to another agent: offer, accept, the owner's card, undo
   app-push            Your App's own phone app: keys in the vault, register, send, limits
   app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
+  auth-pages          Your own sign-in page posts passwords to K2, not your server: codes, PKCE
   app-profile         A person's own profile, picture and sessions in an App; who decides
   app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
   app-transfers       Big uploads and downloads that survive a phone app in the background
@@ -47892,6 +48024,7 @@ _study_page() {
         app-handover) _study_page_app_handover ;;
         app-push) _study_page_app_push ;;
         app-pairing) _study_page_app_pairing ;;
+        auth-pages) _study_page_auth_pages ;;
         app-profile) _study_page_app_profile ;;
         app-account-deletion) _study_page_app_account_deletion ;;
         app-transfers) _study_page_app_transfers ;;
@@ -48470,7 +48603,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 52.
+From K2's verb catalog, version 53.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -48502,6 +48635,7 @@ no cap (your own rooms)
   me.events                WS   /cli/skin/me/events?scope=                    This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too.
   roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.
+  auth.exchange            POST /cli/skin/auth/exchange (server only)         Swap a sign-in door code for the person's pass: your page posted the password to /.k2/auth/* on your own host, K2 answered with a one-time code, and your server sends it here with its PKCE verifier. No password reaches your server.
   app.rooms                GET  /cli/skin/app-rooms (server only)             This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).
   password.change          POST /cli/skin/password/change                     A guest changes their own password (5 wrong current passwords per 15 minutes, then rate_limited); stay: true keeps this pass signed in.
   guests.logout            POST /cli/skin/logout (server only)                Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
@@ -51491,6 +51625,85 @@ START (A BUNDLED WEB BUILD)
 
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
 k2 study app-profile, k2 app init --help, k2 app links --help.
+EOF
+}
+
+_study_page_auth_pages() {
+    cat <<'EOF'
+k2 study auth-pages — your own sign-in page, passwords straight to K2
+
+THE SHAPE
+  Your page, on your App's own host, posts the password to /.k2/auth/* on
+  that same host. K2 answers before your server sees a byte and gives back a
+  one-time code (60 s, one use). Your server swaps the code, with the PKCE
+  verifier it kept, for the person's pass: the same pass guests.login gives
+  (k2 study app-api). No password reaches your server; no K2 pass or cookie
+  reaches the browser. It starts off: the owner runs k2 app auth door on.
+
+  server:  const s = k2.auth.begin()   // {challenge, verifier, setCookie}, per attempt
+           res.setHeader('set-cookie', s.setCookie)   // keeps s.verifier, HttpOnly
+           render the form with s.challenge only
+  page:    const p = await fetch('/.k2/auth/ping').then(r => r.json()).catch(() => null)
+           if (!p || p.k2 !== true) stop: no door here, send no password
+           const r = await fetch('/.k2/auth/sign-in', { method: 'POST',
+             headers: { 'content-type': 'application/json' },
+             body: JSON.stringify({ username, password, challenge }) })
+           const a = await r.json()   // {ok: true, code} | {ok: false, error: {code}}
+           post a.code (never the password) to your own server
+  server:  const session = await k2.auth.exchange({ code, verifier: k2.auth.verifierFrom(req) })
+           your own cookie from session.pass; also send k2.auth.clearCookie()
+  One challenge serves one attempt until a code is made: a refused sign-in
+  uses nothing, so the page retries (or goes on to set-password) with it.
+  Never share one challenge between people or fix it in the page.
+  No SDK: POST {code, verifier, device?} to /cli/skin/auth/exchange on your
+  gateway link (K2_GATEWAY_URL) with the App pass (K2_PASS_FILE), or to
+  /v1/apps/<service id>/auth/exchange with an App key (scope signin or users).
+  device {id, name}: a device sign-in, with a refresh token when the App's
+  Stay signed in is on. Answers carry authAt (when K2 checked the password).
+
+PHONES AND TAURI
+  Native HTTP (no Origin): post to https://<app host>/.k2/auth/*; your
+  server keeps s.verifier against a one-time id it hands the app with the
+  challenge. A bundled page's fetch sends Origin tauri://localhost: list it
+  (k2 app auth origins <app> --origin tauri://localhost); listed origins get
+  CORS on every verb and ping. Any other Origin must be the request's own host.
+
+WHERE THE DOOR IS
+  Yes: <app>.<box>.k2.dev (the default client-IP front), every custom name,
+  the App's front port. No: host.clientIp: false on the k2.dev label, a
+  --cmd service, a name your own web server or a CDN answers. Anything but
+  {"k2": true} from ping: send no password. Your own form posting to your
+  server (k2.login) stays allowed; then your server must never log passwords.
+
+THE VERBS (POST, JSON, Content-Length, at most 8 KiB)
+  sign-in          {username, password, challenge}              → {ok, code}
+  set-password     {token, password, challenge?}                → {ok, code?}
+  change-password  {username, oldPassword, password, challenge} → {ok, code}
+  First password: sign-in answers 403 password_change_required with
+  changeToken (top level); post {token: changeToken, password, challenge} to
+  set-password. Invite or reset: your page gets k2inv_… after the # (k2 app
+  login settings --set-password-url); send it without the #. With a
+  challenge you get a code, unless the person can't use this App (then the
+  password is set, no code); without one, no code: send them to sign in.
+  The token must be this App's; the owner's own reset never works here.
+  change-password needs username (the browser holds no pass); it ends the
+  person's other K2 sessions, and wrong old passwords count toward lockout.
+
+ERRORS ({ok: false, error: {code, hint, retryAfterSecs?}}; the words are yours)
+  401 bad_login  423 locked  429 rate_limited (Retry-After, seconds)
+  403 password_change_required  400 password_unchanged | password_too_short
+  | password_too_long | challenge_required | bad_request  401 bad_token
+  403 bad_origin | app_suspended  411 length_required (send Content-Length)
+  413 too_large  503 retry (K2 restarting)  404 not_found (not a door verb)
+  405 method  · exchange: 401 bad_code (sign in again)
+
+ON THE PAGE
+  A real <form>, autocomplete username / current-password / new-password.
+  Don't log, keep or forward the password. No analytics, session replay or
+  third-party scripts there; keep your service worker off /.k2/. The door
+  keeps the password from your server, not from scripts on your own page.
+  authAt within 15 minutes: pairing.start needs no password. Enterprise SSO
+  isn't here yet.
 EOF
 }
 
@@ -84190,7 +84403,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 52.
+for at once (no review). From K2's verb catalog, version 53.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -92744,8 +92957,8 @@ EOF
             # 0.46.8: `k2 app push`, `k2 app pairing` and `k2 app login` too
             # (their pages say --help; it printed the whole family before).
             # 0.46.9: `k2 app doctor` (--store has its own page), `k2 app set`
-            # and `k2 app account-deletion`.
-            init|links|push|pairing|login|doctor|set|account-deletion|account-deletions)
+            # and `k2 app account-deletion`; `k2 app auth` (the sign-in door).
+            init|links|push|pairing|login|doctor|set|account-deletion|account-deletions|auth)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

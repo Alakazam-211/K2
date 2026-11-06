@@ -2669,6 +2669,17 @@ exit: 0
       ]
     },
     {
+      "name": "app auth",
+      "usage": "k2 app auth [<app>] | k2 app auth door on|off [<app>] | k2 app auth origins <app> [--origin O]… [--clear] [--json]",
+      "description": "The sign-in door: an App's own page posts passwords to K2 at /.k2/auth/* on the App's host and gets a one-time code its server swaps (k2.auth.exchange). door on|off with no app is the server's switch (the owner; it starts off); with an app, that App only. origins lists extra page origins (a bundled Tauri page). k2 study auth-pages.",
+      "args": [{"name": "app", "required": false}],
+      "flags": [
+        {"name": "--origin", "arg": "origin", "description": "origins: one page origin, such as tauri://localhost (repeat; replaces the list)."},
+        {"name": "--clear", "arg": null, "description": "origins: empty the list."},
+        {"name": "--json", "arg": null, "description": "{box{on, stored, envOverride, door}, app?{app, appId, name, door, appOff, origins[], pairingOrigins[], hosts[], labelHasDoor}, warnings?}."}
+      ]
+    },
+    {
       "name": "app updates push",
       "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]",
       "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps.",

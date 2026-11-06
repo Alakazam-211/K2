@@ -213,6 +213,11 @@ pub const ROUTES: &[Route] = &[
     // S19 (0.46.1 door): the per-call audit of an App (a passport: its own
     // workspace's Apps).
     get("/cli/app/audit", Member),
+    // 0.46.9 sign-in door: the box switch is the owner's (the handler
+    // checks); one App's door and origins the owner's, Admins' and the
+    // App's agent's.
+    get("/cli/app/auth", Admin),
+    post("/cli/app/auth/set", Admin),
     get("/cli/app/box", Admin),
     // Box services (0.46.0): read, propose and revoke are Member (a
     // passport sees its own workspace's Apps); a new one is always a held
@@ -1768,6 +1773,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skin/app-info", Public),
     // prd-app-caps-0464-v1 AC5 (0.46.4): app.rooms, an App's own pass only.
     get("/cli/skin/app-rooms", NoLogin),
+    // 0.46.9 sign-in door: the App's server swaps a door code on its
+    // gateway link (the link's App; the handler refuses off a link).
+    post("/cli/skin/auth/exchange", Public),
     post("/cli/skin/client-logs", NoLogin),
     get("/cli/skin/devices", NoLogin),
     post("/cli/skin/devices/revoke", NoLogin),

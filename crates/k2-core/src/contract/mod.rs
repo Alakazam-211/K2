@@ -775,6 +775,10 @@ mod tests {
                 // Catalog v38 (must-change at next sign-in, 0.46.6).
                 "password_change_required",
                 "password_unchanged",
+                // Catalog v51 (the sign-in door, 0.46.9): auth.exchange's
+                // refusals.
+                "bad_code",
+                "app_suspended",
                 // 0.46.7 Workbench (catalog v40): git reads on a folder that isn't a repo.
                 "not_a_repo",
                 // Catalog v50: thread.download's secret-file refusal, and

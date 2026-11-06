@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn fixtures_are_scrubbed_and_registered() {
         let secret_marks = [
-            "/Users/", "k2skn_", "k2sk_", "k2rs_", "ghp_", "gho_", "github_pat_", "xoxb-",
+            "/Users/", "k2skn_", "k2sk_", "k2rs_", "k2lgn_", "ghp_", "gho_", "github_pat_", "xoxb-",
             "xoxp-", "xoxa-", "AKIA", "Bearer ", "-----BEGIN", "@",
         ];
         for f in claude_fixtures() {

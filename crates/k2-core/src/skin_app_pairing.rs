@@ -770,12 +770,16 @@ pub fn normalize_native_origin(s: &str) -> Option<String> {
 }
 
 /// An extra universal-link path the App owns: `/`, then up to 200 of
-/// `A-Za-z0-9._~*/-`; never under `/.well-known/` (K2's own there).
+/// `A-Za-z0-9._~*/-`; never under `/.well-known/` (K2's own there) or the
+/// sign-in door's `/.k2/auth` (0.46.9).
 pub fn valid_link_path(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    let squeezed: String = lower.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
     s.starts_with('/')
         && s.len() <= 201
         && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._~*/-".contains(&b))
-        && !s.to_ascii_lowercase().starts_with("/.well-known")
+        && !lower.starts_with("/.well-known")
+        && !squeezed.starts_with(".k2/auth")
 }
 
 /// A host name (lowercase, no port, no trailing dot).

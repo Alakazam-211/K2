@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn transcript_fixtures_are_scrubbed() {
         let marks = [
-            "/Users/", "k2skn_", "k2sk_", "k2rs_", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-",
+            "/Users/", "k2skn_", "k2sk_", "k2rs_", "k2lgn_", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-",
             "xoxa-", "AKIA", "Bearer ", "-----BEGIN", "@",
         ];
         for name in [

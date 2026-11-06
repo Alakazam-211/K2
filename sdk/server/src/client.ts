@@ -19,7 +19,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 import { K2Error, fromResponse } from './errors.ts'
-import { APP_VERBS, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbRow, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts'
+import { APP_VERBS, type AppAuthSession, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbRow, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts'
+import { beginSignIn, clearSignInCookie, verifierFromCookieHeader, SIGN_IN_COOKIE, type BeginOptions, type SignInStart } from './auth.ts'
 import { SecretFile } from './pass.ts'
 import { watchAccess, watchGuestAccess, type AccessActor, type AccessChange, type OnAccessChangedOptions, type OnGuestAccessChangedOptions } from './access.ts'
 import { openSocket, type WebSocketCtor } from './socket.ts'
@@ -46,6 +47,26 @@ type Cred = { kind: 'guest'; pass: string } | { kind: 'app' } | { kind: 'default
 
 /** The verbs a call needs no pass's identity for, beyond reaching the link. */
 const LOGIN_VERB = 'guests.login' as const
+/** The sign-in door's code swap (K2 0.46.9): the App's own pass, like a login. */
+const EXCHANGE_VERB = 'auth.exchange' as const
+
+/** `k2.auth`: the sign-in door's server half (K2 0.46.9; see auth.ts). */
+export interface K2Auth {
+  /** One sign-in attempt: a fresh PKCE pair, and a Set-Cookie value keeping the verifier. Give the page only `challenge`. */
+  begin(opts?: BeginOptions): SignInStart
+  /** The verifier `begin`'s cookie holds on this request, or null. */
+  verifierFrom(req: RequestLike, cookie?: string): string | null
+  /** A Set-Cookie value that removes `begin`'s cookie. */
+  clearCookie(cookie?: string): string
+  /**
+   * Swap the door's one-time code for the person's pass: through your link
+   * with the App pass, else with the App key (`/v1/apps/<id>/auth/exchange`,
+   * scope signin or users). `device` asks for a device sign-in (a refresh
+   * token too, when the App's "Stay signed in" is on). Fails `bad_code` for
+   * a code that is used, expired, another App's, or whose verifier differs.
+   */
+  exchange(args: { code: string; verifier: string; device?: { id: string; name?: string } }): Promise<AppAuthSession>
+}
 
 /**
  * A login whose password someone else set (K2 0.46.6: the owner, an
@@ -178,7 +199,23 @@ export class K2App {
     this.WebSocketImpl = cfg.WebSocket ?? (globalThis as { WebSocket?: WebSocketCtor }).WebSocket ?? null
     this.defaultActor = this.actor({ kind: 'default' })
     this.appActor = this.actor({ kind: 'app' })
-    Object.assign(this, surfacesOf(this.defaultActor as unknown as ActorFns), { thread: this.defaultActor.thread })
+    Object.assign(this, surfacesOf(this.defaultActor as unknown as ActorFns), { thread: this.defaultActor.thread, auth: this.authApi() })
+  }
+
+  // ── the sign-in door (K2 0.46.9) ───────────────────────────────────
+
+  private authApi(): K2Auth {
+    return {
+      begin: (opts?: BeginOptions) => beginSignIn(opts),
+      verifierFrom: (req: RequestLike, cookie = SIGN_IN_COOKIE) => verifierFromCookieHeader(header(req, 'cookie'), cookie),
+      clearCookie: (cookie = SIGN_IN_COOKIE) => clearSignInCookie(cookie),
+      exchange: async (args) => {
+        if (this.passFile && this.passFile.exists()) return (await this.callAs({ kind: 'app' }, EXCHANGE_VERB, args)) as AppAuthSession
+        const raw = await this.appKey<unknown>('POST', 'auth/exchange', args)
+        const row = this.row(EXCHANGE_VERB)
+        return project(row.response, raw, row.responseNames) as AppAuthSession
+      },
+    }
   }
 
   // ── actors ─────────────────────────────────────────────────────────
@@ -345,7 +382,7 @@ export class K2App {
 
   /** The pass a call presents, or null (a login on a --cmd service: no pass needed). */
   private passFor(cred: Cred, verb: string): string | null {
-    if (verb === LOGIN_VERB) {
+    if (verb === LOGIN_VERB || verb === EXCHANGE_VERB) {
       // A login opens the link with the App's pass when it has one.
       return this.passFile && this.passFile.exists() ? this.passFile.read() : null
     }
@@ -372,7 +409,7 @@ export class K2App {
     let callArgs = args
     if (verb === LOGIN_VERB && this.appId && (args?.app === undefined || args.app === '')) callArgs = { ...args, app: this.appId }
     const req = buildRequest(row.http, callArgs)
-    const usesAppPass = verb === LOGIN_VERB || cred.kind === 'app'
+    const usesAppPass = verb === LOGIN_VERB || verb === EXCHANGE_VERB || cred.kind === 'app'
     for (let attempt = 0; ; attempt++) {
       const pass = this.passFor(cred, verb)
       const headers: Record<string, string> = { ...extraHeaders }
@@ -496,6 +533,8 @@ export interface AppKeyWhoami {
 }
 
 // The surfaces are attached at runtime (one per App verb): declare them.
-export interface K2App extends Omit<AppSurfaces, 'thread'> {
+export interface K2App extends Omit<AppSurfaces, 'thread' | 'auth'> {
   readonly thread: K2Actor['thread']
+  /** The sign-in door's server half: begin, verifierFrom, clearCookie, exchange (K2 0.46.9). */
+  readonly auth: K2Auth
 }

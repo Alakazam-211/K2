@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { K2App, type K2Config } from './client.ts'
 import { K2Error } from './errors.ts'
 
-export { K2App, type AppGuestMustChange, type K2Actor, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts'
+export { K2App, type AppGuestMustChange, type K2Actor, type K2Auth, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts'
 // 0.46.5 activity SDK: thread.watchActivity's types, and @k2/activity's
 // words for drawing a turn the way K2 does.
 export type { AccessChange, OnAccessChangedOptions, OnGuestAccessChangedOptions } from './access.ts'
@@ -38,6 +38,8 @@ export {
   type DoorUploadStatus,
   type UploadToDoorOptions,
 } from './transfer.ts'
+// 0.46.9: the sign-in door's PKCE helpers (k2.auth uses them).
+export { beginSignIn, clearSignInCookie, pkce, verifierFromCookieHeader, SIGN_IN_COOKIE, type BeginOptions, type Pkce, type SignInStart } from './auth.ts'
 export {
   applyChannelOps,
   channelOp,

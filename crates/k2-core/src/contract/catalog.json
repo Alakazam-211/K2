@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 52,
+  "catalogVersion": 53,
   "caps": [
     {
       "name": "agents:read",
@@ -349,6 +349,8 @@
     {"code": "all_suppressed", "doc": "Every recipient is suppressed (a hard bounce, a spam complaint or an unsubscribe), so nothing was sent."},
     {"code": "password_change_required", "doc": "The password is right, but someone else set it (the owner, an admin, an agent, an App key, or K2 made it): no pass. The answer (403) carries mustChangePassword, changeToken (one use, 15 minutes), changeUrl and changePath. Send the person's browser to changeUrl; they choose a new password, then sign in with it."},
     {"code": "password_unchanged", "doc": "The new password is the temporary one the person was given: they choose another. The change token still works."},
+    {"code": "bad_code", "doc": "The sign-in door code is unknown, used, expired, for another App, or its verifier does not match (or the password changed since): sign in again."},
+    {"code": "app_suspended", "doc": "The App is suspended: it signs nobody in until its owner resumes it."},
     {"code": "not_a_repo", "doc": "The agent's folder isn't in a git repository, so there is no branch, diff or log to show."},
     {"code": "attachment_secret", "doc": "The file looks like a secret now, so K2 won't let it leave the agent's server. Secrets travel through the vault (k2 vault)."},
     {"code": "sidecar_live", "doc": "The agent is running. End it first (agents.end), then archive it."},
@@ -7044,6 +7046,205 @@
       ],
       "doc": "Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.",
       "example": "const {pass} = await k2.login({username, password})"
+    },
+    {
+      "verb": "auth.exchange",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-hosted-sign-in-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/auth/exchange",
+          "responseNames": {
+            "pass": "token"
+          },
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "The one-time code (k2lgn_...) the sign-in door gave your page: one use, 60 seconds."
+            },
+            "verifier": {
+              "type": "string",
+              "description": "The PKCE verifier your server made for this attempt (43 to 128 characters); the page only ever saw its S256 challenge."
+            },
+            "device": {
+              "title": "AppDevice",
+              "type": "object",
+              "description": "Name a device to stay signed in: the answer adds a refresh token (when the owner left Stay signed in on).",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "code",
+            "verifier"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppAuthSession",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pass": {
+            "type": "string",
+            "description": "The guest's session pass (k2skn_…): send it as Authorization: Bearer."
+          },
+          "username": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Project ids."
+          },
+          "roomHandles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "caps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every cap in any room."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roomAccess": {
+            "type": "array",
+            "items": {
+              "title": "AppRoomAccess",
+              "type": "object",
+              "properties": {
+                "handle": {
+                  "type": "string"
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "handle",
+                "caps"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "app": {
+            "type": "string",
+            "description": "host or the App's service id."
+          },
+          "refresh": {
+            "type": "string",
+            "description": "With device: the refresh token (k2skr_...). Store it; guests.refresh trades it."
+          },
+          "passExpiresAt": {
+            "type": "integer",
+            "description": "With device: when the pass ends, seconds since the epoch."
+          },
+          "refreshExpiresAt": {
+            "type": "integer",
+            "description": "With device: when the refresh token ends unless used, seconds since the epoch."
+          },
+          "device": {
+            "title": "AppDeviceRef",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "mustChangePassword": {
+            "type": "boolean",
+            "description": "Always false: a password someone else set never reaches a code (the door answers password_change_required first)."
+          },
+          "authAt": {
+            "type": "integer",
+            "description": "When K2 checked the password, seconds since the epoch: the recent-auth stamp (a pass this young starts pairing.start with no password)."
+          },
+          "via": {
+            "type": "string",
+            "description": "Which door verb made the code: sign-in, set-password or change-password."
+          }
+        },
+        "required": [
+          "ok",
+          "pass",
+          "username",
+          "principalId",
+          "rooms",
+          "roomHandles",
+          "caps",
+          "role",
+          "roomAccess",
+          "app",
+          "mustChangePassword",
+          "authAt",
+          "via"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "bad_code",
+        "app_suspended",
+        "usage",
+        "failed"
+      ],
+      "doc": "Swap a sign-in door code for the person's pass: your page posted the password to /.k2/auth/* on your own host, K2 answered with a one-time code, and your server sends it here with its PKCE verifier. No password reaches your server.",
+      "example": "const s = await k2.auth.exchange({code, verifier})"
     },
     {
       "verb": "guests.rooms",

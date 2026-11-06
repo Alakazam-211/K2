@@ -55,7 +55,12 @@ pub(crate) fn fdct4x4(src: &[i32; 16], out: &mut [i32; 16]) {
 pub(crate) fn fwht4x4(src: &[i32; 16], out: &mut [i32; 16]) {
     // The inverse is Y = H X H / 8 with H H = 4I (H symmetric), so X = H Y H / 2.
     let h = |x: [i32; 4]| -> [i32; 4] {
-        [x[0] + x[1] + x[2] + x[3], x[0] + x[1] - x[2] - x[3], x[0] - x[1] - x[2] + x[3], x[0] - x[1] + x[2] - x[3]]
+        [
+            x[0] + x[1] + x[2] + x[3],
+            x[0] + x[1] - x[2] - x[3],
+            x[0] - x[1] - x[2] + x[3],
+            x[0] - x[1] + x[2] - x[3],
+        ]
     };
     let mut tmp = [0i32; 16];
     for c in 0..4 {
@@ -68,7 +73,11 @@ pub(crate) fn fwht4x4(src: &[i32; 16], out: &mut [i32; 16]) {
         let row = h([tmp[r * 4], tmp[r * 4 + 1], tmp[r * 4 + 2], tmp[r * 4 + 3]]);
         for c in 0..4 {
             let v = row[c];
-            out[r * 4 + c] = if v >= 0 { (v + 1) >> 1 } else { -((-v + 1) >> 1) };
+            out[r * 4 + c] = if v >= 0 {
+                (v + 1) >> 1
+            } else {
+                -((-v + 1) >> 1)
+            };
         }
     }
 }
@@ -104,7 +113,8 @@ pub(crate) fn quantize(v: i32, step: i32, bias: i32) -> i32 {
     // boundary it can round up by one, which only nudges the rounding
     // offset; the decoder sees whatever level we choose.
     static RECIPROCALS: std::sync::OnceLock<[u64; 512]> = std::sync::OnceLock::new();
-    let inv = RECIPROCALS.get_or_init(|| std::array::from_fn(|d| (1u64 << 32).div_ceil(d.max(1) as u64 * 256)));
+    let inv = RECIPROCALS
+        .get_or_init(|| std::array::from_fn(|d| (1u64 << 32).div_ceil(d.max(1) as u64 * 256)));
     let num = (a * 256 + bias * step) as u64;
     let l = ((num * inv[step as usize]) >> 32).min(MAX_LEVEL as u64) as i32;
     if v < 0 {

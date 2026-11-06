@@ -158,7 +158,11 @@ impl fmt::Display for EncodeError {
         match self {
             EncodeError::InvalidConfig(why) => write!(f, "invalid encoder config: {why}"),
             EncodeError::SizeMismatch { expected, got } => {
-                write!(f, "picture is {}x{}, the encoder is {}x{}", got.0, got.1, expected.0, expected.1)
+                write!(
+                    f,
+                    "picture is {}x{}, the encoder is {}x{}",
+                    got.0, got.1, expected.0, expected.1
+                )
             }
             EncodeError::InvalidPicture => f.write_str("picture planes are too short for its size"),
             EncodeError::Internal(why) => write!(f, "internal encoder error: {why}"),
@@ -185,7 +189,11 @@ impl Encoder {
     /// `None` when rate control skips the frame. `force_keyframe` (or an
     /// earlier [`request_keyframe`](Self::request_keyframe)) makes this
     /// frame a keyframe.
-    pub fn encode(&mut self, picture: &Picture<'_>, force_keyframe: bool) -> Result<Option<EncodedFrame>, EncodeError> {
+    pub fn encode(
+        &mut self,
+        picture: &Picture<'_>,
+        force_keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, EncodeError> {
         self.core.encode(picture, force_keyframe)
     }
 

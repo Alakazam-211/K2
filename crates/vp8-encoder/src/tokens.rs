@@ -64,7 +64,14 @@ fn extra<S: TokenSink>(sink: &mut S, probs: &[u8], v: i32) {
 
 /// Codes one block's levels (natural order). `eob` is one past the last
 /// non-zero coefficient in zigzag order, at least `first`.
-pub(crate) fn write_block<S: TokenSink>(sink: &mut S, plane: usize, ctx: usize, first: usize, levels: &[i16], eob: usize) {
+pub(crate) fn write_block<S: TokenSink>(
+    sink: &mut S,
+    plane: usize,
+    ctx: usize,
+    first: usize,
+    levels: &[i16],
+    eob: usize,
+) {
     let mut c = first;
     let mut ctx = ctx;
     if eob <= first {
@@ -164,7 +171,13 @@ pub(crate) fn eob_of(levels: &[i16], first: usize) -> usize {
 
 /// Codes all blocks of a macroblock in decoder order (Y2, Y, U, V) and
 /// updates the token contexts. `levels` holds 25 blocks of 16, Y2 last.
-pub(crate) fn write_mb<S: TokenSink>(sink: &mut S, levels: &[i16; 400], has_y2: bool, above: &mut [u8; 9], left: &mut [u8; 9]) {
+pub(crate) fn write_mb<S: TokenSink>(
+    sink: &mut S,
+    levels: &[i16; 400],
+    has_y2: bool,
+    above: &mut [u8; 9],
+    left: &mut [u8; 9],
+) {
     let (y_plane, y_first) = if has_y2 {
         let ctx = (above[8] + left[8]) as usize;
         let lv = &levels[384..400];

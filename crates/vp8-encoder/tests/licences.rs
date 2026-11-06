@@ -30,7 +30,10 @@ const TARGETS: &[&str] = &[
 /// the legacy `a/b` (= OR). An exception only adds permissions, so
 /// `X WITH Y` is allowed when `X` is.
 fn spdx_allowed(expr: &str) -> Result<bool, String> {
-    let spaced = expr.replace('(', " ( ").replace(')', " ) ").replace('/', " OR ");
+    let spaced = expr
+        .replace('(', " ( ")
+        .replace(')', " ) ")
+        .replace('/', " OR ");
     let tokens: Vec<&str> = spaced.split_whitespace().collect();
     let mut pos = 0;
     let v = or_expr(&tokens, &mut pos)?;
@@ -108,7 +111,10 @@ fn metadata(target: &str) -> Value {
 #[test]
 fn spdx_parser() {
     assert_eq!(spdx_allowed("MIT OR Apache-2.0"), Ok(true));
-    assert_eq!(spdx_allowed("(MIT OR Apache-2.0) AND Unicode-3.0"), Ok(true));
+    assert_eq!(
+        spdx_allowed("(MIT OR Apache-2.0) AND Unicode-3.0"),
+        Ok(true)
+    );
     assert_eq!(spdx_allowed("MIT/Apache-2.0"), Ok(true));
     assert_eq!(spdx_allowed("MPL-2.0"), Ok(false));
     assert_eq!(spdx_allowed("MIT AND MPL-2.0"), Ok(false));
@@ -141,7 +147,10 @@ fn dependency_licences_are_on_the_allowlist() {
             .expect("vp8-encoder in the workspace");
         let root_id = root["id"].as_str().expect("id").to_string();
         assert_eq!(root["license"], "(MIT OR Apache-2.0) AND BSD-3-Clause");
-        assert_eq!(spdx_allowed(root["license"].as_str().expect("licence")), Ok(true));
+        assert_eq!(
+            spdx_allowed(root["license"].as_str().expect("licence")),
+            Ok(true)
+        );
 
         let mut seen = BTreeSet::new();
         let mut queue = VecDeque::from([root_id.clone()]);
@@ -149,10 +158,14 @@ fn dependency_licences_are_on_the_allowlist() {
             if !seen.insert(id.clone()) {
                 continue;
             }
-            let node = nodes.get(&id).unwrap_or_else(|| panic!("no resolve node for {id}"));
+            let node = nodes
+                .get(&id)
+                .unwrap_or_else(|| panic!("no resolve node for {id}"));
             for dep in node["deps"].as_array().expect("deps") {
                 let kinds = dep["dep_kinds"].as_array().expect("dep_kinds");
-                let shipped = kinds.iter().any(|k| k["kind"].is_null() || k["kind"] == "build");
+                let shipped = kinds
+                    .iter()
+                    .any(|k| k["kind"].is_null() || k["kind"] == "build");
                 if shipped {
                     queue.push_back(dep["pkg"].as_str().expect("pkg").to_string());
                 }
@@ -169,7 +182,9 @@ fn dependency_licences_are_on_the_allowlist() {
             });
             match spdx_allowed(licence) {
                 Ok(true) => {}
-                Ok(false) => panic!("{name} {version}: {licence} is not on the allowlist ({target})"),
+                Ok(false) => {
+                    panic!("{name} {version}: {licence} is not on the allowlist ({target})")
+                }
                 Err(e) => panic!("{name} {version}: can't parse {licence:?}: {e}"),
             }
             report.insert(format!("{name} {version}"), licence.to_string());
@@ -181,5 +196,8 @@ fn dependency_licences_are_on_the_allowlist() {
     // Only vp8-decoder: anything new here needs a licence review.
     let names: Vec<&String> = report.keys().collect();
     assert_eq!(names.len(), 1, "unexpected dependencies: {report:?}");
-    assert!(names[0].starts_with("vp8-decoder "), "unexpected dependencies: {report:?}");
+    assert!(
+        names[0].starts_with("vp8-decoder "),
+        "unexpected dependencies: {report:?}"
+    );
 }

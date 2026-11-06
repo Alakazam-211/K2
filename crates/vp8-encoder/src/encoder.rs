@@ -11,9 +11,11 @@
 
 use vp8_decoder::bool_encoder::BoolEncoder;
 use vp8_decoder::idct;
-use vp8_decoder::modes::{find_near_mvs, implied_bmode, Bounds, MbInfo, Mv};
-use vp8_decoder::predict::{self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUMA_WS_SIZE, LUMA_WS_STRIDE};
 use vp8_decoder::loop_filter;
+use vp8_decoder::modes::{find_near_mvs, implied_bmode, Bounds, MbInfo, Mv};
+use vp8_decoder::predict::{
+    self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUMA_WS_SIZE, LUMA_WS_STRIDE,
+};
 use vp8_decoder::tables::*;
 use vp8_decoder::Picture;
 
@@ -40,7 +42,11 @@ fn bit_cost(prob: u8, bit: bool) -> u32 {
         t[0] = t[1];
         t
     });
-    table[if bit { 256 - prob as usize } else { prob as usize }]
+    table[if bit {
+        256 - prob as usize
+    } else {
+        prob as usize
+    }]
 }
 
 /// Cost of a tree-coded value in 1/256 bits.
@@ -80,7 +86,11 @@ fn sad16(a: &[u8], a_stride: usize, b: &[u8], b_stride: usize, n: usize) -> u32 
     for r in 0..n {
         let ra = &a[r * a_stride..r * a_stride + n];
         let rb = &b[r * b_stride..r * b_stride + n];
-        s += ra.iter().zip(rb).map(|(&x, &y)| x.abs_diff(y) as u32).sum::<u32>();
+        s += ra
+            .iter()
+            .zip(rb)
+            .map(|(&x, &y)| x.abs_diff(y) as u32)
+            .sum::<u32>();
     }
     s
 }
@@ -158,10 +168,14 @@ struct Coded {
 impl Core {
     pub(crate) fn new(cfg: EncoderConfig) -> Result<Self, EncodeError> {
         if cfg.width == 0 || cfg.height == 0 || cfg.width > 16383 || cfg.height > 16383 {
-            return Err(EncodeError::InvalidConfig("width and height must be 1 to 16383"));
+            return Err(EncodeError::InvalidConfig(
+                "width and height must be 1 to 16383",
+            ));
         }
         if cfg.fps == 0 || cfg.bitrate_bps == 0 {
-            return Err(EncodeError::InvalidConfig("fps and bitrate must be above zero"));
+            return Err(EncodeError::InvalidConfig(
+                "fps and bitrate must be above zero",
+            ));
         }
         let mb_cols = (cfg.width as usize).div_ceil(16);
         let mb_rows = (cfg.height as usize).div_ceil(16);
@@ -172,9 +186,21 @@ impl Core {
             TemporalLayers::L1T2 => [1.25, 0.75, 0.75],
             TemporalLayers::L1T3 => [1.4, 1.0, 0.8],
         };
-        let rc = RateControl::new(cfg.bitrate_bps, cfg.max_bitrate_bps, cfg.fps, cfg.width * cfg.height, weights);
+        let rc = RateControl::new(
+            cfg.bitrate_bps,
+            cfg.max_bitrate_bps,
+            cfg.fps,
+            cfg.width * cfg.height,
+            weights,
+        );
         let search_stride = aw + 2 * PAD;
-        let plane_set = || [vec![0u8; aw * ah], vec![0u8; aw * ah / 4], vec![0u8; aw * ah / 4]];
+        let plane_set = || {
+            [
+                vec![0u8; aw * ah],
+                vec![0u8; aw * ah / 4],
+                vec![0u8; aw * ah / 4],
+            ]
+        };
         #[cfg(debug_assertions)]
         let check = {
             let mut d = vp8_decoder::Decoder::new();
@@ -212,10 +238,15 @@ impl Core {
         self.cfg.bitrate_bps = bitrate_bps.max(1);
         self.cfg.max_bitrate_bps = self.cfg.max_bitrate_bps.max(self.cfg.bitrate_bps);
         self.cfg.fps = fps.max(1);
-        self.rc.set_rates(self.cfg.bitrate_bps, self.cfg.max_bitrate_bps, self.cfg.fps);
+        self.rc
+            .set_rates(self.cfg.bitrate_bps, self.cfg.max_bitrate_bps, self.cfg.fps);
     }
 
-    pub(crate) fn encode(&mut self, pic: &Picture<'_>, force_keyframe: bool) -> Result<Option<EncodedFrame>, EncodeError> {
+    pub(crate) fn encode(
+        &mut self,
+        pic: &Picture<'_>,
+        force_keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, EncodeError> {
         if pic.width != self.cfg.width || pic.height != self.cfg.height {
             return Err(EncodeError::SizeMismatch {
                 expected: (self.cfg.width, self.cfg.height),
@@ -232,7 +263,10 @@ impl Core {
         {
             return Err(EncodeError::InvalidPicture);
         }
-        let interval_due = self.cfg.keyframe_interval.is_some_and(|n| n > 0 && self.frames_since_key >= n as u64);
+        let interval_due = self
+            .cfg
+            .keyframe_interval
+            .is_some_and(|n| n > 0 && self.frames_since_key >= n as u64);
         let key = !self.started || force_keyframe || self.key_pending || interval_due;
         if !key && self.rc.should_drop() {
             self.rc.dropped();
@@ -275,10 +309,34 @@ impl Core {
     /// repeating edge pixels into the padding.
     fn load_source(&mut self, pic: &Picture<'_>) {
         let (w, h) = (pic.width as usize, pic.height as usize);
-        copy_padded(&mut self.src[0], self.aw, self.ah, pic.y, pic.y_stride, w, h);
+        copy_padded(
+            &mut self.src[0],
+            self.aw,
+            self.ah,
+            pic.y,
+            pic.y_stride,
+            w,
+            h,
+        );
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-        copy_padded(&mut self.src[1], self.aw / 2, self.ah / 2, pic.u, pic.uv_stride, cw, ch);
-        copy_padded(&mut self.src[2], self.aw / 2, self.ah / 2, pic.v, pic.uv_stride, cw, ch);
+        copy_padded(
+            &mut self.src[1],
+            self.aw / 2,
+            self.ah / 2,
+            pic.u,
+            pic.uv_stride,
+            cw,
+            ch,
+        );
+        copy_padded(
+            &mut self.src[2],
+            self.aw / 2,
+            self.ah / 2,
+            pic.v,
+            pic.uv_stride,
+            cw,
+            ch,
+        );
     }
 
     fn encode_frame(&mut self, key: bool, q: u8, layer: &LayerFrame) -> Vec<u8> {
@@ -290,7 +348,13 @@ impl Core {
         }
         if !key {
             let reference = &self.refs[ref_slot(layer.reference)];
-            fill_search(&mut self.search, self.search_stride, &reference[0], self.aw, self.ah);
+            fill_search(
+                &mut self.search,
+                self.search_stride,
+                &reference[0],
+                self.aw,
+                self.ah,
+            );
         }
         let stride = self.mb_cols + 1;
         for row in 0..self.mb_rows {
@@ -332,11 +396,23 @@ impl Core {
                         y_stride: aw,
                         uv_stride: caw,
                     };
-                    loop_filter::filter_mb(planes, row, col, filter_level as i32, 0, key, inner, false);
+                    loop_filter::filter_mb(
+                        planes,
+                        row,
+                        col,
+                        filter_level as i32,
+                        0,
+                        key,
+                        inner,
+                        false,
+                    );
                 }
             }
         }
-        for (slot, refresh) in [(0, key || layer.refresh_last), (1, key || layer.refresh_golden)] {
+        for (slot, refresh) in [
+            (0, key || layer.refresh_last),
+            (1, key || layer.refresh_golden),
+        ] {
             if refresh {
                 for p in 0..3 {
                     self.refs[slot][p].copy_from_slice(&self.rec[p]);
@@ -350,7 +426,9 @@ impl Core {
     #[cfg(debug_assertions)]
     fn check_references(&mut self, data: &[u8], layer: &LayerFrame) -> Result<(), EncodeError> {
         if let Err(e) = self.check.decode(data) {
-            return Err(EncodeError::Internal(format!("own output failed to decode: {e}")));
+            return Err(EncodeError::Internal(format!(
+                "own output failed to decode: {e}"
+            )));
         }
         for (slot, which) in [(0, LAST_FRAME), (1, GOLDEN_FRAME)] {
             let r = self.check.reference_frame(which).expect("decoded");
@@ -368,18 +446,39 @@ impl Core {
     }
 
     /// Intra-codes a macroblock (16x16 or, on keyframes, 4x4 modes) into `rec`.
-    fn code_intra(&mut self, row: usize, col: usize, quant: &Quant, lambda: u32, allow_bpred: bool) -> Coded {
+    fn code_intra(
+        &mut self,
+        row: usize,
+        col: usize,
+        quant: &Quant,
+        lambda: u32,
+        allow_bpred: bool,
+    ) -> Coded {
         let key = allow_bpred;
         let mut levels = [0i16; 400];
         let mut info = MbInfo::default();
         let st = LUMA_WS_STRIDE;
         let aw = self.aw;
         let mut ws = [0u8; LUMA_WS_SIZE];
-        predict::fill_ws_border(&mut ws, st, &self.rec[0], aw, 16, col, row, true, col + 1 == self.mb_cols);
+        predict::fill_ws_border(
+            &mut ws,
+            st,
+            &self.rec[0],
+            aw,
+            16,
+            col,
+            row,
+            true,
+            col + 1 == self.mb_cols,
+        );
         let src_pos = row * 16 * aw + col * 16;
 
         // Best whole-block mode.
-        let ymode_probs: &[u8] = if key { &KF_YMODE_PROBS } else { &DEFAULT_YMODE_PROBS };
+        let ymode_probs: &[u8] = if key {
+            &KF_YMODE_PROBS
+        } else {
+            &DEFAULT_YMODE_PROBS
+        };
         let ytree: &[i8] = if key { &KF_YMODE_TREE } else { &YMODE_TREE };
         let mut best = (u32::MAX, DC_PRED);
         for mode in [DC_PRED, V_PRED, H_PRED, TM_PRED] {
@@ -403,7 +502,8 @@ impl Core {
             {
                 let (top, rest) = w.split_at_mut(st);
                 for k in 1..4 {
-                    rest[(4 * k - 1) * st + 17..(4 * k - 1) * st + 21].copy_from_slice(&top[17..21]);
+                    rest[(4 * k - 1) * st + 17..(4 * k - 1) * st + 21]
+                        .copy_from_slice(&top[17..21]);
                 }
             }
             let mut modes = [B_DC_PRED; 16];
@@ -412,8 +512,16 @@ impl Core {
             for b in 0..16 {
                 let pos = (1 + (b >> 2) * 4) * st + 1 + (b & 3) * 4;
                 let a = if b < 4 { above[b + 12] } else { modes[b - 4] };
-                let l = if b & 3 == 0 { left[b + 3] } else { modes[b - 1] };
-                let probs: &[u8] = if key { &KF_BMODE_PROBS[a as usize][l as usize] } else { &BMODE_PROBS };
+                let l = if b & 3 == 0 {
+                    left[b + 3]
+                } else {
+                    modes[b - 1]
+                };
+                let probs: &[u8] = if key {
+                    &KF_BMODE_PROBS[a as usize][l as usize]
+                } else {
+                    &BMODE_PROBS
+                };
                 let sp = src_pos + (b >> 2) * 4 * aw + (b & 3) * 4;
                 let mut best_b = (u32::MAX, B_DC_PRED);
                 for mode in 0..10u8 {
@@ -447,7 +555,17 @@ impl Core {
             info.y_mode = best.1;
             info.bmodes = [implied_bmode(best.1); 16];
             predict::predict_block(&mut ws, st, 16, best.1, row > 0, col > 0);
-            code_luma_y2(&self.src[0], src_pos, aw, &mut ws, st, 1, quant, if key { 112 } else { 96 }, &mut levels);
+            code_luma_y2(
+                &self.src[0],
+                src_pos,
+                aw,
+                &mut ws,
+                st,
+                1,
+                quant,
+                if key { 112 } else { 96 },
+                &mut levels,
+            );
             predict::store_ws(&ws, st, &mut self.rec[0], aw, 16, col, row);
         }
 
@@ -459,7 +577,11 @@ impl Core {
             predict::fill_ws_border(w, cst, &self.rec[1 + p], caw, 8, col, row, false, false);
         }
         let csrc = row * 8 * caw + col * 8;
-        let uv_probs: &[u8] = if key { &KF_UV_MODE_PROBS } else { &DEFAULT_UV_MODE_PROBS };
+        let uv_probs: &[u8] = if key {
+            &KF_UV_MODE_PROBS
+        } else {
+            &DEFAULT_UV_MODE_PROBS
+        };
         let mut best_uv = (u32::MAX, DC_PRED);
         for mode in [DC_PRED, V_PRED, H_PRED, TM_PRED] {
             let mut sad = 0;
@@ -480,7 +602,18 @@ impl Core {
                 let pos = (1 + (j >> 1) * 4) * cst + 1 + (j & 1) * 4;
                 let sp = csrc + (j >> 1) * 4 * caw + (j & 1) * 4;
                 let b = 16 + p * 4 + j;
-                code_block(&self.src[1 + p], sp, caw, w, pos, cst, quant.uv, 112, 0, &mut levels[b * 16..b * 16 + 16]);
+                code_block(
+                    &self.src[1 + p],
+                    sp,
+                    caw,
+                    w,
+                    pos,
+                    cst,
+                    quant.uv,
+                    112,
+                    0,
+                    &mut levels[b * 16..b * 16 + 16],
+                );
             }
             predict::store_ws(w, cst, &mut self.rec[1 + p], caw, 8, col, row);
         }
@@ -488,14 +621,27 @@ impl Core {
     }
 
     /// Codes an interframe macroblock: motion search, mode choice (or intra), residual.
-    fn code_inter(&mut self, row: usize, col: usize, quant: &Quant, lambda: u32, reference: u8) -> Coded {
+    fn code_inter(
+        &mut self,
+        row: usize,
+        col: usize,
+        quant: &Quant,
+        lambda: u32,
+        reference: u8,
+    ) -> Coded {
         let stride = self.mb_cols + 1;
         let i = (row + 1) * stride + col + 1;
         let aw = self.aw;
         let x = col * 16;
         let y = row * 16;
         let src_pos = y * aw + x;
-        let (near, cnt) = find_near_mvs(&self.mbs[i - stride], &self.mbs[i - 1], &self.mbs[i - stride - 1], reference, &[false; 4]);
+        let (near, cnt) = find_near_mvs(
+            &self.mbs[i - stride],
+            &self.mbs[i - 1],
+            &self.mbs[i - stride - 1],
+            reference,
+            &[false; 4],
+        );
         let bounds = Bounds::for_mb(row, col, self.mb_rows, self.mb_cols);
         let probs = [
             MODE_CONTEXTS[cnt[0] as usize][0],
@@ -525,11 +671,17 @@ impl Core {
         };
         let sad_q = |qx: i32, qy: i32| -> u32 { sad_subpel(src, aw, search, ss, x, y, qx, qy) };
         let new_cost = |qx: i32, qy: i32| -> u32 {
-            mode_cost(NEWMV) + mv_component_cost(qx - best_mv.x as i32 / 2) + mv_component_cost(qy - best_mv.y as i32 / 2)
+            mode_cost(NEWMV)
+                + mv_component_cost(qx - best_mv.x as i32 / 2)
+                + mv_component_cost(qy - best_mv.y as i32 / 2)
         };
 
         let zero_sad = sad_q(0, 0);
-        let mut choice = (zero_sad * 256 + lambda * mode_cost(ZEROMV), ZEROMV, Mv::ZERO);
+        let mut choice = (
+            zero_sad * 256 + lambda * mode_cost(ZEROMV),
+            ZEROMV,
+            Mv::ZERO,
+        );
         for (m, mv) in [(NEARESTMV, nearest), (NEARMV, nearv)] {
             let (qx, qy) = (mv.x as i32 / 2, mv.y as i32 / 2);
             if !mv.is_zero() && in_range(qx, qy) {
@@ -544,7 +696,8 @@ impl Core {
             // The search compares every other row (half the work); the
             // final choice below uses the full block.
             let half_cost = |qx: i32, qy: i32| -> u32 {
-                sad_subpel_rows(src, aw, search, ss, x, y, qx, qy, 2) * 512 + lambda * new_cost(qx, qy)
+                sad_subpel_rows(src, aw, search, ss, x, y, qx, qy, 2) * 512
+                    + lambda * new_cost(qx, qy)
             };
             // Full-pixel diamond search from the best candidate.
             let mut starts = vec![(0i32, 0i32)];
@@ -583,7 +736,16 @@ impl Core {
             // four nearest), with a bilinear estimate of the six-tap filter.
             let mut q = (best.1 * 4, best.2 * 4);
             let mut qcost = best.0;
-            let eight = [(-2, -2), (0, -2), (2, -2), (-2, 0), (2, 0), (-2, 2), (0, 2), (2, 2)];
+            let eight = [
+                (-2, -2),
+                (0, -2),
+                (2, -2),
+                (-2, 0),
+                (2, 0),
+                (-2, 2),
+                (0, 2),
+                (2, 2),
+            ];
             let four = [(0, -1), (-1, 0), (1, 0), (0, 1)];
             for pattern in [&eight[..], &four[..]] {
                 let centre = q;
@@ -612,7 +774,11 @@ impl Core {
             } else {
                 NEWMV
             };
-            let rate = if mode == NEWMV { new_cost(q.0, q.1) } else { mode_cost(mode) };
+            let rate = if mode == NEWMV {
+                new_cost(q.0, q.1)
+            } else {
+                mode_cost(mode)
+            };
             let c = sad_q(q.0, q.1) * 256 + lambda * rate;
             if c < choice.0 {
                 choice = (c, mode, mv);
@@ -622,12 +788,28 @@ impl Core {
         // Intra instead, if clearly better (it costs more in residual).
         if choice.0 > 256 * 256 * 3 {
             let mut ws = [0u8; LUMA_WS_SIZE];
-            predict::fill_ws_border(&mut ws, LUMA_WS_STRIDE, &self.rec[0], aw, 16, col, row, true, col + 1 == self.mb_cols);
+            predict::fill_ws_border(
+                &mut ws,
+                LUMA_WS_STRIDE,
+                &self.rec[0],
+                aw,
+                16,
+                col,
+                row,
+                true,
+                col + 1 == self.mb_cols,
+            );
             let mut best_intra = u32::MAX;
             for mode in [DC_PRED, V_PRED, H_PRED, TM_PRED] {
                 let mut w = ws;
                 predict::predict_block(&mut w, LUMA_WS_STRIDE, 16, mode, row > 0, col > 0);
-                let sad = sad16(&w[LUMA_WS_STRIDE + 1..], LUMA_WS_STRIDE, &self.src[0][src_pos..], aw, 16);
+                let sad = sad16(
+                    &w[LUMA_WS_STRIDE + 1..],
+                    LUMA_WS_STRIDE,
+                    &self.src[0][src_pos..],
+                    aw,
+                    16,
+                );
                 best_intra = best_intra.min(sad * 256 + lambda * 256 * 6);
             }
             if best_intra + 256 * 256 < choice.0 {
@@ -667,7 +849,17 @@ impl Core {
             &predict::SIXTAP_FILTERS,
             false,
         );
-        code_luma_y2(&self.src[0], src_pos, aw, &mut self.rec[0], src_pos, 0, quant, 96, &mut levels);
+        code_luma_y2(
+            &self.src[0],
+            src_pos,
+            aw,
+            &mut self.rec[0],
+            src_pos,
+            0,
+            quant,
+            96,
+            &mut levels,
+        );
         // Chroma with the decoder's derived MV.
         let cx = mv.x as i32;
         let cy = mv.y as i32;
@@ -700,7 +892,18 @@ impl Core {
                 let off = (j >> 1) * 4 * caw + (j & 1) * 4;
                 let b = 16 + p * 4 + j;
                 let (src_plane, rec_plane) = (&self.src[1 + p], &mut self.rec[1 + p]);
-                code_block(src_plane, cpos + off, caw, rec_plane, cpos + off, caw, quant.uv, 96, 0, &mut levels[b * 16..b * 16 + 16]);
+                code_block(
+                    src_plane,
+                    cpos + off,
+                    caw,
+                    rec_plane,
+                    cpos + off,
+                    caw,
+                    quant.uv,
+                    96,
+                    0,
+                    &mut levels[b * 16..b * 16 + 16],
+                );
             }
         }
         Coded { info, levels }
@@ -724,11 +927,16 @@ impl Core {
                         if total == 0 {
                             continue;
                         }
-                        let new = ((n0 as u64 * 256 + total as u64 / 2) / total as u64).clamp(1, 255) as u8;
+                        let new = ((n0 as u64 * 256 + total as u64 / 2) / total as u64)
+                            .clamp(1, 255) as u8;
                         let old = probs[i][j][k][l];
-                        let cost = |p: u8| n0 as u64 * bit_cost(p, false) as u64 + n1 as u64 * bit_cost(p, true) as u64;
+                        let cost = |p: u8| {
+                            n0 as u64 * bit_cost(p, false) as u64
+                                + n1 as u64 * bit_cost(p, true) as u64
+                        };
                         let up = COEFF_UPDATE_PROBS[i][j][k][l];
-                        let overhead = 8 * 256 + bit_cost(up, true) as u64 - bit_cost(up, false) as u64;
+                        let overhead =
+                            8 * 256 + bit_cost(up, true) as u64 - bit_cost(up, false) as u64;
                         if cost(new) + overhead < cost(old) {
                             probs[i][j][k][l] = new;
                             updates[i][j][k][l] = true;
@@ -795,8 +1003,8 @@ impl Core {
             h.write_literal(0, 2); // nothing copied to alt-ref
             h.write_bit(false); // golden sign bias
             h.write_bit(false); // alt-ref sign bias
-            // Probability updates last for this frame only, so a lost or
-            // dropped frame never desynchronises a receiver's probabilities.
+                                // Probability updates last for this frame only, so a lost or
+                                // dropped frame never desynchronises a receiver's probabilities.
             h.write_bit(false);
             h.write_bit(layer.refresh_last);
         }
@@ -836,9 +1044,21 @@ impl Core {
                         let above = &self.mbs[i - stride];
                         let left = &self.mbs[i - 1];
                         for b in 0..16 {
-                            let a = if b < 4 { above.bmodes[b + 12] } else { mb.bmodes[b - 4] };
-                            let l = if b & 3 == 0 { left.bmodes[b + 3] } else { mb.bmodes[b - 1] };
-                            h.write_tree(&BMODE_TREE, &KF_BMODE_PROBS[a as usize][l as usize], mb.bmodes[b]);
+                            let a = if b < 4 {
+                                above.bmodes[b + 12]
+                            } else {
+                                mb.bmodes[b - 4]
+                            };
+                            let l = if b & 3 == 0 {
+                                left.bmodes[b + 3]
+                            } else {
+                                mb.bmodes[b - 1]
+                            };
+                            h.write_tree(
+                                &BMODE_TREE,
+                                &KF_BMODE_PROBS[a as usize][l as usize],
+                                mb.bmodes[b],
+                            );
                         }
                     }
                     h.write_tree(&UV_MODE_TREE, &KF_UV_MODE_PROBS, mb.uv_mode);
@@ -859,7 +1079,13 @@ impl Core {
                 if mb.ref_frame != LAST_FRAME {
                     h.write(prob_golden, mb.ref_frame == ALTREF_FRAME);
                 }
-                let (near, cnt) = find_near_mvs(&self.mbs[i - stride], &self.mbs[i - 1], &self.mbs[i - stride - 1], mb.ref_frame, &[false; 4]);
+                let (near, cnt) = find_near_mvs(
+                    &self.mbs[i - stride],
+                    &self.mbs[i - 1],
+                    &self.mbs[i - stride - 1],
+                    mb.ref_frame,
+                    &[false; 4],
+                );
                 let probs = [
                     MODE_CONTEXTS[cnt[0] as usize][0],
                     MODE_CONTEXTS[cnt[1] as usize][1],
@@ -869,8 +1095,16 @@ impl Core {
                 h.write_tree(&MV_REF_TREE, &probs, mb.y_mode);
                 if mb.y_mode == NEWMV {
                     let best = Bounds::for_mb(row, col, self.mb_rows, cols).clamp(near[0]);
-                    write_mv(&mut h, (mb.mv.y as i32 - best.y as i32) / 2, &DEFAULT_MV_PROBS[0]);
-                    write_mv(&mut h, (mb.mv.x as i32 - best.x as i32) / 2, &DEFAULT_MV_PROBS[1]);
+                    write_mv(
+                        &mut h,
+                        (mb.mv.y as i32 - best.y as i32) / 2,
+                        &DEFAULT_MV_PROBS[0],
+                    );
+                    write_mv(
+                        &mut h,
+                        (mb.mv.x as i32 - best.x as i32) / 2,
+                        &DEFAULT_MV_PROBS[1],
+                    );
                 }
             }
         }
@@ -879,7 +1113,10 @@ impl Core {
         // The token partition.
         let mut t = BoolEncoder::new();
         {
-            let mut w = Writer { enc: &mut t, probs: &probs };
+            let mut w = Writer {
+                enc: &mut t,
+                probs: &probs,
+            };
             self.walk_tokens(&mut w);
         }
         let part2 = t.finish();
@@ -955,7 +1192,15 @@ fn loop_filter_level(q: u8) -> u8 {
     ((q as u32 * 3) / 8).min(63) as u8
 }
 
-fn copy_padded(dst: &mut [u8], dw: usize, dh: usize, src: &[u8], stride: usize, w: usize, h: usize) {
+fn copy_padded(
+    dst: &mut [u8],
+    dw: usize,
+    dh: usize,
+    src: &[u8],
+    stride: usize,
+    w: usize,
+    h: usize,
+) {
     for r in 0..dh {
         let s = &src[r.min(h - 1) * stride..r.min(h - 1) * stride + w];
         let d = &mut dst[r * dw..r * dw + dw];
@@ -981,22 +1226,46 @@ fn fill_search(dst: &mut [u8], ds: usize, src: &[u8], w: usize, h: usize) {
 /// (qx, qy) quarter pixels, with bilinear interpolation (an estimate of the
 /// six-tap prediction, used only for the search).
 #[allow(clippy::too_many_arguments)]
-fn sad_subpel(src: &[u8], src_stride: usize, search: &[u8], ss: usize, x: usize, y: usize, qx: i32, qy: i32) -> u32 {
+fn sad_subpel(
+    src: &[u8],
+    src_stride: usize,
+    search: &[u8],
+    ss: usize,
+    x: usize,
+    y: usize,
+    qx: i32,
+    qy: i32,
+) -> u32 {
     sad_subpel_rows(src, src_stride, search, ss, x, y, qx, qy, 1)
 }
 
 /// As `sad_subpel`, over every `row_step`-th row only.
 #[allow(clippy::too_many_arguments)]
-fn sad_subpel_rows(src: &[u8], src_stride: usize, search: &[u8], ss: usize, x: usize, y: usize, qx: i32, qy: i32, row_step: usize) -> u32 {
+fn sad_subpel_rows(
+    src: &[u8],
+    src_stride: usize,
+    search: &[u8],
+    ss: usize,
+    x: usize,
+    y: usize,
+    qx: i32,
+    qy: i32,
+    row_step: usize,
+) -> u32 {
     let fx = (qx & 3) as u32;
     let fy = (qy & 3) as u32;
-    let base = (y as i32 + (qy >> 2) + PAD as i32) as usize * ss + (x as i32 + (qx >> 2) + PAD as i32) as usize;
+    let base = (y as i32 + (qy >> 2) + PAD as i32) as usize * ss
+        + (x as i32 + (qx >> 2) + PAD as i32) as usize;
     if fx == 0 && fy == 0 {
         let mut s = 0u32;
         for r in (0..16).step_by(row_step) {
             let a = &search[base + r * ss..base + r * ss + 16];
             let o = &src[r * src_stride..r * src_stride + 16];
-            s += a.iter().zip(o).map(|(&p, &q)| p.abs_diff(q) as u32).sum::<u32>();
+            s += a
+                .iter()
+                .zip(o)
+                .map(|(&p, &q)| p.abs_diff(q) as u32)
+                .sum::<u32>();
         }
         return s;
     }
@@ -1004,12 +1273,23 @@ fn sad_subpel_rows(src: &[u8], src_stride: usize, search: &[u8], ss: usize, x: u
     let (w00, w01, w10, w11) = (w00 as u16, w01 as u16, w10 as u16, w11 as u16);
     let mut s = 0u32;
     for r in (0..16).step_by(row_step) {
-        let a: &[u8; 17] = search[base + r * ss..base + r * ss + 17].try_into().expect("17 pixels");
-        let b: &[u8; 17] = search[base + (r + 1) * ss..base + (r + 1) * ss + 17].try_into().expect("17 pixels");
-        let o: &[u8; 16] = src[r * src_stride..r * src_stride + 16].try_into().expect("16 pixels");
+        let a: &[u8; 17] = search[base + r * ss..base + r * ss + 17]
+            .try_into()
+            .expect("17 pixels");
+        let b: &[u8; 17] = search[base + (r + 1) * ss..base + (r + 1) * ss + 17]
+            .try_into()
+            .expect("17 pixels");
+        let o: &[u8; 16] = src[r * src_stride..r * src_stride + 16]
+            .try_into()
+            .expect("16 pixels");
         let mut row = 0u32;
         for c in 0..16 {
-            let p = (a[c] as u16 * w00 + a[c + 1] as u16 * w01 + b[c] as u16 * w10 + b[c + 1] as u16 * w11 + 8) >> 4;
+            let p = (a[c] as u16 * w00
+                + a[c + 1] as u16 * w01
+                + b[c] as u16 * w10
+                + b[c + 1] as u16 * w11
+                + 8)
+                >> 4;
             row += (p as i16 - o[c] as i16).unsigned_abs() as u32;
         }
         s += row;
@@ -1060,11 +1340,22 @@ fn code_block(
 
 /// The 4x4 residual `src - rec`.
 #[inline]
-fn residual(src: &[u8], spos: usize, sstride: usize, rec: &[u8], rpos: usize, rstride: usize) -> [i32; 16] {
+fn residual(
+    src: &[u8],
+    spos: usize,
+    sstride: usize,
+    rec: &[u8],
+    rpos: usize,
+    rstride: usize,
+) -> [i32; 16] {
     let mut res = [0i32; 16];
     for r in 0..4 {
-        let s: &[u8; 4] = src[spos + r * sstride..spos + r * sstride + 4].try_into().expect("4 pixels");
-        let p: &[u8; 4] = rec[rpos + r * rstride..rpos + r * rstride + 4].try_into().expect("4 pixels");
+        let s: &[u8; 4] = src[spos + r * sstride..spos + r * sstride + 4]
+            .try_into()
+            .expect("4 pixels");
+        let p: &[u8; 4] = rec[rpos + r * rstride..rpos + r * rstride + 4]
+            .try_into()
+            .expect("4 pixels");
         for c in 0..4 {
             res[r * 4 + c] = s[c] as i32 - p[c] as i32;
         }
@@ -1116,7 +1407,11 @@ fn code_luma_y2(
         if ac_is_zero(sad, quant.y1[1], ac_bias) {
             // Only the DC survives; the transform's DC is the rounded half sum.
             coeffs[b] = [0; 16];
-            coeffs[b][0] = if sum >= 0 { (sum + 1) >> 1 } else { -((-sum + 1) >> 1) };
+            coeffs[b][0] = if sum >= 0 {
+                (sum + 1) >> 1
+            } else {
+                -((-sum + 1) >> 1)
+            };
         } else {
             fdct4x4(&res, &mut coeffs[b]);
         }

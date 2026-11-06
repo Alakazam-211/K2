@@ -15,7 +15,15 @@ pub fn scale_i420(src: &Picture<'_>, width: u32, height: u32, out: &mut Vec<u8>)
     scale_plane(src.v, src.uv_stride, scw, sch, dcw, dch, out);
 }
 
-fn scale_plane(src: &[u8], stride: usize, sw: usize, sh: usize, dw: usize, dh: usize, out: &mut Vec<u8>) {
+fn scale_plane(
+    src: &[u8],
+    stride: usize,
+    sw: usize,
+    sh: usize,
+    dw: usize,
+    dh: usize,
+    out: &mut Vec<u8>,
+) {
     out.reserve(dw * dh);
     if dw <= sw && dh <= sh {
         // Box filter in 16.16 fixed point over the source area of each pixel.
@@ -27,7 +35,10 @@ fn scale_plane(src: &[u8], stride: usize, sw: usize, sh: usize, dw: usize, dh: u
                 let x1 = ((x + 1) * sw / dw).max(x0 + 1);
                 let mut sum = 0u32;
                 for r in y0..y1 {
-                    sum += src[r * stride + x0..r * stride + x1].iter().map(|&p| p as u32).sum::<u32>();
+                    sum += src[r * stride + x0..r * stride + x1]
+                        .iter()
+                        .map(|&p| p as u32)
+                        .sum::<u32>();
                 }
                 let n = ((y1 - y0) * (x1 - x0)) as u32;
                 out.push(((sum + n / 2) / n) as u8);

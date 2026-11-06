@@ -26,7 +26,13 @@ pub(crate) struct RateControl {
 }
 
 impl RateControl {
-    pub(crate) fn new(bitrate: u32, max_bitrate: u32, fps: u32, pixels: u32, weights: [f64; 3]) -> Self {
+    pub(crate) fn new(
+        bitrate: u32,
+        max_bitrate: u32,
+        fps: u32,
+        pixels: u32,
+        weights: [f64; 3],
+    ) -> Self {
         RateControl {
             bitrate: bitrate.max(1) as f64,
             max_bitrate: max_bitrate.max(bitrate).max(1) as f64,
@@ -45,7 +51,9 @@ impl RateControl {
         self.max_bitrate = max_bitrate.max(bitrate).max(1) as f64;
         self.fps = fps.max(1) as f64;
         // Keep the debt in proportion to the new budget.
-        self.buffer = self.buffer.clamp(-0.5 * self.bitrate, 0.6 * self.max_bitrate);
+        self.buffer = self
+            .buffer
+            .clamp(-0.5 * self.bitrate, 0.6 * self.max_bitrate);
     }
 
     fn per_frame(&self) -> f64 {
@@ -94,7 +102,11 @@ impl RateControl {
     pub(crate) fn update(&mut self, bits: usize, key: bool, tid: usize, q: u8) {
         let bits = bits as f64;
         let measured = bits * AC_QUANT[q as usize] as f64 / self.pixels;
-        let slot = if key { &mut self.k_key } else { &mut self.k_inter[tid] };
+        let slot = if key {
+            &mut self.k_key
+        } else {
+            &mut self.k_inter[tid]
+        };
         *slot = Some(match *slot {
             Some(k) => 0.5 * k + 0.5 * measured,
             None => measured,

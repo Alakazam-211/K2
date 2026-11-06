@@ -1797,6 +1797,13 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // CHECK allowed 'none'/'dir'). 0265-0267 are other 0.46.9 branches';
         // renumber freely on a slip (and edit the migration-order tests).
         ("0268_sew_ship_box_backup", include_str!("../../drizzle_sql/0268_sew_ship_box_backup.sql")),
+        // 0270 — k2-node rollouts (prd-compute-update-continuity-v1 §5.10,
+        // §8, 0.46.9): two new tables, `compute_node_rollouts` and
+        // `compute_node_rollout_nodes`. Was reserved as 0224 (never used;
+        // below live numbers now). 0269 is another branch's. Renumber
+        // freely on a slip (and edit the migration-order tests). The store
+        // is `crate::compute::rollout`.
+        ("0270_compute_node_rollouts", include_str!("../../drizzle_sql/0270_compute_node_rollouts.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2476,7 +2483,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0268_sew_ship_box_backup",
+            last_name, "0270_compute_node_rollouts",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2605,6 +2612,8 @@ mod tests {
                 "0267_delivery_journal",
                 // 0.46.9: Sew ship kind box-backup.
                 "0268_sew_ship_box_backup",
+                // 0.46.9: k2-node rollouts.
+                "0270_compute_node_rollouts",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2741,6 +2750,8 @@ mod tests {
                 "0267_delivery_journal",
                 // 0.46.9: Sew ship kind box-backup.
                 "0268_sew_ship_box_backup",
+                // 0.46.9: k2-node rollouts.
+                "0270_compute_node_rollouts",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3013,7 +3024,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0268_sew_ship_box_backup", "0268 (0.46.9) runs last");
+        assert_eq!(top, "0270_compute_node_rollouts", "0270 (0.46.9) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3066,9 +3077,10 @@ mod tests {
                 "0263_chat_refresh_switch",
                 "0264_person_pictures",
                 "0267_delivery_journal",
-                "0268_sew_ship_box_backup"
+                "0268_sew_ship_box_backup",
+                "0270_compute_node_rollouts"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268 and 0270)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3910,7 +3922,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0268 (Sew ship kind box-backup, 0.46.9) is the newest: its
+            // 0270 (k2-node rollouts, 0.46.9) is the newest: its record goes
+            // (its tables and index are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0270_compute_node_rollouts'", []).unwrap();
+            // 0268 (Sew ship kind box-backup, 0.46.9) came before it: its
             // record goes (a re-run copies sew_server into a fresh table again).
             conn.execute("DELETE FROM _migrations WHERE name = '0268_sew_ship_box_backup'", []).unwrap();
             // 0267 (the delivery journal, 0.46.9) came before it: its record

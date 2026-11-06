@@ -23,6 +23,7 @@ pub mod logs;
 pub mod message;
 pub mod result;
 pub mod retry;
+pub mod rollout;
 pub mod scheduler;
 pub mod shards;
 pub mod share;

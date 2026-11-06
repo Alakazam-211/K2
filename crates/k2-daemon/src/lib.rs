@@ -321,6 +321,7 @@ pub mod compute_admin;
 pub mod compute_advertise;
 // A workspace's compute node list (0.46.8): `k2 compute allow-nodes`.
 pub mod compute_allow;
+pub mod compute_rollout;
 // The Compute Garden's node load tile (`compute.nodes`, catalog v49).
 pub mod compute_garden;
 pub mod compute_local;

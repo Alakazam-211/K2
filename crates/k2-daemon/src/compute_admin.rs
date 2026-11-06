@@ -67,6 +67,11 @@ pub const NODE_ROLLBACK: &str = "/cli/compute/nodes/rollback";
 pub const NODE_UPDATE: &str = "/cli/compute/nodes/update";
 /// Turn the Linux job wall on (prd-compute-update-continuity-v1 Q5).
 pub const NODE_WALL: &str = "/cli/compute/nodes/wall";
+/// k2-node rollouts (prd-compute-update-continuity-v1 §5.10).
+pub const NODE_ROLLOUT: &str = "/cli/compute/nodes/rollout";
+pub const NODE_ROLLOUT_PAUSE: &str = "/cli/compute/nodes/rollout/pause";
+pub const NODE_ROLLOUT_RESUME: &str = "/cli/compute/nodes/rollout/resume";
+pub const NODE_ROLLOUT_STOP: &str = "/cli/compute/nodes/rollout/stop";
 /// Node sharing (prd-compute-shared-queue-v1 §9): the servers on a node
 /// this server owns (`k2 compute node servers <node> …`).
 pub const SERVERS: &str = "/cli/compute/nodes/servers";
@@ -96,6 +101,10 @@ pub const ROUTES: &[&str] = &[
     NODE_ROLLBACK,
     NODE_UPDATE,
     NODE_WALL,
+    NODE_ROLLOUT,
+    NODE_ROLLOUT_PAUSE,
+    NODE_ROLLOUT_RESUME,
+    NODE_ROLLOUT_STOP,
     SERVERS,
     SERVERS_ADD,
     SERVERS_LIMITS,
@@ -116,6 +125,9 @@ pub const POST_ROUTES: &[&str] = &[
     NODE_ROLLBACK,
     NODE_UPDATE,
     NODE_WALL,
+    NODE_ROLLOUT_PAUSE,
+    NODE_ROLLOUT_RESUME,
+    NODE_ROLLOUT_STOP,
     SERVERS_ADD,
     SERVERS_LIMITS,
     SERVERS_PAUSE,
@@ -126,7 +138,21 @@ pub const POST_ROUTES: &[&str] = &[
 
 /// Passport-reachable (also in `session_token::is_agent_verb`). approve,
 /// deny, alerts and approval-key are NOT here.
-pub const AGENT_VERBS: &[&str] = &[PROPOSE, REQUESTS, WITHDRAW, NODE_HEALTH, NODE_POLICY, NODE_POLICY_SET, NODE_ROLLBACK, NODE_UPDATE, NODE_WALL];
+pub const AGENT_VERBS: &[&str] = &[
+    PROPOSE,
+    REQUESTS,
+    WITHDRAW,
+    NODE_HEALTH,
+    NODE_POLICY,
+    NODE_POLICY_SET,
+    NODE_ROLLBACK,
+    NODE_UPDATE,
+    NODE_WALL,
+    NODE_ROLLOUT,
+    NODE_ROLLOUT_PAUSE,
+    NODE_ROLLOUT_RESUME,
+    NODE_ROLLOUT_STOP,
+];
 
 pub fn is_route(p: &str) -> bool {
     ROUTES.contains(&p)
@@ -149,6 +175,8 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         NODE_UPDATE => update(who, body),
         NODE_ROLLBACK => rollback(who, body),
         NODE_WALL => wall(who, body),
+        NODE_ROLLOUT => crate::compute_rollout::show(who),
+        NODE_ROLLOUT_PAUSE | NODE_ROLLOUT_RESUME | NODE_ROLLOUT_STOP => crate::compute_rollout::set(who, path, body),
         SERVERS => servers_list(who, params, mgr),
         SERVERS_ADD => servers_add(who, body, mgr),
         SERVERS_LIMITS => servers_limits(who, body, mgr),
@@ -186,7 +214,7 @@ fn assets_dir() -> std::path::PathBuf {
     compute::compute_dir().join("node-assets")
 }
 
-fn online(node_id: &str) -> bool {
+pub(crate) fn online(node_id: &str) -> bool {
     #[cfg(test)]
     if let Some(on) = test_seams::online(node_id) {
         return on;
@@ -249,6 +277,10 @@ fn operate_off() -> crate::compute_routes::Refusal {
 
 /// The owner, an Admin login, or an agent/K2-tab passport whose workspace
 /// has the operate switch on.
+pub(crate) fn operator_check(who: &Who) -> R<()> {
+    operator(who).map(|_| ())
+}
+
 fn operator(who: &Who) -> R<Operator> {
     crate::compute_routes::need_credential(who)?;
     if who.is_admin() {
@@ -1061,6 +1093,8 @@ pub fn on_attach(node_id: &str, boot_id: &str) {
     if let Some(m) = KEYS_SENT.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
         m.remove(node_id);
     }
+    // A node a rollout is waiting for came online (or back on its new build).
+    crate::compute_rollout::kick();
     let now = compute::now();
     let text = {
         let db = k2_core::db::shared();
@@ -1395,7 +1429,14 @@ fn bundled_node(os: &str, arch: &str) -> Option<std::path::PathBuf> {
     if os != std::env::consts::OS || k2_root_proto::node_build::asset_name(os, arch) != k2_root_proto::node_build::asset_name(std::env::consts::OS, std::env::consts::ARCH) {
         return None;
     }
-    let p = std::env::current_exe().ok()?.parent()?.join("k2-node");
+    // C13: beside the daemon, or in K2.app's MacOS folder when the daemon
+    // runs from the nested `K2 Daemon.app` (as the local node finds it).
+    let exe = std::env::current_exe().ok()?;
+    let p = exe.parent()?.join("k2-node");
+    if p.is_file() {
+        return Some(p);
+    }
+    let p = k2_core::daemon_lifecycle::bundle_sidecar_dir(&exe)?.join("k2-node");
     p.is_file().then_some(p)
 }
 
@@ -1440,9 +1481,44 @@ fn newer(candidate: &str, running: Option<&str>) -> bool {
 fn update(who: &Who, body: &[u8]) -> R<Value> {
     let _op = operator(who)?;
     let v = json_body(body)?;
+    // `--all` (prd-compute-update-continuity-v1 §5.10): a rollout to every
+    // node this server owns.
+    if b_true(&v, "all") {
+        let batch = v.get("batch").and_then(Value::as_i64).unwrap_or(0);
+        if batch < 0 {
+            return Err(no(codes::BAD_REQUEST, 400, "--batch is a count of nodes (0 = all at once)"));
+        }
+        let r = crate::compute_rollout::start(&who.label(), "explicit", batch, b_true(&v, "now"))?;
+        crate::compute_routes::audit(who, "rollout_started", None, None, None, r.clone());
+        return Ok(r);
+    }
     let node = node_or_404(s(&v, "node"))?;
-    node_admin_ready(&node, wire::FEATURE_SELF_UPDATE)?;
-    let (os, arch) = node_platform(&node)?;
+    if b_true(&v, "canary") {
+        node_admin_ready(&node, wire::FEATURE_SELF_UPDATE)?;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = admin::set_update_ring(&conn, &node.id, "canary");
+    }
+    let r = offer_update(&node, &who.label(), b_true(&v, "now"), "explicit")?;
+    crate::compute_routes::audit(who, "update_offered", Some(&node.id), None, None, json!({"version": r["update"]["version"], "cmdId": r["update"]["cmdId"]}));
+    Ok(r)
+}
+
+/// The k2-node build this server offers: its own version (§5.11).
+pub(crate) fn offered_version() -> String {
+    server_version()
+}
+
+/// Is `candidate` newer than what a node runs?
+pub(crate) fn newer_than(candidate: &str, running: Option<&str>) -> bool {
+    newer(candidate, running)
+}
+
+/// Offer this server's signed k2-node build to `node` (one node, or one
+/// node of a rollout). `by` = who asked. Records the node's update state.
+pub(crate) fn offer_update(node: &store::NodeRow, by: &str, now_flag: bool, trigger: &str) -> R<Value> {
+    node_admin_ready(node, wire::FEATURE_SELF_UPDATE)?;
+    let (os, arch) = node_platform(node)?;
     let build = load_build(os, arch)?;
     if !newer(&build.version, node.node_version.as_deref()) {
         return Err(no(
@@ -1451,20 +1527,15 @@ fn update(who: &Who, body: &[u8]) -> R<Value> {
             format!("{} already runs {} (offered {}); nodes only move to newer signed builds", node.name, node.node_version.as_deref().unwrap_or("?"), build.version),
         ));
     }
-    if b_true(&v, "canary") {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let _ = admin::set_update_ring(&conn, &node.id, "canary");
-    }
     let transfer_id = crypto::random_id().map_err(|e| no("random", 500, e))?;
-    let mut args = json!({"version": build.version, "sha256": build.sha256, "trigger": "explicit"});
+    let mut args = json!({"version": build.version, "sha256": build.sha256, "trigger": trigger});
     // V55 `--now`: skip a shared node's drain. Sent only to a shared node
     // (solo nodes never drain, and an older k2-node doesn't know it).
-    if b_true(&v, "now") && node.shared {
+    if now_flag && node.shared {
         args[wire::ARG_NOW] = true.into();
     }
     let key = controller_key()?;
-    let cmd = build_command(&node, &key.fingerprint(), Class::Operate, "node.update", &args, None, &who.label(), None, compute::now())?;
+    let cmd = build_command(node, &key.fingerprint(), Class::Operate, "node.update", &args, None, by, None, compute::now())?;
     let sealed = wire::sign_controller(&key, &cmd).map_err(|e| no("seal_failed", 500, e))?;
     let offer = frames::UpdateOffer {
         transfer_id: transfer_id.clone(),
@@ -1488,25 +1559,28 @@ fn update(who: &Who, body: &[u8]) -> R<Value> {
             return Err(no(codes::NODE_OFFLINE, 409, format!("{} went offline mid-transfer", node.name)));
         }
     }
-    let state = json!({"state": "offered", "version": build.version, "from": node.node_version, "transferId": transfer_id, "cmdId": cmd.cmd_id, "at": compute::now(), "by": who.label()});
+    let state = json!({"state": "offered", "version": build.version, "from": node.node_version, "transferId": transfer_id, "cmdId": cmd.cmd_id, "at": compute::now(), "by": by});
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         admin::set_update(&conn, &node.id, &state);
     }
-    crate::compute_routes::audit(who, "update_offered", Some(&node.id), None, None, json!({"version": build.version, "cmdId": cmd.cmd_id, "sha256": build.sha256}));
-    // V55: a shared node finishes every server's running jobs first.
-    let shared = node.shared;
-    if shared {
-        crate::compute_routes::audit(who, "node_update_drain", Some(&node.id), None, None, json!({"version": build.version}));
-    }
-    let note = if shared {
-        "the node is shared: it takes no new jobs and waits for running ones to finish (up to 30 min) before it swaps; it rolls back by itself if the new build doesn't come back healthy in 120 s"
+    // §5.5: from k2-node 0.46.9 on, running jobs keep running through the
+    // update (the node adopts them). Older nodes still drain a shared node
+    // or stop a solo node's jobs.
+    let keeps = node.node_version.as_deref().is_some_and(|v| !newer(KEEPS_JOBS_FROM, Some(v)));
+    let note = if keeps {
+        "running jobs keep running (the updated k2-node adopts them) and new jobs start on the new build; it rolls back by itself if the new build doesn't come back healthy in 120 s"
+    } else if node.shared {
+        "this k2-node is older than 0.46.9: the node is shared, so it takes no new jobs and waits for running ones to finish (up to 30 min) before it swaps; it rolls back by itself if the new build doesn't come back healthy in 120 s"
     } else {
-        "the node verifies, swaps, and rolls back by itself if the new build doesn't come back healthy in 120 s"
+        "this k2-node is older than 0.46.9: running jobs stop for the update; it rolls back by itself if the new build doesn't come back healthy in 120 s"
     };
-    Ok(json!({"ok": true, "node": node.name, "update": state, "shared": shared, "note": note}))
+    Ok(json!({"ok": true, "node": node.name, "update": state, "shared": node.shared, "keepsJobs": keeps, "note": note}))
 }
+
+/// The first k2-node whose updates keep running jobs (U2–U4).
+pub(crate) const KEEPS_JOBS_FROM: &str = "0.46.9";
 
 fn b_true(v: &Value, k: &str) -> bool {
     crate::compute_routes::b(v, k) == Some(true)
@@ -1647,6 +1721,9 @@ pub fn on_update_state(node_id: &str, u: frames::UpdateState) {
         };
         send_alert(node_id, "update_failed", &text);
     }
+    if fresh {
+        crate::compute_rollout::on_update_state(node_id, u.phase, &u.version);
+    }
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "node_update"}));
     crate::compute_ws::notify_change();
 }
@@ -1745,6 +1822,8 @@ fn watch_pass() {
     for (id, text) in due {
         send_alert(&id, "offline", &text);
     }
+    crate::compute_rollout::maybe_follow(now);
+    crate::compute_rollout::tick(now);
 }
 
 /// Start the 60 s watch (boot). Runs with no client attached. It also

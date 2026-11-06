@@ -1181,3 +1181,132 @@ fn a_tenant_node_is_taken_over_only_in_person_after_it_confirms() {
     assert_eq!(crate::compute_secrets::star_grants_text(&g), "k2: GH_TOKEN, NPM; ops: AWS");
     assert!(crate::compute_secrets::star_grants_text(&None).contains("vault is closed"), "never \"none\" when they can't be listed");
 }
+
+/// One more node in the fixture's DB (macOS arm64, online, admin-capable),
+/// running k2-node `version`.
+fn extra_node(tag: &str, version: &str) -> (String, String) {
+    let id = format!("node-{tag}-{}", crypto::random_id().unwrap());
+    let name = format!("mini-{tag}");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let labels = BTreeMap::from([("os".to_string(), "macos".to_string()), ("arch".to_string(), "aarch64".to_string())]);
+        store::insert_pending_node(&conn, &id, &name, &fp_of(&id), "pem", &labels, "owner", "123456", 5).unwrap();
+        store::confirm_node(&conn, &id, "owner", 6).unwrap();
+        store::touch_seen(&conn, &id, "lan", 2, version, compute::now());
+    }
+    test_seams::register(&id, true, &[wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, wire::FEATURE_SELF_UPDATE]);
+    (id, name)
+}
+
+fn update_state(node: &str, phase: wire::UpdatePhase, version: &str) {
+    on_update_state(
+        node,
+        frames::UpdateState { transfer_id: None, cmd_id: Some(format!("c-{node}")), phase, version: version.into(), from: None, code: None, message: None, at: compute::now(), steps: vec![] },
+    );
+}
+
+/// §5.10 / T14 (Rosson Q3: all at once, pause on rollback): `update --all`
+/// offers this server's build to every node it owns at once; a k2-node too
+/// old for a remote update is skipped `node_needs_manual_install`; a node's
+/// own `healthy` settles it; the first `rolled_back` pauses the rollout and
+/// alerts; an offline node waits its turn; resume and stop work; a second
+/// `--all` to the same version returns the open one.
+#[test]
+fn update_all_rolls_out_skips_old_nodes_and_pauses_at_a_rollback() {
+    let f = fx("rollout", true);
+    call(NODE_ALERTS, &Who::Owner, json!({"to": f.ws})).unwrap();
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::touch_seen(&conn, &f.node, "lan", 2, "0.46.5", compute::now());
+    }
+    let (old, old_name) = extra_node("old", "0.46.3");
+    let (bad, _) = extra_node("bad", "0.46.6");
+    let (away, away_name) = extra_node("away", "0.46.6");
+    test_seams::set_online(&away, false);
+    let dir = std::env::temp_dir().join(format!("k2-admin-assets-{}", crypto::random_id().unwrap()));
+    test_seams::set_assets_dir(Some(dir.clone()));
+    test_seams::set_server_version(Some("0.46.9"));
+    stage_build(&dir.join("0.46.9"), "macos", "0.46.9");
+
+    let r = call(NODE_UPDATE, &agent(&f), json!({"all": true})).unwrap();
+    let ro = &r["rollout"];
+    assert_eq!((ro["state"].as_str(), ro["toVersion"].as_str(), ro["batchSize"].as_i64()), (Some("running"), Some("0.46.9"), Some(0)));
+    let place = |v: &Value, id: &str| v["nodes"].as_array().unwrap().iter().find(|n| n["nodeId"] == id).cloned().unwrap();
+    assert_eq!(place(ro, &f.node)["state"], "offered");
+    assert_eq!(place(ro, &bad)["state"], "offered", "all at once");
+    assert_eq!((place(ro, &old)["state"].as_str(), place(ro, &old)["code"].as_str()), (Some("skipped"), Some(crate::compute_rollout::NEEDS_MANUAL_INSTALL)));
+    assert_eq!(place(ro, &away)["state"], "pending", "offline: its turn comes when it attaches");
+    for n in [&f.node, &bad] {
+        assert!(test_seams::take_sent(n).iter().any(|x| matches!(x, Frame::UpdateOffer(o) if o.version == "0.46.9")), "{n} got the build");
+    }
+    assert!(test_seams::take_sent(&old).is_empty(), "never sent to a node that can't take it");
+    let again = call(NODE_UPDATE, &agent(&f), json!({"all": true})).unwrap();
+    assert_eq!(again["rollout"]["id"], ro["id"], "one open rollout per version");
+
+    update_state(&f.node, wire::UpdatePhase::Healthy, "0.46.9");
+    update_state(&bad, wire::UpdatePhase::RolledBack, "0.46.9");
+    let shown = get(NODE_ROLLOUT, &agent(&f), &[]).unwrap();
+    let ro = &shown["rollout"];
+    assert_eq!(place(ro, &f.node)["state"], "healthy");
+    assert_eq!(place(ro, &bad)["state"], "rolled_back");
+    assert_eq!(ro["state"], "paused", "the first rollback pauses it");
+    let m = test_seams::take_messages(&f.ws);
+    assert!(m.iter().any(|x| x.contains("rollout") && x.contains("paused")), "{m:?}");
+
+    // The offline node comes back: still paused, nothing is sent.
+    test_seams::set_online(&away, true);
+    crate::compute_rollout::tick(compute::now());
+    assert!(test_seams::take_sent(&away).is_empty(), "a paused rollout sends nothing");
+    let r = call(NODE_ROLLOUT_RESUME, &agent(&f), json!({})).unwrap();
+    assert_eq!(place(&r["rollout"], &away)["state"], "offered", "resumed: the node that came back gets its turn");
+    assert!(test_seams::take_sent(&away).iter().any(|x| matches!(x, Frame::UpdateOffer(_))));
+    // It reattaches on the new version before its healthy frame: settled.
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::touch_seen(&conn, &away, "lan", 2, "0.46.9", compute::now());
+    }
+    crate::compute_rollout::tick(compute::now());
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!(place(&shown["rollout"], &away)["state"], "healthy");
+    assert_eq!(shown["rollout"]["state"], "done", "every node settled");
+    assert_eq!(call(NODE_ROLLOUT_STOP, &agent(&f), json!({})).unwrap_err().1, "rollout_not_found", "nothing open to stop");
+
+    // The node list says it: the old node needs a hand install.
+    let list = crate::compute_views::nodes_list(&Who::Owner, &HashMap::new(), None).unwrap();
+    let row_of = |name: &str| list["nodes"].as_array().unwrap().iter().find(|n| n["name"] == name).cloned().unwrap();
+    assert_eq!(row_of(&old_name)["rollout"]["code"], crate::compute_rollout::NEEDS_MANUAL_INSTALL);
+    assert_eq!(row_of(&away_name)["rollout"]["node"], "healthy");
+    test_seams::set_assets_dir(None);
+    test_seams::set_server_version(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// C12: a node offered the build that never says how it went is settled
+/// `timed_out` after 10 minutes, and a rollout with nothing left ends.
+#[test]
+fn a_silent_node_times_out_and_the_rollout_ends() {
+    let f = fx("rollout-slow", true);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::touch_seen(&conn, &f.node, "lan", 2, "0.46.5", compute::now());
+    }
+    let dir = std::env::temp_dir().join(format!("k2-admin-assets-{}", crypto::random_id().unwrap()));
+    test_seams::set_assets_dir(Some(dir.clone()));
+    test_seams::set_server_version(Some("0.46.9"));
+    stage_build(&dir.join("0.46.9"), "macos", "0.46.9");
+    let r = call(NODE_UPDATE, &Who::Owner, json!({"all": true, "batch": 1})).unwrap();
+    assert_eq!(r["rollout"]["batchSize"], 1);
+    crate::compute_rollout::tick(compute::now() + crate::compute_rollout::NODE_LIMIT_SECS - 5);
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!(shown["rollout"]["nodes"][0]["state"], "offered", "within its limit");
+    crate::compute_rollout::tick(compute::now() + crate::compute_rollout::NODE_LIMIT_SECS + 1);
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!((shown["rollout"]["nodes"][0]["state"].as_str(), shown["rollout"]["state"].as_str()), (Some("timed_out"), Some("done")));
+    test_seams::set_assets_dir(None);
+    test_seams::set_server_version(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}

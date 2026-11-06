@@ -102,7 +102,11 @@ FOR THE NODE'S OWNER
                                  your own server yes, others no; a 0.46.5
                                  node keeps it in queue.toml; true widens)
   Adds and widenings wait for your approval; narrowing, pause and revoke
-  apply at once. Updates on a shared node wait for running jobs (≤ 30 min).
+  apply at once. Updates keep every server's running jobs (from k2-node
+  0.46.9): the updated node picks them up, so nobody waits. The update's
+  health check covers the owner's jobs; other servers' jobs are picked up
+  right after. Older nodes, and Linux nodes without the job wall, still wait
+  for running jobs (≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set
   to `policy`, add servers at the machine: sudo k2-node servers add …
 

@@ -241,6 +241,13 @@ pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Optio
             if detail {
                 v["status"] = node_status(who, n);
             }
+            // §5.13: the node's update and its place in a rollout (this
+            // server's own nodes; a tenant node updates from its owner).
+            if !n.is_tenant() {
+                let u = crate::compute_rollout::node_view(&n.id);
+                v["update"] = u["update"].clone();
+                v["rollout"] = u["rollout"].clone();
+            }
             v
         })
         .collect();

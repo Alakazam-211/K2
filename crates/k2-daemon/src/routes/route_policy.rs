@@ -654,6 +654,12 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/rename", Admin),
     post("/cli/compute/nodes/retire", Owner),
     post("/cli/compute/nodes/rollback", Admin),
+    // k2-node rollouts (prd-compute-update-continuity-v1 §5.10): the
+    // handler's operator() gate, as for update.
+    get("/cli/compute/nodes/rollout", Admin),
+    post("/cli/compute/nodes/rollout/pause", Admin),
+    post("/cli/compute/nodes/rollout/resume", Admin),
+    post("/cli/compute/nodes/rollout/stop", Admin),
     post("/cli/compute/nodes/routes", Admin),
     // Node sharing (prd-compute-shared-queue-v1 §3, §9): the servers on a
     // node this server owns. Agents need "Allow managing compute nodes" or

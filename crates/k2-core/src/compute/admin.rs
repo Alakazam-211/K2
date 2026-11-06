@@ -553,7 +553,7 @@ pub const POLICY_KEYS: &[&str] = &[
     // 0.46.7 (CE-18): k2-node's tool-cache cap. An older node refuses it
     // (`unknown policy field`).
     "toolchain_budget_gb",
-    // 0.46.10 (git access, GH#78): other servers' jobs may get git tokens
+    // 0.46.9 (git access, GH#78): other servers' jobs may get git tokens
     // on the node. An older node refuses it (`unknown policy field`).
     "tenant_git_access",
 ];

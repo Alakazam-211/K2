@@ -94,7 +94,7 @@ NODE LIST (0.46.8)
   Admin): allow_nodes_needs_person, exit 3; ask on the card it names.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
 
-GIT ACCESS (0.46.10)
+GIT ACCESS (0.46.9)
   k2 compute git-access   the private GitHub repos your jobs may read.
   With a grant, plain git clone/fetch of https://github.com/<o>/<r> in
   a job just works (ssh URLs to github.com too). Grant your own repo

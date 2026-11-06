@@ -74,7 +74,7 @@ pub struct PolicyFile {
     /// `disk_budget_gb`, at most 60. Over it after an install, the least
     /// recently used versions no running or queued job needs go.
     pub toolchain_budget_gb: Option<u64>,
-    /// 0.46.10 (git access, GH#78): may servers other than this node's
+    /// 0.46.9 (git access, GH#78): may servers other than this node's
     /// owner get short-lived git tokens for their jobs here? Default on;
     /// `false` and the node never offers `git-access` to them.
     #[serde(default, skip_serializing_if = "Option::is_none")]

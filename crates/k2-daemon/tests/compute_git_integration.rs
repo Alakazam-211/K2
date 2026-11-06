@@ -274,7 +274,7 @@ fn offer(features: &[&str], share: Option<ShareView>) -> Offer {
         protocol: 8,
         boot_id: "b".into(),
         ledger_id: "l".into(),
-        node_version: "0.46.10".into(),
+        node_version: "0.46.9".into(),
         features: features.iter().map(|f| f.to_string()).collect(),
         host: None,
         pkg: None,

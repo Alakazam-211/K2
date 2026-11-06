@@ -249,7 +249,7 @@ pub(crate) const V1_ACTIONS: [&str; 57] = [
     // packages a filed request names, and set a node's package policy.
     "compute.packages",
     "compute.packages-policy",
-    // 0.46.10 (GH#78): give the agent's own workspace's compute jobs
+    // 0.46.9 (GH#78): give the agent's own workspace's compute jobs
     // read access to GitHub repos (short-lived tokens, a person's grant).
     "compute.git-access",
 ];
@@ -419,7 +419,7 @@ pub(crate) const ROWS: &[Row] = &[
         ],
         ..row(ask("compute.packages-policy", Floor::Owner), code(403, "operate_off"), "/cli/compute/nodes/packages/policy", POST)
     },
-    // Git access for compute jobs (0.46.10, GH#78): an agent's grant for
+    // Git access for compute jobs (0.46.9, GH#78): an agent's grant for
     // its own workspace teaches `compute.git-access repos=<the repos>`.
     Row {
         params: &[("repos", &[ParamFrom::Response("/error/repos")])],
@@ -1322,7 +1322,7 @@ mod tests {
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
             (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
-            // 0.46.10 (GH#78): an agent's git-access grant.
+            // 0.46.9 (GH#78): an agent's git-access grant.
             (403, "POST", "/cli/compute/git-access/grant", vec![], Some(json!({"github":"acme/app"})), json!({"error":{"code":"git_access_needs_person","hint":"x","workspace":"k2","repos":"acme/app"}}), "compute.git-access"),
             // 0.46.9: a filed package request, and the package policy to an agent that can't operate nodes.
             (200, "POST", "/cli/compute/nodes/packages/request", vec![], Some(json!({"nodes":["k2n7"],"names":["libgtk-3-dev"]})), json!({"pkgHeld":true,"request":{"id":"cpr_0123456789abcdef"}}), "compute.packages"),
@@ -1583,7 +1583,7 @@ mod tests {
         assert_eq!(p["command"], "k2 permission request compute.allow-nodes-clear --why \"<what you need it for>\"");
     }
 
-    /// Git access (0.46.10, GH#78): an agent's grant teaches
+    /// Git access (0.46.9, GH#78): an agent's grant teaches
     /// `compute.git-access repos=<the repos>`, for the owner or an Admin.
     #[test]
     fn the_git_access_wall_names_the_repos() {

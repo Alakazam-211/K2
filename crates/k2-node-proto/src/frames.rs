@@ -81,7 +81,7 @@ use crate::crypto::{self, SigningKey};
 /// and frames only to a node offering the feature. An older peer sees
 /// exactly its own release's frames.
 ///
-/// 8 = compute git access (0.46.10, prd-compute-git-access-v1; GH#78;
+/// 8 = compute git access (0.46.9, prd-compute-git-access-v1; GH#78;
 /// [`crate::gitcred`]): `Plan.git_access`, `git_cred_need` / `git_cred` /
 /// `git_cred_refused`, the `git-access` feature. Additive: a node offers
 /// `git-access` and sends `git_cred_need` only to a server that said

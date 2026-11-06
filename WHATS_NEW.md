@@ -3,11 +3,6 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.10
-
-### Compute nodes
-- **Compute jobs can read your private GitHub repos.** `k2 compute git-access grant --github <owner>/<repo>` lets a workspace's jobs `git clone` and `git fetch` those repos, sibling repos included, and the node fetches the job's own source itself, so a big private repo no longer stops at the 50 MB relay cap. Tokens are read-only and short-lived: set up a GitHub App once (`k2 compute git-access setup --github-app <id> --key-file <app.pem>`) and each job gets 1-hour tokens for one repo. A fine-grained token works too. The token never sits in the job's environment, so these jobs keep `--cache`, their warm slot and sccache (a `--secret` job doesn't). Only a person grants (an agent asks on a card), `revoke` takes it back at once, and a node another server owns gets tokens only when you name it with `--shared`. More: `k2 compute git-access --help`.
-
 ## 0.46.9 — Voice calls in the desktop app
 
 ### Voice rooms (preview)
@@ -34,6 +29,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 heartbeat restart <name>`** stops a heartbeat's own session, so its next fire starts a new one. An agent can restart its own workspace's heartbeats without the "Allow hiring and managing agents" switch.
 
 ### Compute nodes
+- **Compute jobs can read your private GitHub repos.** `k2 compute git-access grant --github <owner>/<repo>` lets a workspace's jobs `git clone` and `git fetch` those repos, sibling repos included, and the node fetches the job's own source itself, so a big private repo no longer stops at the 50 MB relay cap. Tokens are read-only and short-lived: set up a GitHub App once (`k2 compute git-access setup --github-app <id> --key-file <app.pem>`) and each job gets 1-hour tokens for one repo. A fine-grained token works too. The token never sits in the job's environment, so these jobs keep `--cache`, their warm slot and sccache (a `--secret` job doesn't). Only a person grants (an agent asks on a card), `revoke` takes it back at once, and a node another server owns gets tokens only when you name it with `--shared`. More: `k2 compute git-access --help`.
 - **Agents can set up the build machine they need.** `k2 compute nodes` and `k2 compute info` now show each machine's Linux distribution, kernel and package manager, and `--distro ubuntu@24.04` picks one. A job can ask for system packages by their usual Debian names (K2 finds the right name on Arch) or for a whole bundle, like `--needs profile:tauri-linux`. Packages the machine's owner allowed install by themselves. For anything else, the owner gets one card to approve, and the agent hears back and runs the job again (`k2 compute node packages`). `rust@stable` now comes with clippy and rustfmt.
 
 ### Chat / Voice Hosting

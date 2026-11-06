@@ -833,7 +833,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // allow_nodes_needs_person).
         "/cli/compute/allow-nodes",
         "/cli/compute/allow-nodes/set",
-        // 0.46.10 (GH#78): the workspace's git access; an agent reads it,
+        // 0.46.9 (GH#78): the workspace's git access; an agent reads it,
         // may revoke its own and is refused a grant
         // (git_access_needs_person, the card compute.git-access).
         "/cli/compute/git-access",

@@ -630,7 +630,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/cache/clear", Admin),
     get("/cli/compute/enroll", Public),
     get("/cli/compute/events", Admin),
-    // Git access for jobs (0.46.10, GH#78): anyone who may see the
+    // Git access for jobs (0.46.9, GH#78): anyone who may see the
     // workspace's compute reads it; the handler lets a person grant, an
     // agent revoke its own; setup is the owner's or an Admin's.
     get("/cli/compute/git-access", Member),

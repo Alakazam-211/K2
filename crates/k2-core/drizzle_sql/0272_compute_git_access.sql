@@ -1,4 +1,4 @@
--- 0272: compute git access (0.46.10, prd-compute-git-access-v1, GH#78).
+-- 0272: compute git access (0.46.9, prd-compute-git-access-v1, GH#78).
 -- `compute_git_grants`: which workspace's compute jobs may read which repo
 -- (`github.com/<owner>/<repo>`, lowercase) on which nodes: `nodes` is '*'
 -- (every node this server owns, now and later) or one node id. A node

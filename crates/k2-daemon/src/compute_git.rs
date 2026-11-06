@@ -1,4 +1,4 @@
-//! `k2 compute git-access` (0.46.10, prd-compute-git-access-v1, GH#78):
+//! `k2 compute git-access` (0.46.9, prd-compute-git-access-v1, GH#78):
 //! short-lived, read-only git tokens for a workspace's compute jobs, for
 //! the GitHub repos a person granted, without `--secret` (so the jobs keep
 //! `--cache`, warm slots and sccache).

@@ -875,7 +875,7 @@ fn apply_packages_policy(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> A
     super::switches::applied(&r, message)
 }
 
-// ── compute.git-access (0.46.10, GH#78, `crate::compute_git`) ────────
+// ── compute.git-access (0.46.9, GH#78, `crate::compute_git`) ────────
 
 const GIT_PARAMS: &[ParamSpec] = &[ParamSpec { key: "repos", kind: ParamKind::Text, required: true, list: true, choices: &[] }];
 

@@ -59,7 +59,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/cache/clear",
     compute_ws::ENROLL_PATH,
     "/cli/compute/events",
-    // Git access for jobs (0.46.10, GH#78, `compute_git`).
+    // Git access for jobs (0.46.9, GH#78, `compute_git`).
     crate::compute_git::SHOW,
     crate::compute_git::GRANT,
     crate::compute_git::REVOKE,
@@ -640,7 +640,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         // or an agent narrowing its own).
         crate::compute_allow::SHOW => crate::compute_allow::show(&who, params),
         crate::compute_allow::SET => crate::compute_allow::set(&who, body),
-        // Git access for jobs (0.46.10): read; grant (a person); revoke (a
+        // Git access for jobs (0.46.9): read; grant (a person); revoke (a
         // person, or an agent for its own workspace); setup (owner/Admin).
         crate::compute_git::SHOW => crate::compute_git::show(&who, params),
         crate::compute_git::GRANT => crate::compute_git::grant(&who, body),

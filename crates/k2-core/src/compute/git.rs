@@ -1,4 +1,4 @@
-//! Compute git access, the controller's store and forge client (0.46.10,
+//! Compute git access, the controller's store and forge client (0.46.9,
 //! prd-compute-git-access-v1, GH#78).
 //!
 //! - **Grants** (`compute_git_grants`, migration 0272): which workspace's

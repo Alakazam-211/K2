@@ -28599,7 +28599,7 @@ if v.get("withdrawn"):
     print("  asked %d job(s) back from a shared node'"'"'s queue (they never start there)" % v["withdrawn"])'
 }
 
-# k2 compute git-access (0.46.10, GH#78): short-lived, read-only git tokens
+# k2 compute git-access (0.46.9, GH#78): short-lived, read-only git tokens
 # for a workspace's compute jobs, for the GitHub repos a person granted.
 # The daemon decides who may: setup is the owner's or an Admin's (outside
 # K2); grant is a person's (an agent gets git_access_needs_person, exit 3,
@@ -29091,7 +29091,7 @@ cmd_compute() {
             _compute_node_packages_usage
             return 0
         fi
-        # k2 compute git-access --help: its own page (0.46.10).
+        # k2 compute git-access --help: its own page (0.46.9).
         if [ "$sub" = "git-access" ]; then
             _compute_git_access_usage
             return 0
@@ -53474,7 +53474,7 @@ NODE LIST (0.46.8)
   Admin): allow_nodes_needs_person, exit 3; ask on the card it names.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
 
-GIT ACCESS (0.46.10)
+GIT ACCESS (0.46.9)
   k2 compute git-access   the private GitHub repos your jobs may read.
   With a grant, plain git clone/fetch of https://github.com/<o>/<r> in
   a job just works (ssh URLs to github.com too). Grant your own repo

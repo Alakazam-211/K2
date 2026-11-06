@@ -7,6 +7,7 @@ import {
   CORNERS,
   cornerSpots,
   EASE_DURATION,
+  freeArea,
   pickCorner,
   planSnap,
   project,
@@ -148,5 +149,79 @@ describe('cornerSpots: where the corners are on the desktop', () => {
 
   it('ignores boxes with no size (a hidden composer)', () => {
     expect(cornerSpots(view, size, insets, [{ left: 600, top: 700, width: 0, height: 0 }])['bottom-right']).toEqual({ x: 748, y: 588 })
+  })
+})
+
+describe('freeArea + cornerSpots: the corners of the free content area (under the tabs, beside drawers)', () => {
+  // A 1000 x 800 window: top bar 38, sidebar 200, content column beside it.
+  const view = { width: 1000, height: 800 }
+  const size = { width: 240, height: 200 }
+  const insets = { top: 50, bottom: 12, side: 12, gap: 8 }
+  const content = { left: 200, top: 38, width: 800, height: 762 }
+  const tabs = { left: 200, top: 38, width: 800, height: 36 }
+
+  it('with no content column, no drawers and no tabs: the whole window (as before)', () => {
+    expect(freeArea(view, {})).toEqual({ left: 0, top: 0, right: 1000, bottom: 800 })
+    expect(cornerSpots(view, size, insets, [], freeArea(view, {}))).toEqual(cornerSpots(view, size, insets))
+  })
+
+  it('the tab strip: the top corners rest just under it, never on it', () => {
+    const area = freeArea(view, { content, tabs: [tabs] })
+    expect(area).toEqual({ left: 200, top: 38 + 36, right: 1000, bottom: 800 })
+    const spots = cornerSpots(view, size, insets, [], area)
+    expect(spots['top-left']).toEqual({ x: 200 + 12, y: 38 + 36 + 8 })
+    expect(spots['top-right']).toEqual({ x: 1000 - 12 - 240, y: 38 + 36 + 8 })
+    expect(spots['bottom-left']).toEqual({ x: 212, y: 800 - 12 - 200 })
+    // A taller strip pushes it further.
+    expect(cornerSpots(view, size, insets, [], freeArea(view, { content, tabs: [{ ...tabs, height: 64 }] }))['top-right'].y).toBe(38 + 64 + 8)
+  })
+
+  it('a left drawer open: the left corners sit beside it', () => {
+    const drawer = { left: 200, top: 38, width: 260, height: 762 }
+    const area = freeArea(view, { drawers: [{ side: 'left', rect: drawer }], tabs: [{ left: 460, top: 38, width: 540, height: 36 }] })
+    expect(area.left).toBe(460)
+    const spots = cornerSpots(view, size, insets, [], area)
+    expect(spots['top-left']).toEqual({ x: 460 + 12, y: 38 + 36 + 8 })
+    expect(spots['bottom-left']).toEqual({ x: 460 + 12, y: 588 })
+    // The right corners don't move.
+    expect(spots['bottom-right']).toEqual({ x: 748, y: 588 })
+  })
+
+  it('a right drawer open: the right corners sit beside it', () => {
+    const drawer = { left: 700, top: 38, width: 300, height: 762 }
+    const area = freeArea(view, { content: { ...content, width: 500 }, drawers: [{ side: 'right', rect: drawer }], tabs: [tabs] })
+    expect(area.right).toBe(700)
+    const spots = cornerSpots(view, size, insets, [], area)
+    expect(spots['bottom-right']).toEqual({ x: 700 - 12 - 240, y: 588 })
+    expect(spots['top-right']).toEqual({ x: 700 - 12 - 240, y: 38 + 36 + 8 })
+    expect(spots['top-left']).toEqual({ x: 212, y: 82 })
+  })
+
+  it('both drawers, and a closed drawer (no width) takes nothing', () => {
+    const area = freeArea(view, {
+      drawers: [
+        { side: 'left', rect: { left: 0, top: 38, width: 250, height: 762 } },
+        { side: 'right', rect: { left: 750, top: 38, width: 250, height: 762 } },
+        { side: 'right', rect: { left: 1000, top: 38, width: 0, height: 762 } },
+      ],
+    })
+    expect(area).toEqual({ left: 250, top: 0, right: 750, bottom: 800 })
+  })
+
+  it("a tab strip outside the area (a drawer's, or low in the window) doesn't move the top", () => {
+    const area = freeArea(view, {
+      drawers: [{ side: 'right', rect: { left: 700, top: 38, width: 300, height: 762 } }],
+      tabs: [
+        { left: 720, top: 38, width: 280, height: 36 },
+        { left: 0, top: 600, width: 700, height: 36 },
+      ],
+    })
+    expect(area.top).toBe(0)
+  })
+
+  it('composers are still avoided inside the area', () => {
+    const composer = { left: 200, top: 700, width: 500, height: 90 }
+    const area = freeArea(view, { content, drawers: [{ side: 'right', rect: { left: 700, top: 38, width: 300, height: 762 } }], tabs: [tabs] })
+    expect(cornerSpots(view, size, insets, [composer], area)['bottom-right']).toEqual({ x: 448, y: 700 - 8 - 200 })
   })
 })

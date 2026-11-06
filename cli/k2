@@ -50993,16 +50993,27 @@ THE STORE RULES (0.46.9, feature app-account-deletion-v1)
   K2 gives both one verb. Your App draws the button and the page.
 
 THE VERB (k2.asGuest(pass).profile.deleteAccount() in the server SDK)
-  profile.deleteAccount   POST /cli/skin/account/delete {password?}
-  Call it with the person's own session pass, on any door: your App's
-  server, its web page or its phone app. The App and the person come from
-  the pass. Never the box login (not_for_host) or an agent's own login
-  (agent_login).
+  profile.deleteAccount   POST /cli/skin/account/delete
+  Send the person's own session pass (k2skn_) as Authorization: Bearer,
+  and a JSON body: {} or {"password": "..."}. Any door works: your App's
+  server, its web page or its phone app, on the same host as its other K2
+  calls. The App and the person come from the pass, never the body.
   Recent sign-in: the sign-in behind the pass must be at most 15 minutes
-  old. If it is older, send their password (reauth_required; a wrong one is
-  bad_login, and 3 wrong ones lock the login: 423 locked). A phone's
-  sign-in counts from when the phone signed in, not from its last refresh.
+  old. A phone's sign-in counts from when the phone signed in, not from
+  its last refresh, so a phone usually needs the password. Someone with no
+  password signs in again first (a fresh sign-in counts).
   Ask "Delete your account?" in your App first: the person can't undo it.
+  Refusals are JSON {ok: false, error: {code, hint}}:
+    401 reauth_required   the sign-in is older: ask for the password, resend
+    401 bad_login         a wrong password: ask again
+    423 locked            3 wrong passwords lock the login for 15 minutes
+                          (error.retryAfterSecs)
+    403 password_change_required   someone else set that password: the
+                          person signs in and chooses their own first
+    403 not_for_host, agent_login  the box login or an agent's own login:
+                          never deleted this way
+  Either way the call ends: the pass stops working (both modes). Sign the
+  person out in the App and clear what it stores on the device.
 
 THE ANSWER (show it to the person)
   state      requested | deleted
@@ -51012,7 +51023,8 @@ THE ANSWER (show it to the person)
   done       what went now (sessions, devices, push_devices, pairings, ...)
   pending    what goes when a request completes
   kept       [{item, why}]: what K2 keeps, with a sentence you may show
-  requestId, dueAt   while requested
+  requestId, dueAt   while requested (dueAt: seconds since the epoch)
+  Immediate mode: state deleted, pending empty.
 
 MODES (per App: k2 app set <app> --account-deletion request|immediate)
   request (the default): K2 signs them out of the App everywhere and turns
@@ -51021,14 +51033,17 @@ MODES (per App: k2 app set <app> --account-deletion request|immediate)
     itself when the grace period ends (--deletion-grace, 1 to 90 days,
     default 30). Undo while it waits: k2 app account-deletion cancel.
   immediate: the deletion runs during the call.
+  A change of mode or grace period applies to new requests; a waiting
+  request keeps its date.
   Either way the owner gets an Inbox notice and the App's agent an inbox
   note, and each step is a line in k2 app history <app> --users.
 
 WHAT GOES (scope account)
   The login, this App's access, sessions, devices, push devices, pairing,
-  names and picture, email, read state, wallet items, chat sessions and the
-  App's client logs from them. With scope app: this App's access, sessions,
-  devices, push devices, pairing and client logs.
+  names and picture, email, read state, wallet items, the App's client logs
+  from them, and their chat sessions (they are signed out of chat).
+  With scope app: this App's access, sessions, devices, push devices,
+  pairing and client logs.
 WHAT STAYS (the kept list says why)
   Thread posts and files they sent to agents (the owner's). Files they put
   in a room's folder (the room's). Chat messages in Sew: Sew deactivates

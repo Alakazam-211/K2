@@ -10,7 +10,11 @@ pub(crate) struct Plane {
 
 impl Plane {
     fn new(w: usize, h: usize) -> Self {
-        Plane { data: vec![0; w * h], w, h }
+        Plane {
+            data: vec![0; w * h],
+            w,
+            h,
+        }
     }
 }
 

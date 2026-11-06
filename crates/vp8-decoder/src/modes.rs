@@ -89,7 +89,13 @@ impl Bounds {
 
 /// The near and nearest MVs and their weights (Section 16.3). Returns
 /// `[best, nearest, near, _]` and the four counts.
-pub fn find_near_mvs(above: &MbInfo, left: &MbInfo, above_left: &MbInfo, ref_frame: u8, sign_bias: &[bool; 4]) -> ([Mv; 4], [u8; 4]) {
+pub fn find_near_mvs(
+    above: &MbInfo,
+    left: &MbInfo,
+    above_left: &MbInfo,
+    ref_frame: u8,
+    sign_bias: &[bool; 4],
+) -> ([Mv; 4], [u8; 4]) {
     let mut mvs = [Mv::ZERO; 4];
     let mut cnt = [0u8; 4];
     let mut idx = 0usize;
@@ -131,7 +137,9 @@ pub fn find_near_mvs(above: &MbInfo, left: &MbInfo, above_left: &MbInfo, ref_fra
     if cnt[3] > 0 && mvs[3] == mvs[1] {
         cnt[1] += 1;
     }
-    cnt[3] = (above.y_mode == SPLITMV) as u8 * 2 + (left.y_mode == SPLITMV) as u8 * 2 + (above_left.y_mode == SPLITMV) as u8;
+    cnt[3] = (above.y_mode == SPLITMV) as u8 * 2
+        + (left.y_mode == SPLITMV) as u8 * 2
+        + (above_left.y_mode == SPLITMV) as u8;
     if cnt[2] > cnt[1] {
         cnt.swap(1, 2);
         mvs.swap(1, 2);
@@ -141,4 +149,3 @@ pub fn find_near_mvs(above: &MbInfo, left: &MbInfo, above_left: &MbInfo, ref_fra
     }
     (mvs, cnt)
 }
-

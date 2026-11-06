@@ -23,7 +23,14 @@ fn clamp255(v: i32) -> u8 {
 /// Whole-block prediction (16x16 luma or 8x8 chroma) for the four
 /// macroblock-level modes. `n` is the block size; the block starts at
 /// `ws[stride + 1]`.
-pub fn predict_block(ws: &mut [u8], stride: usize, n: usize, mode: u8, have_above: bool, have_left: bool) {
+pub fn predict_block(
+    ws: &mut [u8],
+    stride: usize,
+    n: usize,
+    mode: u8,
+    have_above: bool,
+    have_left: bool,
+) {
     let base = stride + 1;
     match mode {
         DC_PRED => {
@@ -84,7 +91,16 @@ pub fn predict_subblock(ws: &mut [u8], stride: usize, pos: usize, mode: u8) {
     // left column, through the corner, along the top to the above-right.
     let l = |i: usize| ws[pos - 1 + i * stride] as i32;
     let p = above(-1);
-    let t: [i32; 8] = [above(0), above(1), above(2), above(3), above(4), above(5), above(6), above(7)];
+    let t: [i32; 8] = [
+        above(0),
+        above(1),
+        above(2),
+        above(3),
+        above(4),
+        above(5),
+        above(6),
+        above(7),
+    ];
     let lf: [i32; 4] = [l(0), l(1), l(2), l(3)];
     let mut b = [0u8; 16];
     let avg3 = |x: i32, y: i32, z: i32| ((x + 2 * y + z + 2) >> 2) as u8;
@@ -102,7 +118,12 @@ pub fn predict_subblock(ws: &mut [u8], stride: usize, pos: usize, mode: u8) {
             }
         }
         B_VE_PRED => {
-            let row = [avg3(p, t[0], t[1]), avg3(t[0], t[1], t[2]), avg3(t[1], t[2], t[3]), avg3(t[2], t[3], t[4])];
+            let row = [
+                avg3(p, t[0], t[1]),
+                avg3(t[0], t[1], t[2]),
+                avg3(t[1], t[2], t[3]),
+                avg3(t[2], t[3], t[4]),
+            ];
             for r in 0..4 {
                 b[r * 4..r * 4 + 4].copy_from_slice(&row);
             }
@@ -276,18 +297,29 @@ pub fn fill_ws_border(
         ws[0] = if mbx == 0 { 129 } else { plane[a - 1] };
     }
     for r in 0..n {
-        ws[(r + 1) * ws_stride] = if mbx == 0 { 129 } else { plane[(y + r) * s + x - 1] };
+        ws[(r + 1) * ws_stride] = if mbx == 0 {
+            129
+        } else {
+            plane[(y + r) * s + x - 1]
+        };
     }
 }
 
 /// Copies the predicted block out of a workspace into a plane of stride `s`.
-pub fn store_ws(ws: &[u8], ws_stride: usize, plane: &mut [u8], s: usize, n: usize, mbx: usize, mby: usize) {
+pub fn store_ws(
+    ws: &[u8],
+    ws_stride: usize,
+    plane: &mut [u8],
+    s: usize,
+    n: usize,
+    mbx: usize,
+    mby: usize,
+) {
     for r in 0..n {
         let d = (mby * n + r) * s + mbx * n;
         plane[d..d + n].copy_from_slice(&ws[(r + 1) * ws_stride + 1..(r + 1) * ws_stride + 1 + n]);
     }
 }
-
 
 // --------------------------------------------------------------------------
 // Inter prediction.
@@ -354,7 +386,14 @@ fn filter_row<const BILINEAR: bool>(out: &mut [u8], taps: [&[u8]; 6], f: &Filter
 #[inline(always)]
 fn h_taps(src: &[u8], p: usize, n: usize) -> [&[u8]; 6] {
     let s = &src[p - 2..p + n + 3];
-    [&s[0..n], &s[1..n + 1], &s[2..n + 2], &s[3..n + 3], &s[4..n + 4], &s[5..n + 5]]
+    [
+        &s[0..n],
+        &s[1..n + 1],
+        &s[2..n + 2],
+        &s[3..n + 3],
+        &s[4..n + 4],
+        &s[5..n + 5],
+    ]
 }
 
 /// The six source rows for a vertical pass whose output 0 is at `p`.
@@ -413,14 +452,19 @@ pub fn inter_predict(
     if fx == 0 && fy == 0 {
         for r in 0..bh {
             let s = origin + r * sstride;
-            dst[dst_pos + r * dst_stride..dst_pos + r * dst_stride + bw].copy_from_slice(&src[s..s + bw]);
+            dst[dst_pos + r * dst_stride..dst_pos + r * dst_stride + bw]
+                .copy_from_slice(&src[s..s + bw]);
         }
         return;
     }
     if bilinear {
-        filter_block::<true>(dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters);
+        filter_block::<true>(
+            dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters,
+        );
     } else {
-        filter_block::<false>(dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters);
+        filter_block::<false>(
+            dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters,
+        );
     }
 }
 
@@ -445,7 +489,11 @@ fn filter_block<const BILINEAR: bool>(
         let f = &filters[fx];
         for r in 0..bh {
             let d = dst_pos + r * dst_stride;
-            filter_row::<BILINEAR>(&mut dst[d..d + bw], h_taps(src, origin + r * sstride, bw), f);
+            filter_row::<BILINEAR>(
+                &mut dst[d..d + bw],
+                h_taps(src, origin + r * sstride, bw),
+                f,
+            );
         }
         return;
     }
@@ -453,7 +501,11 @@ fn filter_block<const BILINEAR: bool>(
         let f = &filters[fy];
         for r in 0..bh {
             let d = dst_pos + r * dst_stride;
-            filter_row::<BILINEAR>(&mut dst[d..d + bw], v_taps(src, origin + r * sstride, sstride, bw), f);
+            filter_row::<BILINEAR>(
+                &mut dst[d..d + bw],
+                v_taps(src, origin + r * sstride, sstride, bw),
+                f,
+            );
         }
         return;
     }
@@ -478,9 +530,26 @@ mod tests {
     #[test]
     fn identity_filters_copy() {
         let data: Vec<u8> = (0..64 * 64).map(|i| (i * 7 % 251) as u8).collect();
-        let refp = RefPlane { data: &data, w: 64, h: 64 };
+        let refp = RefPlane {
+            data: &data,
+            w: 64,
+            h: 64,
+        };
         let mut a = vec![0u8; 16 * 16];
-        inter_predict(&mut a, 0, 16, &refp, 16, 16, 16, 16, 8, -16, &SIXTAP_FILTERS, false);
+        inter_predict(
+            &mut a,
+            0,
+            16,
+            &refp,
+            16,
+            16,
+            16,
+            16,
+            8,
+            -16,
+            &SIXTAP_FILTERS,
+            false,
+        );
         for r in 0..16 {
             for c in 0..16 {
                 // One pixel right and two up: (17, 14).
@@ -492,13 +561,43 @@ mod tests {
     #[test]
     fn edge_emulation_repeats_edges() {
         let data: Vec<u8> = (0..32 * 32).map(|i| (i % 200) as u8).collect();
-        let refp = RefPlane { data: &data, w: 32, h: 32 };
+        let refp = RefPlane {
+            data: &data,
+            w: 32,
+            h: 32,
+        };
         let mut a = vec![0u8; 4 * 4];
         // Far to the left and above: every pixel is the corner pixel.
-        inter_predict(&mut a, 0, 4, &refp, 0, 0, 4, 4, -800, -800, &SIXTAP_FILTERS, false);
+        inter_predict(
+            &mut a,
+            0,
+            4,
+            &refp,
+            0,
+            0,
+            4,
+            4,
+            -800,
+            -800,
+            &SIXTAP_FILTERS,
+            false,
+        );
         assert!(a.iter().all(|&p| p == data[0]));
         // A sub-pixel position on a flat region stays flat.
-        inter_predict(&mut a, 0, 4, &refp, 0, 0, 4, 4, -803, -805, &SIXTAP_FILTERS, false);
+        inter_predict(
+            &mut a,
+            0,
+            4,
+            &refp,
+            0,
+            0,
+            4,
+            4,
+            -803,
+            -805,
+            &SIXTAP_FILTERS,
+            false,
+        );
         assert!(a.iter().all(|&p| p == data[0]));
     }
 }

@@ -2,9 +2,9 @@
 //! published checksums. Test code only.
 
 const S: [u32; 64] = [
-    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10,
-    15, 21,
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
+    14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
+    21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
 
 fn k(i: usize) -> u32 {
@@ -38,7 +38,12 @@ impl Md5 {
     fn block(&mut self, chunk: &[u8]) {
         let mut m = [0u32; 16];
         for (i, w) in m.iter_mut().enumerate() {
-            *w = u32::from_le_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
+            *w = u32::from_le_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
         }
         let [mut a, mut b, mut c, mut d] = self.state;
         for i in 0..64 {
@@ -89,7 +94,11 @@ impl Md5 {
         let len = self.len;
         self.update(&pad);
         self.len = len;
-        self.state.iter().flat_map(|w| w.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
+        self.state
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 }
 
@@ -101,7 +110,10 @@ fn md5_known_answers() {
         m.hex()
     };
     assert_eq!(h(b""), "d41d8cd98f00b204e9800998ecf8427e");
-    assert_eq!(h(b"The quick brown fox jumps over the lazy dog"), "9e107d9d372bb6826bd81d3542a419d6");
+    assert_eq!(
+        h(b"The quick brown fox jumps over the lazy dog"),
+        "9e107d9d372bb6826bd81d3542a419d6"
+    );
     let long: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
     let mut m = Md5::new();
     for chunk in long.chunks(37) {

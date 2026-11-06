@@ -115,16 +115,24 @@ pub(crate) fn decoder(config: DecoderConfig, wake: Wake) -> Result<Box<dyn Video
         return Err(VideoError::Unsupported("no hardware VP8 decoder here".into()));
     }
     Ok(Box::new(ThreadedDecoder::start(
-        Box::new(Vp8Core {
-            dec: vp8_decoder::Decoder::new(),
-        }),
+        Box::new(Vp8Core::new()),
         config,
         wake,
     )?))
 }
 
-struct Vp8Core {
+/// The decoder behind `decoder`'s thread. Its input comes from the network:
+/// see `hostile_tests`.
+pub(crate) struct Vp8Core {
     dec: vp8_decoder::Decoder,
+}
+
+impl Vp8Core {
+    pub(crate) fn new() -> Vp8Core {
+        Vp8Core {
+            dec: vp8_decoder::Decoder::new(),
+        }
+    }
 }
 
 fn map_err(e: vp8_decoder::DecodeError) -> DecodeError {

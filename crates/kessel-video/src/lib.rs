@@ -58,6 +58,9 @@ mod types;
 #[cfg(feature = "vp8")]
 mod vp8;
 
+#[cfg(test)]
+mod hostile_tests;
+
 #[cfg(all(feature = "apple", target_os = "macos"))]
 #[allow(unsafe_code)]
 mod apple;

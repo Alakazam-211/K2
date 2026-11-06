@@ -80,7 +80,9 @@ pub fn avcc_nals(sample: &[u8], len_size: usize) -> Result<Vec<&[u8]>, VideoErro
             n = (n << 8) | *b as usize;
         }
         i += len_size;
-        if n == 0 || i + n > sample.len() {
+        // Not `i + n > len`: a 4-byte length can overflow that sum on a
+        // 32-bit target. `i <= len` here, so this can't underflow.
+        if n == 0 || n > sample.len() - i {
             return Err(invalid(format!(
                 "AVCC NAL of {n} bytes at {i} overruns a {}-byte sample",
                 sample.len()

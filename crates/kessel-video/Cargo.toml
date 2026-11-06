@@ -2,19 +2,21 @@
 name = "kessel-video"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+# The windows crate's minimum (0.62, for the Windows backend).
+rust-version = "1.82"
 license = "MIT OR Apache-2.0"
-description = "Cameras, screen capture, pixels and video codecs for apps that bring their own transport: H.264 through the operating system's codecs, a codec-neutral submit-and-poll API, and a scripted fake backend for tests."
+description = "Cameras, screen capture, pixels and video codecs for apps that bring their own transport: H.264 through the operating system's codecs, VP8 in pure Rust, a codec-neutral submit-and-poll API, and a scripted fake backend for tests."
 authors = ["Alakazam Labs"]
 readme = "README.md"
 documentation = "https://docs.rs/kessel-video"
-# repository = TODO: set when the public repository's home is decided.
-keywords = ["video", "camera", "screen-capture", "h264", "webrtc"]
-categories = ["multimedia::video"]
-# Not published until the API settles and the release is approved.
-publish = false
-# tests/scrub.rs is the repository's own publish check.
-exclude = ["tests/scrub.rs"]
+repository = "https://github.com/Alakazam-211/K2"
+keywords = ["video", "camera", "screen-capture", "h264", "vp8"]
+categories = ["multimedia::video", "multimedia::encoding"]
+# Only the code, the README and the licences ship. Everything else stays in the
+# repository: tests/ (tests/scrub.rs is the repository's own publish check),
+# scripts/, deny.toml and the changelog. The leading / anchors each pattern at
+# the crate root, so a file of the same name deeper in the tree can't match.
+include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
 
 [features]
 # The API types and traits, `null()` and `fake` need no feature, no OS
@@ -44,12 +46,17 @@ vp8 = ["dep:vp8-decoder", "dep:vp8-encoder"]
 # can't be target-gated themselves).
 system = ["apple", "windows", "linux", "android", "vp8"]
 
+# Every dependency comes from crates.io as a caret requirement, so library
+# users get patch and security releases (vp8-decoder decodes frames that come
+# from the network); apps pin through their Cargo.lock.
 [dependencies]
 bytes = "1"
 crossbeam-queue = "0.3"
 thiserror = "2"
-vp8-decoder = { version = "0.1", path = "../vp8-decoder", optional = true }
-vp8-encoder = { version = "0.1", path = "../vp8-encoder", optional = true }
+# The published VP8 crates. vp8-encoder pins vp8-decoder exactly (they share
+# hidden modules), so the two always resolve as a matching pair.
+vp8-decoder = { version = "0.1", optional = true }
+vp8-encoder = { version = "0.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

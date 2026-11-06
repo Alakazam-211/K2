@@ -1,15 +1,21 @@
 //! The [`Platform`] on a device: Camera2 through the NDK, the CAMERA
-//! permission through JNI, and the MediaCodec H.264 encoder. Every `unsafe`
-//! block of the Android backend is in this module and its children.
+//! permission through JNI, the MediaCodec H.264 encoder, the
+//! MediaProjection's virtual display, and host AHardwareBuffers as native
+//! frames. Every `unsafe` block of the Android backend is in this module
+//! and its children.
 
 mod camera;
 mod encoder;
 mod ffi;
+mod hwbuf;
 mod jni;
+mod projection;
+
+pub(crate) use hwbuf::hardware_buffer_frame;
 
 use super::meta::{self, camera_result, CamDesc, RawCharacteristics};
-use super::{Capture, ImageSink, Platform};
-use crate::error::VideoError;
+use super::{Capture, ImageSink, Platform, ProjectionCapture, ScreenSink};
+use crate::error::{unsupported, VideoError};
 use crate::kit::EncoderCore;
 use crate::types::*;
 use ffi::*;
@@ -207,6 +213,26 @@ impl Platform for Ndk {
 
     fn h264_encoder(&self, cfg: &EncoderConfig) -> Result<Box<dyn EncoderCore>, VideoError> {
         Ok(Box::new(encoder::McEncoder::open(cfg)?))
+    }
+
+    fn open_projection(
+        &self,
+        projection: usize,
+        size: (u32, u32, u32),
+        sink: Arc<dyn ScreenSink>,
+    ) -> Result<Box<dyn ProjectionCapture>, VideoError> {
+        let (vm, _) = self.jni.ok_or_else(|| {
+            unsupported(
+                "screen capture needs the JavaVM: make the context with AndroidContext::new",
+            )
+        })?;
+        // SAFETY: `vm` is the process's JavaVM (AndroidContext::new's
+        // contract) and `projection` a live MediaProjection global reference
+        // (set_media_projection's contract; the backend holds the screen
+        // lock, so it isn't stopped meanwhile).
+        Ok(Box::new(unsafe {
+            projection::NdkProjection::open(vm, projection, size, sink)?
+        }))
     }
 }
 

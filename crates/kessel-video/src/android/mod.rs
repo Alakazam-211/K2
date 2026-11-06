@@ -1,8 +1,10 @@
 //! The Android backend: Camera2 cameras through the NDK (`libcamera2ndk`,
 //! with `AImageReader` from `libmediandk`), VP8 from the Rust crates, and
-//! H.264 encoding through `AMediaCodec`. Screen capture needs
-//! MediaProjection and a Java foreground service, so it answers
-//! `Unsupported`.
+//! H.264 encoding through `AMediaCodec`. Screen capture runs once the app
+//! hands over a MediaProjection ([`AndroidContext::set_media_projection`]):
+//! a `VirtualDisplay` into an `AImageReader`, through JNI. The projection's
+//! consent, its foreground service and its stop callback are the app's
+//! (Java or Kotlin).
 //!
 //! The backend logic here runs over a [`Platform`]: the NDK glue on a
 //! device (`ndk`), a scripted one in the tests, so everything but the FFI
@@ -17,6 +19,7 @@ mod meta;
 #[cfg(target_os = "android")]
 #[allow(unsafe_code)]
 mod ndk;
+mod screen;
 #[cfg(test)]
 mod tests;
 
@@ -29,16 +32,44 @@ use crate::frame::{PixelFormat, Planes, VideoFrame};
 use crate::kit::{
     lock, now_us, EncoderCore, QueuedSource, SourceControl, SourceShared, ThreadedEncoder,
 };
-use crate::platform::{AndroidContext, BackgroundListener, HostState};
+use crate::platform::{
+    AndroidContext, BackgroundListener, HostState, ScreenChange, ScreenListener,
+};
 use crate::types::*;
 use image::{oriented_box, to_i420, upright_rotation, Yuv420};
 use meta::{CamDesc, Lost};
+use screen::ScreenImage;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-/// What screen capture answers on Android.
-const NO_SCREEN: &str =
-    "screen capture on Android needs MediaProjection and a Java foreground service: not built";
+/// What screen capture answers on Android before the app hands over a
+/// projection.
+const NO_SCREEN: &str = "screen capture on Android needs a MediaProjection from the app: \
+                         AndroidContext::set_media_projection";
+
+/// The one screen source while a projection is there.
+pub(crate) const PROJECTION_ID: &str = "media-projection";
+
+/// A frame around an AHardwareBuffer the host already has (from its own
+/// capture or rendering), for a [`crate::frame_in()`] source or an encoder.
+/// The buffer is acquired (the caller keeps its own reference) and released
+/// when the frame's last clone drops. Encoders read it back to CPU planes
+/// (`AHardwareBuffer_lock`): RGBA and RGBX buffers on API 26+, YUV 4:2:0
+/// buffers on API 29+. Other formats, or an older device, are
+/// `Unsupported`.
+///
+/// # Safety
+///
+/// `buffer` must be a live `AHardwareBuffer*`.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+pub unsafe fn hardware_buffer_frame(
+    buffer: *mut std::ffi::c_void,
+    capture_us: u64,
+) -> Result<VideoFrame, VideoError> {
+    // SAFETY: the caller's promise.
+    unsafe { ndk::hardware_buffer_frame(buffer, capture_us) }
+}
 
 /// The Android backend for the host app's `ctx`.
 #[cfg(target_os = "android")]
@@ -74,10 +105,39 @@ pub(crate) trait Platform: Send + Sync + 'static {
     fn h264_encode_capability(&self) -> Option<CodecCapability>;
     /// An H.264 encoder core for `cfg` (already validated).
     fn h264_encoder(&self, cfg: &EncoderConfig) -> Result<Box<dyn EncoderCore>, VideoError>;
+    /// A virtual display of `width` x `height` at `dpi` from the host's
+    /// MediaProjection (a JNI global reference, as an address), mirroring
+    /// the screen into a reader whose images go to `sink`. Dropping the
+    /// result releases the display.
+    fn open_projection(
+        &self,
+        projection: usize,
+        size: (u32, u32, u32),
+        sink: Arc<dyn ScreenSink>,
+    ) -> Result<Box<dyn ProjectionCapture>, VideoError>;
 }
 
 /// A running camera. Dropping it closes the device.
 pub(crate) trait Capture: Send {}
+
+/// A running virtual display. Dropping it releases the display and its
+/// reader.
+pub(crate) trait ProjectionCapture: Send {
+    /// A new size (and density): a new reader of that size, then the
+    /// display resized onto it.
+    fn resize(&mut self, width: u32, height: u32, dpi: u32) -> Result<(), VideoError>;
+}
+
+/// Where a virtual display's images go. Called from the NDK's threads; must
+/// not block on the backend.
+pub(crate) trait ScreenSink: Send + Sync {
+    /// Nothing wants frames now: the image can be released unread.
+    fn idle(&self) -> bool;
+    /// One image.
+    fn image(&self, img: &ScreenImage<'_>);
+    /// One image couldn't be read (the display keeps running).
+    fn error(&self, e: VideoError);
+}
 
 /// Where a running camera's images and losses go. Called from the NDK's
 /// threads; must not block on the backend.
@@ -100,12 +160,14 @@ struct Inner {
     events: EventHub,
     shut: AtomicBool,
     cams: Mutex<Vec<Weak<Cam>>>,
+    screens: Mutex<Vec<Weak<Screen>>>,
 }
 
 pub(crate) struct AndroidBackend {
     inner: Arc<Inner>,
-    // Kept alive while the backend lives; the host holds only a weak ref.
+    // Kept alive while the backend lives; the host holds only weak refs.
     _listener: Arc<BackgroundListener>,
+    _screen_listener: Arc<ScreenListener>,
 }
 
 impl AndroidBackend {
@@ -116,6 +178,7 @@ impl AndroidBackend {
             events: EventHub::default(),
             shut: AtomicBool::new(false),
             cams: Mutex::new(Vec::new()),
+            screens: Mutex::new(Vec::new()),
         });
         let weak = Arc::downgrade(&inner);
         let listener: Arc<BackgroundListener> = Arc::new(move |background| {
@@ -124,9 +187,17 @@ impl AndroidBackend {
             }
         });
         ctx.host().listen(&listener);
+        let weak = Arc::downgrade(&inner);
+        let screen_listener: Arc<ScreenListener> = Arc::new(move |change| {
+            if let Some(i) = weak.upgrade() {
+                i.screen_changed(change);
+            }
+        });
+        ctx.host().listen_screen(&screen_listener);
         Arc::new(AndroidBackend {
             inner,
             _listener: listener,
+            _screen_listener: screen_listener,
         })
     }
 
@@ -144,6 +215,42 @@ impl Inner {
         let mut cams = lock(&self.cams);
         cams.retain(|w| w.strong_count() > 0);
         cams.iter().filter_map(Weak::upgrade).collect()
+    }
+
+    fn live_screens(&self) -> Vec<Arc<Screen>> {
+        let mut screens = lock(&self.screens);
+        screens.retain(|w| w.strong_count() > 0);
+        screens.iter().filter_map(Weak::upgrade).collect()
+    }
+
+    /// Screens follow the display; a stopped projection ends them. They
+    /// don't care whether the app is in the background.
+    fn screen_changed(&self, change: ScreenChange) {
+        if self.shut.load(Ordering::Acquire) {
+            return;
+        }
+        match change {
+            ScreenChange::Display => {
+                let display = self.host.screen().display;
+                for s in self.live_screens() {
+                    s.refit(display);
+                }
+            }
+            ScreenChange::Stopped => {
+                for s in self.live_screens() {
+                    s.close();
+                    s.sink
+                        .shared
+                        .event(SourceEvent::Ended(EndReason::SourceClosed));
+                }
+                self.events.publish(BackendEvent::CapabilitiesChanged);
+            }
+            ScreenChange::Given => self.events.publish(BackendEvent::CapabilitiesChanged),
+        }
+    }
+
+    fn projected(&self) -> bool {
+        self.host.screen().projection.is_some()
     }
 
     fn set_background(&self, background: bool) {
@@ -183,7 +290,17 @@ impl VideoBackend for AndroidBackend {
         caps.codecs
             .extend(self.inner.platform.h264_encode_capability());
         caps.camera = true;
-        // Screen capture: none (MediaProjection needs Java).
+        // One screen, while the app's MediaProjection lasts.
+        let projected = self.inner.projected();
+        caps.screen = ScreenCapability {
+            supported: projected,
+            system_picker: false,
+            list: projected,
+            windows: false,
+            cursor: false,
+            exclude_own_windows: false,
+            frame_in: false,
+        };
         caps
     }
 
@@ -287,33 +404,93 @@ impl VideoBackend for AndroidBackend {
     }
 
     fn screen_permission(&self) -> Permission {
-        Permission::Denied
+        // The consent is the projection: asking for it
+        // (createScreenCaptureIntent) is the app's.
+        if self.inner.projected() {
+            Permission::Granted
+        } else {
+            Permission::NotDetermined
+        }
     }
 
     fn request_screen_permission(&self, done: Done<Permission>) {
-        done(Permission::Denied)
+        done(self.screen_permission())
     }
 
     fn screen_sources(&self) -> Result<Vec<ScreenSourceInfo>, VideoError> {
         self.live()?;
-        Ok(Vec::new())
+        let st = *self.inner.host.screen();
+        Ok(match st.projection {
+            Some(_) => vec![ScreenSourceInfo::new(
+                PROJECTION_ID,
+                ScreenKind::Display,
+                "Screen",
+                st.display.0,
+                st.display.1,
+            )],
+            None => Vec::new(),
+        })
     }
 
     fn pick_screen(&self, _opts: PickOptions, done: Done<Result<ScreenSelection, VideoError>>) {
         if self.live().is_err() {
             return done(Err(VideoError::ShutDown));
         }
-        done(Err(unsupported(NO_SCREEN)))
+        // The consent dialog was the picker; the projection is the choice.
+        if self.inner.projected() {
+            done(Ok(ScreenSelection::Listed(PROJECTION_ID.into())))
+        } else {
+            done(Err(unsupported(NO_SCREEN)))
+        }
     }
 
     fn open_screen(
         &self,
-        _s: &ScreenSelection,
-        _c: CaptureConstraints,
-        _wake: Wake,
+        s: &ScreenSelection,
+        c: CaptureConstraints,
+        wake: Wake,
     ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
-        Err(unsupported(NO_SCREEN))
+        c.validate()?;
+        // Held until the virtual display is made: the host's
+        // media_projection_stopped waits for it.
+        let st = self.inner.host.screen();
+        let Some(projection) = st.projection else {
+            return Err(unsupported(NO_SCREEN));
+        };
+        match s {
+            ScreenSelection::Listed(id) if id == PROJECTION_ID => {}
+            _ => return Err(VideoError::NotFound),
+        }
+        let (dw, dh, dpi) = st.display;
+        if dw == 0 || dh == 0 || dpi == 0 {
+            return Err(VideoError::Invalid(format!(
+                "a {dw}x{dh} display at {dpi} dpi (set_media_projection's size)"
+            )));
+        }
+        let (w, h) = screen::virtual_size(dw, dh, c.max_width, c.max_height);
+        let shared = SourceShared::new(c, c.fps.unwrap_or(30), wake);
+        shared.set_box_follows_frame(true);
+        let sink = Arc::new(ScreenFrames { shared });
+        let capture = self
+            .inner
+            .platform
+            .open_projection(projection, (w, h, dpi), sink.clone())?;
+        drop(st);
+        let screen = Arc::new(Screen {
+            sink,
+            slot: Mutex::new(ScreenSlot {
+                capture: Some(capture),
+                size: (w, h, dpi),
+                size_box: (c.max_width, c.max_height),
+            }),
+        });
+        lock(&self.inner.screens).push(Arc::downgrade(&screen));
+        Ok(Box::new(AndroidScreen {
+            queue: QueuedSource::new(screen.sink.shared.clone(), ScreenControl),
+            screen,
+            host: self.inner.host.clone(),
+        }))
     }
 
     fn encoder(
@@ -374,6 +551,128 @@ impl VideoBackend for AndroidBackend {
             c.close();
             c.sink.shared.event(SourceEvent::Ended(EndReason::Closed));
         }
+        for s in self.inner.live_screens() {
+            s.close();
+            s.sink.shared.event(SourceEvent::Ended(EndReason::Closed));
+        }
+    }
+}
+
+// ───────────────────────────── screens ─────────────────────────────
+
+/// Turns a virtual display's images into NV12 frames and queues them.
+struct ScreenFrames {
+    shared: Arc<SourceShared>,
+}
+
+impl ScreenSink for ScreenFrames {
+    fn idle(&self) -> bool {
+        self.shared.idle()
+    }
+
+    fn image(&self, img: &ScreenImage<'_>) {
+        if self.shared.idle() {
+            return;
+        }
+        match screen::to_nv12(img, now_us()) {
+            Ok(f) => self.shared.deliver(f),
+            Err(e) => self.shared.event(SourceEvent::Error(e)),
+        }
+    }
+
+    fn error(&self, e: VideoError) {
+        self.shared.event(SourceEvent::Error(e));
+    }
+}
+
+struct ScreenSlot {
+    /// The virtual display; `None` once closed.
+    capture: Option<Box<dyn ProjectionCapture>>,
+    /// Its width, height and density now.
+    size: (u32, u32, u32),
+    /// The asked size box (orientation-free).
+    size_box: (Option<u32>, Option<u32>),
+}
+
+/// One shared screen: the virtual display, kept at the display's shape.
+struct Screen {
+    sink: Arc<ScreenFrames>,
+    slot: Mutex<ScreenSlot>,
+}
+
+impl Screen {
+    /// Resize the virtual display for `display` (width, height, dpi) and
+    /// the size box, if its size changes.
+    fn refit(&self, display: (u32, u32, u32)) {
+        let (dw, dh, dpi) = display;
+        if dw == 0 || dh == 0 || dpi == 0 {
+            return;
+        }
+        let mut slot = lock(&self.slot);
+        let (bw, bh) = slot.size_box;
+        let (w, h) = screen::virtual_size(dw, dh, bw, bh);
+        let size = (w, h, dpi);
+        if size == slot.size {
+            return;
+        }
+        let Some(capture) = slot.capture.as_mut() else {
+            return;
+        };
+        if let Err(e) = capture.resize(w, h, dpi) {
+            drop(slot);
+            self.sink.shared.event(SourceEvent::Error(e));
+            return;
+        }
+        slot.size = size;
+    }
+
+    fn close(&self) {
+        lock(&self.slot).capture = None;
+    }
+}
+
+struct ScreenControl;
+
+impl SourceControl for ScreenControl {}
+
+/// The screen source: the shared queue, and the size box kept here so the
+/// virtual display follows it.
+struct AndroidScreen {
+    queue: QueuedSource<ScreenControl>,
+    screen: Arc<Screen>,
+    host: Arc<HostState>,
+}
+
+impl FrameSource for AndroidScreen {
+    fn try_recv(&mut self) -> Option<VideoFrame> {
+        self.queue.try_recv()
+    }
+
+    fn try_event(&mut self) -> Option<SourceEvent> {
+        self.queue.try_event()
+    }
+
+    fn set_constraints(&mut self, c: CaptureConstraints) -> Result<(), VideoError> {
+        self.queue.set_constraints(c)?;
+        lock(&self.screen.slot).size_box = (c.max_width, c.max_height);
+        let display = self.host.screen().display;
+        self.screen.refit(display);
+        Ok(())
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        // The display keeps running; its images are released unread.
+        self.queue.set_paused(paused)
+    }
+
+    fn stats(&self) -> SourceStats {
+        self.queue.stats()
+    }
+}
+
+impl Drop for AndroidScreen {
+    fn drop(&mut self) {
+        self.screen.close();
     }
 }
 

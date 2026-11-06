@@ -215,6 +215,11 @@ pub struct ScreenCapability {
     pub cursor: bool,
     /// [`CaptureConstraints::exclude_own_windows`] works here.
     pub exclude_own_windows: bool,
+    /// Screen frames come from outside the backend, through a source the
+    /// app feeds ([`crate::frame_in()`]): on iOS, from the app's broadcast
+    /// upload extension. `pick_screen` and `open_screen` answer
+    /// `Unsupported`; wait for the app's frames instead of opening a picker.
+    pub frame_in: bool,
 }
 
 /// The whole capability answer of a backend.

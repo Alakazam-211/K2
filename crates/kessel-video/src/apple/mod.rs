@@ -6,8 +6,9 @@
 //! low-power events. macOS only: ScreenCaptureKit screens and windows
 //! ([`screen`]). iOS only: the app's foreground and background state, the
 //! phone's orientation and the capture session's interruptions ([`ios`]);
-//! screen sharing on iOS needs a broadcast upload extension, so `open_screen`
-//! answers `Unsupported` there.
+//! screen sharing on iOS comes from a broadcast upload extension, through
+//! the app into a frame-in source, so `open_screen` answers `Unsupported`
+//! there and the capabilities say `frame_in`.
 
 mod camera;
 mod ffi;
@@ -38,7 +39,8 @@ use std::time::Duration;
 pub(crate) use objc::os_name;
 
 /// iOS has no screen capture here: sharing the screen needs a broadcast
-/// upload extension, which runs in its own process.
+/// upload extension, which runs in its own process and hands its frames to
+/// the app, which pushes them into a [`crate::frame_in()`] source.
 #[cfg(target_os = "ios")]
 mod screen {
     use crate::api::{Done, FrameSource, Wake};
@@ -46,7 +48,7 @@ mod screen {
     use crate::types::*;
 
     const WHY: &str = "screen capture on iOS needs a broadcast upload extension; \
-                       kessel-video doesn't capture screens on iOS";
+                       push its frames into a frame_in source";
 
     pub(crate) fn supported() -> bool {
         false
@@ -56,12 +58,14 @@ mod screen {
         false
     }
 
+    // Nothing to ask: the person starts the broadcast from the system's
+    // own picker, and that is the consent.
     pub(crate) fn permission() -> Permission {
-        Permission::Denied
+        Permission::Granted
     }
 
     pub(crate) fn request_permission(done: Done<Permission>) {
-        done(Permission::Denied)
+        done(Permission::Granted)
     }
 
     pub(crate) fn sources() -> Result<Vec<ScreenSourceInfo>, VideoError> {
@@ -250,13 +254,17 @@ impl VideoBackend for AppleBackend {
         let mut caps = Capabilities::new("apple", os_name());
         crate::rust_codecs::add_capabilities(&mut caps);
         caps.camera = true;
+        let listed = screen::supported();
         caps.screen = ScreenCapability {
-            supported: screen::supported(),
+            // iOS: the broadcast upload extension's frames, which the app
+            // feeds into a frame-in source.
+            supported: listed || cfg!(target_os = "ios"),
             system_picker: screen::picker_supported(),
-            list: screen::supported(),
-            windows: screen::supported(),
-            cursor: screen::supported(),
-            exclude_own_windows: screen::supported(),
+            list: listed,
+            windows: listed,
+            cursor: listed,
+            exclude_own_windows: listed,
+            frame_in: cfg!(target_os = "ios"),
         };
         let h264 = || {
             Some(H264Capability::new(

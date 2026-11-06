@@ -624,6 +624,11 @@ impl SourceShared {
         self.paused.load(Ordering::Acquire) || self.ended.load(Ordering::Acquire)
     }
 
+    /// `Ended` was sent: no more frames.
+    pub fn has_ended(&self) -> bool {
+        self.ended.load(Ordering::Acquire)
+    }
+
     /// The device's own rate changed.
     pub fn set_native_fps(&self, fps: u32) {
         *lock(&self.native_fps) = fps;

@@ -5,6 +5,16 @@
 - `apple_pixel_buffer` (macOS and iOS): the `CVPixelBufferRef` inside an
   Apple native frame (a VideoToolbox decoder's `Native` output), borrowed
   while the buffer lives, for an `AVSampleBufferDisplayLayer`.
+- Frame-in sources and phone screens: `frame_in()` makes a `FrameSource`
+  the host pushes frames into (CPU planes, or a native buffer through
+  `pixel_buffer_frame` on Apple and `hardware_buffer_frame` on Android),
+  with timestamps and a `Rotation` that turns them upright; it never pauses
+  for the app's background. iOS screens come in this way
+  (`ScreenCapability::frame_in`, new); Android screens come from a
+  MediaProjection the app hands over (`AndroidContext::set_media_projection`,
+  `set_screen_size`, `media_projection_stopped`), as NV12 from a
+  `VirtualDisplay` and `ImageReader`, resized when the display turns, and
+  `Ended(SourceClosed)` when the projection stops.
 
 ## 0.1.0 (unreleased)
 

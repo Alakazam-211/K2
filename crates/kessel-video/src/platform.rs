@@ -22,13 +22,41 @@ use std::sync::{Arc, Mutex, Weak};
 /// background and `false` when it comes back.
 pub(crate) type BackgroundListener = dyn Fn(bool) + Send + Sync;
 
+/// A change to what the host said about screen capture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScreenChange {
+    /// The display's size or density changed (it turned).
+    Display,
+    /// A MediaProjection was handed over.
+    Given,
+    /// The MediaProjection stopped.
+    Stopped,
+}
+
+/// A screen listener: called on every [`ScreenChange`].
+pub(crate) type ScreenListener = dyn Fn(ScreenChange) + Send + Sync;
+
+/// The MediaProjection the host handed over, and the display it mirrors.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ScreenState {
+    /// The JNI global reference to the `MediaProjection`, as an address.
+    pub(crate) projection: Option<usize>,
+    /// The display's width and height in pixels now, and its density.
+    pub(crate) display: (u32, u32, u32),
+}
+
 /// What the host app tells the Android backend while it runs: whether it is
-/// in the background and which way the device is turned.
+/// in the background, which way the device is turned, and the screen it
+/// lets the app capture.
 #[derive(Default)]
 pub(crate) struct HostState {
     background: AtomicBool,
     orientation: AtomicU32,
     listeners: Mutex<Vec<Weak<BackgroundListener>>>,
+    /// Held while a virtual display is made from the projection, so the
+    /// host's `media_projection_stopped` waits for that to finish.
+    screen: Mutex<ScreenState>,
+    screen_listeners: Mutex<Vec<Weak<ScreenListener>>>,
 }
 
 impl HostState {
@@ -49,6 +77,32 @@ impl HostState {
         l.push(Arc::downgrade(f));
     }
 
+    /// The screen state, locked: the projection can't be dropped while
+    /// the guard lives.
+    pub(crate) fn screen(&self) -> std::sync::MutexGuard<'_, ScreenState> {
+        lock(&self.screen)
+    }
+
+    /// Call `f` on every [`ScreenChange`], until `f` is dropped.
+    #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
+    pub(crate) fn listen_screen(&self, f: &Arc<ScreenListener>) {
+        let mut l = lock(&self.screen_listeners);
+        l.retain(|w| w.strong_count() > 0);
+        l.push(Arc::downgrade(f));
+    }
+
+    fn screen_changed(&self, change: ScreenChange) {
+        // Called outside the locks: a listener may resize or close screens.
+        let live: Vec<Arc<ScreenListener>> = {
+            let mut l = lock(&self.screen_listeners);
+            l.retain(|w| w.strong_count() > 0);
+            l.iter().filter_map(Weak::upgrade).collect()
+        };
+        for f in live {
+            f(change);
+        }
+    }
+
     fn set_background(&self, background: bool) {
         if self.background.swap(background, Ordering::AcqRel) == background {
             return;
@@ -65,8 +119,8 @@ impl HostState {
     }
 }
 
-/// The host app's Android handles and lifecycle, for the Android backend.
-/// Other platforms ignore it.
+/// The host app's Android handles and lifecycle, and the MediaProjection
+/// for screen capture, for the Android backend. Other platforms ignore it.
 ///
 /// Keep a clone: the backend learns from it when the app goes to the
 /// background ([`AndroidContext::set_background`]) and which way the device
@@ -85,6 +139,7 @@ impl std::fmt::Debug for AndroidContext {
             .field("jni", &(self.java_vm != 0 && self.context != 0))
             .field("background", &self.host.background())
             .field("orientation", &self.host.orientation())
+            .field("media_projection", &self.has_media_projection())
             .finish()
     }
 }
@@ -146,6 +201,84 @@ impl AndroidContext {
     /// The device orientation, as last told (0, 90, 180 or 270).
     pub fn device_orientation(&self) -> u32 {
         self.host.orientation()
+    }
+
+    /// Hand over a MediaProjection the person allowed, for screen capture:
+    /// the result of `MediaProjectionManager.getMediaProjection` after the
+    /// consent from `createScreenCaptureIntent`. The display it mirrors is
+    /// `width` x `height` pixels now, at `density_dpi` (from
+    /// `WindowMetrics` or `DisplayMetrics`). From here the backend lists one
+    /// screen source, `pick_screen` answers it without a picker, and
+    /// `open_screen` makes a `VirtualDisplay` into an `ImageReader`.
+    ///
+    /// The app's part, which needs Java or Kotlin:
+    /// - Run a foreground service with
+    ///   `foregroundServiceType="mediaProjection"` (and the
+    ///   `FOREGROUND_SERVICE_MEDIA_PROJECTION` permission on Android 14+)
+    ///   before asking for the projection, for as long as the screen is
+    ///   shared.
+    /// - On Android 14+, register a `MediaProjection.Callback` before handing
+    ///   the projection over (Android throws otherwise), and from its
+    ///   `onStop` call [`AndroidContext::media_projection_stopped`].
+    /// - Call [`AndroidContext::set_screen_size`] when the display turns or
+    ///   changes size.
+    ///
+    /// Android allows one virtual display per projection: open one screen
+    /// source per projection.
+    ///
+    /// # Safety
+    ///
+    /// `projection` must be a JNI global reference to an
+    /// `android.media.projection.MediaProjection`, valid until
+    /// [`AndroidContext::media_projection_stopped`] returns (or until a
+    /// later `set_media_projection` returns). The host deletes it after
+    /// that; kessel-video keeps no reference to it.
+    #[allow(unsafe_code)]
+    pub unsafe fn set_media_projection(
+        &self,
+        projection: *mut std::ffi::c_void,
+        width: u32,
+        height: u32,
+        density_dpi: u32,
+    ) {
+        {
+            let mut st = self.host.screen();
+            st.projection = (!projection.is_null()).then_some(projection as usize);
+            st.display = (width, height, density_dpi);
+        }
+        self.host.screen_changed(ScreenChange::Given);
+    }
+
+    /// The display the projection mirrors turned or changed size: open
+    /// screen sources resize their virtual display to keep the picture
+    /// upright and unstretched (frames report `Started` with the new size).
+    pub fn set_screen_size(&self, width: u32, height: u32, density_dpi: u32) {
+        {
+            let mut st = self.host.screen();
+            if st.display == (width, height, density_dpi) {
+                return;
+            }
+            st.display = (width, height, density_dpi);
+        }
+        self.host.screen_changed(ScreenChange::Display);
+    }
+
+    /// The MediaProjection stopped (its callback's `onStop`: the person
+    /// stopped sharing, or the system did). Open screen sources end with
+    /// [`crate::EndReason::SourceClosed`] and release their virtual
+    /// displays, and screen capture is unsupported again until the next
+    /// [`AndroidContext::set_media_projection`]. Once this returns,
+    /// kessel-video no longer uses the projection's reference.
+    pub fn media_projection_stopped(&self) {
+        let had = self.host.screen().projection.take().is_some();
+        if had {
+            self.host.screen_changed(ScreenChange::Stopped);
+        }
+    }
+
+    /// Is there a projection to capture the screen with?
+    pub fn has_media_projection(&self) -> bool {
+        self.host.screen().projection.is_some()
     }
 
     /// The `JavaVM*` and `Context` global reference, if both were given.

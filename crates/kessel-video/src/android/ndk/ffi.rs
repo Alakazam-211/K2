@@ -2,7 +2,8 @@
 //! `AImageReader` and `AMediaCodec` (`libmediandk`, API 21 to 24), the
 //! system properties (`libc`) and `dlsym` (`libdl`). These are OS
 //! libraries on every Android device; nothing is built or vendored.
-//! Functions newer than API 24 are looked up at run time
+//! Functions newer than API 24 (and `libnativewindow`'s Surface and
+//! AHardwareBuffer calls, API 26 and 29) are looked up at run time
 //! ([`late`]), so the library still loads on API 24.
 
 #![allow(non_camel_case_types, non_snake_case)]
@@ -38,6 +39,7 @@ opaque!(
     AImageReader,
     AImage,
     ANativeWindow,
+    AHardwareBuffer,
     AMediaCodec,
     AMediaFormat,
     AMediaCrypto,
@@ -225,6 +227,7 @@ extern "C" {
         image: *mut *mut AImage,
     ) -> media_status_t;
     pub(crate) fn AImage_delete(image: *mut AImage);
+    pub(crate) fn AImage_getFormat(image: *const AImage, format: *mut i32) -> media_status_t;
     pub(crate) fn AImage_getWidth(image: *const AImage, width: *mut i32) -> media_status_t;
     pub(crate) fn AImage_getHeight(image: *const AImage, height: *mut i32) -> media_status_t;
     pub(crate) fn AImage_getPlaneRowStride(
@@ -322,10 +325,81 @@ pub(crate) type SetParameters =
 /// `AMediaCodec_getInputFormat` (API 28).
 pub(crate) type GetInputFormat = unsafe extern "C" fn(*mut AMediaCodec) -> *mut AMediaFormat;
 
-/// The `libmediandk` functions newer than API 24, where the device has them.
+/// `ANativeWindow_toSurface` (API 26): a Java `Surface` (a local reference)
+/// for a native window.
+pub(crate) type ToSurface = unsafe extern "C" fn(*mut c_void, *mut ANativeWindow) -> *mut c_void;
+
+/// `AHardwareBuffer_Desc`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AHardwareBuffer_Desc {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) layers: u32,
+    pub(crate) format: u32,
+    pub(crate) usage: u64,
+    /// Row length in pixels.
+    pub(crate) stride: u32,
+    pub(crate) rfu0: u32,
+    pub(crate) rfu1: u64,
+}
+
+/// `AHardwareBuffer_Plane`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AHardwareBuffer_Plane {
+    pub(crate) data: *mut c_void,
+    pub(crate) pixelStride: u32,
+    pub(crate) rowStride: u32,
+}
+
+/// `AHardwareBuffer_Planes`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AHardwareBuffer_Planes {
+    pub(crate) planeCount: u32,
+    pub(crate) planes: [AHardwareBuffer_Plane; 4],
+}
+
+/// `AHARDWAREBUFFER_FORMAT_*`.
+pub(crate) const AHB_FORMAT_R8G8B8A8_UNORM: u32 = 1;
+pub(crate) const AHB_FORMAT_R8G8B8X8_UNORM: u32 = 2;
+pub(crate) const AHB_FORMAT_Y8CB8CR8_420: u32 = 0x23;
+/// `AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN`.
+pub(crate) const AHB_USAGE_CPU_READ_OFTEN: u64 = 3;
+
+pub(crate) type AhbAcquire = unsafe extern "C" fn(*mut AHardwareBuffer);
+pub(crate) type AhbRelease = unsafe extern "C" fn(*mut AHardwareBuffer);
+pub(crate) type AhbDescribe =
+    unsafe extern "C" fn(*const AHardwareBuffer, *mut AHardwareBuffer_Desc);
+pub(crate) type AhbLock =
+    unsafe extern "C" fn(*mut AHardwareBuffer, u64, i32, *const c_void, *mut *mut c_void) -> c_int;
+pub(crate) type AhbLockPlanes = unsafe extern "C" fn(
+    *mut AHardwareBuffer,
+    u64,
+    i32,
+    *const c_void,
+    *mut AHardwareBuffer_Planes,
+) -> c_int;
+pub(crate) type AhbUnlock = unsafe extern "C" fn(*mut AHardwareBuffer, *mut i32) -> c_int;
+
+/// `libnativewindow`'s AHardwareBuffer calls (API 26; `lock_planes` API 29).
+#[derive(Clone, Copy)]
+pub(crate) struct Ahb {
+    pub(crate) acquire: AhbAcquire,
+    pub(crate) release: AhbRelease,
+    pub(crate) describe: AhbDescribe,
+    pub(crate) lock: AhbLock,
+    pub(crate) lock_planes: Option<AhbLockPlanes>,
+    pub(crate) unlock: AhbUnlock,
+}
+
+/// The functions newer than API 24, where the device has them.
 pub(crate) struct Late {
     pub(crate) set_parameters: Option<SetParameters>,
     pub(crate) get_input_format: Option<GetInputFormat>,
+    pub(crate) to_surface: Option<ToSurface>,
+    pub(crate) ahb: Option<Ahb>,
 }
 
 /// Look up the newer functions once.
@@ -351,7 +425,45 @@ pub(crate) fn late() -> &'static Late {
         };
         let set = find(c"AMediaCodec_setParameters");
         let get = find(c"AMediaCodec_getInputFormat");
+        // SAFETY: a constant, NUL-terminated name; libnativewindow is a
+        // system library (libmediandk loads it).
+        let nw = unsafe { dlopen(c"libnativewindow.so".as_ptr(), now) };
+        let find_nw = |name: &CStr| -> *mut c_void {
+            if nw.is_null() {
+                return std::ptr::null_mut();
+            }
+            // SAFETY: `nw` is a live handle from dlopen and `name` is
+            // NUL-terminated.
+            unsafe { dlsym(nw, name.as_ptr()) }
+        };
+        let to_surface = find_nw(c"ANativeWindow_toSurface");
+        let lock_planes = find_nw(c"AHardwareBuffer_lockPlanes");
+        let ahb = [
+            c"AHardwareBuffer_acquire",
+            c"AHardwareBuffer_release",
+            c"AHardwareBuffer_describe",
+            c"AHardwareBuffer_lock",
+            c"AHardwareBuffer_unlock",
+        ]
+        .map(find_nw);
+        // SAFETY (each transmute below): a non-null result of dlsym for that
+        // name is the NDK function whose C signature the alias spells out.
+        let ahb = (!ahb.iter().any(|p| p.is_null())).then(|| unsafe {
+            Ahb {
+                acquire: std::mem::transmute::<*mut c_void, AhbAcquire>(ahb[0]),
+                release: std::mem::transmute::<*mut c_void, AhbRelease>(ahb[1]),
+                describe: std::mem::transmute::<*mut c_void, AhbDescribe>(ahb[2]),
+                lock: std::mem::transmute::<*mut c_void, AhbLock>(ahb[3]),
+                unlock: std::mem::transmute::<*mut c_void, AhbUnlock>(ahb[4]),
+                lock_planes: (!lock_planes.is_null())
+                    .then(|| std::mem::transmute::<*mut c_void, AhbLockPlanes>(lock_planes)),
+            }
+        });
         Late {
+            // SAFETY: as above.
+            to_surface: (!to_surface.is_null())
+                .then(|| unsafe { std::mem::transmute::<*mut c_void, ToSurface>(to_surface) }),
+            ahb,
             // SAFETY: non-null results of dlsym for these names are the
             // NDK functions, whose C signatures the aliases spell out.
             set_parameters: (!set.is_null())

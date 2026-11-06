@@ -325,6 +325,74 @@ fn decoded_native_frames_hand_out_their_pixel_buffer() {
     assert_eq!(crate::apple_pixel_buffer(&other), None);
 }
 
+/// A pixel buffer the host already has, pushed through a frame-in source:
+/// upright it stays native and VideoToolbox takes it without a copy;
+/// turned, it is read back and turned; VP8 takes either.
+#[test]
+fn host_pixel_buffers_go_through_frame_in_to_the_encoders() {
+    let upright = pattern_frame(64, 48, 0x0bad_cafe, 0).expect("frame");
+    let make = |f: &VideoFrame| {
+        let nv12 = crate::convert::convert(f, f.width, f.height, PixelFormat::Nv12).expect("nv12");
+        let attrs = ffi::pixel_buffer_attributes(ffi::PIX_420V, None);
+        let mut pb: ffi::CVPixelBufferRef = std::ptr::null_mut();
+        // SAFETY: valid attributes and an out pointer.
+        let st = unsafe {
+            ffi::CVPixelBufferCreate(
+                std::ptr::null(),
+                f.width as usize,
+                f.height as usize,
+                ffi::PIX_420V,
+                attrs.0,
+                &mut pb,
+            )
+        };
+        assert_eq!(st, 0, "CVPixelBufferCreate");
+        pixel::fill_nv12(pb, nv12.planes().expect("planes"), f.width, f.height).expect("fill");
+        ffi::Cf(pb as ffi::CFTypeRef)
+    };
+    let straight = make(&upright);
+    let sideways = make(&crate::frame_in::turn(&upright, 270).expect("turn"));
+    // SAFETY: live pixel buffers, held by `straight` and `sideways`.
+    let (a, b2) = unsafe {
+        (
+            pixel::pixel_buffer_frame(straight.0 as *mut std::ffi::c_void, 1_000).expect("frame"),
+            pixel::pixel_buffer_frame(sideways.0 as *mut std::ffi::c_void, 40_000).expect("frame"),
+        )
+    };
+    // SAFETY: a null pointer is refused before any use.
+    assert!(unsafe { pixel::pixel_buffer_frame(std::ptr::null_mut(), 0) }.is_err());
+    drop((straight, sideways));
+
+    let (tx, mut rx) =
+        crate::frame_in(crate::FrameInOptions::default(), no_wake()).expect("frame_in");
+    tx.push(a, crate::Rotation::Deg0).expect("push");
+    let native = wait_for(Duration::from_secs(1), || rx.try_recv()).expect("frame");
+    assert_eq!(native.format(), PixelFormat::Native, "upright stays native");
+    tx.push(b2, crate::Rotation::Deg90).expect("push");
+    let turned = wait_for(Duration::from_secs(1), || rx.try_recv()).expect("frame");
+    assert_eq!((turned.width, turned.height), (64, 48));
+    assert_eq!(read_frame_code(&turned), Some(0x0bad_cafe));
+
+    let be = backend().expect("backend");
+    let mut h264 = be
+        .encoder(EncoderConfig::h264(64, 48, 30, 100_000), no_wake())
+        .expect("encoder");
+    let e = encode_one(&mut h264, &native, EncodeOptions::default()).expect("out");
+    check_bitstream(&e);
+    assert_eq!(e.capture_us, 1_000);
+    #[cfg(feature = "vp8")]
+    {
+        let mut vp8 = be
+            .encoder(
+                EncoderConfig::new(CodecConfig::Vp8, 64, 48, 30, 200_000),
+                no_wake(),
+            )
+            .expect("vp8");
+        let e = encode_one(&mut vp8, &turned, EncodeOptions::default()).expect("out");
+        assert!(e.keyframe && e.capture_us == 40_000);
+    }
+}
+
 #[test]
 fn listing_and_permissions_never_prompt() {
     let b = backend().expect("backend");
@@ -788,11 +856,12 @@ fn phone_modes_are_chosen_by_the_box_turned_landscape() {
 /// What iOS says about screens and codecs (in the simulator or on a phone).
 #[cfg(target_os = "ios")]
 #[test]
-fn ios_has_no_screen_capture_and_hardware_h264_only() {
+fn ios_screens_come_in_through_frame_in_and_h264_is_hardware_only() {
     let b = backend().expect("backend");
     let caps = b.capabilities();
-    assert!(!caps.screen.supported && !caps.screen.list && !caps.screen.system_picker);
-    assert_eq!(b.screen_permission(), Permission::Denied);
+    assert!(caps.screen.supported && caps.screen.frame_in);
+    assert!(!caps.screen.list && !caps.screen.system_picker);
+    assert_eq!(b.screen_permission(), Permission::Granted);
     assert_eq!(b.screen_sources(), Ok(Vec::new()));
     let r = b.open_screen(
         &ScreenSelection::Listed("0".into()),

@@ -243,6 +243,38 @@ pub fn apple_pixel_buffer(buffer: &NativeBuffer) -> Option<*mut std::ffi::c_void
         .map(CvFrame::raw)
 }
 
+/// A frame around a CVPixelBuffer the host already has (from ReplayKit or
+/// its own capture code), for a [`crate::frame_in()`] source or an encoder.
+/// The buffer is retained (the caller keeps its own reference) and its
+/// colour description is read from its attachments. An Apple encoder takes
+/// it without a copy; anything else reads it back to CPU planes.
+///
+/// NV12 (`420v`, `420f`) and BGRA buffers only; other formats are
+/// `Unsupported`.
+///
+/// # Safety
+///
+/// `pixel_buffer` must be a live `CVPixelBufferRef`.
+pub unsafe fn pixel_buffer_frame(
+    pixel_buffer: *mut std::ffi::c_void,
+    capture_us: u64,
+) -> Result<VideoFrame, VideoError> {
+    let pb = pixel_buffer as CVPixelBufferRef;
+    if pb.is_null() {
+        return Err(invalid("a null pixel buffer"));
+    }
+    if format_of(pb) == PixelFormat::Native {
+        // SAFETY: a live pixel buffer (the caller's promise).
+        let t = unsafe { CVPixelBufferGetPixelFormatType(pb) };
+        return Err(VideoError::Unsupported(format!(
+            "pixel format {:?}",
+            t.to_be_bytes()
+        )));
+    }
+    // SAFETY: as above.
+    Ok(unsafe { native_frame(pb, capture_us) })
+}
+
 /// A CPU copy of `pb` (NV12 or BGRA).
 ///
 /// # Safety

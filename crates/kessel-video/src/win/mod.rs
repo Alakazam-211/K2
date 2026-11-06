@@ -125,6 +125,7 @@ impl VideoBackend for WinBackend {
             windows: wgc,
             cursor: wgc,
             exclude_own_windows: false,
+            frame_in: false,
         };
         caps
     }

@@ -8,6 +8,9 @@
 //! - **One [`VideoBackend`] per app** ([`system`], [`null`] or
 //!   [`fake::FakeBackend`]): capabilities, cameras, permissions, screens and
 //!   windows, encoders, decoders, conversion, and machine-wide events.
+//! - **Frame-in sources** ([`frame_in()`]): the host pushes frames it already
+//!   has (an iPhone's broadcast upload extension, through the app) into a
+//!   [`FrameSource`] like any other.
 //! - **Sources, encoders and decoders work by submit and poll**, with a
 //!   [`Wake`] callback and small bounded queues that never block the
 //!   producer. No async runtime: kessel-video runs its own threads.
@@ -49,6 +52,7 @@ mod convert;
 mod error;
 pub mod fake;
 mod frame;
+mod frame_in;
 pub mod h264;
 pub mod kit;
 mod null;
@@ -57,6 +61,7 @@ mod rust_codecs;
 mod types;
 #[cfg(feature = "vp8")]
 mod vp8;
+mod yuv;
 
 #[cfg(test)]
 mod hostile_tests;
@@ -83,6 +88,9 @@ mod android;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
+/// Android: a frame around an AHardwareBuffer the host already has.
+#[cfg(all(feature = "android", target_os = "android"))]
+pub use android::hardware_buffer_frame;
 pub use api::{
     no_wake, Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
     EVENT_QUEUE,
@@ -90,6 +98,9 @@ pub use api::{
 /// macOS and iOS: the `CVPixelBufferRef` inside an Apple native frame.
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 pub use apple::pixel::apple_pixel_buffer;
+/// macOS and iOS: a frame around a CVPixelBuffer the host already has.
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+pub use apple::pixel::pixel_buffer_frame;
 /// The `bytes` crate, re-exported so callers use the same version.
 pub use bytes;
 pub use bytes::Bytes;
@@ -99,6 +110,7 @@ pub use frame::{
     tight_layout, ColorSpace, FrameBuffer, NativeBuffer, NativeFrame, PixelFormat, Planes,
     VideoFrame,
 };
+pub use frame_in::{frame_in, FrameIn, FrameInOptions, FrameInSender, Rotation};
 pub use kit::now_us;
 pub use null::null;
 #[cfg(any(

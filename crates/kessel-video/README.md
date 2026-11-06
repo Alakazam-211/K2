@@ -31,10 +31,10 @@ won't. Each change is listed in the changelog in the repository.
 | Platform | Cameras | Screens | Encode | Decode | Status |
 |---|---|---|---|---|---|
 | macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | The test suite passes, including VideoToolbox H.264 encoding and decoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
-| iOS (iPhone, iPad) | AVFoundation | none (needs a broadcast upload extension) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked only.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. **Untested on an iPhone**: camera capture, rotation and interruptions need a device and a person. |
+| iOS (iPhone, iPad) | AVFoundation | Frame-in: the app feeds its broadcast upload extension's frames | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked only.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. **Untested on an iPhone**: camera capture, rotation and interruptions need a device and a person. |
 | Linux (x86-64) | V4L2 | The ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. **Camera capture is untested with a real camera, and screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
 | Windows (x86-64) | Media Foundation | Windows Graphics Capture | VP8 | VP8 | **Type-checked only.** |
-| Android (API 24+) | Camera2 through the NDK | none (MediaProjection needs Java) | H.264 (MediaCodec), VP8 | VP8 | **Type-checked only** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, errors, VP8) is tested on a host over a scripted platform; the NDK calls themselves have not run on a device or an emulator. |
+| Android (API 24+) | Camera2 through the NDK | MediaProjection (API 26+), once the app hands one over | H.264 (MediaCodec), VP8 | VP8 | **Type-checked only** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, MediaProjection screens, errors, VP8) is tested on a host over a scripted platform; the NDK and JNI calls themselves have not run on a device or an emulator. |
 | Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same | Tested on Linux and macOS. |
 
 "Type-checked" means `cargo check` and `cargo clippy` pass for that target;
@@ -56,6 +56,7 @@ caller has already decrypted and verified.
 |---|---|
 | Backend | One `VideoBackend` per app: capabilities, cameras, permissions, screens and windows, encoders, decoders, conversion, machine-wide events. `system()` for the OS, `null()` for none, `fake::FakeBackend` for tests. |
 | Threads and queues | Sources, encoders and decoders work by submit and poll. Each takes a `Wake` callback that runs after something is queued. Queues are small and bounded and never block the producer: capture 2 frames (oldest dropped), encoder output 8 (`submit` answers `Busy` instead), decoder output 2 (oldest dropped), events 32. No async runtime. |
+| Frame-in | `frame_in()` makes a `FrameSource` that the host feeds: CPU frames or native buffers (a CVPixelBuffer through `pixel_buffer_frame`, an AHardwareBuffer through `hardware_buffer_frame`), each with its timestamp and the quarter turn that makes it upright. Same queue, rate, size box and events as any source, and it never pauses for the app's background. Phone screen sharing comes in this way on iOS. |
 | Codecs | Codec-neutral: VP8 as raw RFC 6386 frames, H.264 as one Annex B access unit with 4-byte start codes and SPS and PPS before every IDR. Real time: no reordering, no B-frames, one output per input at most, `set_rates` never forces a keyframe, `capture_us` passes through. |
 | VP8 | `vp8-encoder` and `vp8-decoder` (feature `vp8`, part of `system`) in every backend, the fake included: real time, L1T2 and L1T3 temporal layers, one encoder per simulcast layer. |
 | Pixels | I420, NV12, BGRA and RGBA, with conversion and scaling on the CPU (`convert`), and OS-native buffers (`NativeFrame`) that pass from a source to an encoder of the same backend without a copy. |
@@ -70,6 +71,13 @@ caller has already decrypted and verified.
   can only hide our windows from every capture.
 - **Linux:** the portal's picker is the only way to choose, and there is no
   window exclusion.
+- **iOS:** a broadcast upload extension captures the screen in its own
+  process; the app feeds its frames into a `frame_in()` source. The
+  capabilities say `screen.frame_in`: wait for the app's frames instead of
+  opening a picker.
+- **Android:** the app asks for a MediaProjection and hands it over
+  (`AndroidContext::set_media_projection`); then there is one screen
+  source, and `pick_screen` answers it without a picker.
 
 ## Using it
 
@@ -113,6 +121,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(read_frame_code(&decoded), Some(code));
     Ok(())
 }
+```
+
+### Frames from the host
+
+A `frame_in()` source takes frames the host already has: from an iPhone's
+broadcast upload extension (through the app), from the host's own capture,
+or in tests. Each push carries how far the frame must turn to stand upright.
+
+```rust
+use kessel_video::{frame_in, no_wake, now_us, FrameInOptions, FrameSource, PixelFormat, Rotation, VideoFrame};
+
+let (sender, mut source) = frame_in(FrameInOptions::new(1280, 720, 15), no_wake())?;
+// A frame lying on its side: 360 x 640, to turn a quarter clockwise.
+let frame = VideoFrame::filled(PixelFormat::Nv12, 360, 640, [128, 128, 128], now_us())?;
+sender.push(frame, Rotation::Deg90)?;
+let upright = source.try_recv().expect("queued at once");
+assert_eq!((upright.width, upright.height), (640, 360));
+# Ok::<(), kessel_video::VideoError>(())
 ```
 
 ### Errors
@@ -188,9 +214,17 @@ On iOS:
   with `shut_down` (open a new one in front); an H.264 decoder reports
   `session_lost` (call `reset`). VP8 needs no OS session and keeps working
   while the app runs.
-- No screen capture: sharing an iPhone's screen needs a broadcast upload
-  extension, a separate process. `pick_screen` and `open_screen` answer
-  `unsupported`, and `screen_sources()` is empty.
+- Screens come in through frame-in: sharing an iPhone's screen needs a
+  broadcast upload extension, a separate process (with a 50 MB memory cap)
+  that the person starts from the system's picker. The extension hands its
+  frames to the app, which pushes them into a `frame_in()` source with each
+  frame's turn and timestamp. The capabilities say `screen.supported` and
+  `screen.frame_in`; `screen_permission()` is `Granted` (the person's start
+  is the consent); `pick_screen` and `open_screen` answer `unsupported`,
+  and `screen_sources()` is empty. A frame-in source keeps running while
+  the app is in the background.
+- `pixel_buffer_frame` wraps a CVPixelBuffer the app already has (NV12 or
+  BGRA) as a native frame: upright, VideoToolbox encodes it without a copy.
 
 On Android:
 - Make the backend with `system(config)`, with `config.android` set to an
@@ -214,6 +248,25 @@ On Android:
   are orientation-free: 1280x720 also fits a portrait 720x1280 frame.
 - A camera another app takes reports `Interrupted(InUseByAnother)`; it
   reopens on the next resume, or when the caller unpauses the source.
+- Screen capture runs from a MediaProjection the app hands over with
+  `unsafe { ctx.set_media_projection(projection, width, height, dpi) }`
+  (a JNI global reference, and the display's size and density now). The
+  app's part is Java or Kotlin: the consent (`createScreenCaptureIntent`),
+  a foreground service of type `mediaProjection` running for the whole
+  share (with `FOREGROUND_SERVICE_MEDIA_PROJECTION` on Android 14+), and a
+  `MediaProjection.Callback` registered before the handover (Android 14+
+  throws otherwise) whose `onStop` calls `ctx.media_projection_stopped()`.
+  Then `screen_sources()` lists one display, `pick_screen` answers it, and
+  `open_screen` makes a `VirtualDisplay` into an `ImageReader` sized to the
+  asked box (turned to the screen's shape). Call `ctx.set_screen_size` when
+  the display turns: the virtual display is resized and frames come at the
+  new shape (`Started`). Frames are NV12. The screen keeps running while the
+  app is in the background; when the projection stops, the source ends with
+  `Ended(SourceClosed)`. Android allows one virtual display per projection.
+  Needs API 26 (`ANativeWindow_toSurface`).
+- `hardware_buffer_frame` wraps an AHardwareBuffer the app already has
+  (RGBA or RGBX on API 26+, YUV 4:2:0 on API 29+) as a native frame for a
+  `frame_in()` source or an encoder.
 - H.264 encoding uses the device's MediaCodec AVC encoder with CPU (NV12 or
   I420) input; `ImplPreference::SoftwareOnly` picks Android's own software
   encoder. Keyframe requests and bitrate changes need API 26; on API 24 and

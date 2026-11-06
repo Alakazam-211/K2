@@ -85,7 +85,7 @@ fn clamp(v: i32) -> u8 {
 
 /// RGB → (Y, U, V) coefficients (×256) for a colour space, and the luma
 /// offset.
-fn rgb_to_yuv(cs: ColorSpace, r: i32, g: i32, b: i32) -> (u8, u8, u8) {
+pub(crate) fn rgb_to_yuv(cs: ColorSpace, r: i32, g: i32, b: i32) -> (u8, u8, u8) {
     match cs {
         ColorSpace::Bt709Limited => (
             clamp(((47 * r + 157 * g + 16 * b + 128) >> 8) + 16),

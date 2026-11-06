@@ -132,6 +132,7 @@ impl VideoBackend for LinuxBackend {
             // The portal shares what the person picks; it can't leave our
             // own windows out of a display.
             exclude_own_windows: false,
+            frame_in: false,
         };
         caps
     }

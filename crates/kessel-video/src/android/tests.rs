@@ -1,6 +1,8 @@
 //! The Android backend over a scripted [`Platform`]: cameras, permission,
 //! upright frames, the app going to the background and back, cameras taken
-//! by other apps, screens, and VP8 through the backend. Runs on any host.
+//! by other apps, MediaProjection screens (sized, turned, stopped, and not
+//! paused in the background), frame-in sources, and VP8 through the
+//! backend. Runs on any host.
 
 use super::meta::{camera_result, camera_status, describe, mark_default, RawCharacteristics};
 use super::*;
@@ -19,11 +21,42 @@ struct Opened {
     alive: Arc<AtomicBool>,
 }
 
+/// The sizes a virtual display was given, in order.
+type Sizes = Arc<Mutex<Vec<(u32, u32, u32)>>>;
+
+/// A virtual display that is running: its sink, the sizes it was given,
+/// and whether it was released.
+struct Projected {
+    projection: usize,
+    sizes: Sizes,
+    sink: Arc<dyn ScreenSink>,
+    alive: Arc<AtomicBool>,
+}
+
 #[derive(Default)]
 struct Script {
     /// The next opens fail with these, in order.
     open_errors: Vec<VideoError>,
     opened: Vec<Opened>,
+    projected: Vec<Projected>,
+}
+
+struct MockProjection {
+    sizes: Sizes,
+    alive: Arc<AtomicBool>,
+}
+
+impl ProjectionCapture for MockProjection {
+    fn resize(&mut self, width: u32, height: u32, dpi: u32) -> Result<(), VideoError> {
+        lock(&self.sizes).push((width, height, dpi));
+        Ok(())
+    }
+}
+
+impl Drop for MockProjection {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Release);
+    }
 }
 
 struct Mock {
@@ -127,6 +160,27 @@ impl Platform for Mock {
 
     fn h264_encoder(&self, _cfg: &EncoderConfig) -> Result<Box<dyn EncoderCore>, VideoError> {
         Ok(Box::new(MockH264))
+    }
+
+    fn open_projection(
+        &self,
+        projection: usize,
+        size: (u32, u32, u32),
+        sink: Arc<dyn ScreenSink>,
+    ) -> Result<Box<dyn ProjectionCapture>, VideoError> {
+        let mut s = lock(&self.script);
+        if !s.open_errors.is_empty() {
+            return Err(s.open_errors.remove(0));
+        }
+        let sizes = Arc::new(Mutex::new(vec![size]));
+        let alive = Arc::new(AtomicBool::new(true));
+        s.projected.push(Projected {
+            projection,
+            sizes: sizes.clone(),
+            sink,
+            alive: alive.clone(),
+        });
+        Ok(Box::new(MockProjection { sizes, alive }))
     }
 }
 
@@ -497,7 +551,7 @@ fn losses_that_end_the_source() {
 fn screens_are_unsupported_and_shutdown_ends_everything() {
     let mock = phone(Permission::Granted);
     let (b, _ctx) = start(&mock);
-    assert_eq!(b.screen_permission(), Permission::Denied);
+    assert_eq!(b.screen_permission(), Permission::NotDetermined);
     assert!(b.screen_sources().expect("list").is_empty());
     let err = b
         .open_screen(
@@ -508,7 +562,7 @@ fn screens_are_unsupported_and_shutdown_ends_everything() {
         .err()
         .expect("unsupported");
     assert_eq!(err.code(), "unsupported");
-    assert!(err.to_string().contains("MediaProjection"), "{err}");
+    assert!(err.to_string().contains("set_media_projection"), "{err}");
     let (tx, rx) = std::sync::mpsc::channel();
     b.pick_screen(
         PickOptions::default(),
@@ -603,4 +657,309 @@ fn camera_frames_round_trip_through_vp8() {
     assert_eq!((decoded.width, decoded.height), (w, h));
     let psnr = crate::convert::psnr_y(&frame, &decoded).expect("psnr");
     assert!(psnr > 30.0, "PSNR {psnr:.1} dB");
+}
+
+// ───────────────────────────── screens ─────────────────────────────
+
+/// A phone screen of 1080 x 2400 at 420 dpi, handed over as projection
+/// "handle" 0x5150 (the mock never dereferences it).
+#[allow(unsafe_code)]
+fn project(ctx: &AndroidContext) {
+    // SAFETY: the scripted platform never uses the handle as a reference.
+    unsafe { ctx.set_media_projection(0x5150 as *mut std::ffi::c_void, 1080, 2400, 420) };
+}
+
+fn projected(mock: &Mock, i: usize) -> (Arc<dyn ScreenSink>, Sizes, Arc<AtomicBool>) {
+    let s = lock(&mock.script);
+    let p = &s.projected[i];
+    (p.sink.clone(), p.sizes.clone(), p.alive.clone())
+}
+
+/// A `w` x `h` RGBA screen image with rows padded to `stride` bytes: the
+/// top half white, the bottom half black.
+fn screen_image(w: u32, h: u32, stride: usize) -> Vec<u8> {
+    let mut data = vec![0x77u8; stride * h as usize];
+    for y in 0..h as usize {
+        let v = if y < h as usize / 2 { 255 } else { 0 };
+        for x in 0..w as usize {
+            data[y * stride + x * 4..][..4].copy_from_slice(&[v, v, v, 255]);
+        }
+    }
+    data
+}
+
+fn show(sink: &Arc<dyn ScreenSink>, data: &[u8], w: u32, h: u32, stride: usize) {
+    sink.image(&ScreenImage::Rgba {
+        data,
+        width: w,
+        height: h,
+        row_stride: stride,
+        pixel_stride: 4,
+    });
+}
+
+#[test]
+fn a_projection_makes_one_screen_and_capabilities_follow_it() {
+    let mock = phone(Permission::Granted);
+    let (b, ctx) = start(&mock);
+    let events_rx = b.subscribe();
+    let caps = b.capabilities().screen;
+    assert!(!caps.supported && !caps.list && !caps.frame_in);
+    assert!(!ctx.has_media_projection());
+
+    project(&ctx);
+    assert!(ctx.has_media_projection());
+    assert_eq!(
+        events_rx.try_recv(),
+        Some(BackendEvent::CapabilitiesChanged)
+    );
+    let caps = b.capabilities().screen;
+    assert!(caps.supported && caps.list, "{caps:?}");
+    assert!(!caps.system_picker && !caps.frame_in && !caps.windows);
+    assert_eq!(b.screen_permission(), Permission::Granted);
+    let sources = b.screen_sources().expect("list");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(
+        (
+            sources[0].id.as_str(),
+            sources[0].kind,
+            sources[0].width,
+            sources[0].height
+        ),
+        (PROJECTION_ID, ScreenKind::Display, 1080, 2400)
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    b.pick_screen(
+        PickOptions::default(),
+        Box::new(move |r| tx.send(r).expect("send")),
+    );
+    let picked = rx
+        .recv_timeout(WAIT)
+        .expect("an answer at once")
+        .expect("picked");
+    assert!(matches!(&picked, ScreenSelection::Listed(id) if id == PROJECTION_ID));
+    assert_eq!(
+        b.open_screen(
+            &ScreenSelection::Listed("display:0".into()),
+            CaptureConstraints::default(),
+            no_wake()
+        )
+        .err(),
+        Some(VideoError::NotFound)
+    );
+
+    // The virtual display fits the asked box, turned upright.
+    let mut src = b
+        .open_screen(&picked, CaptureConstraints::new(1280, 720, 15), no_wake())
+        .expect("screen");
+    let (sink, sizes, alive) = projected(&mock, 0);
+    assert_eq!(lock(&mock.script).projected[0].projection, 0x5150);
+    assert_eq!(*lock(&sizes), vec![(576, 1280, 420)]);
+
+    // Padded RGBA images become tight NV12 frames.
+    let img = screen_image(576, 1280, 576 * 4 + 64);
+    show(&sink, &img, 576, 1280, 576 * 4 + 64);
+    let f = next_frame(&mut src);
+    assert_eq!(
+        (f.format(), f.width, f.height),
+        (PixelFormat::Nv12, 576, 1280)
+    );
+    let p = f.planes().expect("planes");
+    assert_eq!(p.row(0, 0, 576, 1280)[0], 235, "white on top");
+    assert_eq!(p.row(0, 1279, 576, 1280)[0], 16, "black below");
+    assert_eq!(
+        events(&mut src),
+        vec![SourceEvent::Started {
+            width: 576,
+            height: 1280,
+            fps: 15
+        }]
+    );
+
+    // The phone turns: the display follows, and frames come landscape.
+    ctx.set_screen_size(2400, 1080, 420);
+    assert_eq!(*lock(&sizes), vec![(576, 1280, 420), (1280, 576, 420)]);
+    ctx.set_screen_size(2400, 1080, 420);
+    assert_eq!(lock(&sizes).len(), 2, "no change, no resize");
+    std::thread::sleep(Duration::from_millis(70));
+    let img = screen_image(1280, 576, 1280 * 4);
+    show(&sink, &img, 1280, 576, 1280 * 4);
+    let f = next_frame(&mut src);
+    assert_eq!((f.width, f.height), (1280, 576));
+    assert!(events(&mut src).contains(&SourceEvent::Started {
+        width: 1280,
+        height: 576,
+        fps: 15
+    }));
+    // A smaller box resizes the display too.
+    src.set_constraints(CaptureConstraints::new(640, 360, 15))
+        .expect("constraints");
+    assert_eq!(lock(&sizes).last(), Some(&(640, 288, 420)));
+
+    // A bad image is an error event, not an end.
+    sink.image(&ScreenImage::Rgba {
+        data: &img[..10],
+        width: 1280,
+        height: 576,
+        row_stride: 1280 * 4,
+        pixel_stride: 4,
+    });
+    assert!(matches!(
+        events(&mut src).as_slice(),
+        [SourceEvent::Error(VideoError::Os { .. })]
+    ));
+
+    // Dropping the source releases the display.
+    drop(src);
+    assert!(!alive.load(Ordering::Acquire));
+}
+
+#[test]
+fn screens_keep_going_in_the_background_and_end_when_the_projection_stops() {
+    let mock = phone(Permission::Granted);
+    let (b, ctx) = start(&mock);
+    project(&ctx);
+    let mut screen = b
+        .open_screen(
+            &ScreenSelection::Listed(PROJECTION_ID.into()),
+            CaptureConstraints::new(1280, 720, 30),
+            no_wake(),
+        )
+        .expect("screen");
+    let mut camera = b
+        .open_camera(None, CaptureConstraints::new(640, 480, 30), no_wake())
+        .expect("camera");
+    let (sink, _sizes, alive) = projected(&mock, 0);
+    let events_rx = b.subscribe();
+
+    ctx.set_background(true);
+    assert_eq!(
+        events(&mut camera),
+        vec![SourceEvent::Interrupted(Interruption::Background)],
+        "the camera pauses"
+    );
+    assert!(alive.load(Ordering::Acquire), "the screen's display stays");
+    let img = screen_image(576, 1280, 576 * 4);
+    show(&sink, &img, 576, 1280, 576 * 4);
+    let f = next_frame(&mut screen);
+    assert_eq!((f.width, f.height), (576, 1280), "frames in the background");
+    assert!(
+        !events(&mut screen)
+            .iter()
+            .any(|e| matches!(e, SourceEvent::Interrupted(_))),
+        "a screen share isn't interrupted by the background"
+    );
+    // A second screen can open in the background too.
+    let second = b.open_screen(
+        &ScreenSelection::Listed(PROJECTION_ID.into()),
+        CaptureConstraints::default(),
+        no_wake(),
+    );
+    assert!(second.is_ok(), "{:?}", second.err());
+    drop(second);
+
+    // The person stops sharing from the status bar: onStop.
+    while events_rx.try_recv().is_some() {}
+    ctx.media_projection_stopped();
+    assert!(!alive.load(Ordering::Acquire), "the display is released");
+    assert_eq!(
+        events(&mut screen),
+        vec![SourceEvent::Ended(EndReason::SourceClosed)]
+    );
+    assert_eq!(
+        events_rx.try_recv(),
+        Some(BackendEvent::CapabilitiesChanged)
+    );
+    assert!(!b.capabilities().screen.supported);
+    assert!(!ctx.has_media_projection());
+    assert!(b.screen_sources().expect("list").is_empty());
+    ctx.media_projection_stopped();
+    assert!(events(&mut screen).is_empty(), "ended once");
+    assert_eq!(
+        b.open_screen(
+            &ScreenSelection::Listed(PROJECTION_ID.into()),
+            CaptureConstraints::default(),
+            no_wake()
+        )
+        .err()
+        .map(|e| e.code()),
+        Some("unsupported")
+    );
+
+    // A new projection works again; shutdown ends its screen as Closed.
+    project(&ctx);
+    let mut again = b
+        .open_screen(
+            &ScreenSelection::Listed(PROJECTION_ID.into()),
+            CaptureConstraints::default(),
+            no_wake(),
+        )
+        .expect("screen");
+    let (_, sizes, alive) = projected(&mock, 2);
+    assert_eq!(*lock(&sizes), vec![(1080, 2400, 420)], "no box: full size");
+    b.shutdown();
+    assert!(!alive.load(Ordering::Acquire));
+    assert_eq!(
+        events(&mut again),
+        vec![SourceEvent::Ended(EndReason::Closed)]
+    );
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn a_failed_virtual_display_is_an_error_and_yuv_screens_work() {
+    let mock = phone(Permission::Granted);
+    let (b, ctx) = start(&mock);
+    project(&ctx);
+    lock(&mock.script)
+        .open_errors
+        .push(VideoError::os(0, "createVirtualDisplay threw"));
+    let sel = ScreenSelection::Listed(PROJECTION_ID.into());
+    assert!(matches!(
+        b.open_screen(&sel, CaptureConstraints::default(), no_wake()),
+        Err(VideoError::Os { .. })
+    ));
+    let mut src = b
+        .open_screen(&sel, CaptureConstraints::default(), no_wake())
+        .expect("screen");
+    let (sink, _, _) = projected(&mock, 0);
+    let img = TestImage::new(64, 48);
+    sink.image(&ScreenImage::Yuv(img.view()));
+    let f = next_frame(&mut src);
+    assert_eq!((f.format(), f.width, f.height), (PixelFormat::Nv12, 64, 48));
+    // A zero-sized display is a caller's mistake.
+    ctx.media_projection_stopped();
+    // SAFETY: the scripted platform never uses the handle.
+    unsafe { ctx.set_media_projection(0x5150 as *mut std::ffi::c_void, 0, 0, 0) };
+    assert!(matches!(
+        b.open_screen(&sel, CaptureConstraints::default(), no_wake()),
+        Err(VideoError::Invalid(_))
+    ));
+}
+
+/// A frame-in source on a phone: frames keep flowing while the app is in
+/// the background, which pauses the camera.
+#[test]
+fn frame_in_sources_ignore_the_background() {
+    let mock = phone(Permission::Granted);
+    let (b, ctx) = start(&mock);
+    let mut camera = b
+        .open_camera(None, CaptureConstraints::new(640, 480, 30), no_wake())
+        .expect("camera");
+    let (tx, mut rx) =
+        crate::frame_in(crate::FrameInOptions::new(1280, 720, 15), no_wake()).expect("frame_in");
+    ctx.set_background(true);
+    assert_eq!(
+        events(&mut camera),
+        vec![SourceEvent::Interrupted(Interruption::Background)]
+    );
+    assert!(tx.wants_frames(), "the background doesn't pause frame-in");
+    let f = crate::fake::pattern_frame(640, 360, 3, 0).expect("frame");
+    tx.push(f, crate::Rotation::Deg0).expect("push");
+    let got = rx.try_recv().expect("a frame in the background");
+    assert_eq!(crate::fake::read_frame_code(&got), Some(3));
+    assert!(
+        !std::iter::from_fn(|| rx.try_event()).any(|e| matches!(e, SourceEvent::Interrupted(_)))
+    );
+    drop(b);
 }

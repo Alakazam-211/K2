@@ -296,6 +296,7 @@ impl VideoBackend for FakeBackend {
             windows: true,
             cursor: true,
             exclude_own_windows: true,
+            frame_in: false,
         };
         if self.inner.cfg.codec == FakeCodec::Structural {
             for dir in [CodecDirection::Encode, CodecDirection::Decode] {

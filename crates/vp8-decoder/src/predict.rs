@@ -394,7 +394,8 @@ mod tests {
         inter_predict(&mut a, 0, 16, &refp, 16, 16, 16, 16, 8, -16, &SIXTAP_FILTERS, false);
         for r in 0..16 {
             for c in 0..16 {
-                assert_eq!(a[r * 16 + c], data[(15 + r) * 64 + 17 + c]);
+                // One pixel right and two up: (17, 14).
+                assert_eq!(a[r * 16 + c], data[(14 + r) * 64 + 17 + c]);
             }
         }
     }

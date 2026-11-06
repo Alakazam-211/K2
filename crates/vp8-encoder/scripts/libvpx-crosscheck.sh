@@ -18,14 +18,14 @@ if [ ! -f "$clip" ]; then
 fi
 
 cargo build --locked --release -p vp8-encoder --example encode_y4m 2>&1 | grep -E "^(warning|error)" || true
-bin=target/release/examples/encode_y4m
+enc() { cargo run --locked --release -q -p vp8-encoder --example encode_y4m -- "$@"; }
 
 fail=0
 run() {
     name=$1
     shift
     out="$work/$name.ivf"
-    "$bin" "$clip" "$out" "$@"
+    enc "$clip" "$out" "$@"
     # libvpx's decoder, then ffmpeg's own VP8 decoder.
     ffmpeg -hide_banner -loglevel error -y -c:v libvpx -i "$out" -f rawvideo -pix_fmt yuv420p "$work/$name.libvpx.yuv"
     ffmpeg -hide_banner -loglevel error -y -c:v vp8 -i "$out" -f rawvideo -pix_fmt yuv420p "$work/$name.ffvp8.yuv"

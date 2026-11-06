@@ -522,4 +522,3 @@ fn filter_block<const BILINEAR: bool>(
         filter_row::<BILINEAR>(&mut dst[d..d + bw], v_taps(&tmp, (r + 2) * bw, bw, bw), fv);
     }
 }
-

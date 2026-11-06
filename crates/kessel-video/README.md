@@ -367,8 +367,9 @@ What parses data from the network, and how it is tested:
 
 - **VP8 frames** (`VideoDecoder` for `VideoCodec::Vp8`, on every backend)
   go to `vp8-decoder`, which returns errors for malformed frames. Its only
-  `unsafe` code is its NEON and SSE2 loop-filter kernels, which work on
-  slices already cut to size with checked indexing. It refuses frames larger than 4096x2304, so a crafted
+  `unsafe` code is its NEON and SSE2 loop-filter kernels, which assert the
+  length of every slice they use (cut with checked arithmetic). It
+  refuses frames larger than 4096x2304, so a crafted
   header can't make it allocate a huge frame.
 - **The `h264` helpers** (`annexb_nals`, `avcc_nals`, `unescape_rbsp` and
   the rest) are safe Rust and check every length.

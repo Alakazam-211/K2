@@ -1,16 +1,18 @@
-//! NEON versions of the hot loops, for aarch64 (where NEON is always
-//! present). Each one gives the same bytes as its portable version, which
+//! NEON versions of the hot loops, for aarch64 targets with NEON (all the
+//! usual ones). Each one gives the same bytes as its portable version, which
 //! the tests check.
 //!
 //! This module and `sse2.rs` are the only ones with `unsafe` code. Every
-//! intrinsic is called inside a private `unsafe fn`, and each public function slices its
-//! buffers with ordinary bounds checks before it calls one, so every load
-//! and store lands inside a slice that was checked. The code is our own,
+//! intrinsic is called inside a private `unsafe fn` that first asserts
+//! the lengths of the slices it reads and writes, and the public functions
+//! cut those slices with checked arithmetic and ordinary bounds checks, so
+//! every load and store lands inside a checked slice whatever the input.
+//! The modules compile only when the target has the feature. The code is our own,
 //! written from the RFC's formulas and the portable versions in this crate.
 
 use core::arch::aarch64::*;
 
-use crate::loop_filter::{Kind, Limits};
+use crate::loop_filter::{luma_edge_portable, rows_len, span, Kind, Limits};
 
 // ---------------------------------------------------------------------------
 // Loop filter.
@@ -174,12 +176,18 @@ unsafe fn filter(kind: Kind, t: &mut Taps, l: Limits) {
 /// Filters 16 segments across a horizontal edge. `buf` starts at p3 of the
 /// first segment and holds the eight rows (stride `s`) of 16 pixels each.
 ///
-/// Safety: `buf.len() >= 7 * s + 16`.
+/// Safety: NEON must be on, which the module's cfg guarantees; the length is
+/// asserted below, so every access is inside `buf`.
 #[inline(always)]
 unsafe fn h16(buf: &mut [u8], s: usize, kind: Kind, l: Limits) {
+    assert!(
+        buf.len() >= rows_len(7, s, 16),
+        "loop filter block too short"
+    );
     let p = buf.as_mut_ptr();
     let mut t: Taps = [vdupq_n_u8(0); 8];
     for (k, v) in t.iter_mut().enumerate() {
+        // In bounds: k * s + 16 <= 7 * s + 16 <= buf.len() (asserted).
         *v = vld1q_u8(p.add(k * s));
     }
     filter(kind, &mut t, l);
@@ -189,33 +197,46 @@ unsafe fn h16(buf: &mut [u8], s: usize, kind: Kind, l: Limits) {
 }
 
 /// Filters 16 segments across a vertical edge: rows `0..8` of `a` and
-/// `0..8` of `b` (stride `s`), each eight pixels starting at p3.
+/// `0..8` of `b` (stride `s`), each eight pixels starting at p3. `a` and
+/// `b` are separate slices, so they can't overlap.
 ///
-/// Safety: `a.len() >= 7 * s + 8` and `b.len() >= 7 * s + 8`. `a` and `b`
-/// may be the same buffer only if their rows do not overlap.
+/// Safety: NEON must be on (the module's cfg); the lengths are asserted below.
 #[inline(always)]
-unsafe fn v16(a: *mut u8, b: *mut u8, s: usize, kind: Kind, l: Limits) {
+unsafe fn v16(a: &mut [u8], b: &mut [u8], s: usize, kind: Kind, l: Limits) {
+    let need = rows_len(7, s, 8);
+    assert!(
+        a.len() >= need && b.len() >= need,
+        "loop filter block too short"
+    );
+    let (pa, pb) = (a.as_mut_ptr(), b.as_mut_ptr());
     let mut r: Taps = [vdupq_n_u8(0); 8];
     for (i, v) in r.iter_mut().enumerate() {
-        *v = vcombine_u8(vld1_u8(a.add(i * s)), vld1_u8(b.add(i * s)));
+        // In bounds: i * s + 8 <= 7 * s + 8 (asserted) for each slice.
+        *v = vcombine_u8(vld1_u8(pa.add(i * s)), vld1_u8(pb.add(i * s)));
     }
     let mut t = transpose(r);
     filter(kind, &mut t, l);
     let r = transpose(t);
     for (i, v) in r.iter().enumerate() {
-        vst1_u8(a.add(i * s), vget_low_u8(*v));
-        vst1_u8(b.add(i * s), vget_high_u8(*v));
+        vst1_u8(pa.add(i * s), vget_low_u8(*v));
+        vst1_u8(pb.add(i * s), vget_high_u8(*v));
     }
 }
 
 /// Filters 8 segments of `ub` and 8 of `vb` across a horizontal edge.
 ///
-/// Safety: both slices hold at least `7 * s + 8` bytes.
+/// Safety: NEON must be on (the module's cfg); the lengths are asserted below.
 #[inline(always)]
 unsafe fn h8x2(ub: &mut [u8], vb: &mut [u8], s: usize, kind: Kind, l: Limits) {
+    let need = rows_len(7, s, 8);
+    assert!(
+        ub.len() >= need && vb.len() >= need,
+        "loop filter block too short"
+    );
     let (pu, pv) = (ub.as_mut_ptr(), vb.as_mut_ptr());
     let mut t: Taps = [vdupq_n_u8(0); 8];
     for (k, v) in t.iter_mut().enumerate() {
+        // In bounds: k * s + 8 <= 7 * s + 8 (asserted) for each slice.
         *v = vcombine_u8(vld1_u8(pu.add(k * s)), vld1_u8(pv.add(k * s)));
     }
     filter(kind, &mut t, l);
@@ -226,18 +247,32 @@ unsafe fn h8x2(ub: &mut [u8], vb: &mut [u8], s: usize, kind: Kind, l: Limits) {
 }
 
 /// [`crate::loop_filter`]'s luma edge: 16 segments, q0 of the first at `pos`.
-pub(crate) fn luma_edge(buf: &mut [u8], pos: usize, s: usize, vertical: bool, kind: Kind, l: Limits) {
+/// Every range is computed with checked arithmetic ([`span`]), so a stride
+/// or position that overflows panics, as an out-of-range index does.
+pub(crate) fn luma_edge(
+    buf: &mut [u8],
+    pos: usize,
+    s: usize,
+    vertical: bool,
+    kind: Kind,
+    l: Limits,
+) {
     if vertical {
+        if s < 8 {
+            // Rows that overlap can't be split into two halves; the
+            // portable code handles them (and gives the same bytes).
+            return luma_edge_portable(buf, pos, s, vertical, kind, l);
+        }
         // Rows 0..16, each eight pixels from p3.
-        let block = &mut buf[pos - 4..pos - 4 + 15 * s + 8];
+        let block = &mut buf[span(pos, 0, 4, s, 15, 8)];
         let (top, bottom) = block.split_at_mut(8 * s);
-        assert!(top.len() >= 7 * s + 8 && bottom.len() >= 7 * s + 8);
-        // SAFETY: `top` holds rows 0..8 and `bottom` rows 8..16, each at
-        // least `7 * s + 8` bytes (asserted), and they do not overlap.
-        unsafe { v16(top.as_mut_ptr(), bottom.as_mut_ptr(), s, kind, l) }
+        // SAFETY: NEON is on (the module only compiles with
+        // it), and `v16` asserts that each half holds its eight rows.
+        unsafe { v16(top, bottom, s, kind, l) }
     } else {
-        let block = &mut buf[pos - 4 * s..pos + 3 * s + 16];
-        // SAFETY: `block` is exactly `7 * s + 16` bytes.
+        let block = &mut buf[span(pos, 4, 0, s, 7, 16)];
+        // SAFETY: NEON is on (the module only compiles with
+        // it), and `h16` asserts that `block` holds its eight rows.
         unsafe { h16(block, s, kind, l) }
     }
 }
@@ -254,15 +289,16 @@ pub(crate) fn chroma_edge(
     l: Limits,
 ) {
     if vertical {
-        let u = &mut ub[pos - 4..pos - 4 + 7 * s + 8];
-        let v = &mut vb[pos - 4..pos - 4 + 7 * s + 8];
-        // SAFETY: each slice is exactly `7 * s + 8` bytes, and they are
-        // different buffers.
-        unsafe { v16(u.as_mut_ptr(), v.as_mut_ptr(), s, kind, l) }
+        let r = span(pos, 0, 4, s, 7, 8);
+        let (u, v) = (&mut ub[r.clone()], &mut vb[r]);
+        // SAFETY: NEON is on (the module only compiles with
+        // it), and `v16` asserts that each slice holds its eight rows.
+        unsafe { v16(u, v, s, kind, l) }
     } else {
-        let u = &mut ub[pos - 4 * s..pos + 3 * s + 8];
-        let v = &mut vb[pos - 4 * s..pos + 3 * s + 8];
-        // SAFETY: each slice is exactly `7 * s + 8` bytes.
+        let r = span(pos, 4, 0, s, 7, 8);
+        let (u, v) = (&mut ub[r.clone()], &mut vb[r]);
+        // SAFETY: NEON is on (the module only compiles with
+        // it), and `h8x2` asserts that each slice holds its eight rows.
         unsafe { h8x2(u, v, s, kind, l) }
     }
 }

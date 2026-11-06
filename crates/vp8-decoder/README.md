@@ -111,10 +111,14 @@ rather than panicking.
 
 Its only `unsafe` code is in two modules, `neon.rs` (aarch64) and
 `sse2.rs` (x86_64): the loop filter's SIMD kernels, written with
-`std::arch` intrinsics. The rest of the crate is `deny(unsafe_code)`. Each
-kernel works on a slice that ordinary, bounds-checked indexing has already
-cut to the exact size it reads and writes, so a bad stream can't make it
-touch memory outside the frame. Their output matches the portable code
+`std::arch` intrinsics. The rest of the crate is `deny(unsafe_code)`.
+They compile only when the target has the feature (NEON or SSE2), so a
+target without it gets the portable code. Each kernel asserts the length
+of every slice it reads and writes before touching it, and the code that
+calls it cuts those slices with checked arithmetic and ordinary bounds
+checks. Whatever the input, including the strides and positions given to
+the hidden shared modules, a bad value panics and nothing outside the
+planes is touched. Their output matches the portable code
 byte for byte (tests compare them with the 0.1.0 scalar filter on random
 pictures at every filter level and sharpness). Build with
 `RUSTFLAGS="--cfg vp8_portable"` to leave them out; the decoder is then

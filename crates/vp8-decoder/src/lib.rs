@@ -33,15 +33,15 @@ mod bool_decoder;
 mod decoder;
 mod frame;
 pub mod ivf;
-#[cfg(all(target_arch = "aarch64", not(vp8_portable)))]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon", not(vp8_portable)))]
 #[allow(unsafe_code)]
 mod neon;
-#[cfg(all(target_arch = "aarch64", not(vp8_portable)))]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon", not(vp8_portable)))]
 use neon as simd;
-#[cfg(all(target_arch = "x86_64", not(vp8_portable)))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(vp8_portable)))]
 #[allow(unsafe_code)]
 mod sse2;
-#[cfg(all(target_arch = "x86_64", not(vp8_portable)))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(vp8_portable)))]
 use sse2 as simd;
 #[cfg(test)]
 mod reference;

@@ -1,7 +1,7 @@
 //! The loop filter (RFC 6386 Section 15).
 //!
 //! Each edge is filtered as up to 16 segments of eight pixels (p3 to q3)
-//! straddling it. The segments are gathered into a [`Segs`] block, one row
+//! straddling it. The segments are gathered into a `Segs` block, one row
 //! per tap and one lane per segment, filtered all at once, and the changed
 //! taps written back. For chroma, the U edge fills lanes 0 to 7 and the
 //! matching V edge lanes 8 to 15, so both planes are filtered together.
@@ -68,6 +68,55 @@ impl Limits {
 }
 
 // ---------------------------------------------------------------------------
+// The bytes an edge touches. `filter_mb` and `Planes` are reachable from
+// outside the crate (the hidden shared modules), so strides and positions
+// may be anything: every size is computed with checked arithmetic and an
+// overflow panics, as an out-of-range index does.
+
+/// `rows * s + width`: the bytes from the start of row 0 to the end of a
+/// `width`-pixel run in row `rows` (stride `s`). Panics on overflow.
+#[inline(always)]
+pub(crate) fn rows_len(rows: usize, s: usize, width: usize) -> usize {
+    rows.checked_mul(s)
+        .and_then(|v| v.checked_add(width))
+        .expect("loop filter: stride too large")
+}
+
+#[inline(always)]
+fn add(a: usize, b: usize) -> usize {
+    a.checked_add(b)
+        .expect("loop filter: edge outside the plane")
+}
+
+#[inline(always)]
+fn mul(a: usize, b: usize) -> usize {
+    a.checked_mul(b)
+        .expect("loop filter: edge outside the plane")
+}
+
+/// The range of an edge's segments: it starts `back_rows` rows and
+/// `back_cols` pixels before `pos` and is `rows_len(rows, s, width)` long.
+/// Panics on overflow or if it would start before 0.
+#[inline(always)]
+pub(crate) fn span(
+    pos: usize,
+    back_rows: usize,
+    back_cols: usize,
+    s: usize,
+    rows: usize,
+    width: usize,
+) -> core::ops::Range<usize> {
+    let back = rows_len(back_rows, s, back_cols);
+    let start = pos
+        .checked_sub(back)
+        .expect("loop filter: edge outside the plane");
+    let end = start
+        .checked_add(rows_len(rows, s, width))
+        .expect("loop filter: edge outside the plane");
+    start..end
+}
+
+// ---------------------------------------------------------------------------
 // Gathering and writing back (portable).
 
 /// Gathers `N` segments across a horizontal edge (the taps are rows of
@@ -80,7 +129,7 @@ pub(crate) fn load_h<const N: usize>(
     seg: &mut Segs,
     lane: usize,
 ) {
-    let src = &buf[pos - 4 * s..pos + 3 * s + N];
+    let src = &buf[span(pos, 4, 0, s, 7, N)];
     for (k, row) in seg.iter_mut().enumerate() {
         let r: &[u8; N] = src[k * s..k * s + N].try_into().expect("N pixels");
         row[lane..lane + N].copy_from_slice(r);
@@ -100,7 +149,7 @@ pub(crate) fn store_h<const N: usize>(
     first: usize,
     last: usize,
 ) {
-    let dst = &mut buf[pos - 4 * s..pos + 3 * s + N];
+    let dst = &mut buf[span(pos, 4, 0, s, 7, N)];
     for (k, row) in seg.iter().enumerate().take(last).skip(first) {
         let r: &[u8; N] = row[lane..lane + N].try_into().expect("N lanes");
         dst[k * s..k * s + N].copy_from_slice(r);
@@ -117,7 +166,7 @@ pub(crate) fn load_v<const N: usize>(
     seg: &mut Segs,
     lane: usize,
 ) {
-    let src = &buf[pos - 4..pos - 4 + (N - 1) * s + 8];
+    let src = &buf[span(pos, 0, 4, s, N - 1, 8)];
     for i in 0..N {
         let px: &[u8; 8] = src[i * s..i * s + 8].try_into().expect("8 pixels");
         for (row, &v) in seg.iter_mut().zip(px.iter()) {
@@ -138,11 +187,9 @@ pub(crate) fn store_v<const N: usize>(
     first: usize,
     last: usize,
 ) {
-    let dst = &mut buf[pos - 4..pos - 4 + (N - 1) * s + 8];
+    let dst = &mut buf[span(pos, 0, 4, s, N - 1, 8)];
     for i in 0..N {
-        let px: &mut [u8; 8] = (&mut dst[i * s..i * s + 8])
-            .try_into()
-            .expect("8 pixels");
+        let px: &mut [u8; 8] = (&mut dst[i * s..i * s + 8]).try_into().expect("8 pixels");
         for k in first..last {
             px[k] = seg[k][lane + i];
         }
@@ -326,7 +373,10 @@ fn luma_edge<const PORTABLE: bool>(
     kind: Kind,
     l: Limits,
 ) {
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(vp8_portable)))]
+    #[cfg(any(
+        all(target_arch = "aarch64", target_feature = "neon", not(vp8_portable)),
+        all(target_arch = "x86_64", target_feature = "sse2", not(vp8_portable))
+    ))]
     if !PORTABLE {
         crate::simd::luma_edge(buf, pos, s, vertical, kind, l);
         return;
@@ -368,7 +418,10 @@ fn chroma_edge<const PORTABLE: bool>(
     kind: Kind,
     l: Limits,
 ) {
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(vp8_portable)))]
+    #[cfg(any(
+        all(target_arch = "aarch64", target_feature = "neon", not(vp8_portable)),
+        all(target_arch = "x86_64", target_feature = "sse2", not(vp8_portable))
+    ))]
     if !PORTABLE {
         crate::simd::chroma_edge(ub, vb, pos, s, vertical, kind, l);
         return;
@@ -447,7 +500,7 @@ pub(crate) fn filter_mb_impl<const PORTABLE: bool>(
     let mb = Limits::new((level + 2) * 2 + p.interior_limit, &p);
     let sub = Limits::new(level * 2 + p.interior_limit, &p);
     let s = planes.y_stride;
-    let pos = row * 16 * s + col * 16;
+    let pos = rows_len(mul(row, 16), s, mul(col, 16));
     let y = planes.y;
     if simple {
         if col > 0 {
@@ -455,7 +508,7 @@ pub(crate) fn filter_mb_impl<const PORTABLE: bool>(
         }
         if inner {
             for k in [4, 8, 12] {
-                luma_edge::<PORTABLE>(y, pos + k, s, true, Kind::Simple, sub);
+                luma_edge::<PORTABLE>(y, add(pos, k), s, true, Kind::Simple, sub);
             }
         }
         if row > 0 {
@@ -463,7 +516,7 @@ pub(crate) fn filter_mb_impl<const PORTABLE: bool>(
         }
         if inner {
             for k in [4, 8, 12] {
-                luma_edge::<PORTABLE>(y, pos + k * s, s, false, Kind::Simple, sub);
+                luma_edge::<PORTABLE>(y, rows_len(k, s, pos), s, false, Kind::Simple, sub);
             }
         }
         return;
@@ -476,7 +529,7 @@ pub(crate) fn filter_mb_impl<const PORTABLE: bool>(
     }
     if inner {
         for k in [4, 8, 12] {
-            luma_edge::<PORTABLE>(y, pos + k, s, true, Kind::Subblock, sub);
+            luma_edge::<PORTABLE>(y, add(pos, k), s, true, Kind::Subblock, sub);
         }
     }
     if row > 0 {
@@ -484,23 +537,31 @@ pub(crate) fn filter_mb_impl<const PORTABLE: bool>(
     }
     if inner {
         for k in [4, 8, 12] {
-            luma_edge::<PORTABLE>(y, pos + k * s, s, false, Kind::Subblock, sub);
+            luma_edge::<PORTABLE>(y, rows_len(k, s, pos), s, false, Kind::Subblock, sub);
         }
     }
     let cs = planes.uv_stride;
-    let cpos = row * 8 * cs + col * 8;
+    let cpos = rows_len(mul(row, 8), cs, mul(col, 8));
     let (ub, vb) = (planes.u, planes.v);
     if col > 0 {
         chroma_edge::<PORTABLE>(ub, vb, cpos, cs, true, Kind::Macroblock, mb);
     }
     if inner {
-        chroma_edge::<PORTABLE>(ub, vb, cpos + 4, cs, true, Kind::Subblock, sub);
+        chroma_edge::<PORTABLE>(ub, vb, add(cpos, 4), cs, true, Kind::Subblock, sub);
     }
     if row > 0 {
         chroma_edge::<PORTABLE>(ub, vb, cpos, cs, false, Kind::Macroblock, mb);
     }
     if inner {
-        chroma_edge::<PORTABLE>(ub, vb, cpos + 4 * cs, cs, false, Kind::Subblock, sub);
+        chroma_edge::<PORTABLE>(
+            ub,
+            vb,
+            rows_len(4, cs, cpos),
+            cs,
+            false,
+            Kind::Subblock,
+            sub,
+        );
     }
 }
 
@@ -538,7 +599,6 @@ mod tests {
         }
         v
     }
-
 
     /// Filters every macroblock of a 3x3-macroblock frame, in decode order.
     fn filter_frame(
@@ -612,6 +672,10 @@ mod tests {
     /// sharpness and frame type: the portable filter and the platform's
     /// (NEON on aarch64) match the scalar reference filter byte for byte.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "slow under Miri; edge_strides_and_sizes covers the SIMD paths"
+    )]
     fn portable_and_simd_match_the_reference_filter() {
         let mut rng = Rng(0x9e37_79b9);
         let mut changed = 0u32;
@@ -663,6 +727,7 @@ mod tests {
     /// The lane filters match the reference on random segments at every
     /// limit, across a horizontal edge and, transposed, a vertical one.
     #[test]
+    #[cfg_attr(miri, ignore = "slow under Miri")]
     fn lanes_match_the_reference_in_both_directions() {
         let mut rng = Rng(0x1234_5677);
         for round in 0..4000u32 {
@@ -682,9 +747,7 @@ mod tests {
                 let mut want = pixels.clone();
                 match kind {
                     Kind::Simple => reference::simple_edge(&mut want, 4 * 16, 16, 1, 16, edge),
-                    Kind::Macroblock => {
-                        reference::mb_edge(&mut want, 4 * 16, 16, 1, 16, edge, &rp)
-                    }
+                    Kind::Macroblock => reference::mb_edge(&mut want, 4 * 16, 16, 1, 16, edge, &rp),
                     Kind::Subblock => {
                         reference::subblock_edge(&mut want, 4 * 16, 16, 1, 16, edge, &rp)
                     }
@@ -710,7 +773,10 @@ mod tests {
                 let mut v = t(&pixels);
                 luma_edge_portable(&mut v, 4, 8, true, kind, l);
                 assert_eq!(v, t(&want), "{kind:?} portable vertical, round {round}");
-                #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), not(vp8_portable)))]
+                #[cfg(any(
+                    all(target_arch = "aarch64", target_feature = "neon", not(vp8_portable)),
+                    all(target_arch = "x86_64", target_feature = "sse2", not(vp8_portable))
+                ))]
                 {
                     let mut v = t(&pixels);
                     crate::simd::luma_edge(&mut v, 4, 8, true, kind, l);
@@ -721,5 +787,192 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Runs `filter_mb` (the platform's path, or the portable one) on
+    /// planes the caller made and reports whether it panicked.
+    #[cfg(target_pointer_width = "64")]
+    #[allow(clippy::too_many_arguments)]
+    fn panics(
+        portable: bool,
+        y: &mut [u8],
+        u: &mut [u8],
+        v: &mut [u8],
+        y_stride: usize,
+        uv_stride: usize,
+        row: usize,
+        col: usize,
+    ) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let planes = Planes {
+                y,
+                u,
+                v,
+                y_stride,
+                uv_stride,
+            };
+            if portable {
+                filter_mb_impl::<true>(planes, row, col, 63, 0, true, true, false);
+            } else {
+                filter_mb(planes, row, col, 63, 0, true, true, false);
+            }
+        }))
+        .is_err()
+    }
+
+    /// A stride whose arithmetic overflows (7 * s wraps to 1) must panic,
+    /// on the SIMD path and the portable one, and never touch memory
+    /// outside the planes. So must other huge strides and positions.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn overflowing_strides_and_positions_panic() {
+        let wraps = 0x6db6_db6d_b6db_6db7usize;
+        assert_eq!(wraps.wrapping_mul(7), 1);
+        for portable in [false, true] {
+            let cases: [(usize, usize, usize, usize); 5] = [
+                // (y_stride, uv_stride, row, col)
+                (16, wraps, 0, 0),
+                (wraps, 8, 0, 0),
+                (16, usize::MAX, 0, 0),
+                (usize::MAX / 3, 8, 0, 1),
+                (16, 8, usize::MAX / 8, 1),
+            ];
+            for (ys, cs, row, col) in cases {
+                let (mut y, mut u, mut v) = (vec![0x80u8; 256], vec![0x80u8; 64], vec![0x80u8; 64]);
+                assert!(
+                    panics(portable, &mut y, &mut u, &mut v, ys, cs, row, col),
+                    "no panic: portable {portable}, strides {ys:#x} {cs:#x}, mb ({row}, {col})"
+                );
+            }
+        }
+    }
+
+    /// Strides smaller than a block (rows that overlap) give the same bytes
+    /// on every path: the SIMD path hands vertical luma edges with a stride
+    /// under 8 to the portable code.
+    #[test]
+    fn tiny_strides_match_the_portable_code() {
+        let mut rng = Rng(0x0bad_cafe);
+        for s in [1usize, 3, 7, 8] {
+            for kind in [Kind::Simple, Kind::Macroblock, Kind::Subblock] {
+                let p = FilterParams::new(30, 0, false);
+                let l = Limits::new(30 * 2 + p.interior_limit, &p);
+                let buf = picture(&mut rng, 15 * s + 8 + 8);
+                let mut a = buf.clone();
+                let mut b = buf.clone();
+                luma_edge_portable(&mut a, 4, s, true, kind, l);
+                luma_edge::<false>(&mut b, 4, s, true, kind, l);
+                assert_eq!(a, b, "{kind:?} stride {s}");
+            }
+        }
+    }
+
+    /// Frames of one macroblock to several, with strides from the tightest
+    /// possible to odd and wide ones, in buffers exactly as long as the
+    /// planes need (so an over-read or over-write is an index panic, or
+    /// undefined behaviour Miri reports): the portable and platform paths
+    /// match the reference byte for byte.
+    #[test]
+    fn edge_strides_and_sizes_match_the_reference() {
+        let mut rng = Rng(0x5eed_1234);
+        let sizes: &[(usize, usize)] = if cfg!(miri) {
+            &[(1, 1), (2, 1), (1, 2)]
+        } else {
+            &[(1, 1), (1, 3), (3, 1), (2, 2), (5, 2), (2, 5)]
+        };
+        let extras: &[usize] = if cfg!(miri) {
+            &[0, 7]
+        } else {
+            &[0, 1, 7, 15, 33]
+        };
+        let levels: &[i32] = if cfg!(miri) { &[40] } else { &[1, 20, 40, 63] };
+        let mut cases = 0;
+        for &(cols, rows) in sizes {
+            for &extra in extras {
+                let (ys, cs) = (16 * cols + extra, 8 * cols + extra / 2);
+                // Exactly long enough: the last row ends at the buffer's end.
+                let (ylen, clen) = (
+                    ys * (16 * rows - 1) + 16 * cols,
+                    cs * (8 * rows - 1) + 8 * cols,
+                );
+                for &level in levels {
+                    for simple in [false, true] {
+                        let y = picture(&mut rng, ylen);
+                        let u = picture(&mut rng, clen);
+                        let v = picture(&mut rng, clen);
+                        let mut out = Vec::new();
+                        for which in 0..3u8 {
+                            let (mut y, mut u, mut v) = (y.clone(), u.clone(), v.clone());
+                            for row in 0..rows {
+                                for col in 0..cols {
+                                    let args = (row, col, level, 3, false, true, simple);
+                                    match which {
+                                        0 => reference::filter_mb(
+                                            reference::Planes {
+                                                y: &mut y,
+                                                u: &mut u,
+                                                v: &mut v,
+                                                y_stride: ys,
+                                                uv_stride: cs,
+                                            },
+                                            args.0,
+                                            args.1,
+                                            args.2,
+                                            args.3,
+                                            args.4,
+                                            args.5,
+                                            args.6,
+                                        ),
+                                        1 => filter_mb_impl::<true>(
+                                            Planes {
+                                                y: &mut y,
+                                                u: &mut u,
+                                                v: &mut v,
+                                                y_stride: ys,
+                                                uv_stride: cs,
+                                            },
+                                            args.0,
+                                            args.1,
+                                            args.2,
+                                            args.3,
+                                            args.4,
+                                            args.5,
+                                            args.6,
+                                        ),
+                                        _ => filter_mb(
+                                            Planes {
+                                                y: &mut y,
+                                                u: &mut u,
+                                                v: &mut v,
+                                                y_stride: ys,
+                                                uv_stride: cs,
+                                            },
+                                            args.0,
+                                            args.1,
+                                            args.2,
+                                            args.3,
+                                            args.4,
+                                            args.5,
+                                            args.6,
+                                        ),
+                                    }
+                                }
+                            }
+                            out.push((y, u, v));
+                        }
+                        let what = format!(
+                            "{cols}x{rows} MBs, strides {ys}/{cs}, level {level}, simple {simple}"
+                        );
+                        for (name, o) in [("portable", &out[1]), ("platform", &out[2])] {
+                            assert!(o.0 == out[0].0, "{name} luma differs: {what}");
+                            assert!(o.1 == out[0].1, "{name} U differs: {what}");
+                            assert!(o.2 == out[0].2, "{name} V differs: {what}");
+                        }
+                        cases += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, sizes.len() * extras.len() * levels.len() * 2);
     }
 }

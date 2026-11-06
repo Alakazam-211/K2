@@ -303,7 +303,9 @@ fn main() {
     row(
         &format!("convert to I420 at {}x{}", w / 2, h / 2),
         time_ms(a.seconds, || {
-            std::hint::black_box(convert(&frame, w / 2, h / 2, PixelFormat::I420).expect("convert"));
+            std::hint::black_box(
+                convert(&frame, w / 2, h / 2, PixelFormat::I420).expect("convert"),
+            );
         }),
     );
     match backend.convert(&frame, w, h, PixelFormat::Native) {

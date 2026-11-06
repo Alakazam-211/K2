@@ -366,11 +366,7 @@ pub struct RefPlane<'a> {
 /// 0, and the saturating subtraction gives 0 too. 16-bit lanes let the
 /// compiler use twice as many per vector as 32-bit ones.
 #[inline(always)]
-fn filter_row<const N: usize, const BILINEAR: bool>(
-    out: &mut [u8],
-    taps: [&[u8]; 6],
-    f: &Filter,
-) {
+fn filter_row<const N: usize, const BILINEAR: bool>(out: &mut [u8], taps: [&[u8]; 6], f: &Filter) {
     let out: &mut [u8; N] = (&mut out[..N]).try_into().expect("N pixels");
     let row = |k: usize| fixed::<N>(taps[k]);
     if BILINEAR {
@@ -557,11 +553,7 @@ fn filter_block<const N: usize, const BILINEAR: bool>(
         let f = &filters[fx];
         for r in 0..bh {
             let d = dst_pos + r * dst_stride;
-            filter_row::<N, BILINEAR>(
-                &mut dst[d..d + N],
-                h_taps(src, origin + r * sstride, N),
-                f,
-            );
+            filter_row::<N, BILINEAR>(&mut dst[d..d + N], h_taps(src, origin + r * sstride, N), f);
         }
         return;
     }
@@ -640,17 +632,44 @@ mod tests {
                 } else {
                     (&SIXTAP_FILTERS, &reference::SIXTAP_FILTERS)
                 };
-                for (x, y) in [(0, 0), (16, 16), (w as i32 - bw as i32, 8), (8, h as i32 - bh as i32)] {
+                for (x, y) in [
+                    (0, 0),
+                    (16, 16),
+                    (w as i32 - bw as i32, 8),
+                    (8, h as i32 - bh as i32),
+                ] {
                     for mvy in -40..40 {
                         for mvx in [-200, -37, -9, -8, -3, 0, 1, 5, 7, 13, 26, 99, 300] {
                             let (mvx, mvy) = (mvx + (mvy & 7) * 3, mvy * 3 + (mvx & 3));
                             let mut a = vec![0x5au8; 24 * 24];
                             let mut b = a.clone();
                             inter_predict(
-                                &mut a, 24 + 2, 24, &refp, x, y, bw, bh, mvx, mvy, ours, bilinear,
+                                &mut a,
+                                24 + 2,
+                                24,
+                                &refp,
+                                x,
+                                y,
+                                bw,
+                                bh,
+                                mvx,
+                                mvy,
+                                ours,
+                                bilinear,
                             );
                             reference::inter_predict(
-                                &mut b, 24 + 2, 24, &rp, x, y, bw, bh, mvx, mvy, theirs, bilinear,
+                                &mut b,
+                                24 + 2,
+                                24,
+                                &rp,
+                                x,
+                                y,
+                                bw,
+                                bh,
+                                mvx,
+                                mvy,
+                                theirs,
+                                bilinear,
                             );
                             assert!(
                                 a == b,

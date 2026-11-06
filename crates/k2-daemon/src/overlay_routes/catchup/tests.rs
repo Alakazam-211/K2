@@ -1,7 +1,7 @@
 //! Unit tests for `POST /cli/thread/catchup` (inbox-catchup-v1, 0.46.3):
 //! request rules, the byte budget's item-by-item cut (C1) and the
 //! one-in-flight-per-token guard (C2). The per-caller equality with the
-//! plain read runs headless in `tests/thread_catchup_integration.rs`.
+//! plain read runs headless in `tests/it_chat/thread_catchup_integration.rs`.
 
 use super::*;
 

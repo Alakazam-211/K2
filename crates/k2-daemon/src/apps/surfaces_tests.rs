@@ -6,7 +6,7 @@
 //!
 //! The App's own link (`app.self` / `app.usage` with the link pass, and
 //! another App's id answering 404 with the same bytes) is driven end to
-//! end in `tests/room_surfaces_integration.rs`.
+//! end in `tests/it_guests/room_surfaces_integration.rs`.
 
 use std::collections::{BTreeMap, HashMap};
 

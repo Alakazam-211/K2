@@ -6,7 +6,7 @@
 //! frames, and every answer against its closed catalog row.
 //!
 //! The doors (helper and link), the socket and the dispatcher wiring are
-//! driven end to end in `tests/app_project_chat_integration.rs`.
+//! driven end to end in `tests/it_apps/app_project_chat_integration.rs`.
 
 use std::collections::HashMap;
 

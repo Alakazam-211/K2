@@ -31,7 +31,6 @@ mod bool_decoder;
 mod decoder;
 mod frame;
 pub mod ivf;
-mod loop_filter;
 
 // Shared with the vp8-encoder crate. Not a stable API: it may change in any
 // release, and vp8-encoder pins this crate's exact version.
@@ -39,6 +38,8 @@ mod loop_filter;
 pub mod bool_encoder;
 #[doc(hidden)]
 pub mod idct;
+#[doc(hidden)]
+pub mod loop_filter;
 #[doc(hidden)]
 pub mod modes;
 #[doc(hidden)]

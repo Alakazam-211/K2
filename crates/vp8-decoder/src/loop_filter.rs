@@ -11,13 +11,13 @@
 
 /// Per-macroblock filter parameters.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct FilterParams {
-    pub(crate) interior_limit: i32,
-    pub(crate) hev_threshold: i32,
+pub struct FilterParams {
+    pub interior_limit: i32,
+    pub hev_threshold: i32,
 }
 
 impl FilterParams {
-    pub(crate) fn new(level: i32, sharpness: u8, keyframe: bool) -> Self {
+    pub fn new(level: i32, sharpness: u8, keyframe: bool) -> Self {
         let mut interior = level;
         if sharpness != 0 {
             interior >>= if sharpness > 4 { 2 } else { 1 };
@@ -139,7 +139,7 @@ fn pick(cond: bool, a: u8, b: u8) -> u8 {
 }
 
 /// The simple filter on one edge (luma only). `limit` is the combined edge limit.
-pub(crate) fn simple_edge(buf: &mut [u8], pos: usize, across: usize, along: usize, count: usize, limit: i32) {
+pub fn simple_edge(buf: &mut [u8], pos: usize, across: usize, along: usize, count: usize, limit: i32) {
     let mut seg = load(buf, pos, across, along, count);
     let old = seg;
     for i in 0..16 {
@@ -155,7 +155,7 @@ pub(crate) fn simple_edge(buf: &mut [u8], pos: usize, across: usize, along: usiz
 }
 
 /// The normal filter across a macroblock edge.
-pub(crate) fn mb_edge(
+pub fn mb_edge(
     buf: &mut [u8],
     pos: usize,
     across: usize,
@@ -192,7 +192,7 @@ pub(crate) fn mb_edge(
 }
 
 /// The normal filter across an edge between subblocks.
-pub(crate) fn subblock_edge(
+pub fn subblock_edge(
     buf: &mut [u8],
     pos: usize,
     across: usize,
@@ -220,4 +220,69 @@ pub(crate) fn subblock_edge(
         seg[2][i] = pick(soft, s2u(p1 + a2), old[2][i]);
     }
     store(buf, pos, across, along, count, &seg, 2, 6);
+}
+
+/// The three planes of a frame being filtered.
+pub struct Planes<'a> {
+    pub y: &'a mut [u8],
+    pub u: &'a mut [u8],
+    pub v: &'a mut [u8],
+    pub y_stride: usize,
+    pub uv_stride: usize,
+}
+
+/// Filters the edges one macroblock is responsible for (Section 15.1):
+/// its left and top edges and, if `inner`, the edges between its subblocks.
+/// `level` is the macroblock's final filter level (non-zero).
+#[allow(clippy::too_many_arguments)]
+pub fn filter_mb(planes: Planes<'_>, row: usize, col: usize, level: i32, sharpness: u8, keyframe: bool, inner: bool, simple: bool) {
+    let p = FilterParams::new(level, sharpness, keyframe);
+    let mb_limit = (level + 2) * 2 + p.interior_limit;
+    let b_limit = level * 2 + p.interior_limit;
+    if simple {
+        let s = planes.y_stride;
+        let pos = row * 16 * s + col * 16;
+        let buf = planes.y;
+        if col > 0 {
+            simple_edge(buf, pos, 1, s, 16, mb_limit);
+        }
+        if inner {
+            for k in [4, 8, 12] {
+                simple_edge(buf, pos + k, 1, s, 16, b_limit);
+            }
+        }
+        if row > 0 {
+            simple_edge(buf, pos, s, 1, 16, mb_limit);
+        }
+        if inner {
+            for k in [4, 8, 12] {
+                simple_edge(buf, pos + k * s, s, 1, 16, b_limit);
+            }
+        }
+        return;
+    }
+    filter_plane_mb(planes.y, planes.y_stride, 16, row, col, inner, mb_limit, b_limit, &p);
+    filter_plane_mb(planes.u, planes.uv_stride, 8, row, col, inner, mb_limit, b_limit, &p);
+    filter_plane_mb(planes.v, planes.uv_stride, 8, row, col, inner, mb_limit, b_limit, &p);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filter_plane_mb(buf: &mut [u8], s: usize, n: usize, row: usize, col: usize, inner: bool, mb_limit: i32, b_limit: i32, p: &FilterParams) {
+    let pos = row * n * s + col * n;
+    if col > 0 {
+        mb_edge(buf, pos, 1, s, n, mb_limit, p);
+    }
+    if inner {
+        for k in (4..n).step_by(4) {
+            subblock_edge(buf, pos + k, 1, s, n, b_limit, p);
+        }
+    }
+    if row > 0 {
+        mb_edge(buf, pos, s, 1, n, mb_limit, p);
+    }
+    if inner {
+        for k in (4..n).step_by(4) {
+            subblock_edge(buf, pos + k * s, s, 1, n, b_limit, p);
+        }
+    }
 }

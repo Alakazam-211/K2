@@ -7,7 +7,10 @@ VP8, which every browser decodes.
 - **One frame in, at most one frame out:** no look-ahead, no reordering.
 - **Rate control to a target bitrate.** `set_rates` changes it at any
   time, without a keyframe. Frames are skipped (`Ok(None)`) when the
-  stream runs far over budget.
+  stream runs far over budget. Easy content comes in under a high
+  target, by design: the quantizer has a floor (index 4, the best
+  quality), so a mostly flat or static picture, like a test pattern,
+  cannot spend all the bits. Camera content lands on the target.
 - **Keyframes on request:** `request_keyframe()` or the `force_keyframe`
   flag, for PLI and FIR. Optionally, also on a fixed interval.
 - **Temporal layers:** L1T2 and L1T3, in the usual WebRTC pattern. Each
@@ -70,9 +73,14 @@ the same Ryzen core.
   test vectors bit for bit). Debug builds, which the tests use, also decode
   every frame and check that the decoder's reference frames equal the
   encoder's, bit for bit.
-- The tests check picture quality (PSNR), the bitrate, keyframe requests,
+- The tests check picture quality (PSNR), keyframe requests,
   rate changes and the temporal-layer patterns. They also check that
   receivers which drop the upper layers still decode.
+- Bitrate accuracy: on synthetic camera-like content at 640x360 and
+  1280x720, from 300 kbit/s to 2.5 Mbit/s, with and without temporal
+  layers, the stream lands within 12% of the target
+  (`tests/bitrate.rs`). `scripts/rate-check.sh` runs the same ladder on a
+  real camera clip.
 - The encoded streams were decoded by libvpx (via ffmpeg) and by Chrome's
   WebCodecs, byte-identical to vp8-decoder's output
   (`scripts/libvpx-crosscheck.sh`, `scripts/chrome-check.sh`).

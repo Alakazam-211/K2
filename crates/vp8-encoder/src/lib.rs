@@ -79,6 +79,11 @@ pub struct EncoderConfig {
     /// The frame rate the input arrives at (for rate control).
     pub fps: u32,
     /// Target bitrate in bits per second.
+    ///
+    /// Easy content can come in under it: rate control never goes below
+    /// quantizer index 4, its best quality, so a mostly flat or static
+    /// picture (a test pattern, an idle slide) uses fewer bits than a high
+    /// target allows. Camera content lands on the target.
     pub bitrate_bps: u32,
     /// Ceiling the encoder skips frames to stay under, in bits per second.
     /// Raised to `bitrate_bps` if lower.

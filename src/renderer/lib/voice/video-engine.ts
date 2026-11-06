@@ -95,7 +95,8 @@ export type LocalVideoState = 'off' | 'asking' | 'on' | 'paused'
 export interface LocalVideo {
   camera: LocalVideoState
   screen: LocalVideoState
-  /** A reject code, `background`, `thermal`, `user_stopped`, `source_closed` or `video_disabled`. */
+  /** A reject code, `background`, `thermal`, `user_stopped`, `source_closed`, `video_disabled`,
+   *  `camera_lost` (the camera went away) or, from Sew 0.8.3, `no_frames` (no picture). */
   reason: string | null
 }
 

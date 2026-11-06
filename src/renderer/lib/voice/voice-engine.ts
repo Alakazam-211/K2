@@ -18,6 +18,9 @@ export interface EngineParticipant {
   user: string
   speaking: boolean
   muted: boolean
+  /** The native engine's Sew member id (video tiles find people by it). */
+  memberId?: string
+  isSelf?: boolean
 }
 
 export interface VoiceDevice {

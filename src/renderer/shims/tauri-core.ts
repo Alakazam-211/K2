@@ -210,4 +210,17 @@ export function transformCallback<T = unknown>(
   return 0
 }
 
+/** Tauri's IPC Channel (video sinks import it). The web build has no Rust side,
+ *  so nothing ever sends on one: `stores/video.ts` loads no engine on the web. */
+export class Channel<T = unknown> {
+  id = 0
+  onmessage: (response: T) => void
+  constructor(onmessage?: (response: T) => void) {
+    this.onmessage = onmessage ?? (() => undefined)
+  }
+  toJSON(): string {
+    return `__CHANNEL__:${this.id}`
+  }
+}
+
 export type { }

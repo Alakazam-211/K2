@@ -11,6 +11,7 @@
 // server.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import TopBarPipe from '@/components/TopBar/TopBarPipe'
 import { HeadsetIcon, TOP_BAR_ICON_ACTIVE_CLASS, TOP_BAR_ICON_REST_CLASS } from '@/components/icons/K2Icons'
 import { anyVoiceServer } from '@/lib/voice/voice-servers'
@@ -18,6 +19,9 @@ import { retainVoice, useVoice, voice } from '@/stores/voice'
 import { useSettingsStore } from '@/stores/settings'
 import { headsetState } from './voice-labels'
 import VoicePopover from './VoicePopover'
+import VideoStage from './VideoStage'
+import VideoDemo from './VideoDemo'
+import { retainVideo, video } from '@/stores/video'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -38,11 +42,15 @@ export const UNAVAILABLE_TOOLTIP = "Voice rooms: this server doesn't host them. 
  *  (§4.1); with the roster showing, the roster's divider follows it. */
 export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }): React.JSX.Element | null {
   useEffect(() => retainVoice(), [])
+  useEffect(() => retainVideo(), [])
   const servers = useVoice((s) => s.servers)
   const rooms = useVoice((s) => s.rooms)
   const call = useVoice((s) => s.call)
   const open = useVoice((s) => s.popoverOpen)
   const preview = useSettingsStore((s) => s.voiceRoomsPreview)
+  const videoPreview = useSettingsStore((s) => s.videoRoomsPreview) === true
+  const engineKind = useVoice((s) => s.engineKind)
+  const [demo, setDemo] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const [, setTick] = useState(0)
 
@@ -94,9 +102,45 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
         >
           <HeadsetIcon muted={look.look === 'in-call' && look.muted} live={look.look === 'occupied' || look.look === 'in-call'} />
         </button>
-        {open ? <VoicePopover unavailable={unavailable} /> : null}
+        {open ? (
+          <VoicePopover
+            unavailable={unavailable}
+            onVideoDemo={import.meta.env.DEV && videoPreview ? () => setDemo(true) : undefined}
+          />
+        ) : null}
       </div>
       {withPipe ? <TopBarPipe /> : null}
+      {videoPreview && call && engineKind === 'native'
+        ? createPortal(
+            <VideoStage
+              ctl={video}
+              people={call.participants}
+              title={call.roomName}
+              footer={
+                <>
+                  <button
+                    type="button"
+                    data-testid="video-stage-mute"
+                    className="border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    onClick={() => voice.setMuted(!call.muted)}
+                  >
+                    {call.muted ? 'Unmute' : 'Mute'}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="video-stage-leave"
+                    className="ml-auto border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-status-error-soft)]"
+                    onClick={() => void voice.leave()}
+                  >
+                    Leave
+                  </button>
+                </>
+              }
+            />,
+            document.body,
+          )
+        : null}
+      {demo && videoPreview ? createPortal(<VideoDemo onClose={() => setDemo(false)} />, document.body) : null}
     </>
   )
 }

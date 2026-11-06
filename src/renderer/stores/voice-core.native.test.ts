@@ -365,9 +365,9 @@ describe('the call', () => {
     s.fire('participants', [person(ME, true, { muted: true }), person('7', false), person('99', false, { server_muted: true })])
     await settle()
     expect(s.ctl.store.getState().call?.participants).toEqual([
-      { user: 'ada', speaking: false, muted: true },
-      { user: 'grace', speaking: false, muted: false },
-      { user: 'Someone', speaking: false, muted: true },
+      { user: 'ada', speaking: false, muted: true, memberId: ME, isSelf: true },
+      { user: 'grace', speaking: false, muted: false, memberId: '7', isSelf: false },
+      { user: 'Someone', speaking: false, muted: true, memberId: '99', isSelf: false },
     ])
     expect(s.ctl.store.getState().call?.muted).toBe(true)
     s.fire('speaking', [{ member_id: '7', level: 0.4 }, { member_id: ME, level: 0.01 }])

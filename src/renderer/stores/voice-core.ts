@@ -463,6 +463,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       user: nameOfMember(c.hostKey, p.memberId) ?? (p.isSelf ? deps.selfNames(c.hostKey)[0] ?? 'You' : 'Someone'),
       speaking: nativeSpeaking.has(p.memberId),
       muted: p.muted || p.serverMuted || p.speakDenied,
+      memberId: p.memberId,
+      isSelf: p.isSelf,
     }))
     const muted = self ? self.muted : c.muted
     const deafened = self ? self.deafened : c.deafened

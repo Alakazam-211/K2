@@ -17,6 +17,8 @@ import { MIC_DENIED_LINE, hostingStateText, isLaneReconnecting, micBlockedText, 
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
 import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
+import { video } from '@/stores/video'
+import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -55,6 +57,8 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
   const devices = useVoice((s) => s.devices)
   const prefs = useVoice((s) => s.prefs)
   const engineKind = useVoice((s) => s.engineKind)
+  // Video (preview, off by default): the camera and screen controls.
+  const videoOn = useSettingsStore((s) => s.videoRoomsPreview) === true && engineKind === 'native'
   useEffect(() => {
     if (call.phase !== 'connected') return
     void voice.loadDevices().catch((err: unknown) => console.warn('[voice] reading audio devices failed:', err))
@@ -112,10 +116,13 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
         <button type="button" data-testid="voice-deafen" disabled={busy} className={SMALL_BTN} onClick={() => voice.setDeafened(!call.deafened)}>
           {call.deafened ? 'Undeafen' : 'Deafen'}
         </button>
+        {videoOn ? <VideoCallButtons ctl={video} disabled={busy} /> : null}
         <button type="button" data-testid="voice-leave" className={`${SMALL_BTN} ml-auto text-[var(--color-status-error-soft)]`} onClick={() => void voice.leave()}>
           Leave
         </button>
       </div>
+      {videoOn ? <ScreenPicker ctl={video} /> : null}
+      {videoOn ? <VideoNoticeLine ctl={video} /> : null}
       {devices && (devices.inputs.length > 0 || devices.outputs.length > 0) ? (
         <div className="mt-2 flex flex-col gap-1 text-[11px] text-[var(--color-text-secondary)]">
           <div className="flex items-center justify-between gap-2">
@@ -144,6 +151,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
               onChange={(v) => voice.setPrefs({ outputDeviceId: v || null })}
             />
           </div>
+          {videoOn ? <CameraPicker ctl={video} /> : null}
         </div>
       ) : null}
     </section>
@@ -319,7 +327,14 @@ function WindowHostingSection({ wh }: { wh: WindowHosting | null }): React.JSX.E
   )
 }
 
-export default function VoicePopover({ unavailable = false }: { unavailable?: boolean }): React.JSX.Element {
+export default function VoicePopover({
+  unavailable = false,
+  onVideoDemo,
+}: {
+  unavailable?: boolean
+  /** Dev builds with the video preview on: open the fake-engine video demo. */
+  onVideoDemo?: () => void
+}): React.JSX.Element {
   // The list drops over the room, so it gives way over a live Browser page.
   // The claim lives and dies with this box, not with the store's open flag.
   const rootRef = useRef<HTMLDivElement>(null)
@@ -400,6 +415,11 @@ export default function VoicePopover({ unavailable = false }: { unavailable?: bo
         <p data-testid="voice-empty" className="mt-1 text-[11px] text-[var(--color-text-muted)]">
           No voice rooms yet. Rooms show here from Linux servers with Pro that you're signed in to.
         </p>
+      ) : null}
+      {onVideoDemo ? (
+        <button type="button" data-testid="video-demo-open" className="mt-1 text-[10px] text-[var(--color-text-muted)] underline" onClick={onVideoDemo}>
+          Video demo (dev)
+        </button>
       ) : null}
     </div>
   )

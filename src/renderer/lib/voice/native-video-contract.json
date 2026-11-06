@@ -1,0 +1,65 @@
+{
+  "_": "DRAFT. The JSON K2 expects from tauri-plugin-sew-voice's video commands and events, written from Sew's draft (prd-sew-62 §B7, 2026-11-06), before the plugin has video. Fields the draft doesn't spell out are K2's guesses (see guesses). native-video-engine.test.ts holds the TS adapter to this file; once Sew's tests/contract.rs covers video, src-tauri's native_voice::tests should hold this file to the plugin's real types, as native-voice-contract.json is.",
+  "guesses": [
+    "video_caps.camera is a boolean; screen.windows is a boolean",
+    "video_devices.permission.camera/screen are 'granted' | 'denied' | 'prompt' (anything else reads as unknown)",
+    "video[].unsupported is a boolean",
+    "screen_sources[].kind is 'display' | 'window'; thumbnail_png is base64 PNG (a data: URL also works)",
+    "video_sink's sink_id is a number (the frame header's u32); codec is a string, or null in decoded mode",
+    "command arguments are snake_case (sink_id), as the plugin's consent command takes notice_version",
+    "policy is passed through unread",
+    "a plugin without video rejects video_caps, and state has no video, local_video or policy"
+  ],
+  "plugin": "sew-voice",
+  "eventPrefix": "sew-voice://",
+  "events": ["video", "local_video", "video_devices", "policy", "errors"],
+  "commands": ["video_caps", "video_devices", "set_video_device", "camera", "screen_sources", "screen", "preview", "video_sink", "video_sink_update", "video_sink_close", "request_keyframe"],
+  "videoCaps": {
+    "camera": true,
+    "screen": { "supported": true, "system_picker": false, "list": true, "windows": true },
+    "publish_codecs": ["vp8"],
+    "decode_codecs": ["vp8", "h264"],
+    "backend": "avfoundation"
+  },
+  "videoDevices": {
+    "cameras": [
+      { "id": "cam:1", "name": "FaceTime HD Camera", "facing": "front", "default": true },
+      { "id": "cam:2", "name": "Acme USB Camera", "facing": "external", "default": false }
+    ],
+    "camera": null,
+    "permission": { "camera": "granted", "screen": "denied" }
+  },
+  "video": [
+    { "member_id": "7", "is_self": false, "source": "camera", "track": "TR_VCa", "codec": "vp8", "width": 1280, "height": 720, "muted": false, "paused": null },
+    { "member_id": "7", "is_self": false, "source": "screen", "track": "TR_VSb", "codec": "h264", "width": 1920, "height": 1080, "muted": false, "paused": "congestion" },
+    { "member_id": "48831765147549699", "is_self": true, "source": "camera", "track": "TR_VCc", "codec": "vp8", "width": 640, "height": 360, "muted": true, "paused": null, "unsupported": false }
+  ],
+  "localVideo": {
+    "on": { "camera": "on", "screen": "off" },
+    "paused": { "camera": "paused", "screen": "off", "reason": "background" },
+    "refused": { "camera": "off", "screen": "off", "reason": "video_slots_full" }
+  },
+  "screenSources": [
+    { "id": "display:1", "kind": "display", "title": "Built-in Retina Display", "width": 3024, "height": 1964, "thumbnail_png": "iVBORw0KGgo=" },
+    { "id": "window:42", "kind": "window", "title": "Plan", "app": "Acme Docs", "width": 1200, "height": 800 }
+  ],
+  "previewResult": { "sink_track": "local:camera" },
+  "videoSinkArgs": { "track": "TR_VCa", "width": 640, "height": 360, "visible": true, "tile": "grid", "decode": ["vp8", "h264"] },
+  "videoSinkResult": { "sink_id": 3, "codec": "vp8", "mode": "encoded" },
+  "videoSinkUpdateArgs": { "sink_id": 3, "visible": false, "stats": { "decoded": 10, "dropped": 1, "freezes": 0, "freeze_ms": 0 } },
+  "rejects": {
+    "slots_full": { "code": "video_slots_full", "detail": null },
+    "media_busy": { "code": "media_busy", "detail": { "retry_after": 5 } },
+    "camera_denied": { "code": "camera_denied", "detail": null }
+  },
+  "errors": { "camera_lost": { "code": "camera_lost", "detail": null }, "mic_denied": { "code": "mic_denied", "detail": null } },
+  "snapshotWithVideo": {
+    "state": "connected",
+    "participants": [],
+    "call_id": "r_x",
+    "video": [{ "member_id": "7", "is_self": false, "source": "camera", "track": "TR_VCa", "codec": "vp8", "width": 1280, "height": 720, "muted": false, "paused": null }],
+    "local_video": { "camera": "on", "screen": "off" },
+    "policy": { "video": true }
+  },
+  "snapshotWithoutVideo": { "state": "connected", "participants": [], "call_id": "r_x" }
+}

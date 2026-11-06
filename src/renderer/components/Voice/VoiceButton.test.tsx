@@ -18,11 +18,16 @@ const h = vi.hoisted(() => ({
   lists: {} as Record<string, unknown>,
   signIn: vi.fn(),
   preview: false,
+  videoPreview: false,
   setSection: vi.fn(),
 }))
 
 vi.mock('@/stores/settings', () => {
-  const state = (): { voiceRoomsPreview: boolean; setSection: (s: string) => void } => ({ voiceRoomsPreview: h.preview, setSection: h.setSection })
+  const state = (): { voiceRoomsPreview: boolean; videoRoomsPreview: boolean; setSection: (s: string) => void } => ({
+    voiceRoomsPreview: h.preview,
+    videoRoomsPreview: h.videoPreview,
+    setSection: h.setSection,
+  })
   const useSettingsStore = <T,>(sel: (s: ReturnType<typeof state>) => T): T => sel(state())
   useSettingsStore.getState = state
   return { useSettingsStore }
@@ -80,6 +85,40 @@ vi.mock('@/stores/voice', async () => {
   }
 })
 
+// Video (behind `videoRoomsPreview`): the real controller over the fake engine.
+vi.mock('@/stores/video', async () => {
+  const core = await import('@/stores/video-core')
+  const { FakeVideoEngine } = await import('@/lib/voice/fake-video-engine')
+  const { fakeWebCodecs, RecordingSurface } = await import('@/lib/voice/fake-webcodecs')
+  const { voice } = await import('@/stores/voice')
+  const video = core.createVideoController({
+    loadEngine: async () => new FakeVideoEngine(),
+    webCodecs: fakeWebCodecs,
+    watchBox: (_el, onBox) => {
+      onBox({ width: 160, height: 90, visible: true })
+      return () => {}
+    },
+    devicePixelRatio: () => 1,
+    surfaceFor: () => new RecordingSurface(),
+    loadPrefs: () => ({ cameraId: null }),
+    savePrefs: () => {},
+    toast: () => {},
+    now: () => Date.now(),
+  })
+  const sync = (): void => video.setActive({ enabled: h.videoPreview, inCall: voice.store.getState().call !== null })
+  return {
+    video,
+    retainVideo: () => {
+      const off = voice.store.subscribe(sync)
+      sync()
+      return () => {
+        off()
+        video.stop()
+      }
+    },
+  }
+})
+
 import VoiceButton from './VoiceButton'
 import { voice } from '@/stores/voice'
 import { overlayClaims } from '@/lib/browser-overlay'
@@ -118,6 +157,7 @@ beforeEach(async () => {
   h.signIn.mockReset()
   h.setSection.mockReset()
   h.preview = false
+  h.videoPreview = false
   await act(async () => {
     if (voice.store.getState().call) await voice.leave()
     voice.store.setState({ rooms: {}, notice: null, popoverOpen: false, windowHosting: null })
@@ -369,5 +409,53 @@ describe('VoiceButton', () => {
     // A mousedown truly outside still closes the popover.
     fireEvent.mouseDown(document.body)
     expect(screen.queryByTestId('voice-popover')).toBeNull()
+  })
+})
+
+describe('video in the call (videoRoomsPreview)', () => {
+  /** In a call on the native engine (the fake seat engine, drawn as native). */
+  async function inCall(): Promise<void> {
+    h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
+    h.lists = { 'sewlab.k2.dev': sewList }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getAllByTestId('voice-join')).toHaveLength(2))
+    fireEvent.click(screen.getAllByTestId('voice-join')[0])
+    await waitFor(() => expect(screen.getByTestId('voice-call').getAttribute('data-phase')).toBe('connected'))
+    act(() => voice.store.setState({ engineKind: 'native' }))
+  }
+
+  afterEach(() => voice.store.setState({ engineKind: 'seat' }))
+
+  it('with the setting off: no camera, no screen share, no video panel, no demo', async () => {
+    await inCall()
+    await act(async () => new Promise((r) => setTimeout(r, 0)))
+    expect(screen.queryByTestId('video-camera')).toBeNull()
+    expect(screen.queryByTestId('video-screen')).toBeNull()
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+    expect(screen.queryByTestId('video-demo-open')).toBeNull()
+  })
+
+  it('with it on: Camera and Share screen in the call panel; the camera brings up the self-view, and leaving takes it away', async () => {
+    h.videoPreview = true
+    await inCall()
+    fireEvent.click(await screen.findByTestId('video-camera'))
+    await waitFor(() => expect(screen.getByTestId('video-stage')).toBeTruthy())
+    expect(screen.getByTestId('video-tile').dataset.track).toBe('local:camera')
+    // The panel's controls and the video panel's footer both have them.
+    expect(screen.getAllByTestId('video-screen').map((b) => b.textContent)).toEqual(['Share screen', 'Share screen'])
+    expect(screen.getAllByTestId('video-camera').map((b) => b.textContent)).toEqual(['Camera off', 'Camera off'])
+    expect(screen.getByTestId('video-demo-open')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('video-stage-leave'))
+    await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
+    expect(voice.store.getState().call).toBeNull()
+  })
+
+  it('a seat-only call (web client, no native engine) offers no video', async () => {
+    h.videoPreview = true
+    await inCall()
+    act(() => voice.store.setState({ engineKind: 'seat' }))
+    expect(screen.queryByTestId('video-camera')).toBeNull()
   })
 })

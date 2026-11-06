@@ -1,0 +1,175 @@
+// Video in K2's voice rooms: the seam between the room UI and whatever makes the
+// video. The K2 app's real one is Sew's plugin (`native-video-engine.ts`, against
+// the draft of Sew's plugin video API, §B7); `fake-video-engine.ts` stands in for
+// it in tests and in the dev video demo.
+//
+// The call itself stays the voice engine's (`native-voice-engine.ts`). Video
+// rides on it: no call, no video.
+
+import type { VideoCodec } from './video-frame'
+
+export type { VideoCodec } from './video-frame'
+
+export interface VideoCaps {
+  camera: boolean
+  screen: {
+    supported: boolean
+    /** The OS shows its own picker (macOS 14+, Wayland's portal). */
+    systemPicker: boolean
+    /** `screen_sources` lists what can be shared. */
+    list: boolean
+    /** Single windows can be shared, not only whole screens. */
+    windows: boolean
+  }
+  publishCodecs: VideoCodec[]
+  decodeCodecs: string[]
+  backend: string
+}
+
+export interface CameraDevice {
+  id: string
+  label: string
+  /** `front`, `back`, `external`… (phones mostly). */
+  facing: string | null
+  isDefault: boolean
+}
+
+/** The OS's answer for a capture permission, as the plugin reports it. */
+export type CapturePermission = 'granted' | 'denied' | 'prompt' | 'unknown'
+
+export interface VideoDevicesInfo {
+  cameras: CameraDevice[]
+  /** The camera the next (or live) publish uses. Null: the OS default. */
+  camera: string | null
+  permission: { camera: CapturePermission; screen: CapturePermission }
+}
+
+export type VideoSource = 'camera' | 'screen'
+
+/** Why a track's frames stopped while it's still published. */
+export type VideoPause = 'congestion' | 'background' | 'policy'
+
+/** One published video track in the call (`sew-voice://video`). */
+export interface VideoTrack {
+  memberId: string
+  isSelf: boolean
+  source: VideoSource
+  /** The remote `track_sid`: what a sink opens. */
+  track: string
+  codec: string
+  width: number
+  height: number
+  /** The sender turned it off (the camera's off, the tile shows their avatar). */
+  muted: boolean
+  paused: VideoPause | null
+  /** This device can't decode it. */
+  unsupported: boolean
+}
+
+export type LocalVideoState = 'off' | 'asking' | 'on' | 'paused'
+
+/** This person's own camera and screen (`sew-voice://local_video`). */
+export interface LocalVideo {
+  camera: LocalVideoState
+  screen: LocalVideoState
+  /** A reject code, `background`, `thermal`, `user_stopped`, `source_closed` or `video_disabled`. */
+  reason: string | null
+}
+
+export const LOCAL_VIDEO_OFF: LocalVideo = { camera: 'off', screen: 'off', reason: null }
+
+export interface ScreenSource {
+  id: string
+  /** `display` or `window`. */
+  kind: string
+  title: string
+  app: string | null
+  width: number
+  height: number
+  /** A PNG, as a data URL ready for an <img>. */
+  thumbnail: string | null
+}
+
+export type SinkTile = 'large' | 'grid'
+
+export interface SinkRequest {
+  /** A remote `track_sid`, `local:camera` or `local:screen`. */
+  track: string
+  /** Device pixels. */
+  width: number
+  height: number
+  visible: boolean
+  tile: SinkTile
+  /** What this webview's WebCodecs decodes (the probe). Empty: decoded frames. */
+  decode: VideoCodec[]
+}
+
+export interface SinkInfo {
+  sinkId: number
+  codec: string | null
+  /** `encoded` frames go to WebCodecs; `decoded` frames are I420 or RGBA. */
+  mode: 'encoded' | 'decoded'
+}
+
+export interface SinkStats {
+  decoded: number
+  dropped: number
+  freezes: number
+  freezeMs: number
+}
+
+export interface SinkUpdate {
+  width?: number
+  height?: number
+  visible?: boolean
+  tile?: SinkTile
+  stats?: SinkStats
+}
+
+/** What a window opened mid-call needs (the plugin's `state`). */
+export interface VideoSnapshot {
+  tracks: VideoTrack[]
+  local: LocalVideo
+  /** Sew's `MediaPolicy`, as sent. Read by nothing yet. */
+  policy: unknown
+}
+
+export interface VideoEvents {
+  onVideo(tracks: VideoTrack[]): void
+  onLocalVideo(local: LocalVideo): void
+  onDevices(devices: VideoDevicesInfo): void
+  onPolicy(policy: unknown): void
+  /** Video's own engine errors: `video_stalled`, `encoder_lost`, `camera_lost`. */
+  onError(code: string, detail: unknown): void
+}
+
+export interface VideoEngine {
+  /** Subscribe to the video events, for this window's life. */
+  start(events: VideoEvents): Promise<void>
+  stop(): void
+  snapshot(): Promise<VideoSnapshot>
+  /** Rejects when this build's plugin has no video. */
+  caps(): Promise<VideoCaps>
+  devices(): Promise<VideoDevicesInfo>
+  /** `default` follows the OS default. */
+  setDevice(camera: string): Promise<void>
+  /** Resolves once publishing (or off). Rejects with a `NativeVoiceError`. */
+  camera(on: boolean, device?: string): Promise<void>
+  screenSources(): Promise<ScreenSource[]>
+  screen(on: boolean, source?: string): Promise<void>
+  /** The camera outside a call: the sink track to attach, or null when off. */
+  preview(on: boolean, device?: string): Promise<string | null>
+  /** `onFrame` gets each raw Channel message (`video-frame.ts`). */
+  openSink(req: SinkRequest, onFrame: (data: ArrayBuffer) => void): Promise<SinkInfo>
+  updateSink(sinkId: number, patch: SinkUpdate): Promise<void>
+  closeSink(sinkId: number): Promise<void>
+  requestKeyframe(sinkId: number): Promise<void>
+}
+
+/** The self-view sinks (§B7.5). */
+export const LOCAL_CAMERA_TRACK = 'local:camera'
+export const LOCAL_SCREEN_TRACK = 'local:screen'
+
+/** Sew's per-room caps (`docs/voice.md`): what a refusal names. */
+export const ROOM_CAMERA_LIMIT = 25
+export const ROOM_SCREEN_LIMIT = 3

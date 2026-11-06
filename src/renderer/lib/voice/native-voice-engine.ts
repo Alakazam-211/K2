@@ -208,7 +208,7 @@ export function parseEngineError(v: unknown): { code: string; detail: unknown } 
 /** A rejected command as a `NativeVoiceError`. Tauri rejects with the value the
  *  plugin returned. A plain string is Tauri's own: the command never ran (a
  *  missing permission, say), so it counts as `failed`. */
-function toError(err: unknown): NativeVoiceError {
+export function toNativeError(err: unknown): NativeVoiceError {
   if (err instanceof NativeVoiceError) return err
   const r = record(err)
   if (r && typeof r.code === 'string') return new NativeVoiceError(r.code, r.detail ?? null)
@@ -228,7 +228,7 @@ export class NativeVoiceEngine {
     try {
       return await this.bridge.invoke<T>(`${PLUGIN_COMMAND_PREFIX}${name}`, args)
     } catch (err) {
-      throw toError(err)
+      throw toNativeError(err)
     }
   }
 

@@ -7,8 +7,10 @@ a test broke it and flaked or failed on the gate.
 ## The gate
 
 `scripts/test-gate-linux.sh <sha>` exports `<sha>` with `git archive` into a fresh
-dir, builds with its own target dir, and runs `cargo test -p k2-core` and
-`cargo test -p k2-daemon` (`--no-fail-fast`) under `env -i`: a temp `HOME`, a temp
+dir, builds with its own target dir, and runs `cargo test -p k2-core`,
+`cargo test -p k2-daemon --lib --bins` and, for k2-daemon's integration tests,
+`cargo nextest run -p k2-daemon -E 'kind(test)'` (all `--no-fail-fast`) under
+`env -i`: a temp `HOME`, a temp
 `TMPDIR`, no `SHELL`, no `K2_*` / `K2SO_*`. It runs **as root**. It is green only
 when every test binary reports 0 failed and the ignored tests are exactly its
 allowlist. Write tests that pass there, as a normal user on a Mac, in any order,
@@ -114,8 +116,23 @@ set refuses to start; the test panics when its `REALPG_*` vars are missing).
 ```sh
 for v in $(env | grep -oE '^K2(SO)?_[A-Z0-9_]+'); do unset $v; done
 cargo test -p k2-core --lib -- <module>::     # one module
-cargo test -p k2-daemon --test <file>        # one integration file
+cargo test -p k2-daemon --test <file>        # one integration file (tests/<file>.rs)
+cargo nextest run -p k2-daemon --test it_apps                       # one group
+cargo test -p k2-daemon --test it_apps -- app_grace_integration::   # one module of it
 ```
+
+**k2-daemon's integration tests are grouped by area.** `tests/it_<area>/main.rs`
+is one test binary; every other file next to it is a module that used to be
+its own binary (`tests/<module>.rs`) and keeps that name. Grouping links the
+daemon once per area instead of once per file. The modules still expect a
+process of their own (`$HOME`, `K2_*` env, the shared test DB, statics), so a
+group runs under cargo-nextest (a process per test), or under `cargo test` one
+module at a time. A whole-group `cargo test` fails on purpose: its
+`runner_guard` test says how to run it (`tests/support/env.rs`). New tests go
+in a group: add the file to `tests/it_<area>/` and `mod <name>;` to its
+`main.rs`, and use support as `use crate::support::<name>;`.
+`scripts/check-daemon-test-targets.sh` (in `checks.sh web`) fails on a module
+file that `main.rs` doesn't declare.
 
 A route arm in `routes/dispatcher.rs` that answers on a keep-alive socket must
 consume the peeked request on EVERY branch (GET included), or the loop answers
@@ -123,7 +140,8 @@ it again (the `GET /cli/tunnel/config` bug).
 
 The nightly soak, `scripts/test-soak-linux.sh <sha>`, loops the known-flaky
 groups 200x under CPU load, runs both unit binaries with shuffle seeds 1-10, and
-runs the whole suite once under load.
+runs the whole suite once under load (k2-daemon's integration tests under
+cargo-nextest, profile `soak`).
 
 Loop a flake fix before calling it fixed: run the module filter 200 times with
 `--test-threads=12` under CPU load, and once with a shuffled order

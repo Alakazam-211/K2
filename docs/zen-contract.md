@@ -371,7 +371,7 @@ menu   = "more"         # slot = "menu" only: the menu widget's id
   this grammar in static pages of at most 80 lines, with no daemon needed;
   `k2 zen guide example <name> --toml` prints whole Garden files to pipe
   into `gardens/<id>.toml`. `tests/cli/zen_guide.sh` validates every example
-  against a headless daemon, and `zen_core.rs` (`fc_t17_*`, `fc_t18_*`)
+  against a headless daemon, and `it_zen/zen_core.rs` (`fc_t17_*`, `fc_t18_*`)
   checks the examples and the pages against these tables, so a grammar
   change the guide doesn't follow fails a test.
 

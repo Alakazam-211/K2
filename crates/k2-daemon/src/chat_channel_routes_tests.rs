@@ -1,6 +1,6 @@
 //! Sew for Apps A9 on the App transport, in process, before Sew is asked:
 //! the pass and cap floors, Sew's feature flag, the App's own Space. The
-//! mgmt calls themselves are in tests/sew_for_apps_integration.rs (the
+//! mgmt calls themselves are in tests/it_apps/sew_for_apps_integration.rs (the
 //! fake Sew socket).
 
 use k2_core::skin::{self, link as passes};

@@ -2,7 +2,7 @@
 # Thread file objects (0.46.1, thread-attachments-v1): `k2 thread <addr>
 # "text" --file path[:line[-end]]`. No daemon: help, usage errors and the
 # --file → JSON parsing (extracted from cli/k2). The daemon end to end is
-# crates/k2-daemon/tests/thread_attachments_integration.rs.
+# crates/k2-daemon/tests/it_chat/thread_attachments_integration.rs.
 
 set -euo pipefail
 

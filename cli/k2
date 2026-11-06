@@ -57975,7 +57975,9 @@ SERVER SWITCHES (the owner only)
     computePreview          compute nodes (same as k2 compute preview on|off)
     boardFilePreview        board files open in a tab
     videoRoomsPreview       video in voice rooms: camera and screen share
-                            in the K2 desktop app's call panel
+                            in the K2 desktop app's call panel (needs
+                            voiceRoomsPreview on too)
+  All of them are off until the owner turns them on.
   Run it as the owner in a plain terminal on the server (not a K2 tab): the
   CLI picks up the owner's credential there by itself. These are the only
   keys it takes: any other key, or a value that isn't true/false/on/off,

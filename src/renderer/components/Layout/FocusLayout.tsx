@@ -90,7 +90,7 @@ export default function FocusLayout({
         )}
 
         {/* Main content (terminal) */}
-        <div className="flex-1 overflow-hidden">{children}</div>
+        <div className="flex-1 overflow-hidden" data-call-tile-area="">{children}</div>
 
         {/* Right auxiliary panel */}
         {rightPanel && (

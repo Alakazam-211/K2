@@ -10,8 +10,9 @@
 // Ported from K2 Companion's phone call card (src/zen/voice/miniSnap.ts on
 // its voice-video branch), constants unchanged, so the phone and the desktop
 // move the same way. Companion credits FaceTime's PiP and Apple's "Designing
-// Fluid Interfaces" for the projection. What's new here is `cornerSpots`: on
-// the desktop the corners keep clear of the top bar and of composers.
+// Fluid Interfaces" for the projection. What's new here is `cornerSpots` and
+// `freeArea`: on the desktop the corners are the free content area's (under
+// the tab strip, beside open drawers) and keep clear of composers.
 
 export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 export const CORNERS: readonly Corner[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
@@ -207,21 +208,75 @@ function overlaps(a: Rect, b: Rect): boolean {
   return a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height
 }
 
+/** A box by its edges (px, window coordinates). */
+export interface Bounds {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+/** What the free content area is measured from: the room's content column
+ *  (`content`, beside the sidebar and drawers, under the top bar), the open
+ *  drawers on each side, and the tab strips. */
+export interface AreaParts {
+  content?: Rect | null
+  drawers?: readonly { side: 'left' | 'right'; rect: Rect }[]
+  tabs?: readonly Rect[]
+}
+
+const sized = (r: Rect): boolean => r.width > 0 && r.height > 0
+
+/** The free content area the tile's corners sit in (Rosson 2026-11-06): under
+ *  the tab strip, beside any open drawer, never over either. A drawer with no
+ *  width (closed, or not on this page) takes nothing. A tab strip pushes the
+ *  top down only where it sits over the area's upper half (the panes' tab
+ *  strips are at their tops). */
+export function freeArea(view: { width: number; height: number }, parts: AreaParts): Bounds {
+  let left = 0
+  let top = 0
+  let right = view.width
+  let bottom = view.height
+  const c = parts.content
+  if (c && sized(c)) {
+    left = Math.max(left, c.left)
+    top = Math.max(top, c.top)
+    right = Math.min(right, c.left + c.width)
+    bottom = Math.min(bottom, c.top + c.height)
+  }
+  for (const d of parts.drawers ?? []) {
+    if (!sized(d.rect)) continue
+    if (d.side === 'left') left = Math.max(left, d.rect.left + d.rect.width)
+    else right = Math.min(right, d.rect.left)
+  }
+  const middle = top + (bottom - top) / 2
+  for (const t of parts.tabs ?? []) {
+    if (!sized(t)) continue
+    const across = t.left < right && left < t.left + t.width
+    if (across && t.top < middle) top = Math.max(top, t.top + t.height)
+  }
+  return { left, top, right, bottom }
+}
+
 /** Each corner's spot (the card's top left) in a `view` window for a card
  *  `size`, clear of the insets and of every `avoid` box (composers, key
  *  controls): a bottom corner moves up above what it would cover, a top
  *  corner moves down below it. Never off the window: when nothing clear is
- *  left, the spot stays at the window's edge. */
+ *  left, the spot stays at the window's edge. With an `area` (freeArea: under
+ *  the tabs, beside the drawers), the corners are that area's: `gap` under
+ *  its top, `side` in from its left and right, `bottom` up from its bottom. */
 export function cornerSpots(
   view: { width: number; height: number },
   size: { width: number; height: number },
   insets: SpotInsets,
   avoid: readonly Rect[] = [],
+  area?: Bounds,
 ): Record<Corner, Vec> {
-  const minTop = insets.top
-  const maxTop = Math.max(minTop, view.height - insets.bottom - size.height)
-  const left = insets.side
-  const right = Math.max(left, view.width - insets.side - size.width)
+  const minTop = area ? Math.max(insets.top, area.top + insets.gap) : insets.top
+  const floor = area ? Math.min(view.height, area.bottom) : view.height
+  const maxTop = Math.max(minTop, floor - insets.bottom - size.height)
+  const left = (area ? Math.max(0, area.left) : 0) + insets.side
+  const right = Math.max(left, (area ? Math.min(view.width, area.right) : view.width) - insets.side - size.width)
   const out = {} as Record<Corner, Vec>
   for (const c of CORNERS) {
     const x = c.endsWith('left') ? left : right

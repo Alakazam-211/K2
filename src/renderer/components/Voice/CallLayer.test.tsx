@@ -141,6 +141,7 @@ import { video } from '@/stores/video'
 import { useCallScreen } from '@/stores/call-screen'
 import { fakeTrack } from '@/lib/voice/fake-video-engine'
 import { resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
+import { usePanelsStore } from '@/stores/panels'
 
 const list: VoiceRoomsList = {
   hosting: { state: 'ok', line: 'Voice rooms are on.', detail: null },
@@ -475,6 +476,34 @@ describe('motion', () => {
     expect(tile.style.transform).not.toBe('')
     step(130)
     expect(tile.style.transform).toBe('')
+  })
+
+  it('rests beside an open drawer, moves out of its way when it opens, and back when it closes', async () => {
+    // A right drawer (as AnimatedDrawer marks it), 300 wide, under the top bar.
+    const drawer = document.createElement('div')
+    drawer.dataset.drawerSide = 'right'
+    let width = 300
+    drawer.getBoundingClientRect = () => ({ left: 1024 - width, top: 38, width, height: 730, right: 1024, bottom: 768, x: 1024 - width, y: 38, toJSON: () => ({}) }) as DOMRect
+    document.body.appendChild(drawer)
+    try {
+      act(() => usePanelsStore.setState({ rightPanelOpen: true, rightPanelWidth: 300 }))
+      await inCall()
+      const tile = await cameraOn()
+      expect(tile.dataset.corner).toBe('bottom-right')
+      expect(tile.style.left).toBe(`${1024 - 300 - 12 - 240}px`)
+      // The drawer closes: once its slide is over, the tile goes back to the window's corner.
+      width = 0
+      act(() => usePanelsStore.setState({ rightPanelOpen: false }))
+      await waitFor(() => expect(tile.style.left).toBe(`${1024 - 12 - 240}px`), { timeout: 2000 })
+      // It opens again: the tile moves out of its way.
+      width = 300
+      for (let i = 0; i < 120; i++) step(16)
+      act(() => usePanelsStore.setState({ rightPanelOpen: true }))
+      await waitFor(() => expect(tile.style.left).toBe(`${1024 - 300 - 12 - 240}px`), { timeout: 2000 })
+    } finally {
+      drawer.remove()
+      act(() => usePanelsStore.setState({ rightPanelOpen: false }))
+    }
   })
 
   it('the corner comes back for this window next time', async () => {

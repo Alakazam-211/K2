@@ -6,7 +6,8 @@
 // Ported from K2 Companion's `useCornerDrag` (src/zen/voice/videoLayer.tsx on
 // its voice-video branch): the same press, slop, lift, snap and catch. What
 // differs on the desktop: no native layer to follow and no haptic; the
-// corners are measured spots (`cornerSpots`: clear of the top bar and the
+// corners are measured spots (`cornerSpots`: the free content area under the
+// tab strip and beside open drawers, clear of the
 // composers) instead of CSS anchors; and the corner is saved per window
 // (thin-client view state, never the daemon's).
 

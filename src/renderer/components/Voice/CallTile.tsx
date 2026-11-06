@@ -22,7 +22,9 @@ import { useStore } from 'zustand'
 import { Surface } from '@/components/ui/Surface'
 import { measureElement, overlayClaims, rectsOverlap, subscribeOverlayClaims, useBrowserOverlay } from '@/lib/browser-overlay'
 import { CALL_TILE_Z } from '@/lib/overlay-layers'
-import { cornerSpots, type Corner, type Rect, type Vec } from '@/lib/voice/mini-snap'
+import { cornerSpots, freeArea, type Bounds, type Corner, type Rect, type Vec } from '@/lib/voice/mini-snap'
+import { usePanelsStore } from '@/stores/panels'
+import { DRAWER_ANIM_MS } from '@/components/Layout/drawer-motion'
 import { holdLeft, nextSpeaker, NO_SPEAKER, speakingIds, tilePicture, videoLive, type SpeakerHold } from '@/lib/voice/call-tile-picture'
 import { videoTiles, type CallPerson, type VideoTile as Tile } from '@/lib/voice/video-labels'
 import { getWindowLabel } from '@/lib/window-chrome'
@@ -102,14 +104,57 @@ export function useCallDuration(startedAt: number | null): string | null {
   return startedAt === null ? null : callDuration(startedAt, now)
 }
 
+function rectOf(el: Element): Rect {
+  const r = el.getBoundingClientRect()
+  return { left: r.left, top: r.top, width: r.width, height: r.height }
+}
+
 function visibleRects(selector: string, except: Element | null): Rect[] {
   const out: Rect[] = []
   for (const el of document.querySelectorAll(selector)) {
     if (except?.contains(el)) continue
-    const r = el.getBoundingClientRect()
-    if (r.width > 0 && r.height > 0) out.push({ left: r.left, top: r.top, width: r.width, height: r.height })
+    const r = rectOf(el)
+    if (r.width > 0 && r.height > 0) out.push(r)
   }
   return out
+}
+
+/** The room's content column (Layout, FocusLayout). */
+export const CALL_TILE_AREA = '[data-call-tile-area]'
+/** The panes' tab strips (TabBar). */
+export const CALL_TILE_TABS = '[data-room-tab-bar]'
+/** The drawers, as AnimatedDrawer marks them (their width is the panels
+ *  store's, as drawn). */
+export const CALL_TILE_DRAWERS = '[data-drawer-side]'
+
+/** Measure the free content area now: under the tab strip, beside the open
+ *  drawers (freeArea). Pages with no content column use the window. */
+export function measureCallTileArea(): Bounds {
+  const content = visibleRects(CALL_TILE_AREA, null)[0] ?? null
+  const drawers: { side: 'left' | 'right'; rect: Rect }[] = []
+  for (const el of document.querySelectorAll(CALL_TILE_DRAWERS)) {
+    const side = (el as HTMLElement).dataset.drawerSide
+    if (side === 'left' || side === 'right') drawers.push({ side, rect: rectOf(el) })
+  }
+  return freeArea({ width: window.innerWidth, height: window.innerHeight }, { content, drawers, tabs: visibleRects(CALL_TILE_TABS, null) })
+}
+
+/** A drawer opened, closed or was resized (the panels store): look again once
+ *  its slide has ended, so the tile moves out of its way, and back. */
+function useRelayoutOnDrawers(relayout: () => void): void {
+  const left = usePanelsStore((s) => (s.leftPanelOpen ? s.leftPanelWidth : 0))
+  const right = usePanelsStore((s) => (s.rightPanelOpen ? s.rightPanelWidth : 0))
+  const first = useRef(true)
+  const again = useRef(relayout)
+  again.current = relayout
+  useEffect(() => {
+    if (first.current) {
+      first.current = false
+      return
+    }
+    const id = setTimeout(() => again.current(), DRAWER_ANIM_MS + 30)
+    return () => clearTimeout(id)
+  }, [left, right])
 }
 
 /** A menu or popover over the tile: the tile steps aside until it closes. */
@@ -146,7 +191,13 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
   const spots = (): Record<Corner, Vec> => {
     const el = ref.current
     const size = { width: el?.offsetWidth || CALL_TILE_WIDTH, height: el?.offsetHeight || 0 }
-    return cornerSpots({ width: window.innerWidth, height: window.innerHeight }, size, CALL_TILE_INSETS, visibleRects(CALL_TILE_AVOID, el))
+    return cornerSpots(
+      { width: window.innerWidth, height: window.innerHeight },
+      size,
+      CALL_TILE_INSETS,
+      visibleRects(CALL_TILE_AVOID, el),
+      measureCallTileArea(),
+    )
   }
   const { corner, held, moving, relayout, handlers } = useCornerDrag(ref, {
     windowLabel,
@@ -158,6 +209,7 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
     },
   })
   useFadeIn(ref)
+  useRelayoutOnDrawers(relayout)
   const relayoutRef = useRef(relayout)
   relayoutRef.current = relayout
   useEffect(() => {

@@ -87,6 +87,9 @@ pub use api::{
     no_wake, Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
     EVENT_QUEUE,
 };
+/// macOS and iOS: the `CVPixelBufferRef` inside an Apple native frame.
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+pub use apple::pixel::apple_pixel_buffer;
 /// The `bytes` crate, re-exported so callers use the same version.
 pub use bytes;
 pub use bytes::Bytes;

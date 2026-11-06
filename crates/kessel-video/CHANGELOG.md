@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `apple_pixel_buffer` (macOS and iOS): the `CVPixelBufferRef` inside an
+  Apple native frame (a VideoToolbox decoder's `Native` output), borrowed
+  while the buffer lives, for an `AVSampleBufferDisplayLayer`.
+
 ## 0.1.0 (unreleased)
 
 The first release: the codec-neutral API (`VideoBackend`, `FrameSource`,

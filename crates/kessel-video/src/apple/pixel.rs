@@ -225,6 +225,24 @@ pub(crate) unsafe fn native_frame(pb: CVPixelBufferRef, capture_us: u64) -> Vide
     v
 }
 
+/// The `CVPixelBufferRef` inside a native frame from the Apple backend (a
+/// VideoToolbox decoder's output asked as `PixelFormat::Native`, or a
+/// camera's or screen's native frame), for handing to Apple APIs, such as
+/// wrapping it in a `CMSampleBuffer` for an `AVSampleBufferDisplayLayer`.
+/// `None` for a native buffer of another kind.
+///
+/// The pointer is borrowed: it stays valid while `buffer` (or any clone of
+/// it) lives. To keep the pixel buffer longer, `CVBufferRetain` it and
+/// `CVBufferRelease` it when done. Treat it as read-only: other clones may
+/// be reading it.
+pub fn apple_pixel_buffer(buffer: &NativeBuffer) -> Option<*mut std::ffi::c_void> {
+    buffer
+        .0
+        .as_any()
+        .downcast_ref::<CvFrame>()
+        .map(CvFrame::raw)
+}
+
 /// A CPU copy of `pb` (NV12 or BGRA).
 ///
 /// # Safety

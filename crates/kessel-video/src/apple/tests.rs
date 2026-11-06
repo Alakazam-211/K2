@@ -280,6 +280,51 @@ fn pixel_buffers_round_trip_nv12() {
     assert_eq!(e.capture_us, 8);
 }
 
+/// A VideoToolbox-decoded native frame hands out its CVPixelBuffer (for an
+/// AVSampleBufferDisplayLayer); another kind of native buffer doesn't.
+#[test]
+fn decoded_native_frames_hand_out_their_pixel_buffer() {
+    let b = backend().expect("backend");
+    let mut enc = b
+        .encoder(EncoderConfig::h264(320, 240, 30, 400_000), no_wake())
+        .expect("encoder");
+    let mut cfg = DecoderConfig::new(VideoCodec::H264);
+    cfg.output = PixelFormat::Native;
+    let mut dec = b.decoder(cfg, no_wake()).expect("decoder");
+    let f = pattern_frame(320, 240, 0x00c0_ffee, 1_000).expect("frame");
+    let e = encode_one(&mut enc, &f, EncodeOptions::default()).expect("a keyframe");
+    let out = decode_one(&mut dec, h264_input(&e));
+    let crate::frame::FrameBuffer::Native(native) = &out.buffer else {
+        panic!("asked for a native frame, got {:?}", out.format());
+    };
+    let pb = crate::apple_pixel_buffer(native).expect("a CVPixelBuffer");
+    assert!(!pb.is_null());
+    // SAFETY: `pb` is live while `native` is.
+    let (w, h) = unsafe {
+        (
+            ffi::CVPixelBufferGetWidth(pb),
+            ffi::CVPixelBufferGetHeight(pb),
+        )
+    };
+    assert_eq!((w, h), (320, 240));
+    assert_eq!(read_frame_code(&out), Some(0x00c0_ffee));
+
+    struct Other;
+    impl crate::frame::NativeFrame for Other {
+        fn format(&self) -> PixelFormat {
+            PixelFormat::Nv12
+        }
+        fn to_planes(&self, _: PixelFormat) -> Result<crate::frame::Planes, VideoError> {
+            Err(VideoError::Unsupported("test".into()))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    let other = crate::frame::NativeBuffer(std::sync::Arc::new(Other));
+    assert_eq!(crate::apple_pixel_buffer(&other), None);
+}
+
 #[test]
 fn listing_and_permissions_never_prompt() {
     let b = backend().expect("backend");

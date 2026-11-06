@@ -14,7 +14,7 @@ mod ffi;
 #[cfg(target_os = "ios")]
 mod ios;
 mod objc;
-mod pixel;
+pub(crate) mod pixel;
 #[cfg(target_os = "macos")]
 mod screen;
 mod vt_dec;

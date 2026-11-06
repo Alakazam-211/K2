@@ -683,6 +683,7 @@ fn recording_consent_reaches_sew_as_the_person() {
     assert_eq!((r.status, r.code.as_str()), (409, "consent_notice_changed"));
     let det = r.details.expect("details");
     assert_eq!((det["consent_prompt"]["notice_version"].as_u64(), det["recording"]["id"].as_str()), (Some(4), Some("42")), "the new notice to show");
+    assert_eq!(det["reason"].as_str(), Some("recording_consent_required"), "the reason Sew's from_sew_error reads");
     let r = refused(404, json!({"error": {"code": "not_found", "hint": "not found"}}));
     assert_eq!((r.status, r.code.as_str()), (404, "recording_not_found"));
     let r = refused(503, json!({"error": {"code": "unavailable", "hint": "", "details": {"reason": "recording_unavailable"}}}));

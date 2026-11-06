@@ -994,6 +994,10 @@ fn consent_refusal(a: &SewAnswer) -> Refusal {
                 "the recording notice changed after it was shown: show the new one (details.consent_prompt) and ask again",
             )
             .details(json!({
+                // The same reason Sew and the join path use, so a client
+                // reading it with Sew's `ProviderError::from_sew_error` gets
+                // `ConsentRequired` (and the new notice) with no special case.
+                "reason": "recording_consent_required",
                 "consent_prompt": d.get("consent_prompt").cloned().unwrap_or(Value::Null),
                 "recording": d.get("recording").cloned().unwrap_or(Value::Null),
                 "sew": sew,

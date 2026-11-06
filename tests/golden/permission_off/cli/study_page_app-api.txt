@@ -82,6 +82,7 @@ thread:read (Read the Thread)
   thread.events            WS   /cli/overlay/events?conversation=             Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. The SDK never asks for the counts-only ear here (it keeps every frame a Thread item); a raw socket opened with ear=1 also gets collection activity frames: use thread.stream or thread.activity for the ear.
   thread.stream            WS   /cli/thread/stream?rooms=                     Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq.
   thread.attachmentGet     GET  /cli/thread/attachment                        One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; a download (a save) also needs files:download.
+  thread.attachmentToken   POST /cli/thread/attachment/token                  A short-lived download token for one attachment you may save (a guest also needs files:download in the room), for an OS background download of the raw file with Range and If-Range.
   thread.catchup           POST /cli/thread/catchup                           Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
   thread.setRead           POST /cli/thread/read                              Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.
   thread.markAllRead       POST /cli/thread/read-all                          Mark everything in a room's Thread read for the signed-in person (an App's own pass: its bookmark), so the agent's unread goes to 0; waiting cards stay waiting. Their own state only, on every surface they use.
@@ -109,6 +110,11 @@ files:write (Write files (not the agent's .k2 folder or root CLAUDE.md, AGENTS.m
   files.write              POST /cli/fs/write-file                            Write (or overwrite) a text file; its folder must exist.
   files.uploadBinary       POST /cli/fs/upload-binary                         Upload a file in one request; a taken name becomes name (1).ext. files:write, or files:upload into a drop folder (it lands in your own subfolder).
   files.uploadChunk        POST /cli/fs/upload-chunk                          Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder.
+  files.uploadCreate       POST /cli/fs/upload/create                         Start a resumable upload for an OS background transfer: K2 checks the room, the caps, the folder and the size once, and answers an upload id, the door's url and a short-lived upload token. The phone PUTs byte ranges to the door with that token (k2 study app-transfers).
+  files.uploadStatus       GET  /cli/fs/upload/status                         What K2 holds of an upload of yours: the ranges received and missing, and whether it is done (the door's HEAD answers the same).
+  files.uploadComplete     POST /cli/fs/upload/complete                       Finish an upload: every byte held, the size and sha256 right, then the file lands without replacing anything. Calling it again answers the same. A sha256 mismatch drops what K2 held: send the file again.
+  files.uploadAbort        POST /cli/fs/upload/abort                          Stop an upload of yours: what K2 held is deleted and its tokens stop working. A completed upload's file stays.
+  files.uploadToken        POST /cli/fs/upload/token                          A fresh upload token for an unfinished upload of yours, when the door answered transfer_token_expired.
   files.create             POST /cli/fs/create                                Create an empty file or a folder.
   files.copy               POST /cli/fs/copy                                  Copy files or folders (a taken name becomes 'name copy').
   files.move               POST /cli/fs/move                                  Move files or folders.
@@ -179,6 +185,7 @@ project:write (Post in project chats (needs it in every member room))
 files:download (Download Thread files (a save, not just a view))
   files.downloads          GET  /cli/fs/downloads                             The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file).
   files.download           GET  /cli/fs/download                              Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads).
+  files.downloadToken      POST /cli/fs/download/token                        A short-lived download token for one file files.download would give you, for an OS background download: GET the url with the token, raw bytes, Range and If-Range (k2 study app-transfers).
 wallet:self (Use the person's own wallet (an owner setting per App, never a room cap))
   wallet.list              GET  /cli/skin/wallet/list (browser only)          The person's own wallet (a guest's session pass; never anyone else's). LLM subscriptions and API keys first.
   wallet.status            GET  /cli/skin/wallet/status (browser only)        One of the person's own items.

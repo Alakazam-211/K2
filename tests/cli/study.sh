@@ -751,6 +751,20 @@ ap_lines="$(printf '%s\n' "$ap_out" | wc -l | tr -d ' ')"
 if [ "$ap_lines" -le 80 ]; then echo "  PASS: app-push is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-push is $ap_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: app-push row" "$("$K2" study)" "  app-push            Your App's own phone app"
 
+echo "== k2 study app-transfers (resumable transfers, 0.46.9) =="
+tx_out="$("$K2" study app-transfers)"
+assert_contains "title" "$tx_out" "k2 study app-transfers — big files that survive the app in the background"
+for needle in "files.uploadCreate" "Content-Range: bytes <first>-<last>/<size>" "K2-Content-Sha256" "K2-Upload-Received" \
+    "POST <url>/complete" "files.downloadToken" "thread.attachmentToken" "If-Range" "URLSessionConfiguration.background" \
+    "WorkManager" "Result.retry()" "k2-transfer-client" "uploadToDoor" "transfer_token_expired" "files.uploadToken" \
+    "guest_pass_required" "16 MiB" "10 GiB" "7 days"; do
+    assert_contains "app-transfers: $needle" "$tx_out" "$needle"
+done
+tx_lines="$(printf '%s\n' "$tx_out" | wc -l | tr -d ' ')"
+if [ "$tx_lines" -le 140 ]; then echo "  PASS: app-transfers is bounded ($tx_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-transfers is $tx_lines lines (max 140)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-transfers row" "$("$K2" study)" "  app-transfers       Big uploads and downloads"
+assert_contains "tauri points at app-transfers" "$("$K2" study tauri)" "k2 study app-transfers"
+
 echo "== k2 study app-pairing (prd-app-phone-pairing-v1, 0.46.5) =="
 pp_out="$("$K2" study app-pairing)"
 assert_contains "title" "$pp_out" "k2 study app-pairing — pair your App's own phone app by QR"

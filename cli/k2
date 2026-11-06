@@ -46654,7 +46654,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
 
 _study_usage() {
     cat <<'EOF'
@@ -46672,6 +46672,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
+  app-transfers
   app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  vault
@@ -46713,6 +46714,7 @@ _study_title() {
         app-push) echo "Notifications to a custom App's own phone app" ;;
         app-pairing) echo "Pairing a custom App's own phone app by QR" ;;
         app-profile) echo "A person's own profile, picture and sessions in an App" ;;
+        app-transfers) echo "Big files that survive the app in the background" ;;
         app-chat) echo "Chat, voice and calls in your App (Chat / Voice Hosting)" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
         chat-voice-rooms) echo "Rooms and channels in your App Space" ;;
@@ -46831,6 +46833,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-push            Your App's own phone app: keys in the vault, register, send, limits
   app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
   app-profile         A person's own profile, picture and sessions in an App; who decides
+  app-transfers       Big uploads and downloads that survive a phone app in the background
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
   chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
@@ -46906,6 +46909,7 @@ _study_page() {
         app-push) _study_page_app_push ;;
         app-pairing) _study_page_app_pairing ;;
         app-profile) _study_page_app_profile ;;
+        app-transfers) _study_page_app_transfers ;;
         app-chat) _study_page_app_chat ;;
         chat-voice) _study_page_chat_voice ;;
         chat-voice-rooms) _study_page_chat_voice_rooms ;;
@@ -47550,6 +47554,7 @@ thread:read (Read the Thread)
   thread.events            WS   /cli/overlay/events?conversation=             Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq. The SDK never asks for the counts-only ear here (it keeps every frame a Thread item); a raw socket opened with ear=1 also gets collection activity frames: use thread.stream or thread.activity for the ear.
   thread.stream            WS   /cli/thread/stream?rooms=                     Live Thread items of every room the pass may read on one socket (inbox_subscribed names the set; grants and revokes apply live); after a gap, thread.page with sinceSeq.
   thread.attachmentGet     GET  /cli/thread/attachment                        One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; a download (a save) also needs files:download.
+  thread.attachmentToken   POST /cli/thread/attachment/token                  A short-lived download token for one attachment you may save (a guest also needs files:download in the room), for an OS background download of the raw file with Range and If-Range.
   thread.catchup           POST /cli/thread/catchup                           Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it.
   thread.setRead           POST /cli/thread/read                              Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use.
   thread.markAllRead       POST /cli/thread/read-all                          Mark everything in a room's Thread read for the signed-in person (an App's own pass: its bookmark), so the agent's unread goes to 0; waiting cards stay waiting. Their own state only, on every surface they use.
@@ -47577,6 +47582,11 @@ files:write (Write files (not the agent's .k2 folder or root CLAUDE.md, AGENTS.m
   files.write              POST /cli/fs/write-file                            Write (or overwrite) a text file; its folder must exist.
   files.uploadBinary       POST /cli/fs/upload-binary                         Upload a file in one request; a taken name becomes name (1).ext. files:write, or files:upload into a drop folder (it lands in your own subfolder).
   files.uploadChunk        POST /cli/fs/upload-chunk                          Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder.
+  files.uploadCreate       POST /cli/fs/upload/create                         Start a resumable upload for an OS background transfer: K2 checks the room, the caps, the folder and the size once, and answers an upload id, the door's url and a short-lived upload token. The phone PUTs byte ranges to the door with that token (k2 study app-transfers).
+  files.uploadStatus       GET  /cli/fs/upload/status                         What K2 holds of an upload of yours: the ranges received and missing, and whether it is done (the door's HEAD answers the same).
+  files.uploadComplete     POST /cli/fs/upload/complete                       Finish an upload: every byte held, the size and sha256 right, then the file lands without replacing anything. Calling it again answers the same. A sha256 mismatch drops what K2 held: send the file again.
+  files.uploadAbort        POST /cli/fs/upload/abort                          Stop an upload of yours: what K2 held is deleted and its tokens stop working. A completed upload's file stays.
+  files.uploadToken        POST /cli/fs/upload/token                          A fresh upload token for an unfinished upload of yours, when the door answered transfer_token_expired.
   files.create             POST /cli/fs/create                                Create an empty file or a folder.
   files.copy               POST /cli/fs/copy                                  Copy files or folders (a taken name becomes 'name copy').
   files.move               POST /cli/fs/move                                  Move files or folders.
@@ -47647,6 +47657,7 @@ project:write (Post in project chats (needs it in every member room))
 files:download (Download Thread files (a save, not just a view))
   files.downloads          GET  /cli/fs/downloads                             The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file).
   files.download           GET  /cli/fs/download                              Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads).
+  files.downloadToken      POST /cli/fs/download/token                        A short-lived download token for one file files.download would give you, for an OS background download: GET the url with the token, raw bytes, Range and If-Range (k2 study app-transfers).
 wallet:self (Use the person's own wallet (an owner setting per App, never a room cap))
   wallet.list              GET  /cli/skin/wallet/list (browser only)          The person's own wallet (a guest's session pass; never anyone else's). LLM subscriptions and API keys first.
   wallet.status            GET  /cli/skin/wallet/status (browser only)        One of the person's own items.
@@ -50421,7 +50432,9 @@ START (A BUNDLED WEB BUILD)
   The phone picks <uploadId> (any new id per file); <room> is a room the
   person may write to; offset = bytes already sent. The node-api template
   has this route. After an error, resend from the end of the last part that
-  answered 200.
+  answered 200. For files that must keep going while the app is in the
+  background (iOS URLSession, Android WorkManager), use K2's transfer door
+  instead: k2 study app-transfers.
 
 8. HOW IS IT DOING
     k2 app status <name>-web       health, checks, errors, channels
@@ -50719,6 +50732,141 @@ NOT YET
   Email change, a self-service forgot door, and K2's own account page come
   with K2's own sender (0.46.6). Usernames never change. Password reset
   today: k2 study apps (PASSWORD RESET).
+EOF
+}
+
+_study_page_app_transfers() {
+    cat <<'EOF'
+k2 study app-transfers — big files that survive the app in the background
+
+THE SHAPE
+  A phone pauses or kills an app in the background, so the app can't keep
+  its own connection open for a 200 MB file. K2 splits a transfer in two:
+  - Your App's server starts it as the person (their session pass) and gets
+    back a door path and a short-lived token.
+  - The app, or the phone's OS for it, sends the bytes straight to K2's
+    transfer door on your App's own host, with that token in a header. No
+    pass and no cookie travel with the bytes, and your server never carries
+    them.
+  The door is /_k2/transfers/ on your App's addresses (<app>.<box>.k2.dev
+  and its live custom domains) and on this server's own address. K2 answers
+  it before your App, App up or down. Each answer closes the connection
+  (HTTP/1.1, one request per connection). K2 answers url as a path: the app
+  puts it after the origin it already talks to. Times (expiresAt,
+  tokenExpiresAt, K2-Upload-Expires) are milliseconds since the epoch.
+  Refusals are JSON {"error": {"code", "hint"}}, sometimes with more fields.
+
+UPLOAD, STEP BY STEP
+  1. Your server, as the person:
+       const up = await k2.asGuest(pass).files.uploadCreate({
+         workspace: room, dir: 'uploads', filename, size, sha256 })
+     → { uploadId, url, transferToken, tokenExpiresAt, expiresAt, missing,
+         partMax, dir }
+     The rules of files.uploadChunk run here, once: files:write (or
+     files:upload into a drop folder: leave dir out and it lands in the
+     person's own folder there), the folder scope, at most 10 GiB, free disk.
+     sha256 (lower-case hex of the whole file) is optional; it is checked at
+     the end. tokenTtlSecs (60 to 86400) sets how long the token works: give
+     a long one when the phone may sleep through the upload.
+     Hand url and transferToken to the app. The App's own pass can't start
+     one (guest_pass_required): it is always the person's.
+  2. The app sends ranges, in any order, several at once if it likes:
+       PUT https://<your App's host><url>
+       Authorization: Bearer <transferToken>
+       Content-Range: bytes <first>-<last>/<size>     (last is inclusive)
+       K2-Content-Sha256: <hex of this range>          (optional)
+       <the range's bytes: at most 16 MiB, with Content-Length>
+     → 200 and the status JSON of step 3. Ranges need no alignment, may
+     overlap, and may be sent again. partMax (bytes, 16 MiB) is the most one
+     PUT carries. A few PUTs at once is fine (each token has about 8 requests
+     a second). A wrong K2-Content-Sha256 is 422 checksum_mismatch and
+     nothing is written. An empty file needs no PUT: just complete.
+  3. Ask what K2 holds at any time (after a crash, when the app wakes):
+       HEAD <url>  → K2-Upload-Received: 0-8388607,16777216-25165823
+                     K2-Upload-Size, K2-Upload-Expires (ms), K2-Upload-Done
+       GET  <url>  → the same as JSON: received and missing (lists of
+                     [first, last], inclusive), receivedBytes, complete, done
+     Send what missing lists. Your server can ask too: files.uploadStatus.
+  4. Finish: POST <url>/complete with {"sha256": "<hex of the file>"} (or {})
+     → { relPath, size, sha256, done: true }. The file lands under its name,
+     or "name (1).ext" when that is taken: nothing is ever replaced. Asking
+     again answers the same. Before every byte arrived: 409
+     upload_incomplete with missing. A file sha256 that doesn't match: 422
+     checksum_mismatch; the upload stays, K2 drops what it held, and every
+     range is sent again. Either side may complete: your server calls
+     files.uploadComplete({uploadId, sha256}), or reads files.uploadStatus
+     ({uploadId}: done and relPath) to learn the app finished. To stop:
+     DELETE <url>, or files.uploadAbort({uploadId}).
+
+DOWNLOAD
+  Your server, as the person: files.downloadToken({workspace, relPath}) for
+  a file they may save (files:download), or thread.attachmentToken({addr,
+  id, n}) for a Thread attachment.
+     → { url, transferToken, expiresAt, size, etag, name, mime }
+  The app: GET https://<your App's host><url> with Authorization: Bearer
+  <transferToken>. The answer has ETag and Accept-Ranges: bytes. Range
+  works (206 with Content-Range; past the end is 416). To resume, send
+  Range: bytes=<bytes you have>- and If-Range: <etag>. If the file changed
+  since, the answer is 200 with the whole new file (start over), never a
+  mix of versions. A token that expired mid-download: ask your server for a
+  new one; the etag stays the same while the file does. A link in a browser
+  can't set a header, so a download (never an upload) may carry the token
+  as ?token= instead.
+
+IN THE BACKGROUND ON iOS
+  Use a background session: URLSessionConfiguration.background(withIdentifier:).
+  iOS uploads from files only, so write each range to its own temp file,
+  then make one uploadTask(with: request, fromFile:) per range, with
+  request.httpMethod = "PUT" and the headers above set on the request. iOS
+  sends them while the app sleeps and wakes it when they end
+  (application(_:handleEventsForBackgroundURLSession:completionHandler:)).
+  On wake: HEAD the url, queue what is still missing, then POST complete.
+  Downloads: downloadTask(with: request) with the Authorization header. Keep
+  the etag; iOS's resume data resumes with Range and If-Range.
+
+IN THE BACKGROUND ON ANDROID
+  Use a WorkManager worker (a CoroutineWorker; for a big file make it a
+  long-running worker with setForeground, and add a network constraint).
+  Its loop: HEAD, PUT each missing range, POST complete. Return
+  Result.retry() on a network error, a 5xx or a 429: WorkManager backs off
+  and runs it again, even after the app is killed or the phone restarts.
+  Keep uploadId, url and the token in the worker's input data (or your
+  app's own encrypted storage). Downloads: the same loop with Range and
+  If-Range, appending to a part file.
+
+FROM RUST (A TAURI APP) AND FROM THE WEB
+  Rust: the k2-transfer-client crate (MIT OR Apache-2.0). It resumes from
+  the door's status, retries with backoff and checks sha256:
+    let ep = Endpoint::new("https://<your App's host>", &url, &token);
+    client.upload_file(&ep, path, UploadOptions::default(), |p| ...).await?;
+    client.download_to(&ep, dest, |p| ...).await?;
+  The crate runs in your app's process, so it stops when the phone suspends
+  the app: on a phone, hand the PUTs to the OS (above) through a small
+  native plugin, and use the crate on the desktop and to finish up when the
+  app wakes. A web page or Node: uploadToDoor({ base, url, token, data })
+  from @k2/server.
+
+TOKENS AND LIMITS
+  - An upload token opens its one upload; a download token opens its one
+    file. Neither opens anything else. On every request K2 reads the
+    person's pass and rights again: a pass that ended (signed out, revoked,
+    expired) is 401 pass_invalid, so the person signs in again and you start
+    a new upload; a lost cap, room or folder is 403 cap_not_granted.
+  - An upload token works for 6 hours (tokenTtlSecs: 60 to 86400). On 401
+    transfer_token_expired, your server calls files.uploadToken({uploadId,
+    tokenTtlSecs}) and the app goes on with the new token: the upload lives
+    on. A download token works for 1 hour (tokenTtlSecs too).
+  - An upload lives 7 days, then 410 transfer_expired; K2 deletes what it
+    held.
+  - One range: 16 MiB. One file: 10 GiB. A person has at most 32 unfinished
+    uploads and 256 download tokens at once (429 too_many_transfers). A drop
+    folder's caps count the whole declared size of each unfinished upload.
+  - About 8 requests a second per token (429 with Retry-After).
+  - Retry network errors, 5xx and 429 with backoff. Don't retry another
+    4xx: fix the request (bad_range), resend (checksum_mismatch), or send
+    what missing lists (upload_incomplete).
+
+MORE: k2 study app-api (every verb), k2 study tauri, k2 study app-errors.
 EOF
 }
 

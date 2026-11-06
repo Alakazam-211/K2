@@ -1502,6 +1502,26 @@ async fn handle_one_request(
     // on an App's gateway link (the App's own container calling K2). An App's
     // public addresses never reach this dispatcher: their door is
     // `apps::voice_door`, on the App path.
+    // 0.46.9 resumable transfers: the token door for an OS background
+    // upload or download (`transfer_door`). It carries a transfer token,
+    // not a K2 login, so it answers before K2's login and method gates.
+    // Never on an App's gateway link; an App's public addresses reach it
+    // through `apps::router` instead.
+    if ingress != Ingress::App && crate::transfer_door::is_door(path_and_query) {
+        let head_len = buf[..n].windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4);
+        match head_len {
+            Some(len) => {
+                let head = String::from_utf8_lossy(&buf[..len]).into_owned();
+                crate::transfer_door::serve(&mut *stream, &head, len).await
+            }
+            None => {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(&mut *stream, "400 Bad Request", "application/json", r#"{"error":"incomplete request head"}"#).await;
+            }
+        }
+        return DispatchOutcome::Done;
+    }
+
     if ingress != Ingress::App && crate::voice::sew_lane::is_lane(path_and_query) {
         let head_len = buf[..n].windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4);
         match head_len {
@@ -7196,6 +7216,85 @@ async fn handle_one_request(
         // Do not hang skin off the owner abs-path arm. `post_allowed` +
         // this explicit arm form the method gate (a GET falls through to
         // the catchall → 404).
+        // 0.46.9 resumable transfers (`transfer_routes`): an App guest's
+        // upload session (create, status, complete, abort, a fresh token)
+        // and a file's download token. Small JSON bodies; the bytes go to
+        // the token door (`transfer_door`). status is a GET, the rest POST.
+        p if crate::transfer_routes::is_upload_route(p) || p == crate::transfer_routes::ROUTE_DOWNLOAD_TOKEN => {
+            const TRANSFER_BODY_MAX: usize = 64 * 1024;
+            let get_route = p == crate::transfer_routes::ROUTE_STATUS;
+            if get_route == is_post || (is_post && !post_allowed) {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::cli_response::CliResponse::method_not_allowed();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, TRANSFER_BODY_MAX).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::transfer_routes::error_json("413 Payload Too Large", "too_large", "this request carries at most 64 KiB", None);
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let skin_presented = super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token);
+            let resp = if skin_presented {
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass) {
+                    None => crate::skin_routes::revoked_skin_response(),
+                    Some(pass) => {
+                        let download = p == crate::transfer_routes::ROUTE_DOWNLOAD_TOKEN;
+                        let admitted = if download {
+                            pass.dispatcher_admits_cap(k2_core::skin::CAP_FILES_DOWNLOAD)
+                        } else {
+                            pass.dispatcher_admits_any(&[crate::skin_routes::FILES_WRITE, k2_core::skin::CAP_FILES_UPLOAD])
+                        };
+                        if !admitted {
+                            crate::skin_routes::missing_cap_response(if download {
+                                k2_core::skin::CAP_FILES_DOWNLOAD
+                            } else {
+                                crate::skin_routes::FILES_WRITE
+                            })
+                        } else {
+                            let p_owned = p.to_string();
+                            let query_params = super::http::parse_params(&path, &query);
+                            tokio::task::spawn_blocking(move || {
+                                let route = p_owned.as_str();
+                                if route == crate::transfer_routes::ROUTE_CREATE {
+                                    return crate::fs_routes::handle_skin_upload_create(&body_bytes, &pass);
+                                }
+                                let mut params = if route == crate::transfer_routes::ROUTE_STATUS {
+                                    query_params
+                                } else {
+                                    match crate::transfer_routes::body_params(&body_bytes) {
+                                        Ok(m) => m,
+                                        Err(r) => return r,
+                                    }
+                                };
+                                if route == crate::transfer_routes::ROUTE_DOWNLOAD_TOKEN {
+                                    if let Some(rel) = params.get("relPath").cloned() {
+                                        params.entry("path".to_string()).or_insert(rel);
+                                    }
+                                    return crate::fs_download::handle_token(&params, &pass);
+                                }
+                                crate::transfer_routes::handle(route, &params, &pass)
+                            })
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))
+                        }
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                crate::transfer_routes::not_a_guest()
+            } else {
+                crate::cli::CliResponse::forbidden()
+            };
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
+        }
         p if is_post && post_allowed && p == "/cli/fs/upload-binary" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -9318,6 +9417,22 @@ async fn handle_one_request(
                     {
                         bound_skin = Some(pass);
                         (true, None, None)
+                    }
+                    // 0.46.9: an attachment's download token, with the
+                    // attachment door's own Thread read rights (the handler
+                    // adds the guest's file rights and files:download).
+                    Some(pass)
+                        if p == crate::transfer_routes::ROUTE_ATTACHMENT_TOKEN
+                            && pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
+                    {
+                        bound_skin = Some(pass);
+                        (true, None, None)
+                    }
+                    Some(_) if p == crate::transfer_routes::ROUTE_ATTACHMENT_TOKEN => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::thread_attachments::cap_refused(crate::skin_routes::THREAD_READ);
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
                     }
                     Some(_) if p == crate::overlay_routes::catchup::ROUTE => {
                         let _ = stream.read(&mut buf).await;

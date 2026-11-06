@@ -677,6 +677,17 @@ export const APP_VERBS = {
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"height":{"type":"integer"},"kind":{"type":"string"},"len":{"type":"integer"},"line":{"type":"integer"},"lineEnd":{"type":"integer"},"mime":{"type":"string"},"modifiedAt":{"type":"integer"},"name":{"type":"string"},"offset":{"type":"integer"},"ok":{"type":"boolean"},"sanitized":{"type":"boolean"},"size":{"type":"integer"},"state":{"type":"string"},"text":{"type":"string"},"truncated":{"type":"boolean"},"width":{"type":"integer"}},"type":"object"},
   },
+  'thread.attachmentToken': {
+    cap: 'thread:read',
+    effect: 'write',
+    kind: 'call',
+    feature: 'transfers-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/thread/attachment/token', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"etag":{"type":"string"},"expiresAt":{"type":"integer"},"mime":{"type":"string"},"name":{"type":"string"},"ok":{"type":"boolean"},"size":{"type":"integer"},"transferToken":{"type":"string"},"url":{"type":"string"}},"type":"object"},
+  },
   'thread.catchup': {
     cap: 'thread:read',
     effect: 'read',
@@ -829,7 +840,18 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/fs/download', params: { 'relPath': 'path' }, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"len":{"type":"integer"},"mime":{"type":"string"},"name":{"type":"string"},"offset":{"type":"integer"},"ok":{"type":"boolean"},"size":{"type":"integer"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"etag":{"type":"string"},"len":{"type":"integer"},"mime":{"type":"string"},"name":{"type":"string"},"offset":{"type":"integer"},"ok":{"type":"boolean"},"size":{"type":"integer"}},"type":"object"},
+  },
+  'files.downloadToken': {
+    cap: 'files:download',
+    effect: 'write',
+    kind: 'call',
+    feature: 'transfers-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/fs/download/token', params: { 'relPath': 'path' }, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"etag":{"type":"string"},"expiresAt":{"type":"integer"},"mime":{"type":"string"},"name":{"type":"string"},"ok":{"type":"boolean"},"size":{"type":"integer"},"transferToken":{"type":"string"},"url":{"type":"string"}},"type":"object"},
   },
   'files.write': {
     cap: 'files:write',
@@ -863,6 +885,61 @@ export const APP_VERBS = {
     socket: null,
     responseNames: { 'relPath': 'path' },
     response: {"additionalProperties":false,"properties":{"done":{"type":"boolean"},"received":{"type":"integer"},"relPath":{"type":"string"},"size":{"type":"integer"}},"type":"object"},
+  },
+  'files.uploadCreate': {
+    cap: 'files:write',
+    effect: 'write',
+    kind: 'call',
+    feature: 'transfers-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/fs/upload/create', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"complete":{"type":"boolean"},"dir":{"type":"string"},"done":{"type":"boolean"},"expiresAt":{"type":"integer"},"missing":{"items":{"items":{"type":"integer"},"type":"array"},"type":"array"},"partMax":{"type":"integer"},"received":{"items":{"items":{"type":"integer"},"type":"array"},"type":"array"},"receivedBytes":{"type":"integer"},"relPath":{"type":"string"},"sha256":{"type":"string"},"size":{"type":"integer"},"tokenExpiresAt":{"type":"integer"},"transferToken":{"type":"string"},"uploadId":{"type":"string"},"url":{"type":"string"}},"type":"object"},
+  },
+  'files.uploadStatus': {
+    cap: 'files:write',
+    effect: 'read',
+    kind: 'call',
+    feature: 'transfers-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/fs/upload/status', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"complete":{"type":"boolean"},"dir":{"type":"string"},"done":{"type":"boolean"},"expiresAt":{"type":"integer"},"missing":{"items":{"items":{"type":"integer"},"type":"array"},"type":"array"},"partMax":{"type":"integer"},"received":{"items":{"items":{"type":"integer"},"type":"array"},"type":"array"},"receivedBytes":{"type":"integer"},"relPath":{"type":"string"},"sha256":{"type":"string"},"size":{"type":"integer"},"tokenExpiresAt":{"type":"integer"},"transferToken":{"type":"string"},"uploadId":{"type":"string"},"url":{"type":"string"}},"type":"object"},
+  },
+  'files.uploadComplete': {
+    cap: 'files:write',
+    effect: 'write',
+    kind: 'call',
+    feature: 'transfers-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/fs/upload/complete', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"done":{"type":"boolean"},"relPath":{"type":"string"},"sha256":{"type":"string"},"size":{"type":"integer"},"uploadId":{"type":"string"}},"type":"object"},
+  },
+  'files.uploadAbort': {
+    cap: 'files:write',
+    effect: 'write',
+    kind: 'call',
+    feature: 'transfers-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/fs/upload/abort', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"aborted":{"type":"boolean"},"ok":{"type":"boolean"},"uploadId":{"type":"string"}},"type":"object"},
+  },
+  'files.uploadToken': {
+    cap: 'files:write',
+    effect: 'write',
+    kind: 'call',
+    feature: 'transfers-v1',
+    door: 'both',
+    http: { method: 'POST', route: '/cli/fs/upload/token', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"tokenExpiresAt":{"type":"integer"},"transferToken":{"type":"string"},"uploadId":{"type":"string"},"url":{"type":"string"}},"type":"object"},
   },
   'files.create': {
     cap: 'files:write',
@@ -2624,6 +2701,22 @@ export interface AppThreadFileData {
   readonly width?: number
 }
 
+export interface AppDownloadToken {
+  /** The file's version (strong ETag); a resumed download sends it as If-Range. */
+  readonly etag: string
+  /** When the token stops, milliseconds since the epoch. */
+  readonly expiresAt: number
+  readonly mime: string
+  readonly name: string
+  readonly ok: boolean
+  /** The file's bytes now. */
+  readonly size: number
+  /** The download token (k2dn_…): it opens this one file on the door and nothing else. */
+  readonly transferToken: string
+  /** The door's path: GET it (Range and If-Range work) on the App's own host or this server's address. */
+  readonly url: string
+}
+
 export interface AppCatchupAsk {
   readonly addr: string
   readonly afterSeq?: number
@@ -2803,6 +2896,8 @@ export interface AppDownloads {
 export interface AppFileDownload {
   readonly base64: string
   readonly eof: boolean
+  /** The file's version (catalog v51+): send it back as etag on the next chunk. */
+  readonly etag?: string
   /** Bytes returned. */
   readonly len: number
   /** A content type from the extension (application/octet-stream when unknown). */
@@ -2835,6 +2930,62 @@ export interface AppFileChunk {
   readonly relPath?: string
   /** The landed file's bytes, when done (catalog v22+). */
   readonly size?: number
+}
+
+export interface AppUploadSession {
+  /** Every byte is held (call complete). */
+  readonly complete: boolean
+  /** files.uploadCreate: the room-relative folder it lands in. */
+  readonly dir?: string
+  /** Completed: the file landed (relPath). */
+  readonly done: boolean
+  /** When the upload ends unfinished, milliseconds since the epoch (7 days after create). */
+  readonly expiresAt: number
+  /** Byte ranges still to send, [first, last] inclusive. */
+  readonly missing: number[][]
+  /** The most one PUT carries, in bytes (16 MiB). */
+  readonly partMax: number
+  /** Byte ranges K2 holds, [first, last] inclusive, sorted and merged. */
+  readonly received: number[][]
+  readonly receivedBytes: number
+  /** When done: where the file landed (room-relative). */
+  readonly relPath?: string
+  /** When done: the file's sha256 (hex). */
+  readonly sha256?: string
+  /** The file's bytes, as declared. */
+  readonly size: number
+  /** files.uploadCreate: when the token stops, milliseconds since the epoch. */
+  readonly tokenExpiresAt?: number
+  /** files.uploadCreate: the upload token (k2up_…), shown once. It opens this upload on the door and nothing else. */
+  readonly transferToken?: string
+  readonly uploadId: string
+  /** The door's path for this upload: PUT ranges, HEAD, POST <url>/complete, on the App's own host (or this server's address). */
+  readonly url: string
+}
+
+export interface AppUploadDone {
+  readonly done: boolean
+  /** Where the file landed (room-relative; name (1).ext when the name was taken). */
+  readonly relPath: string
+  /** The file's sha256 (hex). */
+  readonly sha256: string
+  readonly size: number
+  readonly uploadId: string
+}
+
+export interface AppUploadAborted {
+  readonly aborted: boolean
+  readonly ok: boolean
+  readonly uploadId: string
+}
+
+export interface AppUploadToken {
+  /** Milliseconds since the epoch. */
+  readonly tokenExpiresAt: number
+  /** A new upload token (k2up_…); older ones keep working until they expire (at most 4 at once). */
+  readonly transferToken: string
+  readonly uploadId: string
+  readonly url: string
 }
 
 export interface AppFileLanded {
@@ -3715,7 +3866,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'access_lost', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'chat_key_required', 'sew_unreachable', 'sew_refused', 'space_unbound', 'app_mismatch', 'channel_type_mismatch', 'client_msg_id_reused', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'push_server_only', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'not_a_repo', 'attachment_secret', 'sidecar_live', 'sidecar_attached', 'worktree_sidecar'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'access_lost', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'chat_key_required', 'sew_unreachable', 'sew_refused', 'space_unbound', 'app_mismatch', 'channel_type_mismatch', 'client_msg_id_reused', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'push_server_only', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'not_a_repo', 'attachment_secret', 'sidecar_live', 'sidecar_attached', 'worktree_sidecar', 'guest_pass_required', 'too_many_transfers', 'no_space', 'transfer_expired', 'transfer_token_expired', 'transfer_token_invalid', 'transfer_token_required', 'upload_done', 'upload_incomplete', 'checksum_mismatch', 'bad_range'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -3779,6 +3930,7 @@ export interface AppVerbs {
   'thread.events': { args: { conversation: string }; value: AppThreadItem }
   'thread.stream': { args: { rooms: string }; value: AppStreamFrame }
   'thread.attachmentGet': { args: { addr: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range' | 'download'; n?: number; offset?: number; px?: number }; value: AppThreadFileData }
+  'thread.attachmentToken': { args: { addr: string; id: string; n?: number; tokenTtlSecs?: number }; value: AppDownloadToken }
   'thread.catchup': { args: { limit?: number; threads: AppCatchupAsk[] }; value: AppCatchup }
   'thread.setRead': { args: { addr: string; seq?: number }; value: AppReadState }
   'thread.markAllRead': { args: { addr: string }; value: AppReadState }
@@ -3792,10 +3944,16 @@ export interface AppVerbs {
   'files.readRange': { args: { len?: number; offset?: number; relPath: string; workspace: string }; value: AppFileRange }
   'files.stat': { args: { relPath: string; workspace: string }; value: AppFileStat }
   'files.downloads': { args: { workspace: string }; value: AppDownloads }
-  'files.download': { args: { len?: number; offset?: number; relPath: string; workspace: string }; value: AppFileDownload }
+  'files.download': { args: { etag?: string; len?: number; offset?: number; relPath: string; workspace: string }; value: AppFileDownload }
+  'files.downloadToken': { args: { relPath: string; tokenTtlSecs?: number; workspace: string }; value: AppDownloadToken }
   'files.write': { args: { content: string; relPath: string; workspace: string }; value: AppFileDone }
   'files.uploadBinary': { args: { base64: string; dir: string; filename: string; workspace: string }; value: AppFileUploaded }
   'files.uploadChunk': { args: { base64?: string; dir: string; filename: string; isLast?: boolean; offset?: number; status?: boolean; totalBytes?: number; uploadId: string; workspace: string }; value: AppFileChunk }
+  'files.uploadCreate': { args: { dir?: string; filename: string; sha256?: string; size: number; tokenTtlSecs?: number; workspace: string }; value: AppUploadSession }
+  'files.uploadStatus': { args: { uploadId: string }; value: AppUploadSession }
+  'files.uploadComplete': { args: { sha256?: string; uploadId: string }; value: AppUploadDone }
+  'files.uploadAbort': { args: { uploadId: string }; value: AppUploadAborted }
+  'files.uploadToken': { args: { tokenTtlSecs?: number; uploadId: string }; value: AppUploadToken }
   'files.create': { args: { isDirectory?: boolean; relPath: string; workspace: string }; value: AppFileDone }
   'files.copy': { args: { destination: string; sources: string[]; workspace: string }; value: AppFileDone }
   'files.move': { args: { destination: string; sources: string[]; workspace: string }; value: AppFileDone }
@@ -3857,7 +4015,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -3987,6 +4145,8 @@ export interface AppSurfaces {
     stream(args: { rooms: string }, onFrame: (frame: AppStreamFrame) => void, onError?: (error: K2Error) => void): () => void
     /** One attachment of a room's message: meta, preview, thumbnail or a byte range, only when your own file rights cover it; a download (a save) also needs files:download. cap thread:read · GET /cli/thread/attachment. e.g. `const t = await k2.thread.attachmentGet({addr: 'sales', id: item.id, n: 0, mode: 'thumb'})` */
     attachmentGet(args: { addr: string; id: string; len?: number; mode?: 'meta' | 'preview' | 'thumb' | 'range' | 'download'; n?: number; offset?: number; px?: number }): Promise<AppThreadFileData>
+    /** A short-lived download token for one attachment you may save (a guest also needs files:download in the room), for an OS background download of the raw file with Range and If-Range. cap thread:read · POST /cli/thread/attachment/token. e.g. `const d = await k2.asGuest(pass).thread.attachmentToken({addr: 'sales', id: item.id, n: 0})` */
+    attachmentToken(args: { addr: string; id: string; n?: number; tokenTtlSecs?: number }): Promise<AppDownloadToken>
     /** Deltas (or newest pages) for many rooms in one round trip, each exactly what thread.page answers for it. cap thread:read · POST /cli/thread/catchup. e.g. `const {threads} = await k2.thread.catchup({threads: [{addr: 'sales', afterSeq: 41}]})` */
     catchup(args: { limit?: number; threads: AppCatchupAsk[] }): Promise<AppCatchup>
     /** Mark the signed-in person's own read cursor in a room's Thread (an App's own pass: its bookmark); forward only, on every surface they use. cap thread:read · POST /cli/thread/read. e.g. `await k2.thread.setRead({addr: 'sales', seq: last.seq})` */
@@ -4016,13 +4176,25 @@ export interface AppSurfaces {
     /** The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file). cap files:download · GET /cli/fs/downloads. e.g. `const {items} = await k2.asGuest(pass).files.downloads({workspace})` */
     downloads(args: { workspace: string }): Promise<AppDownloads>
     /** Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads). cap files:download · GET /cli/fs/download. e.g. `const c = await k2.asGuest(pass).files.download({workspace, relPath: 'reports/2026-10.pdf'})` */
-    download(args: { len?: number; offset?: number; relPath: string; workspace: string }): Promise<AppFileDownload>
+    download(args: { etag?: string; len?: number; offset?: number; relPath: string; workspace: string }): Promise<AppFileDownload>
+    /** A short-lived download token for one file files.download would give you, for an OS background download: GET the url with the token, raw bytes, Range and If-Range (k2 study app-transfers). cap files:download · POST /cli/fs/download/token. e.g. `const d = await k2.asGuest(pass).files.downloadToken({workspace, relPath: 'reports/2026-10.pdf'})` */
+    downloadToken(args: { relPath: string; tokenTtlSecs?: number; workspace: string }): Promise<AppDownloadToken>
     /** Write (or overwrite) a text file; its folder must exist. cap files:write · POST /cli/fs/write-file. e.g. `await k2.files.write({workspace, relPath: 'a.txt', content})` */
     write(args: { content: string; relPath: string; workspace: string }): Promise<AppFileDone>
     /** Upload a file in one request; a taken name becomes name (1).ext. files:write, or files:upload into a drop folder (it lands in your own subfolder). cap files:write · POST /cli/fs/upload-binary. e.g. `const {relPath} = await k2.files.uploadBinary({workspace, dir: 'in', filename, base64})` */
     uploadBinary(args: { base64: string; dir: string; filename: string; workspace: string }): Promise<AppFileUploaded>
     /** Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder. cap files:write · POST /cli/fs/upload-chunk. e.g. `await k2.files.uploadChunk({workspace, dir, filename, uploadId, offset, base64, isLast})` */
     uploadChunk(args: { base64?: string; dir: string; filename: string; isLast?: boolean; offset?: number; status?: boolean; totalBytes?: number; uploadId: string; workspace: string }): Promise<AppFileChunk>
+    /** Start a resumable upload for an OS background transfer: K2 checks the room, the caps, the folder and the size once, and answers an upload id, the door's url and a short-lived upload token. The phone PUTs byte ranges to the door with that token (k2 study app-transfers). cap files:write · POST /cli/fs/upload/create. e.g. `const up = await k2.asGuest(pass).files.uploadCreate({workspace, dir: 'uploads', filename, size, sha256})` */
+    uploadCreate(args: { dir?: string; filename: string; sha256?: string; size: number; tokenTtlSecs?: number; workspace: string }): Promise<AppUploadSession>
+    /** What K2 holds of an upload of yours: the ranges received and missing, and whether it is done (the door's HEAD answers the same). cap files:write · GET /cli/fs/upload/status. e.g. `const s = await k2.asGuest(pass).files.uploadStatus({uploadId})` */
+    uploadStatus(args: { uploadId: string }): Promise<AppUploadSession>
+    /** Finish an upload: every byte held, the size and sha256 right, then the file lands without replacing anything. Calling it again answers the same. A sha256 mismatch drops what K2 held: send the file again. cap files:write · POST /cli/fs/upload/complete. e.g. `const done = await k2.asGuest(pass).files.uploadComplete({uploadId, sha256})` */
+    uploadComplete(args: { sha256?: string; uploadId: string }): Promise<AppUploadDone>
+    /** Stop an upload of yours: what K2 held is deleted and its tokens stop working. A completed upload's file stays. cap files:write · POST /cli/fs/upload/abort. e.g. `await k2.asGuest(pass).files.uploadAbort({uploadId})` */
+    uploadAbort(args: { uploadId: string }): Promise<AppUploadAborted>
+    /** A fresh upload token for an unfinished upload of yours, when the door answered transfer_token_expired. cap files:write · POST /cli/fs/upload/token. e.g. `const t = await k2.asGuest(pass).files.uploadToken({uploadId})` */
+    uploadToken(args: { tokenTtlSecs?: number; uploadId: string }): Promise<AppUploadToken>
     /** Create an empty file or a folder. cap files:write · POST /cli/fs/create. e.g. `await k2.files.create({workspace, relPath: 'in', isDirectory: true})` */
     create(args: { isDirectory?: boolean; relPath: string; workspace: string }): Promise<AppFileDone>
     /** Copy files or folders (a taken name becomes 'name copy'). cap files:write · POST /cli/fs/copy. e.g. `await k2.files.copy({workspace, sources: ['a.txt'], destination: 'out'})` */

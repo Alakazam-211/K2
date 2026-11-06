@@ -79,6 +79,10 @@ pub mod fs_routes;
 pub mod docs;
 /// prd-app-caps-0464-v1 AC16/AC17 (0.46.4): `files.downloads` / `files.download`.
 pub mod fs_download;
+/// Resumable transfers (0.46.9): the pass side (`/cli/fs/upload/*`, the
+/// download tokens) and the token door (`/_k2/transfers/`).
+pub mod transfer_routes;
+pub mod transfer_door;
 pub mod fs_live;
 pub mod charter_compose_watch;
 /// The home database switch, daemon side (prd-k2-db-rename-v1): the

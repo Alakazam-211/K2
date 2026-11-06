@@ -1225,6 +1225,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_LLM_ACCOUNT_FOR);
     out.push(FEATURE_COMPANION_PAIRING);
     out.push(FEATURE_FILES_DOWNLOAD);
+    // 0.46.9: resumable uploads, download tokens and the transfer door.
+    out.push(crate::transfer_routes::FEATURE);
     if post_idempotency_ready() {
         out.push(FEATURE_POST_IDEMPOTENCY);
     }
@@ -1390,6 +1392,7 @@ mod tests {
                 "llm-account-for-v1",
                 "companion-pairing-v1",
                 "files-download-v1",
+                "transfers-v1",
                 "post-idempotency-v1",
                 "boot-status-views-v1"
             ]

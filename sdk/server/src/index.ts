@@ -26,6 +26,18 @@ export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUse
 export { K2Error, fromResponse } from './errors.ts'
 export * from './generated/verbs.ts'
 export { qrSvg, type QrSvgOptions } from './pairing.ts'
+// 0.46.9 resumable transfers: the bytes of files.uploadCreate's upload, through the door.
+export {
+  backoffMs,
+  downloadLink,
+  missingParts,
+  uploadToDoor,
+  MAX_PART,
+  TransferError,
+  type DoorUploadDone,
+  type DoorUploadStatus,
+  type UploadToDoorOptions,
+} from './transfer.ts'
 export {
   applyChannelOps,
   channelOp,

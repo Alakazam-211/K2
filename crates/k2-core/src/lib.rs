@@ -254,6 +254,9 @@ pub mod fs_compress;
 pub mod fs_extract;
 /// Resumable chunked upload for app guests (part bound to the guest).
 pub mod fs_guest_upload;
+/// Resumable transfers that survive an app in the background (0.46.9):
+/// upload sessions with ranges in any order, download grants, tokens.
+pub mod fs_transfer;
 pub mod git;
 /// Changes tab v1: snapshot, both-sides diff, discard-to-Trash, rev.
 pub mod git_changes;

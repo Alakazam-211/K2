@@ -783,6 +783,18 @@ mod tests {
                 "sidecar_live",
                 "sidecar_attached",
                 "worktree_sidecar",
+                // 0.46.9 resumable transfers (the pass side and the door).
+                "guest_pass_required",
+                "too_many_transfers",
+                "no_space",
+                "transfer_expired",
+                "transfer_token_expired",
+                "transfer_token_invalid",
+                "transfer_token_required",
+                "upload_done",
+                "upload_incomplete",
+                "checksum_mismatch",
+                "bad_range",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

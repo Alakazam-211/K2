@@ -4853,6 +4853,16 @@ pub(crate) fn design_redeliver(
 /// Agent passports are refused: an agent reads its workspace's files from
 /// disk.
 fn handle_get_attachment(params: &HashMap<String, String>) -> CliResponse {
+    attachment_door(params, false)
+}
+
+/// `POST /cli/thread/attachment/token` (0.46.9): the attachment door's own
+/// read gate, then a download token (`thread_attachments::handle_token`).
+fn handle_attachment_token(params: &HashMap<String, String>) -> CliResponse {
+    attachment_door(params, true)
+}
+
+fn attachment_door(params: &HashMap<String, String>, token: bool) -> CliResponse {
     let addr = opt_param(params, "addr")
         .filter(|s| !s.trim().is_empty())
         .or_else(|| opt_param(params, "conversationId"))
@@ -4873,14 +4883,15 @@ fn handle_get_attachment(params: &HashMap<String, String>) -> CliResponse {
         return crate::thread_attachments::cap_refused(k2_core::skin::CAP_THREAD_READ);
     }
     let pass = request_skin();
-    crate::thread_attachments::handle_get(
-        params,
-        &crate::thread_attachments::ResolvedThread {
-            conversation_id: resolved.conversation_id.clone(),
-            project_id: resolved.project_id.clone(),
-        },
-        pass.as_ref(),
-    )
+    let thread = crate::thread_attachments::ResolvedThread {
+        conversation_id: resolved.conversation_id.clone(),
+        project_id: resolved.project_id.clone(),
+    };
+    if token {
+        crate::thread_attachments::handle_token(params, &thread, pass.as_ref())
+    } else {
+        crate::thread_attachments::handle_get(params, &thread, pass.as_ref())
+    }
 }
 
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
@@ -4975,6 +4986,7 @@ pub fn dispatch_post_as(
         "/cli/thread/secret" => handle_secret(&params),
         "/cli/thread/answer" => handle_answer(&params, session_author),
         "/cli/thread/void" => handle_void(&params, session_author),
+        crate::transfer_routes::ROUTE_ATTACHMENT_TOKEN => handle_attachment_token(&params),
         k2_core::permission::NOTE_ROUTE | k2_core::permission::UNDO_ROUTE => {
             handle_permission_card_route(path, &params, session_author)
         }

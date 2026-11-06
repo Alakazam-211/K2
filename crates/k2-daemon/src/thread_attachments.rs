@@ -56,6 +56,10 @@ pub const RANGE_DEFAULT: u64 = 4 * 1024 * 1024;
 /// The explicit save (0.46.3): `range` chunks plus `name` and `mime`; a
 /// guest also needs `files:download`.
 pub const MODE_DOWNLOAD: &str = "download";
+/// A download token (0.46.9, `POST /cli/thread/attachment/token`): the
+/// save's rights, answered as a short-lived token for the transfer door.
+/// Never a `mode=` a GET can ask for (`parse_door_request` refuses it).
+pub const MODE_TOKEN: &str = "token";
 
 /// A workspace's folder as registered.
 pub(crate) fn project_root(project_id: &str) -> Option<PathBuf> {
@@ -297,6 +301,44 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
     serve(params, &req, a, &resolved.project_id, pass, &audit_ctx)
 }
 
+/// `POST /cli/thread/attachment/token` (`thread.attachmentToken`, 0.46.9):
+/// the same rights as `mode=download` (a guest: its own file rights and
+/// `files:download` in the room; a person: what they may open), answered
+/// as a short-lived download token for the transfer door
+/// (`GET /_k2/transfers/downloads/<id>`, raw bytes, `Range` + `If-Range`).
+/// Body: `addr` (or `conversationId`), `id`, `n`, optional `tokenTtlSecs`.
+pub(crate) fn handle_token(params: &HashMap<String, String>, resolved: &ResolvedThread, pass: Option<&SkinPass>) -> CliResponse {
+    let id = str_param(params, "id");
+    if id.trim().is_empty() {
+        return error_json("400 Bad Request", "usage", "missing id (the message's doc id)");
+    }
+    let n: usize = match opt_param(params, "n").unwrap_or_else(|| "0".into()).trim().parse() {
+        Ok(n) => n,
+        Err(_) => return error_json("400 Bad Request", "usage", "n must be the attachment's index (0-based)"),
+    };
+    if let Some(p) = pass {
+        match k2_core::skin::resolve_skin_token_id(&p.id) {
+            Ok(Some(_)) => {}
+            Ok(None) => return crate::transfer_routes::guest_pass_required(),
+            Err(e) => return error_json("500 Internal Server Error", "failed", e),
+        }
+    }
+    let doc = match k2_core::overlay::get_thread_doc(&resolved.conversation_id, id.trim()) {
+        Ok(Some(d)) => d,
+        Ok(None) => return error_json("404 Not Found", "not_found", "no such message in this Thread"),
+        Err(e) => return error_json("500 Internal Server Error", "store", e),
+    };
+    let Some(a) = doc.attachments.get(n) else {
+        return error_json("404 Not Found", "not_found", "no such attachment on this message");
+    };
+    let audit_ctx = DoorAudit {
+        surface: "thread",
+        detail: format!("conversation={} doc={}", resolved.conversation_id, doc.id),
+    };
+    let req = DoorRequest { n, mode: MODE_TOKEN.to_string(), px: 256 };
+    serve(params, &req, a, &resolved.project_id, pass, &audit_ctx)
+}
+
 /// Serve one loaded attachment: the part both doors share (Thread and
 /// ticket). `project_id`'s folder is the root; `pass` adds the guest's
 /// own file rights (a pointer is never a grant).
@@ -329,7 +371,7 @@ pub(crate) fn serve(
         // who may open the file may save it only with files:download in
         // the room. Checked before the file is touched (no existence
         // oracle beyond what opening already shows).
-        if mode == MODE_DOWNLOAD && !guest_may_download(p, project_id) {
+        if (mode == MODE_DOWNLOAD || mode == MODE_TOKEN) && !guest_may_download(p, project_id) {
             audit(
                 &format!("{}.attachment.download_refused", audit_ctx.surface),
                 &format!("guest:{}", p.username.trim()),
@@ -352,7 +394,7 @@ pub(crate) fn serve(
     // daemon. A file edited into holding a credential after it was sent
     // no longer previews or downloads; meta, thumb and the lists stay
     // stat-only.
-    if matches!(mode, "preview" | "range" | MODE_DOWNLOAD) {
+    if matches!(mode, "preview" | "range" | MODE_DOWNLOAD | MODE_TOKEN) {
         if let Some(hit) = k2_core::secret_paths::classify(&a.path, &real) {
             audit(
                 &format!("{}.attachment.secret_refused", audit_ctx.surface),
@@ -402,8 +444,77 @@ pub(crate) fn serve(
         "preview" => preview(a, &real, size, att::live_state(&root, a, true)),
         "thumb" => thumb(project_id, a, &real, &meta, req.px),
         MODE_DOWNLOAD => download(params, a, &real),
+        MODE_TOKEN => token(params, a, project_id, &real, &meta, pass, who.as_deref()),
         _ => range(params, &real),
     }
+}
+
+/// Mint the download grant for an attachment that passed `serve`'s checks.
+fn token(
+    params: &HashMap<String, String>,
+    a: &ThreadAttachment,
+    project_id: &str,
+    real: &Path,
+    meta: &std::fs::Metadata,
+    pass: Option<&SkinPass>,
+    who: Option<&str>,
+) -> CliResponse {
+    use k2_core::fs_transfer as ft;
+    let ttl = match crate::transfer_routes::download_ttl(params) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let Ok(canon) = dunce::canonicalize(real) else { return gone() };
+    let (holder, recheck) = match pass {
+        Some(p) => (
+            ft::Holder {
+                principal: crate::fs_routes::guest_upload_principal(p),
+                pass_id: Some(p.id.clone()),
+                username: p.username.clone(),
+            },
+            ft::Recheck::Attachment { project_id: project_id.to_string(), rel_path: a.path.clone() },
+        ),
+        None => {
+            let login = who.map(str::to_string).unwrap_or_else(|| "owner".to_string());
+            (ft::Holder { principal: format!("person:{login}"), pass_id: None, username: login }, ft::Recheck::Person)
+        }
+    };
+    let name = if a.name.trim().is_empty() {
+        canon.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+    } else {
+        a.name.clone()
+    };
+    let mime = if a.mime.trim().is_empty() { k2_core::fs_commands::mime_for_name(&name).to_string() } else { a.mime.clone() };
+    match ft::mint_download(&ft::downloads_dir(), holder, canon, name, mime, recheck, ttl, ft::now_secs()) {
+        Ok((g, tok)) => {
+            audit("thread.attachment.token", who.unwrap_or("owner"), format!("project={project_id} rel={:?} id={}", a.path, g.id));
+            crate::transfer_routes::download_token_answer(&g, &tok, meta.len(), &ft::file_etag(meta))
+        }
+        Err(e) => crate::transfer_routes::error_response(&e),
+    }
+}
+
+/// May this pass still save the attachment at room-relative `rel` in
+/// `project_id`, and where is it now? The transfer door asks on every
+/// request of an attachment's download grant.
+pub(crate) fn guest_still_may_save(pass: &SkinPass, project_id: &str, rel: &str) -> Option<PathBuf> {
+    if !guest_may_download(pass, project_id) {
+        return None;
+    }
+    let root = project_root(project_id)?;
+    let rel_path = Path::new(rel);
+    if rel.is_empty() || rel_path.is_absolute() || rel_path.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return None;
+    }
+    if !crate::fs_routes::guest_may_read_rel(pass, project_id, &root.to_string_lossy(), rel) {
+        return None;
+    }
+    let real_root = dunce::canonicalize(&root).ok()?;
+    let real = dunce::canonicalize(root.join(rel)).ok()?;
+    if !real.starts_with(&real_root) || k2_core::secret_paths::is_secret_rel(rel) || k2_core::secret_paths::classify(rel, &real).is_some() {
+        return None;
+    }
+    Some(real)
 }
 
 /// `mode=download`: a `range` chunk plus the file's `name` and `mime`, so

@@ -885,6 +885,9 @@ pub const ROUTES: &[Route] = &[
     // prd-app-caps-0464-v1 AC34 (0.46.4): App guests save exposed files;
     // the handlers check the pass (a login gets a usage 400).
     get("/cli/fs/download", Member),
+    // 0.46.9 resumable transfers: a file's download token for the token
+    // door; an App guest's pass only (a login gets a usage 400).
+    post("/cli/fs/download/token", Member),
     get("/cli/fs/downloads", Member),
     post("/cli/fs/duplicate", Member),
     get("/cli/fs/events", Member),
@@ -906,6 +909,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/fs/untitled-name", Member),
     post("/cli/fs/upload-binary", Member),
     post("/cli/fs/upload-chunk", Member),
+    // 0.46.9 resumable transfers: an App guest's upload session; the bytes
+    // go to the token door (`/_k2/transfers/`). A login gets a usage 400.
+    post("/cli/fs/upload/abort", Member),
+    post("/cli/fs/upload/complete", Member),
+    post("/cli/fs/upload/create", Member),
+    get("/cli/fs/upload/status", Member),
+    post("/cli/fs/upload/token", Member),
     post("/cli/fs/write-file", Member),
     get("/cli/fs/zip-list", Member),
     // 0.46.4 first run without git: state (read), Apple's installer (the
@@ -1934,6 +1944,8 @@ pub const ROUTES: &[Route] = &[
     // thread-attachments-v1: previews and ranged downloads of a Thread
     // message's file objects (Thread rights + the caller's file rights).
     get("/cli/thread/attachment", Member),
+    // 0.46.9: a download token for one attachment (the save's rights).
+    post("/cli/thread/attachment/token", Member),
     // inbox-catchup-v1 (0.46.3): a read with a JSON body (200 cursors
     // don't fit in a URL), so POST only; a GET is 405 before auth.
     post("/cli/thread/catchup", Member),

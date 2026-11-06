@@ -286,35 +286,33 @@ fn item(resolved: &SkinWorkspace, real: &Path, meta: &std::fs::Metadata) -> Opti
     }))
 }
 
-/// `GET /cli/fs/download` for an App guest.
-pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+/// A file `files.download` may serve this pass: the landed path, its
+/// room-relative form, the asked path, how it was allowed, and the room.
+pub(crate) struct Target {
+    pub real: PathBuf,
+    pub landed: String,
+    pub asked: String,
+    pub via_entry: bool,
+    pub project_id: String,
+}
+
+/// Every rule of `files.download` up to the bytes (AC17, review A3, A6):
+/// the room and `files:download`, an entry or `files:read` for the path as
+/// written and where it lands, a plain file with one link, no secret.
+/// Anything else is the uniform missing-cap 403 (audited). The token door
+/// runs it again on every request (`transfer_door`).
+pub(crate) fn resolve_target(params: &HashMap<String, String>, pass: &SkinPass) -> Result<Target, CliResponse> {
     let (resolved, scope) = match gate(params, pass) {
         Ok(g) => g,
         Err(r) => {
             crate::thread_attachments::audit("files.download_refused", &who(pass), "gate".to_string());
-            return r;
+            return Err(r);
         }
     };
-    let rel = match need_rel_path(params) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
+    let rel = need_rel_path(params)?;
     // A malformed path is the jail's own 400, as on every files door.
     if let Err(e) = sp::rel_segments(&rel) {
-        return CliResponse::bad_request(e);
-    }
-    let offset: u64 = match params.get("offset").map(|v| v.trim().parse()) {
-        Some(Ok(v)) => v,
-        Some(Err(_)) => return CliResponse::bad_request("invalid 'offset' parameter"),
-        None => 0,
-    };
-    let len: u64 = match params.get("len").map(|v| v.trim().parse()) {
-        Some(Ok(v)) => v,
-        Some(Err(_)) => return CliResponse::bad_request("invalid 'len' parameter"),
-        None => LEN_DEFAULT,
-    };
-    if len == 0 || len > LEN_MAX {
-        return CliResponse::bad_request(format!("len is 1..={LEN_MAX}"));
+        return Err(CliResponse::bad_request(e));
     }
     let deny = |why: &str| {
         crate::thread_attachments::audit(
@@ -329,25 +327,64 @@ pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliRespo
     let by_read = pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ)
         && sp::allows_rel(&scope, &rel, PathNeed::Read).unwrap_or(false);
     if !by_entry && !by_read {
-        return deny("outside");
+        return Err(deny("outside"));
     }
     // Review A6: from here on, missing, a link out, a folder and a secret
     // are all the same missing-cap 403 (no oracle inside an entry).
-    let Ok(real) = jail_rel_path(&resolved.path, &rel, false) else { return deny("unresolved") };
+    let Ok(real) = jail_rel_path(&resolved.path, &rel, false) else { return Err(deny("unresolved")) };
     let landed_entry = by_entry && entry_allows_landed(&scope, &resolved, &real);
     let landed_read = by_read && scope_gate_landed(&scope, &resolved, &real, PathNeed::Read, true).is_none();
     if !landed_entry && !landed_read {
-        return deny("landed");
+        return Err(deny("landed"));
     }
     match std::fs::metadata(&real) {
         Ok(m) if m.is_file() && !hard_linked(&m, &real) => {}
-        Ok(m) if m.is_file() => return deny("hard_link"),
-        _ => return deny("not_a_file"),
+        Ok(m) if m.is_file() => return Err(deny("hard_link")),
+        _ => return Err(deny("not_a_file")),
     }
     if secret_file(&resolved, &real) {
-        return deny("secret");
+        return Err(deny("secret"));
     }
     let landed = rel_in_room(&resolved.path, &real).unwrap_or_else(|| rel.clone());
+    Ok(Target { real, landed, asked: rel, via_entry: landed_entry, project_id: resolved.project_id })
+}
+
+/// `GET /cli/fs/download` for an App guest.
+pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let offset: u64 = match params.get("offset").map(|v| v.trim().parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'offset' parameter"),
+        None => 0,
+    };
+    let len: u64 = match params.get("len").map(|v| v.trim().parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'len' parameter"),
+        None => LEN_DEFAULT,
+    };
+    if len == 0 || len > LEN_MAX {
+        return CliResponse::bad_request(format!("len is 1..={LEN_MAX}"));
+    }
+    let t = match resolve_target(params, pass) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let Target { real, landed, asked: rel, via_entry: landed_entry, project_id } = t;
+    // 0.46.9: the version a client resumes against. `etag` sent and the
+    // file changed since: 412, start over.
+    let etag = match std::fs::metadata(&real) {
+        Ok(m) => k2_core::fs_transfer::file_etag(&m),
+        Err(_) => return refused(),
+    };
+    if let Some(want) = params.get("etag").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if want != etag {
+            return crate::transfer_routes::error_json(
+                "412 Precondition Failed",
+                "conflict",
+                "the file changed since that etag: download it again from the start",
+                Some(serde_json::json!({ "etag": etag })),
+            );
+        }
+    }
     let name = real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     match fsc::read_file_range(&real.to_string_lossy(), offset, len) {
         Ok((bytes, size)) => {
@@ -358,7 +395,7 @@ pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliRespo
                 &who(pass),
                 format!(
                     "room={} rel={landed:?} asked={rel:?} offset={offset} len={} via={}",
-                    resolved.project_id,
+                    project_id,
                     bytes.len(),
                     if landed_entry { "entry" } else { "files:read" }
                 ),
@@ -373,14 +410,68 @@ pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliRespo
                     "eof": eof,
                     "mime": fsc::mime_for_name(&name),
                     "name": name,
+                    "etag": etag,
                 })
                 .to_string(),
             )
         }
         Err(e) => {
             k2_core::log_debug!("[fs/download] read {landed:?}: {e}");
-            deny("read")
+            crate::thread_attachments::audit(
+                "files.download_refused",
+                &who(pass),
+                format!("room={project_id} rel={rel:?} why=read"),
+            );
+            refused()
         }
+    }
+}
+
+/// `POST /cli/fs/download/token` (`files.downloadToken`, 0.46.9): a
+/// short-lived token for one file `files.download` would serve this pass,
+/// for an OS background download (`GET /_k2/transfers/downloads/<id>`,
+/// raw bytes, `Range` + `If-Range`). Body: `workspace`, `relPath`,
+/// optional `tokenTtlSecs` (60..=86400, default 1 h).
+pub fn handle_token(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    use k2_core::fs_transfer as ft;
+    let ttl = match crate::transfer_routes::download_ttl(params) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    match k2_core::skin::resolve_skin_token_id(&pass.id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return crate::transfer_routes::guest_pass_required(),
+        Err(e) => return CliResponse::internal_error(e),
+    }
+    let t = match resolve_target(params, pass) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let meta = match std::fs::metadata(&t.real) {
+        Ok(m) => m,
+        Err(_) => return refused(),
+    };
+    let name = t.real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let holder = ft::Holder {
+        principal: crate::fs_routes::guest_upload_principal(pass),
+        pass_id: Some(pass.id.clone()),
+        username: pass.username.clone(),
+    };
+    let recheck = ft::Recheck::File {
+        workspace: params.get("workspace").cloned().unwrap_or_default(),
+        rel_path: t.asked.clone(),
+    };
+    let mime = fsc::mime_for_name(&name).to_string();
+    match ft::mint_download(&ft::downloads_dir(), holder, t.real.clone(), name, mime, recheck, ttl, ft::now_secs()) {
+        Ok((g, token)) => {
+            crate::thread_attachments::audit(
+                "files.download_token",
+                &who(pass),
+                format!("room={} rel={:?} id={} ttl={ttl}", t.project_id, t.landed, g.id),
+            );
+            crate::transfer_routes::download_token_answer(&g, &token, meta.len(), &ft::file_etag(&meta))
+        }
+        Err(e) => crate::transfer_routes::error_response(&e),
     }
 }
 

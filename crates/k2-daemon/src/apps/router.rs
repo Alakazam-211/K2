@@ -430,7 +430,9 @@ async fn read_first<S>(client: &mut S, app_id: &str, local: Option<&crate::clien
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    if super::voice_door::watching(app_id) {
+    // The call door and the transfer door (0.46.9, while any transfer is
+    // live on this box) are both read here.
+    if super::voice_door::watching(app_id) || crate::transfer_door::watching() {
         return Some(super::voice_door::first_request(client, app_id, local).await);
     }
     match local {

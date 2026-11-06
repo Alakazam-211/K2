@@ -1,0 +1,24 @@
+[package]
+name = "k2-transfer-client"
+# Not the product version: release.sh doesn't bump this crate.
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Resumable uploads and downloads against a K2 transfer door (/_k2/transfers/): ranges in any order, retry with backoff, sha256 checks. For a Tauri app's Rust side."
+authors = ["Alakazam Labs"]
+keywords = ["upload", "resumable", "download", "tauri", "k2"]
+categories = ["network-programming"]
+# Not published until the API settles and the release is approved.
+publish = false
+
+[dependencies]
+# rustls through reqwest with reqwest's own default provider (no crypto
+# swap, Rosson 2026-11-05). The same reqwest the rest of the workspace uses.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["fs", "io-util", "time"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

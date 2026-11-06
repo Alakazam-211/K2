@@ -1756,6 +1756,25 @@ async fn async_main() {
                 Ok(Err(e)) => log_debug!("[fs/upload-chunk] WARN: abandoned-part sweep: {e}"),
                 Err(e) => log_debug!("[fs/upload-chunk] WARN: abandoned-part sweep join: {e}"),
             }
+            // 0.46.9: resumable upload sessions and download grants past
+            // their expiry (an expired session's part goes with it).
+            let expired = tokio::task::spawn_blocking(|| {
+                k2_core::fs_transfer::sweep_expired(
+                    &k2_core::fs_transfer::uploads_dir(),
+                    &k2_core::fs_transfer::downloads_dir(),
+                    &k2_core::fs_guest_upload::ledger_dir(),
+                    k2_core::fs_transfer::now_secs(),
+                )
+            })
+            .await;
+            match expired {
+                Ok(Ok(r)) if r.uploads + r.downloads > 0 => {
+                    log_debug!("[fs/transfer] swept {} upload session(s), {} download grant(s)", r.uploads, r.downloads)
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => log_debug!("[fs/transfer] WARN: expiry sweep: {e}"),
+                Err(e) => log_debug!("[fs/transfer] WARN: expiry sweep join: {e}"),
+            }
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
     });

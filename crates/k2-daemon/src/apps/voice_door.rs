@@ -170,6 +170,15 @@ where
     F: FnOnce() -> bool,
 {
     let p = crate::client_ip::peek_head(client).await;
+    // 0.46.9: the transfer door (`transfer_door`), App up or down.
+    if let Some((head, len)) = crate::transfer_door::door_head(&p.bytes) {
+        {
+            let mut r = Replay::new(p.bytes, client);
+            crate::transfer_door::serve(&mut r, &head, len).await;
+        }
+        let _ = client.shutdown().await;
+        return FirstRequest::Answered;
+    }
     if let Some((head, len)) = lane_head(&p.bytes) {
         let open = open();
         {

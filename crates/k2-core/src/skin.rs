@@ -7184,12 +7184,39 @@ fn resolve_token(presented_raw: &str, used: bool) -> Result<Option<SkinPass>, St
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
         return Ok(None);
     }
-    let key_hash = sha256_hex(presented_raw);
+    resolve_token_by(TokenKey::Hash(sha256_hex(presented_raw)), used)
+}
+
+/// A pass by its id, as it would resolve now (its rooms, caps and folders
+/// read again; `None` once revoked, expired or its grant is gone). For a
+/// holder K2 keeps no secret of: a resumable transfer re-reads the pass
+/// that made it on every request (`fs_transfer`). Never a link pass (those
+/// are the App's own and rotate hourly). Doesn't count as the pass being
+/// used.
+pub fn resolve_skin_token_id(id: &str) -> Result<Option<SkinPass>, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Ok(None);
+    }
+    resolve_token_by(TokenKey::Id(id.to_string()), false)
+}
+
+/// Which column finds the token row.
+enum TokenKey {
+    Hash(String),
+    Id(String),
+}
+
+fn resolve_token_by(key: TokenKey, used: bool) -> Result<Option<SkinPass>, String> {
+    let (key_sql, key_value) = match key {
+        TokenKey::Hash(h) => ("t.key_hash = ?1", h),
+        TokenKey::Id(id) => ("t.id = ?1", id),
+    };
     let now = now_secs();
     let row = with_conn(|conn| {
         let row = conn
             .query_row(
-                "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms, t.room_policy,
+                &format!("SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms, t.room_policy,
                         t.app_service_id,
                         EXISTS (
                           SELECT 1 FROM grants g
@@ -7205,11 +7232,11 @@ fn resolve_token(presented_raw: &str, used: bool) -> Result<Option<SkinPass>, St
                  FROM tokens t
                  LEFT JOIN principals p ON p.id = t.principal_id
                  LEFT JOIN principal_agent_ties tie ON tie.principal_id = t.principal_id AND t.session = 1
-                 WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
+                 WHERE {key_sql} AND t.revoked_at IS NULL
                    AND (t.expires_at IS NULL OR t.expires_at > ?2)
                    AND t.link_id IS NULL
-                   AND (t.session = 0 OR p.id IS NOT NULL)",
-                params![key_hash, now, HOST_APP_ID, CHAT_GRANT_KIND, CHAT_GRANT_TARGET],
+                   AND (t.session = 0 OR p.id IS NOT NULL)"),
+                params![key_value, now, HOST_APP_ID, CHAT_GRANT_KIND, CHAT_GRANT_TARGET],
                 |r| {
                     let principal_id: Option<String> = r.get(1)?;
                     let session: i64 = r.get(2)?;

@@ -280,3 +280,27 @@ async fn the_gateway_upgrade_passes_through_on_an_app_host() {
     drop(c);
     crate::apps::router::clear(id);
 }
+
+/// 0.46.9: the transfer door on an App's address is K2's, whatever the call
+/// door's gate says: a door head is answered here (no token: 401) and never
+/// reaches the App; anything else is replayed to the App untouched.
+#[tokio::test]
+async fn the_transfer_door_is_answered_on_the_app_path() {
+    let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+    let head = "PUT /_k2/transfers/uploads/0123456789abcdef0123456789abcdef HTTP/1.1\r\nHost: a\r\nContent-Range: bytes 0-1/2\r\nContent-Length: 2\r\n\r\nab";
+    client.write_all(head.as_bytes()).await.expect("write");
+    let out = first_request_with(&mut server, None, || panic!("the call door's gate is never asked"), "127.0.0.1:1").await;
+    assert!(matches!(out, FirstRequest::Answered), "K2 answers the transfer door");
+    drop(server);
+    let mut got = String::new();
+    client.read_to_string(&mut got).await.expect("read");
+    assert!(got.starts_with("HTTP/1.1 401"), "{got}");
+    assert!(got.contains("transfer_token_required") && got.contains("Connection: close"), "{got}");
+
+    let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+    client.write_all(b"GET /api/x HTTP/1.1\r\nHost: a\r\n\r\n").await.expect("write");
+    match first_request_with(&mut server, None, || false, "127.0.0.1:1").await {
+        FirstRequest::Pass(bytes) => assert!(bytes.starts_with(b"GET /api/x ")),
+        FirstRequest::Answered => panic!("an App path goes to the App"),
+    }
+}

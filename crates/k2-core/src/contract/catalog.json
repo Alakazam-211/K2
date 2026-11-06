@@ -353,7 +353,18 @@
     {"code": "attachment_secret", "doc": "The file looks like a secret now, so K2 won't let it leave the agent's server. Secrets travel through the vault (k2 vault)."},
     {"code": "sidecar_live", "doc": "The agent is running. End it first (agents.end), then archive it."},
     {"code": "sidecar_attached", "doc": "Someone has the agent open in a tab right now, so K2 didn't end it. Close that tab first."},
-    {"code": "worktree_sidecar", "doc": "The agent works in its own git worktree. Archive doesn't take it: retire it with agents.settle, which removes the worktree."}
+    {"code": "worktree_sidecar", "doc": "The agent works in its own git worktree. Archive doesn't take it: retire it with agents.settle, which removes the worktree."},
+    {"code": "guest_pass_required", "doc": "A resumable transfer is the person's: call it as them (asGuest(pass)), not with the App's own pass."},
+    {"code": "too_many_transfers", "doc": "Too many live uploads (32) or download tokens (256) for this person; finish, abort or let some expire."},
+    {"code": "no_space", "doc": "Not enough disk on the server for this file. Try later or tell the App's owner."},
+    {"code": "transfer_expired", "doc": "The upload or download token's grant is past its expiry (an upload lives 7 days): start a new one."},
+    {"code": "transfer_token_expired", "doc": "The door's upload token expired; the upload lives on. Ask for a new token (files.uploadToken)."},
+    {"code": "transfer_token_invalid", "doc": "The door's token doesn't open this transfer (wrong id, wrong token or garbled)."},
+    {"code": "transfer_token_required", "doc": "The door takes a transfer token: Authorization: Bearer <token>."},
+    {"code": "upload_done", "doc": "The upload is already complete; a range after that is refused."},
+    {"code": "upload_incomplete", "doc": "complete before every byte arrived; missing lists the ranges to send."},
+    {"code": "checksum_mismatch", "doc": "A sha256 didn't match: a range's own (nothing was written) or the whole file's (K2 dropped what it held; send it again)."},
+    {"code": "bad_range", "doc": "A Content-Range or Range that isn't inside the file, or a body that isn't the range's length."}
   ],
   "bannedFields": [
     "workspacePath",
@@ -15158,6 +15169,116 @@
       "example": "const t = await k2.thread.attachmentGet({addr: 'sales', id: item.id, n: 0, mode: 'thumb'})"
     },
     {
+      "verb": "thread.attachmentToken",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "transfers-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/attachment/token"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle (or its pinned Chat's conversation id)."
+            },
+            "id": {
+              "type": "string",
+              "description": "The message's doc id."
+            },
+            "n": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The attachment's index in doc.attachments."
+            },
+            "tokenTtlSecs": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400,
+              "description": "How long the token works, in seconds (default 3600, 1 hour)."
+            }
+          },
+          "required": [
+            "addr",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDownloadToken",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "transferToken": {
+            "type": "string",
+            "description": "The download token (k2dn_…): it opens this one file on the door and nothing else."
+          },
+          "url": {
+            "type": "string",
+            "description": "The door's path: GET it (Range and If-Range work) on the App's own host or this server's address."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "When the token stops, milliseconds since the epoch."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's bytes now."
+          },
+          "etag": {
+            "type": "string",
+            "description": "The file's version (strong ETag); a resumed download sends it as If-Range."
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "transferToken",
+          "url",
+          "expiresAt",
+          "size",
+          "etag",
+          "name",
+          "mime"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "attachment_secret",
+        "guest_pass_required",
+        "too_many_transfers",
+        "failed"
+      ],
+      "doc": "A short-lived download token for one attachment you may save (a guest also needs files:download in the room), for an OS background download of the raw file with Range and If-Range.",
+      "example": "const d = await k2.asGuest(pass).thread.attachmentToken({addr: 'sales', id: item.id, n: 0})"
+    },
+    {
       "verb": "thread.catchup",
       "cap": "thread:read",
       "exposure": [
@@ -17158,6 +17279,10 @@
               "description": "Bytes (default 8 MiB, at most 16 MiB).",
               "minimum": 1,
               "maximum": 16777216
+            },
+            "etag": {
+              "type": "string",
+              "description": "The etag an earlier chunk answered: when the file changed since, K2 refuses with conflict (412), so a resumed save never mixes versions."
             }
           },
           "required": [
@@ -17199,6 +17324,10 @@
           "mime": {
             "type": "string",
             "description": "A content type from the extension (application/octet-stream when unknown)."
+          },
+          "etag": {
+            "type": "string",
+            "description": "The file's version (catalog v51+): send it back as etag on the next chunk."
           }
         },
         "required": [
@@ -17224,6 +17353,112 @@
       ],
       "doc": "Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads).",
       "example": "const c = await k2.asGuest(pass).files.download({workspace, relPath: 'reports/2026-10.pdf'})"
+    },
+    {
+      "verb": "files.downloadToken",
+      "cap": "files:download",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "transfers-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/download/token",
+          "params": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path of one file (never a host path)."
+            },
+            "tokenTtlSecs": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400,
+              "description": "How long the token works, in seconds (default 3600, 1 hour)."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDownloadToken",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "transferToken": {
+            "type": "string",
+            "description": "The download token (k2dn_…): it opens this one file on the door and nothing else."
+          },
+          "url": {
+            "type": "string",
+            "description": "The door's path: GET it (Range and If-Range work) on the App's own host or this server's address."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "When the token stops, milliseconds since the epoch."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's bytes now."
+          },
+          "etag": {
+            "type": "string",
+            "description": "The file's version (strong ETag); a resumed download sends it as If-Range."
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "transferToken",
+          "url",
+          "expiresAt",
+          "size",
+          "etag",
+          "name",
+          "mime"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "guest_pass_required",
+        "too_many_transfers",
+        "failed"
+      ],
+      "doc": "A short-lived download token for one file files.download would give you, for an OS background download: GET the url with the token, raw bytes, Range and If-Range (k2 study app-transfers).",
+      "example": "const d = await k2.asGuest(pass).files.downloadToken({workspace, relPath: 'reports/2026-10.pdf'})"
     },
     {
       "verb": "files.write",
@@ -17486,6 +17721,531 @@
       ],
       "doc": "Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder.",
       "example": "await k2.files.uploadChunk({workspace, dir, filename, uploadId, offset, base64, isLast})"
+    },
+    {
+      "verb": "files.uploadCreate",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "transfers-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/upload/create"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "dir": {
+              "type": "string",
+              "description": "Room-relative folder (made if missing); else the role's upload folder."
+            },
+            "filename": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The file's bytes (at most 10 GiB)."
+            },
+            "sha256": {
+              "type": "string",
+              "description": "The whole file's sha256 (hex), checked at complete."
+            },
+            "tokenTtlSecs": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400,
+              "description": "How long the upload token works, in seconds (default 21600, 6 hours)."
+            }
+          },
+          "required": [
+            "workspace",
+            "filename",
+            "size"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppUploadSession",
+        "type": "object",
+        "properties": {
+          "uploadId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "The door's path for this upload: PUT ranges, HEAD, POST <url>/complete, on the App's own host (or this server's address)."
+          },
+          "transferToken": {
+            "type": "string",
+            "description": "files.uploadCreate: the upload token (k2up_…), shown once. It opens this upload on the door and nothing else."
+          },
+          "tokenExpiresAt": {
+            "type": "integer",
+            "description": "files.uploadCreate: when the token stops, milliseconds since the epoch."
+          },
+          "dir": {
+            "type": "string",
+            "description": "files.uploadCreate: the room-relative folder it lands in."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's bytes, as declared."
+          },
+          "received": {
+            "type": "array",
+            "description": "Byte ranges K2 holds, [first, last] inclusive, sorted and merged.",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "missing": {
+            "type": "array",
+            "description": "Byte ranges still to send, [first, last] inclusive.",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "receivedBytes": {
+            "type": "integer"
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Every byte is held (call complete)."
+          },
+          "done": {
+            "type": "boolean",
+            "description": "Completed: the file landed (relPath)."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "When the upload ends unfinished, milliseconds since the epoch (7 days after create)."
+          },
+          "partMax": {
+            "type": "integer",
+            "description": "The most one PUT carries, in bytes (16 MiB)."
+          },
+          "relPath": {
+            "type": "string",
+            "description": "When done: where the file landed (room-relative)."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "When done: the file's sha256 (hex)."
+          }
+        },
+        "required": [
+          "uploadId",
+          "url",
+          "size",
+          "received",
+          "missing",
+          "receivedBytes",
+          "complete",
+          "done",
+          "expiresAt",
+          "partMax"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "guest_pass_required",
+        "too_large",
+        "too_many_transfers",
+        "no_space",
+        "failed"
+      ],
+      "doc": "Start a resumable upload for an OS background transfer: K2 checks the room, the caps, the folder and the size once, and answers an upload id, the door's url and a short-lived upload token. The phone PUTs byte ranges to the door with that token (k2 study app-transfers).",
+      "example": "const up = await k2.asGuest(pass).files.uploadCreate({workspace, dir: 'uploads', filename, size, sha256})"
+    },
+    {
+      "verb": "files.uploadStatus",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "transfers-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/upload/status"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "description": "The id files.uploadCreate answered."
+            }
+          },
+          "required": [
+            "uploadId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppUploadSession",
+        "type": "object",
+        "properties": {
+          "uploadId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "The door's path for this upload: PUT ranges, HEAD, POST <url>/complete, on the App's own host (or this server's address)."
+          },
+          "transferToken": {
+            "type": "string",
+            "description": "files.uploadCreate: the upload token (k2up_…), shown once. It opens this upload on the door and nothing else."
+          },
+          "tokenExpiresAt": {
+            "type": "integer",
+            "description": "files.uploadCreate: when the token stops, milliseconds since the epoch."
+          },
+          "dir": {
+            "type": "string",
+            "description": "files.uploadCreate: the room-relative folder it lands in."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's bytes, as declared."
+          },
+          "received": {
+            "type": "array",
+            "description": "Byte ranges K2 holds, [first, last] inclusive, sorted and merged.",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "missing": {
+            "type": "array",
+            "description": "Byte ranges still to send, [first, last] inclusive.",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "receivedBytes": {
+            "type": "integer"
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Every byte is held (call complete)."
+          },
+          "done": {
+            "type": "boolean",
+            "description": "Completed: the file landed (relPath)."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "When the upload ends unfinished, milliseconds since the epoch (7 days after create)."
+          },
+          "partMax": {
+            "type": "integer",
+            "description": "The most one PUT carries, in bytes (16 MiB)."
+          },
+          "relPath": {
+            "type": "string",
+            "description": "When done: where the file landed (room-relative)."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "When done: the file's sha256 (hex)."
+          }
+        },
+        "required": [
+          "uploadId",
+          "url",
+          "size",
+          "received",
+          "missing",
+          "receivedBytes",
+          "complete",
+          "done",
+          "expiresAt",
+          "partMax"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "transfer_expired",
+        "failed"
+      ],
+      "doc": "What K2 holds of an upload of yours: the ranges received and missing, and whether it is done (the door's HEAD answers the same).",
+      "example": "const s = await k2.asGuest(pass).files.uploadStatus({uploadId})"
+    },
+    {
+      "verb": "files.uploadComplete",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "transfers-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/upload/complete"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "description": "The id files.uploadCreate answered."
+            },
+            "sha256": {
+              "type": "string",
+              "description": "The whole file's sha256 (hex); must match the one given at create, if any."
+            }
+          },
+          "required": [
+            "uploadId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppUploadDone",
+        "type": "object",
+        "properties": {
+          "uploadId": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          },
+          "relPath": {
+            "type": "string",
+            "description": "Where the file landed (room-relative; name (1).ext when the name was taken)."
+          },
+          "size": {
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "The file's sha256 (hex)."
+          }
+        },
+        "required": [
+          "uploadId",
+          "done",
+          "relPath",
+          "size",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "transfer_expired",
+        "upload_incomplete",
+        "checksum_mismatch",
+        "failed"
+      ],
+      "doc": "Finish an upload: every byte held, the size and sha256 right, then the file lands without replacing anything. Calling it again answers the same. A sha256 mismatch drops what K2 held: send the file again.",
+      "example": "const done = await k2.asGuest(pass).files.uploadComplete({uploadId, sha256})"
+    },
+    {
+      "verb": "files.uploadAbort",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "transfers-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/upload/abort"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "description": "The id files.uploadCreate answered."
+            }
+          },
+          "required": [
+            "uploadId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppUploadAborted",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "uploadId": {
+            "type": "string"
+          },
+          "aborted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "uploadId",
+          "aborted"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Stop an upload of yours: what K2 held is deleted and its tokens stop working. A completed upload's file stays.",
+      "example": "await k2.asGuest(pass).files.uploadAbort({uploadId})"
+    },
+    {
+      "verb": "files.uploadToken",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "transfers-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/upload/token"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "description": "The id files.uploadCreate answered."
+            },
+            "tokenTtlSecs": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400,
+              "description": "How long the token works, in seconds (60 to 86400)."
+            }
+          },
+          "required": [
+            "uploadId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppUploadToken",
+        "type": "object",
+        "properties": {
+          "uploadId": {
+            "type": "string"
+          },
+          "transferToken": {
+            "type": "string",
+            "description": "A new upload token (k2up_…); older ones keep working until they expire (at most 4 at once)."
+          },
+          "tokenExpiresAt": {
+            "type": "integer",
+            "description": "Milliseconds since the epoch."
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "transferToken",
+          "tokenExpiresAt",
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "transfer_expired",
+        "upload_done",
+        "failed"
+      ],
+      "doc": "A fresh upload token for an unfinished upload of yours, when the door answered transfer_token_expired.",
+      "example": "const t = await k2.asGuest(pass).files.uploadToken({uploadId})"
     },
     {
       "verb": "files.create",

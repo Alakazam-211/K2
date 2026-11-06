@@ -169,7 +169,9 @@ START (A BUNDLED WEB BUILD)
   The phone picks <uploadId> (any new id per file); <room> is a room the
   person may write to; offset = bytes already sent. The node-api template
   has this route. After an error, resend from the end of the last part that
-  answered 200.
+  answered 200. For files that must keep going while the app is in the
+  background (iOS URLSession, Android WorkManager), use K2's transfer door
+  instead: k2 study app-transfers.
 
 8. HOW IS IT DOING
     k2 app status <name>-web       health, checks, errors, channels

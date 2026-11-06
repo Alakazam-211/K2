@@ -1943,7 +1943,7 @@ fn jail_mkdir_p(root: &Path, rel: &str) -> Result<PathBuf, String> {
 
 /// Stable identity a guest upload is bound to: the login principal (so a
 /// re-login can resume), else the platform pass id.
-fn guest_upload_principal(pass: &SkinPass) -> String {
+pub(crate) fn guest_upload_principal(pass: &SkinPass) -> String {
     match pass.principal_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => format!("principal:{p}"),
         None => format!("pass:{}", pass.id),
@@ -2180,6 +2180,185 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
             CliResponse::ok_json(serde_json::json!({ "path": rel, "done": true, "size": size }).to_string())
         }
         Err(e) => guest_chunk_error(e),
+    }
+}
+
+/// May `pass` still send bytes into `rel_dir` of room `project_id`? The
+/// door asks on every range of a resumable upload (`transfer_door`), so a
+/// cap, a room or a folder taken away stops the upload at its next request.
+/// `drop`: the session was made with `files:upload` alone (an upload-only
+/// drop), which `files:write` also covers. The lexical scope only: the
+/// landed checks ran when the session was made, and its folder is fixed.
+pub(crate) fn upload_still_allowed(pass: &SkinPass, project_id: &str, rel_dir: &str, drop: bool) -> bool {
+    let Ok(resolved) = resolve_skin_workspace(pass, project_id) else { return false };
+    let write = pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE);
+    if write {
+        if let Ok(scope) = room_scope(pass, &resolved, PathNeed::Write) {
+            if scope_lexical(&scope, rel_dir, PathNeed::Write).is_none() {
+                return true;
+            }
+        }
+    }
+    if !drop || !pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_FILES_UPLOAD) {
+        return false;
+    }
+    let Ok(line) = room_scope(pass, &resolved, PathNeed::Upload) else { return false };
+    let Some(scope) = drop_scope(&line) else { return false };
+    scope_lexical(&scope, rel_dir, PathNeed::Upload).is_none()
+}
+
+/// `POST /cli/fs/upload/create` (`files.uploadCreate`, 0.46.9): a
+/// resumable upload session for an OS background transfer
+/// (`k2_core::fs_transfer`; the bytes go to `transfer_door`).
+///
+/// Body: `workspace`, `dir` (room-relative; else the line's `uploadDir`),
+/// `filename`, `size` (bytes), optional `sha256` (hex of the whole file)
+/// and `tokenTtlSecs` (60..=86400, default 6 h). Every rule of
+/// `files.uploadChunk` applies here, once: `files:write`, or `files:upload`
+/// (the drop lands in `<drop folder>/<username>/` and its caps count this
+/// file's whole size plus the person's other unfinished uploads there), the
+/// folder scope, `.k2/` and heartbeat ground, the 10 GiB ceiling, free disk
+/// and the disk guard. Only a pass K2 can read again by its id may make one
+/// (a guest's session or a platform pass, never the App's own link pass).
+///
+/// 200 `{uploadId, transferToken, tokenExpiresAt, url, size, partMax, received,
+/// missing, receivedBytes, complete, done, expiresAt, dir}`; 400 bad input
+/// or `guest_pass_required`; 403 room/cap; 413 over the ceiling or a drop
+/// cap; 429 `too_many_uploads`; 507 no space.
+pub fn handle_skin_upload_create(body: &[u8], pass: &SkinPass) -> CliResponse {
+    use k2_core::fs_transfer as ft;
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = match skin_json_workspace(&v) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let text = |key: &str| v.get(key).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let dir_sent = text("dir");
+    let filename = text("filename");
+    if filename.is_empty() {
+        return CliResponse::bad_request("Missing 'filename' parameter");
+    }
+    let Some(size) = v.get("size").and_then(|x| x.as_u64()) else {
+        return CliResponse::bad_request("Missing 'size' parameter (the file's bytes)");
+    };
+    let sha256 = match ft::parse_sha256(v.get("sha256").and_then(|x| x.as_str())) {
+        Ok(s) => s,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let ttl_asked = match v.get("tokenTtlSecs") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(x) => match x.as_u64() {
+            Some(n) => Some(n),
+            None => return CliResponse::bad_request("'tokenTtlSecs' is a number of seconds"),
+        },
+    };
+    if size > fsc::MAX_TRANSFER_SIZE {
+        return crate::transfer_routes::error_response(&ft::TransferError::TooLarge(format!(
+            "transfer of {size} bytes exceeds the {} GiB ceiling",
+            fsc::MAX_TRANSFER_SIZE / (1024 * 1024 * 1024)
+        )));
+    }
+    // The door re-reads this pass by id on every range: one K2 can't (the
+    // App's own link pass) can't hold an upload.
+    match k2_core::skin::resolve_skin_token_id(&pass.id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return crate::transfer_routes::guest_pass_required(),
+        Err(e) => return CliResponse::internal_error(e),
+    }
+    let (resolved, mode) = match skin_resolve_upload(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let UploadTarget { scope, dir, need, drop: drop_target } = match upload_target(pass, &resolved, &mode, dir_sent) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let mut _reserved: Option<DropReservation> = None;
+    if let Some(r) = scope_lexical(&scope, &dir, need) {
+        return r;
+    }
+    let jailed_dir = match jail_rel_path(&resolved.path, &dir, true) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &jailed_dir, true, need) {
+        return r;
+    }
+    let name = k2_core::fs_guest_upload::final_name(&filename);
+    if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &format!("{dir}/{name}"), &jailed_dir.join(&name), false, need) {
+        return r;
+    }
+    let root = match dunce::canonicalize(Path::new(&resolved.path)) {
+        Ok(r) => r,
+        Err(e) => return CliResponse::internal_error(format!("workspace root unavailable: {e}")),
+    };
+    let principal = guest_upload_principal(pass);
+    let now = ft::now_secs();
+    if let Some(d) = &drop_target {
+        // The drop caps count this whole file now, plus what this person's
+        // other unfinished uploads in this room still have to send.
+        let pending: u64 = match ft::live_uploads_of(&ft::uploads_dir(), &principal, now) {
+            Ok(live) => live
+                .iter()
+                .filter(|s| s.done.is_none() && s.drop && s.project_id == resolved.project_id)
+                .map(|s| {
+                    let held = std::fs::symlink_metadata(s.dir.join(&s.part)).map(|m| m.len()).unwrap_or(0);
+                    s.size.saturating_sub(held)
+                })
+                .sum(),
+            Err(e) => return CliResponse::internal_error(e.to_string()),
+        };
+        match drop_reserve(&resolved, d, 1, size.saturating_add(pending)) {
+            Ok(r) => _reserved = Some(r),
+            Err(r) => return r,
+        }
+        if let Err(r) = ensure_user_dir(&resolved, &scope, d) {
+            return r;
+        }
+    }
+    let canon_dir = match jail_mkdir_p(&root, &dir) {
+        Ok(d) => d,
+        Err(e) if matches!(mode, UploadMode::Drop { .. }) => {
+            k2_core::log_debug!("[fs/upload/create] drop mkdir refused: {e}");
+            return scope_refused(PathNeed::Upload);
+        }
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    if let Some(r) = refuse_protected_upload(pass, &scope, &resolved, &dir, &canon_dir, true, need) {
+        return r;
+    }
+    let rel_dir = relative_under(&root, &canon_dir.to_string_lossy());
+    let ttl = ft::clamp_ttl(ttl_asked, ft::TOKEN_TTL_DEFAULT_SECS);
+    let new = ft::NewUpload {
+        holder: ft::Holder { principal, pass_id: Some(pass.id.clone()), username: pass.username.clone() },
+        project_id: resolved.project_id.clone(),
+        root,
+        dir: canon_dir,
+        rel_dir: rel_dir.clone(),
+        filename: name,
+        size,
+        sha256,
+        drop: matches!(mode, UploadMode::Drop { .. }),
+        token_ttl_secs: ttl,
+    };
+    match ft::create_upload(&ft::uploads_dir(), &k2_core::fs_guest_upload::ledger_dir(), new, now) {
+        Ok((s, token)) => {
+            crate::transfer_door::note_live();
+            crate::thread_attachments::audit(
+                "files.upload_create",
+                &format!("guest:{}", pass.username.trim()),
+                format!("room={} dir={rel_dir:?} size={size} id={}", s.project_id, s.id),
+            );
+            let mut out = s.status_json();
+            out["transferToken"] = serde_json::json!(token);
+            out["tokenExpiresAt"] = serde_json::json!(s.tokens[0].expires_at.saturating_mul(1000));
+            out["dir"] = serde_json::json!(rel_dir);
+            CliResponse::ok_json(out.to_string())
+        }
+        Err(e) => crate::transfer_routes::error_response(&e),
     }
 }
 

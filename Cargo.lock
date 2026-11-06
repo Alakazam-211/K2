@@ -4773,6 +4773,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-transfer-client"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "k2-vault"
 version = "0.45.0"
 dependencies = [

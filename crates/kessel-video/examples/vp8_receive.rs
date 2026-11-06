@@ -106,7 +106,7 @@ static DECODER_QOS: AtomicU32 = AtomicU32::new(u32::MAX);
 /// The decoder's wake callback, which runs on the decoder's thread: it
 /// records that thread's QoS class and, with `force`, first moves the
 /// thread to that class (to measure what a decoder thread at each class
-/// costs; kessel-video itself sets none).
+/// costs; kessel-video itself sets user-initiated since 0.1.4).
 fn wake(force: Option<u32>) -> Wake {
     Arc::new(move || {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -342,9 +342,10 @@ fn main() {
         }),
     );
 
-    // 5. Apple: kessel-video's decoder thread sets no QoS class. Does it
-    // inherit one from the thread that creates the decoder? And what does
-    // each class cost, back to back and paced like a network stream?
+    // 5. Apple: kessel-video's decoder thread moves itself to user-initiated
+    // (0.1.4). Is that what it runs at, whatever thread creates the decoder?
+    // And what does each class cost, back to back and paced like a network
+    // stream?
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         for class in [qos::BACKGROUND, qos::USER_INTERACTIVE] {

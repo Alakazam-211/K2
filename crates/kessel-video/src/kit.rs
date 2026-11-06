@@ -166,6 +166,9 @@ impl ThreadedEncoder {
 }
 
 fn encoder_main(s: Arc<EncShared>, mut core: Box<dyn EncoderCore>) {
+    // Real-time media: keep the thread off a low QoS class on Apple.
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    crate::apple::set_media_thread_qos();
     let mut since_key: u64 = 0;
     loop {
         let (frame, mut key, rates, size, cfg) = {
@@ -448,6 +451,9 @@ fn shape(
 }
 
 fn decoder_main(s: Arc<DecShared>, mut core: Box<dyn DecoderCore>) {
+    // Real-time media: keep the thread off a low QoS class on Apple.
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    crate::apple::set_media_thread_qos();
     loop {
         // Wait for a reset or an input.
         let (input, fit) = {

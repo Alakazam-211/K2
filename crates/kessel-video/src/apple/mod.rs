@@ -50,6 +50,35 @@ mod screen;
 mod vt_dec;
 mod vt_enc;
 
+/// `QOS_CLASS_USER_INITIATED` from `<sys/qos.h>`.
+const QOS_CLASS_USER_INITIATED: u32 = 0x19;
+
+// libSystem, which every macOS and iOS program links.
+extern "C" {
+    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+    #[cfg(test)]
+    fn qos_class_self() -> u32;
+}
+
+/// Moves the calling thread to QoS class user-initiated. The encoder and
+/// decoder threads ([`ThreadedEncoder`], [`ThreadedDecoder`]) call it when
+/// they start: they do real-time media work, and a thread left at a low
+/// class (or one the system lowers) runs on efficiency cores and is
+/// throttled, most of all on iOS. User-interactive stays for the UI.
+pub(crate) fn set_media_thread_qos() {
+    // SAFETY: sets the calling thread's own QoS class; plain integers in.
+    // On failure (it can't fail for these arguments) the thread keeps the
+    // default class it started with.
+    let _ = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) };
+}
+
+/// The calling thread's QoS class (tests).
+#[cfg(test)]
+pub(crate) fn current_qos() -> u32 {
+    // SAFETY: reads the calling thread's QoS class; no arguments.
+    unsafe { qos_class_self() }
+}
+
 use crate::api::{
     Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
 };

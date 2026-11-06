@@ -1136,3 +1136,39 @@ fn ios_screens_come_in_through_frame_in_and_h264_is_hardware_only() {
     let rx = b.subscribe();
     assert!(rx.try_recv().is_none());
 }
+
+/// The encoder's and decoder's threads move themselves to QoS class
+/// user-initiated (their wake callbacks run on those threads).
+#[cfg(feature = "vp8")]
+#[test]
+fn codec_threads_run_at_user_initiated_qos() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let enc_qos = Arc::new(AtomicU32::new(0));
+    let dec_qos = Arc::new(AtomicU32::new(0));
+    let e = enc_qos.clone();
+    let mut enc = crate::vp8::encoder(
+        EncoderConfig::new(CodecConfig::Vp8, 64, 64, 30, 300_000),
+        Arc::new(move || e.store(current_qos(), Ordering::Relaxed)),
+    )
+    .expect("encoder");
+    let frame = pattern_frame(64, 64, 0, 0).expect("frame");
+    let key = encode_one(&mut enc, &frame, EncodeOptions::default()).expect("a keyframe");
+    let d = dec_qos.clone();
+    let mut dec = crate::vp8::decoder(
+        DecoderConfig::new(VideoCodec::Vp8),
+        Arc::new(move || d.store(current_qos(), Ordering::Relaxed)),
+    )
+    .expect("decoder");
+    dec.submit(EncodedInput::new(VideoCodec::Vp8, key.data, true, 0))
+        .expect("submit");
+    wait_for(Duration::from_secs(5), || dec.poll())
+        .expect("a decoded frame within 5 s")
+        .expect("decode");
+    for (what, seen) in [("encoder", &enc_qos), ("decoder", &dec_qos)] {
+        let q = wait_for(Duration::from_secs(5), || {
+            Some(seen.load(Ordering::Relaxed)).filter(|&q| q != 0)
+        })
+        .unwrap_or_else(|| panic!("the {what} thread never woke the caller"));
+        assert_eq!(q, QOS_CLASS_USER_INITIATED, "{what} thread QoS");
+    }
+}

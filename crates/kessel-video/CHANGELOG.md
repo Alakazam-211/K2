@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.4
+
+The encoder and decoder threads ask for a QoS class on Apple. Nothing in
+0.1.3's API changes.
+
+### Codec threads at QoS user-initiated on macOS and iOS
+
+- Before, the threads behind every encoder and decoder (`ThreadedEncoder`,
+  `ThreadedDecoder`: VP8 on every backend, VideoToolbox H.264 on Apple)
+  set no QoS class. They ran at the default class, which the system may
+  move to efficiency cores. On an Apple M4, a VP8 decoder thread at the
+  background class took 3.5 ms a frame at 640x360 instead of 0.6 ms.
+- Now each thread moves itself to `QOS_CLASS_USER_INITIATED` when it
+  starts: real-time media work, but below the UI's user-interactive class.
+- Other platforms are unchanged.
+
 ## 0.1.3
 
 The Apple backend's `convert` makes native frames from CPU planes. Nothing

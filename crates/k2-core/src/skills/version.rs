@@ -335,7 +335,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 51;
 /// (`mail.send-mode` from `k2 mail sending`, `mail.stop-sending`).
 /// v8 = 0.46.8: a box login's access to your own App (`apps.user-grant-box`).
 /// v9 = 0.46.8: "Refreshing your own chat" (`chat.refresh`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 9;
+/// v10 = 0.46.9: "System packages on compute nodes" (`compute.packages`,
+/// `compute.packages-policy`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 10;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

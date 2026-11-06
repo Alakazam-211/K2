@@ -156,7 +156,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 54] = [
+pub(crate) const V1_ACTIONS: [&str; 56] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -245,6 +245,10 @@ pub(crate) const V1_ACTIONS: [&str; 54] = [
     // 0.46.8: a box login's access to the agent's own App (the owner's on a
     // card; `app.login-grant` names it for a box login).
     "apps.user-grant-box",
+    // 0.46.9 (prd-compute-self-serve-environments-v1 §13): install the
+    // packages a filed request names, and set a node's package policy.
+    "compute.packages",
+    "compute.packages-policy",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -379,6 +383,38 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         needs: Some("/error/clear"),
         ..row(ask("compute.allow-nodes-clear", Floor::Admin), code(403, "allow_nodes_needs_person"), "/cli/compute/allow-nodes/set", POST)
+    },
+    // Package requests (0.46.9, prd-compute-self-serve-environments-v1 §6):
+    // a filed request held for this server's owner answers `pkgHeld: true`
+    // (never `held`, which is a node admin request's), from the request
+    // verb or a prewarm; a job refused `package_not_approved` names the
+    // request it filed. Each teaches `compute.packages request=<cpr_…>`.
+    Row {
+        params: &[("request", &[ParamFrom::Response("/request/id")])],
+        ..row(
+            ask("compute.packages", Floor::Admin),
+            WallMatch::Held { status: 200, field: "pkgHeld", value: "true" },
+            "/cli/compute/nodes/packages/request",
+            POST,
+        )
+    },
+    Row {
+        params: &[("request", &[ParamFrom::Response("/request/id")])],
+        ..row(ask("compute.packages", Floor::Admin), WallMatch::Held { status: 200, field: "pkgHeld", value: "true" }, "/cli/compute/prewarm", POST)
+    },
+    Row {
+        params: &[("request", &[ParamFrom::Response("/error/request")])],
+        ..row(ask("compute.packages", Floor::Admin), code(403, "package_not_approved"), "/cli/compute/", ANY)
+    },
+    // The package policy route to an agent that may not operate nodes: the
+    // owner sets the policy on a card (narrowing at once, widening held).
+    Row {
+        params: &[
+            ("node", &[ParamFrom::Body("/node")]),
+            ("server", &[ParamFrom::Body("/server")]),
+            ("level", &[ParamFrom::Body("/level")]),
+        ],
+        ..row(ask("compute.packages-policy", Floor::Owner), code(403, "operate_off"), "/cli/compute/nodes/packages/policy", POST)
     },
     // ── Sew (0.46.6)───────────────────────────────────────────────────
     // An agent's own call to the owner handoff: agents never become Sew's
@@ -1277,6 +1313,10 @@ mod tests {
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
             (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
+            // 0.46.9: a filed package request, and the package policy to an agent that can't operate nodes.
+            (200, "POST", "/cli/compute/nodes/packages/request", vec![], Some(json!({"nodes":["k2n7"],"names":["libgtk-3-dev"]})), json!({"pkgHeld":true,"request":{"id":"cpr_0123456789abcdef"}}), "compute.packages"),
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n7"})), json!({"error":{"code":"package_not_approved","hint":"x","request":"cpr_0123456789abcdef","node":"k2n7"}}), "compute.packages"),
+            (403, "POST", "/cli/compute/nodes/packages/policy", vec![], Some(json!({"node":"k2n7","server":"own","level":"official"})), json!({"error":{"code":"operate_off","hint":"x"}}), "compute.packages-policy"),
             // 0.46.8: `k2 chat space create --app` with no chat account (fix A),
             // and `k2 mail sending <ws> off` by an agent without mail-manage.
             (403, "POST", "/cli/sew/chat/manage/space/create", vec![], Some(json!({"slug":"jobs","app":"jobs"})), json!({"ok":false,"error":{"code":"chat_account_needed","hint":"x","details":{"workspace":"alpha"}}}), "chat.account"),
@@ -1762,7 +1802,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 54);
+        assert_eq!(V1_ACTIONS.len(), 56);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -1902,6 +1942,64 @@ mod tests {
         assert!(teach_of(200, "POST", "/cli/compute/nodes/policy/set", &[], None, json!({"held": false})).is_none());
         assert!(teach_of(200, "GET", "/cli/compute/nodes/health", &[], None, held.clone()).is_none());
         assert!(teach_of(200, "POST", "/cli/compute/run", &[], None, held.clone()).is_none());
+    }
+
+    /// 0.46.9: a filed package request teaches `compute.packages` with its
+    /// `cpr_…` id, from the hold (`pkgHeld`, the request verb or a prewarm)
+    /// and from a job's `package_not_approved` refusal (run, test,
+    /// prewarm); a node admin hold (`held`) still teaches
+    /// `compute.admin-approve`, and a `pkgHeld` answer never does.
+    #[test]
+    fn a_package_request_teaches_its_own_card() {
+        let id = "cpr_0123456789abcdef";
+        let want = format!("k2 permission request compute.packages request={id} --why \"<what you need it for>\"");
+        let held = json!({"pkgHeld": true, "request": {"id": id, "summary": "Install 1 package on k2n7 for agent tests: libgtk-3-dev"}});
+        for path in ["/cli/compute/nodes/packages/request", "/cli/compute/prewarm"] {
+            let p = teach_of(200, "POST", path, &[], Some(json!({"nodes":["k2n7"]})), held.clone()).unwrap_or_else(|| panic!("{path}: no permission"));
+            assert_eq!(action_of(&p), "compute.packages", "{path}: {p}");
+            assert_eq!(p["params"], json!({"request": id}), "{path}: {p}");
+            assert_eq!(p["command"], want, "{path}");
+            assert_eq!(p["approvers"], Floor::Admin.label(), "{path}: {p}");
+        }
+        let refused = json!({"error": {"code": "package_not_approved", "hint": "x", "request": id, "node": "k2n7", "packages": ["libgtk-3-dev"]}});
+        for path in ["/cli/compute/run", "/cli/compute/test", "/cli/compute/prewarm"] {
+            let p = teach_of(403, "POST", path, &[], Some(json!({"node":"k2n7"})), refused.clone()).unwrap_or_else(|| panic!("{path}: no permission"));
+            assert_eq!(action_of(&p), "compute.packages", "{path}: {p}");
+            assert_eq!(p["command"], want, "{path}");
+        }
+        // Nothing held here (only another server's owner was asked), or a
+        // GET, or a 2xx elsewhere: nothing to ask.
+        assert!(teach_of(200, "POST", "/cli/compute/nodes/packages/request", &[], None, json!({"pkgHeld": false, "request": {"id": id}})).is_none());
+        assert!(teach_of(200, "GET", "/cli/compute/nodes/packages/request", &[], None, held.clone()).is_none());
+        assert!(teach_of(200, "POST", "/cli/compute/run", &[], None, held.clone()).is_none());
+        // A `pkgHeld` answer under /cli/compute/nodes/ never raises the node
+        // admin card; a `held` one there still does.
+        for path in ["/cli/compute/nodes/packages/request", "/cli/compute/nodes/packages/policy", "/cli/compute/nodes/wall"] {
+            let p = teach_of(200, "POST", path, &[], None, held.clone());
+            assert!(p.as_ref().is_none_or(|p| action_of(p) != "compute.admin-approve"), "{path}: {p:?}");
+        }
+        let node_hold = json!({"held": true, "request": {"id": "car_abc123"}});
+        let p = teach_of(200, "POST", "/cli/compute/nodes/packages/policy", &[], None, node_hold).expect("a held policy widening");
+        assert_eq!(action_of(&p), "compute.admin-approve", "{p}");
+        assert_eq!(p["params"], json!({"request": "car_abc123"}), "{p}");
+    }
+
+    /// The package policy route to an agent that may not operate nodes asks
+    /// the owner for that exact policy; elsewhere `operate_off` stays
+    /// compute.operate.
+    #[test]
+    fn the_package_policy_wall_names_the_node_server_and_level() {
+        let off = json!({"error": {"code": "operate_off", "hint": "x"}});
+        let p = teach_of(403, "POST", "/cli/compute/nodes/packages/policy", &[], Some(json!({"node":"k2n7","server":"acme.k2.dev","level":"profiles"})), off.clone())
+            .expect("a permission");
+        assert_eq!(action_of(&p), "compute.packages-policy", "{p}");
+        assert_eq!(p["approvers"], Floor::Owner.label(), "{p}");
+        assert_eq!(
+            p["command"],
+            "k2 permission request compute.packages-policy level=profiles node=k2n7 server=acme.k2.dev --why \"<what you need it for>\""
+        );
+        let p = teach_of(403, "POST", "/cli/compute/admin/propose", &[], Some(json!({"node":"k2n7"})), off).expect("a permission");
+        assert_eq!(action_of(&p), "compute.operate", "{p}");
     }
 
     /// 0.46.9 (Rosson 2026-11-05): the agent's own `k2 compute access on`

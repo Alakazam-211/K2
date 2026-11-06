@@ -8,7 +8,8 @@
 //! no pending item needs a confirm (`viewer.canAnswerAll`, computed by
 //! [`super::present::view_for`]); confirm items are answered one by one.
 //! A card that shows its approver a secret (`apps.user-password-reset`)
-//! never batches.
+//! never batches. A compute package card (`compute.packages`) batches only
+//! with other package cards.
 
 use k2_core::overlay;
 use k2_core::permission::request::{limits, PermissionRequest};
@@ -36,6 +37,10 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
     if super::actions::box_login_grant::never_batched(&req.action) {
         return None;
     }
+    // A compute package card batches only with other package cards: the
+    // person reads every name and the size, never under an unrelated
+    // "Allow all" (prd-compute-self-serve-environments-v1 §3.3, §16.9).
+    let packages = super::actions::compute::batches_alone(&req.action);
     let open = store::open(Some(&req.workspace_id)).ok()?;
     let mut seen: Vec<String> = Vec::new();
     for r in open.iter().rev() {
@@ -49,6 +54,9 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
         }
         let items = store::for_card(conv, card).ok()?;
         if items.iter().any(|i| super::actions::box_login_grant::never_batched(&i.action)) {
+            continue;
+        }
+        if items.iter().any(|i| super::actions::compute::batches_alone(&i.action) != packages) {
             continue;
         }
         let first = items.first()?;

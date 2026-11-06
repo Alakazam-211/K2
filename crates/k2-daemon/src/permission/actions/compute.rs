@@ -124,6 +124,9 @@ pub(crate) const NO_NODE_SWITCH: &str = "this agent can't operate or manage comp
 /// `{reason}` the reason filed with it. Fixed at filing, so the card's
 /// text hash holds until the click.
 pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
+    if action == PACKAGES.id {
+        return Some(packages_computed(ctx));
+    }
     if action != ADMIN_APPROVE.id {
         return None;
     }
@@ -160,7 +163,11 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
 /// the Settings route's own entry (0.46.9: "Denying it denies"). Already
 /// decided in Settings (or withdrawn) is left as it is.
 pub(crate) fn on_denied(action: &str, request: &str, who: &Answerer, why: Option<&str>) {
-    if action != ADMIN_APPROVE.id || request.is_empty() || !compute_on() {
+    if action == PACKAGES.id {
+        on_packages_denied(request, who, why);
+        return;
+    }
+    if action != ADMIN_APPROVE.id || request.is_empty() || is_package_request(request) || !compute_on() {
         return;
     }
     let mut body = json!({ "request": request });
@@ -183,6 +190,10 @@ fn check(ctx: &Ctx) -> Check {
     let Some(id) = text_param(ctx, "request") else {
         return Check::Moved("name the node admin request: request=<its car_… id> (k2 compute node admin requests)".into());
     };
+    // A package request (`cpr_…`) has its own card; this one never decides it.
+    if is_package_request(id) {
+        return Check::Moved(format!("{id} is a package request: ask with k2 permission request {} request={id}", PACKAGES.id));
+    }
     let row = {
         let h = k2_core::db::shared();
         let conn = h.lock();
@@ -548,6 +559,322 @@ fn apply_allow_nodes_clear(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) ->
     apply_allow_to(who, body, message)
 }
 
+// ── compute.packages (0.46.9, prd-compute-self-serve-environments-v1 §6, §14) ──
+
+/// A package request batch or row id (`cpr_…`, `k2_core::compute::pkgreq`).
+pub(crate) fn is_package_request(id: &str) -> bool {
+    id.trim().starts_with("cpr_")
+}
+
+/// The answer field a filed package request carries (`pkgHeld: true`). Not
+/// `held`: that one is a node admin request's (`compute.admin-approve`).
+pub(crate) const PKG_HELD: &str = "pkgHeld";
+
+/// `compute.packages request=<cpr_…>`: install the packages one batched
+/// request names, on its nodes. The owner or an Admin, a person (the
+/// route's own `decider`). One card per batch; it joins only other
+/// `compute.packages` cards ([`batches_alone`]), never an unrelated
+/// "Allow all". The request lives 24 h, so its card does too.
+pub(crate) static PACKAGES: ActionSpec = ActionSpec {
+    id: "compute.packages",
+    area: Area::Compute,
+    params: &[ParamSpec { key: "request", kind: ParamKind::HeldRequest, required: true, list: false, choices: &[] }],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry { default_secs: k2_core::compute::proto::pkgpolicy::REQUEST_TTL_SECS, max_secs: MAX_EXPIRY_SECS },
+    // K2 writes the card from the stored request, never the agent:
+    // `with_computed` fills `{change}` (what installs, where, for whom, the
+    // dependency count and size), `{nodes}`, `{shared}` and `{reason}`.
+    words: Words {
+        setting: "Compute packages",
+        what_changes: "{change}",
+        consequences: "Root installs them on {nodes} from the distro's signed official repos, after a dry run that refuses anything that removes a package, comes from another repo or is too big. {shared}This is request {request} in Settings → Compute → Approvals: whichever you answer first decides it. The agent's reason: {reason}",
+        scope: "package request {request}",
+        duration: "once",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "compute", path: "Settings → Compute → Approvals" },
+    walls: &[
+        // The request verb: filed and held for this server's owner.
+        Wall {
+            matches: WallMatch::Held { status: 200, field: PKG_HELD, value: "true" },
+            route_prefix: crate::compute_pkg::REQUEST,
+            method: WallMethod::Post,
+            params: &[("request", ParamFrom::Response("/request/id"))],
+        },
+        // A prewarm that filed one batched request for its nodes.
+        Wall {
+            matches: WallMatch::Held { status: 200, field: PKG_HELD, value: "true" },
+            route_prefix: "/cli/compute/prewarm",
+            method: WallMethod::Post,
+            params: &[("request", ParamFrom::Response("/request/id"))],
+        },
+        // A job (run, test, prewarm) refused because a package isn't
+        // approved: the refusal filed the request and names it.
+        Wall {
+            matches: WallMatch::Code { status: 403, code: k2_core::compute::proto::pkgpolicy::codes::PACKAGE_NOT_APPROVED },
+            route_prefix: "/cli/compute/",
+            method: WallMethod::Any,
+            params: &[("request", ParamFrom::Response("/error/request"))],
+        },
+    ],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// A `compute.packages` card batches only with other `compute.packages`
+/// cards (PRD §3.3, §16.9): the person reads every name and the size.
+pub(crate) fn batches_alone(action: &str) -> bool {
+    action == PACKAGES.id
+}
+
+/// The batch's rows that belong to the asking workspace.
+fn package_rows(ctx: &Ctx, id: &str) -> Vec<k2_core::compute::pkgreq::PkgRow> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    k2_core::compute::pkgreq::batch(&conn, id).into_iter().filter(|r| r.workspace_id.as_deref() == Some(ctx.workspace_id.as_str())).collect()
+}
+
+/// The card's words from the stored rows: `{change}` is the request's own
+/// summary (Settings shows the same line), `{nodes}` its machines,
+/// `{shared}` the host-wide line when another server asked, `{reason}`
+/// the agent's `--why`.
+fn packages_computed(ctx: &Ctx) -> Ctx {
+    let mut out = ctx.clone();
+    let id = text_param(ctx, "request").unwrap_or("").to_string();
+    let rows = if is_package_request(&id) { package_rows(ctx, &id) } else { Vec::new() };
+    let (change, nodes) = if rows.is_empty() {
+        (format!("Install the packages in request {id}"), "its node".to_string())
+    } else {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let name = |nid: &str| k2_core::compute::store::node_by_id(&conn, nid).map(|n| n.name).unwrap_or_else(|| nid.to_string());
+        let mut nodes: Vec<String> = rows.iter().map(|r| name(r.node_id.as_str())).collect();
+        nodes.dedup();
+        (k2_core::compute::pkgreq::summary(&rows, &name), nodes.join(", "))
+    };
+    let other_server = rows.iter().any(|r| r.server != "own" || r.origin == k2_core::compute::pkgreq::FWD);
+    let shared = if other_server { "This is installed for every job on that machine. " } else { "" };
+    let reason = rows
+        .iter()
+        .filter_map(|r| r.why.as_deref())
+        .map(str::trim)
+        .find(|w| !w.is_empty())
+        .unwrap_or("none")
+        .to_string();
+    out.params.insert("change".into(), json!(change));
+    out.params.insert("nodes".into(), json!(nodes));
+    out.params.insert("shared".into(), json!(shared));
+    out.params.insert("reason".into(), json!(reason));
+    out
+}
+
+/// The batch's state: still waiting here (Needed), all installed or on
+/// their way (AlreadyDone), or decided, expired or sent elsewhere (Moved).
+fn check_packages(ctx: &Ctx) -> Check {
+    use k2_core::compute::proto::pkgpolicy::state;
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    let Some(id) = text_param(ctx, "request") else {
+        return Check::Moved("name the package request: request=<its cpr_… id> (k2 compute node packages requests)".into());
+    };
+    if !is_package_request(id) {
+        return Check::Moved(format!("{id} is not a package request (cpr_…): see k2 compute node packages requests"));
+    }
+    let rows = package_rows(ctx, id);
+    if rows.is_empty() {
+        return Check::Moved(format!("no package request {id} of {}'s (k2 compute node packages requests)", ctx.workspace_handle));
+    }
+    let now = k2_core::compute::now();
+    let live = |r: &&k2_core::compute::pkgreq::PkgRow| r.state == state::PENDING && r.expires_at > now;
+    if rows.iter().filter(live).any(|r| r.origin != k2_core::compute::pkgreq::SENT) {
+        return Check::Needed;
+    }
+    if let Some(r) = rows.iter().find(live) {
+        return Check::Moved(format!(
+            "package request {id} went to the node's owner ({}): they decide it on their own server, and you hear back here",
+            r.server
+        ));
+    }
+    if rows.iter().all(|r| r.state == state::INSTALLED || r.state == "approved") {
+        return Check::AlreadyDone;
+    }
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let states: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            let node = k2_core::compute::store::node_by_id(&conn, &r.node_id).map(|n| n.name).unwrap_or_else(|| r.node_id.clone());
+            let st = if r.state == state::PENDING { state::EXPIRED } else { r.state.as_str() };
+            match r.note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => format!("{st} on {node} ({n})"),
+                None => format!("{st} on {node}"),
+            }
+        })
+        .collect();
+    Check::Moved(format!("package request {id} was decided meanwhile: {}", states.join(", ")))
+}
+
+/// Allow: the route's own entry, as the answerer (its `decider` checks the
+/// person again).
+fn apply_packages(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let Some(id) = text_param(ctx, "request").filter(|id| is_package_request(id)) else {
+        return Applied::Refused { code: "bad_params".into(), message: "the request names no package request (cpr_…)".into() };
+    };
+    match crate::compute_pkg::decide_batch(&who_of(who), id, true, false, None) {
+        Ok(v) => {
+            let rows = v["rows"].as_array().cloned().unwrap_or_default();
+            let on = |st: &str| -> Vec<String> {
+                rows.iter().filter(|r| r["state"] == st).filter_map(|r| r["node"].as_str().map(str::to_string)).collect()
+            };
+            let (sent, offline) = (on("approved"), on(k2_core::compute::proto::pkgpolicy::state::PENDING));
+            let mut msg = Vec::new();
+            if !sent.is_empty() {
+                msg.push(format!("Root installs them on {} now, after its dry run and guards; you hear back when it's done. Then run your job again.", sent.join(", ")));
+            }
+            if !offline.is_empty() {
+                msg.push(format!(
+                    "{} is offline, so it waits there: a person approves it in Settings → Compute → Approvals when it's back.",
+                    offline.join(", ")
+                ));
+            }
+            Applied::Done { message: msg.join(" ") }
+        }
+        Err(r) => Applied::Refused { code: r.code.to_string(), message: r.hint },
+    }
+}
+
+/// The card's Deny denies the request itself, as the person (the same
+/// entry as Settings). Already decided elsewhere is left as it is.
+fn on_packages_denied(request: &str, who: &Answerer, why: Option<&str>) {
+    if !is_package_request(request) || !compute_on() {
+        return;
+    }
+    let why = why.map(str::trim).filter(|w| !w.is_empty());
+    if let Err(r) = crate::compute_pkg::decide_batch(&who_of(who), request.trim(), false, false, why) {
+        k2_core::log_debug!("[permission] compute.packages deny of {request}: {} {}", r.code, r.hint);
+    }
+}
+
+// ── compute.packages-policy (0.46.9, §3.4, §13) ─────────────────────
+
+const POLICY_LEVELS: &[&str] = &["list", "profiles", "official"];
+
+/// `compute.packages-policy node= server= level=`: set what a node installs
+/// for a server without asking (its package policy). The owner. Narrowing
+/// applies at once; widening goes on as a held node admin request the
+/// owner approves in Settings → Compute → Approvals (root on the node).
+pub(crate) static PACKAGES_POLICY: ActionSpec = ActionSpec {
+    id: "compute.packages-policy",
+    area: Area::Compute,
+    params: &[
+        ParamSpec { key: "node", kind: ParamKind::Node, required: true, list: false, choices: &[] },
+        ParamSpec { key: "server", kind: ParamKind::Text, required: true, list: false, choices: &[] },
+        ParamSpec { key: "level", kind: ParamKind::Choice, required: true, list: false, choices: POLICY_LEVELS },
+    ],
+    floor: Floor::Owner,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Compute package policy",
+        what_changes: "Set {node}'s package policy for {server} to {level}",
+        consequences: "list installs only names on {node}'s approved list; profiles adds K2's bundles you turned on; official allows any package from the distro's signed official repos, minus K2's deny list. A package installs for every job on that machine. Narrowing applies at once. Widening runs as root on {node}, so it waits as a node request for you in Settings → Compute → Approvals.",
+        scope: "{server} on {node}",
+        duration: "until someone changes it",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "compute", path: "Settings → Compute" },
+    walls: &[Wall {
+        // The policy route, to an agent that may not operate compute nodes.
+        matches: WallMatch::Code { status: 403, code: k2_core::compute::admin::codes::OPERATE_OFF },
+        route_prefix: crate::compute_pkg::POLICY,
+        method: WallMethod::Post,
+        params: &[("node", ParamFrom::Body("/node")), ("server", ParamFrom::Body("/server")), ("level", ParamFrom::Body("/level"))],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// The named node: active, this server's own. `Ok((node, its offer))`.
+fn policy_node(ctx: &Ctx) -> Result<(k2_core::compute::store::NodeRow, Option<k2_core::compute::proto::frames::Offer>), String> {
+    let name = text_param(ctx, "node").ok_or("name the node: node=<name> (k2 compute nodes)")?;
+    let n = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::compute::store::find_node(&conn, name)
+    }
+    .filter(|n| n.state == "active")
+    .ok_or_else(|| format!("no active compute node '{name}' (k2 compute nodes)"))?;
+    if n.is_tenant() {
+        return Err(format!("{} belongs to another server ({}): its owner sets its package policy", n.name, n.owner_label.as_deref().unwrap_or("its owner")));
+    }
+    let offer = crate::compute_ws::live_view(&n.id).2.or_else(|| n.last_offer.clone());
+    Ok((n, offer))
+}
+
+fn check_packages_policy(ctx: &Ctx) -> Check {
+    use k2_core::compute::proto::pkgpolicy as pp;
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    let (n, offer) = match policy_node(ctx) {
+        Ok(x) => x,
+        Err(m) => return Check::Moved(m),
+    };
+    if !offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == pp::FEATURE_PKG_STATUS)) {
+        return Check::Moved(format!("{}'s k2-node has no package policy yet (older than 0.46.9): update it (k2 compute node update {})", n.name, n.name));
+    }
+    let Some(level) = text_param(ctx, "level").and_then(pp::Level::parse) else {
+        return Check::Moved(format!("level= is one of {}", POLICY_LEVELS.join(", ")));
+    };
+    // The node reports this server's own level; another server's only it knows.
+    let own = text_param(ctx, "server") == Some("own");
+    if own && offer.as_ref().and_then(|o| o.pkg.as_ref()).is_some_and(|p| p.level == level) {
+        return Check::AlreadyDone;
+    }
+    Check::Needed
+}
+
+/// Through the route's own entry (`POST /cli/compute/nodes/packages/policy`),
+/// as the answerer.
+fn apply_packages_policy(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let (n, _) = match policy_node(ctx) {
+        Ok(x) => x,
+        Err(m) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    let (server, level) = (text_param(ctx, "server").unwrap_or("own"), text_param(ctx, "level").unwrap_or(""));
+    let path = crate::compute_pkg::POLICY;
+    if let Err(r) = super::switches::route_floor(who, path) {
+        return super::switches::applied(&r, "");
+    }
+    let body = json!({ "node": n.name, "server": server, "level": level, "reason": format!("package policy for {server}: {level} (a permission card)") });
+    let r = crate::compute_routes::handle(path, who_of(who), body.to_string().as_bytes(), &HashMap::new());
+    let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or(serde_json::Value::Null);
+    let message = if v["held"] == true {
+        let id = v.pointer("/request/id").and_then(serde_json::Value::as_str).unwrap_or("");
+        format!(
+            "That widens what {} installs as root, so it waits as node request {id}: approve it in Settings → Compute → Approvals.",
+            n.name
+        )
+    } else {
+        format!("{}'s package policy for {server} is {level} now.", n.name)
+    };
+    super::switches::applied(&r, message)
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
     vec![
         Registered { spec: &ADMIN_APPROVE, check, apply },
@@ -555,6 +882,8 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &CI_OFF, check: check_ci_off, apply: apply_ci_off },
         Registered { spec: &ALLOW_NODES, check: check_allow_nodes, apply: apply_allow_nodes },
         Registered { spec: &ALLOW_NODES_CLEAR, check: check_allow_nodes_clear, apply: apply_allow_nodes_clear },
+        Registered { spec: &PACKAGES, check: check_packages, apply: apply_packages },
+        Registered { spec: &PACKAGES_POLICY, check: check_packages_policy, apply: apply_packages_policy },
     ]
 }
 

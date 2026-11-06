@@ -363,3 +363,231 @@ fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
     let _off = ComputeOn::set(false);
     assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": b_name })).contains("compute nodes are off"));
 }
+
+// ── compute.packages and compute.packages-policy (0.46.9) ────────────
+
+/// One filed package request batch for `ws` on `node_id`, moved to `state`.
+/// Returns the batch id (`cpr_…`).
+fn file_pkg(ws: &Ws, node_id: &str, state: &str, origin: &str, server: &str) -> String {
+    use k2_core::compute::pkgreq as pr;
+    let names = vec!["libgtk-3-dev".to_string(), "libssl-dev".to_string()];
+    let dry = k2_core::compute::proto::pkgpolicy::DrySummary {
+        installs: vec!["a".into(), "b".into(), "c".into()],
+        size_mb: Some(180),
+        ..Default::default()
+    };
+    let batch = pr::new_id();
+    let now = k2_core::compute::now();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let r = pr::insert(
+        &conn,
+        &pr::NewRow {
+            batch_id: &batch,
+            origin,
+            node_id,
+            server,
+            workspace_id: Some(&ws.id),
+            asked_by: &ws.handle,
+            why: Some("the Tauri tests need GTK"),
+            names: &names,
+            dry: Some(&dry),
+            host: Some("Ubuntu 24.04.1 LTS"),
+            now,
+            ..Default::default()
+        },
+    )
+    .expect("filed");
+    if state != "pending" {
+        assert!(pr::set_state(&conn, &r.id, state, Some("owner"), Some("not on this box"), None, now), "{state}");
+    }
+    batch
+}
+
+fn pkg_rows(batch: &str) -> Vec<k2_core::compute::pkgreq::PkgRow> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::pkgreq::batch(&conn, batch)
+}
+
+#[test]
+fn package_cards_are_registered_with_their_floors() {
+    use k2_core::permission::catalog::{Direction, Floor, Grant, Proof};
+    let r = super::super::find("compute.packages").expect("registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant, r.spec.direction), (Floor::Admin, Proof::Click, Grant::OneTime, Direction::Loosen));
+    assert_eq!(r.spec.expiry.default_secs, k2_core::compute::proto::pkgpolicy::REQUEST_TTL_SECS, "the card lives as long as the request");
+    let p = super::super::find("compute.packages-policy").expect("registered");
+    k2_core::permission::catalog::validate(p.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((p.spec.floor, p.spec.proof), (Floor::Owner, Proof::Click));
+    for route in [crate::compute_pkg::REQUEST, crate::compute_pkg::POLICY, crate::compute_pkg::DECIDE] {
+        assert!(crate::routes::route_policy::lookup(route).and_then(|x| x.post).is_some(), "{route} has a POST row");
+    }
+    assert!(super::batches_alone("compute.packages"));
+    assert!(!super::batches_alone("compute.admin-approve") && !super::batches_alone("compute.packages-policy"));
+}
+
+/// The card is K2's words from the stored request: what installs, where,
+/// for whom, the dependency count and size, and the agent's reason.
+#[test]
+fn the_package_card_names_what_installs_where_and_for_whom() {
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pkgw");
+    let (node, name) = list_node(&ws, "pk-w", true);
+    let id = file_pkg(&ws, &node, "pending", k2_core::compute::pkgreq::OWN, "own");
+    let v = ask_ok(&ws, "compute.packages", json!({ "request": id }));
+    assert_eq!(v["id"], id.as_str(), "the package request keeps its own id: {v}");
+    let exp = v["expiresAt"].as_i64().expect("expiresAt");
+    assert!((exp - (k2_core::overlay::now_secs() + k2_core::compute::proto::pkgpolicy::REQUEST_TTL_SECS)).abs() <= 5, "{v}");
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(
+        vw["whatChanges"],
+        format!(
+            "Install 2 packages on {name} (Ubuntu 24.04.1 LTS) for agent {}: libgtk-3-dev, libssl-dev (3 packages with dependencies, 180 MB).",
+            ws.handle
+        ),
+        "{vw}"
+    );
+    let cons = vw["consequences"].as_str().unwrap_or_else(|| panic!("no consequences: {vw}"));
+    assert!(cons.starts_with(&format!("Root installs them on {name} from the distro's signed official repos")), "{cons}");
+    assert!(cons.contains(&format!("This is request {id} in Settings → Compute → Approvals")), "{cons}");
+    assert!(cons.ends_with("The agent's reason: the Tauri tests need GTK"), "{cons}");
+    assert!(!cons.contains("every job on that machine"), "this server's own agent asked: {cons}");
+    let all = vw.to_string();
+    assert!(!all.contains('\u{2014}'), "no em dashes on the card: {vw}");
+    assert!(!all.contains("{change}") && !all.contains("{shared}") && !all.contains("{reason}"), "every value filled: {vw}");
+
+    // Another server's request: the host-wide line.
+    let theirs = file_pkg(&ws, &node, "pending", k2_core::compute::pkgreq::SENT, "acme.k2.dev");
+    let mut ctx = super::super::Ctx { workspace_id: ws.id.clone(), workspace_handle: ws.handle.clone(), params: Default::default() };
+    ctx.params.insert("request".into(), json!(theirs));
+    let filled = super::with_computed("compute.packages", &ctx).expect("computed");
+    assert_eq!(filled.params["shared"], "This is installed for every job on that machine. ", "{:?}", filled.params);
+    assert!(filled.params["change"].as_str().unwrap_or("").contains("for acme.k2.dev's"), "{:?}", filled.params);
+}
+
+/// The ask follows the request: pending here asks; installed or approved
+/// is already done; denied, expired, sent to another server's owner,
+/// another workspace's, or not a package request at all is refused with
+/// words. The node admin card never takes a package request.
+#[test]
+fn the_package_card_follows_the_request() {
+    use k2_core::compute::pkgreq::{OWN, SENT};
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pkgs");
+    let other = seed("pkgo");
+    let (node, name) = list_node(&ws, "pk-s", true);
+
+    for st in ["installed", "approved"] {
+        let id = file_pkg(&ws, &node, st, OWN, "own");
+        let (s, v) = ask(&ws, "compute.packages", json!({ "request": id }));
+        assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{st}: {v}");
+    }
+    let denied = file_pkg(&ws, &node, "denied", OWN, "own");
+    let hint = ask_refused(&ws, "compute.packages", json!({ "request": denied }));
+    assert!(hint.contains(&format!("denied on {name} (not on this box)")), "{hint}");
+    let expired = file_pkg(&ws, &node, "expired", OWN, "own");
+    let hint = ask_refused(&ws, "compute.packages", json!({ "request": expired }));
+    assert!(hint.contains(&format!("expired on {name}")), "{hint}");
+    let sent = file_pkg(&ws, &node, "pending", SENT, "acme.k2.dev");
+    let hint = ask_refused(&ws, "compute.packages", json!({ "request": sent }));
+    assert!(hint.contains("went to the node's owner (acme.k2.dev)"), "{hint}");
+    let theirs = file_pkg(&other, &node, "pending", OWN, "own");
+    let hint = ask_refused(&ws, "compute.packages", json!({ "request": theirs }));
+    assert!(hint.contains("no package request"), "{hint}");
+    let hint = ask_refused(&ws, "compute.packages", json!({ "request": "car_abc123" }));
+    assert!(hint.contains("not a package request"), "{hint}");
+
+    set_operate(&ws, true);
+    let open = file_pkg(&ws, &node, "pending", OWN, "own");
+    let hint = ask_refused(&ws, "compute.admin-approve", json!({ "request": open }));
+    assert!(hint.contains(&format!("k2 permission request compute.packages request={open}")), "{hint}");
+
+    let _off = ComputeOn::set(false);
+    let hint = ask_refused(&ws, "compute.packages", json!({ "request": open }));
+    assert!(hint.contains("compute nodes are off"), "{hint}");
+}
+
+/// Deny on the card denies the request itself, as the person, with the
+/// reason. Allow while the node is offline approves the card, leaves the
+/// request waiting in Settings, and says so.
+#[test]
+fn the_package_cards_allow_and_deny_decide_the_request() {
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pkgd");
+    let (node, name) = list_node(&ws, "pk-d", true);
+    let admin = login("pkga", Role::Admin);
+
+    let id = file_pkg(&ws, &node, "pending", k2_core::compute::pkgreq::OWN, "own");
+    let v = ask_ok(&ws, "compute.packages", json!({ "request": id }));
+    let member = login("pkgm", Role::Member);
+    below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");
+    let (s, a) = answer_as(&admin, &ws, &card_of(&v), json!({ "answer": "Deny", "reason": "not on this box" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id).state, RequestState::Denied);
+    let rows = pkg_rows(&id);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        (rows[0].state.as_str(), rows[0].decided_by.clone(), rows[0].note.as_deref()),
+        ("denied", Some(format!("login:{admin}")), Some("not on this box")),
+        "{rows:?}"
+    );
+
+    // Allow with the node offline: nothing is sent, the request still waits.
+    let id = file_pkg(&ws, &node, "pending", k2_core::compute::pkgreq::OWN, "own");
+    let v = ask_ok(&ws, "compute.packages", json!({ "request": id }));
+    let (s, a) = answer_as(&admin, &ws, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id).state, RequestState::Approved);
+    assert_eq!(pkg_rows(&id).iter().map(|r| r.state.clone()).collect::<Vec<_>>(), ["pending"]);
+    let turn = last_turn(&ws);
+    assert!(turn.contains(&format!("{name} is offline, so it waits there")), "{turn}");
+}
+
+/// A package card batches only with other package cards, never under an
+/// unrelated "Allow all", in either order.
+#[test]
+fn package_cards_batch_only_with_each_other() {
+    use k2_core::compute::pkgreq::OWN;
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pkgb");
+    let (node, _) = list_node(&ws, "pk-b", true);
+    let (a, _) = list_node(&ws, "pk-b2", true);
+    let (_, b_name) = list_node(&ws, "pk-b3", true);
+    set_list(&ws, Some(std::slice::from_ref(&a)));
+    let other = ask_ok(&ws, "compute.allow-nodes", json!({ "nodes": b_name }));
+    let first = ask_ok(&ws, "compute.packages", json!({ "request": file_pkg(&ws, &node, "pending", OWN, "own") }));
+    assert_ne!(card_of(&first), card_of(&other), "a package card never joins an unrelated card");
+    let second = ask_ok(&ws, "compute.packages", json!({ "request": file_pkg(&ws, &node, "pending", OWN, "own") }));
+    assert_eq!(card_of(&second), card_of(&first), "package cards batch with each other");
+
+    let ws2 = seed("pkgc");
+    let (node2, _) = list_node(&ws2, "pk-c", true);
+    let (c, _) = list_node(&ws2, "pk-c2", true);
+    let (_, d_name) = list_node(&ws2, "pk-c3", true);
+    set_list(&ws2, Some(std::slice::from_ref(&c)));
+    let pkg = ask_ok(&ws2, "compute.packages", json!({ "request": file_pkg(&ws2, &node2, "pending", OWN, "own") }));
+    let later = ask_ok(&ws2, "compute.allow-nodes", json!({ "nodes": d_name }));
+    assert_ne!(card_of(&later), card_of(&pkg), "an unrelated card never joins a package card");
+}
+
+/// The policy card checks its node and level: an unknown node, a node
+/// whose k2-node has no package policy yet, or an unknown level is refused.
+#[test]
+fn the_package_policy_card_checks_its_node() {
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pkgp");
+    let (_node, name) = list_node(&ws, "pk-p", true);
+    let hint = ask_refused(&ws, "compute.packages-policy", json!({ "node": name, "server": "own", "level": "official" }));
+    assert!(hint.contains("has no package policy yet"), "{hint}");
+    let hint = ask_refused(&ws, "compute.packages-policy", json!({ "node": "no-such-node", "server": "own", "level": "list" }));
+    assert!(hint.contains("no active compute node"), "{hint}");
+    let (s, v) = ask(&ws, "compute.packages-policy", json!({ "node": name, "server": "own", "level": "everything" }));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("list, profiles, official"), "{v}");
+}

@@ -1446,6 +1446,16 @@ A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat nee
 
 Save your work before you ask: once you've asked, this chat can end at any moment. Run it as printed. The owner or an admin allows it once, or from now on (that turns the switch on, and you then run `k2 agent refresh` yourself). The card makes the change: don't run it again. You won't see the approved line in this chat, because this chat ends: the new one gets a summary, your note, then the line. Denied: a `[permission:]` line says so here. To change your note: `k2 permission cancel <id>`, run `k2 agent refresh` again, and ask with its new line. `k2 study chat-refresh`.
 
+## System packages on compute nodes
+
+A job whose `--needs` asks for a system package its node's owner hasn't approved is refused with `package_not_approved` (exit 3). The refusal already filed one request for the missing names, and ends with:
+
+    k2 permission request compute.packages request=<cpr_… id> --why "<what you need it for>"
+
+Run it as printed. `k2 compute node packages request <node> <names> --why "..."` (before a job) and `k2 compute prewarm` file the same kind of request and print the same line. The owner or an admin sees exactly what installs, on which machine, the number of packages with dependencies and the size. Several of your package requests can share one card; other kinds never join it. When the `[permission:]` turn says approved, root installs them on the node, and a `[compute]` message says when it's done: then run your job again. A node another server owns is that server's owner's to decide: you hear back in a `[compute]` message, and there is nothing to ask here.
+
+What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

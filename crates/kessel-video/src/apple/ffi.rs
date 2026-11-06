@@ -231,6 +231,14 @@ extern "C" {
         pool: CVPixelBufferPoolRef,
         out: *mut CVPixelBufferRef,
     ) -> i32;
+    pub fn CVPixelBufferPoolCreate(
+        a: CFAllocatorRef,
+        pool_attributes: CFDictionaryRef,
+        pixel_buffer_attributes: CFDictionaryRef,
+        out: *mut CVPixelBufferPoolRef,
+    ) -> i32;
+    pub fn CVPixelBufferPoolFlush(pool: CVPixelBufferPoolRef, options: u64);
+    pub fn CVPixelBufferGetIOSurface(pb: CVPixelBufferRef) -> *mut c_void;
     pub fn CVPixelBufferCreate(
         a: CFAllocatorRef,
         w: usize,
@@ -347,6 +355,8 @@ pub const K_CFNUMBER_SINT64: isize = 4;
 pub const K_CFNUMBER_FLOAT64: isize = 6;
 /// `kVTEncodeInfo_FrameDropped`.
 pub const INFO_FRAME_DROPPED: u32 = 1 << 1;
+/// `kCVPixelBufferPoolFlushExcessBuffers`.
+pub const POOL_FLUSH_EXCESS: u64 = 1;
 /// `kCVPixelBufferLock_ReadOnly`.
 pub const LOCK_READ_ONLY: u64 = 1;
 /// `kCVAttachmentMode_ShouldPropagate`.

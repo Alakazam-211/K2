@@ -2,9 +2,12 @@
 
 use super::ffi::*;
 use crate::error::{invalid, VideoError};
-use crate::frame::{ColorSpace, NativeBuffer, NativeFrame, PixelFormat, Planes, VideoFrame};
+use crate::frame::{
+    ColorSpace, FrameBuffer, NativeBuffer, NativeFrame, PixelFormat, Planes, VideoFrame,
+};
+use crate::kit::lock;
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 autolink!("CoreVideo", "CoreFoundation");
 
@@ -122,14 +125,15 @@ pub(crate) fn planes_from(pb: CVPixelBufferRef) -> Result<(Planes, u32, u32), Vi
     }
 }
 
-/// Fill an NV12 pixel buffer from NV12 planes of the same size.
+/// Fill an NV12 pixel buffer from NV12 or I420 planes of the same size
+/// (I420's chroma planes are interleaved on the way in).
 pub(crate) fn fill_nv12(
     pb: CVPixelBufferRef,
     planes: &Planes,
     width: u32,
     height: u32,
 ) -> Result<(), VideoError> {
-    if planes.format != PixelFormat::Nv12 {
+    if !matches!(planes.format, PixelFormat::Nv12 | PixelFormat::I420) {
         return Err(invalid(format!("fill_nv12 with {:?}", planes.format)));
     }
     planes.validate(width, height)?;
@@ -155,8 +159,17 @@ pub(crate) fn fill_nv12(
                 break;
             }
             for y in 0..rows {
-                let src = planes.row(i, y, width, height);
-                std::ptr::copy_nonoverlapping(src.as_ptr(), base.add(y * bpr), row);
+                let dst = std::slice::from_raw_parts_mut(base.add(y * bpr), row);
+                if i == 1 && planes.format == PixelFormat::I420 {
+                    let u = planes.row(1, y, width, height);
+                    let v = planes.row(2, y, width, height);
+                    for (pair, (u, v)) in dst.chunks_exact_mut(2).zip(u.iter().zip(v)) {
+                        pair[0] = *u;
+                        pair[1] = *v;
+                    }
+                } else {
+                    dst.copy_from_slice(planes.row(i, y, width, height));
+                }
             }
         }
         CVPixelBufferUnlockBaseAddress(pb, 0);
@@ -228,8 +241,10 @@ pub(crate) unsafe fn native_frame(pb: CVPixelBufferRef, capture_us: u64) -> Vide
 }
 
 /// The `CVPixelBufferRef` inside a native frame from the Apple backend (a
-/// VideoToolbox decoder's output asked as `PixelFormat::Native`, or a
-/// camera's or screen's native frame), for handing to Apple APIs, such as
+/// VideoToolbox decoder's output asked as `PixelFormat::Native`, a
+/// camera's or screen's native frame, or any frame the backend's
+/// `convert` turned into `PixelFormat::Native`: an IOSurface-backed NV12
+/// buffer from a pool), for handing to Apple APIs, such as
 /// wrapping it in a `CMSampleBuffer` for an `AVSampleBufferDisplayLayer`.
 /// `None` for a native buffer of another kind.
 ///
@@ -289,4 +304,126 @@ pub(crate) unsafe fn cpu_frame(
     let mut v = VideoFrame::from_planes(planes, w, h, capture_us)?;
     v.color = color_of(pb);
     Ok(v)
+}
+
+/// How many pixel-buffer pools [`Pools`] keeps: one per size and range in
+/// use, so a few remote tracks of different sizes don't rebuild a pool on
+/// every frame.
+const POOLS_KEPT: usize = 4;
+
+/// A pool's size and CoreVideo pixel format (`420v` or `420f`).
+pub(crate) type PoolKey = (u32, u32, u32);
+
+/// The NV12 pixel-buffer pools behind `convert(.., PixelFormat::Native)`,
+/// most recently used first. Each pool hands out IOSurface-backed,
+/// Metal-compatible buffers, and reuses a buffer once every frame holding
+/// it is dropped.
+#[derive(Default)]
+pub(crate) struct Pools {
+    pools: Mutex<Vec<(PoolKey, Arc<Cf>)>>,
+}
+
+impl Pools {
+    /// The pool for `key`, made on first use. A new pool (a size change)
+    /// also lets the others release their idle buffers.
+    fn pool(&self, key: PoolKey) -> Result<Arc<Cf>, VideoError> {
+        let mut pools = lock(&self.pools);
+        if let Some(i) = pools.iter().position(|(k, _)| *k == key) {
+            let entry = pools.remove(i);
+            let pool = entry.1.clone();
+            pools.insert(0, entry);
+            return Ok(pool);
+        }
+        let (w, h, pix) = key;
+        let attrs = pixel_buffer_attributes(pix, Some((w, h)));
+        set_named(&attrs, c"kCVPixelBufferMetalCompatibilityKey", yes());
+        let mut pool: CVPixelBufferPoolRef = std::ptr::null_mut();
+        // SAFETY: a valid attributes dictionary (no pool attributes) and an
+        // out pointer.
+        let st = unsafe {
+            CVPixelBufferPoolCreate(std::ptr::null(), std::ptr::null(), attrs.0, &mut pool)
+        };
+        if st != 0 || pool.is_null() {
+            return Err(VideoError::os(
+                st as i64,
+                format!("CVPixelBufferPoolCreate for {w}x{h}"),
+            ));
+        }
+        let pool = Arc::new(Cf(pool as CFTypeRef));
+        for (_, old) in pools.iter() {
+            // SAFETY: a live pool we hold.
+            unsafe { CVPixelBufferPoolFlush(old.0 as CVPixelBufferPoolRef, POOL_FLUSH_EXCESS) };
+        }
+        pools.insert(0, (key, pool.clone()));
+        pools.truncate(POOLS_KEPT);
+        Ok(pool)
+    }
+
+    /// `frame` at `width` x `height` as a native frame. A CVPixelBuffer
+    /// frame of that size passes through (BGRA too). Anything else is
+    /// scaled and converted on the CPU when it needs to be, then copied
+    /// into an NV12 buffer from a pool and tagged with the frame's colour
+    /// (`420f` for full range, `420v` otherwise).
+    pub(crate) fn native(
+        &self,
+        frame: &VideoFrame,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoError> {
+        if width == 0 || height == 0 || width > 16_384 || height > 16_384 {
+            return Err(invalid(format!("convert to {width}x{height}")));
+        }
+        let same_size = (width, height) == (frame.width, frame.height);
+        let converted;
+        let planes = match &frame.buffer {
+            FrameBuffer::Native(n) if same_size && n.0.as_any().is::<CvFrame>() => {
+                return Ok(frame.clone());
+            }
+            FrameBuffer::Planes(p)
+                if same_size && matches!(p.format, PixelFormat::I420 | PixelFormat::Nv12) =>
+            {
+                p
+            }
+            _ => {
+                converted = crate::convert::convert(frame, width, height, PixelFormat::Nv12)?;
+                match &converted.buffer {
+                    FrameBuffer::Planes(p) => p,
+                    FrameBuffer::Native(_) => return Err(invalid("convert gave a native buffer")),
+                }
+            }
+        };
+        let pix = if frame.color == ColorSpace::Bt709Full {
+            PIX_420F
+        } else {
+            PIX_420V
+        };
+        let pool = self.pool((width, height, pix))?;
+        let mut pb: CVPixelBufferRef = std::ptr::null_mut();
+        // SAFETY: a live pool; an out pointer.
+        let st = unsafe {
+            CVPixelBufferPoolCreatePixelBuffer(
+                std::ptr::null(),
+                pool.0 as CVPixelBufferPoolRef,
+                &mut pb,
+            )
+        };
+        if st != 0 || pb.is_null() {
+            return Err(VideoError::os(st as i64, "no pixel buffer from the pool"));
+        }
+        let owned = Cf(pb as CFTypeRef);
+        fill_nv12(pb, planes, width, height)?;
+        tag_color(pb, frame.color);
+        // SAFETY: a live pixel buffer, held by `owned` until the frame has
+        // its own retain.
+        let mut out = unsafe { native_frame(pb, frame.capture_us) };
+        drop(owned);
+        out.color = frame.color;
+        Ok(out)
+    }
+
+    /// The pools held, most recently used first (tests).
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> Vec<(PoolKey, CFTypeRef)> {
+        lock(&self.pools).iter().map(|(k, p)| (*k, p.0)).collect()
+    }
 }

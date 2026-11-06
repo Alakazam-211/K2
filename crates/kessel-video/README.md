@@ -60,7 +60,7 @@ caller has already decrypted and verified.
 | Frame-in | `frame_in()` makes a `FrameSource` that the host feeds: CPU frames or native buffers (a CVPixelBuffer through `pixel_buffer_frame`, an AHardwareBuffer through `hardware_buffer_frame`), each with its timestamp and the quarter turn that makes it upright. Same queue, rate, size box and events as any source, and it never pauses for the app's background. Phone screen sharing comes in this way on iOS. |
 | Codecs | Codec-neutral: VP8 as raw RFC 6386 frames, H.264 as one Annex B access unit with 4-byte start codes and SPS and PPS before every IDR. Real time: no reordering, no B-frames, one output per input at most, `set_rates` never forces a keyframe, `capture_us` passes through. |
 | VP8 | `vp8-encoder` and `vp8-decoder` (feature `vp8`, part of `system`) in every backend, the fake included: real time, L1T2 and L1T3 temporal layers, one encoder per simulcast layer. |
-| Pixels | I420, NV12, BGRA and RGBA, with conversion and scaling on the CPU (`convert`), and OS-native buffers (`NativeFrame`) that pass from a source to an encoder of the same backend without a copy. |
+| Pixels | I420, NV12, BGRA and RGBA, with conversion and scaling on the CPU (`convert`), and OS-native buffers (`NativeFrame`) that pass from a source to an encoder of the same backend without a copy. On macOS and iOS, `convert` to `Native` makes pooled, IOSurface-backed NV12 pixel buffers from CPU planes, for a display layer. |
 | Capability query | Per codec, direction and implementation: hardware or software, the largest size and rate, how many may be open at once, temporal layers, H.264 profiles and level, pixel formats. |
 
 ### Screens by platform

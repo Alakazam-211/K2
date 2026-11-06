@@ -131,6 +131,12 @@ pub trait VideoBackend: Send + Sync + 'static {
     ) -> Result<Box<dyn VideoDecoder>, VideoError>;
 
     /// Scale and convert a frame.
+    ///
+    /// To `PixelFormat::Native`: the Apple backend gives a CVPixelBuffer
+    /// (see `apple_pixel_buffer`), copying CPU planes into an
+    /// IOSurface-backed NV12 buffer from a pool; a pixel buffer that
+    /// already has the size passes through. The other backends answer
+    /// `Invalid`.
     fn convert(
         &self,
         frame: &VideoFrame,

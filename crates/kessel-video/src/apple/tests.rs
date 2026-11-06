@@ -654,6 +654,218 @@ fn vp8_round_trips_through_the_apple_backend() {
     }
 }
 
+// ─────────────────────── convert to native buffers ───────────────────────
+
+/// The CVPixelBuffer inside a native frame from this backend.
+fn pixel_buffer_of(f: &VideoFrame) -> ffi::CVPixelBufferRef {
+    let crate::frame::FrameBuffer::Native(n) = &f.buffer else {
+        panic!("a native frame, not {:?}", f.format());
+    };
+    let pb = crate::apple_pixel_buffer(n).expect("a CVPixelBuffer");
+    assert!(!pb.is_null());
+    pb
+}
+
+/// A pixel buffer's size, CoreVideo format and IOSurface (or null).
+fn describe(pb: ffi::CVPixelBufferRef) -> (usize, usize, u32, *mut std::ffi::c_void) {
+    // SAFETY: a live pixel buffer (its frame is held by the caller).
+    unsafe {
+        (
+            ffi::CVPixelBufferGetWidth(pb),
+            ffi::CVPixelBufferGetHeight(pb),
+            ffi::CVPixelBufferGetPixelFormatType(pb),
+            ffi::CVPixelBufferGetIOSurface(pb),
+        )
+    }
+}
+
+/// `convert(.., Native)` turns CPU planes into an IOSurface-backed NV12
+/// CVPixelBuffer holding the same pixels, with the frame's range and
+/// matrix; scales first when the size changes; and passes a pixel buffer
+/// of the right size through.
+#[test]
+fn convert_to_native_gives_iosurface_nv12_pixel_buffers() {
+    use crate::frame::ColorSpace;
+    let b = backend().expect("backend");
+    let i420 = pattern_frame(320, 240, 0x1234_5678, 77).expect("frame");
+    let nv12 = crate::convert::convert(&i420, 320, 240, PixelFormat::Nv12).expect("nv12");
+
+    for src in [&i420, &nv12] {
+        let n = b
+            .convert(src, 320, 240, PixelFormat::Native)
+            .expect("to native");
+        assert_eq!(n.format(), PixelFormat::Native);
+        assert_eq!((n.width, n.height, n.capture_us), (320, 240, 77));
+        assert_eq!(n.color, ColorSpace::Bt601Limited);
+        let pb = pixel_buffer_of(&n);
+        let (w, h, pix, surface) = describe(pb);
+        assert_eq!((w, h), (320, 240));
+        assert_eq!(pix, ffi::PIX_420V, "NV12, video range");
+        assert!(!surface.is_null(), "IOSurface-backed");
+        // SAFETY: a live pixel buffer, held by `n`.
+        let back = unsafe { pixel::cpu_frame(pb, 0) }.expect("read back");
+        assert_eq!(back.planes(), nv12.planes(), "the same pixels");
+        assert_eq!(back.color, ColorSpace::Bt601Limited);
+        assert_eq!(read_frame_code(&n), Some(0x1234_5678));
+    }
+
+    // Odd sizes: chroma rounds up.
+    let odd = pattern_frame(33, 17, 5, 0).expect("odd");
+    let n = b.convert(&odd, 33, 17, PixelFormat::Native).expect("odd");
+    // SAFETY: a live pixel buffer, held by `n`.
+    let back = unsafe { pixel::cpu_frame(pixel_buffer_of(&n), 0) }.expect("read back");
+    let want = crate::convert::convert(&odd, 33, 17, PixelFormat::Nv12).expect("nv12");
+    assert_eq!(back.planes(), want.planes());
+
+    // RGB goes through the CPU conversion first.
+    let bgra = crate::convert::convert(&i420, 320, 240, PixelFormat::Bgra).expect("bgra");
+    let n = b.convert(&bgra, 320, 240, PixelFormat::Native).expect("bgra");
+    assert_eq!(describe(pixel_buffer_of(&n)).2, ffi::PIX_420V);
+    let p = crate::convert::psnr_y(&i420, &n).expect("psnr");
+    assert!(p > 40.0, "BGRA to native: {p:.1} dB");
+
+    // Range and matrix: full range is 420f; the matrix is an attachment.
+    for (color, want_pix) in [
+        (ColorSpace::Bt709Full, ffi::PIX_420F),
+        (ColorSpace::Bt709Limited, ffi::PIX_420V),
+        (ColorSpace::Bt601Limited, ffi::PIX_420V),
+    ] {
+        let mut f = i420.clone();
+        f.color = color;
+        let n = b.convert(&f, 320, 240, PixelFormat::Native).expect("native");
+        assert_eq!(n.color, color);
+        let pb = pixel_buffer_of(&n);
+        assert_eq!(describe(pb).2, want_pix, "{color:?}");
+        assert_eq!(pixel::color_of(pb), color, "read back from the buffer");
+    }
+
+    // Another size: scaled on the CPU, then wrapped.
+    let half = b.convert(&i420, 160, 120, PixelFormat::Native).expect("half");
+    let pb = pixel_buffer_of(&half);
+    assert_eq!(describe(pb).0, 160);
+    assert_eq!(describe(pb).1, 120);
+    // SAFETY: a live pixel buffer, held by `half`.
+    let back = unsafe { pixel::cpu_frame(pb, 0) }.expect("read back");
+    let want = crate::convert::convert(&i420, 160, 120, PixelFormat::Nv12).expect("scaled");
+    assert_eq!(back.planes(), want.planes());
+
+    // Native to native: the same size passes through; another size is a
+    // new, scaled buffer.
+    let n = b.convert(&i420, 320, 240, PixelFormat::Native).expect("native");
+    let same = b.convert(&n, 320, 240, PixelFormat::Native).expect("same");
+    assert_eq!(pixel_buffer_of(&same), pixel_buffer_of(&n), "passed through");
+    let small = b.convert(&n, 160, 120, PixelFormat::Native).expect("small");
+    assert_ne!(pixel_buffer_of(&small), pixel_buffer_of(&n));
+    let (w, h, pix, surface) = describe(pixel_buffer_of(&small));
+    assert_eq!((w, h, pix), (160, 120, ffi::PIX_420V));
+    assert!(!surface.is_null());
+    assert_eq!(read_frame_code(&small), read_frame_code(&half));
+
+    // A native frame from convert goes into VideoToolbox without a copy.
+    let mut enc = b
+        .encoder(EncoderConfig::h264(320, 240, 30, 400_000), no_wake())
+        .expect("encoder");
+    let e = encode_one(&mut enc, &n, EncodeOptions::default()).expect("out");
+    check_bitstream(&e);
+    assert_eq!(e.capture_us, 77);
+
+    assert!(matches!(
+        b.convert(&i420, 0, 240, PixelFormat::Native),
+        Err(VideoError::Invalid(_))
+    ));
+    // The other formats still come back as CPU planes.
+    let p = b.convert(&n, 320, 240, PixelFormat::I420).expect("i420");
+    assert_eq!(p.format(), PixelFormat::I420);
+    assert_eq!(read_frame_code(&p), Some(0x1234_5678));
+}
+
+/// The pools behind `convert(.., Native)`: one per size and range, reused
+/// from frame to frame, a new one on a size change, at most four kept.
+#[test]
+fn native_pools_are_reused_and_rebuilt_on_a_size_change() {
+    let pools = pixel::Pools::default();
+    let frame = |w, h| pattern_frame(w, h, 9, 0).expect("frame");
+    let a = pools.native(&frame(64, 48), 64, 48).expect("a");
+    let held = pools.held();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].0, (64, 48, ffi::PIX_420V));
+    let first = held[0].1;
+    for _ in 0..5 {
+        let f = pools.native(&frame(64, 48), 64, 48).expect("again");
+        assert_eq!(describe(pixel_buffer_of(&f)).0, 64);
+    }
+    assert_eq!(pools.held(), vec![((64, 48, ffi::PIX_420V), first)], "reused");
+    drop(a);
+
+    // A size change: a new pool, in front.
+    let b = pools.native(&frame(96, 64), 96, 64).expect("b");
+    assert_eq!(describe(pixel_buffer_of(&b)).0, 96);
+    let held = pools.held();
+    assert_eq!(held.len(), 2);
+    assert_eq!(held[0].0, (96, 64, ffi::PIX_420V));
+    assert_ne!(held[0].1, first, "a new pool");
+    // Back to the first size: its pool again.
+    pools.native(&frame(64, 48), 64, 48).expect("back");
+    assert_eq!(pools.held()[0], ((64, 48, ffi::PIX_420V), first));
+    // Full range is its own pool.
+    let mut full = frame(64, 48);
+    full.color = crate::frame::ColorSpace::Bt709Full;
+    pools.native(&full, 64, 48).expect("full");
+    assert_eq!(pools.held()[0].0, (64, 48, ffi::PIX_420F));
+    // At most four.
+    for (w, h) in [(32, 32), (48, 32), (80, 60)] {
+        pools.native(&frame(w, h), w, h).expect("more");
+    }
+    let held = pools.held();
+    assert_eq!(held.len(), 4);
+    assert_eq!(held[0].0, (80, 60, ffi::PIX_420V));
+    assert!(held.iter().all(|(k, _)| *k != (96, 64, ffi::PIX_420V)));
+}
+
+/// VP8 decoded on the CPU, then handed out as pixel buffers: Sew's
+/// picture-in-picture path.
+#[cfg(feature = "vp8")]
+#[test]
+fn vp8_decodes_into_native_pixel_buffers() {
+    let b = backend().expect("backend");
+    let mut enc = b
+        .encoder(
+            EncoderConfig::new(CodecConfig::Vp8, 320, 180, 30, 400_000),
+            no_wake(),
+        )
+        .expect("VP8 encoder");
+    let mut dec = b
+        .decoder(DecoderConfig::new(VideoCodec::Vp8), no_wake())
+        .expect("VP8 decoder");
+    let mut buffers = Vec::new();
+    for n in 0..10u32 {
+        let f = pattern_frame(320, 180, n, n as u64 * 33_333).expect("frame");
+        let Some(e) = encode_one(&mut enc, &f, EncodeOptions::default()) else {
+            continue;
+        };
+        let out = decode_one(
+            &mut dec,
+            EncodedInput::new(VideoCodec::Vp8, e.data.clone(), e.keyframe, e.capture_us),
+        );
+        assert_eq!(out.format(), PixelFormat::I420);
+        let native = b
+            .convert(&out, out.width, out.height, PixelFormat::Native)
+            .expect("to native");
+        assert_eq!(native.capture_us, n as u64 * 33_333);
+        let (w, h, pix, surface) = describe(pixel_buffer_of(&native));
+        assert_eq!((w, h, pix), (320, 180, ffi::PIX_420V));
+        assert!(!surface.is_null());
+        assert_eq!(read_frame_code(&native), Some(n));
+        // Half size for a small window.
+        let small = b
+            .convert(&out, 160, 90, PixelFormat::Native)
+            .expect("small");
+        assert_eq!(describe(pixel_buffer_of(&small)).0, 160);
+        buffers.push(native);
+    }
+    assert!(buffers.len() >= 8, "{} of 10 frames", buffers.len());
+}
+
 /// Received H.264 goes into VideoToolbox: mutated, truncated and random
 /// access units give an error or a frame, never a panic or a hang, and a
 /// clean keyframe decodes after a reset. Seeded, so the same every run.

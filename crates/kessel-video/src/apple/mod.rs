@@ -142,6 +142,7 @@ pub(crate) fn backend() -> Result<Arc<dyn VideoBackend>, VideoError> {
     Ok(Arc::new(AppleBackend {
         inner,
         monitor: Mutex::new(Some(monitor)),
+        pools: pixel::Pools::default(),
         #[cfg(target_os = "ios")]
         _app_state: app_state,
     }))
@@ -155,6 +156,8 @@ struct Inner {
 struct AppleBackend {
     inner: Arc<Inner>,
     monitor: Mutex<Option<JoinHandle<()>>>,
+    /// The pixel-buffer pools behind `convert` to `Native`.
+    pools: pixel::Pools,
     /// Kept alive while the backend lives (the app-state list holds it
     /// weakly).
     #[cfg(target_os = "ios")]
@@ -474,6 +477,11 @@ impl VideoBackend for AppleBackend {
         format: PixelFormat,
     ) -> Result<VideoFrame, VideoError> {
         self.live()?;
+        // Native here is a CVPixelBuffer: NV12 from a pool for CPU planes,
+        // the frame itself when it already is one of this size.
+        if format == PixelFormat::Native {
+            return self.pools.native(frame, width, height);
+        }
         crate::convert::convert(frame, width, height, format)
     }
 

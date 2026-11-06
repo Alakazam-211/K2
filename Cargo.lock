@@ -3083,6 +3083,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "graviola"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1a15622a211648cbf64f485e0369791466d133eb6578fd99e4a61230c88a6aa"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.4.3",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4327,6 +4337,7 @@ dependencies = [
  "criterion",
  "dirs 5.0.1",
  "dunce",
+ "graviola",
  "ignore",
  "image",
  "k2-client",
@@ -4345,8 +4356,10 @@ dependencies = [
  "objc2-web-kit",
  "parking_lot",
  "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "rusqlite",
  "rustls 0.23.46",
+ "rustls-graviola",
  "security-framework 3.7.0",
  "serde",
  "serde_json",
@@ -8010,6 +8023,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-graviola"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf5d0a370be690f7f1aa4e1b912fde3f5f9a5c53285062fd2d6ac1a52ab3e883"
+dependencies = [
+ "graviola",
+ "rustls 0.23.46",
+]
+
+[[package]]
 name = "rustls-native-certs"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9844,7 +9867,6 @@ dependencies = [
  "osakit",
  "percent-encoding",
  "reqwest 0.13.2",
- "rustls 0.23.46",
  "semver",
  "serde",
  "serde_json",

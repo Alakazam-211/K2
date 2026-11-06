@@ -59,6 +59,8 @@ mod window;
 // `sendEvent:` (`~/.k2/client-event-faults.log`).
 #[cfg(target_os = "macos")]
 mod event_faults;
+// The process-wide rustls provider (graviola) and the CPU check before it.
+pub mod tls_provider;
 
 use tauri::Manager;
 
@@ -940,10 +942,11 @@ pub fn run() {
         Err(e) => eprintln!("[boot] home migration failed: {e} — continuing on legacy layout"),
     }
 
-    // Rustls 0.23 compiles both aws-lc-rs (via reqwest rustls-tls) and ring
-    // (via ngrok) into the binary; it refuses to auto-pick and panics on
-    // first TLS use unless a provider is explicitly installed.
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    // TLS provider (Kessel Steward R9, R10). `main` already did this before
+    // anything else; this is a no-op guard for any other way into `run`.
+    // graviola after a CPU check, or a "processor isn't supported" message
+    // and exit, before any TLS. See tls_provider.rs.
+    tls_provider::install_or_exit();
 
     // Phase 2 Unit 1 — companion settings bridge moved to
     // k2so-daemon. The daemon now reads settings.json directly via

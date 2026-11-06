@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.1.2
+
+Fixes linking the Apple backend into an app through a static library, and
+gives screen thumbnails their size. Nothing in 0.1.1's API changes.
+
+### Apple frameworks in a static library's link
+
+- An iOS app that linked kessel-video inside its Rust static library (Tauri
+  on iOS: Xcode links `libapp.a`) failed with VideoToolbox's session calls
+  undefined. The `#[link]` attributes were there, but rustc passes them only
+  to links it runs itself; for a static library it just prints them as
+  `native-static-libs`, and Xcode never reads that list.
+- The Apple backend now also writes its frameworks into its object code as
+  linker options (`LC_LINKER_OPTION`, what Clang writes for `@import`), so
+  the app's linker adds them on its own: AVFoundation, CoreFoundation,
+  CoreMedia, CoreVideo, Foundation and VideoToolbox. Apps need no extra
+  framework settings for kessel-video. ScreenCaptureKit and CoreGraphics
+  are still opened at run time.
+- Foundation is now linked by name too: its classes were looked up at run
+  time and only loaded because AVFoundation pulls it in.
+- `examples/link_check.rs` with `scripts/check-apple-link.sh` links the
+  crate as such an app does (a static library, `cc`, no `-framework` flags)
+  and runs it on macOS, and for iOS links it with an iPhoneOS SDK or checks
+  the archive's undefined symbols against its linker options.
+  `scripts/check-android-link.sh` also links it as a shared library with no
+  undefined symbols allowed. These are repository checks, not in the
+  package.
+
+### Screen thumbnails
+
+- `ScreenSourceInfo` has `thumbnail_width` and `thumbnail_height` beside
+  `thumbnail`, `with_thumbnail(planes, width, height)` (RGBA, at most 320
+  px wide, checked against the planes) and `thumbnail_size()`. A thumbnail
+  with padded rows no longer has its size guessed from the stride.
+- No backend makes thumbnails yet; the fields are 0 and `thumbnail` is
+  `None` from `ScreenSourceInfo::new`.
+
 ## 0.1.1
 
 Adds the iOS and Android backends, VideoToolbox H.264 decoding and frame-in

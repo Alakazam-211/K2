@@ -103,6 +103,8 @@ describe('parsing the plugin shapes', () => {
     // A backend whose receive and send aren't wired yet: every other command would answer video_unsupported.
     expect(videoUsable({ ...caps, receive: false, publishCodecs: [] })).toBe(false)
     expect(videoUsable({ ...caps, receive: false, camera: false, screen: { ...caps.screen, supported: false } })).toBe(false)
+    // No capture backend on this machine: receive only, backend null (Sew's real engine).
+    expect(videoUsable({ ...parseVideoCaps(contract.videoCapsWithoutVideo), receive: true })).toBe(true)
   })
 
   it('reads the video list, paused and muted tracks included', () => {

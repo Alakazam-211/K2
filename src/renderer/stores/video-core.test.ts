@@ -89,7 +89,19 @@ describe('the gate', () => {
   })
 
   it("says unavailable for a build without video (backend 'null'), and sends nothing else", async () => {
-    const engine = new FakeVideoEngine({ caps: { camera: false, backend: 'null' } })
+    // Sew's answer without video: everything off.
+    const engine = new FakeVideoEngine({
+      caps: {
+        camera: false,
+        screen: { supported: false, systemPicker: false, list: false, windows: false },
+        publishCodecs: [],
+        decodeCodecs: [],
+        receive: false,
+        selfView: false,
+        liveSwitch: false,
+        backend: 'null',
+      },
+    })
     const s = setup(engine)
     s.ctl.setActive({ enabled: true, inCall: true })
     await settle()

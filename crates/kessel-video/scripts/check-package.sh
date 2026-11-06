@@ -11,6 +11,9 @@ echo "== files in the package"
 cargo package -p kessel-video --list
 echo "== cargo publish --dry-run"
 cargo publish -p kessel-video --dry-run
+# publish keeps its .crate elsewhere; write it where `cargo package` does
+# (already verified above).
+cargo package -p kessel-video --no-verify
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/kessel-video/Cargo.toml | head -n 1)
 target=${CARGO_TARGET_DIR:-target}
 work=$(mktemp -d)

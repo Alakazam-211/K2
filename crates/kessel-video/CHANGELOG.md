@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.3
+
+The Apple backend's `convert` makes native frames from CPU planes. Nothing
+in 0.1.2's API changes.
+
+### `convert` to `PixelFormat::Native` on macOS and iOS
+
+- Before, the Apple backend's `convert(frame, w, h, PixelFormat::Native)`
+  answered `Invalid` for every frame, so CPU-decoded video (VP8) had no way
+  to become a CVPixelBuffer for an `AVSampleBufferDisplayLayer`.
+- Now CPU planes (I420, NV12, BGRA or RGBA) become an NV12 CVPixelBuffer,
+  which `apple_pixel_buffer` hands out. I420 and NV12 of the asked size are
+  copied straight in; other formats and other sizes are converted and
+  scaled on the CPU first.
+- The buffers come from a `CVPixelBufferPool` per size and range, reused
+  from frame to frame. A buffer goes back to its pool once every frame
+  holding it is dropped. The backend keeps the four most recently used
+  pools, and a new pool (a size change) lets the others release their idle
+  buffers.
+- Each buffer is IOSurface-backed (a display layer takes it without a
+  copy) and Metal-compatible.
+- Colour: `Bt709Full` frames get full-range buffers (`420f`), the others
+  video range (`420v`), and every buffer carries the frame's matrix,
+  primaries and transfer function as attachments.
+- A native frame that already has the asked size passes through
+  unchanged. At another size it is read back, scaled on the CPU and copied
+  into a pooled buffer.
+- Other formats, and the other backends, are unchanged: they still answer
+  `Invalid` for `Native`.
+
 ## 0.1.2
 
 Fixes linking the Apple backend into an app through a static library, and

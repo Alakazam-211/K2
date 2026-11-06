@@ -39,9 +39,10 @@ export const NO_VIDEO_BACKEND = 'null'
 
 /** This build can show or send video: the engine receives, or it can send a
  *  camera or a screen in a codec it encodes. Otherwise the room stays voice
- *  only (a plugin built without video, or one whose video isn't wired yet). */
+ *  only (a plugin built without video, or one whose video isn't wired yet).
+ *  The backend alone doesn't decide: an engine with no capture backend still
+ *  receives (backend `null`, `receive` true; the webview decodes). */
 export function videoUsable(caps: VideoCaps): boolean {
-  if (caps.backend === NO_VIDEO_BACKEND) return false
   const send = (caps.camera || caps.screen.supported) && caps.publishCodecs.length > 0
   return caps.receive || send
 }

@@ -285,6 +285,32 @@ fn the_renderers_video_contract_file_matches_the_plugin() {
     assert_eq!(f["reasons"], json!(reasons));
 }
 
+/// The headless smoke of `video_caps` on the machine that runs the tests: Sew's
+/// real engine, as K2's build has it (the plugin's `video` feature: this OS's
+/// capture backend). No call, no camera opened, no prompt.
+#[test]
+fn the_real_engine_has_video_on_this_os() {
+    use tauri_plugin_sew_voice::sew_call_client::ClientConfig;
+    use tauri_plugin_sew_voice::VoiceEngine;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let engine = tauri_plugin_sew_voice::real::CallClientEngine::with_mls(ClientConfig::new("dev.k2.video-caps-test", dir.path().to_path_buf()));
+    let caps = engine.video_caps();
+    eprintln!("video_caps on this machine: {}", serde_json::to_string(&caps).expect("json"));
+    assert!(caps.receive, "K2's build receives video: {caps:?}");
+    if cfg!(target_os = "macos") {
+        assert_eq!(caps.backend, "apple", "{caps:?}");
+        assert!(caps.camera && caps.self_view && caps.live_switch, "{caps:?}");
+        assert!(caps.screen.supported && caps.screen.list && caps.screen.windows, "ScreenCaptureKit lists displays and windows: {caps:?}");
+        assert!(caps.publish_codecs.contains(&tauri_plugin_sew_voice::VideoCodec::Vp8), "{caps:?}");
+        assert!(caps.decode_codecs.contains(&tauri_plugin_sew_voice::VideoCodec::Vp8), "{caps:?}");
+    }
+    if cfg!(target_os = "linux") {
+        // A server with no session bus may have no capture backend: still receive.
+        assert!(caps.backend == "linux" || caps.backend == "null", "{caps:?}");
+        assert!(!caps.decode_codecs.contains(&tauri_plugin_sew_voice::VideoCodec::H264), "Linux has no OS H.264: {caps:?}");
+    }
+}
+
 /// Lane C's `POST /cli/voice/join` answer around Sew's `VoiceJoinResponse`.
 fn daemon_answer() -> Value {
     json!({

@@ -16,7 +16,10 @@
 # step's temp HOME/TMPDIR are made writable, then removed.
 #   (a) 200x loops of the known-flaky groups, under CPU load
 #   (b) shuffled full runs of both unit-test binaries, seeds 1..10
-#   (c) one full `cargo test` of both crates under CPU load
+#   (c) one full run of both crates under CPU load: `cargo test`, except
+#       k2-daemon's integration tests, which run under cargo-nextest
+#       (profile soak): the grouped binaries need a process per test (see
+#       crates/k2-daemon/tests/support/env.rs)
 # Prints one line per item and exits non-zero if any run failed. Failing
 # runs' logs are kept under <workdir>/logs; the target and src are removed
 # unless K2_SOAK_KEEP=1.
@@ -197,6 +200,11 @@ load_on()  { for _ in $(seq 1 "$LOAD"); do yes > /dev/null & BURNERS+=($!); done
 load_off() { [ ${#BURNERS[@]} -gt 0 ] && kill "${BURNERS[@]}" 2>/dev/null; wait "${BURNERS[@]}" 2>/dev/null; BURNERS=(); }
 trap load_off EXIT
 
+# k2-daemon's integration tests run under cargo-nextest in (c): refuse to
+# start without it rather than skip them.
+( cd "$SRC" && STEP=nextest-version clean "$CARGO_BIN" nextest --version ) > "$LOGS/nextest-version.log" 2>&1 \
+  || { echo "cargo-nextest is not installed next to cargo (see $LOGS/nextest-version.log)"; exit 2; }
+
 # Build every test binary once and record the paths we loop.
 echo "soak: building $FULL_SHA"
 ( cd "$SRC" && STEP=build-core clean "$CARGO_BIN" test -p k2-core --no-run ) > "$LOGS/build-core.log" 2>&1 || { echo "build failed (core)"; exit 1; }
@@ -236,9 +244,18 @@ loop core-home-locks   "$CORE"   skin:: wiki_public_chat:: terminal::ensure_cli:
 loop daemon-spawnqueue "$DAEMON" spawn_queue:: sandbox_quota:: --test-threads="$THREADS"
 loop daemon-home-race  "$DAEMON" boot_verifier subscription_usage:: --test-threads="$THREADS"
 loop daemon-latent     "$DAEMON" sql:: federation_routes:: tunnel_tls_listener:: remote_session_routes:: --test-threads="$THREADS"
-for t in login_lock_clear agents_routes_integration triage_integration tunnel_disable_unpair_integration zen_headless_integration; do
+# Integration tests: "<binary>", or "<group binary>/<module>" for a module of
+# a grouped binary (crates/k2-daemon/tests/it_*), looped with a `<module>::`
+# filter so the process holds the same tests its own binary did. A binary
+# missing from the build fails the soak instead of skipping its loop.
+for spec in login_lock_clear agents_routes_integration triage_integration tunnel_disable_unpair_integration zen_headless_integration; do
+  t=${spec%%/*}; filter=()
+  [ "$spec" != "$t" ] && filter=("${spec#*/}::")
   b=$(bin_of "$t")
-  [ -n "$b" ] && loop "$t" "$b" --test-threads="$THREADS"
+  if [ -z "$b" ]; then
+    echo "loop $spec: FAILED, no test binary $t in the build"; STATUS=1; continue
+  fi
+  loop "${spec//\//-}" "$b" ${filter[@]+"${filter[@]}"} --test-threads="$THREADS"
 done
 load_off
 
@@ -256,13 +273,23 @@ done
 
 # (c) the whole suite once under load
 load_on
-for pkg in k2-core k2-daemon; do
-  if ( cd "$SRC" && STEP="loaded-$pkg" clean "$CARGO_BIN" test -p "$pkg" --no-fail-fast ) > "$LOGS/loaded-$pkg.log" 2>&1; then
-    echo "loaded full $pkg: ok"
+# loaded <name> <cargo args>: one full run; names libtest's and nextest's
+# failed tests.
+loaded() {
+  local name=$1; shift
+  if ( cd "$SRC" && STEP="loaded-$name" clean "$CARGO_BIN" "$@" ) > "$LOGS/loaded-$name.log" 2>&1; then
+    echo "loaded full $name: ok"
   else
-    echo "loaded full $pkg: FAILED $(grep -h '^test .* FAILED$' "$LOGS/loaded-$pkg.log" | sort -u | tr '\n' ' ')"; STATUS=1
+    echo "loaded full $name: FAILED $( {
+      grep -h '^test .* FAILED$' "$LOGS/loaded-$name.log"
+      grep -h -E '^ *(FAIL|TIMEOUT|ABORT|SIG[A-Z]+|LEAK-FAIL) +\[' "$LOGS/loaded-$name.log" \
+        | sed -E 's/^ *[A-Z-]+ +\[[^]]*\] +(\( *[0-9]+\/ *[0-9]+\) +)?//'
+    } | sort -u | tr '\n' ' ')"; STATUS=1
   fi
-done
+}
+loaded k2-core test -p k2-core --no-fail-fast
+loaded k2-daemon test -p k2-daemon --lib --bins --no-fail-fast
+loaded k2-daemon-integration nextest run --profile soak -p k2-daemon -E 'kind(test)' --no-fail-fast
 load_off
 
 LEFT=$(awk '{ s += $1 } END { print s + 0 }' "$LOGS/leftover-counts" 2> /dev/null || echo 0)

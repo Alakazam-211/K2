@@ -7,7 +7,11 @@
 # tree), builds with its own CARGO_TARGET_DIR, and runs
 #   cargo build -p k2-ptyd --bins   (the ptyd suites exec its binaries)
 #   cargo test -p k2-core   --no-fail-fast
-#   cargo test -p k2-daemon --no-fail-fast
+#   cargo test -p k2-daemon --lib --bins --no-fail-fast   (unit tests)
+#   cargo nextest run --profile ci -p k2-daemon -E 'kind(test)' --no-fail-fast
+#                                   (integration tests: the grouped binaries
+#                                   need a process per test, see
+#                                   crates/k2-daemon/tests/support/env.rs)
 # under a clean `env -i` (HOME and TMPDIR = fresh temp dirs, no SHELL, no
 # K2_*/K2SO_* vars). As root it also runs the root-only ignored tests on the
 # allowlist (live nft check).
@@ -22,7 +26,7 @@
 #   K2_GATE_DEBUG        cargo debuginfo level for the test build (default 0;
 #                        panics still carry file:line and messages)
 #   K2_GATE_KEEP=1       keep the workdir (logs, target) after the run
-#   K2_GATE_THREADS      --test-threads (default: libtest's choice)
+#   K2_GATE_THREADS      --test-threads (default: libtest's and nextest's choice)
 #   K2_GATE_REALPG_PORT / K2_GATE_REALPG_SOCK / K2_GATE_REALPG_BIN
 #                        a throwaway Postgres 16 cluster (TCP port, socket dir,
 #                        bin dir with psql): set all three and the gate RUNS
@@ -95,6 +99,8 @@ CARGO_HOME_DIR=${CARGO_HOME:-$HOME/.cargo}
 RUSTUP_HOME_DIR=${RUSTUP_HOME:-$HOME/.rustup}
 THREAD_ARGS=()
 [ -n "${K2_GATE_THREADS:-}" ] && THREAD_ARGS=(-- "--test-threads=$K2_GATE_THREADS")
+NEXTEST_THREAD_ARGS=()
+[ -n "${K2_GATE_THREADS:-}" ] && NEXTEST_THREAD_ARGS=(--test-threads "$K2_GATE_THREADS")
 
 # Run cargo in a clean environment: only what the toolchain needs, a fresh
 # HOME and TMPDIR per package, no SHELL, no K2_* / K2SO_* variables.
@@ -125,13 +131,33 @@ if ! clean_cargo "$LOGS/build-ptyd.log" build -p k2-ptyd --bins; then
   echo "gate: k2-ptyd bins failed to build (see $LOGS/build-ptyd.log)"
   STATUS=1
 fi
-for pkg in k2-core k2-daemon; do
-  echo "gate: cargo test -p $pkg --no-fail-fast"
-  if ! clean_cargo "$LOGS/$pkg.log" test -p "$pkg" --no-fail-fast "${THREAD_ARGS[@]}"; then
-    STATUS=1
-  fi
-  echo "gate: $pkg done (exit $([ $STATUS -eq 0 ] && echo 0 || echo non-zero so far), free $(avail_gb "$WORK")G)"
-done
+# k2-daemon's integration tests are grouped binaries that need a process
+# per test, so they run under cargo-nextest; refuse to start without it
+# rather than skip them.
+if ! clean_cargo "$LOGS/nextest-version.log" nextest --version; then
+  echo "gate: cargo-nextest is not installed next to cargo (see $LOGS/nextest-version.log)"
+  exit 2
+fi
+echo "gate: cargo test -p k2-core --no-fail-fast"
+if ! clean_cargo "$LOGS/k2-core.log" test -p k2-core --no-fail-fast "${THREAD_ARGS[@]}"; then
+  STATUS=1
+fi
+echo "gate: k2-core done (exit $([ $STATUS -eq 0 ] && echo 0 || echo non-zero so far), free $(avail_gb "$WORK")G)"
+echo "gate: cargo test -p k2-daemon --lib --bins --no-fail-fast"
+if ! clean_cargo "$LOGS/k2-daemon.log" test -p k2-daemon --lib --bins --no-fail-fast "${THREAD_ARGS[@]}"; then
+  STATUS=1
+fi
+echo "gate: cargo nextest run --profile ci -p k2-daemon -E 'kind(test)' --no-fail-fast"
+if ! clean_cargo "$LOGS/k2-daemon-integration.log" nextest run --profile ci -p k2-daemon -E 'kind(test)' --no-fail-fast "${NEXTEST_THREAD_ARGS[@]}"; then
+  STATUS=1
+fi
+# nextest skips ignored tests without naming them: list them for the
+# allowlist check below, as `<module>::<test>` the way libtest names them.
+if ! clean_cargo "$LOGS/k2-daemon-integration-ignored.log" nextest list -p k2-daemon -E 'kind(test)' --run-ignored only --message-format oneline; then
+  echo "gate: could not list k2-daemon's ignored integration tests (see $LOGS/k2-daemon-integration-ignored.log)"
+  STATUS=1
+fi
+echo "gate: k2-daemon done (exit $([ $STATUS -eq 0 ] && echo 0 || echo non-zero so far), free $(avail_gb "$WORK")G)"
 
 if [ "$(id -u)" -eq 0 ]; then
   for entry in "${ROOT_RUNS[@]}"; do
@@ -172,21 +198,30 @@ for log in "$LOGS"/*.log; do
   awk -v f="$(basename "$log")" '
     /^ *Running |^ *Doc-tests / { bin=$0; sub(/^ */, "", bin) }
     /^test result:/ { printf "%-20s %-70s %s\n", f, substr(bin, 1, 70), $0 }
+    /^ *Summary \[/ { s=$0; sub(/^ */, "", s); printf "%-20s %-70s %s\n", f, "cargo nextest", s }
   ' "$log"
 done
 
 echo
 echo "== failed =="
-FAILED=$(grep -h -E '^test .* \.\.\. FAILED$' "$LOGS"/*.log | sed -E 's/^test (.*) \.\.\. FAILED$/\1/' | sort -u)
-COMPILE_ERR=$(grep -h -E '^error(\[E[0-9]+\])?: ' "$LOGS"/*.log | sort -u)
+FAILED=$( {
+  grep -h -E '^test .* \.\.\. FAILED$' "$LOGS"/*.log | sed -E 's/^test (.*) \.\.\. FAILED$/\1/'
+  # nextest: `FAIL [ 1.2s] (3/9) k2-daemon::it_apps app_grace_integration::x`
+  grep -h -E '^ *(FAIL|TIMEOUT|ABORT|SIG[A-Z]+|LEAK-FAIL) +\[' "$LOGS"/*.log \
+    | sed -E 's/^ *[A-Z-]+ +\[[^]]*\] +(\( *[0-9]+\/ *[0-9]+\) +)?//'
+} | sort -u)
+COMPILE_ERR=$(grep -h -E '^error(\[E[0-9]+\])?: ' "$LOGS"/*.log | grep -v -x 'error: test run failed' | sort -u)
 [ -n "$FAILED" ] && { echo "$FAILED"; STATUS=1; }
 [ -n "$COMPILE_ERR" ] && { echo "compile errors:"; echo "$COMPILE_ERR"; STATUS=1; }
 [ -z "$FAILED$COMPILE_ERR" ] && echo "(none)"
 
 echo
 echo "== ignored =="
-IGNORED=$(grep -h -E '^test .* \.\.\. ignored' "$LOGS"/k2-core.log "$LOGS"/k2-daemon.log \
-  | sed -E 's/^test (.*) \.\.\. ignored.*$/\1/' | sort -u)
+IGNORED=$( {
+  grep -h -E '^test .* \.\.\. ignored' "$LOGS"/k2-core.log "$LOGS"/k2-daemon.log \
+    | sed -E 's/^test (.*) \.\.\. ignored.*$/\1/'
+  grep -h -E '^k2-daemon::[^ ]+ ' "$LOGS"/k2-daemon-integration-ignored.log | sed -E 's/^[^ ]+ //'
+} | sort -u)
 echo "${IGNORED:-(none)}"
 UNEXPECTED=""
 while IFS= read -r t; do

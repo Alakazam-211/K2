@@ -52,7 +52,6 @@ fn value_noise(x: f32, y: f32, period: f32, seed: u32) -> f32 {
 /// 1/f-like spectrum, as in natural pictures) and some hard edges.
 struct Scene {
     w: usize,
-    h: usize,
     luma: Vec<f32>,
     cb: Vec<f32>,
     cr: Vec<f32>,
@@ -92,7 +91,7 @@ impl Scene {
                 cr[y * cw + x] = 128.0 + 14.0 * value_noise(fx, fy, 50.0 * s, seed + 300) + 4.0 * value_noise(fx, fy, 5.0 * s, seed + 301);
             }
         }
-        Scene { w, h, luma, cb, cr }
+        Scene { w, luma, cb, cr }
     }
 }
 

@@ -269,7 +269,9 @@ side scribbles on between pushes; `attach`: a producer opening any file),
 and VP8, `scripts/check-staticlib.sh` checks that the static library holds
 only this crate, libc's declarations and Rust's standard library and
 exports exactly the C surface above, `scripts/check-targets.sh`
-type-checks iOS, Android and Windows (types only) from any machine, and
+type-checks iOS, Android and Windows (types only) from any machine,
+`scripts/check-fuzz.sh` builds and runs the fuzz targets,
+`scripts/check-semver.sh` checks the API against a published version, and
 `scripts/check-package.sh` builds
 the package as crates.io would and runs its tests outside the repository.
 

@@ -25,7 +25,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 heartbeat restart <name>`** stops a heartbeat's own session, so its next fire starts a new one. An agent can restart its own workspace's heartbeats without the "Allow hiring and managing agents" switch.
 
 ### Chat / Voice Hosting
-- **K2 installs and upgrades to Sew 0.8.0,** which lets one chat Space show in more than one App later on, and carries Sew's call fixes: calls renew their sign-in in time, and on a tunnelled voice server the voice engine no longer listens on IPv6. Upgrade with `k2 hostchat upgrade`. Going back to Sew 0.7.3 afterwards needs `k2 hostchat rollback --accept-data-loss`, because 0.8.0 changes Sew's data. Upgrades were tested from Sew 0.6.1 and newer.
+- **K2 installs and upgrades to Sew 0.8.1,** which lets one chat Space show in more than one App later on, and carries Sew's call fixes: calls renew their sign-in in time, and on a tunnelled voice server the voice engine no longer listens on IPv6. Its App kit no longer floods the chat server with keepalives when a sign-in lasts longer than about 24 days; rebuild an App on the new kit to get the fix. Upgrade with `k2 hostchat upgrade`. Going back to Sew 0.8.0 is a plain `k2 hostchat rollback`; going back to 0.7.3 needs `k2 hostchat rollback --accept-data-loss`, because 0.8.0 changed Sew's data. Upgrades were tested from Sew 0.6.1 and newer.
 
 ### Logs and delivery
 - **A Thread message waiting for a busy agent now survives a K2 restart.** K2 sends it once it's back up. If K2 stopped while it was typing a message in, or the message waited over an hour, K2 doesn't send it again; it says so in the Thread instead.

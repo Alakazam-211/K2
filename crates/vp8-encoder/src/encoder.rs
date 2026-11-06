@@ -1033,11 +1033,12 @@ fn code_block(
     first: usize,
     levels: &mut [i16],
 ) {
-    let mut res = [0i32; 16];
-    for r in 0..4 {
-        for c in 0..4 {
-            res[r * 4 + c] = src[spos + r * sstride + c] as i32 - rec[rpos + r * rstride + c] as i32;
-        }
+    let res = residual(src, spos, sstride, rec, rpos, rstride);
+    let (sum, sad) = sum_sad(&res);
+    if ac_is_zero(sad, q[1], ac_bias) && (first > 0 || sum.abs() < q[0]) {
+        // Every coefficient would quantize to zero: nothing to code or add.
+        levels[..16].fill(0);
+        return;
     }
     let mut co = [0i32; 16];
     fdct4x4(&res, &mut co);
@@ -1055,6 +1056,33 @@ fn code_block(
     if any {
         idct::idct_add(&deq, rec, rpos, rstride);
     }
+}
+
+/// The 4x4 residual `src - rec`.
+#[inline]
+fn residual(src: &[u8], spos: usize, sstride: usize, rec: &[u8], rpos: usize, rstride: usize) -> [i32; 16] {
+    let mut res = [0i32; 16];
+    for r in 0..4 {
+        let s: &[u8; 4] = src[spos + r * sstride..spos + r * sstride + 4].try_into().expect("4 pixels");
+        let p: &[u8; 4] = rec[rpos + r * rstride..rpos + r * rstride + 4].try_into().expect("4 pixels");
+        for c in 0..4 {
+            res[r * 4 + c] = s[c] as i32 - p[c] as i32;
+        }
+    }
+    res
+}
+
+#[inline]
+fn sum_sad(res: &[i32; 16]) -> (i32, i32) {
+    (res.iter().sum(), res.iter().map(|v| v.abs()).sum())
+}
+
+/// Whether every AC coefficient of a residual with this SAD must quantize to
+/// zero: none can exceed about 0.854 x SAD (the largest basis product,
+/// 1.307^2 / 2), plus one for rounding.
+#[inline]
+fn ac_is_zero(sad: i32, ac_step: i32, ac_bias: i32) -> bool {
+    sad * 875 + 1024 < ac_step * (256 - ac_bias) * 4
 }
 
 /// Codes a 16x16 luma block with a Y2 block: the prediction is in `rec`
@@ -1083,13 +1111,15 @@ fn code_luma_y2(
     for b in 0..16 {
         let so = spos + (b >> 2) * 4 * sstride + (b & 3) * 4;
         let ro = rbase + (b >> 2) * 4 * rstride + (b & 3) * 4;
-        let mut res = [0i32; 16];
-        for r in 0..4 {
-            for c in 0..4 {
-                res[r * 4 + c] = src[so + r * sstride + c] as i32 - rec[ro + r * rstride + c] as i32;
-            }
+        let res = residual(src, so, sstride, rec, ro, rstride);
+        let (sum, sad) = sum_sad(&res);
+        if ac_is_zero(sad, quant.y1[1], ac_bias) {
+            // Only the DC survives; the transform's DC is the rounded half sum.
+            coeffs[b] = [0; 16];
+            coeffs[b][0] = if sum >= 0 { (sum + 1) >> 1 } else { -((-sum + 1) >> 1) };
+        } else {
+            fdct4x4(&res, &mut coeffs[b]);
         }
-        fdct4x4(&res, &mut coeffs[b]);
         dcs[b] = coeffs[b][0];
     }
     let mut y2 = [0i32; 16];

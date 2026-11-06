@@ -323,21 +323,45 @@ pub struct RefPlane<'a> {
     pub h: usize,
 }
 
+/// One output row of a filter pass. `taps[k]` is the source row for tap
+/// `k` (its first element lines up with output 0).
 #[inline(always)]
-fn apply6(src: &[u8], p: usize, step: usize, f: &Filter) -> u8 {
-    let v = src[p - 2 * step] as i32 * f[0]
-        + src[p - step] as i32 * f[1]
-        + src[p] as i32 * f[2]
-        + src[p + step] as i32 * f[3]
-        + src[p + 2 * step] as i32 * f[4]
-        + src[p + 3 * step] as i32 * f[5];
-    clamp255((v + 64) >> 7)
+fn filter_row<const BILINEAR: bool>(out: &mut [u8], taps: [&[u8]; 6], f: &Filter) {
+    let n = out.len();
+    if BILINEAR {
+        // Only taps 2 and 3 are non-zero, and the result never needs clamping.
+        let (a, b) = (&taps[2][..n], &taps[3][..n]);
+        let (f2, f3) = (f[2] as u16, f[3] as u16);
+        for c in 0..n {
+            out[c] = ((a[c] as u16 * f2 + b[c] as u16 * f3 + 64) >> 7) as u8;
+        }
+    } else {
+        let (t0, t1, t2) = (&taps[0][..n], &taps[1][..n], &taps[2][..n]);
+        let (t3, t4, t5) = (&taps[3][..n], &taps[4][..n], &taps[5][..n]);
+        for c in 0..n {
+            let v = t0[c] as i32 * f[0]
+                + t1[c] as i32 * f[1]
+                + t2[c] as i32 * f[2]
+                + t3[c] as i32 * f[3]
+                + t4[c] as i32 * f[4]
+                + t5[c] as i32 * f[5];
+            out[c] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        }
+    }
 }
 
+/// The six source rows for a horizontal pass whose output 0 is at `p`.
 #[inline(always)]
-fn apply2(src: &[u8], p: usize, step: usize, f: &Filter) -> u8 {
-    // Bilinear: only taps 2 and 3 are non-zero, and the result never needs clamping.
-    ((src[p] as u32 * f[2] as u32 + src[p + step] as u32 * f[3] as u32 + 64) >> 7) as u8
+fn h_taps(src: &[u8], p: usize, n: usize) -> [&[u8]; 6] {
+    let s = &src[p - 2..p + n + 3];
+    [&s[0..n], &s[1..n + 1], &s[2..n + 2], &s[3..n + 3], &s[4..n + 4], &s[5..n + 5]]
+}
+
+/// The six source rows for a vertical pass whose output 0 is at `p`.
+#[inline(always)]
+fn v_taps(src: &[u8], p: usize, stride: usize, n: usize) -> [&[u8]; 6] {
+    let row = |k: usize| &src[p + k * stride - 2 * stride..p + k * stride - 2 * stride + n];
+    [row(0), row(1), row(2), row(3), row(4), row(5)]
 }
 
 /// Predicts a `bw` x `bh` block at (`x`, `y`) of the current plane from
@@ -417,28 +441,19 @@ fn filter_block<const BILINEAR: bool>(
     fy: usize,
     filters: &[Filter; 8],
 ) {
-    let apply = |s: &[u8], p: usize, step: usize, f: &Filter| -> u8 {
-        if BILINEAR {
-            apply2(s, p, step, f)
-        } else {
-            apply6(s, p, step, f)
-        }
-    };
     if fy == 0 {
         let f = &filters[fx];
         for r in 0..bh {
-            for c in 0..bw {
-                dst[dst_pos + r * dst_stride + c] = apply(src, origin + r * sstride + c, 1, f);
-            }
+            let d = dst_pos + r * dst_stride;
+            filter_row::<BILINEAR>(&mut dst[d..d + bw], h_taps(src, origin + r * sstride, bw), f);
         }
         return;
     }
     if fx == 0 {
         let f = &filters[fy];
         for r in 0..bh {
-            for c in 0..bw {
-                dst[dst_pos + r * dst_stride + c] = apply(src, origin + r * sstride + c, sstride, f);
-            }
+            let d = dst_pos + r * dst_stride;
+            filter_row::<BILINEAR>(&mut dst[d..d + bw], v_taps(src, origin + r * sstride, sstride, bw), f);
         }
         return;
     }
@@ -447,15 +462,12 @@ fn filter_block<const BILINEAR: bool>(
     let fh = &filters[fx];
     for r in 0..bh + 5 {
         let s = origin - 2 * sstride + r * sstride;
-        for c in 0..bw {
-            tmp[r * bw + c] = apply(src, s + c, 1, fh);
-        }
+        filter_row::<BILINEAR>(&mut tmp[r * bw..r * bw + bw], h_taps(src, s, bw), fh);
     }
     let fv = &filters[fy];
     for r in 0..bh {
-        for c in 0..bw {
-            dst[dst_pos + r * dst_stride + c] = apply(&tmp, (r + 2) * bw + c, bw, fv);
-        }
+        let d = dst_pos + r * dst_stride;
+        filter_row::<BILINEAR>(&mut dst[d..d + bw], v_taps(&tmp, (r + 2) * bw, bw, bw), fv);
     }
 }
 

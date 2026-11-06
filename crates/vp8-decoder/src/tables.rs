@@ -8,40 +8,40 @@
 
 // Intra and inter prediction modes for a macroblock (luma; chroma uses the
 // first four).
-pub(crate) const DC_PRED: u8 = 0;
-pub(crate) const V_PRED: u8 = 1;
-pub(crate) const H_PRED: u8 = 2;
-pub(crate) const TM_PRED: u8 = 3;
-pub(crate) const B_PRED: u8 = 4;
-pub(crate) const NEARESTMV: u8 = 5;
-pub(crate) const NEARMV: u8 = 6;
-pub(crate) const ZEROMV: u8 = 7;
-pub(crate) const NEWMV: u8 = 8;
-pub(crate) const SPLITMV: u8 = 9;
+pub const DC_PRED: u8 = 0;
+pub const V_PRED: u8 = 1;
+pub const H_PRED: u8 = 2;
+pub const TM_PRED: u8 = 3;
+pub const B_PRED: u8 = 4;
+pub const NEARESTMV: u8 = 5;
+pub const NEARMV: u8 = 6;
+pub const ZEROMV: u8 = 7;
+pub const NEWMV: u8 = 8;
+pub const SPLITMV: u8 = 9;
 
 // Subblock intra modes.
-pub(crate) const B_DC_PRED: u8 = 0;
-pub(crate) const B_TM_PRED: u8 = 1;
-pub(crate) const B_VE_PRED: u8 = 2;
-pub(crate) const B_HE_PRED: u8 = 3;
-pub(crate) const B_LD_PRED: u8 = 4;
-pub(crate) const B_RD_PRED: u8 = 5;
-pub(crate) const B_VR_PRED: u8 = 6;
-pub(crate) const B_VL_PRED: u8 = 7;
-pub(crate) const B_HD_PRED: u8 = 8;
-pub(crate) const B_HU_PRED: u8 = 9;
+pub const B_DC_PRED: u8 = 0;
+pub const B_TM_PRED: u8 = 1;
+pub const B_VE_PRED: u8 = 2;
+pub const B_HE_PRED: u8 = 3;
+pub const B_LD_PRED: u8 = 4;
+pub const B_RD_PRED: u8 = 5;
+pub const B_VR_PRED: u8 = 6;
+pub const B_VL_PRED: u8 = 7;
+pub const B_HD_PRED: u8 = 8;
+pub const B_HU_PRED: u8 = 9;
 
 // Split MV sub-block modes.
-pub(crate) const LEFT4X4: u8 = 0;
-pub(crate) const ABOVE4X4: u8 = 1;
-pub(crate) const ZERO4X4: u8 = 2;
-pub(crate) const NEW4X4: u8 = 3;
+pub const LEFT4X4: u8 = 0;
+pub const ABOVE4X4: u8 = 1;
+pub const ZERO4X4: u8 = 2;
+pub const NEW4X4: u8 = 3;
 
 // Reference frames.
-pub(crate) const INTRA_FRAME: u8 = 0;
-pub(crate) const LAST_FRAME: u8 = 1;
-pub(crate) const GOLDEN_FRAME: u8 = 2;
-pub(crate) const ALTREF_FRAME: u8 = 3;
+pub const INTRA_FRAME: u8 = 0;
+pub const LAST_FRAME: u8 = 1;
+pub const GOLDEN_FRAME: u8 = 2;
+pub const ALTREF_FRAME: u8 = 3;
 
 const fn leaf(v: u8) -> i8 {
     -(v as i8)
@@ -49,16 +49,16 @@ const fn leaf(v: u8) -> i8 {
 
 // Trees (RFC 6386 Section 8.1): a leaf is stored as `-value`.
 #[rustfmt::skip]
-pub(crate) const KF_YMODE_TREE: [i8; 8] =
+pub const KF_YMODE_TREE: [i8; 8] =
     [leaf(B_PRED), 2, 4, 6, leaf(DC_PRED), leaf(V_PRED), leaf(H_PRED), leaf(TM_PRED)];
 #[rustfmt::skip]
-pub(crate) const YMODE_TREE: [i8; 8] =
+pub const YMODE_TREE: [i8; 8] =
     [leaf(DC_PRED), 2, 4, 6, leaf(V_PRED), leaf(H_PRED), leaf(TM_PRED), leaf(B_PRED)];
 #[rustfmt::skip]
-pub(crate) const UV_MODE_TREE: [i8; 6] =
+pub const UV_MODE_TREE: [i8; 6] =
     [leaf(DC_PRED), 2, leaf(V_PRED), 4, leaf(H_PRED), leaf(TM_PRED)];
 #[rustfmt::skip]
-pub(crate) const BMODE_TREE: [i8; 18] = [
+pub const BMODE_TREE: [i8; 18] = [
     leaf(B_DC_PRED), 2,
     leaf(B_TM_PRED), 4,
     leaf(B_VE_PRED), 6,
@@ -70,24 +70,24 @@ pub(crate) const BMODE_TREE: [i8; 18] = [
     leaf(B_HD_PRED), leaf(B_HU_PRED),
 ];
 #[rustfmt::skip]
-pub(crate) const SMALL_MV_TREE: [i8; 14] = [2, 8, 4, 6, -0, -1, -2, -3, 10, 12, -4, -5, -6, -7];
+pub const SMALL_MV_TREE: [i8; 14] = [2, 8, 4, 6, -0, -1, -2, -3, 10, 12, -4, -5, -6, -7];
 #[rustfmt::skip]
-pub(crate) const MV_REF_TREE: [i8; 8] =
+pub const MV_REF_TREE: [i8; 8] =
     [leaf(ZEROMV), 2, leaf(NEARESTMV), 4, leaf(NEARMV), 6, leaf(NEWMV), leaf(SPLITMV)];
 #[rustfmt::skip]
-pub(crate) const SUBMV_REF_TREE: [i8; 6] =
+pub const SUBMV_REF_TREE: [i8; 6] =
     [leaf(LEFT4X4), 2, leaf(ABOVE4X4), 4, leaf(ZERO4X4), leaf(NEW4X4)];
 /// Split partitionings: 0 = top/bottom 16x8, 1 = left/right 8x16, 2 = quarters, 3 = 16 4x4s.
-pub(crate) const SPLIT_MV_TREE: [i8; 6] = [-3, 2, -2, 4, -0, -1];
+pub const SPLIT_MV_TREE: [i8; 6] = [-3, 2, -2, 4, -0, -1];
 
-pub(crate) const KF_YMODE_PROBS: [u8; 4] = [145, 156, 163, 128];
-pub(crate) const KF_UV_MODE_PROBS: [u8; 3] = [142, 114, 183];
-pub(crate) const DEFAULT_YMODE_PROBS: [u8; 4] = [112, 86, 140, 37];
-pub(crate) const DEFAULT_UV_MODE_PROBS: [u8; 3] = [162, 101, 204];
+pub const KF_YMODE_PROBS: [u8; 4] = [145, 156, 163, 128];
+pub const KF_UV_MODE_PROBS: [u8; 3] = [142, 114, 183];
+pub const DEFAULT_YMODE_PROBS: [u8; 4] = [112, 86, 140, 37];
+pub const DEFAULT_UV_MODE_PROBS: [u8; 3] = [162, 101, 204];
 /// Subblock mode probabilities in interframes (no context).
-pub(crate) const BMODE_PROBS: [u8; 9] = [120, 90, 79, 133, 87, 85, 80, 111, 151];
-pub(crate) const SPLIT_MV_PROBS: [u8; 3] = [110, 111, 150];
-pub(crate) const SUBMV_REF_PROBS: [[u8; 3]; 5] = [
+pub const BMODE_PROBS: [u8; 9] = [120, 90, 79, 133, 87, 85, 80, 111, 151];
+pub const SPLIT_MV_PROBS: [u8; 3] = [110, 111, 150];
+pub const SUBMV_REF_PROBS: [[u8; 3]; 5] = [
     [147, 136, 18],
     [106, 145, 1],
     [179, 121, 1],
@@ -95,7 +95,7 @@ pub(crate) const SUBMV_REF_PROBS: [[u8; 3]; 5] = [
     [208, 1, 1],
 ];
 /// Mode probabilities from the near-MV counts (`vp8_mode_contexts`).
-pub(crate) const MODE_CONTEXTS: [[u8; 4]; 6] = [
+pub const MODE_CONTEXTS: [[u8; 4]; 6] = [
     [7, 1, 1, 143],
     [14, 18, 14, 107],
     [135, 64, 57, 68],
@@ -104,48 +104,48 @@ pub(crate) const MODE_CONTEXTS: [[u8; 4]; 6] = [
     [234, 188, 128, 28],
 ];
 #[rustfmt::skip]
-pub(crate) const MV_PARTITIONS: [[u8; 16]; 4] = [
+pub const MV_PARTITIONS: [[u8; 16]; 4] = [
     [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1],
     [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
     [0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3],
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
 ];
-pub(crate) const MV_PARTITION_COUNT: [usize; 4] = [2, 2, 4, 16];
+pub const MV_PARTITION_COUNT: [usize; 4] = [2, 2, 4, 16];
 
 // Positions in the MV probability vector of one component.
-pub(crate) const MVP_IS_SHORT: usize = 0;
-pub(crate) const MVP_SIGN: usize = 1;
-pub(crate) const MVP_SHORT: usize = 2;
-pub(crate) const MVP_BITS: usize = 9;
-pub(crate) const MV_LONG_BITS: usize = 10;
-pub(crate) const MV_PROB_COUNT: usize = 19;
+pub const MVP_IS_SHORT: usize = 0;
+pub const MVP_SIGN: usize = 1;
+pub const MVP_SHORT: usize = 2;
+pub const MVP_BITS: usize = 9;
+pub const MV_LONG_BITS: usize = 10;
+pub const MV_PROB_COUNT: usize = 19;
 
-pub(crate) const ZIGZAG: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
+pub const ZIGZAG: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 /// The coefficient band of each position; index 16 is a sentinel.
-pub(crate) const COEFF_BANDS: [usize; 17] = [0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0];
+pub const COEFF_BANDS: [usize; 17] = [0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0];
 
 // DCT extra-bit probabilities, most significant bit first.
-pub(crate) const PCAT1: [u8; 1] = [159];
-pub(crate) const PCAT2: [u8; 2] = [165, 145];
-pub(crate) const PCAT3: [u8; 3] = [173, 148, 140];
-pub(crate) const PCAT4: [u8; 4] = [176, 155, 140, 135];
-pub(crate) const PCAT5: [u8; 5] = [180, 157, 141, 134, 130];
-pub(crate) const PCAT6: [u8; 11] = [254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129];
+pub const PCAT1: [u8; 1] = [159];
+pub const PCAT2: [u8; 2] = [165, 145];
+pub const PCAT3: [u8; 3] = [173, 148, 140];
+pub const PCAT4: [u8; 4] = [176, 155, 140, 135];
+pub const PCAT5: [u8; 5] = [180, 157, 141, 134, 130];
+pub const PCAT6: [u8; 11] = [254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129];
 
-pub(crate) type CoeffProbs = [[[[u8; 11]; 3]; 8]; 4];
-pub(crate) type MvProbs = [[u8; MV_PROB_COUNT]; 2];
+pub type CoeffProbs = [[[[u8; 11]; 3]; 8]; 4];
+pub type MvProbs = [[u8; MV_PROB_COUNT]; 2];
 
 // ---------------------------------------------------------------------------
 // Extracted from the RFC text (see the module comment). Do not edit by hand.
 
 #[rustfmt::skip]
-pub(crate) const DC_QUANT: [i32; 128] = [4, 5, 6, 7, 8, 9, 10, 10, 11, 12, 13, 14, 15, 16, 17, 17, 18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 25, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 93, 95, 96, 98, 100, 101, 102, 104, 106, 108, 110, 112, 114, 116, 118, 122, 124, 126, 128, 130, 132, 134, 136, 138, 140, 143, 145, 148, 151, 154, 157];
+pub const DC_QUANT: [i32; 128] = [4, 5, 6, 7, 8, 9, 10, 10, 11, 12, 13, 14, 15, 16, 17, 17, 18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 25, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 93, 95, 96, 98, 100, 101, 102, 104, 106, 108, 110, 112, 114, 116, 118, 122, 124, 126, 128, 130, 132, 134, 136, 138, 140, 143, 145, 148, 151, 154, 157];
 
 #[rustfmt::skip]
-pub(crate) const AC_QUANT: [i32; 128] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94, 96, 98, 100, 102, 104, 106, 108, 110, 112, 114, 116, 119, 122, 125, 128, 131, 134, 137, 140, 143, 146, 149, 152, 155, 158, 161, 164, 167, 170, 173, 177, 181, 185, 189, 193, 197, 201, 205, 209, 213, 217, 221, 225, 229, 234, 239, 245, 249, 254, 259, 264, 269, 274, 279, 284];
+pub const AC_QUANT: [i32; 128] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94, 96, 98, 100, 102, 104, 106, 108, 110, 112, 114, 116, 119, 122, 125, 128, 131, 134, 137, 140, 143, 146, 149, 152, 155, 158, 161, 164, 167, 170, 173, 177, 181, 185, 189, 193, 197, 201, 205, 209, 213, 217, 221, 225, 229, 234, 239, 245, 249, 254, 259, 264, 269, 274, 279, 284];
 
 #[rustfmt::skip]
-pub(crate) const COEFF_UPDATE_PROBS: [[[[u8; 11]; 3]; 8]; 4] = [
+pub const COEFF_UPDATE_PROBS: [[[[u8; 11]; 3]; 8]; 4] = [
     [
         [
             [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
@@ -317,7 +317,7 @@ pub(crate) const COEFF_UPDATE_PROBS: [[[[u8; 11]; 3]; 8]; 4] = [
 ];
 
 #[rustfmt::skip]
-pub(crate) const DEFAULT_COEFF_PROBS: [[[[u8; 11]; 3]; 8]; 4] = [
+pub const DEFAULT_COEFF_PROBS: [[[[u8; 11]; 3]; 8]; 4] = [
 [
     [
         [128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128],
@@ -489,7 +489,7 @@ pub(crate) const DEFAULT_COEFF_PROBS: [[[[u8; 11]; 3]; 8]; 4] = [
 ];
 
 #[rustfmt::skip]
-pub(crate) const KF_BMODE_PROBS: [[[u8; 9]; 10]; 10] = [
+pub const KF_BMODE_PROBS: [[[u8; 9]; 10]; 10] = [
 [
 [231, 120, 48, 89, 115, 113, 120, 152, 112],
 [152, 179, 64, 126, 170, 118, 46, 70, 95],
@@ -613,13 +613,13 @@ pub(crate) const KF_BMODE_PROBS: [[[u8; 9]; 10]; 10] = [
 ];
 
 #[rustfmt::skip]
-pub(crate) const MV_UPDATE_PROBS: [[u8; 19]; 2] = [
+pub const MV_UPDATE_PROBS: [[u8; 19]; 2] = [
 [237, 246, 253, 253, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 250, 250, 252, 254, 254],
 [231, 243, 245, 253, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 251, 251, 254, 254, 254],
 ];
 
 #[rustfmt::skip]
-pub(crate) const DEFAULT_MV_PROBS: [[u8; 19]; 2] = [
+pub const DEFAULT_MV_PROBS: [[u8; 19]; 2] = [
 [162, 128, 225, 146, 172, 147, 214, 39, 156, 128, 129, 132, 75, 145, 178, 206, 239, 254, 254],
 [164, 128, 204, 170, 119, 235, 140, 230, 228, 128, 130, 130, 74, 148, 180, 203, 236, 254, 254],
 ];

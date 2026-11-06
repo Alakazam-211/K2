@@ -8,7 +8,7 @@ const SINPI8SQRT2: i32 = 35468;
 
 /// The inverse Walsh-Hadamard transform of the Y2 block. Writes the 16
 /// results to `coeffs[i * 16]` (the DC of each luma block).
-pub(crate) fn inverse_wht(input: &[i16; 16], coeffs: &mut [i16]) {
+pub fn inverse_wht(input: &[i16; 16], coeffs: &mut [i16]) {
     let mut tmp = [0i16; 16];
     for i in 0..4 {
         let ip0 = input[i] as i32;
@@ -58,7 +58,7 @@ fn clamp255(v: i32) -> u8 {
 
 /// Inverse DCT of one 4x4 block of dequantized coefficients, added to the
 /// prediction already in `dst` (in place).
-pub(crate) fn idct_add(coeffs: &[i16], dst: &mut [u8], pos: usize, stride: usize) {
+pub fn idct_add(coeffs: &[i16], dst: &mut [u8], pos: usize, stride: usize) {
     let mut tmp = [0i16; 16];
     // Vertical pass (columns).
     for i in 0..4 {
@@ -95,7 +95,7 @@ pub(crate) fn idct_add(coeffs: &[i16], dst: &mut [u8], pos: usize, stride: usize
 }
 
 /// The inverse DCT of a block whose only non-zero coefficient is the DC.
-pub(crate) fn idct_dc_add(dc: i16, dst: &mut [u8], pos: usize, stride: usize) {
+pub fn idct_dc_add(dc: i16, dst: &mut [u8], pos: usize, stride: usize) {
     let v = ((dc as i32 + 4) >> 3) as i16 as i32;
     for r in 0..4 {
         let row = &mut dst[pos + r * stride..pos + r * stride + 4];

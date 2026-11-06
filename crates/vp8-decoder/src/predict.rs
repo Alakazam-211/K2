@@ -9,11 +9,11 @@
 use crate::tables::*;
 
 /// Stride of the luma workspace: P, 16 above, 4 above-right.
-pub(crate) const LUMA_WS_STRIDE: usize = 21;
-pub(crate) const LUMA_WS_SIZE: usize = LUMA_WS_STRIDE * 17;
+pub const LUMA_WS_STRIDE: usize = 21;
+pub const LUMA_WS_SIZE: usize = LUMA_WS_STRIDE * 17;
 /// Stride of a chroma workspace: P and 8 above.
-pub(crate) const CHROMA_WS_STRIDE: usize = 9;
-pub(crate) const CHROMA_WS_SIZE: usize = CHROMA_WS_STRIDE * 9;
+pub const CHROMA_WS_STRIDE: usize = 9;
+pub const CHROMA_WS_SIZE: usize = CHROMA_WS_STRIDE * 9;
 
 #[inline(always)]
 fn clamp255(v: i32) -> u8 {
@@ -23,7 +23,7 @@ fn clamp255(v: i32) -> u8 {
 /// Whole-block prediction (16x16 luma or 8x8 chroma) for the four
 /// macroblock-level modes. `n` is the block size; the block starts at
 /// `ws[stride + 1]`.
-pub(crate) fn predict_block(ws: &mut [u8], stride: usize, n: usize, mode: u8, have_above: bool, have_left: bool) {
+pub fn predict_block(ws: &mut [u8], stride: usize, n: usize, mode: u8, have_above: bool, have_left: bool) {
     let base = stride + 1;
     match mode {
         DC_PRED => {
@@ -77,7 +77,7 @@ pub(crate) fn predict_block(ws: &mut [u8], stride: usize, n: usize, mode: u8, ha
 /// in the workspace; the row above (from `pos - stride - 1`, 9 pixels with
 /// the above-left and four above-right) and the column to the left must be
 /// filled in.
-pub(crate) fn predict_subblock(ws: &mut [u8], stride: usize, pos: usize, mode: u8) {
+pub fn predict_subblock(ws: &mut [u8], stride: usize, pos: usize, mode: u8) {
     let a = pos - stride; // above row: a-1 is the above-left pixel
     let above = |i: isize| ws[(a as isize + i) as usize] as i32;
     // Edge pixels as the RFC names them: E[0..9] runs from the bottom of the
@@ -242,12 +242,59 @@ pub(crate) fn predict_subblock(ws: &mut [u8], stride: usize, pos: usize, mode: u
     }
 }
 
+/// Fills the border of an intra-prediction workspace from the frame
+/// (Section 12.2): 127 above the frame, 129 left of it, the above-left
+/// pixel 127 on the top row and 129 on the left column.
+#[allow(clippy::too_many_arguments)]
+pub fn fill_ws_border(
+    ws: &mut [u8],
+    ws_stride: usize,
+    plane: &[u8],
+    s: usize,
+    n: usize,
+    mbx: usize,
+    mby: usize,
+    above_right: bool,
+    last_col: bool,
+) {
+    let x = mbx * n;
+    let y = mby * n;
+    let extra = if above_right { 4 } else { 0 };
+    if mby == 0 {
+        ws[..1 + n + extra].fill(127);
+    } else {
+        let a = (y - 1) * s + x;
+        ws[1..1 + n].copy_from_slice(&plane[a..a + n]);
+        if above_right {
+            if last_col {
+                let v = plane[a + n - 1];
+                ws[1 + n..1 + n + 4].fill(v);
+            } else {
+                ws[1 + n..1 + n + 4].copy_from_slice(&plane[a + n..a + n + 4]);
+            }
+        }
+        ws[0] = if mbx == 0 { 129 } else { plane[a - 1] };
+    }
+    for r in 0..n {
+        ws[(r + 1) * ws_stride] = if mbx == 0 { 129 } else { plane[(y + r) * s + x - 1] };
+    }
+}
+
+/// Copies the predicted block out of a workspace into a plane of stride `s`.
+pub fn store_ws(ws: &[u8], ws_stride: usize, plane: &mut [u8], s: usize, n: usize, mbx: usize, mby: usize) {
+    for r in 0..n {
+        let d = (mby * n + r) * s + mbx * n;
+        plane[d..d + n].copy_from_slice(&ws[(r + 1) * ws_stride + 1..(r + 1) * ws_stride + 1 + n]);
+    }
+}
+
+
 // --------------------------------------------------------------------------
 // Inter prediction.
 
-pub(crate) type Filter = [i32; 6];
+pub type Filter = [i32; 6];
 
-pub(crate) const SIXTAP_FILTERS: [Filter; 8] = [
+pub const SIXTAP_FILTERS: [Filter; 8] = [
     [0, 0, 128, 0, 0, 0],
     [0, -6, 123, 12, -1, 0],
     [2, -11, 108, 36, -8, 1],
@@ -258,7 +305,7 @@ pub(crate) const SIXTAP_FILTERS: [Filter; 8] = [
     [0, -1, 12, 123, -6, 0],
 ];
 
-pub(crate) const BILINEAR_FILTERS: [Filter; 8] = [
+pub const BILINEAR_FILTERS: [Filter; 8] = [
     [0, 0, 128, 0, 0, 0],
     [0, 0, 112, 16, 0, 0],
     [0, 0, 96, 32, 0, 0],
@@ -270,10 +317,10 @@ pub(crate) const BILINEAR_FILTERS: [Filter; 8] = [
 ];
 
 /// A reference plane: `w` x `h` pixels, stride `w`.
-pub(crate) struct RefPlane<'a> {
-    pub(crate) data: &'a [u8],
-    pub(crate) w: usize,
-    pub(crate) h: usize,
+pub struct RefPlane<'a> {
+    pub data: &'a [u8],
+    pub w: usize,
+    pub h: usize,
 }
 
 #[inline(always)]
@@ -298,7 +345,7 @@ fn apply2(src: &[u8], p: usize, step: usize, f: &Filter) -> u8 {
 /// `dst` at `dst_pos` (stride `dst_stride`). Pixels outside the reference
 /// plane repeat its edge pixels, without limit.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn inter_predict(
+pub fn inter_predict(
     dst: &mut [u8],
     dst_pos: usize,
     dst_stride: usize,

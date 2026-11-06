@@ -103,3 +103,58 @@ fn every_test_vector_matches_its_md5s() {
     );
     assert!(failures.is_empty(), "{} vectors failed:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// Corrupted streams must give errors or pictures, never a panic: every
+/// vector, with random bytes flipped and frames cut short.
+#[test]
+fn corrupted_vectors_never_panic() {
+    let dir = vectors_dir();
+    let mut seed = 0x9e37_79b9u32;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let mut frames = 0;
+    let mut errors = 0;
+    for name in vector_names() {
+        let ivf = std::fs::read(dir.join(format!("{name}.ivf"))).unwrap_or_else(|e| panic!("{name}.ivf: {e}"));
+        let originals: Vec<Vec<u8>> = IvfReader::new(&ivf)
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .map(|f| f.unwrap_or_else(|e| panic!("{name}: {e}")).data.to_vec())
+            .collect();
+        for round in 0..4 {
+            let mut dec = Decoder::new();
+            for f in &originals {
+                let mut f = f.clone();
+                match round {
+                    // Flip a few bytes after the uncompressed header.
+                    0 | 1 => {
+                        for _ in 0..1 + rnd() % 4 {
+                            if f.len() > 10 {
+                                let i = 10 + rnd() as usize % (f.len() - 10);
+                                f[i] ^= 1 << (rnd() % 8);
+                            }
+                        }
+                    }
+                    // Cut the frame short.
+                    2 => {
+                        let keep = rnd() as usize % (f.len() + 1);
+                        f.truncate(keep);
+                    }
+                    // Flip anywhere, the header included.
+                    _ => {
+                        let i = rnd() as usize % f.len();
+                        f[i] ^= 1 << (rnd() % 8);
+                    }
+                }
+                frames += 1;
+                if dec.decode(&f).is_err() {
+                    errors += 1;
+                }
+            }
+        }
+    }
+    eprintln!("[robustness] {frames} corrupted frames decoded without a panic ({errors} errors)");
+}

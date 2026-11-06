@@ -7,6 +7,7 @@ use crate::frame::{FrameBuf, Picture, Plane};
 use crate::idct;
 use crate::loop_filter::{self, FilterParams};
 use crate::predict::{self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUMA_WS_SIZE, LUMA_WS_STRIDE};
+use crate::modes::{find_near_mvs, implied_bmode, Bounds, MbInfo, Mv};
 use crate::tables::*;
 
 /// Why a frame could not be decoded.
@@ -114,63 +115,6 @@ pub fn frame_info(data: &[u8]) -> Result<FrameInfo, DecodeError> {
     })
 }
 
-/// A motion vector in quarter pixels times two (eighth pixels, always even
-/// for luma), as the reference decoder stores them.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-struct Mv {
-    x: i16,
-    y: i16,
-}
-
-impl Mv {
-    const ZERO: Mv = Mv { x: 0, y: 0 };
-
-    fn is_zero(self) -> bool {
-        self.x == 0 && self.y == 0
-    }
-}
-
-/// What the decoder keeps about each macroblock.
-#[derive(Clone, Copy)]
-struct MbInfo {
-    y_mode: u8,
-    uv_mode: u8,
-    ref_frame: u8,
-    segment: u8,
-    /// Any coefficient token was decoded (drives the loop filter's inner edges).
-    has_coeffs: bool,
-    mv: Mv,
-    /// Subblock intra modes (for keyframe contexts); implied ones for the
-    /// other intra modes.
-    bmodes: [u8; 16],
-    /// Per-subblock MVs (all equal unless SPLITMV; zero for intra).
-    mvs: [Mv; 16],
-}
-
-impl Default for MbInfo {
-    fn default() -> Self {
-        MbInfo {
-            y_mode: DC_PRED,
-            uv_mode: DC_PRED,
-            ref_frame: INTRA_FRAME,
-            segment: 0,
-            has_coeffs: false,
-            mv: Mv::ZERO,
-            bmodes: [B_DC_PRED; 16],
-            mvs: [Mv::ZERO; 16],
-        }
-    }
-}
-
-fn implied_bmode(y_mode: u8) -> u8 {
-    match y_mode {
-        V_PRED => B_VE_PRED,
-        H_PRED => B_HE_PRED,
-        TM_PRED => B_TM_PRED,
-        _ => B_DC_PRED,
-    }
-}
-
 /// The probabilities that persist from frame to frame.
 #[derive(Clone)]
 struct Entropy {
@@ -235,6 +179,9 @@ struct Header {
     prob_golden: u8,
 }
 
+/// The default frame size limit: 4096x2304 pixels.
+pub const DEFAULT_MAX_PIXELS: u64 = 4096 * 2304;
+
 /// A VP8 decoder.
 ///
 /// Feed it whole frames in order with [`Decoder::decode`]. It starts at a
@@ -258,6 +205,7 @@ pub struct Decoder {
     deltas: FilterDeltas,
     color_space: bool,
     ready: bool,
+    max_pixels: u64,
     coeffs: Box<[i16; 400]>,
 }
 
@@ -287,8 +235,16 @@ impl Decoder {
             deltas: FilterDeltas::default(),
             color_space: false,
             ready: false,
+            max_pixels: DEFAULT_MAX_PIXELS,
             coeffs: Box::new([0; 400]),
         }
+    }
+
+    /// Sets the largest frame (width times height) the decoder accepts. A
+    /// larger keyframe fails with `Unsupported` instead of allocating. The
+    /// default, [`DEFAULT_MAX_PIXELS`], allows 4096x2304.
+    pub fn set_max_pixels(&mut self, max_pixels: u64) {
+        self.max_pixels = max_pixels;
     }
 
     /// Forgets the stream: the next frame must be a keyframe.
@@ -337,6 +293,20 @@ impl Decoder {
         Ok(Some(self.picture(self.shown)))
     }
 
+    /// A reference frame at the macroblock-aligned size (1 last, 2 golden,
+    /// 3 alt-ref). For vp8-encoder, which decodes its own output to get
+    /// exactly the references a receiver has. Not a stable API.
+    #[doc(hidden)]
+    pub fn reference_frame(&self, which: u8) -> Option<Picture<'_>> {
+        if !self.ready || !(1..=3).contains(&which) {
+            return None;
+        }
+        let mut p = self.picture(self.refs[which as usize]);
+        p.width = (self.mb_cols * 16) as u32;
+        p.height = (self.mb_rows * 16) as u32;
+        Some(p)
+    }
+
     fn picture(&self, idx: usize) -> Picture<'_> {
         let b = &self.bufs[idx];
         Picture {
@@ -370,6 +340,9 @@ impl Decoder {
             return Err(DecodeError::Truncated);
         }
         if let Some(d) = info.dimensions {
+            if d.width as u64 * d.height as u64 > self.max_pixels {
+                return Err(DecodeError::Unsupported("frame larger than the decoder's limit"));
+            }
             if d.width != self.width || d.height != self.height || self.mbs.is_empty() {
                 self.resize(d);
             }
@@ -450,15 +423,10 @@ impl Decoder {
         }
         let saved_entropy = if refresh_entropy { None } else { Some(self.entropy.clone()) };
 
-        for i in 0..4 {
-            for j in 0..8 {
-                for k in 0..3 {
-                    for l in 0..11 {
-                        if bd.read(COEFF_UPDATE_PROBS[i][j][k][l]) {
-                            self.entropy.coeff[i][j][k][l] = bd.read_literal(8) as u8;
-                        }
-                    }
-                }
+        let coeff_probs = self.entropy.coeff.iter_mut().flatten().flatten().flatten();
+        for (p, &update) in coeff_probs.zip(COEFF_UPDATE_PROBS.iter().flatten().flatten().flatten()) {
+            if bd.read(update) {
+                *p = bd.read_literal(8) as u8;
             }
         }
         hdr.skip_enabled = bd.read_bit();
@@ -479,12 +447,10 @@ impl Decoder {
                     *p = bd.read_literal(8) as u8;
                 }
             }
-            for i in 0..2 {
-                for j in 0..MV_PROB_COUNT {
-                    if bd.read(MV_UPDATE_PROBS[i][j]) {
-                        let x = bd.read_literal(7) as u8;
-                        self.entropy.mv[i][j] = if x != 0 { x << 1 } else { 1 };
-                    }
+            for (p, &update) in self.entropy.mv.iter_mut().flatten().zip(MV_UPDATE_PROBS.iter().flatten()) {
+                if bd.read(update) {
+                    let x = bd.read_literal(7) as u8;
+                    *p = if x != 0 { x << 1 } else { 1 };
                 }
             }
         }
@@ -549,16 +515,16 @@ impl Decoder {
             let update_data = bd.read_bit();
             if update_data {
                 self.seg.abs_values = bd.read_bit();
-                for i in 0..4 {
-                    self.seg.quant[i] = bd.read_optional_signed(7);
+                for q in self.seg.quant.iter_mut() {
+                    *q = bd.read_optional_signed(7);
                 }
-                for i in 0..4 {
-                    self.seg.filter_level[i] = bd.read_optional_signed(6);
+                for l in self.seg.filter_level.iter_mut() {
+                    *l = bd.read_optional_signed(6);
                 }
             }
             if self.seg.update_map {
-                for i in 0..3 {
-                    self.seg.tree_probs[i] = if bd.read_bit() { bd.read_literal(8) as u8 } else { 255 };
+                for p in self.seg.tree_probs.iter_mut() {
+                    *p = if bd.read_bit() { bd.read_literal(8) as u8 } else { 255 };
                 }
             }
         } else {
@@ -570,16 +536,11 @@ impl Decoder {
         let sharpness = bd.read_literal(3) as u8;
         self.deltas.enabled = bd.read_bit();
         if self.deltas.enabled && bd.read_bit() {
-            for i in 0..4 {
+            // A delta keeps its old value unless its flag is set.
+            for delta in self.deltas.ref_frame.iter_mut().chain(self.deltas.mode.iter_mut()) {
                 if bd.read_bit() {
                     let v = bd.read_literal(6) as i32;
-                    self.deltas.ref_frame[i] = if bd.read_bit() { -v } else { v };
-                }
-            }
-            for i in 0..4 {
-                if bd.read_bit() {
-                    let v = bd.read_literal(6) as i32;
-                    self.deltas.mode[i] = if bd.read_bit() { -v } else { v };
+                    *delta = if bd.read_bit() { -v } else { v };
                 }
             }
         }
@@ -742,13 +703,7 @@ impl Decoder {
         ];
         mb.y_mode = bd.read_tree(&MV_REF_TREE, &probs);
         mb.uv_mode = mb.y_mode;
-        // Clamp bounds in eighth pixels: one macroblock beyond the frame.
-        let bounds = Bounds {
-            to_left: -(((col + 1) << 7) as i32),
-            to_right: ((self.mb_cols - col) << 7) as i32,
-            to_top: -(((row + 1) << 7) as i32),
-            to_bottom: ((self.mb_rows - row) << 7) as i32,
-        };
+        let bounds = Bounds::for_mb(row, col, self.mb_rows, self.mb_cols);
         match mb.y_mode {
             NEARESTMV => mb.mv = bounds.clamp(near[1]),
             NEARMV => mb.mv = bounds.clamp(near[2]),
@@ -917,22 +872,6 @@ fn filter_plane_mb(
     }
 }
 
-struct Bounds {
-    to_left: i32,
-    to_right: i32,
-    to_top: i32,
-    to_bottom: i32,
-}
-
-impl Bounds {
-    fn clamp(&self, mv: Mv) -> Mv {
-        Mv {
-            x: (mv.x as i32).clamp(self.to_left, self.to_right) as i16,
-            y: (mv.y as i32).clamp(self.to_top, self.to_bottom) as i16,
-        }
-    }
-}
-
 fn read_mv_component(bd: &mut BoolDecoder<'_>, p: &[u8; MV_PROB_COUNT]) -> i16 {
     let mut x: i32;
     if bd.read(p[MVP_IS_SHORT]) {
@@ -959,61 +898,6 @@ fn read_mv(bd: &mut BoolDecoder<'_>, probs: &MvProbs) -> Mv {
     let y = read_mv_component(bd, &probs[0]);
     let x = read_mv_component(bd, &probs[1]);
     Mv { x, y }
-}
-
-/// The near and nearest MVs and their weights (Section 16.3). Returns
-/// `[best, nearest, near, _]` and the four counts.
-fn find_near_mvs(above: &MbInfo, left: &MbInfo, above_left: &MbInfo, ref_frame: u8, sign_bias: &[bool; 4]) -> ([Mv; 4], [u8; 4]) {
-    let mut mvs = [Mv::ZERO; 4];
-    let mut cnt = [0u8; 4];
-    let mut idx = 0usize;
-    let bias = |nb: &MbInfo| -> Mv {
-        let mv = nb.mv;
-        if sign_bias[nb.ref_frame as usize] != sign_bias[ref_frame as usize] {
-            Mv {
-                x: mv.x.wrapping_neg(),
-                y: mv.y.wrapping_neg(),
-            }
-        } else {
-            mv
-        }
-    };
-    if above.ref_frame != INTRA_FRAME {
-        if !above.mv.is_zero() {
-            idx += 1;
-            mvs[idx] = bias(above);
-            cnt[idx] += 2;
-        } else {
-            cnt[0] += 2;
-        }
-    }
-    for (nb, weight) in [(left, 2u8), (above_left, 1u8)] {
-        if nb.ref_frame != INTRA_FRAME {
-            if !nb.mv.is_zero() {
-                let this = bias(nb);
-                if this != mvs[idx] {
-                    idx += 1;
-                    mvs[idx] = this;
-                }
-                cnt[idx] += weight;
-            } else {
-                cnt[0] += weight;
-            }
-        }
-    }
-    // Three distinct MVs: merge above-left into nearest if they are equal.
-    if cnt[3] > 0 && mvs[3] == mvs[1] {
-        cnt[1] += 1;
-    }
-    cnt[3] = (above.y_mode == SPLITMV) as u8 * 2 + (left.y_mode == SPLITMV) as u8 * 2 + (above_left.y_mode == SPLITMV) as u8;
-    if cnt[2] > cnt[1] {
-        cnt.swap(1, 2);
-        mvs.swap(1, 2);
-    }
-    if cnt[1] >= cnt[0] {
-        mvs[0] = mvs[1];
-    }
-    (mvs, cnt)
 }
 
 /// Reads one block's tokens (Section 13) into `out` (dequantized, natural
@@ -1163,43 +1047,6 @@ fn apply_y2(coeffs: &mut [i16; 400]) {
     idct::inverse_wht(&y2, &mut coeffs[..256]);
 }
 
-/// Fills the border of an intra-prediction workspace from the frame
-/// (Section 12.2): 127 above the frame, 129 left of it, the above-left
-/// pixel 127 on the top row and 129 on the left column.
-#[allow(clippy::too_many_arguments)]
-fn fill_ws_border(ws: &mut [u8], ws_stride: usize, plane: &Plane, n: usize, mbx: usize, mby: usize, above_right: bool, last_col: bool) {
-    let s = plane.w;
-    let x = mbx * n;
-    let y = mby * n;
-    let extra = if above_right { 4 } else { 0 };
-    if mby == 0 {
-        ws[..1 + n + extra].fill(127);
-    } else {
-        let a = (y - 1) * s + x;
-        ws[1..1 + n].copy_from_slice(&plane.data[a..a + n]);
-        if above_right {
-            if last_col {
-                let v = plane.data[a + n - 1];
-                ws[1 + n..1 + n + 4].fill(v);
-            } else {
-                ws[1 + n..1 + n + 4].copy_from_slice(&plane.data[a + n..a + n + 4]);
-            }
-        }
-        ws[0] = if mbx == 0 { 129 } else { plane.data[a - 1] };
-    }
-    for r in 0..n {
-        ws[(r + 1) * ws_stride] = if mbx == 0 { 129 } else { plane.data[(y + r) * s + x - 1] };
-    }
-}
-
-fn store_ws(ws: &[u8], ws_stride: usize, plane: &mut Plane, n: usize, mbx: usize, mby: usize) {
-    let s = plane.w;
-    for r in 0..n {
-        let d = (mby * n + r) * s + mbx * n;
-        plane.data[d..d + n].copy_from_slice(&ws[(r + 1) * ws_stride + 1..(r + 1) * ws_stride + 1 + n]);
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn recon_intra(
     cur: &mut FrameBuf,
@@ -1214,7 +1061,7 @@ fn recon_intra(
     // Luma.
     let mut ws = [0u8; LUMA_WS_SIZE];
     let st = LUMA_WS_STRIDE;
-    fill_ws_border(&mut ws, st, &cur.y, 16, mbx, mby, true, mbx + 1 == mb_cols);
+    predict::fill_ws_border(&mut ws, st, &cur.y.data, cur.y.w, 16, mbx, mby, true, mbx + 1 == mb_cols);
     if mb.y_mode == B_PRED {
         // Subblocks on the right use the macroblock's above-right pixels.
         let (top, rest) = ws.split_at_mut(st);
@@ -1236,20 +1083,20 @@ fn recon_intra(
             add_residual(&mut coeffs[b * 16..b * 16 + 16], eobs[b], &mut ws, pos, st);
         }
     }
-    store_ws(&ws, st, &mut cur.y, 16, mbx, mby);
+    predict::store_ws(&ws, st, &mut cur.y.data, cur.y.w, 16, mbx, mby);
 
     // Chroma.
     for (plane, first) in [(&mut cur.u, 16usize), (&mut cur.v, 20usize)] {
         let mut ws = [0u8; CHROMA_WS_SIZE];
         let st = CHROMA_WS_STRIDE;
-        fill_ws_border(&mut ws, st, plane, 8, mbx, mby, false, false);
+        predict::fill_ws_border(&mut ws, st, &plane.data, plane.w, 8, mbx, mby, false, false);
         predict::predict_block(&mut ws, st, 8, mb.uv_mode, mby > 0, mbx > 0);
         for j in 0..4 {
             let b = first + j;
             let pos = (1 + (j >> 1) * 4) * st + 1 + (j & 1) * 4;
             add_residual(&mut coeffs[b * 16..b * 16 + 16], eobs[b], &mut ws, pos, st);
         }
-        store_ws(&ws, st, plane, 8, mbx, mby);
+        predict::store_ws(&ws, st, &mut plane.data, plane.w, 8, mbx, mby);
     }
 }
 

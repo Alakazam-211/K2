@@ -28,15 +28,23 @@
 #![forbid(unsafe_code)]
 
 mod bool_decoder;
-#[cfg(test)]
-mod bool_encoder;
 mod decoder;
 mod frame;
-mod idct;
 pub mod ivf;
 mod loop_filter;
-mod predict;
-mod tables;
 
-pub use decoder::{frame_info, DecodeError, Decoder, Dimensions, FrameInfo};
+// Shared with the vp8-encoder crate. Not a stable API: it may change in any
+// release, and vp8-encoder pins this crate's exact version.
+#[doc(hidden)]
+pub mod bool_encoder;
+#[doc(hidden)]
+pub mod idct;
+#[doc(hidden)]
+pub mod modes;
+#[doc(hidden)]
+pub mod predict;
+#[doc(hidden)]
+pub mod tables;
+
+pub use decoder::{frame_info, DecodeError, Decoder, Dimensions, FrameInfo, DEFAULT_MAX_PIXELS};
 pub use frame::Picture;

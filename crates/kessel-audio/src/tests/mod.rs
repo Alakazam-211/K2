@@ -6,9 +6,9 @@
 
 mod alloc;
 mod hostile;
-mod pause;
 #[cfg(feature = "speech-tests")]
 mod metrics;
+mod pause;
 #[cfg(feature = "speech-tests")]
 mod receive;
 
@@ -29,13 +29,17 @@ pub(crate) const FAR_ID: u64 = 1;
 static HEAVY: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
 pub(crate) fn shared_cpu() -> std::sync::RwLockReadGuard<'static, ()> {
-    HEAVY.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+    HEAVY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 // Only the CPU bars use it, and a debug build without `cpu-bars` skips them.
 #[cfg_attr(all(debug_assertions, not(feature = "cpu-bars")), allow(dead_code))]
 pub(crate) fn exclusive_cpu() -> std::sync::RwLockWriteGuard<'static, ()> {
-    HEAVY.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+    HEAVY
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub(crate) fn core_cfg(processing: ProcessingConfig) -> CoreConfig {

@@ -133,6 +133,8 @@ impl EventRx {
 
 impl std::fmt::Debug for EventRx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EventRx").field("len", &self.q.len()).finish()
+        f.debug_struct("EventRx")
+            .field("len", &self.q.len())
+            .finish()
     }
 }

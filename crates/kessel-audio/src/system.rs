@@ -83,16 +83,26 @@ fn list_devices(host: &cpal::Host) -> DeviceList {
         .map(|i| i.to_string());
     let inputs = host
         .input_devices()
-        .map(|it| it.filter_map(|d| device_info(&d, def_in.as_deref())).collect())
+        .map(|it| {
+            it.filter_map(|d| device_info(&d, def_in.as_deref()))
+                .collect()
+        })
         .unwrap_or_default();
     let outputs = host
         .output_devices()
-        .map(|it| it.filter_map(|d| device_info(&d, def_out.as_deref())).collect())
+        .map(|it| {
+            it.filter_map(|d| device_info(&d, def_out.as_deref()))
+                .collect()
+        })
         .unwrap_or_default();
     DeviceList { inputs, outputs }
 }
 
-fn find_device(host: &cpal::Host, choice: &DeviceChoice, dir: Dir) -> Result<cpal::Device, AudioError> {
+fn find_device(
+    host: &cpal::Host,
+    choice: &DeviceChoice,
+    dir: Dir,
+) -> Result<cpal::Device, AudioError> {
     match choice {
         DeviceChoice::Default => match dir {
             Dir::In => host.default_input_device(),
@@ -150,7 +160,9 @@ fn list_act(list: &[DeviceInfo], open: Option<&DeviceInfo>, want: &DeviceChoice)
         DeviceChoice::Id(_) if !listed => lost(),
         DeviceChoice::Id(_) => ListAct::Nothing,
         // Following the default, and the default moved.
-        DeviceChoice::Default if list.iter().any(|d| d.is_default && d.id != o.id) => ListAct::Reopen,
+        DeviceChoice::Default if list.iter().any(|d| d.is_default && d.id != o.id) => {
+            ListAct::Reopen
+        }
         // The default disappeared and nothing took over. Without this the
         // stream sits on a device that's gone, and nobody hears about it.
         DeviceChoice::Default if !listed => lost(),
@@ -219,7 +231,13 @@ where
     dev.build_input_stream::<T, _, _>(
         *cfg,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
-            push_capture(&mut tx, data, ch, <f32 as FromSample<T>>::from_sample_, &shared.io)
+            push_capture(
+                &mut tx,
+                data,
+                ch,
+                <f32 as FromSample<T>>::from_sample_,
+                &shared.io,
+            )
         },
         move |err| {
             let _ = errors.push(StreamErr {
@@ -247,7 +265,13 @@ where
     dev.build_output_stream::<T, _, _>(
         *cfg,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            pop_playback(&mut rx, data, ch, <T as FromSample<f32>>::from_sample_, &shared.io)
+            pop_playback(
+                &mut rx,
+                data,
+                ch,
+                <T as FromSample<f32>>::from_sample_,
+                &shared.io,
+            )
         },
         move |err| {
             let _ = errors.push(StreamErr {
@@ -355,7 +379,12 @@ impl System {
         }
     }
 
-    fn try_open(&mut self, shared: &Arc<Shared>, dir: Dir, generation: u64) -> Result<Open, AudioError> {
+    fn try_open(
+        &mut self,
+        shared: &Arc<Shared>,
+        dir: Dir,
+        generation: u64,
+    ) -> Result<Open, AudioError> {
         let choice = self.want(dir).clone();
         let dev = find_device(&self.host, &choice, dir)?;
         let default_id = match dir {
@@ -404,7 +433,11 @@ impl System {
         })
     }
 
-    pub(crate) fn set_device(&mut self, shared: &Arc<Shared>, sel: DeviceSelection) -> Result<(), AudioError> {
+    pub(crate) fn set_device(
+        &mut self,
+        shared: &Arc<Shared>,
+        sel: DeviceSelection,
+    ) -> Result<(), AudioError> {
         let mut first_err = None;
         if let Some(c) = sel.input {
             self.want_in = c;
@@ -529,9 +562,18 @@ mod tests {
             (ErrorKind::DeviceChanged, StreamAct::Ignore),
             (ErrorKind::Xrun, StreamAct::Ignore),
             (ErrorKind::RealtimeDenied, StreamAct::Ignore),
-            (ErrorKind::DeviceBusy, StreamAct::Raise(ErrorCode::DeviceBusy)),
-            (ErrorKind::PermissionDenied, StreamAct::Raise(ErrorCode::NoPermission)),
-            (ErrorKind::BackendError, StreamAct::Raise(ErrorCode::Backend)),
+            (
+                ErrorKind::DeviceBusy,
+                StreamAct::Raise(ErrorCode::DeviceBusy),
+            ),
+            (
+                ErrorKind::PermissionDenied,
+                StreamAct::Raise(ErrorCode::NoPermission),
+            ),
+            (
+                ErrorKind::BackendError,
+                StreamAct::Raise(ErrorCode::Backend),
+            ),
         ];
         for (kind, act) in cases {
             assert_eq!(stream_act(kind), act, "{kind:?}");
@@ -555,7 +597,11 @@ mod tests {
             ListAct::Lost("usb name was removed".into())
         );
         assert_eq!(
-            list_act(&[dev("usb", false), dev("built-in", true)], Some(&open), &want),
+            list_act(
+                &[dev("usb", false), dev("built-in", true)],
+                Some(&open),
+                &want
+            ),
             ListAct::Nothing
         );
     }
@@ -564,11 +610,21 @@ mod tests {
     fn following_the_default_moves_with_it() {
         let open = dev("built-in", false);
         let list = [dev("built-in", false), dev("headset", true)];
-        assert_eq!(list_act(&list, Some(&open), &DeviceChoice::Default), ListAct::Reopen);
-        // The old default was unplugged and another took over.
-        assert_eq!(list_act(&[dev("headset", true)], Some(&open), &DeviceChoice::Default), ListAct::Reopen);
         assert_eq!(
-            list_act(&[dev("built-in", true)], Some(&dev("built-in", true)), &DeviceChoice::Default),
+            list_act(&list, Some(&open), &DeviceChoice::Default),
+            ListAct::Reopen
+        );
+        // The old default was unplugged and another took over.
+        assert_eq!(
+            list_act(&[dev("headset", true)], Some(&open), &DeviceChoice::Default),
+            ListAct::Reopen
+        );
+        assert_eq!(
+            list_act(
+                &[dev("built-in", true)],
+                Some(&dev("built-in", true)),
+                &DeviceChoice::Default
+            ),
             ListAct::Nothing
         );
     }
@@ -581,7 +637,11 @@ mod tests {
             ListAct::Lost("built-in name was removed".into())
         );
         assert_eq!(
-            list_act(&[dev("line-in", false)], Some(&open), &DeviceChoice::Default),
+            list_act(
+                &[dev("line-in", false)],
+                Some(&open),
+                &DeviceChoice::Default
+            ),
             ListAct::Lost("built-in name was removed".into())
         );
     }
@@ -589,7 +649,10 @@ mod tests {
     #[test]
     fn nothing_open_retries_when_the_list_changes() {
         assert_eq!(list_act(&[], None, &DeviceChoice::Default), ListAct::Reopen);
-        assert_eq!(list_act(&[], None, &DeviceChoice::Id("usb".into())), ListAct::Reopen);
+        assert_eq!(
+            list_act(&[], None, &DeviceChoice::Id("usb".into())),
+            ListAct::Reopen
+        );
     }
 
     use crate::config::EngineConfig;
@@ -648,7 +711,11 @@ mod tests {
     fn a_denied_mic_raises_no_permission_and_never_opens() {
         for status in [MicStatus::Denied, MicStatus::Restricted] {
             let (shared, os, _sys) = rig(status, NEVER);
-            assert_eq!(errors(&shared), [ErrorCode::NoPermission, ErrorCode::NoDevice], "{status:?}");
+            assert_eq!(
+                errors(&shared),
+                [ErrorCode::NoPermission, ErrorCode::NoDevice],
+                "{status:?}"
+            );
             assert_eq!(lock(&shared.in_use).input, None);
             assert_eq!(os.asks(), 0);
         }
@@ -658,7 +725,9 @@ mod tests {
     fn a_device_switch_on_a_denied_mic_returns_no_permission() {
         let (shared, _os, mut sys) = rig(MicStatus::Denied, NEVER);
         errors(&shared);
-        let e = sys.set_device(&shared, another_mic()).expect_err("the switch must fail");
+        let e = sys
+            .set_device(&shared, another_mic())
+            .expect_err("the switch must fail");
         assert_eq!(e.code, ErrorCode::NoPermission);
         assert_eq!(errors(&shared), [ErrorCode::NoPermission]);
     }
@@ -667,7 +736,11 @@ mod tests {
     fn a_never_asked_mic_prompts_once_and_a_no_raises_no_permission() {
         let (shared, os, mut sys) = rig(MicStatus::NotDetermined, NEVER);
         assert_eq!(os.asks(), 1);
-        assert_eq!(errors(&shared), [ErrorCode::NoDevice], "playback only: the prompt is up");
+        assert_eq!(
+            errors(&shared),
+            [ErrorCode::NoDevice],
+            "playback only: the prompt is up"
+        );
         sys.tick(&shared);
         assert_eq!(errors(&shared), []);
         os.answer(false);
@@ -682,20 +755,28 @@ mod tests {
     fn a_yes_opens_the_device_chosen_during_the_prompt() {
         let (shared, os, mut sys) = rig(MicStatus::NotDetermined, NEVER);
         errors(&shared);
-        sys.set_device(&shared, another_mic()).expect("the prompt is still up");
+        sys.set_device(&shared, another_mic())
+            .expect("the prompt is still up");
         assert_eq!(errors(&shared), []);
         assert_eq!(os.asks(), 1);
         assert_eq!(sys.want_in, DeviceChoice::Id("another-mic".into()));
         os.answer(true);
         sys.tick(&shared);
-        assert_eq!(errors(&shared), [ErrorCode::NoDevice], "the gate let the open through");
+        assert_eq!(
+            errors(&shared),
+            [ErrorCode::NoDevice],
+            "the gate let the open through"
+        );
     }
 
     #[test]
     fn no_usage_description_raises_no_permission_without_asking() {
         let os = FakeOs::new(MicStatus::NotDetermined).no_usage_description();
         let (shared, _sys) = rig_on(&os, NEVER);
-        assert_eq!(errors(&shared), [ErrorCode::NoPermission, ErrorCode::NoDevice]);
+        assert_eq!(
+            errors(&shared),
+            [ErrorCode::NoPermission, ErrorCode::NoDevice]
+        );
         assert_eq!(os.asks(), 0);
     }
 
@@ -709,7 +790,11 @@ mod tests {
         os.set_status(MicStatus::Granted);
         std::thread::sleep(Duration::from_millis(5));
         sys.tick(&shared);
-        assert_eq!(errors(&shared), [ErrorCode::NoDevice], "the gate let the open through");
+        assert_eq!(
+            errors(&shared),
+            [ErrorCode::NoDevice],
+            "the gate let the open through"
+        );
     }
 
     #[test]

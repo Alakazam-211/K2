@@ -120,7 +120,10 @@ pub(crate) struct Faults {
 }
 
 impl Faults {
-    #[cfg_attr(not(all(feature = "os-voice", target_os = "android")), allow(dead_code))]
+    #[cfg_attr(
+        not(all(feature = "os-voice", target_os = "android")),
+        allow(dead_code)
+    )]
     pub(crate) fn raise(&self) {
         let _ = self.q.push(self.generation);
     }

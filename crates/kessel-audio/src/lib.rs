@@ -58,11 +58,19 @@
 // backends' OS calls (`phone::ios`, `phone::android`) are the only `unsafe`
 // outside tests.
 #![cfg_attr(
-    not(any(test, all(feature = "cpal", target_os = "macos"), all(feature = "os-voice", any(target_os = "ios", target_os = "android")))),
+    not(any(
+        test,
+        all(feature = "cpal", target_os = "macos"),
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    )),
     forbid(unsafe_code)
 )]
 #![cfg_attr(
-    any(test, all(feature = "cpal", target_os = "macos"), all(feature = "os-voice", any(target_os = "ios", target_os = "android"))),
+    any(
+        test,
+        all(feature = "cpal", target_os = "macos"),
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ),
     deny(unsafe_code)
 )]
 
@@ -79,7 +87,10 @@ mod level;
 #[cfg(feature = "cpal")]
 mod mic;
 mod null;
-#[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+#[cfg(any(
+    test,
+    all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+))]
 mod phone;
 mod pipeline;
 mod resample;

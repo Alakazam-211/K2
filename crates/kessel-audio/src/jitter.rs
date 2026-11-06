@@ -500,7 +500,13 @@ impl JitterBuffer {
         };
         let lost = expected.saturating_sub(self.n.received);
         let played = self.n.decoded + self.n.fec + self.n.concealed;
-        let pct = |a: u64, b: u64| if b == 0 { 0.0 } else { (a as f64 * 100.0 / b as f64) as f32 };
+        let pct = |a: u64, b: u64| {
+            if b == 0 {
+                0.0
+            } else {
+                (a as f64 * 100.0 / b as f64) as f32
+            }
+        };
         ParticipantStats {
             jitter_ms: (self.jitter_s * 1000.0) as f32,
             loss_pct: pct(lost, expected),
@@ -587,13 +593,21 @@ mod tests {
         s.run_until(100 * 20 + 200);
         assert_eq!(s.decoded(), (0..100).collect::<Vec<_>>());
         // First decode happens no earlier than arrival + min delay (40 ms).
-        let first = s.out.iter().position(|n| matches!(n, Next::Decode(_))).unwrap();
+        let first = s
+            .out
+            .iter()
+            .position(|n| matches!(n, Next::Decode(_)))
+            .unwrap();
         assert!(first as u64 * 20 >= 45, "first decode at tick {first}");
         let st = s.jb.stats();
         assert_eq!(st.loss_pct, 0.0);
         assert_eq!(st.frames_concealed, 0);
         assert_eq!(st.packets_received, 100);
-        assert!(st.jb_delay_ms > 20.0 && st.jb_delay_ms < 80.0, "delay {}", st.jb_delay_ms);
+        assert!(
+            st.jb_delay_ms > 20.0 && st.jb_delay_ms < 80.0,
+            "delay {}",
+            st.jb_delay_ms
+        );
     }
 
     #[test]
@@ -682,7 +696,11 @@ mod tests {
     fn a_late_packet_is_concealed_and_counted_late() {
         let mut s = Sim::new();
         for i in 0..50u16 {
-            let arrive = if i == 20 { 20 * 20 + 300 } else { i as u64 * 20 + 5 };
+            let arrive = if i == 20 {
+                20 * 20 + 300
+            } else {
+                i as u64 * 20 + 5
+            };
             if i != 20 {
                 s.send(i, i as u32 * 960, arrive);
             }
@@ -743,8 +761,14 @@ mod tests {
             .iter()
             .position(|n| matches!(n, Next::Decode(b) if seq_of(b) == 50))
             .unwrap();
-        assert!((first_50 as u64 * 20) >= 80 * 20 + 5 + 40, "tick {first_50}");
-        assert!((first_50 as u64 * 20) <= 80 * 20 + 5 + 80, "tick {first_50}");
+        assert!(
+            (first_50 as u64 * 20) >= 80 * 20 + 5 + 40,
+            "tick {first_50}"
+        );
+        assert!(
+            (first_50 as u64 * 20) <= 80 * 20 + 5 + 80,
+            "tick {first_50}"
+        );
     }
 
     #[test]
@@ -763,7 +787,10 @@ mod tests {
         let st = s.jb.stats();
         assert_eq!(st.loss_pct, 0.0);
         assert!(st.frames_concealed >= 10, "{st:?}");
-        assert!(st.frames_dropped >= 5, "the delay must be trimmed back: {st:?}");
+        assert!(
+            st.frames_dropped >= 5,
+            "the delay must be trimmed back: {st:?}"
+        );
         assert!(st.longest_concealment_ms >= 200.0, "{st:?}");
         assert!(st.jb_delay_ms < st.jb_target_ms + 70.0, "{st:?}");
     }
@@ -832,7 +859,10 @@ mod tests {
         assert!(st.jb_target_ms >= 60.0, "{st:?}");
         assert!(st.jitter_ms > 10.0, "{st:?}");
         let late_after = st.packets_late - late_before;
-        assert!(late_after <= 30, "{late_after} late packets out of 400 after adapting: {st:?}");
+        assert!(
+            late_after <= 30,
+            "{late_after} late packets out of 400 after adapting: {st:?}"
+        );
         assert!(st.concealed_pct < 15.0, "{st:?}");
     }
 }

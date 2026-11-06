@@ -3,8 +3,8 @@
 
 use kessel_audio::bytes::Bytes;
 use kessel_audio::{
-    AudioEngine, CaptureSource, DeviceChoice, DeviceSelection, EncodedFrame, EngineConfig, ErrorCode, Event,
-    FrameRx, NullDevice, ProcessingConfig, RecvFrame, FRAME_SAMPLES,
+    AudioEngine, CaptureSource, DeviceChoice, DeviceSelection, EncodedFrame, EngineConfig,
+    ErrorCode, Event, FrameRx, NullDevice, ProcessingConfig, RecvFrame, FRAME_SAMPLES,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -63,7 +63,11 @@ fn collect(rx: &FrameRx, n: usize, timeout: Duration) -> Vec<EncodedFrame> {
     let mut v = Vec::new();
     while v.len() < n {
         let left = deadline.saturating_duration_since(Instant::now());
-        assert!(!left.is_zero(), "only {} of {n} frames before the timeout", v.len());
+        assert!(
+            !left.is_zero(),
+            "only {} of {n} frames before the timeout",
+            v.len()
+        );
         if let Some(f) = rx.recv_timeout(left) {
             v.push(f);
         }
@@ -81,8 +85,10 @@ fn handles_are_send_and_sync() {
 
 #[test]
 fn capture_frames_step_by_960() {
-    let engine = AudioEngine::start(config(fast_null(Some(Box::new(talker(48_000, 10.0, 10.0))))))
-        .expect("start");
+    let engine = AudioEngine::start(config(fast_null(Some(Box::new(talker(
+        48_000, 10.0, 10.0,
+    ))))))
+    .expect("start");
     let frames = collect(&engine.capture_frames(), 100, Duration::from_secs(10));
     for w in frames.windows(2) {
         assert_eq!(w[1].ts48k.wrapping_sub(w[0].ts48k), FRAME_SAMPLES as u32);
@@ -90,7 +96,10 @@ fn capture_frames_step_by_960() {
     assert_eq!(frames[0].ts48k % FRAME_SAMPLES as u32, 0);
     assert!(frames.iter().all(|f| !f.payload.is_empty()));
     let voiced = frames.iter().filter(|f| f.vad).count();
-    assert!(voiced > 80, "only {voiced} of 100 speech frames had VAD set");
+    assert!(
+        voiced > 80,
+        "only {voiced} of 100 speech frames had VAD set"
+    );
     assert!(frames[50].level_dbov > -40.0 && frames[50].level_dbov < 0.0);
 }
 
@@ -107,7 +116,10 @@ fn ts48k_wraps_around() {
     for w in frames.windows(2) {
         assert_eq!(w[1].ts48k.wrapping_sub(w[0].ts48k), FRAME_SAMPLES as u32);
     }
-    assert!(frames[19].ts48k < frames[0].ts48k, "the timestamp should have wrapped");
+    assert!(
+        frames[19].ts48k < frames[0].ts48k,
+        "the timestamp should have wrapped"
+    );
 }
 
 #[test]
@@ -123,7 +135,10 @@ fn dtx_gaps_advance_ts48k() {
         if let Some(f) = rx.recv_timeout(Duration::from_millis(50)) {
             frames.push(f);
         }
-        if frames.last().is_some_and(|f: &EncodedFrame| f.ts48k >= 48_000 * 7) {
+        if frames
+            .last()
+            .is_some_and(|f: &EncodedFrame| f.ts48k >= 48_000 * 7)
+        {
             break;
         }
     }
@@ -136,20 +151,27 @@ fn dtx_gaps_advance_ts48k() {
         biggest_gap > 10 * FRAME_SAMPLES as u32,
         "no DTX gap: largest step {biggest_gap}"
     );
-    assert!(frames.windows(2).all(|w| w[1].ts48k.wrapping_sub(w[0].ts48k) % FRAME_SAMPLES as u32 == 0));
+    assert!(frames
+        .windows(2)
+        .all(|w| w[1].ts48k.wrapping_sub(w[0].ts48k) % FRAME_SAMPLES as u32 == 0));
     // About 1 s of 3 is sent, plus comfort-noise updates.
     let sent_per_cycle = frames.iter().filter(|f| f.ts48k < 48_000 * 6).count() as f64 / 2.0;
     assert!(
         sent_per_cycle < 100.0,
         "{sent_per_cycle} frames per 3 s cycle: DTX isn't suppressing silence"
     );
-    assert!(frames.iter().any(|f| f.dtx), "no comfort-noise (dtx) frames");
+    assert!(
+        frames.iter().any(|f| f.dtx),
+        "no comfort-noise (dtx) frames"
+    );
 }
 
 #[test]
 fn mute_stops_frames_and_time_keeps_running() {
-    let engine = AudioEngine::start(config(fast_null(Some(Box::new(talker(48_000, 100.0, 100.0))))))
-        .expect("start");
+    let engine = AudioEngine::start(config(fast_null(Some(Box::new(talker(
+        48_000, 100.0, 100.0,
+    ))))))
+    .expect("start");
     let rx = engine.capture_frames();
     let before = collect(&rx, 10, Duration::from_secs(5));
     engine.set_capture(false);
@@ -190,8 +212,10 @@ fn mute_lands_while_the_processing_thread_is_behind() {
 fn a_call_between_two_engines() {
     // Engine A talks; its frames are delivered to engine B as participant 7.
     // Both run in real time, so arrival times match the timestamps.
-    let a = AudioEngine::start(config(realtime_null(Some(Box::new(talker(48_000, 100.0, 100.0))))))
-        .expect("start a");
+    let a = AudioEngine::start(config(realtime_null(Some(Box::new(talker(
+        48_000, 100.0, 100.0,
+    ))))))
+    .expect("start a");
     let played: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = played.clone();
     let b = AudioEngine::start(config(NullDevice {
@@ -229,7 +253,12 @@ fn a_call_between_two_engines() {
     assert_eq!(p.loss_pct, 0.0, "{p:?}");
     assert!(p.frames_decoded > 40, "{p:?}");
     let levels = b.levels();
-    let l = levels.participants.iter().find(|(id, _)| *id == 7).expect("level for 7").1;
+    let l = levels
+        .participants
+        .iter()
+        .find(|(id, _)| *id == 7)
+        .expect("level for 7")
+        .1;
     assert!(l.speaking, "participant 7 should be speaking: {l:?}");
     let mut saw_levels = 0;
     while let Some(e) = events.try_recv() {
@@ -243,7 +272,10 @@ fn a_call_between_two_engines() {
         let tail = &v[v.len().saturating_sub(24_000)..];
         tail.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / tail.len().max(1) as f64
     };
-    assert!(energy > 1e-5, "nothing audible was played (mean square {energy})");
+    assert!(
+        energy > 1e-5,
+        "nothing audible was played (mean square {energy})"
+    );
 
     // Deafen: playback goes silent.
     b.set_deafened(true);
@@ -319,7 +351,10 @@ fn the_frame_queue_is_bounded() {
     assert!(rx.len() <= 5);
     let deadline = Instant::now() + Duration::from_secs(5);
     while engine.stats().capture.frames_dropped == 0 {
-        assert!(Instant::now() < deadline, "no drops counted with a full queue");
+        assert!(
+            Instant::now() < deadline,
+            "no drops counted with a full queue"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -352,7 +387,10 @@ fn null_devices_and_set_device() {
     assert_eq!(list.outputs.len(), 1);
     assert!(list.inputs[0].is_default);
     let in_use = engine.devices_in_use();
-    assert_eq!(in_use.input.as_ref().map(|d| d.id.clone()), Some(list.inputs[0].id.clone()));
+    assert_eq!(
+        in_use.input.as_ref().map(|d| d.id.clone()),
+        Some(list.inputs[0].id.clone())
+    );
     engine
         .set_device(DeviceSelection {
             input: Some(DeviceChoice::Default),

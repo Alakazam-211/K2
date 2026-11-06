@@ -178,7 +178,10 @@ pub(crate) fn pink(rng: &mut Rng, n: usize) -> Vec<f32> {
 
 /// Active speech level (dBFS): frames above p95 - 25 dB.
 pub(crate) fn active_level_db(x: &[f32]) -> f64 {
-    let mut p: Vec<f64> = x.chunks(FRAME).map(|c| energy(c) / c.len() as f64).collect();
+    let mut p: Vec<f64> = x
+        .chunks(FRAME)
+        .map(|c| energy(c) / c.len() as f64)
+        .collect();
     if p.is_empty() {
         return -200.0;
     }
@@ -253,7 +256,11 @@ pub(crate) fn corpus() -> &'static [Utterance] {
                 let l = rd_u16(b, &mut p) as usize;
                 let r = k * crate::frame::FRAME_SAMPLES..(k + 1) * crate::frame::FRAME_SAMPLES;
                 let how = dec.decode(&b[p..p + l], &mut pcm[r]);
-                assert_eq!(how, crate::codec::Decoded::Packet, "corpus packet {k} of speaker {speaker}");
+                assert_eq!(
+                    how,
+                    crate::codec::Decoded::Packet,
+                    "corpus packet {k} of speaker {speaker}"
+                );
                 p += l;
             }
             pcm.truncate(len);
@@ -294,10 +301,26 @@ pub(crate) struct Talker {
 }
 
 pub(crate) const TALKERS: [Talker; 4] = [
-    Talker { f0_lo: 95.0, f0_hi: 140.0, tract: 1.0 },
-    Talker { f0_lo: 180.0, f0_hi: 260.0, tract: 1.17 },
-    Talker { f0_lo: 110.0, f0_hi: 165.0, tract: 1.05 },
-    Talker { f0_lo: 200.0, f0_hi: 290.0, tract: 1.22 },
+    Talker {
+        f0_lo: 95.0,
+        f0_hi: 140.0,
+        tract: 1.0,
+    },
+    Talker {
+        f0_lo: 180.0,
+        f0_hi: 260.0,
+        tract: 1.17,
+    },
+    Talker {
+        f0_lo: 110.0,
+        f0_hi: 165.0,
+        tract: 1.05,
+    },
+    Talker {
+        f0_lo: 200.0,
+        f0_hi: 290.0,
+        tract: 1.22,
+    },
 ];
 
 /// Vowel formants (F1, F2, F3) in Hz for an adult male tract.
@@ -347,7 +370,11 @@ fn utterance(t: &Talker, rng: &mut Rng, len: usize) -> Vec<f32> {
     while pos < len {
         let syl = secs(rng.range(0.12, 0.30)).min(len - pos);
         // Optional fricative onset.
-        let fric = if rng.uniform() < 0.4 { secs(rng.range(0.05, 0.11)).min(syl / 2) } else { 0 };
+        let fric = if rng.uniform() < 0.4 {
+            secs(rng.range(0.05, 0.11)).min(syl / 2)
+        } else {
+            0
+        };
         let mut bp = Biquad::bandpass(rng.range(2500.0, 6000.0), 1.2);
         for i in 0..fric {
             let env = (std::f64::consts::PI * i as f64 / fric as f64).sin();
@@ -427,9 +454,21 @@ pub(crate) struct Room {
 }
 
 pub(crate) const ROOMS: [Room; 3] = [
-    Room { name: "office RT60 0.25s", dims: [3.5, 3.0, 2.5], rt60: 0.25 },
-    Room { name: "living RT60 0.45s", dims: [5.0, 4.0, 2.7], rt60: 0.45 },
-    Room { name: "meeting RT60 0.60s", dims: [7.0, 5.0, 3.0], rt60: 0.60 },
+    Room {
+        name: "office RT60 0.25s",
+        dims: [3.5, 3.0, 2.5],
+        rt60: 0.25,
+    },
+    Room {
+        name: "living RT60 0.45s",
+        dims: [5.0, 4.0, 2.7],
+        rt60: 0.45,
+    },
+    Room {
+        name: "meeting RT60 0.60s",
+        dims: [7.0, 5.0, 3.0],
+        rt60: 0.60,
+    },
 ];
 
 const C: f64 = 343.0;
@@ -486,8 +525,8 @@ pub(crate) fn image_rir(room: &Room, src: [f64; 3], mic: [f64; 3], len: usize) -
                                     continue;
                                 }
                                 let x = k as f64 - frac;
-                                let w = 0.5
-                                    + 0.5 * (std::f64::consts::PI * x / HALF_TAPS as f64).cos();
+                                let w =
+                                    0.5 + 0.5 * (std::f64::consts::PI * x / HALF_TAPS as f64).cos();
                                 let sn = if x.abs() < 1e-12 {
                                     1.0
                                 } else {
@@ -547,7 +586,9 @@ pub(crate) fn laptop_speaker(x: &[f32], drive: f64) -> Vec<f32> {
     let peak = x.iter().fold(0.0f32, |m, &v| m.max(v.abs())).max(1e-9) as f64;
     let g = 0.9 / peak;
     let hp = Biquad::highpass(280.0, 0.707).run(x);
-    hp.iter().map(|&v| ((drive * g * v as f64).tanh() / drive) as f32).collect()
+    hp.iter()
+        .map(|&v| ((drive * g * v as f64).tanh() / drive) as f32)
+        .collect()
 }
 
 pub(crate) struct EchoPath {
@@ -595,7 +636,10 @@ pub(crate) fn floor_noise(rng: &mut Rng, n: usize, level_db: f64) -> Vec<f32> {
 
 /// Per-10 ms activity of a clean reference (p95 - 25 dB, above -65 dBFS).
 pub(crate) fn active_frames(x: &[f32]) -> Vec<bool> {
-    let p: Vec<f64> = x.chunks(FRAME).map(|c| energy(c) / c.len() as f64).collect();
+    let p: Vec<f64> = x
+        .chunks(FRAME)
+        .map(|c| energy(c) / c.len() as f64)
+        .collect();
     let mut s = p.clone();
     s.sort_by(|a, b| a.total_cmp(b));
     let p95 = s[(s.len() * 95 / 100).min(s.len() - 1)];

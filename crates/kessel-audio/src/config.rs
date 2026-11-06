@@ -73,13 +73,19 @@ impl Backend {
     }
 
     /// A phone backend (the only kind with a deferred start).
-    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
     pub(crate) fn is_phone(&self) -> bool {
         self.os_effects().is_some()
     }
 
     /// What the OS's voice processing covers, for a phone backend.
-    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
     pub(crate) fn os_effects(&self) -> Option<crate::phone::OsEffects> {
         match self {
             #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
@@ -156,7 +162,10 @@ impl EngineConfig {
     }
 
     /// With a phone backend, sonora runs only what the OS doesn't.
-    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    #[cfg(any(
+        test,
+        all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+    ))]
     pub(crate) fn with_os_effects(mut self) -> Self {
         if let Some(fx) = self.backend.os_effects() {
             self.processing = fx.remaining(&self.processing);
@@ -189,7 +198,10 @@ impl EngineConfig {
             c.validate()?;
         }
         if let Some(d) = self.backend.null_device() {
-            if d.sample_rate < 8_000 || d.sample_rate > 384_000 || !d.sample_rate.is_multiple_of(100) {
+            if d.sample_rate < 8_000
+                || d.sample_rate > 384_000
+                || !d.sample_rate.is_multiple_of(100)
+            {
                 return bad("null device sample_rate must be 8000..=384000 and a multiple of 100");
             }
             if d.block_period.is_zero() {

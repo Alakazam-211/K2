@@ -24,9 +24,10 @@ fn aa_err(what: &str, e: AaError) -> AudioError {
     let code = match e {
         AaError::Disconnected => ErrorCode::DeviceLost,
         AaError::Unavailable | AaError::NoService | AaError::NoFreeHandles => ErrorCode::DeviceBusy,
-        AaError::InvalidFormat | AaError::InvalidRate | AaError::IllegalArgument | AaError::Unimplemented => {
-            ErrorCode::UnsupportedConfig
-        }
+        AaError::InvalidFormat
+        | AaError::InvalidRate
+        | AaError::IllegalArgument
+        | AaError::Unimplemented => ErrorCode::UnsupportedConfig,
         _ => ErrorCode::Backend,
     };
     AudioError::new(code, format!("AAudio {what}: {e}"))
@@ -115,7 +116,10 @@ impl PhoneIo for VoiceCommunication {
                     .data_callback(Box::new(move |_, data, frames| {
                         // SAFETY: as above, for capture.
                         let buf = unsafe {
-                            std::slice::from_raw_parts(data.cast::<f32>().cast_const(), frames.max(0) as usize)
+                            std::slice::from_raw_parts(
+                                data.cast::<f32>().cast_const(),
+                                frames.max(0) as usize,
+                            )
                         };
                         push_capture(&mut capture, buf, 1, |v| v, &s.io);
                         AudioCallbackResult::Continue

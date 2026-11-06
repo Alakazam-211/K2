@@ -191,6 +191,8 @@ pub(super) struct Mft {
     /// Output buffer size when the MFT neither says nor allocates.
     pub(super) out_size_hint: u32,
     streaming: bool,
+    /// An asynchronous MFT was drained and has taken no input since.
+    drained: bool,
 }
 
 // SAFETY: MFTs are free-threaded COM objects (Microsoft's are registered
@@ -217,6 +219,7 @@ impl Mft {
             out_info: MFT_OUTPUT_STREAM_INFO::default(),
             out_size_hint: 1 << 20,
             streaming: false,
+            drained: false,
         };
         // SAFETY: attribute reads and writes on the MFT's own store; the
         // event generator is the same object (asynchronous MFTs must have
@@ -432,25 +435,48 @@ impl Mft {
         let ev = self.events.clone().expect("asynchronous");
         let mut out = Vec::new();
         let start = Instant::now();
-        // Wait to be asked for input (outputs of earlier inputs that show
-        // up meanwhile belong to them; with one input at a time there are
-        // none, but keep them in order).
-        while self.credits == 0 {
-            match next_event(&ev)? {
-                Some(t) => self.on_event(t, &mut out, on_change)?,
-                None if start.elapsed() > STUCK => {
-                    return Err(VideoError::os(
-                        0,
-                        format!("{} asked for no input in {STUCK:?}", self.name),
-                    ))
+        let mut nudged = false;
+        loop {
+            // Wait to be asked for input (outputs of earlier inputs that
+            // show up meanwhile belong to them; with one input at a time
+            // there are none, but keep them in order).
+            while self.credits == 0 {
+                match next_event(&ev)? {
+                    Some(t) => self.on_event(t, &mut out, on_change)?,
+                    None if start.elapsed() > STUCK => {
+                        return Err(VideoError::os(
+                            0,
+                            format!("{} asked for no input in {STUCK:?}", self.name),
+                        ))
+                    }
+                    None => {
+                        // Some MFTs wait for a new start of stream after a
+                        // drain before they ask again.
+                        if self.drained && !nudged && start.elapsed() > Duration::from_millis(100) {
+                            nudged = true;
+                            // SAFETY: a notification on a live MFT.
+                            unsafe {
+                                self.transform
+                                    .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+                            }
+                            .map_err(|e| map_error(&e, "MFT_MESSAGE_NOTIFY_START_OF_STREAM"))?;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
                 }
-                None => std::thread::sleep(Duration::from_millis(1)),
+            }
+            // SAFETY: a live MFT that asked for input, and a live sample.
+            match unsafe { self.transform.ProcessInput(self.in_id, input, 0) } {
+                Ok(()) => {
+                    self.credits -= 1;
+                    self.drained = false;
+                    break;
+                }
+                // A request from before a drain that no longer stands.
+                Err(e) if e.code() == MF_E_NOTACCEPTING => self.credits = 0,
+                Err(e) => return Err(map_error(&e, "ProcessInput")),
             }
         }
-        // SAFETY: a live MFT that asked for input, and a live sample.
-        unsafe { self.transform.ProcessInput(self.in_id, input, 0) }
-            .map_err(|e| map_error(&e, "ProcessInput"))?;
-        self.credits -= 1;
         let had = out.len();
         let mut asked_at: Option<Instant> = None;
         loop {
@@ -500,13 +526,7 @@ impl Mft {
                 None => std::thread::sleep(Duration::from_millis(1)),
             }
         }
-        // A drained asynchronous MFT starts a new stream.
-        // SAFETY: a notification on a live MFT.
-        unsafe {
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
-        }
-        .map_err(|e| map_error(&e, "MFT_MESSAGE_NOTIFY_START_OF_STREAM"))?;
+        self.drained = true;
         Ok(out)
     }
 

@@ -1,21 +1,21 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 50,
-  "catalogSha256": "8a4369604a31f9ba65865c30cf7e76ca05e19ef23e94f05340bdd9ee1a3d4634",
+  "catalogVersion": 51,
+  "catalogSha256": "fb8959cfc65e1eea330c945f059a997f7d07f2e59a542ff7d0f928a560d5a33d",
   "runtimeSha256": "92df683d1130bee4e59d32c9d1937728993a75d6fd590b56314529ebc68f8ab5",
   "files": {
-    "cli/k2": "aa66211286ca4313afc14ded155fc56f7a0799fb6606033b038204cbd965a6ba",
+    "cli/k2": "13c4084f2cbe98d35165e12ca13b4b401ac3ca8008a74c36aa67094349945a72",
     "cli/k2#refusals": "b26af93076186114824ddc5692db6216a404b775c1df46e66f658191d72a0d83",
-    "cli/k2#study app-api": "fa94de4e105082c40b6d01bac63f8be4bdbf4593e9ddddcaa7994421ed9d2634",
+    "cli/k2#study app-api": "d28c2832fab303bbfc665e3a320ae1bf5851c05c6109ff8e82c35039c922f057",
     "cli/k2#study live": "7f314f6dcdbee2c019329bbfaf2e35ed524f9e067d738c44addc18b4ec91487e",
     "cli/k2#zen guide libs": "113adbd45ce4733f70cb1bacd270b188a733e4286cee793317a160caf3619863",
-    "crates/k2-core/src/app_surface.rs": "baca8c802ba91c209bd53bafeaf635f897188dc7991c049ca4c7f3b4dd8ee16c",
-    "sdk/generated/k2-frame.js": "fe9c606ff94e6705e5a5f0c7d9e406cd19a380f449e5c539f8f5682a3a323180",
+    "crates/k2-core/src/app_surface.rs": "342a20f9f35e488b4c383f24543a1042b48f37a0c21ee68bd363b9ca7e96065e",
+    "sdk/generated/k2-frame.js": "5dedb11ffa007fbb2d2961bd6cfe0a2cac69b59a0b59242b1946a5d5f44eb1e4",
     "sdk/generated/k2.d.ts": "8ff7b4bb422625a2ce0c4f4111367802e0434505adc725af9c381718564d9fed",
-    "sdk/generated/phone-verbs.json": "8e53e57fee344da2abdf7e1d60379336c2a917026d5b0786d48eca13b7848f0e",
-    "sdk/server/src/generated/verbs.ts": "b0a9527eba75a02ba90779e05ec36fcf60cbe2fd664c48bad818686dfe41c93b",
+    "sdk/generated/phone-verbs.json": "40df9c29be5d42e48a85dd6eeb70a5284fe6fd88f6b91d999178fa8482efb82e",
+    "sdk/server/src/generated/verbs.ts": "cc2b61b4cdb160f36cb214d88a2862915f4c72df1a6931241d685cebbe0a3df3",
     "src/renderer/lib/k2-caps.generated.ts": "f43e74cf96175f537607c73c5937267b1a8b5e869d4a18216661b094132f91bd",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "87e93849ac11ad714aca06712888a894b350eaed98a5b1af22ca0b68a7205131"
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "fc9b9b78834ae2aa67120583b91ef1cfbab7b5d37b1d7c9f01a3e9cf0eef9a14"
   }
 }

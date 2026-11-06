@@ -243,7 +243,8 @@ fn exposure_counts_are_pinned() {
     // (garden-local) and its cap compute:nodes.
     // Catalog v50: + thread.download (widget), agents.end and agents.archive
     // (garden-local).
-    assert_eq!(c.catalog_version, 50);
+    // Catalog v51 (0.46.9): the seven resumable transfer rows.
+    assert_eq!(c.catalog_version, 51);
     assert_eq!(
         c.verbs.len(),
         262,

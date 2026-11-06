@@ -8,6 +8,8 @@
 # are ```text).
 #
 #   default  local runs: stop at the first failure.
+#   soak     scripts/test-soak-linux.sh (c): k2-daemon's integration tests
+#            once under CPU load, every test, one process per CPU.
 #   ci       the K2 Compute CI gate (scripts/ci/checks.sh rust-test), the
 #            same steps in .github/workflows/checks.yml, and split runs
 #            (`k2 compute test --shards N --profile ci`,
@@ -41,3 +43,11 @@ success-output = "never"
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
+
+[profile.soak]
+retries = 0
+fail-fast = false
+test-threads = "num-cpus"
+slow-timeout = { period = "60s", terminate-after = 10 }
+failure-output = "immediate-final"
+success-output = "never"

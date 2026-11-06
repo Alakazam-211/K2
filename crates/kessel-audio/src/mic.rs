@@ -284,8 +284,14 @@ mod macos {
         #[test]
         #[ignore = "needs the microphone refused for this process; starts the real output device"]
         fn real_denied_mic_raises_no_permission() {
-            use crate::{AudioEngine, DeviceChoice, DeviceSelection, EngineConfig, ErrorCode, Event};
-            assert_eq!(CaptureDeviceAuth.status(), MicStatus::Denied, "refuse the microphone first");
+            use crate::{
+                AudioEngine, DeviceChoice, DeviceSelection, EngineConfig, ErrorCode, Event,
+            };
+            assert_eq!(
+                CaptureDeviceAuth.status(),
+                MicStatus::Denied,
+                "refuse the microphone first"
+            );
             let engine = AudioEngine::start(EngineConfig::default()).expect("start");
             let events = engine.events();
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -304,7 +310,10 @@ mod macos {
             };
             let e = engine.set_device(sel).expect_err("the switch must fail");
             assert_eq!(e.code, ErrorCode::NoPermission);
-            assert!(engine.capture_frames().try_recv().is_none(), "frames from a refused microphone");
+            assert!(
+                engine.capture_frames().try_recv().is_none(),
+                "frames from a refused microphone"
+            );
         }
 
         /// The real prompt call. Needs a usage description linked into the
@@ -315,11 +324,18 @@ mod macos {
         #[ignore = "shows the OS prompt; needs a usage description linked in"]
         fn real_ask_returns_at_once_and_calls_back() {
             let os = CaptureDeviceAuth;
-            assert!(os.can_ask(), "link an Info.plist with the usage description");
+            assert!(
+                os.can_ask(),
+                "link an Info.plist with the usage description"
+            );
             let reply = Reply::default();
             let t = Instant::now();
             os.ask(reply.clone());
-            assert!(t.elapsed() < Duration::from_secs(2), "ask blocked for {:?}", t.elapsed());
+            assert!(
+                t.elapsed() < Duration::from_secs(2),
+                "ask blocked for {:?}",
+                t.elapsed()
+            );
             let deadline = Instant::now() + Duration::from_secs(60);
             while reply.get().is_none() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(20));
@@ -377,7 +393,11 @@ pub(crate) mod fake {
         /// callback runs, as on macOS.
         pub(crate) fn answer(&self, granted: bool) {
             let mut g = self.state();
-            g.status = if granted { MicStatus::Granted } else { MicStatus::Denied };
+            g.status = if granted {
+                MicStatus::Granted
+            } else {
+                MicStatus::Denied
+            };
             g.reply.as_ref().expect("nobody asked").send(granted);
         }
     }

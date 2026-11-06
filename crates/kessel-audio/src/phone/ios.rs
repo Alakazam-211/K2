@@ -8,17 +8,22 @@
 //! rate, mono f32; the engine resamples to 48 kHz.
 #![allow(unsafe_code)]
 
-use super::{Ends, OsEffects, Opened, PhoneIo};
+use super::{Ends, Opened, OsEffects, PhoneIo};
 use crate::device::{pop_playback, push_capture};
 use crate::error::{AudioError, ErrorCode};
 use coreaudio::audio_unit::audio_format::LinearPcmFlags;
 use coreaudio::audio_unit::render_callback::{data, Args};
 use coreaudio::audio_unit::{AudioUnit, Element, IOType, SampleFormat, Scope, StreamFormat};
-use objc2_audio_toolbox::{kAUVoiceIOProperty_VoiceProcessingEnableAGC, kAudioOutputUnitProperty_EnableIO};
+use objc2_audio_toolbox::{
+    kAUVoiceIOProperty_VoiceProcessingEnableAGC, kAudioOutputUnitProperty_EnableIO,
+};
 use objc2_avf_audio::{AVAudioSession, AVAudioSessionRecordPermission};
 
 fn ca_err(what: &str, e: coreaudio::Error) -> AudioError {
-    AudioError::new(ErrorCode::Backend, format!("voice processing unit: {what}: {e}"))
+    AudioError::new(
+        ErrorCode::Backend,
+        format!("voice processing unit: {what}: {e}"),
+    )
 }
 
 /// The session's current hardware rate, or `None` if it reports none.
@@ -64,7 +69,10 @@ impl PhoneIo for VoiceProcessingIo {
             faults: _,
         } = ends;
         let rate = session_rate().ok_or_else(|| {
-            AudioError::new(ErrorCode::NoDevice, "the audio session reports no sample rate")
+            AudioError::new(
+                ErrorCode::NoDevice,
+                "the audio session reports no sample rate",
+            )
         })?;
         let mut warnings = Vec::new();
         let mic = !mic_refused();
@@ -79,10 +87,20 @@ impl PhoneIo for VoiceProcessingIo {
             .map_err(|e| ca_err("create", e))?;
         let on = 1u32;
         let input = u32::from(mic);
-        unit.set_property(kAudioOutputUnitProperty_EnableIO, Scope::Input, Element::Input, Some(&input))
-            .map_err(|e| ca_err("enable input", e))?;
-        unit.set_property(kAudioOutputUnitProperty_EnableIO, Scope::Output, Element::Output, Some(&on))
-            .map_err(|e| ca_err("enable output", e))?;
+        unit.set_property(
+            kAudioOutputUnitProperty_EnableIO,
+            Scope::Input,
+            Element::Input,
+            Some(&input),
+        )
+        .map_err(|e| ca_err("enable input", e))?;
+        unit.set_property(
+            kAudioOutputUnitProperty_EnableIO,
+            Scope::Output,
+            Element::Output,
+            Some(&on),
+        )
+        .map_err(|e| ca_err("enable output", e))?;
         if !self.fx.gain_control {
             let off = 0u32;
             if let Err(e) = unit.set_property(

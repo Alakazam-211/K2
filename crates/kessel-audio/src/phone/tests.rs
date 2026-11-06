@@ -3,7 +3,7 @@
 //! retries. The state machine tests drive it directly; the engine tests run
 //! it on the engine's real threads with a fake device that plays a clock.
 
-use super::{check_selection, Ends, Faults, OsEffects, Opened, Phone, PhoneIo};
+use super::{check_selection, Ends, Faults, Opened, OsEffects, Phone, PhoneIo};
 use crate::apm::ProcessingConfig;
 use crate::config::{Backend, EngineConfig};
 use crate::device::NullDevice;
@@ -22,7 +22,9 @@ pub(crate) struct FakeIo(pub(crate) Box<dyn PhoneIo>, pub(crate) OsEffects);
 
 impl std::fmt::Debug for FakeIo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("FakeIo").field(&self.1).finish_non_exhaustive()
+        f.debug_tuple("FakeIo")
+            .field(&self.1)
+            .finish_non_exhaustive()
     }
 }
 
@@ -70,7 +72,11 @@ impl FakeOs {
     }
     /// The open stream's device thread reports that it died.
     fn raise_fault(&self) {
-        lock(&self.0).faults.as_ref().expect("a stream was opened").raise();
+        lock(&self.0)
+            .faults
+            .as_ref()
+            .expect("a stream was opened")
+            .raise();
     }
     fn io(&self) -> Box<dyn PhoneIo> {
         Box::new(FakeDev(self.clone()))
@@ -132,7 +138,8 @@ impl PhoneIo for FakeDev {
                 let mut next = Instant::now();
                 while !stop.load(Ordering::Acquire) {
                     for v in inb.iter_mut() {
-                        *v = 0.3 * (2.0 * std::f32::consts::PI * 300.0 * n as f32 / rate as f32).sin();
+                        *v = 0.3
+                            * (2.0 * std::f32::consts::PI * 300.0 * n as f32 / rate as f32).sin();
                         n += 1;
                     }
                     if mic {
@@ -221,7 +228,11 @@ fn rig(session_active: bool) -> (Arc<Shared>, FakeOs, Phone) {
 #[test]
 fn a_deferred_start_opens_only_when_the_session_is_active() {
     let (s, os, mut p) = rig(false);
-    assert_eq!(os.log(), Vec::<String>::new(), "nothing opens before the session");
+    assert_eq!(
+        os.log(),
+        Vec::<String>::new(),
+        "nothing opens before the session"
+    );
     assert_eq!(ctrl(&s), ["pause"], "the capture path waits for a device");
     assert_eq!(in_use(&s), (None, None));
     p.tick(&s);
@@ -232,7 +243,10 @@ fn a_deferred_start_opens_only_when_the_session_is_active() {
     assert_eq!(ctrl(&s), OPENED);
     assert_eq!(
         in_use(&s),
-        (Some("Fake input (48000 Hz)".into()), Some("Fake output (48000 Hz)".into()))
+        (
+            Some("Fake input (48000 Hz)".into()),
+            Some("Fake output (48000 Hz)".into())
+        )
     );
     assert_eq!(errors(&s), []);
 }
@@ -307,7 +321,10 @@ fn a_route_change_reopens_at_the_new_rate_mid_call() {
     assert_eq!(ctrl(&s), want);
     assert_eq!(
         in_use(&s),
-        (Some("Fake input (16000 Hz)".into()), Some("Fake output (16000 Hz)".into()))
+        (
+            Some("Fake input (16000 Hz)".into()),
+            Some("Fake output (16000 Hz)".into())
+        )
     );
     assert_eq!(errors(&s), [], "a route change is not an error");
 }
@@ -335,7 +352,11 @@ fn a_fault_from_the_open_stream_reopens_and_a_stale_one_is_ignored() {
     assert_eq!(errors(&s), []);
     stale.raise();
     p.tick(&s);
-    assert_eq!(os.log(), Vec::<String>::new(), "a fault from a closed stream");
+    assert_eq!(
+        os.log(),
+        Vec::<String>::new(),
+        "a fault from a closed stream"
+    );
 }
 
 #[test]
@@ -397,13 +418,19 @@ fn the_os_picks_the_route() {
         input: Some(DeviceChoice::Id("usb-mic".into())),
         output: None,
     };
-    assert_eq!(check_selection(&sel).expect_err("not ours").code, ErrorCode::NoDevice);
+    assert_eq!(
+        check_selection(&sel).expect_err("not ours").code,
+        ErrorCode::NoDevice
+    );
 }
 
 #[test]
 fn sonora_runs_only_what_the_os_does_not() {
     let all = ProcessingConfig::default();
-    assert_eq!(OsEffects::default().remaining(&all), ProcessingConfig::off());
+    assert_eq!(
+        OsEffects::default().remaining(&all),
+        ProcessingConfig::off()
+    );
     let no_aec = OsEffects {
         echo_cancellation: false,
         ..OsEffects::default()
@@ -424,7 +451,10 @@ fn sonora_runs_only_what_the_os_does_not() {
     };
     assert_eq!(none.remaining(&all), all);
     // What the caller turned off stays off.
-    assert_eq!(none.remaining(&ProcessingConfig::off()), ProcessingConfig::off());
+    assert_eq!(
+        none.remaining(&ProcessingConfig::off()),
+        ProcessingConfig::off()
+    );
 }
 
 // ---- On the engine's threads ----
@@ -454,7 +484,11 @@ fn frames(e: &AudioEngine, n: usize, within: Duration) -> Vec<u32> {
     let mut ts = Vec::new();
     while ts.len() < n {
         let left = deadline.saturating_duration_since(Instant::now());
-        assert!(!left.is_zero(), "only {} of {n} frames in {within:?}", ts.len());
+        assert!(
+            !left.is_zero(),
+            "only {} of {n} frames in {within:?}",
+            ts.len()
+        );
         if let Some(f) = rx.recv_timeout(left) {
             ts.push(f.ts48k);
         }
@@ -498,7 +532,9 @@ fn engine_defers_until_the_session_is_active_and_survives_a_route_change() {
     os.set_rate(16_000);
     e.route_changed();
     wait_for("the 16 kHz device", Duration::from_secs(2), || {
-        e.devices_in_use().input.is_some_and(|d| d.name.contains("16000"))
+        e.devices_in_use()
+            .input
+            .is_some_and(|d| d.name.contains("16000"))
     });
     let mut after = drain(&e);
     after.extend(frames(&e, 25, Duration::from_secs(2)));
@@ -506,7 +542,10 @@ fn engine_defers_until_the_session_is_active_and_survives_a_route_change() {
     // Time only moves forward, in whole frames; the reopen is at most a
     // short gap.
     for d in steps(&all) {
-        assert!(d >= 960 && d.is_multiple_of(960) && d <= 960 * 20, "step {d} in {all:?}");
+        assert!(
+            d >= 960 && d.is_multiple_of(960) && d <= 960 * 20,
+            "step {d} in {all:?}"
+        );
     }
     assert_eq!(os.log(), ["close", "open 16000"]);
     let errs: Vec<Event> = std::iter::from_fn(|| e.events().try_recv())
@@ -538,7 +577,10 @@ fn engine_suspend_stops_frames_and_resume_carries_the_gap() {
     // second of scheduling slack.
     let lo = 500 * 48;
     let hi = (paused.as_millis() as u32 + 1000) * 48;
-    assert!(jump >= lo && jump <= hi && jump.is_multiple_of(960), "jump {jump} (lo {lo}, hi {hi})");
+    assert!(
+        jump >= lo && jump <= hi && jump.is_multiple_of(960),
+        "jump {jump} (lo {lo}, hi {hi})"
+    );
     assert!(steps(&after).iter().all(|&d| d == 960), "{after:?}");
 }
 
@@ -546,7 +588,8 @@ fn engine_suspend_stops_frames_and_resume_carries_the_gap() {
 fn engine_routes_are_the_os_s_and_deferral_needs_a_phone_backend() {
     let os = FakeOs::new(48_000);
     let e = phone_engine(&os, false);
-    e.set_device(DeviceSelection::default()).expect("the default route");
+    e.set_device(DeviceSelection::default())
+        .expect("the default route");
     let err = e
         .set_device(DeviceSelection {
             input: Some(DeviceChoice::Id("usb-mic".into())),

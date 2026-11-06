@@ -57,7 +57,10 @@ fn capture(core: &mut Core, b0: usize, blocks: usize, out: &mut Vec<EncodedFrame
 /// When each frame reaches the far end: 30 ms after its capture ended
 /// (`ts48k` started at 0 and tracks the wall clock, gaps included).
 fn arrivals(frames: &[EncodedFrame]) -> Vec<u64> {
-    frames.iter().map(|f| (f.ts48k / 48) as u64 + 20 + 30).collect()
+    frames
+        .iter()
+        .map(|f| (f.ts48k / 48) as u64 + 20 + 30)
+        .collect()
 }
 
 /// Play `frames` through a receiver's jitter buffer as a transport would:
@@ -72,7 +75,12 @@ fn receive(frames: &[EncodedFrame], arrive_ms: &[u64]) -> ParticipantStats {
         let now_ms = tick * 20;
         while next < frames.len() && arrive_ms[next] <= now_ms {
             let f = &frames[next];
-            jb.insert(next as u16, f.ts48k, f.payload.clone(), t0 + Duration::from_millis(arrive_ms[next]));
+            jb.insert(
+                next as u16,
+                f.ts48k,
+                f.payload.clone(),
+                t0 + Duration::from_millis(arrive_ms[next]),
+            );
             next += 1;
         }
         let _ = jb.next(t0 + Duration::from_millis(now_ms));
@@ -96,7 +104,9 @@ fn suspended_call() -> (Vec<EncodedFrame>, usize) {
     let before = frames.len();
     capture(&mut c, 100, 200, &mut frames);
     assert_eq!(frames.len(), before, "no frames while suspended");
-    assert!(c.set_paused(Pause::Caller, false, t0 + BLOCK * 300).is_none());
+    assert!(c
+        .set_paused(Pause::Caller, false, t0 + BLOCK * 300)
+        .is_none());
     let resumed_at = frames.len();
     capture(&mut c, 300, 100, &mut frames);
     assert_eq!(frames.len(), resumed_at + 50);
@@ -114,7 +124,10 @@ fn a_suspend_reads_as_dtx_at_the_far_end_not_loss() {
         frames[resumed_at].ts48k,
         51 * FRAME_SAMPLES as u32 + gap_ts48k(Duration::from_secs(2))
     );
-    assert_eq!(gap_ts48k(Duration::from_secs(2)), 100 * FRAME_SAMPLES as u32);
+    assert_eq!(
+        gap_ts48k(Duration::from_secs(2)),
+        100 * FRAME_SAMPLES as u32
+    );
     let st = receive(&frames, &arrivals(&frames));
     assert_eq!(st.loss_pct, 0.0, "{st:?}");
     assert_eq!(st.frames_concealed, 0, "{st:?}");
@@ -157,13 +170,19 @@ fn no_closing_frame_when_muted_or_already_silent() {
     for _ in 0..200 {
         let _ = c.capture_block(&[0.0; BLOCK_SAMPLES]);
     }
-    assert!(c.set_paused(Pause::Caller, true, t0).is_none(), "already in DTX");
+    assert!(
+        c.set_paused(Pause::Caller, true, t0).is_none(),
+        "already in DTX"
+    );
 
     let mut c = core();
     for _ in 0..4 {
         let _ = c.capture_block(&[0.0; BLOCK_SAMPLES]);
     }
-    assert!(c.set_paused(Pause::Caller, true, t0).is_none(), "silence, not speech");
+    assert!(
+        c.set_paused(Pause::Caller, true, t0).is_none(),
+        "silence, not speech"
+    );
 }
 
 #[test]
@@ -175,12 +194,16 @@ fn a_pause_lasts_while_any_reason_holds() {
     let ts_end = 10 * FRAME_SAMPLES as u32;
     assert!(c.set_paused(Pause::Device, true, t0 + BLOCK * 20).is_some());
     assert!(c.set_paused(Pause::Caller, true, t0 + BLOCK * 30).is_none());
-    assert!(c.set_paused(Pause::Device, false, t0 + BLOCK * 40).is_none());
+    assert!(c
+        .set_paused(Pause::Device, false, t0 + BLOCK * 40)
+        .is_none());
     assert!(c.is_paused());
     let n = frames.len();
     capture(&mut c, 40, 20, &mut frames);
     assert_eq!(frames.len(), n, "still suspended");
-    assert!(c.set_paused(Pause::Caller, false, t0 + BLOCK * 60).is_none());
+    assert!(c
+        .set_paused(Pause::Caller, false, t0 + BLOCK * 60)
+        .is_none());
     assert!(!c.is_paused());
     frames.clear();
     capture(&mut c, 60, 2, &mut frames);
@@ -198,7 +221,9 @@ fn nothing_captured_yet_means_no_gap() {
     let t0 = Instant::now();
     let mut c = core();
     assert!(c.set_paused(Pause::Device, true, t0).is_none());
-    assert!(c.set_paused(Pause::Device, false, t0 + Duration::from_secs(5)).is_none());
+    assert!(c
+        .set_paused(Pause::Device, false, t0 + Duration::from_secs(5))
+        .is_none());
     let mut frames = Vec::new();
     capture(&mut c, 500, 2, &mut frames);
     assert_eq!(frames[0].ts48k, 0, "the first frame keeps initial_ts48k");
@@ -215,7 +240,13 @@ fn suspend_silences_playback_and_a_device_pause_does_not() {
         dtx: false,
         ..EncoderCfg::default()
     };
-    let sched = schedule(&encode_remote(&far, enc), Net { base_ms: 30.0, ..Net::default() });
+    let sched = schedule(
+        &encode_remote(&far, enc),
+        Net {
+            base_ms: 30.0,
+            ..Net::default()
+        },
+    );
     let t0 = Instant::now();
     let mut next = 0;
     let mut energy = |c: &mut Core, b0: usize, blocks: usize| -> f64 {
@@ -244,7 +275,10 @@ fn suspend_silences_playback_and_a_device_pause_does_not() {
     assert_eq!(energy(&mut c, 100, 50), 0.0, "suspended: silence");
     let mut levels = crate::events::Levels::default();
     c.fill_levels(&mut levels);
-    assert!(levels.participants[0].1.level_dbov > -60.0, "still decoded: {levels:?}");
+    assert!(
+        levels.participants[0].1.level_dbov > -60.0,
+        "still decoded: {levels:?}"
+    );
     assert_eq!(levels.local.level_dbov, -127.0);
     let _ = c.set_paused(Pause::Caller, false, t0 + BLOCK * 150);
     let _ = c.set_paused(Pause::Device, true, t0 + BLOCK * 150);

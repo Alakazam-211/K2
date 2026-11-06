@@ -146,7 +146,8 @@ pub(crate) struct OpusDec {
 impl OpusDec {
     pub(crate) fn new() -> Result<Self, AudioError> {
         Ok(OpusDec {
-            dec: OpusDecoder::new(SAMPLE_RATE as i32, 1).map_err(|c| opus_err("decoder init", c))?,
+            dec: OpusDecoder::new(SAMPLE_RATE as i32, 1)
+                .map_err(|c| opus_err("decoder init", c))?,
             scratch: vec![0.0; MAX_DECODE],
         })
     }
@@ -175,7 +176,10 @@ impl OpusDec {
     /// to concealment when `next` carries none (the decoder does that
     /// itself) or fails.
     pub(crate) fn decode_fec(&mut self, next: &[u8], out: &mut [f32]) -> Decoded {
-        match self.dec.decode_float(Some(next), out, FRAME_SAMPLES as i32, true) {
+        match self
+            .dec
+            .decode_float(Some(next), out, FRAME_SAMPLES as i32, true)
+        {
             Ok(n) if n as usize == FRAME_SAMPLES => Decoded::Fec,
             _ => {
                 self.conceal(out);
@@ -187,7 +191,10 @@ impl OpusDec {
     /// Packet-loss concealment for one 20 ms frame. After a DTX
     /// comfort-noise frame this continues the comfort noise.
     pub(crate) fn conceal(&mut self, out: &mut [f32]) {
-        match self.dec.decode_float(None, out, FRAME_SAMPLES as i32, false) {
+        match self
+            .dec
+            .decode_float(None, out, FRAME_SAMPLES as i32, false)
+        {
             Ok(n) if n as usize == FRAME_SAMPLES => {}
             _ => out.fill(0.0),
         }
@@ -230,7 +237,11 @@ mod tests {
         for (i, f) in x.chunks(FRAME_SAMPLES).enumerate() {
             let e = enc.encode(f).unwrap();
             assert!(!e.is_empty_dtx(), "speech frame {i} came out empty");
-            assert!(e.packet.len() < 300, "32 kbit/s frame of {} bytes", e.packet.len());
+            assert!(
+                e.packet.len() < 300,
+                "32 kbit/s frame of {} bytes",
+                e.packet.len()
+            );
             let p = e.packet.to_vec();
             assert_eq!(
                 dec.decode(&p, &mut y[i * FRAME_SAMPLES..(i + 1) * FRAME_SAMPLES]),
@@ -255,7 +266,10 @@ mod tests {
         }
         // After a short hangover the encoder sends almost nothing.
         assert!(empty >= 70, "only {empty} of 100 silent frames were empty");
-        assert!(in_dtx >= 70, "only {in_dtx} of 100 silent frames were in DTX");
+        assert!(
+            in_dtx >= 70,
+            "only {in_dtx} of 100 silent frames were in DTX"
+        );
     }
 
     #[cfg(feature = "speech-tests")]
@@ -322,7 +336,9 @@ mod tests {
         };
         let frames: Vec<Vec<u8>> = {
             let mut enc = OpusEnc::new(cfg).unwrap();
-            x.as_chunks::<FRAME_SAMPLES>().0.iter()
+            x.as_chunks::<FRAME_SAMPLES>()
+                .0
+                .iter()
                 .map(|f| enc.encode(f).unwrap().packet.to_vec())
                 .collect()
         };

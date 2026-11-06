@@ -25,8 +25,14 @@ fn valid_packets() -> Vec<Bytes> {
                 * (0.6 + 0.4 * (2.0 * std::f32::consts::PI * 3.0 * t).sin())
         })
         .collect();
-    let cfg = EncoderCfg { dtx: false, ..EncoderCfg::default() };
-    encode_remote(&x, cfg).into_iter().map(|p| p.payload).collect()
+    let cfg = EncoderCfg {
+        dtx: false,
+        ..EncoderCfg::default()
+    };
+    encode_remote(&x, cfg)
+        .into_iter()
+        .map(|p| p.payload)
+        .collect()
 }
 
 /// One hostile payload: random bytes, or a valid packet with bits flipped,
@@ -77,10 +83,16 @@ fn the_decoder_survives_hostile_packets() {
             }
             _ => dec.conceal(&mut out),
         }
-        assert!(out.iter().all(|v| v.is_finite()), "packet {i} decoded to a non-finite sample");
+        assert!(
+            out.iter().all(|v| v.is_finite()),
+            "packet {i} decoded to a non-finite sample"
+        );
     }
     // And it still decodes a good packet afterwards.
-    assert_eq!(dec.decode(&valid[10], &mut out), crate::codec::Decoded::Packet);
+    assert_eq!(
+        dec.decode(&valid[10], &mut out),
+        crate::codec::Decoded::Packet
+    );
 }
 
 #[test]
@@ -124,7 +136,8 @@ fn the_receive_path_survives_hostile_frames() {
             // Arrivals from the past, the present or the future.
             let skew_ms = rng.below(4_000) as i64 - 2_000;
             let arrival = if skew_ms < 0 {
-                now.checked_sub(Duration::from_millis(-skew_ms as u64)).unwrap_or(now)
+                now.checked_sub(Duration::from_millis(-skew_ms as u64))
+                    .unwrap_or(now)
             } else {
                 now + Duration::from_millis(skew_ms as u64)
             };
@@ -133,7 +146,13 @@ fn the_receive_path_survives_hostile_frames() {
             } else {
                 hostile_payload(&mut rng, &valid)
             };
-            core.insert(RecvFrame { participant: FAR_ID, payload, seq, ts48k: ts, arrival });
+            core.insert(RecvFrame {
+                participant: FAR_ID,
+                payload,
+                seq,
+                ts48k: ts,
+                arrival,
+            });
             inserted += 1;
             if rng.below(20) == 0 {
                 core.lost(FAR_ID, rng.next_u64() as u16);

@@ -138,7 +138,9 @@ fn report_dependency_allocations_per_second() {
     let mut out = [0.0f32; BLOCK_SAMPLES];
     let mut pcm = [0.0f32; FRAME_SAMPLES];
     let packets: Vec<Vec<u8>> = x
-        .as_chunks::<FRAME_SAMPLES>().0.iter()
+        .as_chunks::<FRAME_SAMPLES>()
+        .0
+        .iter()
         .map(|f| enc.encode(f).unwrap().packet.to_vec())
         .collect();
     // Warm-up done above for the encoder; measure 5 s of each.

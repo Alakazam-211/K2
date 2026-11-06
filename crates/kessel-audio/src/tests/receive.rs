@@ -37,7 +37,12 @@ fn clean_network_plays_everything() {
             ..Net::default()
         },
     );
-    let run = run_core(&core_cfg(ProcessingConfig::off()), &sched, n + secs(0.5), None);
+    let run = run_core(
+        &core_cfg(ProcessingConfig::off()),
+        &sched,
+        n + secs(0.5),
+        None,
+    );
     let st = participant_stats(&run);
     assert_eq!(st.loss_pct, 0.0, "{st:?}");
     assert_eq!(st.frames_concealed, 0, "{st:?}");
@@ -47,7 +52,10 @@ fn clean_network_plays_everything() {
     let ly = active_level(&run.rendered[..n], &x);
     // The playback is delayed by the network and jitter buffer; the
     // active-frame mask tolerates that over speech segments of seconds.
-    assert!((lx - ly).abs() < 2.0, "talker {lx:.1} dBFS played {ly:.1} dBFS");
+    assert!(
+        (lx - ly).abs() < 2.0,
+        "talker {lx:.1} dBFS played {ly:.1} dBFS"
+    );
 }
 
 #[test]
@@ -64,19 +72,41 @@ fn loss_reordering_and_jitter_are_concealed() {
         seed: 2,
     };
     let sched = schedule(&packets, net);
-    let lossy = run_core(&core_cfg(ProcessingConfig::off()), &sched, n + secs(0.5), None);
+    let lossy = run_core(
+        &core_cfg(ProcessingConfig::off()),
+        &sched,
+        n + secs(0.5),
+        None,
+    );
     let clean = run_core(
         &core_cfg(ProcessingConfig::off()),
-        &schedule(&packets, Net { base_ms: 30.0, ..Net::default() }),
+        &schedule(
+            &packets,
+            Net {
+                base_ms: 30.0,
+                ..Net::default()
+            },
+        ),
         n + secs(0.5),
         None,
     );
     let st = participant_stats(&lossy);
     eprintln!("[receive] 10% loss, 5% reorder, 30 ms jitter: {st:?}");
-    assert!((6.0..=14.0).contains(&st.loss_pct), "loss {:.1}%", st.loss_pct);
+    assert!(
+        (6.0..=14.0).contains(&st.loss_pct),
+        "loss {:.1}%",
+        st.loss_pct
+    );
     assert!(st.frames_fec > 0, "FEC never used: {st:?}");
-    assert!(st.concealed_pct < 15.0, "concealed {:.1}%", st.concealed_pct);
-    assert!(lossy.rendered.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
+    assert!(
+        st.concealed_pct < 15.0,
+        "concealed {:.1}%",
+        st.concealed_pct
+    );
+    assert!(lossy
+        .rendered
+        .iter()
+        .all(|v| v.is_finite() && v.abs() <= 1.0));
     let l_lossy = active_level(&lossy.rendered[..n], &x);
     let l_clean = active_level(&clean.rendered[..n], &x);
     assert!(
@@ -103,7 +133,12 @@ fn fec_off_conceals_every_loss() {
             ..Net::default()
         },
     );
-    let run = run_core(&core_cfg(ProcessingConfig::off()), &sched, n + secs(0.5), None);
+    let run = run_core(
+        &core_cfg(ProcessingConfig::off()),
+        &sched,
+        n + secs(0.5),
+        None,
+    );
     let st = participant_stats(&run);
     assert_eq!(st.frames_fec, 0, "{st:?}");
     assert!(st.frames_concealed > 0, "{st:?}");
@@ -128,10 +163,21 @@ fn fec_beats_plc_on_lost_frames() {
             ..EncoderCfg::default()
         };
         let packets = encode_remote(&x, cfg);
-        let lossy = run_core(&core_cfg(ProcessingConfig::off()), &schedule(&packets, net), n, None);
+        let lossy = run_core(
+            &core_cfg(ProcessingConfig::off()),
+            &schedule(&packets, net),
+            n,
+            None,
+        );
         let clean = run_core(
             &core_cfg(ProcessingConfig::off()),
-            &schedule(&packets, Net { base_ms: 30.0, ..Net::default() }),
+            &schedule(
+                &packets,
+                Net {
+                    base_ms: 30.0,
+                    ..Net::default()
+                },
+            ),
             n,
             None,
         );
@@ -144,7 +190,9 @@ fn fec_beats_plc_on_lost_frames() {
     };
     let with_fec = err_db(true);
     let without = err_db(false);
-    eprintln!("[receive] SNR vs clean decode at 8% loss: FEC {with_fec:.1} dB, PLC only {without:.1} dB");
+    eprintln!(
+        "[receive] SNR vs clean decode at 8% loss: FEC {with_fec:.1} dB, PLC only {without:.1} dB"
+    );
     assert!(
         with_fec > without + 5.0,
         "FEC ({with_fec:.1} dB) is not better than PLC alone ({without:.1} dB)"
@@ -159,9 +207,16 @@ fn levels_follow_the_talker() {
     let mut x = far(5, n);
     // A long silence in the middle.
     x[secs(4.0)..secs(7.0)].fill(0.0);
-    let sched = schedule(&encode_remote(&x, EncoderCfg::default()), Net { base_ms: 20.0, ..Net::default() });
+    let sched = schedule(
+        &encode_remote(&x, EncoderCfg::default()),
+        Net {
+            base_ms: 20.0,
+            ..Net::default()
+        },
+    );
     let mut core = Core::new(cfg.clone()).unwrap();
-    core.add(Participant::new(FAR_ID, &cfg).unwrap()).unwrap_or_else(|_| panic!("add"));
+    core.add(Participant::new(FAR_ID, &cfg).unwrap())
+        .unwrap_or_else(|_| panic!("add"));
     let t0 = Instant::now();
     let mut next = 0;
     let mut out = [0.0f32; BLOCK_SAMPLES];
@@ -206,9 +261,16 @@ fn levels_follow_the_talker() {
         }
     }
     assert!(speaking_when_loud.1 > 20);
-    assert!(speaking_when_silent.1 > 20, "the silence must be long enough to judge");
+    assert!(
+        speaking_when_silent.1 > 20,
+        "the silence must be long enough to judge"
+    );
     let frac = speaking_when_loud.0 as f64 / speaking_when_loud.1 as f64;
-    assert!(frac > 0.8, "speaking in only {:.0}% of loud windows", frac * 100.0);
+    assert!(
+        frac > 0.8,
+        "speaking in only {:.0}% of loud windows",
+        frac * 100.0
+    );
     assert_eq!(speaking_when_silent.0, 0, "speaking during long silence");
 }
 
@@ -218,9 +280,16 @@ fn deafen_silences_playback_but_not_levels() {
     let cfg = core_cfg(ProcessingConfig::off());
     let n = secs(4.0);
     let x = far(6, n);
-    let sched = schedule(&encode_remote(&x, EncoderCfg::default()), Net { base_ms: 20.0, ..Net::default() });
+    let sched = schedule(
+        &encode_remote(&x, EncoderCfg::default()),
+        Net {
+            base_ms: 20.0,
+            ..Net::default()
+        },
+    );
     let mut core = Core::new(cfg.clone()).unwrap();
-    core.add(Participant::new(FAR_ID, &cfg).unwrap()).unwrap_or_else(|_| panic!("add"));
+    core.add(Participant::new(FAR_ID, &cfg).unwrap())
+        .unwrap_or_else(|_| panic!("add"));
     core.set_deafened(true);
     let t0 = Instant::now();
     let mut next = 0;
@@ -241,13 +310,19 @@ fn deafen_silences_playback_but_not_levels() {
             next += 1;
         }
         core.render_block(t0 + Duration::from_micros(now_us), &mut out);
-        assert!(out.iter().all(|&v| v == 0.0), "deafened output must be silent");
+        assert!(
+            out.iter().all(|&v| v == 0.0),
+            "deafened output must be silent"
+        );
         if core.take_levels_due() {
             core.fill_levels(&mut levels);
             max_level = max_level.max(levels.participants[0].1.level_dbov);
         }
     }
-    assert!(max_level > -40.0, "levels must stay live while deafened: {max_level}");
+    assert!(
+        max_level > -40.0,
+        "levels must stay live while deafened: {max_level}"
+    );
 }
 
 #[test]

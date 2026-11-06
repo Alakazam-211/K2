@@ -25,7 +25,10 @@ pub(crate) enum Pause {
     /// The phone backend has no device open (the OS's session is inactive,
     /// or a route change is reopening it).
     #[cfg_attr(
-        not(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android")))),
+        not(any(
+            test,
+            all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
+        )),
         allow(dead_code)
     )]
     Device = 2,
@@ -226,7 +229,12 @@ impl Core {
     ///   sequence number accounts for, which a receiver reads as DTX.
     ///
     /// Returns the closing frame, if there is one.
-    pub(crate) fn set_paused(&mut self, why: Pause, on: bool, now: Instant) -> Option<EncodedFrame> {
+    pub(crate) fn set_paused(
+        &mut self,
+        why: Pause,
+        on: bool,
+        now: Instant,
+    ) -> Option<EncodedFrame> {
         let was = self.is_paused();
         if on {
             self.pause |= why as u8;
@@ -244,7 +252,9 @@ impl Core {
             (true, false) => {
                 if let Some(at) = self.paused_at.take() {
                     if self.captured_any {
-                        self.ts48k = self.ts48k.wrapping_add(gap_ts48k(now.saturating_duration_since(at)));
+                        self.ts48k = self
+                            .ts48k
+                            .wrapping_add(gap_ts48k(now.saturating_duration_since(at)));
                     }
                 }
                 self.cap_len = 0;

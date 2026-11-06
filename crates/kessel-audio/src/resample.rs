@@ -144,7 +144,11 @@ mod tests {
             pos += n;
         }
         // ~1 s in, ~1 s out (minus less than one block of leftover input).
-        assert!(at48.len() >= 47_000 && at48.len() <= 48_000, "{}", at48.len());
+        assert!(
+            at48.len() >= 47_000 && at48.len() <= 48_000,
+            "{}",
+            at48.len()
+        );
         let tail = &at48[4800..];
         assert!((rms(tail) - 0.3536).abs() < 0.01, "rms {}", rms(tail));
 

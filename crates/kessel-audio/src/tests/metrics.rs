@@ -99,12 +99,26 @@ fn s1_far_end_only_erle() {
                 ("t_to_20db_s".into(), t20.unwrap_or(f64::NAN)),
             ],
         );
-        let aec_delay = run.stats.aec_delay_ms.expect("the echo canceller reports its delay");
-        report(&format!("S1 {}", room.name), &[("aec_delay_ms".into(), aec_delay as f64)]);
+        let aec_delay = run
+            .stats
+            .aec_delay_ms
+            .expect("the echo canceller reports its delay");
+        report(
+            &format!("S1 {}", room.name),
+            &[("aec_delay_ms".into(), aec_delay as f64)],
+        );
         // The echo path's delay is 60 ms (the render reference is fed in the
         // same 10 ms block it is played).
-        assert!((45..=75).contains(&aec_delay), "{}: AEC delay {aec_delay} ms", room.name);
-        assert!(e_steady >= 38.0, "{}: steady ERLE {e_steady:.1} dB < 38", room.name);
+        assert!(
+            (45..=75).contains(&aec_delay),
+            "{}: AEC delay {aec_delay} ms",
+            room.name
+        );
+        assert!(
+            e_steady >= 38.0,
+            "{}: steady ERLE {e_steady:.1} dB < 38",
+            room.name
+        );
         let t20 = t20.unwrap_or_else(|| panic!("{}: never reached 20 dB ERLE", room.name));
         assert!(t20 <= 0.5, "{}: {t20:.2} s to 20 dB ERLE", room.name);
         steady.push(e_steady);
@@ -152,7 +166,8 @@ fn double_talk(processing: ProcessingConfig, ri: usize, seed: u64) -> DoubleTalk
     let near_m = active_frames(&near);
     let far_m = active_frames(&echo);
     let dt = mask_and(&near_m, &far_m);
-    let near_gain_db = level_on(&run.out, &dt, 1200, 3000) - level_on(&reference.out, &dt, 1200, 3000);
+    let near_gain_db =
+        level_on(&run.out, &dt, 1200, 3000) - level_on(&reference.out, &dt, 1200, 3000);
     let gaps = mask_and_not(&far_m, &near_m);
     let gap_erle_db = erle(&mic, &run.out, &gaps, 1200, 3000).expect("far-only gaps");
     let after_far_db =
@@ -180,9 +195,21 @@ fn s2_double_talk_keeps_the_near_end() {
                 ("near_after_far_db".into(), r.after_far_db),
             ],
         );
-        assert!(r.near_gain_db >= -7.0, "near end ducked {:.1} dB in double talk", r.near_gain_db);
-        assert!(r.gap_erle_db >= 32.0, "ERLE in far-only gaps {:.1} dB", r.gap_erle_db);
-        assert!(r.after_far_db.abs() <= 1.0, "near end after far stops off by {:.1} dB", r.after_far_db);
+        assert!(
+            r.near_gain_db >= -7.0,
+            "near end ducked {:.1} dB in double talk",
+            r.near_gain_db
+        );
+        assert!(
+            r.gap_erle_db >= 32.0,
+            "ERLE in far-only gaps {:.1} dB",
+            r.gap_erle_db
+        );
+        assert!(
+            r.after_far_db.abs() <= 1.0,
+            "near end after far stops off by {:.1} dB",
+            r.after_far_db
+        );
     }
 }
 
@@ -200,9 +227,21 @@ fn s2_double_talk_full_chain() {
             ("near_after_far_db".into(), r.after_far_db),
         ],
     );
-    assert!(r.gap_erle_db >= 35.0, "ERLE in far-only gaps {:.1} dB", r.gap_erle_db);
-    assert!(r.near_gain_db >= -7.0, "near end ducked {:.1} dB", r.near_gain_db);
-    assert!(r.after_far_db.abs() <= 1.5, "near end after far stops off by {:.1} dB", r.after_far_db);
+    assert!(
+        r.gap_erle_db >= 35.0,
+        "ERLE in far-only gaps {:.1} dB",
+        r.gap_erle_db
+    );
+    assert!(
+        r.near_gain_db >= -7.0,
+        "near end ducked {:.1} dB",
+        r.near_gain_db
+    );
+    assert!(
+        r.after_far_db.abs() <= 1.5,
+        "near end after far stops off by {:.1} dB",
+        r.after_far_db
+    );
 }
 
 /// S3 (baseline criterion 3): the echo path changes at 20 s. (a) the laptop
@@ -223,8 +262,14 @@ fn s3_reconverges_after_an_echo_path_change() {
     let change = secs(20.0);
     let echo_a = make_echo(&case.rendered, &path_a, SYS_DELAY, ECHO_DB);
     for (label, echo_b) in [
-        ("moved+3dB", make_echo(&case.rendered, &path_b, SYS_DELAY, ECHO_DB + 3.0)),
-        ("delay+40ms", make_echo(&case.rendered, &path_a, SYS_DELAY + 40 * 48, ECHO_DB)),
+        (
+            "moved+3dB",
+            make_echo(&case.rendered, &path_b, SYS_DELAY, ECHO_DB + 3.0),
+        ),
+        (
+            "delay+40ms",
+            make_echo(&case.rendered, &path_a, SYS_DELAY + 40 * 48, ECHO_DB),
+        ),
     ] {
         let mut echo = echo_a.clone();
         echo[change..].copy_from_slice(&echo_b[change..]);
@@ -247,7 +292,10 @@ fn s3_reconverges_after_an_echo_path_change() {
         let t30 = t30.unwrap_or_else(|| panic!("{label}: never got back to 30 dB ERLE"));
         assert!(t30 <= 0.5, "{label}: {t30:.2} s to get back to 30 dB ERLE");
         assert!(settled >= 40.0, "{label}: settled ERLE {settled:.1} dB");
-        assert!(after_2s >= 30.0, "{label}: ERLE in the first 2 s after {after_2s:.1} dB");
+        assert!(
+            after_2s >= 30.0,
+            "{label}: ERLE in the first 2 s after {after_2s:.1} dB"
+        );
     }
 }
 
@@ -290,7 +338,8 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
     let speech_m = active_frames(&speech);
     let pauses = mask_not(&speech_m);
     let vs_input = level_on(&mic, &pauses, 300, 2000) - level_on(&run.out, &pauses, 300, 2000);
-    let ns_alone = level_on(&plain.out, &pauses, 300, 2000) - level_on(&run.out, &pauses, 300, 2000);
+    let ns_alone =
+        level_on(&plain.out, &pauses, 300, 2000) - level_on(&run.out, &pauses, 300, 2000);
     let speech_change =
         level_on(&run.out, &speech_m, 300, 2000) - level_on(&plain.out, &speech_m, 300, 2000);
     report(
@@ -301,9 +350,18 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
             ("speech_change_db".into(), speech_change),
         ],
     );
-    assert!(vs_input >= 12.0, "noise cut in pauses {vs_input:.1} dB < 12");
-    assert!(ns_alone >= 8.0, "noise suppression alone cut {ns_alone:.1} dB < 8");
-    assert!(speech_change >= -2.5, "speech level changed {speech_change:.1} dB");
+    assert!(
+        vs_input >= 12.0,
+        "noise cut in pauses {vs_input:.1} dB < 12"
+    );
+    assert!(
+        ns_alone >= 8.0,
+        "noise suppression alone cut {ns_alone:.1} dB < 8"
+    );
+    assert!(
+        speech_change >= -2.5,
+        "speech level changed {speech_change:.1} dB"
+    );
 }
 
 /// The C++ WebRTC library's AGC2 output levels in the baseline (input -50,
@@ -352,7 +410,10 @@ fn s6_agc2_levels_speech() {
             -50 + 10 * i as i32
         );
     }
-    assert!(spread <= 7.5, "spread {spread:.1} dB over a 30 dB input range");
+    assert!(
+        spread <= 7.5,
+        "spread {spread:.1} dB over a 30 dB input range"
+    );
 }
 
 /// Baseline criterion 5: CPU per 10 ms block. The baseline's bar was for
@@ -398,7 +459,10 @@ fn cpu_per_block_within_bars() {
         }
         (run, apm_ns)
     };
-    assert_eq!(run.rendered, case.rendered, "the pipeline must be deterministic");
+    assert_eq!(
+        run.rendered, case.rendered,
+        "the pipeline must be deterministic"
+    );
     let stats = |v: &[u64]| -> (f64, f64, f64) {
         let mut ns = v.to_vec();
         ns.sort_unstable();
@@ -421,8 +485,14 @@ fn cpu_per_block_within_bars() {
             ("debug_build".into(), cfg!(debug_assertions) as u8 as f64),
         ],
     );
-    assert!(a50 <= 500.0, "echo canceller chain: median block {a50:.0} µs (> 5% of a core)");
-    assert!(d50 <= 1000.0, "duplex path: median block {d50:.0} µs (> 10% of a core)");
+    assert!(
+        a50 <= 500.0,
+        "echo canceller chain: median block {a50:.0} µs (> 5% of a core)"
+    );
+    assert!(
+        d50 <= 1000.0,
+        "duplex path: median block {d50:.0} µs (> 10% of a core)"
+    );
 }
 
 /// The AGC2 tuning holds: with the tuned headroom, speech at -40 and
@@ -461,9 +531,15 @@ fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
         let tuned = run(AGC2_HEADROOM_DB);
         report(
             &format!("S6 tuning input {lvl}"),
-            &[("default_dbfs".into(), default), ("tuned_dbfs".into(), tuned)],
+            &[
+                ("default_dbfs".into(), default),
+                ("tuned_dbfs".into(), tuned),
+            ],
         );
         let lift = tuned - default;
-        assert!((0.6..=1.4).contains(&lift), "input {lvl}: tuning lifted the level {lift:.2} dB");
+        assert!(
+            (0.6..=1.4).contains(&lift),
+            "input {lvl}: tuning lifted the level {lift:.2} dB"
+        );
     }
 }

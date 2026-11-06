@@ -60,8 +60,8 @@ caller has already decrypted and verified.
 | Frame-in | `frame_in()` makes a `FrameSource` that the host feeds: CPU frames or native buffers (a CVPixelBuffer through `pixel_buffer_frame`, an AHardwareBuffer through `hardware_buffer_frame`), each with its timestamp and the quarter turn that makes it upright. Same queue, rate, size box and events as any source, and it never pauses for the app's background. Phone screen sharing comes in this way on iOS. |
 | Codecs | Codec-neutral: VP8 as raw RFC 6386 frames, H.264 as one Annex B access unit with 4-byte start codes and SPS and PPS before every IDR. Real time: no reordering, no B-frames, one output per input at most, `set_rates` never forces a keyframe, `capture_us` passes through. |
 | VP8 | `vp8-encoder` and `vp8-decoder` (feature `vp8`, part of `system`) in every backend, the fake included: real time, L1T2 and L1T3 temporal layers, one encoder per simulcast layer. |
-| Pixels | I420, NV12, BGRA and RGBA, with conversion and scaling on the CPU (`convert`), and OS-native buffers (`NativeFrame`) that pass from a source to an encoder of the same backend without a copy. On macOS and iOS, `convert` to `Native` makes pooled, IOSurface-backed NV12 pixel buffers from CPU planes, for a display layer. |
-| Capability query | Per codec, direction and implementation: hardware or software, the largest size and rate, how many may be open at once, temporal layers, H.264 profiles and level, pixel formats. |
+| Pixels | I420, NV12, BGRA and RGBA, with conversion and scaling on the CPU (`convert`), and OS-native buffers (`NativeFrame`) that pass from a source to an encoder of the same backend without a copy. On macOS and iOS, `convert` to `Native` makes pooled, IOSurface-backed NV12 pixel buffers from CPU planes, for a display layer. `convert` to I420 or NV12 reads a CVPixelBuffer or an AHardwareBuffer in place while it is locked, so one hardware capture feeds an H.264 encoder (the native frame) and a VP8 encoder (I420) at once, and its output memory comes from a pool: a steady stream allocates no pixel memory. |
+| Capability query | Per codec, direction and implementation: hardware or software, the largest size and rate, how many may be open at once, temporal layers, H.264 profiles and level, pixel formats. A hardware H.264 entry is listed only after a real hardware session opens, never assumed. Every open encoder and decoder reports what the OS actually made (`implementation()`: `Hardware`, `Software`, or `Unknown` where the OS doesn't say). |
 
 ### Screens by platform
 
@@ -273,7 +273,12 @@ On Android:
   `frame_in()` source or an encoder.
 - H.264 encoding uses the device's MediaCodec AVC encoder with CPU (NV12 or
   I420) input; `ImplPreference::SoftwareOnly` picks Android's own software
-  encoder. Keyframe requests and bitrate changes need API 26; on API 24 and
+  encoder. The encoders are probed once: H.264 is listed as hardware only
+  when the codec `video/avc` resolves to is a vendor component by name
+  (`AMediaCodec_getName`, API 28), as software when Android's own encoder
+  is there, and not at all otherwise. Before API 28 the codec can't be
+  named, so no hardware entry is listed and an open encoder reports
+  `Unknown`. Keyframe requests and bitrate changes need API 26; on API 24 and
   25 a keyframe request restarts the codec and the bitrate stays as opened.
   There is no H.264 decoder yet; VP8 decodes in Rust.
 

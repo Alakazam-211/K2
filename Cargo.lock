@@ -4868,7 +4868,7 @@ dependencies = [
 
 [[package]]
 name = "kessel-video"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "block2",
  "bytes",

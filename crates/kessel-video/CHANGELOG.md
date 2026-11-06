@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.1.5
+
+Open encoders and decoders say what the OS really made, hardware H.264 is
+listed only after a real probe on every platform, and `convert` reads
+native buffers in place. Additions only: nothing in 0.1.4's API changes or
+goes away.
+
+### What an open codec runs
+
+- `Implementation` has a new variant, `Unknown`: the OS doesn't say. Only
+  an open session reports it; capability entries stay `Hardware` or
+  `Software`. Treat it as not known to be hardware.
+- `VideoEncoder::implementation()` and `VideoDecoder::implementation()`
+  (provided methods) read `EncoderInfo::implementation` and
+  `DecoderStats::implementation`, which now come from the session the OS
+  created, never from what was asked for or listed:
+  - after an encoder's `set_size` reopens its session, it is asked again;
+  - a decoder reports `None` until its session opens on the first
+    keyframe, and again after `reset`.
+- VideoToolbox: the session's own "using hardware" property when it
+  answers; else a binding ask (hardware required, which fails the create
+  without it, or hardware disabled, which is never used); else
+  VideoToolbox's encoder list, by the session's encoder ID. Nothing said is
+  `Unknown`.
+  - Before, on macOS, VideoToolbox's low-latency encoder (which every
+    `PreferHardware` and `HardwareOnly` encoder gets) doesn't answer the
+    property, and a missing answer counted as software. So a hardware
+    session reported `Software`, `HardwareOnly` always failed, and
+    `capabilities()` listed no hardware H.264 encoder, even on Apple
+    silicon. `PreferHardware` now asks for hardware first and falls back to
+    letting VideoToolbox choose, so a hardware session is known to be one.
+  - `HardwareOnly` refuses a session it can't confirm as hardware.
+  - An iOS before 17.4 can't require or report hardware for an encoder,
+    nor an iOS before 17.0 for a decoder: unless the encoder list names the
+    encoder, those sessions are `Unknown`.
+- Android: from the codec's component name (`AMediaCodec_getName`, API 28,
+  looked up at run time). Android's own software codecs (`c2.android.*`,
+  `c2.google.*`, `OMX.google.*`), FFmpeg's, the emulator's, components
+  marked `.sw`, and names that aren't a vendor's `OMX.*` or `c2.*` count as
+  software. Before API 28 the name isn't there: `Unknown`, except for the
+  software encoder asked for by name.
+- VP8 (the Rust codecs) is `Software`, as before.
+
+### Hardware H.264 is probed, never assumed
+
+- macOS and iOS: `capabilities()` lists the hardware H.264 encoder only if
+  a hardware-only 720p30 session opens and is confirmed as hardware. Before,
+  iOS listed it without asking. The probe runs once; one run from an iOS
+  app in the background isn't kept, and the next one in front decides.
+- Android: the AVC encoders are probed once, on first use: the codec
+  `video/avc` resolves to (by name), and Android's own software encoder.
+  H.264 encode is listed as `Hardware` only when the first is a vendor
+  component, as `Software` (Constrained Baseline, 720p30) when Android's
+  own encoder exists, and not at all otherwise. Before, a `Hardware` entry
+  was always listed. VP8 is listed as before.
+- Android `HardwareOnly`: `Unsupported` when the probe found no hardware
+  encoder; `NoResources` when it did but this open got a software or
+  unnamed codec (the hardware one is taken).
+
+### `convert` reads native buffers in place
+
+- To I420 or NV12, `convert` (and every backend's `convert`) now reads the
+  source where it lies: CPU planes, a CVPixelBuffer (NV12 `420v` and
+  `420f`, BGRA) or an AHardwareBuffer (RGBA, RGBX, and YUV 4:2:0 with any
+  row and pixel stride: planar, NV12 or NV21), locked for reading. Before,
+  a native buffer was first copied out whole.
+- Its planes are scaled straight into the output, with the same
+  arithmetic as before: the same bytes for every source, size and format.
+- The output's memory comes from a pool and goes back to it when the frame
+  and all its clones drop, so a steady stream of frames allocates no pixel
+  memory (only a small handle a frame). The pool keeps at most eight idle
+  buffers and 64 MiB.
+- A frame whose width and height don't match its native buffer is
+  `Invalid`.
+- From a 1280x720 `420v` CVPixelBuffer to I420, a frame takes 0.27 ms at
+  640x360 (and 360x640 from portrait), 0.19 ms at 1280x720 and 0.51 ms at
+  320x180 on an Apple M4 Mac mini; 0.39, 0.24 and 0.71 ms on an M1. From
+  BGRA, 1.7 ms at 640x360 on the M4. Before, each conversion also copied
+  the whole buffer out first and allocated every intermediate picture.
+- Needs bytes 1.9 (`Bytes::from_owner`).
+
 ## 0.1.4
 
 The encoder and decoder threads ask for a QoS class on Apple, and the

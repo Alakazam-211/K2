@@ -29,8 +29,9 @@ fake = []
 # macOS and iOS: AVFoundation, VideoToolbox, and ScreenCaptureKit (macOS
 # only). System frameworks through FFI; no codec library is linked or shipped.
 apple = ["dep:objc2", "dep:block2"]
-# Media Foundation cameras and Windows Graphics Capture screens (H.264
-# MFTs later). OS components through the `windows` crate.
+# Media Foundation cameras, Windows Graphics Capture screens, and H.264
+# through Media Foundation's MFTs (the GPU driver's or Microsoft's own). OS
+# components through the `windows` crate.
 windows = ["dep:windows", "dep:windows-future"]
 # V4L2 cameras (raw ioctls) and the xdg-desktop-portal ScreenCast (zbus,
 # pure Rust) with PipeWire (the system's libpipewire, loaded at run time:
@@ -89,7 +90,10 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_Graphics_Gdi",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
     "Win32_System_SystemInformation",
+    "Win32_System_Variant",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",

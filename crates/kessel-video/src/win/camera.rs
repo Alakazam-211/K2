@@ -2,6 +2,7 @@
 //! source reader on a thread of its own that delivers NV12 frames.
 
 use super::map_error;
+use super::mfdll::{mfcapture, mfplat};
 use crate::api::{FrameSource, Wake};
 use crate::error::VideoError;
 use crate::frame::{PixelFormat, Planes, VideoFrame};
@@ -20,16 +21,19 @@ static REFUSED: AtomicBool = AtomicBool::new(false);
 
 /// COM on this thread (multithreaded; an STA thread keeps its apartment,
 /// which Media Foundation also works in) and Media Foundation once.
-fn init() -> Result<(), VideoError> {
+/// `Unsupported` where Media Foundation isn't installed.
+pub(super) fn init() -> Result<(), VideoError> {
+    let mf = mfplat()?;
     // SAFETY: COM initialisation for the calling thread; RPC_E_CHANGED_MODE
     // (already an STA) is fine for Media Foundation.
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     static STARTED: OnceLock<Result<(), VideoError>> = OnceLock::new();
     STARTED
         .get_or_init(|| {
-            // SAFETY: MFStartup with the SDK version; never shut down (the
-            // process keeps Media Foundation for its lifetime).
-            unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.map_err(|e| map_error(&e, "MFStartup"))
+            // MFStartup with the SDK version; never shut down (the process
+            // keeps Media Foundation for its lifetime).
+            mf.startup(MF_VERSION, MFSTARTUP_FULL)
+                .map_err(|e| map_error(&e, "MFStartup"))
         })
         .clone()
 }
@@ -42,15 +46,14 @@ pub(crate) fn permission() -> Permission {
     }
 }
 
-fn attributes(n: u32) -> Result<IMFAttributes, VideoError> {
-    let mut a: Option<IMFAttributes> = None;
-    // SAFETY: an out pointer for the new attribute store.
-    unsafe { MFCreateAttributes(&mut a, n) }.map_err(|e| map_error(&e, "MFCreateAttributes"))?;
-    a.ok_or_else(|| VideoError::os(0, "MFCreateAttributes gave nothing"))
+pub(super) fn attributes(n: u32) -> Result<IMFAttributes, VideoError> {
+    mfplat()?
+        .create_attributes(n)
+        .map_err(|e| map_error(&e, "MFCreateAttributes"))
 }
 
 /// A string attribute.
-fn string_attr(a: &IMFAttributes, key: &windows::core::GUID) -> Option<String> {
+pub(super) fn string_attr(a: &IMFAttributes, key: &windows::core::GUID) -> Option<String> {
     let mut p = PWSTR::null();
     let mut len = 0u32;
     // SAFETY: Media Foundation allocates the string; we free it with
@@ -67,31 +70,24 @@ pub(crate) fn cameras() -> Vec<CameraInfo> {
     if init().is_err() {
         return Vec::new();
     }
+    let Ok(cap) = mfcapture() else {
+        return Vec::new();
+    };
     let Ok(attrs) = attributes(1) else {
         return Vec::new();
     };
-    let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
-    let mut count = 0u32;
-    // SAFETY: a video-capture source-type attribute; MF allocates the array
-    // of activation objects, which we take over one by one and free.
-    let devices: Vec<IMFActivate> = unsafe {
-        if attrs
-            .SetGUID(
-                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
-                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
-            )
-            .is_err()
-        {
-            return Vec::new();
-        }
-        if MFEnumDeviceSources(&attrs, &mut list, &mut count).is_err() || list.is_null() {
-            return Vec::new();
-        }
-        let out = (0..count as usize)
-            .filter_map(|i| std::ptr::read(list.add(i)))
-            .collect();
-        CoTaskMemFree(Some(list as *const core::ffi::c_void));
-        out
+    // SAFETY: a video-capture source-type attribute on a live store.
+    let typed = unsafe {
+        attrs.SetGUID(
+            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+        )
+    };
+    if typed.is_err() {
+        return Vec::new();
+    }
+    let Ok(devices) = cap.enum_device_sources(&attrs) else {
+        return Vec::new();
     };
     devices
         .iter()
@@ -166,6 +162,7 @@ fn open_reader(
     c: &CaptureConstraints,
 ) -> Result<(IMFSourceReader, u32, u32, u32), VideoError> {
     init()?;
+    let cap = mfcapture()?;
     let id = match id {
         Some(id) => id.to_string(),
         None => cameras()
@@ -191,7 +188,7 @@ fn open_reader(
                 PCWSTR(link.as_ptr()),
             )
             .map_err(|e| map_error(&e, "SetString"))?;
-        MFCreateDeviceSource(&attrs)
+        cap.create_device_source(&attrs)
     }
     .map_err(|e| match map_error(&e, "MFCreateDeviceSource") {
         VideoError::Os { .. } => VideoError::NotFound,
@@ -204,7 +201,7 @@ fn open_reader(
             .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
             .map_err(|e| map_error(&e, "SetUINT32"))?;
         let _ = rattrs.SetUINT32(&MF_LOW_LATENCY, 1);
-        MFCreateSourceReaderFromMediaSource(&source, &rattrs)
+        cap.create_reader(&source, &rattrs)
     }
     .map_err(|e| map_error(&e, "MFCreateSourceReaderFromMediaSource"))?;
     let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
@@ -232,7 +229,9 @@ fn open_reader(
         let size = current
             .GetUINT64(&MF_MT_FRAME_SIZE)
             .map_err(|e| map_error(&e, "MF_MT_FRAME_SIZE"))?;
-        let out = MFCreateMediaType().map_err(|e| map_error(&e, "MFCreateMediaType"))?;
+        let out = mfplat()?
+            .create_media_type()
+            .map_err(|e| map_error(&e, "MFCreateMediaType"))?;
         out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
             .map_err(|e| map_error(&e, "SetGUID"))?;
         out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)

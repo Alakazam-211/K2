@@ -1,9 +1,16 @@
-//! The Windows backend: Media Foundation cameras and Windows Graphics
-//! Capture screens and windows. OS components through the `windows` crate;
-//! no codec library. Phase 1 publishes VP8, so there is no H.264 here yet
-//! (the Media Foundation H.264 MFTs come in phase 2).
+//! The Windows backend: Media Foundation cameras, Windows Graphics Capture
+//! screens and windows, and H.264 through Media Foundation's encoder and
+//! decoder MFTs (the GPU driver's hardware ones, or Microsoft's software
+//! ones that ship with Windows). OS components through the `windows` crate;
+//! no codec library. Media Foundation's DLLs are loaded at run time, so an
+//! N or KN edition without the Media Feature Pack runs with no cameras and
+//! no H.264 instead of failing to start.
 
 mod camera;
+mod h264_dec;
+mod h264_enc;
+mod mfdll;
+mod mft;
 mod screen;
 
 use crate::api::{
@@ -11,10 +18,10 @@ use crate::api::{
 };
 use crate::error::{unsupported, VideoError};
 use crate::frame::{PixelFormat, VideoFrame};
-use crate::kit::{lock, now_us};
+use crate::kit::{lock, now_us, EncoderCore, ThreadedDecoder, ThreadedEncoder};
 use crate::types::*;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -97,6 +104,136 @@ fn monitor(inner: Weak<Inner>) {
     }
 }
 
+/// The H.264 MFTs that work on this machine, found once: a kind is listed
+/// only when a session of it opened (and, for encoders, encoded a frame),
+/// never because Windows is Windows.
+#[derive(Debug, Default)]
+struct H264Probe {
+    /// The friendly names of the first working MFT of each kind.
+    hardware_encoder: Option<String>,
+    software_encoder: Option<String>,
+    hardware_decoder: Option<String>,
+    software_decoder: Option<String>,
+}
+
+/// Does `found` encode a 720p frame?
+fn encodes(found: &mft::Found) -> bool {
+    let cfg = EncoderConfig::h264(1280, 720, 30, 1_000_000);
+    let Ok(mut enc) = h264_enc::MfEncoder::open_one(found, &cfg) else {
+        return false;
+    };
+    let Ok(frame) = VideoFrame::filled(PixelFormat::Nv12, 1280, 720, [128, 128, 128], 0) else {
+        return false;
+    };
+    matches!(enc.encode(&frame, true), Ok(Some(f)) if f.keyframe)
+}
+
+fn h264_probe() -> &'static H264Probe {
+    static PROBE: OnceLock<H264Probe> = OnceLock::new();
+    PROBE.get_or_init(|| {
+        let mut p = H264Probe::default();
+        // Unsupported (no Media Foundation) leaves every kind out.
+        let enc = mft::find(mft::Role::Encoder, ImplPreference::PreferHardware).unwrap_or_default();
+        p.hardware_encoder = enc
+            .iter()
+            .find(|f| f.hardware && encodes(f))
+            .map(|f| f.name.clone());
+        p.software_encoder = enc
+            .iter()
+            .find(|f| !f.hardware && encodes(f))
+            .map(|f| f.name.clone());
+        let dec = mft::find(mft::Role::Decoder, ImplPreference::PreferHardware).unwrap_or_default();
+        let decodes = |f: &&mft::Found| {
+            let mut cfg = DecoderConfig::new(VideoCodec::H264);
+            cfg.implementation = if f.hardware {
+                ImplPreference::HardwareOnly
+            } else {
+                ImplPreference::SoftwareOnly
+            };
+            h264_dec::MfDecoder::open(&cfg).is_ok()
+        };
+        p.hardware_decoder = dec
+            .iter()
+            .find(|f| f.hardware && decodes(f))
+            .map(|f| f.name.clone());
+        p.software_decoder = dec
+            .iter()
+            .find(|f| !f.hardware && decodes(f))
+            .map(|f| f.name.clone());
+        p
+    })
+}
+
+/// The H.264 capability entries the probe found.
+fn h264_capabilities() -> Vec<CodecCapability> {
+    let p = h264_probe();
+    let formats = vec![
+        PixelFormat::Nv12,
+        PixelFormat::I420,
+        PixelFormat::Bgra,
+        PixelFormat::Rgba,
+    ];
+    let entry = |dir, implementation, name: &str, (w, h): (u32, u32), level| {
+        let mut c = CodecCapability::new(
+            VideoCodec::H264,
+            dir,
+            implementation,
+            format!("Media Foundation: {name}"),
+            w,
+            h,
+            30,
+        );
+        c.h264 = Some(H264Capability::new(
+            vec![
+                H264Profile::ConstrainedBaseline,
+                H264Profile::ConstrainedHigh,
+            ],
+            level,
+        ));
+        c.formats = formats.clone();
+        c
+    };
+    let mut out = Vec::new();
+    // Hardware: what level 5.1 allows; the GPU may refuse a size, and the
+    // open says so. Microsoft's software encoder: 1080p in real time.
+    let kinds = [
+        (
+            &p.hardware_encoder,
+            CodecDirection::Encode,
+            Implementation::Hardware,
+            (4096, 2304),
+            H264Level::L5_1,
+        ),
+        (
+            &p.software_encoder,
+            CodecDirection::Encode,
+            Implementation::Software,
+            (1920, 1080),
+            H264Level::L4_0,
+        ),
+        (
+            &p.hardware_decoder,
+            CodecDirection::Decode,
+            Implementation::Hardware,
+            (4096, 2304),
+            H264Level::L5_1,
+        ),
+        (
+            &p.software_decoder,
+            CodecDirection::Decode,
+            Implementation::Software,
+            (4096, 2304),
+            H264Level::L5_1,
+        ),
+    ];
+    for (name, dir, imp, size, level) in kinds {
+        if let Some(name) = name {
+            out.push(entry(dir, imp, name, size, level));
+        }
+    }
+    out
+}
+
 impl WinBackend {
     fn live(&self) -> Result<(), VideoError> {
         if self.inner.shut.load(Ordering::Acquire) {
@@ -111,7 +248,10 @@ impl VideoBackend for WinBackend {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::new("windows", os_name());
         crate::rust_codecs::add_capabilities(&mut caps);
-        caps.camera = true;
+        caps.codecs.extend(h264_capabilities());
+        // Media Foundation is missing on an N or KN edition without the
+        // Media Feature Pack.
+        caps.camera = camera::init().is_ok() && mfdll::mfcapture().is_ok();
         let wgc = screen::supported();
         // The system picker (GraphicsCapturePicker) needs the app's HWND:
         // PickOptions::with_parent_window. No window exclusion: Windows' only
@@ -197,10 +337,21 @@ impl VideoBackend for WinBackend {
         if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
             return r;
         }
-        Err(unsupported(format!(
-            "no {:?} encoder on Windows yet",
-            config.codec.codec()
-        )))
+        config.validate()?;
+        match config.codec {
+            CodecConfig::H264 { .. } => {
+                let core = h264_enc::MfEncoder::open(&config)?;
+                Ok(Box::new(ThreadedEncoder::start(
+                    Box::new(core),
+                    config,
+                    wake,
+                )?))
+            }
+            _ => Err(unsupported(format!(
+                "no {:?} encoder on Windows",
+                config.codec.codec()
+            ))),
+        }
     }
 
     fn decoder(
@@ -212,10 +363,20 @@ impl VideoBackend for WinBackend {
         if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
             return r;
         }
-        Err(unsupported(format!(
-            "no {:?} decoder on Windows yet (the webview's WebCodecs decodes)",
-            config.codec
-        )))
+        match config.codec {
+            VideoCodec::H264 => {
+                let core = h264_dec::MfDecoder::open(&config)?;
+                Ok(Box::new(ThreadedDecoder::start(
+                    Box::new(core),
+                    config,
+                    wake,
+                )?))
+            }
+            _ => Err(unsupported(format!(
+                "no {:?} decoder on Windows",
+                config.codec
+            ))),
+        }
     }
 
     fn convert(
@@ -263,6 +424,9 @@ pub(crate) fn map_error(e: &windows::core::Error, what: &str) -> VideoError {
 }
 
 #[cfg(test)]
+mod h264_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::no_wake;
@@ -295,10 +459,19 @@ mod tests {
         let caps = b.capabilities();
         assert_eq!(caps.backend, "windows");
         assert!(caps.os.starts_with("Windows"), "{}", caps.os);
-        assert!(
-            caps.codecs.iter().all(|c| c.codec != VideoCodec::H264),
-            "phase 1: no OS H.264"
-        );
+        // H.264 is listed exactly when an encoder opens (the probe and the
+        // open agree).
+        let listed = caps
+            .codecs
+            .iter()
+            .any(|c| c.codec == VideoCodec::H264 && c.direction == CodecDirection::Encode);
+        let opened = b.encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake());
+        match &opened {
+            Ok(_) => assert!(listed, "an H.264 encoder opened but none is listed"),
+            Err(VideoError::Unsupported(_)) => assert!(!listed, "listed but none opened"),
+            Err(e) => panic!("{e}"),
+        }
+        drop(opened);
         assert_eq!(caps.screen.system_picker, caps.screen.supported);
         assert!(!caps.screen.exclude_own_windows);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -322,11 +495,6 @@ mod tests {
         for c in &cams {
             assert!(!c.id.is_empty());
         }
-        assert!(matches!(
-            b.encoder(EncoderConfig::h264(640, 360, 30, 500_000), no_wake())
-                .err(),
-            Some(VideoError::Unsupported(_))
-        ));
         b.shutdown();
         assert_eq!(b.screen_sources().err(), Some(VideoError::ShutDown));
     }

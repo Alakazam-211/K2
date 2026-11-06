@@ -30,6 +30,14 @@
   `include` ships only `src/`, the README and the licences.
 - The README has a platforms table (tested or only type-checked), a
   security contact and the licence notes for sonora and ropus.
+- sonora and ropus are caret requirements (`0.2.0`, `0.12.18`), not exact
+  pins, so patch and security releases reach library users.
+- The README also covers patents, `unsafe` code and fuzzing, Android's
+  missing-permission error, API stability for 0.x, and a consistent
+  baseline column in the quality table.
+- A seeded hostile-input test sends random and mutated packets, and
+  nonsense sequence numbers, timestamps and arrival times, through the
+  decoder, jitter buffer and mixer.
 - `scripts/check-targets.sh` type-checks the iOS and Android targets (or any
   other) on a toolchain that can't add targets.
 

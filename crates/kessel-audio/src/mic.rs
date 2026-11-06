@@ -173,7 +173,8 @@ impl MicOs for NoCheck {
 }
 
 /// AVCaptureDevice's authorization calls, reached through the Objective-C
-/// runtime. These are the crate's only `unsafe` outside tests.
+/// runtime. With the phone backends' OS calls, the crate's only `unsafe`
+/// outside tests.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos {

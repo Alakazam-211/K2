@@ -49,12 +49,15 @@ cpu-bars = ["speech-tests"]
 bytes = "1"
 crossbeam-queue = "0.3"
 rtrb = "0.3"
-# Pinned exactly: echo cancellation behaviour and the AGC2 tuning were
-# measured against this version. Changing it means re-running the metric tests.
-sonora = "=0.2.0"
+# Caret requirements, so library users get patch and security releases (ropus
+# decodes packets from the network); apps pin through their Cargo.lock. The
+# echo cancellation figures and the AGC2 tuning were measured on sonora 0.2.0.
+# The metric tests assert bars, not samples, so a 0.2.x patch is checked by
+# re-running them (`--features speech-tests`).
+sonora = "0.2.0"
 # Pure-Rust Opus, bit-exact with the reference implementation (encode and
 # decode, including DTX, in-band FEC and PLC).
-ropus = "=0.12.18"
+ropus = "0.12.18"
 rubato = "5.0.1"
 cpal = { version = "0.18.2", optional = true, default-features = false }
 

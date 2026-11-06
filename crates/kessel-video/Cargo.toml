@@ -34,9 +34,9 @@ windows = ["dep:windows"]
 linux = ["dep:libc"]
 # Camera2/CameraX, MediaCodec, MediaProjection (not built yet).
 android = []
-# VP8 decoding in pure Rust (the vp8-decoder crate) as a software codec in
-# every backend.
-vp8 = ["dep:vp8-decoder"]
+# VP8 encoding and decoding in pure Rust (the vp8-encoder and vp8-decoder
+# crates) as software codecs in every backend.
+vp8 = ["dep:vp8-decoder", "dep:vp8-encoder"]
 # The OS backend for the target, plus VP8. Naming all four is safe: each
 # backend's dependencies are target-specific and its code is cfg-gated to
 # its OS, so a Linux build compiles only the Linux backend (Cargo features
@@ -48,6 +48,7 @@ bytes = "1"
 crossbeam-queue = "0.3"
 thiserror = "2"
 vp8-decoder = { version = "0.1", path = "../vp8-decoder", optional = true }
+vp8-encoder = { version = "0.1", path = "../vp8-encoder", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

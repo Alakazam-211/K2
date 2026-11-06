@@ -171,8 +171,11 @@ impl VideoBackend for WinBackend {
         screen::open(source, c, wake)
     }
 
-    fn encoder(&self, config: EncoderConfig, _wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
+            return r;
+        }
         Err(unsupported(format!("no {:?} encoder on Windows yet", config.codec.codec())))
     }
 

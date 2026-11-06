@@ -22,5 +22,10 @@
 	     System Audio Recording. -->
 	<key>NSCameraUsageDescription</key>
 	<string>K2 uses your camera for video in voice rooms, only while you turn it on.</string>
+	<!-- Continuity Camera (an iPhone as the Mac's camera): AVFoundation lists
+	     the iPhone only to an app that opts in, and macOS logs a warning for
+	     an app that opens cameras without this key. -->
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
 </dict>
 </plist>

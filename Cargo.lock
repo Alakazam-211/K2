@@ -4865,6 +4865,7 @@ dependencies = [
  "objc2",
  "serde_json",
  "thiserror 2.0.18",
+ "vp8-decoder",
  "windows 0.62.2",
 ]
 

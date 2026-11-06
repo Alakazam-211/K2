@@ -108,6 +108,7 @@ impl LinuxBackend {
 impl VideoBackend for LinuxBackend {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::new("linux", os_name());
+        crate::rust_codecs::add_capabilities(&mut caps);
         caps.camera = true;
         caps
     }
@@ -162,8 +163,11 @@ impl VideoBackend for LinuxBackend {
         Err(unsupported(format!("no {:?} encoder on Linux yet", config.codec.codec())))
     }
 
-    fn decoder(&self, config: DecoderConfig, _wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
+            return r;
+        }
         Err(unsupported(format!("no {:?} decoder on Linux yet", config.codec)))
     }
 

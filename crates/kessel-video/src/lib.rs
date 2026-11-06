@@ -53,7 +53,10 @@ pub mod h264;
 pub mod kit;
 mod null;
 mod platform;
+mod rust_codecs;
 mod types;
+#[cfg(feature = "vp8")]
+mod vp8;
 
 #[cfg(all(feature = "apple", target_os = "macos"))]
 #[allow(unsafe_code)]

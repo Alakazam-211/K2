@@ -235,10 +235,15 @@ impl Caller {
 }
 
 fn not_a_caller(c: &Caller) -> Option<CliResponse> {
+    caller_refusal(c).map(|r| refuse(&r))
+}
+
+/// [`not_a_caller`] as a refusal (the kit door writes Sew's error shape).
+fn caller_refusal(c: &Caller) -> Option<Refusal> {
     match c {
-        Caller::App => Some(no(403, "app_pass_not_allowed", "voice rooms are for this server's own logins, never App passes or API keys")),
-        Caller::DeviceEnded => Some(refuse(&bff::device_session_ended())),
-        Caller::Invalid => Some(no(401, "unauthenticated", "invalid or missing token")),
+        Caller::App => Some(Refusal::new(403, "app_pass_not_allowed", "voice rooms are for this server's own logins, never App passes or API keys")),
+        Caller::DeviceEnded => Some(bff::device_session_ended()),
+        Caller::Invalid => Some(Refusal::new(401, "unauthenticated", "invalid or missing token")),
         _ => None,
     }
 }
@@ -261,29 +266,45 @@ fn need_manager(c: &Caller) -> Result<(), CliResponse> {
 /// Refuses every caller that isn't a person's own login (or paired phone):
 /// the owner token, passports, App passes and bad tokens.
 fn not_a_person(c: &Caller) -> Option<CliResponse> {
-    if let Some(r) = not_a_caller(c) {
+    person_refusal(c).map(|r| refuse(&r))
+}
+
+/// [`not_a_person`] as a refusal.
+fn person_refusal(c: &Caller) -> Option<Refusal> {
+    if let Some(r) = caller_refusal(c) {
         return Some(r);
     }
     match c {
-        Caller::OwnerToken => Some(no(
+        Caller::OwnerToken => Some(Refusal::new(
             403,
             "owner_token_cannot_join",
             "the bare owner token can't join a voice room (agents can read it): join from your own login on this server",
         )),
-        Caller::Passport | Caller::ChatManager => Some(no(403, "agents_not_in_voice", "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)")),
+        Caller::Passport | Caller::ChatManager => Some(Refusal::new(
+            403,
+            "agents_not_in_voice",
+            "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)",
+        )),
         Caller::Login { .. } => None,
-        Caller::App | Caller::DeviceEnded | Caller::Invalid => Some(no(401, "unauthenticated", "invalid or missing token")),
+        Caller::App | Caller::DeviceEnded | Caller::Invalid => Some(Refusal::new(401, "unauthenticated", "invalid or missing token")),
     }
 }
 
 /// The person behind the caller, for join and the call's routes.
 fn need_person(c: &Caller, owner_token: &str) -> Result<Person, CliResponse> {
-    if let Some(r) = not_a_person(c) {
+    person_of(c, owner_token).map_err(|r| refuse(&r))
+}
+
+/// The person behind the caller as join sees them, or the refusal join
+/// answers. The kit door uses the same rule on the box address
+/// (`voice::kit_door`).
+pub(crate) fn person_of(c: &Caller, owner_token: &str) -> Result<Person, Refusal> {
+    if let Some(r) = person_refusal(c) {
         return Err(r);
     }
     match c {
-        Caller::Login { username, role, token } => bff::person_of_login(token, username, *role, owner_token).map_err(|r| refuse(&r)),
-        _ => Err(no(401, "unauthenticated", "invalid or missing token")),
+        Caller::Login { username, role, token } => bff::person_of_login(token, username, *role, owner_token),
+        _ => Err(Refusal::new(401, "unauthenticated", "invalid or missing token")),
     }
 }
 

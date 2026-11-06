@@ -11,6 +11,12 @@
 //! WebSocket spliced to Sew's loopback listener, the same per-credential
 //! rate limit and relay cap, and K2's own answers carry the frame headers.
 //!
+//! **Sew's web kit** (`voice::kit_door`): on the same gate, a kit route with
+//! one of THIS App's login sessions (`k2skn_`) as the bearer runs as that
+//! person, with a Sew session from their own chat pass (the App's `app`
+//! claim and caps). App sessions get the narrow route set; any other bearer
+//! is refused there.
+//!
 //! **The gate** ([`open_of`]). The door opens on an App's addresses only when
 //! all of these hold:
 //! - voice is installed on this box (Chat / Voice Hosting with `k2 hostchat
@@ -45,6 +51,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use crate::chat_pass::identity::AppChatCeiling;
 use crate::client_ip::{LocalAnswer, Replay};
+use crate::voice::kit_door::{Door, KitCtx};
 use crate::voice::sew_lane;
 
 use super::router::FirstRequest;
@@ -160,11 +167,22 @@ where
             return first_request_with(client, local, || t.open, &t.sew_addr).await;
         }
     }
-    first_request_with(client, local, || open_of(&facts(app_id)), &crate::sew::ops::client_addr()).await
+    let kit = KitCtx::live(Door::App { app_id: app_id.to_string() });
+    first_request_kit(client, local, || open_of(&facts(app_id)), &crate::sew::ops::client_addr(), Some(&kit)).await
 }
 
-/// [`first_request`] with the gate and Sew's address given.
+/// [`first_request`] with the gate and Sew's address given, and no kit lane.
 pub async fn first_request_with<S, F>(client: &mut S, local: Option<&LocalAnswer>, open: F, sew_addr: &str) -> FirstRequest
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce() -> bool,
+{
+    first_request_kit(client, local, open, sew_addr, None).await
+}
+
+/// [`first_request_with`] with the App's kit lane (`voice::kit_door`): its
+/// people's App login sessions on Sew's web kit routes.
+pub async fn first_request_kit<S, F>(client: &mut S, local: Option<&LocalAnswer>, open: F, sew_addr: &str, kit: Option<&KitCtx>) -> FirstRequest
 where
     S: AsyncRead + AsyncWrite + Unpin,
     F: FnOnce() -> bool,
@@ -183,7 +201,7 @@ where
         let open = open();
         {
             let mut r = Replay::new(p.bytes, client);
-            sew_lane::serve_app(&mut r, &head, len, open, sew_addr).await;
+            sew_lane::serve_app(&mut r, &head, len, open, sew_addr, kit).await;
         }
         let _ = client.shutdown().await;
         return FirstRequest::Answered;

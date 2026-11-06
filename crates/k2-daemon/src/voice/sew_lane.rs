@@ -29,6 +29,12 @@
 //!   passes through, and Sew takes it over (the first closes `4011`
 //!   `session_revoked`, Sew's door spec rev 2).
 //!
+//! **Sew's web kit** (`@sew/voice` in a native shell) uses the same door
+//! with the person's own K2 login as the bearer instead: on a kit route
+//! (`kit_door::kit_route`), any bearer that isn't `sewcc_` goes to
+//! [`super::kit_door`], which runs the route as that person with their own
+//! Sew session. A non-`sewcc_` bearer on an engine-only route is still 401.
+//!
 //! The credential is never logged, and never appears in an answer K2 writes.
 
 use std::collections::HashMap;
@@ -40,6 +46,9 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+use super::bff;
+use super::kit_door::{self, Door, KitCtx};
 
 /// The lane's path prefix (with its slash, so `/_k2/voice/sewx` isn't it).
 pub const PREFIX: &str = "/_k2/voice/sew/";
@@ -181,9 +190,10 @@ fn take_token(sel: &str, now: Instant) -> bool {
 
 static RELAYS: AtomicUsize = AtomicUsize::new(0);
 
-struct RelaySlot;
+/// One relay at once of [`MAX_RELAYS`] (the kit lane counts in it too).
+pub(super) struct RelaySlot;
 impl RelaySlot {
-    fn take() -> Option<RelaySlot> {
+    pub(super) fn take() -> Option<RelaySlot> {
         let n = RELAYS.fetch_add(1, Ordering::SeqCst);
         if n >= MAX_RELAYS {
             RELAYS.fetch_sub(1, Ordering::SeqCst);
@@ -218,14 +228,29 @@ async fn answer<S: AsyncWrite + Unpin>(client: &mut S, status: &str, code: &str,
 /// Serve one lane request whose head is still unread on `client` (the
 /// dispatcher only peeked). `head_len` is the head's length with its blank
 /// line. The connection closes afterwards.
-pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize) {
-    serve_to(client, head, head_len, k2_core::voice_preview::enabled(), &crate::sew::ops::client_addr()).await;
+/// `owner_token`: the box's, so the kit lane refuses it as join does.
+pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, owner_token: &str) {
+    let kit = KitCtx::live(Door::Box { owner_token: owner_token.to_string() });
+    serve_box(client, head, head_len, k2_core::voice_preview::enabled(), &crate::sew::ops::client_addr(), Some(&kit)).await;
+}
+
+/// The box label's door without the kit lane (tests of the engine lane).
+#[cfg(test)]
+async fn serve_to<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, preview_on: bool, sew_addr: &str) {
+    serve_box(client, head, head_len, preview_on, sew_addr, None).await;
 }
 
 /// The box label's door: off while the voice rooms preview is.
-async fn serve_to<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, preview_on: bool, sew_addr: &str) {
+pub(super) async fn serve_box<S: AsyncRead + AsyncWrite + Unpin>(
+    client: &mut S,
+    head: &str,
+    head_len: usize,
+    preview_on: bool,
+    sew_addr: &str,
+    kit: Option<&KitCtx>,
+) {
     let off = (!preview_on).then_some(("voice_rooms_off", "no such route"));
-    serve_door(client, head, head_len, off, sew_addr).await;
+    serve_door(client, head, head_len, off, sew_addr, kit).await;
 }
 
 /// The 404 code on an App's address whose door is shut.
@@ -236,13 +261,28 @@ const APP_DOOR_OFF_HINT: &str = "no call door on this App's address: the App nee
 /// An App address's door (`apps::voice_door`): this lane, open only when
 /// `open` (that App's gate). The allowlist, the credential rule and the limits
 /// are the box label's.
-pub async fn serve_app<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, open: bool, sew_addr: &str) {
+/// `kit`: the kit lane for the App's people (`None`: engine lane only).
+pub async fn serve_app<S: AsyncRead + AsyncWrite + Unpin>(
+    client: &mut S,
+    head: &str,
+    head_len: usize,
+    open: bool,
+    sew_addr: &str,
+    kit: Option<&KitCtx>,
+) {
     let off = (!open).then_some((APP_DOOR_OFF, APP_DOOR_OFF_HINT));
-    serve_door(client, head, head_len, off, sew_addr).await;
+    serve_door(client, head, head_len, off, sew_addr, kit).await;
 }
 
 /// `off`: the door is shut; answer 404 with this `(code, hint)`.
-async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, off: Option<(&str, &str)>, sew_addr: &str) {
+async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(
+    client: &mut S,
+    head: &str,
+    head_len: usize,
+    off: Option<(&str, &str)>,
+    sew_addr: &str,
+    kit: Option<&KitCtx>,
+) {
     let mut consumed = vec![0u8; head_len];
     if client.read_exact(&mut consumed).await.is_err() {
         return;
@@ -263,6 +303,19 @@ async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &st
     let Some(sew_path) = path.strip_prefix(&PREFIX[..PREFIX.len() - 1]) else {
         return answer(client, "404 Not Found", "not_found", not_found, None).await;
     };
+    // Sew's web kit: a kit route with the person's own login, not a call
+    // credential (`kit_door`).
+    if let Some(kit) = kit.filter(|_| sewcc_bearer(head).is_none()) {
+        if kit_door::kit_route(method, sew_path, query).is_some() {
+            return match crate::routes::http::extract_bearer(head) {
+                Some(b) => kit_door::serve(client, method, sew_path, query, head, b, kit, sew_addr).await,
+                None => {
+                    let r = bff::Refusal::new(401, "unauthenticated", "send the person's own K2 login session (or a call credential on the engine's routes)");
+                    kit_door::refuse(client, &r).await
+                }
+            };
+        }
+    }
     let Some(route) = allowed(method, sew_path) else {
         return answer(client, "404 Not Found", "not_found", not_found, None).await;
     };

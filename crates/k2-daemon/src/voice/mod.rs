@@ -8,6 +8,9 @@
 //!   call's own Sew routes, moderation through the moderator's own session.
 //! - [`occupancy`]: the SW-3 follower (who is in which room), headless,
 //!   publishing `voice_rooms_changed {rev}` (hosting changes ride it too).
+//! - [`sew_lane`]: the call door `/_k2/voice/sew/`: the native engine's
+//!   `sewcc_` lane, and Sew's web kit ([`kit_door`] routes, [`kit_feed`]
+//!   events) on the person's own login.
 //! - [`lane`]: the voice lane's state (lane A publishes it; held joins read
 //!   it, M11).
 //!
@@ -16,6 +19,8 @@
 //! read its ledger and call its owner actions (count, rename, Close now).
 
 pub mod bff;
+pub mod kit_door;
+pub mod kit_feed;
 pub mod lane;
 pub mod occupancy;
 pub mod routes;

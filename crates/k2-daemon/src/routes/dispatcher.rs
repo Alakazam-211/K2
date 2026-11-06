@@ -1527,7 +1527,7 @@ async fn handle_one_request(
         match head_len {
             Some(len) => {
                 let head = String::from_utf8_lossy(&buf[..len]).into_owned();
-                crate::voice::sew_lane::serve(&mut *stream, &head, len).await
+                crate::voice::sew_lane::serve(&mut *stream, &head, len, state.token.as_str()).await
             }
             None => {
                 let _ = stream.read(&mut buf).await;

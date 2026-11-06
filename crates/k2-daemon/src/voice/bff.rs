@@ -569,22 +569,43 @@ fn member_gate(p: &Person, d: &Deps) -> Result<(), Refusal> {
 
 /// The person's Sew session token: cached, or a fresh pass traded for one.
 fn session(p: &Person, d: &Deps, fresh: bool) -> Result<String, Refusal> {
+    cached_session(&p.ident.sid, fresh, d, || {
+        member_gate(p, d)?;
+        (d.mint)(&p.ident).map_err(|e| {
+            k2_core::log_debug!("[voice-rooms] pass for {}: {e}", p.ident.actor);
+            Refusal::new(503, "chat_unavailable", "Chat / Voice Hosting is not enabled or not reachable on this server")
+        })
+    })
+}
+
+/// The person's Sew session for the kit door (`kit_door`): the same cached
+/// session their call join uses, so both have one scope.
+pub fn person_session(p: &Person, fresh: bool) -> Result<String, Refusal> {
+    session(p, &deps(), fresh)
+}
+
+/// Drop the Sew session cached under `sid` (Sew answered 401 with it).
+pub fn forget_session(sid: &str) {
+    sessions().lock().unwrap_or_else(|e| e.into_inner()).remove(sid);
+}
+
+/// The Sew session cached under login session `sid`, or a fresh one from
+/// the pass `mint` makes (`fresh` drops the cached one first). Keys are
+/// login session ids (`cu_…`, `skn_…`), so a box login and an App login
+/// never share an entry.
+pub fn cached_session(sid: &str, fresh: bool, d: &Deps, mint: impl FnOnce() -> Result<String, Refusal>) -> Result<String, Refusal> {
     let now = now_secs();
     {
         let mut g = sessions().lock().unwrap_or_else(|e| e.into_inner());
         if fresh {
-            g.remove(&p.ident.sid);
-        } else if let Some(s) = g.get(&p.ident.sid) {
+            g.remove(sid);
+        } else if let Some(s) = g.get(sid) {
             if s.expires_at > now + RENEW_BEFORE_SECS {
                 return Ok(s.token.clone());
             }
         }
     }
-    member_gate(p, d)?;
-    let pass = (d.mint)(&p.ident).map_err(|e| {
-        k2_core::log_debug!("[voice-rooms] pass for {}: {e}", p.ident.actor);
-        Refusal::new(503, "chat_unavailable", "Chat / Voice Hosting is not enabled or not reachable on this server")
-    })?;
+    let pass = mint()?;
     let a = d.sew.post(None, paths::AUTH_K2, &json!({ "pass": pass })).map_err(unreachable)?;
     if !a.ok() {
         return Err(sew_refusal(&a));
@@ -605,7 +626,7 @@ fn session(p: &Person, d: &Deps, fresh: bool) -> Result<String, Refusal> {
         .unwrap_or(now + DEFAULT_SESSION_SECS);
     let mut g = sessions().lock().unwrap_or_else(|e| e.into_inner());
     g.retain(|_, s| s.expires_at > now);
-    g.insert(p.ident.sid.clone(), Sess { token: token.clone(), expires_at });
+    g.insert(sid.to_string(), Sess { token: token.clone(), expires_at });
     Ok(token)
 }
 

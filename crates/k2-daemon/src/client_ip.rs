@@ -292,6 +292,13 @@ fn resolve(mode: Mode) -> Rule {
     }
 }
 
+/// The client address K2 vouches for on a connection in `mode`, if any:
+/// the one the rewrite would put in `X-Forwarded-For` (a local caller that
+/// isn't K2's own hop has none).
+pub fn visitor_of(mode: Mode) -> Option<IpAddr> {
+    resolve(mode).visitor()
+}
+
 /// A read half with its own buffer.
 struct Reader<R> {
     r: R,

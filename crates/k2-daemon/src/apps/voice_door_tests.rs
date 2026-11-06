@@ -304,3 +304,141 @@ async fn the_transfer_door_is_answered_on_the_app_path() {
         FirstRequest::Answered => panic!("an App path goes to the App"),
     }
 }
+
+// ── media signalling: /rtc/v1 for the native engine ──────────────────
+
+#[test]
+fn the_signal_gate_is_the_call_gate_plus_sew_signal() {
+    let open = declared(&["voice:join"]);
+    assert_eq!(signal_open_of(&facts(true, true, false, open.clone()), Some(7880)).as_deref(), Some("127.0.0.1:7880"));
+    assert_eq!(signal_open_of(&facts(true, true, false, AppChatCeiling::NotDeclared), Some(7890)).as_deref(), Some("127.0.0.1:7890"));
+    assert!(signal_open_of(&facts(true, true, false, open.clone()), None).is_none(), "sew-signal not approved");
+    assert!(signal_open_of(&facts(false, true, false, open.clone()), Some(7880)).is_none(), "no voice");
+    assert!(signal_open_of(&facts(true, false, false, open.clone()), Some(7880)).is_none(), "sew-api not approved");
+    assert!(signal_open_of(&facts(true, true, true, open.clone()), Some(7880)).is_none(), "suspended");
+    assert!(signal_open_of(&facts(true, true, false, declared(&["chat:read"])), Some(7880)).is_none(), "no voice:join");
+}
+
+/// One connection on the App's path as a tunnelled client at `ip`.
+async fn via_tunnel(app_id: &str, ip: &str) -> TcpStream {
+    let l = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = l.local_addr().expect("addr");
+    let id = app_id.to_string();
+    let ip: std::net::IpAddr = ip.parse().expect("ip");
+    tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.expect("accept");
+        crate::apps::router::serve_app_conn_with(&mut s, &id, crate::client_ip::Mode::Tunnel(Some(ip))).await;
+    });
+    TcpStream::connect(addr).await.expect("connect")
+}
+
+const MEDIA_JWT: &str = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJnbG9iZXgifQ.c2ln";
+
+fn rtc(target: &str, auth: &str) -> String {
+    format!(
+        "GET {target} HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\n{auth}Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc==\r\nSec-WebSocket-Version: 13\r\nX-Forwarded-For: 198.51.100.66\r\nX-Real-IP: 198.51.100.67\r\n\r\n"
+    )
+}
+
+async fn handshake(c: &mut TcpStream) -> String {
+    let mut got = Vec::new();
+    let mut b = [0u8; 1024];
+    while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = tokio::time::timeout(Duration::from_secs(5), c.read(&mut b)).await.expect("in time").expect("read");
+        assert!(n > 0, "closed in the handshake");
+        got.extend_from_slice(&b[..n]);
+    }
+    String::from_utf8_lossy(&got).to_string()
+}
+
+#[tokio::test]
+async fn the_native_signal_socket_goes_to_the_engine_with_k2s_address() {
+    let _home = crate::test_support::TempHome::new();
+    let (sew, mut sew_seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    let (engine, mut seen) = fake_sew("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", true).await;
+    let (app_port, dials) = fake_app().await;
+    let id = "signal-door-open";
+    let _ = crate::apps::router::switch(id, app_port);
+    set_test_signal(id, true, &sew, Some(&engine));
+
+    let mut c = via_tunnel(id, "203.0.113.20").await;
+    let req = rtc("/rtc/v1?join_request=Q2dFeA", &format!("Authorization: Bearer {MEDIA_JWT}\r\nCookie: app_session=x\r\n"));
+    c.write_all(req.as_bytes()).await.expect("handshake");
+    let got = handshake(&mut c).await;
+    assert!(got.starts_with("HTTP/1.1 101"), "{got}");
+    let up = seen.recv().await.expect("the engine saw it");
+    assert!(up.starts_with("GET /rtc/v1?join_request=Q2dFeA HTTP/1.1\r\n"), "path and query unchanged: {up}");
+    assert!(up.contains(&format!("\r\nAuthorization: Bearer {MEDIA_JWT}\r\n")), "{up}");
+    assert!(up.contains("\r\nX-Forwarded-For: 203.0.113.20\r\n"), "K2's own client address: {up}");
+    assert!(!up.contains("198.51.100") && !up.to_ascii_lowercase().contains("cookie"), "a spoofed address or a cookie never reaches the engine: {up}");
+    c.write_all(b"ping").await.expect("frame");
+    let mut f = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(5), c.read_exact(&mut f)).await.expect("in time").expect("echo");
+    assert_eq!(&f, b"ping", "frames cross both ways");
+
+    // A second socket on the same token (a resume overlapping a reconnect)
+    // passes too, while the first is open.
+    let mut c2 = via_tunnel(id, "203.0.113.20").await;
+    c2.write_all(req.as_bytes()).await.expect("handshake");
+    assert!(handshake(&mut c2).await.starts_with("HTTP/1.1 101"));
+    assert!(seen.recv().await.expect("the engine saw the second").starts_with("GET /rtc/v1?"));
+    assert_eq!(dials.load(Ordering::SeqCst), 0, "the App is never dialed");
+    nothing_reached(&mut sew_seen, "a signalling socket").await;
+    drop(c);
+    drop(c2);
+
+    // The App down: the engine still gets the socket.
+    crate::apps::router::clear(id);
+    let mut c = via_tunnel(id, "203.0.113.21").await;
+    c.write_all(req.as_bytes()).await.expect("handshake");
+    assert!(handshake(&mut c).await.starts_with("HTTP/1.1 101"));
+    assert!(seen.recv().await.expect("the engine saw it").contains("X-Forwarded-For: 203.0.113.21\r\n"));
+}
+
+#[tokio::test]
+async fn browsers_k2_credentials_and_other_rtc_paths_reach_the_app() {
+    let _home = crate::test_support::TempHome::new();
+    let (sew, _sew_seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    let (engine, mut seen) = fake_sew("HTTP/1.1 101 Switching Protocols\r\n\r\n", true).await;
+    let (app_port, dials) = fake_app().await;
+    let id = "signal-door-app";
+    let _ = crate::apps::router::switch(id, app_port);
+    set_test_signal(id, true, &sew, Some(&engine));
+    let bearer = format!("Authorization: Bearer {MEDIA_JWT}\r\n");
+    let cases = [
+        ("a browser's cookie", rtc("/rtc/v1?join_request=Q2dFeA", "Cookie: app_session=x\r\n")),
+        ("a browser's query token", rtc("/rtc/v1?access_token=tok", "")),
+        ("an App pass", rtc("/rtc/v1", "Authorization: Bearer k2skn_pass.secret\r\n")),
+        ("a Sew session", rtc("/rtc/v1", "Authorization: Bearer sews_sess.secret\r\n")),
+        ("a call credential", rtc("/rtc/v1", "Authorization: Bearer sewcc_sel.secret\r\n")),
+        ("/rtc", rtc("/rtc?join_request=Q2dFeA", &bearer)),
+        ("/rtc/validate", rtc("/rtc/validate", &bearer)),
+        ("/rtc/v1/validate", rtc("/rtc/v1/validate?x=1", &bearer)),
+        ("a plain GET", format!("GET /rtc/v1 HTTP/1.1\r\nHost: a\r\n{bearer}\r\n")),
+    ];
+    for (n, (what, req)) in cases.iter().enumerate() {
+        let out = ask(id, req).await;
+        assert!(out.starts_with("HTTP/1.1 200 OK") && out.ends_with("app"), "{what}: {out}");
+        assert_eq!(dials.load(Ordering::SeqCst), n + 1, "{what} dialed the App");
+    }
+    nothing_reached(&mut seen, "a request that is the App's").await;
+    crate::apps::router::clear(id);
+}
+
+#[tokio::test]
+async fn a_shut_gate_or_no_sew_signal_leaves_rtc_to_the_app() {
+    let _home = crate::test_support::TempHome::new();
+    let (sew, _sew_seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    let (engine, mut seen) = fake_sew("HTTP/1.1 101 Switching Protocols\r\n\r\n", true).await;
+    let (app_port, dials) = fake_app().await;
+    let req = rtc("/rtc/v1?join_request=Q2dFeA", &format!("Authorization: Bearer {MEDIA_JWT}\r\n"));
+    for (id, open, signal) in [("signal-door-shut", false, Some(engine.as_str())), ("signal-door-unapproved", true, None)] {
+        let _ = crate::apps::router::switch(id, app_port);
+        set_test_signal(id, open, &sew, signal);
+        let out = ask(id, &req).await;
+        assert!(out.starts_with("HTTP/1.1 200 OK") && out.ends_with("app"), "{id}: {out}");
+        crate::apps::router::clear(id);
+    }
+    assert_eq!(dials.load(Ordering::SeqCst), 2);
+    nothing_reached(&mut seen, "a shut gate's socket").await;
+}

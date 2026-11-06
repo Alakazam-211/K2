@@ -17,6 +17,13 @@
 //! claim and caps). App sessions get the narrow route set; any other bearer
 //! is refused there.
 //!
+//! **Media signalling** (`voice::signal_lane`): on the same gate plus the
+//! App's approved `sew-signal` box service ([`signal_open_of`]), a native
+//! engine's `GET /rtc/v1` WebSocket with a non-K2 `Authorization: Bearer`
+//! is spliced to Sew's signal listener on loopback, with K2's own
+//! `X-Forwarded-For`. Browsers' `/rtc*` requests (cookie or query token) and
+//! everything on a shut gate reach the App exactly as before.
+//!
 //! **The gate** ([`open_of`]). The door opens on an App's addresses only when
 //! all of these hold:
 //! - voice is installed on this box (Chat / Voice Hosting with `k2 hostchat
@@ -44,6 +51,7 @@
 //! connection reaches the App: the engine's own connections only ever carry
 //! door requests, and K2 closes each one after its answer.
 
+use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -52,7 +60,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use crate::chat_pass::identity::AppChatCeiling;
 use crate::client_ip::{LocalAnswer, Replay};
 use crate::voice::kit_door::{Door, KitCtx};
-use crate::voice::sew_lane;
+use crate::voice::{sew_lane, signal_lane};
 
 use super::router::FirstRequest;
 
@@ -60,6 +68,8 @@ use super::router::FirstRequest;
 pub const VOICE_CAP: &str = "voice:join";
 /// The box service that is Sew's client API.
 pub const SEW_API: &str = "sew-api";
+/// The box service that is Sew's media signalling listener.
+pub const SEW_SIGNAL: &str = "sew-signal";
 /// How long "voice is installed here" is trusted between reads.
 const VOICE_TTL: Duration = Duration::from_secs(10);
 
@@ -85,6 +95,30 @@ pub fn open_of(f: &Facts) -> bool {
         AppChatCeiling::NotDeclared => true,
         AppChatCeiling::Declared(caps) => caps.iter().any(|c| c.trim() == VOICE_CAP),
     }
+}
+
+/// The signalling door's gate (pure): the call door's gate, and the App's
+/// `sew-signal` box service approved at host port `signal_port`. `Some`: the
+/// loopback address to splice to.
+pub fn signal_open_of(f: &Facts, signal_port: Option<u16>) -> Option<String> {
+    let port = signal_port?;
+    open_of(f).then(|| format!("127.0.0.1:{port}"))
+}
+
+/// The host port of `app_id`'s approved `sew-signal` box service, if any.
+pub fn signal_port(app_id: &str) -> Option<u16> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let rows = k2_core::deploy::box_service::list(&conn, app_id).ok()?;
+    rows.iter()
+        .find(|s| s.status == k2_core::deploy::box_service::STATUS_ALLOWED && (s.name == SEW_SIGNAL || s.preset.as_deref() == Some(SEW_SIGNAL)))
+        .map(|s| s.host_port)
+}
+
+/// Where `app_id`'s native signalling socket goes now, when its gate is open.
+pub fn signal_addr(app_id: &str) -> Option<String> {
+    let port = signal_port(app_id)?;
+    signal_open_of(&facts(app_id), Some(port))
 }
 
 /// Is voice installed on this box (read at most every [`VOICE_TTL`])?
@@ -156,19 +190,30 @@ pub fn lane_head(bytes: &[u8]) -> Option<(String, usize)> {
 /// Read a connection's first request for `app_id` (the App not dialed yet):
 /// the door's, K2 relays it or refuses it; one of `local`'s (the pairing link
 /// files, the update feed), K2 answers it; anything else, the bytes to replay
-/// to the App.
-pub async fn first_request<S>(client: &mut S, app_id: &str, local: Option<&LocalAnswer>) -> FirstRequest
+/// to the App. `visitor`: the client address K2 derived for this connection
+/// (`client_ip::visitor_of`), sent to the signal listener.
+pub async fn first_request<S>(client: &mut S, app_id: &str, local: Option<&LocalAnswer>, visitor: Option<IpAddr>) -> FirstRequest
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     #[cfg(test)]
     {
         if let Some(t) = test_door(app_id) {
-            return first_request_with(client, local, || t.open, &t.sew_addr).await;
+            let signal = t.signal.clone().filter(|_| t.open);
+            return first_request_door(client, local, || t.open, &t.sew_addr, None, visitor, move || signal).await;
         }
     }
     let kit = KitCtx::live(Door::App { app_id: app_id.to_string() });
-    first_request_kit(client, local, || open_of(&facts(app_id)), &crate::sew::ops::client_addr(), Some(&kit)).await
+    first_request_door(
+        client,
+        local,
+        || open_of(&facts(app_id)),
+        &crate::sew::ops::client_addr(),
+        Some(&kit),
+        visitor,
+        || signal_addr(app_id),
+    )
+    .await
 }
 
 /// [`first_request`] with the gate and Sew's address given, and no kit lane.
@@ -186,6 +231,26 @@ pub async fn first_request_kit<S, F>(client: &mut S, local: Option<&LocalAnswer>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     F: FnOnce() -> bool,
+{
+    first_request_door(client, local, open, sew_addr, kit, None, || None).await
+}
+
+/// [`first_request_kit`] with the media-signalling door: `signal` answers
+/// where the App's native signalling socket goes when its gate is open
+/// ([`signal_addr`]); it is only asked for a head that is the door's.
+pub async fn first_request_door<S, F, G>(
+    client: &mut S,
+    local: Option<&LocalAnswer>,
+    open: F,
+    sew_addr: &str,
+    kit: Option<&KitCtx>,
+    visitor: Option<IpAddr>,
+    signal: G,
+) -> FirstRequest
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce() -> bool,
+    G: FnOnce() -> Option<String>,
 {
     let p = crate::client_ip::peek_head(client).await;
     // 0.46.9: the transfer door (`transfer_door`), App up or down.
@@ -206,6 +271,18 @@ where
         let _ = client.shutdown().await;
         return FirstRequest::Answered;
     }
+    // The native engine's media signalling. A shut gate: the App's, as before.
+    if let Some((head, len)) = signal_lane::native_head(&p.bytes) {
+        if let Some(addr) = signal() {
+            {
+                let mut r = Replay::new(p.bytes, client);
+                signal_lane::serve(&mut r, &head, len, &addr, visitor).await;
+            }
+            let _ = client.shutdown().await;
+            return FirstRequest::Answered;
+        }
+        return FirstRequest::Pass(p.bytes);
+    }
     if let (Some(l), Some((method, path, host))) = (local, &p.plain) {
         if let Some(bytes) = l(method, path, host.as_deref()) {
             let _ = client.write_all(&bytes).await;
@@ -223,6 +300,8 @@ where
 pub struct TestDoor {
     pub open: bool,
     pub sew_addr: String,
+    /// The signal listener when the App's `sew-signal` is approved.
+    pub signal: Option<String>,
 }
 
 #[cfg(test)]
@@ -240,7 +319,15 @@ fn test_door(app_id: &str) -> Option<TestDoor> {
 /// relaying to `sew_addr`.
 #[cfg(test)]
 pub fn set_test_door(app_id: &str, open: bool, sew_addr: &str) {
-    test_doors().lock().unwrap_or_else(|e| e.into_inner()).insert(app_id.to_string(), TestDoor { open, sew_addr: sew_addr.to_string() });
+    test_doors().lock().unwrap_or_else(|e| e.into_inner()).insert(app_id.to_string(), TestDoor { open, sew_addr: sew_addr.to_string(), signal: None });
+}
+
+/// Tests: `app_id`'s door as [`set_test_door`], with its `sew-signal`
+/// approved at `signal_addr` (`None`: not approved).
+#[cfg(test)]
+pub fn set_test_signal(app_id: &str, open: bool, sew_addr: &str, signal_addr: Option<&str>) {
+    let t = TestDoor { open, sew_addr: sew_addr.to_string(), signal: signal_addr.map(str::to_string) };
+    test_doors().lock().unwrap_or_else(|e| e.into_inner()).insert(app_id.to_string(), t);
 }
 
 #[cfg(test)]

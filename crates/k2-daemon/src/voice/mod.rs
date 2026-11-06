@@ -11,6 +11,8 @@
 //! - [`sew_lane`]: the call door `/_k2/voice/sew/`: the native engine's
 //!   `sewcc_` lane, and Sew's web kit ([`kit_door`] routes, [`kit_feed`]
 //!   events) on the person's own login.
+//! - [`signal_lane`]: the native media-signalling door `/rtc/v1` on an App's
+//!   addresses (a non-K2 bearer, spliced to Sew's signal listener).
 //! - [`lane`]: the voice lane's state (lane A publishes it; held joins read
 //!   it, M11).
 //!
@@ -25,6 +27,7 @@ pub mod lane;
 pub mod occupancy;
 pub mod routes;
 pub mod sew_lane;
+pub mod signal_lane;
 
 #[cfg(test)]
 mod tests;

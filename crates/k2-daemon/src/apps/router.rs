@@ -357,7 +357,7 @@ where
     match live(app_id) {
         None => {
             let local = super::local_answers::for_app(app_id);
-            match read_first(client, app_id, local.as_ref()).await {
+            match read_first(client, app_id, local.as_ref(), crate::client_ip::visitor_of(mode)).await {
                 Some(FirstRequest::Answered) => return,
                 Some(FirstRequest::Pass(_)) => {}
                 None => consume_request_head(client).await,
@@ -401,9 +401,11 @@ pub async fn serve_tls_app<S>(client: &mut S, be: Arc<Backend>, label: &str, mod
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    // The visitor for K2's own doors, whatever the App's rewrite choice.
+    let visitor = crate::client_ip::visitor_of(mode);
     let mode = rewrite_mode(&be, label, mode);
     let local = mode.and_then(|_| super::local_answers::for_app(label));
-    match read_first(client, label, local.as_ref()).await {
+    match read_first(client, label, local.as_ref(), visitor).await {
         Some(FirstRequest::Answered) => TlsAppOutcome::Answered,
         Some(FirstRequest::Pass(bytes)) => {
             let r = {
@@ -425,15 +427,21 @@ where
 /// A connection's first request, when K2 may answer it before the App is
 /// dialed: the native call door on a box with voice (`voice_door`, App up or
 /// down, raw splice or not), else `local`'s answers. `None`: K2 reads
-/// nothing and the App gets the connection as it comes.
-async fn read_first<S>(client: &mut S, app_id: &str, local: Option<&crate::client_ip::LocalAnswer>) -> Option<FirstRequest>
+/// nothing and the App gets the connection as it comes. `visitor`: the
+/// client address K2 derived (the signalling door sends it on).
+async fn read_first<S>(
+    client: &mut S,
+    app_id: &str,
+    local: Option<&crate::client_ip::LocalAnswer>,
+    visitor: Option<std::net::IpAddr>,
+) -> Option<FirstRequest>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     // The call door and the transfer door (0.46.9, while any transfer is
     // live on this box) are both read here.
     if super::voice_door::watching(app_id) || crate::transfer_door::watching() {
-        return Some(super::voice_door::first_request(client, app_id, local).await);
+        return Some(super::voice_door::first_request(client, app_id, local, visitor).await);
     }
     match local {
         Some(l) => Some(answer_first(client, l).await),

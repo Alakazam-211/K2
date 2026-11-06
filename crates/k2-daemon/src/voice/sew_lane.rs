@@ -135,7 +135,7 @@ fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-fn wants_upgrade(head: &str) -> bool {
+pub(super) fn wants_upgrade(head: &str) -> bool {
     header(head, "upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
 }
 
@@ -189,29 +189,41 @@ fn take_token(sel: &str, now: Instant) -> bool {
 }
 
 static RELAYS: AtomicUsize = AtomicUsize::new(0);
+/// The media-signalling door's sockets (`signal_lane`) have their own
+/// [`MAX_RELAYS`], so neither door can starve the other.
+static SIGNAL_RELAYS: AtomicUsize = AtomicUsize::new(0);
 
 /// One relay at once of [`MAX_RELAYS`] (the kit lane counts in it too).
-pub(super) struct RelaySlot;
+pub(super) struct RelaySlot(&'static AtomicUsize);
 impl RelaySlot {
     pub(super) fn take() -> Option<RelaySlot> {
-        let n = RELAYS.fetch_add(1, Ordering::SeqCst);
+        Self::take_in(&RELAYS)
+    }
+
+    /// One socket of the signalling door's own [`MAX_RELAYS`].
+    pub(super) fn take_signal() -> Option<RelaySlot> {
+        Self::take_in(&SIGNAL_RELAYS)
+    }
+
+    fn take_in(counter: &'static AtomicUsize) -> Option<RelaySlot> {
+        let n = counter.fetch_add(1, Ordering::SeqCst);
         if n >= MAX_RELAYS {
-            RELAYS.fetch_sub(1, Ordering::SeqCst);
+            counter.fetch_sub(1, Ordering::SeqCst);
             return None;
         }
-        Some(RelaySlot)
+        Some(RelaySlot(counter))
     }
 }
 impl Drop for RelaySlot {
     fn drop(&mut self) {
-        RELAYS.fetch_sub(1, Ordering::SeqCst);
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 
 // ── answers K2 writes itself ─────────────────────────────────────────
 
-async fn answer<S: AsyncWrite + Unpin>(client: &mut S, status: &str, code: &str, hint: &str, retry_after: Option<u64>) {
+pub(super) async fn answer<S: AsyncWrite + Unpin>(client: &mut S, status: &str, code: &str, hint: &str, retry_after: Option<u64>) {
     let body = json!({ "error": { "code": code, "hint": hint, "details": null } }).to_string();
     let retry = retry_after.map(|s| format!("Retry-After: {s}\r\n")).unwrap_or_default();
     let msg = format!(
@@ -384,7 +396,7 @@ async fn relay_http<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &st
     let _ = client.flush().await;
 }
 
-async fn relay_gateway<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &str, head: &[u8]) {
+pub(super) async fn relay_gateway<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &str, head: &[u8]) {
     let unreachable = "K2 could not reach this server's Sew";
     let Some(mut up) = connect_sew(addr).await else {
         return answer(client, "502 Bad Gateway", "voice_unavailable", unreachable, Some(2)).await;

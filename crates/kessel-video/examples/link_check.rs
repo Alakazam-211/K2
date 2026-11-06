@@ -31,6 +31,7 @@ pub extern "C" fn kessel_video_link_check() -> i32 {
     }
 }
 
+/// Runs the check as a program: exit status 0 or 1.
 pub fn main() {
     std::process::exit(kessel_video_link_check());
 }

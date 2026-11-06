@@ -13,7 +13,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 51.
+From K2's verb catalog, version 52.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -58,6 +58,8 @@ no cap (your own rooms)
   profile.sessions         GET  /cli/skin/sessions                            The browsers and devices signed in to this App as this person, this one first (never another App's).
   profile.revokeSession    POST /cli/skin/sessions/revoke                     Sign one of this person's own browsers or devices out of this App.
   profile.signOutOthers    POST /cli/skin/sessions/revoke-others              Sign this person out of this App everywhere else (their notification devices there go too); this pass stays.
+  profile.deleteAccount    POST /cli/skin/account/delete                      The person deletes their own account in this App (App Store 5.1.1(v)): a request the owner or the grace period completes, or at once, by the App's mode. The answer lists what went and what K2 keeps. Needs a sign-in at most 15 minutes old, or the password.
+  diagnostics.send         POST /cli/skin/client-logs                         Send this person's device crash or log bundle to the App's own server (no third party): 20 per person and 300 per App an hour, kept 14 days by default. K2 redacts tokens and secrets again; the owner and the App's agent read it with k2 app logs <app> --client.
   push.register            POST /cli/skin/push/register                       Register this guest's phone for this App's notifications; call it on every launch and whenever the token changes.
   push.unregister          POST /cli/skin/push/unregister                     Stop this App's notifications on one of this guest's own devices (signing out also removes it).
   push.device              GET  /cli/skin/push/device                         This guest's own push registration for one device (never the token).
@@ -227,6 +229,18 @@ BIG UPLOADS from a phone app (a Tauri app's HTTP plugin holds a whole request
   your App's server in parts of at most 16 MiB, and the server passes each on,
   in order: files.uploadChunk({workspace, dir, filename, uploadId, offset,
   base64, isLast}). The last part lands the file (10 GiB at most).
+
+CLIENT LOGS (diagnostics.send, no third-party crash SDK): the device POSTs
+  {appVersion, os, kind: crash|log, message, lines: [text, ...], device?, at?}
+  (at: seconds since the epoch) with the person's pass, like its other calls.
+  Redact on the device first: no passes (k2skn_), refresh tokens, passwords,
+  push tokens, Authorization headers, emails, or what people wrote (Thread
+  and chat text). K2 redacts again (the answer's redacted counts them) and
+  trims to 64 KiB, newest lines kept (over 128 KiB: 413 too_large). 20 per
+  person and 300 per App an hour (429 rate_limited, error.retryAfterSecs:
+  keep it and send it later); kept 14 days (k2 app set --client-logs-days).
+  Read: k2 app logs <app> --client. Account deletion:
+  k2 study app-account-deletion.
 
 RULES: one guest's pass per guest request; send it as Authorization:
   Bearer (a pass in ?token= still works but lands in your own logs, and

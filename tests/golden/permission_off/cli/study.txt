@@ -35,6 +35,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-push            Your App's own phone app: keys in the vault, register, send, limits
   app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
   app-profile         A person's own profile, picture and sessions in an App; who decides
+  app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
   app-transfers       Big uploads and downloads that survive a phone app in the background
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls

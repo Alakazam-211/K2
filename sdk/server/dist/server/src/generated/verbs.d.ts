@@ -1,6 +1,6 @@
 import type { K2Error } from '../errors.ts';
 /** The catalog version this table was generated from. */
-export declare const CATALOG_VERSION = 51;
+export declare const CATALOG_VERSION = 52;
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = {
     readonly [key: string]: unknown;
@@ -1895,6 +1895,117 @@ export declare const APP_VERBS: {
                     readonly type: "integer";
                 };
                 readonly ok: {
+                    readonly type: "boolean";
+                };
+            };
+            readonly type: "object";
+        };
+    };
+    readonly 'profile.deleteAccount': {
+        readonly cap: null;
+        readonly effect: "write";
+        readonly kind: "call";
+        readonly feature: "app-account-deletion-v1";
+        readonly door: "both";
+        readonly http: {
+            readonly method: "POST";
+            readonly route: "/cli/skin/account/delete";
+            readonly params: {};
+            readonly query: readonly [];
+        };
+        readonly socket: null;
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly done: {
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly type: "array";
+                };
+                readonly dueAt: {
+                    readonly type: "integer";
+                };
+                readonly kept: {
+                    readonly items: {
+                        readonly additionalProperties: false;
+                        readonly properties: {
+                            readonly item: {
+                                readonly type: "string";
+                            };
+                            readonly why: {
+                                readonly type: "string";
+                            };
+                        };
+                        readonly type: "object";
+                    };
+                    readonly type: "array";
+                };
+                readonly mode: {
+                    readonly enum: readonly ["request", "immediate"];
+                };
+                readonly ok: {
+                    readonly type: "boolean";
+                };
+                readonly pending: {
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly type: "array";
+                };
+                readonly requestId: {
+                    readonly type: "string";
+                };
+                readonly requestedAt: {
+                    readonly type: "integer";
+                };
+                readonly scope: {
+                    readonly enum: readonly ["account", "app"];
+                };
+                readonly state: {
+                    readonly enum: readonly ["requested", "deleted"];
+                };
+                readonly username: {
+                    readonly type: "string";
+                };
+            };
+            readonly type: "object";
+        };
+    };
+    readonly 'diagnostics.send': {
+        readonly cap: null;
+        readonly effect: "write";
+        readonly kind: "call";
+        readonly feature: "app-client-logs-v1";
+        readonly door: "both";
+        readonly http: {
+            readonly method: "POST";
+            readonly route: "/cli/skin/client-logs";
+            readonly params: {};
+            readonly query: readonly [];
+        };
+        readonly socket: null;
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly bytes: {
+                    readonly type: "integer";
+                };
+                readonly id: {
+                    readonly type: "string";
+                };
+                readonly lines: {
+                    readonly type: "integer";
+                };
+                readonly ok: {
+                    readonly type: "boolean";
+                };
+                readonly redacted: {
+                    readonly type: "integer";
+                };
+                readonly truncated: {
                     readonly type: "boolean";
                 };
             };
@@ -10029,6 +10140,48 @@ export interface AppSignedOut {
     readonly ended: number;
     readonly ok: boolean;
 }
+export interface AppDeletionKept {
+    /** login, thread_posts, room_files, chat_messages, app_data or history. */
+    readonly item: string;
+    /** A sentence the App may show as is. */
+    readonly why: string;
+}
+export interface AppAccountDeletion {
+    /** What K2 removed now: login, app_access, sessions, devices, push_devices, pairings, profile, email, read_state, wallet, chat_sessions, client_logs. */
+    readonly done: string[];
+    /** While requested: when K2 completes it on its own, seconds since the epoch. */
+    readonly dueAt?: number;
+    /** What K2 keeps, and why. The App deletes what it keeps in its own data itself. */
+    readonly kept: AppDeletionKept[];
+    /** The App's mode (its owner sets it: k2 app set <app> --account-deletion). */
+    readonly mode: 'request' | 'immediate';
+    readonly ok: boolean;
+    /** What goes when a request completes (empty once deleted). */
+    readonly pending: string[];
+    /** While requested: the request (adr_...), what the owner completes or cancels. */
+    readonly requestId?: string;
+    /** Seconds since the epoch. */
+    readonly requestedAt?: number;
+    /** account: the login itself goes. app: the login also opens another App or the server, so only this App's access goes. */
+    readonly scope: 'account' | 'app';
+    /** requested: signed out everywhere, access off, deleted on dueAt or when the owner completes it. deleted: done now. */
+    readonly state: 'requested' | 'deleted';
+    /** Once deleted: the username that went. */
+    readonly username?: string;
+}
+export interface AppDiagnosticsSent {
+    /** Text kept, in bytes. */
+    readonly bytes: number;
+    /** The stored bundle (cl_...). */
+    readonly id: string;
+    /** Lines kept. */
+    readonly lines: number;
+    readonly ok: boolean;
+    /** Values K2 replaced with *** (tokens, secrets): redact them on the device next time. */
+    readonly redacted: number;
+    /** Lines or text were cut to fit. */
+    readonly truncated: boolean;
+}
 export interface AppPushConfigured {
     /** The owner set this App's Apple key. */
     readonly apns: boolean;
@@ -11864,6 +12017,24 @@ export interface AppVerbs {
         args: {};
         value: AppSignedOut;
     };
+    'profile.deleteAccount': {
+        args: {
+            password?: string;
+        };
+        value: AppAccountDeletion;
+    };
+    'diagnostics.send': {
+        args: {
+            appVersion: string;
+            at?: number;
+            device?: string;
+            kind?: 'crash' | 'log';
+            lines?: string[];
+            message?: string;
+            os: string;
+        };
+        value: AppDiagnosticsSent;
+    };
     'push.register': {
         args: {
             channel?: 'app' | 'k2-companion';
@@ -12734,7 +12905,7 @@ export interface AppVerbs {
         value: AppProjectFrame;
     };
 }
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
 export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events';
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
@@ -12861,6 +13032,22 @@ export interface AppSurfaces {
         }): Promise<AppOk>;
         /** Sign this person out of this App everywhere else (their notification devices there go too); this pass stays. no cap · POST /cli/skin/sessions/revoke-others. e.g. `await k2.asGuest(pass).profile.signOutOthers()` */
         signOutOthers(args?: {}): Promise<AppSignedOut>;
+        /** The person deletes their own account in this App (App Store 5.1.1(v)): a request the owner or the grace period completes, or at once, by the App's mode. The answer lists what went and what K2 keeps. Needs a sign-in at most 15 minutes old, or the password. no cap · POST /cli/skin/account/delete. e.g. `const d = await k2.asGuest(pass).profile.deleteAccount({ password })` */
+        deleteAccount(args?: {
+            password?: string;
+        }): Promise<AppAccountDeletion>;
+    };
+    readonly diagnostics: {
+        /** Send this person's device crash or log bundle to the App's own server (no third party): 20 per person and 300 per App an hour, kept 14 days by default. K2 redacts tokens and secrets again; the owner and the App's agent read it with k2 app logs <app> --client. no cap · POST /cli/skin/client-logs. e.g. `await k2.asGuest(pass).diagnostics.send({ appVersion, os, kind: 'crash', message, lines })` */
+        send(args: {
+            appVersion: string;
+            at?: number;
+            device?: string;
+            kind?: 'crash' | 'log';
+            lines?: string[];
+            message?: string;
+            os: string;
+        }): Promise<AppDiagnosticsSent>;
     };
     readonly push: {
         /** Register this guest's phone for this App's notifications; call it on every launch and whenever the token changes. no cap · POST /cli/skin/push/register. e.g. `await k2.asGuest(pass).push.register({deviceId, platform: 'apns', pushToken, environment: 'sandbox'})` */
@@ -13508,4 +13695,4 @@ export interface AppSurfaces {
     };
 }
 /** The surface names, in catalog order (the client builds one object each). */
-export declare const APP_SURFACES: readonly ["me", "roomAgents", "guests", "app", "password", "profile", "push", "pairing", "email", "thread", "files", "resources", "tickets", "wiki", "storeDocs", "db", "heartbeats", "activity", "agentIdentity", "room", "chat", "project"];
+export declare const APP_SURFACES: readonly ["me", "roomAgents", "guests", "app", "password", "profile", "diagnostics", "push", "pairing", "email", "thread", "files", "resources", "tickets", "wiki", "storeDocs", "db", "heartbeats", "activity", "agentIdentity", "room", "chat", "project"];

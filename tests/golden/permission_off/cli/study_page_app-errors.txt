@@ -398,7 +398,8 @@ PAIRING (pairing a phone with an App)
       fix: The App's owner turns it on: k2 app pairing setup <app>.
       Server-wide off (K2_APP_PAIRING=off) is the owner's.
   reauth_required (exit 3)
-      fix: Ask the person for the password and send it with the start.
+      fix: Ask the person for the password and send it with the call
+      (pairing.start, profile.deleteAccount).
 
 CHAT (an App's chat key, the Spaces it governs, an agent's chat account)
   agent_subject (exit 3)

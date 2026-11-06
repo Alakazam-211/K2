@@ -2840,6 +2840,27 @@ exit: 0
       ]
     },
     {
+      "name": "app set",
+      "usage": "k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>] [--client-logs-days <days>] [--json]",
+      "description": "An App's account deletion mode and grace period, and how long K2 keeps its client logs. No flags: show them. The owner or an Admin; the App's own agent with \"manage its Apps' users\". See k2 study app-account-deletion.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--account-deletion", "arg": "request|immediate", "description": "request (default): sign out and turn access off, delete after the grace period or when completed; immediate: delete at once."},
+        {"name": "--deletion-grace", "arg": "days", "description": "Days a request waits (1 to 90; default 30)."},
+        {"name": "--client-logs-days", "arg": "days", "description": "Days K2 keeps client log bundles (1 to 90; default 14)."},
+        {"name": "--json", "arg": null, "description": "{ok, app, accountDeletion, clientLogs}."}
+      ]
+    },
+    {
+      "name": "app account-deletion",
+      "usage": "k2 app account-deletion <app> [--json] | complete <app> <request|user> | cancel <app> <request|user>",
+      "description": "People's own account deletion requests in an App: list them, complete one now, or cancel one (their access comes back). The owner or an Admin; the App's own agent with \"manage its Apps' users\". See k2 study app-account-deletion.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The answer as JSON."}
+      ]
+    },
+    {
       "name": "app user show",
       "usage": "k2 app user show <username> --app <app> [--json]",
       "description": "Owner only. A person's profile in one App: full name (a self-set one shows the username beside it), display name, email, picture hash, role there, last sign-in, sessions and the App's profile settings.",

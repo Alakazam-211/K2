@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 51;
+pub const CATALOG_VERSION: u32 = 52;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -52,6 +52,8 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("HEAD", "/cli/skin/sessions"),
     ("POST", "/cli/skin/sessions/revoke"),
     ("POST", "/cli/skin/sessions/revoke-others"),
+    ("POST", "/cli/skin/account/delete"),
+    ("POST", "/cli/skin/client-logs"),
     ("POST", "/cli/skin/push/register"),
     ("POST", "/cli/skin/push/unregister"),
     ("GET", "/cli/skin/push/device"),
@@ -196,6 +198,8 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/skin/sessions"),
     ("POST", "/cli/skin/sessions/revoke"),
     ("POST", "/cli/skin/sessions/revoke-others"),
+    ("POST", "/cli/skin/account/delete"),
+    ("POST", "/cli/skin/client-logs"),
     ("POST", "/cli/skin/push/register"),
     ("POST", "/cli/skin/push/unregister"),
     ("GET", "/cli/skin/push/device"),
@@ -396,6 +400,8 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/skin/sessions", "profile.sessions", "both"),
     ("POST", "/cli/skin/sessions/revoke", "profile.revokeSession", "both"),
     ("POST", "/cli/skin/sessions/revoke-others", "profile.signOutOthers", "both"),
+    ("POST", "/cli/skin/account/delete", "profile.deleteAccount", "both"),
+    ("POST", "/cli/skin/client-logs", "diagnostics.send", "both"),
     ("POST", "/cli/skin/push/register", "push.register", "both"),
     ("POST", "/cli/skin/push/unregister", "push.unregister", "both"),
     ("GET", "/cli/skin/push/device", "push.device", "both"),

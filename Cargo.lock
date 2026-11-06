@@ -10818,6 +10818,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vp8-encoder"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "vp8-decoder",
+]
+
+[[package]]
 name = "vswhom"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

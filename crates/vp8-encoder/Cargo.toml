@@ -1,0 +1,29 @@
+[package]
+name = "vp8-encoder"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+# Uses vp8-decoder's RFC 6386 Section 20 derived code (BSD-3-Clause, see
+# NOTICE and PROVENANCE.md); our own code is MIT OR Apache-2.0.
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+description = "A real-time VP8 video encoder in pure, safe Rust: rate control, keyframes on request, temporal layers."
+authors = ["Alakazam Labs"]
+readme = "README.md"
+repository = "https://github.com/Alakazam-211/K2"
+keywords = ["vp8", "video", "encoder", "codec", "webrtc"]
+categories = ["multimedia::video", "multimedia::encoding"]
+include = ["src/", "README.md", "NOTICE", "PROVENANCE.md", "LICENSE-MIT", "LICENSE-APACHE"]
+
+[lib]
+name = "vp8_encoder"
+
+[dependencies]
+# Exact: the encoder uses vp8-decoder's hidden shared modules, which are
+# not a stable API.
+vp8-decoder = { path = "../vp8-decoder", version = "=0.1.0" }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+missing_docs = "warn"

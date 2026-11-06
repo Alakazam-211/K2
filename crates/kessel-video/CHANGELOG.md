@@ -58,6 +58,9 @@ encoding), and VP8 through vp8-encoder and vp8-decoder in every backend.
   buffers, VideoToolbox, and the FFI and Objective-C helpers.
   ScreenCaptureKit stays macOS-only (`screen.rs`); the iOS-only parts are in
   `ios.rs`.
+- The camera session leaves the app's audio session alone on iOS
+  (`automaticallyConfiguresApplicationAudioSession = NO`) and never adds an
+  audio input, so it works inside a CallKit call.
 - Cameras on iOS: the front camera by default, `CaptureConstraints::facing`
   for front or back, modes chosen with the box turned landscape, frames
   turned upright (the rotation coordinator on iOS 17+, the device's

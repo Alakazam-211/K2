@@ -505,6 +505,14 @@ unsafe fn open_in_pool(
     if input.is_null() {
         return Err(av_error(err, "AVCaptureDeviceInput"));
     }
+    // On iOS the session would otherwise take over the app's audio session
+    // (the property defaults to YES). In a call, CallKit owns the audio
+    // session, so the camera must leave it alone. The session stays
+    // video-only: no audio input is ever added.
+    #[cfg(target_os = "ios")]
+    {
+        let _: () = msg_send![&*session, setAutomaticallyConfiguresApplicationAudioSession: Bool::NO];
+    }
     let _: () = msg_send![&*session, beginConfiguration];
     let ok: Bool = msg_send![&*session, canAddInput: input];
     if !ok.as_bool() {

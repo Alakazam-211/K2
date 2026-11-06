@@ -6,8 +6,10 @@ use crate::bool_decoder::BoolDecoder;
 use crate::frame::{FrameBuf, Picture};
 use crate::idct;
 use crate::loop_filter;
-use crate::predict::{self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUMA_WS_SIZE, LUMA_WS_STRIDE};
 use crate::modes::{find_near_mvs, implied_bmode, Bounds, MbInfo, Mv};
+use crate::predict::{
+    self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUMA_WS_SIZE, LUMA_WS_STRIDE,
+};
 use crate::tables::*;
 
 /// Why a frame could not be decoded.
@@ -341,7 +343,9 @@ impl Decoder {
         }
         if let Some(d) = info.dimensions {
             if d.width as u64 * d.height as u64 > self.max_pixels {
-                return Err(DecodeError::Unsupported("frame larger than the decoder's limit"));
+                return Err(DecodeError::Unsupported(
+                    "frame larger than the decoder's limit",
+                ));
             }
             if d.width != self.width || d.height != self.height || self.mbs.is_empty() {
                 self.resize(d);
@@ -393,7 +397,10 @@ impl Decoder {
             };
             let qi = |delta: i32| (q + delta).clamp(0, 127) as usize;
             dq.y1 = [DC_QUANT[qi(y1_dc)], AC_QUANT[qi(0)]];
-            dq.y2 = [DC_QUANT[qi(y2_dc)] * 2, (AC_QUANT[qi(y2_ac)] * 155 / 100).max(8)];
+            dq.y2 = [
+                DC_QUANT[qi(y2_dc)] * 2,
+                (AC_QUANT[qi(y2_ac)] * 155 / 100).max(8),
+            ];
             dq.uv = [DC_QUANT[qi(uv_dc)].min(132), AC_QUANT[qi(uv_ac)]];
         }
 
@@ -421,10 +428,15 @@ impl Decoder {
             refresh_entropy = bd.read_bit();
             hdr.refresh_last = bd.read_bit();
         }
-        let saved_entropy = if refresh_entropy { None } else { Some(self.entropy.clone()) };
+        let saved_entropy = if refresh_entropy {
+            None
+        } else {
+            Some(self.entropy.clone())
+        };
 
         let coeff_probs = self.entropy.coeff.iter_mut().flatten().flatten().flatten();
-        for (p, &update) in coeff_probs.zip(COEFF_UPDATE_PROBS.iter().flatten().flatten().flatten()) {
+        for (p, &update) in coeff_probs.zip(COEFF_UPDATE_PROBS.iter().flatten().flatten().flatten())
+        {
             if bd.read(update) {
                 *p = bd.read_literal(8) as u8;
             }
@@ -447,7 +459,13 @@ impl Decoder {
                     *p = bd.read_literal(8) as u8;
                 }
             }
-            for (p, &update) in self.entropy.mv.iter_mut().flatten().zip(MV_UPDATE_PROBS.iter().flatten()) {
+            for (p, &update) in self
+                .entropy
+                .mv
+                .iter_mut()
+                .flatten()
+                .zip(MV_UPDATE_PROBS.iter().flatten())
+            {
                 if bd.read(update) {
                     let x = bd.read_literal(7) as u8;
                     *p = if x != 0 { x << 1 } else { 1 };
@@ -499,7 +517,11 @@ impl Decoder {
     }
 
     /// The frame header up to the token partition count.
-    fn read_header(&mut self, bd: &mut BoolDecoder<'_>, info: &FrameInfo) -> Result<Header, DecodeError> {
+    fn read_header(
+        &mut self,
+        bd: &mut BoolDecoder<'_>,
+        info: &FrameInfo,
+    ) -> Result<Header, DecodeError> {
         if info.keyframe {
             self.color_space = bd.read_bit();
             // The clamping type: whether the encoder promises in-range
@@ -524,7 +546,11 @@ impl Decoder {
             }
             if self.seg.update_map {
                 for p in self.seg.tree_probs.iter_mut() {
-                    *p = if bd.read_bit() { bd.read_literal(8) as u8 } else { 255 };
+                    *p = if bd.read_bit() {
+                        bd.read_literal(8) as u8
+                    } else {
+                        255
+                    };
                 }
             }
         } else {
@@ -537,7 +563,12 @@ impl Decoder {
         self.deltas.enabled = bd.read_bit();
         if self.deltas.enabled && bd.read_bit() {
             // A delta keeps its old value unless its flag is set.
-            for delta in self.deltas.ref_frame.iter_mut().chain(self.deltas.mode.iter_mut()) {
+            for delta in self
+                .deltas
+                .ref_frame
+                .iter_mut()
+                .chain(self.deltas.mode.iter_mut())
+            {
                 if bd.read_bit() {
                     let v = bd.read_literal(6) as i32;
                     *delta = if bd.read_bit() { -v } else { v };
@@ -603,7 +634,11 @@ impl Decoder {
                         ctx_above[8] = 0;
                     }
                 } else {
-                    let seg = if self.seg.enabled { mb.segment as usize } else { 0 };
+                    let seg = if self.seg.enabled {
+                        mb.segment as usize
+                    } else {
+                        0
+                    };
                     mb.has_coeffs = decode_mb_tokens(
                         tbd,
                         &self.entropy.coeff,
@@ -621,7 +656,19 @@ impl Decoder {
                     recon_intra(cur, &mb, col, row, cols, &mut self.coeffs, &eobs, has_y2);
                 } else {
                     let refb = &self.bufs[self.refs[mb.ref_frame as usize]];
-                    recon_inter(cur, refb, &mb, x, y, &mut self.coeffs, &eobs, has_y2, filters, bilinear, full_pixel);
+                    recon_inter(
+                        cur,
+                        refb,
+                        &mb,
+                        x,
+                        y,
+                        &mut self.coeffs,
+                        &eobs,
+                        has_y2,
+                        filters,
+                        bilinear,
+                        full_pixel,
+                    );
                 }
                 self.mbs[i] = mb;
             }
@@ -637,7 +684,14 @@ impl Decoder {
 
     /// Reads one macroblock header (Section 19.3): segment, skip flag and
     /// modes. Returns the macroblock and its skip flag.
-    fn read_modes(&self, bd: &mut BoolDecoder<'_>, hdr: &Header, i: usize, row: usize, col: usize) -> (MbInfo, bool) {
+    fn read_modes(
+        &self,
+        bd: &mut BoolDecoder<'_>,
+        hdr: &Header,
+        i: usize,
+        row: usize,
+        col: usize,
+    ) -> (MbInfo, bool) {
         let stride = self.mb_cols + 1;
         let mut mb = MbInfo {
             segment: self.mbs[i].segment,
@@ -661,9 +715,18 @@ impl Decoder {
                 let above = &self.mbs[i - stride];
                 let left = &self.mbs[i - 1];
                 for b in 0..16 {
-                    let a = if b < 4 { above.bmodes[b + 12] } else { mb.bmodes[b - 4] };
-                    let l = if b & 3 == 0 { left.bmodes[b + 3] } else { mb.bmodes[b - 1] };
-                    mb.bmodes[b] = bd.read_tree(&BMODE_TREE, &KF_BMODE_PROBS[a as usize][l as usize]);
+                    let a = if b < 4 {
+                        above.bmodes[b + 12]
+                    } else {
+                        mb.bmodes[b - 4]
+                    };
+                    let l = if b & 3 == 0 {
+                        left.bmodes[b + 3]
+                    } else {
+                        mb.bmodes[b - 1]
+                    };
+                    mb.bmodes[b] =
+                        bd.read_tree(&BMODE_TREE, &KF_BMODE_PROBS[a as usize][l as usize]);
                 }
             } else {
                 mb.bmodes = [implied_bmode(mb.y_mode); 16];
@@ -721,9 +784,20 @@ impl Decoder {
                 let part = bd.read_tree(&SPLIT_MV_TREE, &SPLIT_MV_PROBS) as usize;
                 let map = &MV_PARTITIONS[part];
                 for j in 0..MV_PARTITION_COUNT[part] as u8 {
-                    let k = map.iter().position(|&m| m == j).expect("every part has a block");
-                    let left_mv = if k & 3 != 0 { mb.mvs[k - 1] } else { left.mvs[k + 3] };
-                    let above_mv = if k >= 4 { mb.mvs[k - 4] } else { above.mvs[k + 12] };
+                    let k = map
+                        .iter()
+                        .position(|&m| m == j)
+                        .expect("every part has a block");
+                    let left_mv = if k & 3 != 0 {
+                        mb.mvs[k - 1]
+                    } else {
+                        left.mvs[k + 3]
+                    };
+                    let above_mv = if k >= 4 {
+                        mb.mvs[k - 4]
+                    } else {
+                        above.mvs[k + 12]
+                    };
                     let lez = left_mv.is_zero();
                     let aez = above_mv.is_zero();
                     let lea = left_mv == above_mv;
@@ -811,7 +885,16 @@ impl Decoder {
                 y_stride: y.w,
                 uv_stride: u.w,
             };
-            loop_filter::filter_mb(planes, row, col, level, hdr.sharpness, hdr.keyframe, inner, hdr.filter_simple);
+            loop_filter::filter_mb(
+                planes,
+                row,
+                col,
+                level,
+                hdr.sharpness,
+                hdr.keyframe,
+                inner,
+                hdr.filter_simple,
+            );
         }
     }
 }
@@ -879,7 +962,11 @@ fn decode_block(
         } else {
             next_ctx = 2;
             if !bd.read(p[3]) {
-                v = if !bd.read(p[4]) { 2 } else { 3 + bd.read(p[5]) as i32 };
+                v = if !bd.read(p[4]) {
+                    2
+                } else {
+                    3 + bd.read(p[5]) as i32
+                };
             } else if !bd.read(p[6]) {
                 v = if !bd.read(p[7]) {
                     5 + extra(bd, &PCAT1)
@@ -947,7 +1034,14 @@ fn decode_mb_tokens(
     };
     for b in 0..16 {
         let ctx = (above[b & 3] + left[b >> 2]) as usize;
-        let eob = decode_block(bd, &probs[y_type], ctx, y_first, &dq.y1, &mut coeffs[b * 16..b * 16 + 16]);
+        let eob = decode_block(
+            bd,
+            &probs[y_type],
+            ctx,
+            y_first,
+            &dq.y1,
+            &mut coeffs[b * 16..b * 16 + 16],
+        );
         let nz = (eob > y_first) as u8;
         above[b & 3] = nz;
         left[b >> 2] = nz;
@@ -961,7 +1055,14 @@ fn decode_mb_tokens(
         let ai = base + (j & 1);
         let li = base + (j >> 1);
         let ctx = (above[ai] + left[li]) as usize;
-        let eob = decode_block(bd, &probs[2], ctx, 0, &dq.uv, &mut coeffs[b * 16..b * 16 + 16]);
+        let eob = decode_block(
+            bd,
+            &probs[2],
+            ctx,
+            0,
+            &dq.uv,
+            &mut coeffs[b * 16..b * 16 + 16],
+        );
         let nz = (eob > 0) as u8;
         above[ai] = nz;
         left[li] = nz;
@@ -1005,7 +1106,17 @@ fn recon_intra(
     // Luma.
     let mut ws = [0u8; LUMA_WS_SIZE];
     let st = LUMA_WS_STRIDE;
-    predict::fill_ws_border(&mut ws, st, &cur.y.data, cur.y.w, 16, mbx, mby, true, mbx + 1 == mb_cols);
+    predict::fill_ws_border(
+        &mut ws,
+        st,
+        &cur.y.data,
+        cur.y.w,
+        16,
+        mbx,
+        mby,
+        true,
+        mbx + 1 == mb_cols,
+    );
     if mb.y_mode == B_PRED {
         // Subblocks on the right use the macroblock's above-right pixels.
         let (top, rest) = ws.split_at_mut(st);
@@ -1113,7 +1224,13 @@ fn recon_inter(
         }
         for b in 0..16 {
             let pos = (y + (b >> 2) * 4) * s + x + (b & 3) * 4;
-            add_residual(&mut coeffs[b * 16..b * 16 + 16], eobs[b], &mut cur.y.data, pos, s);
+            add_residual(
+                &mut coeffs[b * 16..b * 16 + 16],
+                eobs[b],
+                &mut cur.y.data,
+                pos,
+                s,
+            );
         }
     }
 
@@ -1147,7 +1264,10 @@ fn recon_inter(
     }
     let cx0 = x / 2;
     let cy0 = y / 2;
-    for (plane, refplane, first) in [(&mut cur.u, &refb.u, 16usize), (&mut cur.v, &refb.v, 20usize)] {
+    for (plane, refplane, first) in [
+        (&mut cur.u, &refb.u, 16usize),
+        (&mut cur.v, &refb.v, 20usize),
+    ] {
         let refp = RefPlane {
             data: &refplane.data,
             w: refplane.w,
@@ -1173,13 +1293,32 @@ fn recon_inter(
             for (j, &(mx, my)) in cmv.iter().enumerate() {
                 let bx = cx0 + (j & 1) * 4;
                 let by = cy0 + (j >> 1) * 4;
-                predict::inter_predict(&mut plane.data, by * s + bx, s, &refp, bx as i32, by as i32, 4, 4, mx, my, filters, bilinear);
+                predict::inter_predict(
+                    &mut plane.data,
+                    by * s + bx,
+                    s,
+                    &refp,
+                    bx as i32,
+                    by as i32,
+                    4,
+                    4,
+                    mx,
+                    my,
+                    filters,
+                    bilinear,
+                );
             }
         }
         for j in 0..4 {
             let b = first + j;
             let pos = (cy0 + (j >> 1) * 4) * s + cx0 + (j & 1) * 4;
-            add_residual(&mut coeffs[b * 16..b * 16 + 16], eobs[b], &mut plane.data, pos, s);
+            add_residual(
+                &mut coeffs[b * 16..b * 16 + 16],
+                eobs[b],
+                &mut plane.data,
+                pos,
+                s,
+            );
         }
     }
 }

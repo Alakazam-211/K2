@@ -114,7 +114,13 @@ impl BoolEncoder {
 }
 
 /// The path of branches from `node` to the leaf `value`.
-fn tree_path(tree: &[i8], node: usize, value: u8, path: &mut [(usize, bool); 16], depth: usize) -> Option<usize> {
+fn tree_path(
+    tree: &[i8],
+    node: usize,
+    value: u8,
+    path: &mut [(usize, bool); 16],
+    depth: usize,
+) -> Option<usize> {
     for bit in [false, true] {
         let next = tree[node + bit as usize];
         path[depth] = (node, bit);

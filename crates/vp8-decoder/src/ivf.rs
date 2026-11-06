@@ -58,7 +58,8 @@ impl<'a> IvfReader<'a> {
             return Err(IvfError("no DKIF signature"));
         }
         let u16_at = |i: usize| u16::from_le_bytes([data[i], data[i + 1]]);
-        let u32_at = |i: usize| u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        let u32_at =
+            |i: usize| u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
         let header_len = u16_at(6) as usize;
         if header_len < 32 || header_len > data.len() {
             return Err(IvfError("bad header length"));
@@ -70,7 +71,11 @@ impl<'a> IvfReader<'a> {
             timebase: (u32_at(20), u32_at(16)),
             frame_count: u32_at(24),
         };
-        Ok(IvfReader { header, data, pos: header_len })
+        Ok(IvfReader {
+            header,
+            data,
+            pos: header_len,
+        })
     }
 
     /// The file header.

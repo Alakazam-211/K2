@@ -48,9 +48,14 @@ fn vector_names() -> Vec<String> {
 /// Decodes one vector; returns a description of the first mismatch, if any,
 /// and the number of frames checked.
 fn check(dir: &std::path::Path, name: &str) -> (Option<String>, usize) {
-    let ivf = std::fs::read(dir.join(format!("{name}.ivf"))).unwrap_or_else(|e| panic!("{name}.ivf: {e}"));
-    let md5s = std::fs::read_to_string(dir.join(format!("{name}.ivf.md5"))).unwrap_or_else(|e| panic!("{name}.ivf.md5: {e}"));
-    let expected: Vec<&str> = md5s.lines().filter_map(|l| l.split_whitespace().next()).collect();
+    let ivf = std::fs::read(dir.join(format!("{name}.ivf")))
+        .unwrap_or_else(|e| panic!("{name}.ivf: {e}"));
+    let md5s = std::fs::read_to_string(dir.join(format!("{name}.ivf.md5")))
+        .unwrap_or_else(|e| panic!("{name}.ivf.md5: {e}"));
+    let expected: Vec<&str> = md5s
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
     let reader = IvfReader::new(&ivf).unwrap_or_else(|e| panic!("{name}: {e}"));
     let mut dec = Decoder::new();
     let mut shown = 0usize;
@@ -62,9 +67,19 @@ fn check(dir: &std::path::Path, name: &str) -> (Option<String>, usize) {
                 match expected.get(shown) {
                     Some(want) if *want == got => {}
                     Some(want) => {
-                        return (Some(format!("frame {i} (shown {shown}): md5 {got}, want {want}")), shown);
+                        return (
+                            Some(format!("frame {i} (shown {shown}): md5 {got}, want {want}")),
+                            shown,
+                        );
                     }
-                    None => return (Some(format!("frame {i}: more shown frames than the .md5 file lists")), shown),
+                    None => {
+                        return (
+                            Some(format!(
+                                "frame {i}: more shown frames than the .md5 file lists"
+                            )),
+                            shown,
+                        )
+                    }
                 }
                 shown += 1;
             }
@@ -73,7 +88,13 @@ fn check(dir: &std::path::Path, name: &str) -> (Option<String>, usize) {
         }
     }
     if shown != expected.len() {
-        return (Some(format!("{shown} shown frames, the .md5 file lists {}", expected.len())), shown);
+        return (
+            Some(format!(
+                "{shown} shown frames, the .md5 file lists {}",
+                expected.len()
+            )),
+            shown,
+        );
     }
     (None, shown)
 }
@@ -82,7 +103,10 @@ fn check(dir: &std::path::Path, name: &str) -> (Option<String>, usize) {
 fn every_test_vector_matches_its_md5s() {
     let dir = vectors_dir();
     let names = vector_names();
-    assert!(names.len() >= 18, "the manifest lists the comprehensive set at least");
+    assert!(
+        names.len() >= 18,
+        "the manifest lists the comprehensive set at least"
+    );
     let mut failures = Vec::new();
     let mut frames = 0;
     for name in &names {
@@ -101,7 +125,12 @@ fn every_test_vector_matches_its_md5s() {
         names.len() - failures.len(),
         names.len()
     );
-    assert!(failures.is_empty(), "{} vectors failed:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} vectors failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// Corrupted streams must give errors or pictures, never a panic: every
@@ -119,7 +148,8 @@ fn corrupted_vectors_never_panic() {
     let mut frames = 0;
     let mut errors = 0;
     for name in vector_names() {
-        let ivf = std::fs::read(dir.join(format!("{name}.ivf"))).unwrap_or_else(|e| panic!("{name}.ivf: {e}"));
+        let ivf = std::fs::read(dir.join(format!("{name}.ivf")))
+            .unwrap_or_else(|e| panic!("{name}.ivf: {e}"));
         let originals: Vec<Vec<u8>> = IvfReader::new(&ivf)
             .unwrap_or_else(|e| panic!("{name}: {e}"))
             .map(|f| f.unwrap_or_else(|e| panic!("{name}: {e}")).data.to_vec())

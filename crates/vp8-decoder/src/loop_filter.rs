@@ -68,7 +68,16 @@ fn load(buf: &[u8], pos: usize, across: usize, along: usize, count: usize) -> Se
 /// Writes back taps `first..last` (the ones a filter may change).
 // The segment index walks the transposed array, so a range loop is clearest.
 #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
-fn store(buf: &mut [u8], pos: usize, across: usize, along: usize, count: usize, seg: &Segments, first: usize, last: usize) {
+fn store(
+    buf: &mut [u8],
+    pos: usize,
+    across: usize,
+    along: usize,
+    count: usize,
+    seg: &Segments,
+    first: usize,
+    last: usize,
+) {
     if across == 1 {
         for i in 0..count {
             let p = pos + i * along;
@@ -140,12 +149,24 @@ fn pick(cond: bool, a: u8, b: u8) -> u8 {
 }
 
 /// The simple filter on one edge (luma only). `limit` is the combined edge limit.
-pub fn simple_edge(buf: &mut [u8], pos: usize, across: usize, along: usize, count: usize, limit: i32) {
+pub fn simple_edge(
+    buf: &mut [u8],
+    pos: usize,
+    across: usize,
+    along: usize,
+    count: usize,
+    limit: i32,
+) {
     let mut seg = load(buf, pos, across, along, count);
     let old = seg;
     for i in 0..16 {
         let mask = simple_mask(&old, i, limit);
-        let (p1, p0, q0, q1) = (u2s(old[2][i]), u2s(old[3][i]), u2s(old[4][i]), u2s(old[5][i]));
+        let (p1, p0, q0, q1) = (
+            u2s(old[2][i]),
+            u2s(old[3][i]),
+            u2s(old[4][i]),
+            u2s(old[5][i]),
+        );
         let a = c8(c8(p1 - q1) + 3 * (q0 - p0));
         let f1 = c8(a + 4) >> 3;
         let f2 = c8(a + 3) >> 3;
@@ -207,7 +228,12 @@ pub fn subblock_edge(
     for i in 0..16 {
         let mask = normal_mask(&old, i, edge_limit, params.interior_limit);
         let high = hev(&old, i, params.hev_threshold);
-        let (p1, p0, q0, q1) = (u2s(old[2][i]), u2s(old[3][i]), u2s(old[4][i]), u2s(old[5][i]));
+        let (p1, p0, q0, q1) = (
+            u2s(old[2][i]),
+            u2s(old[3][i]),
+            u2s(old[4][i]),
+            u2s(old[5][i]),
+        );
         // The outer taps count only at high edge variance.
         let outer = if high { c8(p1 - q1) } else { 0 };
         let a = c8(outer + 3 * (q0 - p0));
@@ -236,7 +262,16 @@ pub struct Planes<'a> {
 /// its left and top edges and, if `inner`, the edges between its subblocks.
 /// `level` is the macroblock's final filter level (non-zero).
 #[allow(clippy::too_many_arguments)]
-pub fn filter_mb(planes: Planes<'_>, row: usize, col: usize, level: i32, sharpness: u8, keyframe: bool, inner: bool, simple: bool) {
+pub fn filter_mb(
+    planes: Planes<'_>,
+    row: usize,
+    col: usize,
+    level: i32,
+    sharpness: u8,
+    keyframe: bool,
+    inner: bool,
+    simple: bool,
+) {
     let p = FilterParams::new(level, sharpness, keyframe);
     let mb_limit = (level + 2) * 2 + p.interior_limit;
     let b_limit = level * 2 + p.interior_limit;
@@ -262,13 +297,53 @@ pub fn filter_mb(planes: Planes<'_>, row: usize, col: usize, level: i32, sharpne
         }
         return;
     }
-    filter_plane_mb(planes.y, planes.y_stride, 16, row, col, inner, mb_limit, b_limit, &p);
-    filter_plane_mb(planes.u, planes.uv_stride, 8, row, col, inner, mb_limit, b_limit, &p);
-    filter_plane_mb(planes.v, planes.uv_stride, 8, row, col, inner, mb_limit, b_limit, &p);
+    filter_plane_mb(
+        planes.y,
+        planes.y_stride,
+        16,
+        row,
+        col,
+        inner,
+        mb_limit,
+        b_limit,
+        &p,
+    );
+    filter_plane_mb(
+        planes.u,
+        planes.uv_stride,
+        8,
+        row,
+        col,
+        inner,
+        mb_limit,
+        b_limit,
+        &p,
+    );
+    filter_plane_mb(
+        planes.v,
+        planes.uv_stride,
+        8,
+        row,
+        col,
+        inner,
+        mb_limit,
+        b_limit,
+        &p,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
-fn filter_plane_mb(buf: &mut [u8], s: usize, n: usize, row: usize, col: usize, inner: bool, mb_limit: i32, b_limit: i32, p: &FilterParams) {
+fn filter_plane_mb(
+    buf: &mut [u8],
+    s: usize,
+    n: usize,
+    row: usize,
+    col: usize,
+    inner: bool,
+    mb_limit: i32,
+    b_limit: i32,
+    p: &FilterParams,
+) {
     let pos = row * n * s + col * n;
     if col > 0 {
         mb_edge(buf, pos, 1, s, n, mb_limit, p);

@@ -1,11 +1,12 @@
 # Changelog
 
-## 0.1.5
+## 0.1.4
 
 Open encoders and decoders say what the OS really made, hardware H.264 is
-listed only after a real probe on every platform, and `convert` reads
-native buffers in place. Additions only: nothing in 0.1.4's API changes or
-goes away.
+listed only after a real probe on every platform, `convert` reads native
+buffers in place, the encoder and decoder threads ask for a QoS class on
+Apple, and the Windows backend gets H.264 through Media Foundation.
+Additions only: nothing in 0.1.3's API changes or goes away.
 
 ### What an open codec runs
 
@@ -80,12 +81,6 @@ goes away.
   BGRA, 1.7 ms at 640x360 on the M4. Before, each conversion also copied
   the whole buffer out first and allocated every intermediate picture.
 - Needs bytes 1.9 (`Bytes::from_owner`).
-
-## 0.1.4
-
-The encoder and decoder threads ask for a QoS class on Apple, and the
-Windows backend gets H.264 through Media Foundation. Nothing in 0.1.3's
-API changes.
 
 ### Codec threads at QoS user-initiated on macOS and iOS
 

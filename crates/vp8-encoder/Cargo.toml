@@ -12,7 +12,7 @@ readme = "README.md"
 repository = "https://github.com/Alakazam-211/K2"
 keywords = ["vp8", "video", "encoder", "codec", "webrtc"]
 categories = ["multimedia::video", "multimedia::encoding"]
-include = ["src/", "README.md", "NOTICE", "PROVENANCE.md", "LICENSE-MIT", "LICENSE-APACHE"]
+include = ["src/", "README.md", "NOTICE", "PROVENANCE.md", "LICENSE-MIT", "LICENSE-APACHE", "/CHANGELOG.md"]
 
 [lib]
 name = "vp8_encoder"

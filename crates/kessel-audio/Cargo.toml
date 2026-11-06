@@ -17,7 +17,7 @@ categories = ["multimedia::audio"]
 # the `speech-tests` feature; tests/scrub.rs is the repository's own publish
 # check), scripts/, deny.toml and the changelog. The leading / anchors each
 # pattern at the crate root: a bare "README.md" also matches tests/data/README.md.
-include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/CHANGELOG.md"]
 
 [features]
 default = ["cpal", "os-voice"]

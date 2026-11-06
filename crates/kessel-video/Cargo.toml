@@ -17,7 +17,7 @@ categories = ["multimedia::video", "multimedia::encoding"]
 # repository: tests/ (tests/scrub.rs is the repository's own publish check),
 # scripts/, deny.toml and the changelog. The leading / anchors each pattern at
 # the crate root, so a file of the same name deeper in the tree can't match.
-include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/CHANGELOG.md"]
 
 [features]
 # The API types and traits, `null()` and `fake` need no feature, no OS

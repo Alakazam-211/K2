@@ -7,6 +7,7 @@ import {
   ROOM_SCREEN_LIMIT,
   type LocalVideo,
   type VideoPause,
+  type VideoPolicy,
   type VideoSource,
   type VideoTrack,
 } from './video-engine'
@@ -64,6 +65,16 @@ export function videoRefusalText(code: string, detail: unknown, what: VideoSourc
     default:
       return { line: what === 'camera' ? "K2 couldn't turn on your camera." : "K2 couldn't share your screen.", kind: 'error' }
   }
+}
+
+/** Why the room's media policy keeps the camera or screen off, or null when it
+ *  doesn't. Turning one off is always allowed. */
+export function policyBlockText(policy: VideoPolicy | null, what: VideoSource): string | null {
+  if (!policy) return null
+  if (!policy.videoEnabled) return 'Video is turned off for this room.'
+  if (what === 'camera' && !policy.cameraAllowed) return "Video isn't allowed for you in this room. A room admin can change that."
+  if (what === 'screen' && !policy.screenAllowed) return "Screen sharing isn't allowed for you in this room. A room admin can change that."
+  return null
 }
 
 /** Why the camera or screen stopped or paused by itself (`local_video.reason`).

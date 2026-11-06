@@ -8,6 +8,8 @@ import {
   channelBytes,
   NativeVideoEngine,
   parseLocalVideo,
+  parseMediaPolicy,
+  parseSinkInfo,
   parseScreenSources,
   parseVideoCaps,
   parseVideoDevices,
@@ -58,7 +60,22 @@ describe('parsing the draft shapes', () => {
         { id: 'cam:2', label: 'Acme USB Camera', facing: 'external', isDefault: false },
       ],
       camera: null,
-      permission: { camera: 'granted', screen: 'denied' },
+      permission: { camera: 'granted', screen: 'unsupported' },
+    })
+    for (const p of ['granted', 'denied', 'prompt', 'unsupported']) {
+      expect(parseVideoDevices({ ...contract.videoDevices, permission: { camera: p, screen: p } }).permission).toEqual({ camera: p, screen: p })
+    }
+    // Sew's four values only: the OS's restricted case comes as `denied`.
+    expect(() => parseVideoDevices({ ...contract.videoDevices, permission: { camera: 'restricted', screen: 'granted' } })).toThrow(/capture permission/)
+  })
+
+  it("reads a build without video: everything off, backend 'null'", () => {
+    expect(parseVideoCaps(contract.videoCapsWithoutVideo)).toEqual({
+      camera: false,
+      screen: { supported: false, systemPicker: false, list: false, windows: false },
+      publishCodecs: [],
+      decodeCodecs: [],
+      backend: 'null',
     })
   })
 
@@ -77,10 +94,27 @@ describe('parsing the draft shapes', () => {
     expect(parseLocalVideo(contract.localVideo.paused)).toEqual({ camera: 'paused', screen: 'off', reason: 'background' })
   })
 
-  it('turns a base64 thumbnail into a data URL', () => {
+  it('turns the standard base64 thumbnail into a data URL, and takes only display or window', () => {
     const s = parseScreenSources(contract.screenSources)
-    expect(s[0].thumbnail).toBe('data:image/png;base64,iVBORw0KGgo=')
+    expect(s[0]).toMatchObject({ kind: 'display', thumbnail: 'data:image/png;base64,iVBORw0KGgo=' })
     expect(s[1]).toMatchObject({ kind: 'window', app: 'Acme Docs', thumbnail: null })
+    expect(() => parseScreenSources([{ ...contract.screenSources[0], kind: 'tab' }])).toThrow(/screen source/)
+  })
+
+  it('reads the sink answer: a u32 id, and no codec in decoded mode', () => {
+    expect(parseSinkInfo(contract.videoSinkResultDecoded)).toEqual({ sinkId: 4, codec: null, mode: 'decoded' })
+    expect(() => parseSinkInfo({ sink_id: 1, codec: null, mode: 'encoded' })).toThrow(/video_sink answer/)
+    expect(() => parseSinkInfo({ sink_id: 1, codec: 'vp8', mode: 'decoded' })).toThrow(/video_sink answer/)
+    expect(() => parseSinkInfo({ sink_id: 2 ** 32, codec: 'vp8', mode: 'encoded' })).toThrow(/video_sink answer/)
+    expect(() => parseSinkInfo({ sink_id: '3', codec: 'vp8', mode: 'encoded' })).toThrow(/video_sink answer/)
+  })
+
+  it("reads video_enabled, camera_allowed and screen_allowed from sew-proto's MediaPolicy", () => {
+    expect(parseMediaPolicy(contract.policy.joinAnswerNoVideoCap)).toEqual({ videoEnabled: true, cameraAllowed: false, screenAllowed: true })
+    expect(parseMediaPolicy(contract.policy.videoOff)).toEqual({ videoEnabled: false, cameraAllowed: true, screenAllowed: true })
+    // Older payloads without the two leases read as allowed.
+    expect(parseMediaPolicy(contract.policy.old)).toEqual({ videoEnabled: true, cameraAllowed: true, screenAllowed: true })
+    expect(() => parseMediaPolicy({ tier: 'full' })).toThrow(/policy/)
   })
 
   it('throws on a shape it does not know', () => {
@@ -154,7 +188,7 @@ describe('commands', () => {
     const snap = await withVideo.snapshot()
     expect(snap.tracks.map((t) => t.track)).toEqual(['TR_VCa'])
     expect(snap.local).toEqual({ camera: 'on', screen: 'off', reason: null })
-    expect(snap.policy).toEqual({ video: true })
+    expect(snap.policy).toEqual({ videoEnabled: true, cameraAllowed: false, screenAllowed: true })
     const without = new NativeVideoEngine(bridge({ state: contract.snapshotWithoutVideo }).b)
     expect(await without.snapshot()).toEqual({ tracks: [], local: { camera: 'off', screen: 'off', reason: null }, policy: null })
   })
@@ -169,17 +203,17 @@ describe('events', () => {
       onVideo: (t) => seen.push(`video ${t.length}`),
       onLocalVideo: (l) => seen.push(`local ${l.camera}`),
       onDevices: (d) => seen.push(`devices ${d.cameras.length}`),
-      onPolicy: () => seen.push('policy'),
+      onPolicy: (p) => seen.push(`policy ${p.videoEnabled} ${p.cameraAllowed}`),
       onError: (code) => seen.push(`error ${code}`),
     })
     expect([...listeners.keys()].sort()).toEqual(contract.events.map((n: string) => `sew-voice://${n}`).sort())
     listeners.get('sew-voice://video')?.(contract.video)
     listeners.get('sew-voice://local_video')?.(contract.localVideo.paused)
     listeners.get('sew-voice://video_devices')?.(contract.videoDevices)
-    listeners.get('sew-voice://policy')?.({ video: false })
+    listeners.get('sew-voice://policy')?.(contract.policy.videoOff)
     listeners.get('sew-voice://errors')?.(contract.errors.mic_denied)
     listeners.get('sew-voice://errors')?.(contract.errors.camera_lost)
-    expect(seen).toEqual(['video 3', 'local paused', 'devices 2', 'policy', 'error camera_lost'])
+    expect(seen).toEqual(['video 3', 'local paused', 'devices 2', 'policy false true', 'error camera_lost'])
     e.stop()
     expect(listeners.size).toBe(0)
   })

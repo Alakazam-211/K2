@@ -21,12 +21,15 @@ import {
   type VideoCaps,
   type VideoDevicesInfo,
   type VideoEngine,
+  type VideoPolicy,
   type VideoTrack,
+  NO_VIDEO_BACKEND,
 } from '@/lib/voice/video-engine'
 import { canvasSurface, probeDecode, SinkDecoder, type FrameSurface, type WebCodecsEnv } from '@/lib/voice/video-decoder'
 import { NativeVoiceError } from '@/lib/voice/native-voice-engine'
 import {
   localVideoReasonText,
+  policyBlockText,
   videoEngineErrorText,
   videoRefusalText,
   type PrivacyPane,
@@ -48,7 +51,8 @@ export interface VideoNotice extends VideoNoticeText {
 }
 
 export interface VideoState {
-  /** `unavailable`: this build's plugin has no video (or the engine failed). */
+  /** `unavailable`: this build's plugin has no video (backend `null`, or an
+   *  older plugin with no `video_caps`), or the engine failed. */
   availability: VideoAvailability
   caps: VideoCaps | null
   tracks: VideoTrack[]
@@ -56,7 +60,10 @@ export interface VideoState {
   devices: VideoDevicesInfo | null
   /** The last `screen_sources` answer, while the share picker is open. */
   screenSources: ScreenSource[] | null
-  policy: unknown
+  /** Sew's media policy for this call. `cameraAllowed` and `screenAllowed` keep
+   *  the join answer's value for the whole call (sew-proto: later copies always
+   *  say true); `videoEnabled` follows each update. Null: no call yet. */
+  policy: VideoPolicy | null
   notice: VideoNotice | null
   /** A camera or screen command is on its way. */
   pending: { camera: boolean; screen: boolean }
@@ -106,7 +113,8 @@ export interface VideoController {
   /** The setting and the call: load the engine while both say so. */
   setActive(active: { enabled: boolean; inCall: boolean }): void
   setCamera(on: boolean): Promise<void>
-  /** `source`: from `screen_sources`; absent where the OS picks. */
+  /** No `source`: the OS's own picker. A `source` id from `screen_sources`
+   *  shares that one (the list, where the OS allows it). */
   setScreen(on: boolean, source?: string): Promise<void>
   loadScreenSources(): Promise<void>
   closeScreenPicker(): void
@@ -359,6 +367,11 @@ export function createVideoController(deps: VideoDeps): VideoController {
     store.setState({ tracks })
   }
 
+  const onPolicy = (p: VideoPolicy): void => {
+    const prev = store.getState().policy
+    store.setState({ policy: prev ? { ...prev, videoEnabled: p.videoEnabled } : p })
+  }
+
   const onLocalVideo = (local: LocalVideo): void => {
     const prev = store.getState().local
     store.setState({ local })
@@ -393,6 +406,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
       local: LOCAL_VIDEO_OFF,
       devices: null,
       screenSources: null,
+      policy: null,
       pending: { camera: false, screen: false },
     })
   }
@@ -417,11 +431,16 @@ export function createVideoController(deps: VideoDeps): VideoController {
         return null
       }
       if (myGen !== gen) return null
+      if (caps.backend === NO_VIDEO_BACKEND) {
+        // Built without video: it answers with everything off.
+        store.setState({ availability: 'unavailable', caps })
+        return null
+      }
       await e.start({
         onVideo,
         onLocalVideo,
         onDevices: (d) => store.setState({ devices: d }),
-        onPolicy: (p) => store.setState({ policy: p }),
+        onPolicy,
         onError: (code) => notice(videoEngineErrorText(code)),
       })
       if (myGen !== gen) {
@@ -455,7 +474,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
     // The call ended: its video went with it.
     if (was.inCall && !next.inCall) {
       closeAllSinks()
-      store.setState({ tracks: [], local: LOCAL_VIDEO_OFF, screenSources: null, pending: { camera: false, screen: false } })
+      store.setState({ tracks: [], local: LOCAL_VIDEO_OFF, screenSources: null, policy: null, pending: { camera: false, screen: false } })
     }
   }
 
@@ -468,6 +487,11 @@ export function createVideoController(deps: VideoDeps): VideoController {
   const setCamera = async (on: boolean): Promise<void> => {
     const e = engine
     if (!e || store.getState().pending.camera) return
+    const blocked = on ? policyBlockText(store.getState().policy, 'camera') : null
+    if (blocked) {
+      notice({ line: blocked, kind: 'error' })
+      return
+    }
     store.setState((s) => ({ pending: { ...s.pending, camera: true }, notice: null }))
     try {
       await e.camera(on, on && prefs.cameraId ? prefs.cameraId : undefined)
@@ -481,6 +505,11 @@ export function createVideoController(deps: VideoDeps): VideoController {
   const setScreen = async (on: boolean, source?: string): Promise<void> => {
     const e = engine
     if (!e || store.getState().pending.screen) return
+    const blocked = on ? policyBlockText(store.getState().policy, 'screen') : null
+    if (blocked) {
+      notice({ line: blocked, kind: 'error' })
+      return
+    }
     store.setState((s) => ({ pending: { ...s.pending, screen: true }, notice: null, screenSources: null }))
     try {
       await e.screen(on, source)

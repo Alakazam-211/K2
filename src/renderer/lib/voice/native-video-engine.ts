@@ -1,12 +1,13 @@
-// Video in K2's voice rooms, from Sew's plugin (`tauri-plugin-sew-voice`), against
-// the DRAFT of its video API (prd-sew-62 §B7, sent to K2 2026-11-06). Names and
-// shapes may change before the plugin lands; `native-video-contract.json` holds
-// what this file reads, so a change shows up as a failing test.
+// Video in K2's voice rooms, from Sew's plugin (`tauri-plugin-sew-voice`): its
+// video API (prd-sew-62 §B7), with the open points Sew settled on 2026-11-06.
+// `native-video-contract.json` holds what this file reads, so a change shows up
+// as a failing test.
 //
 // Commands are `plugin:sew-voice|<name>` and reject `{code, detail}`. Arguments
-// are snake_case, as the plugin's `consent` takes them. Events go to every
-// window, like the voice ones. Frames come over one Tauri raw Channel per sink:
-// binary, no JSON on the hot path (`video-frame.ts`).
+// are snake_case. Events go to every window, like the voice ones. Frames come
+// over one Tauri raw Channel per sink: binary, no JSON on the hot path
+// (`video-frame.ts`). Every start of frames begins at a keyframe with the
+// discontinuity flag.
 
 import { NativeVoiceError, PLUGIN_COMMAND_PREFIX, EVENT_PREFIX, toNativeError, type NativeVoiceBridge } from './native-voice-engine'
 import type {
@@ -23,6 +24,7 @@ import type {
   VideoEngine,
   VideoEvents,
   VideoPause,
+  VideoPolicy,
   VideoSnapshot,
   VideoTrack,
 } from './video-engine'
@@ -65,7 +67,8 @@ export function parseVideoCaps(v: unknown): VideoCaps {
 }
 
 function permission(v: unknown): CapturePermission {
-  return v === 'granted' || v === 'denied' || v === 'prompt' ? v : 'unknown'
+  if (v === 'granted' || v === 'denied' || v === 'prompt' || v === 'unsupported') return v
+  throw badShape('capture permission', v)
 }
 
 export function parseVideoDevices(v: unknown): VideoDevicesInfo {
@@ -77,10 +80,11 @@ export function parseVideoDevices(v: unknown): VideoDevicesInfo {
     return { id: c.id, label: c.name, facing: typeof c.facing === 'string' ? c.facing : null, isDefault: c.default === true }
   })
   const p = record(r.permission)
+  if (!p) throw badShape('video_devices permission', r.permission)
   return {
     cameras,
     camera: typeof r.camera === 'string' ? r.camera : null,
-    permission: { camera: permission(p?.camera), screen: permission(p?.screen) },
+    permission: { camera: permission(p.camera), screen: permission(p.screen) },
   }
 }
 
@@ -128,24 +132,53 @@ export function parseScreenSources(v: unknown): ScreenSource[] {
   if (!Array.isArray(v)) throw badShape('screen_sources', v)
   return v.map((raw) => {
     const r = record(raw)
-    if (!r || typeof r.id !== 'string' || typeof r.title !== 'string') throw badShape('screen source', raw)
+    if (!r || typeof r.id !== 'string' || typeof r.title !== 'string' || (r.kind !== 'display' && r.kind !== 'window')) {
+      throw badShape('screen source', raw)
+    }
+    // Standard base64, no `data:` prefix.
     const png = typeof r.thumbnail_png === 'string' && r.thumbnail_png !== '' ? r.thumbnail_png : null
     return {
       id: r.id,
-      kind: typeof r.kind === 'string' ? r.kind : 'display',
+      kind: r.kind,
       title: r.title,
       app: typeof r.app === 'string' ? r.app : null,
       width: typeof r.width === 'number' ? r.width : 0,
       height: typeof r.height === 'number' ? r.height : 0,
-      thumbnail: png === null ? null : png.startsWith('data:') ? png : `data:image/png;base64,${png}`,
+      thumbnail: png === null ? null : `data:image/png;base64,${png}`,
     }
   })
 }
 
 export function parseSinkInfo(v: unknown): SinkInfo {
   const r = record(v)
-  if (!r || typeof r.sink_id !== 'number' || (r.mode !== 'encoded' && r.mode !== 'decoded')) throw badShape('video_sink answer', v)
-  return { sinkId: r.sink_id, codec: typeof r.codec === 'string' ? r.codec : null, mode: r.mode }
+  if (
+    !r ||
+    typeof r.sink_id !== 'number' ||
+    !Number.isInteger(r.sink_id) ||
+    r.sink_id < 0 ||
+    r.sink_id > 0xffffffff ||
+    (r.mode === 'encoded' && typeof r.codec !== 'string') ||
+    (r.mode === 'decoded' && r.codec !== null) ||
+    (r.mode !== 'encoded' && r.mode !== 'decoded')
+  ) {
+    throw badShape('video_sink answer', v)
+  }
+  return { sinkId: r.sink_id, codec: r.mode === 'encoded' ? (r.codec as string) : null, mode: r.mode }
+}
+
+/** The parts of sew-proto's `MediaPolicy` the UI reads. `camera_allowed` and
+ *  `screen_allowed` read as true when absent (older payloads, as sew-proto says). */
+export function parseMediaPolicy(v: unknown): VideoPolicy {
+  const r = record(v)
+  if (
+    !r ||
+    typeof r.video_enabled !== 'boolean' ||
+    (r.camera_allowed !== undefined && typeof r.camera_allowed !== 'boolean') ||
+    (r.screen_allowed !== undefined && typeof r.screen_allowed !== 'boolean')
+  ) {
+    throw badShape('policy', v)
+  }
+  return { videoEnabled: r.video_enabled, cameraAllowed: r.camera_allowed !== false, screenAllowed: r.screen_allowed !== false }
 }
 
 /** A raw Channel message as bytes. Tauri hands `InvokeResponseBody::Raw` over as
@@ -178,7 +211,7 @@ export class NativeVideoEngine implements VideoEngine {
       on('video', (p) => events.onVideo(parseVideoTracks(p))),
       on('local_video', (p) => events.onLocalVideo(parseLocalVideo(p))),
       on('video_devices', (p) => events.onDevices(parseVideoDevices(p))),
-      on('policy', (p) => events.onPolicy(p)),
+      on('policy', (p) => events.onPolicy(parseMediaPolicy(p))),
       on('errors', (p) => {
         const r = record(p)
         if (r && typeof r.code === 'string' && VIDEO_ERROR_CODES.has(r.code)) events.onError(r.code, r.detail ?? null)
@@ -191,15 +224,15 @@ export class NativeVideoEngine implements VideoEngine {
     this.unlisten = []
   }
 
-  /** `state` gains `video`, `local_video` and `policy`. A plugin without video
-   *  leaves them out: no tracks, nothing on. */
+  /** `state` gains `video`, `local_video` and `policy`. An older plugin
+   *  without video leaves them out: no tracks, nothing on. */
   async snapshot(): Promise<VideoSnapshot> {
     const r = record(await this.command<unknown>('state'))
     if (!r) throw badShape('state snapshot', r)
     return {
       tracks: r.video === undefined ? [] : parseVideoTracks(r.video),
       local: r.local_video === undefined ? LOCAL_VIDEO_OFF : parseLocalVideo(r.local_video),
-      policy: r.policy ?? null,
+      policy: r.policy === undefined || r.policy === null ? null : parseMediaPolicy(r.policy),
     }
   }
 

@@ -8,29 +8,28 @@
 import { useEffect } from 'react'
 import { useStore } from 'zustand'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
+import { policyBlockText } from '@/lib/voice/video-labels'
 import type { VideoController } from '@/stores/video-core'
 
 const SMALL_BTN =
   'border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50'
 
-/** Camera and Share screen, beside Mute and Deafen. */
+/** Camera and Share screen, beside Mute and Deafen. Share screen opens the OS's
+ *  own picker; where the OS lists what can be shared, "Pick" offers that list
+ *  too. The room's media policy greys out what this person may not turn on. */
 export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoController; disabled?: boolean }): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
   const caps = useStore(ctl.store, (s) => s.caps)
   const local = useStore(ctl.store, (s) => s.local)
   const pending = useStore(ctl.store, (s) => s.pending)
+  const policy = useStore(ctl.store, (s) => s.policy)
   if (availability !== 'ready' || !caps) return null
   const cameraOn = local.camera !== 'off'
   const screenOn = local.screen !== 'off'
-  const share = (): void => {
-    if (screenOn) {
-      void ctl.setScreen(false)
-      return
-    }
-    // A listed source needs our picker; otherwise the system shows its own.
-    if (caps.screen.list && !caps.screen.systemPicker) void ctl.loadScreenSources()
-    else void ctl.setScreen(true)
-  }
+  // Turning one off is always allowed.
+  const cameraBlock = cameraOn ? null : policyBlockText(policy, 'camera')
+  const screenBlock = screenOn ? null : policyBlockText(policy, 'screen')
+  const share = (): void => void ctl.setScreen(!screenOn)
   return (
     <>
       {caps.camera ? (
@@ -38,7 +37,8 @@ export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoControll
           type="button"
           data-testid="video-camera"
           data-on={cameraOn ? 'true' : 'false'}
-          disabled={disabled || pending.camera || local.camera === 'asking'}
+          disabled={disabled || pending.camera || local.camera === 'asking' || cameraBlock !== null}
+          title={cameraBlock ?? undefined}
           className={SMALL_BTN}
           onClick={() => void ctl.setCamera(!cameraOn)}
         >
@@ -50,11 +50,24 @@ export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoControll
           type="button"
           data-testid="video-screen"
           data-on={screenOn ? 'true' : 'false'}
-          disabled={disabled || pending.screen || local.screen === 'asking'}
+          disabled={disabled || pending.screen || local.screen === 'asking' || screenBlock !== null}
+          title={screenBlock ?? undefined}
           className={SMALL_BTN}
           onClick={share}
         >
           {screenOn ? 'Stop sharing' : 'Share screen'}
+        </button>
+      ) : null}
+      {caps.screen.supported && caps.screen.list && !screenOn ? (
+        <button
+          type="button"
+          data-testid="video-screen-pick"
+          title="Pick a screen or window from a list"
+          disabled={disabled || pending.screen || screenBlock !== null}
+          className={SMALL_BTN}
+          onClick={() => void ctl.loadScreenSources()}
+        >
+          Pick…
         </button>
       ) : null}
     </>
@@ -128,7 +141,10 @@ export function VideoNoticeLine({ ctl }: { ctl: VideoController }): React.JSX.El
   const notice = useStore(ctl.store, (s) => s.notice)
   const devices = useStore(ctl.store, (s) => s.devices)
   const availability = useStore(ctl.store, (s) => s.availability)
+  const policy = useStore(ctl.store, (s) => s.policy)
+  const cameraOff = useStore(ctl.store, (s) => s.local.camera === 'off')
   const cameraBlocked = devices?.permission.camera === 'denied'
+  const policyLine = cameraOff ? policyBlockText(policy, 'camera') : null
   if (availability === 'unavailable') {
     return (
       <p data-testid="video-unavailable" className="mt-1 text-[10px] text-[var(--color-text-muted)]">
@@ -136,7 +152,10 @@ export function VideoNoticeLine({ ctl }: { ctl: VideoController }): React.JSX.El
       </p>
     )
   }
-  const text = notice ?? (cameraBlocked ? { line: "K2 isn't allowed to use your camera.", kind: 'error' as const, settings: 'camera' as const } : null)
+  const text =
+    notice ??
+    (policyLine ? { line: policyLine, kind: 'info' as const } : null) ??
+    (cameraBlocked ? { line: "K2 isn't allowed to use your camera.", kind: 'error' as const, settings: 'camera' as const } : null)
   if (!text) return null
   return (
     <p

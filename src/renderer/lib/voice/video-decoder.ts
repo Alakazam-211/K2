@@ -1,5 +1,6 @@
-// Video in voice rooms: one sink's frames onto a tile's canvas (Sew's draft
-// §B9.2, drawn straight to a canvas instead of through a MediaStream).
+// Video in voice rooms: one sink's frames onto a tile's canvas (Sew's §B9.2,
+// drawn straight to a canvas instead of through a MediaStream; Sew agreed
+// 2026-11-06). With no MediaStream there is no picture-in-picture from it.
 //
 // Encoded mode: the webview's WebCodecs `VideoDecoder`, one per sink, tuned for
 // latency. H.264 comes as Annex B, so it's configured without a `description`,
@@ -135,7 +136,9 @@ export class SinkDecoder {
   }
 
   /** The track came back (unmuted, unpaused, visible again): its next frames
-   *  need a keyframe, and the gap wasn't a freeze. */
+   *  need a keyframe, and the gap wasn't a freeze. The plugin starts every
+   *  resumed stream at a keyframe with the discontinuity flag by itself; asking
+   *  too is harmless (Sew, 2026-11-06), and covers a frame we couldn't read. */
   resume(): void {
     this.lastDrawAt = null
     this.waitingKey = true

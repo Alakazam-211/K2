@@ -1,7 +1,7 @@
 // Video in K2's voice rooms: the seam between the room UI and whatever makes the
-// video. The K2 app's real one is Sew's plugin (`native-video-engine.ts`, against
-// the draft of Sew's plugin video API, §B7); `fake-video-engine.ts` stands in for
-// it in tests and in the dev video demo.
+// video. The K2 app's real one is Sew's plugin (`native-video-engine.ts`, Sew's
+// plugin video API §B7, its open points settled by Sew on 2026-11-06);
+// `fake-video-engine.ts` stands in for it in tests and in the dev video demo.
 //
 // The call itself stays the voice engine's (`native-voice-engine.ts`). Video
 // rides on it: no call, no video.
@@ -23,8 +23,12 @@ export interface VideoCaps {
   }
   publishCodecs: VideoCodec[]
   decodeCodecs: string[]
+  /** `null`: a plugin built without video (everything above is off). */
   backend: string
 }
+
+/** The backend a plugin built without video reports. */
+export const NO_VIDEO_BACKEND = 'null'
 
 export interface CameraDevice {
   id: string
@@ -34,8 +38,10 @@ export interface CameraDevice {
   isDefault: boolean
 }
 
-/** The OS's answer for a capture permission, as the plugin reports it. */
-export type CapturePermission = 'granted' | 'denied' | 'prompt' | 'unknown'
+/** The OS's answer for a capture permission, as the plugin reports it.
+ *  `denied` covers the OS's restricted case; `unsupported`: no such capture on
+ *  this OS or build. */
+export type CapturePermission = 'granted' | 'denied' | 'prompt' | 'unsupported'
 
 export interface VideoDevicesInfo {
   cameras: CameraDevice[]
@@ -80,13 +86,12 @@ export const LOCAL_VIDEO_OFF: LocalVideo = { camera: 'off', screen: 'off', reaso
 
 export interface ScreenSource {
   id: string
-  /** `display` or `window`. */
-  kind: string
+  kind: 'display' | 'window'
   title: string
   app: string | null
   width: number
   height: number
-  /** A PNG, as a data URL ready for an <img>. */
+  /** A PNG (at most 320 px wide), as a data URL ready for an <img>. */
   thumbnail: string | null
 }
 
@@ -105,7 +110,9 @@ export interface SinkRequest {
 }
 
 export interface SinkInfo {
+  /** u32, the frame header's `sink_id`. */
   sinkId: number
+  /** Null in decoded mode. */
   codec: string | null
   /** `encoded` frames go to WebCodecs; `decoded` frames are I420 or RGBA. */
   mode: 'encoded' | 'decoded'
@@ -126,19 +133,29 @@ export interface SinkUpdate {
   stats?: SinkStats
 }
 
+/** What the UI reads of Sew's `MediaPolicy` (sew-proto's JSON). */
+export interface VideoPolicy {
+  /** `[voice.video] enabled` on the Sew install. */
+  videoEnabled: boolean
+  /** This session may hold a camera lease (the K2 pass has `voice:video`). */
+  cameraAllowed: boolean
+  /** This session may hold a screen-share lease. */
+  screenAllowed: boolean
+}
+
 /** What a window opened mid-call needs (the plugin's `state`). */
 export interface VideoSnapshot {
   tracks: VideoTrack[]
   local: LocalVideo
-  /** Sew's `MediaPolicy`, as sent. Read by nothing yet. */
-  policy: unknown
+  /** Null: not in a call yet. */
+  policy: VideoPolicy | null
 }
 
 export interface VideoEvents {
   onVideo(tracks: VideoTrack[]): void
   onLocalVideo(local: LocalVideo): void
   onDevices(devices: VideoDevicesInfo): void
-  onPolicy(policy: unknown): void
+  onPolicy(policy: VideoPolicy): void
   /** Video's own engine errors: `video_stalled`, `encoder_lost`, `camera_lost`. */
   onError(code: string, detail: unknown): void
 }

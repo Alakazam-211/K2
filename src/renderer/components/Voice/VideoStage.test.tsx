@@ -146,11 +146,25 @@ describe('the controls', () => {
     expect(s.engine.calls.filter((c) => c.startsWith('camera'))).toEqual(['camera {"on":true}', 'camera {"on":false}'])
   })
 
-  it('shares a screen from the picker, and stops', async () => {
+  it('Share screen opens the OS picker (no source), and stops', async () => {
     const s = setup([])
     render(<Controls s={s} />)
     await ready(s)
     fireEvent.click(await screen.findByTestId('video-screen'))
+    await waitFor(() => expect(screen.getByTestId('video-screen').textContent).toBe('Stop sharing'))
+    expect(s.engine.calls).toContain('screen {"on":true}')
+    expect(s.engine.calls).not.toContain('screen_sources')
+    // Sharing: no list to pick from.
+    expect(screen.queryByTestId('video-screen-pick')).toBeNull()
+    fireEvent.click(screen.getByTestId('video-screen'))
+    await waitFor(() => expect(screen.getByTestId('video-screen').textContent).toBe('Share screen'))
+  })
+
+  it('where the OS lists what can be shared, Pick offers the list, and a pick shares that source', async () => {
+    const s = setup([])
+    render(<Controls s={s} />)
+    await ready(s)
+    fireEvent.click(await screen.findByTestId('video-screen-pick'))
     fireEvent.click(await screen.findByTestId('video-screen-source'))
     const menu = screen.getByTestId('setting-dropdown-menu')
     expect(menu.textContent).toContain('Screens')
@@ -160,11 +174,9 @@ describe('the controls', () => {
     await waitFor(() => expect(screen.getByTestId('video-screen').textContent).toBe('Stop sharing'))
     expect(screen.queryByTestId('video-screen-picker')).toBeNull()
     expect(s.engine.calls).toContain('screen {"on":true,"source":"window:42"}')
-    fireEvent.click(screen.getByTestId('video-screen'))
-    await waitFor(() => expect(screen.getByTestId('video-screen').textContent).toBe('Share screen'))
   })
 
-  it('lets the system pick where it has its own picker', async () => {
+  it('offers no Pick where the OS has no list', async () => {
     const s = setup([])
     s.engine.caps = async () => ({
       camera: true,
@@ -175,9 +187,23 @@ describe('the controls', () => {
     })
     render(<Controls s={s} />)
     await ready(s)
-    fireEvent.click(await screen.findByTestId('video-screen'))
-    await waitFor(() => expect(s.engine.calls).toContain('screen {"on":true}'))
-    expect(s.engine.calls).not.toContain('screen_sources')
+    await screen.findByTestId('video-screen')
+    expect(screen.queryByTestId('video-screen-pick')).toBeNull()
+  })
+
+  it("greys out what the room's policy forbids, and says why", async () => {
+    const s = setup([])
+    s.engine.snapshot = async () => ({ tracks: [], local: { camera: 'off', screen: 'off', reason: null }, policy: { videoEnabled: true, cameraAllowed: false, screenAllowed: true } })
+    render(<Controls s={s} />)
+    await ready(s)
+    const camera = (await screen.findByTestId('video-camera')) as HTMLButtonElement
+    await waitFor(() => expect(camera.disabled).toBe(true))
+    expect(camera.title).toBe("Video isn't allowed for you in this room. A room admin can change that.")
+    expect((screen.getByTestId('video-screen') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByTestId('video-notice').textContent).toBe("Video isn't allowed for you in this room. A room admin can change that.")
+    act(() => s.engine.setPolicy({ videoEnabled: false, cameraAllowed: true, screenAllowed: true }))
+    await waitFor(() => expect((screen.getByTestId('video-screen') as HTMLButtonElement).disabled).toBe(true))
+    expect(screen.getByTestId('video-screen').title).toBe('Video is turned off for this room.')
   })
 
   it('explains a refusal, with the way to the privacy settings when the OS said no', async () => {

@@ -17,6 +17,7 @@ import {
   type VideoDevicesInfo,
   type VideoEngine,
   type VideoEvents,
+  type VideoPolicy,
   type VideoSnapshot,
   type VideoTrack,
 } from './video-engine'
@@ -39,7 +40,11 @@ export interface FakeVideoOptions {
   source?: (track: string) => FrameSource | null
   /** `video_sink` answers `decoded` for these tracks. */
   decodedTracks?: string[]
+  /** The call's media policy in the snapshot (default: everything allowed). */
+  policy?: VideoPolicy | null
 }
+
+export const FAKE_POLICY: VideoPolicy = { videoEnabled: true, cameraAllowed: true, screenAllowed: true }
 
 export const FAKE_CAPS: VideoCaps = {
   camera: true,
@@ -98,7 +103,7 @@ export class FakeVideoEngine implements VideoEngine {
   }
 
   async snapshot(): Promise<VideoSnapshot> {
-    return { tracks: this.tracks, local: this.local, policy: null }
+    return { tracks: this.tracks, local: this.local, policy: this.opts.policy === undefined ? FAKE_POLICY : this.opts.policy }
   }
 
   async caps(): Promise<VideoCaps> {
@@ -196,6 +201,11 @@ export class FakeVideoEngine implements VideoEngine {
   setLocal(local: LocalVideo): void {
     this.local = local
     this.events?.onLocalVideo(local)
+  }
+
+  /** `media_policy_updated`. */
+  setPolicy(p: VideoPolicy): void {
+    this.events?.onPolicy(p)
   }
 
   emitError(code: string, detail: unknown = null): void {

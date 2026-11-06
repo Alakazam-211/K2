@@ -88,7 +88,17 @@ describe('the gate', () => {
     expect(s.ctl.store.getState()).toMatchObject({ availability: 'off', tracks: [] })
   })
 
-  it('says unavailable when the plugin has no video', async () => {
+  it("says unavailable for a build without video (backend 'null'), and sends nothing else", async () => {
+    const engine = new FakeVideoEngine({ caps: { camera: false, backend: 'null' } })
+    const s = setup(engine)
+    s.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    expect(s.ctl.store.getState().availability).toBe('unavailable')
+    await s.ctl.setCamera(true)
+    expect(engine.calls).toEqual([])
+  })
+
+  it('says unavailable when an older plugin has no video_caps', async () => {
     const engine = new FakeVideoEngine()
     engine.caps = async () => {
       throw new Error('command video_caps not found')
@@ -238,6 +248,34 @@ describe('sinks', () => {
     expect(s.engine.sinkFor('TR_7')?.info.mode).toBe('decoded')
     s.engine.push('TR_7', { kind: 'rgba', width: 2, height: 1 }, new Uint8Array(8))
     expect(s.surface.drawn).toEqual([{ kind: 'rgba', width: 2, height: 1 }])
+  })
+})
+
+describe("the room's media policy", () => {
+  it("keeps the join answer's camera_allowed for the whole call, follows video_enabled, and forgets both when the call ends", async () => {
+    const s = setup(new FakeVideoEngine({ policy: { videoEnabled: true, cameraAllowed: false, screenAllowed: true } }))
+    s.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    expect(s.ctl.store.getState().policy).toEqual({ videoEnabled: true, cameraAllowed: false, screenAllowed: true })
+    // Later copies always say true (sew-proto): the join answer's no stands.
+    s.engine.setPolicy({ videoEnabled: false, cameraAllowed: true, screenAllowed: true })
+    expect(s.ctl.store.getState().policy).toEqual({ videoEnabled: false, cameraAllowed: false, screenAllowed: true })
+    s.ctl.setActive({ enabled: true, inCall: false })
+    expect(s.ctl.store.getState().policy).toBeNull()
+  })
+
+  it('does not ask the plugin for what the policy forbids, and says why', async () => {
+    const s = setup(new FakeVideoEngine({ policy: { videoEnabled: true, cameraAllowed: false, screenAllowed: false } }))
+    s.ctl.setActive({ enabled: true, inCall: true })
+    await settle()
+    await s.ctl.setCamera(true)
+    expect(s.ctl.store.getState().notice?.line).toBe("Video isn't allowed for you in this room. A room admin can change that.")
+    await s.ctl.setScreen(true)
+    expect(s.ctl.store.getState().notice?.line).toBe("Screen sharing isn't allowed for you in this room. A room admin can change that.")
+    expect(s.engine.calls.filter((c) => c.startsWith('camera') || c.startsWith('screen'))).toEqual([])
+    s.engine.setPolicy({ videoEnabled: false, cameraAllowed: true, screenAllowed: true })
+    await s.ctl.setCamera(true)
+    expect(s.ctl.store.getState().notice?.line).toBe('Video is turned off for this room.')
   })
 })
 

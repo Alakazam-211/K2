@@ -31,6 +31,13 @@
 set -eu
 [ $# -gt 0 ] || set -- macos ios
 here=$(pwd)
+# The app crate is built outside the repository, where rust-toolchain.toml
+# doesn't apply: pin the repository's compiler, or an older default rustc
+# meets a newer iOS standard library (E0514).
+if [ -z "${RUSTUP_TOOLCHAIN:-}" ] && [ -f "$here/rust-toolchain.toml" ]; then
+    RUSTUP_TOOLCHAIN=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$here/rust-toolchain.toml" | head -1)
+    [ -n "$RUSTUP_TOOLCHAIN" ] && export RUSTUP_TOOLCHAIN
+fi
 target_dir=${CARGO_TARGET_DIR:-target}
 case $target_dir in
 /*) ;;

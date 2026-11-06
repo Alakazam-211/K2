@@ -16,6 +16,8 @@ import { writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboa
 import { useContextMenuStore } from '@/stores/context-menu'
 import { useToastStore } from '@/stores/toast'
 import { useChatLinkCopyStore } from '@/stores/chat-link-copy'
+import { isWebClient } from '@/lib/is-web'
+import { externalLinkUrl, openExternalLink } from '@/lib/open-external-link'
 
 /** The text a code block's Copy puts on the clipboard: the code as written,
  *  minus the single trailing newline markdown ends every block with. */
@@ -123,11 +125,27 @@ function CopyGlyph({ done }: { done: boolean }): JSX.Element {
   )
 }
 
-/** `a` for react-markdown: the link. Right-click offers "Copy link" (the
- *  app's own menu, since the webview's is off). It handles its own menu, so
- *  a link inside a Thread message opens this one, not the message's. With
- *  the "copy button beside links" setting on (Rosson 2026-11-04; off by
- *  default), a copy icon also shows beside the link on hover, as in 0.46.7. */
+/** A click (or middle click) on a chat link. Desktop: the default browser
+ *  or mail app, through `openExternalLink`; never the webview itself and
+ *  never the in-app Browser tab (GH#77: a Thread link click did nothing).
+ *  Hosted web: an http(s) or mailto link follows its own `target=_blank`.
+ *  Any other scheme is refused. The click stops here, so the message
+ *  around the link takes no action on it. */
+function onChatLinkClick(e: MouseEvent<HTMLAnchorElement>, href: string): void {
+  e.stopPropagation()
+  if (isWebClient() && externalLinkUrl(href)) return
+  e.preventDefault()
+  openExternalLink(href)
+}
+
+/** `a` for react-markdown: the link. A click opens it outside K2
+ *  (`onChatLinkClick`); the global link handler (lib/external-link-handler)
+ *  leaves `data-chat-link` anchors to this one. Right-click offers "Copy
+ *  link" (the app's own menu, since the webview's is off). It handles its
+ *  own menu, so a link inside a Thread message opens this one, not the
+ *  message's. With the "copy button beside links" setting on (Rosson
+ *  2026-11-04; off by default), a copy icon also shows beside the link on
+ *  hover, as in 0.46.7. */
 export function ChatLink({
   node: _node,
   children,
@@ -140,7 +158,12 @@ export function ChatLink({
   const link = (
     <a
       {...props}
+      {...(/^https?:/i.test(href.trim()) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
       data-chat-link=""
+      onClick={(e) => onChatLinkClick(e, href)}
+      onAuxClick={(e) => {
+        if (e.button === 1) onChatLinkClick(e, href)
+      }}
       onContextMenu={(e) => {
         props.onContextMenu?.(e)
         if (e.defaultPrevented) return

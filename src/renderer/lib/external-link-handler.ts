@@ -41,6 +41,10 @@ export function installExternalLinkHandler(): void {
 
       const link = findLinkAncestor(e.target)
       if (!link) return
+      // A chat markdown link (components/common/chat-copy `ChatLink`) opens
+      // itself in the default browser, with its own scheme check. Routing
+      // it here too would open it twice, or in the in-app Browser tab.
+      if (link.hasAttribute('data-chat-link')) return
 
       const href = link.getAttribute('href') ?? ''
       if (!href || href.startsWith('#')) return

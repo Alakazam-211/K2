@@ -62,4 +62,16 @@ describe('installExternalLinkHandler', () => {
     expect(openOffOriginHttp).toHaveBeenCalledTimes(0)
     expect(openUrl).toHaveBeenCalledTimes(0)
   })
+
+  it('leaves a chat markdown link (data-chat-link) to its own click handler', () => {
+    const anchor = document.createElement('a')
+    anchor.setAttribute('href', 'https://example.com/')
+    anchor.setAttribute('data-chat-link', '')
+    document.body.appendChild(anchor)
+    // Stands in for ChatLink's own handler, which opens it in the default browser.
+    anchor.addEventListener('click', (e) => e.preventDefault())
+    anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(openOffOriginHttp).toHaveBeenCalledTimes(0)
+    expect(openUrl).toHaveBeenCalledTimes(0)
+  })
 })

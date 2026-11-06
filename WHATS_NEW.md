@@ -40,6 +40,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A push no longer goes to a phone that was removed a moment before it was sent.**
 - **If this box's own nightly backup already takes Sew's backups off the box, the owner can run `k2 hostchat ship box-backup`.** K2 clears the off-box alarm only while it can see that backup is set up, and `k2 hostchat status` says what is missing.
 
+### Fixes
+- **Links in Thread messages open in your default browser.** Clicking a link or a bare web address in an agent's message (also in Project chat and ticket comments) did nothing in the desktop app. It now opens in your default browser on macOS, Windows and Linux, and a mailto link opens your mail app. Only web and mailto links open; a link to a file or anything else says so instead. A click on a link no longer acts on the message around it.
+
 ## 0.46.8 — Agents run their Apps' people
 
 An agent can now look after its App's people from start to finish, and App screens update the moment someone's access changes, with no sign-out. Mailboxes can forward to up to 100 addresses and send files, your own domain can reach an App through K2 Connect, and the Windows installer is back.

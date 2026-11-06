@@ -5,8 +5,8 @@ carry live video over their own transport:
 
 - **camera and screen capture** through each operating system's own APIs;
 - **H.264 encoding and decoding through the OS's codec** (VideoToolbox on
-  macOS and iOS). The crate contains no H.264 implementation and links no
-  codec library;
+  macOS and iOS, Media Foundation on Windows, MediaCodec on Android). The
+  crate contains no H.264 implementation and links no codec library;
 - **VP8** encoding and decoding in pure Rust, through the published
   [`vp8-encoder`](https://crates.io/crates/vp8-encoder) and
   [`vp8-decoder`](https://crates.io/crates/vp8-decoder) crates;
@@ -33,7 +33,7 @@ won't. Each change is listed in CHANGELOG.md.
 | macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | The test suite passes, including VideoToolbox H.264 encoding and decoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
 | iOS (iPhone, iPad) | AVFoundation | Frame-in: the app feeds its broadcast upload extension's frames | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked and unit-tested only: never run on an iPhone or iPad.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. The iOS-only code and its tests (which need the simulator or a phone) have not run, and camera capture, rotation and interruptions need a device and a person. |
 | Linux (x86-64) | V4L2 | The ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. **Camera capture is untested with a real camera, and screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
-| Windows (x86-64) | Media Foundation | Windows Graphics Capture | VP8 | VP8 | **Type-checked only.** |
+| Windows (x86-64) | Media Foundation | Windows Graphics Capture | H.264 (Media Foundation), VP8 | H.264 (Media Foundation), VP8 | The test suite passes on Windows 11 with no GPU, including H.264 encoding and decoding through Microsoft's software MFTs. **Hardware H.264 MFTs are untested** (they need a machine with a GPU), and **camera and screen capture are untested on hardware** (their tests run by hand). |
 | Android (API 24+) | Camera2 through the NDK | MediaProjection (API 26+), once the app hands one over | H.264 (MediaCodec), VP8 | VP8 | **Type-checked and unit-tested only: never run on a device or an emulator** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, MediaProjection screens, errors, VP8) is tested on a host over a scripted platform; the NDK and JNI calls themselves have not run. |
 | Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same | Tested on Linux and macOS. |
 
@@ -277,11 +277,35 @@ On Android:
   25 a keyframe request restarts the codec and the bitrate stays as opened.
   There is no H.264 decoder yet; VP8 decodes in Rust.
 
+On Windows:
+- H.264 runs through Media Foundation transforms (MFTs) that come with
+  Windows or its GPU driver: the driver's hardware encoder and decoder MFTs
+  when there are any, else Microsoft's software H.264 encoder and decoder.
+  No other software MFT is ever picked. `capabilities()` lists a kind only
+  after a session of it opened (and, for an encoder, encoded a frame), once
+  per process; `info().implementation` and the decoder's
+  `stats().implementation` say which kind each session runs.
+  `ImplPreference::HardwareOnly` answers `unsupported` on a machine without
+  a hardware MFT.
+- The encoder runs in low-latency mode with no B-frames, constant bitrate
+  (`set_rates` changes it in place), Constrained Baseline (`avc1.42C01F`
+  from Microsoft's encoder) or Constrained High, keyframes on request, and
+  CPU input (NV12; other formats are converted).
+- The decoder takes Annex B access units and gives CPU frames in the asked
+  format. It has no Direct3D device, so Microsoft's decoder decodes on the
+  CPU. Native (Direct3D 11) frames aren't offered on Windows yet: cameras,
+  screens and the decoder all give CPU planes.
+- The N and KN editions of Windows have no Media Foundation until the
+  Media Feature Pack is installed. kessel-video loads Media Foundation's
+  DLLs at run time instead of importing them, so an app still starts there:
+  `capabilities()` lists no H.264 and no camera, H.264 encoders and
+  decoders answer `unsupported`, and VP8 and screen capture work as usual.
+
 ## Testing
 
 | Command | Runs |
 |---|---|
-| `cargo test` | The unit tests and the README's example. On a Mac, also the VideoToolbox H.264 tests. From the repository, also `tests/` (the VP8 end-to-end test and the licence and publish checks), which is not in the published package. |
+| `cargo test` | The unit tests and the README's example. On a Mac, also the VideoToolbox H.264 tests; on Windows, the Media Foundation H.264 tests (they need Windows with Media Foundation, not an N edition without the Media Feature Pack). From the repository, also `tests/` (the VP8 end-to-end test and the licence and publish checks), which is not in the published package. |
 | `cargo test -- --ignored` | Also the tests that need a real camera, a desktop session or a person to answer a permission prompt or a picker. Run by hand; see the platform table for what has been run. |
 
 None of the default tests need a camera, screen or GPU. In the repository,
@@ -343,8 +367,9 @@ What parses data from the network, and how it is tested:
   header can't make it allocate a huge frame.
 - **The `h264` helpers** (`annexb_nals`, `avcc_nals`, `unescape_rbsp` and
   the rest) are safe Rust and check every length.
-- **H.264 decoding** is not offered by any real backend yet, so no H.264
-  from the network reaches a decoder in this crate.
+- **H.264 decoding** goes to the OS's decoder (VideoToolbox on Apple,
+  Microsoft's or the GPU driver's decoder MFT on Windows). The crate itself
+  only splits the NAL unit framing, with the checked helpers above.
 - **Not fuzzed.** kessel-video has no coverage-guided fuzzer. A seeded
   random test sends 3,000 hostile frames (random bytes; valid VP8 frames
   with bits flipped, truncated, extended, spliced, with a rewritten header
@@ -361,8 +386,9 @@ What parses data from the network, and how it is tested:
 - **kessel-video's own `unsafe`** is only in the OS backends' FFI, in three
   modules: `apple` (Objective-C runtime, CoreFoundation, CoreMedia,
   CoreVideo, VideoToolbox and AVFoundation calls, and the run-time load of
-  ScreenCaptureKit), `win` (Media Foundation, Direct3D 11 and Windows
-  Graphics Capture through the `windows` crate) and `linux` (V4L2 ioctls,
+  ScreenCaptureKit), `win` (Media Foundation and its MFTs, Direct3D 11 and
+  Windows Graphics Capture through the `windows` crate, with Media
+  Foundation's DLLs loaded at run time) and `linux` (V4L2 ioctls,
   mmap, a file descriptor from the portal, and libpipewire through dlopen).
   The rest of the crate is `deny(unsafe_code)`: the API, the frame and pixel
   code, conversion, the H.264 helpers, the VP8 glue, the fake and null
@@ -378,8 +404,9 @@ What parses data from the network, and how it is tested:
 
 Every C library is reached as the system's own copy, never vendored, built
 or statically linked: Apple's frameworks and Windows' DLLs are linked
-dynamically, and libpipewire is opened at run time with dlopen
-(`libpipewire-0.3.so.0`). No dependency compiles C: there is no `cc`,
+dynamically, Media Foundation's DLLs are loaded at run time from System32
+(`mfplat.dll`, `mf.dll`, `mfreadwrite.dll`), and libpipewire is opened at
+run time with dlopen (`libpipewire-0.3.so.0`). No dependency compiles C: there is no `cc`,
 `cmake` or `pkg-config` build step in the tree (`windows-sys` and
 `linux-raw-sys` are Rust declarations, not C).
 
@@ -402,8 +429,9 @@ repository.
 - **Our own code:** no patent licence is granted beyond Apache-2.0's for our
   own contributions.
 - **H.264:** kessel-video ships no H.264 implementation. It hands frames to
-  the operating system's own codec (VideoToolbox on macOS and iOS), so the OS
-  vendor's licence for that codec applies. The fake backend's structural
+  the operating system's own codec (VideoToolbox on macOS and iOS, the
+  Media Foundation MFTs that come with Windows or its GPU driver on
+  Windows), so the OS vendor's licence for that codec applies. The fake backend's structural
   H.264 only wraps a frame code in H.264's NAL unit framing; it encodes no
   picture.
 - **VP8:** VP8 comes from the vp8-encoder and vp8-decoder crates. Their

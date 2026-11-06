@@ -2,8 +2,9 @@
 
 ## 0.1.4
 
-The encoder and decoder threads ask for a QoS class on Apple. Nothing in
-0.1.3's API changes.
+The encoder and decoder threads ask for a QoS class on Apple, and the
+Windows backend gets H.264 through Media Foundation. Nothing in 0.1.3's
+API changes.
 
 ### Codec threads at QoS user-initiated on macOS and iOS
 
@@ -15,6 +16,57 @@ The encoder and decoder threads ask for a QoS class on Apple. Nothing in
 - Now each thread moves itself to `QOS_CLASS_USER_INITIATED` when it
   starts: real-time media work, but below the UI's user-interactive class.
 - Other platforms are unchanged.
+
+### H.264 encoding and decoding on Windows
+
+- Before, the Windows backend had VP8 only: H.264 encoders and decoders
+  answered `Unsupported` and `capabilities()` listed no H.264.
+- Now H.264 runs through the Media Foundation transforms (MFTs) that come
+  with Windows or its GPU driver. Hardware MFTs (`MFTEnumEx` with
+  `MFT_ENUM_FLAG_HARDWARE`) come first; otherwise Microsoft's software H.264
+  encoder and decoder, picked by CLSID, so no software MFT another app
+  registered is ever used. The crate still contains no H.264 code.
+- `capabilities()` lists each kind (hardware or software, encode or
+  decode) only after a session of it opened, and for an encoder encoded a
+  frame. The probe runs once per process. Hardware entries say
+  `Implementation::Hardware`, Microsoft's say `Software`.
+- Every session reports the MFT it actually runs: the encoder's
+  `info().implementation` and the decoder's `stats().implementation`.
+  `ImplPreference::HardwareOnly` never falls back to software; it answers
+  `Unsupported` where there is no hardware MFT.
+- The encoder: low-latency mode, no B-frames, constant bitrate at the
+  target with `set_rates` taking effect in place (no keyframe), keyframes
+  on request (`CODECAPI_AVEncVideoForceKeyFrame`) plus the configured
+  interval, and Constrained Baseline or Constrained High (plain Baseline or
+  High where an MFT lacks the constrained ones). Input is CPU NV12; other
+  formats and sizes are converted first.
+- Its output is the crate's H.264 form: one Annex B access unit per frame,
+  4-byte start codes, no access unit delimiters, SPS and PPS first on every
+  IDR (from the stream, or the MFT's sequence header).
+- Hardware MFTs are asynchronous (they say when they want input and have
+  output through their event queue); Microsoft's are synchronous. Both are
+  driven one frame at a time.
+- The decoder takes Annex B access units and gives CPU frames, cropped to
+  the picture, in the format the caller asks for. It runs in low-latency
+  mode, so each frame comes out as it is decoded. Microsoft's decoder runs
+  on the CPU here: it is given no Direct3D device.
+- No Direct3D 11 native frames yet: Windows cameras, screens and the
+  decoder all give CPU planes, so `convert` from a native frame doesn't
+  arise on Windows.
+- Tested on Windows 11 with no GPU (Microsoft's software MFTs): encoding
+  and decoding at 640x360 and 1280x720, a bitrate change, keyframe
+  requests, a size change, and the hardware and software flags. Hardware
+  MFTs have not run.
+
+### Windows N and KN editions
+
+- Media Foundation's DLLs (`mfplat.dll`, `mf.dll`, `mfreadwrite.dll`) are
+  now loaded at run time from System32 instead of imported. An N or KN
+  edition without the Media Feature Pack has none of them; before, an app
+  built with the Windows backend would fail to start there.
+- There, `capabilities()` lists no H.264 and `camera` is false, H.264
+  encoders and decoders and cameras answer `Unsupported`, and VP8 and
+  screen capture work as before.
 
 ## 0.1.3
 

@@ -33,6 +33,9 @@ members = [
     # Voice audio pipeline (devices, AEC/NS/AGC, Opus, jitter buffers);
     # MIT OR Apache-2.0, Kessel family.
     "crates/kessel-audio",
+    # Cameras, screen capture, pixels and video codecs (H.264 through the OS
+    # codecs only); MIT OR Apache-2.0, Kessel family.
+    "crates/kessel-video",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos

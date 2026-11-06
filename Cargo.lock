@@ -4842,6 +4842,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kessel-video"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "bytes",
+ "crossbeam-queue",
+ "objc2",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -706,6 +706,7 @@ fn convert_to_native_gives_iosurface_nv12_pixel_buffers() {
         let back = unsafe { pixel::cpu_frame(pb, 0) }.expect("read back");
         assert_eq!(back.planes(), nv12.planes(), "the same pixels");
         assert_eq!(back.color, ColorSpace::Bt601Limited);
+        assert_eq!(crate::convert::psnr_y(src, &n).expect("psnr"), 100.0);
         assert_eq!(read_frame_code(&n), Some(0x1234_5678));
     }
 
@@ -719,10 +720,16 @@ fn convert_to_native_gives_iosurface_nv12_pixel_buffers() {
 
     // RGB goes through the CPU conversion first.
     let bgra = crate::convert::convert(&i420, 320, 240, PixelFormat::Bgra).expect("bgra");
-    let n = b.convert(&bgra, 320, 240, PixelFormat::Native).expect("bgra");
-    assert_eq!(describe(pixel_buffer_of(&n)).2, ffi::PIX_420V);
-    let p = crate::convert::psnr_y(&i420, &n).expect("psnr");
-    assert!(p > 40.0, "BGRA to native: {p:.1} dB");
+    let n = b
+        .convert(&bgra, 320, 240, PixelFormat::Native)
+        .expect("bgra");
+    let pb = pixel_buffer_of(&n);
+    assert_eq!(describe(pb).2, ffi::PIX_420V);
+    // SAFETY: a live pixel buffer, held by `n`.
+    let back = unsafe { pixel::cpu_frame(pb, 0) }.expect("read back");
+    let want = crate::convert::convert(&bgra, 320, 240, PixelFormat::Nv12).expect("nv12");
+    assert_eq!(back.planes(), want.planes(), "the CPU conversion's pixels");
+    assert_eq!(read_frame_code(&n), Some(0x1234_5678));
 
     // Range and matrix: full range is 420f; the matrix is an attachment.
     for (color, want_pix) in [
@@ -732,7 +739,9 @@ fn convert_to_native_gives_iosurface_nv12_pixel_buffers() {
     ] {
         let mut f = i420.clone();
         f.color = color;
-        let n = b.convert(&f, 320, 240, PixelFormat::Native).expect("native");
+        let n = b
+            .convert(&f, 320, 240, PixelFormat::Native)
+            .expect("native");
         assert_eq!(n.color, color);
         let pb = pixel_buffer_of(&n);
         assert_eq!(describe(pb).2, want_pix, "{color:?}");
@@ -740,7 +749,9 @@ fn convert_to_native_gives_iosurface_nv12_pixel_buffers() {
     }
 
     // Another size: scaled on the CPU, then wrapped.
-    let half = b.convert(&i420, 160, 120, PixelFormat::Native).expect("half");
+    let half = b
+        .convert(&i420, 160, 120, PixelFormat::Native)
+        .expect("half");
     let pb = pixel_buffer_of(&half);
     assert_eq!(describe(pb).0, 160);
     assert_eq!(describe(pb).1, 120);
@@ -751,9 +762,15 @@ fn convert_to_native_gives_iosurface_nv12_pixel_buffers() {
 
     // Native to native: the same size passes through; another size is a
     // new, scaled buffer.
-    let n = b.convert(&i420, 320, 240, PixelFormat::Native).expect("native");
+    let n = b
+        .convert(&i420, 320, 240, PixelFormat::Native)
+        .expect("native");
     let same = b.convert(&n, 320, 240, PixelFormat::Native).expect("same");
-    assert_eq!(pixel_buffer_of(&same), pixel_buffer_of(&n), "passed through");
+    assert_eq!(
+        pixel_buffer_of(&same),
+        pixel_buffer_of(&n),
+        "passed through"
+    );
     let small = b.convert(&n, 160, 120, PixelFormat::Native).expect("small");
     assert_ne!(pixel_buffer_of(&small), pixel_buffer_of(&n));
     let (w, h, pix, surface) = describe(pixel_buffer_of(&small));
@@ -794,7 +811,11 @@ fn native_pools_are_reused_and_rebuilt_on_a_size_change() {
         let f = pools.native(&frame(64, 48), 64, 48).expect("again");
         assert_eq!(describe(pixel_buffer_of(&f)).0, 64);
     }
-    assert_eq!(pools.held(), vec![((64, 48, ffi::PIX_420V), first)], "reused");
+    assert_eq!(
+        pools.held(),
+        vec![((64, 48, ffi::PIX_420V), first)],
+        "reused"
+    );
     drop(a);
 
     // A size change: a new pool, in front.

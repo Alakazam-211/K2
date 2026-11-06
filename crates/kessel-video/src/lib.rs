@@ -13,8 +13,8 @@
 //!   producer. No async runtime: kessel-video runs its own threads.
 //! - **Codec-neutral:** VP8 as raw RFC 6386 frames, H.264 as one Annex B
 //!   access unit (4-byte start codes, SPS and PPS before every IDR). H.264
-//!   comes only from the operating system's codecs (VideoToolbox on macOS,
-//!   MediaCodec on Android); no codec library is linked or shipped.
+//!   comes only from the operating system's codecs (VideoToolbox on macOS
+//!   and iOS, MediaCodec on Android); no codec library is linked or shipped.
 //!
 //! ## Example
 //!
@@ -61,7 +61,7 @@ mod vp8;
 #[cfg(test)]
 mod hostile_tests;
 
-#[cfg(all(feature = "apple", target_os = "macos"))]
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 #[allow(unsafe_code)]
 mod apple;
 

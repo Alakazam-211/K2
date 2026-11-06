@@ -4,8 +4,9 @@ Cameras, screen capture, pixels and video codecs in Rust, for apps that
 carry live video over their own transport:
 
 - **camera and screen capture** through each operating system's own APIs;
-- **H.264 encoding through the OS's codec** (VideoToolbox on macOS). The
-  crate contains no H.264 implementation and links no codec library;
+- **H.264 encoding and decoding through the OS's codec** (VideoToolbox on
+  macOS and iOS). The crate contains no H.264 implementation and links no
+  codec library;
 - **VP8** encoding and decoding in pure Rust, through the published
   [`vp8-encoder`](https://crates.io/crates/vp8-encoder) and
   [`vp8-decoder`](https://crates.io/crates/vp8-decoder) crates;
@@ -29,10 +30,10 @@ won't. Each change is listed in the changelog in the repository.
 
 | Platform | Cameras | Screens | Encode | Decode | Status |
 |---|---|---|---|---|---|
-| macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | VP8 | The test suite passes, including VideoToolbox H.264 encoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
+| macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | The test suite passes, including VideoToolbox H.264 encoding and decoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
+| iOS (iPhone, iPad) | AVFoundation | none (needs a broadcast upload extension) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked only.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. **Untested on an iPhone**: camera capture, rotation and interruptions need a device and a person. |
 | Linux (x86-64) | V4L2 | The ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. **Camera capture is untested with a real camera, and screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
 | Windows (x86-64) | Media Foundation | Windows Graphics Capture | VP8 | VP8 | **Type-checked only.** |
-| iOS | none yet | none yet | VP8 (fake backend) | VP8 (fake backend) | **No iOS backend yet**: `system()` answers `Unsupported`. The API, the null and fake backends and VP8 are type-checked. |
 | Android (API 24+) | Camera2 through the NDK | none (MediaProjection needs Java) | H.264 (MediaCodec), VP8 | VP8 | **Type-checked only** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, errors, VP8) is tested on a host over a scripted platform; the NDK calls themselves have not run on a device or an emulator. |
 | Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same | Tested on Linux and macOS. |
 
@@ -163,6 +164,33 @@ On macOS:
   be called from any thread, but it needs the app's main run loop.
 - ScreenCaptureKit is loaded at run time, so the app still starts on systems
   without it.
+
+On iOS:
+- `system()` gives the Apple backend. The app needs `NSCameraUsageDescription`
+  in its Info.plist; without it `camera_permission()` answers `Denied`
+  instead of letting iOS end the app for asking. Ask with
+  `request_camera_permission`; a denied camera makes `open_camera` answer
+  `no_permission`.
+- `open_camera(None, ...)` opens the front camera. `CaptureConstraints::facing`
+  picks the front or back camera, and `cameras()` lists both with their
+  `facing`. Modes are chosen with the asked box turned landscape (the
+  sensor's way), and frames come out upright and unmirrored: held upright, a
+  1280 x 720 box gives 720 x 1280 frames. Mirroring the self-view is the
+  app's choice, in its own preview.
+- iOS stops the camera while the app is in the background, during a phone
+  call, when another app takes the camera, and under heavy thermal load. The
+  source stays open and sends `SourceEvent::Interrupted` (with
+  `Interruption::Background`, `InUseByAnother` or `Thermal`), then
+  `Resumed` when the camera comes back; frames simply pause in between.
+  `subscribe()` also gets `Background(true)` and `Background(false)`.
+  Opening a camera or an H.264 encoder while the app is in the background
+  answers `shut_down`. An H.264 encoder whose session iOS takes away ends
+  with `shut_down` (open a new one in front); an H.264 decoder reports
+  `session_lost` (call `reset`). VP8 needs no OS session and keeps working
+  while the app runs.
+- No screen capture: sharing an iPhone's screen needs a broadcast upload
+  extension, a separate process. `pick_screen` and `open_screen` answer
+  `unsupported`, and `screen_sources()` is empty.
 
 On Android:
 - Make the backend with `system(config)`, with `config.android` set to an
@@ -299,7 +327,7 @@ repository.
 - **Our own code:** no patent licence is granted beyond Apache-2.0's for our
   own contributions.
 - **H.264:** kessel-video ships no H.264 implementation. It hands frames to
-  the operating system's own codec (VideoToolbox on macOS), so the OS
+  the operating system's own codec (VideoToolbox on macOS and iOS), so the OS
   vendor's licence for that codec applies. The fake backend's structural
   H.264 only wraps a frame code in H.264's NAL unit framing; it encodes no
   picture.

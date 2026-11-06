@@ -1,5 +1,6 @@
-//! H.264 encoding through VideoToolbox (hardware on Apple silicon and on
-//! Intel Macs with a T2 or Quick Sync; Apple's software encoder otherwise).
+//! H.264 encoding through VideoToolbox: hardware on iPhones and iPads, on
+//! Apple silicon and on Intel Macs with a T2 or Quick Sync; Apple's software
+//! encoder on other Macs.
 //!
 //! Settings: real time, no frame reordering (no B-frames), low-latency rate
 //! control when the OS has it, Constrained Baseline or Constrained High,
@@ -34,7 +35,9 @@ extern "C" fn on_output(
     // SAFETY: refcon is the encoder's boxed Mutex<Outbox>, alive until the
     // session is invalidated (Drop invalidates first).
     let outbox = unsafe { &*(refcon as *const Mutex<Outbox>) };
-    let r = if status != 0 {
+    let r = if status == VT_INVALID_SESSION || status == VT_ENCODER_NOT_AVAILABLE_NOW {
+        Err(lost_session(status))
+    } else if status != 0 {
         Err(VideoError::os(status as i64, "VideoToolbox encode"))
     } else if sb.is_null() || flags & INFO_FRAME_DROPPED != 0 {
         Ok(None)
@@ -43,6 +46,18 @@ extern "C" fn on_output(
         unsafe { sample_to_annexb(sb) }.map(Some)
     };
     outbox.lock().unwrap_or_else(|e| e.into_inner()).out.push(r);
+}
+
+/// The error for a session VideoToolbox took away. iOS takes the encoder
+/// from an app in the background: that is `ShutDown`, as the API says for
+/// phones. Otherwise an OS error; either way, open a new encoder.
+pub(crate) fn lost_session(st: OSStatus) -> VideoError {
+    let phone_gone = cfg!(target_os = "ios") && st == VT_ENCODER_NOT_AVAILABLE_NOW;
+    if phone_gone || (st == VT_INVALID_SESSION && super::in_background()) {
+        VideoError::ShutDown
+    } else {
+        VideoError::os(st as i64, "the VideoToolbox session was lost")
+    }
 }
 
 /// AVCC sample → one Annex B access unit, SPS + PPS in front of a keyframe.
@@ -154,6 +169,11 @@ impl VtEncoder {
                 cfg.codec.codec()
             )));
         };
+        if cfg!(target_os = "ios") && cfg.implementation == ImplPreference::SoftwareOnly {
+            return Err(unsupported(
+                "iOS has no software-only H.264 encoder to ask for",
+            ));
+        }
         let outbox: Box<Mutex<Outbox>> = Box::default();
         let attrs = pixel_buffer_attributes(PIX_420V, Some((cfg.width, cfg.height)));
         let spec_for = |low_latency: bool| {
@@ -237,8 +257,10 @@ impl VtEncoder {
             low_latency,
             last_pts: -1,
         };
-        enc.hardware =
-            enc.copy_bool(c"kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder");
+        // iOS encodes H.264 in hardware; an iOS without the key doesn't say.
+        enc.hardware = enc
+            .copy_bool(c"kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder")
+            .unwrap_or(cfg!(target_os = "ios"));
         if cfg.implementation == ImplPreference::HardwareOnly && !enc.hardware {
             return Err(unsupported(
                 "VideoToolbox gave a software encoder when hardware was required",
@@ -299,17 +321,18 @@ impl VtEncoder {
         unsafe { VTSessionSetProperty(self.session, k, value) == 0 }
     }
 
-    fn copy_bool(&self, key: &std::ffi::CStr) -> bool {
-        let Some(k) = cf_const(key) else { return false };
+    /// A boolean property; `None` when the OS lacks the key or won't say.
+    fn copy_bool(&self, key: &std::ffi::CStr) -> Option<bool> {
+        let k = cf_const(key)?;
         let mut v: CFTypeRef = ptr::null();
         // SAFETY: a live session, a framework key, an out pointer; we own
         // the copied value.
         unsafe {
             if VTSessionCopyProperty(self.session, k, ptr::null(), &mut v) != 0 || v.is_null() {
-                return false;
+                return None;
             }
             let owned = Cf(v);
-            CFBooleanGetValue(owned.0) != 0
+            Some(CFBooleanGetValue(owned.0) != 0)
         }
     }
 
@@ -422,11 +445,8 @@ impl EncoderCore for VtEncoder {
                 st
             }
         };
-        if st == VT_INVALID_SESSION {
-            return Err(VideoError::os(
-                st as i64,
-                "the VideoToolbox session was lost",
-            ));
+        if st == VT_INVALID_SESSION || st == VT_ENCODER_NOT_AVAILABLE_NOW {
+            return Err(lost_session(st));
         }
         if st != 0 {
             return Err(VideoError::os(st as i64, "VTCompressionSessionEncodeFrame"));

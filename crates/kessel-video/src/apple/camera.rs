@@ -1,7 +1,12 @@
-//! Cameras through AVFoundation: the list, the permission, and capture
-//! sessions that deliver NV12 frames to a [`SourceShared`].
+//! Cameras through AVFoundation, on macOS and iOS: the list, the
+//! permission, and capture sessions that deliver NV12 frames to a
+//! [`SourceShared`]. On iOS the front camera is the default, frames are
+//! turned upright and left unmirrored, and interruptions (a phone call, the
+//! app in the background, another app taking the camera) are source events.
 
 use super::ffi::{self, cf_const, cm_time, FormatDescriptionArg, SampleBufferArg};
+#[cfg(target_os = "ios")]
+use super::ios::{Observer, Rotation};
 use super::objc::{array_items, error_of, info_plist_has, nsstring, string_of, ObjSend, Queue};
 use super::pixel::{cpu_frame, native_frame};
 use crate::api::{Done, FrameSource, Wake};
@@ -121,6 +126,13 @@ unsafe fn devices() -> Vec<*mut AnyObject> {
     array_items(list)
 }
 
+/// Which of two formats of one size to keep: the faster. On iOS, a format up
+/// to 60 fps beats a high-speed (slow-motion) one, which can be binned or
+/// cropped.
+fn fps_rank(fps: u32) -> (bool, u32) {
+    (!cfg!(target_os = "ios") || fps <= 60, fps)
+}
+
 /// A device's modes with the format objects behind them.
 unsafe fn modes(device: *mut AnyObject) -> Vec<(CaptureMode, *mut AnyObject)> {
     let formats: *mut AnyObject = msg_send![device, formats];
@@ -150,7 +162,7 @@ unsafe fn modes(device: *mut AnyObject) -> Vec<(CaptureMode, *mut AnyObject)> {
             .iter_mut()
             .find(|(m, _)| (m.width, m.height) == (mode.width, mode.height))
         {
-            Some(slot) if slot.0.max_fps < mode.max_fps => *slot = (mode, f),
+            Some(slot) if fps_rank(slot.0.max_fps) < fps_rank(mode.max_fps) => *slot = (mode, f),
             Some(_) => {}
             None => out.push((mode, f)),
         }
@@ -171,6 +183,17 @@ unsafe fn info_of(device: *mut AnyObject, default_id: &str) -> CameraInfo {
     let id: *mut AnyObject = msg_send![device, uniqueID];
     let name: *mut AnyObject = msg_send![device, localizedName];
     let id = string_of(id);
+    let mut info = CameraInfo::new(
+        id.clone(),
+        string_of(name),
+        facing_of(device),
+        id == default_id,
+    );
+    info.modes = modes(device).into_iter().map(|(m, _)| m).collect();
+    info
+}
+
+unsafe fn facing_of(device: *mut AnyObject) -> Facing {
     let ty: *mut AnyObject = msg_send![device, deviceType];
     let position: isize = msg_send![device, position];
     let external = [
@@ -182,23 +205,42 @@ unsafe fn info_of(device: *mut AnyObject, default_id: &str) -> CameraInfo {
     .any(|n| cf_const(n).is_some_and(|t| is_equal(ty, t as *const AnyObject)));
     let built_in = cf_const(c"AVCaptureDeviceTypeBuiltInWideAngleCamera")
         .is_some_and(|t| is_equal(ty, t as *const AnyObject));
-    let facing = match position {
+    match position {
         1 => Facing::Back,
         2 => Facing::Front,
         _ if external => Facing::External,
         _ if built_in => Facing::Front,
         _ => Facing::Unknown,
+    }
+}
+
+/// The first camera facing `facing` (autoreleased; call inside a pool), or
+/// null.
+unsafe fn facing_device(facing: Facing) -> *mut AnyObject {
+    devices()
+        .into_iter()
+        .find(|d| facing_of(*d) == facing)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// The default camera (autoreleased; call inside a pool), or null. On iOS
+/// the front camera, since calls face the person; elsewhere the system's
+/// default.
+unsafe fn default_device() -> *mut AnyObject {
+    if cfg!(target_os = "ios") {
+        let d = facing_device(Facing::Front);
+        if !d.is_null() {
+            return d;
+        }
+    }
+    let Some(mt) = media_type_video() else {
+        return std::ptr::null_mut();
     };
-    let mut info = CameraInfo::new(id.clone(), string_of(name), facing, id == default_id);
-    info.modes = modes(device).into_iter().map(|(m, _)| m).collect();
-    info
+    msg_send![class!(AVCaptureDevice), defaultDeviceWithMediaType: mt]
 }
 
 unsafe fn default_id() -> String {
-    let Some(mt) = media_type_video() else {
-        return String::new();
-    };
-    let d: *mut AnyObject = msg_send![class!(AVCaptureDevice), defaultDeviceWithMediaType: mt];
+    let d = default_device();
     if d.is_null() {
         return String::new();
     }
@@ -300,6 +342,8 @@ struct CameraControl {
     ctx: *mut Ctx,
     stop: Arc<AtomicBool>,
     watch: Option<JoinHandle<()>>,
+    #[cfg(target_os = "ios")]
+    observers: Vec<Observer>,
 }
 
 // SAFETY: the objects are thread-safe AVFoundation objects; ctx is freed
@@ -310,6 +354,9 @@ impl SourceControl for CameraControl {}
 
 impl Drop for CameraControl {
     fn drop(&mut self) {
+        // No interruption events once the caller is closing it.
+        #[cfg(target_os = "ios")]
+        self.observers.clear();
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.watch.take() {
             let _ = t.join();
@@ -332,9 +379,19 @@ impl Drop for CameraControl {
     }
 }
 
-fn av_error(e: *mut AnyObject, what: &str) -> VideoError {
+/// `AVErrorMediaServicesWereReset`: iOS restarted its media services; the
+/// session can be started again.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+const MEDIA_SERVICES_RESET: i64 = -11819;
+
+pub(crate) fn av_error(e: *mut AnyObject, what: &str) -> VideoError {
     // SAFETY: nil or an NSError.
     let (code, desc) = unsafe { error_of(e) };
+    av_error_code(code, &format!("{what}: {desc}"))
+}
+
+/// The error for an `AVError` code.
+pub(crate) fn av_error_code(code: i64, detail: &str) -> VideoError {
     match code {
         // AVErrorApplicationIsNotAuthorizedToUseDevice
         -11852 => VideoError::NoPermission,
@@ -342,8 +399,50 @@ fn av_error(e: *mut AnyObject, what: &str) -> VideoError {
         -11804 => VideoError::DeviceBusy,
         // AVErrorDeviceNotConnected
         -11814 => VideoError::DeviceLost,
-        _ => VideoError::os(code, format!("{what}: {desc}")),
+        _ => VideoError::os(code, detail.to_string()),
     }
+}
+
+/// The interruption for an `AVCaptureSessionInterruptionReason` (iOS).
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) fn interruption_for_reason(reason: Option<isize>) -> Interruption {
+    match reason {
+        // VideoDeviceNotAvailableInBackground, and
+        // VideoDeviceNotAvailableWithMultipleForegroundApps (iPad
+        // multitasking): the app isn't the one the camera serves now.
+        Some(1) | Some(4) => Interruption::Background,
+        // VideoDeviceNotAvailableDueToSystemPressure (heat, power).
+        Some(5) => Interruption::Thermal,
+        // Another client has the audio or video device (a phone or FaceTime
+        // call, another app), and any reason newer than this code.
+        _ => Interruption::InUseByAnother,
+    }
+}
+
+/// `AVCaptureVideoOrientation` for a `UIDeviceOrientation`: the same number
+/// for the upright and the two sideways ones (UIKit's landscape left is the
+/// capture's landscape right, and the two enums are numbered to match),
+/// `None` face up, face down or unknown.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) fn video_orientation_for(device_orientation: isize) -> Option<isize> {
+    (1..=4)
+        .contains(&device_orientation)
+        .then_some(device_orientation)
+}
+
+/// The constraints a phone's (landscape) sensor modes are chosen by: the
+/// asked box turned landscape. Frames are then turned upright and fitted to
+/// the box turned the same way.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) fn landscape_box(c: CaptureConstraints) -> CaptureConstraints {
+    let mut out = c;
+    if let (Some(w), Some(h)) = (c.max_width, c.max_height) {
+        if w < h {
+            out.max_width = Some(h);
+            out.max_height = Some(w);
+        }
+    }
+    out
 }
 
 pub(crate) fn open(
@@ -355,6 +454,11 @@ pub(crate) fn open(
     if permission() != Permission::Granted {
         return Err(VideoError::NoPermission);
     }
+    // iOS gives no camera to an app in the background.
+    #[cfg(target_os = "ios")]
+    if super::ios::in_background() {
+        return Err(VideoError::ShutDown);
+    }
     autoreleasepool(|_| unsafe { open_in_pool(id, c, wake) })
 }
 
@@ -363,14 +467,16 @@ unsafe fn open_in_pool(
     c: CaptureConstraints,
     wake: Wake,
 ) -> Result<Box<dyn FrameSource>, VideoError> {
-    let mt = media_type_video()
-        .ok_or_else(|| VideoError::Unsupported("AVFoundation has no video media type".into()))?;
-    let device: *mut AnyObject = match id {
-        Some(id) => {
+    let device: *mut AnyObject = match (id, c.facing) {
+        (Some(id), _) => {
             let s = nsstring(id).ok_or(VideoError::NotFound)?;
             msg_send![class!(AVCaptureDevice), deviceWithUniqueID: &*s]
         }
-        None => msg_send![class!(AVCaptureDevice), defaultDeviceWithMediaType: mt],
+        (None, Some(facing)) => match facing_device(facing) {
+            d if d.is_null() => default_device(),
+            d => d,
+        },
+        (None, None) => default_device(),
     };
     if device.is_null() {
         return Err(VideoError::NotFound);
@@ -378,7 +484,12 @@ unsafe fn open_in_pool(
     let device = ObjSend(Retained::retain(device).ok_or(VideoError::NotFound)?);
     let all = modes(Retained::as_ptr(&device.0) as *mut AnyObject);
     let list: Vec<CaptureMode> = all.iter().map(|(m, _)| *m).collect();
-    let chosen = nearest_mode(&list, &c);
+    let by = if cfg!(target_os = "ios") {
+        landscape_box(c)
+    } else {
+        c
+    };
+    let chosen = nearest_mode(&list, &by);
     let format = chosen.and_then(|m| all.iter().find(|(x, _)| *x == m).map(|(_, f)| *f));
     let fps = match (chosen, c.fps) {
         (Some(m), Some(f)) => f.min(m.max_fps).max(1),
@@ -414,6 +525,9 @@ unsafe fn open_in_pool(
     let _: () = msg_send![&*output, setAlwaysDiscardsLateVideoFrames: Bool::YES];
 
     let shared = SourceShared::new(c, fps, wake);
+    // Frames come out upright, so a held-upright phone's are portrait.
+    #[cfg(target_os = "ios")]
+    shared.set_box_follows_frame(true);
     let ctx = Box::into_raw(Box::new(Ctx {
         shared: shared.clone(),
         native: c.prefer_native,
@@ -439,6 +553,8 @@ unsafe fn open_in_pool(
         ctx,
         stop: Arc::new(AtomicBool::new(false)),
         watch: None,
+        #[cfg(target_os = "ios")]
+        observers: Vec::new(),
     };
     let ok: Bool = msg_send![&*control.session, canAddOutput: &*control.output];
     if !ok.as_bool() {
@@ -474,9 +590,31 @@ unsafe fn open_in_pool(
             shared.event(SourceEvent::Error(av_error(err, "lockForConfiguration")));
         }
     }
+
+    // iOS: upright, unmirrored frames, and interruptions as events.
+    #[cfg(target_os = "ios")]
+    let phone = {
+        let conn = phone::video_connection(&control.output);
+        let rotation = Rotation::new(&device);
+        if let Some(conn) = &conn {
+            phone::unmirror(conn);
+            if let Some(t) = rotation.turn() {
+                phone::apply_turn(&control.session, conn, t);
+            }
+        }
+        let state = Arc::new(phone::Interrupts::default());
+        control.observers = phone::observers(&control.session, &shared, &state);
+        phone::Watch {
+            conn,
+            rotation,
+            state,
+            last: None,
+        }
+    };
+
     let _: () = msg_send![&*control.session, startRunning];
     let running: Bool = msg_send![&*control.session, isRunning];
-    if !running.as_bool() {
+    if !running.as_bool() && !interrupted(&control.session) {
         return Err(VideoError::DeviceBusy);
     }
 
@@ -491,20 +629,29 @@ unsafe fn open_in_pool(
         std::thread::Builder::new()
             .name("kessel-video-camera-watch".into())
             .spawn(move || {
+                #[cfg(target_os = "ios")]
+                let mut phone = phone;
                 while !stop.load(Ordering::Acquire) {
                     std::thread::sleep(Duration::from_millis(250));
-                    let (connected, running) = autoreleasepool(|_| {
+                    #[cfg(target_os = "ios")]
+                    phone.tick(&sess);
+                    let (connected, running, interrupted) = autoreleasepool(|_| {
                         // SAFETY: live, thread-safe AVFoundation objects.
                         unsafe {
                             let c: Bool = msg_send![&*dev, isConnected];
                             let r: Bool = msg_send![&*sess, isRunning];
-                            (c.as_bool(), r.as_bool())
+                            (c.as_bool(), r.as_bool(), interrupted(&sess))
                         }
                     });
                     if stop.load(Ordering::Acquire) {
                         return;
                     }
-                    if !connected || !running {
+                    // iOS reset its media services: start again.
+                    #[cfg(target_os = "ios")]
+                    if !running && !interrupted && phone.restart(&sess) {
+                        continue;
+                    }
+                    if !connected || (!running && !interrupted) {
                         s.event(SourceEvent::Ended(EndReason::DeviceLost));
                         return;
                     }
@@ -515,4 +662,188 @@ unsafe fn open_in_pool(
             })?,
     );
     Ok(Box::new(QueuedSource::new(shared, control)))
+}
+
+/// Is the session interrupted (iOS: a call, the background, another app)?
+/// Always false on macOS.
+unsafe fn interrupted(session: &AnyObject) -> bool {
+    if cfg!(target_os = "ios") && super::objc::responds(session, sel!(isInterrupted)) {
+        let b: Bool = msg_send![session, isInterrupted];
+        b.as_bool()
+    } else {
+        false
+    }
+}
+
+/// iOS: the capture connection's rotation and mirroring, and the session's
+/// interruption notifications.
+#[cfg(target_os = "ios")]
+mod phone {
+    use super::super::ios::{user_info_integer, user_info_object, Observer, Rotation, Turn};
+    use super::super::objc::{error_of, responds, ObjSend};
+    use super::{av_error, interruption_for_reason, media_type_video, MEDIA_SERVICES_RESET};
+    use crate::kit::SourceShared;
+    use crate::types::*;
+    use objc2::rc::{autoreleasepool, Retained};
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{msg_send, sel};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// The video output's connection.
+    ///
+    /// # Safety
+    /// `output` must be a live AVCaptureVideoDataOutput.
+    pub(super) unsafe fn video_connection(output: &AnyObject) -> Option<ObjSend> {
+        let mt = media_type_video()?;
+        let c: Option<Retained<AnyObject>> = msg_send![output, connectionWithMediaType: mt];
+        c.map(ObjSend)
+    }
+
+    /// The far end sees the picture as the camera does; mirroring a front
+    /// camera's self-view is the app's choice, in its preview.
+    ///
+    /// # Safety
+    /// `conn` must be a live AVCaptureConnection.
+    pub(super) unsafe fn unmirror(conn: &AnyObject) {
+        let ok: Bool = msg_send![conn, isVideoMirroringSupported];
+        if ok.as_bool() {
+            let _: () = msg_send![conn, setAutomaticallyAdjustsVideoMirroring: Bool::NO];
+            let _: () = msg_send![conn, setVideoMirrored: Bool::NO];
+        }
+    }
+
+    /// Turn the connection's frames upright.
+    ///
+    /// # Safety
+    /// `session` and `conn` must be the live session and its connection.
+    pub(super) unsafe fn apply_turn(session: &AnyObject, conn: &AnyObject, turn: Turn) {
+        let _: () = msg_send![session, beginConfiguration];
+        match turn {
+            Turn::Angle(a) => {
+                if responds(conn, sel!(isVideoRotationAngleSupported:)) {
+                    let ok: Bool = msg_send![conn, isVideoRotationAngleSupported: a];
+                    if ok.as_bool() {
+                        let _: () = msg_send![conn, setVideoRotationAngle: a];
+                    }
+                }
+            }
+            Turn::Orientation(o) => {
+                let ok: Bool = msg_send![conn, isVideoOrientationSupported];
+                if ok.as_bool() {
+                    let _: () = msg_send![conn, setVideoOrientation: o];
+                }
+            }
+        }
+        let _: () = msg_send![session, commitConfiguration];
+    }
+
+    /// The source's interruption state: `Interrupted` and `Resumed` are
+    /// sent once per change.
+    #[derive(Default)]
+    pub(super) struct Interrupts {
+        on: AtomicBool,
+        media_reset: AtomicBool,
+    }
+
+    impl Interrupts {
+        fn begin(&self, s: &SourceShared, why: Interruption) {
+            if !self.on.swap(true, Ordering::AcqRel) {
+                s.event(SourceEvent::Interrupted(why));
+            }
+        }
+
+        fn end(&self, s: &SourceShared) {
+            if self.on.swap(false, Ordering::AcqRel) {
+                s.event(SourceEvent::Resumed);
+            }
+        }
+    }
+
+    /// Observers for the session's interruptions and runtime errors.
+    ///
+    /// # Safety
+    /// `session` must be a live AVCaptureSession.
+    pub(super) unsafe fn observers(
+        session: &AnyObject,
+        shared: &Arc<SourceShared>,
+        state: &Arc<Interrupts>,
+    ) -> Vec<Observer> {
+        let object = session as *const AnyObject;
+        let mut out = Vec::new();
+        let (s, st) = (shared.clone(), state.clone());
+        out.extend(Observer::new(
+            c"AVCaptureSessionWasInterruptedNotification",
+            object,
+            move |n| {
+                // SAFETY: Foundation hands the block an NSNotification.
+                let reason =
+                    unsafe { user_info_integer(n, c"AVCaptureSessionInterruptionReasonKey") };
+                st.begin(&s, interruption_for_reason(reason));
+            },
+        ));
+        let (s, st) = (shared.clone(), state.clone());
+        out.extend(Observer::new(
+            c"AVCaptureSessionInterruptionEndedNotification",
+            object,
+            move |_| st.end(&s),
+        ));
+        let (s, st) = (shared.clone(), state.clone());
+        out.extend(Observer::new(
+            c"AVCaptureSessionRuntimeErrorNotification",
+            object,
+            move |n| {
+                // SAFETY: Foundation hands the block an NSNotification; its
+                // error is nil or an NSError.
+                let e = unsafe { user_info_object(n, c"AVCaptureSessionErrorKey") };
+                // SAFETY: as above.
+                if unsafe { error_of(e) }.0 == MEDIA_SERVICES_RESET {
+                    st.media_reset.store(true, Ordering::Release);
+                }
+                s.event(SourceEvent::Error(av_error(e, "capture session")));
+            },
+        ));
+        out
+    }
+
+    /// What the watch thread keeps for a phone camera.
+    pub(super) struct Watch {
+        pub(super) conn: Option<ObjSend>,
+        pub(super) rotation: Rotation,
+        pub(super) state: Arc<Interrupts>,
+        pub(super) last: Option<Turn>,
+    }
+
+    impl Watch {
+        /// Follow the way the phone is held.
+        pub(super) fn tick(&mut self, session: &ObjSend) {
+            self.rotation.refresh();
+            let (Some(conn), Some(turn)) = (&self.conn, self.rotation.turn()) else {
+                return;
+            };
+            if self.last == Some(turn) {
+                return;
+            }
+            self.last = Some(turn);
+            // SAFETY: the live session and its connection.
+            autoreleasepool(|_| unsafe { apply_turn(session, conn, turn) });
+        }
+
+        /// After iOS reset its media services, start the session again
+        /// (once per reset). True when it runs again.
+        pub(super) fn restart(&self, session: &ObjSend) -> bool {
+            if !self.state.media_reset.swap(false, Ordering::AcqRel) {
+                return false;
+            }
+            autoreleasepool(|_| {
+                // SAFETY: a live session; startRunning blocks until it runs
+                // or fails.
+                unsafe {
+                    let _: () = msg_send![&**session, startRunning];
+                    let r: Bool = msg_send![&**session, isRunning];
+                    r.as_bool()
+                }
+            })
+        }
+    }
 }

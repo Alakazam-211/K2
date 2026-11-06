@@ -196,7 +196,7 @@ pub(crate) fn os_name() -> String {
     os::name()
 }
 
-#[cfg(all(feature = "apple", target_os = "macos"))]
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod os {
     pub(super) use crate::apple::{backend, os_name as name};
 }
@@ -217,7 +217,7 @@ mod os {
 }
 
 #[cfg(not(any(
-    all(feature = "apple", target_os = "macos"),
+    all(feature = "apple", any(target_os = "macos", target_os = "ios")),
     all(feature = "windows", windows),
     all(feature = "linux", target_os = "linux"),
     all(feature = "android", target_os = "android")

@@ -1,7 +1,8 @@
 //! Hand-written FFI to CoreFoundation, CoreMedia, CoreVideo and
-//! VideoToolbox (system frameworks; nothing here adds a crate). Framework
-//! *constants* are looked up at run time with `dlsym` ([`cf_const`]), so a
-//! key an older macOS lacks is skipped instead of failing at launch.
+//! VideoToolbox (system frameworks on macOS and iOS; nothing here adds a
+//! crate). Framework *constants* are looked up at run time with `dlsym`
+//! ([`cf_const`]), so a key an older OS (or the other Apple OS) lacks is
+//! skipped instead of failing at launch.
 
 #![allow(non_upper_case_globals, non_snake_case, dead_code)]
 
@@ -273,6 +274,12 @@ extern "C" {
         len: usize,
         dest: *mut c_void,
     ) -> OSStatus;
+    pub fn CMBlockBufferReplaceDataBytes(
+        src: *const c_void,
+        dest: CMBlockBufferRef,
+        offset: usize,
+        len: usize,
+    ) -> OSStatus;
     pub fn CMBlockBufferCreateWithMemoryBlock(
         a: CFAllocatorRef,
         memory: *mut c_void,
@@ -342,6 +349,18 @@ pub const LOCK_READ_ONLY: u64 = 1;
 pub const ATTACH_PROPAGATE: u32 = 1;
 /// `kVTInvalidSessionErr`.
 pub const VT_INVALID_SESSION: OSStatus = -12903;
+/// `kVTVideoDecoderBadDataErr`.
+pub const VT_BAD_DATA: OSStatus = -12909;
+/// `kVTVideoDecoderMalfunctionErr`.
+pub const VT_DECODER_MALFUNCTION: OSStatus = -12911;
+/// `kVTVideoDecoderNotAvailableNowErr` (iOS: the app is in the background).
+pub const VT_DECODER_NOT_AVAILABLE_NOW: OSStatus = -12913;
+/// `kVTVideoEncoderNotAvailableNowErr` (iOS: the app is in the background).
+pub const VT_ENCODER_NOT_AVAILABLE_NOW: OSStatus = -12915;
+/// `kVTDecodeInfo_FrameDropped`.
+pub const DECODE_INFO_FRAME_DROPPED: u32 = 1 << 1;
+/// `kCMBlockBufferAssureMemoryNowFlag`.
+pub const BLOCK_BUFFER_ASSURE_MEMORY_NOW: u32 = 1;
 
 /// A framework constant (a `const CFStringRef` or other object pointer) by
 /// name, or `None` on an OS without it.

@@ -26,8 +26,8 @@ default = ["system"]
 # `fake::FakeBackend` is always compiled; this feature exists so a
 # consumer's own test feature can name it.
 fake = []
-# macOS (and later iOS): AVFoundation, ScreenCaptureKit, VideoToolbox. System
-# frameworks through FFI; no codec library is linked or shipped.
+# macOS and iOS: AVFoundation, VideoToolbox, and ScreenCaptureKit (macOS
+# only). System frameworks through FFI; no codec library is linked or shipped.
 apple = ["dep:objc2", "dep:block2"]
 # Media Foundation cameras and Windows Graphics Capture screens (H.264
 # MFTs later). OS components through the `windows` crate.
@@ -62,7 +62,7 @@ thiserror = "2"
 vp8-decoder = { version = "0.1", optional = true }
 vp8-encoder = { version = "0.1", optional = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = { version = "0.6", optional = true }
 block2 = { version = "0.6", optional = true }
 

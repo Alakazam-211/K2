@@ -5,8 +5,9 @@
 The first release: the codec-neutral API (`VideoBackend`, `FrameSource`,
 `VideoEncoder`, `VideoDecoder`), the null and fake backends, the macOS
 backend (AVFoundation cameras, ScreenCaptureKit screens, VideoToolbox H.264
-encoding), the Windows backend (Media Foundation cameras, Windows Graphics
-Capture screens), the Linux backend (V4L2 cameras, ScreenCast portal and
+encoding and decoding), the iOS backend (AVFoundation cameras, VideoToolbox
+H.264 encoding and decoding), the Windows backend (Media Foundation cameras,
+Windows Graphics Capture screens), the Linux backend (V4L2 cameras, ScreenCast portal and
 PipeWire screens), the Android backend (Camera2 cameras, MediaCodec H.264
 encoding), and VP8 through vp8-encoder and vp8-decoder in every backend.
 
@@ -33,6 +34,36 @@ encoding), and VP8 through vp8-encoder and vp8-decoder in every backend.
 - The backend's logic runs over a scripted platform in the host tests; only
   the NDK calls need a device. Type-checked for `aarch64-linux-android` and
   `x86_64-linux-android`; not yet run on a device or an emulator.
+
+### iOS backend
+
+- `system()` on iOS gives the Apple backend instead of `Unsupported`. It
+  shares `src/apple/` with macOS: AVFoundation cameras, CoreVideo pixel
+  buffers, VideoToolbox, and the FFI and Objective-C helpers.
+  ScreenCaptureKit stays macOS-only (`screen.rs`); the iOS-only parts are in
+  `ios.rs`.
+- Cameras on iOS: the front camera by default, `CaptureConstraints::facing`
+  for front or back, modes chosen with the box turned landscape, frames
+  turned upright (the rotation coordinator on iOS 17+, the device's
+  orientation before) and unmirrored. Interruptions (the app in the
+  background, a call, another app, thermal pressure) are `Interrupted` and
+  `Resumed` source events, not an end; a media-services reset restarts the
+  session. `Background(bool)` backend events follow the app.
+- Opening a camera or an H.264 encoder while the app is in the background
+  answers `ShutDown`, and so does an H.264 encoder whose session iOS takes
+  away. iOS offers no software-only H.264, so `SoftwareOnly` is
+  `Unsupported` there.
+- No screen capture on iOS (it needs a broadcast upload extension):
+  `pick_screen` and `open_screen` answer `Unsupported`.
+- H.264 decoding through VideoToolbox, on macOS and iOS: in-band SPS and PPS
+  set up or replace the session, outputs are NV12 pixel buffers (`Native`,
+  or converted to the asked format), and a session iOS takes away is
+  `DecodeError::SessionLost`. The capabilities list it.
+- macOS also honours `CaptureConstraints::facing` when no camera id is
+  given (the first camera facing that way, else the default).
+- `kit::SourceShared::set_box_follows_frame` turns the asked box to the
+  frame's orientation before fitting (phone cameras use it).
+- The objc2 and block2 dependencies apply to iOS as well as macOS.
 
 ### Packaging
 

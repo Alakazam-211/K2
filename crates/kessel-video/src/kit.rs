@@ -584,6 +584,7 @@ pub struct SourceShared {
     stats: Mutex<SourceStats>,
     last_kept_us: AtomicU64,
     native_fps: Mutex<u32>,
+    box_follows_frame: AtomicBool,
 }
 
 impl std::fmt::Debug for SourceShared {
@@ -607,7 +608,15 @@ impl SourceShared {
             stats: Mutex::new(SourceStats::default()),
             last_kept_us: AtomicU64::new(u64::MAX),
             native_fps: Mutex::new(native_fps),
+            box_follows_frame: AtomicBool::new(false),
         })
+    }
+
+    /// Phone cameras: turn the asked box to the frame's orientation before
+    /// fitting, so a 1280 x 720 box gives 720 x 1280 frames while the phone
+    /// is held upright (instead of 405 x 720). Off by default.
+    pub fn set_box_follows_frame(&self, on: bool) {
+        self.box_follows_frame.store(on, Ordering::Release);
     }
 
     /// Paused or ended: the OS callback can skip its work.
@@ -644,10 +653,17 @@ impl SourceShared {
             }
         }
         self.last_kept_us.store(frame.capture_us, Ordering::Release);
-        let (bw, bh) = (
+        let (mut bw, mut bh) = (
             c.max_width.unwrap_or(u32::MAX),
             c.max_height.unwrap_or(u32::MAX),
         );
+        if self.box_follows_frame.load(Ordering::Acquire)
+            && (frame.width > frame.height) != (bw > bh)
+            && frame.width != frame.height
+            && bw != bh
+        {
+            std::mem::swap(&mut bw, &mut bh);
+        }
         let frame = if frame.width > bw || frame.height > bh {
             let (w, h) = fit_within(frame.width, frame.height, bw, bh);
             let format = match frame.format() {
@@ -770,5 +786,34 @@ pub fn wait_for<T>(timeout: Duration, mut f: impl FnMut() -> Option<T>) -> Optio
             return None;
         }
         std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::no_wake;
+    use crate::fake::pattern_frame;
+
+    #[test]
+    fn the_box_turns_with_the_frame_only_when_asked() {
+        let s = SourceShared::new(CaptureConstraints::new(1280, 720, 30), 30, no_wake());
+        let upright = |n: u32| pattern_frame(1080, 1920, n, n as u64 * 40_000).expect("frame");
+        s.deliver(upright(0));
+        let f = s.frames.pop().expect("a frame");
+        assert_eq!(f.height, 720, "fitted to the box as given");
+        assert!(f.width < 720, "{}x{}", f.width, f.height);
+
+        s.set_box_follows_frame(true);
+        s.deliver(upright(1));
+        let f = s.frames.pop().expect("a frame");
+        assert_eq!((f.width, f.height), (720, 1280), "the box turned upright");
+        s.deliver(pattern_frame(1920, 1080, 2, 80_000).expect("frame"));
+        let f = s.frames.pop().expect("a frame");
+        assert_eq!(
+            (f.width, f.height),
+            (1280, 720),
+            "a landscape frame keeps the box"
+        );
     }
 }

@@ -1,9 +1,11 @@
-//! macOS backend tests. The codec tests run on any Mac (VideoToolbox has a
-//! software encoder when there's no hardware one). Real cameras and screens
-//! need a person (permission prompts) and hardware, so those run by hand.
+//! Apple backend tests, for macOS and iOS. The codec tests run on any Mac
+//! (VideoToolbox has a software encoder when there's no hardware one) and in
+//! the iOS simulator. Real cameras and screens need a person (permission
+//! prompts) and hardware, so those run by hand.
 
 use super::*;
 use crate::api::no_wake;
+use crate::error::DecodeError;
 use crate::fake::{pattern_frame, read_frame_code};
 use crate::h264::{annexb_nals, nal_type, profile_level_id, NAL_IDR, NAL_PPS, NAL_SPS};
 use crate::kit::wait_for;
@@ -301,7 +303,12 @@ fn listing_and_permissions_never_prompt() {
     // NotDetermined (asking would end the process).
     assert_ne!(p, Permission::NotDetermined);
     let caps = b.capabilities();
-    assert!(caps.os.starts_with("macOS "), "{}", caps.os);
+    let os = if cfg!(target_os = "ios") {
+        "iOS "
+    } else {
+        "macOS "
+    };
+    assert!(caps.os.starts_with(os), "{}", caps.os);
     assert!(caps.camera);
     let events = b.subscribe();
     assert!(events.try_recv().is_none());
@@ -345,6 +352,7 @@ fn real_camera_delivers_frames() {
 }
 
 /// By hand on a Mac with Screen Recording allowed for the test binary.
+#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "needs a GUI session and the Screen Recording permission"]
 fn real_screen_delivers_frames() {
@@ -367,4 +375,417 @@ fn real_screen_delivers_frames() {
         .expect("screen");
     let f = wait_for(Duration::from_secs(5), || src.try_recv()).expect("a frame in 5 s");
     assert!(f.width <= 1280 && f.height <= 720);
+}
+
+// ───────────────────────────── decoding ─────────────────────────────
+
+fn h264_input(e: &EncodedFrame) -> EncodedInput {
+    EncodedInput::new(VideoCodec::H264, e.data.clone(), e.keyframe, e.capture_us)
+}
+
+/// Submit one input and wait for its decoded frame.
+fn decode_one(dec: &mut Box<dyn VideoDecoder>, input: EncodedInput) -> VideoFrame {
+    dec.submit(input).expect("decode submit");
+    wait_for(Duration::from_secs(5), || dec.poll())
+        .expect("a decoded frame within 5 s")
+        .expect("decode")
+}
+
+#[test]
+fn videotoolbox_h264_round_trips_through_the_decoder() {
+    let b = backend().expect("backend");
+    let caps = b.capabilities();
+    let d = caps
+        .best(VideoCodec::H264, CodecDirection::Decode)
+        .expect("an H.264 decoder is listed");
+    assert_eq!(d.name, "VideoToolbox");
+    let mut enc = b
+        .encoder(EncoderConfig::h264(640, 360, 30, 1_000_000), no_wake())
+        .expect("encoder");
+    let mut dec = b
+        .decoder(DecoderConfig::new(VideoCodec::H264), no_wake())
+        .expect("decoder");
+    let mut decoded = 0;
+    for n in 0..30u32 {
+        if n == 15 {
+            enc.request_keyframe();
+        }
+        let f = pattern_frame(640, 360, n, 5_000 + n as u64 * 33_333).expect("frame");
+        let Some(e) = encode_one(&mut enc, &f, EncodeOptions::default()) else {
+            continue;
+        };
+        let out = decode_one(&mut dec, h264_input(&e));
+        assert_eq!((out.width, out.height), (640, 360));
+        assert_eq!(out.format(), PixelFormat::I420, "the configured output");
+        assert_eq!(out.capture_us, e.capture_us, "capture_us passes through");
+        assert_eq!(
+            read_frame_code(&out),
+            Some(n),
+            "the frame code survives H.264 at frame {n}"
+        );
+        decoded += 1;
+    }
+    assert!(decoded >= 27, "only {decoded} of 30 decoded");
+    let st = dec.stats();
+    assert_eq!(st.frames_out, decoded);
+    assert_eq!(st.errors, 0);
+    eprintln!("[apple] decoder: {:?}", st.implementation);
+
+    // A new size: the keyframe's new SPS and PPS reopen the session.
+    enc.set_size(480, 270).expect("set_size");
+    let f = pattern_frame(480, 270, 77, 2_000_000).expect("frame");
+    let e = encode_one(&mut enc, &f, EncodeOptions::default()).expect("out");
+    assert!(e.keyframe);
+    let out = decode_one(&mut dec, h264_input(&e));
+    assert_eq!((out.width, out.height), (480, 270));
+    assert_eq!(read_frame_code(&out), Some(77));
+}
+
+#[test]
+fn the_h264_decoder_gates_reports_and_recovers() {
+    let b = backend().expect("backend");
+    let mut enc = b
+        .encoder(EncoderConfig::h264(320, 180, 30, 400_000), no_wake())
+        .expect("encoder");
+    let mut cfg = DecoderConfig::new(VideoCodec::H264);
+    cfg.output = PixelFormat::Native;
+    let mut dec = b.decoder(cfg, no_wake()).expect("decoder");
+
+    let key = encode_one(
+        &mut enc,
+        &pattern_frame(320, 180, 1, 100).expect("frame"),
+        EncodeOptions::default(),
+    )
+    .expect("out");
+    assert!(key.keyframe);
+    let delta = encode_one(
+        &mut enc,
+        &pattern_frame(320, 180, 2, 200).expect("frame"),
+        EncodeOptions::default(),
+    )
+    .expect("out");
+    assert!(!delta.keyframe);
+
+    // A delta first is refused at the door.
+    assert_eq!(
+        dec.submit(h264_input(&delta)),
+        Err(DecodeError::NeedKeyframe)
+    );
+    // An IDR with no SPS and PPS before it is corrupt.
+    let bare: Vec<u8> = vec![0, 0, 0, 1, 0x65, 0x88, 0x84, 0x00, 0x33, 0xff];
+    dec.submit(EncodedInput::new(VideoCodec::H264, bare, true, 1))
+        .expect("queued");
+    let r = wait_for(Duration::from_secs(5), || dec.poll()).expect("an answer");
+    assert!(matches!(r, Err(DecodeError::Corrupt(_))), "{r:?}");
+    assert_eq!(
+        dec.submit(h264_input(&delta)),
+        Err(DecodeError::NeedKeyframe),
+        "after an error it waits for a keyframe"
+    );
+
+    // Parameter sets alone set up the format and give no frame.
+    let params: Vec<u8> = annexb_nals(&key.data)
+        .into_iter()
+        .filter(|n| matches!(nal_type(n), Some(NAL_SPS | NAL_PPS)))
+        .flat_map(|n| [&[0u8, 0, 0, 1][..], n].concat())
+        .collect();
+    dec.submit(EncodedInput::new(VideoCodec::H264, params, true, 3))
+        .expect("queued");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        dec.poll().is_none(),
+        "parameter sets alone decode to nothing"
+    );
+
+    dec.reset();
+    let out = decode_one(&mut dec, h264_input(&key));
+    assert_eq!(out.format(), PixelFormat::Native, "the OS buffer, as asked");
+    assert_eq!(
+        read_frame_code(&out),
+        Some(1),
+        "it reads back through to_planes"
+    );
+    let out = decode_one(&mut dec, h264_input(&delta));
+    assert_eq!(read_frame_code(&out), Some(2));
+    assert_eq!(out.capture_us, 200);
+
+    // A decoded native frame goes back into an encoder of this backend.
+    let again = encode_one(&mut enc, &out, EncodeOptions::keyframe()).expect("out");
+    check_bitstream(&again);
+}
+
+#[test]
+fn vp8_round_trips_through_the_apple_backend() {
+    let b = backend().expect("backend");
+    let mut enc = b
+        .encoder(
+            EncoderConfig::new(CodecConfig::Vp8, 320, 180, 30, 400_000),
+            no_wake(),
+        )
+        .expect("VP8 encoder");
+    let mut dec = b
+        .decoder(DecoderConfig::new(VideoCodec::Vp8), no_wake())
+        .expect("VP8 decoder");
+    for n in 0..10u32 {
+        let f = pattern_frame(640, 360, n, n as u64 * 33_333).expect("frame");
+        let Some(e) = encode_one(&mut enc, &f, EncodeOptions::default()) else {
+            continue;
+        };
+        assert_eq!(e.codec, VideoCodec::Vp8);
+        let out = decode_one(
+            &mut dec,
+            EncodedInput::new(VideoCodec::Vp8, e.data.clone(), e.keyframe, e.capture_us),
+        );
+        assert_eq!((out.width, out.height), (320, 180));
+        assert_eq!(read_frame_code(&out), Some(n));
+    }
+}
+
+/// Received H.264 goes into VideoToolbox: mutated, truncated and random
+/// access units give an error or a frame, never a panic or a hang, and a
+/// clean keyframe decodes after a reset. Seeded, so the same every run.
+#[test]
+fn the_h264_decoder_survives_hostile_input() {
+    use crate::kit::DecoderCore;
+    let b = backend().expect("backend");
+    let mut enc = b
+        .encoder(EncoderConfig::h264(320, 180, 30, 400_000), no_wake())
+        .expect("encoder");
+    let mut valid = Vec::new();
+    for n in 0..8u32 {
+        let f = pattern_frame(320, 180, n, n as u64 * 33_333).expect("frame");
+        if let Some(e) = encode_one(&mut enc, &f, EncodeOptions::default()) {
+            valid.push(e);
+        }
+    }
+    assert!(valid[0].keyframe);
+    let mut core = vt_dec::VtDecoder::open(&DecoderConfig::new(VideoCodec::H264)).expect("core");
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        seed.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    };
+    let t = std::time::Instant::now();
+    let (mut frames, mut errors) = (0, 0);
+    for i in 0..300u64 {
+        let src = &valid[(next() % valid.len() as u64) as usize];
+        let mut data = src.data.to_vec();
+        match next() % 4 {
+            0 => {
+                for _ in 0..1 + next() % 8 {
+                    let at = (next() % data.len() as u64) as usize;
+                    data[at] ^= 1 << (next() % 8);
+                }
+            }
+            1 => data.truncate((next() % (data.len() as u64 + 1)) as usize),
+            2 => data = (0..next() % 1500).map(|_| next() as u8).collect(),
+            _ => {}
+        }
+        let input = EncodedInput::new(VideoCodec::H264, data, src.keyframe, i);
+        match core.decode(&input) {
+            Ok(Some(f)) => {
+                assert!(f.width <= 8192 && f.height <= 8192, "{f:?}");
+                frames += 1;
+            }
+            Ok(None) => {}
+            Err(_) => errors += 1,
+        }
+    }
+    eprintln!(
+        "[apple] hostile H.264: {frames} frames, {errors} errors in {:?}",
+        t.elapsed()
+    );
+    assert!(
+        t.elapsed() < Duration::from_secs(60),
+        "300 hostile inputs took {:?}",
+        t.elapsed()
+    );
+    core.reset().expect("reset");
+    let out = core
+        .decode(&h264_input(&valid[0]))
+        .expect("a clean keyframe decodes after a reset")
+        .expect("a frame");
+    assert_eq!(read_frame_code(&out), Some(0));
+}
+
+// ───────────────────────────── mappings ─────────────────────────────
+
+#[test]
+fn access_units_split_into_parameter_sets_and_slices() {
+    let au = [
+        &[0u8, 0, 0, 1, 0x09, 0xf0][..],
+        &[0, 0, 0, 1, 0x67, 1, 2][..],
+        &[0, 0, 1, 0x68, 3][..],
+        &[0, 0, 0, 1, 0x06, 4][..],
+        &[0, 0, 0, 1, 0x65, 5, 6][..],
+    ]
+    .concat();
+    let s = vt_dec::split_access_unit(&au);
+    assert_eq!(s.sps, Some(&[0x67u8, 1, 2][..]));
+    assert_eq!(s.pps, Some(&[0x68u8, 3][..]));
+    assert_eq!(s.nals, vec![&[0x06u8, 4][..], &[0x65u8, 5, 6][..]]);
+    let none = vt_dec::split_access_unit(&[0, 0, 0, 1, 0x41, 9]);
+    assert_eq!((none.sps, none.pps), (None, None));
+    assert_eq!(none.nals.len(), 1);
+}
+
+#[test]
+fn videotoolbox_statuses_map_to_the_api_errors() {
+    assert_eq!(
+        vt_dec::decode_error(ffi::VT_INVALID_SESSION, "x"),
+        DecodeError::SessionLost
+    );
+    assert_eq!(
+        vt_dec::decode_error(ffi::VT_DECODER_NOT_AVAILABLE_NOW, "x"),
+        DecodeError::SessionLost
+    );
+    assert_eq!(
+        vt_dec::decode_error(ffi::VT_DECODER_MALFUNCTION, "x"),
+        DecodeError::SessionLost
+    );
+    assert!(matches!(
+        vt_dec::decode_error(ffi::VT_BAD_DATA, "x"),
+        DecodeError::Corrupt(_)
+    ));
+    assert_eq!(
+        vt_dec::decode_error(-12345, "x"),
+        DecodeError::Video(VideoError::os(-12345, "x"))
+    );
+    // In front (always, on a Mac) a lost encoder session is an OS error.
+    assert_eq!(
+        vt_enc::lost_session(ffi::VT_INVALID_SESSION).code(),
+        "os",
+        "not in the background"
+    );
+    let gone = vt_enc::lost_session(ffi::VT_ENCODER_NOT_AVAILABLE_NOW);
+    if cfg!(target_os = "ios") {
+        assert_eq!(
+            gone,
+            VideoError::ShutDown,
+            "iOS: the app is in the background"
+        );
+    } else {
+        assert_eq!(gone.code(), "os");
+    }
+}
+
+#[test]
+fn avfoundation_codes_map_to_the_api_errors() {
+    assert_eq!(camera::av_error_code(-11852, "x"), VideoError::NoPermission);
+    assert_eq!(camera::av_error_code(-11804, "x"), VideoError::DeviceBusy);
+    assert_eq!(camera::av_error_code(-11814, "x"), VideoError::DeviceLost);
+    assert_eq!(
+        camera::av_error_code(-11819, "media services reset"),
+        VideoError::os(-11819, "media services reset")
+    );
+    // Interruption reasons (iOS).
+    assert_eq!(
+        camera::interruption_for_reason(Some(1)),
+        Interruption::Background
+    );
+    assert_eq!(
+        camera::interruption_for_reason(Some(4)),
+        Interruption::Background
+    );
+    assert_eq!(
+        camera::interruption_for_reason(Some(3)),
+        Interruption::InUseByAnother
+    );
+    assert_eq!(
+        camera::interruption_for_reason(Some(2)),
+        Interruption::InUseByAnother
+    );
+    assert_eq!(
+        camera::interruption_for_reason(Some(5)),
+        Interruption::Thermal
+    );
+    assert_eq!(
+        camera::interruption_for_reason(None),
+        Interruption::InUseByAnother
+    );
+    // UIDeviceOrientation to AVCaptureVideoOrientation.
+    for o in 1..=4 {
+        assert_eq!(camera::video_orientation_for(o), Some(o));
+    }
+    for o in [0, 5, 6, 7, -1] {
+        assert_eq!(camera::video_orientation_for(o), None, "{o}");
+    }
+}
+
+#[test]
+fn phone_modes_are_chosen_by_the_box_turned_landscape() {
+    let upright = CaptureConstraints::new(720, 1280, 30);
+    let l = camera::landscape_box(upright);
+    assert_eq!(
+        (l.max_width, l.max_height, l.fps),
+        (Some(1280), Some(720), Some(30))
+    );
+    let wide = CaptureConstraints::new(1280, 720, 30);
+    assert_eq!(camera::landscape_box(wide), wide);
+    assert_eq!(
+        camera::landscape_box(CaptureConstraints::default()),
+        CaptureConstraints::default()
+    );
+    let modes = [
+        CaptureMode::new(1920, 1080, 30, PixelFormat::Nv12),
+        CaptureMode::new(1280, 720, 60, PixelFormat::Nv12),
+        CaptureMode::new(640, 480, 30, PixelFormat::Nv12),
+    ];
+    assert_eq!(
+        nearest_mode(&modes, &l).map(|m| (m.width, m.height)),
+        Some((1280, 720)),
+        "an upright 720p box picks the 720p sensor mode"
+    );
+}
+
+/// What iOS says about screens and codecs (in the simulator or on a phone).
+#[cfg(target_os = "ios")]
+#[test]
+fn ios_has_no_screen_capture_and_hardware_h264_only() {
+    let b = backend().expect("backend");
+    let caps = b.capabilities();
+    assert!(!caps.screen.supported && !caps.screen.list && !caps.screen.system_picker);
+    assert_eq!(b.screen_permission(), Permission::Denied);
+    assert_eq!(b.screen_sources(), Ok(Vec::new()));
+    let r = b.open_screen(
+        &ScreenSelection::Listed("0".into()),
+        CaptureConstraints::default(),
+        no_wake(),
+    );
+    assert!(
+        matches!(&r, Err(VideoError::Unsupported(why)) if why.contains("broadcast upload extension")),
+        "{:?}",
+        r.err()
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    b.pick_screen(
+        PickOptions::new(),
+        Box::new(move |r| tx.send(r).expect("send")),
+    );
+    assert!(matches!(
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("answered at once"),
+        Err(VideoError::Unsupported(_))
+    ));
+    assert!(caps
+        .codecs
+        .iter()
+        .all(|c| c.codec != VideoCodec::H264 || c.implementation == Implementation::Hardware));
+    let mut sw = EncoderConfig::h264(640, 360, 30, 500_000);
+    sw.implementation = ImplPreference::SoftwareOnly;
+    assert!(matches!(
+        b.encoder(sw, no_wake()).err(),
+        Some(VideoError::Unsupported(_))
+    ));
+    let mut sw = DecoderConfig::new(VideoCodec::H264);
+    sw.implementation = ImplPreference::SoftwareOnly;
+    assert!(matches!(
+        b.decoder(sw, no_wake()).err(),
+        Some(VideoError::Unsupported(_))
+    ));
+    // The test binary is in front as far as it knows (no UIApplication).
+    let rx = b.subscribe();
+    assert!(rx.try_recv().is_none());
 }

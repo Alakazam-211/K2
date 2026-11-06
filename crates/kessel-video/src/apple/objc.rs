@@ -172,14 +172,20 @@ pub fn is_main_thread() -> bool {
     b.as_bool()
 }
 
-/// The OS version string, for logs ("macOS 15.1").
+/// The OS version string, for logs ("macOS Version 15.1 (Build ...)", or
+/// "iOS ..." on a phone).
 pub fn os_name() -> String {
     objc2::rc::autoreleasepool(|_| {
         // SAFETY: Foundation methods with documented signatures.
         unsafe {
             let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
             let v: *mut AnyObject = msg_send![info, operatingSystemVersionString];
-            format!("macOS {}", string_of(v))
+            let os = if cfg!(target_os = "ios") {
+                "iOS"
+            } else {
+                "macOS"
+            };
+            format!("{os} {}", string_of(v))
         }
     })
 }

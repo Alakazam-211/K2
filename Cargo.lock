@@ -4862,6 +4862,7 @@ version = "0.0.0"
 dependencies = [
  "kessel-video",
  "libc",
+ "serde_json",
 ]
 
 [[package]]

@@ -37,8 +37,8 @@ members = [
     # codecs only); MIT OR Apache-2.0, Kessel family.
     "crates/kessel-video",
     # NV12 frames from one process to another through a shared-memory ring
-    # (an iOS broadcast upload extension to its app); a placeholder name,
-    # not published.
+    # (an iOS broadcast upload extension to its app); MIT OR Apache-2.0,
+    # Kessel family.
     "crates/kessel-frame-ring",
     # A pure-Rust VP8 decoder (RFC 6386) for receiving browser video.
     "crates/vp8-decoder",

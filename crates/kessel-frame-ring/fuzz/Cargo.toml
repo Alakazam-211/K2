@@ -1,0 +1,33 @@
+[package]
+name = "kessel-frame-ring-fuzz"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for kessel-frame-ring: a ring file the other process corrupts, and files a producer attaches to. A panic, a fault or a frame outside the layout is a finding."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repository's, so a normal build
+# doesn't pull libFuzzer.
+[workspace]
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped.
+libfuzzer-sys = "0.4"
+kessel-frame-ring = { path = ".." }
+
+[[bin]]
+name = "consumer"
+path = "fuzz_targets/consumer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attach"
+path = "fuzz_targets/attach.rs"
+test = false
+doc = false
+bench = false

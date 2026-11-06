@@ -1,53 +1,80 @@
-# kessel-frame-ring (placeholder name)
+# kessel-frame-ring
 
 A single-producer, single-consumer ring of NV12 video frames in a
 shared-memory file, for handing frames from one process to another on the
-same machine. Made for an iPhone's screen share: the broadcast upload
-extension writes each screen frame in, and the app reads it out and encodes
-it. Pure Rust on `std` and `libc` (declarations only: no C is built, no
-build script), Unix only. Not published; the name is a placeholder.
+same machine. It was made for screen sharing from an iPhone: the broadcast
+upload extension writes each screen frame in, and the app reads it out and
+encodes it. Pure Rust on `std` and `libc` (declarations only: no C is built,
+no build script). Unix only: macOS, iOS, Linux and Android.
+
+Kessel is Alakazam Labs' family of open-source Rust crates for real-time
+apps. kessel-frame-ring stands alone: it needs no other Kessel crate. Its
+frames suit [`kessel-video`](https://crates.io/crates/kessel-video)'s
+frame-in sources, but any encoder will do. API docs are on
+[docs.rs](https://docs.rs/kessel-frame-ring), and the source is at
+<https://github.com/Alakazam-211/K2> (`crates/kessel-frame-ring`). Licensed
+MIT OR Apache-2.0.
+
+**Version 0.1** is the first release. Until 1.0, a minor release (0.2, 0.3)
+may change the API or the file format, as Cargo allows for 0.x versions; a
+patch release (0.1.x) won't. The app and its extension must use the same
+format version (`VERSION`): a producer refuses a ring of another version.
+Each change is listed in the changelog in the repository.
+
+## Platforms
+
+| Platform | Status |
+|---|---|
+| Linux (x86-64) | The test suite passes, including two real processes and a producer killed mid-write. |
+| macOS (Apple Silicon) | The test suite passes. |
+| iOS | **Type-checked, and the static library is checked** (members and symbols). **Never run on an iPhone**: a broadcast upload extension needs a device and a person to start it. |
+| Android | **Type-checked only.** |
 
 ## How it works
 
 - **The app (consumer) creates the ring** in a file both processes can open
-  (the App Group container), with a fixed `Layout`: the largest frame (either
-  way round), 3 slots, at most 15 fps. 1280 x 720 is about 4 MB. The file is
-  built under a temporary name and renamed into place, so the extension never
-  sees a half-made ring. Dropping the consumer marks it gone and removes the
-  file.
-- **The extension (producer) maps it read-write** and writes each frame into
-  the slot after the newest, scaled down to fit the box (a box filter, so
-  text stays readable). It never blocks and allocates nothing per frame.
-- **Each frame carries its own** width, height, rotation (the clockwise turn
-  to upright), colour (BT.601 or BT.709, limited or full range) and
+  (the App Group container), with a fixed `Layout`: the largest frame
+  (either way round), 3 slots, at most 15 fps. 1280 x 720 is about 4 MB.
+  The file is built under a fresh temporary name (created exclusively,
+  never through a symbolic link) and renamed into place, so the extension
+  never sees a half-made ring. Dropping the consumer marks it gone and
+  removes the file.
+- **The extension (producer) maps it read-write** and writes each frame
+  into the slot after the newest, scaled down to fit the box (a box filter,
+  so text stays readable). It never blocks and allocates nothing per frame.
+- **Each frame carries its own** width, height, rotation (the clockwise
+  turn to upright), colour (BT.601 or BT.709, limited or full range) and
   timestamp. A turn or a new size is just the next frame; only the capacity
   is fixed.
-- **Torn frames are never read.** Each slot has a sequence word (a seqlock):
-  odd while being written, even when whole. The newest frame's slot is
-  published only after the write; a reader checks the sequence before and
-  after its copy.
+- **Torn frames are never read.** Each slot has a sequence word (a
+  seqlock): odd while being written, even when whole. The newest frame's
+  slot is published only after the write; a reader checks the sequence
+  before and after its copy.
 - **Control words** in the header: the producer's state (waiting, running,
   ended with a reason), the consumer's wishes (wants frames, please stop,
   gone, the highest rate) and a heartbeat the consumer bumps on every read.
   The producer holds an advisory lock (`flock`) while attached, so the app
-  can tell an extension that was killed (`ProducerState::Gone`) from a quiet
-  one.
+  can tell an extension that was killed (`ProducerState::Gone`) from a
+  quiet one.
 
-## The producer's C surface (for Swift)
+## The extension's side: the C surface (for Swift)
 
-The extension links the crate as a static library and calls these through a
-bridging header. They are Rust functions with the C calling convention.
+The extension links the crate as a static library (`crate-type` includes
+`staticlib`) and calls these through a bridging header. They are Rust
+functions with the C calling convention; no C is compiled.
 
 ```c
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
+// Not thread-safe: make every call on one producer from one serial queue,
+// and kfr_producer_finish last.
 typedef struct KfrProducer KfrProducer;
 
 // Attach to the ring the app made at `path`. Null on failure, with *error:
 // -1 invalid, -2 no ring (the app isn't in a call), -3 another producer,
-// -4 not a matching ring, -5 an OS error.
+// -4 not a matching ring, -5 an OS error, -6 an internal error.
 KfrProducer *kfr_producer_attach(const char *path, int32_t *error);
 // Before the first push.
 int32_t kfr_producer_start(KfrProducer *p);
@@ -55,7 +82,8 @@ int32_t kfr_producer_start(KfrProducer *p);
 // rotation: 0, 90, 180, 270 (clockwise to upright). color: 0 BT.601 limited,
 // 1 BT.709 limited (420v), 2 BT.709 full (420f). timestamp_ns: on
 // kfr_monotonic_ns's clock, or 0 for now. Returns 0 written, 1 dropped (the
-// app doesn't want frames now), 2 dropped (too soon for the rate), or < 0.
+// app doesn't want frames now), 2 dropped (too soon for the rate), -1 for
+// any argument that doesn't describe a frame, or another code below 0.
 int32_t kfr_producer_push_nv12(KfrProducer *p,
                                const uint8_t *y, size_t y_len, size_t y_stride,
                                const uint8_t *uv, size_t uv_len, size_t uv_stride,
@@ -67,15 +95,15 @@ bool kfr_producer_wants_frames(const KfrProducer *p);
 // True: the call ended in the app; finish the broadcast.
 bool kfr_producer_stop_requested(const KfrProducer *p);
 // reason: 1 the person stopped (broadcastFinished), 2 closed, 3 failed.
-// Frees p.
+// Frees p. Call it last, once.
 void kfr_producer_finish(KfrProducer *p, uint32_t reason);
 // The clock timestamps use: mach absolute time in ns (CMClock host time).
 uint64_t kfr_monotonic_ns(void);
 ```
 
 In `processSampleBuffer(_:with: .video)`: if `kfr_producer_wants_frames` is
-false, return. Otherwise lock the pixel buffer read-only, pass plane 0 and 1
-(`CVPixelBufferGetBaseAddressOfPlane`, `GetBytesPerRowOfPlane`, and
+false, return. Otherwise lock the pixel buffer read-only, pass plane 0 and
+1 (`CVPixelBufferGetBaseAddressOfPlane`, `GetBytesPerRowOfPlane`, and
 `bytesPerRow x GetHeightOfPlane` as the length), the rotation from
 `RPVideoSampleOrientationKey`, the colour from the pixel format, and the
 presentation time on the host clock in ns; unlock. Poll
@@ -83,32 +111,124 @@ presentation time on the host clock in ns; unlock. Poll
 broadcast when it is true. Call `kfr_producer_finish(p, 1)` in
 `broadcastFinished`.
 
-## The consumer (the app, in Rust)
+### Safety rules for the C surface
+
+- **One queue.** A producer is not thread-safe. Make every call on one
+  producer from one serial dispatch queue (or otherwise one at a time).
+  ReplayKit may call `processSampleBuffer` and `broadcastFinished` on
+  different queues, so hop to your queue in both. A push that races
+  `kfr_producer_finish` uses freed memory.
+- **Finish last, once.** After `kfr_producer_finish` returns, the pointer
+  is gone; don't pass it again. Null is ignored everywhere.
+- **Truthful lengths.** `y` and `uv` must be readable for `y_len` and
+  `uv_len` bytes for the whole call (keep the pixel buffer locked). Sizes,
+  strides, rotation and colour are checked, and anything that doesn't
+  describe a frame inside those lengths returns -1; the lengths themselves
+  can't be checked.
+- **No panics cross the boundary.** Each function catches a panic and
+  returns its error value (-6, false, or null). An extension built with
+  `panic = "abort"` aborts instead, as Rust requires.
+
+## The app's side (Rust)
 
 ```rust,ignore
 let mut ring = Consumer::create(container.join("screen.ring"), Layout::hd720())?;
 let mut buf = Vec::new();
 // Every ~10 ms while sharing:
-match ring.producer()? {
-    ProducerState::Ended(reason) => { /* end the share */ }
-    ProducerState::Gone => { /* the extension died: end the share */ }
-    _ => {}
+match ring.producer() {
+    Ok(ProducerState::Ended(reason)) => { /* end the share */ }
+    Ok(ProducerState::Gone) => { /* the extension died: end the share */ }
+    Err(_) => { /* the file shrank or the OS failed: end the share */ }
+    Ok(_) => {}
 }
 if let Some(info) = ring.try_read(&mut buf) {
     // buf is tight NV12: Y at 0 (stride info.y_stride()), UV at
-    // info.uv_offset() (stride info.uv_stride()).
+    // info.uv_offset() (stride info.uv_stride()). info.width and
+    // info.height fit the layout's box and info.rotation is a quarter turn.
+    // The timestamp is the extension's: map it with saturating maths.
 }
 ```
 
-`tests/frame_in_vp8.rs` has the whole glue into a kessel-video frame-in
-source (`pump`), with the timestamp mapped to the source's clock.
+The repository's `tests/frame_in_vp8.rs` has the whole glue into a
+kessel-video frame-in source, with the timestamp mapped to the source's
+clock.
 
-## Tests
+## Trust boundary
 
-`cargo test -p kessel-frame-ring`: the producer in a second process (the
-test binary runs itself again), a producer killed mid-write, a racing
+The extension is a separate process with the ring's file open read-write,
+so the app treats everything in the file as untrusted: a bug, a kill
+mid-write or a compromised extension can leave any bytes there. What the
+consumer guarantees, whatever the file holds:
+
+- **No panic, no out-of-range read, no overflow.** The slot index, size,
+  rotation, colour and length of a frame are checked against the
+  consumer's own layout (never the file's copy) before a byte is copied,
+  and all size maths is checked. A frame handed out fits the box (either
+  way round), has a rotation of 0, 90, 180 or 270, a known colour, and
+  exactly `info.len()` bytes. A slot that fails is skipped and counted
+  (`RingStats::rejected`).
+- **A torn frame is never handed out** (the seqlock), and a stray frame
+  number can't stop later frames: any number other than the last one read
+  is a new frame.
+- **The layout is the consumer's own.** `Consumer::layout()` never reads
+  the file.
+
+What it can't guarantee:
+
+- **Pixels, timestamps and frame numbers are whatever the producer wrote.**
+  They are only numbers and bytes: use saturating or checked maths on the
+  timestamp, and treat the pixels as you would any untrusted image.
+- **A producer can shrink the file.** Touching a mapped page past the end
+  of a file kills the process with SIGBUS, and Apple platforms have no file
+  seals to forbid shrinking. The consumer checks the file's length before
+  each use of the mapping and then reports nothing to read
+  (`Consumer::producer` returns `RingError::Mismatch`: end the share), but
+  a shrink that lands between that check and the copy still faults. Keep
+  the file in a container only your own app and extension can open.
+- **A producer can deny service:** stop writing, write nonstop, or claim to
+  be running. The app decides when a share has gone on too long.
+
+On iOS, the system ends a suspended process that holds a file lock in a
+shared container (exception code `0xdead10cc`). The extension holds its
+lock while attached and the app holds one for a moment in
+`Consumer::producer`; broadcast extensions aren't normally suspended
+mid-broadcast, but this hasn't been tried on a device. Call
+`kfr_producer_finish` as the broadcast ends, and don't call
+`Consumer::producer` as the app goes to the background.
+
+## Tests and fuzzing
+
+`cargo test -p kessel-frame-ring` runs the producer in a second process
+(the test binary runs itself again), a producer killed mid-write, a racing
 producer that never hands over a torn frame, wraparound, files that don't
-match, bad frames, the control words, scaling, and the C surface; then the
-whole path through kessel-video's frame-in and VP8.
+match, bad frames, the control words, scaling and the C surface. Its
+hostile-input tests run 20,000 seeded rounds of corrupt, torn and hostile
+rings (random and edge-value header and slot words, slots that claim
+anything, random frame bytes, shrunk files) and check that the consumer
+never panics and hands out only frames that fit; producers attach to
+corrupt files, and the C surface gets bad sizes, strides and lengths.
+`KFR_HOSTILE_ITERS` and `KFR_HOSTILE_SEED` change the rounds and the seed.
 
-Licensed MIT OR Apache-2.0.
+In the repository, `fuzz/` has two cargo-fuzz targets (`consumer`: a ring
+the other process scribbles on; `attach`: a producer opening any file),
+`tests/frame_in_vp8.rs` runs the whole path through kessel-video's frame-in
+and VP8, `scripts/check-staticlib.sh` checks that the static library holds
+only this crate, libc's declarations and Rust's standard library and
+exports exactly the C surface above, `scripts/check-targets.sh`
+type-checks iOS, Android and Windows from any machine, and
+`scripts/check-package.sh` builds
+the package as crates.io would and runs its tests outside the repository.
+
+## Security
+
+The consumer reads memory another process writes, so treat a crash, hang
+or out-of-range access on a crafted ring file as a security bug, and the
+same for the C surface on arguments within its safety rules. Please report
+it privately, not in a public issue, through GitHub's private
+vulnerability reporting: <https://github.com/Alakazam-211/K2/security>, then
+"Report a vulnerability". The repository's SECURITY.md has the policy.
+
+## Licence
+
+Licensed under either of the Apache License, Version 2.0 (`LICENSE-APACHE`)
+or the MIT licence (`LICENSE-MIT`), at your option.

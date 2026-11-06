@@ -1,28 +1,41 @@
 [package]
-# A placeholder name: the final name, and whether it is published, are the
-# crate family steward's call.
 name = "kessel-frame-ring"
 version = "0.0.0"
 edition = "2021"
+# is_multiple_of on unsigned integers.
 rust-version = "1.87"
 license = "MIT OR Apache-2.0"
-description = "A single-producer, single-consumer ring of NV12 video frames in a shared-memory file, for handing frames from one process to another on the same machine (an iOS broadcast upload extension to its app). Never blocks the producer; survives a producer killed mid-write."
+description = "A single-producer, single-consumer ring of NV12 video frames in a shared-memory file, for handing frames from one process to another on the same machine (an iOS broadcast upload extension to its app). Never blocks the producer; survives a producer killed mid-write; the consumer checks everything the other process wrote."
 authors = ["Alakazam Labs"]
-publish = false
+readme = "README.md"
+documentation = "https://docs.rs/kessel-frame-ring"
+repository = "https://github.com/Alakazam-211/K2"
+keywords = ["video", "shared-memory", "ios", "screen-capture", "ring-buffer"]
+categories = ["multimedia::video", "concurrency", "os::unix-apis"]
+# Only the code, the README, the changelog and the licences ship. Everything
+# else stays in the repository: tests/ (tests/scrub.rs is the repository's
+# own publish check, and tests/frame_in_vp8.rs needs kessel-video from the
+# repository), scripts/ and fuzz/. The leading / anchors each pattern at the
+# crate root, so a file of the same name deeper in the tree can't match.
+include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/CHANGELOG.md"]
 
 [lib]
 # `staticlib` for an app extension that links this crate alone, through its
 # small `extern "C"` surface; `lib` for Rust users (the app's side).
 crate-type = ["lib", "staticlib"]
 
+# A caret requirement, so users get libc's patch and security releases; apps
+# pin through their Cargo.lock.
 [dependencies]
 # mmap, flock and the monotonic clock. Declarations only: no C is built.
 libc = "0.2"
 
 [dev-dependencies]
 # The end-to-end test feeds the ring's frames into a kessel-video frame-in
-# source and through VP8.
+# source and through VP8. Repository only: the test stays out of the package.
 kessel-video = { path = "../kessel-video", default-features = false, features = ["vp8"] }
+# tests/licences.rs reads `cargo metadata`.
+serde_json = "1"
 
 [lints.rust]
 missing_docs = "warn"

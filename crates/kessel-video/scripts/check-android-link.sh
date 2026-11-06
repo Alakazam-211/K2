@@ -13,6 +13,12 @@
 # Default targets: aarch64-linux-android x86_64-linux-android.
 set -eu
 [ $# -gt 0 ] || set -- aarch64-linux-android x86_64-linux-android
+here=$(pwd)
+target_dir=${CARGO_TARGET_DIR:-target}
+case $target_dir in
+/*) ;;
+*) target_dir=$here/$target_dir ;;
+esac
 ndk_version=r27c
 api=24
 tmp=${TMPDIR:-/tmp}
@@ -55,15 +61,41 @@ for target in "$@"; do
     done
     echo "linked: $exe imports the NDK's camera, image reader and codec calls"
 
-    # As an app links it: a shared library (a Tauri Android app's
-    # libapp.so) from examples/link_check.rs, which reaches every backend
-    # call through system(). --no-undefined: a library the crate forgets to
-    # ask for fails here, not when Android loads the app.
-    echo "== link $target: examples/link_check.rs as a shared library"
-    env "$linker_var=$bin/$target$api-clang" \
+    # As an app links it: an app crate (examples/link_check.rs as its
+    # library, a Tauri Android app's libapp.so) built as a shared library
+    # that depends on kessel-video, outside the workspace (from crates.io)
+    # as users get it. It reaches every backend call through system().
+    # --no-undefined: a library the crate forgets to ask for fails here, not
+    # when Android loads the app.
+    echo "== link $target: an app's shared library over kessel-video"
+    app=$(mktemp -d)
+    mkdir -p "$app/src"
+    cp crates/kessel-video/examples/link_check.rs "$app/src/lib.rs"
+    cp Cargo.lock "$app/Cargo.lock"
+    cat >"$app/Cargo.toml" <<EOF
+[package]
+name = "link-check-app"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# The example's cfg names kessel-video's backend features.
+[features]
+default = ["android"]
+android = []
+
+[dependencies]
+kessel-video = { path = "$here/crates/kessel-video" }
+
+[workspace]
+EOF
+    (cd "$app" && env "$linker_var=$bin/$target$api-clang" CARGO_TARGET_DIR="$target_dir/kessel-video-link-check" \
         RUSTFLAGS="--sysroot=$root -C link-arg=-Wl,--no-undefined ${RUSTFLAGS:-}" \
-        cargo rustc --locked -p kessel-video --example link_check --target "$target" --crate-type cdylib
-    so=${CARGO_TARGET_DIR:-target}/$target/debug/examples/liblink_check.so
+        cargo build --lib --target "$target")
+    so=$target_dir/kessel-video-link-check/$target/debug/liblink_check_app.so
     [ -f "$so" ] || { echo "no $so" >&2; exit 1; }
     for lib in libcamera2ndk.so libmediandk.so; do
         "$bin/llvm-readelf" -d "$so" | grep -q "Shared library: \[$lib\]" ||

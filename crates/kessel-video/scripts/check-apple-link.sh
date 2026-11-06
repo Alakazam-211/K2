@@ -1,10 +1,13 @@
 #!/bin/sh
-# Link kessel-video the way Xcode links a Tauri app's Rust code: as a static
-# library (examples/link_check.rs), with no -framework flags of the app's
-# own. rustc's #[link] attributes never reach that link (rustc only prints
-# them as native-static-libs); only the linker options kessel-video writes
-# into its object code do. A framework the crate forgets shows up here as
-# undefined symbols, as it does in the app.
+# Link kessel-video the way Xcode links a Tauri app's Rust code: an app
+# crate (examples/link_check.rs as its library) built as a static library
+# that depends on kessel-video, linked with no -framework flags of the
+# app's own. rustc's #[link] attributes never reach that link (rustc only
+# prints them as native-static-libs); only the linker options kessel-video
+# writes into its object code do. A framework the crate forgets shows up
+# here as undefined symbols, as it does in the app. The app crate is built
+# outside the workspace (from crates.io, needs the network), as users get
+# kessel-video's dependencies.
 #
 # macos: link the library with cc and only the plain libraries rustc names
 #   (its -framework flags dropped), check the program loads every framework
@@ -25,7 +28,12 @@
 #   sh crates/kessel-video/scripts/check-apple-link.sh [macos] [ios]
 set -eu
 [ $# -gt 0 ] || set -- macos ios
+here=$(pwd)
 target_dir=${CARGO_TARGET_DIR:-target}
+case $target_dir in
+/*) ;;
+*) target_dir=$here/$target_dir ;;
+esac
 work=$(mktemp -d)
 cat >"$work/main.c" <<'EOF'
 #include <stdio.h>
@@ -42,19 +50,50 @@ int main(void) {
 }
 EOF
 
-# build <target> <log> [rustflags]: the static library, with rustc's list
-# of native libraries in <log>.
+# The app: a crate of its own whose library is examples/link_check.rs, a
+# static library that depends on kessel-video, as a Tauri app's crate does.
+# It starts from the workspace's Cargo.lock and is outside the workspace,
+# so it gets kessel-video's dependencies as a user of the crate does.
+# A fresh copy each run, so rustc runs and prints the native libraries.
+mkdir -p "$work/app/src"
+cp crates/kessel-video/examples/link_check.rs "$work/app/src/lib.rs"
+cp Cargo.lock "$work/app/Cargo.lock"
+cat >"$work/app/Cargo.toml" <<EOF
+[package]
+name = "link-check-app"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+# The example's cfg names kessel-video's backend features.
+[features]
+default = ["apple"]
+apple = []
+
+[dependencies]
+kessel-video = { path = "$here/crates/kessel-video" }
+
+[workspace]
+EOF
+
+# build <target> <log> [rustflags]: the app's static library, with rustc's
+# list of native libraries in <log>.
 build() {
-    env RUSTFLAGS="${3:-} ${RUSTFLAGS:-}" cargo rustc --locked -p kessel-video --example link_check --target "$1" \
-        --crate-type staticlib -- --print native-static-libs >"$2" 2>&1 ||
+    (cd "$work/app" && env CARGO_TARGET_DIR="$target_dir/kessel-video-link-check" \
+        RUSTFLAGS="${3:-} ${RUSTFLAGS:-}" cargo rustc --lib --target "$1" \
+        -- --print native-static-libs) >"$2" 2>&1 ||
         { cat "$2" >&2; exit 1; }
-    lib="$target_dir/$1/debug/examples/liblink_check.a"
+    lib="$target_dir/kessel-video-link-check/$1/debug/liblink_check_app.a"
     [ -f "$lib" ] || { echo "no $lib" >&2; exit 1; }
 }
 
 # plain_libs <log>: rustc's native-static-libs without its -framework pairs:
 # what an app that never read that list still links (libSystem, libobjc...).
 plain_libs() {
+    grep -q 'native-static-libs: ' "$1" || { echo "rustc printed no native-static-libs" >&2; cat "$1" >&2; exit 1; }
     sed -n 's/.*native-static-libs: //p' "$1" | tail -n 1 |
         awk '{ for (i = 1; i <= NF; i++) { if ($i == "-framework") { i++; continue } printf "%s ", $i } }'
 }

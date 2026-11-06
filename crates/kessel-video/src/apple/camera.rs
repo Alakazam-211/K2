@@ -521,7 +521,8 @@ unsafe fn open_in_pool(
     // video-only: no audio input is ever added.
     #[cfg(target_os = "ios")]
     {
-        let _: () = msg_send![&*session, setAutomaticallyConfiguresApplicationAudioSession: Bool::NO];
+        let _: () =
+            msg_send![&*session, setAutomaticallyConfiguresApplicationAudioSession: Bool::NO];
     }
     let _: () = msg_send![&*session, beginConfiguration];
     let ok: Bool = msg_send![&*session, canAddInput: input];

@@ -23,8 +23,6 @@ fn s2u(v: i32) -> u8 {
 /// Per-macroblock filter parameters.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct FilterParams {
-    /// The filter level (0 = no filtering).
-    pub(crate) level: i32,
     pub(crate) interior_limit: i32,
     pub(crate) hev_threshold: i32,
 }
@@ -47,7 +45,6 @@ impl FilterParams {
             hev += 1;
         }
         FilterParams {
-            level,
             interior_limit: interior,
             hev_threshold: hev,
         }

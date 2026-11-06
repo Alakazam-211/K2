@@ -1,6 +1,7 @@
 #!/bin/sh
 # Encodes a real camera clip at the sizes and rates of a WebRTC simulcast
-# ladder and prints, for each, the bitrate achieved against the target and
+# ladder (the 60-frame clip played forward and back to 300 frames) and
+# prints, for each, the bitrate achieved against the target and
 # the quantizer range rate control used. The test suite checks the same on
 # synthetic camera-like content (tests/bitrate.rs); this is the real-clip
 # cross-check.
@@ -24,7 +25,7 @@ for layers in 1 3; do
         for rate in 300000 600000 1200000 2500000; do
             # shellcheck disable=SC2086 # size is two words on purpose
             cargo run --locked --release -q -p vp8-encoder --example encode_y4m -- \
-                "$clip" "$work/out.ivf" "$rate" $size --layers "$layers"
+                "$clip" "$work/out.ivf" "$rate" $size --layers "$layers" --frames 300 --loop
         done
     done
 done

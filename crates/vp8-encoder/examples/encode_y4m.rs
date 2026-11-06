@@ -3,7 +3,10 @@
 //! other decoders' output can be compared byte for byte.
 //!
 //!   cargo run --release -p vp8-encoder --example encode_y4m -- \
-//!       in.y4m out.ivf BITRATE [WIDTH HEIGHT] [--layers 1|2|3] [--frames N]
+//!       in.y4m out.ivf BITRATE [WIDTH HEIGHT] [--layers 1|2|3] [--frames N] [--loop]
+//!
+//! `--loop` plays a short clip forward, then backward, and so on until
+//! `--frames` frames, for steady-state rate measurements.
 
 use std::io::Write;
 use std::time::Instant;
@@ -12,13 +15,14 @@ use vp8_encoder::{scale_i420, Encoder, EncoderConfig, Picture, TemporalLayers};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: encode_y4m IN.y4m OUT.ivf BITRATE [WIDTH HEIGHT] [--layers N] [--frames N]";
+    let usage = "usage: encode_y4m IN.y4m OUT.ivf BITRATE [WIDTH HEIGHT] [--layers N] [--frames N] [--loop]";
     let input = args.first().expect(usage);
     let output = args.get(1).expect(usage);
     let bitrate: u32 = args.get(2).expect(usage).parse().expect("bitrate in bit/s");
     let mut size: Option<(u32, u32)> = None;
     let mut layers = TemporalLayers::L1T1;
     let mut max_frames = usize::MAX;
+    let mut looped = false;
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -30,15 +34,16 @@ fn main() {
                 };
                 i += 2;
             }
+            "--loop" => {
+                looped = true;
+                i += 1;
+            }
             "--frames" => {
                 max_frames = args[i + 1].parse().expect("frame count");
                 i += 2;
             }
             w => {
-                size = Some((
-                    w.parse().expect("width"),
-                    args[i + 1].parse().expect("height"),
-                ));
+                size = Some((w.parse().expect("width"), args[i + 1].parse().expect("height")));
                 i += 2;
             }
         }
@@ -82,11 +87,27 @@ fn main() {
     let count_pos = ivf.len();
     ivf.extend_from_slice(&0u32.to_le_bytes());
     ivf.extend_from_slice(&0u32.to_le_bytes());
-    let mut decoded_yuv = std::io::BufWriter::new(
-        std::fs::File::create(format!("{output}.dec.yuv")).expect("create .dec.yuv"),
-    );
+    let mut decoded_yuv = std::io::BufWriter::new(std::fs::File::create(format!("{output}.dec.yuv")).expect("create .dec.yuv"));
 
+    // Where each frame's pixels start.
+    let mut starts = Vec::new();
     let mut pos = header_end + 1;
+    while pos < data.len() {
+        let line_end = pos + data[pos..].iter().position(|&b| b == b'\n').expect("FRAME line");
+        pos = line_end + 1;
+        assert!(pos + frame_len <= data.len(), "truncated frame");
+        starts.push(pos);
+        pos += frame_len;
+    }
+    assert!(!starts.is_empty(), "no frames");
+    if looped {
+        assert!(max_frames != usize::MAX, "--loop needs --frames");
+    } else {
+        max_frames = max_frames.min(starts.len());
+    }
+    // After the first second: the rate without the first keyframe and the
+    // rate control's warm-up.
+    let mut steady_bytes = 0usize;
     let mut n = 0usize;
     let mut out_frames = 0u32;
     let mut bytes = 0usize;
@@ -95,15 +116,12 @@ fn main() {
     let mut encode_secs = 0.0;
     let mut scaled = Vec::new();
     let mut qs = Vec::new();
-    while pos < data.len() && n < max_frames {
-        let line_end = pos
-            + data[pos..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .expect("FRAME line");
-        pos = line_end + 1;
-        let src = &data[pos..pos + frame_len];
-        pos += frame_len;
+    while n < max_frames {
+        // Forward, then backward, without repeating the end frames.
+        let period = (2 * starts.len()).saturating_sub(2).max(1);
+        let k = n % period;
+        let idx = if k < starts.len() { k } else { period - k };
+        let src = &data[starts[idx]..starts[idx] + frame_len];
         let full = Picture::from_i420(src, sw as u32, sh as u32).expect("source picture");
         let pic = if (w, h) == (sw as u32, sh as u32) {
             full
@@ -121,37 +139,33 @@ fn main() {
         keyframes += out.keyframe as usize;
         qs.push(out.q_index);
         bytes += out.data.len();
+        if n > fps as usize {
+            steady_bytes += out.data.len();
+        }
         ivf.extend_from_slice(&(out.data.len() as u32).to_le_bytes());
         ivf.extend_from_slice(&(n as u64 - 1).to_le_bytes());
         ivf.extend_from_slice(&out.data);
         out_frames += 1;
-        let p = dec
-            .decode(&out.data)
-            .expect("own output decodes")
-            .expect("shown");
+        let p = dec.decode(&out.data).expect("own output decodes").expect("shown");
         let got = p.to_i420();
         decoded_yuv.write_all(&got).expect("write .dec.yuv");
-        let mse: f64 = got
-            .iter()
-            .zip(&reference)
-            .map(|(&a, &b)| (a as f64 - b as f64).powi(2))
-            .sum::<f64>()
-            / got.len() as f64;
-        psnr_sum += if mse == 0.0 {
-            99.0
-        } else {
-            10.0 * (65025.0 / mse).log10()
-        };
+        let mse: f64 = got.iter().zip(&reference).map(|(&a, &b)| (a as f64 - b as f64).powi(2)).sum::<f64>() / got.len() as f64;
+        psnr_sum += if mse == 0.0 { 99.0 } else { 10.0 * (65025.0 / mse).log10() };
     }
     qs.sort_unstable();
     let q_range = match (qs.first(), qs.last()) {
         (Some(lo), Some(hi)) => format!("q {lo}..{hi} (median {})", qs[qs.len() / 2]),
         _ => "no frames".to_string(),
     };
+    let steady = if n > 2 * fps as usize {
+        format!("{:.0} kbit/s after the first second", steady_bytes as f64 * 8.0 / ((n - fps as usize) as f64 / fps as f64) / 1000.0)
+    } else {
+        "too short for a steady rate".to_string()
+    };
     ivf[count_pos..count_pos + 4].copy_from_slice(&out_frames.to_le_bytes());
     std::fs::write(output, &ivf).unwrap_or_else(|e| panic!("{output}: {e}"));
     println!(
-        "[encode] {w}x{h} {:?} target {} kbit/s: {n} frames in, {out_frames} out, {keyframes} keyframes, {:.0} kbit/s, {q_range}, PSNR {:.2} dB, {:.1} fps encode ({:.2} ms/frame)",
+        "[encode] {w}x{h} {:?} target {} kbit/s: {n} frames in, {out_frames} out, {keyframes} keyframes, {:.0} kbit/s ({steady}), {q_range}, PSNR {:.2} dB, {:.1} fps encode ({:.2} ms/frame)",
         layers,
         bitrate / 1000,
         bytes as f64 * 8.0 / (n as f64 / fps as f64) / 1000.0,

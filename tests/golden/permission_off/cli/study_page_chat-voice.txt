@@ -99,15 +99,21 @@ TURN directly. The TURN host and its credentials come in the call's
 signalling join (ice_servers): never hard-code them. 404 voice_door_off:
 no voice (step 1), or sew-api or voice:join not approved (step 7).
 Sew's web kit (@sew/voice in native mode) also asks for names, rings,
-devices and live call events. The app sends those to the same door with
-the person's App login session (Authorization: Bearer k2skn_…) instead.
-K2 runs each one as that person, with their own Sew session:
-GET api/v1/members?ids=…, GET api/v1/channels/<id>,
-POST api/v1/channels/<id>/call/decline, GET api/v1/me/devices,
-POST api/v1/devices/<id>/revoke, and GET feed (a WebSocket: Sew's READY
-first, then voice, call, recording and permission events, s counting from
-1). Recording and moderation answer 403 app_session_route on an App's
-host. The door answers no CORS: send from the app's native code.
+devices and live call events. The app sends those to the same api_base,
+but with the person's App login session (Authorization: Bearer k2skn_…,
+the token your App's sign-in gave the app), not the sewcc_. K2 runs each
+as that person, with their own Sew session; bodies and answers are Sew's:
+  GET  <api_base>api/v1/members?ids=<id>,<id>   (1-100 member ids)
+  GET  <api_base>api/v1/channels/<id>           (only id, recording_audio_days)
+  POST <api_base>api/v1/channels/<id>/call/decline   {"call_id": "<id>"}
+  GET  <api_base>api/v1/me/devices
+  POST <api_base>api/v1/devices/<id>/revoke     (the person's own devices only)
+  GET  <api_base>feed   a WebSocket (wss://), the same Authorization header
+The feed sends Sew's READY first (rings in calls[].my_ring), then voice,
+call (call_ring), recording and permission events, s counting from 1 with
+no gaps. Close 4000: reconnect (a fresh READY); 4001: sign in again.
+Recording and moderation answer 403 app_session_route on an App's host.
+The door answers no CORS: send from the app's native (Rust) code.
 
 WHAT GOES WRONG
   origin null, no calls from outside → no public URL (step 2)

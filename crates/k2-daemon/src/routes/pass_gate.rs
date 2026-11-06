@@ -380,6 +380,20 @@ mod tests {
             ("crate::chat_map_routes::WHOIS", vec![crate::chat_map_routes::WHOIS]),
             ("crate::chat_map_routes::SPACE", vec![crate::chat_map_routes::SPACE]),
             ("crate::chat_channel_routes::ROUTE", vec![crate::chat_channel_routes::ROUTE]),
+            // Resumable transfers (0.46.9): the upload session routes and the
+            // two download token routes (catalog rows).
+            (
+                "crate::transfer_routes::is_upload_route",
+                vec![
+                    crate::transfer_routes::ROUTE_CREATE,
+                    crate::transfer_routes::ROUTE_STATUS,
+                    crate::transfer_routes::ROUTE_COMPLETE,
+                    crate::transfer_routes::ROUTE_ABORT,
+                    crate::transfer_routes::ROUTE_TOKEN,
+                ],
+            ),
+            ("crate::transfer_routes::ROUTE_DOWNLOAD_TOKEN", vec![crate::transfer_routes::ROUTE_DOWNLOAD_TOKEN]),
+            ("crate::transfer_routes::ROUTE_ATTACHMENT_TOKEN", vec![crate::transfer_routes::ROUTE_ATTACHMENT_TOKEN]),
             // Live docs (0.46.7): the Live socket and its auth probe; both
             // refuse an App pass (REFUSING_ARMS).
             ("crate::docs::live::LIVE_CHECK_PATH", vec![crate::docs::live::LIVE_CHECK_PATH]),

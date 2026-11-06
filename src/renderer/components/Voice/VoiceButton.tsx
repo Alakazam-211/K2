@@ -19,7 +19,8 @@ import { retainVoice, useVoice, voice } from '@/stores/voice'
 import { useSettingsStore } from '@/stores/settings'
 import { headsetState } from './voice-labels'
 import VoicePopover from './VoicePopover'
-import VideoStage from './VideoStage'
+import CallControls from './CallControls'
+import { useCallTileShown } from './CallLayer'
 import VideoDemo from './VideoDemo'
 import { retainVideo, video } from '@/stores/video'
 
@@ -51,6 +52,10 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   const videoPreview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const engineKind = useVoice((s) => s.engineKind)
   const [demo, setDemo] = useState(false)
+  // In a call: Mute, Deafen, Camera and Hang up beside the headset, unless
+  // the call's video is up in the floating tile, whose strip has them.
+  const tileShown = useCallTileShown()
+  const showControls = call !== null && engineKind === 'native' && !tileShown
   const rootRef = useRef<HTMLDivElement>(null)
   const [, setTick] = useState(0)
 
@@ -109,37 +114,12 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
           />
         ) : null}
       </div>
+      {showControls && call ? (
+        <div className="ml-0.5 flex items-center no-drag" style={noDrag}>
+          <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} />
+        </div>
+      ) : null}
       {withPipe ? <TopBarPipe /> : null}
-      {videoPreview && call && engineKind === 'native'
-        ? createPortal(
-            <VideoStage
-              ctl={video}
-              people={call.participants}
-              title={call.roomName}
-              footer={
-                <>
-                  <button
-                    type="button"
-                    data-testid="video-stage-mute"
-                    className="border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    onClick={() => voice.setMuted(!call.muted)}
-                  >
-                    {call.muted ? 'Unmute' : 'Mute'}
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="video-stage-leave"
-                    className="ml-auto border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-status-error-soft)]"
-                    onClick={() => void voice.leave()}
-                  >
-                    Leave
-                  </button>
-                </>
-              }
-            />,
-            document.body,
-          )
-        : null}
       {demo && videoPreview ? createPortal(<VideoDemo onClose={() => setDemo(false)} />, document.body) : null}
     </>
   )

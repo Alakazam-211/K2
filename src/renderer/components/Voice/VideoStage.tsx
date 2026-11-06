@@ -41,11 +41,14 @@ export interface VideoStageProps {
   title: string
   /** Extra buttons in the footer (Mute, Leave). */
   footer?: React.ReactNode
-  /** The demo closes itself; the real one hides to a pill. */
+  /** The demo closes itself. */
   onClose?: () => void
+  /** The call's view hides back to the floating tile (CallLayer). Without
+   *  this or `onClose`, it hides to a pill. */
+  onHide?: () => void
 }
 
-export default function VideoStage({ ctl, people, title, footer, onClose }: VideoStageProps): React.JSX.Element | null {
+export default function VideoStage({ ctl, people, title, footer, onClose, onHide }: VideoStageProps): React.JSX.Element | null {
   const tracks = useStore(ctl.store, (s) => s.tracks)
   const local = useStore(ctl.store, (s) => s.local)
   const availability = useStore(ctl.store, (s) => s.availability)
@@ -86,7 +89,7 @@ export default function VideoStage({ ctl, people, title, footer, onClose }: Vide
         <button type="button" data-testid="video-stage-size" className={SMALL_BTN} onClick={() => setWide(!wide)}>
           {wide ? 'Smaller' : 'Bigger'}
         </button>
-        <button type="button" data-testid="video-stage-hide" className={SMALL_BTN} onClick={() => (onClose ? onClose() : setHidden(true))}>
+        <button type="button" data-testid="video-stage-hide" className={SMALL_BTN} onClick={() => (onClose ? onClose() : onHide ? onHide() : setHidden(true))}>
           {onClose ? 'Close' : 'Hide'}
         </button>
       </header>

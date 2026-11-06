@@ -26,6 +26,7 @@ import MemoryWatcher from './components/MemoryWatcher/MemoryWatcher'
 import HeartbeatScheduleDialog from './components/HeartbeatScheduleDialog/HeartbeatScheduleDialog'
 import MergeDialog from './components/MergeDialog/MergeDialog'
 import Toast from './components/Toast/Toast'
+import CallLayer from './components/Voice/CallLayer'
 import TransferProgress from './components/TransferProgress/TransferProgress'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
@@ -1156,6 +1157,8 @@ function AppRoot(): React.JSX.Element {
       <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />
       <MergeDialog />
+      {/* A call's video: the floating tile, or the call view over the page. */}
+      <CallLayer />
       <Toast />
       <TransferProgress />
       <AssistantBar />

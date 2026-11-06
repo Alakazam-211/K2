@@ -28,3 +28,9 @@ export const REMOVE_WORKSPACE_Z = 1000
  *  they opened hidden under Settings/Home and a new folder seemed to do
  *  nothing (Rosson 2026-11-04). */
 export const ADD_WORKSPACE_Z = 1000
+
+/** The floating call tile (Voice/CallTile): over the room and over Zen
+ *  (150), so a video call stays in view on every page; below Settings (200),
+ *  where the top bar's call controls take over, and below every modal, menu
+ *  and toast. It steps aside while a menu or popover overlaps it. */
+export const CALL_TILE_Z = 160

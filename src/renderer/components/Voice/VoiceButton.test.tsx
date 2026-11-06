@@ -120,6 +120,7 @@ vi.mock('@/stores/video', async () => {
 })
 
 import VoiceButton from './VoiceButton'
+import CallLayer from './CallLayer'
 import { voice } from '@/stores/voice'
 import { overlayClaims } from '@/lib/browser-overlay'
 
@@ -418,7 +419,12 @@ describe('video in the call (videoRoomsPreview)', () => {
     h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
     h.lists = { 'sewlab.k2.dev': sewList }
     act(() => voice.recompute())
-    render(<VoiceButton />)
+    render(
+      <>
+        <VoiceButton />
+        <CallLayer />
+      </>,
+    )
     fireEvent.click(screen.getByTestId('voice-button'))
     await waitFor(() => expect(screen.getAllByTestId('voice-join')).toHaveLength(2))
     fireEvent.click(screen.getAllByTestId('voice-join')[0])
@@ -434,21 +440,24 @@ describe('video in the call (videoRoomsPreview)', () => {
     expect(screen.queryByTestId('video-camera')).toBeNull()
     expect(screen.queryByTestId('video-screen')).toBeNull()
     expect(screen.queryByTestId('video-stage')).toBeNull()
+    expect(screen.queryByTestId('call-tile')).toBeNull()
     expect(screen.queryByTestId('video-demo-open')).toBeNull()
   })
 
-  it('with it on: Camera and Share screen in the call panel; the camera brings up the self-view, and leaving takes it away', async () => {
+  it('with it on: Camera and Share screen in the call panel; the camera brings up the floating tile, and leaving takes it away', async () => {
     h.videoPreview = true
     await inCall()
     fireEvent.click(await screen.findByTestId('video-camera'))
-    await waitFor(() => expect(screen.getByTestId('video-stage')).toBeTruthy())
+    // The window's call layer (mounted at the app's root) floats the tile.
+    await waitFor(() => expect(screen.getByTestId('call-tile')).toBeTruthy())
+    expect(screen.getByTestId('call-tile').dataset.picture).toBe('local:camera')
     expect(screen.getByTestId('video-tile').dataset.track).toBe('local:camera')
-    // The panel's controls and the video panel's footer both have them.
-    expect(screen.getAllByTestId('video-screen').map((b) => b.textContent)).toEqual(['Share screen', 'Share screen'])
-    expect(screen.getAllByTestId('video-camera').map((b) => b.textContent)).toEqual(['Camera off', 'Camera off'])
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+    expect(screen.getAllByTestId('video-screen').map((b) => b.textContent)).toEqual(['Share screen'])
+    expect(screen.getAllByTestId('video-camera').map((b) => b.textContent)).toEqual(['Camera off'])
     expect(screen.getByTestId('video-demo-open')).toBeTruthy()
-    fireEvent.click(screen.getByTestId('video-stage-leave'))
-    await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
+    fireEvent.click(screen.getByTestId('call-tile-leave'))
+    await waitFor(() => expect(screen.queryByTestId('call-tile')).toBeNull())
     expect(voice.store.getState().call).toBeNull()
   })
 

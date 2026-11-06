@@ -45,7 +45,8 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Home/HomeAddPanels.tsx': 'Add Agent / Add Workspace panels open inside the Home sidebar column',
   'components/ui/SearchableAgentList.tsx': 'an inline list inside its host panel (the host claims if it floats)',
   // Portals that only host a component that claims its own box.
-  'components/Voice/VoiceButton.tsx': 'portals the video panel and the video demo; VideoStage claims its own box',
+  'components/Voice/VoiceButton.tsx': 'portals the video demo; VideoStage claims its own box',
+  'components/Voice/CallLayer.tsx': 'portals the call view; VideoStage claims its own box (CallTile claims its own)',
   // Settings / Projects / Feedback / Wiki pages: the room (and every
   // Browser tab) is hidden while they are open.
   'components/Settings/SettingsSearchModal.tsx': 'Settings is open: Browser tabs are hidden',

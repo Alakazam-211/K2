@@ -255,13 +255,33 @@ unsafe fn facing_of(device: *mut AnyObject) -> Facing {
     }
 }
 
-/// The first camera facing `facing` (autoreleased; call inside a pool), or
-/// null.
+/// The first camera facing `facing` that isn't suspended, else the first
+/// facing it (autoreleased; call inside a pool), or null.
 unsafe fn facing_device(facing: Facing) -> *mut AnyObject {
+    let all: Vec<_> = devices()
+        .into_iter()
+        .filter(|d| facing_of(*d) == facing)
+        .collect();
+    all.iter()
+        .copied()
+        .find(|d| !is_suspended(*d))
+        .or(all.first().copied())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// The camera an open with no id takes (autoreleased; call inside a pool),
+/// or null: the default unless it is suspended, then the first listed
+/// camera that isn't; when every one is suspended, the default. As
+/// [`crate::types::default_camera`] does for a listing.
+unsafe fn open_default() -> *mut AnyObject {
+    let d = default_device();
+    if d.is_null() || !is_suspended(d) {
+        return d;
+    }
     devices()
         .into_iter()
-        .find(|d| facing_of(*d) == facing)
-        .unwrap_or(std::ptr::null_mut())
+        .find(|x| !is_suspended(*x))
+        .unwrap_or(d)
 }
 
 /// The default camera (autoreleased; call inside a pool), or null. On iOS
@@ -777,10 +797,10 @@ unsafe fn open_in_pool(
             msg_send![class!(AVCaptureDevice), deviceWithUniqueID: &*s]
         }
         (None, Some(facing)) => match facing_device(facing) {
-            d if d.is_null() => default_device(),
+            d if d.is_null() => open_default(),
             d => d,
         },
-        (None, None) => default_device(),
+        (None, None) => open_default(),
     };
     if device.is_null() {
         return Err(VideoError::NotFound);

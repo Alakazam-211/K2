@@ -359,7 +359,7 @@ impl VideoBackend for FakeBackend {
         let cams = self.cameras();
         let cam = match id {
             Some(id) => cams.iter().find(|c| c.id == id),
-            None => cams.iter().find(|c| c.is_default).or(cams.first()),
+            None => default_camera(&cams),
         }
         .ok_or(VideoError::NotFound)?;
         let mode = nearest_mode(&cam.modes, &c).unwrap_or(CaptureMode::new(
@@ -1304,6 +1304,73 @@ mod tests {
         let now = b.cameras();
         assert!(now[0].suspended);
         assert_eq!(now[0].id, id, "the same id while suspended");
+    }
+
+    /// The size a no-id open of `cams` delivers first.
+    fn default_open_size(cams: Vec<CameraInfo>) -> (u32, u32) {
+        let b = FakeBackend::new(FakeConfig {
+            cameras: cams,
+            ..FakeConfig::default()
+        });
+        let mut src = b
+            .open_camera(None, CaptureConstraints::default(), no_wake())
+            .expect("camera");
+        match wait_for(Duration::from_secs(2), || src.try_event()) {
+            Some(SourceEvent::Started { width, height, .. }) => (width, height),
+            other => panic!("expected Started, got {other:?}"),
+        }
+    }
+
+    /// A no-id open passes over a suspended default for the first camera
+    /// that isn't, in the list's order; with every camera suspended it
+    /// opens the default.
+    #[test]
+    fn a_no_id_open_skips_a_suspended_default() {
+        let cam = |id: &str, default: bool, suspended: bool, w: u32, h: u32| {
+            let mut c = CameraInfo::new(id, id, Facing::External, default);
+            c.modes = vec![CaptureMode::new(w, h, 30, PixelFormat::I420)];
+            c.suspended = suspended;
+            c
+        };
+        // The built-in camera with the lid closed, then two others: the
+        // first one that isn't suspended opens.
+        let lid_closed = vec![
+            cam("built-in", true, true, 1280, 720),
+            cam("usb-a", false, true, 960, 540),
+            cam("usb-b", false, false, 640, 480),
+            cam("usb-c", false, false, 320, 240),
+        ];
+        assert_eq!(
+            default_camera(&lid_closed).map(|c| c.id.as_str()),
+            Some("usb-b")
+        );
+        assert_eq!(default_open_size(lid_closed), (640, 480));
+        // Every camera suspended: the default, as before.
+        let all = vec![
+            cam("usb-a", false, true, 960, 540),
+            cam("built-in", true, true, 1280, 720),
+        ];
+        assert_eq!(
+            default_camera(&all).map(|c| c.id.as_str()),
+            Some("built-in")
+        );
+        assert_eq!(default_open_size(all), (1280, 720));
+        // A default that isn't suspended opens, whatever else is listed.
+        let fine = vec![
+            cam("usb-b", false, false, 640, 480),
+            cam("built-in", true, false, 1280, 720),
+        ];
+        assert_eq!(default_open_size(fine), (1280, 720));
+        // No default named: the first camera stands in for it.
+        assert_eq!(
+            default_camera(&[
+                cam("a", false, true, 640, 480),
+                cam("b", false, false, 640, 480)
+            ])
+            .map(|c| c.id.as_str()),
+            Some("b")
+        );
+        assert_eq!(default_camera(&[]), None);
     }
 
     #[test]

@@ -344,7 +344,8 @@ pub struct CameraInfo {
     pub name: String,
     /// Which way it faces.
     pub facing: Facing,
-    /// The system default.
+    /// The system default, suspended or not. An open with no id skips it
+    /// while it is suspended (see `VideoBackend::open_camera`).
     pub is_default: bool,
     /// Its modes.
     pub modes: Vec<CaptureMode>,
@@ -353,11 +354,23 @@ pub struct CameraInfo {
     /// and for a camera whose lens cover is shut
     /// (`AVCaptureDevice.isSuspended`, read on iOS too). Opening it works
     /// but gives no frames until it comes back; an open source reports
-    /// [`Interruption::Suspended`] meanwhile. A change shows in
+    /// [`Interruption::Suspended`] meanwhile. An open with no id passes
+    /// over it for the first camera that isn't suspended. A change shows in
     /// [`BackendEvent::Cameras`]. Always `false` where the OS doesn't
     /// report it: Windows, Linux and Android (and the fake backend, unless
     /// its script sets it).
     pub suspended: bool,
+}
+
+/// The camera an open with no id takes from a listing: the default (else
+/// the first) unless it is suspended, then the first camera in the list's
+/// order that isn't; when every one is suspended, the default.
+pub(crate) fn default_camera(cams: &[CameraInfo]) -> Option<&CameraInfo> {
+    let def = cams.iter().find(|c| c.is_default).or(cams.first())?;
+    if !def.suspended {
+        return Some(def);
+    }
+    Some(cams.iter().find(|c| !c.suspended).unwrap_or(def))
 }
 
 impl CameraInfo {

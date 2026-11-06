@@ -195,7 +195,9 @@ On macOS:
   disconnects (a Continuity Camera that goes away, an unplugged camera) or
   its capture session posts a runtime error. Open another camera then.
 - `cameras()` sets `suspended` on a camera that is listed but can't deliver
-  frames now: a MacBook's built-in camera while the lid is closed. An open
+  frames now: a MacBook's built-in camera while the lid is closed.
+  `open_camera(None, ...)` passes over a suspended default for the first
+  camera that isn't (all suspended: the default). An open
   source on a camera that becomes suspended sends
   `Interrupted(Suspended)`, then `Resumed`. Camera ids are
   `AVCaptureDevice.uniqueID`, the same when a camera comes back.

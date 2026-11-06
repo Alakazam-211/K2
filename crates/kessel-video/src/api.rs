@@ -99,8 +99,16 @@ pub trait VideoBackend: Send + Sync + 'static {
     fn camera_permission(&self) -> Permission;
     /// Shows the OS prompt if `NotDetermined`; otherwise calls `done` at once.
     fn request_camera_permission(&self, done: Done<Permission>);
-    /// Opens a camera (`None`: the default). Returns when the device is open;
-    /// frames follow on `wake`. Denied permission: `Err(NoPermission)`.
+    /// Opens a camera. Returns when the device is open; frames follow on
+    /// `wake`. Denied permission: `Err(NoPermission)`.
+    ///
+    /// `None` opens the default camera ([`CameraInfo::is_default`]), unless
+    /// it is [suspended](CameraInfo::suspended): then the first camera in
+    /// [`cameras`](VideoBackend::cameras)' order that isn't. When every
+    /// camera is suspended, the default opens anyway and its source reports
+    /// [`Interruption::Suspended`] until it comes back. With
+    /// [`CaptureConstraints::facing`] (phones), the first camera facing that
+    /// way that isn't suspended, else the first facing that way.
     fn open_camera(
         &self,
         id: Option<&str>,

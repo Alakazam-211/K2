@@ -2,8 +2,9 @@
 
 ## 0.1.5
 
-A camera that goes away now ends its source on macOS and iOS, and the
-camera list says which cameras are suspended. Additions only: nothing in
+A camera that goes away now ends its source on macOS and iOS, the camera
+list says which cameras are suspended, and opening the default camera skips
+a suspended one. Additions only: nothing in
 0.1.4's API changes or goes away.
 
 ### A lost camera ends its source (macOS and iOS)
@@ -45,6 +46,15 @@ camera list says which cameras are suspended. Additions only: nothing in
   report it: there it is always `false`.
 - A change of it is a change of the list, so `BackendEvent::Cameras`
   reports it.
+- `open_camera(None, ...)` skips a suspended default. Before, it always
+  opened the system default, so a MacBook with its lid closed opened the
+  built-in camera and got no frames. Now, when the default is suspended,
+  the first camera in `cameras()`' order that isn't suspended opens. When
+  every camera is suspended, the default opens as before, and its source
+  reports `Interrupted(Suspended)`. With `CaptureConstraints::facing`
+  (phones), the first camera facing that way that isn't suspended opens,
+  else the first facing that way, as before. `is_default` still marks the
+  system default. The fake backend follows the same rule.
 - `Interruption` has a new variant, `Suspended`: an open camera source on
   macOS or iOS whose device becomes suspended sends
   `Interrupted(Suspended)`, then `Resumed` when it comes back.

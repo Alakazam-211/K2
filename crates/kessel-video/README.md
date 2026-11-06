@@ -31,12 +31,13 @@ caller has already decrypted and verified.
 
 | | Cameras | Screens | H.264 encode | Decode |
 |---|---|---|---|---|
-| macOS | AVFoundation | ScreenCaptureKit (12.3+): list, system picker (14+), window exclusion | VideoToolbox | not yet |
-| Windows | Media Foundation (NV12 through the source reader) | Windows Graphics Capture: displays and windows; no system picker or window exclusion yet | not yet | not yet |
-| Linux | V4L2 through raw ioctls (NV12, I420, YUYV modes; MJPEG not yet) | not yet (the ScreenCast portal with PipeWire is next) | none: no OS codec | not yet |
+| macOS | AVFoundation | ScreenCaptureKit (12.3+): list, system picker (14+), window exclusion | VideoToolbox | VP8 (Rust) |
+| Windows | Media Foundation (NV12 through the source reader) | Windows Graphics Capture: displays and windows; no system picker or window exclusion yet | not yet | VP8 (Rust) |
+| Linux | V4L2 through raw ioctls (NV12, I420, YUYV modes; MJPEG not yet) | not yet (the ScreenCast portal with PipeWire is next) | none: no OS codec | VP8 (Rust) |
 
-VP8 comes from pure-Rust encoder and decoder crates behind a feature, once
-they land. Every platform has the API, `null()` and the fake backend today.
+VP8 decoding comes from the pure-Rust `vp8-decoder` crate (feature `vp8`,
+part of `system`) in every backend, the fake included; VP8 encoding plugs in
+the same way when `vp8-encoder` lands. Every platform has the API, `null()` and the fake backend today.
 
 On macOS:
 - A bundled app needs `NSCameraUsageDescription` in its Info.plist (and

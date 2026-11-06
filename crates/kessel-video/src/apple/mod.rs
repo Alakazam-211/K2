@@ -150,6 +150,7 @@ impl AppleBackend {
 impl VideoBackend for AppleBackend {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::new("apple", os_name());
+        crate::rust_codecs::add_capabilities(&mut caps);
         caps.camera = true;
         caps.screen = ScreenCapability {
             supported: screen::supported(),
@@ -232,8 +233,11 @@ impl VideoBackend for AppleBackend {
         }
     }
 
-    fn decoder(&self, config: DecoderConfig, _wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
+            return r;
+        }
         Err(unsupported(format!("no {:?} decoder on this Mac yet (the webview's WebCodecs decodes)", config.codec)))
     }
 

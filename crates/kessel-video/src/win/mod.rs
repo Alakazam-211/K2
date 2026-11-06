@@ -105,6 +105,7 @@ impl WinBackend {
 impl VideoBackend for WinBackend {
     fn capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::new("windows", os_name());
+        crate::rust_codecs::add_capabilities(&mut caps);
         caps.camera = true;
         let wgc = screen::supported();
         // No system picker yet: GraphicsCapturePicker needs an owner HWND
@@ -175,8 +176,11 @@ impl VideoBackend for WinBackend {
         Err(unsupported(format!("no {:?} encoder on Windows yet", config.codec.codec())))
     }
 
-    fn decoder(&self, config: DecoderConfig, _wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    fn decoder(&self, config: DecoderConfig, wake: Wake) -> Result<Box<dyn VideoDecoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::decoder(&config, &wake) {
+            return r;
+        }
         Err(unsupported(format!("no {:?} decoder on Windows yet (the webview's WebCodecs decodes)", config.codec)))
     }
 

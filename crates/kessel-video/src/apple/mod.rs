@@ -223,6 +223,9 @@ impl VideoBackend for AppleBackend {
 
     fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
+            return r;
+        }
         config.validate()?;
         match config.codec {
             CodecConfig::H264 { .. } => {

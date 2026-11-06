@@ -360,6 +360,9 @@ impl VideoBackend for FakeBackend {
 
     fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
+            return r;
+        }
         config.validate()?;
         if self.inner.cfg.codec != FakeCodec::Structural || config.codec.codec() != VideoCodec::H264 {
             return Err(unsupported(format!("the fake has no {:?} encoder", config.codec.codec())));

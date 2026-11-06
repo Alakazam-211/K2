@@ -158,8 +158,11 @@ impl VideoBackend for LinuxBackend {
         Err(unsupported("Linux screen capture (the ScreenCast portal) isn't built yet"))
     }
 
-    fn encoder(&self, config: EncoderConfig, _wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    fn encoder(&self, config: EncoderConfig, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
         self.live()?;
+        if let Some(r) = crate::rust_codecs::encoder(&config, &wake) {
+            return r;
+        }
         Err(unsupported(format!("no {:?} encoder on Linux yet", config.codec.codec())))
     }
 

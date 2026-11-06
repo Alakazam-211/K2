@@ -4866,6 +4866,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "vp8-decoder",
+ "vp8-encoder",
  "windows 0.62.2",
 ]
 

@@ -24,28 +24,29 @@ fn round_shift(v: i64, shift: u32) -> i32 {
 /// The decoder's inverse brings the result back to `src`.
 pub(crate) fn fdct4x4(src: &[i32; 16], out: &mut [i32; 16]) {
     // The inverse is P = M X M^T / 8 with M^T M = 4I, so X = M^T P M / 2.
-    let mut tmp = [0i64; 16];
+    // Rows first, kept with 3 fractional bits; then columns.
+    let mut tmp = [0i32; 16];
     for r in 0..4 {
         let x = &src[r * 4..r * 4 + 4];
-        let a0 = (x[0] + x[3]) as i64;
-        let a1 = (x[1] + x[2]) as i64;
-        let d0 = (x[0] - x[3]) as i64;
-        let d1 = (x[1] - x[2]) as i64;
-        tmp[r * 4] = (a0 + a1) << 12;
-        tmp[r * 4 + 2] = (a0 - a1) << 12;
-        tmp[r * 4 + 1] = C * d0 + S * d1;
-        tmp[r * 4 + 3] = S * d0 - C * d1;
+        let a0 = x[0] + x[3];
+        let a1 = x[1] + x[2];
+        let d0 = x[0] - x[3];
+        let d1 = x[1] - x[2];
+        tmp[r * 4] = (a0 + a1) << 3;
+        tmp[r * 4 + 2] = (a0 - a1) << 3;
+        tmp[r * 4 + 1] = round_shift(C * d0 as i64 + S * d1 as i64, 9);
+        tmp[r * 4 + 3] = round_shift(S * d0 as i64 - C * d1 as i64, 9);
     }
     for c in 0..4 {
         let a0 = tmp[c] + tmp[12 + c];
         let a1 = tmp[4 + c] + tmp[8 + c];
-        let d0 = tmp[c] - tmp[12 + c];
-        let d1 = tmp[4 + c] - tmp[8 + c];
-        // Scale 2^24 from the two passes, and the final halving.
-        out[c] = round_shift((a0 + a1) << 12, 25);
-        out[8 + c] = round_shift((a0 - a1) << 12, 25);
-        out[4 + c] = round_shift(C * d0 + S * d1, 25);
-        out[12 + c] = round_shift(S * d0 - C * d1, 25);
+        let d0 = (tmp[c] - tmp[12 + c]) as i64;
+        let d1 = (tmp[4 + c] - tmp[8 + c]) as i64;
+        // Scale 2^3 from the rows, 2^12 from the column constants, and the final halving.
+        out[c] = round_shift(((a0 + a1) as i64) << 12, 16);
+        out[8 + c] = round_shift(((a0 - a1) as i64) << 12, 16);
+        out[4 + c] = round_shift(C * d0 + S * d1, 16);
+        out[12 + c] = round_shift(S * d0 - C * d1, 16);
     }
 }
 

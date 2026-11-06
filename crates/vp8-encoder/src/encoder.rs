@@ -15,6 +15,8 @@ use vp8_decoder::predict::{self, RefPlane, CHROMA_WS_SIZE, CHROMA_WS_STRIDE, LUM
 use vp8_decoder::tables::*;
 use vp8_decoder::{Decoder, Picture};
 
+use std::sync::OnceLock;
+
 use crate::rate::RateControl;
 use crate::tokens::{self, Counter, Writer};
 use crate::transform::{fdct4x4, fwht4x4, quantize, Quant};
@@ -27,8 +29,16 @@ const PAD: usize = 64;
 
 /// Cost of a bool in 1/256 bits.
 fn bit_cost(prob: u8, bit: bool) -> u32 {
-    let p = if bit { 256 - prob as u32 } else { prob as u32 } as f64 / 256.0;
-    (-p.log2() * 256.0).round() as u32
+    static TABLE: OnceLock<[u32; 257]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0u32; 257];
+        for (p, c) in t.iter_mut().enumerate().skip(1) {
+            *c = (-(p as f64 / 256.0).log2() * 256.0).round() as u32;
+        }
+        t[0] = t[1];
+        t
+    });
+    table[if bit { 256 - prob as usize } else { prob as usize }]
 }
 
 /// Cost of a tree-coded value in 1/256 bits.
@@ -432,7 +442,14 @@ impl Core {
         let nearest = bounds.clamp(near[1]);
         let nearv = bounds.clamp(near[2]);
         let best_mv = bounds.clamp(near[0]);
-        let mode_cost = |m: u8| tree_cost(&MV_REF_TREE, &probs, m);
+        let mode_costs: [u32; 10] = std::array::from_fn(|m| {
+            if (NEARESTMV as usize..=SPLITMV as usize).contains(&m) {
+                tree_cost(&MV_REF_TREE, &probs, m as u8)
+            } else {
+                0
+            }
+        });
+        let mode_cost = |m: u8| mode_costs[m as usize];
 
         // Candidates, in quarter pixels.
         let src = &self.src[0][src_pos..];
@@ -901,15 +918,18 @@ fn sad_subpel(src: &[u8], src_stride: usize, search: &[u8], ss: usize, x: usize,
         return sad16(src, src_stride, &search[base..], ss, 16);
     }
     let (w00, w01, w10, w11) = ((4 - fx) * (4 - fy), fx * (4 - fy), (4 - fx) * fy, fx * fy);
+    let (w00, w01, w10, w11) = (w00 as u16, w01 as u16, w10 as u16, w11 as u16);
     let mut s = 0u32;
     for r in 0..16 {
-        let a = &search[base + r * ss..base + r * ss + 17];
-        let b = &search[base + (r + 1) * ss..base + (r + 1) * ss + 17];
-        let o = &src[r * src_stride..r * src_stride + 16];
+        let a: &[u8; 17] = search[base + r * ss..base + r * ss + 17].try_into().expect("17 pixels");
+        let b: &[u8; 17] = search[base + (r + 1) * ss..base + (r + 1) * ss + 17].try_into().expect("17 pixels");
+        let o: &[u8; 16] = src[r * src_stride..r * src_stride + 16].try_into().expect("16 pixels");
+        let mut row = 0u32;
         for c in 0..16 {
-            let p = (a[c] as u32 * w00 + a[c + 1] as u32 * w01 + b[c] as u32 * w10 + b[c + 1] as u32 * w11 + 8) >> 4;
-            s += (p as i32 - o[c] as i32).unsigned_abs();
+            let p = (a[c] as u16 * w00 + a[c + 1] as u16 * w01 + b[c] as u16 * w10 + b[c + 1] as u16 * w11 + 8) >> 4;
+            row += (p as i16 - o[c] as i16).unsigned_abs() as u32;
         }
+        s += row;
     }
     s
 }

@@ -319,6 +319,33 @@ pub fn temp_dir(tag: &str) -> std::path::PathBuf {
     std::fs::canonicalize(&p).expect("canonicalize temp dir")
 }
 
+/// Test helper: write a script (mode 0755) that a test will exec.
+///
+/// Never `fs::write` + chmod + exec in a multi-threaded test binary: while
+/// this thread has the file open for writing, another test thread may fork,
+/// and that child keeps a copy of the write fd until it execs. An exec of
+/// the script in that window fails with ETXTBSY ("Text file busy"), which
+/// a loaded run hit. A short-lived `/bin/sh` child writes the bytes, so the
+/// write fd never exists in this process.
+#[cfg(unix)]
+pub fn write_executable(path: &std::path::Path, body: &str) {
+    use std::io::Write;
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn /bin/sh to write {}: {e}", path.display()));
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(body.as_bytes())
+        .unwrap_or_else(|e| panic!("pipe the script for {}: {e}", path.display()));
+    let status = child.wait().expect("wait for the script writer");
+    assert!(status.success(), "writing {} failed: {status}", path.display());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

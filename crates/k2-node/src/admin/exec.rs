@@ -1138,9 +1138,7 @@ mod preflight_tests {
     fn the_preflight_child_inherits_no_fds_above_2() {
         let dir = crate::util::temp_dir("preflight-fds");
         let script = dir.join("k2-node");
-        std::fs::write(&script, "#!/bin/sh\nprintf 'k2-node fds:'; ls /dev/fd | tr '\\n' ' '\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::util::write_executable(&script, "#!/bin/sh\nprintf 'k2-node fds:'; ls /dev/fd | tr '\\n' ' '\n");
         let path = std::ffi::CString::new(dir.join("held").display().to_string()).unwrap();
         // SAFETY: plain open(2) with a valid path; no O_CLOEXEC on purpose.
         let low = unsafe { libc::open(path.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600) };

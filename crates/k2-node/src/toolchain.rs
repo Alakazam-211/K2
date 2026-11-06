@@ -1369,7 +1369,6 @@ mod tests {
     /// and `node` first on PATH win), never installs, skips what's absent.
     #[tokio::test]
     async fn tools_used_reads_the_jobs_own_path() {
-        use std::os::unix::fs::PermissionsExt;
         let d = crate::util::temp_dir("tc-used");
         let bin = d.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -1378,9 +1377,7 @@ mod tests {
             ("node", "#!/bin/sh\necho v22.23.4\n"),
             ("python3", "#!/bin/sh\nexit 1\n"),
         ] {
-            let p = bin.join(name);
-            std::fs::write(&p, body).unwrap();
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::util::write_executable(&bin.join(name), body);
         }
         let env = vec![("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display()))];
         let explicit = needs::parse_all(&["node@22", "python@3.12"]).unwrap();
@@ -1463,7 +1460,6 @@ mod tests {
     /// dirs first. No network.
     #[tokio::test]
     async fn resolve_with_a_fake_mise() {
-        use std::os::unix::fs::PermissionsExt;
         let home = crate::util::temp_dir("tc-fake");
         let tc = Toolchains::new(&home, vec![("PATH".into(), "/usr/bin:/bin".into()), ("HOME".into(), home.display().to_string())]);
         let bin = tc.mise_bin();
@@ -1482,8 +1478,7 @@ case "$1" in
 esac
 "#
         );
-        std::fs::write(&bin, script).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::util::write_executable(&bin, &script);
 
         let explicit = needs::parse_all(&["node@22"]).unwrap();
         let repo = vec![(needs::parse("python@3.12").unwrap(), "mise.toml".to_string()), (needs::parse("node@20").unwrap(), ".nvmrc".to_string())];
@@ -1517,7 +1512,7 @@ esac
         std::fs::remove_file(tc.mise_data().join("empty-installs")).unwrap();
         // A failing explicit install fails the job with a stable code; a
         // failing repo-declared one is only a note.
-        std::fs::write(&bin, format!("#!/bin/sh\ncase \"$1\" in --version) echo {MISE_VERSION};; install) echo 'no such tool' >&2; exit 1;; *) exit 0;; esac\n")).unwrap();
+        crate::util::write_executable(&bin, &format!("#!/bin/sh\ncase \"$1\" in --version) echo {MISE_VERSION};; install) echo 'no such tool' >&2; exit 1;; *) exit 0;; esac\n"));
         let e = tc.resolve(&needs::parse_all(&["zig@0.13"]).unwrap(), &[], None, &mut |_| {}).await.unwrap_err();
         assert_eq!(e.0, codes::TOOL_INSTALL_FAILED);
         assert!(e.1.contains("zig@0.13") && e.1.contains("no such tool"), "{}", e.1);
@@ -1532,7 +1527,6 @@ esac
     /// newest for the next job, but never while a running job uses stable.
     #[tokio::test]
     async fn stable_moves_forward_for_new_jobs_never_under_a_running_one() {
-        use std::os::unix::fs::PermissionsExt;
         let home = crate::util::temp_dir("tc-rust-refresh");
         let mut tc = Toolchains::new(&home, vec![("PATH".into(), "/usr/bin:/bin".into()), ("HOME".into(), home.display().to_string())]);
         let rustup = tc.cargo_home().join("bin/rustup");
@@ -1543,8 +1537,7 @@ esac
             h = home.display(),
             l = log.display()
         );
-        std::fs::write(&rustup, script).unwrap();
-        std::fs::set_permissions(&rustup, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::util::write_executable(&rustup, &script);
         let stable = RustToolchain { channel: "stable".into(), components: vec![], targets: vec![] };
         let installs = || std::fs::read_to_string(&log).unwrap_or_default().lines().count();
         let mut notes = Vec::new();

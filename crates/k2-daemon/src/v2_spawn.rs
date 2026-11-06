@@ -2858,6 +2858,18 @@ mod tests {
         );
     }
 
+    /// The one env lock, for a spawn test with no `TempHome` / `StubHome`
+    /// (those hold it already). Held for the whole test. Another test's
+    /// `AgentShim` or `EnvVar` sets `K2_TEST_AGENT_SHIM_DIR` for a while,
+    /// and in that window the spawn guard looks a program up in the shim
+    /// dirs only: an unlocked `sleep` spawn then failed with 500 "agent shim
+    /// 'sleep' not found in K2_TEST_AGENT_SHIM_DIR=<another test's home>"
+    /// (nightly soak, shuffled runs). Under the lock this test sees the
+    /// process's own environment from start to end.
+    fn spawn_env_lock() -> k2_core::test_env::EnvLock {
+        k2_core::test_env::lock()
+    }
+
     fn seed_project_row(id: &str, path: &str) {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2914,10 +2926,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn nested_workspace_spawn_refuses_other_project() {
+        // Declared first so it drops last (after the session is killed).
+        let _env = spawn_env_lock();
         k2_core::db::init_for_tests();
         let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let agent = format!("tab-nested-own-{n}");
-        let root = std::env::temp_dir().join(format!("k2-nested-own-{n}"));
+        let root = k2_core::test_env::stable_temp_dir().join(format!("k2-nested-own-{n}"));
         let parent = root.join("parent");
         let nested = parent.join("nested");
         std::fs::create_dir_all(&nested).expect("create nested cwd");
@@ -2950,10 +2964,12 @@ mod tests {
     /// Home M4: a view-only room's attach never spawns, evicts or resizes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn attach_only_never_spawns_and_returns_the_live_session_untouched() {
+        // Declared first so it drops last (after the session is killed).
+        let _env = spawn_env_lock();
         k2_core::db::init_for_tests();
         let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let agent = format!("tab-attach-only-{n}");
-        let root = std::env::temp_dir().join(format!("k2-attach-only-{n}"));
+        let root = k2_core::test_env::stable_temp_dir().join(format!("k2-attach-only-{n}"));
         std::fs::create_dir_all(&root).expect("create cwd");
         let cwd = root.to_string_lossy().into_owned();
         let pid = format!("proj-attach-only-{n}");
@@ -3011,10 +3027,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn nested_workspace_spawn_reuses_worktree_on_parent_project() {
+        // Declared first so it drops last (after the session is killed).
+        let _env = spawn_env_lock();
         k2_core::db::init_for_tests();
         let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let agent = format!("tab-nested-wt-{n}");
-        let root = std::env::temp_dir().join(format!("k2-nested-wt-{n}"));
+        let root = k2_core::test_env::stable_temp_dir().join(format!("k2-nested-wt-{n}"));
         let parent = root.join("parent");
         let worktree = parent.join(".worktrees").join("branch");
         std::fs::create_dir_all(&worktree).expect("create worktree cwd");
@@ -3066,10 +3084,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn nested_workspace_spawn_reuses_when_one_side_unregistered() {
+        // Declared first so it drops last (after the session is killed).
+        let _env = spawn_env_lock();
         k2_core::db::init_for_tests();
         let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let agent = format!("tab-nested-orphan-{n}");
-        let root = std::env::temp_dir().join(format!("k2-nested-orphan-{n}"));
+        let root = k2_core::test_env::stable_temp_dir().join(format!("k2-nested-orphan-{n}"));
         let parent = root.join("parent");
         let orphan = root.join("orphan");
         std::fs::create_dir_all(&parent).expect("create parent cwd");
@@ -3579,6 +3599,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn refresh_spawn_failure_surfaces_an_error() {
+        // Declared first so it drops last (after the session is killed).
+        let _env = spawn_env_lock();
         k2_core::db::init_for_tests();
         let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let pid = format!("refresh-missing-{n}");
@@ -3892,7 +3914,7 @@ mod tests {
     }
 
     fn unique_cwd(tag: &str) -> String {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = k2_core::test_env::stable_temp_dir().join(format!(
             "k2-closed-tab-{tag}-{}-{}",
             std::process::id(),
             NEXT_ID.fetch_add(1, Ordering::SeqCst)
@@ -3971,6 +3993,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn close_with_tab_close_reason_refuses_empty_spawn_until_command_spawn() {
+        // Declared first so it drops last (after the session is killed).
+        let _env = spawn_env_lock();
         k2_core::db::init_for_tests();
         let agent = closed_tab_name();
         let _reap = ReapAgent(agent.clone());
@@ -4019,6 +4043,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn close_without_reason_does_not_refuse_empty_spawn() {
+        // Declared first so it drops last (after the session is killed).
+        let _env = spawn_env_lock();
         k2_core::db::init_for_tests();
         let agent = closed_tab_name();
         let _reap = ReapAgent(agent.clone());

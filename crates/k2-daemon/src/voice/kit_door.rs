@@ -513,17 +513,13 @@ fn crosses_back(name: &str) -> bool {
 
 /// Sew's answer: its status and body, the listed headers only.
 pub(super) async fn relay_answer<S: AsyncWrite + Unpin>(client: &mut S, a: &SewHttp, body: &[u8]) {
-    let mut head = format!("HTTP/1.1 {} {}\r\n", a.status, reason(a.status));
+    let mut msg = format!("HTTP/1.1 {} {}\r\n{}", a.status, reason(a.status), k2_core::frame_policy::CONNECT_HEADER_LINES);
     for (k, v) in &a.headers {
         if crosses_back(k) && !v.chars().any(char::is_control) {
-            head.push_str(&format!("{k}: {v}\r\n"));
+            msg.push_str(&format!("{k}: {v}\r\n"));
         }
     }
-    let msg = format!(
-        "{head}Content-Length: {}\r\n{frame}Connection: close\r\n\r\n",
-        body.len(),
-        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
-    );
+    msg.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()));
     if client.write_all(msg.as_bytes()).await.is_ok() {
         let _ = client.write_all(body).await;
     }

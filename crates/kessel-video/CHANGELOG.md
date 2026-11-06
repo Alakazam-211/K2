@@ -46,6 +46,10 @@ API changes.
 - Hardware MFTs are asynchronous (they say when they want input and have
   output through their event queue); Microsoft's are synchronous. Both are
   driven one frame at a time.
+- `capabilities()` and opening an H.264 encoder or decoder do their COM
+  and Media Foundation work on a short-lived thread of their own, so the
+  caller's thread never joins COM's multithreaded apartment (an app's UI
+  thread must stay free to join a single-threaded one for its webview).
 - The decoder takes Annex B access units and gives CPU frames, cropped to
   the picture, in the format the caller asks for. It runs in low-latency
   mode, so each frame comes out as it is decoded. Microsoft's decoder runs

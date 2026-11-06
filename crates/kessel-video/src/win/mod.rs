@@ -128,40 +128,34 @@ fn encodes(found: &mft::Found) -> bool {
     matches!(enc.encode(&frame, true), Ok(Some(f)) if f.keyframe)
 }
 
+fn probe_now() -> H264Probe {
+    let mut p = H264Probe::default();
+    // Unsupported (no Media Foundation) leaves every kind out.
+    let enc = mft::find(mft::Role::Encoder, ImplPreference::PreferHardware).unwrap_or_default();
+    p.hardware_encoder = enc
+        .iter()
+        .find(|f| f.hardware && encodes(f))
+        .map(|f| f.name.clone());
+    p.software_encoder = enc
+        .iter()
+        .find(|f| !f.hardware && encodes(f))
+        .map(|f| f.name.clone());
+    let dec = mft::find(mft::Role::Decoder, ImplPreference::PreferHardware).unwrap_or_default();
+    let decodes = |f: &&mft::Found| h264_dec::open_one(f).is_ok();
+    p.hardware_decoder = dec
+        .iter()
+        .find(|f| f.hardware && decodes(f))
+        .map(|f| f.name.clone());
+    p.software_decoder = dec
+        .iter()
+        .find(|f| !f.hardware && decodes(f))
+        .map(|f| f.name.clone());
+    p
+}
+
 fn h264_probe() -> &'static H264Probe {
     static PROBE: OnceLock<H264Probe> = OnceLock::new();
-    PROBE.get_or_init(|| {
-        let mut p = H264Probe::default();
-        // Unsupported (no Media Foundation) leaves every kind out.
-        let enc = mft::find(mft::Role::Encoder, ImplPreference::PreferHardware).unwrap_or_default();
-        p.hardware_encoder = enc
-            .iter()
-            .find(|f| f.hardware && encodes(f))
-            .map(|f| f.name.clone());
-        p.software_encoder = enc
-            .iter()
-            .find(|f| !f.hardware && encodes(f))
-            .map(|f| f.name.clone());
-        let dec = mft::find(mft::Role::Decoder, ImplPreference::PreferHardware).unwrap_or_default();
-        let decodes = |f: &&mft::Found| {
-            let mut cfg = DecoderConfig::new(VideoCodec::H264);
-            cfg.implementation = if f.hardware {
-                ImplPreference::HardwareOnly
-            } else {
-                ImplPreference::SoftwareOnly
-            };
-            h264_dec::MfDecoder::open(&cfg).is_ok()
-        };
-        p.hardware_decoder = dec
-            .iter()
-            .find(|f| f.hardware && decodes(f))
-            .map(|f| f.name.clone());
-        p.software_decoder = dec
-            .iter()
-            .find(|f| !f.hardware && decodes(f))
-            .map(|f| f.name.clone());
-        p
-    })
+    PROBE.get_or_init(|| mft::on_com_thread(probe_now))
 }
 
 /// The H.264 capability entries the probe found.
@@ -251,7 +245,7 @@ impl VideoBackend for WinBackend {
         caps.codecs.extend(h264_capabilities());
         // Media Foundation is missing on an N or KN edition without the
         // Media Feature Pack.
-        caps.camera = camera::init().is_ok() && mfdll::mfcapture().is_ok();
+        caps.camera = mfdll::mfplat().is_ok() && mfdll::mfcapture().is_ok();
         let wgc = screen::supported();
         // The system picker (GraphicsCapturePicker) needs the app's HWND:
         // PickOptions::with_parent_window. No window exclusion: Windows' only
@@ -340,7 +334,7 @@ impl VideoBackend for WinBackend {
         config.validate()?;
         match config.codec {
             CodecConfig::H264 { .. } => {
-                let core = h264_enc::MfEncoder::open(&config)?;
+                let core = mft::on_com_thread(|| h264_enc::MfEncoder::open(&config))?;
                 Ok(Box::new(ThreadedEncoder::start(
                     Box::new(core),
                     config,
@@ -365,7 +359,7 @@ impl VideoBackend for WinBackend {
         }
         match config.codec {
             VideoCodec::H264 => {
-                let core = h264_dec::MfDecoder::open(&config)?;
+                let core = mft::on_com_thread(|| h264_dec::MfDecoder::open(&config))?;
                 Ok(Box::new(ThreadedDecoder::start(
                     Box::new(core),
                     config,

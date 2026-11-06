@@ -63,6 +63,22 @@ fn has_hardware_url(a: &IMFAttributes) -> bool {
     unsafe { a.GetStringLength(&MFT_ENUM_HARDWARE_URL_Attribute) }.is_ok()
 }
 
+/// Run `f` on a short-lived thread of its own and wait for it. Opening an
+/// MFT joins the calling thread to COM's multithreaded apartment; the
+/// caller's thread may be an app's UI thread that must stay free to join a
+/// single-threaded one later (a webview does). The MFTs are free-threaded,
+/// so what `f` opens works from the codec's own thread afterwards.
+pub(super) fn on_com_thread<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .name("kessel-video-mf".into())
+            .spawn_scoped(s, f)
+            .map(|t| t.join())
+    })
+    .unwrap_or_else(|e| panic!("kessel-video: no thread to open Media Foundation on: {e}"))
+    .unwrap_or_else(|p| std::panic::resume_unwind(p))
+}
+
 /// The H.264 MFTs for `role`, in the order `pref` asks for: hardware ones
 /// (Media Foundation's merit order), then Microsoft's software MFT. Empty
 /// where Windows has no H.264 (an N or KN edition without the Media Feature

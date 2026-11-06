@@ -364,6 +364,32 @@ fn access_units_get_four_byte_start_codes_and_parameter_sets_first() {
 }
 
 #[test]
+fn opening_h264_leaves_the_callers_thread_free_for_a_ui_apartment() {
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    let b = backend().expect("backend");
+    assert!(b
+        .capabilities()
+        .codecs
+        .iter()
+        .any(|c| c.codec == VideoCodec::H264));
+    let mut enc = b
+        .encoder(EncoderConfig::h264(320, 180, 30, 300_000), no_wake())
+        .expect("encoder");
+    let mut dec = b
+        .decoder(DecoderConfig::new(VideoCodec::H264), no_wake())
+        .expect("decoder");
+    let e = encode_one(&mut enc, &picture(320, 180, 0, false));
+    assert_eq!(decode_one(&mut dec, &e).width, 320);
+    // A webview's thread joins a single-threaded apartment; that fails on
+    // a thread already in the multithreaded one.
+    // SAFETY: COM on this test's own thread, undone below.
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    assert!(hr.is_ok(), "{hr:?}");
+    // SAFETY: balances the successful call above.
+    unsafe { CoUninitialize() };
+}
+
+#[test]
 fn the_software_encoder_gives_each_frame_out_without_a_drain() {
     // Low latency: one input, its access unit straight back. A drain per
     // frame would work but costs time.

@@ -254,7 +254,7 @@ impl MfDecoder {
     }
 }
 
-fn open_one(found: &Found) -> Result<Mft, VideoError> {
+pub(super) fn open_one(found: &Found) -> Result<Mft, VideoError> {
     let mut mft = Mft::open(found)?;
     let input = mft::video_type(&MFVideoFormat_H264)?;
     // SAFETY: offering the MFT an H.264 input type.

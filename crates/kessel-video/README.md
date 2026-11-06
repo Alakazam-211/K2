@@ -288,7 +288,11 @@ None of the default tests need a camera, screen or GPU. In the repository,
 `scripts/check-targets.sh` type-checks Windows, iOS and Android, or any
 target you name, from a machine that can't run them, and
 `scripts/check-package.sh` builds the package as crates.io would and runs
-its tests outside the repository.
+its tests outside the repository. A library build never links, so
+`scripts/check-apple-link.sh` and `scripts/check-android-link.sh` link
+`examples/link_check.rs` as apps do (a static library with no
+`-framework` flags of its own on macOS and iOS, a shared library with no
+undefined symbols allowed on Android) and run it on macOS.
 
 ## Building
 
@@ -301,6 +305,14 @@ its tests outside the repository.
   libraries `libcamera2ndk` and `libmediandk`, declared in Rust and linked
   from the NDK's own stubs like any Android app (Android). No build script
   and no C is compiled.
+- Apps that link Rust as a static library (Tauri on iOS, where Xcode links
+  `libapp.a`) need no extra frameworks for kessel-video. rustc doesn't pass
+  `#[link]` frameworks to that link, so the Apple backend also writes them
+  into its object code as linker options, as Clang does for `@import`:
+  AVFoundation, CoreFoundation, CoreMedia, CoreVideo, Foundation and
+  VideoToolbox. An app built with `-ignore_auto_link`, or an older linker
+  that skips these options, must list those six itself.
+  ScreenCaptureKit and CoreGraphics (macOS screens) are opened at run time.
 - Features: `system` (default) is the OS backend for the target plus `vp8`.
   `apple`, `windows`, `linux` and `android` pick backends one by one; `vp8` adds the
   Rust VP8 codecs. With `--no-default-features` you get the API, `null()`

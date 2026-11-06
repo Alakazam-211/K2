@@ -6,6 +6,8 @@ use crate::frame::{ColorSpace, NativeBuffer, NativeFrame, PixelFormat, Planes, V
 use std::any::Any;
 use std::sync::Arc;
 
+autolink!("CoreVideo", "CoreFoundation");
+
 /// A retained CVPixelBuffer (NV12 `420v`/`420f` or BGRA).
 pub struct CvFrame {
     pub(crate) pb: Cf,

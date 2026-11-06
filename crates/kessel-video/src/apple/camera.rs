@@ -24,8 +24,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+// No AVFoundation function is called by name: its classes are looked up at
+// run time, so the framework must be loaded. Linking it does that.
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {}
+
+autolink!(
+    "AVFoundation",
+    "CoreMedia",
+    "CoreVideo",
+    "CoreFoundation",
+    "Foundation"
+);
 
 fn media_type_video() -> Option<*const AnyObject> {
     cf_const(c"AVMediaTypeVideo").map(|p| p as *const AnyObject)

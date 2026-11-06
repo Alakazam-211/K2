@@ -31,6 +31,10 @@ struct CGRect {
     h: f64,
 }
 
+// ScreenCaptureKit and CoreGraphics are opened at run time (`loaded`), so
+// an app still starts on a macOS without them.
+autolink!("CoreMedia", "CoreFoundation", "Foundation");
+
 // SAFETY: CGRect's runtime encoding, `{CGRect={CGPoint=dd}{CGSize=dd}}`.
 unsafe impl Encode for CGRect {
     const ENCODING: Encoding = Encoding::Struct(

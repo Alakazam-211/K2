@@ -9,6 +9,35 @@
 //! screen sharing on iOS comes from a broadcast upload extension, through
 //! the app into a frame-in source, so `open_screen` answers `Unsupported`
 //! there and the capabilities say `frame_in`.
+//!
+//! Each framework is asked for twice. `#[link]` on the `extern` blocks
+//! reaches a link that rustc runs (a Rust program, a dylib, a cdylib). An app
+//! that links kessel-video inside a static library (Tauri on iOS: Xcode
+//! links `libapp.a`) never sees `#[link]`: rustc only prints those as
+//! `native-static-libs`. For that link, `autolink!` writes the same
+//! frameworks into the object code as linker options, as Clang does for an
+//! `@import`.
+
+/// Writes `-framework <name>` linker options (`LC_LINKER_OPTION`) into this
+/// module's object code. The linker takes them from every archive member it
+/// loads, so each module that calls into a framework carries its own: it
+/// lands in the same object as the calls. Repeats are merged.
+macro_rules! autolink {
+    ($($framework:literal),+ $(,)?) => {
+        ::core::arch::global_asm!(
+            $(concat!(".linker_option \"-framework\", \"", $framework, "\"")),+
+        );
+    };
+}
+
+autolink!(
+    "AVFoundation",
+    "CoreFoundation",
+    "CoreMedia",
+    "CoreVideo",
+    "Foundation",
+    "VideoToolbox"
+);
 
 mod camera;
 mod ffi;

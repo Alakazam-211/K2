@@ -18,6 +18,8 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
 
+autolink!("VideoToolbox", "CoreMedia", "CoreVideo", "CoreFoundation");
+
 /// What the output callback fills: one entry per decoded frame, the pixel
 /// buffer retained.
 #[derive(Default)]

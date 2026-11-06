@@ -122,6 +122,10 @@ pub struct VTDecompressionOutputCallbackRecord {
     pub refcon: *mut c_void,
 }
 
+// For a static library's link, which never sees `#[link]` (see the
+// backend's module docs). `Cf`'s retain and release live in this module.
+autolink!("CoreFoundation", "CoreMedia", "CoreVideo", "VideoToolbox");
+
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     pub static kCFBooleanTrue: CFBooleanRef;

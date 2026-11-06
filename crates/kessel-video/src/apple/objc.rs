@@ -7,6 +7,14 @@ use objc2::{class, msg_send};
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 
+// The NS classes used here and across the backend (NSString, NSThread,
+// NSProcessInfo, NSNotificationCenter...) are looked up at run time, so
+// Foundation must be loaded. Linking it does that.
+#[link(name = "Foundation", kind = "framework")]
+extern "C" {}
+
+autolink!("Foundation");
+
 /// An object we hold on another thread. Only used for AVFoundation and
 /// ScreenCaptureKit objects whose methods we call are thread-safe
 /// (sessions, streams, devices, filters).

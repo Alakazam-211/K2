@@ -217,6 +217,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.1 Settings → App Approvals (door S20): the window's server's held
   // App requests.
   'components/Settings/sections/app-approvals-api.ts',
+  // 0.46.9 Settings → Compute → package requests (self-serve environments
+  // S3): the window's server's held package requests, as App Approvals.
+  'components/Settings/sections/compute-packages-api.ts',
   // 0.46.1 secret handoff (H4): Vault Incoming/Sent default to the window's
   // server; callers with a room pass its scope.
   'components/Settings/sections/handoff-api.ts',

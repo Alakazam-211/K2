@@ -30,6 +30,7 @@ import { useCallScreen } from '@/stores/call-screen'
 import type { VideoController } from '@/stores/video-core'
 import type { VoiceCall } from '@/stores/voice-core'
 import CallControls, { type CallControlsProps } from './CallControls'
+import { ScreenPicker, VideoNoticeLine } from './VideoControls'
 import { callDuration } from './voice-labels'
 import { reduceMotion, useCornerDrag, useFadeIn } from './useCornerDrag'
 import VideoTile from './VideoTile'
@@ -226,6 +227,10 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
       </Surface>
       <Surface role2="elevated" elevation={held ? 5 : 3} data-testid="call-tile-strip" className="pointer-events-auto p-1.5">
         <CallControls variant="tile" call={call} actions={actions} video={video} />
+        {/* The share list (where the OS has no picker of its own) and why a
+            camera or share was refused, with the way to the privacy settings. */}
+        <ScreenPicker ctl={video} />
+        <VideoNoticeLine ctl={video} noticeOnly />
       </Surface>
     </div>
   )

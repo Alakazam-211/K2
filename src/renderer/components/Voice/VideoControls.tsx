@@ -136,8 +136,10 @@ export function CameraPicker({ ctl }: { ctl: VideoController }): React.JSX.Eleme
   )
 }
 
-/** Why video didn't start, and the way to the OS's privacy pane when that's why. */
-export function VideoNoticeLine({ ctl }: { ctl: VideoController }): React.JSX.Element | null {
+/** Why video didn't start, and the way to the OS's privacy pane when that's why.
+ *  `noticeOnly` (the floating tile's strip): only a refusal or stop just now,
+ *  not the standing lines the call panel shows. */
+export function VideoNoticeLine({ ctl, noticeOnly = false }: { ctl: VideoController; noticeOnly?: boolean }): React.JSX.Element | null {
   const notice = useStore(ctl.store, (s) => s.notice)
   const devices = useStore(ctl.store, (s) => s.devices)
   const availability = useStore(ctl.store, (s) => s.availability)
@@ -152,6 +154,7 @@ export function VideoNoticeLine({ ctl }: { ctl: VideoController }): React.JSX.El
       </p>
     )
   }
+  if (noticeOnly && !notice) return null
   const text =
     notice ??
     (policyLine ? { line: policyLine, kind: 'info' as const } : null) ??

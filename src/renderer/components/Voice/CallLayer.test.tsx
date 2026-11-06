@@ -17,7 +17,7 @@ import type { HostEntry } from '@/lib/host-pool'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { VoiceRoomsList } from '@/lib/voice/voice-wire'
 import type { FakeVoiceEngine } from '@/lib/voice/fake-voice-engine'
-import type { FakeVideoEngine } from '@/lib/voice/fake-video-engine'
+import type { FakeVideoEngine, FakeVideoOptions } from '@/lib/voice/fake-video-engine'
 
 const h = vi.hoisted(() => ({
   entries: {} as Record<string, unknown>,
@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   settingsOpen: false,
   voiceEngine: null as FakeVoiceEngine | null,
   videoEngine: null as FakeVideoEngine | null,
+  /** The next video engine's options (caps, the camera permission). */
+  videoOpts: {} as FakeVideoOptions,
 }))
 
 vi.mock('@/stores/settings', () => {
@@ -102,7 +104,7 @@ vi.mock('@/stores/video', async () => {
   const { voice } = await import('@/stores/voice')
   const video = core.createVideoController({
     loadEngine: async () => {
-      h.videoEngine = new FakeVideoEngine()
+      h.videoEngine = new FakeVideoEngine(h.videoOpts)
       return h.videoEngine
     },
     webCodecs: fakeWebCodecs,
@@ -213,6 +215,7 @@ function step(ms: number): void {
 beforeEach(async () => {
   h.videoPreview = true
   h.settingsOpen = false
+  h.videoOpts = {}
   localStorage.clear()
   __resetCornersForTests()
   frames = new Map()
@@ -288,7 +291,8 @@ describe('video on: the tile with its strip, and the top bar gives way', () => {
     const tile = await cameraOn()
     expect(tile.dataset.picture).toBe('local:camera')
     expect(screen.getByTestId('call-tile-strip')).toBeTruthy()
-    expect(screen.getByTestId('call-tile-controls').querySelectorAll('button')).toHaveLength(4)
+    // Mute, Deafen, Camera, Share screen, Hang up.
+    expect(screen.getByTestId('call-tile-controls').querySelectorAll('button')).toHaveLength(5)
     expect(screen.queryByTestId('call-topbar-controls')).toBeNull()
     // The call's time, in the band under the picture.
     expect(screen.getByTestId('call-tile-duration').textContent).toMatch(/^\d+:\d\d$/)
@@ -479,5 +483,54 @@ describe('motion', () => {
     await inCall()
     const tile = await cameraOn()
     expect(tile.dataset.corner).toBe('top-right')
+  })
+})
+
+describe("camera and screen from the call's controls (Sew's plugin video)", () => {
+  it("the camera's first press asks the OS (the plugin never does), and a refusal says why with the way to the settings", async () => {
+    h.videoOpts = { cameraPermission: 'prompt', cameraPrompt: 'granted' }
+    await inCall()
+    await cameraOn()
+    expect(h.videoEngine?.calls.slice(0, 3)).toEqual(['camera_permission', 'request_camera_permission', 'camera {"on":true}'])
+    // Then the self-view's sink.
+    await waitFor(() => expect(video.sinks().map((x) => x.track)).toEqual(['local:camera']))
+    fireEvent.click(screen.getByTestId('call-tile-camera'))
+    await waitFor(() => expect(screen.queryByTestId('call-tile')).toBeNull())
+    // Denied now (System Settings): the press asks nothing and says so.
+    if (!h.videoEngine) throw new Error('no video engine')
+    h.videoEngine.permission = 'denied'
+    fireEvent.click(await screen.findByTestId('call-topbar-camera'))
+    await waitFor(() => expect(video.store.getState().notice).toMatchObject({ settings: 'camera' }))
+    expect(h.videoEngine.calls.slice(-1)).toEqual(['camera_permission'])
+    expect(screen.queryByTestId('call-tile')).toBeNull()
+  })
+
+  it("Share screen opens the OS picker where there is one, and the tile shows the share's self-view", async () => {
+    h.videoOpts = { caps: { screen: { supported: true, systemPicker: true, list: true, windows: true } } }
+    await inCall()
+    // The top bar has it too, where the OS has a picker.
+    fireEvent.click(await screen.findByTestId('call-topbar-screen'))
+    const tile = await screen.findByTestId('call-tile')
+    expect(h.videoEngine?.calls).toContain('screen {"on":true}')
+    expect(tile.dataset.picture).toBe('local:screen')
+    await waitFor(() => expect(video.sinks().map((s) => s.track)).toEqual(['local:screen']))
+    fireEvent.click(screen.getByTestId('call-tile-screen'))
+    await waitFor(() => expect(screen.queryByTestId('call-tile')).toBeNull())
+    expect(h.videoEngine?.calls).toContain('screen {"on":false}')
+  })
+
+  it("where the OS only lists, the strip's Share screen shows the list under it, in K2's own menu", async () => {
+    await inCall()
+    await cameraOn()
+    // No OS picker: the top bar has no Share; the tile's strip does.
+    fireEvent.click(screen.getByTestId('call-tile-screen'))
+    await screen.findByTestId('video-screen-picker')
+    expect(h.videoEngine?.calls).toContain('screen_sources')
+    fireEvent.click(screen.getByTestId('video-screen-source'))
+    const pick = (await screen.findAllByText(/Quarterly plan/)).map((el) => el.closest('button, [role="option"]')).find((b) => b !== null)
+    if (!pick) throw new Error('the window is not in the list')
+    fireEvent.click(pick)
+    await waitFor(() => expect(h.videoEngine?.calls).toContain('screen {"on":true,"source":"window:42"}'))
+    await waitFor(() => expect(screen.queryByTestId('video-screen-picker')).toBeNull())
   })
 })

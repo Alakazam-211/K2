@@ -1,5 +1,5 @@
-// The call's quick controls: Mute, Deafen, Camera (with video rooms on) and
-// Hang up. They sit in the top bar beside the headset while the call has no
+// The call's quick controls: Mute, Deafen, Camera and Share screen (with
+// video rooms on) and Hang up. They sit in the top bar beside the headset while the call has no
 // video, and under the floating video tile while it has.
 //
 // Ported from K2 Companion's call tile strip (src/zen/voice/callTile.tsx,
@@ -16,6 +16,7 @@ import {
   MicIcon,
   MicOffIcon,
   PhoneOffIcon,
+  ScreenShareIcon,
   TOP_BAR_ICON_REST_CLASS,
   VideoIcon,
 } from '@/components/icons/K2Icons'
@@ -131,6 +132,42 @@ function CameraButton({ variant, video, busy }: { variant: CallControlsVariant; 
   )
 }
 
+/** Share screen. Where the OS has its own picker (macOS 14+, Windows, the
+ *  Linux portal) a press opens it. Where it only lists (older macOS), the
+ *  tile's strip shows the list (ScreenPicker under it); the top bar leaves
+ *  that to the headset's list, which has Pick. */
+function ScreenButton({ variant, video, busy }: { variant: CallControlsVariant; video: VideoController; busy: boolean }): React.JSX.Element | null {
+  const availability = useStore(video.store, (s) => s.availability)
+  const caps = useStore(video.store, (s) => s.caps)
+  const local = useStore(video.store, (s) => s.local)
+  const pending = useStore(video.store, (s) => s.pending.screen)
+  const policy = useStore(video.store, (s) => s.policy)
+  if (availability !== 'ready' || !caps?.screen.supported) return null
+  const on = local.screen !== 'off'
+  const picker = caps.screen.systemPicker
+  if (!on && !picker && !(variant === 'tile' && caps.screen.list)) return null
+  const block = on ? null : policyBlockText(policy, 'screen')
+  const asking = local.screen === 'asking'
+  return (
+    <CallButton
+      variant={variant}
+      label={block ?? (on ? 'Stop sharing' : 'Share screen')}
+      pressed={on}
+      on={on}
+      dead={busy || pending || asking || block !== null}
+      testId={`call-${variant}-screen`}
+      state={local.screen}
+      onPress={() => {
+        if (on) void video.setScreen(false)
+        else if (picker) void video.setScreen(true)
+        else void video.loadScreenSources()
+      }}
+    >
+      <ScreenShareIcon stop={on} size={variant === 'tile' ? 15 : undefined} />
+    </CallButton>
+  )
+}
+
 export default function CallControls({ variant, call, actions, video }: CallControlsProps): React.JSX.Element {
   const busy = call.phase === 'joining'
   const locked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
@@ -166,6 +203,7 @@ export default function CallControls({ variant, call, actions, video }: CallCont
         <HeadphonesIcon off={call.deafened} size={size} />
       </CallButton>
       {video ? <CameraButton variant={variant} video={video} busy={busy} /> : null}
+      {video ? <ScreenButton variant={variant} video={video} busy={busy} /> : null}
       <CallButton variant={variant} label="Hang up" danger testId={`call-${variant}-leave`} onPress={() => void actions.leave()}>
         <PhoneOffIcon size={size} />
       </CallButton>

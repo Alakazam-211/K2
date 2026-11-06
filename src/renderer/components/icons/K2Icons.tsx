@@ -516,6 +516,29 @@ export function VideoIcon({ off = false, ...props }: K2IconProps & { off?: boole
   )
 }
 
+/** The call's screen share: Lucide `screen-share`, squared (a display with an
+ *  arrow out of its corner); `stop` swaps the arrow for an X (`screen-share-off`). */
+export function ScreenShareIcon({ stop = false, ...props }: K2IconProps & { stop?: boolean }): React.JSX.Element {
+  return (
+    <svg {...iconProps(stop ? 'screen-share-off' : 'screen-share', props)}>
+      <path d="M13 3H2v14h20v-5" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+      {stop ? (
+        <>
+          <path d="M22 3l-5 5" />
+          <path d="M17 3l5 5" />
+        </>
+      ) : (
+        <>
+          <path d="M17 8l5-5" />
+          <path d="M17 3h5v5" />
+        </>
+      )}
+    </svg>
+  )
+}
+
 /** Hang up: Lucide `phone-off` (the handset's curves, kept round). */
 export function PhoneOffIcon(props: K2IconProps = {}): React.JSX.Element {
   return (

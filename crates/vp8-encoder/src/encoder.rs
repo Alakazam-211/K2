@@ -477,21 +477,22 @@ impl Core {
         }
         // Static content: skip the search.
         if zero_sad > 256 * 2 {
+            // The search compares every other row (half the work); the
+            // final choice below uses the full block.
+            let half_cost = |qx: i32, qy: i32| -> u32 {
+                sad_subpel_rows(src, aw, search, ss, x, y, qx, qy, 2) * 512 + lambda * new_cost(qx, qy)
+            };
             // Full-pixel diamond search from the best candidate.
             let mut starts = vec![(0i32, 0i32)];
             for mv in [nearest, nearv, best_mv] {
                 let p = ((mv.x as i32 / 2 + 2) >> 2, (mv.y as i32 / 2 + 2) >> 2);
-                if p.0.abs() <= SEARCH_RANGE && p.1.abs() <= SEARCH_RANGE {
+                if p.0.abs() <= SEARCH_RANGE && p.1.abs() <= SEARCH_RANGE && !starts.contains(&p) {
                     starts.push(p);
                 }
             }
-            let full_cost = |px: i32, py: i32| -> u32 {
-                let sad = sad16(src, aw, &search[(y as i32 + py + PAD as i32) as usize * ss + (x as i32 + px + PAD as i32) as usize..], ss, 16);
-                sad * 256 + lambda * new_cost(px * 4, py * 4)
-            };
             let mut best = (u32::MAX, 0, 0);
             for &(px, py) in &starts {
-                let c = full_cost(px, py);
+                let c = half_cost(px * 4, py * 4);
                 if c < best.0 {
                     best = (c, px, py);
                 }
@@ -499,42 +500,38 @@ impl Core {
             for step in [4, 2, 1] {
                 for _ in 0..16 {
                     let (bc, bx, by) = best;
-                    let mut moved = false;
                     for (dx, dy) in [(step, 0), (-step, 0), (0, step), (0, -step)] {
                         let (nx, ny) = (bx + dx, by + dy);
                         if nx.abs() > SEARCH_RANGE || ny.abs() > SEARCH_RANGE {
                             continue;
                         }
-                        let c = full_cost(nx, ny);
+                        let c = half_cost(nx * 4, ny * 4);
                         if c < best.0 {
                             best = (c, nx, ny);
-                            moved = true;
                         }
                     }
-                    if !moved || best.0 == bc {
+                    if best.0 >= bc {
                         break;
                     }
                 }
             }
-            // Half, then quarter pixel refinement (bilinear estimate).
+            // Half pixels (all eight neighbours), then quarter pixels (the
+            // four nearest), with a bilinear estimate of the six-tap filter.
             let mut q = (best.1 * 4, best.2 * 4);
-            let mut qcost = sad_q(q.0, q.1) * 256 + lambda * new_cost(q.0, q.1);
-            for step in [2, 1] {
+            let mut qcost = best.0;
+            let eight = [(-2, -2), (0, -2), (2, -2), (-2, 0), (2, 0), (-2, 2), (0, 2), (2, 2)];
+            let four = [(0, -1), (-1, 0), (1, 0), (0, 1)];
+            for pattern in [&eight[..], &four[..]] {
                 let centre = q;
-                for dy in [-step, 0, step] {
-                    for dx in [-step, 0, step] {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
-                        let (nx, ny) = (centre.0 + dx, centre.1 + dy);
-                        if !in_range(nx, ny) {
-                            continue;
-                        }
-                        let c = sad_q(nx, ny) * 256 + lambda * new_cost(nx, ny);
-                        if c < qcost {
-                            qcost = c;
-                            q = (nx, ny);
-                        }
+                for &(dx, dy) in pattern {
+                    let (nx, ny) = (centre.0 + dx, centre.1 + dy);
+                    if !in_range(nx, ny) {
+                        continue;
+                    }
+                    let c = half_cost(nx, ny);
+                    if c < qcost {
+                        qcost = c;
+                        q = (nx, ny);
                     }
                 }
             }
@@ -551,7 +548,8 @@ impl Core {
             } else {
                 NEWMV
             };
-            let c = if mode == NEWMV { qcost } else { sad_q(q.0, q.1) * 256 + lambda * mode_cost(mode) };
+            let rate = if mode == NEWMV { new_cost(q.0, q.1) } else { mode_cost(mode) };
+            let c = sad_q(q.0, q.1) * 256 + lambda * rate;
             if c < choice.0 {
                 choice = (c, mode, mv);
             }
@@ -911,16 +909,28 @@ fn fill_search(dst: &mut [u8], ds: usize, src: &[u8], w: usize, h: usize) {
 /// six-tap prediction, used only for the search).
 #[allow(clippy::too_many_arguments)]
 fn sad_subpel(src: &[u8], src_stride: usize, search: &[u8], ss: usize, x: usize, y: usize, qx: i32, qy: i32) -> u32 {
+    sad_subpel_rows(src, src_stride, search, ss, x, y, qx, qy, 1)
+}
+
+/// As `sad_subpel`, over every `row_step`-th row only.
+#[allow(clippy::too_many_arguments)]
+fn sad_subpel_rows(src: &[u8], src_stride: usize, search: &[u8], ss: usize, x: usize, y: usize, qx: i32, qy: i32, row_step: usize) -> u32 {
     let fx = (qx & 3) as u32;
     let fy = (qy & 3) as u32;
     let base = (y as i32 + (qy >> 2) + PAD as i32) as usize * ss + (x as i32 + (qx >> 2) + PAD as i32) as usize;
     if fx == 0 && fy == 0 {
-        return sad16(src, src_stride, &search[base..], ss, 16);
+        let mut s = 0u32;
+        for r in (0..16).step_by(row_step) {
+            let a = &search[base + r * ss..base + r * ss + 16];
+            let o = &src[r * src_stride..r * src_stride + 16];
+            s += a.iter().zip(o).map(|(&p, &q)| p.abs_diff(q) as u32).sum::<u32>();
+        }
+        return s;
     }
     let (w00, w01, w10, w11) = ((4 - fx) * (4 - fy), fx * (4 - fy), (4 - fx) * fy, fx * fy);
     let (w00, w01, w10, w11) = (w00 as u16, w01 as u16, w10 as u16, w11 as u16);
     let mut s = 0u32;
-    for r in 0..16 {
+    for r in (0..16).step_by(row_step) {
         let a: &[u8; 17] = search[base + r * ss..base + r * ss + 17].try_into().expect("17 pixels");
         let b: &[u8; 17] = search[base + (r + 1) * ss..base + (r + 1) * ss + 17].try_into().expect("17 pixels");
         let o: &[u8; 16] = src[r * src_stride..r * src_stride + 16].try_into().expect("16 pixels");

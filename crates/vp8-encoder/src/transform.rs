@@ -99,7 +99,12 @@ pub(crate) const MAX_LEVEL: i32 = 2048 + 66;
 #[inline(always)]
 pub(crate) fn quantize(v: i32, step: i32, bias: i32) -> i32 {
     let a = v.abs();
-    let l = ((a * 256 + bias * step) / (step * 256)).min(MAX_LEVEL);
+    // Division by a multiply with 2^32 / divisor rounded up. Just below a
+    // boundary it can round up by one, which only nudges the rounding
+    // offset; the decoder sees whatever level we choose.
+    let num = (a * 256 + bias * step) as u64;
+    let inv = (1u64 << 32).div_ceil((step * 256) as u64);
+    let l = ((num * inv) >> 32).min(MAX_LEVEL as u64) as i32;
     if v < 0 {
         -l
     } else {

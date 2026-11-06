@@ -101,7 +101,12 @@ parking_lot = "0.12"
 # `keyring-store` feature off: its Linux Secret Service backend can't build beside
 # K2's `sync-secret-service`, and K2 passes its own store over its own keyring.
 # zeroize: the device key K2's store handles.
-tauri-plugin-sew-voice = { version = "=0.4.1", optional = true }
+# `video` (0.46.9, video in voice rooms, behind the videoRoomsPreview setting):
+# the plugin's video engine (`video-core`) plus kessel-video's system backends
+# for this OS (AVFoundation, VideoToolbox and ScreenCaptureKit on macOS; Media
+# Foundation and Windows Graphics Capture; V4L2 and the portal on Linux). The
+# commands it adds need `sew-voice:video` (capabilities-native-voice/).
+tauri-plugin-sew-voice = { version = "=0.4.1", optional = true, features = ["video"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

@@ -78,6 +78,9 @@ person: joining another room moves them. Hide camera and screen share when
 the join answer's media.camera_allowed / screen_allowed is false (keep
 those for the whole call). A private channel they're not in is a 404:
 show your own "no access".
+In a native app (Sew's engine), the call's /rtc/v1 socket is K2's on
+your App's host: your server only mints the join (k2 study chat-voice,
+NATIVE APPS). Your web page still uses your own /rtc relay.
 
 REFUSALS. 422 channel_full (user_limit) · 503 voice_capacity (the box is
 full) · 403 missing_permission cap_ceiling (no voice:join) · 403

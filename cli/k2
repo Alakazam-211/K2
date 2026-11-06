@@ -11294,6 +11294,28 @@ YOUR SERVER (never the browser):
 Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
 on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.
+/RTC. That relay is for browsers (your cookie). Keep it. A native app
+(Sew's call engine, tauri-plugin-sew-voice) opens wss://<your host>/rtc/v1
+with Authorization: Bearer <Sew's media token>, never in the URL. The
+plugin does that from the join answer your server returned. K2 answers
+that socket itself on every live host of your App, App up or down: your
+server needs no code and never sees it. K2 takes a request only when all
+of these hold:
+  - GET /rtc/v1 (any query) with a WebSocket upgrade;
+  - exactly one Authorization: Bearer, and the token isn't K2's own
+    (k2skn_, sews_, sewcc_);
+  - your App has sew-api and sew-signal approved (and voice:join, if it
+    asks for chat caps), isn't suspended, and voice is installed on the
+    box (k2 study chat-voice, steps 1 and 7).
+K2 splices it to Sew's signal listener as is: path, query, the token and
+the WebSocket headers. It drops every other header and adds
+X-Forwarded-For with the person's real address. Sew trusts that from K2
+by default, so its per-address limits see each phone (nothing to set).
+K2 never reads or checks the token: Sew does. Anything else on /rtc*
+reaches your server as before: a browser's cookie or ?access_token=,
+/rtc, /rtc/validate, /rtc/v1/validate, a K2 token as the bearer, and any
+request while a condition above is false. A native /rtc/v1 that reaches your server
+means one of them is false.
 Sew's gateway socket has its own close codes, not K2's table in k2 study
 app-surfaces: 4003 identify_timeout (Sew 0.7.1) is a slow sign-in on that socket,
 never a dead pass, and Sew's kit identifies again by itself. Don't sign the
@@ -11464,6 +11486,8 @@ No K2 pass, no cookie, no Origin; any other route is 404. Media goes to
 TURN directly. The TURN host and its credentials come in the call's
 signalling join (ice_servers): never hard-code them. 404 voice_door_off:
 no voice (step 1), or sew-api or voice:join not approved (step 7).
+The engine's wss://<same host>/rtc/v1 (Bearer <Sew's media token>) is K2's
+too once sew-signal is approved: add nothing (k2 study app-chat, /RTC).
 Sew's web kit (@sew/voice in native mode) also asks for names, rings,
 devices, recording, moderation and live call events. The app sends those
 to the same api_base, but with the person's App login session
@@ -11591,6 +11615,9 @@ person: joining another room moves them. Hide camera and screen share when
 the join answer's media.camera_allowed / screen_allowed is false (keep
 those for the whole call). A private channel they're not in is a 404:
 show your own "no access".
+In a native app (Sew's engine), the call's /rtc/v1 socket is K2's on
+your App's host: your server only mints the join (k2 study chat-voice,
+NATIVE APPS). Your web page still uses your own /rtc relay.
 
 REFUSALS. 422 channel_full (user_limit) · 503 voice_capacity (the box is
 full) · 403 missing_permission cap_ceiling (no voice:join) · 403
@@ -51440,7 +51467,11 @@ START (A BUNDLED WEB BUILD)
   short-lived sewcc_ call credential for the signed-in person and returns it
   with api_base https://<your App's host>/_k2/voice/sew/. The app holds no K2
   pass: it talks to that door and to TURN directly, with the TURN host taken
-  from the call's join, never hard-coded. Setup: k2 study chat-voice (NATIVE APPS).
+  from the call's join, never hard-coded. The call's media signalling,
+  wss://<your App's host>/rtc/v1 with Sew's media token as the bearer, is
+  K2's too (sew-signal approved): your server adds nothing for it, and
+  keeps its own /rtc relay for the web page. Setup: k2 study chat-voice
+  (NATIVE APPS).
 
 11. BEFORE THE STORES (every Tauri App)
   init --template tauri also writes src-tauri/PrivacyInfo.xcprivacy (Apple's

@@ -98,6 +98,8 @@ No K2 pass, no cookie, no Origin; any other route is 404. Media goes to
 TURN directly. The TURN host and its credentials come in the call's
 signalling join (ice_servers): never hard-code them. 404 voice_door_off:
 no voice (step 1), or sew-api or voice:join not approved (step 7).
+The engine's wss://<same host>/rtc/v1 (Bearer <Sew's media token>) is K2's
+too once sew-signal is approved: add nothing (k2 study app-chat, /RTC).
 Sew's web kit (@sew/voice in native mode) also asks for names, rings,
 devices, recording, moderation and live call events. The app sends those
 to the same api_base, but with the person's App login session

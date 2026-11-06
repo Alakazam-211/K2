@@ -204,7 +204,11 @@ START (A BUNDLED WEB BUILD)
   short-lived sewcc_ call credential for the signed-in person and returns it
   with api_base https://<your App's host>/_k2/voice/sew/. The app holds no K2
   pass: it talks to that door and to TURN directly, with the TURN host taken
-  from the call's join, never hard-coded. Setup: k2 study chat-voice (NATIVE APPS).
+  from the call's join, never hard-coded. The call's media signalling,
+  wss://<your App's host>/rtc/v1 with Sew's media token as the bearer, is
+  K2's too (sew-signal approved): your server adds nothing for it, and
+  keeps its own /rtc relay for the web page. Setup: k2 study chat-voice
+  (NATIVE APPS).
 
 11. BEFORE THE STORES (every Tauri App)
   init --template tauri also writes src-tauri/PrivacyInfo.xcprivacy (Apple's

@@ -15,8 +15,9 @@ categories = ["multimedia::audio"]
 # Only the code, the README and the licences ship. Everything else stays in the
 # repository: tests/ (tests/data is CC BY 4.0 speech for the metric tests, see
 # the `speech-tests` feature; tests/scrub.rs is the repository's own publish
-# check), scripts/, deny.toml and the changelog.
-include = ["src/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
+# check), scripts/, deny.toml and the changelog. The leading / anchors each
+# pattern at the crate root: a bare "README.md" also matches tests/data/README.md.
+include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
 
 [features]
 default = ["cpal", "os-voice"]

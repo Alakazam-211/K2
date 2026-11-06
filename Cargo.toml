@@ -36,6 +36,8 @@ members = [
     # Cameras, screen capture, pixels and video codecs (H.264 through the OS
     # codecs only); MIT OR Apache-2.0, Kessel family.
     "crates/kessel-video",
+    # A pure-Rust VP8 decoder (RFC 6386) for receiving browser video.
+    "crates/vp8-decoder",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos
@@ -80,6 +82,9 @@ opt-level = 3
 [profile.dev.package.ropus]
 opt-level = 3
 [profile.dev.package.rubato]
+opt-level = 3
+# Video decoding is real time too.
+[profile.dev.package.vp8-decoder]
 opt-level = 3
 
 [profile.release]

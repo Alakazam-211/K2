@@ -120,18 +120,30 @@ export function localVideoReasonText(reason: string | null, what: VideoSource): 
       return { line: 'Your camera is paused to let this computer cool down.', kind: 'info' }
     case 'source_closed':
       return { line: 'Screen sharing stopped: the window you shared closed.', kind: 'info' }
+    // Sew 0.8.2: the camera's source ended (unplugged, an iPhone camera walked
+    // away); the track is unpublished.
     case 'camera_lost':
-      return { line: 'Your camera was disconnected.', kind: 'error' }
+      return CAMERA_LOST
+    // Sew 0.8.3: the camera is open but sent no frame within about 2.5 s (a
+    // closed laptop lid, a camera another app holds dark).
+    case 'no_frames':
+      return CAMERA_NO_FRAMES
     default:
       return videoRefusalText(reason, null, what)
   }
 }
 
+/** The camera went away (`local_video` off with `camera_lost`, or the
+ *  engine's `camera_lost` error). */
+export const CAMERA_LOST: VideoNoticeText = { line: 'Your camera disconnected.', kind: 'error' }
+/** The camera sends no picture (`local_video.reason` `no_frames`, Sew 0.8.3). */
+export const CAMERA_NO_FRAMES: VideoNoticeText = { line: "Your camera isn't sending a picture. Is the lid closed?", kind: 'error' }
+
 /** The plugin's video engine errors. */
 export function videoEngineErrorText(code: string): VideoNoticeText | null {
   switch (code) {
     case 'camera_lost':
-      return { line: 'Your camera was disconnected.', kind: 'error' }
+      return CAMERA_LOST
     case 'encoder_lost':
       return { line: 'Your video stopped: this computer could not encode it.', kind: 'error' }
     case 'video_stalled':

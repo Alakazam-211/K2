@@ -230,6 +230,22 @@ describe('the controls', () => {
     await waitFor(() => expect(s.privacy).toEqual(['camera']))
   })
 
+  it('says plainly when your camera disconnects, or sends no picture', async () => {
+    const s = setup([])
+    render(<Controls s={s} />)
+    await ready(s)
+    fireEvent.click(await screen.findByTestId('video-camera'))
+    await waitFor(() => expect(screen.getByTestId('video-camera').getAttribute('aria-label')).toBe('Turn camera off'))
+    act(() => s.engine.setLocal({ camera: 'off', screen: 'off', reason: 'camera_lost' }))
+    await waitFor(() => expect(screen.getByTestId('video-notice').textContent).toBe('Your camera disconnected.'))
+    expect(screen.getByTestId('video-notice').dataset.kind).toBe('error')
+    expect(screen.getByTestId('video-camera').getAttribute('aria-label')).toBe('Turn camera on')
+    fireEvent.click(screen.getByTestId('video-camera'))
+    await waitFor(() => expect(screen.getByTestId('video-camera').getAttribute('aria-label')).toBe('Turn camera off'))
+    act(() => s.engine.setLocal({ camera: 'off', screen: 'off', reason: 'no_frames' }))
+    await waitFor(() => expect(screen.getByTestId('video-notice').textContent).toBe("Your camera isn't sending a picture. Is the lid closed?"))
+  })
+
   it('says so before you try when the OS already denied the camera', async () => {
     const s = setup([])
     s.engine.devices = async () => ({ cameras: [{ id: 'cam:1', label: 'Acme HD Camera', facing: null, isDefault: true }], camera: null, permission: { camera: 'denied', screen: 'granted' } })

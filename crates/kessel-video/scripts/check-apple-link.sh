@@ -31,6 +31,10 @@
 set -eu
 [ $# -gt 0 ] || set -- macos ios
 here=$(pwd)
+if [ ! -f "$here/crates/kessel-video/examples/link_check.rs" ]; then
+    echo "check-apple-link.sh: run it from the repository root (it reads crates/kessel-video/examples/link_check.rs)" >&2
+    exit 2
+fi
 # The app crate is built outside the repository, where rust-toolchain.toml
 # doesn't apply: pin the repository's compiler, or an older default rustc
 # meets a newer iOS standard library (E0514).

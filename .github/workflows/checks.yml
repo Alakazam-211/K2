@@ -83,6 +83,13 @@ jobs:
       - name: CI gate on K2 Compute (stubbed)
         run: bash tests/packaging/ci-gate.sh
 
+      # k2-daemon's grouped integration tests (tests/it_*/main.rs): every
+      # module file is declared, so none drops out of the build silently.
+      - name: k2-daemon test groups (no cargo)
+        run: bash scripts/check-daemon-test-targets.sh
+      - name: Test-group check fails on broken layouts
+        run: bash tests/packaging/daemon-test-targets.sh
+
       # One Rust everywhere: rust-toolchain.toml, these workflows' toolchain:
       # lines and every K2 Compute job's rust@ need agree; release.sh's
       # Step 0.4 check (stub rustup/rustc).

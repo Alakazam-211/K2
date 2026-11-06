@@ -191,6 +191,14 @@ On macOS:
   be called from any thread, but it needs the app's main run loop.
 - ScreenCaptureKit is loaded at run time, so the app still starts on systems
   without it.
+- A camera source ends with `Ended(DeviceLost)` when its device
+  disconnects (a Continuity Camera that goes away, an unplugged camera) or
+  its capture session posts a runtime error. Open another camera then.
+- `cameras()` sets `suspended` on a camera that is listed but can't deliver
+  frames now: a MacBook's built-in camera while the lid is closed. An open
+  source on a camera that becomes suspended sends
+  `Interrupted(Suspended)`, then `Resumed`. Camera ids are
+  `AVCaptureDevice.uniqueID`, the same when a camera comes back.
 
 On iOS:
 - `system()` gives the Apple backend. The app needs `NSCameraUsageDescription`
@@ -209,6 +217,8 @@ On iOS:
   source stays open and sends `SourceEvent::Interrupted` (with
   `Interruption::Background`, `InUseByAnother` or `Thermal`), then
   `Resumed` when the camera comes back; frames simply pause in between.
+  These pauses never end the source: `Ended(DeviceLost)` means the camera
+  is gone for good (disconnected, or a runtime error that says so).
   `subscribe()` also gets `Background(true)` and `Background(false)`.
   Opening a camera or an H.264 encoder while the app is in the background
   answers `shut_down`. An H.264 encoder whose session iOS takes away ends

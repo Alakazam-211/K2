@@ -1270,6 +1270,42 @@ mod tests {
         );
     }
 
+    /// What a closed laptop lid and a camera that goes away look like to a
+    /// caller: the listing says suspended, the open source ends.
+    #[test]
+    fn a_script_suspends_a_camera_and_loses_a_source() {
+        let mut cfg = FakeConfig::default();
+        assert!(!cfg.cameras[0].suspended, "a new camera isn't suspended");
+        let mut lid_closed = cfg.cameras.clone();
+        lid_closed[0].suspended = true;
+        assert_ne!(lid_closed, cfg.cameras, "suspension changes the listing");
+        cfg.hotplug = vec![(Duration::from_millis(50), lid_closed.clone())];
+        cfg.source_events = vec![(
+            Duration::from_millis(20),
+            SourceEvent::Ended(EndReason::DeviceLost),
+        )];
+        let b = FakeBackend::new(cfg);
+        let events = b.subscribe();
+        let id = b.cameras()[0].id.clone();
+        let mut src = b
+            .open_camera(Some(&id), CaptureConstraints::default(), no_wake())
+            .expect("camera");
+        assert_eq!(
+            wait_for(Duration::from_secs(2), || match src.try_event() {
+                Some(SourceEvent::Started { .. }) => None,
+                e => e,
+            }),
+            Some(SourceEvent::Ended(EndReason::DeviceLost))
+        );
+        assert_eq!(
+            wait_for(Duration::from_secs(2), || events.try_recv()),
+            Some(BackendEvent::Cameras(lid_closed))
+        );
+        let now = b.cameras();
+        assert!(now[0].suspended);
+        assert_eq!(now[0].id, id, "the same id while suspended");
+    }
+
     #[test]
     fn permissions_hotplug_and_events_follow_the_script() {
         let mut cfg = FakeConfig {

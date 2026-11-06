@@ -1,7 +1,10 @@
-//! Small Objective-C helpers: strings, arrays, dispatch queues, NSError, and
-//! a Send wrapper for objects that are safe to hold across threads.
+//! Small Objective-C helpers: strings, arrays, dispatch queues, NSError,
+//! notification observers, and a Send wrapper for objects that are safe to
+//! hold across threads.
 
-use objc2::rc::Retained;
+use super::ffi::cf_const;
+use block2::RcBlock;
+use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::{AnyObject, Bool};
 use objc2::{class, msg_send};
 use std::ffi::{c_void, CStr, CString};
@@ -196,4 +199,106 @@ pub fn os_name() -> String {
             format!("{os} {}", string_of(v))
         }
     })
+}
+
+// ───────────────────────────── notifications ─────────────────────────────
+
+/// A block registered with the default NSNotificationCenter; removed on
+/// drop.
+pub struct Observer(Retained<AnyObject>);
+
+// SAFETY: NSNotificationCenter is thread-safe, and the token is only passed
+// back to it.
+unsafe impl Send for Observer {}
+// SAFETY: as above.
+unsafe impl Sync for Observer {}
+
+impl Observer {
+    /// Call `f` with each `name` notification (from `object`, or from
+    /// anyone), on the posting thread. `None` when the OS has no such
+    /// notification (a framework that isn't loaded).
+    ///
+    /// # Safety
+    /// `object` must be null or a live object. `f` gets the NSNotification.
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub unsafe fn new(
+        name: &CStr,
+        object: *const AnyObject,
+        f: impl Fn(*mut AnyObject) + Send + Sync + 'static,
+    ) -> Option<Observer> {
+        Observer::named(cf_const(name)? as *const AnyObject, object, f)
+    }
+
+    /// As [`Observer::new`], for a notification named by an NSString.
+    ///
+    /// # Safety
+    /// `name` must be a live NSString; as [`Observer::new`] otherwise.
+    pub unsafe fn named(
+        name: *const AnyObject,
+        object: *const AnyObject,
+        f: impl Fn(*mut AnyObject) + Send + Sync + 'static,
+    ) -> Option<Observer> {
+        let block = RcBlock::new(move |n: *mut AnyObject| {
+            // A panic must not unwind into Foundation.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(n)));
+        });
+        autoreleasepool(|_| {
+            let center: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
+            let nil: *const AnyObject = std::ptr::null();
+            let token: Option<Retained<AnyObject>> = msg_send![
+                center,
+                addObserverForName: name,
+                object: object,
+                queue: nil,
+                usingBlock: &*block
+            ];
+            token.map(Observer)
+        })
+    }
+}
+
+impl Drop for Observer {
+    fn drop(&mut self) {
+        autoreleasepool(|_| {
+            // SAFETY: the token addObserverForName gave us. After this no new
+            // call of the block starts; one already running on another thread
+            // may still finish, so callers guard their own state.
+            unsafe {
+                let center: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
+                let _: () = msg_send![center, removeObserver: &*self.0];
+            }
+        });
+    }
+}
+
+/// An integer from a notification's userInfo (`None` when absent).
+///
+/// # Safety
+/// `n` must be an NSNotification.
+pub unsafe fn user_info_integer(n: *mut AnyObject, key: &CStr) -> Option<isize> {
+    let key = cf_const(key)? as *const AnyObject;
+    let info: *mut AnyObject = msg_send![n, userInfo];
+    if info.is_null() {
+        return None;
+    }
+    let v: *mut AnyObject = msg_send![info, objectForKey: key];
+    if v.is_null() {
+        return None;
+    }
+    Some(msg_send![v, integerValue])
+}
+
+/// An object from a notification's userInfo (borrowed; may be null).
+///
+/// # Safety
+/// `n` must be an NSNotification.
+pub unsafe fn user_info_object(n: *mut AnyObject, key: &CStr) -> *mut AnyObject {
+    let Some(key) = cf_const(key) else {
+        return std::ptr::null_mut();
+    };
+    let info: *mut AnyObject = msg_send![n, userInfo];
+    if info.is_null() {
+        return std::ptr::null_mut();
+    }
+    msg_send![info, objectForKey: key as *const AnyObject]
 }

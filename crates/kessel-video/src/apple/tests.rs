@@ -1499,3 +1499,504 @@ fn cf_values_are_read_only_as_the_type_they_are() {
     assert_eq!(number_i64(yes()), None);
     assert_eq!(number_i64(d.0), None);
 }
+
+// ───────────────────────────── losing the camera ─────────────────────────────
+
+use camera::{Life, Next, Signal};
+
+/// Feed `signals` to `life`: the events each one sent, and what came next.
+fn feed(life: &mut Life, signals: Vec<Signal>) -> Vec<(Vec<SourceEvent>, Next)> {
+    signals
+        .into_iter()
+        .map(|s| {
+            let mut sent = Vec::new();
+            let next = life.on(s, &mut |e| sent.push(e));
+            (sent, next)
+        })
+        .collect()
+}
+
+fn look(connected: bool, running: bool, interrupted: bool, suspended: bool) -> Signal {
+    Signal::Poll {
+        connected,
+        running,
+        interrupted,
+        suspended,
+    }
+}
+
+const LOST: SourceEvent = SourceEvent::Ended(EndReason::DeviceLost);
+
+#[test]
+fn a_disconnected_device_ends_the_source_once() {
+    for phone in [false, true] {
+        let mut life = Life::new(phone);
+        assert_eq!(
+            feed(
+                &mut life,
+                vec![
+                    look(true, true, false, false),
+                    Signal::Disconnected,
+                    Signal::Disconnected,
+                    look(false, false, false, false),
+                    Signal::RuntimeError(-11800, "late".into()),
+                ]
+            ),
+            vec![
+                (vec![], Next::Watch),
+                (vec![LOST], Next::Stop),
+                (vec![], Next::Stop),
+                (vec![], Next::Stop),
+                (vec![], Next::Stop),
+            ],
+            "phone: {phone}"
+        );
+        // The look every 250 ms catches it too.
+        let mut life = Life::new(phone);
+        assert_eq!(
+            feed(&mut life, vec![look(false, true, false, false)]),
+            vec![(vec![LOST], Next::Stop)],
+            "phone: {phone}"
+        );
+    }
+}
+
+#[test]
+fn a_runtime_error_ends_a_mac_camera_at_once() {
+    // macOS: a runtime error stops the session for good (a Continuity
+    // Camera that went away posts one), even before isRunning says so.
+    let mut life = Life::new(false);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                Signal::RuntimeError(-11800, "device went away".into()),
+                look(true, true, false, false),
+            ]
+        ),
+        vec![
+            (
+                vec![
+                    SourceEvent::Error(VideoError::os(
+                        -11800,
+                        "capture session: device went away"
+                    )),
+                    LOST
+                ],
+                Next::Stop
+            ),
+            (vec![], Next::Stop),
+        ]
+    );
+    // A session that stopped on its own ends the source too.
+    let mut life = Life::new(false);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![look(true, true, false, false), look(true, false, false, false)]
+        ),
+        vec![(vec![], Next::Watch), (vec![LOST], Next::Stop)]
+    );
+}
+
+#[test]
+fn a_phone_tells_device_lost_from_interruptions() {
+    // A phone call: interrupted, then resumed, never lost, even while the
+    // session isn't running.
+    let mut life = Life::new(true);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                Signal::Interrupted(Some(3)),
+                Signal::Interrupted(Some(1)),
+                look(true, false, true, false),
+                Signal::InterruptionEnded,
+                Signal::InterruptionEnded,
+                look(true, true, false, false),
+            ]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Interrupted(Interruption::InUseByAnother)],
+                Next::Watch
+            ),
+            (vec![], Next::Watch),
+            (vec![], Next::Watch),
+            (vec![SourceEvent::Resumed], Next::Watch),
+            (vec![], Next::Watch),
+            (vec![], Next::Watch),
+        ]
+    );
+    // An error that says the device is gone ends it at once.
+    let mut life = Life::new(true);
+    assert_eq!(
+        feed(&mut life, vec![Signal::RuntimeError(-11814, "gone".into())]),
+        vec![(
+            vec![SourceEvent::Error(VideoError::DeviceLost), LOST],
+            Next::Stop
+        )]
+    );
+    // Any other error is reported; the session stopping without an
+    // interruption then ends the source.
+    let mut life = Life::new(true);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                Signal::RuntimeError(-11800, "x".into()),
+                look(true, true, false, false),
+                look(true, false, false, false),
+            ]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Error(VideoError::os(
+                    -11800,
+                    "capture session: x"
+                ))],
+                Next::Watch
+            ),
+            (vec![], Next::Watch),
+            (vec![LOST], Next::Stop),
+        ]
+    );
+}
+
+#[test]
+fn a_media_services_reset_restarts_the_session_once() {
+    let reset = || {
+        SourceEvent::Error(VideoError::os(
+            camera::MEDIA_SERVICES_RESET,
+            "capture session: reset",
+        ))
+    };
+    let mut life = Life::new(true);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                Signal::RuntimeError(camera::MEDIA_SERVICES_RESET, "reset".into()),
+                look(true, false, false, false),
+                // Running again after the restart.
+                look(true, true, false, false),
+                Signal::RuntimeError(camera::MEDIA_SERVICES_RESET, "reset".into()),
+                look(true, false, false, false),
+                // This restart didn't take: lost.
+                look(true, false, false, false),
+            ]
+        ),
+        vec![
+            (vec![reset()], Next::Watch),
+            (vec![], Next::Restart),
+            (vec![], Next::Watch),
+            (vec![reset()], Next::Watch),
+            (vec![], Next::Restart),
+            (vec![LOST], Next::Stop),
+        ]
+    );
+}
+
+#[test]
+fn a_suspended_camera_pauses_without_ending() {
+    // A MacBook's lid closes and opens while its camera runs.
+    let mut life = Life::new(false);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                look(true, true, false, true),
+                look(true, true, false, true),
+                look(true, true, false, false),
+            ]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Interrupted(Interruption::Suspended)],
+                Next::Watch
+            ),
+            (vec![], Next::Watch),
+            (vec![SourceEvent::Resumed], Next::Watch),
+        ]
+    );
+    // On a phone, a suspension and an interruption that overlap are one
+    // pause: one Interrupted, and one Resumed when both are over.
+    let mut life = Life::new(true);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                look(true, true, false, true),
+                Signal::Interrupted(Some(1)),
+                look(true, false, true, false),
+                Signal::InterruptionEnded,
+            ]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Interrupted(Interruption::Suspended)],
+                Next::Watch
+            ),
+            (vec![], Next::Watch),
+            (vec![], Next::Watch),
+            (vec![SourceEvent::Resumed], Next::Watch),
+        ]
+    );
+}
+
+#[test]
+fn a_closed_source_sends_nothing() {
+    let mut life = Life::new(false);
+    life.close();
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                Signal::Disconnected,
+                Signal::RuntimeError(-11800, "x".into()),
+                look(true, true, false, true),
+            ]
+        ),
+        vec![
+            (vec![], Next::Stop),
+            (vec![], Next::Stop),
+            (vec![], Next::Stop)
+        ]
+    );
+}
+
+struct NoControl;
+impl crate::kit::SourceControl for NoControl {}
+
+type Obj = objc2::rc::Retained<AnyObject>;
+
+/// An NSObject standing in for a capture session or a device: the
+/// observers only match notifications by the object that posts them.
+fn stand_in() -> Obj {
+    // SAFETY: +[NSObject new].
+    let o: Option<Obj> = unsafe { msg_send![class!(NSObject), new] };
+    o.expect("an NSObject")
+}
+
+/// Post the notification `name` from `object`, as AVFoundation does
+/// (synchronously, on this thread).
+fn post(name: &AnyObject, object: &AnyObject, info: Option<&AnyObject>) {
+    let info: *const AnyObject = info.map_or(std::ptr::null(), |i| i as *const AnyObject);
+    autoreleasepool(|_| {
+        // SAFETY: NSNotificationCenter's documented post method, with an
+        // NSString name, a live object and a nil or live dictionary.
+        unsafe {
+            let center: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
+            let _: () =
+                msg_send![center, postNotificationName: name, object: object, userInfo: info];
+        }
+    });
+}
+
+/// A runtime error notification's userInfo: `AVCaptureSessionErrorKey` to
+/// an AVFoundation NSError with `code`.
+fn runtime_error_info(code: isize) -> Obj {
+    let domain = objc::nsstring("AVFoundationErrorDomain").expect("an NSString");
+    let key = ffi::cf_const(c"AVCaptureSessionErrorKey").expect("AVCaptureSessionErrorKey")
+        as *const AnyObject;
+    // SAFETY: NSError and NSDictionary class methods with live arguments.
+    unsafe {
+        let nil: *const AnyObject = std::ptr::null();
+        let e: Option<Obj> =
+            msg_send![class!(NSError), errorWithDomain: &*domain, code: code, userInfo: nil];
+        let e = e.expect("an NSError");
+        let d: Option<Obj> =
+            msg_send![class!(NSDictionary), dictionaryWithObject: &*e, forKey: key];
+        d.expect("an NSDictionary")
+    }
+}
+
+/// The four notification names, as the tests' own NSStrings. Posting
+/// AVFoundation's real names from a stand-in would reach AVFoundation's own
+/// process-wide observers, which take the object for a real device.
+struct TestNames {
+    disconnected: Obj,
+    runtime_error: Obj,
+    interrupted: Obj,
+    interruption_ended: Obj,
+}
+
+impl TestNames {
+    fn new() -> TestNames {
+        let n = |s: &str| objc::nsstring(s).expect("an NSString");
+        TestNames {
+            disconnected: n("KesselVideoTestDeviceWasDisconnected"),
+            runtime_error: n("KesselVideoTestSessionRuntimeError"),
+            interrupted: n("KesselVideoTestSessionWasInterrupted"),
+            interruption_ended: n("KesselVideoTestSessionInterruptionEnded"),
+        }
+    }
+
+    fn notices(&self) -> camera::Notices {
+        let p = |o: &Obj| Some(objc2::rc::Retained::as_ptr(o));
+        camera::Notices {
+            disconnected: p(&self.disconnected),
+            runtime_error: p(&self.runtime_error),
+            interrupted: p(&self.interrupted),
+            interruption_ended: p(&self.interruption_ended),
+        }
+    }
+}
+
+/// A camera source's queue, life and observers, on two stand-ins.
+struct Observed {
+    src: crate::kit::QueuedSource<NoControl>,
+    life: Arc<Mutex<Life>>,
+    observers: Vec<objc::Observer>,
+    names: TestNames,
+    session: Obj,
+    device: Obj,
+    /// How many times the source woke its caller.
+    wakes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+fn observed() -> Observed {
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let w = wakes.clone();
+    let shared = crate::kit::SourceShared::new(
+        CaptureConstraints::new(640, 360, 30),
+        30,
+        Arc::new(move || {
+            w.fetch_add(1, Ordering::SeqCst);
+        }),
+    );
+    let (session, device, names) = (stand_in(), stand_in(), TestNames::new());
+    let life = Arc::new(Mutex::new(Life::new(cfg!(target_os = "ios"))));
+    // SAFETY: live objects (the observers only compare them by identity)
+    // and live NSStrings.
+    let observers =
+        unsafe { camera::observers(&session, &device, &life, &shared, &names.notices()) };
+    assert_eq!(observers.len(), 4, "one observer for each name");
+    Observed {
+        src: crate::kit::QueuedSource::new(shared, NoControl),
+        life,
+        observers,
+        names,
+        session,
+        device,
+        wakes,
+    }
+}
+
+#[test]
+fn avfoundation_names_its_notifications() {
+    let n = camera::Notices::avfoundation();
+    assert!(n.disconnected.is_some(), "the disconnect notification");
+    assert!(n.runtime_error.is_some(), "the runtime error notification");
+    let phone = cfg!(target_os = "ios");
+    assert_eq!(n.interrupted.is_some(), phone, "interruptions on iOS only");
+    assert_eq!(n.interruption_ended.is_some(), phone);
+    assert!(
+        ffi::cf_const(c"AVCaptureSessionErrorKey").is_some(),
+        "the runtime error's userInfo key"
+    );
+}
+
+#[test]
+fn the_device_disconnected_notification_ends_the_source() {
+    let mut o = observed();
+    let other = stand_in();
+    // Another camera's disconnection, and one posted by our session, are
+    // not our device's.
+    post(&o.names.disconnected, &other, None);
+    post(&o.names.disconnected, &o.session, None);
+    assert_eq!(o.src.try_event(), None);
+    assert_eq!(o.wakes.load(Ordering::SeqCst), 0);
+    post(&o.names.disconnected, &o.device, None);
+    assert_eq!(o.src.try_event(), Some(LOST));
+    assert_eq!(o.src.try_event(), None);
+    assert_eq!(o.wakes.load(Ordering::SeqCst), 1);
+    // Ended is sent once.
+    post(&o.names.disconnected, &o.device, None);
+    assert_eq!(o.src.try_event(), None);
+    assert_eq!(o.wakes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_runtime_error_notification_ends_the_source() {
+    let mut o = observed();
+    // AVErrorDeviceWasDisconnected: lost on macOS and iOS alike.
+    let info = runtime_error_info(-11808);
+    post(&o.names.runtime_error, &o.device, Some(&*info));
+    assert_eq!(o.src.try_event(), None, "from the device, not the session");
+    post(&o.names.runtime_error, &o.session, Some(&*info));
+    assert_eq!(
+        o.src.try_event(),
+        Some(SourceEvent::Error(VideoError::DeviceLost))
+    );
+    assert_eq!(o.src.try_event(), Some(LOST));
+    assert_eq!(o.src.try_event(), None);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn any_runtime_error_notification_ends_a_mac_camera() {
+    let mut o = observed();
+    let info = runtime_error_info(-11800);
+    post(&o.names.runtime_error, &o.session, Some(&*info));
+    let first = o.src.try_event();
+    assert!(
+        matches!(
+            first,
+            Some(SourceEvent::Error(VideoError::Os { code: -11800, .. }))
+        ),
+        "{first:?}"
+    );
+    assert_eq!(o.src.try_event(), Some(LOST));
+}
+
+#[test]
+fn interruption_notifications_pause_and_resume() {
+    let mut o = observed();
+    // No reason in the userInfo: another client has the camera.
+    post(&o.names.interrupted, &o.session, None);
+    assert_eq!(
+        o.src.try_event(),
+        Some(SourceEvent::Interrupted(Interruption::InUseByAnother))
+    );
+    post(&o.names.interruption_ended, &o.device, None);
+    assert_eq!(o.src.try_event(), None, "from the session only");
+    post(&o.names.interruption_ended, &o.session, None);
+    assert_eq!(o.src.try_event(), Some(SourceEvent::Resumed));
+    assert_eq!(o.src.try_event(), None);
+    // Still running: the next look sends nothing.
+    let mut sent = Vec::new();
+    let next = lock(&o.life).on(look(true, true, false, false), &mut |e| sent.push(e));
+    assert_eq!((sent, next), (vec![], Next::Watch));
+}
+
+#[test]
+fn no_events_after_the_source_closes() {
+    let Observed {
+        mut src,
+        life,
+        observers,
+        names,
+        session,
+        device,
+        wakes,
+    } = observed();
+    // What CameraControl's Drop does first: close, then remove.
+    lock(&life).close();
+    post(&names.disconnected, &device, None);
+    drop(observers);
+    post(&names.disconnected, &device, None);
+    let info = runtime_error_info(-11808);
+    post(&names.runtime_error, &session, Some(&*info));
+    assert_eq!(src.try_event(), None);
+    assert_eq!(wakes.load(Ordering::SeqCst), 0);
+    // Removed, the observers let go of the life they held.
+    assert_eq!(Arc::strong_count(&life), 1);
+}
+
+#[test]
+fn an_object_without_is_suspended_is_not_suspended() {
+    let o = stand_in();
+    // SAFETY: a live object; isSuspended is only sent if it answers it.
+    assert!(!unsafe { camera::is_suspended(&*o) });
+}

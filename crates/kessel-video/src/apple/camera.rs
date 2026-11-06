@@ -3,16 +3,25 @@
 //! [`SourceShared`]. On iOS the front camera is the default, frames are
 //! turned upright and left unmirrored, and interruptions (a phone call, the
 //! app in the background, another app taking the camera) are source events.
+//!
+//! A source ends with `Ended(DeviceLost)` when its device goes away
+//! (`AVCaptureDeviceWasDisconnectedNotification`, or `isConnected` turning
+//! false) or its session dies: a runtime error on macOS, or a session that
+//! stopped without an interruption on either OS. [`Life`] decides, from
+//! those signals, which events a source sends.
 
 use super::ffi::{self, cf_const, cm_time, FormatDescriptionArg, SampleBufferArg};
 #[cfg(target_os = "ios")]
-use super::ios::{Observer, Rotation};
-use super::objc::{array_items, error_of, info_plist_has, nsstring, string_of, ObjSend, Queue};
+use super::ios::Rotation;
+use super::objc::{
+    array_items, error_of, info_plist_has, nsstring, responds, string_of, user_info_integer,
+    user_info_object, ObjSend, Observer, Queue,
+};
 use super::pixel::{cpu_frame, native_frame};
 use crate::api::{Done, FrameSource, Wake};
 use crate::error::VideoError;
 use crate::frame::PixelFormat;
-use crate::kit::{now_us, QueuedSource, SourceControl, SourceShared};
+use crate::kit::{lock, now_us, QueuedSource, SourceControl, SourceShared};
 use crate::types::*;
 use block2::RcBlock;
 use objc2::rc::{autoreleasepool, Retained};
@@ -207,7 +216,22 @@ unsafe fn info_of(device: *mut AnyObject, default_id: &str) -> CameraInfo {
         id == default_id,
     );
     info.modes = modes(device).into_iter().map(|(m, _)| m).collect();
+    info.suspended = is_suspended(device);
     info
+}
+
+/// `AVCaptureDevice.isSuspended`: the device can't deliver frames now (a
+/// MacBook's built-in camera with the lid closed, a shut lens cover). False
+/// where the OS doesn't answer.
+///
+/// # Safety
+/// `device` must be a live AVCaptureDevice.
+pub(crate) unsafe fn is_suspended(device: *const AnyObject) -> bool {
+    if !responds(device, sel!(isSuspended)) {
+        return false;
+    }
+    let b: Bool = msg_send![device, isSuspended];
+    b.as_bool()
 }
 
 unsafe fn facing_of(device: *mut AnyObject) -> Facing {
@@ -359,7 +383,7 @@ struct CameraControl {
     ctx: *mut Ctx,
     stop: Arc<AtomicBool>,
     watch: Option<JoinHandle<()>>,
-    #[cfg(target_os = "ios")]
+    life: Arc<Mutex<Life>>,
     observers: Vec<Observer>,
 }
 
@@ -371,8 +395,11 @@ impl SourceControl for CameraControl {}
 
 impl Drop for CameraControl {
     fn drop(&mut self) {
-        // No interruption events once the caller is closing it.
-        #[cfg(target_os = "ios")]
+        // No events once the caller is closing it. Closing under the lock
+        // waits for an observer block that is sending one now, and a block
+        // that still runs after removeObserver (it can, on another thread)
+        // sends nothing.
+        lock(&self.life).close();
         self.observers.clear();
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.watch.take() {
@@ -398,8 +425,7 @@ impl Drop for CameraControl {
 
 /// `AVErrorMediaServicesWereReset`: iOS restarted its media services; the
 /// session can be started again.
-#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
-const MEDIA_SERVICES_RESET: i64 = -11819;
+pub(crate) const MEDIA_SERVICES_RESET: i64 = -11819;
 
 pub(crate) fn av_error(e: *mut AnyObject, what: &str) -> VideoError {
     // SAFETY: nil or an NSError.
@@ -412,16 +438,16 @@ pub(crate) fn av_error_code(code: i64, detail: &str) -> VideoError {
     match code {
         // AVErrorApplicationIsNotAuthorizedToUseDevice
         -11852 => VideoError::NoPermission,
+        // AVErrorDeviceAlreadyUsedByAnotherSession,
         // AVErrorDeviceInUseByAnotherApplication
-        -11804 => VideoError::DeviceBusy,
-        // AVErrorDeviceNotConnected
-        -11814 => VideoError::DeviceLost,
+        -11804 | -11815 => VideoError::DeviceBusy,
+        // AVErrorDeviceWasDisconnected, AVErrorDeviceNotConnected
+        -11808 | -11814 => VideoError::DeviceLost,
         _ => VideoError::os(code, detail.to_string()),
     }
 }
 
 /// The interruption for an `AVCaptureSessionInterruptionReason` (iOS).
-#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 pub(crate) fn interruption_for_reason(reason: Option<isize>) -> Interruption {
     match reason {
         // VideoDeviceNotAvailableInBackground, and
@@ -433,6 +459,267 @@ pub(crate) fn interruption_for_reason(reason: Option<isize>) -> Interruption {
         // Another client has the audio or video device (a phone or FaceTime
         // call, another app), and any reason newer than this code.
         _ => Interruption::InUseByAnother,
+    }
+}
+
+// ───────────────────────────── a source's life ─────────────────────────────
+
+/// What a camera source hears about its device and session: the
+/// notification observers' signals, and the watch thread's look every
+/// 250 ms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Signal {
+    /// `AVCaptureDeviceWasDisconnectedNotification` for the source's device.
+    Disconnected,
+    /// `AVCaptureSessionRuntimeErrorNotification`: the `AVError` code and
+    /// the error's description.
+    RuntimeError(i64, String),
+    /// `AVCaptureSessionWasInterruptedNotification` (iOS), with its
+    /// `AVCaptureSessionInterruptionReason` when it has one.
+    Interrupted(Option<isize>),
+    /// `AVCaptureSessionInterruptionEndedNotification` (iOS).
+    InterruptionEnded,
+    /// The watch thread's look at the device and the session.
+    Poll {
+        /// `AVCaptureDevice.isConnected`.
+        connected: bool,
+        /// `AVCaptureSession.isRunning`.
+        running: bool,
+        /// `AVCaptureSession.isInterrupted` (iOS; false on macOS).
+        interrupted: bool,
+        /// `AVCaptureDevice.isSuspended`.
+        suspended: bool,
+    },
+}
+
+/// What the watch thread does after a signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Next {
+    /// Keep watching.
+    Watch,
+    /// Start the session again (iOS reset its media services), then keep
+    /// watching: a session that still doesn't run ends the source.
+    Restart,
+    /// The source ended or was closed: stop watching.
+    Stop,
+}
+
+/// A camera source's life: which events its signals send. The observers
+/// (on AVFoundation's threads) and the watch thread share one behind a
+/// mutex, so events go out in order, `Ended` once, and nothing after the
+/// source is closed.
+///
+/// - The device going away, or the session dying, is the end:
+///   `Ended(DeviceLost)`. A runtime error says so at once on macOS (the
+///   session stops on one, and macOS has no media-services reset) and on
+///   either OS when its code says the device is gone; otherwise a session
+///   that stopped without an interruption says so at the next look.
+/// - A pause is not the end. An iOS interruption (a phone call, the app in
+///   the background, multitasking, heat) sends `Interrupted(why)` and later
+///   `Resumed`; so does a device that reports itself suspended
+///   (`Interrupted(Suspended)`: a closed laptop lid).
+/// - iOS resetting its media services sends the runtime error as `Error`
+///   and starts the session once more.
+#[derive(Debug)]
+pub(crate) struct Life {
+    phone: bool,
+    /// The session's interruption (iOS notifications).
+    interruption: Option<Interruption>,
+    /// The device says it is suspended.
+    suspended: bool,
+    /// iOS reset its media services: start the session again, once.
+    media_reset: bool,
+    /// `Ended` was sent, or the source was closed.
+    done: bool,
+}
+
+impl Life {
+    /// A running source's life: `phone` for iOS's rules.
+    pub(crate) fn new(phone: bool) -> Life {
+        Life {
+            phone,
+            interruption: None,
+            suspended: false,
+            media_reset: false,
+            done: false,
+        }
+    }
+
+    /// The caller is closing the source: no more events.
+    pub(crate) fn close(&mut self) {
+        self.done = true;
+    }
+
+    fn paused(&self) -> bool {
+        self.interruption.is_some() || self.suspended
+    }
+
+    fn end(&mut self, send: &mut dyn FnMut(SourceEvent)) -> Next {
+        self.done = true;
+        send(SourceEvent::Ended(EndReason::DeviceLost));
+        Next::Stop
+    }
+
+    /// Take a signal; `send` gets the events it makes.
+    pub(crate) fn on(&mut self, signal: Signal, send: &mut dyn FnMut(SourceEvent)) -> Next {
+        if self.done {
+            return Next::Stop;
+        }
+        let was_paused = self.paused();
+        let next = match signal {
+            Signal::Disconnected => return self.end(send),
+            Signal::RuntimeError(code, detail) => {
+                let e = av_error_code(code, &format!("capture session: {detail}"));
+                let lost = e == VideoError::DeviceLost;
+                send(SourceEvent::Error(e));
+                if self.phone && code == MEDIA_SERVICES_RESET {
+                    self.media_reset = true;
+                } else if lost || !self.phone {
+                    return self.end(send);
+                }
+                Next::Watch
+            }
+            Signal::Interrupted(reason) => {
+                if self.interruption.is_none() {
+                    self.interruption = Some(interruption_for_reason(reason));
+                }
+                Next::Watch
+            }
+            Signal::InterruptionEnded => {
+                self.interruption = None;
+                Next::Watch
+            }
+            Signal::Poll {
+                connected,
+                running,
+                interrupted,
+                suspended,
+            } => {
+                if !connected {
+                    return self.end(send);
+                }
+                if !running && !interrupted {
+                    if std::mem::take(&mut self.media_reset) {
+                        return Next::Restart;
+                    }
+                    return self.end(send);
+                }
+                self.suspended = suspended;
+                Next::Watch
+            }
+        };
+        match (was_paused, self.paused()) {
+            (false, true) => send(SourceEvent::Interrupted(
+                self.interruption.unwrap_or(Interruption::Suspended),
+            )),
+            (true, false) => send(SourceEvent::Resumed),
+            _ => {}
+        }
+        next
+    }
+}
+
+/// Hand `signal` to `life`, sending its events to the source.
+pub(crate) fn signal(life: &Mutex<Life>, shared: &SourceShared, signal: Signal) -> Next {
+    lock(life).on(signal, &mut |e| shared.event(e))
+}
+
+/// The names of the notifications a camera source observes (NSStrings).
+/// AVFoundation's in a source; tests post their own names, so that
+/// AVFoundation's own observers never see a stand-in object.
+pub(crate) struct Notices {
+    /// `AVCaptureDeviceWasDisconnectedNotification`.
+    pub(crate) disconnected: Option<*const AnyObject>,
+    /// `AVCaptureSessionRuntimeErrorNotification`.
+    pub(crate) runtime_error: Option<*const AnyObject>,
+    /// `AVCaptureSessionWasInterruptedNotification` (iOS).
+    pub(crate) interrupted: Option<*const AnyObject>,
+    /// `AVCaptureSessionInterruptionEndedNotification` (iOS).
+    pub(crate) interruption_ended: Option<*const AnyObject>,
+}
+
+impl Notices {
+    /// AVFoundation's names, looked up by symbol; `None` for one the OS
+    /// lacks. The interruption ones only on iOS.
+    pub(crate) fn avfoundation() -> Notices {
+        let name = |n: &std::ffi::CStr| cf_const(n).map(|p| p as *const AnyObject);
+        let phone = |n: &std::ffi::CStr| {
+            if cfg!(target_os = "ios") {
+                name(n)
+            } else {
+                None
+            }
+        };
+        Notices {
+            disconnected: name(c"AVCaptureDeviceWasDisconnectedNotification"),
+            runtime_error: name(c"AVCaptureSessionRuntimeErrorNotification"),
+            interrupted: phone(c"AVCaptureSessionWasInterruptedNotification"),
+            interruption_ended: phone(c"AVCaptureSessionInterruptionEndedNotification"),
+        }
+    }
+}
+
+/// Observers for the device's disconnection and the session's runtime
+/// errors, and on iOS its interruptions, under `names`. Dropping them
+/// removes them.
+///
+/// # Safety
+/// `session` and `device` must be live objects (the session and its
+/// device), and each name a live NSString.
+pub(crate) unsafe fn observers(
+    session: &AnyObject,
+    device: &AnyObject,
+    life: &Arc<Mutex<Life>>,
+    shared: &Arc<SourceShared>,
+    names: &Notices,
+) -> Vec<Observer> {
+    let mut out = Vec::new();
+    if let Some(name) = names.disconnected {
+        let (l, s) = (life.clone(), shared.clone());
+        out.extend(Observer::named(name, device, move |_| {
+            signal(&l, &s, Signal::Disconnected);
+        }));
+    }
+    if let Some(name) = names.runtime_error {
+        let (l, s) = (life.clone(), shared.clone());
+        out.extend(Observer::named(name, session, move |n| {
+            // SAFETY: Foundation hands the block an NSNotification; its
+            // error is nil or an NSError.
+            let (code, detail) =
+                unsafe { error_of(user_info_object(n, c"AVCaptureSessionErrorKey")) };
+            signal(&l, &s, Signal::RuntimeError(code, detail));
+        }));
+    }
+    if let Some(name) = names.interrupted {
+        let (l, s) = (life.clone(), shared.clone());
+        out.extend(Observer::named(name, session, move |n| {
+            // SAFETY: Foundation hands the block an NSNotification.
+            let reason =
+                unsafe { user_info_integer(n, c"AVCaptureSessionInterruptionReasonKey") };
+            signal(&l, &s, Signal::Interrupted(reason));
+        }));
+    }
+    if let Some(name) = names.interruption_ended {
+        let (l, s) = (life.clone(), shared.clone());
+        out.extend(Observer::named(name, session, move |_| {
+            signal(&l, &s, Signal::InterruptionEnded);
+        }));
+    }
+    out
+}
+
+/// The watch thread's look at the device and the session.
+///
+/// # Safety
+/// `device` and `session` must be live.
+unsafe fn poll(device: &AnyObject, session: &AnyObject) -> Signal {
+    let connected: Bool = msg_send![device, isConnected];
+    let running: Bool = msg_send![session, isRunning];
+    Signal::Poll {
+        connected: connected.as_bool(),
+        running: running.as_bool(),
+        interrupted: interrupted(session),
+        suspended: is_suspended(device),
     }
 }
 
@@ -579,7 +866,7 @@ unsafe fn open_in_pool(
         ctx,
         stop: Arc::new(AtomicBool::new(false)),
         watch: None,
-        #[cfg(target_os = "ios")]
+        life: Arc::new(Mutex::new(Life::new(cfg!(target_os = "ios")))),
         observers: Vec::new(),
     };
     let ok: Bool = msg_send![&*control.session, canAddOutput: &*control.output];
@@ -617,7 +904,7 @@ unsafe fn open_in_pool(
         }
     }
 
-    // iOS: upright, unmirrored frames, and interruptions as events.
+    // iOS: upright, unmirrored frames.
     #[cfg(target_os = "ios")]
     let phone = {
         let conn = phone::video_connection(&control.output);
@@ -628,15 +915,22 @@ unsafe fn open_in_pool(
                 phone::apply_turn(&control.session, conn, t);
             }
         }
-        let state = Arc::new(phone::Interrupts::default());
-        control.observers = phone::observers(&control.session, &shared, &state);
         phone::Watch {
             conn,
             rotation,
-            state,
             last: None,
         }
     };
+
+    // The device going away and the session's runtime errors (and on iOS
+    // its interruptions), as they happen.
+    control.observers = observers(
+        &control.session,
+        &device,
+        &control.life,
+        &shared,
+        &Notices::avfoundation(),
+    );
 
     let _: () = msg_send![&*control.session, startRunning];
     let running: Bool = msg_send![&*control.session, isRunning];
@@ -644,9 +938,10 @@ unsafe fn open_in_pool(
         return Err(VideoError::DeviceBusy);
     }
 
-    // Unplugged, or the session died: end the source.
-    let (stop, s, dev, sess) = (
+    // And a look every 250 ms: unplugged, the session stopped, suspended.
+    let (stop, life, s, dev, sess) = (
         control.stop.clone(),
+        control.life.clone(),
         shared.clone(),
         device,
         ObjSend(control.session.0.clone()),
@@ -661,25 +956,16 @@ unsafe fn open_in_pool(
                     std::thread::sleep(Duration::from_millis(250));
                     #[cfg(target_os = "ios")]
                     phone.tick(&sess);
-                    let (connected, running, interrupted) = autoreleasepool(|_| {
-                        // SAFETY: live, thread-safe AVFoundation objects.
-                        unsafe {
-                            let c: Bool = msg_send![&*dev, isConnected];
-                            let r: Bool = msg_send![&*sess, isRunning];
-                            (c.as_bool(), r.as_bool(), interrupted(&sess))
-                        }
-                    });
+                    // SAFETY: live, thread-safe AVFoundation objects.
+                    let look = autoreleasepool(|_| unsafe { poll(&dev, &sess) });
                     if stop.load(Ordering::Acquire) {
                         return;
                     }
-                    // iOS reset its media services: start again.
-                    #[cfg(target_os = "ios")]
-                    if !running && !interrupted && phone.restart(&sess) {
-                        continue;
-                    }
-                    if !connected || (!running && !interrupted) {
-                        s.event(SourceEvent::Ended(EndReason::DeviceLost));
-                        return;
+                    match signal(&life, &s, look) {
+                        Next::Watch => {}
+                        // SAFETY: the live session.
+                        Next::Restart => autoreleasepool(|_| unsafe { start(&sess) }),
+                        Next::Stop => return,
                     }
                 }
             })
@@ -690,10 +976,19 @@ unsafe fn open_in_pool(
     Ok(Box::new(QueuedSource::new(shared, control)))
 }
 
+/// Start the session again (after iOS reset its media services). It blocks
+/// until the session runs or fails; the next look decides which.
+///
+/// # Safety
+/// `session` must be a live AVCaptureSession.
+unsafe fn start(session: &AnyObject) {
+    let _: () = msg_send![session, startRunning];
+}
+
 /// Is the session interrupted (iOS: a call, the background, another app)?
 /// Always false on macOS.
 unsafe fn interrupted(session: &AnyObject) -> bool {
-    if cfg!(target_os = "ios") && super::objc::responds(session, sel!(isInterrupted)) {
+    if cfg!(target_os = "ios") && responds(session, sel!(isInterrupted)) {
         let b: Bool = msg_send![session, isInterrupted];
         b.as_bool()
     } else {
@@ -701,20 +996,15 @@ unsafe fn interrupted(session: &AnyObject) -> bool {
     }
 }
 
-/// iOS: the capture connection's rotation and mirroring, and the session's
-/// interruption notifications.
+/// iOS: the capture connection's rotation and mirroring.
 #[cfg(target_os = "ios")]
 mod phone {
-    use super::super::ios::{user_info_integer, user_info_object, Observer, Rotation, Turn};
-    use super::super::objc::{error_of, responds, ObjSend};
-    use super::{av_error, interruption_for_reason, media_type_video, MEDIA_SERVICES_RESET};
-    use crate::kit::SourceShared;
-    use crate::types::*;
+    use super::super::ios::{Rotation, Turn};
+    use super::super::objc::{responds, ObjSend};
+    use super::media_type_video;
     use objc2::rc::{autoreleasepool, Retained};
     use objc2::runtime::{AnyObject, Bool};
     use objc2::{msg_send, sel};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
 
     /// The video output's connection.
     ///
@@ -764,79 +1054,10 @@ mod phone {
         let _: () = msg_send![session, commitConfiguration];
     }
 
-    /// The source's interruption state: `Interrupted` and `Resumed` are
-    /// sent once per change.
-    #[derive(Default)]
-    pub(super) struct Interrupts {
-        on: AtomicBool,
-        media_reset: AtomicBool,
-    }
-
-    impl Interrupts {
-        fn begin(&self, s: &SourceShared, why: Interruption) {
-            if !self.on.swap(true, Ordering::AcqRel) {
-                s.event(SourceEvent::Interrupted(why));
-            }
-        }
-
-        fn end(&self, s: &SourceShared) {
-            if self.on.swap(false, Ordering::AcqRel) {
-                s.event(SourceEvent::Resumed);
-            }
-        }
-    }
-
-    /// Observers for the session's interruptions and runtime errors.
-    ///
-    /// # Safety
-    /// `session` must be a live AVCaptureSession.
-    pub(super) unsafe fn observers(
-        session: &AnyObject,
-        shared: &Arc<SourceShared>,
-        state: &Arc<Interrupts>,
-    ) -> Vec<Observer> {
-        let object = session as *const AnyObject;
-        let mut out = Vec::new();
-        let (s, st) = (shared.clone(), state.clone());
-        out.extend(Observer::new(
-            c"AVCaptureSessionWasInterruptedNotification",
-            object,
-            move |n| {
-                // SAFETY: Foundation hands the block an NSNotification.
-                let reason =
-                    unsafe { user_info_integer(n, c"AVCaptureSessionInterruptionReasonKey") };
-                st.begin(&s, interruption_for_reason(reason));
-            },
-        ));
-        let (s, st) = (shared.clone(), state.clone());
-        out.extend(Observer::new(
-            c"AVCaptureSessionInterruptionEndedNotification",
-            object,
-            move |_| st.end(&s),
-        ));
-        let (s, st) = (shared.clone(), state.clone());
-        out.extend(Observer::new(
-            c"AVCaptureSessionRuntimeErrorNotification",
-            object,
-            move |n| {
-                // SAFETY: Foundation hands the block an NSNotification; its
-                // error is nil or an NSError.
-                let e = unsafe { user_info_object(n, c"AVCaptureSessionErrorKey") };
-                // SAFETY: as above.
-                if unsafe { error_of(e) }.0 == MEDIA_SERVICES_RESET {
-                    st.media_reset.store(true, Ordering::Release);
-                }
-                s.event(SourceEvent::Error(av_error(e, "capture session")));
-            },
-        ));
-        out
-    }
-
     /// What the watch thread keeps for a phone camera.
     pub(super) struct Watch {
         pub(super) conn: Option<ObjSend>,
         pub(super) rotation: Rotation,
-        pub(super) state: Arc<Interrupts>,
         pub(super) last: Option<Turn>,
     }
 
@@ -853,23 +1074,6 @@ mod phone {
             self.last = Some(turn);
             // SAFETY: the live session and its connection.
             autoreleasepool(|_| unsafe { apply_turn(session, conn, turn) });
-        }
-
-        /// After iOS reset its media services, start the session again
-        /// (once per reset). True when it runs again.
-        pub(super) fn restart(&self, session: &ObjSend) -> bool {
-            if !self.state.media_reset.swap(false, Ordering::AcqRel) {
-                return false;
-            }
-            autoreleasepool(|_| {
-                // SAFETY: a live session; startRunning blocks until it runs
-                // or fails.
-                unsafe {
-                    let _: () = msg_send![&**session, startRunning];
-                    let r: Bool = msg_send![&**session, isRunning];
-                    r.as_bool()
-                }
-            })
         }
     }
 }

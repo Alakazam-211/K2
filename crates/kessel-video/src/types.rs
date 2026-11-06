@@ -334,7 +334,11 @@ impl CaptureMode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CameraInfo {
-    /// Stable across runs where the OS allows.
+    /// Stable across runs where the OS allows, and the same when a camera
+    /// goes away and comes back: `AVCaptureDevice.uniqueID` on macOS and
+    /// iOS, the device's symbolic link on Windows, its `/dev/v4l/by-id`
+    /// name on Linux when there is one (else its `/dev/videoN` path), the
+    /// Camera2 id on Android. Pass it to `open_camera` to open this camera.
     pub id: String,
     /// Display name.
     pub name: String,
@@ -344,10 +348,20 @@ pub struct CameraInfo {
     pub is_default: bool,
     /// Its modes.
     pub modes: Vec<CaptureMode>,
+    /// The OS lists the camera but says it can't deliver frames now. macOS
+    /// reports this for a MacBook's built-in camera while the lid is closed
+    /// and for a camera whose lens cover is shut
+    /// (`AVCaptureDevice.isSuspended`, read on iOS too). Opening it works
+    /// but gives no frames until it comes back; an open source reports
+    /// [`Interruption::Suspended`] meanwhile. A change shows in
+    /// [`BackendEvent::Cameras`]. Always `false` where the OS doesn't
+    /// report it: Windows, Linux and Android (and the fake backend, unless
+    /// its script sets it).
+    pub suspended: bool,
 }
 
 impl CameraInfo {
-    /// A camera with no modes listed.
+    /// A camera with no modes listed, not suspended.
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -360,6 +374,7 @@ impl CameraInfo {
             facing,
             is_default,
             modes: Vec::new(),
+            suspended: false,
         }
     }
 }
@@ -444,7 +459,14 @@ pub fn nearest_mode(modes: &[CaptureMode], c: &CaptureConstraints) -> Option<Cap
 pub enum EndReason {
     /// The caller dropped or closed it.
     Closed,
-    /// The device went away.
+    /// The device went away, or the OS stopped capturing from it for good:
+    /// unplugged, a Continuity Camera that disconnected, a capture session
+    /// that died with a runtime error, a read the OS refused. Drop the
+    /// source and open a camera again: another one, or this one once
+    /// [`cameras`](crate::VideoBackend::cameras) lists it again (by the
+    /// same [`CameraInfo::id`]). A pause the OS will undo is never this: a
+    /// phone call or the app in the background is
+    /// [`SourceEvent::Interrupted`], then [`SourceEvent::Resumed`].
     DeviceLost,
     /// The person stopped it from OS UI.
     UserStopped,
@@ -466,6 +488,10 @@ pub enum Interruption {
     Thermal,
     /// A screen source is minimised or occluded.
     Hidden,
+    /// The camera says it is suspended (macOS and iOS): a MacBook's
+    /// built-in camera while its lid is closed, a shut lens cover. See
+    /// [`CameraInfo::suspended`].
+    Suspended,
 }
 
 /// A source's events, in order.

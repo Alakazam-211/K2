@@ -1,6 +1,6 @@
 [package]
 name = "kessel-video"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 # zbus 5's minimum (with zvariant and zbus_macros), for the Linux backend.
 # The windows crate (0.62) needs 1.82.

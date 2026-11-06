@@ -1,6 +1,57 @@
 # Changelog
 
-## 0.1.4
+## 0.1.5
+
+A camera that goes away now ends its source on macOS and iOS, and the
+camera list says which cameras are suspended. Additions only: nothing in
+0.1.4's API changes or goes away.
+
+### A lost camera ends its source (macOS and iOS)
+
+- Before, a camera source noticed a lost device only by a look every
+  250 ms at `isConnected` and `isRunning`. On macOS a Continuity Camera
+  can be invalidated (its session posts a runtime error and stops) while
+  those still read as running, and the source then stayed open with no
+  frames and no event.
+- Now each source also observes `AVCaptureDeviceWasDisconnectedNotification`
+  for its device and `AVCaptureSessionRuntimeErrorNotification` for its
+  session, on macOS as on iOS. The source ends with
+  `SourceEvent::Ended(EndReason::DeviceLost)` (after the error as
+  `SourceEvent::Error`) when:
+  - its device disconnects;
+  - on macOS, its session posts any runtime error;
+  - on either OS, the runtime error says the device is gone
+    (`AVErrorDeviceWasDisconnected`, `AVErrorDeviceNotConnected`);
+  - as before, the device stops being connected, or the session stops
+    without an interruption.
+- A pause is not an end. On iOS a phone call, the app in the background,
+  iPad multitasking or heat sends `Interrupted(...)` and later `Resumed`,
+  as before, and never `DeviceLost`. iOS resetting its media services still
+  sends the error and restarts the session once.
+- `Ended` is sent once, and nothing is sent after the source is dropped:
+  the observers are removed then, and one already running on another
+  thread sends nothing.
+- `AVErrorDeviceWasDisconnected` (-11808) now maps to `VideoError::DeviceLost`
+  and `AVErrorDeviceInUseByAnotherApplication` (-11815) to
+  `VideoError::DeviceBusy` (both were `Os`).
+
+### Suspended cameras
+
+- `CameraInfo` has a new field, `suspended: bool`: the OS lists the camera
+  but says it can't deliver frames now. On macOS and iOS it is
+  `AVCaptureDevice.isSuspended`, which is true for a MacBook's built-in
+  camera while the lid is closed (and for a camera with a shut lens cover).
+  `CameraInfo::new` sets it to `false`. Windows, Linux and Android don't
+  report it: there it is always `false`.
+- A change of it is a change of the list, so `BackendEvent::Cameras`
+  reports it.
+- `Interruption` has a new variant, `Suspended`: an open camera source on
+  macOS or iOS whose device becomes suspended sends
+  `Interrupted(Suspended)`, then `Resumed` when it comes back.
+- `CameraInfo::id` is unchanged and now documented per platform:
+  `AVCaptureDevice.uniqueID` on macOS and iOS, which stays the same when a
+  camera goes away and comes back.
+
 
 Open encoders and decoders say what the OS really made, hardware H.264 is
 listed only after a real probe on every platform, `convert` reads native

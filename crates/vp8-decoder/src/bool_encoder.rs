@@ -128,3 +128,9 @@ fn tree_path(tree: &[i8], node: usize, value: u8, path: &mut [(usize, bool); 16]
     }
     None
 }
+
+impl Default for BoolEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

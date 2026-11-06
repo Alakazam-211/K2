@@ -21,8 +21,11 @@
 //!
 //! **The allowlist** ([`kit_route`]): the method and every segment exact; ids
 //! are `[0-9]{1,19}`; no query except R1's `ids=` list. Anything else is 404
-//! and never reaches Sew. App sessions get the narrow set (R1, R2, R3, R8, R9
-//! and the feed): R4–R7 record or moderate other people and answer 403 there.
+//! and never reaches Sew. App sessions get every kit route, R4–R7 (recording,
+//! member mute, deafen and move) too: Sew checks the person's own rights on
+//! each (the channel's recording permission and consent, the Space's
+//! moderation permissions), and its answer comes back unchanged. An App that
+//! wants finer rules sets them in its own code.
 //!
 //! **What crosses.** To Sew: K2's own request line, `Authorization: Bearer
 //! sews_…`, the JSON body re-serialized (a JSON object, at most
@@ -110,13 +113,6 @@ impl KitRoute {
                 | KitRoute::DeviceRevoke
         )
     }
-
-    /// The narrow set an App's people get on its address: their own rings,
-    /// devices and the feed, and reads. Recording and moderation act on other
-    /// people (vs-live §4 point 4: start narrow).
-    pub fn for_app_sessions(self) -> bool {
-        !matches!(self, KitRoute::RecordingStart | KitRoute::RecordingStop | KitRoute::MemberVoice | KitRoute::MemberMove)
-    }
 }
 
 /// A Sew id: a decimal of 1–19 digits.
@@ -193,7 +189,7 @@ pub struct KitPerson {
     pub sid: String,
     /// For logs (never a secret).
     pub actor: String,
-    /// An App's person on its address: the narrow route set.
+    /// An App's person on its address (for logs: they get the same routes).
     pub app_session: bool,
     who: Who,
 }
@@ -652,11 +648,6 @@ pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
         Ok(p) => p,
         Err(r) => return refuse(client, &r).await,
     };
-    if person.app_session && !route.for_app_sessions() {
-        let r = Refusal::new(403, "missing_permission", "on an App's address the kit's recording and moderation routes are off")
-            .details(json!({ "reason": "app_session_route" }));
-        return refuse(client, &r).await;
-    }
     if !take_token(&person.sid, Instant::now()) {
         return refuse(client, &Refusal::new(429, "rate_limited", "too many requests from this login").retry(RETRY_SECS)).await;
     }

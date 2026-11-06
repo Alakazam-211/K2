@@ -5,7 +5,8 @@
 //! tests drive it over a duplex pipe). People are named by their login
 //! session id's first word: `alice-…` sees channels 10, 20 and 30 (READY lists
 //! 10 and 20), `bob-…` sees 99, `carol-…`'s first Sew session is already gone
-//! (401). A session token is `sews_<sid>_<generation>`.
+//! (401), and `dana-…` holds none of Sew's recording or moderation rights
+//! (Sew's own 403 on R4–R7). A session token is `sews_<sid>_<generation>`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -87,6 +88,12 @@ fn member_id(sid: &str) -> &'static str {
     }
 }
 
+/// Sew's own refusal when the person lacks the right (here, dana on R4–R7).
+fn sews_own_403() -> (u16, Vec<(&'static str, String)>, String) {
+    let body = json!({"ok": false, "error": {"code": "missing_permission", "hint": "you lack this Space's moderation permission", "details": {"permission": "moderate"}}});
+    (403, vec![], body.to_string())
+}
+
 fn masked_404() -> (u16, Vec<(&'static str, String)>, String) {
     (404, vec![], json!({"ok": false, "error": {"code": "not_found", "hint": "no such channel", "details": null}}).to_string())
 }
@@ -123,6 +130,9 @@ impl Fake {
         }
         let path = r.target.split('?').next().unwrap_or("");
         let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        if role(&sid) == "dana" && r.method == "POST" && ["recording", "recordings", "spaces"].iter().any(|w| segs.contains(w)) {
+            return sews_own_403();
+        }
         match (r.method.as_str(), segs.as_slice()) {
             ("POST", ["api", "v1", "gateway", "ticket"]) => {
                 let n = self.n.fetch_add(1, Ordering::SeqCst);
@@ -450,16 +460,6 @@ fn the_allowlist_is_exact() {
     }
 }
 
-#[test]
-fn app_sessions_get_the_narrow_set() {
-    for r in [KitRoute::Members, KitRoute::CallDecline, KitRoute::Channel, KitRoute::MyDevices, KitRoute::DeviceRevoke, KitRoute::Feed] {
-        assert!(r.for_app_sessions(), "{r:?}");
-    }
-    for r in [KitRoute::RecordingStart, KitRoute::RecordingStop, KitRoute::MemberVoice, KitRoute::MemberMove] {
-        assert!(!r.for_app_sessions(), "{r:?}");
-    }
-}
-
 // ── routes ───────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -619,7 +619,7 @@ async fn someone_elses_room_and_device_are_refused() {
 }
 
 #[tokio::test]
-async fn an_app_session_gets_the_narrow_set() {
+async fn an_app_session_reaches_every_kit_route_and_sew_decides() {
     let (addr, fake) = fake_sew().await;
     let kit = app_ctx();
     let me = "app:alice-guest";
@@ -633,23 +633,40 @@ async fn an_app_session_gets_the_narrow_set() {
         let out = through(&addr, &kit, &req(m, target, me, body)).await;
         assert_eq!(status(&out), 200, "{m} {target}: {out}");
     }
-    for (m, target) in [
-        ("POST", "/api/v1/channels/10/recording/start"),
-        ("POST", "/api/v1/recordings/77/stop"),
-        ("POST", "/api/v1/spaces/3/members/1002/voice"),
-        ("POST", "/api/v1/spaces/3/members/1002/voice/move"),
+    // Recording and moderation (R4–R7) cross too, on the person's own Sew
+    // session, and Sew's answer comes back unchanged.
+    for (target, want) in [
+        ("/api/v1/channels/10/recording/start", json!({"id": "77", "channel_id": "10", "state": "active"})),
+        ("/api/v1/recordings/77/stop", json!({"ok": true})),
+        ("/api/v1/spaces/3/members/1002/voice", json!({"ok": true})),
+        ("/api/v1/spaces/3/members/1002/voice/move", json!({"ok": true})),
     ] {
-        let out = through(&addr, &kit, &req(m, target, me, Some("{}"))).await;
-        assert_eq!(status(&out), 403, "{m} {target}: {out}");
-        let b = body_json(&out);
-        assert_eq!(b["error"]["code"], "missing_permission", "{out}");
-        assert_eq!(b["error"]["details"]["reason"], "app_session_route", "{out}");
-        assert!(!fake.targets_of("alice-guest").iter().any(|t| t.ends_with(target)), "{target} reached Sew");
+        let out = through(&addr, &kit, &req("POST", target, me, Some(r#"{"x":1}"#))).await;
+        assert_eq!(status(&out), 200, "{target}: {out}");
+        assert_eq!(body_json(&out), want, "{target}: {out}");
+        let r = fake.requests().into_iter().find(|r| r.who().0 == "alice-guest" && r.target == target).expect("Sew saw it");
+        assert_eq!(r.bearer(), "sews_alice-guest_1", "{target} ran on the person's own session");
+        assert_eq!(r.body, r#"{"x":1}"#, "{target}: the body crossed");
+    }
+    // Someone without Sew's rights: Sew's own 403 reaches the kit unchanged,
+    // so Sew's check is the one that decides.
+    let dana = "app:dana-guest";
+    let sews = serde_json::from_str::<Value>(&sews_own_403().2).expect("json");
+    for target in [
+        "/api/v1/channels/10/recording/start",
+        "/api/v1/recordings/77/stop",
+        "/api/v1/spaces/3/members/1002/voice",
+        "/api/v1/spaces/3/members/1002/voice/move",
+    ] {
+        let out = through(&addr, &kit, &req("POST", target, dana, Some("{}"))).await;
+        assert_eq!(status(&out), 403, "{target}: {out}");
+        assert_eq!(body_json(&out), sews, "{target}: {out}");
+        assert!(fake.targets_of("dana-guest").contains(&format!("POST {target}")), "{target} never reached Sew");
     }
     // A box login on an App's address is not this App's person.
     let out = through(&addr, &kit, &req("GET", "/api/v1/me/devices", "login:alice-guestbox", None)).await;
     assert_eq!(status(&out), 401, "{out}");
-    // The feed is in the narrow set.
+    // The feed opens for an App session too.
     let (mut ws, _t) = open_feed(&addr, &kit, "app:alice-guestfeed").await.expect("the feed opens");
     assert_eq!(next_json(&mut ws).await["t"], "ready");
 }

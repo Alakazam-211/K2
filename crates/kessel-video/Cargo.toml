@@ -37,7 +37,10 @@ android = []
 # VP8 decoding in pure Rust (the vp8-decoder crate) as a software codec in
 # every backend.
 vp8 = ["dep:vp8-decoder"]
-# Whichever of the OS backends matches the target, plus VP8.
+# The OS backend for the target, plus VP8. Naming all four is safe: each
+# backend's dependencies are target-specific and its code is cfg-gated to
+# its OS, so a Linux build compiles only the Linux backend (Cargo features
+# can't be target-gated themselves).
 system = ["apple", "windows", "linux", "android", "vp8"]
 
 [dependencies]

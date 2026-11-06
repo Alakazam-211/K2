@@ -13,8 +13,8 @@
 //!   producer. No async runtime: kessel-video runs its own threads.
 //! - **Codec-neutral:** VP8 as raw RFC 6386 frames, H.264 as one Annex B
 //!   access unit (4-byte start codes, SPS and PPS before every IDR). H.264
-//!   comes only from the operating system's codecs (VideoToolbox on macOS);
-//!   no codec library is linked or shipped.
+//!   comes only from the operating system's codecs (VideoToolbox on macOS,
+//!   MediaCodec on Android); no codec library is linked or shipped.
 //!
 //! ## Example
 //!
@@ -72,6 +72,11 @@ mod win;
 #[cfg(all(feature = "linux", target_os = "linux"))]
 #[allow(unsafe_code)]
 mod linux;
+
+// On Android, and in host tests over a scripted platform. Its NDK glue,
+// the only `unsafe`, is an Android-only submodule.
+#[cfg(all(feature = "android", any(target_os = "android", test)))]
+mod android;
 
 // Runs the README's examples as doctests.
 #[cfg(doctest)]

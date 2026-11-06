@@ -7,8 +7,32 @@ The first release: the codec-neutral API (`VideoBackend`, `FrameSource`,
 backend (AVFoundation cameras, ScreenCaptureKit screens, VideoToolbox H.264
 encoding), the Windows backend (Media Foundation cameras, Windows Graphics
 Capture screens), the Linux backend (V4L2 cameras, ScreenCast portal and
-PipeWire screens), and VP8 through vp8-encoder and vp8-decoder in every
-backend.
+PipeWire screens), the Android backend (Camera2 cameras, MediaCodec H.264
+encoding), and VP8 through vp8-encoder and vp8-decoder in every backend.
+
+### Android backend
+
+- `system()` on Android: Camera2 cameras through the NDK (`libcamera2ndk`
+  with `AImageReader`), front and back selection (the front camera is the
+  default), the sensor modes at 30 fps with the auto-exposure range set to
+  match, frames rotated upright for the sensor orientation and the device's
+  turn, and size boxes that fit portrait and landscape frames alike.
+- `AndroidContext` holds the host's JNI handles (`AndroidContext::new`,
+  unsafe: the `JavaVM*` and a `Context` global reference) for reading the
+  CAMERA permission, and the app's lifecycle: `set_background` closes
+  cameras on pause (`Interrupted(Background)`) and reopens them on resume
+  (`Resumed`); `set_device_orientation` turns frames upright.
+- A denied CAMERA permission answers `NoPermission`; asking for it stays the
+  app's job. A camera another app takes reports
+  `Interrupted(InUseByAnother)` and reopens on resume or unpause.
+- H.264 encoding through `AMediaCodec` (NV12 or I420 input, SPS and PPS
+  before every IDR, Constrained Baseline flags set in the SPS). VP8 encodes
+  and decodes through the Rust crates. No H.264 decoder yet.
+- Screen capture answers `Unsupported`: MediaProjection needs a Java
+  foreground service.
+- The backend's logic runs over a scripted platform in the host tests; only
+  the NDK calls need a device. Type-checked for `aarch64-linux-android` and
+  `x86_64-linux-android`; not yet run on a device or an emulator.
 
 ### Packaging
 

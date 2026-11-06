@@ -32,7 +32,8 @@ won't. Each change is listed in the changelog in the repository.
 | macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | VP8 | The test suite passes, including VideoToolbox H.264 encoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
 | Linux (x86-64) | V4L2 | The ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. **Camera capture is untested with a real camera, and screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
 | Windows (x86-64) | Media Foundation | Windows Graphics Capture | VP8 | VP8 | **Type-checked only.** |
-| iOS, Android | none yet | none yet | VP8 (fake backend) | VP8 (fake backend) | **No phone backends yet**: `system()` answers `Unsupported`. The API, the null and fake backends and VP8 are type-checked. |
+| iOS | none yet | none yet | VP8 (fake backend) | VP8 (fake backend) | **No iOS backend yet**: `system()` answers `Unsupported`. The API, the null and fake backends and VP8 are type-checked. |
+| Android (API 24+) | Camera2 through the NDK | none (MediaProjection needs Java) | H.264 (MediaCodec), VP8 | VP8 | **Type-checked only** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, errors, VP8) is tested on a host over a scripted platform; the NDK calls themselves have not run on a device or an emulator. |
 | Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same | Tested on Linux and macOS. |
 
 "Type-checked" means `cargo check` and `cargo clippy` pass for that target;
@@ -163,6 +164,34 @@ On macOS:
 - ScreenCaptureKit is loaded at run time, so the app still starts on systems
   without it.
 
+On Android:
+- Make the backend with `system(config)`, with `config.android` set to an
+  `AndroidContext` from the host's JNI handles:
+  `unsafe { AndroidContext::new(vm, context) }`, where `vm` is the
+  `JavaVM*` and `context` a global reference to the Activity or Application
+  (in a Tauri or winit app, `ndk_context::android_context()` has both).
+  Keep a clone of the context.
+- The app declares `<uses-permission android:name="android.permission.CAMERA" />`
+  and `<uses-feature android:name="android.hardware.camera" android:required="false" />`
+  in its manifest, and asks for CAMERA at run time itself (in Tauri, through
+  its permission API): asking needs an Activity's result callback, which is
+  Java. `camera_permission()` reads the state through JNI (`NotDetermined`
+  without the handles); `request_camera_permission()` reports it without a
+  prompt; a denied open answers `NoPermission`.
+- Call `AndroidContext::set_background(true)` when the app pauses and
+  `false` when it resumes. Cameras close in the background (Android takes
+  them from background apps) and report `Interrupted(Background)`, then
+  reopen and report `Resumed`. Call `set_device_orientation` when the device
+  turns: frames are rotated upright for the sensor and the turn. Size boxes
+  are orientation-free: 1280x720 also fits a portrait 720x1280 frame.
+- A camera another app takes reports `Interrupted(InUseByAnother)`; it
+  reopens on the next resume, or when the caller unpauses the source.
+- H.264 encoding uses the device's MediaCodec AVC encoder with CPU (NV12 or
+  I420) input; `ImplPreference::SoftwareOnly` picks Android's own software
+  encoder. Keyframe requests and bitrate changes need API 26; on API 24 and
+  25 a keyframe request restarts the codec and the bitrate stays as opened.
+  There is no H.264 decoder yet; VP8 decodes in Rust.
+
 ## Testing
 
 | Command | Runs |
@@ -182,10 +211,13 @@ its tests outside the repository.
   `windows` crate needs 1.82).
 - No system libraries or headers at build time on any platform. The OS
   backends reach the OS through system frameworks (macOS), OS DLLs through
-  the `windows` crate (Windows), and raw ioctls, D-Bus in pure Rust and a
-  run-time dlopen of the system's libpipewire (Linux).
+  the `windows` crate (Windows), raw ioctls, D-Bus in pure Rust and a
+  run-time dlopen of the system's libpipewire (Linux), and the NDK's system
+  libraries `libcamera2ndk` and `libmediandk`, declared in Rust and linked
+  from the NDK's own stubs like any Android app (Android). No build script
+  and no C is compiled.
 - Features: `system` (default) is the OS backend for the target plus `vp8`.
-  `apple`, `windows` and `linux` pick backends one by one; `vp8` adds the
+  `apple`, `windows`, `linux` and `android` pick backends one by one; `vp8` adds the
   Rust VP8 codecs. With `--no-default-features` you get the API, `null()`
   and the fake backend (with structural H.264 only), with no OS code and no
   `unsafe`.

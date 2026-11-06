@@ -36,7 +36,10 @@ windows = ["dep:windows", "dep:windows-future"]
 # pure Rust) with PipeWire (the system's libpipewire, loaded at run time:
 # nothing to install at build time). No H.264: Linux has no OS codec.
 linux = ["dep:libc", "dep:zbus", "dep:serde"]
-# Camera2/CameraX, MediaCodec, MediaProjection (not built yet).
+# Camera2 cameras and MediaCodec H.264 encoding through the NDK's system
+# libraries (libcamera2ndk, libmediandk), declared in Rust: no build script,
+# no C, nothing vendored. Needs API 24. Screen capture (MediaProjection) is
+# not built: it needs a Java foreground service.
 android = []
 # VP8 encoding and decoding in pure Rust (the vp8-encoder and vp8-decoder
 # crates) as software codecs in every backend.

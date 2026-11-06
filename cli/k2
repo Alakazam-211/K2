@@ -11573,6 +11573,33 @@ ask your human in your Thread)
   k2 voice rename <room> <name>    the slug stays
   k2 voice close <room> [--now]    only the top room (close_from_top)
 
+WHEN ROOMS STOP WORKING. Sew can lose the K5 Space and its rooms while K2
+still holds their ids: Sew was purged and installed again, or restored
+from an older backup. Joins then answer voice_unavailable, and k2 voice
+status shows "K5 Space: checking" or "suspect" with the fix. K2 checks
+on its own: when Sew answers not_found for the Space or a room, when the
+Sew install changes, and every 6 hours. It makes the Space and rooms
+again. To run it now:
+  k2 voice repair [--json]   the owner, an Admin, or an agent whose
+                             workspace has Manage Chat / Voice Hosting on
+                             (any other agent: chat_manage_off). Waits up
+                             to 30 s, then prints what it found and fixed.
+What it does: asks Sew which Space holds the slug k5-admin (Sew makes one
+if none does; Sew picks every id, never K2), re-links the rooms to the
+channels Sew holds and makes any that are gone, adds every member again,
+retries the changes Sew refused, and sets aside agents' own Spaces from
+an earlier Sew install. It is K2's own check, run now, plus every
+member's add sent again. Running it twice is safe: the second run finds
+everything in place. Not done in 30 s: it says "still working" and exits
+0; K2 keeps at it (run it again, or watch k2 voice status). A Space Sew
+made again starts empty: old messages, uploads, recordings, read
+positions and channels or roles someone made by hand don't come back.
+DMs are not affected. A Space it set aside is listed with each agent
+workspace and the level it had: the one at level manage made it and makes
+it again (k2 chat space create <slug> --name "<Name>"), then the owner or
+an Admin gives the others their level back (k2 chat access grant <slug>
+<workspace> --level <level>).
+
 JOIN. People join from the K2 app with their own login. Agents never join
 (agents_not_in_voice). The bare owner token never joins or moderates
 (owner_token_cannot_join; agents can read it on shared boxes). k2 voice
@@ -44386,7 +44413,7 @@ cmd_schema() {
     {"name": "hostchat on-behalf", "usage": "k2 hostchat on-behalf [list] [--state pending|approved|declined|all] [--limit N] | approve <act_…|msg_…> [--note \"…\"] | decline <act_…|msg_…> [--note \"…\"] [--json]", "description": "Posts an assistant made on your behalf. They are the assistant's own posts and never wait for you; each carries whether you have reviewed it (pending, approved or declined, who and when). approve needs your confirm (Touch ID or the vault password, from a terminal outside K2); decline needs none. GET /cli/sew/on-behalf, POST /cli/sew/on-behalf/review.", "args": [], "flags": []},
     {"name": "hostchat deliveries", "usage": "k2 hostchat deliveries [list] [<workspace>] | set <workspace> [--quiet-hours …] [--tz …] [--batch …] | reset <workspace> [--json]", "description": "Every chat agent's delivery hub: running, cursor, held, delivered and missed counts, prefs and follows. set/reset change a workspace's prefs (reset also clears its follows' --batch). Manage Chat / Voice Hosting (agents) or owner/admin; audited (GET /cli/sew/admin/deliveries, POST /set, /reset).", "args": [], "flags": []},
     {"name": "hostchat log", "usage": "k2 hostchat log [--limit N] [--json]", "description": "Chat administration record: access grants and changes, community management and on-behalf reviews (no message text). GET /cli/sew/admin/log.", "args": [], "flags": []},
-    {"name": "voice", "usage": "k2 voice <rooms|status|set rooms <0-10>|rename|close|join|leave|kick|mute|unmute|deafen|undeafen> ... [--now] [--json]", "description": "Voice rooms on this server (a preview; Linux servers with Pro host them; people talk from the K2 app). rooms: the rooms and who is in each (anyone, agents too). status: hosting state and why, the K5 Space, members, sync holds, the voice lane (owner/Admin; agents read it). set rooms, rename, close: owner/Admin (rooms close from the top; --now gives a 10 s notice, then calls end). join/leave: your own login only (the CLI has no audio; agents and the bare owner token never join). kick|mute|unmute|deafen|undeafen <room> <person>: from the owner's or an Admin's own login. GET /cli/voice/rooms, /cli/voice/status; POST /cli/voice/settings, /rooms/rename, /rooms/close, /join, /session/leave, /moderate. Exit 2 = bad usage, 3 = refused or unavailable. k2 study voice-rooms.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}, {"name": "--now", "arg": null, "description": "set rooms / close: close now (a 10 s notice, then calls end)."}]},
+    {"name": "voice", "usage": "k2 voice <rooms|status|repair|set rooms <0-10>|rename|close|join|leave|kick|mute|unmute|deafen|undeafen> ... [--now] [--json]", "description": "Voice rooms on this server (a preview; Linux servers with Pro host them; people talk from the K2 app). rooms: the rooms and who is in each (anyone, agents too). status: hosting state and why, the K5 Space, members, sync holds, the voice lane (owner/Admin; agents read it). repair: check the K5 Space with Sew and fix it (make it and its rooms again if Sew lost them, re-link rooms, re-add members, retry refused changes; safe to run twice; owner/Admin, or an agent with Manage Chat / Voice Hosting). set rooms, rename, close: owner/Admin (rooms close from the top; --now gives a 10 s notice, then calls end). join/leave: your own login only (the CLI has no audio; agents and the bare owner token never join). kick|mute|unmute|deafen|undeafen <room> <person>: from the owner's or an Admin's own login. GET /cli/voice/rooms, /cli/voice/status; POST /cli/voice/settings, /rooms/rename, /rooms/close, /join, /session/leave, /moderate, /repair. Exit 2 = bad usage, 3 = refused or unavailable. k2 study voice-rooms.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}, {"name": "--now", "arg": null, "description": "set rooms / close: close now (a 10 s notice, then calls end)."}]},
     {"name": "chat", "usage": "k2 chat <spaces|channels|messages|read|unread|mark-read|ack|wait|whoami|send|post|reply|dm|edit|delete|outbox|follow|unfollow|prefs|deliveries|access|channel|space|role|ban|unban|timeout|mute> ...", "description": "Chat inside Spaces, for agents (Chat / Voice Hosting, powered by Sew; runs as the agent's own Sew member; id + locked tool, so a K2 terminal sends its passport). Levels per Space: read < reply < send < manage; a Space may queue every post for approval (out_…, exit 0). Server admin is k2 hostchat. Exit 0 ok (incl. queued), 1 error, 2 usage or wait timeout, 3 not allowed here.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}]},
     {"name": "chat send", "usage": "k2 chat send|post <space>/<channel> \"text\"|- [--on-behalf-of <user>] [--key K] [--json]", "description": "Post to a channel (POST /cli/sew/chat/send). Prints msg_… when posted or out_… when queued for approval. --on-behalf-of <user>: you speak for the person you assist; the post is yours, goes out at once (unless the Space holds every post) and they can review it later. --key: idempotency key; re-run with the same key after an error so nothing double-posts. - reads the text from stdin.", "args": [], "flags": []},
     {"name": "chat reply", "usage": "k2 chat reply <msg_…> \"text\"|- [--broadcast] [--on-behalf-of <user>] [--key K] [--json]", "description": "Reply under a message (replying to a reply answers in the same chain). --broadcast also shows it in the channel; fine at level reply.", "args": [], "flags": []},
@@ -68053,6 +68080,16 @@ server can't host, and lets the owner or an Admin change them. Read
   k2 voice status                     hosting state and why, the K5 Space,
                                       members, rooms, sync holds, the voice lane
                                       (owner/Admin; agents read it)
+  k2 voice repair                     rooms stopped working (joins refused, status
+                                      says the K5 Space is "checking" or "suspect")?
+                                      Check the K5 Space with Sew and fix it: make
+                                      it and its rooms again if Sew lost them, re-link
+                                      the rooms, re-add every member, retry what Sew
+                                      refused. Waits up to 30 s, then says what it
+                                      found and fixed ("still working" = K2 keeps at
+                                      it; run it again later). Safe to run twice.
+                                      Owner/Admin, or an agent with Manage Chat /
+                                      Voice Hosting
   k2 voice set rooms <0-10> [--now]   how many rooms this server hosts (owner/Admin).
                                       Lowering closes rooms from the top: an empty
                                       room closes at once, a room with people closes
@@ -68087,7 +68124,9 @@ server can't host, and lets the owner or an Admin change them. Read
 Agents: read only (rooms, status). Every change, join, consent and
 moderation refuses an agent's passport (owner_or_admin_only,
 agents_not_in_voice, agents_cannot_moderate): ask your human in your
-Thread. The bare owner token reads and changes rooms but never joins,
+Thread. One exception: an agent whose workspace has Manage Chat / Voice
+Hosting on may run k2 voice repair (other agents get chat_manage_off).
+The bare owner token reads and changes rooms but never joins,
 answers a recording notice or moderates (owner_token_cannot_join,
 owner_token_cannot_moderate).
 
@@ -68150,9 +68189,19 @@ elif verb == "status":
         t = "%s, %s reading" % (t.get("state"), t.get("reading")) + ((": " + t["reason"]) if t.get("reason") else "")
     print("rooms:      %s (plan: %s)" % (v.get("count"), t))
     sp = v.get("space") or {}
-    print("K5 Space: %s%s" % (sp.get("state") or "not made yet", (" " + sp["spaceId"]) if sp.get("spaceId") else ""))
-    if sp.get("why"):
+    sh = v.get("spaceHealth") or {}
+    state = sh.get("state") or sp.get("state") or "not made yet"
+    if state == "none":
+        state = "not made yet"
+    print("K5 Space: %s%s" % (state, (" " + sp["spaceId"]) if sp.get("spaceId") else ""))
+    if sh.get("state") in ("checking", "suspect", "blocked"):
+        print("  why:      %s" % sh.get("line"))
+        print("  fix:      %s" % sh.get("fix"))
+    elif sp.get("why"):
         print("  why:      %s" % sp["why"])
+    lc = sp.get("lastCheck") or {}
+    if lc.get("outcome") in ("remade", "relinked"):
+        print("  last check: %s (was %s, now %s)" % ("Sew made it again" if lc["outcome"] == "remade" else "K2 re-linked a stale id", lc.get("from"), lc.get("to")))
     for r in v.get("rooms") or []:
         print("  %-8s %-24s %s%s" % (r.get("slug"), r.get("wantName") or r.get("name") or "", r.get("state"), "  (close now)" if r.get("closeNow") else ""))
     m = v.get("members") or []
@@ -68164,10 +68213,39 @@ elif verb == "status":
         print("hold:       %s %s %s%s" % (x.get("op"), x.get("subject"), x.get("state"), (" — " + x["error"]) if x.get("error") else ""))
     if v.get("carriedAgents"):
         print("agents carried to k5-admin: %s" % ", ".join(v["carriedAgents"]))
+    st = v.get("staleSpaces") or []
+    if st:
+        print("set aside:  %d agent Space(s) from an earlier Sew install (%s): k2 voice repair says how to make them again" % (len(st), ", ".join(s.get("slug") or "?" for s in st)))
     ln = v.get("lane") or {}
     print("voice lane: %s%s" % (ln.get("state"), (" — " + ln["reason"]) if ln.get("reason") else ""))
     fd = v.get("feed") or {}
     print("feed:       %s%s" % (fd.get("state"), (" — " + fd["lastError"]) if fd.get("lastError") else ""))
+elif verb == "repair":
+    print("K5 Space:   %s" % v.get("space"))
+    for r in v.get("rooms") or []:
+        print("  %s: re-linked to channel %s (was %s)" % (r.get("room"), r.get("to"), r.get("from") or "none"))
+    m = v.get("members") or {}
+    print("members:    %s in the Space, %s still being added" % (m.get("added"), m.get("pending")))
+    for x in m.get("held") or []:
+        print("  held:     %s — %s" % (x.get("externalId"), x.get("why")))
+    fixed = v.get("fixed") or []
+    for f in fixed:
+        print("fixed:      %s" % f)
+    if not fixed and v.get("settled"):
+        print("fixed:      nothing needed fixing")
+    if v.get("notRestored"):
+        print("note:       %s" % v["notRestored"])
+    st = v.get("staleSpaces") or []
+    if st:
+        print("set aside:  %d agent Space(s) from an earlier Sew install:" % len(st))
+        for s in st:
+            who = ", ".join("%s (level %s)" % (a.get("workspace") or a.get("projectId"), a.get("level")) for a in s.get("access") or [])
+            print("  %s (old id %s): %s" % (s.get("slug"), s.get("spaceId"), who or "no agents"))
+        print("  how:      %s" % v.get("staleHint"))
+    for x in v.get("holds") or []:
+        print("hold:       %s %s %s%s" % (x.get("op"), x.get("subject"), x.get("state"), (" — " + x["error"]) if x.get("error") else ""))
+    if not v.get("settled"):
+        print("still working: K2 keeps at it; k2 voice status shows progress")
 elif verb in ("set", "close"):
     print("rooms: %s" % v.get("count"))
     if v.get("closing"):
@@ -68228,6 +68306,10 @@ cmd_voice() {
             [ "$n" -eq 0 ] || _voice_bad "k2 voice status takes no arguments"
             _hostchat_call GET /cli/voice/status ""
             _voice_print status "$as_json" ;;
+        repair)
+            [ "$n" -eq 0 ] || _voice_bad "k2 voice repair takes no arguments"
+            _hostchat_call POST /cli/voice/repair "{}"
+            _voice_print repair "$as_json" ;;
         set)
             [ "$n" -eq 2 ] && [ "${pos[0]}" = "rooms" ] || _voice_bad "k2 voice set rooms <0-10> [--now]"
             case "${pos[1]}" in ''|*[!0-9]*) _voice_bad "the room count is a number 0-10" ;; esac

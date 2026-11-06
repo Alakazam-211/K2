@@ -39,6 +39,33 @@ ask your human in your Thread)
   k2 voice rename <room> <name>    the slug stays
   k2 voice close <room> [--now]    only the top room (close_from_top)
 
+WHEN ROOMS STOP WORKING. Sew can lose the K5 Space and its rooms while K2
+still holds their ids: Sew was purged and installed again, or restored
+from an older backup. Joins then answer voice_unavailable, and k2 voice
+status shows "K5 Space: checking" or "suspect" with the fix. K2 checks
+on its own: when Sew answers not_found for the Space or a room, when the
+Sew install changes, and every 6 hours. It makes the Space and rooms
+again. To run it now:
+  k2 voice repair [--json]   the owner, an Admin, or an agent whose
+                             workspace has Manage Chat / Voice Hosting on
+                             (any other agent: chat_manage_off). Waits up
+                             to 30 s, then prints what it found and fixed.
+What it does: asks Sew which Space holds the slug k5-admin (Sew makes one
+if none does; Sew picks every id, never K2), re-links the rooms to the
+channels Sew holds and makes any that are gone, adds every member again,
+retries the changes Sew refused, and sets aside agents' own Spaces from
+an earlier Sew install. It is K2's own check, run now, plus every
+member's add sent again. Running it twice is safe: the second run finds
+everything in place. Not done in 30 s: it says "still working" and exits
+0; K2 keeps at it (run it again, or watch k2 voice status). A Space Sew
+made again starts empty: old messages, uploads, recordings, read
+positions and channels or roles someone made by hand don't come back.
+DMs are not affected. A Space it set aside is listed with each agent
+workspace and the level it had: the one at level manage made it and makes
+it again (k2 chat space create <slug> --name "<Name>"), then the owner or
+an Admin gives the others their level back (k2 chat access grant <slug>
+<workspace> --level <level>).
+
 JOIN. People join from the K2 app with their own login. Agents never join
 (agents_not_in_voice). The bare owner token never joins or moderates
 (owner_token_cannot_join; agents can read it on shared boxes). k2 voice

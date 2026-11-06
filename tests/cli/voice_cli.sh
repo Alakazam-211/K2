@@ -122,6 +122,15 @@ class H(BaseHTTPRequestHandler):
                 out = {"ok": True, "left": True, "already": True, "why": "joined_elsewhere", "room": "room-1", "channelId": "901"}
             else:
                 out = {"ok": True, "left": True, "already": False, "room": "room-1", "channelId": "901"}
+        elif p == "/cli/voice/repair":
+            if rec["token"] == scoped:
+                status, out = 403, {"ok": False, "code": "chat_manage_off", "error": {"code": "chat_manage_off", "hint": "needs Manage Chat / Voice Hosting"}}
+            else:
+                out = {"ok": True, "settled": True, "space": "the K5 Space was gone from Sew; Sew made it again as 7002 (was 7001)",
+                       "rooms": [{"room": "room-1", "from": "901", "to": "902"}], "members": {"added": 3, "pending": 0, "held": []},
+                       "fixed": ["1 room(s) re-linked to new channels"], "notRestored": "Sew made the K5 Space again under a new id",
+                       "staleSpaces": [{"spaceId": "6060", "slug": "u1", "access": [{"projectId": "p1", "level": "manage", "approval": "none"}]}],
+                       "staleHint": "the agent that made one makes it again", "holds": []}
         elif p == "/cli/voice/moderate":
             out = {"ok": True, "action": b.get("action"), "person": b.get("person"), "room": {"name": "Standup"}}
         elif p == "/cli/voice/recording/consent":
@@ -197,6 +206,26 @@ assert_contains "status: hosting state and detail" "$out" "voice_off: Voice isn'
 assert_contains "status: detail" "$out" "(sew_too_old)"
 assert_contains "status: the Pro gate reading" "$out" "(plan: pro, fresh reading)"
 
+echo "== repair =="
+run owner voice repair
+assert_eq "repair exit 0" "$rc" "0"
+assert_eq "repair is a POST" "$(req_where /cli/voice/repair method)" "POST"
+assert_eq "repair body" "$(req_where /cli/voice/repair body)" '{}'
+assert_contains "repair: what it found" "$out" "K5 Space:   the K5 Space was gone from Sew; Sew made it again as 7002 (was 7001)"
+assert_contains "repair: a re-linked room" "$out" "room-1: re-linked to channel 902 (was 901)"
+assert_contains "repair: members" "$out" "members:    3 in the Space, 0 still being added"
+assert_contains "repair: what it fixed" "$out" "fixed:      1 room(s) re-linked to new channels"
+assert_contains "repair: what Sew can't bring back" "$out" "note:       Sew made the K5 Space again"
+assert_contains "repair: a set-aside agent Space" "$out" "u1 (old id 6060): p1 (level manage)"
+run owner voice repair --json
+assert_eq "repair --json is the raw body" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["rooms"][0]["to"])' "$out")" "902"
+run cell voice repair
+assert_eq "an agent without the switch exits 3" "$rc" "3"
+assert_contains "repair: chat_manage_off on stderr" "$err" "chat_manage_off"
+assert_eq "repair sends the agent's passport" "$(req_where /cli/voice/repair token)" "$SCOPED"
+run owner voice --help
+assert_contains "help: repair" "$out" "k2 voice repair"
+
 echo "== owner actions =="
 run owner voice set rooms 1 --now
 assert_eq "set rooms exit 0" "$rc" "0"
@@ -254,7 +283,7 @@ assert_contains "help: consent" "$out" "k2 voice consent <recording-id> yes --no
 echo "== usage errors send nothing =="
 before="$(nreq)"
 for args in "set rooms 11" "set rooms x" "set seats 2" "rooms --now" "join" "kick room-1" "rename room-1" "frobnicate" "status extra" \
-    "consent 77" "consent 77 yes" "consent 77 maybe" "consent x7 no" "consent 77 yes --notice v2" "join room-1 --notice 2"; do
+    "repair now" "repair --now" "consent 77" "consent 77 yes" "consent 77 maybe" "consent x7 no" "consent 77 yes --notice v2" "join room-1 --notice 2"; do
     # shellcheck disable=SC2086
     run owner voice $args
     assert_eq "usage: k2 voice $args exits 2" "$rc" "2"

@@ -9,10 +9,9 @@ license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 description = "A VP8 video decoder in pure, safe Rust (RFC 6386), conformance-tested on the WebM test vectors."
 authors = ["Alakazam Labs"]
 readme = "README.md"
+repository = "https://github.com/Alakazam-211/K2"
 keywords = ["vp8", "video", "decoder", "codec", "webrtc"]
 categories = ["multimedia::video", "multimedia::encoding"]
-# Not published until Kessel Steward's checklist is done.
-publish = false
 include = ["src/", "README.md", "NOTICE", "PROVENANCE.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
 [lib]

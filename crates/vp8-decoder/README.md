@@ -13,11 +13,12 @@ It decodes every bitstream version (0 to 3), with:
 - the last, golden and alt-ref references, with sign bias and buffer copies;
 - hidden frames.
 
-It matches the WebM project's VP8 test vectors bit for bit (see Testing).
+It matches the WebM project's 59 VP8 test vectors bit for bit (see Testing).
+
+## Using it
 
 Input is one raw VP8 frame at a time, starting at the frame tag: no IVF,
 WebM or RTP framing. That is what an RTP depacketiser (RFC 7741) produces.
-Output is a borrowed I420 picture. A small IVF reader is included.
 
 ```rust
 let mut decoder = vp8_decoder::Decoder::new();
@@ -30,35 +31,70 @@ match decoder.decode(frame) {
 }
 ```
 
-After any error the decoder waits for the next keyframe. A real-time
-receiver should send a keyframe request (PLI) then.
+- **`Picture` borrows the decoder.** It points into the decoder's own frame
+  buffer, so it lives until the next call to `decode`. To keep a frame,
+  copy it with `Picture::to_i420()` or `write_i420()`. It is I420 at the
+  frame's display size; chroma is `(width + 1) / 2` by `(height + 1) / 2`.
+- **The size comes from the stream:** every keyframe carries it, and the
+  decoder reallocates when it changes. `Decoder::dimensions()` returns it.
+- **Errors** (`DecodeError`):
+  - `NeedKeyframe`: an interframe before the first keyframe, or after an error;
+  - `Truncated`: the frame is shorter than its headers say;
+  - `Invalid`: the frame is malformed;
+  - `Unsupported`: a bitstream version above 3.
 
-The scaling bits in the keyframe header are reported in `FrameInfo` and
-otherwise ignored, as RFC 6386 Section 9.1 allows: pictures come out at
-the coded size.
+  After any error the decoder waits for the next keyframe, and a real-time
+  receiver should ask for one (PLI).
+- **`frame_info()`** reads a frame's uncompressed header without decoding it:
+  keyframe flag, version, whether it is shown, and a keyframe's size.
+- **The scaling bits** in the keyframe header are reported in `Dimensions`
+  and otherwise ignored, as RFC 6386 Section 9.1 allows. Pictures come out
+  at the coded size.
+- **`ivf::IvfReader`** reads IVF files (the container the test vectors use)
+  frame by frame.
 
 ## Testing
 
+The conformance test needs a checkout of the repository: `scripts/` and
+`tests/` are not in the published crate.
+
 ```sh
-scripts/fetch-test-vectors.sh /tmp/vp8-vectors
+crates/vp8-decoder/scripts/fetch-test-vectors.sh /tmp/vp8-vectors
 VP8_TEST_VECTORS=/tmp/vp8-vectors cargo test -p vp8-decoder --release --features conformance
 ```
 
-The script downloads the WebM project's vectors. These are
-`vp80-00-comprehensive-001` to `018`, plus the intra, inter,
-segmentation, partitions, sharpness and small-size sets. It also downloads
-their per-frame MD5 files, and checks every file against
-`tests/vectors.sha256`. The vectors are test data and are not in this
-repository.
+The script downloads the WebM project's vectors (`vp80-00-comprehensive-001`
+to `018`, plus the intra, inter, segmentation, partitions, sharpness and
+small-size sets) and their per-frame MD5 files. It checks every file
+against `tests/vectors.sha256`. The vectors are test data and are not in
+this repository.
 
-The test decodes every frame and compares the MD5 of each shown frame's
-I420 data with the published one.
+The `conformance` feature only switches on that test, which decodes every
+frame and compares the MD5 of each shown frame's I420 data with the
+published one. It needs `VP8_TEST_VECTORS` and fails, never skips, without
+it. A plain `cargo test -p vp8-decoder` runs the unit tests only.
 
-## Licence and provenance
+## Security
 
-This crate is a port of the reference decoder in RFC 6386 Section 20.
-Its licence is `(MIT OR Apache-2.0) AND BSD-3-Clause`:
+The decoder is meant for untrusted input: it has no `unsafe` code, and
+malformed frames return errors rather than panicking. Please report a crash
+or hang on a malicious stream privately, through GitHub's "Report a
+vulnerability" on the Security tab of
+[Alakazam-211/K2](https://github.com/Alakazam-211/K2/security).
+
+## Licence, provenance and patents
+
+This crate is an independent port of the reference decoder in RFC 6386
+Section 20. Its licence is `(MIT OR Apache-2.0) AND BSD-3-Clause`:
 - the RFC code's BSD-3-Clause notice is in NOTICE;
 - our own code is MIT OR Apache-2.0.
+
+**If you distribute binaries** that include this crate, you must reproduce
+the BSD-3-Clause notice in NOTICE, as that licence requires.
+
+**Patents:** no patent licence is granted beyond Apache-2.0's for our own
+contributions. Google's VP8 patent grant covers only Google's own code.
+Users who want patent cover can join Google's free VP8 Patent
+Cross-License themselves.
 
 PROVENANCE.md records exactly which sources were used.

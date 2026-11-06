@@ -19,12 +19,6 @@ fn main() {
     #[cfg(unix)]
     k2_client::process::raise_nofile_limit();
 
-    // TLS before anything that could use it (Kessel Steward R9, R10): check
-    // the CPU, install graviola as the process-wide rustls provider, or show
-    // "This computer's processor isn't supported" and exit. A reqwest client
-    // can't be built before this.
-    k2_lib::tls_provider::install_or_exit();
-
     // Phase 2 Unit 2 — `--llm-worker` arm moved to k2so-daemon. The
     // daemon now spawns itself as `k2so-daemon --llm-worker <payload>`
     // to run inference in an isolated child process. Tauri is no

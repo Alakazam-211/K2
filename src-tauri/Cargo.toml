@@ -36,12 +36,7 @@ tauri = { version = "2.12", features = ["protocol-asset", "macos-private-api", "
 tauri-plugin-dialog = "2.8"
 tauri-plugin-clipboard-manager = "2.4"
 tauri-plugin-deep-link = "2.5"
-# TLS (Kessel Steward R9): the plugin's default `rustls-tls` feature turns on
-# rustls' `ring` provider, so it is off. Its reqwest 0.13 gets rustls with no
-# provider from `reqwest-0-13` below, and the process default (graviola,
-# src/tls_provider.rs) carries the TLS. `system-proxy` and `zip` are the
-# plugin's other defaults, kept.
-tauri-plugin-updater = { version = "2.13", default-features = false, features = ["system-proxy", "zip"] }
+tauri-plugin-updater = "2.13"
 tauri-plugin-process = "2.4"
 # Desktop notification on FeedbackCreated (Feedback F2 —
 # prd-agent-feedback-notifications §6). macOS Notification Center via
@@ -90,23 +85,8 @@ libc = "0.2"
 # + `sampler` features) for the LlmManager type, and `encoding_rs`
 # for token decoding — they're available transitively but Tauri's
 # own source tree doesn't need to compile them as direct deps.
-# TLS (Kessel Steward R9, R10): rustls with no crypto provider of its own (no
-# ring, no aws-lc-rs). src/tls_provider.rs checks the CPU and installs graviola
-# as the process default before any TLS. `rustls-tls-webpki-roots-no-provider`
-# is `rustls-tls` (webpki roots, the same trust store as before) minus ring.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots-no-provider"] }
-# Tauri's updater uses reqwest 0.13. Named here only to give it rustls with no
-# provider: the platform verifier plus the process default provider, which is
-# what the plugin's own `rustls-tls` gave it, minus ring. Not used from K2's
-# code (tests/tls_https_local.rs drives it).
-reqwest-0-13 = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls-no-provider"] }
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
-# graviola: pure Rust plus assembly that rustc builds (no C compiler, no build
-# script), Apache-2.0 OR ISC OR MIT-0. 0.4.4 is the first release with
-# `util::is_cpu_supported`, which R10 requires before any TLS. 64-bit only
-# (x86_64, aarch64).
-graviola = "0.4.4"
-rustls-graviola = "0.4.0"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 tauri-plugin-drag = "2.1.0"
 tauri-plugin-opener = "2.6"
 notify = { version = "7", features = ["macos_fsevent"] }

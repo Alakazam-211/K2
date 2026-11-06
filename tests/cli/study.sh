@@ -835,17 +835,17 @@ for needle in "k2 app install <app> --tunnel" "re-creating drops its logins" "gu
     "k2 app approve <id>" "--core sew=on" "chat:channels" "delivered true" "Hearth" "optional" \
     "k2 study chat-voice-rooms" "Owner" "chat_manage on" \
     "NATIVE APPS" "call_credential: true" "/_k2/voice/sew/" "Bearer sewcc_" "ice_servers" "voice_door_off" \
-    "Bearer k2skn_" "<api_base>feed" "Close 4000" "app_session_route" "no CORS"; do
+    "Bearer k2skn_" "<api_base>feed" "Close 4000" "voice/move" "its 403 comes back as is" "no CORS"; do
     assert_contains "chat-voice: $needle" "$cv_out" "$needle"
 done
 # K2's own names win over Sew's draft: no proposed cap, no flags this K2 lacks.
-for absent in "chat:structure" "--manager" "--voice" "k2 app grant add --kind chat --subject-kind principal"; do
+for absent in "chat:structure" "--manager" "--voice" "k2 app grant add --kind chat --subject-kind principal" "app_session_route"; do
     assert_absent "chat-voice: no $absent" "$cv_out" "$absent"
 done
 # 0.46.9: the off-box backup alarm points at k2 hostchat ship (dir | box-backup).
 assert_contains "chat-voice: the off-box backup alarm" "$cv_out" "k2_backup_offbox_none → no off-box backup: the owner, k2 hostchat ship (--help)"
 cv_lines="$(printf '%s\n' "$cv_out" | wc -l | tr -d ' ')"
-if [ "$cv_lines" -le 136 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 136)" >&2; fail=$((fail + 1)); fi
+if [ "$cv_lines" -le 144 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 144)" >&2; fail=$((fail + 1)); fi
 cr_out="$("$K2" study chat-voice-rooms)"
 assert_contains "title" "$cr_out" "k2 study chat-voice-rooms — Rooms and channels in your App Space"
 for needle in "POST /api/v1/spaces/{space_id}/channels" "\"type\":\"voice\"" "NOT idempotent" "409 conflict" \

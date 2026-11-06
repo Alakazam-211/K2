@@ -393,7 +393,37 @@ pub fn inter_predict(
         }
         return;
     }
-    let apply = if bilinear { apply2 } else { apply6 };
+    if bilinear {
+        filter_block::<true>(dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters);
+    } else {
+        filter_block::<false>(dst, dst_pos, dst_stride, src, sstride, origin, bw, bh, fx, fy, filters);
+    }
+}
+
+/// The sub-pixel filter passes, specialised per filter kind so the taps
+/// inline.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn filter_block<const BILINEAR: bool>(
+    dst: &mut [u8],
+    dst_pos: usize,
+    dst_stride: usize,
+    src: &[u8],
+    sstride: usize,
+    origin: usize,
+    bw: usize,
+    bh: usize,
+    fx: usize,
+    fy: usize,
+    filters: &[Filter; 8],
+) {
+    let apply = |s: &[u8], p: usize, step: usize, f: &Filter| -> u8 {
+        if BILINEAR {
+            apply2(s, p, step, f)
+        } else {
+            apply6(s, p, step, f)
+        }
+    };
     if fy == 0 {
         let f = &filters[fx];
         for r in 0..bh {

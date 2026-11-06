@@ -30,6 +30,12 @@
 //!   ([`ProducerState::Gone`]) from one that is merely quiet.
 //! - **Memory stays bounded:** the file is the header and the slots, sized
 //!   once; nothing is allocated per frame on the producer's side.
+//! - **The consumer trusts nothing in the file.** The producer is another
+//!   process, so a frame's slot, size, rotation, colour and length are
+//!   checked against the consumer's own layout before a byte is copied
+//!   (see [`FrameInfo`]), and the file's length before each use of the
+//!   mapping. The README's "Trust boundary" says what that covers and
+//!   what it can't.
 //!
 //! The producer's whole surface is also a small `extern "C"` API ([`ffi`]),
 //! for an app extension written in Swift that links this crate as a static
@@ -66,6 +72,8 @@ mod producer;
 mod scale;
 #[cfg(unix)]
 mod shm;
+#[cfg(all(test, unix))]
+mod hostile_tests;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -142,26 +150,42 @@ impl Layout {
         nv12_len(self.max_width, self.max_height)
     }
 
-    /// The whole file's length.
+    /// The whole file's length (`usize::MAX` for a layout too large to
+    /// exist, which [`Layout::validate`] refuses).
     pub fn file_len(&self) -> usize {
-        layout::HEADER + self.slots as usize * self.slot_stride()
+        (self.slots as usize)
+            .saturating_mul(self.slot_stride())
+            .saturating_add(layout::HEADER)
     }
 
     pub(crate) fn slot_stride(&self) -> usize {
-        (layout::SLOT_HEADER + self.slot_bytes()).div_ceil(64) * 64
+        layout::SLOT_HEADER
+            .saturating_add(self.slot_bytes())
+            .div_ceil(64)
+            .saturating_mul(64)
+    }
+
+    /// Does a `width` x `height` frame fit the box, either way round?
+    pub(crate) fn fits(&self, width: u32, height: u32) -> bool {
+        let (bw, bh) = (self.max_width, self.max_height);
+        (width <= bw && height <= bh) || (width <= bh && height <= bw)
     }
 }
 
 /// The bytes of a tight NV12 frame: the Y plane, then interleaved U and V
-/// at half size (rounded up).
+/// at half size (rounded up). `usize::MAX` when that doesn't fit a `usize`
+/// (no real frame is that large), so it never overflows.
 pub fn nv12_len(width: u32, height: u32) -> usize {
-    let (w, h) = (width as usize, height as usize);
-    w * h + 2 * w.div_ceil(2) * h.div_ceil(2)
+    let (w, h) = (u64::from(width), u64::from(height));
+    // Each term fits a u64 (under 2^64 and 2^63); only the sum may not.
+    let len = (w * h).saturating_add(2 * w.div_ceil(2) * h.div_ceil(2));
+    usize::try_from(len).unwrap_or(usize::MAX)
 }
 
 /// The colour description of a frame's YUV.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[repr(u32)]
+#[non_exhaustive]
 pub enum Color {
     /// BT.601, limited range (16-235).
     #[default]
@@ -187,6 +211,7 @@ impl Color {
 /// Why the producer stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u32)]
+#[non_exhaustive]
 pub enum EndReason {
     /// The person stopped it (an iOS broadcast's `broadcastFinished`).
     UserStopped = 1,
@@ -211,6 +236,7 @@ impl EndReason {
 
 /// What the consumer knows of the producer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ProducerState {
     /// None attached yet, or attached and not started.
     Waiting,
@@ -286,18 +312,31 @@ impl<'a> Nv12Frame<'a> {
         if !matches!(self.rotation, 0 | 90 | 180 | 270) {
             return bad(format!("a rotation of {}", self.rotation));
         }
+        // A plane of `rows` rows `stride` apart, the last `row` bytes long,
+        // needs this many bytes; None when that overflows (a stride no real
+        // plane has).
+        let need =
+            |stride: usize, rows: usize, row: usize| stride.checked_mul(rows - 1)?.checked_add(row);
         if self.y_stride < w {
             return bad(format!("a Y stride of {} for {w} pixels", self.y_stride));
         }
-        if self.y.len() < self.y_stride * (h - 1) + w {
-            return bad(format!("a {}-byte Y plane for {w}x{h}", self.y.len()));
+        if need(self.y_stride, h, w).is_none_or(|n| self.y.len() < n) {
+            return bad(format!(
+                "a {}-byte Y plane for {w}x{h}, stride {}",
+                self.y.len(),
+                self.y_stride
+            ));
         }
         let (cw2, ch) = (2 * w.div_ceil(2), h.div_ceil(2));
         if self.uv_stride < cw2 {
             return bad(format!("a UV stride of {} for {w} pixels", self.uv_stride));
         }
-        if self.uv.len() < self.uv_stride * (ch - 1) + cw2 {
-            return bad(format!("a {}-byte UV plane for {w}x{h}", self.uv.len()));
+        if need(self.uv_stride, ch, cw2).is_none_or(|n| self.uv.len() < n) {
+            return bad(format!(
+                "a {}-byte UV plane for {w}x{h}, stride {}",
+                self.uv.len(),
+                self.uv_stride
+            ));
         }
         Ok(())
     }
@@ -305,20 +344,30 @@ impl<'a> Nv12Frame<'a> {
 
 /// One frame read by [`Consumer::try_read`]: what it is, and where its
 /// planes sit in the bytes read out (tight NV12).
+///
+/// The producer is another process, so the consumer checks what it wrote
+/// before handing a frame out: the width and height are at least 1 and fit
+/// the ring's box (either way round), the rotation is 0, 90, 180 or 270,
+/// the colour is one this version knows, and the bytes read out are exactly
+/// [`FrameInfo::len`]. A slot that fails a check is skipped
+/// ([`RingStats::rejected`]). The timestamp and the frame number are only
+/// numbers: use them with saturating or checked maths.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FrameInfo {
-    /// Counts up from 1 across producers; a gap means frames were skipped.
+    /// Counts up from 1 across producers (to 2^56 - 1, then from 1 again);
+    /// a gap means frames were skipped.
     pub frame_no: u64,
     /// Width in pixels (after the producer's scaling).
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// How far to turn it clockwise to stand upright.
+    /// How far to turn it clockwise to stand upright: 0, 90, 180 or 270.
     pub rotation: u32,
     /// The colour description.
     pub color: Color,
-    /// Capture time, ns on [`monotonic_ns`]'s clock.
+    /// Capture time, ns on [`monotonic_ns`]'s clock, as the producer
+    /// stamped it.
     pub timestamp_ns: u64,
 }
 
@@ -330,7 +379,7 @@ impl FrameInfo {
 
     /// Where the UV plane starts.
     pub fn uv_offset(&self) -> usize {
-        self.width as usize * self.height as usize
+        (self.width as usize).saturating_mul(self.height as usize)
     }
 
     /// Bytes per UV row (the width rounded up to even).
@@ -361,6 +410,10 @@ pub struct RingStats {
     pub missed: u64,
     /// Reads given up because the producer kept rewriting the slot.
     pub torn: u64,
+    /// Frames skipped because their slot didn't describe a valid frame (a
+    /// corrupt ring, or a producer that misbehaves). Counted once per
+    /// frame.
+    pub rejected: u64,
     /// Producers that attached.
     pub attaches: u64,
 }
@@ -454,6 +507,9 @@ pub(crate) mod layout {
     pub(crate) const H_STATE: usize = 56; // u32, S_*
     pub(crate) const H_END_REASON: usize = 60; // u32, EndReason
     pub(crate) const H_LATEST: usize = 64; // u64: frame_no << 8 | slot; 0 = none
+    /// The largest frame number (56 bits, beside the slot in `H_LATEST`).
+    /// After it the producer starts again at 1.
+    pub(crate) const MAX_FRAME_NO: u64 = (1 << 56) - 1;
     pub(crate) const H_WRITTEN: usize = 72; // u64
     pub(crate) const H_DROPPED: usize = 80; // u64
     pub(crate) const H_ATTACHES: usize = 88; // u64

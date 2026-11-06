@@ -38,13 +38,22 @@ struct Src<'a> {
 }
 
 /// Write `src` into `dst` (tight, `dcols` x `drows`), averaging the box of
-/// source samples under each destination sample.
-fn plane(src: &Src<'_>, dst: &mut [u8], dcols: usize, drows: usize) {
+/// source samples under each destination sample. Reads of `src` are bounds
+/// checked; writes go through the raw pointer (shared memory another
+/// process may be reading).
+///
+/// # Safety
+///
+/// `dst` is valid for writes of `dcols * drows * src.channels` bytes.
+unsafe fn plane(src: &Src<'_>, dst: *mut u8, dcols: usize, drows: usize) {
     let ch = src.channels;
     if (dcols, drows) == (src.cols, src.rows) {
         let row = dcols * ch;
         for y in 0..drows {
-            dst[y * row..][..row].copy_from_slice(&src.data[y * src.stride..][..row]);
+            let from = &src.data[y * src.stride..][..row];
+            // SAFETY: row `y` of `dst` is in the caller's range, and `from`
+            // is the caller's own buffer, apart from `dst`.
+            unsafe { std::ptr::copy_nonoverlapping(from.as_ptr(), dst.add(y * row), row) };
         }
         return;
     }
@@ -63,42 +72,51 @@ fn plane(src: &Src<'_>, dst: &mut [u8], dcols: usize, drows: usize) {
                         sum += row[x * ch + c] as u64;
                     }
                 }
-                dst[(dy * dcols + dx) * ch + c] = ((sum + n / 2) / n) as u8;
+                let at = (dy * dcols + dx) * ch + c;
+                // SAFETY: `at` < dcols * drows * ch, the caller's range.
+                unsafe { dst.add(at).write(((sum + n / 2) / n) as u8) };
             }
         }
     }
 }
 
 /// Write `f` (already validated) into `dst` as tight NV12 of `dw` x `dh`.
-/// `dst` holds at least [`crate::nv12_len`] of that size.
-pub(crate) fn write_nv12(f: &Nv12Frame<'_>, dw: u32, dh: u32, dst: &mut [u8]) {
+///
+/// # Safety
+///
+/// `dst` is valid for writes of [`crate::nv12_len`]`(dw, dh)` bytes.
+pub(crate) unsafe fn write_nv12(f: &Nv12Frame<'_>, dw: u32, dh: u32, dst: *mut u8) {
     let (w, h) = (f.width as usize, f.height as usize);
     let (dw, dh) = (dw as usize, dh as usize);
-    let (luma, chroma) = dst.split_at_mut(dw * dh);
-    plane(
-        &Src {
-            data: f.y,
-            stride: f.y_stride,
-            cols: w,
-            rows: h,
-            channels: 1,
-        },
-        luma,
-        dw,
-        dh,
-    );
-    plane(
-        &Src {
-            data: f.uv,
-            stride: f.uv_stride,
-            cols: w.div_ceil(2),
-            rows: h.div_ceil(2),
-            channels: 2,
-        },
-        chroma,
-        dw.div_ceil(2),
-        dh.div_ceil(2),
-    );
+    // SAFETY: the luma plane is the first dw * dh bytes of `dst` and the
+    // chroma plane the 2 * ceil(dw / 2) * ceil(dh / 2) after it: together
+    // nv12_len(dw, dh), the caller's range.
+    unsafe {
+        plane(
+            &Src {
+                data: f.y,
+                stride: f.y_stride,
+                cols: w,
+                rows: h,
+                channels: 1,
+            },
+            dst,
+            dw,
+            dh,
+        );
+        plane(
+            &Src {
+                data: f.uv,
+                stride: f.uv_stride,
+                cols: w.div_ceil(2),
+                rows: h.div_ceil(2),
+                channels: 2,
+            },
+            dst.add(dw * dh),
+            dw.div_ceil(2),
+            dh.div_ceil(2),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -129,13 +147,15 @@ mod tests {
         let uv = [100, 200, 110, 210, 0xEE, 0xEE];
         let f = Nv12Frame::new(&y, 6, &uv, 6, 4, 2);
         let mut out = vec![0u8; 2 + 2];
-        write_nv12(&f, 2, 1, &mut out);
+        // SAFETY: `out` holds nv12_len(2, 1) bytes.
+        unsafe { write_nv12(&f, 2, 1, out.as_mut_ptr()) };
         assert_eq!(&out[..2], &[25, 45]);
         // Chroma 2 x 1 to 1 x 1: U and V averaged apart.
         assert_eq!(&out[2..], &[105, 205]);
         // The same size: a tight copy without the padding.
         let mut out = vec![0u8; crate::nv12_len(4, 2)];
-        write_nv12(&f, 4, 2, &mut out);
+        // SAFETY: `out` holds nv12_len(4, 2) bytes.
+        unsafe { write_nv12(&f, 4, 2, out.as_mut_ptr()) };
         assert_eq!(
             out,
             vec![10, 20, 30, 40, 30, 40, 50, 60, 100, 200, 110, 210]

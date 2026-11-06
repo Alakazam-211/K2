@@ -315,14 +315,14 @@ fn a_mismatched_or_missing_ring_is_refused() {
     }
     file.set_len(len).expect("restore");
     // Another version, or a header that disagrees with itself.
-    let v = c.map().u32(H_VERSION);
+    let v = c.raw_map().u32(H_VERSION);
     v.store(VERSION + 1, Ordering::Relaxed);
     assert!(matches!(
         Producer::attach(&path),
         Err(RingError::Mismatch(_))
     ));
     v.store(VERSION, Ordering::Relaxed);
-    let sb = c.map().u64(H_SLOT_BYTES);
+    let sb = c.raw_map().u64(H_SLOT_BYTES);
     let right = sb.load(Ordering::Relaxed);
     sb.store(right + 64, Ordering::Relaxed);
     assert!(matches!(
@@ -330,7 +330,7 @@ fn a_mismatched_or_missing_ring_is_refused() {
         Err(RingError::Mismatch(_))
     ));
     sb.store(right, Ordering::Relaxed);
-    let magic = c.map().u64(H_MAGIC);
+    let magic = c.raw_map().u64(H_MAGIC);
     magic.store(0, Ordering::Relaxed);
     assert!(matches!(
         Producer::attach(&path),
@@ -437,7 +437,7 @@ fn the_control_words_drop_frames_without_copying() {
     assert_eq!(p.push(&at(2_000_000_000)).expect("push"), Pushed::NotWanted);
     c.set_wanted(true);
     // A consumer that stops looking (the app suspended) counts as away.
-    c.map().u64(H_BEAT).store(0, Ordering::Relaxed);
+    c.raw_map().u64(H_BEAT).store(0, Ordering::Relaxed);
     assert!(!p.consumer_present());
     assert_eq!(p.push(&at(3_000_000_000)).expect("push"), Pushed::NotWanted);
     let mut buf = Vec::new();

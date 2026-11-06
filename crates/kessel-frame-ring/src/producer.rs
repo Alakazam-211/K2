@@ -81,7 +81,7 @@ impl Producer {
             map,
             file,
             layout,
-            next_frame: (latest >> 8) + 1,
+            next_frame: after(latest >> 8),
             last_kept_ns: None,
             finished: false,
         })
@@ -184,16 +184,18 @@ impl Producer {
             .store(len as u64, Ordering::Relaxed);
         let data = self.map.bytes(base + SLOT_HEADER, len);
         // SAFETY: `data` is `len` bytes of this slot (bounds checked by
-        // `bytes`). The consumer may copy them at the same time; it checks
-        // the slot's sequence after and drops a copy that raced this write.
-        let dst = unsafe { std::slice::from_raw_parts_mut(data, len) };
-        scale::write_nv12(f, dw, dh, dst);
+        // `bytes`), and `len` is the NV12 length of `dw` x `dh`. It is
+        // written through the raw pointer, never a `&mut [u8]`, because the
+        // consumer may copy the same bytes at the same time (a seqlock: it
+        // checks the slot's sequence after and drops a copy that raced this
+        // write).
+        unsafe { scale::write_nv12(f, dw, dh, data) };
         seq.store(odd + 1, Ordering::Release);
         self.map
             .u64(H_LATEST)
             .store(frame_no << 8 | slot as u64, Ordering::Release);
         self.map.u64(H_WRITTEN).fetch_add(1, Ordering::Relaxed);
-        self.next_frame += 1;
+        self.next_frame = after(frame_no);
         self.last_kept_ns = Some(ts);
         Ok(Pushed::Written {
             frame_no,
@@ -246,6 +248,17 @@ impl Producer {
         let data = self.map.bytes(base + SLOT_HEADER, half);
         // SAFETY: `half` bytes of this slot, bounds checked by `bytes`.
         unsafe { std::ptr::write_bytes(data, value, half) };
+    }
+}
+
+/// The frame number after `n`: 1 after the largest (and after anything
+/// out of range a corrupt file held), so `frame_no << 8` never loses bits
+/// and 0 (no frame) is never used.
+fn after(n: u64) -> u64 {
+    if n < MAX_FRAME_NO {
+        n + 1
+    } else {
+        1
     }
 }
 

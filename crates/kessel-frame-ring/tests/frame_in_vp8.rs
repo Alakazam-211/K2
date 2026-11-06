@@ -44,6 +44,8 @@ fn pump(ring: &mut Consumer, tx: &FrameInSender, buf: &mut Vec<u8>) -> bool {
             Color::Bt601Limited => ColorSpace::Bt601Limited,
             Color::Bt709Limited => ColorSpace::Bt709Limited,
             Color::Bt709Full => ColorSpace::Bt709Full,
+            // A colour a newer ring version may add: the common default.
+            _ => ColorSpace::Bt601Limited,
         };
         let rotation = Rotation::from_degrees(info.rotation).expect("a quarter turn");
         if tx.push(frame, rotation).is_err() {
@@ -61,7 +63,8 @@ fn pump(ring: &mut Consumer, tx: &FrameInSender, buf: &mut Vec<u8>) -> bool {
             tx.end(EndReason::SourceClosed);
             false
         }
-        ProducerState::Waiting | ProducerState::Running => true,
+        // Waiting, Running, and any state a newer version adds.
+        _ => true,
     }
 }
 

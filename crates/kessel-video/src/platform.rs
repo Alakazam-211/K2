@@ -25,17 +25,32 @@ pub struct SystemConfig {
 }
 
 /// The OS backend for this target (feature `system`, or the per-OS
-/// feature). `Unsupported` on a target whose backend isn't built yet.
+/// feature). `Unsupported` on a target whose backend isn't built yet
+/// (macOS is; Windows and Linux are next).
 #[cfg(any(feature = "apple", feature = "windows", feature = "linux", feature = "android"))]
 pub fn system(config: SystemConfig) -> Result<Arc<dyn VideoBackend>, VideoError> {
     let _ = config;
-    Err(crate::error::unsupported(format!(
-        "no kessel-video backend for {} yet",
-        std::env::consts::OS
-    )))
+    #[cfg(all(feature = "apple", target_os = "macos"))]
+    {
+        crate::apple::backend()
+    }
+    #[cfg(not(all(feature = "apple", target_os = "macos")))]
+    {
+        Err(crate::error::unsupported(format!(
+            "no kessel-video backend for {} yet",
+            std::env::consts::OS
+        )))
+    }
 }
 
 /// The OS and version, for logs.
 pub(crate) fn os_name() -> String {
-    std::env::consts::OS.to_string()
+    #[cfg(all(feature = "apple", target_os = "macos"))]
+    {
+        crate::apple::os_name()
+    }
+    #[cfg(not(all(feature = "apple", target_os = "macos")))]
+    {
+        std::env::consts::OS.to_string()
+    }
 }

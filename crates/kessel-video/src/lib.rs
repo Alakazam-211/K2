@@ -55,6 +55,10 @@ mod null;
 mod platform;
 mod types;
 
+#[cfg(all(feature = "apple", target_os = "macos"))]
+#[allow(unsafe_code)]
+mod apple;
+
 // Runs the README's examples as doctests.
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]

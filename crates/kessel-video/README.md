@@ -29,13 +29,26 @@ caller has already decrypted and verified.
 
 ### Platforms
 
-| | Cameras | Screens | H.264 |
-|---|---|---|---|
-| macOS | not yet | not yet | not yet |
-| Windows | not yet | not yet | not yet |
-| Linux | not yet | not yet | none (no OS codec) |
+| | Cameras | Screens | H.264 encode | Decode |
+|---|---|---|---|---|
+| macOS | AVFoundation | ScreenCaptureKit (12.3+): list, system picker (14+), window exclusion | VideoToolbox | not yet |
+| Windows | not yet | not yet | not yet | not yet |
+| Linux | not yet | not yet | none: no OS codec | not yet |
 
-Every platform has the API, `null()` and the fake backend today.
+VP8 comes from pure-Rust encoder and decoder crates behind a feature, once
+they land. Every platform has the API, `null()` and the fake backend today.
+
+On macOS:
+- A bundled app needs `NSCameraUsageDescription` in its Info.plist (and
+  `com.apple.security.device.camera` under the hardened runtime). Without it
+  `camera_permission()` answers `Denied` instead of letting the OS end the
+  app for asking.
+- Listing displays and windows needs Screen Recording permission.
+  `pick_screen` (macOS 14+) doesn't: the person's choice in the system picker
+  is the permission. It runs the picker on the main thread itself, so it can
+  be called from any thread, but it needs the app's main run loop.
+- ScreenCaptureKit is loaded at run time, so the app still starts on systems
+  without it.
 
 ## The fake backend
 

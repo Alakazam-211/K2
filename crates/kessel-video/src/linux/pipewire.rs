@@ -38,7 +38,7 @@ pub(crate) const VIDEO_RGBA: u32 = 11;
 pub(crate) const VIDEO_BGRA: u32 = 12;
 
 fn pad8(v: &mut Vec<u8>) {
-    while v.len() % 8 != 0 {
+    while !v.len().is_multiple_of(8) {
         v.push(0);
     }
 }

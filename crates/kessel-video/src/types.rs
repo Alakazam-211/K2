@@ -731,8 +731,8 @@ pub(crate) fn validate_size(width: u32, height: u32) -> Result<(), VideoError> {
         || height < 16
         || width > 8192
         || height > 8192
-        || width % 2 != 0
-        || height % 2 != 0
+        || !width.is_multiple_of(2)
+        || !height.is_multiple_of(2)
     {
         return Err(invalid(format!(
             "coded size {width}x{height} (even, 16 to 8192)"

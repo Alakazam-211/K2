@@ -35,7 +35,10 @@ fn main() {
                 i += 2;
             }
             w => {
-                size = Some((w.parse().expect("width"), args[i + 1].parse().expect("height")));
+                size = Some((
+                    w.parse().expect("width"),
+                    args[i + 1].parse().expect("height"),
+                ));
                 i += 2;
             }
         }
@@ -79,7 +82,9 @@ fn main() {
     let count_pos = ivf.len();
     ivf.extend_from_slice(&0u32.to_le_bytes());
     ivf.extend_from_slice(&0u32.to_le_bytes());
-    let mut decoded_yuv = std::io::BufWriter::new(std::fs::File::create(format!("{output}.dec.yuv")).expect("create .dec.yuv"));
+    let mut decoded_yuv = std::io::BufWriter::new(
+        std::fs::File::create(format!("{output}.dec.yuv")).expect("create .dec.yuv"),
+    );
 
     let mut pos = header_end + 1;
     let mut n = 0usize;
@@ -90,7 +95,11 @@ fn main() {
     let mut encode_secs = 0.0;
     let mut scaled = Vec::new();
     while pos < data.len() && n < max_frames {
-        let line_end = pos + data[pos..].iter().position(|&b| b == b'\n').expect("FRAME line");
+        let line_end = pos
+            + data[pos..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .expect("FRAME line");
         pos = line_end + 1;
         let src = &data[pos..pos + frame_len];
         pos += frame_len;
@@ -114,11 +123,23 @@ fn main() {
         ivf.extend_from_slice(&(n as u64 - 1).to_le_bytes());
         ivf.extend_from_slice(&out.data);
         out_frames += 1;
-        let p = dec.decode(&out.data).expect("own output decodes").expect("shown");
+        let p = dec
+            .decode(&out.data)
+            .expect("own output decodes")
+            .expect("shown");
         let got = p.to_i420();
         decoded_yuv.write_all(&got).expect("write .dec.yuv");
-        let mse: f64 = got.iter().zip(&reference).map(|(&a, &b)| (a as f64 - b as f64).powi(2)).sum::<f64>() / got.len() as f64;
-        psnr_sum += if mse == 0.0 { 99.0 } else { 10.0 * (65025.0 / mse).log10() };
+        let mse: f64 = got
+            .iter()
+            .zip(&reference)
+            .map(|(&a, &b)| (a as f64 - b as f64).powi(2))
+            .sum::<f64>()
+            / got.len() as f64;
+        psnr_sum += if mse == 0.0 {
+            99.0
+        } else {
+            10.0 * (65025.0 / mse).log10()
+        };
     }
     ivf[count_pos..count_pos + 4].copy_from_slice(&out_frames.to_le_bytes());
     std::fs::write(output, &ivf).unwrap_or_else(|e| panic!("{output}: {e}"));

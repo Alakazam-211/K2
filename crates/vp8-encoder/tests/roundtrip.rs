@@ -37,7 +37,12 @@ fn frame(w: usize, h: usize, t: usize) -> Vec<u8> {
 }
 
 fn psnr(a: &[u8], b: &[u8]) -> f64 {
-    let mse: f64 = a.iter().zip(b).map(|(&x, &y)| (x as f64 - y as f64).powi(2)).sum::<f64>() / a.len() as f64;
+    let mse: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(&x, &y)| (x as f64 - y as f64).powi(2))
+        .sum::<f64>()
+        / a.len() as f64;
     if mse == 0.0 {
         99.0
     } else {
@@ -83,7 +88,10 @@ fn run(cfg: EncoderConfig, frames: usize, mut each: impl FnMut(usize, &mut Encod
         r.bits.push(out.data.len() * 8);
         r.tids.push(out.temporal_id);
         r.syncs.push(out.layer_sync);
-        let picture = dec.decode(&out.data).unwrap_or_else(|e| panic!("frame {t}: {e}")).expect("shown");
+        let picture = dec
+            .decode(&out.data)
+            .unwrap_or_else(|e| panic!("frame {t}: {e}"))
+            .expect("shown");
         assert_eq!((picture.width, picture.height), (w as u32, h as u32));
         let p = psnr(&picture.to_i420(), &src);
         r.psnr_min = r.psnr_min.min(p);
@@ -97,7 +105,10 @@ fn run(cfg: EncoderConfig, frames: usize, mut each: impl FnMut(usize, &mut Encod
 #[test]
 fn decodes_and_looks_like_the_input() {
     let r = run(EncoderConfig::new(320, 240, 30, 600_000), 45, |_, _| {});
-    eprintln!("[roundtrip] 320x240 at 600 kbit/s: PSNR avg {:.2} dB, min {:.2} dB", r.psnr_avg, r.psnr_min);
+    eprintln!(
+        "[roundtrip] 320x240 at 600 kbit/s: PSNR avg {:.2} dB, min {:.2} dB",
+        r.psnr_avg, r.psnr_min
+    );
     assert_eq!(r.keyframes, vec![0], "only the first frame is a keyframe");
     assert!(r.psnr_avg > 32.0, "average PSNR {:.2} dB", r.psnr_avg);
     assert!(r.psnr_min > 27.0, "minimum PSNR {:.2} dB", r.psnr_min);
@@ -107,7 +118,11 @@ fn decodes_and_looks_like_the_input() {
 fn odd_sizes_and_tiny_frames_round_trip() {
     for (w, h) in [(1, 1), (17, 9), (33, 47), (175, 143)] {
         let r = run(EncoderConfig::new(w, h, 30, 300_000), 6, |_, _| {});
-        assert!(r.psnr_min > 25.0, "{w}x{h}: minimum PSNR {:.2} dB", r.psnr_min);
+        assert!(
+            r.psnr_min > 25.0,
+            "{w}x{h}: minimum PSNR {:.2} dB",
+            r.psnr_min
+        );
     }
 }
 
@@ -119,9 +134,16 @@ fn hits_the_target_bitrate() {
         // Skip the first second (keyframe and model warm-up).
         let tail: usize = r.bits[30..].iter().sum();
         let kbps = tail as f64 / ((frames - 30) as f64 / 30.0) / 1000.0;
-        eprintln!("[rate] {w}x{h} target {} kbit/s: got {kbps:.0} kbit/s, PSNR avg {:.2} dB", rate / 1000, r.psnr_avg);
+        eprintln!(
+            "[rate] {w}x{h} target {} kbit/s: got {kbps:.0} kbit/s, PSNR avg {:.2} dB",
+            rate / 1000,
+            r.psnr_avg
+        );
         let target = rate as f64 / 1000.0;
-        assert!(kbps > target * 0.6 && kbps < target * 1.25, "{w}x{h}: {kbps:.0} kbit/s for a {target} kbit/s target");
+        assert!(
+            kbps > target * 0.6 && kbps < target * 1.25,
+            "{w}x{h}: {kbps:.0} kbit/s for a {target} kbit/s target"
+        );
     }
 }
 
@@ -140,10 +162,18 @@ fn keyframes_come_on_request_and_rate_changes_do_not_force_one() {
 
 #[test]
 fn temporal_layers_follow_the_webrtc_pattern() {
-    let r = run(EncoderConfig::new(160, 120, 30, 300_000).with_temporal_layers(TemporalLayers::L1T3), 12, |_, _| {});
+    let r = run(
+        EncoderConfig::new(160, 120, 30, 300_000).with_temporal_layers(TemporalLayers::L1T3),
+        12,
+        |_, _| {},
+    );
     assert_eq!(r.tids, vec![0, 2, 1, 2, 0, 2, 1, 2, 0, 2, 1, 2]);
     assert_eq!(r.syncs[..4], [true, true, true, false]);
-    let r = run(EncoderConfig::new(160, 120, 30, 300_000).with_temporal_layers(TemporalLayers::L1T2), 6, |_, _| {});
+    let r = run(
+        EncoderConfig::new(160, 120, 30, 300_000).with_temporal_layers(TemporalLayers::L1T2),
+        6,
+        |_, _| {},
+    );
     assert_eq!(r.tids, vec![0, 1, 0, 1, 0, 1]);
 }
 
@@ -151,19 +181,32 @@ fn temporal_layers_follow_the_webrtc_pattern() {
 #[test]
 fn base_layer_alone_decodes() {
     let (w, h) = (160usize, 120usize);
-    let mut enc = Encoder::new(EncoderConfig::new(w as u32, h as u32, 30, 300_000).with_temporal_layers(TemporalLayers::L1T3)).expect("encoder");
+    let mut enc = Encoder::new(
+        EncoderConfig::new(w as u32, h as u32, 30, 300_000)
+            .with_temporal_layers(TemporalLayers::L1T3),
+    )
+    .expect("encoder");
     let mut base = Decoder::new();
     let mut half = Decoder::new();
     for t in 0..24 {
         let src = frame(w, h, t);
         let pic = Picture::from_i420(&src, w as u32, h as u32).expect("picture");
-        let out = enc.encode(&pic, false).expect("encode").expect("not dropped at this rate");
+        let out = enc
+            .encode(&pic, false)
+            .expect("encode")
+            .expect("not dropped at this rate");
         if out.temporal_id == 0 {
-            let p = base.decode(&out.data).expect("base layer decodes").expect("shown");
+            let p = base
+                .decode(&out.data)
+                .expect("base layer decodes")
+                .expect("shown");
             assert!(psnr(&p.to_i420(), &src) > 25.0, "frame {t}");
         }
         if out.temporal_id <= 1 {
-            let p = half.decode(&out.data).expect("layers 0 and 1 decode").expect("shown");
+            let p = half
+                .decode(&out.data)
+                .expect("layers 0 and 1 decode")
+                .expect("shown");
             assert!(psnr(&p.to_i420(), &src) > 25.0, "frame {t}");
         }
     }

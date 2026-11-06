@@ -1,0 +1,29 @@
+[package]
+# A placeholder name: the final name, and whether it is published, are the
+# crate family steward's call.
+name = "kessel-frame-ring"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT OR Apache-2.0"
+description = "A single-producer, single-consumer ring of NV12 video frames in a shared-memory file, for handing frames from one process to another on the same machine (an iOS broadcast upload extension to its app). Never blocks the producer; survives a producer killed mid-write."
+authors = ["Alakazam Labs"]
+publish = false
+
+[lib]
+# `staticlib` for an app extension that links this crate alone, through its
+# small `extern "C"` surface; `lib` for Rust users (the app's side).
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+# mmap, flock and the monotonic clock. Declarations only: no C is built.
+libc = "0.2"
+
+[dev-dependencies]
+# The end-to-end test feeds the ring's frames into a kessel-video frame-in
+# source and through VP8.
+kessel-video = { path = "../kessel-video", default-features = false, features = ["vp8"] }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"

@@ -36,6 +36,10 @@ members = [
     # Cameras, screen capture, pixels and video codecs (H.264 through the OS
     # codecs only); MIT OR Apache-2.0, Kessel family.
     "crates/kessel-video",
+    # NV12 frames from one process to another through a shared-memory ring
+    # (an iOS broadcast upload extension to its app); a placeholder name,
+    # not published.
+    "crates/kessel-frame-ring",
     # A pure-Rust VP8 decoder (RFC 6386) for receiving browser video.
     "crates/vp8-decoder",
     # A pure-Rust real-time VP8 encoder for sending video.

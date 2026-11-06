@@ -1,0 +1,38 @@
+[package]
+name = "vp8-decoder"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+# A port of the RFC 6386 Section 20 reference decoder (BSD-3-Clause, see
+# NOTICE and PROVENANCE.md); our own code is MIT OR Apache-2.0.
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+description = "A VP8 video decoder in pure, safe Rust (RFC 6386), conformance-tested on the WebM test vectors."
+authors = ["Alakazam Labs"]
+readme = "README.md"
+keywords = ["vp8", "video", "decoder", "codec", "webrtc"]
+categories = ["multimedia::video", "multimedia::encoding"]
+# Not published until Kessel Steward's checklist is done.
+publish = false
+include = ["src/", "README.md", "NOTICE", "PROVENANCE.md", "LICENSE-MIT", "LICENSE-APACHE"]
+
+[lib]
+name = "vp8_decoder"
+
+[features]
+# Tests only: the WebM test vectors (needs VP8_TEST_VECTORS; see
+# scripts/fetch-test-vectors.sh).
+conformance = []
+
+[dev-dependencies]
+serde_json = "1"
+
+[[test]]
+name = "conformance"
+required-features = ["conformance"]
+
+[[bench]]
+name = "decode"
+harness = false
+
+[lints.rust]
+missing_docs = "warn"

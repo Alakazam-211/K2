@@ -247,7 +247,7 @@ fn exposure_counts_are_pinned() {
     // Catalog v51 (0.46.9): the seven resumable transfer rows.
     // Catalog v52 (0.46.9): + profile.deleteAccount (app-account-deletion-v1)
     // and diagnostics.send (app-client-logs-v1), both app rows.
-    assert_eq!(c.catalog_version, 51);
+    assert_eq!(c.catalog_version, 52);
     assert_eq!(
         c.verbs.len(),
         264,

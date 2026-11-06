@@ -19,6 +19,9 @@ target=${CARGO_TARGET_DIR:-target}
 work=$(mktemp -d)
 tar -xzf "$target/package/kessel-video-$version.crate" -C "$work"
 cd "$work/kessel-video-$version"
+# A target folder of its own: a shared one can hold another build of a crate
+# of the same name and version, and a doctest may link against it.
+export CARGO_TARGET_DIR="$work/target"
 echo "== the packaged crate: cargo test"
 cargo test
 echo "== the packaged crate: cargo test, API and fake only"

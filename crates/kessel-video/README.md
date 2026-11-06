@@ -31,14 +31,15 @@ won't. Each change is listed in the changelog in the repository.
 | Platform | Cameras | Screens | Encode | Decode | Status |
 |---|---|---|---|---|---|
 | macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | The test suite passes, including VideoToolbox H.264 encoding and decoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
-| iOS (iPhone, iPad) | AVFoundation | Frame-in: the app feeds its broadcast upload extension's frames | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked only.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. **Untested on an iPhone**: camera capture, rotation and interruptions need a device and a person. |
+| iOS (iPhone, iPad) | AVFoundation | Frame-in: the app feeds its broadcast upload extension's frames | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked and unit-tested only: never run on an iPhone or iPad.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. The iOS-only code and its tests (which need the simulator or a phone) have not run, and camera capture, rotation and interruptions need a device and a person. |
 | Linux (x86-64) | V4L2 | The ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. **Camera capture is untested with a real camera, and screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
 | Windows (x86-64) | Media Foundation | Windows Graphics Capture | VP8 | VP8 | **Type-checked only.** |
-| Android (API 24+) | Camera2 through the NDK | MediaProjection (API 26+), once the app hands one over | H.264 (MediaCodec), VP8 | VP8 | **Type-checked only** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, MediaProjection screens, errors, VP8) is tested on a host over a scripted platform; the NDK and JNI calls themselves have not run on a device or an emulator. |
+| Android (API 24+) | Camera2 through the NDK | MediaProjection (API 26+), once the app hands one over | H.264 (MediaCodec), VP8 | VP8 | **Type-checked and unit-tested only: never run on a device or an emulator** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, MediaProjection screens, errors, VP8) is tested on a host over a scripted platform; the NDK and JNI calls themselves have not run. |
 | Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same | Tested on Linux and macOS. |
 
-"Type-checked" means `cargo check` and `cargo clippy` pass for that target;
-the tests have not run on it. The test suite needs no camera, screen or GPU.
+"Type-checked" means `cargo check` and `cargo clippy` pass for that target.
+"Unit-tested" means the logic's tests pass on a Mac or a Linux machine, not on
+that platform. The test suite needs no camera, screen or GPU.
 
 ## What it does
 
@@ -222,7 +223,10 @@ On iOS:
   `screen.frame_in`; `screen_permission()` is `Granted` (the person's start
   is the consent); `pick_screen` and `open_screen` answer `unsupported`,
   and `screen_sources()` is empty. A frame-in source keeps running while
-  the app is in the background.
+  the app is in the background. How the frames cross from the extension to
+  the app is the app's choice; kessel-video doesn't carry them. The
+  `kessel-frame-ring` crate is one way: a shared-memory ring the extension
+  writes through a small C surface and the app reads in Rust.
 - `pixel_buffer_frame` wraps a CVPixelBuffer the app already has (NV12 or
   BGRA) as a native frame: upright, VideoToolbox encodes it without a copy.
 

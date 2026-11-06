@@ -157,6 +157,10 @@ pub mod profile;
 /// The skin.db half of an App handover (prd-app-handoff-v1, 0.46.5).
 #[path = "skin_handover.rs"]
 pub mod handover;
+// App account deletion (0.46.9, app-account-deletion-v1): per-App mode and
+// grace period, pending requests.
+#[path = "skin_account_deletion.rs"]
+pub mod account_deletion;
 pub use paths::{RoomPathScope, RoomPaths};
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
@@ -1667,6 +1671,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // App-governed Spaces S1 (0.46.7): per-App chat keys. Additive, no
     // numbered step.
     app_chat_key::ensure_schema(&conn)?;
+    // App account deletion (0.46.9): settings and pending requests.
+    // Additive, no numbered step.
+    account_deletion::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;

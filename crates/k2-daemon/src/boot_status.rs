@@ -784,6 +784,13 @@ pub const FEATURE_APP_PAIRING: &str = crate::app_pairing::FEATURE;
 /// the owner's `/cli/skin/access/profile*`, `/cli/app/profile-settings`.
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_USER_PROFILE: &str = "app-user-profile-v1";
+/// App account deletion (0.46.9): `profile.deleteAccount` with a person's
+/// own session pass, `/cli/app/settings` and `/cli/app/account-deletion*`.
+/// skin.db tables only, no SQL migration.
+pub const FEATURE_APP_ACCOUNT_DELETION: &str = crate::app_account_deletion::FEATURE;
+/// App client logs (0.46.9): `diagnostics.send` with a person's own session
+/// pass, `/cli/app/client-logs`. k2.db migration 0269.
+pub const FEATURE_APP_CLIENT_LOGS: &str = crate::app_client_logs::FEATURE;
 /// Email Notifications (prd-email-notifications-core-v1, 0.46.5):
 /// `email.send|status|log` on the App's link (cap `email:send`),
 /// `/v1/apps/<id>/email/*` (App key scope `email`), `/cli/app/email/*` and
@@ -1159,6 +1166,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_CAPABILITIES);
     out.push(FEATURE_APP_PAIRING);
     out.push(FEATURE_APP_USER_PROFILE);
+    out.push(FEATURE_APP_ACCOUNT_DELETION);
+    out.push(FEATURE_APP_CLIENT_LOGS);
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_APP_CHAT);
     out.push(FEATURE_APP_CHAT_SPACE);
@@ -1356,6 +1365,8 @@ mod tests {
                 "capabilities-v1",
                 "app-phone-pairing-v1",
                 "app-user-profile-v1",
+                "app-account-deletion-v1",
+                "app-client-logs-v1",
                 "email-notifications-v1",
                 "app-chat-v1",
                 "app-chat-space-v1",

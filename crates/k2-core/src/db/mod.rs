@@ -1797,6 +1797,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // CHECK allowed 'none'/'dir'). 0265-0267 are other 0.46.9 branches';
         // renumber freely on a slip (and edit the migration-order tests).
         ("0268_sew_ship_box_backup", include_str!("../../drizzle_sql/0268_sew_ship_box_backup.sql")),
+        // 0269 — App client logs (0.46.9, app-client-logs-v1): two new
+        // tables, `app_client_logs` and `app_client_log_settings`. Renumber
+        // freely on a slip (and edit the migration-order tests). The store
+        // is `crate::app_client_logs`.
+        ("0269_app_client_logs", include_str!("../../drizzle_sql/0269_app_client_logs.sql")),
         // 0270 — k2-node rollouts (prd-compute-update-continuity-v1 §5.10,
         // §8, 0.46.9): two new tables, `compute_node_rollouts` and
         // `compute_node_rollout_nodes`. Was reserved as 0224 (never used;
@@ -2612,6 +2617,8 @@ mod tests {
                 "0267_delivery_journal",
                 // 0.46.9: Sew ship kind box-backup.
                 "0268_sew_ship_box_backup",
+                // 0.46.9: App client logs.
+                "0269_app_client_logs",
                 // 0.46.9: k2-node rollouts.
                 "0270_compute_node_rollouts",
             ],
@@ -2750,6 +2757,8 @@ mod tests {
                 "0267_delivery_journal",
                 // 0.46.9: Sew ship kind box-backup.
                 "0268_sew_ship_box_backup",
+                // 0.46.9: App client logs.
+                "0269_app_client_logs",
                 // 0.46.9: k2-node rollouts.
                 "0270_compute_node_rollouts",
             ],
@@ -3078,6 +3087,9 @@ mod tests {
                 "0264_person_pictures",
                 "0267_delivery_journal",
                 "0268_sew_ship_box_backup",
+                "0269_app_client_logs"
+            ],
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268 and 0269)"
                 "0270_compute_node_rollouts"
             ],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268 and 0270)"

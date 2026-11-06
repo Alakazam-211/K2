@@ -299,7 +299,7 @@ pub(super) const ROWS: &[Refusal] = &[
     r("pairing_off", "pairing", 403, Who::Agent, "Phone pairing is off for this App (or for the whole server).",
         "The App's owner turns it on: k2 app pairing setup <app>. Server-wide off (K2_APP_PAIRING=off) is the owner's."),
     r("reauth_required", "pairing", 401, Who::Person, "The sign-in is more than 15 minutes old.",
-        "Ask the person for the password and send it with the start."),
+        "Ask the person for the password and send it with the call (pairing.start, profile.deleteAccount)."),
     // ── chat ──
     r("agent_subject", "chat", 403, Who::Agent, "That username is an agent's login. Agents chat as themselves (k2 chat); an App never signs one in or sets its channels.",
         "Leave the agent out of chat.setChannels. To put an agent in a channel, list it in the manifest's chat block (agents: [...])."),

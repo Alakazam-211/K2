@@ -306,7 +306,7 @@
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
     {"code": "push_off", "doc": "This App doesn't send notifications: its owner turns them on (approving push:send, or k2 app push on)."},
     {"code": "push_server_only", "doc": "This App takes push.register and push.viewing only from its own server; send the device token there, and the server registers it."},
-    {"code": "not_for_host", "doc": "Push and phone pairing are for a published App's own users, never the box login (host)."},
+    {"code": "not_for_host", "doc": "Push, phone pairing, account deletion and client logs are for a published App's own users, never the box login (host)."},
     {"code": "channel_unavailable", "doc": "K2 Companion can't receive this App's notifications yet; register the App's own phone app (channel app)."},
     {"code": "push_devices_full", "doc": "This App holds as many push devices as its owner allows."},
     {"code": "push_not_configured", "doc": "This App has no Apple or Google push key yet; its owner runs k2 app push setup."},
@@ -317,7 +317,7 @@
     {"code": "token_in_use", "doc": "Another person on this App is still signed in with this phone's push token; they sign out (push.unregister) first."},
     {"code": "pairing_off", "doc": "This App doesn't pair phones (its owner turns it on: k2 app pairing setup)."},
     {"code": "pairing_from_device", "doc": "A phone that is signed in can't pair another one: start from the person's web sign-in."},
-    {"code": "reauth_required", "doc": "The web sign-in is more than 15 minutes old: send the person's password with the start."},
+    {"code": "reauth_required", "doc": "The sign-in is more than 15 minutes old: send the person's password with the call (pairing.start, profile.deleteAccount)."},
     {"code": "device_signin_off", "doc": "This App's Stay signed in is off, so a phone can't stay signed in."},
     {"code": "host_not_paired", "doc": "That host isn't one this App pairs on; the error lists the ones it does."},
     {"code": "no_public_host", "doc": "This App has no public k2.dev host to pair on."},
@@ -10049,6 +10049,268 @@
       ],
       "doc": "Sign this person out of this App everywhere else (their notification devices there go too); this pass stays.",
       "example": "await k2.asGuest(pass).profile.signOutOthers()"
+    },
+    {
+      "verb": "profile.deleteAccount",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-account-deletion-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/account/delete"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "password": {
+              "type": "string",
+              "description": "The person's password, when their sign-in is more than 15 minutes old (reauth_required). A phone's sign-in counts from its device sign-in, not its last refresh.",
+              "default": ""
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppAccountDeletion",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "mode": {
+            "enum": [
+              "request",
+              "immediate"
+            ],
+            "description": "The App's mode (its owner sets it: k2 app set <app> --account-deletion)."
+          },
+          "state": {
+            "enum": [
+              "requested",
+              "deleted"
+            ],
+            "description": "requested: signed out everywhere, access off, deleted on dueAt or when the owner completes it. deleted: done now."
+          },
+          "scope": {
+            "enum": [
+              "account",
+              "app"
+            ],
+            "description": "account: the login itself goes. app: the login also opens another App or the server, so only this App's access goes."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "While requested: the request (adr_...), what the owner completes or cancels."
+          },
+          "requestedAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "dueAt": {
+            "type": "integer",
+            "description": "While requested: when K2 completes it on its own, seconds since the epoch."
+          },
+          "username": {
+            "type": "string",
+            "description": "Once deleted: the username that went."
+          },
+          "done": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What K2 removed now: login, app_access, sessions, devices, push_devices, pairings, profile, email, read_state, wallet, chat_sessions, client_logs."
+          },
+          "pending": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What goes when a request completes (empty once deleted)."
+          },
+          "kept": {
+            "type": "array",
+            "items": {
+              "title": "AppDeletionKept",
+              "type": "object",
+              "properties": {
+                "item": {
+                  "type": "string",
+                  "description": "login, thread_posts, room_files, chat_messages, app_data or history."
+                },
+                "why": {
+                  "type": "string",
+                  "description": "A sentence the App may show as is."
+                }
+              },
+              "required": [
+                "item",
+                "why"
+              ],
+              "additionalProperties": false
+            },
+            "description": "What K2 keeps, and why. The App deletes what it keeps in its own data itself."
+          }
+        },
+        "required": [
+          "ok",
+          "mode",
+          "state",
+          "scope",
+          "done",
+          "pending",
+          "kept"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_for_host",
+        "agent_login",
+        "reauth_required",
+        "bad_login",
+        "locked",
+        "password_change_required",
+        "usage",
+        "too_large",
+        "failed"
+      ],
+      "doc": "The person deletes their own account in this App (App Store 5.1.1(v)): a request the owner or the grace period completes, or at once, by the App's mode. The answer lists what went and what K2 keeps. Needs a sign-in at most 15 minutes old, or the password.",
+      "example": "const d = await k2.asGuest(pass).profile.deleteAccount({ password })"
+    },
+    {
+      "verb": "diagnostics.send",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-client-logs-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/client-logs"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "appVersion": {
+              "type": "string",
+              "description": "The app's own version (up to 64 characters)."
+            },
+            "os": {
+              "type": "string",
+              "description": "The OS and its version, e.g. iOS 27.0 (up to 64 characters)."
+            },
+            "kind": {
+              "enum": [
+                "crash",
+                "log"
+              ],
+              "description": "crash: a panic or fatal error; log: anything else.",
+              "default": "log"
+            },
+            "message": {
+              "type": "string",
+              "description": "The panic or error message (up to 4,000 characters).",
+              "default": ""
+            },
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The newest lines of the app's log ring buffer, oldest first (up to 1,000 lines of 1,000 characters; 64 KiB of text in all, the newest kept). Redact them before you send.",
+              "default": []
+            },
+            "device": {
+              "type": "string",
+              "description": "The device model, e.g. iPhone16,2 (up to 64 characters).",
+              "default": ""
+            },
+            "at": {
+              "type": "integer",
+              "description": "When it happened on the device, seconds since the epoch."
+            }
+          },
+          "required": [
+            "appVersion",
+            "os"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDiagnosticsSent",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "description": "The stored bundle (cl_...)."
+          },
+          "lines": {
+            "type": "integer",
+            "description": "Lines kept."
+          },
+          "bytes": {
+            "type": "integer",
+            "description": "Text kept, in bytes."
+          },
+          "redacted": {
+            "type": "integer",
+            "description": "Values K2 replaced with *** (tokens, secrets): redact them on the device next time."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Lines or text were cut to fit."
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "lines",
+          "bytes",
+          "redacted",
+          "truncated"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "not_for_host",
+        "usage",
+        "too_large",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Send this person's device crash or log bundle to the App's own server (no third party): 20 per person and 300 per App an hour, kept 14 days by default. K2 redacts tokens and secrets again; the owner and the App's agent read it with k2 app logs <app> --client.",
+      "example": "await k2.asGuest(pass).diagnostics.send({ appVersion, os, kind: 'crash', message, lines })"
     },
     {
       "verb": "push.register",

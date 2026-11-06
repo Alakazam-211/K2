@@ -61,6 +61,9 @@ pub mod agent_hooks;
 pub mod app_grace;
 /// The per-call App audit (`~/.k2/apps/app-audit.db`, runtime S19).
 pub mod app_audit;
+/// App client logs (0.46.9, migration 0269): a signed-in App user's
+/// device sends a redacted log bundle; `k2 app logs <app> --client`.
+pub mod app_client_logs;
 /// `k2 app sdk add` (0.46.6): @k2/server at this K2's version and Sew's App
 /// kit, vendored into an App folder.
 pub mod app_sdk;

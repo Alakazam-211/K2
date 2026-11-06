@@ -401,6 +401,9 @@ mod tests {
             ("crate::app_pairing::guest_routes::PASS_ROUTES", crate::app_pairing::guest_routes::PASS_ROUTES.to_vec()),
             // app-user-profile (0.46.5): a person's own profile and sessions.
             ("crate::app_profile_routes::PASS_ROUTES", crate::app_profile_routes::PASS_ROUTES.to_vec()),
+            // 0.46.9: account deletion and client logs (a person's own pass).
+            ("crate::app_account_deletion::PASS_ROUTES", crate::app_account_deletion::PASS_ROUTES.to_vec()),
+            ("crate::app_client_logs::PASS_ROUTES", crate::app_client_logs::PASS_ROUTES.to_vec()),
             // Email Notifications (0.46.5): the App's own email.* on its link.
             ("crate::email_notify::link_routes::PASS_ROUTES", crate::email_notify::link_routes::PASS_ROUTES.to_vec()),
             // 0.46.3 lanes folded in at r4: App project chat's socket, the

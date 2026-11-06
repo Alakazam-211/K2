@@ -446,6 +446,12 @@ pub mod app_profile_routes;
 pub mod app_push;
 // Phone pairing for custom Apps (prd-app-phone-pairing-v1, 0.46.5).
 pub mod app_pairing;
+// App account deletion (0.46.9): a person deletes their own account from
+// inside an App (App Store 5.1.1(v)); `k2 app set`, `k2 app account-deletion`.
+pub mod app_account_deletion;
+// App client logs (0.46.9): a device's redacted crash/log bundle; `k2 app
+// logs <app> --client`.
+pub mod app_client_logs;
 // Email Notifications (prd-email-notifications-core-v1, 0.46.5): K2's
 // one-way mail from senders no agent can read, the App `email.send` door.
 pub mod email_notify;

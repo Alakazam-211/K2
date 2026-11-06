@@ -1803,6 +1803,24 @@ async fn async_main() {
         }
     });
 
+    // 0.46.9: account deletion requests whose grace period ended complete,
+    // and client log bundles past their App's retention go. First pass
+    // ~7 min after boot, then hourly. Headless.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(420)).await;
+        loop {
+            match tokio::task::spawn_blocking(crate::app_account_deletion::sweep).await {
+                Ok(n) if n > 0 => log_debug!("[account-deletion] {n} request(s) completed at the end of their grace period"),
+                Ok(_) => {}
+                Err(e) => log_debug!("[account-deletion] WARN: sweep join: {e}"),
+            }
+            if let Err(e) = tokio::task::spawn_blocking(crate::app_client_logs::sweep).await {
+                log_debug!("[client-logs] WARN: sweep join: {e}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+    });
+
     // app-user-profile §3.7 (0.46.5): write the sessions' remembered
     // last-used times to skin.db and drop the rows of ended sessions,
     // every 5 minutes (a pass resolve never writes).

@@ -370,6 +370,9 @@ pub fn request_body_cap(method: &str, path: &str) -> Option<usize> {
         // the other profile and session writes are small.
         p if p == crate::app_profile_routes::PROFILE_IMAGE => Some(crate::app_profile_routes::MAX_BODY),
         p if crate::app_profile_routes::PASS_ROUTES.contains(&p) => Some(64 * 1024),
+        // 0.46.9: a client log bundle (128 KiB) and an account deletion.
+        p if p == crate::app_client_logs::SEND => Some(crate::app_client_logs::MAX_BODY),
+        p if p == crate::app_account_deletion::DELETE => Some(crate::app_account_deletion::MAX_BODY),
         _ => None,
     }
 }

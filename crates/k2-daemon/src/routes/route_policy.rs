@@ -378,6 +378,16 @@ pub const ROUTES: &[Route] = &[
     // app-user-profile (0.46.5): an App's profile settings. The owner or an
     // Admin; the App's own agent (passport) lowers only, in the handler.
     both("/cli/app/profile-settings", Admin),
+    // 0.46.9: `k2 app set` (account deletion mode and grace, client log
+    // retention) and `k2 app account-deletion`. Reads: any login; the
+    // handler holds writes to the owner, an Admin or the App's own agent
+    // with the App-user switch.
+    both("/cli/app/settings", Member),
+    get("/cli/app/account-deletion", Member),
+    post("/cli/app/account-deletion/complete", Admin),
+    post("/cli/app/account-deletion/cancel", Admin),
+    // `k2 app logs <app> --client`: like the App's own logs.
+    get("/cli/app/client-logs", Member),
     // prd-custom-app-push-v1 CP36: status, devices, send are Admin-floor
     // (the App's agent by its passport); keys and check are the Owner's.
     get("/cli/app/push", Admin),
@@ -1834,6 +1844,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skin/sessions", NoLogin),
     post("/cli/skin/sessions/revoke", NoLogin),
     post("/cli/skin/sessions/revoke-others", NoLogin),
+    // App account deletion and client logs (0.46.9): a person's own session
+    // pass only (the handlers check); no login uses them.
+    post("/cli/skin/account/delete", NoLogin),
+    post("/cli/skin/client-logs", NoLogin),
     both("/cli/skin/templates", Owner),
     post("/cli/skin/templates/apply", Owner),
     post("/cli/skin/templates/delete", Owner),

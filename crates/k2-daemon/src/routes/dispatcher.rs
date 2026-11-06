@@ -11431,6 +11431,93 @@ async fn handle_one_request(
             };
             send_with_retry_after(&mut *stream, &r).await;
         }
+        // 0.46.9: a person deletes their own account (App Store 5.1.1(v)),
+        // and a person's device sends a client log bundle. A guest session
+        // pass only (the handlers check), any door. Never cached.
+        p if crate::app_account_deletion::PASS_ROUTES.contains(&p) || crate::app_client_logs::PASS_ROUTES.contains(&p) => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let deletion = crate::app_account_deletion::PASS_ROUTES.contains(&p);
+            let cap = if deletion { crate::app_account_deletion::MAX_BODY } else { crate::app_client_logs::MAX_BODY };
+            let body = match super::http::read_post_body_capped(&mut *stream, &mut buf, cap).await {
+                Ok(b) => b,
+                Err(refused) => {
+                    let r = if deletion { crate::app_account_deletion::too_large() } else { crate::app_client_logs::too_large() };
+                    super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let presented = super::http::extract_token(&query);
+            let r = match presented {
+                Some(t) if k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t) => {
+                    // Task-local link context: resolve here, not on the worker.
+                    match crate::apps::gateway::resolve_pass(t) {
+                        Some(pass) => {
+                            let route = p.to_string();
+                            let link_app = crate::apps::gateway::current().map(|l| l.service_id.clone());
+                            if deletion {
+                                let ctx = crate::app_account_deletion::Ctx {
+                                    link_app,
+                                    ip: client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string()),
+                                };
+                                tokio::task::spawn_blocking(move || crate::app_account_deletion::handle_pass(&route, &pass, is_post, &body, &ctx))
+                                    .await
+                                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                            } else {
+                                let ctx = crate::app_client_logs::Ctx { link_app };
+                                tokio::task::spawn_blocking(move || crate::app_client_logs::handle_pass(&route, &pass, is_post, &body, &ctx))
+                                    .await
+                                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                            }
+                        }
+                        None => crate::skin_routes::revoked_skin_response(),
+                    }
+                }
+                Some(_) if deletion => crate::app_account_deletion::guest_required(),
+                Some(_) => crate::app_client_logs::guest_required(),
+                None if deletion => crate::app_account_deletion::pass_required(),
+                None => crate::app_client_logs::pass_required(),
+            };
+            if r.status.starts_with("401") && deletion {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, "Cache-Control: no-store\r\n").await;
+        }
+        // 0.46.9: `k2 app set`, `k2 app account-deletion`, `k2 app logs
+        // --client`. The owner, a login, or the App's own agent (the
+        // handlers check who may write).
+        p if crate::app_account_deletion::OWNER_ROUTES.contains(&p) || p == crate::app_client_logs::LIST => {
+            if crate::app_account_deletion::OWNER_POST_ROUTES.contains(&p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::app_account_deletion::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::app_account_deletion::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let route = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                if route == crate::app_client_logs::LIST {
+                    crate::app_client_logs::handle_list(&who, is_post, &params)
+                } else {
+                    crate::app_account_deletion::handle_owner(&route, &who, is_post, &body, &params)
+                }
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // app-user-profile P6 (owner): a person's profile, picture and
         // sessions as the owner sees and ends them.
         crate::app_profile_routes::OWNER_PROFILE => {

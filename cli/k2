@@ -8189,6 +8189,11 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app profile settings <app> [--names on|off] [--image on|off]
                                         May the App's people change their own names and picture
                                         (default on; the App's agent may only turn them off)
+  k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>] [--client-logs-days <days>]
+                                        How "Delete my account" works in the App (request by
+                                        default, 30-day grace) and how long client logs stay
+  k2 app account-deletion <app> | complete|cancel <app> <request|user>
+                                        Pending account deletions: list, complete now, undo
   k2 app user show <username> --app <app> [--json]
                                         Owner only. Their profile in that App: names (a self-set one
                                         names its username), email, picture, role, sign-ins, sessions
@@ -8692,6 +8697,9 @@ See and run it:
                                        sessions ended, a login removed, rooms changed.
   k2 app history --widget <name>       A Garden widget's version history.
   k2 app logs <app-id> [--deployment D] [--tail N] [--follow]
+  k2 app logs <app> --client [--user U] [--kind crash|log] [--since 1d] [--limit N] [--json]
+                                       Crash and log bundles the App's people's devices
+                                       sent (diagnostics.send), redacted, kept 14 days
   k2 app errors <app-id> [--since 1h] [--kind crash|health|build|deploy] [--json]
                                        Crashes, failed health gates and failed
                                        builds (exit code, restarts, rolled
@@ -10217,19 +10225,33 @@ print("audit chain: %s" % ("verifies" if v.get("auditVerified") else "BROKEN (k2
 }
 
 # k2 app logs <app-id> [--deployment D] [--tail N] [--follow] — framed as untrusted.
+# k2 app logs <app> --client [--user U] [--kind crash|log] [--since 1d] [--limit N] [--json]
 cmd_app_logs() {
-    local app="" dep="" tail=200 follow=0
+    local app="" dep="" tail=200 follow=0 client=0 cuser="" ckind="" csince="" climit="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --deployment) dep="${2:-}"; shift 2 ;;
             --tail) tail="${2:-}"; shift 2 ;;
             --follow|-f) follow=1; shift ;;
+            --client) client=1; shift ;;
+            --user) cuser="${2:-}"; shift 2 ;;
+            --kind) ckind="${2:-}"; shift 2 ;;
+            --since) csince="${2:-}"; shift 2 ;;
+            --limit) climit="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
         esac
     done
-    [ -z "$app" ] && { echo "usage: k2 app logs <app-id> [--deployment D] [--tail N] [--follow]" >&2; exit 2; }
+    if [ "$client" = 1 ]; then
+        _app_client_logs "$app" "$cuser" "$ckind" "$csince" "$climit" "$json_out"
+        return $?
+    fi
+    if [ -n "$cuser$ckind$csince$climit" ] || [ "$json_out" = 1 ]; then
+        echo "usage: --user, --kind, --since, --limit and --json go with --client (k2 app logs <app> --client)" >&2; exit 2
+    fi
+    [ -z "$app" ] && { echo "usage: k2 app logs <app-id> [--deployment D] [--tail N] [--follow]  |  k2 app logs <app> --client" >&2; exit 2; }
     local q="app=$(urlencode "$app")&tail=$(urlencode "$tail")"
     [ -n "$dep" ] && q="${q}&deployment=$(urlencode "$dep")"
     _compute_call GET /cli/app/logs "$q"
@@ -10254,6 +10276,35 @@ for l in new[i:]:
 ' <<<"$_CP_BODY"
         last="$_CP_BODY"
     done
+}
+
+# k2 app logs <app> --client: the crash and log bundles the App's people's
+# devices sent (diagnostics.send, 0.46.9), framed as untrusted.
+_app_client_logs() {
+    local app="$1" user="$2" kind="$3" since="$4" limit="$5" json_out="$6"
+    [ -z "$app" ] && { echo "usage: k2 app logs <app> --client [--user U] [--kind crash|log] [--since 1d|12h|30m] [--limit N] [--json]" >&2; exit 2; }
+    case "$kind" in ""|crash|log) ;; *) echo "usage: --kind takes crash or log" >&2; exit 2 ;; esac
+    if [ -n "$limit" ] && ! [[ "$limit" =~ ^[0-9]+$ ]]; then echo "usage: --limit takes a number (1 to 500)" >&2; exit 2; fi
+    local q="app=$(urlencode "$app")" from=""
+    if [ -n "$since" ]; then
+        local secs
+        if [[ "$since" =~ ^([0-9]+)d$ ]]; then secs=$(( 10#${BASH_REMATCH[1]} * 86400 )); else secs="$(_compute_secs "$since")"; fi
+        from=$(( $(date +%s) - secs ))
+        q="${q}&since=${from}"
+    fi
+    [ -n "$user" ] && q="${q}&user=$(urlencode "$user")"
+    [ -n "$kind" ] && q="${q}&kind=${kind}"
+    [ -n "$limit" ] && q="${q}&limit=${limit}"
+    _compute_call GET /cli/app/client-logs "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if not v.get("count"):
+    print("No client log bundles for %s (kept %s days)." % (v.get("app"), v.get("keepDays")))
+    sys.exit(0)
+print("%s bundle(s) for %s, oldest first (kept %s days; --limit for more):" % (v["count"], v["app"], v.get("keepDays")))
+print(v["framed"])'
 }
 
 # k2 app errors <app-id> [--since 1h|30m|2d|300] [--kind crash|health|build|deploy] [--json]
@@ -17277,6 +17328,130 @@ s = json.load(sys.stdin).get("settings") or {}
 print("App %s: people may change their names %s, their picture %s" % (s.get("app"), "on" if s.get("editNames") else "off", "on" if s.get("editImage") else "off"))'
 }
 
+# k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>]
+#                  [--client-logs-days <days>] [--json]   (0.46.9)
+_app_set_usage() {
+    cat <<'EOF'
+usage: k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>]
+                        [--client-logs-days <days>] [--json]
+  --account-deletion request    (default) a person's "Delete my account" signs them out of
+                                the App everywhere and turns their access off at once; the
+                                deletion completes when you run k2 app account-deletion
+                                complete, or by itself when the grace period ends
+  --account-deletion immediate  the deletion runs at once
+  --deletion-grace <days>       how long a request waits before K2 completes it
+                                (1 to 90 days, default 30; 30d also works)
+  --client-logs-days <days>     how long K2 keeps the App's client log bundles
+                                (1 to 90 days, default 14; k2 app logs <app> --client)
+No flags: show the settings. The owner or an Admin changes them; so may the App's
+own agent with "Let this agent manage its Apps' users" on. Every change is a line in
+k2 app history <app> --users. More: k2 study app-account-deletion.
+EOF
+}
+
+cmd_app_set() {
+    local app="" mode="" grace="" logs="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --account-deletion) mode="${2:-}"; shift 2 ;;
+            --account-deletion=*) mode="${1#*=}"; shift ;;
+            --deletion-grace) grace="${2:-}"; shift 2 ;;
+            --deletion-grace=*) grace="${1#*=}"; shift ;;
+            --client-logs-days) logs="${2:-}"; shift 2 ;;
+            --client-logs-days=*) logs="${1#*=}"; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_set_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app set --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] && app="$1" || { echo "usage: one App only (k2 app set --help)" >&2; exit 2; }; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { _app_set_usage >&2; exit 2; }
+    case "$mode" in ""|request|immediate) ;; *) echo "usage: --account-deletion takes request or immediate" >&2; exit 2 ;; esac
+    grace="${grace%d}"; logs="${logs%d}"
+    for v in "$grace" "$logs"; do
+        [[ -z "$v" || "$v" =~ ^[0-9]+$ ]] || { echo "usage: --deletion-grace and --client-logs-days take a number of days (1 to 90)" >&2; exit 2; }
+    done
+    if [ -z "$mode" ] && [ -z "$grace" ] && [ -z "$logs" ]; then
+        _compute_call GET /cli/app/settings "app=$(urlencode "$app")"
+    else
+        _compute_call POST /cli/app/settings "$(_compute_json K2_CJ_app="$app" K2_CJ_accountDeletion="$mode" K2_CJ_deletionGraceDays_n="$grace" K2_CJ_clientLogsDays_n="$logs")"
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d = v.get("accountDeletion") or {}
+c = v.get("clientLogs") or {}
+print("App %s" % v.get("app"))
+print("  account deletion   %s, grace %s days%s" % (d.get("mode"), d.get("graceDays"), "" if d.get("set") else " (the defaults)"))
+print("  client logs kept   %s days%s" % (c.get("keepDays"), "" if c.get("set") else " (the default)"))'
+}
+
+# k2 app account-deletion <app> | complete <app> <request|user> | cancel <app> <request|user>
+_app_account_deletion_usage() {
+    cat <<'EOF'
+usage: k2 app account-deletion <app> [--json]                     pending requests and the settings
+       k2 app account-deletion complete <app> <adr_…|username>    delete now (can't be undone)
+       k2 app account-deletion cancel <app> <adr_…|username>      undo: their access comes back
+A person deletes their own account from inside the App (profile.deleteAccount).
+With the App's mode "request" (the default), K2 signs them out and turns their
+access off, and the deletion waits here until you complete it or its grace period
+ends. The owner or an Admin completes or cancels; so may the App's own agent with
+"Let this agent manage its Apps' users" on. Settings: k2 app set <app> --help.
+After a deletion, delete what the App keeps for that person in its own data.
+More: k2 study app-account-deletion.
+EOF
+}
+
+cmd_app_account_deletion() {
+    local action="list" app="" who="" json_out=0
+    case "${1:-}" in
+        complete|cancel) action="$1"; shift ;;
+        list) shift ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_account_deletion_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app account-deletion --help)" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$who" ]; then who="$1"; else echo "usage: too many arguments (k2 app account-deletion --help)" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { _app_account_deletion_usage >&2; exit 2; }
+    if [ "$action" = list ]; then
+        [ -n "$who" ] && { echo "usage: k2 app account-deletion <app> (to act on one: complete|cancel <app> <request>)" >&2; exit 2; }
+        _compute_call GET /cli/app/account-deletion "app=$(urlencode "$app")"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+d = v.get("accountDeletion") or {}
+def t(x): return time.strftime("%Y-%m-%d %H:%M", time.localtime(x)) if x else "-"
+print("App %s: account deletion %s, grace %s days" % (v.get("app"), d.get("mode"), d.get("graceDays")))
+ps = v.get("pending") or []
+if not ps:
+    print("No pending deletion requests.")
+for p in ps:
+    print("  %-26s %-20s asked %s  completes %s  (%s)" % (p["id"], p["username"], t(p["requestedAt"]), t(p["dueAt"]), "the login goes" if p.get("scope") == "account" else "only this App access goes"))
+if ps:
+    print("Complete now: k2 app account-deletion complete %s <request|username>   Undo: ... cancel" % v.get("app"))'
+        return 0
+    fi
+    [ -z "$who" ] && { echo "usage: k2 app account-deletion $action <app> <adr_…|username>" >&2; exit 2; }
+    _compute_call POST "/cli/app/account-deletion/$action" "$(_compute_json K2_CJ_app="$app" K2_CJ_request="$who")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | K2_AD_ACTION="$action" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+if os.environ["K2_AD_ACTION"] == "cancel":
+    print("Cancelled %s (%s): their access to this App is back (%s grant(s) on). They sign in again." % (v.get("requestId"), v.get("username"), v.get("restored")))
+    sys.exit(0)
+print("Deleted %s (%s): %s." % (v.get("username"), "the login" if v.get("scope") == "account" else "only this App access", ", ".join(v.get("done") or [])))
+for k in v.get("kept") or []:
+    print("  kept %-14s %s" % (k["item"], k["why"]))
+print("Now delete what the App keeps for them in its own data.")'
+}
+
 cmd_app_members() {
     local room="" app="" json_out=0
     while [ $# -gt 0 ]; do
@@ -18169,6 +18344,9 @@ cmd_app() {
         discovery) shift; cmd_app_discovery "$@" ;;
         stay-signed-in) shift; cmd_app_stay "$@" ;;
         invite-settings) shift; cmd_app_invite_settings "$@" ;;
+        # 0.46.9: account deletion mode and grace, client log retention.
+        set) shift; cmd_app_set "$@" ;;
+        account-deletion|account-deletions) shift; cmd_app_account_deletion "$@" ;;
         profile)
             shift
             case "${1:-}" in
@@ -45380,6 +45558,27 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app set",
+      "usage": "k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>] [--client-logs-days <days>] [--json]",
+      "description": "An App's account deletion mode and grace period, and how long K2 keeps its client logs. No flags: show them. The owner or an Admin; the App's own agent with \"manage its Apps' users\". See k2 study app-account-deletion.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--account-deletion", "arg": "request|immediate", "description": "request (default): sign out and turn access off, delete after the grace period or when completed; immediate: delete at once."},
+        {"name": "--deletion-grace", "arg": "days", "description": "Days a request waits (1 to 90; default 30)."},
+        {"name": "--client-logs-days", "arg": "days", "description": "Days K2 keeps client log bundles (1 to 90; default 14)."},
+        {"name": "--json", "arg": null, "description": "{ok, app, accountDeletion, clientLogs}."}
+      ]
+    },
+    {
+      "name": "app account-deletion",
+      "usage": "k2 app account-deletion <app> [--json] | complete <app> <request|user> | cancel <app> <request|user>",
+      "description": "People's own account deletion requests in an App: list them, complete one now, or cancel one (their access comes back). The owner or an Admin; the App's own agent with \"manage its Apps' users\". See k2 study app-account-deletion.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The answer as JSON."}
+      ]
+    },
+    {
       "name": "app user show",
       "usage": "k2 app user show <username> --app <app> [--json]",
       "description": "Owner only. A person's profile in one App: full name (a self-set one shows the username beside it), display name, email, picture hash, role there, last sign-in, sessions and the App's profile settings.",
@@ -46775,7 +46974,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
 
 _study_usage() {
     cat <<'EOF'
@@ -46793,7 +46992,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
-  app-transfers
+  app-account-deletion  app-transfers
   app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  vault
@@ -46835,6 +47034,7 @@ _study_title() {
         app-push) echo "Notifications to a custom App's own phone app" ;;
         app-pairing) echo "Pairing a custom App's own phone app by QR" ;;
         app-profile) echo "A person's own profile, picture and sessions in an App" ;;
+        app-account-deletion) echo "A person deletes their own App account: store rules, modes, what stays" ;;
         app-transfers) echo "Big files that survive the app in the background" ;;
         app-chat) echo "Chat, voice and calls in your App (Chat / Voice Hosting)" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
@@ -46954,6 +47154,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-push            Your App's own phone app: keys in the vault, register, send, limits
   app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
   app-profile         A person's own profile, picture and sessions in an App; who decides
+  app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
   app-transfers       Big uploads and downloads that survive a phone app in the background
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
@@ -47030,6 +47231,7 @@ _study_page() {
         app-push) _study_page_app_push ;;
         app-pairing) _study_page_app_pairing ;;
         app-profile) _study_page_app_profile ;;
+        app-account-deletion) _study_page_app_account_deletion ;;
         app-transfers) _study_page_app_transfers ;;
         app-chat) _study_page_app_chat ;;
         chat-voice) _study_page_chat_voice ;;
@@ -50776,6 +50978,76 @@ REFUSALS
   pairing_not_from_browser  not_for_host  usage
   K2_APP_PAIRING=off in the daemon's environment stops every App's
   pairing. K2 Companion's own phones are k2 users pair-phone.
+EOF
+}
+
+_study_page_app_account_deletion() {
+    cat <<'EOF'
+k2 study app-account-deletion — a person deletes their own account in an App
+
+THE STORE RULES (0.46.9, feature app-account-deletion-v1)
+  Apple (App Store 5.1.1(v)): an App where people can make an account must
+  let them delete it from inside the App, not only by email or a website.
+  Google Play: the same, plus a web page for people who no longer have the
+  App; you give its address in the Play Console.
+  K2 gives both one verb. Your App draws the button and the page.
+
+THE VERB (k2.asGuest(pass).profile.deleteAccount() in the server SDK)
+  profile.deleteAccount   POST /cli/skin/account/delete {password?}
+  Call it with the person's own session pass, on any door: your App's
+  server, its web page or its phone app. The App and the person come from
+  the pass. Never the box login (not_for_host) or an agent's own login
+  (agent_login).
+  Recent sign-in: the sign-in behind the pass must be at most 15 minutes
+  old. If it is older, send their password (reauth_required; a wrong one is
+  bad_login, and 3 wrong ones lock the login: 423 locked). A phone's
+  sign-in counts from when the phone signed in, not from its last refresh.
+  Ask "Delete your account?" in your App first: the person can't undo it.
+
+THE ANSWER (show it to the person)
+  state      requested | deleted
+  scope      account: the login itself goes
+             app: the login also opens another App or the server, so only
+             this App's access goes
+  done       what went now (sessions, devices, push_devices, pairings, ...)
+  pending    what goes when a request completes
+  kept       [{item, why}]: what K2 keeps, with a sentence you may show
+  requestId, dueAt   while requested
+
+MODES (per App: k2 app set <app> --account-deletion request|immediate)
+  request (the default): K2 signs them out of the App everywhere and turns
+    their access off at once. The deletion completes when the owner or the
+    App's agent runs k2 app account-deletion complete <app> <user>, or by
+    itself when the grace period ends (--deletion-grace, 1 to 90 days,
+    default 30). Undo while it waits: k2 app account-deletion cancel.
+  immediate: the deletion runs during the call.
+  Either way the owner gets an Inbox notice and the App's agent an inbox
+  note, and each step is a line in k2 app history <app> --users.
+
+WHAT GOES (scope account)
+  The login, this App's access, sessions, devices, push devices, pairing,
+  names and picture, email, read state, wallet items, chat sessions and the
+  App's client logs from them. With scope app: this App's access, sessions,
+  devices, push devices, pairing and client logs.
+WHAT STAYS (the kept list says why)
+  Thread posts and files they sent to agents (the owner's). Files they put
+  in a room's folder (the room's). Chat messages in Sew: Sew deactivates
+  them but has no erase yet. Your App's own data: your App deletes it, K2
+  can't see inside it. One History line with the username (the owner's
+  record).
+
+THE WEB PAGE FOR GOOGLE PLAY
+  Serve a page on your App's own web side, like
+  https://<your app>/delete-account. The person signs in there
+  (guests.login) and confirms; your server then calls profile.deleteAccount
+  with the pass it just got (a fresh sign-in needs no password). Give that
+  address in the Play Console. K2 serves no page.
+
+THE OWNER AND THE APP'S AGENT
+  k2 app account-deletion <app>          pending requests, the settings
+  k2 app set <app>                       mode, grace period, log retention
+  The App's agent completes and cancels with "Let this agent manage its
+  Apps' users" on. After any deletion, delete what your App keeps for them.
 EOF
 }
 
@@ -91573,8 +91845,9 @@ EOF
             # 0.46.7: `k2 app init` and `k2 app links` own their --help.
             # 0.46.8: `k2 app push`, `k2 app pairing` and `k2 app login` too
             # (their pages say --help; it printed the whole family before).
-            # 0.46.9: `k2 app doctor` (--store has its own page).
-            init|links|push|pairing|login|doctor)
+            # 0.46.9: `k2 app doctor` (--store has its own page), `k2 app set`
+            # and `k2 app account-deletion`.
+            init|links|push|pairing|login|doctor|set|account-deletion|account-deletions)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

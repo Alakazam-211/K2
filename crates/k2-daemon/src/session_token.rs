@@ -995,6 +995,14 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // after the owner approved its held request (the handler).
         "/cli/app/test-guest/password",
         "/cli/app/test-guests",
+        // 0.46.9: its own Apps' settings, deletion requests and client logs
+        // (reads for its own Apps; writes with "manage its Apps' users",
+        // checked in the handlers).
+        "/cli/app/settings",
+        "/cli/app/account-deletion",
+        "/cli/app/account-deletion/complete",
+        "/cli/app/account-deletion/cancel",
+        "/cli/app/client-logs",
         "/cli/app/config",
         "/cli/app/deploy",
         "/cli/app/deployment",

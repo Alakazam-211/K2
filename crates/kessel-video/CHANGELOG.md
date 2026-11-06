@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - `apple_pixel_buffer` (macOS and iOS): the `CVPixelBufferRef` inside an
   Apple native frame (a VideoToolbox decoder's `Native` output), borrowed
@@ -16,7 +16,7 @@
   `VirtualDisplay` and `ImageReader`, resized when the display turns, and
   `Ended(SourceClosed)` when the projection stops.
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 The first release: the codec-neutral API (`VideoBackend`, `FrameSource`,
 `VideoEncoder`, `VideoDecoder`), the null and fake backends, the macOS

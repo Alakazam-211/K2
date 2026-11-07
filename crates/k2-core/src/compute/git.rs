@@ -267,6 +267,14 @@ impl Github {
         Ok((status, v))
     }
 
+    /// `POST /repos/<owner>/<repo>/statuses/<sha>` (`k2 ci`, C6a): one
+    /// commit status. `state` is pending, success, failure or error. No
+    /// `target_url`: logs stay in K2 (`k2 ci logs`).
+    pub fn create_status(&self, token: &str, owner: &str, repo: &str, sha: &str, state: &str, context: &str, description: &str) -> Result<(), ForgeError> {
+        let body = serde_json::json!({ "state": state, "context": context, "description": description });
+        self.call(reqwest::Method::POST, &format!("/repos/{owner}/{repo}/statuses/{sha}"), &format!("Bearer {token}"), Some(body)).map(|_| ())
+    }
+
     /// `GET /app` with the JWT: the App's slug (setup's check).
     pub fn app_slug(&self, jwt: &str) -> Result<String, ForgeError> {
         let (_, v) = self.call(reqwest::Method::GET, "/app", &format!("Bearer {jwt}"), None)?;

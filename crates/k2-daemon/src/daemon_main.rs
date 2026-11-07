@@ -1934,6 +1934,10 @@ async fn async_main() {
     crate::jobs::boot();
     let _jobs_handle = crate::jobs::spawn_loop();
 
+    // `k2 ci` (0.46.10, C6a): the CI watch/reap loop, headless (it idles
+    // while compute is off).
+    let _ci_handle = crate::ci_engine::spawn_loop();
+
     // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): the
     // poller runs on its own threads, with no window open. Gaps from the
     // restart are marked first [GV57].

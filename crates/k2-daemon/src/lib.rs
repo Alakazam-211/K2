@@ -323,6 +323,9 @@ pub mod compute_advertise;
 pub mod compute_allow;
 // Git access for compute jobs (0.46.9, GH#78): `k2 compute git-access`.
 pub mod compute_git;
+// `k2 ci` (0.46.10, C6a): CI on compute: the routes and the watch loop.
+pub mod ci_engine;
+pub mod ci_routes;
 pub mod compute_rollout;
 // The Compute Garden's node load tile (`compute.nodes`, catalog v49).
 pub mod compute_garden;

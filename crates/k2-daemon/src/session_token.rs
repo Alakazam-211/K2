@@ -837,6 +837,15 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // with switch 2 reads and sets that App's fallback only (the
         // handler checks; every other /cli/app/wallet/* answers owner_only).
         "/cli/app/wallet/settings",
+        // `k2 ci` (0.46.10, C6a): an agent runs CI for its own workspace
+        // (the workspace switch "Allow compute nodes"; jobs carry the
+        // workspace's own grants). watch/freeze/init: its own workspace
+        // only (the handler).
+        "/cli/ci/freeze",
+        "/cli/ci/init",
+        "/cli/ci/run",
+        "/cli/ci/status",
+        "/cli/ci/watch",
         // K2 compute nodes (CN18): the agent verbs. The handler checks the
         // workspace switch (`compute_off`) and the node grant
         // (`not_granted`) and scopes everything to the passport's

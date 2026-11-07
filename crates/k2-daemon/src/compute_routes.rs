@@ -43,6 +43,12 @@ pub const MAX_BODY: usize = 1 << 20;
 
 /// Every compute route (the two sockets included).
 pub const ROUTES: &[&str] = &[
+    // `k2 ci` (0.46.10, C6a, `ci_routes`): CI on compute, same callers.
+    crate::ci_routes::FREEZE,
+    crate::ci_routes::INIT,
+    crate::ci_routes::RUN,
+    crate::ci_routes::STATUS,
+    crate::ci_routes::WATCH,
     "/cli/compute/admin/approval-key",
     "/cli/compute/admin/approve",
     "/cli/compute/admin/deny",
@@ -124,6 +130,10 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    crate::ci_routes::FREEZE,
+    crate::ci_routes::INIT,
+    crate::ci_routes::RUN,
+    crate::ci_routes::WATCH,
     "/cli/compute/admin/approve",
     "/cli/compute/admin/deny",
     "/cli/compute/admin/propose",
@@ -497,7 +507,7 @@ pub(crate) fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
 
 /// The workspace a grant/revoke acts for. A manager may name any workspace
 /// (its own when it names none); everyone else follows [`target_ws`].
-fn grant_target_ws(who: &Who, requested: Option<&str>, mgr: Option<&Manager>) -> R<Ws> {
+pub(crate) fn grant_target_ws(who: &Who, requested: Option<&str>, mgr: Option<&Manager>) -> R<Ws> {
     let Some(m) = mgr else { return target_ws(who, requested) };
     match requested.map(str::trim).filter(|s| !s.is_empty()) {
         Some(req) => ws_by_token_or_worktree(req).ok_or_else(|| no_workspace(req)),
@@ -677,6 +687,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
         // health, alerts; and a shared node's servers.
         p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params, mgr),
+        // `k2 ci` (0.46.10, C6a): watch, run, status, init, freeze.
+        p if crate::ci_routes::is_route(p) => crate::ci_routes::handle(p, &who, body, params, mgr),
         _ => Err(no("not_found", 404, "no such compute route")),
     };
     match r {
@@ -1384,6 +1396,38 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let sub = submit_one(who, &v, &ws, client_id, &request_sha, &SubmitOpts { session, ..Default::default() })?;
     Ok(submitted_json(who, &sub))
+}
+
+/// `k2 ci` (0.46.10, C6a): submit one check's job for workspace `ws_id`
+/// through the normal job path ([`submit_one`]: placement, grants, needs,
+/// limits, the tier and supersede rules), with **the workspace's own
+/// authority**: a non-admin caller of that workspace, so its compute
+/// grants are the fence (a CI job never gets the owner's reach to every
+/// node, and `--tier ci` needs a grant with `--ci`). `run_id` names the
+/// submitter (`<workspace>/ci-<run>/ci`); no session is woken. Idempotent
+/// on the body's `clientJobId` like `/cli/compute/run`. The answer is the
+/// run route's JSON (`job`, `notices`, `warnings`, …).
+pub(crate) fn submit_for_ci(ws_id: &str, run_id: &str, body: &serde_json::Value) -> R<serde_json::Value> {
+    let ws = ws_by_id(ws_id).ok_or_else(|| no("workspace_not_found", 404, "the workspace is no longer registered"))?;
+    let who = Who::Agent { project_id: ws.id.clone(), session_id: format!("ci-{}", &run_id[..run_id.len().min(8)]) };
+    let client_id = s(body, "clientJobId").ok_or_else(|| no(codes::BAD_REQUEST, 400, "clientJobId is required"))?;
+    if !valid_client_id(client_id) {
+        return Err(no(codes::BAD_REQUEST, 400, "clientJobId must be 16–64 of A-Z a-z 0-9 - _"));
+    }
+    let request_sha = crypto::sha256_hex(&k2_core::compute::proto::canonical::to_vec(body).map_err(|e| no(codes::BAD_REQUEST, 400, e))?);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Some(j) = store::job_by_client_id(&conn, &ws.id, client_id) {
+            if j.request_sha256 != request_sha {
+                return Err(no(codes::IDEMPOTENCY_CONFLICT, 409, "this clientJobId was already used for a different request"));
+            }
+            drop(conn);
+            return Ok(serde_json::json!({ "job": job_summary(&j), "existing": true }));
+        }
+    }
+    let sub = submit_one(&who, body, &ws, client_id, &request_sha, &SubmitOpts::default())?;
+    Ok(submitted_json(&who, &sub))
 }
 
 /// What a prewarm job reserves (it runs `sh -c true` after the install).

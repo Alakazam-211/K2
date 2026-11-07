@@ -569,6 +569,15 @@ pub const ROUTES: &[Route] = &[
     get("/cli/chatter", Member),
     get("/cli/chatterlog", Member),
     post("/cli/checkin", Member),
+    // `k2 ci` (0.46.10, C6a; `ci_routes`, on the compute router): status
+    // and run are agent verbs (the workspace switch + its own workspace);
+    // watch, freeze and init need Admin people or a passport for its own
+    // workspace (the handler refuses a Member login `owner_only`).
+    post("/cli/ci/freeze", Member),
+    post("/cli/ci/init", Member),
+    post("/cli/ci/run", Member),
+    get("/cli/ci/status", Member),
+    post("/cli/ci/watch", Member),
     post("/cli/claude-auth/install-scheduler", Member),
     post("/cli/claude-auth/refresh-now", Member),
     get("/cli/claude-auth/status", Member),

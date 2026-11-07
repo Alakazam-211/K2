@@ -674,6 +674,73 @@ fn grid_import_over_the_cap_is_declined_too_large() {
     );
 }
 
+/// Rows are their own limit (`Config::grid_max_rows`): a blank row holds no cell, so the cell
+/// limit doesn't bound them. Deleted rows count, as for cells.
+#[test]
+fn grid_rows_past_the_row_cap_exit_2_blank_ones_included() {
+    let mut c = config();
+    c.grid_max_rows = 3;
+    let f = fx_with("rowcap", c);
+    // three rows, one of them blank: at the row limit, far under the cell limit
+    let s = f.open("t.csv", "a,b\n\nc,d\n");
+    let p = f.person(&s, "p");
+    // one more blank row is refused, with the plain message; nothing is applied
+    let e = op(&s, p, &EditOptions::new(), |t| {
+        t.insert_row(Anchor::End, &[]).map(|x| x.1)
+    })
+    .unwrap_err();
+    assert_eq!(session_exit(&e), exit::USAGE);
+    assert_eq!(
+        e,
+        SessionError::AtLimit {
+            what: "rows",
+            limit: 3,
+            would_be: 4
+        }
+    );
+    assert_eq!(
+        e.to_string(),
+        "this table is at its size limit (3 rows, deleted rows included); the owner can \
+         free space with `rows drop-deleted`"
+    );
+    assert_eq!(text(&s, p), "a,b\n\nc,d\n");
+    // a change that doesn't grow it passes
+    person_set(&s, p, "r2", "c1", "x");
+    // deleted rows still count
+    op(&s, p, &EditOptions::new(), |t| t.delete_row(&k("r1"))).unwrap();
+    let still = op(&s, p, &EditOptions::new(), |t| {
+        t.insert_row(Anchor::End, &["g".into()]).map(|x| x.1)
+    });
+    assert!(
+        matches!(still, Err(SessionError::AtLimit { what: "rows", .. })),
+        "{still:?}"
+    );
+    // (a rect row with a present cell renders every column)
+    assert_eq!(text(&s, p), "x,\nc,d\n");
+}
+
+#[test]
+fn grid_import_over_the_row_cap_is_declined_too_large() {
+    let mut c = config();
+    c.grid_max_rows = 2;
+    let f = fx_with("rowsbig", c);
+    // one cell and two blank rows: over the row limit, under every other
+    let e = f
+        .mgr
+        .open(Arc::new(Lite), &key("t.csv"), Some(b"a\n\n\n"))
+        .err()
+        .expect("declined");
+    let SessionError::Declined(d) = e else {
+        unreachable!("{e:?}")
+    };
+    assert_eq!(d.code, "too_large");
+    assert_eq!(
+        d.message,
+        "this table is larger than the grid limit (2 rows; it has 3), so it opens as text"
+    );
+    assert!(f.store.find(&key("t.csv")).unwrap().is_none());
+}
+
 // ---------- history: restore, revert, blame ----------
 
 #[test]

@@ -65,8 +65,8 @@ use crate::hash::{file_hash, hex, hmac, legacy_matches};
 use crate::schema::{Kind, Schema};
 use crate::store::{
     Approval, ApprovalState, BlobRefScan, ChangeInfo, ChangeKind, ClockSpan, DocId, DocKey,
-    DocMeta, DocStore, ElemCounts, ElemRoot, HunkRoots, LogEntry, NewChange, ProvRow, RecordHunk,
-    RecordRoot, RevertRecord, RootRuns, Seq, SyncState, Version, VersionReason,
+    DocMeta, DocStore, ElemCounts, ElemRoot, EntryBody, HunkRoots, LogEntry, NewChange, ProvRow,
+    RecordHunk, RecordRoot, RevertRecord, RootRuns, Seq, SyncState, Version, VersionReason,
 };
 use crate::text::diff::{self, Hunk};
 use crate::text::lines;
@@ -745,9 +745,9 @@ struct State {
     aware: Aware,
     /// The verb the change being committed came from (`sed -i`), for the activity ring.
     verb_hint: Option<String>,
-    /// A table's present cells (live or hidden) and columns, counted on first need and kept
-    /// in step by every change (the size limit, K-CSV-7).
-    grid_size: Option<(usize, usize)>,
+    /// A table's present cells (live or hidden), columns and rows (live or deleted), counted
+    /// on first need and kept in step by every change (the size limits, K-CSV-7).
+    grid_size: Option<(usize, usize, usize)>,
     /// A grid's axes and line map as the roster last read them, with the doc's version and
     /// codec they were read at (the roster push's flush reads them for every caret: O(doc)
     /// to build, so built once per change, not once per flush; v0.10.0).
@@ -1335,11 +1335,7 @@ impl Session {
         doc.set_position_check_every(config.position_check_every);
         let snap_seq = loaded.snapshot.as_ref().map_or(0, |(s, _)| *s);
         let version = loaded.updates.last().map_or(snap_seq, |(s, _)| *s);
-        let log_bytes: u64 = loaded
-            .updates
-            .iter()
-            .map(|(_, e)| e.update.len() as u64)
-            .sum();
+        let log_bytes: u64 = loaded.updates.iter().map(|(_, e)| e.body.yrs_len()).sum();
         let state_bytes = loaded.snapshot.as_ref().map_or(0, |(_, s)| s.len() as u64) + log_bytes;
         let mut authors: VecDeque<(Seq, String)> = loaded
             .updates
@@ -1418,7 +1414,7 @@ impl Session {
             client,
             at_ms: now,
             via: "disk".to_owned(),
-            update: u,
+            body: EntryBody::Yrs(u),
             on_behalf_of: None,
         });
         let version = Version {
@@ -1499,7 +1495,7 @@ impl Session {
             Some((&sync, &hash_key)),
             Some(&change),
         )?;
-        let ub = entry.as_ref().map_or(0, |e| e.update.len() as u64);
+        let ub = entry.as_ref().map_or(0, |e| e.body.yrs_len());
         let mut authors = VecDeque::new();
         if let Some(s) = seq {
             authors.push_back((s, IMPORT_PID.to_owned()));
@@ -3609,13 +3605,21 @@ impl Session {
         let (client, via, obo) = (m.client, m.p.via.clone(), m.p.on_behalf_of.clone());
         let mut entries = Vec::with_capacity(applied.len());
         let mut changes = Vec::with_capacity(applied.len());
+        // the updates the disk replica's catch-up takes once the commit lands, beside the
+        // entries (an entry's body is the doc engine's: the bytes to send are kept here)
+        let catching_up = st.disk.as_ref().is_some_and(|d| d.catch_up.is_some());
+        let mut caught = Vec::new();
         for a in &mut applied {
+            let update = std::mem::take(&mut a.update);
+            if catching_up {
+                caught.push(update.clone());
+            }
             entries.push(LogEntry {
                 author: pid.clone(),
                 client,
                 at_ms: now,
                 via: via.clone(),
-                update: std::mem::take(&mut a.update),
+                body: EntryBody::Yrs(update),
                 on_behalf_of: obo.clone(),
             });
             // the rows a text left on their keys by a non-exact pairing; and a marked row an
@@ -3696,7 +3700,7 @@ impl Session {
             ix.bind(&seqs);
         }
         if let Some(c) = st.disk.as_mut().and_then(|d| d.catch_up.as_mut()) {
-            c.extend(entries.iter().map(|e| e.update.clone()));
+            c.extend(caught);
         }
         if let Some(v) = versions.iter().map(|v| v.seq).max() {
             st.last_version_seq = st.last_version_seq.max(v);
@@ -3712,8 +3716,8 @@ impl Session {
         for ((a, seq), e) in applied.into_iter().zip(&seqs).zip(&entries) {
             prof!("commit.bookkeeping");
             st.log_entries += 1;
-            st.log_bytes += e.update.len() as u64;
-            st.state_bytes += e.update.len() as u64;
+            st.log_bytes += e.body.yrs_len();
+            st.state_bytes += e.body.yrs_len();
             st.authors.push_back((*seq, pid.clone()));
             if st.authors.len() > AUTHORS_KEPT {
                 st.authors.pop_front();
@@ -4457,11 +4461,7 @@ impl Session {
                 st.version = version;
                 Self::elem_presence_after(st);
                 st.log_entries = loaded.updates.len() as u64;
-                st.log_bytes = loaded
-                    .updates
-                    .iter()
-                    .map(|(_, e)| e.update.len() as u64)
-                    .sum();
+                st.log_bytes = loaded.updates.iter().map(|(_, e)| e.body.yrs_len()).sum();
                 for m in &mut st.members {
                     m.cursor = None;
                     m.view = None;
@@ -6095,7 +6095,7 @@ impl Session {
             client,
             at_ms: now,
             via: "disk".to_owned(),
-            update,
+            body: EntryBody::Yrs(update),
             on_behalf_of: None,
         };
         if let Err(e) = store.commit_disk(
@@ -6152,8 +6152,8 @@ impl Session {
         st.version = seq;
         st.codec = content.codec;
         st.log_entries += 1;
-        st.log_bytes += entry.update.len() as u64;
-        st.state_bytes += entry.update.len() as u64;
+        st.log_bytes += entry.body.yrs_len();
+        st.state_bytes += entry.body.yrs_len();
         st.authors.push_back((seq, EXTERNAL_PID.to_owned()));
         if st.authors.len() > AUTHORS_KEPT {
             st.authors.pop_front();

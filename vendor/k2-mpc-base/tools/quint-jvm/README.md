@@ -19,6 +19,19 @@ both servers it starts use it: the export check's (`tools/quint/`, unchanged) an
 `tools/undo/tlc.sh`'s. Only the size limit changes: the TLA+ an export produces is the same
 with and without the agent. A server quint starts on its own keeps the default.
 
-If the IR is over the limit anyway (no agent, or past the agent's), the export check and
-`tlc.sh`'s compile say so in one line ("the IR is over Jackson's 20M limit and the agent isn't
-loaded") instead of retrying a tool error that can't pass.
+**The agent is required** (since 2026-11-04; the undo model's IR is 21.3 MB, past the limit
+on every instance). `require.sh`'s `qjvm_require` runs before each Apalache server a job
+starts: the export check's (`tools/undo/job.sh`) and `tools/undo/tlc.sh`'s. Without the agent
+in `APA_JAVA_OPTS` (`agent.sh` couldn't build it, or the variable was set to something else)
+the job stops there with one line naming the limit and the model's IR size:
+
+    === quint-jvm: <server>: no Jackson limits agent in APA_JAVA_OPTS ('...'). Apalache reads
+    the model's IR as one JSON string of at most 20,000,000 characters (Jackson's default
+    limit); this model's IR (q_export_check) is N bytes. Stopping the job before any Apalache
+    request (tools/quint-jvm/README.md).
+
+A server quint starts on its own keeps Jackson's default, so no compile of the model may reach
+one: the job fetches Apalache with a one-line module (`q_fetch`), and stops if its own server
+didn't come up rather than let a compile start one. `quint run`, `typecheck` and `compile
+--target json` don't use Apalache. If the IR is past the agent's limit too, the export check
+and `tlc.sh`'s compile say so in one line instead of retrying a tool error that can't pass.

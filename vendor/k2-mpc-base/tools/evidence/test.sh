@@ -4,12 +4,17 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 PY=${PYTHON:-python3}
+echo "=== settings: PYTHON=$PY"
 t=$here/tests
 fail=0
 ok() { echo "ok   $1"; }
 bad() { echo "FAIL $1"; fail=1; }
 if "$PY" "$here/check.py" --runs "$t/runs" "$t/docs/good.md" > /dev/null; then ok "good.md passes"; else bad "good.md must pass:"; "$PY" "$here/check.py" --runs "$t/runs" "$t/docs/good.md"; fi
+nb=0
 for f in "$t"/docs/bad_*.md; do
+  # an unmatched glob is a missing fixture set, never a pass
+  [ -f "$f" ] || { bad "no bad_*.md fixtures in $t/docs"; continue; }
+  nb=$((nb + 1))
   n=$(basename "$f")
   if out=$("$PY" "$here/check.py" --runs "$t/runs" "$f"); then bad "$n must fail"; else ok "$n fails: $(echo "$out" | head -1 | sed 's/^[^:]*:[0-9]*: //')"; fi
 done

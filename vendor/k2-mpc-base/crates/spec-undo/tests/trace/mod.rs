@@ -34,6 +34,7 @@ pub mod kit;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use k2_mpc_base::differential::{with_side, Path, Side};
 use k2_mpc_base::session::{
     ConflictKind, ConflictRegion, SessionError, UndoMode, UndoOutcome, WriteOutcome,
 };
@@ -634,7 +635,25 @@ pub fn run_group(seed: u64, verbose: bool) -> TraceResult {
     run_mode(seed, verbose, false, true)
 }
 
+/// Run `f` with every client ID the kit mints on this thread drawn from `seed` (the
+/// `differential` feature's seeded side, on the production edit path), not at random. The
+/// IDs decide byte sizes the kit's compaction reads (an ID's varint length in the log, the
+/// IDs' order in the snapshot's encoding), so with random IDs a compaction could move by a
+/// step from one run of a seed to the next, and the classes read off it with it
+/// (`revert_beyond_compaction`; traces.rs `trace_counts_repeat`).
+fn seeded_clients<R>(seed: u64, f: impl FnOnce() -> R) -> R {
+    let mut side = Side::new(Path::MainDoc).with_client_seed(mix(seed ^ CLIENT_SEED));
+    with_side(&mut side, f)
+}
+
+/// Kept apart from the trace's own RNG seed (`mix(seed)`).
+const CLIENT_SEED: u64 = 0x636c_6965_6e74_5f69;
+
 fn run_mode(seed: u64, verbose: bool, twin: bool, group: bool) -> TraceResult {
+    seeded_clients(seed, || run_seeded(seed, verbose, twin, group))
+}
+
+fn run_seeded(seed: u64, verbose: bool, twin: bool, group: bool) -> TraceResult {
     let mut rng = SmallRng::seed_from_u64(mix(seed) ^ u64::from(twin) ^ (u64::from(group) << 1));
     let n_pids = if group {
         rng.gen_range(2..=4)
@@ -771,6 +790,10 @@ fn run_mode(seed: u64, verbose: bool, twin: bool, group: bool) -> TraceResult {
 /// Run a scripted trace: `pids` participants (one connection each, acting for nobody)
 /// over `seeds`. Returns the first mismatch's description, if any.
 pub fn script(seeds: [&str; 2], pids: usize, steps: Vec<Step>) -> Option<String> {
+    seeded_clients(0, || script_seeded(seeds, pids, steps))
+}
+
+fn script_seeded(seeds: [&str; 2], pids: usize, steps: Vec<Step>) -> Option<String> {
     let kit = Kit::open(seeds, &KNOBS);
     let head = kit.version();
     let bounds = Bounds {

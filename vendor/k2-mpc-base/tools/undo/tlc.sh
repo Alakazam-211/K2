@@ -17,8 +17,12 @@ apa_up() {
     APA_JAVA_OPTS=$(sh "$ROOT/tools/quint-jvm/agent.sh" "$APA_JAR" "$ROOT/qjvm") || APA_JAVA_OPTS=""
     export APA_JAVA_OPTS
   fi
+  # the agent is required: without it the job stops here, naming the 20,000,000 limit
+  . "$ROOT/tools/quint-jvm/require.sh"; qjvm_require "tlc.sh's Apalache server"
   java ${APA_JAVA_OPTS} -Xmx${APA_HEAP:-6g} -jar "$APA_JAR" server --port=${QJ_APA_PORT:-8822} > "$ROOT/apalache-server.log" 2>&1 &
   i=0; until grep -q "running on port" "$ROOT/apalache-server.log" 2>/dev/null || [ $i -ge 120 ]; do sleep 1; i=$((i + 1)); done
+  # never let a compile fall back to a server quint would start itself (no agent)
+  grep -q "running on port" "$ROOT/apalache-server.log" || { echo "=== tlc.sh's Apalache server didn't start in 120 s: no TLC run"; tail -5 "$ROOT/apalache-server.log"; exit 1; }
   echo "=== apalache server: up after ${i}s on port ${QJ_APA_PORT:-8822} (heap ${APA_HEAP:-6g}; ${APA_JAVA_OPTS:-no agent})"; tail -2 "$ROOT/apalache-server.log"
 }
 # the Apalache server runs in the background: the job's epilogue stops it with anything else
@@ -49,9 +53,9 @@ tlc() {
     if grep -q -E "StreamConstraintsException|String value length \([0-9]+\) exceeds the maximum allowed" "$n.cerr" "$ROOT/apalache-server.log" 2>/dev/null; then
       if [ -z "${APA_JAVA_OPTS:-}" ]; then echo "=== quint compile $n: the IR is over Jackson's 20M limit and the agent isn't loaded (tools/quint-jvm)"
       else echo "=== quint compile $n: the IR is over the agent's string limit too ($APA_JAVA_OPTS)"; fi
-      set -e; return 1
+      tlc_compile_failed "$n"; set -e; return 1
     fi
-    k=$((k + 1)); [ $k -le 3 ] || { set -e; return 1; }
+    k=$((k + 1)); [ $k -le 3 ] || { tlc_compile_failed "$n"; set -e; return 1; }
   done; set -e
   { printf 'INIT q_init\nNEXT q_step\n'
     for i in $inv; do
@@ -72,8 +76,14 @@ tlc() {
     echo "--- counterexample (TLC_TRACE=$TLC_TRACE)"; sed -n '/violated/,/states generated/p' "$n.tlc.log" | head -"$TLC_TRACE"; echo "--- end of counterexample"
   fi
   if [ "$rc" = 150 ] || [ "$rc" = 75 ]; then grep -B2 -A12 -iE "semantic|parse error|multiply|unknown operator|was expected" "$n.tlc.log" | head -40; fi
-  tlc_record "$n" "$n.tlc.log" "$secs" "$rc" "$(( $(date +%s) - s ))"
+  rec=$(tlc_record "$n" "$n.tlc.log" "$secs" "$rc" "$(( $(date +%s) - s ))"); echo "$rec"
   echo "=== tlc $n [$inv]: exit $rc, wall $(( $(date +%s) - s ))s (124 = stopped by timeout)"
+  # the row's verdict (tools/undo/expect.sh, which tools/undo/job.sh sources)
+  if command -v _expect_tlc >/dev/null 2>&1; then _expect_tlc "$n" "$rec" "$(echo $inv)"; fi
+}
+# a compile that failed every attempt: the row never ran (tools/undo/expect.sh)
+tlc_compile_failed() {
+  if command -v _expect_fail >/dev/null 2>&1; then echo tlc >> "$EXPECT_DIR/rows"; _expect_fail "tlc $1: quint compile failed: no TLC run"; fi
 }
 # tlc_record RUN LOG CAP_S EXIT WALL_S: the run's record, one `RUNREC {json}` line
 # (tools/evidence/README.md; the same rules as the engine repository's tools/quint-job.sh):

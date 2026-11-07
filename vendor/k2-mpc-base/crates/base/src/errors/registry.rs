@@ -1102,7 +1102,7 @@ NEEDS_BASE = e("MPC-E801", "needs_base", Structured, 2, "K-BR-12", &["cell set",
 AT_LIMIT = e("MPC-E802", "at_limit", Structured, 2, "K-CSV-7 (KC4)", &["@change"],
     "this table is at its size limit ({limit} {what}, deleted rows included); the owner can \
      free space with `rows drop-deleted`",
-    "The table can't grow past its limit (details.what: cells or columns); nothing was \
+    "The table can't grow past its limit (details.what: cells, columns or rows); nothing was \
      applied and nothing was dropped. Remove rows or columns first, or ask an owner to run \
      rows drop-deleted to free the space deleted rows still hold.")
     .step("rows drop-deleted", &[],
@@ -1542,9 +1542,9 @@ CHANGE_TOO_LARGE = e("MPCE-E980", "change_too_large", Limits, 2,
 STORE_SECRET_MISSING = e("MPCE-E566", "store_secret_missing", Store, 6,
     "the MPCE seam (stable codes)", &["(host)"],
     "the engine refused: this store has no secret configured",
-    "This store can't write a checkpoint without its secret. Nothing was written. Generate the \
-     store's secret once, keep it with the store's metadata, and pass it on every open of that \
-     store.")
+    "This store can't write a checkpoint without its secret. Nothing was written. The host \
+     supplies the store's secret and keeps it outside the store; pass it on every open. Never \
+     make a new secret for a store that has native records.")
     .indirect("the native engine's store (feature native)");
 
 CHECKPOINT_MAC = e("MPCE-E567", "checkpoint_mac", Store, 6,

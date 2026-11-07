@@ -266,15 +266,22 @@ impl Doc {
     }
 
     /// Rebuild a doc from what the kit's store holds: the snapshot, then the log after it.
-    /// Store bytes are trusted: the kit wrote them (see [`crate::store`]).
+    /// Store bytes are trusted: the kit wrote them (see [`crate::store`]). The log is
+    /// replayed through [`crate::store::Loaded::yrs_updates`] only: a log holding a native
+    /// entry is [`DocError::Malformed`] before anything is replayed.
     pub fn from_store(schema: Schema, loaded: &crate::store::Loaded) -> Result<Self, DocError> {
         timed!(LoadDoc);
+        let updates = loaded
+            .yrs_updates()
+            .map_err(|e| DocError::Malformed(format!("the log can't be replayed on Yrs: {e}")))?;
         let mut d = match &loaded.snapshot {
             Some((_, state)) => Self::load(schema, state)?,
             None => Self::new(schema)?,
         };
-        for (_, e) in &loaded.updates {
-            d.inner.apply_trusted(&e.update)?;
+        for u in updates {
+            #[cfg(test)]
+            YRS_REPLAYS.with(|n| n.set(n.get() + 1));
+            d.inner.apply_trusted(u)?;
         }
         Ok(d)
     }
@@ -861,6 +868,13 @@ impl Doc {
             }],
         )
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The Yrs updates [`Doc::from_store`] has replayed on this thread (the store rows'
+    /// replay counter).
+    pub(crate) static YRS_REPLAYS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

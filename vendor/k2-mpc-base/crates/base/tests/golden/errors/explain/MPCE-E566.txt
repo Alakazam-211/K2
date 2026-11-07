@@ -1,7 +1,7 @@
 MPCE-E566 store_secret_missing (store)
 exit:     6
 message:  the engine refused: this store has no secret configured
-next:     This store can't write a checkpoint without its secret. Nothing was written. Generate the store's secret once, keep it with the store's metadata, and pass it on every open of that store.
+next:     This store can't write a checkpoint without its secret. Nothing was written. The host supplies the store's secret and keeps it outside the store; pass it on every open. Never make a new secret for a store that has native records.
 rule:     the MPCE seam (stable codes)
 verbs:    a host call (no verb)
 status:   live
@@ -12,7 +12,7 @@ status:   live
   "area": "store",
   "exit": 6,
   "message": "the engine refused: this store has no secret configured",
-  "next": "This store can't write a checkpoint without its secret. Nothing was written. Generate the store's secret once, keep it with the store's metadata, and pass it on every open of that store.",
+  "next": "This store can't write a checkpoint without its secret. Nothing was written. The host supplies the store's secret and keeps it outside the store; pass it on every open. Never make a new secret for a store that has native records.",
   "rule": "the MPCE seam (stable codes)",
   "verbs": ["(host)"],
   "returned_by": [],

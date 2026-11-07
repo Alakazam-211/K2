@@ -25,8 +25,8 @@ that commit. **indicative (bundle):** the source went to the node as env chunks 
 fallback), so the record names no commit and the exact source can't be rebuilt from it;
 **source stated as <commit>** is the commit the note names for that run, which the record
 can't confirm. **indicative (dirty: ...):** a pushed commit plus files that were not
-committed. **rerun at a pushed sha: pending:** the run is being repeated at a pushed commit,
-and that job will be cited here. **K2 Engine's record at `<commit>`:** K2 Engine's job (its
+committed. **rerun at pushed `<commit>`: `<job>`:** the run was repeated at that pushed commit;
+the job named is the sha-tied rerun, cited beside the marked run, whose own figures stay as it printed. **K2 Engine's record at `<commit>`:** K2 Engine's job (its
 record isn't readable from this repo's side); K2 Engine's record names that commit.
 **indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pending:** K2 Engine's
 job ran an uploaded tree with no commit. A mark changes no figure: an indicative run's result
@@ -247,6 +247,20 @@ flags the merge computed from its own `at_end` (`end == live.len() && base_doc_n
 `atEndFor`), so it could not fail on correct code. No behaviour of the oracle changed: the
 additions are four mutants, two independently formulated checks and a debug-assertion job.
 
+**Two caveats, stated up front:**
+
+- **`O5doc` covers single-step requests only** (a revert, or an undo or redo of one batch).
+  An `undo --steps 2` whose two steps both merge rests on the old `O5` check alone, which
+  reads the merge's own flags (below, "Independent formulations").
+- **`i1-per-request`'s Rust test is a replayed witness, not a search.** At its own bound a
+  full `bfs` of the oracle runs out of memory (20 GB), so `tests/mutants.rs` replays the
+  least counterexample and checks it, and its least depth (5) rests on the enumerator's
+  `--first` run and TLC's one-worker run (`counts.sh` `PART=m`). **That bound turns off
+  two-region edits and purge** (2 × 2 + 1 undo + 1 revert, seed `a`, `MAXLEN` 3), only to
+  keep TLC's search small: the witness uses neither. **It is not in the G1 walks**: from
+  `abb` with `MAXLEN` 4 its least witness at G1 is six exact steps, which uniform walks
+  don't draw (0 of 20,000, job `2668cf01`); the other three are (below).
+
 ### Four mutants (`Mutant::ALL`, `MUTANT` in `undo.qnt`, `counts.sh` `PART=m`, `smoke.sh`)
 
 | Mutant | Rule | Bound | Least depth: enumerator / TLC (one worker) | Violating action |
@@ -298,6 +312,27 @@ rule violated at the level it stops on: one each), and each leaves the oracle as
   its end state passes `Model::i1` with `I1` in `viol`. The bound's whole oracle run doesn't
   fit a test (about 10^6 states at depth 5 alone, over 20 GB for a full `bfs`), so its least
   depth is the jobs'. TLC took 496 s with one worker (301,577 states); the enumerator 52 s.
+
+**At the literal G1 bound, on walks.** The rows `g1.sh` and `g1-smoke.sh` declare
+(`tools/undo/expect.sh`), with their verdicts, run at the branch head `37c36196`:
+
+| Mutant | Walk row (`g1.sh` walks-mutants, 50,000 walks; `g1-smoke.sh`, 20,000; walks-bias declares the same rows) | Its own rule, at its own bound (`counts.sh` `PART=m`, job `2ee1b04f`) |
+|---|---|---|
+| `u13-refused-revert-applies` | VIOLATION at U13: `violations=[U13@3]` (jobs `5d33fce7`, `2668cf01`) | U13, depth 3, TLC and the enumerator |
+| `r3-redo-rewrites-window` | VIOLATION at own_only: `[own_only@4]` (same jobs) | own_only, depth 4 |
+| `r3-revert-rewrites-window` | VIOLATION at own_only: `[own_only@3]` (same jobs) | own_only, depth 3 |
+| `i1-per-request` | **not in walks** (six-step least witness; 0 of 20,000 drew it): `g1-smoke.sh` declares its 20,000 walks SAMPLED, `violations=[]` (job `2668cf01`); left out of `g1.sh`'s lists (`NW`, the comment beside `AUDIT_MUTANTS`) | **caught exhaustively** at its own bound: I1, depth 5, TLC (one worker) and the enumerator |
+| (iv) `iv-redo-retries-skipped` | stopped by the oracle's own shared-edge assertion at depth 5 ("a shared edge's elements must be foreign"; the enumerator's pseudo-rule for a failed assertion), **not U17**; its walk row accepts either | U17 (and U17doc), depth 3: its own-bound rows `tlc@iv-redo-retries-skipped/U17`, `enum@…/U17` (job `2ee1b04f`) |
+
+`i1-per-request`'s least witness at G1, from `abb` with `MAXLEN` 4: p1 deletes a letter,
+appends R, deletes R; p2 appends; p2 reverts p1's delete; p1 `undo --steps 2`. Uniform walks
+don't draw those six steps. The three caught on walks fail their own rule only.
+
+**Export check and counts at that head** (job `2ee1b04f`, `counts.sh` `PART=abm`, `=== EXPECT:
+GREEN: all 51 declared rows ran`): the export guard compared 113 definitions, 0 differ; TLC =
+enumerator, COMPLETE, at all seven bounds (3,889; 35,758; 220,210; 144; 542,418; 199,268;
+49,644); ITF 0 mismatches; every mutant at its rule, `i1-per-request` I1 at depth 5 in both
+tools (TLC 301,577 states), (iv) U17 and U17doc on its one-rule rows.
 
 ### Independent formulations
 
@@ -373,6 +408,43 @@ draft was 22,522,104 (job `16f98d6f`): every expression whose type holds the who
 what `checks` reads once (`nts`, `sts`, `kind`, `post`, the stacks and records; the existing
 checks now use them too), passes maps rather than states to `stepRegions` and `oppStack`,
 and folds the redo rewrite into `applyStep`, which already holds the window's roots.
+
+**The agent is required, and its absence stops the job** (follow-up, 2026-11-04). The IR's
+anatomy (`quint compile --target json` of `u_tiny`, bytes by part; job `c20c1e8a`): `types`
+13.0 MB, the name `table` 7.3 MB (an instance's import keeps each name twice, qualified and
+not), `effects` 3.1 MB, the expressions themselves 0.6 MB. By definition, `undoRedoW` holds
+1.6 MB, `perform` 0.6, `revert` 0.6, `checks` 0.6, `commit` 0.5. **Moving the mutants into a
+module of their own was not done**:
+
+- it would not get the base under 20 MB: the mutant-only definitions and branches (the
+  `undoRedo` wrapper and `perRequest`, `rewrite`, the old mutants' branches in
+  `mergeRegions`, `undoRedoW`, `purge`, `restart`) come to about 1 MB of the 21.3, and the
+  export check's instance is a further ~0.14 MB over `u_tiny`;
+- Quint has no overriding: every mutant changes a core definition (`mergeRegions`,
+  `undoRedoW`, `revert`, `purge`, `restart`), so a mutant module would carry its own copies
+  of most of the model, kept equal to the base by hand.
+
+Instead every Apalache server a job starts goes through `tools/quint-jvm/require.sh`
+(`qjvm_require`): without the agent in `APA_JAVA_OPTS` the job stops before its first
+Apalache request, in one line naming the 20,000,000 limit and the IR's size. The planted run
+(job `ce625b9f` at `37c36196`, `APA_JAVA_OPTS` set to a non-agent option) stops at its export check,
+exit 1, through `tools/undo/expect.sh` (`=== EXPECT: RED: 1 problem(s)`, the missing agent):
+
+    === quint-jvm: the export check's Apalache server: no Jackson limits agent in APA_JAVA_OPTS
+    ('-Dplanted.no.agent=1'). Apalache reads the model's IR as one JSON string of at most
+    20,000,000 characters (Jackson's default limit); this model's IR (q_export_check) is
+    21471884 bytes. Stopping the job before any Apalache request (tools/quint-jvm/README.md).
+
+Every Quint path, and where it sets or checks the agent:
+
+| Path | Apalache? | Agent |
+|---|---|---|
+| `tools/undo/job.sh` quint: Apalache's fetch | a server quint starts itself | the one-line module `q_fetch` (`cat > q_fetch.qnt`), never the model's IR |
+| `tools/undo/job.sh` quint: the export check's server (`lint.sh --export`, every compile through the port shim) | yes | `APA_JAVA_OPTS=$(sh … agent.sh …)`, then `qjvm_require "the export check's Apalache server"` before `java ${APA_JAVA_OPTS} … server`; stops if the server didn't start (no fallback to quint's own) |
+| `tools/undo/tlc.sh` `apa_up` (every `tlc` call: `smoke.sh`, `counts.sh` a/b/m, `diff.sh`) | yes | the same, `qjvm_require "tlc.sh's Apalache server"`, and the same start check |
+| `smoke.sh`, `counts.sh`, `g1-smoke.sh`: `q run`, `q typecheck`, `q compile --target json` | no (quint alone) | not needed |
+| `tools/undo/g1.sh`, `debug.sh` | no (enumerator only) | not needed |
+| `tools/undo-quint-job.sh` / `undo-bundle.sh` (the fallback) | through `tools/undo/job.sh` | as above |
 
 ### Jobs (an x86 compute node, `--cpus 4 --mem 20G`)
 
@@ -477,7 +549,7 @@ request's result record, then one that read and rebuilt the state in `undoRedo`,
 about 20.03 MB and every compile failed: every expression whose type holds the whole state
 carries that type in the IR. The per-step flag therefore lives in `commit` (one record
 update, inside the state). `smoke.sh` prints the size. **Since 2026-11-04** (the audit's additions above):
-21,334,452 bytes, every Quint job running its servers with `tools/quint-jvm`'s agent.
+21,334,452 bytes, every Quint job running its servers with `tools/quint-jvm`'s agent, which is required (a job without it stops; "The audit's additions").
 
 ### Jobs (an x86 compute node, `--cpus 4 --mem 8G`, `APA_HEAP=4g TLC_HEAP=2g NODE_HEAP_MB=2048`)
 

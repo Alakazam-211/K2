@@ -691,7 +691,7 @@ pub(super) fn check_import_size(
                 Neutral::Text(_) => 0,
             })
     };
-    let (cells, cols) = (count(table::CELLS), count(table::COLS));
+    let (cells, cols, rows) = (count(table::CELLS), count(table::COLS), count(table::ROWS));
     let over = |what: &str, n: usize, max: usize| {
         SessionError::Declined(Declined {
             code: "too_large",
@@ -706,6 +706,10 @@ pub(super) fn check_import_size(
     }
     if cols > config.grid_max_cols {
         return Err(over("columns", cols, config.grid_max_cols));
+    }
+    // blank rows hold no cell: rows are their own limit
+    if rows > config.grid_max_rows {
+        return Err(over("rows", rows, config.grid_max_rows));
     }
     // a value or name past `grid_max_value_len` (C1k)
     let longest = ordered
@@ -1303,18 +1307,21 @@ impl Session {
         Ok(out)
     }
 
-    /// A table's present cells and columns (live or deleted), counted on first need.
-    fn grid_size(&self, st: &mut State) -> Result<(usize, usize)> {
+    /// A table's present cells, columns and rows (live or deleted), counted on first need.
+    fn grid_size(&self, st: &mut State) -> Result<(usize, usize, usize)> {
         if let Some(n) = st.grid_size {
             return Ok(n);
         }
         let k = st.doc.keyed_state()?;
-        let mut n = (0, 0);
+        let mut n = (0, 0, 0);
         for (r, x) in &k.roots {
             match x {
                 KeyedRoot::Map(m) if r == table::CELLS => n.0 = m.len(),
                 KeyedRoot::List { live, hidden, .. } if r == table::COLS => {
                     n.1 = live.len() + hidden.len()
+                }
+                KeyedRoot::List { live, hidden, .. } if r == table::ROWS => {
+                    n.2 = live.len() + hidden.len()
                 }
                 _ => {}
             }
@@ -1325,7 +1332,7 @@ impl Session {
 
     /// Keep the counted size in step with a change's stream.
     pub(super) fn grid_size_after(&self, st: &mut State, stream: &[ElemApplied]) {
-        let Some((mut cells, mut cols)) = st.grid_size else {
+        let Some((mut cells, mut cols, mut rows)) = st.grid_size else {
             return;
         };
         for a in stream {
@@ -1339,14 +1346,19 @@ impl Session {
                         }
                     }
                 }
-                ElemApplied::List { root, ops } if root == table::COLS => {
+                ElemApplied::List { root, ops } if root == table::COLS || root == table::ROWS => {
+                    let n = if root == table::COLS {
+                        &mut cols
+                    } else {
+                        &mut rows
+                    };
                     for o in ops
                         .iter()
                         .filter(|o| !matches!(o.effect, Effect::None { .. }))
                     {
                         match o.kind {
-                            ListOpKind::Insert => cols += 1,
-                            ListOpKind::Drop => cols = cols.saturating_sub(1),
+                            ListOpKind::Insert => *n += 1,
+                            ListOpKind::Drop => *n = n.saturating_sub(1),
                             _ => {}
                         }
                     }
@@ -1354,7 +1366,7 @@ impl Session {
                 _ => {}
             }
         }
-        st.grid_size = Some((cells, cols));
+        st.grid_size = Some((cells, cols, rows));
     }
 
     /// K-CSV-7 / KC4: refuse a change that takes a table past a limit (and grows it there);
@@ -1384,9 +1396,9 @@ impl Session {
                 }
             }
         }
-        let (cells, cols) = self.grid_size(st)?;
+        let (cells, cols, rows) = self.grid_size(st)?;
         let mut present: HashMap<&str, bool> = HashMap::new();
-        let (mut c, mut k) = (cells as i64, cols as i64);
+        let (mut c, mut k, mut n) = (cells as i64, cols as i64, rows as i64);
         for e in edits {
             match e {
                 Edit::Map { root, ops } if root == table::CELLS => {
@@ -1401,11 +1413,12 @@ impl Session {
                         present.insert(key, now);
                     }
                 }
-                Edit::List { root, ops } if root == table::COLS => {
+                Edit::List { root, ops } if root == table::COLS || root == table::ROWS => {
+                    let at = if root == table::COLS { &mut k } else { &mut n };
                     for o in ops {
                         match o {
-                            ListOp::Insert { .. } => k += 1,
-                            ListOp::Drop { .. } => k -= 1,
+                            ListOp::Insert { .. } => *at += 1,
+                            ListOp::Drop { .. } => *at -= 1,
                             _ => {}
                         }
                     }
@@ -1424,6 +1437,9 @@ impl Session {
             return Err(e);
         }
         if let Some(e) = over("columns", k, cols, self.config.grid_max_cols) {
+            return Err(e);
+        }
+        if let Some(e) = over("rows", n, rows, self.config.grid_max_rows) {
             return Err(e);
         }
         Ok(())
@@ -2350,6 +2366,14 @@ impl Session {
         let store = self.store(st)?;
         let lines = self.conflict_lines(live, &st.codec);
         let now_g = self.grid_now(st)?;
+        // read once for every conflict: each live row's and column's index, each row's lines,
+        // and the live columns' positions in the base and the text (a row's conflict lists
+        // the cells changed in it from the row's own cells), so each conflict costs O(its
+        // row), however many there are (the planted ConflictWalk walks them per conflict)
+        let walk = table::conflict_walk();
+        let (rows_at, cols_at) = (t.rows.live_index(), t.cols.live_index());
+        let spans = lines.as_ref().map(|m| m.row_spans());
+        let (base_cols_at, ours_cols_at) = (base_t.cols.live_index(), ours_t.cols.live_index());
         let mut out = Vec::with_capacity(conflicts.len());
         for c in conflicts {
             let (facets, row): (Vec<(&str, String, ElemFacet)>, Option<&Key>) = match &c.at {
@@ -2433,17 +2457,20 @@ impl Session {
                 None => None,
             };
             let index = match &c.at {
-                table::Region::Col(k) | table::Region::Name(k) => match t.cols.state(k) {
+                table::Region::Col(k) | table::Region::Name(k) if walk => match t.cols.state(k) {
                     ElemState::Live(i) => Some(i),
                     _ => None,
                 },
-                _ => row.and_then(|r| match t.rows.state(r) {
+                _ if walk => row.and_then(|r| match t.rows.state(r) {
                     ElemState::Live(i) => Some(i),
                     _ => None,
                 }),
+                table::Region::Col(k) | table::Region::Name(k) => cols_at.get(k).copied(),
+                _ => row.and_then(|r| rows_at.get(r).copied()),
             };
-            let lines = match (&lines, row) {
-                (Some(m), Some(r)) => m.lines_of(r),
+            let lines = match (&lines, &spans, row) {
+                (Some(m), _, Some(r)) if walk => m.lines_of(r),
+                (_, Some(sp), Some(r)) => sp.get(r).cloned(),
                 _ => None,
             };
             // a row's conflict: the cells in it either side changed since V
@@ -2462,13 +2489,43 @@ impl Session {
                             _ => None,
                         })
                         .collect();
-                    for col in base_t.cols.live().chain(ours_t.cols.live()) {
-                        let at = (r.clone(), col.clone());
-                        if base_t.cell(r, col) != ours_t.cell(r, col) && !cells.contains(&at) {
-                            cells.push(at);
+                    if walk {
+                        for col in base_t.cols.live().chain(ours_t.cols.live()) {
+                            let at = (r.clone(), col.clone());
+                            if base_t.cell(r, col) != ours_t.cell(r, col) && !cells.contains(&at) {
+                                cells.push(at);
+                            }
                         }
+                        cells
+                    } else {
+                        // the columns live in the base or the text where the row's cell differs:
+                        // only where either holds a cell (absent on both is the same), in the
+                        // base's column order, then the text's
+                        let mut seen: HashSet<(Key, Key)> = cells.iter().cloned().collect();
+                        let mut changed: Vec<((usize, usize), &Key)> = base_t
+                            .row_cells(r)
+                            .chain(ours_t.row_cells(r))
+                            .map(|(c, _)| c)
+                            .filter_map(|c| {
+                                let at = match (base_cols_at.get(c), ours_cols_at.get(c)) {
+                                    (Some(&i), _) => (0, i),
+                                    (None, Some(&i)) => (1, i),
+                                    (None, None) => return None,
+                                };
+                                Some((at, c))
+                            })
+                            .filter(|(_, c)| base_t.cell(r, c) != ours_t.cell(r, c))
+                            .collect();
+                        changed.sort_unstable_by_key(|x| x.0);
+                        changed.dedup_by_key(|x| x.0);
+                        for (_, c) in changed {
+                            let at = (r.clone(), c.clone());
+                            if seen.insert(at.clone()) {
+                                cells.push(at);
+                            }
+                        }
+                        cells
                     }
-                    cells
                 }
                 _ => Vec::new(),
             };
@@ -2596,6 +2653,8 @@ impl Session {
         let store = self.store(st)?;
         let view = View::new(live.clone());
         let lines = self.conflict_lines(&view, &st.codec);
+        // each row's lines read once (O(1) per conflict after)
+        let spans = lines.as_ref().map(|m| m.row_spans());
         let mut out = Vec::new();
         for (root, key, why, w) in conflicts {
             let row = match root.as_str() {
@@ -2603,8 +2662,8 @@ impl Session {
                 table::CELLS => table::parse_cell_key(&key).map(|(r, _)| r),
                 _ => None,
             };
-            let l = match (&lines, &row) {
-                (Some(m), Some(r)) => m.lines_of(r).map_or((0, 0), |x| (x.start, x.end - 1)),
+            let l = match (&spans, &row) {
+                (Some(sp), Some(r)) => sp.get(r).map_or((0, 0), |x| (x.start, x.end - 1)),
                 _ => (0, 0),
             };
             let by = match &w {
@@ -2858,33 +2917,73 @@ impl Session {
                 _ => {}
             }
         }
-        let live_cols = t.live_cols();
         // the write a line goes to: (original change, the write)
         let rank = |w: &ElemWrite| (resolved(w).0, w.restores.map(|_| w.seq));
         let best = |cands: Vec<&ElemWrite>| -> Option<ElemWrite> {
             cands.into_iter().max_by_key(|w| rank(w)).cloned()
         };
-        let mut chosen: Vec<(usize, Option<ElemWrite>)> = Vec::new();
-        for n in first..=last {
-            let w = match map.owner(n) {
-                Some(table::LineOwner::Header) => best(
-                    live_cols
-                        .iter()
-                        .filter_map(|c| writes.get(&(table::NAMES.to_owned(), c.to_string())))
+        // each live column's position: a line's candidates are its row's present cells (or
+        // the names), in column order (the order breaks ties between equal ranks), so a line
+        // costs O(its row's cells), whatever the width; a row's lines share one answer
+        let cols_at = t.col_positions();
+        let owner_write = |owner: Option<&table::LineOwner>| -> Option<ElemWrite> {
+            if table::per_column() {
+                // the planted per-column walk
+                let live_cols = t.live_cols();
+                return match owner {
+                    Some(table::LineOwner::Header) => best(
+                        live_cols
+                            .iter()
+                            .filter_map(|c| writes.get(&(table::NAMES.to_owned(), c.to_string())))
+                            .collect(),
+                    ),
+                    Some(table::LineOwner::Row(r)) => best(
+                        live_cols
+                            .iter()
+                            .filter(|c| t.cell(r, c).is_some())
+                            .filter_map(|c| {
+                                writes.get(&(table::CELLS.to_owned(), table::cell_key(r, c)))
+                            })
+                            .collect(),
+                    )
+                    .or_else(|| inserts.get(r.as_str()).cloned()),
+                    Some(table::LineOwner::Preamble) | None => None,
+                };
+            }
+            let in_order = |mut at: Vec<(usize, (String, String))>| {
+                at.sort_unstable_by_key(|(i, _)| *i);
+                best(at.iter().filter_map(|(_, k)| writes.get(k)).collect())
+            };
+            match owner {
+                Some(table::LineOwner::Header) => in_order(
+                    t.names
+                        .keys()
+                        .filter_map(|c| cols_at.get(c).map(|&i| (i, c)))
+                        .map(|(i, c)| (i, (table::NAMES.to_owned(), c.to_string())))
                         .collect(),
                 ),
-                Some(table::LineOwner::Row(r)) => best(
-                    live_cols
-                        .iter()
-                        .filter(|c| t.cell(r, c).is_some())
-                        .filter_map(|c| {
-                            writes.get(&(table::CELLS.to_owned(), table::cell_key(r, c)))
-                        })
+                Some(table::LineOwner::Row(r)) => in_order(
+                    t.row_cells(r)
+                        .filter_map(|(c, _)| cols_at.get(c).map(|&i| (i, c)))
+                        .map(|(i, c)| (i, (table::CELLS.to_owned(), table::cell_key(r, c))))
                         .collect(),
                 )
                 .or_else(|| inserts.get(r.as_str()).cloned()),
                 // a codec's own line (`sep=;`): no element wrote it
                 Some(table::LineOwner::Preamble) | None => None,
+            }
+        };
+        let mut chosen: Vec<(usize, Option<ElemWrite>)> = Vec::new();
+        let mut last_owner: Option<(&table::LineOwner, Option<ElemWrite>)> = None;
+        for n in first..=last {
+            let owner = map.owner(n);
+            let same = matches!((&last_owner, owner), (Some((o, _)), Some(x)) if *o == x);
+            let w = if same {
+                last_owner.as_ref().and_then(|(_, w)| w.clone())
+            } else {
+                let w = owner_write(owner);
+                last_owner = owner.map(|o| (o, w.clone()));
+                w
             };
             chosen.push((n, w));
         }
@@ -3385,8 +3484,11 @@ impl Session {
                 Declined {
                     code: "too_large",
                     message: format!(
-                        "the file now holds more than the grid limit ({} cells, {} columns)",
-                        self.config.grid_max_cells, self.config.grid_max_cols
+                        "the file now holds more than the grid limit ({} cells, {} columns, {} \
+                         rows)",
+                        self.config.grid_max_cells,
+                        self.config.grid_max_cols,
+                        self.config.grid_max_rows
                     ),
                 },
             );
@@ -3508,7 +3610,7 @@ impl Session {
             client,
             at_ms: now,
             via: "disk".to_owned(),
-            update: a.update.clone(),
+            body: EntryBody::Yrs(a.update.clone()),
             on_behalf_of: None,
         };
         if let Err(e) = store.commit_disk(
@@ -3552,8 +3654,8 @@ impl Session {
         self.grid_presence_after(st, None, &a.stream, now);
         Self::elem_presence_after(st);
         st.log_entries += 1;
-        st.log_bytes += entry.update.len() as u64;
-        st.state_bytes += entry.update.len() as u64;
+        st.log_bytes += entry.body.yrs_len();
+        st.state_bytes += entry.body.yrs_len();
         st.authors.push_back((seq, EXTERNAL_PID.to_owned()));
         if st.authors.len() > AUTHORS_KEPT {
             st.authors.pop_front();
@@ -3683,11 +3785,11 @@ impl Session {
                 None => None,
             })
         };
-        let line_of = |r: &Key| lines.as_ref().and_then(|m| m.lines_of(r)).map(|l| l.start);
-        let col_of = |c: &Key| match live.cols.state(c) {
-            ElemState::Live(i) => Some(i + 1),
-            _ => None,
-        };
+        // each row's lines and each live column's index read once (O(1) per override after)
+        let spans = lines.as_ref().map(|m| m.row_spans());
+        let cols_at = live.cols.live_index();
+        let line_of = |r: &Key| spans.as_ref().and_then(|m| m.get(r)).map(|l| l.start);
+        let col_of = |c: &Key| cols_at.get(c).map(|i| i + 1);
         let mut out = Vec::with_capacity(overrides.len());
         for c in overrides {
             let mut by: Vec<String> = Vec::new();
@@ -4042,7 +4144,117 @@ pub(super) fn back_after(live: &KeyedState, root: &str, left: &[String], moving:
 /// `ours` to a key none of the three tables knows, so the merge inserts it as the file has it
 /// (contract §2.9.1: never dropped); unchanged, it is left alone (the live drop stands).
 fn rekey_dropped_in_file(base: &Table, ours: Table, live: &Table) -> Table {
+    if table::rekey_walk() {
+        return rekey_dropped_walk(base, ours, live);
+    }
+    // the candidates: live in the base, unknown to the live side, still in the text; each
+    // checked against indexes read once (each version's live places, the candidate columns'
+    // cells), and a row's cells by its own range: O(the tables) for any number dropped
+    let drop_rows: Vec<&Key> = base
+        .rows
+        .live()
+        .filter(|r| !live.rows.knows(r) && ours.rows.knows(r))
+        .collect();
+    let drop_cols: Vec<&Key> = base
+        .cols
+        .live()
+        .filter(|c| !live.cols.knows(c) && ours.cols.knows(c))
+        .collect();
+    if drop_rows.is_empty() && drop_cols.is_empty() {
+        return ours;
+    }
+    let changed: (HashSet<Key>, HashSet<Key>) = {
+        let ours = &ours;
+        let mut rows_changed = HashSet::new();
+        if !drop_rows.is_empty() {
+            let (b, o) = (
+                table::merge::ElemIndex::new(&base.rows),
+                table::merge::ElemIndex::new(&ours.rows),
+            );
+            for r in &drop_rows {
+                if b.of(r) != o.of(r) || base.row_cells(r).ne(ours.row_cells(r)) {
+                    rows_changed.insert((*r).clone());
+                }
+            }
+        }
+        let mut cols_changed = HashSet::new();
+        if !drop_cols.is_empty() {
+            let (b, o) = (
+                table::merge::ElemIndex::new(&base.cols),
+                table::merge::ElemIndex::new(&ours.cols),
+            );
+            let cand: HashSet<&Key> = drop_cols.iter().copied().collect();
+            let (bc, oc) = (cells_by_col(base, &cand), cells_by_col(ours, &cand));
+            for c in &drop_cols {
+                if b.of(c) != o.of(c) || base.name(c) != ours.name(c) || bc.get(c) != oc.get(c) {
+                    cols_changed.insert((*c).clone());
+                }
+            }
+        }
+        (rows_changed, cols_changed)
+    };
+    let mut next = (
+        base.next_row.max(ours.next_row).max(live.next_row),
+        base.next_col.max(ours.next_col).max(live.next_col),
+    );
+    let fresh = |prefix: char, n: &mut u64| -> Key {
+        loop {
+            let k = Key::new(format!("{prefix}{}", *n)).expect("a minted key");
+            *n += 1;
+            let known = |t: &Table| {
+                if prefix == 'r' {
+                    t.rows.knows(&k)
+                } else {
+                    t.cols.knows(&k)
+                }
+            };
+            if !known(base) && !known(&ours) && !known(live) {
+                return k;
+            }
+        }
+    };
+    // in the base's order, as the walk mints them
+    let mut rows: HashMap<Key, Key> = HashMap::new();
+    for r in drop_rows.iter().filter(|r| changed.0.contains(**r)) {
+        rows.insert((*r).clone(), fresh('r', &mut next.0));
+    }
+    let mut cols: HashMap<Key, Key> = HashMap::new();
+    for c in drop_cols.iter().filter(|c| changed.1.contains(**c)) {
+        cols.insert((*c).clone(), fresh('c', &mut next.1));
+    }
+    if rows.is_empty() && cols.is_empty() {
+        return ours;
+    }
+    let mut t = ours.renamed(
+        &|k| rows.get(k).cloned().unwrap_or_else(|| k.clone()),
+        &|k| cols.get(k).cloned().unwrap_or_else(|| k.clone()),
+    );
+    t.next_row = t.next_row.max(next.0);
+    t.next_col = t.next_col.max(next.1);
+    t
+}
+
+/// The cells of the columns in `cand`, each column's in row order: one pass over `t`'s cells.
+fn cells_by_col<'a>(
+    t: &'a Table,
+    cand: &HashSet<&Key>,
+) -> HashMap<&'a Key, Vec<(&'a Key, &'a String)>> {
+    table::visited(t.cells.len());
+    let mut m: HashMap<&Key, Vec<(&Key, &String)>> = HashMap::new();
+    for ((r, c), v) in &t.cells {
+        if cand.contains(c) {
+            m.entry(c).or_default().push((r, v));
+        }
+    }
+    m
+}
+
+/// [`rekey_dropped_in_file`] by the walk: each candidate's cells found by a scan of both
+/// versions' cells, its place by a walk of each axis (the planted
+/// [`crate::differential::GridCostMutant::RekeyWalk`] only).
+fn rekey_dropped_walk(base: &Table, ours: Table, live: &Table) -> Table {
     let changed_row = |r: &Key| {
+        table::visited(base.cells.len() + ours.cells.len());
         let at = |t: &Table| table::ElemAt::of(&t.rows, r);
         at(base) != at(&ours)
             || base
@@ -4057,6 +4269,7 @@ fn rekey_dropped_in_file(base: &Table, ours: Table, live: &Table) -> Table {
                     .map(|((_, c), v)| (c, v)))
     };
     let changed_col = |c: &Key| {
+        table::visited(base.cells.len() + ours.cells.len());
         let at = |t: &Table| table::ElemAt::of(&t.cols, c);
         at(base) != at(&ours)
             || base.name(c) != ours.name(c)

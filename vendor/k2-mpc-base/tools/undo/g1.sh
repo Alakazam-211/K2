@@ -27,6 +27,29 @@
 # tools/undo/job.sh enum tools/undo/g1.sh
 # (the fallback bundle: tools/undo-enum-job.sh tools/undo/g1.sh <out dir> ck-<name>.txt)
 T=${THREADS:-$(nproc)}
+# The audit's mutants (2026-11-04; their least depths are counts.sh PART=m's): U13, own_only
+# through redo, and through revert, each caught on these walks at its own rule. NOT
+# i1-per-request (I1 at an intermediate step only): from abb with MAXLEN 4 its least witness
+# at G1 is six exact steps (p1 deletes a letter, appends R, deletes R; p2 appends; p2 reverts
+# p1's delete; p1 `undo --steps 2`), which uniform walks don't draw (g1-smoke.sh declares its
+# 20,000 walks SAMPLED: none drew it); it is caught exhaustively at its own bound (counts.sh
+# PART=m: the enumerator and TLC, depth 5, which drops two-region edits and purge only to keep
+# TLC's search small).
+AUDIT_MUTANTS="u13-refused-revert-applies r3-redo-rewrites-window r3-revert-rewrites-window"
+case ${PART:-exhaustive} in walks-bias) BRST=1000 ;; *) BRST=1000000 ;; esac   # WALKS_BIAS_RST's default by PART
+settings PART=exhaustive THREADS=$T WALKS=5000000 WALKS_RST=1000000 WALKS_BIAS=200000 WALKS_BIAS_RST=$BRST
+# the rows each PART must end with, each with its verdict (tools/undo/expect.sh)
+W=enum:walk_3x3_u2_r1; BI=_bias-redo-after-partial; NW='-i1-per-request'    # (NW: not on walks here; AUDIT_MUTANTS above says why)
+case ${PART:-exhaustive} in
+  exhaustive) expect_complete enum:dfs_3x1_u2_r1_rs0_none_sym enum:dfs_2x2_u2_r1_rs0_none_sym ;;
+  walks) expect ${W}_rs0_none SAMPLED; expect_mutants walk $NW; expect ${W}_rs1_none SAMPLED ;;
+  walks-main) expect ${W}_rs0_none SAMPLED ;;
+  walks-mutants) expect_mutants walk $NW ;;
+  walks-restart) expect ${W}_rs1_none SAMPLED ;;
+  walks-bias) expect ${W}_rs0_none$BI SAMPLED; expect_mutants walk $NW; expect ${W}_rs1_none$BI SAMPLED ;;
+  walks-bias-restart) expect ${W}_rs1_none$BI SAMPLED ;;
+  long) expect_complete enum:dfs_3x2_u2_r0_rs0_none_sym ;;
+esac
 run_g() { # run_g NAME ARGS...
   n=$1; shift
   timed "enumerator $n" E dfs "$@" --sym --threads "$T" --checkpoint "$ROOT/ck-$n.txt" --progress 60
@@ -47,6 +70,10 @@ case ${PART:-exhaustive} in
       timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint
       timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant x-provenance-ignored-in-o4
       timed "walks at G1, mutant xi-no-o4a (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant xi-no-o4a
+      # the audit's four (2026-11-04): each at the literal G1 bound, at its own rule
+      for m in $AUDIT_MUTANTS; do
+        timed "walks at G1, mutant $m (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant $m
+      done
     fi
     if [ "$P" = walks ] || [ "$P" = walks-restart ]; then
       timed "walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_RST:-1000000} --threads "$T"
@@ -54,13 +81,13 @@ case ${PART:-exhaustive} in
   walks-bias)
     B="--bias redo-after-partial"
     timed "biased walks at G1" E walk --g1 --probes ${WALKS_BIAS:-200000} --threads "$T" $B
-    for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff x-provenance-ignored-in-o4 xi-no-o4a; do
+    for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff x-provenance-ignored-in-o4 xi-no-o4a $AUDIT_MUTANTS; do
       timed "biased walks at G1, mutant $m (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant $m $B
     done
     timed "biased walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint $B
-    timed "biased walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_BIAS_RST:-1000} --threads "$T" $B ;;
+    timed "biased walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_BIAS_RST:-$BRST} --threads "$T" $B ;;
   walks-bias-restart)
-    timed "biased walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_BIAS_RST:-1000000} --threads "$T" --bias redo-after-partial ;;
+    timed "biased walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_BIAS_RST:-$BRST} --threads "$T" --bias redo-after-partial ;;
   long)
     run_g 3x2u2r0 --pids 3 --events 2 --undos 2 --reverts 0 --init abb --seed-depth 3 ;;
   *) echo "PART: exhaustive, walks (walks-main, walks-mutants, walks-restart), walks-bias, walks-bias-restart or long" >&2; exit 2 ;;

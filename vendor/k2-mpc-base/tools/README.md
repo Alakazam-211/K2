@@ -44,7 +44,11 @@ k2 compute run <node> --repo <repo> [--sha REV] --needs rust@stable,cargo-nextes
   root. The file runs each step as `timed LABEL CMD...`, which prints `=== LABEL: exit N,
   wall Ss`; the job exits non-zero if any step failed (the later steps still run). It prints
   a heartbeat every 4 minutes (a long step isn't stopped as stalled), the job's memory peak
-  at the end, and stops any process the job left behind.
+  at the end, and stops any process the job left behind. A commands file that ran no step
+  fails the job, and a step that would run nothing (a count of 0) is skipped and says so, or
+  fails, never `exit 0`. Every count or size a commands file reads from the environment is
+  printed near the top, defaults included (`settings NAME=DEFAULT...`, as `=== settings:
+  NAME=VALUE ...`): a job's record shows env names, not values.
 - **What `--repo` needs** (`k2 compute run --help`, `k2 study compute`, k2-node 0.46.6):
   - `<repo>` is the repo's folder or a worktree of it, **relative to the workspace folder**
     (an absolute path is refused, `repo_invalid`); run from inside a checkout or worktree and
@@ -214,6 +218,7 @@ merged into main:** main merges the pre-cut commit (`tag^`), which keeps everyth
 | `public-text-exceptions.txt` | The lines the text rule found and a person reviewed and kept, one `PATH: TEXT` each (the whole added line, trimmed). An entry covers that exact text in that file, so a changed line or another line of the file still blocks, and a moved one needs no update. Line numbers would go stale with each edit above them, and a hash would hide what was reviewed. An entry matching no added line blocks too, so none outlives its base |
 | `public-cut-regressions.txt` | The pinned regression tests of the host's earlier tags, which every cut must still carry (a hotfix line is cherry-picked, not an ancestor, so they are checked by name). One per line: `NAME` (a Rust `fn NAME` with a test attribute, not `#[ignore]`d) or `PATH IDENT` (the word in that file). **At each hotfix tag, append its regression tests** under a comment naming the tag and the fix |
 | `tests/public-cut-gate.sh` | The cut's gate: a commands file for `job.sh`, run at the cut commit, one part per job (`--env PART=`): `full.sh`'s parts on the cut (`lint`, `base-a1` to `base-d`, `errors`, `spec-undo`, `wire-guard`, `evidence` with oss), `licence`, `lockproof` (cargo's own resolution leaves the pruned lock unchanged), `checker` (the cut is clean; planted copies of it are blocked), `checker-precut` (the pre-cut commit is blocked; the script on planted copies drops derived features and stops on a mixed one) and `reproduce` (the script run on the node makes exactly the cut's tree: the node's awk gates, other awks are informational). Planted and reproduced trees are `git archive` copies beside the checkout, never a worktree of its repository. Each part ends with `=== RESULT <part>: GREEN` or `RED` |
+| `tests/public-cut-dryrun.sh` | A public cut's dry run at a pre-cut commit, for `job.sh`: `public-cut.sh --no-commit`, then `check-public-cut.sh` on the staged tree, in a shared clone; each step's failure is the job's exit (`=== RESULT dry run: GREEN` or `RED`) |
 
 The procedure for a release:
 
@@ -356,7 +361,9 @@ since the purge revision (20,001,757 bytes; 19,992,163 before). `undo/job.sh` bu
 Java agent (`JacksonLimits.java`, needs a JDK: `java@21` has one) that raises the limit, and
 starts both its servers with it (`APA_JAVA_OPTS`): the export check's and `undo/tlc.sh`'s. The
 guard itself (`tools/quint/`) is unchanged, and the TLA+ it checks is the same with and
-without the agent.
+without the agent. **The agent is required** (2026-11-04, `tools/quint-jvm/require.sh`): a job
+without it stops before its first Apalache server, in one line naming the 20,000,000 limit
+and the model's IR size (`tools/quint-jvm/README.md`).
 
 Commands files (in `tools/undo/`):
 
@@ -371,6 +378,18 @@ Commands files (in `tools/undo/`):
 
 `inst` and `itfinst` take an optional 11th argument, `RESTARTS` (default 0); `undo_enum` and
 `undo_itf_replay` take `--restarts N`.
+
+**Row verdicts** (`undo/expect.sh`, sourced by `undo/job.sh`): each commands file declares,
+before it runs anything, every row (TLC run, `E`, `R`) it must end with and its verdict
+(`expect KEY COMPLETE|SAMPLED|VIOLATION [RULE]`, `expect_mutants tlc|enum|walk`). Each row is
+checked as it ends (`=== row KEY: ... as expected`), and the job exits 1 (`=== EXPECT: RED`,
+with each problem) when a declared row didn't run, a row ended with another verdict or at
+another rule, a row isn't declared, a tool printed no `RUNREC`, a TLC compile failed, or a
+`timed` step that ran no row exited non-zero. A new mutant goes into `UNDO_MUTANT_RULES`
+there with its rule. `expect_mutants` prints its variant (`=== expect: variant=walk ...`) and
+refuses an unknown one, or an argument that isn't `-` and a mutant there; `expect.sh` is sourced
+once a job (by `job.sh`), and a commands file that sources it again is refused, its rows kept.
+Each refusal is one of the job's problems: the job ends `=== EXPECT: RED`, exit 1.
 
 ### Running a job
 

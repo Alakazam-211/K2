@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -1069,6 +1069,7 @@
     "conflict_copy_keep_ms": 2592000000,
     "grid_max_cells": 25000,
     "grid_max_cols": 1024,
+    "grid_max_rows": 100000,
     "grid_max_value_len": 65536,
     "tool_output_max_bytes": 33554432
   },

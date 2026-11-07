@@ -9,7 +9,9 @@
 # E ARGS (undo_enum), R ARGS (undo_itf_replay) and timed LABEL CMD.... `enum`: at the repo
 # root, no Quint or Java. `quint`: installs Quint (0.33; TLC comes with Apalache), runs the
 # export guard (tools/quint), then the commands file in spec/quint with inst, itfinst, q and
-# tlc (see tools/undo-quint-job.sh). tools/undo-bundle.sh's fallback jobs run this same script
+# tlc (see tools/undo-quint-job.sh). Each run (TLC, E, R) is a row: the commands file declares
+# its rows with their verdicts (`expect`, tools/undo/expect.sh) and the job exits 1 when one
+# didn't run, ended with another verdict, or a tool failed. tools/undo-bundle.sh's fallback jobs run this same script
 # after unpacking. Extra files a commands file reads (a checkpoint) travel with the commit, or
 # with --dirty as untracked files.
 set -e
@@ -28,16 +30,21 @@ job_epilogue() {
   ps -eo pid=,ppid=,sid=,etime=,args= 2>/dev/null | awk -v s="$JOB_SID" -v me=$$ '$3==s && $1!=me && $0 !~ /tools\/undo\/job\.sh/ && $0 !~ /sh -ec set -e.mkdir -p job/ && $0 !~ / (ps -eo pid=|cut -c1-160)/' | cut -c1-160 || true
   for p in $(ps -eo pid=,sid=,args= 2>/dev/null | awk -v s="$JOB_SID" -v me=$$ '$2==s && $1!=me && $0 !~ /tools\/undo\/job\.sh/ && $0 !~ /sh -ec set -e.mkdir -p job/ {print $1}'); do kill $p 2>/dev/null || true; done
 }
-trap job_epilogue EXIT
+# Row verdicts (tools/undo/expect.sh): the commands file declares its rows (`expect`), each is
+# checked as it ends, and the job fails when one didn't run or ended otherwise; at any exit too
+. "$ROOT/tools/undo/expect.sh"
+trap '_expect_exit $?' EXIT
 # a runner's warm target dir is kept (a --repo job); else ./target
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}
 rustc --version; nproc; free -g | head -2
+settings QUINT_VERSION=0.33.0 APA_HEAP=6g TLC_HEAP=3g TLC_WORKERS=auto TLC_TRACE TLC_EXTRA NODE_HEAP_MB=4096 CARGO_TARGET_DIR
 s=$(date +%s)
 cargo build -q --release --features mutants -p k2-mpc-spec-undo --bins
 echo "=== build: wall $(( $(date +%s) - s ))s"
-E() { "$CARGO_TARGET_DIR/release/undo_enum" "$@"; }
-R() { "$CARGO_TARGET_DIR/release/undo_itf_replay" "$@"; }
-timed() { l=$1; shift; s=$(date +%s); set +e; "$@"; rc=$?; set -e; echo "=== $l: exit $rc, wall $(( $(date +%s) - s ))s"; }
+E() { _expect_tool enum "$CARGO_TARGET_DIR/release/undo_enum" "$@"; }
+R() { _expect_tool itf "$CARGO_TARGET_DIR/release/undo_itf_replay" "$@"; }
+# timed LABEL CMD...: a step that ran no row (E, R) fails the job when it exits non-zero
+timed() { l=$1; shift; s=$(date +%s); tr0=$(_expect_rows); set +e; "$@"; rc=$?; set -e; echo "=== $l: exit $rc, wall $(( $(date +%s) - s ))s"; _expect_step "$l" "$rc" "$tr0"; }
 if [ "$KIND" = quint ]; then
 java -version 2>&1 | head -1; node --version
 mkdir -p q && ( cd q && npm init -y >/dev/null && npm install -s --no-audit --no-fund @informalsystems/quint@${QUINT_VERSION:-0.33.0} >/dev/null )
@@ -80,11 +87,24 @@ set -e; echo "=== quint lint (undo.qnt): exit $rc, wall $(( $(date +%s) - s ))s"
 [ $rc -eq 0 ] || { echo "=== the Quint export guard stopped the job (lint)"; exit 1; }
 inst q_export_check 2 1 1 1 4 "0, 1, 1" true true none 1
 s=$(date +%s); set +e
-quint compile --target tlaplus --main=q_export_check q_export_check.qnt > /dev/null 2> q_export_check.cerr
+# fetch Apalache (quint downloads it on its first TLA+ compile) with a one-line module: that
+# compile runs on a server quint starts itself, without the Jackson limits agent, so it never
+# carries the model's IR (tools/quint-jvm)
+cat > q_fetch.qnt <<'QF'
+module q_fetch {
+  var x: int
+  action init = x' = 0
+  action step = x' = x
+}
+QF
+quint compile --target tlaplus --main=q_fetch q_fetch.qnt > /dev/null 2> q_fetch.cerr
 # quint's own Apalache server (4 GiB) fails this model's transpile at random ("error:" and
 # nothing else; tools/undo/tlc.sh): run the check against a server with tlc.sh's heap, then
 # stop it so tlc.sh starts its own as before
 APA_JAR=$(ls ~/.quint/apalache-dist-*/apalache/lib/apalache.jar 2>/dev/null | head -1)
+[ -n "$APA_JAR" ] || { echo "=== Apalache wasn't fetched (q_fetch's compile: $(head -c 200 q_fetch.cerr)): the Quint export guard stopped the job"; exit 1; }
+# every Apalache server this job starts loads the Jackson limits agent, or the job stops here
+. "$ROOT/tools/quint-jvm/require.sh"
 EC_APA=""
 if [ -n "$APA_JAR" ]; then
   # quint stops the server it started after its compile: wait for the port (as tlc.sh does)
@@ -96,8 +116,11 @@ if [ -n "$APA_JAR" ]; then
     export APA_JAVA_OPTS
   fi
   echo "=== apalache server JVM options: ${APA_JAVA_OPTS:-none}"
+  qjvm_require "the export check's Apalache server"
   java ${APA_JAVA_OPTS} -Xmx${APA_HEAP:-6g} -jar "$APA_JAR" server --port=$QJ_APA_PORT > "$ROOT/apalache-export-check.log" 2>&1 & EC_APA=$!
   i=0; until grep -q "running on port" "$ROOT/apalache-export-check.log" 2>/dev/null || [ $i -ge 120 ]; do sleep 1; i=$((i + 1)); done
+  # never let a compile fall back to a server quint would start itself (no agent)
+  grep -q "running on port" "$ROOT/apalache-export-check.log" || { echo "=== the export check's Apalache server didn't start in 120 s: the Quint export guard stopped the job"; tail -5 "$ROOT/apalache-export-check.log"; exit 1; }
 fi
 # a tool error (exit 2; quint's compile can fail at random on a cold Apalache server, as
 # tools/undo/tlc.sh notes) is retried, up to 3 attempts; a finding (exit 1) is never retried
@@ -137,3 +160,4 @@ else
 cd "$ROOT"
 fi
 . "$ROOT/$CMDS"
+expect_done || exit 1

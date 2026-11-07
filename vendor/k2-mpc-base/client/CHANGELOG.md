@@ -3,6 +3,15 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.13.2 (kit tag v0.12.0)
+
+The client for kit v0.12.0. The client's code, tests and wire contract are as in 0.13.1: no
+export is added, removed or renamed, no frame changes, and a host changes nothing. The kit's
+changes in this release (the log entry's body, the grid row limit, the grid paths) are on the
+Rust side only.
+
+- **Docs only:** 0.13.0's entry says it plainly: a held undo or redo isn't counted in `pending`.
+
 ## 0.13.1 (kit tag v0.11.1)
 
 The client for kit v0.11.1. No export is added, removed or renamed, and no frame changes; a host
@@ -36,8 +45,8 @@ to an older host sends none of the new frames (`welcome.features`).
   (no ack awaited), so the server undoes the step the person meant, and the edit typed before a
   redo clears it first, as in an editor. Typing after a held request starts a new entry. With
   nothing queued it goes at once; held while disconnected, it goes on the new connection in the
-  same place; it is no pending change (`pending`). Hosts change nothing. Tests: unit and
-  end-to-end, and the fake host's undo and redo stacks per participant, as the kit's.
+  same place; a held undo or redo isn't counted in `pending`. Hosts change nothing. Tests: unit
+  and end-to-end, and the fake host's undo and redo stacks per participant, as the kit's.
 - **`mint` helpers, new (structured live, slice 1):** `writerTag`, `parseTag`, `parseKey`,
   `formatKey`, `nextFor`, `markKey` and `retiredMark`, with `MAX_CLIENT_ID`, `MAX_KIT_CLIENT`,
   `MAX_KEY_LEN`, `MAX_PREFIX_LEN` and `MAX_TAG_LEN` and the types `TaggedKey` and `MintError`:

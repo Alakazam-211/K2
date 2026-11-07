@@ -28,6 +28,7 @@
 # .config/nextest.toml: no retries, every failure reported), else under cargo test; NEXTEST=0
 # forces cargo test. nextest runs no doctests, so base-a1 runs them with cargo test. The build
 # step is `cargo test --no-run` either way (nextest builds the same artifacts).
+settings PART NEXTEST=1
 if [ "${NEXTEST:-1}" != 0 ] && cargo nextest --version >/dev/null 2>&1; then
   echo "tests: $(cargo nextest --version | head -1)"
   tests() { cargo nextest run "$@"; }
@@ -49,7 +50,8 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           timed windows_names_selftest sh tools/test-windows-names.sh
           timed windows_names sh tools/check-windows-names.sh .
           timed oss_selftest sh tools/test-oss-check.sh
-          timed oss sh tools/oss-check.sh . ;;
+          timed oss sh tools/oss-check.sh .
+          ;;
   base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
           timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;
   base-c) timed build cargo test -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --test roster --test app_view --test overflow --no-run
@@ -60,10 +62,24 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
   errors) timed build cargo test -p k2-mpc-base --test error_ids --test tools_session --test pack_verbs --no-run
           timed errors tests -p k2-mpc-base --test error_ids --test tools_session --test pack_verbs
           timed example cargo build -p k2-mpc-base --example mpc ;;
+  # the mutant tests, each required by name (tools/job.sh `passed`): every mutant fails its
+  # rule, the oracle passes at each mutant's bound, and the harness's own checks
   spec-undo) timed build cargo test -p k2-mpc-spec-undo --no-run
           timed spec_undo tests -p k2-mpc-spec-undo
-          if [ "$NEXTEST" = 0 ]; then timed mutants tests -p k2-mpc-spec-undo --features mutants --test mutants
-          else timed mutants cargo nextest run --profile mutants -p k2-mpc-spec-undo --features mutants --test mutants; fi ;;
+          # the skipped set is exactly the four #[ignore]d large trace runs, by name
+          timed spec_undo_ignored ignored_exactly "trace_equivalence_large d1_traces_large group_trace_equivalence_large
+            end_break_trace_class_large" cargo test -p k2-mpc-spec-undo --tests -- --list --ignored
+          M="the_oracle_passes_at_the_tiny_bound the_oracle_passes_at_the_restart_bound the_oracle_passes_at_the_provenance_bound
+            the_oracle_passes_at_the_no_o4a_bound the_oracle_passes_at_the_revert_bound the_oracle_passes_at_the_restorations_bound
+            no_taint_fails_u9 partial_hides_taint_fails_u15 redo_retries_skipped_fails_u17
+            o5_every_window_end_fails_o5 o5_region_base_fails_o5 skip_u19_fails_u19 rediff_fails_own_only restart_single_taint_fails_rt
+            provenance_ignored_fails_i1 no_o4a_fails_i1 refused_revert_applies_fails_u13 redo_rewrites_window_fails_own_only_through_redo
+            revert_rewrites_window_fails_own_only_through_revert i1_per_request_fails_i1_at_an_intermediate_step
+            o5_every_window_end_fails_o5doc o5_region_base_fails_o5doc redo_retries_skipped_fails_u17doc
+            every_mutant_has_its_test no_o4a_fails_i1_in_mid_text
+            an_oracle_panic_ends_every_enumerator_mode_as_a_violation d1_mutants_are_caught_by_the_traces"
+          if [ "$NEXTEST" = 0 ]; then timed mutants passed "$M" tests -p k2-mpc-spec-undo --features mutants --test mutants
+          else timed mutants passed "$M" cargo nextest run --profile mutants -p k2-mpc-spec-undo --features mutants --test mutants; fi ;;
   wire-guard) . tools/tests/wire-guard.sh ;;
   # scripts/check.sh's fmt and clippy, on a node (--needs rust@stable+clippy+rustfmt on k2-node
   # 0.46.7, else tools/job.sh's job-local toolchain); a --repo job only (the whole workspace)

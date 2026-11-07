@@ -23,8 +23,8 @@ use crate::session::pack::Pack;
 use crate::session::prov::{elem_ids, Ids};
 use crate::session::summary;
 use crate::store::{
-    fresh_key, ChangeInfo, ChangeKind, ClockSpan, LogEntry, NewChange, PromoteRows, RevertRecord,
-    Seq, SyncState, Version, VersionReason,
+    fresh_key, ChangeInfo, ChangeKind, ClockSpan, EntryBody, LogEntry, NewChange, PromoteRows,
+    RevertRecord, Seq, SyncState, Version, VersionReason,
 };
 use crate::text::{diff, lines};
 
@@ -397,7 +397,7 @@ impl BlobSession {
                         client,
                         at_ms: v.at_ms,
                         via: v.via.clone(),
-                        update,
+                        body: EntryBody::Yrs(update),
                         on_behalf_of: v.on_behalf_of.clone(),
                     });
                     if let (Some(_), Some(a)) = (&v.on_behalf_of, approvals.get(vid)) {

@@ -1267,3 +1267,60 @@ fn a_purge_of_a_store_holding_a_newer_kits_table_is_refused_unchanged() {
     assert!(text(&s, own).contains("a line to purge"));
     s.replace_text(own, ROOT, &base).unwrap();
 }
+
+/// The erasure limit is stated where a host reads about purge (`docs/SESSIONS.md`): the
+/// paragraph under `## Erasure`, the rewrite's list, and the K-PURGE-12 row. A purge holds
+/// against the store as it stands, never against an older copy of it.
+/// `MPC_DOCS_PLANT=docs-without-limit` (the docs read with the paragraph and the row taken out)
+/// fails at the paragraph's assert.
+#[test]
+fn purge_docs_state_the_erasure_limit() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/SESSIONS.md");
+    let mut docs = fs::read_to_string(path).unwrap();
+    let plant = std::env::var("MPC_DOCS_PLANT");
+    println!("MPC_DOCS_PLANT={}", plant.as_deref().unwrap_or("(unset)"));
+    match plant.as_deref() {
+        Ok("docs-without-limit") => {
+            docs = docs
+                .lines()
+                .filter(|l| !l.starts_with("**The erasure limit.**"))
+                .filter(|l| !l.starts_with("| An older copy of the store file"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        Ok(other) => unreachable!("MPC_DOCS_PLANT={other}: no such plant"),
+        Err(_) => {}
+    }
+    let section = |heading: &str| {
+        let from = docs
+            .find(heading)
+            .unwrap_or_else(|| unreachable!("no {heading}"));
+        let rest = &docs[from + heading.len()..];
+        let end = rest.find("\n## ").unwrap_or(rest.len());
+        rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let erasure = section("\n## Erasure\n");
+    for words in [
+        "**The erasure limit.** A purge holds against the store as it stands, not against an \
+         older copy of it.",
+        "It does not hold against restoring an older copy of the store, or a copy cut short at \
+         its end: such a copy loads as the doc was before the purge.",
+        "Erasing backups and older copies is the host's job.",
+    ] {
+        assert!(
+            erasure.contains(words),
+            "the erasure limit's paragraph: {words}"
+        );
+    }
+    assert!(
+        erasure.contains("an older copy of the store (the erasure limit, [above](#erasure))"),
+        "the rewrite's list"
+    );
+    assert!(
+        erasure.contains(
+            "| An older copy of the store file (a backup, a snapshot, a copy taken before the \
+             purge) | **No** | it loads as the doc was then; erase older copies (the host's job) |"
+        ),
+        "the K-PURGE-12 row"
+    );
+}

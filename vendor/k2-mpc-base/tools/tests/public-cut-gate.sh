@@ -33,6 +33,7 @@ else
 fi
 REPO=$PWD
 GATE_TMP=${GATE_TMP:-$REPO/../public-cut-gate}
+settings PART EXPECT GATE_TMP
 mkdir -p "$GATE_TMP"
 if [ "$(git log -1 --format=%s HEAD 2>/dev/null)" != "release: public cut" ]; then
   echo "HEAD is not a public cut (subject: $(git log -1 --format=%s HEAD 2>/dev/null)): run the gate at the cut commit"; RC=1

@@ -61,6 +61,11 @@ B_LABEL=${PERF_B_LABEL:-$(pair_label B)}; B_LABEL=${B_LABEL:-B}
 SIDES=A
 [ -d "$ROOT/.perf-b" ] && SIDES="A B"
 [ "${PERF_AA:-0}" = 1 ] && [ ! -d "$ROOT/.perf-b" ] && { SIDES="A B"; B_LABEL="$A_LABEL (A/A)"; }
+settings PERF_SIZES=10000,100000,1000000 PERF_SIZES_MEASURE="(PERF_SIZES)" PERF_RUNS=5 PERF_SAMPLES=10000 PERF_SEED=1 \
+  PERF_LARGE=1 PERF_LARGE_VERSIONS=10000 PERF_WINDOW=50000 PERF_SLOW_CAP_S=60 PERF_COLD_CAP_S=60 PERF_FAST_CAP_S=900 \
+  PERF_MAX_S=3600 PERF_AA=0 PERF_GROW_ONLY=0 PERF_GROW_PAR=0 PERF_NO_GROW=0 PERF_SKIP_H=0 PERF_OWN_FIXTURES=0 \
+  PERF_HOOKED=0 PERF_SAME_SOURCE=0 PERF_LINT=0 PERF_TIMERS_A=off PERF_TIMERS_B=off PERF_TIMERS_CHECK PERF_FIX_CACHE PERF_NODE_CLASS=unnamed
+[ "$RUNS" -ge 1 ] 2>/dev/null || { echo "perf: PERF_RUNS=$RUNS: nothing would be measured"; RC=1; return 0; }
 echo "perf: node class ${PERF_NODE_CLASS:-unnamed}"
 echo "perf: sides $SIDES (A=$A_LABEL B=$B_LABEL), sizes $SIZES, $RUNS runs, $SAMPLES samples, seed $SEED, large $LARGE"
 df -h "$ROOT" "$WB" 2>/dev/null | sed 's/^/perf: disk /'
@@ -258,6 +263,8 @@ if [ "${PERF_GROW_ONLY:-0}" != 1 ]; then
     [ "${PERF_SKIP_H:-0}" = 1 ] || measure_pair "h$size" "$size" history h
   done
   [ "$LARGE" = 1 ] && measure_pair "large$LARGE_V" "$LARGE_V" content large
-  timed summary "$OUT/bin/A-plain" summarize --tsv "$OUT/samples.tsv"
+  # no sample (every row left out) is no measurement: never a summary of nothing
+  if [ -s "$OUT/samples.tsv" ]; then timed summary "$OUT/bin/A-plain" summarize --tsv "$OUT/samples.tsv"
+  else echo "perf: no sample was measured (PERF_SKIP_H, PERF_LARGE, PERF_SIZES_MEASURE): nothing to summarize"; RC=1; fi
 fi
 rm -rf "$WB"

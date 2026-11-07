@@ -291,6 +291,11 @@ pub struct Config {
     pub grid_max_cells: usize,
     /// At most this many columns (live or deleted). Default 1,024.
     pub grid_max_cols: usize,
+    /// At most this many rows (live or deleted, blank ones included: a blank row holds no
+    /// cell, so the cell limit doesn't bound them). A change that would grow past it is
+    /// refused ([`super::SessionError::AtLimit`], `rows`, exit 2), and a file with more opens
+    /// as text (`too_large`). Default 100,000.
+    pub grid_max_rows: usize,
     /// The longest cell value or column name, in bytes (contract §1.8). A change that writes
     /// a longer one is refused ([`super::SessionError::AtLimit`], `value bytes`, exit 2);
     /// values already in the doc are never touched. Raise or lower it; the table ops of an
@@ -376,6 +381,7 @@ impl Config {
             conflict_copy_keep_ms,
             grid_max_cells,
             grid_max_cols,
+            grid_max_rows,
             grid_max_value_len,
         } = self;
         vec![
@@ -454,6 +460,7 @@ impl Config {
             ("conflict_copy_keep_ms", *conflict_copy_keep_ms),
             ("grid_max_cells", *grid_max_cells as u64),
             ("grid_max_cols", *grid_max_cols as u64),
+            ("grid_max_rows", *grid_max_rows as u64),
             ("grid_max_value_len", *grid_max_value_len as u64),
         ]
     }
@@ -546,6 +553,7 @@ impl Default for Config {
             conflict_copy_keep_ms: 30 * DAY,
             grid_max_cells: 25_000,
             grid_max_cols: 1_024,
+            grid_max_rows: 100_000,
             grid_max_value_len: crate::table::DEFAULT_MAX_VALUE_LEN,
         }
     }

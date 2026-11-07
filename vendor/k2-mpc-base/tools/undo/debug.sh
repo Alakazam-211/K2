@@ -12,11 +12,16 @@
 #
 # (THREADS: the walks' threads, default 4; WALKS: walks per run, default 100,000.)
 T=${THREADS:-4}
+settings THREADS=4 WALKS=100000
 DT="$ROOT/target-dbg"
 s=$(date +%s)
 CARGO_TARGET_DIR="$DT" CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo build -q --release --features mutants -p k2-mpc-spec-undo --bins
 echo "=== build (debug assertions): wall $(( $(date +%s) - s ))s"
-D() { "$DT/release/undo_enum" "$@"; }
+D() { _expect_tool enum "$DT/release/undo_enum" "$@"; }
+# the rows (tools/undo/expect.sh): the oracle of record, no rule violated, no assertion failed
+expect_complete enum:dbg_c_2x1u1 enum:dbg_c_2x1u1r1 enum:dbg_c_3x1u1 enum:dbg_c_1x1u1r1 enum:dbg_c_2x2u1_l3 \
+  enum:dbg_c_1x3r1s1 enum:dbg_c_2x1u2r1
+expect enum:dbg_walk_g1 SAMPLED; expect enum:dbg_walk_g1_rs1 SAMPLED
 for spec in "c_2x1u1:--pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb" \
             "c_2x1u1r1:--pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init abb" \
             "c_3x1u1:--pids 3 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb" \

@@ -222,6 +222,67 @@ pub fn with_line_mutant<R>(mutant: LineMutant, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A fault planted in a grid's render paths, so `tests/grid_scaling.rs` can show its bound
+/// catches it (selected there by `MPC_GRID_COST_MUTANT`). Installed per thread by
+/// [`with_grid_cost_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GridCostMutant {
+    /// [`crate::table::Table::render`], [`crate::table::Table::line_map`] and a grid's blame
+    /// visit every live column of every row, both keys cloned for each lookup (the earlier
+    /// walk): their cost grows with rows × columns, blank rows included.
+    PerColumn,
+    /// A row's or column's place is found by a walk from the first place (as the vector the
+    /// axis was), so a change that inserts or moves many rows costs rows × rows.
+    AxisWalk,
+    /// A merge's conflict listing finds each row's position, lines and changed cells by
+    /// walking the axis, the line map and the live columns, per conflict.
+    ConflictWalk,
+    /// `row list` finds each row's lines by walking the line map, and builds every column's
+    /// field as its own string with both keys cloned.
+    RowListWalk,
+    /// A live write from an older version (or an outside save) checks each element the live
+    /// side dropped and the text kept by scanning every cell of both versions and walking
+    /// both axes, per element.
+    RekeyWalk,
+}
+
+thread_local! {
+    static VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Elements visited on this thread by the table paths that count them (an axis's place
+/// lookups and shifts, a position walk, a line map's scan): a timing-free cost for
+/// `tests/grid_scaling.rs`.
+pub fn visits() -> u64 {
+    VISITS.with(|v| v.get())
+}
+
+pub(crate) fn visit(n: usize) {
+    VISITS.with(|v| v.set(v.get().saturating_add(n as u64)));
+}
+
+thread_local! {
+    static GRID_COST_MUTANT: std::cell::Cell<Option<GridCostMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The grid cost fault planted on this thread, if any.
+pub fn grid_cost_mutant() -> Option<GridCostMutant> {
+    GRID_COST_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, however `f` ends.
+pub fn with_grid_cost_mutant<R>(mutant: GridCostMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<GridCostMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            GRID_COST_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(GRID_COST_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// A fault in element presence ([`crate::session::Session::set_selection`]), so its tests can
 /// show they catch it (selected by `MPC_STRUCT_MUTANT` in `tests/elem_presence.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

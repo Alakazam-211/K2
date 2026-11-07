@@ -9,14 +9,14 @@ use std::collections::BTreeMap;
 /// Traces run on this many threads (each has its own store).
 const THREADS: u64 = 4;
 
-fn run_many(name: &str, seeds: std::ops::Range<u64>, min_per_class: u64) {
+fn run_many(name: &str, seeds: std::ops::Range<u64>, min_per_class: u64, floors: &Floors) {
     let (conflicts, regions) = run_many_with(
         name,
         seeds,
         trace::CLASSES,
         min_per_class,
         trace::run,
-        &MAIN,
+        floors,
     );
     // the comparison of write --base's conflict regions was reached
     assert!(
@@ -310,6 +310,9 @@ fn plant(f: u64) -> u64 {
 /// coalescences of `write --base` regions).
 struct Floors {
     per: u64,
+    /// `of` holds measured counts (rates per `per` traces), not floors: a floor is half the
+    /// count expected at the run's traces, rounded down, at least 1 where the rate is above 0
+    rates: bool,
     of: &'static [(&'static str, u64)],
 }
 
@@ -320,6 +323,9 @@ impl Floors {
         };
         let f = if f == 0 {
             0
+        } else if self.rates {
+            // half the count expected at n traces, rounded down, at least 1
+            ((f * n) / (2 * self.per)).max(1)
         } else {
             ((f * n).div_ceil(self.per)).max(1)
         };
@@ -331,6 +337,7 @@ impl Floors {
 /// write --base refused writes 790, regions 1107, 227 refused in separate regions with 544).
 const MAIN: Floors = Floors {
     per: 256,
+    rates: false,
     of: &[
         ("steps", 14316),
         ("append_at_end", 185),
@@ -397,6 +404,7 @@ const MAIN: Floors = Floors {
 /// compared, 297 regions, 63 refused in separate regions with 149). Undo-only classes are 0.
 const TWIN: Floors = Floors {
     per: 128,
+    rates: false,
     of: &[
         ("steps", 6769),
         ("append_at_end", 48),
@@ -462,6 +470,7 @@ const TWIN: Floors = Floors {
 /// They make no `write --base`, revert, purge or restart: those counts are 0.
 const GROUP: Floors = Floors {
     per: 256,
+    rates: false,
     of: &[
         ("steps", 12594),
         ("append_at_end", 12),
@@ -534,12 +543,253 @@ const GROUP: Floors = Floors {
     ],
 };
 
+/// `trace_equivalence_large`'s rates, seeds 1,000,000..1,004,000 (kit 2bbe1e50): the counts job
+/// 301c3906 measured in 4000 traces (a RATE, not a floor: each floor is half the count expected at
+/// the traces a run checks, `Floors::at`; 0 where the generator gives none, and for the costs and
+/// diagnostics, as in the tables above).
+const LARGE_MAIN: Floors = Floors {
+    per: 4000,
+    rates: true,
+    of: &[
+        ("steps", 444910),
+        ("append_at_end", 5487),
+        ("concurrent_restore_base_by_root", 1699),
+        ("concurrent_restore_o4", 807),
+        ("concurrent_restore_o4a", 155),
+        ("concurrent_restores_of_one_root", 2647),
+        ("d1_widened", 86771),
+        ("d1_widened_then_undone", 38278),
+        ("empty_base_double_write", 2148),
+        ("end_break_a", 1525),
+        ("end_break_b", 1245),
+        ("end_break_c", 1114),
+        ("end_break_d", 1142),
+        ("exact_sides_differ_from_rediff", 24223),
+        ("history_lost_after_restart", 5231),
+        ("insert_inside_another_range", 604),
+        ("last_line_delete_after_append", 2581),
+        ("multi_connection_pid", 5939),
+        ("multi_hunk_partial", 956),
+        ("multi_root_batch", 1327),
+        ("redo_after_partial", 50),
+        ("repeated_text_identity", 6217),
+        ("revert_after_restart", 7076),
+        ("revert_beyond_compaction", 14751),
+        ("revert_outside_window", 1965),
+        ("revert_over_erased", 761),
+        ("revert_restart_transparent", 711),
+        ("stays_on_top", 3830),
+        ("steps_n", 2454),
+        ("taint", 13443),
+        ("touching_regions_one_step", 3437),
+        ("undo_across_purge", 3265),
+        ("undo_drop", 1667),
+        ("undo_for_person", 1160),
+        ("whole_doc_delete_then_append", 2617),
+        ("write_base_multiline_rewrite", 2082),
+        ("write_base_shared_start", 4973),
+        ("write_base_shared_start_was_conflict", 921),
+        ("write_base_words_same_line", 6713),
+        ("restore_part:base_by_root", 1699),
+        ("restore_part:o4_restore", 807),
+        ("restore_part:o4a", 155),
+        ("own_only_checked", 38557),
+        ("own_only_removed", 265585),
+        ("own_only_removed_root_author_not_actor", 39019),
+        ("own_only_unresolved", 0),
+        ("reverts_checked", 21619),
+        ("revert_regions", 28434),
+        ("revert_extra", 0),
+        ("touching_revert_regions", 3680),
+        ("touching_revert_extra", 0),
+        ("wb_conflicts_compared", 11674),
+        ("wb_regions_compared", 16039),
+        ("wb_exact", 11674),
+        ("wb_coalesced_touching", 0),
+        ("wb_multi_separate", 3157),
+        ("wb_multi_separate_regions", 7522),
+    ],
+};
+
+/// `d1_traces_large`'s and `end_break_trace_class_large`'s rates (one generator, one seed range),
+/// seeds 2,000,000..2,004,000 (kit 2bbe1e50): the counts job 841f1cba measured in 4000 traces (a
+/// RATE, not a floor: each floor is half the count expected at the traces a run checks,
+/// `Floors::at`; 0 where the generator gives none, and for the costs and diagnostics, as in the
+/// tables above).
+const LARGE_D1: Floors = Floors {
+    per: 4000,
+    rates: true,
+    of: &[
+        ("steps", 437549),
+        ("append_at_end", 5431),
+        ("concurrent_restore_base_by_root", 1743),
+        ("concurrent_restore_o4", 837),
+        ("concurrent_restore_o4a", 154),
+        ("concurrent_restores_of_one_root", 2715),
+        ("d1_widened", 86443),
+        ("d1_widened_then_undone", 37883),
+        ("empty_base_double_write", 2099),
+        ("end_break_a", 1440),
+        ("end_break_b", 1209),
+        ("end_break_c", 1135),
+        ("end_break_d", 1063),
+        ("exact_sides_differ_from_rediff", 24236),
+        ("history_lost_after_restart", 4865),
+        ("insert_inside_another_range", 583),
+        ("last_line_delete_after_append", 2597),
+        ("multi_connection_pid", 6140),
+        ("multi_hunk_partial", 981),
+        ("multi_root_batch", 1401),
+        ("redo_after_partial", 63),
+        ("repeated_text_identity", 6462),
+        ("revert_after_restart", 6733),
+        ("revert_beyond_compaction", 14478),
+        ("revert_outside_window", 1921),
+        ("revert_over_erased", 682),
+        ("revert_restart_transparent", 618),
+        ("stays_on_top", 3882),
+        ("steps_n", 2470),
+        ("taint", 13205),
+        ("touching_regions_one_step", 3305),
+        ("undo_across_purge", 3085),
+        ("undo_drop", 1567),
+        ("undo_for_person", 1187),
+        ("whole_doc_delete_then_append", 2600),
+        ("write_base_multiline_rewrite", 2040),
+        ("write_base_shared_start", 5223),
+        ("write_base_shared_start_was_conflict", 1024),
+        ("write_base_words_same_line", 6757),
+        ("restore_part:base_by_root", 1743),
+        ("restore_part:o4_restore", 837),
+        ("restore_part:o4a", 154),
+        ("own_only_checked", 38257),
+        ("own_only_removed", 263877),
+        ("own_only_removed_root_author_not_actor", 38623),
+        ("own_only_unresolved", 0),
+        ("reverts_checked", 21202),
+        ("revert_regions", 27832),
+        ("revert_extra", 0),
+        ("touching_revert_regions", 3496),
+        ("touching_revert_extra", 0),
+        ("wb_conflicts_compared", 11597),
+        ("wb_regions_compared", 15949),
+        ("wb_exact", 11597),
+        ("wb_coalesced_touching", 0),
+        ("wb_multi_separate", 3142),
+        ("wb_multi_separate_regions", 7494),
+    ],
+};
+
+/// `group_trace_equivalence_large`'s rates, seeds 3,000,000..3,002,000 (kit 2bbe1e50): the counts
+/// job f45b9156 measured in 2000 traces (a RATE, not a floor: each floor is half the count expected
+/// at the traces a run checks, `Floors::at`; 0 where the generator gives none, and for the costs
+/// and diagnostics, as in the tables above).
+const LARGE_GROUP: Floors = Floors {
+    per: 2000,
+    rates: true,
+    of: &[
+        ("steps", 201714),
+        ("append_at_end", 200),
+        ("concurrent_restore_base_by_root", 261),
+        ("concurrent_restore_o4", 0),
+        ("concurrent_restore_o4a", 0),
+        ("concurrent_restores_of_one_root", 261),
+        ("d1_widened", 49578),
+        ("d1_widened_then_undone", 19770),
+        ("empty_base_double_write", 0),
+        ("end_break_a", 0),
+        ("end_break_b", 0),
+        ("end_break_c", 0),
+        ("end_break_d", 0),
+        ("exact_sides_differ_from_rediff", 8069),
+        ("group_agent_token", 5052),
+        ("group_closed_boundary", 5437),
+        ("group_closed_foreign", 3552),
+        ("group_closed_idle", 736),
+        ("group_closed_newline", 2406),
+        ("group_closed_noncontiguous", 4026),
+        ("group_closed_token", 1936),
+        ("group_joined", 14431),
+        ("group_redone", 245),
+        ("group_self_undone", 946),
+        ("group_undone", 2376),
+        ("history_lost_after_restart", 694),
+        ("insert_inside_another_range", 125),
+        ("last_line_delete_after_append", 197),
+        ("multi_connection_pid", 2328),
+        ("multi_hunk_partial", 39),
+        ("multi_root_batch", 0),
+        ("redo_after_partial", 3),
+        ("repeated_text_identity", 0),
+        ("revert_after_restart", 0),
+        ("revert_beyond_compaction", 0),
+        ("revert_outside_window", 0),
+        ("revert_over_erased", 0),
+        ("revert_restart_transparent", 0),
+        ("stays_on_top", 671),
+        ("steps_n", 1225),
+        ("taint", 2059),
+        ("touching_regions_one_step", 32),
+        ("undo_across_purge", 0),
+        ("undo_drop", 0),
+        ("undo_for_person", 0),
+        ("whole_doc_delete_then_append", 6),
+        ("write_base_multiline_rewrite", 0),
+        ("write_base_shared_start", 0),
+        ("write_base_shared_start_was_conflict", 0),
+        ("write_base_words_same_line", 0),
+        ("restore_part:base_by_root", 261),
+        ("restore_part:o4_restore", 0),
+        ("restore_part:o4a", 0),
+        ("own_only_checked", 19753),
+        ("own_only_removed", 58770),
+        ("own_only_removed_root_author_not_actor", 2783),
+        ("own_only_unresolved", 0),
+        ("reverts_checked", 0),
+        ("revert_regions", 0),
+        ("revert_extra", 0),
+        ("touching_revert_regions", 0),
+        ("touching_revert_extra", 0),
+        ("wb_conflicts_compared", 0),
+        ("wb_regions_compared", 0),
+        ("wb_exact", 0),
+        ("wb_coalesced_touching", 0),
+        ("wb_multi_separate", 0),
+        ("wb_multi_separate_regions", 0),
+    ],
+};
+
 /// The trace count: `SPEC_UNDO_TRACES`, else `default`.
 fn traces_or(default: u64) -> u64 {
     std::env::var("SPEC_UNDO_TRACES")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)
+}
+
+/// A large run's seeds and class minimum, or a part of them: `SPEC_UNDO_SEEDS=START..END`
+/// (tools/undo/traces-large.sh, one node job per part) runs the seeds START..END of `range`
+/// (inside it, or the test fails), named `NAME_START_END`, its class minimum scaled to the
+/// part (rounded up), so parts that cover `range` assert at least the whole run's minimum
+/// between them. The floors scale to the traces run as always (`Floors::at`).
+fn large_part(
+    name: &str,
+    range: std::ops::Range<u64>,
+    min_per_class: u64,
+) -> (String, std::ops::Range<u64>, u64) {
+    let Ok(s) = std::env::var("SPEC_UNDO_SEEDS") else {
+        return (name.to_owned(), range, min_per_class);
+    };
+    let (a, b) = s
+        .split_once("..")
+        .and_then(|(a, b)| Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?)))
+        .unwrap_or_else(|| panic!("SPEC_UNDO_SEEDS={s}: START..END"));
+    assert!(
+        range.start <= a && a < b && b <= range.end,
+        "SPEC_UNDO_SEEDS={s}: not a part of {name}'s seeds {range:?}"
+    );
+    let min = (min_per_class * (b - a)).div_ceil(range.end - range.start);
+    (format!("{name}_{a}_{b}"), a..b, min)
 }
 
 /// Regression for finding F1 (fixed in v0.8.1): two participants append the same line;
@@ -621,32 +871,90 @@ fn restart_transparency() {
 /// a quick local look; the class minimum still applies.
 #[test]
 fn trace_equivalence() {
-    run_many("trace_equivalence", 0..traces_or(256), 1);
+    run_many("trace_equivalence", 0..traces_or(256), 1, &MAIN);
 }
 
-/// The nodes' run: traces until every class has 10^4 hits (spec §8 Volume). Not run here.
+/// The nodes' run (spec §8 Volume): 400,000 traces, seeds 1,000,000..1,400,000, in parts
+/// (tools/undo/traces-large.sh PART=main1..main5). Each class at least half its measured
+/// rate (`LARGE_MAIN`, job 301c3906) at the traces a part checks: over the 400,000, enforced
+/// minimums of about 2,500 for `redo_after_partial` and about 7,750 for
+/// `concurrent_restore_o4a` (and its `restore_part:o4a`), every other class above 10^4.
+/// Not run here.
 #[test]
 #[ignore]
 fn trace_equivalence_large() {
-    run_many(
-        "trace_equivalence_large",
-        1_000_000..1_000_000 + 400_000,
-        10_000,
-    );
+    let (name, seeds, min) = large_part("trace_equivalence_large", 1_000_000..1_400_000, 1);
+    run_many(&name, seeds, min, &LARGE_MAIN);
 }
 
 /// D1's run on the nodes (v0.9.7, undo spec v1.10): 50,000 traces of the main class mix,
-/// D1's classes (`d1_widened`, `d1_widened_then_undone`) among them. Not run here.
+/// D1's classes (`d1_widened`, `d1_widened_then_undone`) among them, each class at least half
+/// its measured rate (`LARGE_D1`, job 841f1cba). One job (tools/undo/traces-large.sh
+/// PART=d1). Not run here.
 #[test]
 #[ignore]
 fn d1_traces_large() {
-    run_many_with(
-        "d1_traces_large",
-        2_000_000..2_050_000,
-        trace::CLASSES,
-        1,
-        trace::run,
-        &MAIN,
+    let (name, seeds, min) = large_part("d1_traces_large", 2_000_000..2_050_000, 1);
+    run_many_with(&name, seeds, trace::CLASSES, min, trace::run, &LARGE_D1);
+}
+
+/// Seeds of `d1_traces_large` whose class counts differed between two runs of the same
+/// seeds (jobs 89adae85 and 05dcd2f2, a scan of 2,000,000..2,050,000 run twice): the
+/// session's client IDs, drawn at random, change the sizes compaction reads (an ID's varint
+/// length in the log, or the IDs' order in the snapshot's encoding), so a compaction moved
+/// by a step and `revert_beyond_compaction` with it.
+const REPEAT_SEEDS: [u64; 11] = [
+    2_002_488, 2_004_968, 2_005_922, 2_006_543, 2_008_968, 2_011_790, 2_015_468, 2_015_894,
+    2_017_200, 2_018_420, 2_040_571,
+];
+
+/// A trace is a function of its seed: [`REPEAT_SEEDS`] run `REPEAT_RUNS` times (default 8)
+/// give the same steps, class counts and other counts every time (the trace runner draws
+/// the kit's client IDs from the seed).
+#[test]
+fn trace_counts_repeat() {
+    let runs: usize = std::env::var("REPEAT_RUNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let counts = |r: &trace::TraceResult| {
+        format!(
+            "steps {} mismatch {:?} classes {:?} reverts {} {} {} {} {} restores {:?} \
+             own_only {:?} write_base {} {} {:?} {} {}",
+            r.steps,
+            r.mismatch.as_ref().map(|m| (m.step, &m.what)),
+            r.classes,
+            r.revert_regions,
+            r.revert_extra,
+            r.touching_revert_regions,
+            r.touching_revert_extra,
+            r.reverts_checked,
+            r.restore_parts,
+            r.own_only,
+            r.write_conflicts,
+            r.write_regions,
+            r.write_labels,
+            r.write_multi,
+            r.write_multi_regions
+        )
+    };
+    let mut differ = Vec::new();
+    for seed in REPEAT_SEEDS {
+        let first = counts(&trace::run(seed));
+        for k in 1..runs {
+            let again = counts(&trace::run(seed));
+            if again != first {
+                differ.push(format!("seed {seed}, run {k}:\n  {first}\n  {again}"));
+                break;
+            }
+        }
+    }
+    assert!(
+        differ.is_empty(),
+        "{} of {} seeds gave other counts on another run:\n{}",
+        differ.len(),
+        REPEAT_SEEDS.len(),
+        differ.join("\n")
     );
 }
 
@@ -675,17 +983,20 @@ fn group_trace_equivalence() {
 }
 
 /// The nodes' run of the grouping class: 10^4 traces, every grouping class hit at least 100
-/// times. Not run here.
+/// times, and each class at least half its measured rate (`LARGE_GROUP`, job f45b9156; the
+/// rarest grouping class, `group_redone`, at about 610). One job (tools/undo/traces-large.sh
+/// PART=group). Not run here.
 #[test]
 #[ignore]
 fn group_trace_equivalence_large() {
+    let (name, seeds, min) = large_part("group_traces_large", 3_000_000..3_010_000, 100);
     run_many_with(
-        "group_traces_large",
-        3_000_000..3_010_000,
+        &name,
+        seeds,
         trace::GROUP_CLASSES,
-        100,
+        min,
         group_trace,
-        &GROUP,
+        &LARGE_GROUP,
     );
 }
 
@@ -737,13 +1048,20 @@ fn group_mutants_are_caught() {
 /// (`write_base_shared_start`), the part of it v0.9.7's sides refused
 /// (`write_base_shared_start_was_conflict`); two different changes of one line, refused
 /// (`write_base_words_same_line`); a line rewritten into several against the other side's
-/// change (`write_base_multiline_rewrite`). Not run here.
+/// change (`write_base_multiline_rewrite`). Every other class at least half its measured
+/// rate (`LARGE_D1`, job 841f1cba: the same generator and seeds as `d1_traces_large`). One
+/// job (tools/undo/traces-large.sh PART=endbreak). Not run here.
 #[test]
 #[ignore]
 fn end_break_trace_class_large() {
-    run_many_with(
+    let (name, seeds, min) = large_part(
         "end_break_traces_large",
         2_000_000..2_000_000 + traces_or(50_000),
+        10_000,
+    );
+    run_many_with(
+        &name,
+        seeds,
         &[
             "end_break_a",
             "end_break_b",
@@ -754,9 +1072,9 @@ fn end_break_trace_class_large() {
             "write_base_words_same_line",
             "write_base_multiline_rewrite",
         ],
-        10_000,
+        min,
         trace::run,
-        &MAIN,
+        &LARGE_D1,
     );
 }
 

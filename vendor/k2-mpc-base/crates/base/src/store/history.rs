@@ -1782,7 +1782,7 @@ mod tests {
     /// is written. The u64 tables (clock spans, provenance) take such clocks as they are.
     #[test]
     fn a_root_run_over_u32_is_refused_at_encode_and_nothing_is_written() {
-        use crate::store::{DocKey, DocMeta, LogEntry};
+        use crate::store::{DocKey, DocMeta, EntryBody, LogEntry};
         let over = u64::from(u32::MAX) + 1;
         let fits = record_with_runs(vec![(2, 1, 7, u64::from(u32::MAX))], Vec::new());
         assert!(enc_record(&fits).is_ok(), "u32::MAX itself fits");
@@ -1821,7 +1821,7 @@ mod tests {
                     client: 7,
                     at_ms: 5,
                     via: "cli".into(),
-                    update: vec![1],
+                    body: EntryBody::Yrs(vec![1]),
                     on_behalf_of: None,
                 },
                 NewChange {
@@ -1884,7 +1884,7 @@ mod tests {
 
     #[test]
     fn records_stats_prune_and_purge_reach() {
-        use crate::store::{ApprovalState, DocKey, DocMeta, LogEntry};
+        use crate::store::{ApprovalState, DocKey, DocMeta, EntryBody, LogEntry};
         let dir = std::env::temp_dir().join(format!("k2mb-hist-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1911,7 +1911,7 @@ mod tests {
                 client: 7,
                 at_ms: 5,
                 via: "cli".into(),
-                update: vec![1],
+                body: EntryBody::Yrs(vec![1]),
                 on_behalf_of: obo.map(Into::into),
             };
             let mut info = ChangeInfo::new(ChangeKind::Edit, "a", "cli", 5);

@@ -129,7 +129,12 @@ pub fn reconcile(t: &Table, records: &[Record]) -> Result<Reconciled, TableError
         .unwrap_or(0);
     let shown_w = old.iter().map(Vec::len).max().unwrap_or(0);
     let mut col_of: Vec<Option<usize>> = vec![None; new_w];
-    let pair = |j: usize, i: usize, col_of: &mut Vec<Option<usize>>| col_of[j] = Some(i);
+    // the old columns paired so far (`col_of`'s values), O(1) each
+    let mut taken = vec![false; old_cols.len()];
+    let pair = |j: usize, i: usize, col_of: &mut Vec<Option<usize>>, taken: &mut Vec<bool>| {
+        col_of[j] = Some(i);
+        taken[i] = true;
+    };
     if header {
         let mut by_name: Pairing<&str> = BTreeMap::new();
         for (i, c) in old_cols.iter().enumerate() {
@@ -142,7 +147,7 @@ pub fn reconcile(t: &Table, records: &[Record]) -> Result<Reconciled, TableError
         }
         for (o, n) in by_name.values() {
             if let ([i], [j]) = (o.as_slice(), n.as_slice()) {
-                pair(*j, *i, &mut col_of);
+                pair(*j, *i, &mut col_of, &mut taken);
             }
         }
     }
@@ -153,35 +158,34 @@ pub fn reconcile(t: &Table, records: &[Record]) -> Result<Reconciled, TableError
     // each column's values sorted, so two columns holding the same values in other rows match).
     // Content pairs only find the column that went or came when the width changed
     if header || new_w != old_cols.len() {
-        let mut by_content: Pairing<Vec<Option<&str>>> = BTreeMap::new();
-        for i in (0..old_cols.len()).filter(|&i| !taken_at(&col_of, i)) {
-            if let Some(s) = column(old_body, i) {
+        let mut by_content: Pairing<(usize, Vec<&str>)> = BTreeMap::new();
+        let (old_vals, new_vals) = (columns(old_body, old_cols.len()), columns(body, new_w));
+        for (i, s) in old_vals.into_iter().enumerate() {
+            if let (false, Some(s)) = (taken[i], s) {
                 by_content.entry(s).or_default().0.push(i);
             }
         }
-        for j in (0..new_w).filter(|&j| col_of[j].is_none()) {
-            if let Some(s) = column(body, j) {
+        for (j, s) in new_vals.into_iter().enumerate() {
+            if let (None, Some(s)) = (col_of[j], s) {
                 by_content.entry(s).or_default().1.push(j);
             }
         }
         for (o, n) in by_content.values() {
             if let ([i], [j]) = (o.as_slice(), n.as_slice()) {
-                pair(*j, *i, &mut col_of);
+                pair(*j, *i, &mut col_of, &mut taken);
             }
         }
     }
-    let unmatched_old: Vec<usize> = (0..old_cols.len())
-        .filter(|&i| !taken_at(&col_of, i))
-        .collect();
+    let unmatched_old: Vec<usize> = (0..old_cols.len()).filter(|&i| !taken[i]).collect();
     let unmatched_new: Vec<usize> = (0..new_w).filter(|&j| col_of[j].is_none()).collect();
     for (&i, &j) in unmatched_old.iter().zip(&unmatched_new) {
-        pair(j, i, &mut col_of);
+        pair(j, i, &mut col_of, &mut taken);
     }
     let all_blank = records.iter().all(Vec::is_empty);
     let mut gone_cols = Vec::new();
     let mut kept_hidden = Vec::new();
     for (i, c) in old_cols.iter().enumerate() {
-        if col_of.contains(&Some(i)) {
+        if taken[i] {
             continue;
         }
         // (a column the header line showed was shown: a header-on column that is invisible
@@ -216,21 +220,28 @@ pub fn reconcile(t: &Table, records: &[Record]) -> Result<Reconciled, TableError
         .enumerate()
         .filter_map(|(j, o)| o.map(|i| (j, i)))
         .collect();
-    let ot: Vec<String> = old_body
+    // each field position's place among the matched columns, per side
+    let (mut old_at, mut new_at) = (vec![None; old_cols.len()], vec![None; new_w]);
+    for (m, &(j, i)) in matched.iter().enumerate() {
+        old_at[i] = Some(m);
+        new_at[j] = Some(m);
+    }
+    let (ot, ot_len): (Vec<String>, Vec<usize>) = old_body
         .iter()
-        .map(|r| token(r, matched.iter().map(|&(_, i)| i)))
-        .collect();
-    let nt: Vec<String> = body
+        .map(|r| token(r, &old_at, matched.len()))
+        .unzip();
+    let (nt, nt_len): (Vec<String>, Vec<usize>) = body
         .iter()
-        .map(|r| token(r, matched.iter().map(|&(j, _)| j)))
-        .collect();
+        .map(|r| token(r, &new_at, matched.len()))
+        .unzip();
     let mut new_old: Vec<Option<usize>> = vec![None; body.len()];
     let mut old_new: Vec<Option<usize>> = vec![None; old_body.len()];
     // (a) the longest common subsequence of fingerprints
     let gaps = {
         let a: Vec<&str> = ot.iter().map(String::as_str).collect();
         let b: Vec<&str> = nt.iter().map(String::as_str).collect();
-        let bytes = a.iter().chain(&b).map(|s| s.len() + 1).sum();
+        // the budget counts each row's full fingerprint, one byte past it
+        let bytes = ot_len.iter().chain(&nt_len).map(|n| n + 1).sum();
         let changes = myers::diff(&a, &b, &mut Budget::for_input(bytes));
         let (mut o, mut n) = (0, 0);
         let mut gaps = Vec::with_capacity(changes.len());
@@ -360,22 +371,29 @@ pub fn reconcile(t: &Table, records: &[Record]) -> Result<Reconciled, TableError
     out.deleted_rows = gone_rows;
 
     // ---- cells, names, quoting ----
+    // per row, O(its fields and present cells): a field position past the record's end asks
+    // for an absent cell, so only the row's present cells there are touched
+    let tcol_at: HashMap<&Key, usize> = tcols.iter().enumerate().map(|(j, c)| (c, j)).collect();
     for (rec, r) in body.iter().zip(&out.rows) {
-        let want = desired(t.shape, rec, new_w, |j| w.cell(r, &tcols[j]).is_some());
+        let have: HashSet<usize> = w
+            .row_cells(r)
+            .filter_map(|(c, _)| tcol_at.get(c).copied())
+            .collect();
+        let want = desired(t.shape, rec, rec.len(), |j| have.contains(&j));
         for (j, d) in want.into_iter().enumerate() {
-            let c = &tcols[j];
-            let at = QuoteAt::Cell(r.clone(), c.clone());
-            match d {
-                Some((v, q)) => {
-                    ch.cell(&mut w, r, c, Some(v));
-                    ch.quote(&mut w, at, q);
-                }
-                None if w.cell(r, c).is_some() => {
-                    ch.cell(&mut w, r, c, None);
-                    ch.quote(&mut w, at, None);
-                }
-                None => {}
+            if let Some((v, q)) = d {
+                let c = &tcols[j];
+                ch.cell(&mut w, r, c, Some(v));
+                ch.quote(&mut w, QuoteAt::Cell(r.clone(), c.clone()), q);
             }
+            // (no field asks for nothing here: an empty one keeps an absent cell absent)
+        }
+        let mut gone: Vec<usize> = have.into_iter().filter(|&j| j >= rec.len()).collect();
+        gone.sort_unstable();
+        for j in gone {
+            let c = &tcols[j];
+            ch.cell(&mut w, r, c, None);
+            ch.quote(&mut w, QuoteAt::Cell(r.clone(), c.clone()), None);
         }
     }
     if header {
@@ -401,37 +419,50 @@ pub fn reconcile(t: &Table, records: &[Record]) -> Result<Reconciled, TableError
     Ok(out)
 }
 
-/// A column's values over `recs` (a missing field is `None`), sorted: equal for a column that
-/// only moved. `None` when it holds nothing but empty fields (no evidence).
-fn column(recs: &[Record], i: usize) -> Option<Vec<Option<&str>>> {
-    let mut v: Vec<Option<&str>> = recs
-        .iter()
-        .map(|r| r.get(i).map(|f| f.value.as_str()))
-        .collect();
-    if !v.iter().any(|x| x.is_some_and(|s| !s.is_empty())) {
-        return None;
+/// Each column's values over `recs`, for positions `0..width`: how many records have no field
+/// there, and the values present, sorted (equal for a column that only moved). `None` for a
+/// column holding nothing but empty fields (no evidence). O(the fields), whatever the width:
+/// a record adds only the fields it has.
+fn columns(recs: &[Record], width: usize) -> Vec<Option<(usize, Vec<&str>)>> {
+    let mut vals: Vec<Vec<&str>> = vec![Vec::new(); width];
+    for r in recs {
+        for (v, f) in vals.iter_mut().zip(r) {
+            v.push(&f.value);
+        }
     }
-    v.sort_unstable();
-    Some(v)
+    vals.into_iter()
+        .map(|mut v| {
+            if !v.iter().any(|s| !s.is_empty()) {
+                return None;
+            }
+            let missing = recs.len() - v.len();
+            v.sort_unstable();
+            Some((missing, v))
+        })
+        .collect()
 }
 
 /// The new record's decoded values are the old one's under `col_of` (new position to old):
 /// every field present on one side has the same value on the other. No fingerprint, nothing
 /// normalised (a missing field differs from an empty one); how a field is quoted doesn't count.
+///
+/// `col_of` pairs each new position with at most one old one, and no two with the same: so
+/// this holds exactly when both records have as many fields and each new field's column is
+/// paired with an old field holding its value. O(the fields), whatever the width.
 fn row_is_exact(old: &Record, new: &Record, col_of: &[Option<usize>]) -> bool {
-    let matched = col_of.iter().enumerate().all(|(j, o)| {
-        let (n, m) = (new.get(j), o.and_then(|i| old.get(i)));
-        n.map(|f| &f.value) == m.map(|f| &f.value)
-    });
-    matched && (0..old.len()).all(|i| col_of.contains(&Some(i)))
+    old.len() == new.len()
+        && new.iter().enumerate().all(|(j, f)| {
+            col_of
+                .get(j)
+                .copied()
+                .flatten()
+                .and_then(|i| old.get(i))
+                .is_some_and(|o| o.value == f.value)
+        })
 }
 
 fn old_rows_len(t: &Table) -> usize {
     t.rows.live_len()
-}
-
-fn taken_at(col_of: &[Option<usize>], i: usize) -> bool {
-    col_of.contains(&Some(i))
 }
 
 fn link(o: usize, n: usize, new_old: &mut [Option<usize>], old_new: &mut [Option<usize>]) {
@@ -439,21 +470,31 @@ fn link(o: usize, n: usize, new_old: &mut [Option<usize>], old_new: &mut [Option
     old_new[o] = Some(n);
 }
 
-/// A row's fingerprint: its fields at `idx` (a missing field differs from an empty one),
-/// as one token. Values hold no NUL ([`check_value`]).
-fn token(rec: &Record, idx: impl Iterator<Item = usize>) -> String {
+/// A row's fingerprint over the `m` matched columns (`at[i]`: field `i`'s place among them):
+/// the fields present there, by place, each with its value (a missing field differs from an
+/// empty one). Two rows' fingerprints are equal exactly when, at every matched column, both
+/// have no field or both hold the same value. Built from the record's own fields: O(them),
+/// whatever the width, and a blank row's is empty. Values hold no NUL ([`check_value`]).
+///
+/// Also the length of the row's full fingerprint, a field or a mark per matched column (two
+/// bytes each, plus the values): the diff's work budget is counted over it.
+fn token(rec: &Record, at: &[Option<usize>], m: usize) -> (String, usize) {
+    let mut fields: Vec<(usize, &str)> = rec
+        .iter()
+        .zip(at)
+        .filter_map(|(f, a)| a.map(|k| (k, f.value.as_str())))
+        .collect();
+    fields.sort_unstable_by_key(|&(k, _)| k);
     let mut s = String::new();
-    for i in idx {
-        match rec.get(i) {
-            Some(f) => {
-                s.push('\u{1}');
-                s.push_str(&f.value);
-            }
-            None => s.push('\u{2}'),
-        }
+    let mut len = 2 * m;
+    for (k, v) in fields {
+        s.push_str(&k.to_string());
+        s.push('\u{1}');
+        s.push_str(v);
         s.push('\0');
+        len += v.len();
     }
-    s
+    (s, len)
 }
 
 /// Two rows share at least half their non-empty fields (under the matched columns), and at

@@ -22,6 +22,8 @@ import {
   isFlapPatternEstablished,
   pruneFlapTimestamps,
   shouldConsultArbiter,
+  nextSoftPollFails,
+  probeBootStatusWithEviction,
   WEDGE_PATTERN_MS,
   WEDGE_CLEAR_OK_STREAK,
   WEDGE_FLAP_THRESHOLD,
@@ -329,17 +331,31 @@ describe('shouldConsultArbiter (post-accept poisoned pool)', () => {
         probeOk: false,
         sustainedFail: false,
         flapFail: false,
+        dropConfirmed: false,
       }),
     ).toBe(false)
   })
 
-  it('post-accept webview miss consults immediately', () => {
+  it('0.46.10: a lone post-accept webview miss does NOT consult (no reload on one bad moment)', () => {
     expect(
       shouldConsultArbiter({
         acceptedOnce: true,
         probeOk: false,
         sustainedFail: false,
         flapFail: false,
+        dropConfirmed: false,
+      }),
+    ).toBe(false)
+  })
+
+  it('a miss after the drop was already confirmed by an earlier tick consults (wedge still reloads)', () => {
+    expect(
+      shouldConsultArbiter({
+        acceptedOnce: true,
+        probeOk: false,
+        sustainedFail: false,
+        flapFail: false,
+        dropConfirmed: true,
       }),
     ).toBe(true)
   })
@@ -351,6 +367,7 @@ describe('shouldConsultArbiter (post-accept poisoned pool)', () => {
         probeOk: true,
         sustainedFail: false,
         flapFail: false,
+        dropConfirmed: false,
       }),
     ).toBe(false)
   })
@@ -362,6 +379,7 @@ describe('shouldConsultArbiter (post-accept poisoned pool)', () => {
         probeOk: false,
         sustainedFail: true,
         flapFail: false,
+        dropConfirmed: false,
       }),
     ).toBe(true)
     expect(
@@ -370,6 +388,7 @@ describe('shouldConsultArbiter (post-accept poisoned pool)', () => {
         probeOk: true,
         sustainedFail: false,
         flapFail: true,
+        dropConfirmed: false,
       }),
     ).toBe(true)
   })
@@ -403,5 +422,67 @@ describe('arbiterProvesHostReady (out-of-webview second opinion)', () => {
   it('an unparseable / non-boot-status body is not proof', () => {
     expect(arbiterProvesHostReady({ status: 200, body: 'not json' })).toBe(false)
     expect(arbiterProvesHostReady({ status: 200, body: JSON.stringify({ nope: 1 }) })).toBe(false)
+  })
+})
+
+describe('probe-first drop counting (0.46.10)', () => {
+  it('one failed request + a healthy probe → 0 fails: no recovery', () => {
+    const fails = nextSoftPollFails({ consecutiveFails: 0, accepted: true, failureEvidence: true })
+    expect(fails).toBe(0)
+    expect(shouldSurfaceRemoteDrop(fails)).toBe(false)
+  })
+
+  it('one failed request + a failed probe → the threshold at once: recovery', () => {
+    const fails = nextSoftPollFails({ consecutiveFails: 0, accepted: false, failureEvidence: true })
+    expect(fails).toBe(2)
+    expect(shouldSurfaceRemoteDrop(fails)).toBe(true)
+  })
+
+  it('a lone failed scheduled probe stays debounced (1), the next one surfaces (2)', () => {
+    const first = nextSoftPollFails({ consecutiveFails: 0, accepted: false, failureEvidence: false })
+    expect(first).toBe(1)
+    expect(shouldSurfaceRemoteDrop(first)).toBe(false)
+    const second = nextSoftPollFails({ consecutiveFails: first, accepted: false, failureEvidence: false })
+    expect(second).toBe(2)
+    expect(shouldSurfaceRemoteDrop(second)).toBe(true)
+  })
+})
+
+describe('probeBootStatusWithEviction (0.46.10)', () => {
+  it('a fast network miss is retried once on a fresh socket; the retry decides', async () => {
+    const results = [{ kind: 'network' as const }, { kind: 'ok' as const }]
+    let calls = 0
+    const out = await probeBootStatusWithEviction(async () => results[calls++])
+    expect(calls).toBe(2)
+    expect(out).toEqual({ kind: 'ok' })
+  })
+
+  it('two network misses → network (a real drop still reads as one)', async () => {
+    let calls = 0
+    const out = await probeBootStatusWithEviction(async () => {
+      calls += 1
+      return { kind: 'network' as const }
+    })
+    expect(calls).toBe(2)
+    expect(out).toEqual({ kind: 'network' })
+  })
+
+  it('a timeout is not retried (it already spent its budget)', async () => {
+    let calls = 0
+    const out = await probeBootStatusWithEviction(async () => {
+      calls += 1
+      return { kind: 'network' as const, timedOut: true as const }
+    })
+    expect(calls).toBe(1)
+    expect(out).toEqual({ kind: 'network', timedOut: true })
+  })
+
+  it('an HTTP answer or an ok is the host\'s answer: one call', async () => {
+    let calls = 0
+    await probeBootStatusWithEviction(async () => {
+      calls += 1
+      return { kind: 'http' as const }
+    })
+    expect(calls).toBe(1)
   })
 })

@@ -51,7 +51,6 @@ const PRIMARY_TABS_USERS: Record<string, string> = {
   'App.tsx': "quit / unload save and the dirty-dot of the window's own room",
   'components/Sidebar/ActiveBar.tsx': 'window sidebar: the primary room',
   'components/Sidebar/WorktreeDialog.tsx': 'window sidebar: the primary room',
-  'components/GitInitDialog/GitInitDialog.tsx': "adds a workspace to the window's server",
   'components/RunningAgentsPanel/RunningAgentsPanel.tsx': "primary-only (MS14): the window's running agents",
   'components/AgentsPanel/AgentsPanel.tsx': 'unmounted legacy panel (primary)',
   'components/Settings/sections/ProjectsSection.tsx': "Settings is about the window's server",

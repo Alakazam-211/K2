@@ -630,6 +630,70 @@ describe('projects store — Plan B host-aware migration', () => {
     errSpy.mockRestore()
   })
 
+  it('0.46.10: addProject shows the new workspace even when the list re-read fails (inserted from the add answer, selected)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // A loaded list first (the window had its baseline before the add).
+    daemonCliGet.mockImplementation((route: string) => {
+      if (route === 'projects/list') return Promise.resolve([{ ...mkProject('p1'), workspaces: [mkWorkspace('w1', 'p1')] }])
+      throw new Error(`unexpected GET ${route}`)
+    })
+    await useProjectsStore.getState().fetchProjects()
+    expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual(['p1'])
+    daemonCliPost.mockImplementation((route: string) => {
+      if (route === 'projects/add-from-path') return Promise.resolve(mkProject('p9'))
+      throw new Error(`unexpected POST ${route}`)
+    })
+    daemonCliGet.mockImplementation((route: string, params?: Record<string, unknown>) => {
+      // The host blipped right after the add: the list read is lost.
+      if (route === 'projects/list') return Promise.reject(new TypeError('Load failed'))
+      if (route === 'workspaces/list' && params?.project_id === 'p9') {
+        return Promise.resolve([mkWorkspace('w9', 'p9')])
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+
+    const added = await useProjectsStore.getState().addProject('/tmp/p9')
+
+    expect(added?.id).toBe('p9')
+    const state = useProjectsStore.getState()
+    // The old list stays, the new workspace is in it and selected.
+    expect(state.projects.map((p) => p.id)).toEqual(['p1', 'p9'])
+    expect(state.activeProjectId).toBe('p9')
+    expect(state.activeWorkspaceId).toBe('w9')
+    expect(restoreWorkspaceMock).toHaveBeenCalledWith('p9:w9', '/tmp/p9')
+    expect(addToast).toHaveBeenCalledWith('Workspace added', 'success')
+    errSpy.mockRestore()
+  })
+
+  it('addProject uses the canonical row when the list re-read works (no extra workspaces/list)', async () => {
+    daemonCliPost.mockImplementation((route: string) => {
+      if (route === 'projects/add-from-path') return Promise.resolve(mkProject('p9'))
+      throw new Error(`unexpected POST ${route}`)
+    })
+    daemonCliGet.mockImplementation((route: string) => {
+      if (route === 'projects/list') {
+        return Promise.resolve([{ ...mkProject('p9'), name: 'canonical', workspaces: [mkWorkspace('w9', 'p9')] }])
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+
+    const added = await useProjectsStore.getState().addProject('/tmp/p9')
+
+    expect(added?.name).toBe('canonical')
+    expect(daemonCliGet).not.toHaveBeenCalledWith('workspaces/list', expect.anything())
+    expect(useProjectsStore.getState().activeProjectId).toBe('p9')
+  })
+
+  it('addProject returns null on the needs-git path (nothing added, nothing selected)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    daemonCliPost.mockResolvedValueOnce({ needsGitInit: true, path: '/tmp/new', name: 'new' })
+
+    await expect(useProjectsStore.getState().addProject('/tmp/new')).resolves.toBe(null)
+    expect(daemonCliGet).not.toHaveBeenCalled()
+    expect(addToast).not.toHaveBeenCalledWith('Workspace added', 'success')
+    logSpy.mockRestore()
+  })
+
   it('addProject falls back to generic toast when the error has no message, then rethrows', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     daemonCliPost.mockRejectedValueOnce(new Error(''))

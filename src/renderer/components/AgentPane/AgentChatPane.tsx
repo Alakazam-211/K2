@@ -49,6 +49,7 @@ import { SessionTokenPicker } from '@/components/Settings/shared/LlmLoginPicker'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { harnessLabel, harnessOfCommand, movePinnedChat, movePinnedChatMessage, PINNED_HARNESSES } from '@/lib/pinned-harness'
 import { usePresetsStore } from '@/stores/presets'
+import { harnessMissingMessage } from '@/lib/harness-missing'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -1137,7 +1138,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
             Chat session failed to start
           </div>
           <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
-            {phase.message || 'The daemon could not start the chat session.'}
+            {/* 0.46.10: a harness not installed on this server says so plainly. */}
+            {harnessMissingMessage(phase.message, room.scope.label)
+              ?? (phase.message || 'The daemon could not start the chat session.')}
           </div>
           <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>

@@ -433,8 +433,8 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
     expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(1)
   })
 
-  it('exhausted REMOTE connection failure kicks a health probe; LOCAL does not', async () => {
-    const probe = vi.spyOn(connectionGateProbe, 'forceSoftHealthProbe').mockImplementation(() => {})
+  it('exhausted REMOTE connection failure reports evidence (probe-first); LOCAL does not', async () => {
+    const probe = vi.spyOn(connectionGateProbe, 'reportRemoteFailure').mockImplementation(() => {})
     try {
       const host = makeRemoteHost()
       useConnectHostStore.getState().addHost(host)
@@ -460,7 +460,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
   })
 
   it('remote ACAO TypeError is 1 fetch then probe once', async () => {
-    const probe = vi.spyOn(connectionGateProbe, 'forceSoftHealthProbe').mockImplementation(() => {})
+    const probe = vi.spyOn(connectionGateProbe, 'reportRemoteFailure').mockImplementation(() => {})
     try {
       const host = makeRemoteHost()
       useConnectHostStore.getState().addHost(host)
@@ -493,7 +493,7 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
   })
 
   it('REMOTE HTTP 400 is not a health probe (Anna 400 is the poll, not cliFetch)', async () => {
-    const probe = vi.spyOn(connectionGateProbe, 'forceSoftHealthProbe').mockImplementation(() => {})
+    const probe = vi.spyOn(connectionGateProbe, 'reportRemoteFailure').mockImplementation(() => {})
     try {
       const host = makeRemoteHost()
       useConnectHostStore.getState().addHost(host)

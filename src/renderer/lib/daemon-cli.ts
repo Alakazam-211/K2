@@ -19,7 +19,7 @@ import { assertScopeMayPost, type ServerScope } from '@/kessel/server-scope'
 import { assertServerScope } from '@/kessel/assert-scope'
 import type { ConnectHost } from '@/stores/connect-host'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { forceSoftHealthProbe } from '@/lib/connection-gate-probe'
+import { reportRemoteFailure } from '@/lib/connection-gate-probe'
 import {
   classifyRemoteFetchError,
   logRemotePath,
@@ -341,9 +341,11 @@ async function cliFetch(
   } catch (err) {
     if (isHostSwitchedError(err)) throw err
     // Compose send and other /cli/* rides this path. Edge 404/CORS throws
-    // here; kick a health tick so the arbiter can reload the poisoned pool
-    // instead of waiting 25s (or for Local → remote). HTTP 400 is an
-    // application error from parseDaemonResponse — not this catch, and
+    // here. One failed request is EVIDENCE, not a verdict (0.46.10): it
+    // asks the gate to probe the host now. A healthy probe drops it (no
+    // recovery, no reload, no socket teardown); a failed probe counts it as
+    // a strike, so a dead host still goes to recovery at once. HTTP 400 is
+    // an application error from parseDaemonResponse — not this catch, and
     // not a probe.
     if (isConnectionLevelError(err) && scope.isRemote && scope.isWindowHost()) {
       logRemotePath('cli-fail', {
@@ -351,7 +353,7 @@ async function cliFetch(
         class: classifyRemoteFetchError(err),
         err: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
       })
-      forceSoftHealthProbe()
+      reportRemoteFailure()
     }
     throw err
   } finally {

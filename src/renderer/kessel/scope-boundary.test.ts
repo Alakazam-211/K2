@@ -249,6 +249,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/WorkspacePanel/WorkspaceCompletionSoundToggle.tsx',
   'components/common/HeartbeatSessionPicker.tsx',
   'hooks/useCursorMigrationCheck.ts',
+  // 0.46.10: the add-workspace ingest runs on the window's own server (the
+  // add itself is the projects store's, same server).
+  'lib/add-workspace.ts',
   'lib/context-stack.ts',
   'lib/daemon-settings.ts',
   'lib/external-drop-router.ts',

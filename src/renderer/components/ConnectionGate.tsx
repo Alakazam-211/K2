@@ -69,6 +69,7 @@ import { jittered } from '@/lib/backoff'
 import {
   clearR1FlapEpisode,
   registerRemoteHealthControls,
+  takeRemoteFailureEvidence,
   wasR1FlapStampedThisEpisode,
 } from '@/lib/connection-gate-probe'
 import {
@@ -176,6 +177,45 @@ const FIRST_CONNECT_PROBE_RETRY_DELAY_MS = 1000
  *  effect. Used by the poll loop below. */
 export function shouldSurfaceRemoteDrop(consecutiveFails: number): boolean {
   return consecutiveFails >= REMOTE_DROP_THRESHOLD
+}
+
+/** Probe-first counting (0.46.10): the consecutive-fail count after a soft
+ *  health tick. A tick the gate accepts resets it. A failed tick adds one,
+ *  plus one more when a request or socket on this host failed since the
+ *  last tick (`failureEvidence`, from `reportRemoteFailure`). So:
+ *    - a failed request + a healthy probe → 0 (no recovery);
+ *    - a failed request + a failed probe → the threshold at once (recovery);
+ *    - a lone failed scheduled probe → 1 (still debounced, as before).
+ *  Pure, for the unit tests. */
+export function nextSoftPollFails(opts: {
+  consecutiveFails: number
+  accepted: boolean
+  failureEvidence: boolean
+}): number {
+  if (opts.accepted) return 0
+  return opts.consecutiveFails + 1 + (opts.failureEvidence ? 1 : 0)
+}
+
+/** The webview probe result shape `probeBootStatusWithEviction` needs. */
+type ProbeKind = { kind: string; timedOut?: true }
+
+/**
+ * Run the webview `/boot-status` probe; on a NETWORK-class miss, run it
+ * once more right away. Same lever as `withRemoteRetry` for `/cli/*`: the
+ * throw evicts WebKit's dead pooled socket, so the second try opens a fresh
+ * one. Without it the probe a failed request asks for usually rides the
+ * same dead socket and "confirms" a drop that isn't there. An HTTP answer
+ * (any status) is the host's answer and is never retried here, and
+ * neither is a timeout.
+ */
+export async function probeBootStatusWithEviction<T extends ProbeKind>(
+  probe: () => Promise<T>,
+): Promise<T> {
+  const first = await probe()
+  // A timeout already waited the full budget: retrying it only delays a
+  // dead host's banner. A fast throw is the dead-socket case.
+  if (first.kind !== 'network' || first.timedOut) return first
+  return probe()
 }
 
 /** Stale-creds rule for the upgrade kickstart (black-screen bug, fix B).
@@ -366,7 +406,9 @@ async function getAppVersion(): Promise<string | null> {
 export type BootProbeResult =
   | { kind: 'ok'; status: DaemonBootStatus; tokenSent: boolean }
   | { kind: 'http'; httpStatus: number }
-  | { kind: 'network' }
+  // `timedOut` (0.46.10): the probe hit its own timeout. Not a dead pooled
+  // socket (those fail fast), so the eviction retry skips it.
+  | { kind: 'network'; timedOut?: true }
 
 /** Hit the daemon's /boot-status with a per-attempt timeout. Returns the
  *  discriminated {@link BootProbeResult}; both failure kinds invalidate the
@@ -428,7 +470,7 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
       err: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
       msSinceOk: msSinceRemoteBootOk(),
     })
-    return { kind: 'network' }
+    return classifyRemoteFetchError(err) === 'timeout' ? { kind: 'network', timedOut: true } : { kind: 'network' }
   }
 }
 
@@ -600,9 +642,16 @@ export function shouldConsultArbiter(opts: {
   probeOk: boolean
   sustainedFail: boolean
   flapFail: boolean
+  /** 0.46.10: the drop was already confirmed by an EARLIER tick (the
+   *  consecutive-fail count before this probe had reached the threshold,
+   *  so recovery is up). A miss on its own no longer reloads the page: a
+   *  reload tears down every socket and resets the view, which turned one
+   *  dropped request on a healthy host into a full reconnect. A wedge
+   *  still reloads, one tick (≈1 s at the reconnecting cadence) later. */
+  dropConfirmed: boolean
 }): boolean {
   if (opts.sustainedFail || opts.flapFail) return true
-  return opts.acceptedOnce && !opts.probeOk
+  return opts.acceptedOnce && !opts.probeOk && opts.dropConfirmed
 }
 
 /** Pure rule: has the consecutive webview-failure run lasted long enough to
@@ -970,8 +1019,37 @@ export function ConnectionGate(): React.ReactElement {
       }
       if (timeoutId !== null) clearTimeout(timeoutId)
       timeoutId = setTimeout(() => {
-        void tick()
+        void runTick()
       }, jittered(REMOTE_HEALTH_POLL_MS))
+    }
+
+    // 0.46.10: one tick at a time. A forced probe (a failed request, a
+    // socket drop, the tab coming back) that lands while a tick is still
+    // awaiting its probe used to start a SECOND tick, so one bad moment was
+    // counted twice and crossed the drop threshold on its own. Now it asks
+    // for one more tick right after the running one (which also reads any
+    // evidence reported meanwhile).
+    let tickRunning = false
+    let tickQueued = false
+    const runTick = async (): Promise<void> => {
+      if (tickRunning) {
+        tickQueued = true
+        return
+      }
+      tickRunning = true
+      try {
+        await tick()
+      } finally {
+        tickRunning = false
+        if (tickQueued && !cancelled) {
+          tickQueued = false
+          if (timeoutId !== null) {
+            clearTimeout(timeoutId)
+            timeoutId = null
+          }
+          void runTick()
+        }
+      }
     }
 
     const tick = async (): Promise<void> => {
@@ -1001,10 +1079,21 @@ export function ConnectionGate(): React.ReactElement {
       const policy = await ensurePolicy()
       // Remote health-polls get a looser timeout (a tunnel round-trip is
       // higher-latency than a localhost hit); local keeps the tight 2s.
-      const probe = await fetchBootStatus(
-        isRemote ? REMOTE_BOOT_STATUS_TIMEOUT_MS : 2000,
-      )
+      // 0.46.10: once mounted, a network-class miss is retried once at once
+      // (fresh socket) before it counts. First connect keeps one try.
+      const probeOnce = (): Promise<BootProbeResult> =>
+        fetchBootStatus(isRemote ? REMOTE_BOOT_STATUS_TIMEOUT_MS : 2000)
+      const probe =
+        isRemote && acceptedOnce
+          ? await probeBootStatusWithEviction(probeOnce)
+          : await probeOnce()
       if (cancelled) return
+      // Evidence from failed requests / sockets since the last tick, read
+      // AFTER the probe so a failure reported while it ran is weighed by it.
+      // Read on every tick (first connect too) so it can't go stale.
+      const failureEvidence = takeRemoteFailureEvidence()
+      // Was the drop already confirmed before this tick? (Arbiter gate.)
+      const dropConfirmedBefore = isRemote && shouldSurfaceRemoteDrop(consecutiveFails)
       // Policies keep their old input shape: any failed probe folds to null.
       const status = probe.kind === 'ok' ? probe.status : null
       // Wedge tracking (0.40.48 + 0.40.68): only a REMOTE host can wedge
@@ -1038,6 +1127,7 @@ export function ConnectionGate(): React.ReactElement {
         probeOk: probe.kind === 'ok',
         sustainedFail,
         flapFail,
+        dropConfirmed: dropConfirmedBefore,
       })
       if (
         isRemote &&
@@ -1299,7 +1389,11 @@ export function ConnectionGate(): React.ReactElement {
       // decision + the non-blocking reconnect banner. The App stays mounted
       // throughout; recovery (an accept above) clears the counter + banner.
       if (softPoll) {
-        consecutiveFails += 1
+        consecutiveFails = nextSoftPollFails({
+          consecutiveFails,
+          accepted: false,
+          failureEvidence,
+        })
         // Recovery state 1 — the "still booting back up" affordance. A host
         // that ANSWERED /boot-status with a pre-'ready' phase (e.g.
         // 'migrating' while an update applies) is AUTHORITATIVELY restarting:
@@ -1357,7 +1451,7 @@ export function ConnectionGate(): React.ReactElement {
           ? recoveryPollMs(useConnectHostStore.getState().recovery, attemptsLocal)
           : 500,
       )
-      timeoutId = setTimeout(() => { void tick() }, backoff)
+      timeoutId = setTimeout(() => { void runTick() }, backoff)
     }
 
     // 0.40.75: one probe when the tab becomes visible again after a
@@ -1371,7 +1465,7 @@ export function ConnectionGate(): React.ReactElement {
         clearTimeout(timeoutId)
         timeoutId = null
       }
-      void tick()
+      void runTick()
     }
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisibilityChange)
@@ -1389,7 +1483,7 @@ export function ConnectionGate(): React.ReactElement {
             clearTimeout(timeoutId)
             timeoutId = null
           }
-          void tick()
+          void runTick()
         },
         stampFlap: () => {
           if (cancelled) return
@@ -1399,7 +1493,7 @@ export function ConnectionGate(): React.ReactElement {
       })
     }
 
-    void tick()
+    void runTick()
 
     return () => {
       cancelled = true

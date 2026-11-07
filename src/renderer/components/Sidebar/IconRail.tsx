@@ -10,7 +10,7 @@ import { useRemoveWorkspaceDialogStore } from '../../stores/remove-workspace-dia
 import { usePresenceStore, usersForWorkspace } from '../../stores/presence'
 import { presenceDisplayName } from '../Presence/PresenceAvatar'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliPost } from '@/lib/daemon-cli'
+import { addWorkspaceWithIngest } from '@/lib/add-workspace'
 import { showContextMenu } from '../../lib/context-menu'
 import { pickWorkspaceFolder } from '../../lib/pick-workspace-folder'
 import { useConnectHostStore } from '../../stores/connect-host'
@@ -102,7 +102,6 @@ export default function IconRail(): React.JSX.Element {
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const setActiveProject = useProjectsStore((s) => s.setActiveProject)
   const removeProject = useProjectsStore((s) => s.removeProject)
-  const addProject = useProjectsStore((s) => s.addProject)
 
   const expand = useSidebarStore((s) => s.expand)
 
@@ -143,17 +142,12 @@ export default function IconRail(): React.JSX.Element {
     useAddWorkspaceDialogStore.getState().open({
       path: folderPath,
       onConfirm: async ({ seedWiki, seedAgentsMd, fanout }) => {
-        await addProject(folderPath, { seedWiki, seedAgentsMd, fanout })
-        // Trigger the skill write immediately so the user sees the effect
-        // of the migration without having to restart K2.
-        try {
-          await daemonCliPost(primaryScope(), 'agents/run-workspace-ingest', { project_path: folderPath })
-        } catch (err) {
-          console.warn('[add-workspace] run ingest failed:', err)
-        }
+        // The add, then the skill write right away (so the user sees it
+        // without restarting K2). The ingest is best-effort and not awaited.
+        await addWorkspaceWithIngest(folderPath, { seedWiki, seedAgentsMd, fanout })
       },
     })
-  }, [addProject])
+  }, [])
 
   const handleProjectClick = useCallback(
     (projectId: string) => {

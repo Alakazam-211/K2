@@ -2,18 +2,21 @@
 //
 // All three session-events factories (workspace / active-state / tab-events)
 // share ONE 2000ms debounce surface so a multi-bus blip doesn't thrash the
-// banner. On fire: stamp flap once, setRecovery(reconnecting), and
-// forceSoftHealthProbe() so a healthy host soft-accepts immediately rather
-// than waiting up to 25s for the next scheduled tick.
+// banner. On fire: stamp flap once and report the drop as failure evidence
+// (0.46.10, probe-first): the gate probes now; a healthy host stays
+// 'connected' (no banner, no cliFetch gate, no soft-resync teardown), a
+// failed probe plus this evidence reaches the drop threshold at once, so a
+// dead host still shows the banner right after the debounce. (Before
+// 0.46.10 this set 'reconnecting' first and probed after, so every events
+// blip on a healthy host flipped the whole window into recovery.)
 //
 // D4b: if any bus reopens healthy before the debounce fires (and recovery
 // stayed connected), cancel the debounce and emit soft-resync('events-reopen')
 // so half-open grids still repaint without a recovery flip.
 
-import { deriveRecovery } from '@/lib/remote-recovery'
 import {
   clearR1FlapEpisode,
-  forceSoftHealthProbe,
+  reportRemoteFailure,
   stampRemoteReconnectFlap,
 } from '@/lib/connection-gate-probe'
 import { emitSoftResync } from '@/lib/soft-resync'
@@ -40,19 +43,14 @@ function onDebounceFire(): void {
 
   // Always-on prod breadcrumb (main debounce-fire path).
   // eslint-disable-next-line no-console
-  console.warn('[remote-ws-drop] events debounce fire → recovery reconnecting')
+  console.warn('[remote-ws-drop] events debounce fire → probing host')
 
   // D9: one flap stamp per R1 episode (soft-poll fail skips if already set).
+  // Kept on a healthy probe too: GH#57's WS thrash must still arm the flap
+  // detector (arbiter → reload) even when /boot-status answers.
   stampRemoteReconnectFlap()
-  s.setRecovery(
-    deriveRecovery({
-      bootStatus: { reachable: false },
-      auth: 'unknown',
-    }),
-  )
-  // D2b: never bare setRecovery(reconnecting) — probe immediately so a
-  // false blip soft-accepts without waiting for the 25s health cadence.
-  forceSoftHealthProbe()
+  // Probe-first: evidence + an immediate probe. The gate owns the verdict.
+  reportRemoteFailure()
 }
 
 /**

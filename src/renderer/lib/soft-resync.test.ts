@@ -23,6 +23,9 @@ import {
   stampRemoteReconnectFlap,
   wasR1FlapStampedThisEpisode,
   clearR1FlapEpisode,
+  hasRemoteFailureEvidenceForTests,
+  reportRemoteFailure,
+  takeRemoteFailureEvidence,
 } from './connection-gate-probe'
 import { useConnectHostStore } from '@/stores/connect-host'
 
@@ -174,6 +177,21 @@ describe('connection-gate-probe registration', () => {
     expect(forceProbe).toHaveBeenCalledTimes(1)
   })
 
+  it('reportRemoteFailure: evidence + one probe; take reads and clears; a new gate run drops stale evidence', () => {
+    const forceProbe = vi.fn()
+    registerRemoteHealthControls({ forceProbe, stampFlap: vi.fn() })
+    reportRemoteFailure()
+    reportRemoteFailure()
+    expect(forceProbe).toHaveBeenCalledTimes(1)
+    expect(takeRemoteFailureEvidence()).toBe(true)
+    expect(takeRemoteFailureEvidence()).toBe(false)
+
+    reportRemoteFailure()
+    expect(hasRemoteFailureEvidenceForTests()).toBe(true)
+    registerRemoteHealthControls({ forceProbe: vi.fn(), stampFlap: vi.fn() })
+    expect(hasRemoteFailureEvidenceForTests()).toBe(false)
+  })
+
   it('stampRemoteReconnectFlap stamps once per episode', () => {
     const stampFlap = vi.fn()
     registerRemoteHealthControls({ forceProbe: vi.fn(), stampFlap })
@@ -217,6 +235,7 @@ describe('R1 remote events drop debounce', () => {
     resetRemoteEventsDropState()
     resetSoftResyncBus()
     registerRemoteHealthControls(null)
+    __resetForceProbeLatchForTests()
     useConnectHostStore.setState({
       activeHost: 'local',
       recovery: { kind: 'connected' },
@@ -231,7 +250,7 @@ describe('R1 remote events drop debounce', () => {
     expect(hadRemoteEventsPriorClose()).toBe(false)
   })
 
-  it('fire → reconnecting + force probe + flap stamp', () => {
+  it('fire → probe-first: stays connected, reports evidence, forces a probe, stamps flap (0.46.10)', () => {
     const forceProbe = vi.fn()
     const stampFlap = vi.fn()
     registerRemoteHealthControls({ forceProbe, stampFlap })
@@ -246,10 +265,9 @@ describe('R1 remote events drop debounce', () => {
     expect(forceProbe).not.toHaveBeenCalled()
 
     vi.advanceTimersByTime(1)
-    expect(useConnectHostStore.getState().recovery).toEqual({
-      kind: 'reconnecting',
-      bootPhase: null,
-    })
+    // The gate's probe decides; the drop alone never flips recovery.
+    expect(useConnectHostStore.getState().recovery).toEqual({ kind: 'connected' })
+    expect(hasRemoteFailureEvidenceForTests()).toBe(true)
     expect(forceProbe).toHaveBeenCalledTimes(1)
     expect(stampFlap).toHaveBeenCalledTimes(1)
     expect(wasR1FlapStampedThisEpisode()).toBe(true)
@@ -307,7 +325,8 @@ describe('R1 remote events drop debounce', () => {
     noteRemoteEventsClosed()
     vi.advanceTimersByTime(REMOTE_EVENTS_DROP_DEBOUNCE_MS)
     expect(forceProbe).toHaveBeenCalledTimes(1)
-    expect(useConnectHostStore.getState().recovery.kind).toBe('reconnecting')
+    expect(useConnectHostStore.getState().recovery.kind).toBe('connected')
+    expect(hasRemoteFailureEvidenceForTests()).toBe(true)
   })
 
   it('resetRemoteEventsDropState clears debounce and prior close', () => {

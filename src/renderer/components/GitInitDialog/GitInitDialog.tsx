@@ -1,12 +1,10 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useGitInitDialogStore } from '../../stores/git-init-dialog'
-import { useProjectsStore } from '../../stores/projects'
-import { useTabsStore, ensurePinnedAgentTabForMode } from '../../stores/tabs'
-import { useFocusGroupsStore } from '../../stores/focus-groups'
-import { emit } from '@tauri-apps/api/event'
+import { revealAddedProject } from '../../stores/projects'
+import { runWorkspaceIngestBestEffort } from '@/lib/add-workspace'
 // Plan B — project add / focus-group assign are host-aware daemon data:
-// route through the `/cli/*` HTTP layer and re-emit the same cross-window
-// `sync:projects` / `sync:focus-groups` events the old Tauri shims fired.
+// route through the `/cli/*` HTTP layer; `revealAddedProject` re-emits the
+// cross-window `sync:projects` / `sync:focus-groups` events.
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { Callout, DialogScrim } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
@@ -26,82 +24,27 @@ export default function GitInitDialog(): React.JSX.Element | null {
   const setIsPending = useGitInitDialogStore((s) => s.setIsPending)
   const setError = useGitInitDialogStore((s) => s.setError)
 
-  const fetchProjects = useProjectsStore((s) => s.fetchProjects)
-
   const [branchName, setBranchName] = useState('main')
-  // Capture project IDs before the dialog action so we can find the new one
-  const prevIdsRef = useRef<Set<string>>(new Set())
 
-  // Reset branch name and capture current project IDs when dialog opens
+  // Reset branch name when dialog opens
   useEffect(() => {
-    if (isOpen) {
-      setBranchName('main')
-      prevIdsRef.current = new Set(useProjectsStore.getState().projects.map((p) => p.id))
-    }
+    if (isOpen) setBranchName('main')
   }, [isOpen])
 
-  const selectNewProject = useCallback(async () => {
-    // Stash current workspace before switching
-    const preState = useProjectsStore.getState()
-    const tabsStore = useTabsStore.getState()
-    if (preState.activeProjectId && preState.activeWorkspaceId) {
-      tabsStore.stashWorkspace(`${preState.activeProjectId}:${preState.activeWorkspaceId}`)
-    } else if (useTabsStore.getState().tabs.length > 0) {
-      tabsStore.clearAllTabs()
-    }
-
-    await fetchProjects()
-
-    const state = useProjectsStore.getState()
-    // Find the new project by comparing before/after IDs
-    const newProject = state.projects.find((p) => !prevIdsRef.current.has(p.id))
-      ?? state.projects[state.projects.length - 1]
-
-    if (newProject) {
-      // Assign to active focus group
-      const focusState = useFocusGroupsStore.getState()
-      const targetGroupId = focusState.focusGroupsEnabled ? focusState.activeFocusGroupId : null
-      if (targetGroupId) {
-        try {
-          await daemonCliPost(primaryScope(), 'focus-groups/assign', { projectId: newProject.id, focusGroupId: targetGroupId })
-          // assign emitted BOTH sync:focus-groups and sync:projects.
-          void emit('sync:focus-groups').catch(() => {})
-          void emit('sync:projects').catch(() => {})
-          useProjectsStore.setState({
-            projects: useProjectsStore.getState().projects.map((p) =>
-              p.id === newProject.id ? { ...p, focusGroupId: targetGroupId } : p
-            )
-          })
-        } catch { /* non-fatal */ }
-      }
-
-      const newWorkspaceId = newProject.workspaces[0]?.id ?? null
-      useProjectsStore.setState({
-        activeProjectId: newProject.id,
-        activeWorkspaceId: newWorkspaceId
-      })
-
-      if (newWorkspaceId) {
-        const cwd = newProject.workspaces[0]?.worktreePath ?? newProject.path ?? '~'
-        const newKey = `${newProject.id}:${newWorkspaceId}`
-        // #681 (Bug A) — await restoreWorkspace, then ensure the pinned
-        // Chat + Inbox tabs (this git-init-open path previously created no
-        // pinned tabs at all, so a freshly git-init'd workspace opened
-        // with neither surface visible). Mirrors addProject.
-        await useTabsStore.getState().restoreWorkspace(newKey, cwd)
-        ensurePinnedAgentTabForMode(newProject.agentMode, newProject.path)
-      } else {
-        useTabsStore.getState().clearAllTabs()
-      }
-    }
-  }, [fetchProjects])
+  // 0.46.10: show and select the workspace the daemon just added (its own
+  // answer, inserted optimistically if the list read fails), then start the
+  // skill write. The ingest is best-effort and not awaited.
+  const showAdded = useCallback(async (added: unknown) => {
+    const project = await revealAddedProject(added)
+    if (project) void runWorkspaceIngestBestEffort(project.path)
+  }, [])
 
   // Initialize git and open
   const handleInitGit = useCallback(async () => {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost(primaryScope(), 'projects/init-git-and-open', {
+      const added = await daemonCliPost<unknown>(primaryScope(), 'projects/init-git-and-open', {
         path,
         // Trimmed here; the daemon trims and checks the name too (0.46.4).
         branch: branchName.trim(),
@@ -109,27 +52,25 @@ export default function GitInitDialog(): React.JSX.Element | null {
         seedAgentsMd,
         fanout,
       })
-      void emit('sync:projects').catch(() => {})
       close()
-      await selectNewProject()
+      await showAdded(added)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [path, branchName, seedWiki, seedAgentsMd, fanout, close, selectNewProject, setIsPending, setError])
+  }, [path, branchName, seedWiki, seedAgentsMd, fanout, close, showAdded, setIsPending, setError])
 
   // Open without git
   const handleOpenWithoutGit = useCallback(async () => {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost(primaryScope(), 'projects/add-without-git', { path, seedWiki, seedAgentsMd, fanout })
-      void emit('sync:projects').catch(() => {})
+      const added = await daemonCliPost<unknown>(primaryScope(), 'projects/add-without-git', { path, seedWiki, seedAgentsMd, fanout })
       close()
-      await selectNewProject()
+      await showAdded(added)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [path, seedWiki, seedAgentsMd, fanout, close, selectNewProject, setIsPending, setError])
+  }, [path, seedWiki, seedAgentsMd, fanout, close, showAdded, setIsPending, setError])
 
   // Close on Escape
   useEffect(() => {

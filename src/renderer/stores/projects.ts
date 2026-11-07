@@ -357,7 +357,9 @@ interface ProjectsState {
   activeWorkspaceId: string | null
 
   fetchProjects: () => Promise<void>
-  addProject: (path: string, opts?: { seedWiki?: boolean; seedAgentsMd?: boolean; fanout?: boolean }) => Promise<void>
+  /** Resolves to the added workspace (shown and active), or `null` when the
+   *  folder needs git first (the git-init dialog took over; nothing added). */
+  addProject: (path: string, opts?: { seedWiki?: boolean; seedAgentsMd?: boolean; fanout?: boolean }) => Promise<ProjectWithWorkspaces | null>
   removeProject: (id: string) => Promise<void>
   /** `afterShown` runs once the project's workspace is showing (its tabs
    *  restored), e.g. to open a file tab in it (a Thread file link from
@@ -592,79 +594,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           seedAgentsMd,
           fanout,
         )
-        return
+        return null
       }
 
-      // The result IS the Project object — extract its ID for reliable lookup
-      const newProjectId = (result as any)?.id as string | undefined
-
-      // Stash the workspace we're leaving BEFORE fetchProjects changes active IDs
-      const preState = get()
-      const tabsStore = useTabsStore.getState()
-
-      if (preState.activeProjectId && preState.activeWorkspaceId) {
-        tabsStore.stashWorkspace(`${preState.activeProjectId}:${preState.activeWorkspaceId}`)
-      } else if (useTabsStore.getState().tabs.length > 0) {
-        tabsStore.clearAllTabs()
-      }
-
-      // Mirror the old Tauri `projects_add_from_path` Rust-side
-      // `sync:projects` emit so other windows pick up the new project.
-      emitProjectsChanged()
-
-      await get().fetchProjects()
-
-      const state = get()
-      // Find the new project by its ID from the backend result
-      const newProject = newProjectId
-        ? state.projects.find((p) => p.id === newProjectId)
-        : state.projects[state.projects.length - 1]
-
-      if (newProject) {
-        // Assign to the active focus group so it's visible in the current view
-        const focusState = useFocusGroupsStore.getState()
-        const targetGroupId = focusState.focusGroupsEnabled ? focusState.activeFocusGroupId : null
-        if (targetGroupId) {
-          try {
-            await daemonCliPost(primaryScope(), 'focus-groups/assign', { projectId: newProject.id, focusGroupId: targetGroupId })
-            // The old Tauri `focus_groups_assign_project` emitted BOTH
-            // `sync:focus-groups` and `sync:projects` (the project's
-            // focusGroupId changed). Mirror both.
-            void emit('sync:focus-groups').catch(() => {})
-            emitProjectsChanged()
-            // Optimistic local update so sidebar shows it immediately
-            set({
-              projects: get().projects.map((p) =>
-                p.id === newProject.id ? { ...p, focusGroupId: targetGroupId } : p
-              )
-            })
-          } catch {
-            // Non-fatal — project was still added
-          }
-        }
-
-        const newWorkspaceId = newProject.workspaces[0]?.id ?? null
-        set({
-          activeProjectId: newProject.id,
-          activeWorkspaceId: newWorkspaceId
-        })
-
-        if (newWorkspaceId) {
-          const cwd = newProject.workspaces[0]?.worktreePath ?? newProject.path ?? '~'
-          const newKey = `${newProject.id}:${newWorkspaceId}`
-          // #681 (Bug A) — AWAIT restoreWorkspace before ensuring the
-          // pinned tabs (mirrors the #658 cold-boot ordering). For a
-          // brand-new workspace restoreWorkspace falls through to the slow
-          // path → loadLayoutForWorkspace clears tabs + sets the workspace
-          // key; awaiting guarantees ensurePinnedAgentTabForMode then
-          // creates the Chat + Inbox tabs (Chat active) deterministically,
-          // so they show on first open instead of only after a switch-away.
-          await tabsStore.restoreWorkspace(newKey, cwd)
-          ensurePinnedAgentTabForMode(newProject.agentMode, newProject.path)
-        } else {
-          tabsStore.clearAllTabs()
-        }
-      }
+      // The result IS the Project object: show it (canonical list, or the
+      // returned row if the list read fails) and make it active.
+      const added = await revealAddedProject(result)
 
       useToastStore.getState().addToast('Workspace added', 'success')
 
@@ -672,6 +607,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // inline by AddWorkspaceDialog before this fn runs — the user
       // has already picked one of the three options by the time
       // addProject is called. No follow-up modal needed.
+      return added
     } catch (err) {
       console.error('[projects] addProject failed:', err)
       const message =
@@ -1153,3 +1089,113 @@ onActiveHostChange(() => {
   })
   void useProjectsStore.getState().fetchProjects()
 })
+
+/** The row the daemon returned for a just-added workspace, with its
+ *  workspaces read on their own (best-effort: `[]` if that read fails too). */
+async function addedProjectRow(project: Project): Promise<ProjectWithWorkspaces> {
+  let workspaces: Workspace[] = []
+  try {
+    const ws = await daemonCliGet<Workspace[]>(primaryScope(), 'workspaces/list', { project_id: project.id })
+    if (Array.isArray(ws)) workspaces = ws
+  } catch (err) {
+    console.warn('[projects] added workspace: workspaces/list failed (shown without one for now):', err)
+  }
+  return { ...project, workspaces }
+}
+
+/**
+ * Show a workspace the daemon just added and make it active (0.46.10; the
+ * add, git-init and open-without-git paths share it). `added` is the
+ * daemon's answer (the Project row).
+ *
+ * The canonical list is re-read first. If that read fails or races (a remote
+ * blip right after the add: the list read is skipped while the host
+ * recovers), the add still succeeded, so the returned row is inserted
+ * optimistically and selected; the next `projects_changed` sync replaces it
+ * with the canonical row. Before this, a failed read left the new
+ * workspace out of view even though the daemon had it.
+ */
+export async function revealAddedProject(added: unknown): Promise<ProjectWithWorkspaces | null> {
+  const store = useProjectsStore
+  const row = added && typeof added === 'object' ? (added as Partial<Project>) : null
+  const newProjectId = typeof row?.id === 'string' && row.id !== '' ? row.id : undefined
+  const hostKeyAtStart = activeHostKey(useConnectHostStore.getState().activeHost)
+  const hostUnchanged = (): boolean =>
+    activeHostKey(useConnectHostStore.getState().activeHost) === hostKeyAtStart
+
+  // Stash the workspace we're leaving BEFORE fetchProjects changes active IDs
+  const preState = store.getState()
+  const tabsStore = useTabsStore.getState()
+  if (preState.activeProjectId && preState.activeWorkspaceId) {
+    tabsStore.stashWorkspace(`${preState.activeProjectId}:${preState.activeWorkspaceId}`)
+  } else if (useTabsStore.getState().tabs.length > 0) {
+    tabsStore.clearAllTabs()
+  }
+
+  // Mirror the old Tauri `projects_add_from_path` Rust-side
+  // `sync:projects` emit so other windows pick up the new project.
+  emitProjectsChanged()
+
+  await store.getState().fetchProjects()
+  if (!hostUnchanged()) return null
+
+  let newProject: ProjectWithWorkspaces | undefined = newProjectId
+    ? store.getState().projects.find((p) => p.id === newProjectId)
+    : store.getState().projects[store.getState().projects.length - 1]
+
+  if (!newProject && newProjectId && row) {
+    newProject = await addedProjectRow(row as Project)
+    if (!hostUnchanged()) return null
+    const inserted = newProject
+    store.setState({
+      projects: [...store.getState().projects.filter((p) => p.id !== inserted.id), inserted],
+    })
+  }
+  if (!newProject) return null
+
+  // Assign to the active focus group so it's visible in the current view
+  const focusState = useFocusGroupsStore.getState()
+  const targetGroupId = focusState.focusGroupsEnabled ? focusState.activeFocusGroupId : null
+  if (targetGroupId) {
+    try {
+      await daemonCliPost(primaryScope(), 'focus-groups/assign', { projectId: newProject.id, focusGroupId: targetGroupId })
+      // The old Tauri `focus_groups_assign_project` emitted BOTH
+      // `sync:focus-groups` and `sync:projects` (the project's
+      // focusGroupId changed). Mirror both.
+      void emit('sync:focus-groups').catch(() => {})
+      emitProjectsChanged()
+      // Optimistic local update so sidebar shows it immediately
+      const assignedId = newProject.id
+      store.setState({
+        projects: store.getState().projects.map((p) =>
+          p.id === assignedId ? { ...p, focusGroupId: targetGroupId } : p
+        )
+      })
+    } catch {
+      // Non-fatal — project was still added
+    }
+  }
+
+  const newWorkspaceId = newProject.workspaces[0]?.id ?? null
+  store.setState({
+    activeProjectId: newProject.id,
+    activeWorkspaceId: newWorkspaceId
+  })
+
+  if (newWorkspaceId) {
+    const cwd = newProject.workspaces[0]?.worktreePath ?? newProject.path ?? '~'
+    const newKey = `${newProject.id}:${newWorkspaceId}`
+    // #681 (Bug A) — AWAIT restoreWorkspace before ensuring the
+    // pinned tabs (mirrors the #658 cold-boot ordering). For a
+    // brand-new workspace restoreWorkspace falls through to the slow
+    // path → loadLayoutForWorkspace clears tabs + sets the workspace
+    // key; awaiting guarantees ensurePinnedAgentTabForMode then
+    // creates the Chat + Inbox tabs (Chat active) deterministically,
+    // so they show on first open instead of only after a switch-away.
+    await tabsStore.restoreWorkspace(newKey, cwd)
+    ensurePinnedAgentTabForMode(newProject.agentMode, newProject.path)
+  } else {
+    tabsStore.clearAllTabs()
+  }
+  return newProject
+}

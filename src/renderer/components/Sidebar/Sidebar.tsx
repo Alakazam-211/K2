@@ -19,6 +19,7 @@ import { emit } from '@tauri-apps/api/event'
 // (open-in-finder/editor, open-focus-window) stay on Tauri `invoke`.
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
+import { addWorkspaceWithIngest } from '@/lib/add-workspace'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -733,7 +734,6 @@ export default function Sidebar(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const removeProject = useProjectsStore((s) => s.removeProject)
-  const addProject = useProjectsStore((s) => s.addProject)
   const fetchProjects = useProjectsStore((s) => s.fetchProjects)
 
   const reorderProjects = useProjectsStore((s) => s.reorderProjects)
@@ -842,15 +842,12 @@ export default function Sidebar(): React.JSX.Element {
     useAddWorkspaceDialogStore.getState().open({
       path: folderPath,
       onConfirm: async ({ seedWiki, seedAgentsMd, fanout }) => {
-        await addProject(folderPath, { seedWiki, seedAgentsMd, fanout })
-        try {
-          await daemonCliPost(primaryScope(), 'agents/run-workspace-ingest', { project_path: folderPath })
-        } catch (err) {
-          console.warn('[add-workspace] run ingest failed:', err)
-        }
+        // The ingest after the add is best-effort and not awaited: a lost
+        // ingest request never aborts the add or hides the new workspace.
+        await addWorkspaceWithIngest(folderPath, { seedWiki, seedAgentsMd, fanout })
       },
     })
-  }, [addProject])
+  }, [])
 
   const handleContextMenu = useCallback(
     async (e: React.MouseEvent, projectId: string) => {

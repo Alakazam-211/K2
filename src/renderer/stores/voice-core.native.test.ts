@@ -254,6 +254,71 @@ describe('native join', () => {
   })
 })
 
+describe('a plugin that still holds an ended call (Sew < 0.8.3)', () => {
+  const BUSY = "K2's call engine is still holding your last call. Try again in a minute, or reload the window (Cmd+R / Ctrl+R) if it keeps happening."
+
+  it('already_in_call with nothing live: says so, plainly, and logs it', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const s = setup({ plugin: { joinError: { code: 'already_in_call', detail: null }, state: { state: 'ended', reason: 'network', participants: [], call_id: null }, call: { target: 'host-1', room: 'room-1' } } })
+    await s.ctl.join(SEW, room1)
+    await settle()
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: BUSY, kind: 'error' })
+    expect(s.toasts).toEqual([BUSY])
+    expect(err).toHaveBeenCalledWith('[voice] join refused: already_in_call with no live call')
+    err.mockRestore()
+  })
+
+  it('already_in_call with a live call: that call is shown, no notice', async () => {
+    const s = setup({ plugin: { joinError: { code: 'already_in_call', detail: null }, state: { state: 'reconnecting', attempt: 1, participants: [], call_id: 'r_z' }, call: { target: 'host-1', room: 'room-1' } } })
+    await s.ctl.join(SEW, room1)
+    await settle()
+    expect(s.ctl.store.getState().notice).toBeNull()
+    expect(s.ctl.store.getState().call).toMatchObject({ callId: 'r_z', roomId: 'room-1', phase: 'reconnecting' })
+  })
+
+  it('a call that ended as it was joined says why', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = setup({ plugin: { state: { state: 'ended', reason: 'removed_by_moderator', participants: [], call_id: null } } })
+    await s.ctl.join(SEW, room1)
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: 'You were removed from Standup.', kind: 'error' })
+    expect(warn).toHaveBeenCalledWith('[voice] the call ended as it was joined: removed_by_moderator')
+    warn.mockRestore()
+  })
+
+  it('a call that ended as it was joined because they left says nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = setup({ plugin: { state: { state: 'ended', reason: 'left', participants: [], call_id: null } } })
+    await s.ctl.join(SEW, room1)
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice).toBeNull()
+    warn.mockRestore()
+  })
+})
+
+describe('every headset button unmounted during a native call', () => {
+  it('nothing leaves; ending it then leaves through the plugin, never /cli/voice/leave', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = await inCall()
+    const stop = s.ctl.start()
+    await settle()
+    stop()
+    await settle()
+    expect(s.calls.filter(([c]) => c === `${P}leave`)).toEqual([])
+    expect(s.ctl.store.getState().call?.callId).toBe('r_x')
+    expect(s.ctl.store.getState().engineKind).toBe('seat')
+    // Signed out on the call's server while no button is mounted.
+    s.authFns.forEach((fn) => fn(SEW, 'signin-required'))
+    await settle()
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.api.leave).not.toHaveBeenCalled()
+    expect(s.calls.filter(([c]) => c === `${P}leave`)).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith('[voice] ending a native call (signed_out) with no engine attached: leaving through the plugin, not /cli/voice/leave')
+    warn.mockRestore()
+  })
+})
+
 describe('microphone', () => {
   it('denied still joins: the call is up, they see why they are muted, and nothing opens until they click', async () => {
     const s = setup()

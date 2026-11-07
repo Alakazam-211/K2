@@ -222,6 +222,7 @@ export type VoiceErrorCode =
   | 'join_timeout'
   | 'owner_token_cannot_join'
   | 'recorded_room'
+  | 'engine_busy'
   | 'unknown'
 
 const CODE_OF: Readonly<Record<string, VoiceErrorCode>> = {
@@ -315,6 +316,9 @@ export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabe
       return `Sign in to ${serverLabel} with your own login to join.`
     case 'recorded_room':
       return recordedRoomJoinText(roomName)
+    case 'engine_busy':
+      // The plugin still holds a call that already ended (Sew < 0.8.3).
+      return "K2's call engine is still holding your last call. Try again in a minute, or reload the window (Cmd+R / Ctrl+R) if it keeps happening."
     case 'unknown':
       return hint ? `Couldn't join ${roomName} on ${serverLabel}: ${hint}` : `Couldn't join ${roomName} on ${serverLabel}.`
   }

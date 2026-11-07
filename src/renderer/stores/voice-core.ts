@@ -46,6 +46,7 @@ import {
   type NativeLevel,
   type NativeParticipant,
   type NativeRecording,
+  type NativeSnapshot,
   type NativeVoiceEngine,
 } from '@/lib/voice/native-voice-engine'
 import type { VoiceDevices } from '@/lib/voice/voice-engine'
@@ -229,6 +230,10 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   /** This window is inside `native.join`: its answer explains a failure, so the
    *  `ended` and `errors` events of that failure stay quiet here. */
   let nativeJoining = false
+  /** The call in the store came from the native engine (joined or adopted).
+   *  It stays true while every headset button is unmounted (`native` is null
+   *  then), so such a call never takes the seat path's `/cli/voice/leave`. */
+  let nativeCall = false
   /** The engine's own list and levels; `participants` is drawn from them. */
   let nativePeople: NativeParticipant[] = []
   let nativeSpeaking = new Set<string>()
@@ -305,7 +310,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
    *  counts, since a stale one shows nobody. */
   const checkSeat = (hostKey: string, list: VoiceRoomsList): void => {
     const c = store.getState().call
-    if (native || !c || c.phase !== 'connected' || canon(c.hostKey) !== canon(hostKey) || !list.feedLive) return
+    if (native || nativeCall || !c || c.phase !== 'connected' || canon(c.hostKey) !== canon(hostKey) || !list.feedLive) return
     if (c.connectedAt === null || deps.now() - c.connectedAt < VOICE_SEAT_GRACE_MS) return
     const names = deps.selfNames(hostKey).map((n) => n.toLowerCase())
     if (names.length === 0) return
@@ -407,7 +412,21 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     engine = null
     store.setState({ call: null })
     if (opts.toast) {
-      notice(callEndedText(reason, call.roomName, call.serverLabel, native !== null), reason === 'left' ? 'info' : 'error')
+      notice(callEndedText(reason, call.roomName, call.serverLabel, native !== null || nativeCall), reason === 'left' ? 'info' : 'error')
+    }
+    if (!native && nativeCall) {
+      // A native call while this window has no engine attached (every headset
+      // button unmounted). The seat path's leave isn't this call's: the plugin
+      // leaves, with the call credential.
+      console.warn(`[voice] ending a native call (${reason}) with no engine attached: leaving through the plugin, not /cli/voice/leave`)
+      clearNativeCall()
+      const n = await (deps.loadNative?.() ?? Promise.resolve(null)).catch((err: unknown) => {
+        console.warn('[voice] loading the native engine to leave failed:', err)
+        return null
+      })
+      if (n) await n.leave().catch((err: unknown) => console.warn('[voice] leave failed:', err))
+      void refreshRooms(call.hostKey)
+      return
     }
     if (native) {
       // The engine tells Sew itself, with the call credential.
@@ -512,6 +531,12 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (known) store.setState({ call: { ...c, roomId: known.id, roomName: known.name } })
   }
 
+  /** The plugin holds a call that's up, on a server and room it names. */
+  const isLiveSnapshot = (snap: NativeSnapshot): boolean => {
+    const phase = snap.state.state
+    return Boolean(snap.target && snap.room) && (phase === 'connecting' || phase === 'connected' || phase === 'reconnecting')
+  }
+
   /** A call this window didn't start: another window's, or one from before a
    *  reload. The engine and K2's Rust side say what it is. */
   const adoptNativeCall = async (): Promise<void> => {
@@ -533,6 +558,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     nativePeople = snap.participants
     const self = snap.participants.find((p) => p.isSelf)
     callGen += 1
+    nativeCall = true
     store.setState({
       call: {
         hostKey,
@@ -559,7 +585,10 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (s.state === 'idle') return
     if (s.state === 'ended') {
       // This window's own failed join is explained by the join's answer.
-      if (nativeJoining) return
+      if (nativeJoining) {
+        console.warn(`[voice] dropped while joining: ended (${s.reason})`)
+        return
+      }
       const c = store.getState().call
       if (!c) return
       callGen += 1
@@ -626,7 +655,10 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       return
     }
     // A failed join says this itself; with no call there's nothing to explain.
-    if (nativeJoining || !c) return
+    if (nativeJoining || !c) {
+      console.warn(`[voice] dropped engine error ${code}: ${nativeJoining ? 'a join is in flight' : 'no call'}`)
+      return
+    }
     const text = engineErrorText(code, c.serverLabel)
     if (text) notice(text.line, text.kind)
     else console.warn(`[voice] engine says: ${code}`)
@@ -693,6 +725,31 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     return nativeLoad
   }
 
+  /** The plugin refused the join: it holds a call. Another window's live call is
+   *  shown. A call that already ended but that the plugin still holds (Sew
+   *  < 0.8.3, e.g. after the lid closed on a call) can't be left from here, so
+   *  say so instead of doing nothing. */
+  const settleAlreadyInCall = async (gen: number, room: VoiceRoom, label: string, hostKey: string): Promise<void> => {
+    const n = native
+    const snap = n
+      ? await n.snapshot().catch((err: unknown) => {
+          console.warn('[voice] reading the live call failed:', err)
+          return null
+        })
+      : null
+    if (gen !== callGen) return
+    if (snap && isLiveSnapshot(snap)) {
+      // Another window got there first: show that call.
+      store.setState({ call: null })
+      callGen += 1
+      await adoptNativeCall().catch((failure: unknown) => console.warn('[voice] reading the live call failed:', failure))
+      return
+    }
+    console.error('[voice] join refused: already_in_call with no live call')
+    failJoin(gen, 'engine_busy', room, label)
+    void refreshRooms(hostKey)
+  }
+
   const failNativeJoin = (gen: number, err: unknown, room: VoiceRoom, label: string, hostKey: string): void => {
     if (gen !== callGen) return
     const e = err instanceof NativeVoiceError ? err : new NativeVoiceError('failed', err instanceof Error ? err.message : String(err))
@@ -705,11 +762,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       return
     }
     if (e.code === 'already_in_call') {
-      // Another window got there first: show that call.
-      store.setState({ call: null })
-      callGen += 1
       nativeJoining = false
-      void adoptNativeCall().catch((failure: unknown) => console.warn('[voice] reading the live call failed:', failure))
+      void settleAlreadyInCall(gen, room, label, hostKey)
       return
     }
     const detail = e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null
@@ -725,6 +779,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     const label = deps.labelOf(hostKey)
     const prefs = store.getState().prefs
     clearNativeCall()
+    nativeCall = true
     store.setState({
       notice: null,
       call: {
@@ -760,14 +815,18 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       }
       const { callId } = await n.join({ target, room: room.id, muted: prefs.joinMuted })
       if (gen !== callGen) return
-      const phase = (await n.snapshot()).state.state
+      const after = (await n.snapshot()).state
+      const phase = after.state
       if (gen !== callGen) return
       const c = store.getState().call
       if (!c) return
-      if (phase === 'ended') {
+      if (after.state === 'ended') {
+        // Ended as it was joined: its reason is the only word on why.
+        console.warn(`[voice] the call ended as it was joined: ${after.reason}`)
         store.setState({ call: null })
         callGen += 1
         clearNativeCall()
+        if (after.reason !== 'left') notice(callEndedText(after.reason, c.roomName, c.serverLabel, true), 'error')
         void refreshRooms(hostKey)
         return
       }
@@ -805,6 +864,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (current) await endCall(callGen, 'left', { tellServer: true, toast: false })
     const gen = ++callGen
     seatMisses = 0
+    nativeCall = false
     const label = deps.labelOf(hostKey)
     const prefs = store.getState().prefs
     store.setState({
@@ -892,7 +952,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const sendSelf = (): void => {
     const c = store.getState().call
     // The native engine sends Sew's self state itself.
-    if (!c?.callId || native) return
+    if (!c?.callId || native || nativeCall) return
     void deps.api.selfState(deps.scopeFor(c.hostKey), c.callId, c.muted, c.deafened).catch((err: unknown) => {
       console.warn('[voice] self state failed:', err)
     })

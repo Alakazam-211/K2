@@ -17,6 +17,10 @@ import { MIC_DENIED_LINE, hostingStateText, isLaneReconnecting, micBlockedText, 
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
 import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
+
+/** While a join runs, another Join (and "Leave and join") would leave it
+ *  half way, so they wait. */
+const JOINING_WAIT = 'Joining… wait a moment'
 import { video } from '@/stores/video'
 import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
@@ -187,6 +191,7 @@ function RoomRow({
   onJoin: (room: VoiceRoom) => void
 }): React.JSX.Element {
   const here = call !== null && call.hostKey === server.hostKey && call.roomId === room.id
+  const joining = call?.phase === 'joining'
   const state = roomStateText(room, Date.now())
   return (
     <li data-testid="voice-room" data-room={room.id} className="flex items-center gap-2 py-1">
@@ -207,7 +212,14 @@ function RoomRow({
       {here ? (
         <span className="text-[11px] text-[var(--color-accent)]">You're here</span>
       ) : state === null ? (
-        <button type="button" data-testid="voice-join" className={SMALL_BTN} onClick={() => onJoin(room)}>
+        <button
+          type="button"
+          data-testid="voice-join"
+          className={SMALL_BTN}
+          disabled={joining}
+          title={joining ? JOINING_WAIT : undefined}
+          onClick={() => onJoin(room)}
+        >
           Join
         </button>
       ) : (
@@ -410,6 +422,8 @@ export default function VoicePopover({
               type="button"
               data-testid="voice-confirm-join"
               className={SMALL_BTN}
+              disabled={call?.phase === 'joining'}
+              title={call?.phase === 'joining' ? JOINING_WAIT : undefined}
               onClick={() => {
                 const c = confirm
                 setConfirm(null)

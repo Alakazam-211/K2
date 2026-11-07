@@ -352,6 +352,31 @@ describe('VoiceButton', () => {
     await waitFor(() => expect(voice.store.getState().call?.roomId).toBe('room-2'))
   })
 
+  it('while a join runs, Join and "Leave and join" wait', async () => {
+    h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
+    h.lists = { 'sewlab.k2.dev': sewList }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getAllByTestId('voice-join')).toHaveLength(2))
+    fireEvent.click(screen.getAllByTestId('voice-join')[0])
+    await waitFor(() => expect(screen.getByTestId('voice-call').getAttribute('data-phase')).toBe('connected'))
+    fireEvent.click(screen.getByTestId('voice-join'))
+    expect(screen.getByTestId('voice-confirm').textContent).toContain('Leave Standup and join Room 2?')
+    // The call goes back to joining (as a join in flight shows it).
+    const c = voice.store.getState().call
+    if (!c) throw new Error('the call should be up')
+    act(() => voice.store.setState({ call: { ...c, phase: 'joining' } }))
+    const join = screen.getByTestId('voice-join') as HTMLButtonElement
+    const confirmJoin = screen.getByTestId('voice-confirm-join') as HTMLButtonElement
+    expect(join.disabled).toBe(true)
+    expect(join.title).toBe('Joining… wait a moment')
+    expect(confirmJoin.disabled).toBe(true)
+    expect(confirmJoin.title).toBe('Joining… wait a moment')
+    fireEvent.click(confirmJoin)
+    expect(voice.store.getState().call?.roomId).toBe('room-1')
+  })
+
   it('a full, closing or unavailable room offers no Join', async () => {
     h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
     h.lists = {

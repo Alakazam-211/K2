@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.4 (2026-11-07)
+
+Pairs with kit v0.12.0 (`178b449e`, the public cut). The bridge's lock moves to it; the pack's code doesn't change. The bridge builds and reads no kit `LogEntry` and holds no kit grid, so the kit's breaking change (`LogEntry.body: EntryBody`) and its grid row limit don't reach it.
+
 ## v0.1.3 (2026-11-04)
 
 Pairs with kit v0.11.1 (`d9927a6e`, the public cut). The bridge's lock moves to it; the pack's code doesn't change.

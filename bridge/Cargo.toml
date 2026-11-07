@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-board-bridge"
-version = "0.1.3"
+version = "0.1.4"
 license = "MIT OR Apache-2.0"
 edition = "2021"
 rust-version = "1.80"
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 k2-mpc-board = { path = "../crates/board" }
 # The kit (k2-mpc-base), by path: its checkout sits beside this repo's, as for the other packs.
-# Pinned to the kit's v0.11.1 (d9927a6e): a host vendors the kit at that tag beside this
+# Pinned to the kit's v0.12.0 (178b449e): a host vendors the kit at that tag beside this
 # repo (README). Run `cargo update -p k2-mpc-base` here and commit the lock when it moves.
 k2-mpc-base = { path = "../../k2-mpc-base/crates/base" }
 

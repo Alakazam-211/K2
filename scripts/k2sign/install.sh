@@ -308,7 +308,18 @@ for w in k2sign k2sign-admin; do
     sed "s#@PYTHON@#$PY#" "$HERE/$w" > "$WORK/$w"
     grep -q '@PYTHON@' "$WORK/$w" && die "could not fill in the python path in $w"
 done
-printf '%s\n' "# Public keys pinned by install.sh from $(cd "$TREE" && git -c safe.directory='*' rev-parse HEAD 2>/dev/null || echo 'an unknown commit')." \
+# Git reads the checkout's own config (core.fsmonitor runs a program): never
+# as root; as the release user who owns the checkout (k2-signer review M6).
+if [ "$(id -u)" = 0 ]; then
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        TREE_COMMIT="$(/usr/bin/sudo -n -u "$SUDO_USER" -- /usr/bin/git -C "$TREE" rev-parse HEAD 2>/dev/null || echo 'an unknown commit')"
+    else
+        TREE_COMMIT="an unknown commit (git is not run as root)"
+    fi
+else
+    TREE_COMMIT="$(/usr/bin/git -C "$TREE" rev-parse HEAD 2>/dev/null || echo 'an unknown commit')"
+fi
+printf '%s\n' "# Public keys pinned by install.sh from $TREE_COMMIT." \
     "$PUBKEYS_TEXT" > "$WORK/pubkeys"
 act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$WORK/k2sign" "$LIBEXEC/k2sign"
 act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$WORK/k2sign-admin" "$LIBEXEC/k2sign-admin"

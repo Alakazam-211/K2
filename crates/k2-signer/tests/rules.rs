@@ -652,6 +652,18 @@ fn signer_rules_on_policies() {
     assert!(k2_signer::policy::parse(&text, "acme-desktop").unwrap_err().message().contains("inner_binary"));
     // The file name must be the project.
     assert!(k2_signer::policy::parse(&w.policy_text(TEST_PUB), "other").is_err());
+    // L4: the repo and tag prefix that reach GitHub API paths are a strict charset.
+    for bad in ["acme/desktop?ref=x", "acme/../x", "acme/desk top", "acme/%2e%2e"] {
+        let text = w.policy_text(TEST_PUB).replace("repo = \"acme/desktop\"", &format!("repo = \"{bad}\""));
+        assert!(k2_signer::policy::parse(&text, "acme-desktop").is_err(), "{bad}");
+    }
+    for bad in ["v/../", "v?", "release v"] {
+        let text = w.policy_text(TEST_PUB).replace("tag_prefix = \"v\"", &format!("tag_prefix = \"{bad}\""));
+        let e = k2_signer::policy::parse(&text, "acme-desktop").unwrap_err();
+        assert!(e.message().contains("tag_prefix"), "{bad}: {e}");
+    }
+    let text = w.policy_text(TEST_PUB).replace("tag_prefix = \"v\"", "tag_prefix = \"release-\"");
+    k2_signer::policy::parse(&text, "acme-desktop").unwrap();
     // A key that is not a minisign key.
     let text = w.policy_text("not-a-key");
     assert!(k2_signer::policy::parse(&text, "acme-desktop").unwrap_err().message().contains("keys.updater.public"));

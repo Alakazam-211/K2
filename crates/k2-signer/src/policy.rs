@@ -46,6 +46,21 @@ pub fn parse(text: &str, project: &str) -> R<SignerPolicy> {
 
 /// The signer's own rules on top of the frozen schema (all narrowing).
 pub fn signer_rules(p: &SignerPolicy) -> R<()> {
+    // L4: what reaches GitHub API paths is a strict charset.
+    if let Some(repo) = &p.source.repo {
+        let ok_part = |x: &str| {
+            !x.is_empty() && x.len() <= 100 && x != "." && x != ".." && x.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+        };
+        match repo.split_once('/') {
+            Some((o, r)) if ok_part(o) && ok_part(r) => {}
+            _ => return refused(format!("policy: source.repo {repo:?} is not owner/repo ([A-Za-z0-9._-], 1-100 each)")),
+        }
+    }
+    if let Some(t) = &p.source.tag_prefix {
+        if t.len() > 32 || !t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-') {
+            return refused(format!("policy: source.tag_prefix {t:?} is not [A-Za-z0-9._-], at most 32"));
+        }
+    }
     for (name, a) in &p.assets {
         let b = &p.build[&a.build];
         match a.check {

@@ -14,8 +14,26 @@ Install: `scripts/k2sign/install-k2-signer.sh --binary <build> --expect-sha256 <
 These were accepted at the 2026-11-07 security review. They are not fixed in
 0.46.10:
 
-- **Review findings L2, L4, L5, L7, L8, L11**: noted, not fixed. The review
-  itself has the details.
+- **L2: revocation can lag.** A revocation can take up to
+  `roster_max_age_hours` (default 168, max 720) to reach the signer. Roster
+  marks move only when evidence registers, and a receipt's `roster_seq_seen`
+  is optional.
+- **L5: the shared lock is held during slow work.** It is held while up to
+  1 GiB of stdin is read and during GitHub calls, so a caller who never closes
+  stdin stalls k2sign too. This affects availability only.
+- **L7: marks are kept per owner.** Evidence for project A that carries a
+  newer roster makes project B's already-registered evidence (with the older
+  roster) fail at sign time. It fails safe (B re-registers); this affects
+  availability only.
+- **L8: "one evidence per version" holds one way only.** k2sign doesn't look
+  for k2-signer's v2 evidence (k2-signer refuses a version that has k2sign's
+  S3b evidence). The shared one-sha-per-asset registry still prevents the two
+  from signing different bytes.
+- **L11: GitHub answers are trusted over TLS** with the system trust store,
+  so an installed corporate CA could fake them. The read-only token's scope
+  isn't checked.
+- (L4, `source.repo` / `tag_prefix` reaching GitHub API paths, is fixed: both
+  are checked against a strict charset.)
 - **Baked-in secrets (S9).** The policy's `secret_sha256` is not checked.
   Receipt v2 records nothing about what a build baked in, so evidence that
   uses it only gets a note.

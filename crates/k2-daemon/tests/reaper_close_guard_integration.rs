@@ -313,6 +313,8 @@ impl Drop for Reap {
 /// nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_close_with_tab_close_reason_refuses_empty_respawn() {
+    // A stub HOME: the spawn mints a passport into ~/.k2/hook-sessions.json.
+    let _home = k2_core::test_env::StubHome::new("reaper-close");
     k2_core::db::init_for_tests();
     let agent = uniq_tab_name();
     let _reap = Reap(agent.clone());
@@ -345,6 +347,8 @@ async fn v2_close_with_tab_close_reason_refuses_empty_respawn() {
 /// empty-command respawn alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_close_without_reason_does_not_refuse_empty_respawn() {
+    // A stub HOME: the spawn mints a passport into ~/.k2/hook-sessions.json.
+    let _home = k2_core::test_env::StubHome::new("reaper-close");
     k2_core::db::init_for_tests();
     let agent = uniq_tab_name();
     let _reap = Reap(agent.clone());

@@ -629,6 +629,18 @@ pub const TEST_BUILD: bool = cfg!(any(test, feature = "test-util"));
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_isolation;
 
+/// Test builds: panic when `store` under `~/.k2` isn't in a test's own home
+/// ([`test_isolation::assert_home_isolated_for_store`]). A no-op otherwise,
+/// so a daemon store can call it unconditionally. Active in the daemon
+/// binary a `cargo test` builds too (`test-util` unifies), not in a release.
+#[track_caller]
+pub fn guard_test_store_home(store: &str) {
+    #[cfg(any(test, feature = "test-util"))]
+    test_isolation::assert_home_isolated_for_store(store);
+    #[cfg(not(any(test, feature = "test-util")))]
+    let _ = store;
+}
+
 // Quiet-gate PRD §5.3 (0.45.1): the ONE lock + RAII guards for env
 // mutation in tests (HOME, PATH, SHELL, K2_*). k2-daemon re-uses it.
 #[cfg(any(test, feature = "test-util"))]

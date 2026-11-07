@@ -62,6 +62,47 @@ TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
 # inversion is the agent elevation hole for ID verbs. Empty outside a scoped
 # cell (the UDS arm is then skipped — see cli_send).
 SCOPED_TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+
+# BEGIN_CLI_HEALED_PASSPORT
+# A session's env can't change, so when a daemon restart finds the passport
+# store lost it mints a new passport for this same session into the session's
+# own secrets dir ($K2_SECRETS_DIR/.k2-passport, 0600, written only by the
+# daemon's adoption). Used when it names this session and differs from the
+# env's; never for another session, never for an owner token (no `.`).
+_K2_PASSPORT_REFUSAL="Invalid or missing auth token"
+_K2_PASSPORT_RETRIED=0
+_cli_healed_passport() {
+    local cur="${SCOPED_TOKEN:-}" f="${K2_SECRETS_DIR:-}/.k2-passport" t=""
+    [ -n "${K2_SECRETS_DIR:-}" ] && [[ "$cur" == *.* ]] || return 1
+    [ -f "$f" ] && [ ! -L "$f" ] || return 1
+    IFS= read -r t <"$f" 2>/dev/null || [ -n "$t" ] || return 1
+    [[ "$t" =~ ^[A-Za-z0-9-]+\.[A-Za-z0-9]+$ ]] || return 1
+    [ "$t" != "$cur" ] && [ "${t%%.*}" = "${cur%%.*}" ] || return 1
+    printf '%s' "$t"
+}
+# Switch this run (and any k2 it starts) to the re-minted passport. False when
+# there is none.
+_cli_use_healed_passport() {
+    local t
+    t="$(_cli_healed_passport)" || return 1
+    [ "${TOKEN:-}" = "${SCOPED_TOKEN:-}" ] && TOKEN="$t"
+    SCOPED_TOKEN="$t"
+    export K2_HOOK_TOKEN="$t"
+    if [ -n "${K2SO_HOOK_TOKEN:-}" ]; then export K2SO_HOOK_TOKEN="$t"; fi
+    return 0
+}
+# A call refused its passport, started before the new one was written (the
+# daemon was restarting): true once per shell when there is a new passport to
+# try. A 403 ran no handler, so sending the request again is safe.
+_cli_retry_with_healed_passport() {
+    [ "$_K2_PASSPORT_RETRIED" = 0 ] || return 1
+    [[ "${1:-}" == *"$_K2_PASSPORT_REFUSAL"* ]] || return 1
+    _cli_use_healed_passport || return 1
+    _K2_PASSPORT_RETRIED=1
+}
+_cli_use_healed_passport || true
+# END_CLI_HEALED_PASSPORT
+
 # Disk owner credential (if present). Used only for Open-tool TCP ergonomics
 # and external (non-cell) terminals — never for ID/locked tools when a
 # scoped session marker ($K2_HOOK_SOCK) is present.
@@ -1100,6 +1141,10 @@ cli_request() {
         fi
         break
     done
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_request "$endpoint" "$@"
+        return $?
+    fi
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -1138,6 +1183,10 @@ cli_request_post() {
         cli_request "$endpoint" "$@"
         return $?
     fi
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_request_post "$endpoint" "$@"
+        return $?
+    fi
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -1162,6 +1211,10 @@ cli_request_post_uds() {
         fi
         break
     done
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_request_post_uds "$endpoint" "$@"
+        return $?
+    fi
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -1187,6 +1240,10 @@ cli_post_json() {
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_post_json "$endpoint" "$body"
+        return $?
+    fi
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -1325,6 +1382,10 @@ cli_request_uds() {
         fi
         break
     done
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_request_uds "$endpoint" "$@"
+        return $?
+    fi
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -1466,6 +1527,10 @@ cli_send_json() {
                 -w $'\n%{http_code}' 2>/dev/null)" || out=""
         fi
         if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+            if _cli_retry_with_healed_passport "$out"; then
+                cli_send_json "$method" "$path" "$payload"
+                return $?
+            fi
             _permission_note "$out"
             printf '%s' "$out"
             return 0
@@ -1484,6 +1549,10 @@ cli_send_json() {
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     fi
     out="${out%x}"
+    if _cli_retry_with_healed_passport "$out"; then
+        cli_send_json "$method" "$path" "$payload"
+        return $?
+    fi
     _permission_note "$out"
     printf '%s' "$out"
 }
@@ -1534,6 +1603,10 @@ elif p.get("requestable") is False:
 }
 
 _permission_note() {
+    # A passport refused: the flush checks whether it is really dead.
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        case "${1:-}" in *"Invalid or missing auth token"*) : >"${_K2_PERMISSION_NOTE}.passport" 2>/dev/null ;; esac
+    fi
     case "${1:-}" in *'"permission"'*) ;; *) return 0 ;; esac
     local lines
     lines="$(_permission_closing_lines "$1")" || return 0
@@ -1561,6 +1634,15 @@ _permission_in_body() {
 _permission_note_flush() {
     local rc="${1:-$?}" f
     f="$_K2_PERMISSION_NOTE"
+    # That text also answers a good passport on a route agents can't use, so
+    # ask the daemon about the passport itself (whoami is an agent verb).
+    if [ -f "${f}.passport" ]; then
+        rm -f "${f}.passport" 2>/dev/null || true
+        _cli_use_healed_passport || true
+        if ! _cli_skip_uds && _cli_scoped_token_rejected; then
+            echo "This session's passport isn't valid on this daemon. Restart this tab to get a new one." >&2
+        fi
+    fi
     if [ -f "$f" ]; then
         if [ "$rc" != 0 ]; then
             cat "$f" >&2 2>/dev/null || true

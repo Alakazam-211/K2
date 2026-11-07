@@ -16045,6 +16045,8 @@ mod tests {
 
     #[test]
     fn auth_scope_failure_garbage_token_is_classic_forbidden() {
+        // The garbage passport is looked up in ~/.k2/hook-sessions.json.
+        let _home = crate::test_support::TempHome::new();
         let r = auth_scope_failure(
             "/cli/heartbeat/list-all",
             "token=not-a-real-passport",
@@ -16072,6 +16074,8 @@ mod tests {
 
     #[test]
     fn skin_dual_auth_failure_garbage_token_is_classic_forbidden() {
+        // The garbage passport is looked up in ~/.k2/hook-sessions.json.
+        let _home = crate::test_support::TempHome::new();
         let r = skin_dual_auth_failure("token=not-a-real-passport", None);
         assert_eq!(r.status, "403 Forbidden");
         assert!(

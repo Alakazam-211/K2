@@ -24,8 +24,12 @@ use k2_daemon::test_harness;
 
 static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+/// This binary's lock, under a stub `$HOME` (never the real one: these tests
+/// mint passports into `~/.k2/hook-sessions.json`). The env lock first, then
+/// the module lock (`k2_core::test_env::serial`'s order).
+fn lock() -> (k2_core::test_env::StubHome, std::sync::MutexGuard<'static, ()>) {
+    let home = k2_core::test_env::StubHome::new("grid-emitter");
+    (home, TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 const OWNER_TOKEN: &str = "grid-emitter-owner-token";

@@ -61,6 +61,26 @@ fn scoped_principal_workspace(agent_name: &str, cwd: &str) -> String {
     project_id_for_cwd(cwd).unwrap_or_default()
 }
 
+/// The `agent_address` a v2 spawn stamps into a passport (also the re-mint
+/// at adoption, `ptyd_adopt`). Chat attribution (`[from …]`) reads it, and a
+/// canonical session's `agent_name` is a bare project UUID, so: the human
+/// display name (persona / projects.name / folder basename) when there is
+/// one, else the session key, else the folder name.
+pub(crate) fn passport_agent_address(agent_name: &str, cwd: &str) -> String {
+    let display = k2_core::workspace::display::agent_display_name(cwd);
+    if !display.trim().is_empty() && !is_uuid_shape(display.trim()) {
+        display
+    } else if !agent_name.is_empty() && !is_uuid_shape(agent_name) {
+        agent_name.to_string()
+    } else {
+        Path::new(cwd)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.trim().is_empty() && !is_uuid_shape(s.trim()))
+            .unwrap_or_else(|| "agent".to_string())
+    }
+}
+
 fn project_id_for_cwd(cwd: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -1320,20 +1340,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         // must NOT become the chat label. Mint the human display name
         // (persona / projects.name / folder basename) when we can.
         let workspace_uuid = scoped_principal_workspace(&req.agent_name, &req.cwd);
-        let agent_address = {
-            let display = k2_core::workspace::display::agent_display_name(&req.cwd);
-            if !display.trim().is_empty() && !is_uuid_shape(display.trim()) {
-                display
-            } else if !req.agent_name.is_empty() && !is_uuid_shape(&req.agent_name) {
-                req.agent_name.clone()
-            } else {
-                Path::new(&req.cwd)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .filter(|s| !s.trim().is_empty() && !is_uuid_shape(s.trim()))
-                    .unwrap_or_else(|| "agent".to_string())
-            }
-        };
+        let agent_address = passport_agent_address(&req.agent_name, &req.cwd);
         let principal = crate::session_token::HookPrincipal {
             workspace_uuid: workspace_uuid.clone(),
             agent_address,
@@ -2859,15 +2866,18 @@ mod tests {
     }
 
     /// The one env lock, for a spawn test with no `TempHome` / `StubHome`
-    /// (those hold it already). Held for the whole test. Another test's
+    /// (those hold it already), under a stub `$HOME` outside the temp roots
+    /// (so the folder-trust gate stays off for these `/tmp` folders, as it
+    /// did on the process HOME, and the passport each spawn mints never lands
+    /// in the real `~/.k2`). Held for the whole test. Another test's
     /// `AgentShim` or `EnvVar` sets `K2_TEST_AGENT_SHIM_DIR` for a while,
     /// and in that window the spawn guard looks a program up in the shim
     /// dirs only: an unlocked `sleep` spawn then failed with 500 "agent shim
     /// 'sleep' not found in K2_TEST_AGENT_SHIM_DIR=<another test's home>"
     /// (nightly soak, shuffled runs). Under the lock this test sees the
     /// process's own environment from start to end.
-    fn spawn_env_lock() -> k2_core::test_env::EnvLock {
-        k2_core::test_env::lock()
+    fn spawn_env_lock() -> k2_core::test_env::StubHome {
+        k2_core::test_env::StubHome::new("v2spawn-env")
     }
 
     fn seed_project_row(id: &str, path: &str) {

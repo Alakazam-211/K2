@@ -1019,6 +1019,7 @@ fn quiesce() {
     // in-process session dies with this daemon anyway, so it is killed and
     // the successor resumes it, as before. Kills run in parallel (each has
     // a 100 ms SIGHUP grace).
+    crate::session_token::save_for_next_daemon();
     let sessions = crate::v2_session_map::snapshot();
     let detached = sessions.iter().filter(|(_, s)| crate::daemon_stop::keep_for_next_daemon(s)).count();
     let joins: Vec<_> = sessions

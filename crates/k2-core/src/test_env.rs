@@ -491,6 +491,51 @@ impl Drop for TempHome {
     }
 }
 
+/// A `$HOME` for a test that behaves as a person's home would: OUTSIDE the
+/// OS temp roots, so the temp-HOME spawn belt and the folder-trust gate act
+/// as they do for a person (both treat a temp HOME as a test's), yet never
+/// the real home. Next to the test binary when that dir isn't under a temp
+/// root, else `/var/tmp`. Named `k2-<tag>-home-<uuid>`, which is how the
+/// store-home guard ([`crate::test_isolation::home_is_isolated`]) knows it.
+/// Holds [`lock`]; `.k2/` pre-created; on drop the dir goes and the previous
+/// `$HOME` comes back.
+#[must_use = "HOME is restored when the guard drops"]
+pub struct StubHome {
+    home: PathBuf,
+    _home: EnvVar,
+}
+
+impl StubHome {
+    pub fn new(tag: &str) -> Self {
+        use crate::terminal::agent_spawn_guard::GuardEnv;
+        let lock = lock();
+        let name = format!("k2-{tag}-home-{}", uuid::Uuid::new_v4().simple());
+        let is_temp = |dir: &Path| GuardEnv { home: Some(dir.join(&name)), ..GuardEnv::from_process() }.home_is_temp();
+        let exe = std::env::current_exe().expect("test binary path");
+        let beside = exe.parent().expect("test binary dir").to_path_buf();
+        let base = if !is_temp(&beside) { beside } else { PathBuf::from("/var/tmp") };
+        assert!(!is_temp(&base), "no stub HOME outside the OS temp roots (beside the test binary, /var/tmp); is TMPDIR=/var/tmp?");
+        let home = base.join(name);
+        std::fs::create_dir_all(home.join(".k2")).expect("create stub HOME/.k2");
+        let var = EnvVar::set("HOME", &home);
+        drop(lock);
+        crate::test_isolation::assert_isolated_from_prod();
+        StubHome { home, _home: var }
+    }
+
+    /// The stub `$HOME`.
+    pub fn path(&self) -> &Path {
+        &self.home
+    }
+}
+
+impl Drop for StubHome {
+    fn drop(&mut self) {
+        // Before the fields drop: the lock is still held and HOME still ours.
+        let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
 /// Write an executable script (mode 0755) that a test will exec.
 ///
 /// Never `fs::write` + `chmod` + exec from a multi-threaded test binary on

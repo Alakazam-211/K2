@@ -148,6 +148,12 @@ SOURCE="${{K2_HOOK_SOURCE:-claude}}"
 AGENT_PID="${{K2_HOOK_AGENT_PID:-}}"
 SOCK="${{K2_HOOK_SOCK:-${{K2SO_HOOK_SOCK:-}}}}"
 SCOPED="${{K2_HOOK_TOKEN:-${{K2SO_HOOK_TOKEN:-}}}}"
+# A passport K2 re-minted for this same session (its env one was lost).
+if [ -n "${{K2_SECRETS_DIR:-}}" ] && [ -f "$K2_SECRETS_DIR/.k2-passport" ] && [ ! -L "$K2_SECRETS_DIR/.k2-passport" ]; then
+    HEALED=""
+    IFS= read -r HEALED <"$K2_SECRETS_DIR/.k2-passport" 2>/dev/null
+    [ -n "$HEALED" ] && [ "${{HEALED%%.*}}" = "${{SCOPED%%.*}}" ] && SCOPED="$HEALED"
+fi
 
 # The payload: JSON as $1 (notify-style CLIs) or on stdin. Always drain
 # stdin so the CLI never sees a broken pipe.

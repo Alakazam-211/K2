@@ -2579,6 +2579,8 @@ mod tests {
     /// id and missed).
     #[test]
     fn feedback_poison_sandbox_stamp_on_canonical_id_is_not_session_gone() {
+        // The wake spawns, and a spawn mints into ~/.k2/hook-sessions.json.
+        let _home = k2_core::test_env::StubHome::new("feedback-poison");
         let (name, path) = unique("poison-stamp");
         std::fs::create_dir_all(&path).expect("workspace cwd");
         let project_id = insert_project(&name, &path);

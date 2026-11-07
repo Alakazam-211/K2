@@ -132,6 +132,56 @@ pub fn assert_store_not_in_real_home(path: &Path) {
     );
 }
 
+/// Is `home` a throwaway home a test may write daemon stores under? Not the
+/// real home, and inside a temp root: `temp_dirs` (the system temp dir), or
+/// the short `/tmp` a socket test uses ([`crate::test_env::short_tmp`]), or
+/// a home that holds `TMPDIR` itself (a daemon harness points TMPDIR into
+/// its scratch HOME).
+pub fn home_is_isolated(home: &Path, real_home: Option<&Path>, temp_dirs: &[PathBuf]) -> bool {
+    let canon = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let home = canon(home);
+    if real_home.is_some_and(|r| home == canon(r)) {
+        return false;
+    }
+    temp_dirs.iter().any(|t| {
+        let t = canon(t);
+        home.starts_with(&t) || t.starts_with(&home)
+    }) || is_stub_home(&home)
+}
+
+/// A test's stub home outside the temp roots ([`crate::test_env::StubHome`],
+/// k2-daemon's `stub_home_dir`): `k2-<tag>-home-<32 hex>`.
+fn is_stub_home(home: &Path) -> bool {
+    let Some(name) = home.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(rest) = name.strip_prefix("k2-") else { return false };
+    let Some((_, id)) = rest.rsplit_once("-home-") else { return false };
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The temp roots [`home_is_isolated`] accepts in this process.
+fn temp_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir(), crate::test_env::stable_temp_dir()];
+    if cfg!(unix) {
+        roots.push(PathBuf::from("/tmp"));
+    }
+    roots
+}
+
+/// Panic when `store` (a file under `~/.k2` that live agents depend on) is
+/// about to be read or written in a home that isn't a test's own. 2026-11-07:
+/// a `cargo test` with the real HOME overwrote `hook-sessions.json`, and the
+/// next daemon refused every surviving agent's passport.
+#[track_caller]
+pub fn assert_home_isolated_for_store(store: &str) {
+    let home = crate::paths::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    assert!(
+        home_is_isolated(&home, real_home().as_deref(), &temp_roots()),
+        "prod-isolation guard: a test build reached ~/.k2/{store} in {}, which is not a temp home. \
+         Wrap the test in TempHome / with_temp_home, or give the daemon it spawns a temp HOME.",
+        home.display()
+    );
+}
+
 /// The home the password database lists for this uid (never `$HOME`).
 #[cfg(unix)]
 pub fn real_home() -> Option<PathBuf> {
@@ -176,6 +226,22 @@ mod tests {
             ("PATH", "/bin"),
         ];
         assert_eq!(leaked_vars(vars), vec!["K2SO_PANE_ID".to_string(), "K2_HOOK_SOCK".to_string()]);
+    }
+
+    #[test]
+    fn a_store_home_must_be_a_temp_home_and_not_the_real_one() {
+        let temp = std::env::temp_dir();
+        let roots = vec![temp.clone()];
+        let real = PathBuf::from("/Users/someone");
+        assert!(!home_is_isolated(&real, Some(&real), &roots), "the real home");
+        assert!(!home_is_isolated(Path::new("/var/lib/elsewhere"), Some(&real), &roots), "not a temp home");
+        assert!(home_is_isolated(&temp.join("k2-test-home"), Some(&real), &roots), "under the temp dir");
+        assert!(home_is_isolated(&temp.join("h"), None, &[temp.join("h").join("tmp")]), "TMPDIR inside the home");
+        assert!(!home_is_isolated(&temp, Some(&temp), &roots), "a real home under the temp dir is still real");
+        let stub = PathBuf::from("/var/tmp/k2-v2spawn-home-0123456789abcdef0123456789abcdef");
+        assert!(home_is_isolated(&stub, Some(&real), &roots), "a test's stub home");
+        assert!(!home_is_isolated(Path::new("/var/tmp/k2-v2spawn-home-oops"), Some(&real), &roots), "not a stub name");
+        assert!(!home_is_isolated(Path::new("/home/k2-x-home-0123456789abcdef0123456789abcdef"), Some(Path::new("/home/k2-x-home-0123456789abcdef0123456789abcdef")), &roots), "the real home, whatever its name");
     }
 
     #[test]

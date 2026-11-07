@@ -177,6 +177,7 @@ pub fn on_shutdown() {
                 log_debug!("[daemon] shutdown: ended {n} ptyd agent session(s): {why}");
             }
             ExitPlan::KeepAgents(why) => {
+                crate::session_token::save_for_next_daemon();
                 let n = detach_all();
                 log_debug!("[daemon] shutdown: kept {n} ptyd agent session(s) running for the next daemon: {why}");
             }

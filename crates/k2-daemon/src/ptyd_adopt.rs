@@ -70,6 +70,13 @@ pub struct Report {
     pub ended: usize,
     pub retried_in_background: usize,
     pub skipped: Option<String>,
+    /// Adopted sessions whose passport the store had lost, re-minted into
+    /// their own secrets dirs (their ids).
+    pub passports_reminted: Vec<String>,
+    /// Adopted sessions the store holds no usable passport for, which got
+    /// no new one: (id, why). Their agents' K2 calls are refused until the
+    /// tab restarts.
+    pub passports_unusable: Vec<(String, String)>,
 }
 
 static REPORT: Mutex<Option<Report>> = Mutex::new(None);
@@ -287,6 +294,7 @@ pub fn b1() {
                 r.ended,
                 started.elapsed()
             );
+            say_passport_trouble(&r.passports_reminted, &r.passports_unusable);
         }
     }
 }
@@ -360,6 +368,10 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
     if let Some(started) = meta.get("hb_started_on").filter(|v| !v.is_null()) {
         crate::hb_stale::reseed_after_adoption(&session_id, started);
     }
+    // Before the cell listener serves: this session's passport.
+    if crate::session_token::scoped_hooks_enabled() {
+        heal_passport(&session, &key, meta, late);
+    }
     // P44: the cell listener ptyd held across the restart.
     if crate::session_token::scoped_hooks_enabled() {
         match crate::cell_uds::take_held_cell_listener(owner, &session_id) {
@@ -387,6 +399,68 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
         pending.len(),
         if carried { "carried" } else { "fresh" }
     );
+}
+
+/// A live session the store has no passport for (the store was overwritten,
+/// wiped or unreadable): its env token can never work again, and an agent
+/// can't change its env. So the same session gets a new passport in its own
+/// secrets dir, where the CLI and the hook script look for one. A revoked
+/// session never does: `heal_adopted_session` checks. The principal is what
+/// its spawn stamped: the workspace the spawn recorded in the ptyd meta, and
+/// the agent address the spawn's own rule gives for its key and folder.
+#[cfg(unix)]
+fn heal_passport(session: &k2_core::terminal::DaemonPtySession, key: &str, meta: &Value, late: bool) {
+    use crate::session_token::{heal_adopted_session, HookPrincipal, PassportHeal};
+    let sid = session.session_id.to_string();
+    let principal = || {
+        let workspace_uuid = meta.get("workspace_uuid").and_then(Value::as_str).map(str::trim).filter(|w| !w.is_empty())?.to_string();
+        let agent_address = match (meta.get("spawn_site").and_then(Value::as_str), session.cwd.as_deref()) {
+            (Some("v2_spawn"), Some(cwd)) => crate::v2_spawn::passport_agent_address(key, &cwd.to_string_lossy()),
+            _ => key.to_string(),
+        };
+        Some(HookPrincipal { workspace_uuid, agent_address })
+    };
+    let deliver = |token: &str| {
+        let dir = meta
+            .get("secrets_dir")
+            .and_then(Value::as_str)
+            .filter(|d| !d.is_empty())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no secrets dir"))?;
+        crate::vault::spawn::deliver_passport(&sid, std::path::Path::new(dir), token).map(|_| ())
+    };
+    let (reminted, unusable) = match heal_adopted_session(&session.session_id, principal, deliver) {
+        PassportHeal::Valid => return,
+        PassportHeal::Revoked => (vec![], vec![(sid.clone(), "revoked".to_string())]),
+        PassportHeal::Lost(why) => (vec![], vec![(sid.clone(), why)]),
+        PassportHeal::Reminted => (vec![sid.clone()], vec![]),
+    };
+    if late {
+        say_passport_trouble(&reminted, &unusable);
+    }
+    update_report(|r| {
+        r.passports_reminted.extend(reminted);
+        r.passports_unusable.extend(unusable);
+    });
+}
+
+/// The lines that would have shown the 2026-11-07 store loss in seconds.
+#[cfg(unix)]
+fn say_passport_trouble(reminted: &[String], unusable: &[(String, String)]) {
+    if !reminted.is_empty() {
+        log_debug!(
+            "[ptyd] ERROR adoption found {} live session(s) with no passport in the store: re-minted into their own secrets dirs: {}",
+            reminted.len(),
+            reminted.join(", ")
+        );
+    }
+    if !unusable.is_empty() {
+        let list: Vec<String> = unusable.iter().map(|(s, why)| format!("{s} ({why})")).collect();
+        log_debug!(
+            "[ptyd] ERROR adoption found {} live session(s) with no usable passport and no new one: their K2 calls get 403 until the tab restarts: {}",
+            unusable.len(),
+            list.join(", ")
+        );
+    }
 }
 
 /// P32: a session that exited while no daemon was attached — revoke its

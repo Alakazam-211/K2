@@ -296,6 +296,8 @@ fn an_agent_with_the_owner_token_cannot_finish_someone_elses_recovery_without_th
 
 #[test]
 fn it_agents_share_server_secrets_with_others_only() {
+    // `session:<id>` is looked up in ~/.k2/hook-sessions.json.
+    let _home = crate::test_support::TempHome::new();
     let t = vault();
     set_server(&t, "OPENAI", "k2test-0123456789abcdef");
     let it = agent("it-ws", true);

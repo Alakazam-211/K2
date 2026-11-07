@@ -245,6 +245,13 @@ struct TokenRecord {
 // Registry
 // ─────────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassportState {
+    Valid,
+    Revoked,
+    Missing,
+}
+
 /// In-memory (disk-backed) map of `SessionId` → scoped-token claims, plus
 /// the epoch bookkeeping that makes revocation instant + restart-surviving.
 ///
@@ -388,6 +395,17 @@ impl SessionTokenRegistry {
             cred_mode: rec.cred_mode,
             provider: rec.provider,
         })
+    }
+
+    /// What the store says about one session's passport (no secret needed).
+    fn passport_state(&self, sid: &str) -> PassportState {
+        let current = self.session_epochs.get(sid).copied().unwrap_or(0);
+        match self.records.get(sid) {
+            Some(r) if r.global_epoch == self.global_epoch && r.session_epoch == current => PassportState::Valid,
+            Some(_) => PassportState::Revoked,
+            None if current > 0 => PassportState::Revoked,
+            None => PassportState::Missing,
+        }
     }
 
     /// Revoke the token for one session by bumping its per-session epoch
@@ -1421,20 +1439,45 @@ pub fn store_path() -> PathBuf {
         .join("hook-sessions.json")
 }
 
+static REGISTRY: OnceLock<Mutex<SessionTokenRegistry>> = OnceLock::new();
+
 /// The process-wide registry, lazily loaded from disk on first access.
 fn registry() -> &'static Mutex<SessionTokenRegistry> {
-    static REGISTRY: OnceLock<Mutex<SessionTokenRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(load_from_disk()))
+}
+
+/// Why this boot's store loaded empty or short, for `/boot-status`.
+static STORE_TROUBLE: Mutex<Option<String>> = Mutex::new(None);
+
+/// What went wrong loading the passport store this boot, if anything (it
+/// loads on first use: adoption, a mint or a passport call).
+pub fn store_trouble() -> Option<String> {
+    STORE_TROUBLE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The store failed closed: every surviving agent's passport is about to be
+/// refused. A log line that says so, and `/boot-status` carries it.
+fn say_store_trouble(path: &std::path::Path, what: String) {
+    log_debug!(
+        "[hook-scoped] ERROR passport store {}: {what}. Passports of running agents that it no longer holds are refused until re-minted at adoption or the tab restarts.",
+        path.display()
+    );
+    *STORE_TROUBLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(what);
 }
 
 /// Load the registry from disk. A missing/empty file → a fresh registry.
 /// A malformed file or unknown envelope version fails CLOSED (empty
 /// registry → every prior token invalid), matching `connect_users`.
 fn load_from_disk() -> SessionTokenRegistry {
+    k2_core::guard_test_store_home("hook-sessions.json");
     let path = store_path();
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(_) => return SessionTokenRegistry::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SessionTokenRegistry::new(),
+        Err(e) => {
+            say_store_trouble(&path, format!("can't be read ({e}); failing closed"));
+            return SessionTokenRegistry::new();
+        }
     };
     if raw.trim().is_empty() {
         return SessionTokenRegistry::new();
@@ -1442,19 +1485,87 @@ fn load_from_disk() -> SessionTokenRegistry {
     match serde_json::from_str::<SessionTokenRegistry>(&raw) {
         Ok(mut reg) if reg.version == STORE_VERSION => {
             // Drop any per-record version mismatch (fail closed per-record).
+            let before = reg.records.len();
             reg.records
                 .retain(|_, r| r.version == STORE_VERSION && !r.token_digest.is_empty());
+            let dropped = before - reg.records.len();
+            if dropped > 0 {
+                say_store_trouble(&path, format!("{dropped} of {before} record(s) had a version this daemon can't read; dropped"));
+            }
             reg
         }
-        Ok(_) => {
-            log_debug!(
-                "[hook-scoped] WARN unknown hook-sessions store version; failing closed (empty)"
-            );
+        Ok(reg) => {
+            say_store_trouble(&path, format!("unknown store version {}; failing closed (empty)", reg.version));
             SessionTokenRegistry::new()
         }
         Err(e) => {
-            log_debug!("[hook-scoped] WARN parse hook-sessions.json failed ({e}); failing closed");
+            say_store_trouble(&path, format!("is not valid ({e}); failing closed (empty)"));
             SessionTokenRegistry::new()
+        }
+    }
+}
+
+/// A daemon that keeps its agents for the next one writes its own registry
+/// out as it goes, so the next daemon loads this daemon's copy whatever
+/// happened to the file meanwhile. Nothing to do when this daemon never
+/// loaded the store (the file is then all there is).
+pub fn save_for_next_daemon() {
+    if let Some(reg) = REGISTRY.get() {
+        save_to_disk(&reg.lock().unwrap_or_else(|e| e.into_inner()));
+    }
+}
+
+/// What [`heal_adopted_session`] found for an adopted live session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PassportHeal {
+    /// The store holds its passport, unrevoked: nothing to do.
+    Valid,
+    /// Revoked on purpose (its epoch moved, or the kill switch since its
+    /// mint). Never re-minted.
+    Revoked,
+    /// No record and no sign of a revoke: a new passport went to its folder.
+    Reminted,
+    /// No record, and no new passport could reach it (why).
+    Lost(String),
+}
+
+/// Adoption: `session_id` is alive in k2-ptyd. If the store lost its passport
+/// (and nothing says it was revoked), mint a new one for the same session and
+/// hand it to `deliver`, which writes it into the session's own folder. A
+/// failed delivery drops the record again: a passport nobody holds must not
+/// read as valid at the next restart. `principal` may take the DB lock, so it
+/// runs outside the registry lock; the state is checked again under it.
+pub fn heal_adopted_session(
+    session_id: &SessionId,
+    principal: impl FnOnce() -> Option<HookPrincipal>,
+    deliver: impl FnOnce(&str) -> std::io::Result<()>,
+) -> PassportHeal {
+    let sid = session_id.to_string();
+    let state = |g: &SessionTokenRegistry| match g.passport_state(&sid) {
+        PassportState::Valid => Some(PassportHeal::Valid),
+        PassportState::Revoked => Some(PassportHeal::Revoked),
+        PassportState::Missing => None,
+    };
+    if let Some(done) = state(&registry().lock().unwrap_or_else(|e| e.into_inner())) {
+        return done;
+    }
+    let Some(principal) = principal() else {
+        return PassportHeal::Lost("no workspace to bind a new passport to".to_string());
+    };
+    let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(done) = state(&g) {
+        return done;
+    }
+    // Same mint as at spawn: pane id = the session id, the bare-PTY defaults.
+    let token = g.mint(session_id, &sid, principal, CredMode::ApiKey, Provider::Anthropic);
+    match deliver(&token) {
+        Ok(()) => {
+            save_to_disk(&g);
+            PassportHeal::Reminted
+        }
+        Err(e) => {
+            g.records.remove(&sid);
+            PassportHeal::Lost(format!("its folder took no file ({})", e.kind()))
         }
     }
 }
@@ -1462,6 +1573,7 @@ fn load_from_disk() -> SessionTokenRegistry {
 /// Persist the registry via tmp+rename then chmod 0600 (same discipline as
 /// `connect_users::save_sessions`).
 fn save_to_disk(reg: &SessionTokenRegistry) {
+    k2_core::guard_test_store_home("hook-sessions.json");
     let path = store_path();
     let Some(dir) = path.parent().map(PathBuf::from) else {
         return;
@@ -1918,6 +2030,82 @@ fn restrict_mode(_file: &std::path::Path) {}
 mod tests {
     use super::*;
     use crate::test_support::with_temp_home;
+
+    /// A test build refuses the store in a home that isn't a test's own.
+    #[test]
+    #[should_panic(expected = "prod-isolation guard")]
+    fn saving_the_store_outside_a_temp_home_panics() {
+        let _home = k2_core::test_env::EnvVar::set("HOME", "/var/lib/k2-not-a-temp-home");
+        save_to_disk(&SessionTokenRegistry::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "prod-isolation guard")]
+    fn loading_the_store_outside_a_temp_home_panics() {
+        let _home = k2_core::test_env::EnvVar::set("HOME", "/var/lib/k2-not-a-temp-home");
+        let _ = load_from_disk();
+    }
+
+    fn heal_principal() -> Option<HookPrincipal> {
+        Some(HookPrincipal { workspace_uuid: "ws".into(), agent_address: "a".into() })
+    }
+
+    /// The kill switch counts as a revoke: records stay but are inert, and
+    /// don't read as valid or as lost. (A bare registry: tripping the process
+    /// one would reach every other test in this binary.)
+    #[test]
+    fn the_kill_switch_reads_as_revoked_not_lost() {
+        let mut reg = SessionTokenRegistry::new();
+        let id = SessionId::new();
+        reg.mint(&id, "p", heal_principal().unwrap(), CredMode::ApiKey, Provider::Anthropic);
+        assert_eq!(reg.passport_state(&id.to_string()), PassportState::Valid);
+        reg.revoke_all();
+        assert_eq!(reg.passport_state(&id.to_string()), PassportState::Revoked);
+        assert_eq!(reg.passport_state(&SessionId::new().to_string()), PassportState::Missing);
+    }
+
+    /// A session that lost its record gets a new passport, once; a revoked
+    /// one never does; a failed delivery leaves no record behind.
+    #[test]
+    fn healing_mints_only_for_a_lost_passport_and_never_a_revoked_one() {
+        with_temp_home(|| {
+            let lost = SessionId::new();
+            let mut delivered = String::new();
+            let healed = heal_adopted_session(&lost, heal_principal, |t| {
+                delivered = t.to_string();
+                Ok(())
+            });
+            assert_eq!(healed, PassportHeal::Reminted);
+            let v = validate_hook(&delivered).expect("the delivered passport validates");
+            assert_eq!(v.session_id, lost.to_string());
+            assert_eq!(v.pane_id, lost.to_string());
+            assert_eq!(v.principal.workspace_uuid, "ws");
+            let path = store_path();
+            assert!(std::fs::read_to_string(&path).unwrap().contains(&lost.to_string()), "saved");
+
+            // Now it has a record: nothing to heal, no delivery.
+            let again = heal_adopted_session(&lost, heal_principal, |_| panic!("no second delivery"));
+            assert_eq!(again, PassportHeal::Valid);
+
+            // Revoked (the epoch moved, the record went): never again.
+            revoke_session(&lost);
+            let revoked = heal_adopted_session(&lost, heal_principal, |_| panic!("a revoked session got a passport"));
+            assert_eq!(revoked, PassportHeal::Revoked);
+            assert!(validate_hook(&delivered).is_none());
+
+            // No file reached the session: no record, so a restart tries again.
+            let undelivered = SessionId::new();
+            let lost_it = heal_adopted_session(&undelivered, heal_principal, |_| Err(std::io::Error::other("no dir")));
+            assert!(matches!(lost_it, PassportHeal::Lost(_)), "{lost_it:?}");
+            let retried = heal_adopted_session(&undelivered, heal_principal, |_| Ok(()));
+            assert_eq!(retried, PassportHeal::Reminted);
+
+            // No workspace to bind it to: no mint.
+            let nameless = SessionId::new();
+            let no_ws = heal_adopted_session(&nameless, || None, |_| panic!("no principal, no passport"));
+            assert!(matches!(no_ws, PassportHeal::Lost(_)), "{no_ws:?}");
+        });
+    }
 
     fn principal() -> HookPrincipal {
         HookPrincipal {

@@ -25,8 +25,33 @@ pub fn register_embedded() {
 /// this boot adopted from k2-ptyd) to `/boot-status` — only when the switch
 /// is on or this boot adopted something, so the default body is unchanged.
 pub fn decorate_boot_status(body: serde_json::Value) -> serde_json::Value {
-    let adopted = crate::ptyd_adopt::report().map(|r| r.adopted);
-    decorate_with(body, Switch::resolve(), status_line, adopted)
+    let report = crate::ptyd_adopt::report();
+    let adopted = report.as_ref().map(|r| r.adopted);
+    let body = decorate_with(body, Switch::resolve(), status_line, adopted);
+    decorate_passports(body, report.as_ref(), crate::session_token::store_trouble())
+}
+
+/// Passport trouble this boot, only when there is any: the default body is
+/// unchanged.
+fn decorate_passports(
+    mut body: serde_json::Value,
+    report: Option<&crate::ptyd_adopt::Report>,
+    store_trouble: Option<String>,
+) -> serde_json::Value {
+    let Some(obj) = body.as_object_mut() else { return body };
+    if let Some(t) = store_trouble {
+        obj.insert("passportStoreTrouble".into(), t.into());
+    }
+    if let Some(r) = report {
+        if !r.passports_reminted.is_empty() {
+            obj.insert("passportsReminted".into(), r.passports_reminted.clone().into());
+        }
+        if !r.passports_unusable.is_empty() {
+            let ids: Vec<String> = r.passports_unusable.iter().map(|(s, _)| s.clone()).collect();
+            obj.insert("passportsUnusable".into(), ids.into());
+        }
+    }
+    body
 }
 
 fn decorate_with(
@@ -62,6 +87,23 @@ mod tests {
         let out = decorate_with(serde_json::json!({"version": "x"}), Switch::On, || "off (killmode_control-group)".into(), None);
         assert_eq!(out["ptyd"], "off (killmode_control-group)");
         assert_eq!(out["adopted"], 0);
+    }
+
+    #[test]
+    fn boot_status_names_passport_trouble_only_when_there_is_some() {
+        let body = serde_json::json!({"version": "x"});
+        assert_eq!(decorate_passports(body.clone(), None, None), body, "nothing wrong: unchanged");
+        let clean = crate::ptyd_adopt::Report::default();
+        assert_eq!(decorate_passports(body.clone(), Some(&clean), None), body, "a clean adoption: unchanged");
+        let r = crate::ptyd_adopt::Report {
+            passports_reminted: vec!["a".into()],
+            passports_unusable: vec![("b".into(), "revoked".into())],
+            ..Default::default()
+        };
+        let out = decorate_passports(body, Some(&r), Some("is not valid".into()));
+        assert_eq!(out["passportStoreTrouble"], "is not valid");
+        assert_eq!(out["passportsReminted"], serde_json::json!(["a"]));
+        assert_eq!(out["passportsUnusable"], serde_json::json!(["b"]));
     }
 
     /// Switch off, but this boot adopted sessions (P68: they keep running):

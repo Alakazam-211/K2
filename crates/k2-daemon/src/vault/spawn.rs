@@ -281,6 +281,45 @@ pub fn write_secret_file(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Resul
     f.sync_all()
 }
 
+/// The file in a session's secrets dir that holds a passport K2 re-minted
+/// for it ([`deliver_passport`]). The CLI and `notify.sh` read it when the
+/// session's env token is no longer the valid one.
+pub const PASSPORT_FILE: &str = ".k2-passport";
+
+/// Put a re-minted passport into THIS session's own secrets dir (`recorded`:
+/// the dir its spawn recorded in the ptyd meta). The dir must be a real,
+/// private, owned, direct child of the secrets root, named for the session;
+/// anything else is refused, so a wrong meta can't carry a token elsewhere.
+/// The file is 0600, swapped in by rename; a link planted at the name is
+/// replaced, never followed. The token is never logged.
+pub fn deliver_passport(session_id: &str, recorded: &Path, token: &str) -> std::io::Result<PathBuf> {
+    let refused = |why: &str| std::io::Error::new(std::io::ErrorKind::PermissionDenied, why.to_string());
+    let root = secrets_root().ok_or_else(|| refused("no secrets root"))?;
+    let tag: String = session_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
+    let own_name = recorded.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&format!("{tag}-")));
+    if recorded.parent() != Some(root.as_path()) || !own_name {
+        return Err(refused("not this session's secrets dir"));
+    }
+    let m = std::fs::symlink_metadata(recorded)?;
+    if !m.is_dir() || m.file_type().is_symlink() || !private_fs::owned_by_me(recorded, &m) || !private_fs::is_private(recorded, &m) {
+        return Err(refused("secrets dir check failed"));
+    }
+    let tmp = recorded.join(format!("{PASSPORT_FILE}.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+    let path = recorded.join(PASSPORT_FILE);
+    let write = || -> std::io::Result<()> {
+        let mut f = private_fs::create_new_private_file(&tmp)?;
+        f.write_all(token.as_bytes())?;
+        f.write_all(b"\n")?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, &path)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    Ok(path)
+}
+
 /// Make a fresh per-session dir under `root` (must not exist yet).
 pub fn make_session_dir(root: &Path, session: &str) -> std::io::Result<PathBuf> {
     ensure_private(root)?;
@@ -882,7 +921,7 @@ fn unrecorded_files(dir: &Path, d: &Delivered) -> Vec<String> {
     rd.flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
-        .filter(|n| !d.files.contains_key(n))
+        .filter(|n| !d.files.contains_key(n) && n != PASSPORT_FILE)
         .collect()
 }
 
@@ -1134,6 +1173,51 @@ mod tests {
             let m = std::fs::metadata(p).expect("m");
             assert!(private_fs::is_private(p, &m), "{} is not owner-only", p.display());
         }
+    }
+
+    /// A re-minted passport reaches only the session's own private dir, as a
+    /// 0600 file, replaces an older one, and a link at its name isn't followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_passport_goes_only_to_the_sessions_own_private_dir() {
+        let _home = crate::test_support::TempHome::short();
+        let root = secrets_root().expect("root");
+        let sid = "11111111-1111-4111-8111-111111111111";
+        let dir = make_session_dir(&root, sid).expect("dir");
+        let path = deliver_passport(sid, &dir, "sid.one").expect("delivered");
+        assert_eq!(path, dir.join(PASSPORT_FILE));
+        assert_private(&path, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "sid.one\n");
+        deliver_passport(sid, &dir, "sid.two").expect("replaced");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "sid.two\n");
+
+        // Planted link: replaced, its target untouched.
+        let bait = dir.join("bait");
+        std::fs::write(&bait, "kept").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&bait, &path).unwrap();
+        deliver_passport(sid, &dir, "sid.three").expect("over a link");
+        assert_eq!(std::fs::read_to_string(&bait).unwrap(), "kept");
+        assert!(!std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+
+        // Another session's dir, a dir outside the root, a link, an open dir.
+        let other = make_session_dir(&root, "22222222-2222-4222-8222-222222222222").expect("other");
+        assert!(deliver_passport(sid, &other, "x").is_err(), "another session's dir");
+        assert!(!other.join(PASSPORT_FILE).exists());
+        let t = k2_vault::fsutil::TestDir::new("passport-outside");
+        let outside = t.path().join(format!("{sid}-abc"));
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(deliver_passport(sid, &outside, "x").is_err(), "outside the root");
+        let link = root.join(format!("{sid}-link"));
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(deliver_passport(sid, &link, "x").is_err(), "a link to a dir");
+        let open = root.join(format!("{sid}-open"));
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(deliver_passport(sid, &open, "x").is_err(), "an open dir");
+
+        // K2's own bookkeeping doesn't count it as a stray file.
+        assert!(!unrecorded_files(&dir, &Delivered::default()).contains(&PASSPORT_FILE.to_string()));
     }
 
     /// Many callers making the same missing dir at once all get it (one

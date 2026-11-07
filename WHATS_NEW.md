@@ -8,6 +8,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### When you update
 - **`k2 db create` no longer prints the database password.** Its `dsn` (and the `--test` `migratorDsn`) come without the password, and `dsnHint` says how to get the full one: `k2 db dsn --db <name>`. Scripts that read the password from `create --json` need to call `k2 db dsn` instead.
 
+### Desktop app
+- **New agents open in Split view:** the agent's terminal on the left and its Thread on the right. Agents you already set to a view keep it, and Settings → Workspace settings → "New agents open in" still changes the default.
+- **Switching workspaces puts you in the message box.** "When moving between workspaces, auto-select" now defaults to Message agent. If you picked Terminal, that stays.
+
 ### Fixes
 - **Adding a workspace on a remote server works again.** In the desktop app, adding a workspace on a server you're connected to could show "workspace added", then empty the list and reconnect, and the new workspace never appeared. One request that didn't get through made the app treat the whole server as down. Now the app checks the server before reconnecting, the new workspace appears and is selected, and a server that's really down still shows "reconnecting" within a few seconds. The server now also closes its answer to a browser's CORS check cleanly, which is what lost that request.
 - **When a workspace's default CLI isn't installed on its server, its chat says so** ("codex isn't installed on <server>"), instead of showing a spawn error.

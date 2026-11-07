@@ -352,6 +352,11 @@ k2_compute_signer_check() {
     local l1 v1 pins
     l1="${K2_COMPUTE_X86_NODE:-${K2_COMPUTE_NODE:-k2n7-vin}}"
     v1="$(k2cr_verify_node)"
+    if [ "${K2_COMPUTE_OAUTH:-secret}" != secret ]; then
+        echo "ERROR: K2_COMPUTE_OAUTH=${K2_COMPUTE_OAUTH}, but the signing user signs a compute-built daemon only from" >&2
+        echo "  secret jobs (the OAuth values from the vault): a job with them in --env may share the node's caches." >&2
+        return 1
+    fi
     if [ -z "$v1" ]; then
         echo "ERROR: K2_COMPUTE_VERIFY_NODE=none, but the signing user (K2_SIGNER=k2sign) signs a compute-built" >&2
         echo "  daemon only with the V1 dual build on a second node. Name a verify node, or use K2_LINUX_BUILDS=shadow." >&2
@@ -373,7 +378,7 @@ if l1 == v1:
     bad.append("L1 and V1 are both %s: the dual build needs two nodes" % l1)
 for role, n in (("L1", l1), ("V1", v1)):
     if n not in names:
-        bad.append("%s's node %s is not pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node %s /abs/path/%s.pem" % (role, n, n, n))
+        bad.append("%s's node %s is not pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node %s /abs/path/%s.pem <its node_fp, read on the node>" % (role, n, n, n))
 if bad:
     print("ERROR: K2_LINUX_BUILDS=compute: the signing user would refuse the compute-built daemon at Step 10.5:", file=sys.stderr)
     for b in bad:

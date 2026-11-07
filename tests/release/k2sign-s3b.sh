@@ -44,7 +44,10 @@ release_routes() { # <version>: GitHub after Step 8.9: v<x> = T (tree TT), paren
     route "$REPOP/commits/$T" "{\"sha\": \"$T\", \"commit\": {\"tree\": {\"sha\": \"$TT\"}}, \"parents\": [{\"sha\": \"$B\"}]}"
     route "$REPOP/compare/$B...$T" '{"status": "ahead", "ahead_by": 1, "files": [{"filename": "package.json"}]}'
     route "$REPOP/compare/$B...main" '{"status": "ahead"}'
+    route "$REPOP/contents/rust-toolchain.toml?ref=$T" "{\"encoding\": \"base64\", \"content\": \"$TOOLCHAIN_B64\"}"
 }
+# The tag's rust-toolchain.toml, as GitHub's contents API returns it.
+TOOLCHAIN_B64="$(printf '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n' | base64 | tr -d '\n')"
 open_session() { # <version> assets…
     local v="$1"; shift
     "$K" challenge "$v" "$B" "$@" > "$tmp/c.json" 2>"$tmp/c.err" || { fail "challenge $v" "$(cat "$tmp/c.err")"; return 1; }
@@ -96,7 +99,10 @@ unset K2_MICROSOFT_CLIENT_ID || true
 # signed with the node's key over the k2 receipt domain bytes (openssl).
 # Overrides: any receipt field; "src.<f>"; "drop_art"/"set_art" {name: sha};
 # "fp" (claim another node's fp); "tamper" (edit the body after signing);
-# "no_body" (an older daemon: only the parsed receipt).
+# "no_body" (an older daemon: only the parsed receipt). The plan (what the
+# route returns since the S3b review, H1) follows the receipt; "plan.<k>"
+# sets a plan field (null drops it), "plan_tamper" edits the plan after the
+# digest went into the receipt, "no_plan" leaves it out.
 mkrcpt() {
     python3 -I - "$1" "$tmp/keys/$2.key" "$3" "${4:-$NOOVER}" "$C" "$TT" "$CTL" "$((NOW0 + 60))" "$((NOW0 + 1800))" <<'PY'
 import base64, hashlib, json, os, struct, subprocess, sys
@@ -126,7 +132,7 @@ r = {"v": 1, "job_id": job, "attempt": 1, "generation": 1, "plan_digest": "sha25
      "argv_sha256": hashlib.sha256(canonical(["bash", "scripts/ci/build-linux-bins.sh", "x86_64"]).encode()).hexdigest(),
      "env_names": ["BUILD_COMMIT", "BUILD_TREE", "CARGO_HOME", "CI", "HOME", "K2_COMPUTE_JOB", "K2_NODE_OS", "PATH"],
      "secret_env": ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"],
-     "src": {"commit": commit, "tree": tree, "dirty_sha256": None, "slot": 0, "warmth": "warm"},
+     "src": {"commit": commit, "tree": tree, "dirty_sha256": None, "slot": None, "warmth": "private"},
      "tools": {"rustc": "1.99.1"}, "tools_used": {"rustc": "1.99.1"}, "boot_id": "boot-1",
      "started_at": int(started), "ended_at": int(ended), "state": "done", "exit": {"code": 0, "signal": None},
      "log": {"sha256": "ef" * 32, "bytes": 12, "truncated": False}, "artifacts": arts}
@@ -134,11 +140,30 @@ if "fp" in over:
     r["node_fp"] = over.pop("fp")
 tamper = over.pop("tamper", False)
 no_body = over.pop("no_body", False)
+plan_tamper = over.pop("plan_tamper", None)
+no_plan = over.pop("no_plan", False)
+plan_over = {k[5:]: over.pop(k) for k in [k for k in over if k.startswith("plan.")]}
 for k, v in over.items():
     if k.startswith("src."):
         r["src"][k[4:]] = v
     else:
         r[k] = v
+plan = {"job_id": r["job_id"], "node_id": "node-1", "workspace_id": "ws-release", "workspace_label": "release",
+        "requested_by": "release", "argv": ["bash", "scripts/ci/build-linux-bins.sh", "x86_64"],
+        "env": {"BUILD_COMMIT": r["src"]["commit"], "BUILD_TREE": r["src"]["tree"]}, "cwd": None,
+        "limits": {"max_secs": 7200, "cpu_millis": 4000}, "exclusive": False, "created_at": int(started) - 30,
+        "src": {"project_key": "pk-release", "remote_url": None, "commit": r["src"]["commit"], "dirty": None, "slots": 1},
+        "needs": ["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"], "artifacts": ["dist/*"],
+        "packages": ["pkg-config", "zlib1g-dev"], "secret_env": list(r["secret_env"]), "tier": "ci"}
+for k, v in plan_over.items():
+    if v is None:
+        plan.pop(k, None)
+    else:
+        plan[k] = v
+if "plan_digest" not in over:
+    r["plan_digest"] = "sha256:" + hashlib.sha256(canonical(plan).encode()).hexdigest()
+if plan_tamper:
+    plan.update(plan_tamper)
 body = canonical(r)
 raw = body.encode()
 msg = b"k2-compute-receipt-v1\0" + struct.pack(">I", len(raw)) + raw
@@ -150,6 +175,8 @@ o = {"job": job[:8], "verified": True, "receipt": r, "signature": base64.b64enco
      "proves": "which node said it ran which inputs and got which outputs — not that the node is honest"}
 if not no_body:
     o["body"] = body
+if not no_plan:
+    o["plan"] = plan
 os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump(o, open(out, "w"))
 PY
@@ -224,12 +251,16 @@ bundle good1 "$tmp/set-0.47.1"
 register "no controller or nodes pinned: refused" 3 "no controller pinned" 0.47.1 good1
 check "pin the controller (admin)" 0 "compute controller pinned" "$ADM" pin-compute-controller "$CTL"
 register "a controller but no nodes: refused" 3 "no compute nodes pinned" 0.47.1 good1
-check "pin build-a (admin; prints the fp to compare with the node's status.json)" 0 "$FP_A" "$ADM" pin-compute-node build-a "$tmp/keys/build-a.pem"
-check "pin build-b" 0 "$FP_B" "$ADM" pin-compute-node build-b "$tmp/keys/build-b.pem"
-check "the same key under a second name: refused" 3 "already pinned as node build-a" "$ADM" pin-compute-node build-c "$tmp/keys/build-a.pem"
+check "M2 pin-compute-node without the fingerprint read from the node: usage" 2 "expected fingerprint" "$ADM" pin-compute-node build-a "$tmp/keys/build-a.pem"
+check "M2 a key whose fingerprint is not the one read from the node: refused" 3 "not the $FP_B you read from node build-a: not pinned" \
+    "$ADM" pin-compute-node build-a "$tmp/keys/build-a.pem" "$FP_B"
+check "M2 a malformed expected fingerprint: usage" 2 "64 lowercase hex" "$ADM" pin-compute-node build-a "$tmp/keys/build-a.pem" "${FP_A:0:16}"
+check "pin build-a with the fingerprint read from the node" 0 "$FP_A" "$ADM" pin-compute-node build-a "$tmp/keys/build-a.pem" "$FP_A"
+check "pin build-b" 0 "$FP_B" "$ADM" pin-compute-node build-b "$tmp/keys/build-b.pem" "$FP_B"
+check "the same key under a second name: refused" 3 "already pinned as node build-a" "$ADM" pin-compute-node build-c "$tmp/keys/build-a.pem" "$FP_A"
 printf 'not a key\n' > "$tmp/keys/junk.pem"
-check "a file that is not a P-256 key: refused" 3 "no PUBLIC KEY block" "$ADM" pin-compute-node build-c "$tmp/keys/junk.pem"
-check "pin-compute-node needs an absolute path" 2 "absolute path" "$ADM" pin-compute-node build-c keys/x.pem
+check "a file that is not a P-256 key: refused" 3 "no PUBLIC KEY block" "$ADM" pin-compute-node build-c "$tmp/keys/junk.pem" "$FP_A"
+check "pin-compute-node needs an absolute path" 2 "absolute path" "$ADM" pin-compute-node build-c keys/x.pem "$FP_A"
 check "compute-pins (signer verb, read-only)" 0 "\"name\": \"build-b\"" "$K" compute-pins
 grep -q "etc/compute-pins" "$TROOT/usr/local/etc/k2sign/pins.sha256" && pass "compute-pins is in pins.sha256" || fail "compute-pins pinned" "$(cat "$TROOT/usr/local/etc/k2sign/pins.sha256")"
 cp "$TROOT/usr/local/etc/k2sign/compute-pins" "$tmp/pins.bak"
@@ -252,6 +283,12 @@ register "a receipt without its body text (an older daemon): canonical JSON, sti
 bundle attag "$tmp/set-0.47.1" build-a "{\"src.commit\": \"$T\"}" build-b "{\"src.commit\": \"$T\"}"
 edit_bundle attag 'b.pop("commit_object")'
 register "built at the tag commit itself: no commit object needed" 0 '"ok": true' 0.47.1 attag
+MS='["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET", "BUILD_MICROSOFT_CLIENT_ID"]'
+bundle withms "$tmp/set-0.47.1" build-a "{\"secret_env\": $MS}" build-b "{\"secret_env\": $MS}"
+register "the optional Microsoft client id from the vault too (both jobs)" 0 '"ok": true' 0.47.1 withms
+bundle nopkgs "$tmp/set-0.47.1" build-a '{"plan.packages": null}' build-b '{"plan.packages": null}'
+register "a plan without packages (a node without pkg-map installs the sys: needs itself)" 0 '"ok": true' 0.47.1 nopkgs
+grep -q '"rust": "1.99.1"' "$tmp/out" && pass "the summary names the rust pin read from GitHub at the tag" || fail "rust in summary" "$(cat "$tmp/out")"
 
 echo "== refused: the signature and the key =="
 S2="$tmp/set-0.47.2"
@@ -298,6 +335,58 @@ bundle env "$S2" build-a '{"env_names": ["BUILD_COMMIT", "HOME", "RUSTFLAGS"]}'
 register "a job with extra --env" 3 "env the release build doesn't set: RUSTFLAGS" 0.47.2 env
 bundle placeholder "$S2" build-a '{"env_names": ["BUILD_COMMIT", "BUILD_OAUTH", "HOME"]}'
 register "a placeholder OAuth build (BUILD_OAUTH)" 3 "env the release build doesn't set: BUILD_OAUTH" 0.47.2 placeholder
+
+echo "== refused: the plan (S3b review H1) =="
+bundle noplan "$S2" build-a '{"no_plan": true}'
+register "H1 no plan in the evidence (an older daemon's receipt)" 3 "L1: the evidence has no job plan" 0.47.2 noplan
+bundle plantamper "$S2" build-a '{"plan_tamper": {"cwd": "crates"}}'
+register "H1 a plan that doesn't hash to the receipt's plan_digest" 3 "L1: the plan does not hash to the receipt's plan_digest" 0.47.2 plantamper
+NEST='[{"path": "crates/k2-daemon", "project_key": "pk-evil", "remote_url": null, "commit": "'"$C_BADTREE"'"}]'
+bundle nested "$S2" build-a "{\"plan.with\": $NEST, \"plan.src_path\": \"\"}" build-b "{\"plan.with\": $NEST, \"plan.src_path\": \"\"}"
+register "H1 exploit: a --with repo nested at crates/k2-daemon, right argv and tree, both pinned nodes" 3 \
+    "L1: the plan ships --with repos (crates/k2-daemon): they would lay other code into the build" 0.47.2 nested
+bundle srcpath "$S2" build-a '{"plan.src_path": "k2"}'
+register "H1 a --with layout (src_path) without repos" 3 "the plan has a --with layout (src_path 'k2')" 0.47.2 srcpath
+bundle cwd "$S2" build-a '{"plan.cwd": "crates"}'
+register "H1 a cwd" 3 "the plan runs in another folder (cwd 'crates')" 0.47.2 cwd
+bundle plancache "$S2" build-a '{"plan.cache": "target"}'
+register "H1 a --cache in the plan" 3 "the plan mounts a --cache ('target')" 0.47.2 plancache
+bundle pkgs "$S2" build-a '{"plan.packages": ["evil-tools", "pkg-config", "zlib1g-dev"]}'
+register "H1 packages beyond the release needs" 3 "installs packages beyond the release needs: evil-tools" 0.47.2 pkgs
+bundle needstable "$S2" build-a '{"plan.needs": ["rust@stable", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]}'
+register "H1 needs: rust@stable, not the pin" 3 "the plan needs rust@stable cmake@3" 0.47.2 needstable
+bundle needextra "$S2" build-a '{"plan.needs": ["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev", "node@22"]}'
+register "H1 needs: an extra tool" 3 "the release build needs rust@1.99.1 cmake@3 sys:pkg-config sys:zlib1g-dev" 0.47.2 needextra
+bundle planenv "$S2" build-a "{\"plan.env\": {\"BUILD_COMMIT\": \"$C\", \"BUILD_TREE\": \"$TT\", \"BUILD_GMAIL_CLIENT_ID\": \"x\"}}"
+register "H1 a free-form BUILD_GMAIL_* value in the plan's env" 3 "the plan sets env the release build doesn't: BUILD_GMAIL_CLIENT_ID" 0.47.2 planenv
+bundle envval "$S2" build-a "{\"plan.env\": {\"BUILD_COMMIT\": \"$T\", \"BUILD_TREE\": \"$TT\"}}"
+register "H1 BUILD_COMMIT is not the commit it ran" 3 "BUILD_COMMIT/BUILD_TREE are not the commit and tree it ran" 0.47.2 envval
+bundle planarts "$S2" build-a '{"plan.artifacts": ["dist/*", "../*"]}'
+register "H1 other artifact globs" 3 "the plan collects" 0.47.2 planarts
+bundle planfield "$S2" build-a '{"plan.future_switch": 1}'
+register "H1 a plan field the signer doesn't know" 3 "the plan has fields the signer doesn't know: future_switch" 0.47.2 planfield
+bundle planargv "$S2" build-a '{"plan.argv": ["bash", "-c", "x"]}'
+register "H1 the plan's command (argv) is not the release build" 3 "the plan's command is not the release build command" 0.47.2 planargv
+bundle rustc "$S2" build-a '{"tools_used": {"rustc": "1.98.0"}}'
+register "H1 the rustc that ran is not the tag's pin" 3 "L1: the job's rustc was 1.98.0, the tag pins 1.99.1" 0.47.2 rustc
+
+echo "== refused: shared caches and the OAuth path (S3b review H2) =="
+bundle warm "$S2" build-a '{"src.warmth": "warm", "src.slot": 1}'
+register "H2 a build in a node's warm target slot" 3 "L1: the job built in a shared target dir (warmth 'warm')" 0.47.2 warm
+bundle nowarmth "$S2" build-a '{"src.warmth": null}'
+register "H2 no warmth said" 3 "built in a shared target dir (warmth None)" 0.47.2 nowarmth
+bundle envmode "$S2" build-a '{"secret_env": [], "env_names": ["BUILD_COMMIT", "BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET", "BUILD_TREE", "HOME"]}'
+register "H2 an env-mode job (the OAuth values in --env)" 3 "env the release build doesn't set: BUILD_GMAIL_CLIENT_ID, BUILD_GMAIL_CLIENT_SECRET" 0.47.2 envmode
+bundle nosecret "$S2" build-a '{"secret_env": []}'
+register "H2 no vault secrets at all (not a secret job)" 3 "did not get the OAuth values from the vault (secret_env lacks BUILD_GMAIL_CLIENT_ID, BUILD_GMAIL_CLIENT_SECRET)" 0.47.2 nosecret
+bundle onesecret "$S2" build-a '{"secret_env": ["BUILD_GMAIL_CLIENT_ID"]}'
+register "H2 only part of the OAuth secrets" 3 "secret_env lacks BUILD_GMAIL_CLIENT_SECRET" 0.47.2 onesecret
+bundle extrasecret "$S2" build-a '{"secret_env": ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET", "BUILD_SIGNING_KEY"]}'
+register "H2 a vault secret the build doesn't use" 3 "vault secrets the release build doesn't use: BUILD_SIGNING_KEY" 0.47.2 extrasecret
+bundle secretmismatch "$S2" build-a '{"plan.secret_env": ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET", "BUILD_MICROSOFT_CLIENT_ID"]}'
+register "H2 the plan's secrets are not the receipt's" 3 "the plan's vault secrets are not the receipt's" 0.47.2 secretmismatch
+bundle v1ms "$S2" build-a '{}' build-b "{\"secret_env\": $MS}"
+register "V1 got other vault secrets than L1" 3 "V1 got other vault secrets than L1" 0.47.2 v1ms
 
 echo "== refused: the V1 dual build =="
 bundle nov1 "$S2" build-a '{}' none
@@ -346,8 +435,27 @@ register "a bundle whose L1 lists no daemon still registers (the V1 set matches)
 refuses "S3b-8 an artifact not listed in L1's receipt" "$S5/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.5 "k2-daemon-linux-x86_64 is not an artifact in L1's signed receipt"
 refuses "aarch64 is never a compute asset: GitHub's attestation is still required" "$S5/k2-daemon-linux-aarch64" u2 k2-daemon-linux-aarch64 0.47.5 "no build attestation"
 
+echo "== L1: clear-compute-evidence (root) puts a version back on GitHub's path =="
+check "L1 clear 0.47.5's compute evidence (admin, audited)" 0 "compute evidence for 0.47.5 cleared" "$ADM" clear-compute-evidence 0.47.5
+grep -q $'\tCOMPUTE-EVIDENCE-CLEARED-BY-ADMIN\t' "$AUDIT/0.47.5/signatures.tsv" && pass "the clear is in the signer's audit log" || fail "clear audit" ""
+refuses "after the clear, the x86 daemon goes the GitHub way (attestation needed)" "$S5/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.5 "no build attestation"
+check "clearing again: nothing to clear" 3 "0.47.5 has no compute evidence registered" "$ADM" clear-compute-evidence 0.47.5
+check "the release user can't clear (no signer verb)" 2 "verbs:" "$K" clear-compute-evidence 0.47.5
+check "status after the clear: no compute evidence" 0 '"compute": null' "$K" status 0.47.5
+
 echo "== the test switch for per-file evidence never reaches compute-evidence =="
 K2SIGN_TEST_EVIDENCE=accept register "K2SIGN_TEST_EVIDENCE=accept: a bad bundle is still refused" 3 "does not verify" 0.47.2 badsig
+
+echo "== the rust pin comes from GitHub at the tag =="
+route "$REPOP/contents/rust-toolchain.toml?ref=$T" -
+register "no rust-toolchain.toml at the tag: refused" 3 "v0.47.2 has no rust-toolchain.toml on GitHub" 0.47.2 good4
+TWO_B64="$(printf '[toolchain]\nchannel = "1.99.1"\nchannel = "1.98.0"\n' | base64 | tr -d '\n')"
+route "$REPOP/contents/rust-toolchain.toml?ref=$T" "{\"encoding\": \"base64\", \"content\": \"$TWO_B64\"}"
+register "a rust-toolchain.toml with two channels: refused" 3 "pins 2 channels, want exactly 1" 0.47.2 good4
+OLD_B64="$(printf '[toolchain]\nchannel = "1.98.0"\n' | base64 | tr -d '\n')"
+route "$REPOP/contents/rust-toolchain.toml?ref=$T" "{\"encoding\": \"base64\", \"content\": \"$OLD_B64\"}"
+register "the tag pins another Rust than the jobs built with: refused" 3 "the job's rustc was 1.99.1, the tag pins 1.98.0" 0.47.2 good4
+release_routes 0.47.2
 
 echo "== no session, no evidence =="
 bundle nosess "$tmp/set-0.47.1"
@@ -421,6 +529,19 @@ assert dual == pol["compute_dual_names"].split(), (dual, pol["compute_dual_names
 for label in ("L1", "V1"):
     m = re.search(r'k2cr_submit %s .*? -- (bash scripts/ci/build-linux-bins\.sh x86_64)' % label, s)
     assert m and m.group(1) == pol["compute_argv"], label
+needs = re.search(r'local bins_needs="\$rust,([^"]+)"', s).group(1).split(",")
+assert ["rust@{rust_pin}"] + needs == pol["compute_needs"].split(), (needs, pol["compute_needs"])
+assert re.search(r"--artifact '([^']+)'", s).group(1) == pol["compute_artifacts"]
+PY
+python3 -I - "$REPO/crates/k2-node-proto/src/frames.rs" "$TROOT/usr/local/libexec/k2sign/k2sign.py" <<'PY' && pass "the signer's PLAN_KEYS are exactly frames.rs Plan's fields" || fail "plan field drift"
+import importlib.util, re, sys
+sys.dont_write_bytecode = True
+src = open(sys.argv[1]).read()
+body = re.search(r"pub struct Plan \{\n(.*?)\n\}", src, re.S).group(1)
+fields = set(re.findall(r"^    pub (\w+):", body, re.M))
+spec = importlib.util.spec_from_file_location("k2sign_drift", sys.argv[2])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert fields == m.PLAN_KEYS, (sorted(fields ^ m.PLAN_KEYS))
 PY
 
 finish

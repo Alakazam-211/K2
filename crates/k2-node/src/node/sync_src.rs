@@ -256,6 +256,12 @@ impl Node {
             sys("applied the dirty patch and untracked files".into());
             dirty_sha = Some(d.sha256.clone());
         }
+        // The main repo as the layout root: a --with repo must not land on
+        // a path its checkout already has (syncing it removes that path).
+        if let Some(sp) = a.plan.src_path.as_deref() {
+            k2_node_proto::frames::check_with_in_main_checkout(sp, &a.plan.with, |p| main_dir.join(p).symlink_metadata().is_ok())
+                .map_err(|e| fail("sync_failed", e))?;
+        }
         for w in &a.plan.with {
             let dest = dirs.src.join(&w.path);
             self.sync_repo(t, a, &git, &w.project_key, w.remote_url.as_deref(), &w.commit, &dest, &dirs.root, journal, stop).await?;

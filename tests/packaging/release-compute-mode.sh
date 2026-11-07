@@ -115,6 +115,9 @@ rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS="$PI
 [ "$rc" = 1 ] && grep -q "signs a compute-built" "$tmp/out-pf-k2sign-nov1" && ! grep -q pins "$tmp/calls-pf-k2sign-nov1" \
     && pass "compute under k2sign without V1 (K2_COMPUTE_VERIFY_NODE=none): refused (the signer needs the dual build)" \
     || fail "k2sign no V1" "rc=$rc $(cat "$tmp/out-pf-k2sign-nov1")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS="$PINS_OK" K2_COMPUTE_OAUTH=env run pf-k2sign-env k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "only from" "$tmp/out-pf-k2sign-env" && grep -q "secret jobs" "$tmp/out-pf-k2sign-env" \
+    && pass "compute under k2sign with K2_COMPUTE_OAUTH=env: refused (the signer takes only secret jobs)" || fail "k2sign env mode" "rc=$rc $(cat "$tmp/out-pf-k2sign-env")"
 rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS_FAIL=1 run pf-k2sign-old k2_linux_builds_preflight)"
 [ "$rc" = 1 ] && grep -q "can't list its K2 Compute pins" "$tmp/out-pf-k2sign-old" \
     && pass "compute under an older signer (no compute-pins verb): refused, re-install from this commit" || fail "k2sign old signer" "rc=$rc $(cat "$tmp/out-pf-k2sign-old")"

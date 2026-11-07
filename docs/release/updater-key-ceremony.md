@@ -209,16 +209,29 @@ is re-enrolled (its key changes):
    `openssl pkey -in ~/.k2/tunnel-key.pem -pubout -outform DER | shasum -a 256`
    then `sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <fp>`.
 3. Each release node (L1 and V1, at least `K2_COMPUTE_X86_NODE` and
-   `K2_COMPUTE_VERIFY_NODE`): save its public key from a receipt of a job
-   it ran, `k2 compute receipt <job> --json` (`node_public_key_pem`, as this
-   Mac's K2 pinned it at enrollment) to a file, then
-   `sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node <name> /abs/path/<name>.pem`.
-   It prints the key's fingerprint: it must equal `node_fp` in that node's
-   own `run/status.json` (read on the node, not through this Mac), or don't
-   use the pin (`unpin-compute-node <name>`).
+   `K2_COMPUTE_VERIFY_NODE`):
+   - **The fingerprint, out of band.** Read `node_fp` in that node's own
+     `run/status.json` on the node itself: at its console, or over ssh from
+     another machine (not this Mac, whose release user is what the pin
+     guards against). Write the 64 hex down.
+   - **The key.** Save `node_public_key_pem` from a receipt of a job it ran
+     (`k2 compute receipt <job> --json`, as this Mac's K2 pinned it at
+     enrollment) to a file.
+   - `sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node <name> /abs/path/<name>.pem <the fingerprint you wrote down>`.
+     Type the fingerprint yourself. The signer refuses the pin unless the
+     key's fingerprint is that one, so a key swapped on this Mac's side is
+     never pinned.
+   - A re-enrolled node has a new key: `unpin-compute-node <name>`, then pin again.
 4. `sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-pins` lists
    them; release.sh's pre-flight refuses compute mode until the controller
    and both release nodes are there.
+
+**Falling back to GitHub for a version that already has compute evidence.**
+Once evidence is registered, that version's x86 daemon signs only on it.
+To use GitHub's build instead (the fallback in `docs/ci-on-k2-compute.md`):
+`sudo /usr/local/libexec/k2sign/k2sign-admin clear-compute-evidence <version>`
+(audited as `COMPUTE-EVIDENCE-CLEARED-BY-ADMIN`). An x86 daemon already
+signed for that version stays the only bytes it signs (one sha per asset).
 
 ## What changes
 

@@ -299,6 +299,19 @@ each checked by the signer itself:
   release build command, ended done/exit 0, with no `--dirty`, no
   `--cache` and no env beyond the build's own (`BUILD_OAUTH` included:
   a placeholder daemon never ships);
+- the job's **plan** (in the bundle; the receipt only carries its digest)
+  hashes to the receipt's `plan_digest`, has no field the signer doesn't
+  know, and ships nothing that changes the build: no `--with`, no
+  `src_path`, no `cwd`, no `--cache`; needs exactly
+  `rust@<pin> cmake@3 sys:pkg-config sys:zlib1g-dev` (the pin read from
+  `rust-toolchain.toml` at the tag, on GitHub) and no other packages; env
+  exactly `BUILD_COMMIT`/`BUILD_TREE` set to what it built; artifacts
+  `dist/*`;
+- each job was a **secret job** (the Gmail id and secret from the vault,
+  plus the optional Microsoft id; the same set on L1 and V1), so it built
+  in its own target with its own `CARGO_HOME` and sccache: the receipt
+  says `warmth: private`. `K2_COMPUTE_OAUTH=env` or `placeholder` builds
+  are refused (the pre-flight says so first). The rustc that ran is the pin;
 - each job built the tree GitHub's tag `v<x>` has, at the tag commit or
   at a commit (hashed by the signer) with that tree whose only parent is
   the base commit the Touch ID approval named;
@@ -311,7 +324,8 @@ each checked by the signer itself:
   lists.
 
 Once a version has compute evidence, its x86 daemon signs only on it
-(no fallback to an attestation). aarch64 still needs GitHub's
+(no fallback to an attestation) until root runs `k2sign-admin
+clear-compute-evidence <version>` (audited) for the GitHub fallback. aarch64 still needs GitHub's
 attestation. The pre-flight (`k2_compute_signer_check`) refuses compute
 mode before any build unless the signer has the controller and both
 release nodes pinned and a V1 node is set. Pinning is in

@@ -38,9 +38,19 @@ apple_team = 36B8R93HXV
 compute_assets = k2-daemon-linux-x86_64
 # The release build command both jobs must have run (compute-release.sh L1/V1).
 compute_argv = bash scripts/ci/build-linux-bins.sh x86_64
-# The only --env / vault env a release build job may carry. BUILD_OAUTH (the
-# placeholder switch) is not one: a placeholder daemon never ships.
-compute_env = BUILD_COMMIT BUILD_TREE BUILD_GMAIL_CLIENT_ID BUILD_GMAIL_CLIENT_SECRET BUILD_MICROSOFT_CLIENT_ID
+# Exactly what the plan of a release build job needs ({rust_pin}: the
+# channel rust-toolchain.toml pins at the tag, read from GitHub; the job's
+# rustc must be that version too). compute-release.sh's bins_needs; a test
+# keeps the two equal. Its sys: names are the only packages a plan may list.
+compute_needs = rust@{rust_pin} cmake@3 sys:pkg-config sys:zlib1g-dev
+# The artifact globs the plan collects (compute-release.sh --artifact).
+compute_artifacts = dist/*
+# The OAuth values come only from the vault, as these names (secret mode).
+# The plan's env is exactly BUILD_COMMIT and BUILD_TREE. A job without these
+# secrets (env or placeholder mode) is refused: it isn't a secret job, so
+# it may share the node's warm target, CARGO_HOME and sccache.
+compute_secret_env = BUILD_GMAIL_CLIENT_ID BUILD_GMAIL_CLIENT_SECRET
+compute_secret_env_optional = BUILD_MICROSOFT_CLIENT_ID
 # V1 must reproduce these byte for byte (the root-key assets, plan G12;
 # compute-release.sh k2cr_dual_names, and a test keeps the two equal).
 compute_dual_names = k2-root-helper-linux-x86_64 k2-node-linux-x86_64 k2-app-engine-linux-x86_64

@@ -24,7 +24,8 @@ Signer verbs (the whole surface; anything else exits 2):
 Admin verbs (root):
   set-approver <pem>    repin    approve <version> <base> <asset>... [--windows] [--reapprove]
   generate-u2           import u1 <key file> [--password-stdin]
-  pin-compute-controller <fp>    pin-compute-node <name> <pem>    unpin-compute-node <name>
+  pin-compute-controller <fp>    pin-compute-node <name> <pem> <fp>    unpin-compute-node <name>
+  clear-compute-evidence <version>
 
 Exit codes: 0 ok; 2 usage; 3 refused (one red line saying why); 4 internal.
 
@@ -75,7 +76,8 @@ POLICY_KEYS = {
     "approval", "session_hours", "challenge_minutes", "max_stdin_mb",
     "assets.u1", "assets.u2", "windows_assets", "repo",
     "github_api", "daemon_workflow", "release_commit_files", "apple_team",
-    "compute_assets", "compute_argv", "compute_env", "compute_dual_names", "compute_receipt_max_hours",
+    "compute_assets", "compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env",
+    "compute_secret_env_optional", "compute_dual_names", "compute_receipt_max_hours",
 }
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
@@ -353,8 +355,9 @@ def load_policy(ctx):
     for a in pol["compute_assets"].split():
         if a not in LINUX_DAEMONS:
             raise Refused("policy: compute_assets may list only the Linux daemons (not %s)" % a)
-    if not pol["compute_argv"].split() or not pol["compute_dual_names"].split():
-        raise Refused("policy: compute_argv and compute_dual_names must not be empty")
+    for k in ("compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env", "compute_dual_names"):
+        if not pol[k].split():
+            raise Refused("policy: %s must not be empty" % k)
     return pol
 
 
@@ -942,6 +945,14 @@ def pe_evidence(asset, path):
 #   beyond the build's own; both started after this version's first
 #   approval; the root helper, k2-node and App engine are byte-identical in
 #   both (V1, G12); and the file on stdin is L1's signed artifact.
+#   The receipt only digests the job's plan, so the bundle carries the plan
+#   itself (S3b review H1): it must hash to the receipt's plan_digest and
+#   ship nothing that changes the build (no --with, src_path, cwd, --cache,
+#   extra packages; the release needs exactly, rust at the tag's pin; env
+#   exactly BUILD_COMMIT/BUILD_TREE; the OAuth values only as the expected
+#   vault secret names). A secret job never touches a node's shared caches
+#   (no warm target, its own CARGO_HOME and sccache), so warmth must be
+#   "private" (H2) and the rustc that ran must be the pin.
 
 COMPUTE_PINS = "compute-pins"
 COMPUTE_DOMAIN = b"k2-compute-receipt-v1"
@@ -956,6 +967,15 @@ NODE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 COMPUTE_NODE_ENV = {"HOME", "PATH", "CARGO_HOME", "RUSTUP_HOME", "CARGO_TARGET_DIR", "SCCACHE_DIR", "TMPDIR",
                     "LANG", "CI", "USER", "LOGNAME", "SHELL", "RUSTUP_TOOLCHAIN"}
 JOB_CACHE_ENV = "K2_JOB_CACHE"
+# The --env a release build job carries: exactly these two, set to what it built.
+COMPUTE_PLAN_ENV = ("BUILD_COMMIT", "BUILD_TREE")
+# Every field k2-node-proto frames.rs Plan has (a test keeps the two equal).
+# A field the signer doesn't know may change the build: refused.
+PLAN_KEYS = {"job_id", "node_id", "workspace_id", "workspace_label", "requested_by", "argv", "env", "cwd", "limits",
+             "src", "exclusive", "created_at", "needs", "artifacts", "stall_secs", "class", "session_id", "est_secs",
+             "est_p90_secs", "ws_max_running", "secret_env", "tier", "cache", "src_path", "with", "submitter",
+             "submitter_max_running", "packages", "git_access"}
+TOOLCHAIN_CHANNEL_RE = re.compile(r'^\s*channel\s*=\s*"([0-9A-Za-z][0-9A-Za-z.-]{0,63})"\s*$', re.M)
 # The DER header of a P-256 SubjectPublicKeyInfo (k2-node-proto crypto.rs).
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
 
@@ -1055,8 +1075,8 @@ def compute_state_path(ctx, version):
 
 
 def compute_bundle_receipts(bundle):
-    """The (label, body text, signature) of L1 and V1 from a bundle; any
-    shape problem is a refusal."""
+    """The (label, body text, signature, plan) of L1 and V1 from a bundle;
+    any shape problem is a refusal."""
     if not isinstance(bundle, dict) or bundle.get("v") != 1:
         raise Refused("the compute evidence is not a v1 bundle")
     recs = bundle.get("receipts")
@@ -1078,7 +1098,7 @@ def compute_bundle_receipts(bundle):
             body = canonical_json(r["receipt"])
         if not isinstance(body, str) or len(body) > (1 << 20):
             raise Refused("%s: the receipt body is not text" % label)
-        out.append((label, body, r["signature"]))
+        out.append((label, body, r["signature"], r.get("plan")))
     return out
 
 
@@ -1112,6 +1132,76 @@ def receipt_artifacts(label, rc):
     return arts
 
 
+def rust_pin_at(ctx, pol, version, t):
+    """The Rust channel rust-toolchain.toml pins at the tag commit T, read
+    by the signer from GitHub (never from the caller's checkout)."""
+    j = gh_api(ctx, pol, "/repos/%s/contents/rust-toolchain.toml?ref=%s" % (pol["repo"], t),
+               missing="v%s has no rust-toolchain.toml on GitHub" % version)
+    if not isinstance(j, dict) or j.get("encoding") != "base64" or not isinstance(j.get("content"), str):
+        raise Refused("GitHub's rust-toolchain.toml at v%s is not a base64 file" % version)
+    try:
+        text = base64.b64decode("".join(j["content"].split()), validate=True).decode("utf-8")
+    except Exception:
+        raise Refused("GitHub's rust-toolchain.toml at v%s does not decode" % version)
+    pins = TOOLCHAIN_CHANNEL_RE.findall(text)
+    if len(pins) != 1:
+        raise Refused("rust-toolchain.toml at v%s pins %d channels, want exactly 1" % (version, len(pins)))
+    return pins[0]
+
+
+def check_plan(label, plan, rc, pol, argv, want_needs):
+    """The job's plan (H1): what it is (its digest), and that nothing in it
+    changes the build beyond the release's own inputs."""
+    if not isinstance(plan, dict):
+        raise Refused("%s: the evidence has no job plan (k2 compute receipt from a K2 with the S3b plan field)" % label)
+    unknown = sorted(set(plan) - PLAN_KEYS)
+    if unknown:
+        raise Refused("%s: the plan has fields the signer doesn't know: %s" % (label, ", ".join(unknown[:5])))
+    if "sha256:" + hashlib.sha256(canonical_json(plan).encode("utf-8")).hexdigest() != rc.get("plan_digest"):
+        raise Refused("%s: the plan does not hash to the receipt's plan_digest" % label)
+    if plan.get("job_id") != rc.get("job_id"):
+        raise Refused("%s: the plan is for job %s, the receipt for %s" % (label, plan.get("job_id"), rc.get("job_id")))
+    if plan.get("argv") != argv:
+        raise Refused("%s: the plan's command is not the release build command" % label)
+    if plan.get("with"):
+        raise Refused("%s: the plan ships --with repos (%s): they would lay other code into the build"
+                      % (label, ", ".join(str((w or {}).get("path")) for w in plan["with"])[:200]))
+    if plan.get("src_path") is not None:
+        raise Refused("%s: the plan has a --with layout (src_path %r)" % (label, plan["src_path"]))
+    if plan.get("cwd") is not None:
+        raise Refused("%s: the plan runs in another folder (cwd %r)" % (label, plan["cwd"]))
+    if plan.get("cache") is not None:
+        raise Refused("%s: the plan mounts a --cache (%r)" % (label, plan["cache"]))
+    src, rsrc = plan.get("src"), rc.get("src") or {}
+    if not isinstance(src, dict) or src.get("commit") != rsrc.get("commit") or src.get("dirty") is not None:
+        raise Refused("%s: the plan's source is not the commit the receipt ran, clean" % label)
+    want_env = {"BUILD_COMMIT": rsrc.get("commit"), "BUILD_TREE": rsrc.get("tree")}
+    if plan.get("env") != want_env:
+        got = plan.get("env") if isinstance(plan.get("env"), dict) else {}
+        extra = sorted(set(got) - set(COMPUTE_PLAN_ENV))
+        if extra:
+            raise Refused("%s: the plan sets env the release build doesn't: %s" % (label, ", ".join(extra[:5])))
+        raise Refused("%s: the plan's BUILD_COMMIT/BUILD_TREE are not the commit and tree it ran" % label)
+    needs = plan.get("needs") or []
+    if not isinstance(needs, list) or sorted(needs) != sorted(want_needs) or len(set(needs)) != len(needs):
+        raise Refused("%s: the plan needs %s, the release build needs %s" % (label, " ".join(map(str, needs)), " ".join(want_needs)))
+    pkgs = plan.get("packages") or []
+    want_pkgs = sorted(n[4:] for n in want_needs if n.startswith("sys:"))
+    if pkgs and pkgs != want_pkgs:
+        raise Refused("%s: the plan installs packages beyond the release needs: %s" % (label, " ".join(map(str, pkgs))[:200]))
+    if (plan.get("artifacts") or []) != pol["compute_artifacts"].split():
+        raise Refused("%s: the plan collects %s, not %s" % (label, plan.get("artifacts"), pol["compute_artifacts"]))
+    req, opt = set(pol["compute_secret_env"].split()), set(pol["compute_secret_env_optional"].split())
+    sec = plan.get("secret_env") or []
+    if sec != (rc.get("secret_env") or []) or len(set(sec)) != len(sec):
+        raise Refused("%s: the plan's vault secrets are not the receipt's" % label)
+    if not req <= set(sec):
+        raise Refused("%s: the job did not get the OAuth values from the vault (secret_env lacks %s): an env-mode or "
+                      "placeholder build shares the node's caches and never ships" % (label, ", ".join(sorted(req - set(sec)))))
+    if not set(sec) <= req | opt:
+        raise Refused("%s: the job got vault secrets the release build doesn't use: %s" % (label, ", ".join(sorted(set(sec) - req - opt))))
+
+
 def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
     """Every S3b condition (header above). Returns a summary for the state
     file and the audit log; refuses with the first failed condition."""
@@ -1132,7 +1222,9 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
         commit_obj = parse_commit_object(raw)
     argv = pol["compute_argv"].split()
     want_argv = hashlib.sha256(canonical_json(argv).encode()).hexdigest()
-    env_ok = set(pol["compute_env"].split())
+    env_ok = set(COMPUTE_PLAN_ENV)
+    pin = rust_pin_at(ctx, pol, version, t)
+    want_needs = [n.replace("{rust_pin}", pin) for n in pol["compute_needs"].split()]
     now = ctx.now()
     if session is not None:
         not_before = int(session.get("opened", session["approved"])) - COMPUTE_SKEW_SECS
@@ -1142,7 +1234,7 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
         since = "the last %s hours" % pol["compute_receipt_max_hours"]
     oldest = now - int(pol["compute_receipt_max_hours"]) * 3600
     seen, out = {}, {}
-    for label, body, sig in compute_bundle_receipts(bundle):
+    for label, body, sig, plan in compute_bundle_receipts(bundle):
         try:
             rc = json.loads(body)
         except ValueError:
@@ -1185,7 +1277,10 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
             if c_parents != [base]:
                 raise Refused("%s: commit %s's parent is %s, not the approved base %s"
                               % (label, c_sha[:12], ",".join(p[:12] for p in c_parents) or "none", base[:12]))
-        names = [str(n) for n in (rc.get("env_names") or [])] + [str(n) for n in (rc.get("secret_env") or [])]
+        if src.get("warmth") != "private":
+            raise Refused("%s: the job built in a shared target dir (warmth %r): a release build must be a secret job, "
+                          "which uses only its own target, CARGO_HOME and sccache" % (label, src.get("warmth")))
+        names = [str(n) for n in (rc.get("env_names") or [])]
         if JOB_CACHE_ENV in names:
             raise Refused("%s: the job ran with a --cache mount" % label)
         extra = sorted(n for n in set(names) if n not in env_ok and n not in COMPUTE_NODE_ENV and not n.startswith("K2_"))
@@ -1198,6 +1293,10 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
             raise Refused("%s: an old receipt: the job started %s, before %s" % (label, hhmm(started), since))
         if ended > now + COMPUTE_SKEW_SECS:
             raise Refused("%s: the receipt ends in the future (%s)" % (label, hhmm(ended)))
+        rustc = (rc.get("tools_used") or {}).get("rustc")
+        if rustc != pin:
+            raise Refused("%s: the job's rustc was %s, the tag pins %s" % (label, rustc, pin))
+        check_plan(label, plan, rc, pol, argv, want_needs)
         rid = hashlib.sha256(body.encode()).hexdigest()
         seen[label] = (rc, receipt_artifacts(label, rc), name)
         out[label] = {"job": rc.get("job_id"), "node": name, "node_fp": fp, "receipt": rid,
@@ -1207,6 +1306,8 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
         raise Refused("V1 ran on the same node as L1 (%s): the dual build needs a second node" % n1)
     if l1.get("job_id") == v1.get("job_id"):
         raise Refused("V1 is the same job as L1")
+    if sorted(l1.get("secret_env") or []) != sorted(v1.get("secret_env") or []):
+        raise Refused("V1 got other vault secrets than L1: the two builds are not the same build")
     for n in pol["compute_dual_names"].split():
         k = "dist/" + n
         if k not in a1:
@@ -1216,7 +1317,7 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
         if a1[k]["sha256"] != av[k]["sha256"] or a1[k]["bytes"] != av[k]["bytes"]:
             raise Refused("V1 mismatch: %s differs between L1 on %s (%s…) and V1 on %s (%s…)"
                           % (n, n1, a1[k]["sha256"][:12], nv, av[k]["sha256"][:12]))
-    summary = {"tag_commit": t, "tree": t_tree, "base": base, "built_commit": l1["src"]["commit"], "jobs": out}
+    summary = {"tag_commit": t, "tree": t_tree, "base": base, "built_commit": l1["src"]["commit"], "rust": pin, "jobs": out}
     if asset is not None:
         k = "dist/" + asset
         if k not in a1:
@@ -1844,16 +1945,22 @@ def admin_pin_compute_controller(ctx, args):
 
 
 def admin_pin_compute_node(ctx, args):
-    """A release node's public key. Compare the printed fingerprint with
-    node_fp in that node's own run/status.json before trusting it."""
-    if len(args) != 2 or not NODE_NAME_RE.match(args[0]):
-        raise Usage("pin-compute-node <node name> <public key pem file>")
+    """A release node's public key, pinned only when its fingerprint equals
+    the one a person typed after reading it out of band: node_fp in that
+    node's own run/status.json, read on the node's console or from another
+    machine, never through this Mac's K2 (S3b review M2)."""
+    if len(args) != 3 or not NODE_NAME_RE.match(args[0]):
+        raise Usage("pin-compute-node <node name> <public key pem file> <expected fingerprint: 64 hex, from the node itself>")
+    if not FP_RE.match(args[2]):
+        raise Usage("the expected fingerprint is 64 lowercase hex (node_fp in the node's run/status.json)")
     if not os.path.isabs(args[1]):
         raise Usage("pin-compute-node needs an absolute path (the wrapper runs from /)")
     check_pins(ctx)
     with open(args[1]) as f:
         der = spki_from_pem(f.read(8192))
     fp = hashlib.sha256(der).hexdigest()
+    if fp != args[2]:
+        raise Refused("that key's fingerprint is %s, not the %s you read from node %s: not pinned" % (fp, args[2], args[0]))
     controller, nodes = load_compute_pins(ctx)
     for other_fp, (n, _) in list(nodes.items()):
         if n == args[0]:
@@ -1862,7 +1969,7 @@ def admin_pin_compute_node(ctx, args):
             raise Refused("that key is already pinned as node %s" % n)
     nodes[fp] = (args[0], der)
     write_compute_pins(ctx, controller, nodes)
-    say("compute node %s pinned: fingerprint %s. Check it equals node_fp in that node's run/status.json." % (args[0], fp))
+    say("compute node %s pinned: fingerprint %s (it equals the one you read from the node)" % (args[0], fp))
 
 
 def admin_unpin_compute_node(ctx, args):
@@ -1877,10 +1984,30 @@ def admin_unpin_compute_node(ctx, args):
     say("compute node %s unpinned" % args[0])
 
 
+def admin_clear_compute_evidence(ctx, args):
+    """Drop a version's registered compute evidence, so its x86 daemon goes
+    the GitHub way again (the documented fallback). Audited. The replay
+    registry stays, and the one-sha-per-asset rule still holds: bytes
+    already signed for this version stay the only ones it signs."""
+    if len(args) != 1:
+        raise Usage("clear-compute-evidence <version>")
+    version = check_version(args[0])
+    check_pins(ctx)
+    with Locked(ctx):
+        p = compute_state_path(ctx, version)
+        if not os.path.exists(p):
+            raise Refused("%s has no compute evidence registered" % version)
+        summary = read_json(p).get("summary") or {}
+        os.unlink(p)
+        audit(ctx, version, "COMPUTE-EVIDENCE-CLEARED-BY-ADMIN", detail="tree %s; %s" % (summary.get("tree"), "; ".join(
+            "%s job %s" % (k, (v or {}).get("job")) for k, v in sorted((summary.get("jobs") or {}).items()))))
+    say("compute evidence for %s cleared (audited): its x86 daemon now needs GitHub's attestation" % version)
+
+
 ADMIN_VERBS = {"set-approver": admin_set_approver, "repin": admin_repin, "approve": admin_approve,
                "generate-u2": admin_generate_u2, "import": admin_import, "set-gh-token": admin_set_gh_token,
                "pin-compute-controller": admin_pin_compute_controller, "pin-compute-node": admin_pin_compute_node,
-               "unpin-compute-node": admin_unpin_compute_node}
+               "unpin-compute-node": admin_unpin_compute_node, "clear-compute-evidence": admin_clear_compute_evidence}
 
 
 def main(argv):

@@ -387,6 +387,10 @@ async fn compute_end_to_end_with_the_real_node() {
     assert_eq!(k2_node_proto::crypto::fingerprint_of_spki_der(&spki), parsed["node_fp"].as_str().unwrap());
     let signed = k2_node_proto::frames::SignedReceipt { body: body.to_string(), sig: rv["signature"].as_str().unwrap().to_string() };
     assert!(signed.verify(&spki).is_some(), "the route's body + signature verify with the node's key");
+    // S3b review H1: the plan rides along and is the plan the receipt digests.
+    let plan: k2_node_proto::frames::Plan = serde_json::from_value(rv["plan"].clone()).expect("the route returns the plan");
+    assert_eq!(plan.digest().unwrap(), parsed["plan_digest"].as_str().unwrap(), "the plan hashes to the receipt's plan_digest");
+    assert_eq!(plan.job_id, parsed["job_id"].as_str().unwrap());
     // Another workspace's agent can't see it.
     let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": other.id, "toggle": "compute", "value": true})).await;
     assert_eq!(r.status, 200);

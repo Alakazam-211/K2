@@ -690,6 +690,37 @@ async fn with_repos_are_laid_out_beside_the_main_one() {
     assert!(!fr.iter().any(|f| matches!(f, Frame::Need(_))), "nothing asked for");
 }
 
+/// S3b review H1: with the main repo as the layout root (`src_path` ""),
+/// a `--with` repo at a path the main checkout has would replace those
+/// files under a receipt naming the main tree. The node refuses it after
+/// the main checkout and before the sibling syncs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_with_repo_on_a_path_of_the_main_checkout_is_refused() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-with-nest", "", |_| {}).await;
+    let (md, _, md_head) = temp_repo();
+    let (_other, _, other_head) = temp_repo();
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let mut p = plan("wn1", &["/bin/sh", "-c", "cat a.txt"]);
+    p.src = Some(Src { project_key: "pk-nest".into(), remote_url: None, commit: md_head.clone(), dirty: None, slots: 1 });
+    p.src_path = Some(String::new());
+    p.with = vec![frames::SrcWith { path: "a.txt".into(), project_key: "pk-other".into(), remote_url: None, commit: other_head.clone() }];
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = c.until(|f| matches!(f, Frame::Need(_))).await;
+    let Frame::Need(need) = fr.last().unwrap() else { unreachable!() };
+    assert_eq!(need.want, md_head, "the main repo first");
+    let b = bundle_for(&md, "wn1", &md_head, &n.dir.join("nest.bundle"));
+    send_blob(&c, "wn1", TransferKind::Bundle, &b, 1000);
+    let fr = run_to_receipt(&mut c, "wn1").await;
+    let last = states_of(&fr, "wn1").into_iter().last().unwrap();
+    assert_eq!((last.state, last.reason.as_deref()), (JobState::Failed, Some("sync_failed")));
+    let sys = text(&logs_of(&fr, "wn1"), LogStream::Sys);
+    assert!(sys.contains("\"a.txt\" is inside the main checkout"), "{sys}");
+    assert!(!fr.iter().any(|f| matches!(f, Frame::Need(nd) if nd.want == other_head)), "the --with repo was never asked for");
+    assert!(text(&logs_of(&fr, "wn1"), LogStream::Out).is_empty(), "the command never ran");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dirty_blob_is_applied_and_a_bad_digest_fails_the_job() {
     let mut fake = Fake::start().await;

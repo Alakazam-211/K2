@@ -902,6 +902,29 @@ pub fn check_layout(src_path: &str, with: &[SrcWith]) -> Result<(), String> {
     Ok(())
 }
 
+/// The second half of the `--with` layout check, run on the node once the
+/// main checkout (and any dirty patch) is in place. When the main repo is
+/// the layout root (`src_path` `""`), every `--with` repo lands inside its
+/// checkout, and syncing one first removes what is at its path. So a path
+/// the main checkout already has (`exists`) is refused: a `--with` repo
+/// never replaces the main repo's files, and the receipt's tree stays the
+/// tree that ran (S3b security review H1). A path the main repo doesn't
+/// have (a nested repo it ignores) is still fine. `Err` names the path.
+pub fn check_with_in_main_checkout(src_path: &str, with: &[SrcWith], exists: impl Fn(&str) -> bool) -> Result<(), String> {
+    if !src_path.is_empty() {
+        return Ok(());
+    }
+    for w in with {
+        if exists(&w.path) {
+            return Err(format!(
+                "--with {:?} is inside the main checkout, which already has that path: a --with repo never replaces the main repo's files",
+                w.path
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Blob {
     pub sha256: String,
@@ -1931,6 +1954,20 @@ mod tests {
         assert!(check_layout("../m", &[w("x")]).is_err());
         assert!(check_layout("m", &[w("x"), w("x")]).is_err(), "twice");
         assert!(check_layout("m", &(0..=MAX_WITH).map(|i| w(&format!("r{i}"))).collect::<Vec<_>>()).is_err());
+    }
+
+    /// S3b review H1: with the main repo as the layout root, a `--with`
+    /// repo at a path the main checkout has (crates/k2-daemon) would
+    /// replace those files under a receipt that names the main tree.
+    #[test]
+    fn a_with_repo_never_replaces_the_main_checkouts_files() {
+        let w = |p: &str| SrcWith { path: p.into(), project_key: "k".into(), remote_url: None, commit: "a".repeat(40) };
+        let tracked = |p: &str| matches!(p, "crates/k2-daemon" | "crates" | "Cargo.toml");
+        let e = check_with_in_main_checkout("", &[w("vendor/dep"), w("crates/k2-daemon")], tracked).unwrap_err();
+        assert!(e.contains("\"crates/k2-daemon\" is inside the main checkout"), "{e}");
+        assert!(check_with_in_main_checkout("", &[w("Cargo.toml")], tracked).is_err());
+        assert!(check_with_in_main_checkout("", &[w("vendor/dep")], tracked).is_ok(), "a nested repo the main one doesn't have");
+        assert!(check_with_in_main_checkout("m", &[w("crates/k2-daemon")], tracked).is_ok(), "siblings: check_layout's overlap rule covers them");
     }
 
     #[test]

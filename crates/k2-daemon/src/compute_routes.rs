@@ -3805,6 +3805,11 @@ fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
         "body": signed.body,
         "signature": signed.sig,
         "node_public_key_pem": node_key,
+        // The plan the node ran (its canonical JSON hashes to the receipt's
+        // `plan_digest`), so a checker sees every input the receipt only
+        // digests: --with, cwd, --cache, needs, env. Env VALUES are in it
+        // (as in every plan); vault secrets never are (names only).
+        "plan": j.plan().and_then(|p| serde_json::to_value(p).ok()),
         "proves": "which node said it ran which inputs and got which outputs — not that the node is honest",
     });
     // SE8/SE29: the env names the node says the job got from the vault.

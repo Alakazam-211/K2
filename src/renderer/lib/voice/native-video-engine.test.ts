@@ -146,6 +146,10 @@ describe('parsing the plugin shapes', () => {
         if (t !== null) expect(generic.has(t.line), `${reason} falls back to the generic line`).toBe(false)
       }
     }
+    // A camera that went away, or (Sew 0.8.3) sends no picture, says so plainly.
+    expect(localVideoReasonText('camera_lost', 'camera')?.line).toBe('Your camera disconnected.')
+    expect(localVideoReasonText('no_frames', 'camera')?.line).toMatch(/isn't sending a picture/)
+    expect(parseLocalVideo(contract.localVideo.lost)).toEqual({ camera: 'off', screen: 'on', reason: 'camera_lost' })
     // The person's own off says nothing; a hidden window says why.
     expect(localVideoReasonText('unpublished', 'camera')).toBeNull()
     expect(localVideoReasonText('user_stopped', 'screen')).toBeNull()

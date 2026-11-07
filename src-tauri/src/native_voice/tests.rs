@@ -31,8 +31,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// The repository and commit the root Cargo.toml's `tauri-plugin-sew-voice`
-/// row pins: Sew's public mirror for a release, Sew's own repository for a
-/// pre-release.
+/// row pins (Sew's public mirror).
 fn sew_pin() -> (String, String) {
     let root_manifest = std::fs::read_to_string(repo_root().join("Cargo.toml")).expect("root Cargo.toml");
     let row = root_manifest
@@ -50,7 +49,7 @@ fn sew_pin() -> (String, String) {
 
 /// A file of one of Sew's crates, from the pinned commit cargo checked out (the
 /// root Cargo.toml's rev). Offline: this build already fetched it. The mirror
-/// has each crate at its root; Sew's own repository under `crates/`.
+/// has each crate at its root.
 fn sew_crate_file(krate: &str, rel: &str) -> Vec<u8> {
     let (repo, rev) = sew_pin();
     let short = &rev[..7];
@@ -68,10 +67,9 @@ fn sew_crate_file(krate: &str, rel: &str) -> Vec<u8> {
         if !ours {
             continue;
         }
-        for path in [dir.join(short).join(krate).join(rel), dir.join(short).join("crates").join(krate).join(rel)] {
-            if path.exists() {
-                return std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-            }
+        let path = dir.join(short).join(krate).join(rel);
+        if path.exists() {
+            return std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         }
     }
     panic!("{krate}/{rel} of {repo} at {short} isn't under {}", checkouts.display())
@@ -214,9 +212,11 @@ fn the_renderers_video_contract_file_matches_the_plugin() {
     }
     let tracks: Vec<VideoTrack> = exact(&f["video"]);
     assert!(tracks[2].is_self);
-    for name in ["on", "paused", "refused", "hidden"] {
+    for name in ["on", "paused", "refused", "hidden", "lost"] {
         let _: LocalVideo = exact(&f["localVideo"][name]);
     }
+    let lost: LocalVideo = exact(&f["localVideo"]["lost"]);
+    assert_eq!((lost.camera, lost.reason.as_deref()), (LocalVideoState::Off, Some(video_code::CAMERA_LOST)), "a camera that went away");
     assert_eq!(exact::<LocalVideo>(&f["localVideo"]["hidden"]).screen, LocalVideoState::Paused);
     let sources: Vec<ScreenSource> = exact(&f["screenSources"]);
     assert_eq!(sources[1].app.as_deref(), Some("Acme Docs"));
@@ -281,6 +281,12 @@ fn the_renderers_video_contract_file_matches_the_plugin() {
         tauri_plugin_sew_voice::wire::video_reason::SOURCE_CLOSED,
         tauri_plugin_sew_voice::wire::video_reason::VIDEO_DISABLED,
         tauri_plugin_sew_voice::video::SYSTEM_UI,
+        // A camera whose source ended (unplugged, an iPhone walked away): the
+        // track is unpublished with the engine's own code as the reason.
+        video_code::CAMERA_LOST,
+        // Sew 0.8.3: the camera opened but sent no frame. Not in the plugin
+        // yet; the renderer has its words ready.
+        "no_frames",
     ];
     assert_eq!(f["reasons"], json!(reasons));
 }

@@ -1,5 +1,5 @@
 {
-  "_": "The JSON K2 reads from tauri-plugin-sew-voice's video commands and events (prd-sew-62 §B7). src-tauri's native_voice::tests holds this file to the plugin's real types at the pinned commit (Sew 0.8.2: commands, events, every payload, the refusal codes and the stop reasons); native-video-engine.test.ts holds the TS adapter to this file.",
+  "_": "The JSON K2 reads from tauri-plugin-sew-voice's video commands and events (prd-sew-62 §B7). src-tauri's native_voice::tests holds this file to the plugin's real types at the pinned commit (Sew 0.8.2: commands, events, every payload, the refusal codes and the stop reasons; no_frames is Sew 0.8.3's, listed ahead); native-video-engine.test.ts holds the TS adapter to this file.",
   "decisions": [
     "command arguments are snake_case (sink_id)",
     "video_sink's sink_id is a u32 number (the frame header's); codec is null in decoded mode, and also in encoded mode for a self-view sink opened before the camera or preview runs",
@@ -133,6 +133,11 @@
       "camera": "off",
       "screen": "paused",
       "reason": "hidden"
+    },
+    "lost": {
+      "camera": "off",
+      "screen": "on",
+      "reason": "camera_lost"
     }
   },
   "screenSources": [
@@ -437,7 +442,9 @@
     "user_stopped",
     "source_closed",
     "video_disabled",
-    "system_ui"
+    "system_ui",
+    "camera_lost",
+    "no_frames"
   ],
   "engineReasons": [
     "unpublished"

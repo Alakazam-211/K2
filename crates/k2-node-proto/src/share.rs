@@ -56,6 +56,10 @@ pub const TENANT_UID_FIRST: u32 = 61001;
 pub const TENANT_UID_LAST: u32 = 64999;
 /// A tenant job user's name prefix (`k2job-<slot>`).
 pub const TENANT_USER_PREFIX: &str = "k2job-";
+/// Per-job uids (protocol 9, C2, vs-live V15): each slot has this many
+/// recycled pool users (`k2job-<slot>-<n>`, uids from the tenant range), so
+/// at most this many secret jobs of one slot run as their own uid at once.
+pub const JOB_UID_POOL: u32 = 8;
 /// `servers.toml` `max_servers` when absent: 3 servers per node (the owner
 /// plus two; Rosson 2026-10-21, proposed for the Mac minis, pending his
 /// final answer). The node owner may set 1 (no sharing) up to [`MAX_SLOTS`].
@@ -188,6 +192,9 @@ pub mod blocked {
     /// A leftover process from an earlier job holds a slot (its unit is
     /// still alive; SE26 counts it as another workspace's secret job).
     pub const LINGERING: &str = "lingering";
+    /// C2: every per-job uid of the job's slot is in use
+    /// ([`super::JOB_UID_POOL`] secret jobs run as their own uid there).
+    pub const JOB_UID_POOL_BUSY: &str = "job_uid_pool_busy";
 
     /// A job waiting for one of these doesn't hold the queue: jobs behind
     /// it may start first (its own limit, not the node's room).

@@ -214,6 +214,10 @@ impl Node {
                 }
             }
         }
+        // C2: secret jobs run as a per-job uid here (protocol 9 only).
+        if t.speaks_ci() && self.job_uid_ready() && !f.iter().any(|x| x == k2_node_proto::ci::FEATURE_JOB_UID) {
+            f.push(k2_node_proto::ci::FEATURE_JOB_UID.to_string());
+        }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.
         if t.speaks_easy() {

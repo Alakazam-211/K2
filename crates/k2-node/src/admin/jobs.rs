@@ -311,6 +311,14 @@ pub struct JobStart {
     /// executor ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_secs: Option<u64>,
+    /// Protocol 9 (C2): run the job as a per-job uid from its slot's pool
+    /// ([`super::jobpool`]) instead of the slot's job user; every
+    /// read-write path must be inside the job root. The answer's
+    /// `uid_index` says which uid. Sent only when `Ready` said `job_uid`;
+    /// an older executor ignores the field, so the node fails a start
+    /// whose answer has no `uid_index` (never a silent shared uid).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub job_uid: bool,
 }
 
 /// `RuntimeMaxSec` is the job's limit plus this: while a node runs, it
@@ -344,8 +352,17 @@ pub enum JobAnswer {
         job_user: String,
         #[serde(default)]
         stdin: bool,
+        /// Protocol 9 (C2): secret jobs may run as a per-job uid here
+        /// ([`super::jobpool`]). An older executor omits it (false).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        job_uid: bool,
     },
-    Started { unit: String },
+    Started {
+        unit: String,
+        /// The per-job uid's pool index, for a `job_uid` start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uid_index: Option<u32>,
+    },
     Status(UnitStatus),
     Done { detail: Value },
     Refused(AdminRefusal),
@@ -912,6 +929,11 @@ fn find_program(name: &str) -> Option<PathBuf> {
     ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].iter().map(|d| Path::new(d).join(name)).find(|p| p.is_file())
 }
 
+/// [`find_program`] for the per-job uid pool ([`super::jobpool`]).
+pub(crate) fn find_program_in_sbin(name: &str) -> Option<PathBuf> {
+    find_program(name)
+}
+
 pub(crate) fn systemctl(args: &[&str]) -> Result<String, String> {
     let prog = find_program("systemctl").ok_or("systemctl not found")?;
     let out = std::process::Command::new(&prog)
@@ -1168,12 +1190,12 @@ impl Executor {
     /// The job ops (the server checked the peer: root or the node user).
     pub fn handle_job(&self, op: &JobOp, fds: Vec<OwnedFd>) -> JobAnswer {
         let r = match op {
-            JobOp::Ready => self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u, stdin: true }),
+            JobOp::Ready => self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u, stdin: true, job_uid: self.job_uid_ready().is_ok() }),
             // No job starts while an owner change is unfinished (its trees
             // and users are moving), whatever the node's control says
             // (verification L3).
             JobOp::Start(_) if super::update::control_held(self) => Err(super::owner::in_progress_refusal("a job start")),
-            JobOp::Start(s) => self.start_job(s, fds).map(|unit| JobAnswer::Started { unit }),
+            JobOp::Start(s) => self.start_job(s, fds).map(|(unit, uid_index)| JobAnswer::Started { unit, uid_index }),
             JobOp::Status { unit } => self.with_unit(unit, |u| unit_status(u).map(JobAnswer::Status)),
             JobOp::Stop { unit } => self.with_unit(unit, |u| systemctl(&["stop", "--no-block", u]).map(|_| JobAnswer::Done { detail: json!({"stopping": u}) })),
             // Never blocks (V58): a job that ignores SIGTERM holds only its
@@ -1271,7 +1293,7 @@ impl Executor {
         gone
     }
 
-    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<String, AdminRefusal> {
+    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<(String, Option<u32>), AdminRefusal> {
         let ids = self.job_ids(s.tenant)?;
         if key_slot(&s.key) != s.tenant {
             return Err(refuse(code::BAD_ARGS, format!("job key {:?} isn't a slot-{} key", s.key, s.tenant)));
@@ -1280,6 +1302,14 @@ impl Executor {
         let (root, rw) = check_paths(&self.paths.home, s.tenant, &s.root, &s.rw)?;
         let node_uid = super::server::user_ids(&self.node_user()).map(|(u, _)| u).ok_or_else(|| refuse(code::NOT_CONFIGURED, "the node user is missing"))?;
         check_bind_sources(&root, node_uid)?;
+        // C2: a per-job uid writes only its own job root (so its files can
+        // only be there when the pool proves it empty for reuse).
+        if s.job_uid {
+            self.job_uid_ready()?;
+            if let Some(p) = rw.iter().find(|p| **p != root && !inside(p, &root)) {
+                return Err(refuse(code::BAD_ARGS, format!("a job with its own uid writes only its job root, not {}", p.display())));
+            }
+        }
         // Exactly two fds, or exactly three with `stdin` (SE21): a fixed,
         // checked relay. The third must be the read end of a pipe; root
         // never reads from it, it only becomes systemd-run's stdin, which
@@ -1312,7 +1342,7 @@ impl Executor {
         if s.tenant != OWNER_SLOT && v < MIN_SYSTEMD_TENANT {
             return Err(refuse(share::codes::TENANT_WALL_MISSING, format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: no tenant jobs here")));
         }
-        let plan = UnitPlan {
+        let mut plan = UnitPlan {
             unit: unit.clone(),
             job_uid: ids.uid,
             group_gid: ids.gid,
@@ -1338,19 +1368,31 @@ impl Executor {
                 return Err(refuse(code::BUSY, format!("{unit} is already starting")));
             }
         }
-        let r = self.spawn_unit(&plan, &unit, out, err, input);
+        // C2: a uid of the slot's pool, proven empty, and the tree handed to
+        // it, before the unit exists. A refusal fails the start; the job
+        // never falls back to the slot's shared uid.
+        let mut uid_index = None;
+        let r = (|| {
+            if s.job_uid {
+                let (index, uid) = self.job_uid_lease(s.tenant, &ids, &unit, &plan.root)?;
+                self.job_uid_take_tree(&plan.root, uid, ids.gid)?;
+                plan.job_uid = uid;
+                uid_index = Some(index);
+            }
+            self.spawn_unit(&plan, &unit, out, err, input)
+        })();
         starting().lock().unwrap_or_else(|e| e.into_inner()).remove(&unit);
         let _ = self.audit().append(
             super::store::AuditEntry {
                 event: "job".into(),
                 // `stdin` only says a secret-env pipe was relayed; root never
                 // sees what is in it.
-                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns}),
+                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns, "job_uid": uid_index}),
                 ..Default::default()
             },
             self.now(),
         );
-        r.map(|_| unit)
+        r.map(|_| (unit, uid_index))
     }
 
     fn spawn_unit(&self, plan: &UnitPlan, unit: &str, out: OwnedFd, err: OwnedFd, input: Option<OwnedFd>) -> Result<(), AdminRefusal> {
@@ -2043,8 +2085,10 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60) }),
-            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true }),
+            JobOp::KeyTaint { node_fp: "a".repeat(64), mark: Some("--dev".into()) },
+            JobOp::KeyTaint { node_fp: "a".repeat(64), mark: None },
             JobOp::Tenants,
             JobOp::TenantPrepare(share::TenantPrepare { slot: 1, trust: share::Trust::Own, weight: 1, network: Network::On }),
             JobOp::TenantWipe(share::TenantWipe { slot: 1 }),
@@ -2062,10 +2106,19 @@ mod tests {
         let JobOp::Start(s) = old else { panic!() };
         assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
         // A start without stdin is the 0.46.3 wire, byte for byte.
-        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None });
-        assert!(!serde_json::to_string(&plain).unwrap().contains("stdin"));
-        // An older executor's Ready (no stdin) reads as "can't relay stdin".
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false });
+        let text = serde_json::to_string(&plain).unwrap();
+        assert!(!text.contains("stdin") && !text.contains("job_uid"), "{text}");
+        // An older executor's Ready (no stdin) reads as "can't relay stdin",
+        // and as "no per-job uids" (C2).
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false });
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false });
+        // An older executor's Started has no uid index: the node fails a
+        // job_uid start on it.
+        let a: JobAnswer = serde_json::from_str(r#"{"answer":"started","unit":"k2job-k.service"}"#).unwrap();
+        assert_eq!(a, JobAnswer::Started { unit: "k2job-k.service".into(), uid_index: None });
+        let s = serde_json::to_string(&JobAnswer::Started { unit: "u".into(), uid_index: None }).unwrap();
+        assert_eq!(s, r#"{"answer":"started","unit":"u"}"#, "0.46.9's bytes");
+        assert_eq!(serde_json::to_string(&JobAnswer::KeyTaint { tainted: true }).unwrap(), r#"{"answer":"key_taint","tainted":true}"#);
     }
 }

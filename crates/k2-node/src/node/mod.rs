@@ -99,6 +99,9 @@ pub struct NodeOptions {
     /// Does the executor relay a secret-env stdin pipe? `None` = ask it
     /// (`Ready.stdin`) at start and on every wall probe (tests set it).
     pub exec_stdin: Option<bool>,
+    /// Does the executor give secret jobs a per-job uid (`Ready.job_uid`,
+    /// C2)? `None` = ask it with `exec_stdin` (tests set it).
+    pub exec_job_uid: Option<bool>,
     /// How long a job waits for its secret env (SE18; tests shorten it).
     pub secret_wait: Duration,
     /// The `k2-node` binary that runs `job-hold` (§5.2): set, jobs not
@@ -150,6 +153,7 @@ impl NodeOptions {
             disk_poll: Duration::from_secs(10),
             disk_free: None,
             exec_stdin: None,
+            exec_job_uid: None,
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
@@ -162,12 +166,21 @@ impl NodeOptions {
 /// Does the executor relay a secret-env stdin pipe (`Ready.stdin`, SE21,
 /// SV18)? An older executor omits it: false.
 pub async fn probe_exec_stdin(admin_socket: &Path) -> bool {
+    probe_exec_caps(admin_socket).await.0
+}
+
+/// What the executor's `Ready` says it can do: (relay a secret-env stdin
+/// pipe, give secret jobs a per-job uid). An older one says neither.
+pub async fn probe_exec_caps(admin_socket: &Path) -> (bool, bool) {
     let sock = admin_socket.to_path_buf();
     let r = tokio::task::spawn_blocking(move || {
         crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Ready, &[], Duration::from_secs(10))
     })
     .await;
-    matches!(r, Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin: true, .. })))
+    match r {
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, .. })) => (stdin, job_uid),
+        _ => (false, false),
+    }
 }
 
 /// How this node walls its jobs (module `wall`). `--dev` (the node runs as
@@ -288,6 +301,9 @@ struct RunningJob {
     /// a secret job never shares a uid with another workspace's job).
     workspace: String,
     secret: bool,
+    /// How it shares its uid (C2): a secret job of a protocol-9 server
+    /// runs as its own pool uid where the node can, else alone.
+    uid: k2_node_proto::queue::UidShare,
     /// Its loopback port block (`K2_JOB_PORT_BASE`), unique among running
     /// jobs; none for a stand-in.
     port_block: Option<u16>,
@@ -368,6 +384,9 @@ pub struct Node {
     /// The executor relays a secret-env stdin pipe (`Ready.stdin`; asked at
     /// start and on every wall probe, so an executor restart is noticed).
     pub exec_stdin: std::sync::atomic::AtomicBool,
+    /// The executor gives secret jobs a per-job uid (`Ready.job_uid`, C2;
+    /// asked with `exec_stdin`).
+    pub exec_job_uid: std::sync::atomic::AtomicBool,
     /// Job caches running jobs hold (module `job_cache`).
     job_caches_busy: Mutex<job_cache::Busy>,
     /// Which running attempt holds which job cache, by (slot, job, gen):
@@ -471,11 +490,13 @@ impl Node {
         let root_taint = sync_root_taint(&opts, &layout, &key_meta.node_fp).await;
         // Phase 1 (C1): this boot's adoptable rows stay open; the rest end.
         let (lingering, adoptable) = tenant::reconcile(&owner, &opts, &wall, true).await?;
-        let exec_stdin = match (opts.exec_stdin, &wall) {
-            (Some(v), _) => v,
-            (None, Wall::JobUser { .. }) => probe_exec_stdin(&opts.admin_socket).await,
-            (None, _) => false,
+        // Tests set `exec_stdin` (and then never probe a real executor).
+        let probed = match (&opts.exec_stdin, &wall) {
+            (None, Wall::JobUser { .. }) => probe_exec_caps(&opts.admin_socket).await,
+            _ => (false, false),
         };
+        let exec_stdin = opts.exec_stdin.unwrap_or(probed.0);
+        let exec_job_uid = opts.exec_job_uid.unwrap_or(probed.1);
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -514,6 +535,7 @@ impl Node {
             job_seq: Default::default(),
             slot_use: Mutex::new(HashMap::new()),
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
+            exec_job_uid: std::sync::atomic::AtomicBool::new(exec_job_uid),
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
             git_helpers: Mutex::new(HashMap::new()),
@@ -581,8 +603,12 @@ impl Node {
         if self.opts.exec_stdin.is_some() || !matches!(self.wall, Wall::JobUser { .. }) {
             return false;
         }
-        let now = probe_exec_stdin(&self.opts.admin_socket).await;
-        self.exec_stdin.swap(now, std::sync::atomic::Ordering::SeqCst) != now
+        let (stdin, job_uid) = probe_exec_caps(&self.opts.admin_socket).await;
+        let mut changed = self.exec_stdin.swap(stdin, std::sync::atomic::Ordering::SeqCst) != stdin;
+        if self.opts.exec_job_uid.is_none() {
+            changed |= self.exec_job_uid.swap(job_uid, std::sync::atomic::Ordering::SeqCst) != job_uid;
+        }
+        changed
     }
 
     /// Why this node won't take a secret-env job of `t` now (SE16, SE17),
@@ -643,6 +669,7 @@ impl Node {
                         gate: false,
                         workspace: LINGER_WORKSPACE.to_string(),
                         secret: true,
+                        uid: Default::default(),
                         port_block: None,
                         adoptable: false,
                         rust: Vec::new(),
@@ -716,16 +743,20 @@ impl Node {
 
     /// SE26: may a job of `ws` in `slot` (`secret`: it gets vault secrets)
     /// start beside the jobs running now? `Some(reason)` when not.
-    pub(crate) fn secret_isolation_wait(&self, slot: Slot, ws: &str, secret: bool) -> Option<String> {
+    pub(crate) fn secret_isolation_wait(&self, slot: Slot, ws: &str, secret: bool, uid: k2_node_proto::queue::UidShare) -> Option<String> {
+        use k2_node_proto::queue::UidShare;
         let jobs = self.jobs.lock().unwrap();
-        let blocked = k2_node_proto::queue::isolation_blocks(
+        let blocked = k2_node_proto::queue::uid_blocks(
             cfg!(target_os = "macos"),
-            slot,
-            ws,
-            secret,
-            jobs.iter().map(|((s, _), j)| (*s, j.workspace.as_str(), j.secret)),
+            (slot, ws, secret, uid),
+            jobs.iter().map(|((s, _), j)| (*s, j.workspace.as_str(), j.secret, j.uid)),
         );
-        blocked.then(|| k2_node_proto::secret::codes::ISOLATION_WAIT.to_string())
+        if blocked {
+            return Some(k2_node_proto::secret::codes::ISOLATION_WAIT.to_string());
+        }
+        // C2: the slot's pool is full.
+        let own = jobs.iter().filter(|((s, _), j)| *s == slot && j.uid == UidShare::Own).count() as u32;
+        (uid == UidShare::Own && own >= k2_node_proto::share::JOB_UID_POOL).then(|| k2_node_proto::share::blocked::JOB_UID_POOL_BUSY.to_string())
     }
 
     /// What a Seatbelt profile closes (macOS): the node's own state, the
@@ -1203,20 +1234,20 @@ mod wall_tests {
         o.admin_socket = d.join("no-executor.sock");
         o.unit_poll = Duration::from_millis(20);
         let n = Node::open(o).await.unwrap();
-        assert_eq!(n.secret_isolation_wait(OWNER_SLOT, "ws-a", true), None, "nothing runs yet");
+        assert_eq!(n.secret_isolation_wait(OWNER_SLOT, "ws-a", true, Default::default()), None, "nothing runs yet");
         n.hold_lingering(OWNER_SLOT, vec![Linger { key: "k2job-old-g1.service".into(), unit: Some("k2job-old-g1.service".into()), tree: None }]);
         for (ws, secret) in [("ws-a", true), ("ws-a", false), ("ws-b", false)] {
             assert_eq!(
-                n.secret_isolation_wait(OWNER_SLOT, ws, secret).as_deref(),
+                n.secret_isolation_wait(OWNER_SLOT, ws, secret, Default::default()).as_deref(),
                 Some(k2_node_proto::secret::codes::ISOLATION_WAIT),
                 "{ws} secret={secret}: held beside a lingering unit"
             );
         }
         // Another slot is another uid on Linux; macOS runs every slot as one.
-        assert_eq!(n.secret_isolation_wait(1, "ws-a", true).is_some(), cfg!(target_os = "macos"));
+        assert_eq!(n.secret_isolation_wait(1, "ws-a", true, Default::default()).is_some(), cfg!(target_os = "macos"));
         assert_eq!(n.running_by_tenant().get(&OWNER_SLOT), Some(&vec!["lingering:k2job-old-g1.service".to_string()]));
         tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some(), "no Status answer: still held (fail closed)");
+        assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false, Default::default()).is_some(), "no Status answer: still held (fail closed)");
     }
 
     /// Review B-H1 round 2: a secret attempt's folder that can't be deleted
@@ -1255,10 +1286,10 @@ mod wall_tests {
         assert!(disk::delete_secret_tree(&d.join("none.sock"), false, OWNER_SLOT, &root).is_err(), "the blocked delete must fail (root: {root_user})");
         n.hold_lingering(OWNER_SLOT, vec![Linger { key: "sj-g1".into(), unit: None, tree: Some(root.clone()) }]);
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some(), "a failed delete keeps the slot held");
+        assert!(n.secret_isolation_wait(OWNER_SLOT, "ws-b", false, Default::default()).is_some(), "a failed delete keeps the slot held");
         block(false);
         let t0 = std::time::Instant::now();
-        while n.secret_isolation_wait(OWNER_SLOT, "ws-b", false).is_some() {
+        while n.secret_isolation_wait(OWNER_SLOT, "ws-b", false, Default::default()).is_some() {
             assert!(t0.elapsed() < Duration::from_secs(10), "the hold never cleared");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }

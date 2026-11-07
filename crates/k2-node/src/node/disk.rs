@@ -86,14 +86,17 @@ pub(crate) fn delete_secret_tree(admin_socket: &Path, walled: bool, slot: k2_nod
     if !meta.is_dir() {
         return Err(format!("{} isn't a plain folder", root.display()));
     }
+    // The whole tree, its root too, back to the node user first: a job
+    // with its own uid (C2) owns its root and every file in it, and its
+    // uid is reused only once it owns nothing (`admin::jobpool`).
+    if walled {
+        let op = crate::admin::jobs::JobOp::Reclaim { path: root.to_path_buf(), slot };
+        crate::admin::server::job_request(admin_socket, &op, &[], Duration::from_secs(600)).map_err(|x| format!("reclaim {}: {}: {}", root.display(), x.code, x.message))?;
+    }
     let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(root).map_err(|e| format!("{}: {e}", root.display()))?.flatten().filter(|e| e.file_name() != "log").collect();
     for e in &entries {
         let p = e.path();
         if real_dir(e) {
-            if walled {
-                let op = crate::admin::jobs::JobOp::Reclaim { path: p.clone(), slot };
-                crate::admin::server::job_request(admin_socket, &op, &[], Duration::from_secs(600)).map_err(|x| format!("reclaim {}: {}: {}", p.display(), x.code, x.message))?;
-            }
             std::fs::remove_dir_all(&p).map_err(|x| format!("delete {}: {x}", p.display()))?;
         } else {
             std::fs::remove_file(&p).map_err(|x| format!("delete {}: {x}", p.display()))?;

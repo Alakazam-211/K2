@@ -73,6 +73,8 @@ struct RunMeta {
     est: Option<(u64, u64)>,
     /// It got vault secrets (secret-env SE26).
     secret: bool,
+    /// How it shares its uid (C2).
+    uid: k2_node_proto::queue::UidShare,
 }
 
 type Key = (Slot, String, u32);
@@ -286,7 +288,7 @@ impl FairQ {
     }
 
     /// An attempt started (any path): account it from now.
-    pub(crate) fn started(&self, slot: Slot, a: &Assign, now: i64, caps: &Caps) {
+    pub(crate) fn started(&self, slot: Slot, a: &Assign, now: i64, caps: &Caps, uid: k2_node_proto::queue::UidShare) {
         let hash = cmd_hash(&a.plan.argv);
         let mut st = self.st.lock().unwrap();
         let hist = st.store.duration(slot, &hash).ok().flatten();
@@ -306,6 +308,7 @@ impl FairQ {
             accounted: std::time::Instant::now(),
             est,
             secret: !a.plan.secret_env.is_empty(),
+            uid,
         };
         let key = (slot, a.fence.job_id.clone(), a.fence.generation);
         st.gates.remove(&key);
@@ -426,6 +429,7 @@ impl FairQ {
                     left_p50: m.est.map(|e| left(e.0)),
                     left_p90: m.est.map(|e| left(e.1)),
                     secret: m.secret,
+                    uid: m.uid,
                     submitter: m.submitter.clone(),
                 }
             })
@@ -443,6 +447,7 @@ impl FairQ {
                 left_p50: None,
                 left_p90: None,
                 secret: true,
+                uid: Default::default(),
                 submitter: None,
             }))
             .collect();
@@ -472,6 +477,7 @@ impl FairQ {
                     ws_max_running: r.plan.ws_max_running,
                     eligible: epoch != 0 && gate == Some(epoch),
                     secret: !r.plan.secret_env.is_empty(),
+                    uid: node.uid_share(t, &r.plan),
                     submitter: r.plan.turn_key(),
                     submitter_max_running: r.plan.submitter_max_running,
                 });

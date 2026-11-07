@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use k2_node_proto::ci::{self, Isolation, RunFacts, Signed};
 use k2_node_proto::frames::{Frame, Plan, PROTOCOL, RECEIPT_V2};
+use k2_node_proto::queue::UidShare;
 
 use super::{Node, Tenant, NODE_VERSION};
 use crate::wall::Wall;
@@ -126,6 +127,28 @@ impl Node {
         }
     }
 
+    /// Can a secret job get a uid of its own here (C2)? Linux, the job
+    /// wall, and an executor whose `Ready` said `job_uid`.
+    pub fn job_uid_ready(&self) -> bool {
+        cfg!(target_os = "linux") && matches!(self.wall, Wall::JobUser { .. }) && self.exec_job_uid.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How a job of `t` with `plan` shares its uid (C2, vs-live V15/V16).
+    /// Only a secret job of a protocol-9 server changes: its own pool uid
+    /// where the node has the pool, else its slot's uid with no other job
+    /// beside it. An exclusive job has the node to itself anyway. Every
+    /// other job, and every job of a protocol-8 server, keeps today's
+    /// rule (SE26).
+    pub fn uid_share(&self, t: &Tenant, plan: &Plan) -> UidShare {
+        if plan.secret_env.is_empty() || !t.speaks_ci() || plan.exclusive {
+            UidShare::Slot
+        } else if self.job_uid_ready() {
+            UidShare::Own
+        } else {
+            UidShare::SlotAlone
+        }
+    }
+
     /// How a job of `plan` is kept apart from other jobs, before any
     /// per-job uid (C2 sets that one when the executor gives it).
     pub fn base_isolation(&self, plan: &Plan) -> Isolation {
@@ -180,6 +203,14 @@ impl Node {
         }
     }
 
+    /// C2: the job got its own uid (pool `index`): its receipt v2 says so.
+    pub(super) fn set_ci_run_job_uid(&self, t: &Tenant, job: &str, gen: u32, index: u32) {
+        if let Some(f) = self.ci_runs.lock().unwrap().get_mut(&(t.slot, job.to_string(), gen)) {
+            f.isolation = Isolation::JobUid;
+            f.uid_index = Some(index);
+        }
+    }
+
     pub(super) fn ci_run(&self, t: &Tenant, job: &str, gen: u32) -> Option<RunFacts> {
         self.ci_runs.lock().unwrap().get(&(t.slot, job.to_string(), gen)).cloned()
     }
@@ -207,5 +238,63 @@ pub fn taint_label(t: ci::Taint) -> &'static str {
         ci::Taint::Clean => "clean",
         ci::Taint::Tainted => "tainted",
         ci::Taint::Unknown => "unknown",
+    }
+}
+
+/// C2: who gets a per-job uid. Only a secret job of a protocol-9 server,
+/// and only where the executor gives one; a protocol-8 server's jobs keep
+/// today's rule; `job-uid` is offered only to protocol 9.
+#[cfg(all(test, target_os = "linux"))]
+mod job_uid_tests {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use k2_node_proto::queue::UidShare;
+
+    use crate::node::{Node, NodeOptions};
+    use crate::wall::Wall;
+
+    async fn node(job_uid: bool) -> std::sync::Arc<Node> {
+        let d = crate::util::temp_dir("job-uid-share");
+        let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        let mut o = NodeOptions::new(layout);
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.wall = Some(Wall::JobUser { user: "k2job".into() });
+        o.exec_stdin = Some(true);
+        o.exec_job_uid = Some(job_uid);
+        o.cancel_grace = Duration::from_millis(100);
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        Node::open(o).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_a_protocol_9_secret_job_gets_its_own_uid() {
+        let n = node(true).await;
+        let owner = n.owner();
+        let mut p = crate::ledger::tests::assign("j", 1).plan;
+        // Not secret: the slot's uid, as always.
+        owner.protocol.store(9, Ordering::SeqCst);
+        assert_eq!(n.uid_share(&owner, &p), UidShare::Slot);
+        p.secret_env = vec!["K2T_SECRET".into()];
+        assert_eq!(n.uid_share(&owner, &p), UidShare::Own);
+        assert!(n.session_features(&owner).iter().any(|f| f == k2_node_proto::ci::FEATURE_JOB_UID));
+        // A protocol-8 server: today's rule exactly, and no feature.
+        owner.protocol.store(8, Ordering::SeqCst);
+        assert_eq!(n.uid_share(&owner, &p), UidShare::Slot);
+        assert!(!n.session_features(&owner).iter().any(|f| f == k2_node_proto::ci::FEATURE_JOB_UID));
+        // Exclusive: the node to itself, no pool needed.
+        owner.protocol.store(9, Ordering::SeqCst);
+        p.exclusive = true;
+        assert_eq!(n.uid_share(&owner, &p), UidShare::Slot);
+        p.exclusive = false;
+        // No pool here: alone on its slot's uid (never shared, own workspace
+        // included), and no feature.
+        n.exec_job_uid.store(false, Ordering::SeqCst);
+        assert_eq!(n.uid_share(&owner, &p), UidShare::SlotAlone);
+        assert!(!n.session_features(&owner).iter().any(|f| f == k2_node_proto::ci::FEATURE_JOB_UID));
     }
 }

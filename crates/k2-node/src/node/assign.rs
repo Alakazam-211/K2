@@ -154,7 +154,7 @@ impl Node {
             return None;
         }
         // SE26 (solo path): answered as queued, so the server just waits.
-        if let Some(code) = self.secret_isolation_wait(t.slot, &a.plan.workspace_id, !a.plan.secret_env.is_empty()) {
+        if let Some(code) = self.secret_isolation_wait(t.slot, &a.plan.workspace_id, !a.plan.secret_env.is_empty(), self.uid_share(t, &a.plan)) {
             t.hub.send(self.state_frame(&job, gen, JobState::Queued, Some(&code), Some("a job of another workspace runs as the same user and one of them gets vault secrets; it starts when that ends")));
             return None;
         }
@@ -170,6 +170,8 @@ impl Node {
     /// the queue's accounting, the job task.
     fn launch(self: &Arc<Self>, t: &Arc<Tenant>, a: Assign) {
         let (stop_tx, stop_rx) = watch::channel(None);
+        // C2: decided once, here; the run asks the executor for exactly this.
+        let uid = self.uid_share(t, &a.plan);
         let mut jobs = self.jobs.lock().unwrap();
         let port_block = super::free_port_block(&jobs);
         jobs.insert(
@@ -187,6 +189,7 @@ impl Node {
                 gate: a.plan.tier_or_class() == k2_node_proto::tiers::Tier::Ci,
                 workspace: a.plan.workspace_id.clone(),
                 secret: !a.plan.secret_env.is_empty(),
+                uid,
                 port_block,
                 adoptable: false,
                 rust: Vec::new(),
@@ -194,7 +197,7 @@ impl Node {
         );
         drop(jobs);
         let caps = self.queue_caps();
-        self.fairq.started(t.slot, &a, self.now(), &caps);
+        self.fairq.started(t.slot, &a, self.now(), &caps, uid);
         self.jobs_changed();
         let (node, tenant) = (self.clone(), t.clone());
         tokio::spawn(async move { node.run_job(tenant, a, stop_rx).await });
@@ -579,6 +582,7 @@ impl Node {
                     gate: false,
                     workspace: String::new(),
                     secret: false,
+                    uid: Default::default(),
                     port_block: None,
                     adoptable: false,
                     rust: Vec::new(),

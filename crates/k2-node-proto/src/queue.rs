@@ -86,9 +86,44 @@ impl Default for Config {
 /// (`secret`: it gets vault secrets) start beside `running` = `(slot,
 /// workspace, secret)`? Never beside another workspace's job under the
 /// same uid when either of the two is a secret job; same-workspace jobs
-/// may share it (the grant is per workspace anyway).
+/// may share it (the grant is per workspace anyway). Every job here shares
+/// its slot's uid ([`UidShare::Slot`]); [`uid_blocks`] is the full rule.
 pub fn isolation_blocks<'a>(one_uid: bool, slot: Slot, ws: &str, secret: bool, running: impl IntoIterator<Item = (Slot, &'a str, bool)>) -> bool {
-    running.into_iter().any(|(s, w, sec)| (one_uid || s == slot) && w != ws && (secret || sec))
+    uid_blocks(one_uid, (slot, ws, secret, UidShare::Slot), running.into_iter().map(|(s, w, sec)| (s, w, sec, UidShare::Slot)))
+}
+
+/// How a job shares its uid with the jobs around it (SE26; per-job uids,
+/// protocol 9 slice C2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum UidShare {
+    /// Its slot's job user, shared with the slot's other jobs (every job
+    /// before protocol 9, and every non-secret job): the SE26 rule.
+    #[default]
+    Slot,
+    /// A secret job of a protocol-9 server on a node that can't give it a
+    /// uid of its own (no pool here): its slot's user, and no other job,
+    /// of any workspace, shares it while it runs.
+    SlotAlone,
+    /// A uid of its own from the slot's pool: it shares none, so neither
+    /// it nor any other job waits on its account.
+    Own,
+}
+
+/// The full same-uid rule: may `job` = `(slot, workspace, secret, uid)`
+/// start beside `running` (the same tuples)? A job with its own uid never
+/// blocks and is never blocked; a [`UidShare::SlotAlone`] job shares its
+/// uid with nobody; otherwise SE26 ([`isolation_blocks`]).
+pub fn uid_blocks<'a>(one_uid: bool, job: (Slot, &str, bool, UidShare), running: impl IntoIterator<Item = (Slot, &'a str, bool, UidShare)>) -> bool {
+    let (slot, ws, secret, uid) = job;
+    running.into_iter().any(|(s, w, sec, ru)| {
+        if uid == UidShare::Own || ru == UidShare::Own || !(one_uid || s == slot) {
+            return false;
+        }
+        if uid == UidShare::SlotAlone || ru == UidShare::SlotAlone {
+            return true;
+        }
+        w != ws && (secret || sec)
+    })
 }
 
 /// A lingering unit (a leftover process of an earlier job) enters the
@@ -167,6 +202,8 @@ pub struct Running {
     pub left_p90: Option<u64>,
     /// It got vault secrets (SE26).
     pub secret: bool,
+    /// How it shares its uid (C2).
+    pub uid: UidShare,
     /// The plan's turn key ([`crate::frames::Plan::turn_key`]): the
     /// per-submitter cap counts by it (L3).
     pub submitter: Option<String>,
@@ -203,6 +240,8 @@ pub struct Queued {
     pub eligible: bool,
     /// It gets vault secrets at spawn (`Plan.secret_env`, SE26).
     pub secret: bool,
+    /// How it will share its uid (C2; the node decides it).
+    pub uid: UidShare,
     /// The plan's turn key ([`crate::frames::Plan::turn_key`]: the
     /// submitter, else the session): turns inside a line (L4).
     pub submitter: Option<String>,
@@ -442,6 +481,7 @@ struct SimRun {
     slot: Slot,
     ws: String,
     secret: bool,
+    uid: UidShare,
     cpu: u64,
     mem: u64,
     exclusive: bool,
@@ -507,11 +547,16 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     // leftover unit counts as such a job; the reason then says so.
     let blockers: Vec<&SimRun> = run
         .iter()
-        .filter(|r| isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, [(r.slot, r.ws.as_str(), r.secret)]))
+        .filter(|r| uid_blocks(input.cfg.one_uid, (e.slot, &e.workspace_id, e.secret, e.uid), [(r.slot, r.ws.as_str(), r.secret, r.uid)]))
         .collect();
     if !blockers.is_empty() {
         let code = if blockers.iter().all(|r| r.lingering) { blocked::LINGERING } else { crate::secret::codes::ISOLATION_WAIT };
         return if line.holds() { Fit::Capacity(code) } else { Fit::Wait(code) };
+    }
+    // C2: a slot's pool has `share::JOB_UID_POOL` uids; past them the next
+    // secret job waits for one (it never shares one).
+    if e.uid == UidShare::Own && run.iter().filter(|r| r.slot == e.slot && r.uid == UidShare::Own).count() as u32 >= share::JOB_UID_POOL {
+        return if line.holds() { Fit::Capacity(blocked::JOB_UID_POOL_BUSY) } else { Fit::Wait(blocked::JOB_UID_POOL_BUSY) };
     }
     let used_cpu: u64 = run.iter().map(|r| r.cpu).sum();
     let used_mem: u64 = run.iter().map(|r| r.mem).sum();
@@ -551,6 +596,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
             slot: r.slot,
             ws: r.workspace_id.clone(),
             secret: r.secret,
+            uid: r.uid,
             cpu: r.cpu_millis,
             mem: r.mem_bytes,
             exclusive: r.exclusive,
@@ -622,6 +668,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
                         slot: e.slot,
                         ws: e.workspace_id.clone(),
                         secret: e.secret,
+                        uid: e.uid,
                         cpu,
                         mem,
                         exclusive: e.exclusive,
@@ -731,7 +778,7 @@ pub fn quote(input: &Input<'_>, slot: Slot, cpu_millis: u64, mem_bytes: u64) -> 
         est_p90: None,
         ws_max_running: None,
         eligible: true,
-        secret: false, submitter: None, submitter_max_running: None,
+        secret: false, uid: UidShare::Slot, submitter: None, submitter_max_running: None,
     });
     let probe = Input { queued: &queued, ..input.clone() };
     let d = decide(&probe);
@@ -907,7 +954,7 @@ mod tests {
             est_p90: Some(120),
             ws_max_running: None,
             eligible: true,
-            secret: false, submitter: None, submitter_max_running: None,
+            secret: false, uid: UidShare::Slot, submitter: None, submitter_max_running: None,
         }
     }
 
@@ -925,7 +972,7 @@ mod tests {
             exclusive: false,
             left_p50: left,
             left_p90: left.map(|l| l * 2),
-            secret: false, submitter: None,
+            secret: false, uid: UidShare::Slot, submitter: None,
         }
     }
 
@@ -972,6 +1019,84 @@ mod tests {
         assert_eq!(w.decide().start.len(), 1);
         assert!(isolation_blocks(false, 0, "a", true, [(0u8, "b", false)]));
         assert!(!isolation_blocks(false, 0, "a", false, [(0u8, "b", false)]), "no secret anywhere: no rule");
+    }
+
+    /// C2: a secret job with its own uid starts beside anything (another
+    /// workspace's, its own workspace's, another secret job), and nothing
+    /// waits for it; one without (a protocol-9 server, no pool on the node)
+    /// shares its slot's uid with nobody, its own workspace included; at
+    /// most `JOB_UID_POOL` per slot run as their own uid.
+    #[test]
+    fn per_job_uids_share_nothing_and_a_lone_secret_job_shares_with_nobody() {
+        let mut w = World::new(16, vec![tenant(0, 1), tenant(1, 1)]);
+        // Room for more than a pool's worth of running jobs per server.
+        for t in w.tenants.iter_mut() {
+            t.limits.max_running = 16;
+        }
+        let mut other = running(0, "other-ws", 100, Some(60));
+        other.workspace_id = "w-other".into();
+        let mut same = running(0, "same-ws", 100, Some(60));
+        same.workspace_id = "w-rel".into();
+        let mut sec_run = running(0, "sec-run", 100, Some(60));
+        sec_run.workspace_id = "w-third".into();
+        sec_run.secret = true;
+        w.running = vec![other.clone(), same.clone()];
+        let mut own = q(0, "own", "w-rel", 1);
+        own.secret = true;
+        own.uid = UidShare::Own;
+        own.cpu_millis = Some(100);
+        w.queued = vec![own.clone()];
+        assert_eq!(w.decide().start, vec![0], "its own uid: starts beside both");
+        // Beside another workspace's running secret job (slot uid): fine too.
+        w.running = vec![sec_run.clone()];
+        assert_eq!(w.decide().start, vec![0]);
+        // A plain job of another workspace beside a running own-uid secret job: starts.
+        let mut own_run = sec_run.clone();
+        own_run.uid = UidShare::Own;
+        w.running = vec![own_run.clone()];
+        w.queued = vec![q(0, "plain", "w-x", 1)];
+        assert_eq!(w.decide().start, vec![0], "nobody waits for an own-uid job");
+        // A lone secret job (no pool): its own workspace's job waits for it
+        // too, and it waits for that one.
+        let mut alone = q(0, "alone", "w-rel", 1);
+        alone.secret = true;
+        alone.uid = UidShare::SlotAlone;
+        w.running = vec![same.clone()];
+        w.queued = vec![alone.clone()];
+        let d = w.decide();
+        assert!(d.start.is_empty(), "never beside its own workspace's job either");
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(crate::secret::codes::ISOLATION_WAIT));
+        let mut alone_run = same.clone();
+        alone_run.secret = true;
+        alone_run.uid = UidShare::SlotAlone;
+        w.running = vec![alone_run.clone()];
+        w.queued = vec![q(0, "same", "w-rel", 1)];
+        assert!(w.decide().start.is_empty(), "its own workspace's plain job waits for it");
+        // Another slot's job (another uid): starts beside it.
+        w.queued = vec![q(1, "other-slot", "w-rel", 1)];
+        assert_eq!(w.decide().start, vec![0]);
+        // The pool cap: JOB_UID_POOL own-uid jobs of slot 0 running, the next waits.
+        w.running = (0..share::JOB_UID_POOL)
+            .map(|i| {
+                let mut r = own_run.clone();
+                r.job_id = format!("own{i}");
+                r
+            })
+            .collect();
+        w.queued = vec![own.clone()];
+        let d = w.decide();
+        assert!(d.start.is_empty());
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::JOB_UID_POOL_BUSY));
+        // Another slot's pool is its own.
+        let mut own1 = own.clone();
+        own1.slot = 1;
+        w.queued = vec![own1];
+        assert_eq!(w.decide().start, vec![0]);
+        // The pure rule.
+        assert!(!uid_blocks(false, (0, "a", true, UidShare::Own), [(0u8, "b", false, UidShare::Slot)]));
+        assert!(uid_blocks(false, (0, "a", false, UidShare::Slot), [(0u8, "a", true, UidShare::SlotAlone)]));
+        assert!(!uid_blocks(false, (0, "a", false, UidShare::Slot), [(1u8, "a", true, UidShare::SlotAlone)]));
+        assert!(uid_blocks(true, (0, "a", false, UidShare::Slot), [(1u8, "a", true, UidShare::SlotAlone)]), "one uid (macOS): every slot");
     }
 
     struct World {

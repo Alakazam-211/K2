@@ -1,0 +1,603 @@
+//! A throwaway user per secret job (protocol 9, slice C2;
+//! prd-ci-on-compute-for-clients-v1 §4.3, vs-live V15/V16/S8), root side.
+//!
+//! A secret job from a protocol-9 server runs as a uid of its own, so no
+//! other job (another workspace's, or its own workspace's) shares a uid
+//! with it: none can read its `/proc/<pid>/environ`, ptrace it or enter
+//! its job root. The uid comes from a **recycled pool per slot**:
+//! [`JOB_UID_POOL`] users `k2job-<slot>-<n>`, made the first time an index
+//! is needed. The PRD's "a fresh uid per job, never reused" would spend the
+//! node's 3,999 tenant ids in months (vs-live B10), so an index is reused,
+//! but only once it is **proven empty** ([`prove_empty`]):
+//! - the unit of its last job is no longer live;
+//! - no process runs as its uid (leftovers are killed through a pidfd
+//!   first; one that survives keeps the index out);
+//! - it owns no file in its last job root, nor in the host's `/tmp`,
+//!   `/var/tmp` and `/dev/shm` (its leftovers there are removed first, as
+//!   `tenant.wipe` does).
+//!
+//! Why those places are enough: a pool job may write only its own job root
+//! (the executor refuses any other read-write path for it, and binds its
+//! `/tmp` and `/var/tmp` inside the root); its `/dev/shm` is the unit's
+//! own. So after a job, its uid's files can only be in that root, and the
+//! node deletes a secret job's root when it ends (`delete_secret_tree`,
+//! which first gives the tree back to the node user). Each earlier root was
+//! proven clean before the index was used again, and nothing runs as the
+//! uid in between, so the last root is the only one to look at.
+//!
+//! The pool's uids come from the tenant id range (`tenant-ids.json`, the
+//! same high-water mark as tenant users), so a wiped slot's pool never
+//! comes back with an old uid (V64), and the K2 daemon's refusal of
+//! loopback clients in that range covers them too. Its state is root's
+//! `job-uid-pool.json` (the uid of each index, its last lease, why it is
+//! held). Exclusive mode (`--exclusive`) stays the other way to run a
+//! secret job alone, and the fallback where the pool can't be used.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use k2_node_proto::admin::{code, AdminRefusal};
+use k2_node_proto::share::{self, Slot, OWNER_SLOT};
+use serde::{Deserialize, Serialize};
+
+use super::exec::Executor;
+use super::jobs::{self, JobIds};
+
+/// Users per slot ([`k2_node_proto::share::JOB_UID_POOL`]).
+pub const JOB_UID_POOL: u32 = share::JOB_UID_POOL;
+/// Root's pool state, in the executor's state dir.
+pub const POOL_FILE: &str = "job-uid-pool.json";
+/// The host temp dirs a pool uid's leftovers are looked for (and removed).
+pub const HOST_TEMP: &[&str] = &["/dev/shm", "/tmp", "/var/tmp"];
+/// A proof walks at most this many entries; past it the index is held
+/// (fail closed) until its root is gone.
+pub const PROOF_MAX_ENTRIES: usize = 200_000;
+
+/// `k2job-<slot>-<n>`.
+pub fn pool_user_name(slot: Slot, index: u32) -> String {
+    format!("{}{slot}-{index}", share::TENANT_USER_PREFIX)
+}
+
+fn pool_key(slot: Slot, index: u32) -> String {
+    format!("{slot}-{index}")
+}
+
+/// One pool user as root keeps it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolUser {
+    pub uid: u32,
+    /// The last job that ran as it: its unit and its job root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leased_at: Option<i64>,
+    /// Why it wasn't proven empty the last time it was looked at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
+}
+
+/// [`POOL_FILE`]: pool users by `"<slot>-<index>"`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolFile {
+    #[serde(default)]
+    pub users: BTreeMap<String, PoolUser>,
+}
+
+impl PoolFile {
+    pub fn get(&self, slot: Slot, index: u32) -> Option<&PoolUser> {
+        self.users.get(&pool_key(slot, index))
+    }
+
+    /// Every pool uid of `slot`, by index.
+    pub fn slot_users(&self, slot: Slot) -> Vec<(u32, PoolUser)> {
+        (0..JOB_UID_POOL).filter_map(|i| self.get(slot, i).map(|u| (i, u.clone()))).collect()
+    }
+}
+
+/// What a proof looks at (the real one is [`SystemProbe`]; tests fake it).
+pub trait Probe {
+    /// The unit is loaded and its command hasn't ended (unknown = live).
+    fn unit_live(&self, unit: &str) -> bool;
+    /// Every process running as `uid`.
+    fn pids(&self, uid: u32) -> Vec<i32>;
+    /// SIGKILL `pid` if it still runs as `uid`.
+    fn kill(&self, pid: i32, uid: u32);
+    /// Remove what `uid` left at the top of the host temp dirs.
+    fn clear_temp(&self, uid: u32);
+    /// The first file or folder under `roots` (missing roots are skipped)
+    /// owned by `uid`; `Err` when the walk couldn't finish.
+    fn owned_file(&self, uid: u32, roots: &[PathBuf]) -> Result<Option<PathBuf>, String>;
+}
+
+/// May `u`'s uid run another job? `Err(why)` when it isn't proven empty.
+pub fn prove_empty(u: &PoolUser, probe: &dyn Probe) -> Result<(), String> {
+    if let Some(unit) = &u.unit {
+        if probe.unit_live(unit) {
+            return Err(format!("its last job's unit {unit} is still live"));
+        }
+    }
+    let pids = probe.pids(u.uid);
+    if !pids.is_empty() {
+        for p in &pids {
+            probe.kill(*p, u.uid);
+        }
+        let left = probe.pids(u.uid);
+        if !left.is_empty() {
+            return Err(format!("uid {} still runs process(es) {left:?}", u.uid));
+        }
+    }
+    probe.clear_temp(u.uid);
+    let mut roots: Vec<PathBuf> = HOST_TEMP.iter().map(PathBuf::from).collect();
+    if let Some(r) = &u.root {
+        roots.insert(0, r.clone());
+    }
+    match probe.owned_file(u.uid, &roots) {
+        Ok(None) => Ok(()),
+        Ok(Some(p)) => Err(format!("uid {} still owns {}", u.uid, p.display())),
+        Err(e) => Err(format!("uid {}: its files can't be proven gone ({e})", u.uid)),
+    }
+}
+
+/// Which index a secret job gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// A pool user that exists and is proven empty.
+    Reuse(u32),
+    /// An index with no user yet (made now).
+    Fresh(u32),
+}
+
+/// Pick an index of `slot`: the lowest pool user proven empty, else the
+/// lowest index with no user yet. Every user looked at gets its `held`
+/// reason updated (or cleared). `Err` lists why each one is held.
+pub fn pick(f: &mut PoolFile, slot: Slot, probe: &dyn Probe) -> Result<Choice, String> {
+    let mut why = Vec::new();
+    let mut fresh = None;
+    for i in 0..JOB_UID_POOL {
+        match f.users.get_mut(&pool_key(slot, i)) {
+            None => {
+                if fresh.is_none() {
+                    fresh = Some(i);
+                }
+            }
+            Some(u) => match prove_empty(u, probe) {
+                Ok(()) => {
+                    u.held = None;
+                    return Ok(Choice::Reuse(i));
+                }
+                Err(e) => {
+                    why.push(format!("{}: {e}", pool_user_name(slot, i)));
+                    u.held = Some(e);
+                }
+            },
+        }
+    }
+    fresh.map(Choice::Fresh).ok_or_else(|| format!("every per-job uid of slot {slot} is busy or not proven empty yet ({})", why.join("; ")))
+}
+
+/// Record that `index` of `slot` now runs `unit` in `root`.
+pub fn lease(f: &mut PoolFile, slot: Slot, index: u32, uid: u32, unit: &str, root: &Path, now: i64) {
+    f.users.insert(pool_key(slot, index), PoolUser { uid, unit: Some(unit.to_string()), root: Some(root.to_path_buf()), leased_at: Some(now), held: None });
+}
+
+pub fn read_pool(path: &Path) -> Result<PoolFile, String> {
+    match std::fs::read(path) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PoolFile::default()),
+        Err(e) => Err(format!("read {}: {e}", path.display())),
+    }
+}
+
+pub fn write_pool(path: &Path, f: &PoolFile) -> Result<(), String> {
+    let b = serde_json::to_vec_pretty(f).map_err(|e| e.to_string())?;
+    crate::util::atomic_write(path, &b, 0o600)
+}
+
+/// The machine, as root sees it.
+pub struct SystemProbe;
+
+impl Probe for SystemProbe {
+    fn unit_live(&self, unit: &str) -> bool {
+        match jobs::unit_status(unit) {
+            Ok(s) => s.loaded && !s.ended(),
+            Err(_) => true,
+        }
+    }
+
+    fn pids(&self, uid: u32) -> Vec<i32> {
+        super::tenants::pids_of(uid)
+    }
+
+    fn kill(&self, pid: i32, uid: u32) {
+        super::tenants::kill_if_still(pid, uid);
+        // Give it a moment to go before the recount.
+        for _ in 0..20 {
+            if !super::tenants::pids_of(uid).contains(&pid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    fn clear_temp(&self, uid: u32) {
+        for d in HOST_TEMP {
+            let _ = crate::wall::remove_owned_by(Path::new(d), uid);
+        }
+    }
+
+    fn owned_file(&self, uid: u32, roots: &[PathBuf]) -> Result<Option<PathBuf>, String> {
+        let mut seen = 0usize;
+        for r in roots {
+            if let Some(p) = owned_under(r, uid, &mut seen)? {
+                return Ok(Some(p));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// The first entry under `root` (itself included) owned by `uid`, never
+/// following a link; a missing root has none.
+pub fn owned_under(root: &Path, uid: u32, seen: &mut usize) -> Result<Option<PathBuf>, String> {
+    use std::os::unix::fs::MetadataExt;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let m = match std::fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("{}: {e}", p.display())),
+        };
+        *seen += 1;
+        if *seen > PROOF_MAX_ENTRIES {
+            return Err(format!("over {PROOF_MAX_ENTRIES} entries to look at"));
+        }
+        if m.uid() == uid {
+            return Ok(Some(p));
+        }
+        if m.is_dir() {
+            let rd = match std::fs::read_dir(&p) {
+                Ok(rd) => rd,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("{}: {e}", p.display())),
+            };
+            for e in rd {
+                stack.push(e.map_err(|e| format!("{}: {e}", p.display()))?.path());
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
+    AdminRefusal::new(c, m)
+}
+
+/// Refusal code: no per-job uid can be given now (every pool user busy or
+/// not proven empty, or the pool can't be set up). The job fails; it never
+/// runs as a shared uid instead.
+pub const JOB_UID_UNAVAILABLE: &str = "job_uid_unavailable";
+
+impl Executor {
+    fn pool_path(&self) -> PathBuf {
+        self.paths.state_dir.join(POOL_FILE)
+    }
+
+    /// Can secret jobs get a per-job uid here? Linux, the job wall,
+    /// systemd ≥ 247 (`ProtectProc=invisible`: other uids' processes are
+    /// hidden), and the user tools. The node asks through `Ready`.
+    pub fn job_uid_ready(&self) -> Result<(), AdminRefusal> {
+        if !cfg!(target_os = "linux") {
+            return Err(refuse(code::NOT_CONFIGURED, "per-job uids are Linux only"));
+        }
+        self.job_user()?;
+        let v = jobs::systemd();
+        if v < jobs::MIN_SYSTEMD_PROTECT_PROC {
+            return Err(refuse(code::NOT_CONFIGURED, format!("systemd {v} is older than {}: per-job uids need ProtectProc=invisible", jobs::MIN_SYSTEMD_PROTECT_PROC)));
+        }
+        for t in ["useradd", "userdel", "setfacl"] {
+            if jobs::find_program_in_sbin(t).is_none() {
+                return Err(refuse(code::NOT_CONFIGURED, format!("{t} not found (per-job uids need it)")));
+            }
+        }
+        Ok(())
+    }
+
+    /// A per-job uid for `unit` in `root`, of `slot` (whose jobs run with
+    /// `ids`' group): an index proven empty, or a new pool user. Recorded
+    /// before it is returned. Under the tenant ops lock (it may add a user
+    /// and spend a tenant id).
+    pub(crate) fn job_uid_lease(&self, slot: Slot, ids: &JobIds, unit: &str, root: &Path) -> Result<(u32, u32), AdminRefusal> {
+        self.job_uid_ready()?;
+        let _g = super::tenants::ops_lock_for(self)?;
+        let path = self.pool_path();
+        // An unreadable pool file holds every index (fail closed).
+        let mut f = read_pool(&path).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e))?;
+        let choice = pick(&mut f, slot, &SystemProbe);
+        let r = match choice {
+            Ok(Choice::Reuse(i)) => {
+                let u = f.get(slot, i).cloned().expect("picked");
+                self.check_pool_user(slot, i, u.uid, ids).map(|_| (i, u.uid))
+            }
+            Ok(Choice::Fresh(i)) => self.make_pool_user(&mut f, slot, i, ids).map(|uid| (i, uid)),
+            Err(why) => Err(refuse(JOB_UID_UNAVAILABLE, why)),
+        };
+        if let Ok((i, uid)) = &r {
+            lease(&mut f, slot, *i, *uid, unit, root, self.now());
+        }
+        // The held reasons are written either way (`status` shows them).
+        write_pool(&path, &f).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e))?;
+        r
+    }
+
+    /// A pool user as `useradd` made it: its name, uid and group, a bare
+    /// account, never an id of root, the node, the owner's jobs or the
+    /// slot's own job user.
+    fn check_pool_user(&self, slot: Slot, index: u32, uid: u32, ids: &JobIds) -> Result<(), AdminRefusal> {
+        let name = pool_user_name(slot, index);
+        let bad = |m: String| refuse(JOB_UID_UNAVAILABLE, m);
+        let (u, g) = super::server::user_ids(&name).ok_or_else(|| bad(format!("{name} is gone (tenant.wipe, or by hand)")))?;
+        if u != uid || g != ids.gid {
+            return Err(bad(format!("{name} isn't the user the pool made (uid {u}/{uid}, group {g}/{})", ids.gid)));
+        }
+        let node_uid = super::server::user_ids(&self.node_user()).map(|(u, _)| u);
+        let owner_uid = self.job_user().ok().map(|(_, u)| u);
+        if uid == 0 || Some(uid) == node_uid || Some(uid) == owner_uid || uid == ids.uid || !(share::TENANT_UID_FIRST..=share::TENANT_UID_LAST).contains(&uid) {
+            return Err(bad(format!("{name} shares an id with root, the node or another job user")));
+        }
+        jobs::check_job_account(&name, g).map_err(bad)
+    }
+
+    /// Make `k2job-<slot>-<index>`: a tenant id (recorded in
+    /// `tenant-ids.json` and here before the user exists, so a crash never
+    /// hands it out twice), the slot's job group, no home, no shell.
+    fn make_pool_user(&self, f: &mut PoolFile, slot: Slot, index: u32, ids: &JobIds) -> Result<u32, AdminRefusal> {
+        let name = pool_user_name(slot, index);
+        if super::server::user_ids(&name).is_some() {
+            return Err(refuse(JOB_UID_UNAVAILABLE, format!("a {name} the pool doesn't know exists; remove it (userdel {name})")));
+        }
+        let uid = super::tenants::next_tenant_id(self).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e.message))?;
+        f.users.insert(pool_key(slot, index), PoolUser { uid, held: Some("being made".into()), ..Default::default() });
+        write_pool(&self.pool_path(), f).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e))?;
+        let nologin = ["/usr/sbin/nologin", "/sbin/nologin", "/usr/bin/nologin"].into_iter().find(|p| Path::new(p).exists()).unwrap_or("/bin/false");
+        let comment = format!("K2 compute secret jobs (server slot {slot}, pool {index})");
+        let useradd = jobs::find_program_in_sbin("useradd").ok_or_else(|| refuse(code::NOT_CONFIGURED, "useradd not found"))?;
+        super::exec::run_fixed(
+            &useradd.display().to_string(),
+            &[
+                "--system",
+                "--uid",
+                &uid.to_string(),
+                "--gid",
+                &ids.gid.to_string(),
+                "--home-dir",
+                "/nonexistent",
+                "--no-create-home",
+                "--shell",
+                nologin,
+                "--comment",
+                &comment,
+                &name,
+            ],
+        )
+        .map_err(|e| refuse(JOB_UID_UNAVAILABLE, e))?;
+        self.check_pool_user(slot, index, uid, ids)?;
+        let _ = self.audit().append(
+            super::store::AuditEntry { event: "job_uid.user".into(), detail: serde_json::json!({"slot": slot, "index": index, "uid": uid, "user": name}), ..Default::default() },
+            self.now(),
+        );
+        Ok(uid)
+    }
+
+    /// Hand a job tree to its per-job uid before the unit starts: every
+    /// entry chowned to `uid:gid` (never through a link), and the root
+    /// itself closed to everyone but that uid and the node user (who
+    /// writes, reads and finally deletes it), so no other job of the slot,
+    /// which shares the group, can enter it.
+    pub(crate) fn job_uid_take_tree(&self, root: &Path, uid: u32, gid: u32) -> Result<(), AdminRefusal> {
+        crate::wall::reclaim(root, uid, gid).map_err(|e| refuse(code::FAILED, e))?;
+        let setfacl = jobs::find_program_in_sbin("setfacl").ok_or_else(|| refuse(code::NOT_CONFIGURED, "setfacl not found"))?;
+        let acl = format!("u::rwx,g::---,o::---,u:{}:rwx,m::rwx", self.node_user());
+        super::exec::run_fixed(&setfacl.display().to_string(), &["-P", "--set", &acl, &root.display().to_string()]).map_err(|e| refuse(code::FAILED, e))
+    }
+
+    /// `tenant.wipe` / `tenant.unuser`: every pool user of `slot` goes
+    /// (after its processes; their uids stay spent).
+    pub(crate) fn remove_pool_users(&self, slot: Slot, removed: &mut Vec<String>, errors: &mut Vec<String>) {
+        if !cfg!(target_os = "linux") || slot == OWNER_SLOT {
+            return;
+        }
+        let path = self.pool_path();
+        let mut f = match read_pool(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                errors.push(e);
+                return;
+            }
+        };
+        let userdel = jobs::find_program_in_sbin("userdel").map(|p| p.display().to_string());
+        for (i, u) in f.slot_users(slot) {
+            for _ in 0..20 {
+                let pids = super::tenants::pids_of(u.uid);
+                if pids.is_empty() {
+                    break;
+                }
+                for p in pids {
+                    super::tenants::kill_if_still(p, u.uid);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            for d in HOST_TEMP {
+                match crate::wall::remove_owned_by(Path::new(d), u.uid) {
+                    Ok(n) => removed.extend(n),
+                    Err(e) => errors.push(e),
+                }
+            }
+            let name = pool_user_name(slot, i);
+            if super::server::user_ids(&name).is_some() {
+                match userdel.as_deref().map(|ud| super::exec::run_fixed(ud, &[&name])) {
+                    Some(Ok(())) => removed.push(format!("user {name}")),
+                    Some(Err(e)) => errors.push(e),
+                    None => errors.push("userdel not found".into()),
+                }
+            }
+            f.users.remove(&pool_key(slot, i));
+        }
+        if let Err(e) = write_pool(&path, &f) {
+            errors.push(e);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A machine in a test: live units, processes by uid (some immortal),
+    /// files by uid.
+    #[derive(Default)]
+    struct Fake {
+        live: Vec<String>,
+        procs: RefCell<BTreeMap<u32, Vec<i32>>>,
+        immortal: Vec<i32>,
+        files: BTreeMap<u32, PathBuf>,
+        unprovable: Vec<u32>,
+        cleared: RefCell<Vec<u32>>,
+    }
+
+    impl Probe for Fake {
+        fn unit_live(&self, unit: &str) -> bool {
+            self.live.iter().any(|u| u == unit)
+        }
+        fn pids(&self, uid: u32) -> Vec<i32> {
+            self.procs.borrow().get(&uid).cloned().unwrap_or_default()
+        }
+        fn kill(&self, pid: i32, uid: u32) {
+            if !self.immortal.contains(&pid) {
+                if let Some(v) = self.procs.borrow_mut().get_mut(&uid) {
+                    v.retain(|p| *p != pid);
+                }
+            }
+        }
+        fn clear_temp(&self, uid: u32) {
+            self.cleared.borrow_mut().push(uid);
+        }
+        fn owned_file(&self, uid: u32, _roots: &[PathBuf]) -> Result<Option<PathBuf>, String> {
+            if self.unprovable.contains(&uid) {
+                return Err("too many".into());
+            }
+            Ok(self.files.get(&uid).cloned())
+        }
+    }
+
+    fn used(f: &mut PoolFile, slot: Slot, i: u32, uid: u32) {
+        lease(f, slot, i, uid, &format!("k2job-t{slot}-{i:016x}.service"), Path::new("/nonexistent/jobs/x"), 1);
+    }
+
+    #[test]
+    fn a_fresh_pool_hands_out_index_0_then_recycles_it_once_proven_empty() {
+        let mut f = PoolFile::default();
+        let probe = Fake::default();
+        assert_eq!(pick(&mut f, 1, &probe), Ok(Choice::Fresh(0)));
+        used(&mut f, 1, 0, 61010);
+        // Its job still runs: the next secret job gets a new index.
+        let busy = Fake { live: vec!["k2job-t1-0000000000000000.service".into()], ..Default::default() };
+        assert_eq!(pick(&mut f, 1, &busy), Ok(Choice::Fresh(1)));
+        assert!(f.get(1, 0).unwrap().held.as_deref().unwrap().contains("still live"));
+        // It ended, nothing of it is left: index 0 again (recycled, the
+        // same uid), and the held reason is gone.
+        assert_eq!(pick(&mut f, 1, &probe), Ok(Choice::Reuse(0)));
+        assert_eq!(f.get(1, 0).unwrap().held, None);
+        assert_eq!(f.get(1, 0).unwrap().uid, 61010);
+        assert_eq!(probe.cleared.borrow().as_slice(), &[61010], "its temp leftovers went first");
+        // Other slots are their own pools.
+        assert_eq!(pick(&mut f, 2, &probe), Ok(Choice::Fresh(0)));
+    }
+
+    #[test]
+    fn a_leftover_process_blocks_reuse_until_it_is_gone() {
+        let mut f = PoolFile::default();
+        used(&mut f, 1, 0, 61010);
+        used(&mut f, 1, 1, 61011);
+        // 61010 left a process that a kill doesn't end (stuck in D state);
+        // 61011 left one that a kill ends.
+        let probe = Fake { procs: RefCell::new(BTreeMap::from([(61010, vec![4242]), (61011, vec![4343])])), immortal: vec![4242], ..Default::default() };
+        assert_eq!(pick(&mut f, 1, &probe), Ok(Choice::Reuse(1)), "61011's leftover was killed, so it is empty; 61010 is held");
+        let held = f.get(1, 0).unwrap().held.clone().unwrap();
+        assert!(held.contains("still runs process(es) [4242]"), "{held}");
+        assert!(probe.pids(61011).is_empty());
+        // While 61010's process lives it is never reused, even when it's the
+        // only user left that could be.
+        let only0 = Fake { procs: RefCell::new(BTreeMap::from([(61010, vec![4242])])), immortal: vec![4242], live: vec!["k2job-t1-0000000000000001.service".into()], ..Default::default() };
+        assert_eq!(pick(&mut f, 1, &only0), Ok(Choice::Fresh(2)), "a new index, never the held one");
+        // Gone: reusable again.
+        assert_eq!(pick(&mut f, 1, &Fake::default()), Ok(Choice::Reuse(0)));
+    }
+
+    #[test]
+    fn a_leftover_file_or_an_unfinished_proof_blocks_reuse() {
+        let mut f = PoolFile::default();
+        used(&mut f, 3, 0, 61020);
+        let file = Fake { files: BTreeMap::from([(61020, PathBuf::from("/var/lib/k2node-t/3/jobs/x/target/secret.o"))]), ..Default::default() };
+        assert_eq!(pick(&mut f, 3, &file), Ok(Choice::Fresh(1)));
+        assert!(f.get(3, 0).unwrap().held.as_deref().unwrap().contains("still owns /var/lib/k2node-t/3/jobs/x/target/secret.o"));
+        let unprovable = Fake { unprovable: vec![61020], ..Default::default() };
+        assert_eq!(pick(&mut f, 3, &unprovable), Ok(Choice::Fresh(1)));
+        assert!(f.get(3, 0).unwrap().held.as_deref().unwrap().contains("can't be proven gone"));
+    }
+
+    #[test]
+    fn a_full_pool_refuses_never_shares() {
+        let mut f = PoolFile::default();
+        let mut live = Vec::new();
+        for i in 0..JOB_UID_POOL {
+            used(&mut f, 1, i, 61100 + i);
+            live.push(format!("k2job-t1-{i:016x}.service"));
+        }
+        let e = pick(&mut f, 1, &Fake { live, ..Default::default() }).unwrap_err();
+        assert!(e.contains("every per-job uid of slot 1 is busy"), "{e}");
+        assert!(e.contains(&pool_user_name(1, 7)), "{e}");
+    }
+
+    #[test]
+    fn the_pool_file_round_trips_and_refuses_unknown_keys() {
+        let mut f = PoolFile::default();
+        used(&mut f, 1, 0, 61010);
+        let d = crate::util::temp_dir("pool-file");
+        let p = d.join(POOL_FILE);
+        assert_eq!(read_pool(&p).unwrap(), PoolFile::default(), "missing = empty");
+        write_pool(&p, &f).unwrap();
+        assert_eq!(read_pool(&p).unwrap(), f);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::write(&p, r#"{"users":{},"extra":1}"#).unwrap();
+        assert!(read_pool(&p).is_err(), "unknown keys: refused (the executor then holds every index)");
+        assert_eq!(pool_user_name(1, 3), "k2job-1-3");
+        assert_ne!(pool_user_name(1, 0), jobs::tenant_user_name(1));
+    }
+
+    #[test]
+    fn owned_under_finds_a_file_never_follows_links_and_is_bounded() {
+        use std::os::unix::fs::MetadataExt;
+        let d = crate::util::temp_dir("pool-owned");
+        let me = std::fs::metadata(&d).unwrap().uid();
+        std::fs::create_dir_all(d.join("a/b")).unwrap();
+        std::fs::write(d.join("a/b/f"), "x").unwrap();
+        let mut seen = 0;
+        assert!(owned_under(&d, me, &mut seen).unwrap().is_some(), "my own files are mine");
+        let mut seen = 0;
+        assert_eq!(owned_under(&d, me.wrapping_add(7), &mut seen).unwrap(), None);
+        assert!(seen >= 4, "{seen}");
+        let mut seen = 0;
+        assert_eq!(owned_under(&d.join("missing"), me, &mut seen).unwrap(), None, "a missing root has none");
+        // A link to elsewhere is the link, not its target.
+        let other = crate::util::temp_dir("pool-owned-other");
+        std::os::unix::fs::symlink(&other, d.join("link")).unwrap();
+        let mut seen = PROOF_MAX_ENTRIES;
+        assert!(owned_under(&d, me.wrapping_add(7), &mut seen).is_err(), "past the bound: not proven");
+    }
+}

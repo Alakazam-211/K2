@@ -23,6 +23,8 @@ use k2_node_proto::results::Outputs;
 use k2_node_proto::share::{codes, Network, Trust};
 use tokio::sync::watch;
 
+use k2_node_proto::queue::UidShare;
+
 use super::adopt::{HeldFacts, LeaseFacts, RunFacts, RunKind, DETACH, RUN_V};
 use super::{Node, StopReason, Tenant};
 use crate::cgroup::Leaf;
@@ -611,6 +613,8 @@ impl Node {
         // project cache or sccache server, and its whole tree goes when it
         // ends, before another workspace's job may start.
         let secret_job = !a.plan.secret_env.is_empty();
+        // C2: how it shares its uid, as `launch` decided it.
+        let uid_share = self.jobs.lock().unwrap().get(&(t.slot, job.clone())).map(|j| j.uid).unwrap_or_default();
         let journal_path = t.paths.journal(&job, gen);
         let mut journal = match dirs.create_for(unit_mode).and_then(|_| JournalWriter::create(&journal_path, a.plan.limits.log_cap_bytes)) {
             Ok(j) => j,
@@ -947,16 +951,16 @@ impl Node {
             if let Some(c) = &job_cache_dir {
                 rw.push(c.clone());
             }
-            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref(), writers).await
+            self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref(), writers, uid_share == UidShare::Own).await
         } else if let (Some(bin), Some((out_w, err_w))) = (holder_bin.as_ref(), writers) {
-            self.start_held(&t, &a, &cwd, &env, network, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None))
+            self.start_held(&t, &a, &cwd, &env, network, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None, None))
         } else {
-            self.start_local(&t, &a, &cwd, &env, network)
+            self.start_local(&t, &a, &cwd, &env, network).map(|(p, o, e)| (p, o, e, None))
         };
         // SE19: the plaintext goes as soon as the unit has it (the
         // redactor's copy stays until the job ends).
         drop(secrets.take());
-        let (proc, out_pipe, err_pipe) = match started {
+        let (proc, out_pipe, err_pipe, uid_index) = match started {
             Ok(s) => s,
             Err(e) => {
                 sys(&mut journal, &e);
@@ -964,6 +968,13 @@ impl Node {
                 return;
             }
         };
+        // C2: its own uid, from the slot's pool: the receipt says so.
+        if let Some(i) = uid_index {
+            sys(&mut journal, &format!("runs as a uid of its own ({}, pool index {i}); no other job shares it", crate::admin::jobpool::pool_user_name(t.slot, i)));
+            self.set_ci_run_job_uid(&t, &job, gen, i);
+        } else if uid_share == UidShare::SlotAlone {
+            sys(&mut journal, "runs as this server's job user with no other job beside it (no per-job uid on this node)");
+        }
         let pgid = proc.pgid();
         {
             let l = t.ledger.lock().unwrap();
@@ -1451,7 +1462,8 @@ impl Node {
         mem_limit: u64,
         secrets: Option<&k2_node_proto::secret::Plain>,
         spool: Option<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)>,
-    ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+        job_uid: bool,
+    ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>, Option<u32>), String> {
         use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
         crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf(), stdin_env: secrets.is_some() })?;
@@ -1491,12 +1503,21 @@ impl Node {
             // C11: the unit's own limit (`RuntimeMaxSec`), so a job no node
             // watches still ends at its time limit.
             max_secs: Some(a.plan.limits.max_secs.max(1)),
+            // C2: a uid of its own from the slot's pool.
+            job_uid,
         };
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.
         let ans = self.job_op(JobOp::Start(start), fds, Duration::from_secs(60)).await;
-        let unit = match ans {
-            Ok(JobAnswer::Started { unit }) => unit,
+        let (unit, uid_index) = match ans {
+            // C2: asked for its own uid, the answer must say which; an
+            // executor that ignored the ask started it as the slot's user:
+            // stopped at once, never left running beside others.
+            Ok(JobAnswer::Started { unit, uid_index: None }) if job_uid => {
+                let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
+                return Err(format!("{}: the executor started {unit} without a uid of its own; stopped (update k2-node)", crate::admin::jobpool::JOB_UID_UNAVAILABLE));
+            }
+            Ok(JobAnswer::Started { unit, uid_index }) => (unit, uid_index),
             Ok(JobAnswer::Refused(r)) => return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message)),
             Ok(other) => return Err(format!("unexpected executor answer: {other:?}")),
             Err(e) => return Err(format!("couldn't start the job unit: {e}")),
@@ -1505,8 +1526,8 @@ impl Node {
             tokio::net::unix::pipe::Receiver::from_owned_fd(std::os::fd::OwnedFd::from(r)).ok().map(|p| Box::new(p) as OutPipe)
         };
         Ok(match readers {
-            Some((out_r, err_r)) => (Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r)),
-            None => (Proc::Unit { unit, last: None, cg: None }, None, None),
+            Some((out_r, err_r)) => (Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r), uid_index),
+            None => (Proc::Unit { unit, last: None, cg: None }, None, None, uid_index),
         })
     }
 

@@ -86,6 +86,30 @@ fn ops_lock(e: &Executor) -> Result<crate::util::FileLock, AdminRefusal> {
     crate::util::FileLock::exclusive(&e.paths.config_dir.join(OPS_LOCK_FILE)).map_err(failed)
 }
 
+/// [`ops_lock`] for the per-job uid pool (it adds users and spends tenant
+/// ids too).
+pub(crate) fn ops_lock_for(e: &Executor) -> Result<crate::util::FileLock, AdminRefusal> {
+    ops_lock(e)
+}
+
+/// The next tenant id no user or group has, recorded as spent in
+/// `tenant-ids.json` before the caller makes anything with it (never
+/// handed out twice, never reused: V64). For the per-job uid pool (C2);
+/// call under [`ops_lock_for`].
+pub(crate) fn next_tenant_id(e: &Executor) -> Result<u32, AdminRefusal> {
+    let mut ids = read_ids(e).map_err(failed)?;
+    let mut id = ids.next.max(TENANT_ID_FIRST);
+    while id <= TENANT_ID_LAST && uid_taken(id) {
+        id += 1;
+    }
+    if id > TENANT_ID_LAST {
+        return Err(failed("no tenant uids left (61001–64999)"));
+    }
+    ids.next = id + 1;
+    write_ids(e, &ids).map_err(failed)?;
+    Ok(id)
+}
+
 fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
     AdminRefusal::new(c, m)
 }
@@ -115,7 +139,7 @@ fn run(program: &str, args: &[&str]) -> Result<(), AdminRefusal> {
 /// SIGKILL `pid` only if it is still `uid`'s: the pidfd pins the process,
 /// then its uid is read again (Linux; no pidfd → nothing is sent).
 #[cfg(target_os = "linux")]
-fn kill_if_still(pid: i32, uid: u32) {
+pub(crate) fn kill_if_still(pid: i32, uid: u32) {
     // SAFETY: pidfd_open takes a pid and flags; the fd is closed below.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
     if fd < 0 {
@@ -132,7 +156,7 @@ fn kill_if_still(pid: i32, uid: u32) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn kill_if_still(_pid: i32, _uid: u32) {}
+pub(crate) fn kill_if_still(_pid: i32, _uid: u32) {}
 
 /// macOS: (ppid, uid) of a process, by `proc_pidinfo`.
 #[cfg(target_os = "macos")]
@@ -206,7 +230,7 @@ fn kill_orphan_if_still(pid: i32, uid: u32) {
 fn kill_orphan_if_still(_pid: i32, _uid: u32) {}
 
 /// Every process of `uid` (from /proc; Linux).
-fn pids_of(uid: u32) -> Vec<i32> {
+pub(crate) fn pids_of(uid: u32) -> Vec<i32> {
     let mut out = Vec::new();
     let Ok(rd) = std::fs::read_dir("/proc") else { return out };
     for e in rd.flatten() {
@@ -580,6 +604,9 @@ impl Executor {
         if !cfg!(target_os = "linux") {
             return Ok(());
         }
+        // C2: the slot's per-job uids first (the slot's group is theirs
+        // too, so it can't go while they exist); their uids stay spent.
+        self.remove_pool_users(slot, removed, errors);
         let name = jobs::tenant_user_name(slot);
         let group = jobs::tenant_group_name(slot);
         if let Ok(setfacl) = tool("setfacl") {

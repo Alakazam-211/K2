@@ -316,6 +316,7 @@ impl Node {
                     gate: a.plan.tier_or_class() == k2_node_proto::tiers::Tier::Ci,
                     workspace: a.plan.workspace_id.clone(),
                     secret: false,
+                    uid: Default::default(),
                     port_block: f.port_block,
                     adoptable: true,
                     rust: f.rust.clone(),
@@ -323,7 +324,7 @@ impl Node {
             );
         }
         let caps = self.queue_caps();
-        self.fairq.started(t.slot, &a, self.now(), &caps);
+        self.fairq.started(t.slot, &a, self.now(), &caps, Default::default());
         self.set_ci_run(t, &job, gen, f.ci_run.clone());
         let lease = f.lease.as_ref().map(|l| {
             if let Some(n) = l.slot {

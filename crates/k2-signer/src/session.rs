@@ -72,10 +72,10 @@ pub fn session_path(ctx: &Ctx, project: &str, version: &str) -> PathBuf {
 
 pub fn load(ctx: &Ctx, project: &str, version: &str) -> R<Option<Session>> {
     let p = session_path(ctx, project, version);
-    if !p.exists() {
+    let Some(raw) = ctx::read_file(ctx, &p, 1 << 20)? else {
         return Ok(None);
-    }
-    let s: Session = serde_json::from_slice(&std::fs::read(&p)?).map_err(|e| Fail::Refused(format!("{}: {e}", p.display())))?;
+    };
+    let s: Session = serde_json::from_slice(&raw).map_err(|e| Fail::Refused(format!("{}: {e}", p.display())))?;
     if s.version != version || (project != "k2" && s.project.as_deref() != Some(project)) {
         return refused(format!("{} is for another project or version", p.display()));
     }

@@ -60,6 +60,7 @@ import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 SIGNER_USER = "_k2sign"
@@ -181,9 +182,15 @@ class Ctx:
         return self.test and os.environ.get("K2SIGN_TEST_NOTARIZED") == "1"
 
     def own(self, path):
-        """Admin writes under /var/k2sign belong to the signing user."""
+        """Admin writes under /var/k2sign belong to the signing user. Never
+        through a symlink (k2-signer review N1): lchown, not chown."""
         if self.admin and not self.test:
-            os.chown(path, self.signer.pw_uid, self.signer.pw_gid)
+            os.chown(path, self.signer.pw_uid, self.signer.pw_gid, follow_symlinks=False)
+
+    def fown(self, fd):
+        """The same, on an open file descriptor (fchown)."""
+        if self.admin and not self.test:
+            os.fchown(fd, self.signer.pw_uid, self.signer.pw_gid)
 
 
 # ── small helpers ──────────────────────────────────────────────────────────
@@ -224,30 +231,171 @@ def check_asset_name(a):
     return a
 
 
-def write_file(ctx, path, data, mode=0o600):
-    tmp = "%s.tmp-%s" % (path, secrets.token_hex(4))
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+# ── files under /var/k2sign: never through a symlink (k2-signer review N1) ─
+#
+# /var/k2sign belongs to the signing user, so anything below it may be a
+# symlink that user planted. When root works there (k2sign-admin), a path
+# that followed it could write or chown a root file. So every folder below
+# /var/k2sign is opened component by component with O_NOFOLLOW, files are
+# opened relative to that descriptor with O_NOFOLLOW | O_NOCTTY, and mode
+# and owner are set on the open descriptor.
+
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+FILE_FLAGS = os.O_NOFOLLOW | os.O_NOCTTY | getattr(os, "O_CLOEXEC", 0)
+
+
+def var_split(ctx, path):
+    """(folder below /var/k2sign, name) of a path under it, else None."""
+    var = getattr(ctx, "var", None)  # (tests pass a bare stand-in for Ctx)
+    if not var or not path.startswith(var + "/"):
+        return None
+    folder, _, name = path[len(var) + 1:].rpartition("/")
+    return folder, name
+
+
+def var_dirfd(ctx, rel, create=True):
+    """A descriptor of /var/k2sign/<rel>, a real folder at every step; missing
+    folders are made 0700 and given to the signing user. None when one is
+    missing and not create."""
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data if isinstance(data, bytes) else data.encode())
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, mode)
-        ctx.own(tmp)
-        os.rename(tmp, path)
-    except BaseException:
+        fd = os.open(ctx.var, DIR_FLAGS)
+    except OSError as e:
+        raise Refused("%s: %s (it must be a real folder)" % (ctx.var, e.strerror))
+    at = ctx.var
+    for part in [x for x in rel.split("/") if x]:
+        if part in (".", ".."):
+            os.close(fd)
+            raise Refused("%s: not a plain path below %s" % (rel, ctx.var))
+        at = at + "/" + part
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            nfd = os.open(part, DIR_FLAGS, dir_fd=fd)
+        except FileNotFoundError:
+            if not create:
+                os.close(fd)
+                return None
+            try:
+                os.mkdir(part, 0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            try:
+                nfd = os.open(part, DIR_FLAGS, dir_fd=fd)
+            except OSError as e:
+                os.close(fd)
+                raise Refused("%s: %s (a symlink or not a folder: refused)" % (at, e.strerror))
+            os.fchmod(nfd, 0o700)
+            ctx.fown(nfd)
+        except OSError as e:
+            os.close(fd)
+            raise Refused("%s: %s (a symlink or not a folder: refused)" % (at, e.strerror))
+        os.close(fd)
+        fd = nfd
+    return fd
+
+
+def check_opened(ctx, fd, path):
+    """A file opened under /var/k2sign is a plain file with one link and, in
+    production, the signing user's (a hard link to a root file is refused)."""
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        raise Refused("%s: not a plain, single-link file: refused" % path)
+    if not ctx.test and ctx.signer is not None and st.st_uid != ctx.signer.pw_uid and st.st_size > 0:
+        raise Refused("%s: not the signing user's file: refused" % path)
+    return st
+
+
+def write_file(ctx, path, data, mode=0o600):
+    data = data if isinstance(data, bytes) else data.encode()
+    sp = var_split(ctx, path)
+    if sp is None:
+        tmp = "%s.tmp-%s" % (path, secrets.token_hex(4))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | FILE_FLAGS, mode)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+                os.fchmod(f.fileno(), mode)
+            os.rename(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return
+    folder, name = sp
+    dfd = var_dirfd(ctx, folder)
+    tmp = "%s.tmp-%s" % (name, secrets.token_hex(4))
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | FILE_FLAGS, mode, dir_fd=dfd)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+                os.fchmod(f.fileno(), mode)
+                ctx.fown(f.fileno())
+            # renameat replaces a symlink at name, never its target.
+            os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dfd)
+
+
+def append_text(ctx, path, text, header=None):
+    """Append to a file (registries, audit), writing header first when the
+    file is new; never through a symlink or a hard link."""
+    sp = var_split(ctx, path)
+    if sp is None:
+        raise Refused("internal: append outside %s: %s" % (ctx.var, path))
+    folder, name = sp
+    dfd = var_dirfd(ctx, folder)
+    try:
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | FILE_FLAGS, 0o600, dir_fd=dfd)
+        except OSError as e:
+            raise Refused("%s: %s (a symlink is refused)" % (path, e.strerror))
+    finally:
+        os.close(dfd)
+    try:
+        st = check_opened(ctx, fd, path)
+        ctx.fown(fd)
+        out = (header + "\n" if header and st.st_size == 0 else "") + text
+        os.write(fd, out.encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def unlink_var(ctx, path):
+    """Remove a file under /var/k2sign (unlinkat: a symlink, never its target)."""
+    folder, name = var_split(ctx, path)
+    dfd = var_dirfd(ctx, folder, create=False)
+    if dfd is None:
+        return
+    try:
+        os.unlink(name, dir_fd=dfd)
+    except FileNotFoundError:
+        pass
+    finally:
+        os.close(dfd)
 
 
 def mkdirs(ctx, path, mode=0o700):
+    sp = var_split(ctx, path + "/x")
+    if sp is not None:
+        os.close(var_dirfd(ctx, sp[0]))
+        return
+    if os.path.islink(path):
+        raise Refused("%s is a symlink: refused" % path)
     if not os.path.isdir(path):
         os.makedirs(path, mode)
         os.chmod(path, mode)
-        ctx.own(path)
 
 
 def mode_of(path):
@@ -421,10 +569,20 @@ class Locked:
         self.ctx = ctx
 
     def __enter__(self):
-        mkdirs(self.ctx, self.ctx.state)
         path = os.path.join(self.ctx.state, ".lock")
-        self.fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        self.ctx.own(path)
+        dfd = var_dirfd(self.ctx, "state")
+        try:
+            self.fd = os.open(".lock", os.O_RDWR | os.O_CREAT | FILE_FLAGS, 0o600, dir_fd=dfd)
+        except OSError as e:
+            raise Refused("%s: %s (a symlink is refused)" % (path, e.strerror))
+        finally:
+            os.close(dfd)
+        try:
+            check_opened(self.ctx, self.fd, path)
+            self.ctx.fown(self.fd)
+        except BaseException:
+            os.close(self.fd)
+            raise
         fcntl.flock(self.fd, fcntl.LOCK_EX)
         return self
 
@@ -463,18 +621,10 @@ def load_session(ctx, version):
 
 
 def audit(ctx, version, event, slot="", asset="", sha="", key_id="", tc="", detail=""):
-    d = os.path.join(ctx.audit_dir, version)
-    mkdirs(ctx, ctx.audit_dir)
-    mkdirs(ctx, d)
-    path = os.path.join(d, "signatures.tsv")
-    new = not os.path.exists(path)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    with os.fdopen(fd, "a") as f:
-        if new:
-            f.write("time\tevent\tslot\tasset\tsha256\tkey_id\ttrusted_comment\tdetail\n")
-        clean = lambda s: str(s).replace("\t", "\\t").replace("\n", " ")
-        f.write("\t".join(clean(x) for x in (iso(ctx.now()), event, slot, asset, sha, key_id, tc, detail)) + "\n")
-    ctx.own(path)
+    path = os.path.join(ctx.audit_dir, version, "signatures.tsv")
+    clean = lambda s: str(s).replace("\t", "\\t").replace("\n", " ")
+    line = "\t".join(clean(x) for x in (iso(ctx.now()), event, slot, asset, sha, key_id, tc, detail)) + "\n"
+    append_text(ctx, path, line, header="time\tevent\tslot\tasset\tsha256\tkey_id\ttrusted_comment\tdetail")
 
 
 # ── minisign ───────────────────────────────────────────────────────────────
@@ -1451,11 +1601,9 @@ def verb_compute_evidence(ctx, args):
         except Refused as e:
             audit(ctx, version, "REFUSED-COMPUTE-EVIDENCE", detail=str(e))
             raise
-        with open(used_path, "a") as f:
-            for j in summary["jobs"].values():
-                if j["receipt"] not in used:
-                    f.write("%s\t%s\n" % (j["receipt"], version))
-        ctx.own(used_path)
+        new_lines = "".join("%s\t%s\n" % (j["receipt"], version) for j in summary["jobs"].values() if j["receipt"] not in used)
+        if new_lines:
+            append_text(ctx, used_path, new_lines)
         if not again:
             write_file(ctx, state_path, json.dumps({"bundle": bundle, "bundle_sha256": bundle_sha,
                                                     "registered": ctx.now(), "summary": summary}, sort_keys=True))
@@ -1556,6 +1704,11 @@ class Scratch:
         self.ctx = ctx
 
     def __enter__(self):
+        if self.ctx.admin:
+            # Root's scratch never sits in a folder the signing user owns (N1).
+            self.dir = tempfile.mkdtemp(prefix="k2sign-admin-")
+            os.chmod(self.dir, 0o700)
+            return self.dir
         mkdirs(self.ctx, self.ctx.tmp)
         self.dir = os.path.join(self.ctx.tmp, secrets.token_hex(8))
         os.mkdir(self.dir, 0o700)
@@ -1831,9 +1984,7 @@ def verb_sign(ctx, args):
             raise
         text, key_id, tc = sign_and_check(ctx, slot, path, asset, version)
         if asset not in first:
-            with open(apath, "a") as f:
-                f.write("%s\t%s\n" % (asset, sha))
-            ctx.own(apath)
+            append_text(ctx, apath, "%s\t%s\n" % (asset, sha))
         if sess is not None and not again:
             sess["count"] += 1
             sess["signed"].append(key)
@@ -1904,18 +2055,22 @@ def admin_generate_u2(ctx, args):
     check_pins(ctx)
     mkdirs(ctx, ctx.keys)
     key, pw = keyfiles(ctx, "u2")
-    if os.path.exists(key) or os.path.exists(pw):
+    if os.path.lexists(key) or os.path.lexists(pw):
         raise Refused("U2 already exists in %s; this runs once (rotation: docs/release/updater-key-ceremony.md)" % ctx.keys)
     password = secrets.token_hex(32)
     with Scratch(ctx) as d:
         pub = os.path.join(d, "u2.pub")
         try:
-            rc, out, err = run([ctx.minisign, "-G", "-p", pub, "-s", key],
+            # minisign writes the key in root's own scratch; the signer's
+            # folder gets it through write_file (no symlink followed, N1).
+            tmpkey = os.path.join(d, "u2.key")
+            rc, out, err = run([ctx.minisign, "-G", "-p", pub, "-s", tmpkey],
                                input_bytes=("%s\n%s\n" % (password, password)).encode())
             if rc != 0:
                 raise Refused("minisign -G failed (%s)" % err.decode(errors="replace").strip()[:200])
-            os.chmod(key, 0o600)
-            ctx.own(key)
+            with open(tmpkey, "rb") as f:
+                write_file(ctx, key, f.read(), 0o600)
+            os.unlink(tmpkey)
             write_file(ctx, pw, password + "\n")
             line = open(pub).read().splitlines()[1].strip()
             key_id = b64_key_id(line)
@@ -1927,8 +2082,7 @@ def admin_generate_u2(ctx, args):
                 raise Refused("the new U2 key does not verify its own self-test")
         except BaseException:
             for p in (key, pw):
-                if os.path.exists(p):
-                    os.unlink(p)
+                unlink_var(ctx, p)
             raise
         # A world-readable copy of the PUBLIC line, for the ceremony and for
         # install.sh's check that the tree's U2 is this one.
@@ -1964,7 +2118,7 @@ def admin_import(ctx, args):
     pub = pinned_pubkey(ctx, "u1")
     mkdirs(ctx, ctx.keys)
     key, pw = keyfiles(ctx, "u1")
-    if os.path.exists(key) or os.path.exists(pw):
+    if os.path.lexists(key) or os.path.lexists(pw):
         raise Refused("U1 is already imported in %s" % ctx.keys)
     raw = decode_secret_key(open(args[1], "rb").read())
     if stdin_pw:
@@ -1987,8 +2141,7 @@ def admin_import(ctx, args):
                               % b64_key_id(pub))
     except BaseException:
         for p in (key, pw):
-            if os.path.exists(p):
-                os.unlink(p)
+            unlink_var(ctx, p)
         raise
     say("U1 imported into %s; it signs and verifies with the pinned key %s." % (ctx.keys, b64_key_id(pub)))
 
@@ -2142,10 +2295,13 @@ def admin_clear_compute_evidence(ctx, args):
         p = compute_state_path(ctx, version)
         if not os.path.exists(p):
             raise Refused("%s has no compute evidence registered" % version)
+        if os.path.islink(p):
+            raise Refused("%s is a symlink: refused" % p)
         summary = read_json(p).get("summary") or {}
-        os.unlink(p)
+        # Audit first, then remove (unlinkat: never a symlink's target, N1).
         audit(ctx, version, "COMPUTE-EVIDENCE-CLEARED-BY-ADMIN", detail="tree %s; %s" % (summary.get("tree"), "; ".join(
             "%s job %s" % (k, (v or {}).get("job")) for k, v in sorted((summary.get("jobs") or {}).items()))))
+        unlink_var(ctx, p)
     say("compute evidence for %s cleared (audited): its x86 daemon now needs GitHub's attestation" % version)
 
 

@@ -45,7 +45,14 @@ These were accepted at the 2026-11-07 security review. They are not fixed in
 - **Pairing-pin switch (M7).** It lives in `trust.json`
   (`k2-signer-admin pairing-pins <project> required|optional`), not in the
   frozen policy schema. By default it is required for client projects and
-  optional for `k2`.
+  optional for `k2`. Whether a node is the client's own comes from the
+  person's pin (`trust-owner … --own-controller <fp>`), never from the
+  owner's `owner_server_fp`.
+- **Pairing pins aren't controller-signed.** The client server sends the
+  evidence bundle's `pairing_pins` unsigned (bundle v2 has no controller
+  signature). So they guard against a lying node owner, not against a
+  compromised client server, which could list a rogue node's key. The
+  owner's roster and the person's acceptance still have to agree.
 - **One key per asset.** The policy names one key per asset. K2's U1/U2
   bridge (until SS6) is therefore special-cased: `u1` is allowed only for
   project `k2`.

@@ -3,10 +3,22 @@
 //! server's tunnel-key fingerprint (the `controller_fp` every receipt
 //! signs), and the server records the signer's public key.
 //!
-//! **Commit, then reveal** (security review H2): neither end can pick its
-//! nonce after seeing the other's, so whoever carries the messages can't
-//! grind a nonce until the 6-digit SAS matches; and the one-time code never
-//! travels, not even hashed: it keys a MAC over the server's offer.
+//! **The SAS is the check.** The person must read the 6 digits on a screen
+//! the courier can't fake: the K2 server's own UI (its desktop app, or `k2`
+//! in a terminal on the server), never a page or message the courier
+//! relays. Everything else here is there so that the SAS can't be gamed:
+//!
+//! - **Commit, then reveal** (security review H2): neither end can pick its
+//!   nonce after seeing the other's, so whoever carries the messages can't
+//!   grind a nonce until the 6-digit SAS matches.
+//! - **The code's MAC is defence in depth.** The one-time code keys an HMAC
+//!   over the server's offer, and the hello and offer don't carry the code
+//!   or its hash. But the person types the code on the server, so whoever
+//!   sees that screen or the server route also sees it. The SAS, not the
+//!   code, is what proves which server is on the other end.
+//! - **Root's state only** (review M-a): the pairing state lives in root's
+//!   private folder, and `pair-accept` checks the offer's signature, MAC and
+//!   commitment again before it computes the SAS.
 //!
 //! 1. **`pair-begin`** (admin, at the signer): a one-time 10-character code
 //!    and the signer's fingerprint prefix, `ABCDE-FGHJK.<16 hex>`, for the
@@ -32,9 +44,19 @@
 //! The SAS scheme is `k2_node_proto::pairing::sas_digits` with the frozen
 //! domain `k2-signer-sas-v1`; nothing in k2-node-proto changed. The signer
 //! never talks to the network: the messages travel through the person's
-//! `k2` CLI and the server's route. **Server side:** [`server_offer`],
-//! [`server_sas`] and [`server_finish`] are the reference implementation and
-//! the interface for the daemon route (builder O).
+//! `k2` CLI and the server's route.
+//!
+//! **Server side (builder O).** [`server_offer`], [`server_sas`] and
+//! [`server_finish`] are the reference implementation and the interface for
+//! the daemon route. The route must:
+//! - take `k2 ci signer add` only from the owner or an Admin with a confirm
+//!   token, never an agent (V17);
+//! - show the SAS **only in the server's own UI** (the desktop app or a
+//!   `k2` command run on the server), never return it to the caller that
+//!   carries the hello/offer/reveal (a courier who learns the SAS could
+//!   relay it);
+//! - keep [`ServerPending`] server-side, and record the signer only after
+//!   [`server_finish`] verifies.
 
 use aws_lc_rs::hmac;
 use k2_node_proto::ci::{Signed, DOMAIN_SIGNER_SAS};
@@ -131,8 +153,9 @@ pub struct Pending {
     pub signer_nonce: String,
     pub created_at: i64,
     pub label: String,
-    /// The one offer the nonce was revealed for.
-    pub offer: Option<Signed>,
+    /// The one offer (with its MAC) the nonce was revealed for; checked
+    /// again in full at `pair-accept` (M-a).
+    pub offer: Option<OfferMsg>,
 }
 
 /// What the server keeps between its steps.
@@ -202,24 +225,15 @@ pub fn signer_begin(identity: &SigningKey, label: &str, now: i64) -> Result<(Str
     Ok((es.render(), hello, pending))
 }
 
-/// Signer: check the server's offer; returns the offer, its parsed body and
-/// the signed [`Reveal`] for the server. The caller stores the offer in
-/// `Pending.offer`: the nonce is revealed for that one offer only.
-pub fn signer_reveal(identity: &SigningKey, pending: &Pending, msg: &OfferMsg, now: i64) -> Result<(Offer, Signed), String> {
-    if now > pending.created_at + CODE_TTL_SECS {
-        return Err("the pairing code expired: start again (pair-begin)".into());
-    }
-    if let Some(o) = &pending.offer {
-        if *o != msg.offer {
-            return Err("this pairing's nonce was already revealed to another offer: start again (pair-begin)".into());
-        }
-    }
+/// Every check of an offer against this pairing: the code's MAC, the
+/// server's signature, labels, this signer, this hello's commitment.
+fn verify_offer(identity: &SigningKey, pending: &Pending, msg: &OfferMsg) -> Result<Offer, String> {
     let key = (0..pending.mac_key.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(pending.mac_key.get(i..i + 2).unwrap_or("zz"), 16))
         .collect::<Result<Vec<u8>, _>>()
         .map_err(|_| "the pending pairing is damaged".to_string())?;
-    if !mac_ok(&key, &msg.offer.body, &msg.mac) {
+    if key.len() != 32 || !mac_ok(&key, &msg.offer.body, &msg.mac) {
         return Err("the offer was not made with this pairing code (a server the person did not give the code to)".into());
     }
     let peek: Offer = msg.offer.peek(DOMAIN_PAIR_OFFER)?;
@@ -242,6 +256,22 @@ pub fn signer_reveal(identity: &SigningKey, pending: &Pending, msg: &OfferMsg, n
     if crypto::unb64(&o.server_nonce)?.len() != 16 {
         return Err("the offer's nonce is not 16 bytes".into());
     }
+    Ok(o)
+}
+
+/// Signer: check the server's offer; returns the offer's body and the signed
+/// [`Reveal`] for the server. The caller stores `msg` in `Pending.offer`:
+/// the nonce is revealed for that one offer only.
+pub fn signer_reveal(identity: &SigningKey, pending: &Pending, msg: &OfferMsg, now: i64) -> Result<(Offer, Signed), String> {
+    if now > pending.created_at + CODE_TTL_SECS {
+        return Err("the pairing code expired: start again (pair-begin)".into());
+    }
+    if let Some(o) = &pending.offer {
+        if o != msg {
+            return Err("this pairing's nonce was already revealed to another offer: start again (pair-begin)".into());
+        }
+    }
+    let o = verify_offer(identity, pending, msg)?;
     let reveal = Reveal {
         v: PAIR_V,
         kind: "k2-signer-reveal".into(),
@@ -254,22 +284,24 @@ pub fn signer_reveal(identity: &SigningKey, pending: &Pending, msg: &OfferMsg, n
     Ok((o, signed))
 }
 
-/// Signer: the SAS the person typed (read off the server's screen) against
-/// the one the signer computes for the revealed offer. Returns the server's
-/// fp, SPKI, label and the signed [`Done`].
+/// Signer: the SAS the person typed (read off the server's own screen)
+/// against the one the signer computes for the revealed offer, which is
+/// checked again in full first (M-a). Returns the server's fp, SPKI, label
+/// and the signed [`Done`].
 pub fn signer_accept(identity: &SigningKey, pending: &Pending, typed_sas: &str, now: i64) -> Result<(String, String, String, Signed), String> {
     if now > pending.created_at + CODE_TTL_SECS {
         return Err("the pairing code expired: start again (pair-begin)".into());
     }
-    let Some(offer) = &pending.offer else {
+    let Some(msg) = &pending.offer else {
         return Err("no offer revealed yet (pair-reveal first)".into());
     };
-    let o: Offer = offer.peek(DOMAIN_PAIR_OFFER)?;
-    let want = sas(&o.server_fp, &o.signer_fp, &o.server_nonce, &pending.signer_nonce, &offer.digest());
+    let o = verify_offer(identity, pending, msg)?;
+    let want = sas(&o.server_fp, &o.signer_fp, &o.server_nonce, &pending.signer_nonce, &msg.offer.digest());
     if !sas_matches(&want, typed_sas) {
-        return Err("the SAS you typed is not the one this signer computed: not paired (check you are pairing with your own server)".into());
+        return Err("the SAS you typed is not the one this signer computed: not paired, and this pairing is void (start again with pair-begin; check you are pairing with your own server)".into());
     }
-    let done = Done { v: PAIR_V, kind: "k2-signer-done".into(), signer_fp: identity.fingerprint(), server_fp: o.server_fp.clone(), offer_digest: offer.digest(), at: now };
+    let done =
+        Done { v: PAIR_V, kind: "k2-signer-done".into(), signer_fp: identity.fingerprint(), server_fp: o.server_fp.clone(), offer_digest: msg.offer.digest(), at: now };
     let signed = Signed::sign_node(identity, DOMAIN_PAIR_DONE, &done)?;
     Ok((o.server_fp, o.server_spki, o.server_label, signed))
 }
@@ -346,7 +378,7 @@ mod tests {
         let now = 1_800_000_000;
         let (code, hello, mut pending) = signer_begin(&signer, "z3mbpZ", now).unwrap();
         assert!(code.contains('.'));
-        // The code never travels: not in the hello, not in the offer.
+        // The hello and the offer carry neither the code nor its hash.
         let (msg, sp) = server_offer(&server, "client.example", &code, &hello, now + 5).unwrap();
         let wire = serde_json::to_string(&(&hello, &msg)).unwrap();
         let normalized = normalize_code(code.split('.').next().unwrap()).unwrap();
@@ -354,7 +386,7 @@ mod tests {
         // No SAS before the reveal; accept refuses.
         assert!(signer_accept(&signer, &pending, "123456", now + 9).unwrap_err().contains("pair-reveal first"));
         let (_, reveal) = signer_reveal(&signer, &pending, &msg, now + 10).unwrap();
-        pending.offer = Some(msg.offer.clone());
+        pending.offer = Some(msg.clone());
         let shown = server_sas(&sp, &reveal).unwrap();
         let wrong = if shown == "000000" { "111111" } else { "000000" };
         assert!(signer_accept(&signer, &pending, wrong, now + 12).is_err());
@@ -388,54 +420,39 @@ mod tests {
         assert!(server_sas(&sp, &forged).unwrap_err().contains("committed"));
     }
 
-    /// H2: whoever carries the messages (here: one who even knows the code)
-    /// can't grind its nonce to a target SAS: the signer's nonce is committed
-    /// before, revealed after, and revealed for one offer only.
+    /// H2 / L-b: the nonce is revealed for one offer only. With
+    /// `pending.offer` = A, an offer B (here: the same server's key, its
+    /// nonce ground after seeing the reveal) is refused, every time.
     #[test]
     fn a_ground_nonce_no_longer_passes() {
         let signer = SigningKey::generate().unwrap();
-        let real = SigningKey::generate().unwrap();
         let attacker = SigningKey::generate().unwrap();
         let now = 1_800_000_000;
-        let (code, hello, pending) = signer_begin(&signer, "z3mbpZ", now).unwrap();
-        // The real server's SAS, which the person will read and type.
-        let (real_msg, real_sp) = server_offer(&real, "client.example", &code, &hello, now).unwrap();
-        // The attacker offers its own key first and grinds server nonces
-        // against the SAS it wants; it must guess the signer's nonce.
-        let (mut atk, _) = server_offer(&attacker, "client.example", &code, &hello, now).unwrap();
-        let mut pending_atk = pending.clone();
-        let (_, atk_reveal) = signer_reveal(&signer, &pending_atk, &atk, now + 1).unwrap();
-        pending_atk.offer = Some(atk.offer.clone());
-        // Having seen the nonce for its first offer, the attacker grinds a
-        // second offer to the real server's SAS ...
-        let revealed: Reveal = atk_reveal.peek(DOMAIN_PAIR_REVEAL).unwrap();
-        // (Another signer state, for the real server's side of the picture.)
-        let (_, real_reveal) = signer_reveal(&signer, &pending, &real_msg, now + 1).unwrap();
-        let target = server_sas(&real_sp, &real_reveal).unwrap();
-        let mut found = None;
-        for i in 0u32..20_000 {
-            let mut o: Offer = atk.offer.peek(DOMAIN_PAIR_OFFER).unwrap();
-            o.server_nonce = crypto::b64(&[&i.to_be_bytes()[..], &[0u8; 12]].concat());
-            let s = Signed::sign_node(&attacker, DOMAIN_PAIR_OFFER, &o).unwrap();
-            if sas(&o.server_fp, &o.signer_fp, &o.server_nonce, &revealed.signer_nonce, &s.digest()) == target {
-                found = Some(s);
-                break;
-            }
-        }
-        // ... but the signer reveals for one offer only, so a ground offer is
-        // refused whether or not the grinding hit.
-        if let Some(s) = found {
-            atk.offer = s;
-            atk.mac = mac(&mac_key_of(&code).unwrap(), &atk.offer.body);
-            assert!(signer_reveal(&signer, &pending_atk, &atk, now + 2).unwrap_err().contains("already revealed"));
-        }
-        // And the SAS the person reads off the real server does not pin the
-        // attacker's offer the signer holds.
-        assert!(signer_accept(&signer, &pending_atk, &target, now + 3).is_err() || {
-            // 1 in a million: the attacker's first offer happened to share the SAS.
-            let o: Offer = atk.offer.peek(DOMAIN_PAIR_OFFER).unwrap();
-            sas(&o.server_fp, &o.signer_fp, &o.server_nonce, &revealed.signer_nonce, &atk.offer.digest()) == target
-        });
+        let (code, hello, mut pending) = signer_begin(&signer, "z3mbpZ", now).unwrap();
+        let (a, _) = server_offer(&attacker, "client.example", &code, &hello, now).unwrap();
+        let (_, reveal) = signer_reveal(&signer, &pending, &a, now + 1).unwrap();
+        pending.offer = Some(a.clone());
+        let revealed: Reveal = reveal.peek(DOMAIN_PAIR_REVEAL).unwrap();
+        assert_eq!(revealed.signer_nonce, pending.signer_nonce);
+        // Now the courier knows the signer's nonce: it grinds a second offer B
+        // (another server nonce, the code's MAC redone, as if it knew the code).
+        let mut o: Offer = a.offer.peek(DOMAIN_PAIR_OFFER).unwrap();
+        o.server_nonce = crypto::b64(&[7u8; 16]);
+        let b_offer = Signed::sign_node(&attacker, DOMAIN_PAIR_OFFER, &o).unwrap();
+        let b = OfferMsg { mac: mac(&mac_key_of(code.split('.').next().unwrap()).unwrap(), &b_offer.body), offer: b_offer };
+        assert!(signer_reveal(&signer, &pending, &b, now + 2).unwrap_err().contains("already revealed to another offer"));
+        // And pair-accept re-checks what pending.offer holds (M-a): a B swapped
+        // in behind the signer's back fails its commitment or MAC check …
+        let mut swapped = pending.clone();
+        let other = SigningKey::generate().unwrap();
+        let (_, other_hello, _) = signer_begin(&other, "x", now).unwrap();
+        let (c, _) = server_offer(&attacker, "client.example", &code, &Hello { signer_fp: signer.fingerprint(), signer_spki: crypto::b64(signer.spki_der()), ..other_hello }, now).unwrap();
+        swapped.offer = Some(c);
+        assert!(signer_accept(&signer, &swapped, "000000", now + 3).unwrap_err().contains("not for this pairing's hello"));
+        // … and a damaged MAC on the revealed offer too.
+        let mut bad_mac = pending.clone();
+        bad_mac.offer = Some(OfferMsg { mac: crypto::b64(&[0u8; 32]), ..a.clone() });
+        assert!(signer_accept(&signer, &bad_mac, "000000", now + 3).unwrap_err().contains("not made with this pairing code"));
     }
 
     struct PendingNoOffer<'a>(&'a Pending);

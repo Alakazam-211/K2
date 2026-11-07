@@ -286,9 +286,14 @@ pub fn check(inp: &Input) -> R<Summary> {
         if p.roster_changes == Changes::Ask {
             auto.remove(&p.project);
         }
+        // L2: remember every key this owner ever showed revoked.
+        let mut revoked = mark.map(|m| m.revoked.clone()).unwrap_or_default();
+        for (r, _) in &list {
+            revoked.extend(r.entries.iter().filter(|e| e.status == KeyStatus::Revoked).map(|e| e.node_fp.clone()));
+        }
         new_marks.insert(
             fp.clone(),
-            RosterMark { seq: newest.seq, digest: newest_digest.clone(), issued_at: newest.issued_at, seen_at: inp.now, auto_accepted: auto },
+            RosterMark { seq: newest.seq, digest: newest_digest.clone(), issued_at: newest.issued_at, seen_at: inp.now, auto_accepted: auto, revoked },
         );
         rosters.insert(fp, OwnerRosters { newest, newest_digest });
     }
@@ -414,10 +419,14 @@ pub fn check(inp: &Input) -> R<Summary> {
         // node another owner runs, the pins are required unless the person
         // made them optional for this project (M7: default required for
         // client projects, optional for `k2`).
-        let foreign = owned.newest.owner_server_fp != *ctl;
+        // Who runs the node is the person's pin (trust-owner --own-controller),
+        // never the owner's own `owner_server_fp`, which a foreign owner could
+        // set to the client's fingerprint (M7).
+        let foreign = !inp.trust.owners.get(owner_fp).is_some_and(|o| o.own_controllers.contains(ctl));
         if foreign && inp.trust.pairing_pins_required(&p.project) && !b.pairing_pins.contains_key(&fp) {
             return refused(format!(
-                "{label}: node {name} belongs to {}, and the evidence carries no pairing pin for its key: the client server's own                  SAS-checked pin is required (k2-signer-admin pairing-pins {} optional to drop it)",
+                "{label}: node {name} belongs to {}, and the evidence carries no pairing pin for its key: the client server's own \
+                 SAS-checked pin is required (k2-signer-admin pairing-pins {} optional to drop it)",
                 owned.newest.owner_id, p.project
             ));
         }
@@ -453,16 +462,21 @@ pub fn check(inp: &Input) -> R<Summary> {
         }
         // A person accepted this key with these roster attributes (S1, M4),
         // or this project says auto (H1: never another project's auto).
-        let attrs = crate::trust::entry_attrs(entry);
+        // L2: a key ever shown revoked never comes back.
+        let ever_revoked = inp.trust.owners.get(owner_fp).is_some_and(|o| o.revoked.contains(&fp))
+            || inp.marks.get(owner_fp).is_some_and(|m| m.revoked.contains(&fp));
+        if ever_revoked {
+            return refused(format!("{label}: node {name}'s key {}… was revoked in an earlier roster of {}: a revoked key never comes back", fp16(&fp), owned.newest.owner_id));
+        }
         let person = inp.trust.owners.get(owner_fp).and_then(|o| o.accepted.get(&fp));
-        let person_ok = person.is_some_and(|a| a.attrs == attrs);
+        let person_ok = person.is_some_and(|a| a.covers(entry));
         let auto_ok = p.roster_changes == Changes::Auto
-            && new_marks.get(owner_fp).and_then(|m| m.auto_accepted.get(&p.project)).and_then(|m| m.get(&fp)).is_some_and(|a| a.attrs == attrs);
+            && new_marks.get(owner_fp).and_then(|m| m.auto_accepted.get(&p.project)).and_then(|m| m.get(&fp)).is_some_and(|a| a.covers(entry));
         if !person_ok && !auto_ok {
             match p.roster_changes {
                 Changes::Ask => {
                     let why = if person.is_some() {
-                        "its roster attributes (host, provider, site, admin reach, taint basis…) changed since a person accepted it"
+                        "its roster attributes (host, provider, site, admin reach, taint basis…) changed, or its status or validity widened, since a person accepted it"
                     } else {
                         "it is new to this signer"
                     };
@@ -484,7 +498,7 @@ pub fn check(inp: &Input) -> R<Summary> {
                         m.auto_accepted
                             .entry(p.project.clone())
                             .or_default()
-                            .insert(fp.clone(), AcceptedKey { name: name.clone(), seq: owned.newest.seq, at: inp.now, attrs: attrs.clone() });
+                            .insert(fp.clone(), AcceptedKey::of(entry, owned.newest.seq, inp.now));
                     }
                 }
             }

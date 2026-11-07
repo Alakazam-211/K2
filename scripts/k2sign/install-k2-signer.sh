@@ -7,11 +7,14 @@
 #   sudo bash scripts/k2sign/install-k2-signer.sh --binary <k2-signer> --expect-sha256 <hex>
 #   K2_SIGNER_TEST_ROOT=<dir> bash scripts/k2sign/install-k2-signer.sh --test --binary <k2-signer> --expect-sha256 <hex>
 #
-# <k2-signer> is `cargo build --release --locked -p k2-signer` of THIS commit
-# (target/release/k2-signer), built by the release user. --expect-sha256 is
-# the sha256 of an INDEPENDENT build of the same commit (a K2 Compute job on
-# a Mac node: k2 compute run --os macos --sha <commit> ... then
-# k2 compute fetch); a different binary is refused. Git runs as the release
+# <k2-signer> is the reproducible build of THIS commit, made by the release
+# user (paths remapped, so two machines get the same bytes):
+#   bash scripts/k2sign/build-k2-signer.sh        # prints "<sha256>  <binary>"
+# --expect-sha256 is the sha256 of an INDEPENDENT build of the same commit:
+#   k2 compute run --os macos --sha <commit> --needs rust@<rust-toolchain.toml's channel> \
+#       -- bash scripts/k2sign/build-k2-signer.sh
+# (same Rust; the same Xcode Command Line Tools, whose linker version the
+# binary records). A different binary is refused. Git runs as the release
 # user, never as root (a checkout's config can run code: core.fsmonitor).
 #
 # What it does (idempotent; a re-run upgrades the binary and re-pins):

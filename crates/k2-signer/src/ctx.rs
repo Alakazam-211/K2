@@ -7,11 +7,13 @@
 //! env_reset were loosened. Only in test mode are `K2_SIGNER_TEST_NOW` and
 //! `K2_SIGNER_TEST_GITHUB_API` read.
 
-use std::ffi::CString;
+use std::ffi::{CString, OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::{refused, Fail, R};
 
@@ -194,14 +196,35 @@ impl Ctx {
         Ok("https://api.github.com".to_string())
     }
 
-    /// Admin writes under `/var/k2sign` belong to the signing user.
-    pub fn own(&self, path: &Path) -> R<()> {
+    /// Root's own state, which the signing user must never be able to touch
+    /// (security review N1, M-a): the admin audit log, the pairing state and
+    /// the signer's pairing key. `/usr/local/etc/k2-signer/private`, root 0700.
+    pub fn private_dir(&self) -> PathBuf {
+        self.etc().join("private")
+    }
+
+    /// Admin writes under `/var/k2sign` belong to the signing user: by the
+    /// open file descriptor (fchown), never by path, which would follow a
+    /// symlink the signing user planted (N1).
+    fn own_fd(&self, fd: &impl AsRawFd) -> R<()> {
         if self.admin && !self.test {
             if let Some((u, g)) = self.signer_ids {
-                std::os::unix::fs::chown(path, Some(u), Some(g))?;
+                // SAFETY: fchown on a descriptor we hold open.
+                if unsafe { libc::fchown(fd.as_raw_fd(), u, g) } != 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
             }
         }
         Ok(())
+    }
+
+    /// The uid that may own files under `/var/k2sign` (production).
+    fn var_owner(&self) -> Option<u32> {
+        if self.test {
+            None
+        } else {
+            self.signer_ids.map(|(u, _)| u)
+        }
     }
 }
 
@@ -211,16 +234,157 @@ pub fn mode_of(path: &Path) -> R<u32> {
     Ok(fs::symlink_metadata(path)?.permissions().mode() & 0o7777)
 }
 
-/// Write `data` atomically (temp file, fsync, rename) with `mode`.
+// ── files under /var/k2sign: never through a symlink (N1) ──────────────
+//
+// `/var/k2sign` belongs to the signing user, so anything below it may be a
+// symlink that user planted. When root works there (admin verbs), a path
+// that followed it could write or chown a root file. So every folder below
+// `/var/k2sign` is opened component by component with O_NOFOLLOW, files are
+// opened relative to that descriptor with O_NOFOLLOW | O_NOCTTY, and mode
+// and owner are set on the open descriptor (fchmod, fchown).
+
+fn cstr(s: &OsStr) -> R<CString> {
+    CString::new(s.as_bytes()).map_err(|_| Fail::Refused("a path with a NUL byte".into()))
+}
+
+fn last_err() -> std::io::Error {
+    std::io::Error::last_os_error()
+}
+
+/// `(folder below /var/k2sign, file name)` of a path under it.
+fn split_var(ctx: &Ctx, path: &Path) -> Option<(PathBuf, OsString)> {
+    let rel = path.strip_prefix(ctx.var()).ok()?;
+    let name = rel.file_name()?.to_os_string();
+    Some((rel.parent().unwrap_or(Path::new("")).to_path_buf(), name))
+}
+
+const DIR_FLAGS: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+
+/// `/var/k2sign/<rel>`, a real folder at every step (a symlink is refused);
+/// missing folders are made 0700 and given to the signing user when `create`.
+/// `Ok(None)` when one is missing and not `create`.
+pub fn var_dir(ctx: &Ctx, rel: &Path, create: bool) -> R<Option<OwnedFd>> {
+    let top = cstr(ctx.var().as_os_str())?;
+    // SAFETY: plain open(2); the result is checked and owned below.
+    let fd = unsafe { libc::open(top.as_ptr(), DIR_FLAGS) };
+    if fd < 0 {
+        return refused(format!("{}: {} (it must be a real folder)", ctx.var().display(), last_err()));
+    }
+    // SAFETY: fd is a fresh, valid descriptor we own.
+    let mut cur = unsafe { OwnedFd::from_raw_fd(fd) };
+    let mut at = ctx.var();
+    for comp in rel.components() {
+        let Component::Normal(name) = comp else {
+            return refused(format!("{}: not a plain path below {}", rel.display(), ctx.var().display()));
+        };
+        at = at.join(name);
+        let c = cstr(name)?;
+        // SAFETY: openat relative to a descriptor we hold.
+        let mut nfd = unsafe { libc::openat(cur.as_raw_fd(), c.as_ptr(), DIR_FLAGS) };
+        if nfd < 0 {
+            let e = last_err();
+            if e.raw_os_error() != Some(libc::ENOENT) {
+                return refused(format!("{}: {e} (a symlink or not a folder: refused)", at.display()));
+            }
+            if !create {
+                return Ok(None);
+            }
+            // SAFETY: mkdirat relative to a descriptor we hold.
+            if unsafe { libc::mkdirat(cur.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+                let e = last_err();
+                if e.raw_os_error() != Some(libc::EEXIST) {
+                    return Err(e.into());
+                }
+            }
+            // SAFETY: as above.
+            nfd = unsafe { libc::openat(cur.as_raw_fd(), c.as_ptr(), DIR_FLAGS) };
+            if nfd < 0 {
+                return refused(format!("{}: {} (a symlink or not a folder: refused)", at.display(), last_err()));
+            }
+            // SAFETY: nfd is fresh and ours.
+            let o = unsafe { OwnedFd::from_raw_fd(nfd) };
+            // SAFETY: fchmod on a descriptor we hold.
+            if unsafe { libc::fchmod(o.as_raw_fd(), 0o700) } != 0 {
+                return Err(last_err().into());
+            }
+            ctx.own_fd(&o)?;
+            cur = o;
+            continue;
+        }
+        // SAFETY: nfd is fresh and ours.
+        cur = unsafe { OwnedFd::from_raw_fd(nfd) };
+    }
+    Ok(Some(cur))
+}
+
+fn var_dir_for(ctx: &Ctx, rel: &Path) -> R<OwnedFd> {
+    var_dir(ctx, rel, true)?.ok_or_else(|| Fail::Internal("var_dir create returned none".into()))
+}
+
+/// Open a file relative to a folder descriptor, never through a symlink.
+fn open_at(dir: &OwnedFd, name: &OsStr, flags: libc::c_int, mode: u32) -> std::io::Result<File> {
+    let c = CString::new(name.as_bytes()).map_err(|_| std::io::Error::other("NUL in a file name"))?;
+    // SAFETY: openat relative to a descriptor we hold; the result is checked.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), c.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_NOCTTY | libc::O_CLOEXEC, mode as libc::c_uint) };
+    if fd < 0 {
+        return Err(last_err());
+    }
+    // SAFETY: fd is fresh and ours.
+    Ok(File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+}
+
+/// A file opened under /var/k2sign must be a plain file with one link and,
+/// in production, the signing user's (a hard link to a root file is refused).
+fn check_opened(ctx: &Ctx, f: &File, what: &Path) -> R<()> {
+    let m = f.metadata()?;
+    if !m.is_file() || m.nlink() != 1 {
+        return refused(format!("{}: not a plain, single-link file: refused", what.display()));
+    }
+    if let Some(u) = ctx.var_owner() {
+        if m.uid() != u && m.len() > 0 {
+            return refused(format!("{}: not the signing user's file: refused", what.display()));
+        }
+    }
+    Ok(())
+}
+
+/// Write `data` atomically (temp file, fsync, rename) with `mode`. Under
+/// /var/k2sign through descriptors (N1); elsewhere (root's private folder)
+/// plainly, root-owned.
 pub fn write_file(ctx: &Ctx, path: &Path, data: &[u8], mode: u32) -> R<()> {
-    let rnd = k2_node_proto::crypto::random_bytes(4).map_err(Fail::Internal)?;
-    let tmp = PathBuf::from(format!("{}.tmp-{}", path.display(), k2_node_proto::crypto::hex(&rnd)));
+    let rnd = k2_node_proto::crypto::hex(&k2_node_proto::crypto::random_bytes(4).map_err(Fail::Internal)?);
+    if let Some((dir, name)) = split_var(ctx, path) {
+        let dfd = var_dir_for(ctx, &dir)?;
+        let mut tmp = name.clone();
+        tmp.push(format!(".tmp-{rnd}"));
+        let res = (|| -> R<()> {
+            let mut f = open_at(&dfd, &tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, mode)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+            f.set_permissions(fs::Permissions::from_mode(mode))?;
+            ctx.own_fd(&f)?;
+            let (a, b) = (cstr(&tmp)?, cstr(&name)?);
+            // SAFETY: renameat within one folder descriptor we hold; it
+            // replaces a symlink at `name`, never its target.
+            if unsafe { libc::renameat(dfd.as_raw_fd(), a.as_ptr(), dfd.as_raw_fd(), b.as_ptr()) } != 0 {
+                return Err(last_err().into());
+            }
+            Ok(())
+        })();
+        if res.is_err() {
+            if let Ok(a) = cstr(&tmp) {
+                // SAFETY: unlinkat of our own temp name.
+                unsafe { libc::unlinkat(dfd.as_raw_fd(), a.as_ptr(), 0) };
+            }
+        }
+        return res;
+    }
+    let tmp = PathBuf::from(format!("{}.tmp-{rnd}", path.display()));
     let res = (|| -> R<()> {
-        let mut f = OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?;
+        let mut f = OpenOptions::new().write(true).create_new(true).mode(mode).custom_flags(libc::O_NOFOLLOW).open(&tmp)?;
         f.write_all(data)?;
         f.sync_all()?;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
-        ctx.own(&tmp)?;
+        f.set_permissions(fs::Permissions::from_mode(mode))?;
         fs::rename(&tmp, path)?;
         Ok(())
     })();
@@ -230,24 +394,116 @@ pub fn write_file(ctx: &Ctx, path: &Path, data: &[u8], mode: u32) -> R<()> {
     res
 }
 
-/// A directory, made 0700 (and the signing user's) when missing.
+/// A directory, made 0700 when missing: the signing user's under
+/// /var/k2sign (never through a symlink), root's elsewhere.
 pub fn mkdirs(ctx: &Ctx, path: &Path) -> R<()> {
-    if !path.is_dir() {
-        fs::create_dir_all(path)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-        ctx.own(path)?;
+    if let Ok(rel) = path.strip_prefix(ctx.var()) {
+        var_dir_for(ctx, rel)?;
+        return Ok(());
     }
+    if let Ok(m) = fs::symlink_metadata(path) {
+        if !m.is_dir() {
+            return refused(format!("{}: not a folder (a symlink?): refused", path.display()));
+        }
+        return Ok(());
+    }
+    fs::create_dir_all(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
-/// Append one line to a file the signing user owns (registries, audit).
-pub fn append_line(ctx: &Ctx, path: &Path, line: &str) -> R<()> {
-    let mut f = OpenOptions::new().append(true).create(true).mode(0o600).open(path)?;
-    f.write_all(line.as_bytes())?;
-    f.write_all(b"\n")?;
+/// Append lines to a file (registries, audit), writing `header` first when
+/// the file is new. Never through a symlink or a hard link (N1).
+pub fn append_lines(ctx: &Ctx, path: &Path, header: Option<&str>, line: &str) -> R<()> {
+    let mut f = if let Some((dir, name)) = split_var(ctx, path) {
+        let dfd = var_dir_for(ctx, &dir)?;
+        let f = open_at(&dfd, &name, libc::O_WRONLY | libc::O_APPEND | libc::O_CREAT, 0o600)
+            .map_err(|e| Fail::Refused(format!("{}: {e} (a symlink is refused)", path.display())))?;
+        check_opened(ctx, &f, path)?;
+        ctx.own_fd(&f)?;
+        f
+    } else {
+        let f = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NOCTTY)
+            .open(path)
+            .map_err(|e| Fail::Refused(format!("{}: {e} (a symlink is refused)", path.display())))?;
+        if !f.metadata()?.is_file() || f.metadata()?.nlink() != 1 {
+            return refused(format!("{}: not a plain, single-link file: refused", path.display()));
+        }
+        f
+    };
+    let mut buf = String::new();
+    if let Some(h) = header {
+        if f.metadata()?.len() == 0 {
+            buf.push_str(h);
+            buf.push('\n');
+        }
+    }
+    buf.push_str(line);
+    buf.push('\n');
+    f.write_all(buf.as_bytes())?;
     f.sync_all()?;
-    ctx.own(path)?;
     Ok(())
+}
+
+pub fn append_line(ctx: &Ctx, path: &Path, line: &str) -> R<()> {
+    append_lines(ctx, path, None, line)
+}
+
+/// Read a file (`None` when missing): under /var/k2sign never through a
+/// symlink, so root never reads a file the signing user pointed at.
+pub fn read_file(ctx: &Ctx, path: &Path, max: u64) -> R<Option<Vec<u8>>> {
+    let f = if let Some((dir, name)) = split_var(ctx, path) {
+        let Some(dfd) = var_dir(ctx, &dir, false)? else { return Ok(None) };
+        match open_at(&dfd, &name, libc::O_RDONLY, 0) {
+            Ok(f) => {
+                check_opened(ctx, &f, path)?;
+                f
+            }
+            Err(e) if e.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
+            Err(e) => return refused(format!("{}: {e} (a symlink is refused)", path.display())),
+        }
+    } else {
+        match OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NOCTTY).open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return refused(format!("{}: {e} (a symlink is refused)", path.display())),
+        }
+    };
+    let mut buf = Vec::new();
+    f.take(max + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > max {
+        return refused(format!("{} is larger than {max} bytes", path.display()));
+    }
+    Ok(Some(buf))
+}
+
+/// Remove a file (never a symlink's target: unlinkat removes the link).
+pub fn remove_file(ctx: &Ctx, path: &Path) -> R<()> {
+    if let Some((dir, name)) = split_var(ctx, path) {
+        let Some(dfd) = var_dir(ctx, &dir, false)? else { return Ok(()) };
+        let c = cstr(&name)?;
+        // SAFETY: unlinkat relative to a descriptor we hold.
+        if unsafe { libc::unlinkat(dfd.as_raw_fd(), c.as_ptr(), 0) } != 0 {
+            let e = last_err();
+            if e.raw_os_error() != Some(libc::ENOENT) {
+                return Err(e.into());
+            }
+        }
+        return Ok(());
+    }
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Whether anything (a file, a folder, a symlink, dangling or not) is at `path`.
+pub fn lexists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
 /// Production: a file the signer trusts is root-owned, not a symlink, and
@@ -300,10 +556,12 @@ pub struct Locked(File);
 
 impl Locked {
     pub fn take(ctx: &Ctx) -> R<Self> {
-        mkdirs(ctx, &ctx.state())?;
         let p = ctx.state().join(".lock");
-        let f = OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600).open(&p)?;
-        ctx.own(&p)?;
+        let dfd = var_dir_for(ctx, Path::new("state"))?;
+        let f = open_at(&dfd, OsStr::new(".lock"), libc::O_RDWR | libc::O_CREAT, 0o600)
+            .map_err(|e| Fail::Refused(format!("{}: {e} (a symlink is refused)", p.display())))?;
+        check_opened(ctx, &f, &p)?;
+        ctx.own_fd(&f)?;
         f.lock()?;
         Ok(Self(f))
     }
@@ -362,21 +620,15 @@ impl<'a> AuditLine<'a> {
 /// Append to `<dir>/signatures.tsv` (k2sign's columns, so one reader reads
 /// both signers' logs).
 pub fn audit(ctx: &Ctx, dir: &Path, l: &AuditLine) -> R<()> {
-    if let Some(parent) = dir.parent() {
-        mkdirs(ctx, parent)?;
-    }
     mkdirs(ctx, dir)?;
     let path = dir.join("signatures.tsv");
-    if !path.exists() {
-        append_line(ctx, &path, "time\tevent\tslot\tasset\tsha256\tkey_id\ttrusted_comment\tdetail")?;
-    }
     let clean = |s: &str| s.replace('\t', "\\t").replace('\n', " ");
     let line = [iso(ctx.now()).as_str(), l.event, l.slot, l.asset, l.sha, l.key_id, l.tc, l.detail]
         .iter()
         .map(|s| clean(s))
         .collect::<Vec<_>>()
         .join("\t");
-    append_line(ctx, &path, &line)
+    append_lines(ctx, &path, Some("time\tevent\tslot\tasset\tsha256\tkey_id\ttrusted_comment\tdetail"), &line)
 }
 
 // ── pins (root-owned files, hashed into pins.sha256) ───────────────────
@@ -387,7 +639,7 @@ pub fn pinned_files(ctx: &Ctx) -> R<Vec<(String, PathBuf)>> {
     for n in ["k2-signer", "k2-signer-admin", "k2-signer-bin"] {
         out.push((format!("libexec/{n}"), ctx.libexec().join(n)));
     }
-    for n in ["trust.json", "approver.pem"] {
+    for n in ["trust.json", "approver.pem", "identity.pub"] {
         let p = ctx.etc().join(n);
         if p.exists() {
             out.push((format!("etc/{n}"), p));
@@ -457,6 +709,12 @@ pub fn check_pins(ctx: &Ctx) -> R<()> {
     for d in [ctx.libexec(), ctx.etc()] {
         check_root_owned(ctx, &d)?;
     }
+    if lexists(&ctx.private_dir()) {
+        check_root_owned(ctx, &ctx.private_dir())?;
+        if !ctx.test && mode_of(&ctx.private_dir())? != 0o700 {
+            return refused(format!("{} must be mode 700", ctx.private_dir().display()));
+        }
+    }
     check_root_owned(ctx, &pins_path)?;
     let mut want = std::collections::BTreeMap::new();
     for line in fs::read_to_string(&pins_path)?.lines() {
@@ -513,12 +771,9 @@ pub struct Scratch(pub PathBuf);
 
 impl Scratch {
     pub fn new(ctx: &Ctx) -> R<Self> {
-        mkdirs(ctx, &ctx.own_dir())?;
-        mkdirs(ctx, &ctx.tmp())?;
         let rnd = k2_node_proto::crypto::random_bytes(8).map_err(Fail::Internal)?;
         let d = ctx.tmp().join(k2_node_proto::crypto::hex(&rnd));
-        fs::create_dir(&d)?;
-        fs::set_permissions(&d, fs::Permissions::from_mode(0o700))?;
+        mkdirs(ctx, &d)?;
         Ok(Self(d))
     }
 }

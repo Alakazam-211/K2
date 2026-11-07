@@ -511,6 +511,26 @@ bundle good5 "$S5"
 register "0.47.5's good bundle registers" 0 '"ok": true' 0.47.5 good5
 refuses "aarch64 is never a compute asset: GitHub's attestation is still required" "$S5/k2-daemon-linux-aarch64" u2 k2-daemon-linux-aarch64 0.47.5 "no build attestation"
 
+echo "== N1: root never writes through a symlink the signing user planted =="
+printf "root's file\n" > "$tmp/root-target"
+mv "$AUDIT/0.47.5/signatures.tsv" "$tmp/audit.real"
+ln -s "$tmp/root-target" "$AUDIT/0.47.5/signatures.tsv"
+check "N1 an audit log symlinked to a root file: refused" 3 "a symlink is refused" "$ADM" clear-compute-evidence 0.47.5
+[ "$(cat "$tmp/root-target")" = "root's file" ] && pass "…and the symlink's target is untouched" || fail "N1 target written" "$(cat "$tmp/root-target")"
+[ -f "$TROOT/var/k2sign/state/compute/0.47.5.json" ] && pass "…and the evidence is still registered (the audit comes first)" || fail "N1 evidence removed" ""
+rm "$AUDIT/0.47.5/signatures.tsv"; mv "$tmp/audit.real" "$AUDIT/0.47.5/signatures.tsv"
+mv "$TROOT/var/k2sign/state/.lock" "$tmp/lock.real"
+ln -s "$tmp/root-target" "$TROOT/var/k2sign/state/.lock"
+check "N1 the shared lock symlinked to a root file: refused" 3 "a symlink is refused" "$ADM" clear-compute-evidence 0.47.5
+[ "$(cat "$tmp/root-target")" = "root's file" ] && pass "…and its target is untouched" || fail "N1 lock target written" ""
+rm "$TROOT/var/k2sign/state/.lock"; mv "$tmp/lock.real" "$TROOT/var/k2sign/state/.lock"
+mkdir -p "$tmp/elsewhere"
+mv "$AUDIT/0.47.5" "$tmp/auditdir.real"
+ln -s "$tmp/elsewhere" "$AUDIT/0.47.5"
+check "N1 an audit folder swapped for a symlink: refused" 3 "a symlink or not a folder" "$ADM" clear-compute-evidence 0.47.5
+[ -z "$(ls -A "$tmp/elsewhere")" ] && pass "…and nothing was written in its target folder" || fail "N1 wrote into the target folder" "$(ls "$tmp/elsewhere")"
+rm "$AUDIT/0.47.5"; mv "$tmp/auditdir.real" "$AUDIT/0.47.5"
+
 echo "== L1: clear-compute-evidence (root) puts a version back on GitHub's path =="
 check "L1 clear 0.47.5's compute evidence (admin, audited)" 0 "compute evidence for 0.47.5 cleared" "$ADM" clear-compute-evidence 0.47.5
 grep -q $'\tCOMPUTE-EVIDENCE-CLEARED-BY-ADMIN\t' "$AUDIT/0.47.5/signatures.tsv" && pass "the clear is in the signer's audit log" || fail "clear audit" ""

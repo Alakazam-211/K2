@@ -143,10 +143,12 @@ impl World {
         let mut acc = BTreeMap::new();
         for n in accepted {
             let host = if *n == "node-b" { "host-b" } else { "host-a" };
-            let attrs = k2_signer::trust::entry_attrs(&self.entry(n, host));
-            acc.insert(self.fp(n), AcceptedKey { name: n.to_string(), seq: 1, at: NOW - 86_400, attrs });
+            acc.insert(self.fp(n), AcceptedKey::of(&self.entry(n, host), 1, NOW - 86_400));
         }
-        t.owners.insert(self.owner_fp.clone(), OwnerPin { key: self.owner.public().encode(), label: "owner".into(), at: NOW - 86_400, accepted: acc });
+        t.owners.insert(
+            self.owner_fp.clone(),
+            OwnerPin { key: self.owner.public().encode(), label: "owner".into(), at: NOW - 86_400, accepted: acc, own_controllers: vec![], revoked: Default::default() },
+        );
         t
     }
 
@@ -435,14 +437,14 @@ pub fn accept_from(t: &mut Trust, b: &EvidenceBundle, names: &[&str]) {
         o.accepted.clear();
         for e in &r.entries {
             if names.contains(&e.name.as_str()) {
-                o.accepted.insert(e.node_fp.clone(), AcceptedKey { name: e.name.clone(), seq: r.seq, at: NOW - 86_400, attrs: k2_signer::trust::entry_attrs(e) });
+                o.accepted.insert(e.node_fp.clone(), AcceptedKey::of(e, r.seq, NOW - 86_400));
             }
         }
     }
 }
 
 pub fn mark(seq: u64, digest: &str) -> RosterMark {
-    RosterMark { seq, digest: digest.into(), issued_at: NOW - 7200, seen_at: NOW - 7000, auto_accepted: BTreeMap::new() }
+    RosterMark { seq, digest: digest.into(), issued_at: NOW - 7200, seen_at: NOW - 7000, auto_accepted: BTreeMap::new(), revoked: Default::default() }
 }
 
 /// A minisign public line (jedisct1's) for policies that sign nothing.

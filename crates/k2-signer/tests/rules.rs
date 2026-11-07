@@ -136,12 +136,12 @@ fn signature_and_key_rules() {
     refuses(&w, &r, s, "does not verify with node node-a's key");
     // §4.1.6: the bundle carries the client server's pairing pins, and it
     // never paired node-a's key.
-    // (The owner's nodes are the client's own here, so M7's rule below doesn't fire first.)
-    let mut own = w.spec();
-    own.roster.owner_server_fp = w.controller.fingerprint();
-    let mut b = w.build(own);
+    // (The person pinned this owner as the client's own server, so M7's rule below doesn't fire first.)
+    let mut r_own = Run::new(&w);
+    r_own.trust.owners.get_mut(&w.owner_fp).unwrap().own_controllers = vec![w.controller.fingerprint()];
+    let mut b = w.build(w.spec());
     b.pairing_pins.remove(&w.fp("node-a"));
-    assert!(r.go(&b).unwrap_err().contains("L1: the client server never paired node node-a's key"));
+    assert!(r_own.go(&b).unwrap_err().contains("L1: the client server never paired node node-a's key"));
     // A pin whose key isn't its fingerprint is a shape error.
     b.pairing_pins.insert(w.fp("node-a"), w.spki("node-b"));
     assert!(b.check().is_err());
@@ -149,11 +149,18 @@ fn signature_and_key_rules() {
     let mut s = w.spec();
     s.pairing_pins = false;
     refuses(&w, &r, s, "L1: node node-a belongs to owner.example, and the evidence carries no pairing pin");
-    // … fine for the client's own nodes (its own roster) …
+    // … even when the other owner's roster claims to be the client (M7 bypass:
+    // owner_server_fp is the owner's own word) …
     let mut s = w.spec();
     s.pairing_pins = false;
     s.roster.owner_server_fp = w.controller.fingerprint();
-    passes(&w, &r, s);
+    refuses(&w, &r, s, "carries no pairing pin");
+    // … fine for nodes the person pinned as the client's own (trust-owner --own-controller) …
+    let mut r_own = Run::new(&w);
+    r_own.trust.owners.get_mut(&w.owner_fp).unwrap().own_controllers = vec![w.controller.fingerprint()];
+    let mut s = w.spec();
+    s.pairing_pins = false;
+    passes(&w, &r_own, s);
     // … and when the person made the pins optional for the project.
     let mut r2 = Run::new(&w);
     r2.trust.pairing_pins.insert("acme-desktop".into(), false);
@@ -227,7 +234,7 @@ fn acceptance_is_tied_to_the_roster_attributes() {
         let mut s = w.spec();
         f(entry_mut(&mut s, &w.fp("node-b")));
         let e = r.go(&w.build(s)).map(|_| ()).unwrap_err();
-        assert!(e.contains("V1: node node-b") && e.contains("changed since a person accepted it"), "{what}: {e}");
+        assert!(e.contains("V1: node node-b") && e.contains("since a person accepted it"), "{what}: {e}");
     }
 }
 
@@ -453,6 +460,54 @@ fn what_ran_rules() {
     l1(&mut s).build = "other-build".into();
     v1(&mut s).build = "other-build".into();
     refuses(&w, &r, s, "build other-build is not in the policy");
+}
+
+/// L2: an acceptance covers the status and validity the person saw; a wider
+/// one asks again, a narrower one doesn't, and a key once revoked never
+/// comes back.
+#[test]
+fn widening_asks_again_and_revoked_keys_stay_out() {
+    let w = World::new();
+    let base = |entry: k2_node_proto::node_roster::RosterEntry| {
+        let mut r = Run::new(&w);
+        r.accept_from_bundle = false;
+        let fp = entry.node_fp.clone();
+        r.trust.owners.get_mut(&w.owner_fp).unwrap().accepted.insert(fp, k2_signer::trust::AcceptedKey::of(&entry, 1, NOW - 86_400));
+        r
+    };
+    // Accepted while retired; now active again (an un-retire).
+    let mut retired = w.entry("node-b", "host-b");
+    retired.status = KeyStatus::Retired;
+    retired.valid_to = Some(NOW - 100);
+    refuses(&w, &base(retired), w.spec(), "V1: node node-b");
+    // Accepted from valid_from T; now an earlier valid_from.
+    let r = base(w.entry("node-b", "host-b"));
+    let mut s = w.spec();
+    entry_mut(&mut s, &w.fp("node-b")).valid_from = NOW - 300_000;
+    refuses(&w, &r, s, "status or validity widened");
+    // Narrowing (retired after the job started) needs no one.
+    let mut s = w.spec();
+    let e = entry_mut(&mut s, &w.fp("node-b"));
+    e.status = KeyStatus::Retired;
+    e.valid_to = Some(NOW - 60);
+    passes(&w, &r, s);
+    // A key a registered roster showed revoked never comes back …
+    let mut r2 = Run::new(&w);
+    let mut m = mark(1, &w.build(w.spec()).rosters[0].digest());
+    m.revoked.insert(w.fp("node-b"));
+    r2.marks.insert(w.owner_fp.clone(), m);
+    refuses(&w, &r2, w.spec(), "was revoked in an earlier roster");
+    // … nor one the person saw revoked at roster-accept.
+    let mut r3 = Run::new(&w);
+    r3.trust.owners.get_mut(&w.owner_fp).unwrap().revoked.insert(w.fp("node-b"));
+    refuses(&w, &r3, w.spec(), "was revoked in an earlier roster");
+    // A registration remembers revocations in the mark.
+    let mut s = w.spec();
+    let e = entry_mut(&mut s, &w.fp("node-c"));
+    e.status = KeyStatus::Revoked;
+    e.revoked_reason = Some(RevokeReason::Compromised);
+    let out = passes(&w, &Run::new(&w), s);
+    assert!(out.new_marks[&w.owner_fp].revoked.contains(&w.fp("node-c")));
 }
 
 /// M1: the controller picks env values; only the build facts may carry one.

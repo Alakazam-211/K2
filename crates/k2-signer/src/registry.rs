@@ -63,10 +63,10 @@ pub fn evidence_path(ctx: &Ctx, project: &str, version: &str) -> PathBuf {
 
 pub fn load_evidence(ctx: &Ctx, project: &str, version: &str) -> R<Option<Registered>> {
     let p = evidence_path(ctx, project, version);
-    if !p.exists() {
+    let Some(raw) = ctx::read_file(ctx, &p, 2 * k2_node_proto::evidence::MAX_EVIDENCE_BYTES as u64)? else {
         return Ok(None);
-    }
-    let r: Registered = serde_json::from_slice(&std::fs::read(&p)?).map_err(|e| Fail::Refused(format!("{}: {e}", p.display())))?;
+    };
+    let r: Registered = serde_json::from_slice(&raw).map_err(|e| Fail::Refused(format!("{}: {e}", p.display())))?;
     if r.project != project || r.version != version {
         return refused(format!("{} is for another project or version", p.display()));
     }

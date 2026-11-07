@@ -466,9 +466,9 @@ fn open_key(ctx: &Ctx, project: &str, slot: &str) -> R<SecretKey> {
             return refused(format!("{} must be mode 600", p.display()));
         }
     }
-    let raw = std::fs::read(&k)?;
+    let raw = ctx::read_file(ctx, &k, 64 * 1024)?.ok_or_else(|| Fail::Refused(format!("{} vanished", k.display())))?;
     // L9: the password and the key file never outlive this call in memory.
-    let password = zeroize::Zeroizing::new(std::fs::read(&pw)?);
+    let password = zeroize::Zeroizing::new(ctx::read_file(ctx, &pw, 4096)?.ok_or_else(|| Fail::Refused(format!("{} vanished", pw.display())))?);
     let raw = zeroize::Zeroizing::new(raw);
     let pw = password.strip_suffix(b"\n").unwrap_or(&password);
     SecretKey::open(&raw, pw).map_err(|e| Fail::Refused(format!("{project}'s {slot} key: {e}")))
@@ -700,30 +700,41 @@ fn verb_pins(env: &Env, args: &[String]) -> R<Vec<u8>> {
 }
 
 fn identity_path(ctx: &Ctx) -> std::path::PathBuf {
-    ctx.own_dir().join("identity.pem")
+    ctx.private_dir().join("identity.pem")
 }
 
+/// The signer's pairing key: root's private folder (N1, M-a).
 fn load_identity(ctx: &Ctx) -> R<Option<SigningKey>> {
     let p = identity_path(ctx);
-    if !p.exists() {
-        return Ok(None);
-    }
+    let Some(raw) = ctx::read_file(ctx, &p, 16 * 1024)? else { return Ok(None) };
     if ctx::mode_of(&p)? != 0o600 {
         return refused(format!("{} must be mode 600", p.display()));
     }
-    Ok(Some(SigningKey::from_pkcs8_pem(&std::fs::read_to_string(&p)?).map_err(Fail::Refused)?))
+    let pem = zeroize::Zeroizing::new(String::from_utf8(raw).map_err(|_| Fail::Refused("identity.pem is not text".into()))?);
+    Ok(Some(SigningKey::from_pkcs8_pem(&pem).map_err(Fail::Refused)?))
+}
+
+/// Its public half, root-owned and pinned, for the signing user's `identity`.
+fn identity_pub_path(ctx: &Ctx) -> std::path::PathBuf {
+    ctx.etc().join("identity.pub")
 }
 
 fn verb_identity(env: &Env, args: &[String]) -> R<Vec<u8>> {
     need(args, 0, "identity")?;
-    let k = load_identity(env.ctx)?;
-    json_out(&json!({"fp": k.as_ref().map(|k| k.fingerprint()), "spki": k.as_ref().map(|k| k2_node_proto::crypto::b64(k.spki_der()))}))
+    ctx::check_pins(env.ctx)?;
+    let p = identity_pub_path(env.ctx);
+    if !p.exists() {
+        return json_out(&json!({"fp": null, "spki": null}));
+    }
+    let v: Value = serde_json::from_slice(&ctx::read_trusted(env.ctx, &p, 4096)?).map_err(|e| Fail::Refused(format!("identity.pub: {e}")))?;
+    json_out(&v)
 }
 
 // ── admin ──────────────────────────────────────────────────────────────
 
 fn admin_audit(ctx: &Ctx, event: &str, detail: &str) -> R<()> {
-    audit(ctx, &ctx.own_dir().join("audit").join("admin"), &AuditLine::event(event, detail))
+    // Root's own folder (N1): never one the signing user could plant a symlink in.
+    audit(ctx, &ctx.private_dir().join("audit"), &AuditLine::event(event, detail))
 }
 
 fn admin_policy_approve(env: &Env, args: &[String]) -> R<Vec<u8>> {
@@ -762,8 +773,25 @@ fn admin_policy_approve(env: &Env, args: &[String]) -> R<Vec<u8>> {
 }
 
 fn admin_trust_owner(env: &Env, args: &[String]) -> R<Vec<u8>> {
+    // `--own-controller <fp>`: this owner IS that paired client server (its
+    // own nodes), so pairing pins aren't needed for them (M7).
+    let mut own = Vec::new();
+    let mut rest: Vec<String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--own-controller" {
+            let f = it.next().ok_or_else(|| Fail::Usage("--own-controller <controller fp>".into()))?;
+            if !k2_node_proto::ci::is_fp(f) {
+                return usage("--own-controller takes a 64-hex controller fingerprint");
+            }
+            own.push(f.clone());
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    let args = &rest[..];
     if args.len() < 2 || args.len() > 3 {
-        return usage("trust-owner <fingerprint you read on the owner's own screen> <ed25519:key> [<label>]");
+        return usage("trust-owner <fingerprint you read on the owner's own screen> <ed25519:key> [<label>] [--own-controller <fp>]");
     }
     let ctx = env.ctx;
     ctx::check_pins(ctx)?;
@@ -784,7 +812,17 @@ fn admin_trust_owner(env: &Env, args: &[String]) -> R<Vec<u8>> {
     }
     let label = args.get(2).cloned().unwrap_or_default();
     k2_node_proto::ci::is_name(&label).then_some(()).or(label.is_empty().then_some(())).ok_or_else(|| Fail::Usage("the label is a name ([a-z0-9._-])".into()))?;
-    t.owners.insert(fp.clone(), OwnerPin { key: k.encode(), label: label.clone(), at: ctx.now(), accepted: BTreeMap::new() });
+    for c in &own {
+        if !t.controllers.contains_key(c) {
+            return refused(format!("--own-controller {c}: not a paired controller (pair it first)"));
+        }
+    }
+    own.sort();
+    own.dedup();
+    t.owners.insert(
+        fp.clone(),
+        OwnerPin { key: k.encode(), label: label.clone(), at: ctx.now(), accepted: BTreeMap::new(), own_controllers: own, revoked: Default::default() },
+    );
     t.save(ctx)?;
     admin_audit(ctx, "OWNER-TRUSTED", &format!("{fp} {label}"))?;
     env.say(format!("owner {label} pinned: roster key {fp}. Its node keys are accepted one roster at a time (roster-accept)."));
@@ -858,12 +896,12 @@ fn admin_roster_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let mut lines = vec![format!("{}'s node roster seq {} (issued {}), digest {digest}", r.owner_id, r.seq, ctx::hhmm(r.issued_at))];
     let mut new_keys = Vec::new();
     for e in &r.entries {
-        let attrs = trust::entry_attrs(e);
         let prior = accepted.get(&e.node_fp);
-        let known = prior.is_some_and(|a| a.attrs == attrs);
+        let known = prior.is_some_and(|a| a.covers(e));
+        let ever_revoked = t.owners[owner].revoked.contains(&e.node_fp);
         let tag = if known {
             "  accepted"
-        } else if e.status == k2_node_proto::ci::KeyStatus::Revoked {
+        } else if e.status == k2_node_proto::ci::KeyStatus::Revoked || ever_revoked {
             "  revoked "
         } else if prior.is_some() {
             "~ CHANGED "
@@ -887,7 +925,7 @@ fn admin_roster_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
             e.site.as_deref().unwrap_or("-"),
             e.admin_reach.join(",")
         ));
-        if !known && e.status != k2_node_proto::ci::KeyStatus::Revoked {
+        if !known && e.status != k2_node_proto::ci::KeyStatus::Revoked && !ever_revoked {
             new_keys.push(e.clone());
         }
     }
@@ -917,7 +955,12 @@ fn admin_roster_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let names: Vec<String> = new_keys.iter().map(|e| e.name.clone()).collect();
     if let Some(o) = t.owners.get_mut(owner.as_str()) {
         for e in &new_keys {
-            o.accepted.insert(e.node_fp.clone(), AcceptedKey { name: e.name.clone(), seq: r.seq, at: now, attrs: trust::entry_attrs(e) });
+            o.accepted.insert(e.node_fp.clone(), AcceptedKey::of(e, r.seq, now));
+        }
+        // L2: a revoked key is remembered, and never accepted again.
+        for e in r.entries.iter().filter(|e| e.status == k2_node_proto::ci::KeyStatus::Revoked) {
+            o.revoked.insert(e.node_fp.clone());
+            o.accepted.remove(&e.node_fp);
         }
     }
     t.save(ctx)?;
@@ -927,7 +970,7 @@ fn admin_roster_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
 }
 
 fn pending_path(ctx: &Ctx) -> std::path::PathBuf {
-    ctx.own_dir().join("pairing").join("pending.json")
+    ctx.private_dir().join("pairing.json")
 }
 
 fn admin_pair_begin(env: &Env, args: &[String]) -> R<Vec<u8>> {
@@ -936,20 +979,21 @@ fn admin_pair_begin(env: &Env, args: &[String]) -> R<Vec<u8>> {
     }
     let ctx = env.ctx;
     ctx::check_pins(ctx)?;
-    ctx::mkdirs(ctx, &ctx.own_dir())?;
+    ctx::mkdirs(ctx, &ctx.private_dir())?;
     let identity = match load_identity(ctx)? {
         Some(k) => k,
         None => {
             let k = SigningKey::generate().map_err(Fail::Internal)?;
-            let pem = k.to_pkcs8_pem().map_err(Fail::Internal)?;
+            let pem = zeroize::Zeroizing::new(k.to_pkcs8_pem().map_err(Fail::Internal)?);
             ctx::write_file(ctx, &identity_path(ctx), pem.as_bytes(), 0o600)?;
+            let public = json!({"fp": k.fingerprint(), "spki": k2_node_proto::crypto::b64(k.spki_der())});
+            install_root_file(ctx, "identity.pub", format!("{public}\n").as_bytes())?;
             k
         }
     };
     let label = args.first().cloned().unwrap_or_else(|| "k2-signer".into());
     pairing::check_label("the label", &label).map_err(Fail::Usage)?;
     let (code, hello, pending) = pairing::signer_begin(&identity, &label, ctx.now()).map_err(Fail::Internal)?;
-    ctx::mkdirs(ctx, &ctx.own_dir().join("pairing"))?;
     ctx::write_file(ctx, &pending_path(ctx), &serde_json::to_vec(&pending).map_err(|e| Fail::Internal(e.to_string()))?, 0o600)?;
     admin_audit(ctx, "PAIR-BEGIN", &format!("signer {}", identity.fingerprint()))?;
     env.say(format!(
@@ -963,11 +1007,10 @@ fn load_pending(ctx: &Ctx) -> R<(SigningKey, pairing::Pending)> {
     let Some(identity) = load_identity(ctx)? else {
         return refused("no pairing started (pair-begin first)");
     };
-    let pp = pending_path(ctx);
-    if !pp.exists() {
+    let Some(raw) = ctx::read_file(ctx, &pending_path(ctx), 256 * 1024)? else {
         return refused("no pairing started (pair-begin first)");
-    }
-    let pending: pairing::Pending = serde_json::from_slice(&std::fs::read(&pp)?).map_err(|e| Fail::Internal(e.to_string()))?;
+    };
+    let pending: pairing::Pending = serde_json::from_slice(&raw).map_err(|e| Fail::Internal(e.to_string()))?;
     Ok((identity, pending))
 }
 
@@ -987,7 +1030,7 @@ fn admin_pair_reveal(env: &Env, args: &[String]) -> R<Vec<u8>> {
             return refused(e);
         }
     };
-    pending.offer = Some(msg.offer.clone());
+    pending.offer = Some(msg.clone());
     ctx::write_file(ctx, &pending_path(ctx), &serde_json::to_vec(&pending).map_err(|e| Fail::Internal(e.to_string()))?, 0o600)?;
     admin_audit(ctx, "PAIR-REVEAL", &format!("server {} {}", offer.server_fp, offer.server_label))?;
     env.say(format!(
@@ -1006,6 +1049,11 @@ fn admin_pair_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let (fp, spki, label, done) = match pairing::signer_accept(&identity, &pending, &args[0], ctx.now()) {
         Ok(x) => x,
         Err(e) => {
+            // L-a: one try. Once an offer was revealed, a wrong SAS (or any
+            // other failure) voids the pairing.
+            if pending.offer.is_some() {
+                ctx::remove_file(ctx, &pending_path(ctx))?;
+            }
             admin_audit(ctx, "REFUSED-PAIR", &e)?;
             return refused(e);
         }
@@ -1013,7 +1061,7 @@ fn admin_pair_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let mut t = Trust::load(ctx)?;
     t.controllers.insert(fp.clone(), ControllerPin { label: label.clone(), spki: Some(spki), how: PinHow::Sas, at: ctx.now() });
     t.save(ctx)?;
-    std::fs::remove_file(pending_path(ctx))?;
+    ctx::remove_file(ctx, &pending_path(ctx))?;
     admin_audit(ctx, "PAIRED", &format!("controller {fp} {label}"))?;
     env.say(format!("paired with {label}: controller {fp} pinned. Name it in a project's policy (controllers) to let it build that project."));
     json_out(&serde_json::to_value(&done).map_err(|e| Fail::Internal(e.to_string()))?)
@@ -1158,7 +1206,7 @@ fn new_key_files(ctx: &Ctx, project: &str, slot: &str) -> R<(std::path::PathBuf,
     ctx::mkdirs(ctx, &registry::project_dir(ctx, project))?;
     ctx::mkdirs(ctx, &d)?;
     let (k, pw) = (d.join(format!("{slot}.key")), d.join(format!("{slot}.pw")));
-    if k.exists() || pw.exists() {
+    if ctx::lexists(&k) || ctx::lexists(&pw) {
         return refused(format!("{project}'s {slot} key already exists in {}", d.display()));
     }
     Ok((k, pw))
@@ -1253,12 +1301,12 @@ fn admin_clear_evidence(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let Some(r) = registry::load_evidence(ctx, project, version)? else {
         return refused(format!("{project} {version} has no evidence registered"));
     };
-    std::fs::remove_file(registry::evidence_path(ctx, project, version))?;
     audit(
         ctx,
         &registry::audit_dir(ctx, project, version),
         &AuditLine::event("EVIDENCE-CLEARED-BY-ADMIN", &format!("{project}; bundle {}", r.bundle_sha256)),
     )?;
+    ctx::remove_file(ctx, &registry::evidence_path(ctx, project, version))?;
     env.say(format!(
         "evidence for {project} {version} cleared (audited). The one-sha-per-asset rule still holds: bytes already signed stay the only ones it signs."
     ));

@@ -47,10 +47,9 @@ fn trust(g: &Golden, accept: &[&str]) -> Trust {
     let roster: k2_node_proto::node_roster::NodeRoster = g.bundle.rosters[0].peek(k2_node_proto::ci::DOMAIN_NODE_ROSTER).unwrap();
     for k in accept {
         let fp = keys[*k]["fp"].as_str().unwrap().to_string();
-        let attrs = k2_signer::trust::entry_attrs(roster.entry(&fp).unwrap());
-        accepted.insert(fp, AcceptedKey { name: k.to_string(), seq: 2, at: 0, attrs });
+        accepted.insert(fp.clone(), AcceptedKey::of(roster.entry(&fp).unwrap(), 2, 0));
     }
-    t.owners.insert(roster_fp, OwnerPin { key: roster_key.encode(), label: "owner".into(), at: 0, accepted });
+    t.owners.insert(roster_fp, OwnerPin { key: roster_key.encode(), label: "owner".into(), at: 0, accepted, own_controllers: vec![], revoked: Default::default() });
     t.check().unwrap();
     t
 }
@@ -119,7 +118,10 @@ fn the_golden_bundle_fails_when_the_signer_state_differs() {
     // A higher roster seq was registered before: a replay.
     let roster_fp = g.root["keys"]["roster"]["fp"].as_str().unwrap().to_string();
     let mut m = BTreeMap::new();
-    m.insert(roster_fp.clone(), RosterMark { seq: 3, digest: format!("sha256:{}", "1".repeat(64)), issued_at: 0, seen_at: 0, auto_accepted: BTreeMap::new() });
+    m.insert(
+        roster_fp.clone(),
+        RosterMark { seq: 3, digest: format!("sha256:{}", "1".repeat(64)), issued_at: 0, seen_at: 0, auto_accepted: BTreeMap::new(), revoked: Default::default() },
+    );
     assert!(run(&t, &m, NOW).contains("node_roster_replayed"));
     // Seq 2 registered with another digest: a fork.
     m.get_mut(&roster_fp).unwrap().seq = 2;

@@ -139,7 +139,29 @@ impl Approver {
     }
 }
 
+/// pair-begin, then the server's offer and the signer's reveal: `(hello
+/// JSON, server state, the SAS the server shows)`.
+fn pair_until_sas(r: &Root, controller: &SigningKey) -> (Value, pairing::ServerPending, String) {
+    let out = ok(run(&r.admin, "pair-begin", &["release-mac"], b"", None));
+    // M-a: the pairing state and key are root's, never in the signing user's folder.
+    assert!(r.dir.join("usr/local/etc/k2-signer/private/pairing.json").is_file());
+    assert!(r.dir.join("usr/local/etc/k2-signer/private/identity.pem").is_file());
+    assert!(!r.dir.join("var/k2sign/k2-signer/pairing").exists() && !r.dir.join("var/k2sign/k2-signer/identity.pem").exists());
+    let v: Value = serde_json::from_str(&out).unwrap();
+    let hello: pairing::Hello = serde_json::from_value(v["hello"].clone()).unwrap();
+    let (msg, sp) = pairing::server_offer(controller, "client.example", v["code"].as_str().unwrap(), &hello, NOW).unwrap();
+    let reveal: Signed = serde_json::from_str(&ok(run(&r.admin, "pair-reveal", &[], &serde_json::to_vec(&msg).unwrap(), None))).unwrap();
+    let sas = pairing::server_sas(&sp, &reveal).unwrap();
+    (v, sp, sas)
+}
+
 fn pair(r: &Root, controller: &SigningKey) {
+    // L-a: one try. A wrong SAS voids the pairing; the right one after it is refused.
+    let (_, _, sas) = pair_until_sas(r, controller);
+    let wrong = if sas == "123456" { "654321" } else { "123456" };
+    refused(run(&r.admin, "pair-accept", &[wrong], b"", None), "not the one this signer computed");
+    assert!(!r.dir.join("usr/local/etc/k2-signer/private/pairing.json").exists());
+    refused(run(&r.admin, "pair-accept", &[&sas], b"", None), "no pairing started");
     let out = ok(run(&r.admin, "pair-begin", &["release-mac"], b"", None));
     let v: Value = serde_json::from_str(&out).unwrap();
     let code = v["code"].as_str().unwrap();
@@ -156,8 +178,6 @@ fn pair(r: &Root, controller: &SigningKey) {
     let reveal = ok(run(&r.admin, "pair-reveal", &[], &msg_json, None));
     let reveal: Signed = serde_json::from_str(&reveal).unwrap();
     let sas = pairing::server_sas(&sp, &reveal).unwrap();
-    let wrong = if sas == "123456" { "654321" } else { "123456" };
-    refused(run(&r.admin, "pair-accept", &[wrong], b"", None), "not the one this signer computed");
     let done = ok(run(&r.admin, "pair-accept", &[&sas], b"", None));
     let done: Signed = serde_json::from_str(&done).unwrap();
     assert_eq!(pairing::server_finish(&sp, &done).unwrap(), v["hello"]["signer_fp"].as_str().unwrap());
@@ -212,7 +232,7 @@ fn a_client_release_end_to_end() {
     let fpb = w.fp("node-b");
     moved.roster.entries.iter_mut().find(|e| e.node_fp == fpb).unwrap().host = "host-z".into();
     let mj = bundle_json(&w.build(moved));
-    refused(run(&r.signer, "rehearse", &["acme-desktop"], &mj, None), "changed since a person accepted it");
+    refused(run(&r.signer, "rehearse", &["acme-desktop"], &mj, None), "since a person accepted it");
     let show = ok(run(&r.admin, "roster-accept", &[&w.owner_fp], &mj, None));
     assert!(show.contains("~ CHANGED  node-b") && show.contains("host host-z"), "{show}");
 
@@ -393,6 +413,51 @@ fn project_k2_shares_k2sign_state() {
     s2["version"] = "0.47.2".into();
     std::fs::write(state.join("sessions/0.47.2.json"), s2.to_string()).unwrap();
     refused(run(&r.signer, "sign", &["k2", "u2", "k2-daemon-linux-x86_64", "0.47.2", "raw"], &daemon, Some(&f)), "REFUSED-SWAP");
+
+    // N1: root (admin verbs) never writes, chowns or reads through a symlink
+    // the signing user planted under /var/k2sign.
+    let target = r.dir.join("root-owned-target");
+    std::fs::write(&target, b"root's file\n").unwrap();
+    let audit = r.dir.join(format!("var/k2sign/audit/{version}/signatures.tsv"));
+    std::fs::rename(&audit, r.dir.join("audit.real")).unwrap();
+    std::os::unix::fs::symlink(&target, &audit).unwrap();
+    refused(run(&r.admin, "clear-evidence", &["k2", version], b"", None), "a symlink is refused");
+    assert_eq!(std::fs::read(&target).unwrap(), b"root's file\n");
+    assert!(r.dir.join(format!("var/k2sign/k2-signer/evidence/k2/{version}.json")).exists(), "evidence kept: the audit comes first");
+    std::fs::remove_file(&audit).unwrap();
+    std::fs::rename(r.dir.join("audit.real"), &audit).unwrap();
+    // The shared lock.
+    let lock = state.join(".lock");
+    std::fs::rename(&lock, r.dir.join("lock.real")).unwrap();
+    std::os::unix::fs::symlink(&target, &lock).unwrap();
+    refused(run(&r.admin, "clear-evidence", &["k2", version], b"", None), "a symlink is refused");
+    assert_eq!(std::fs::read(&target).unwrap(), b"root's file\n");
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::rename(r.dir.join("lock.real"), &lock).unwrap();
+    // A folder swapped for a symlink to another folder.
+    let elsewhere = r.dir.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let audit_dir = r.dir.join(format!("var/k2sign/audit/{version}"));
+    std::fs::rename(&audit_dir, r.dir.join("auditdir.real")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &audit_dir).unwrap();
+    refused(run(&r.admin, "clear-evidence", &["k2", version], b"", None), "a symlink or not a folder");
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing written into the symlink's target folder");
+    std::fs::remove_file(&audit_dir).unwrap();
+    std::fs::rename(r.dir.join("auditdir.real"), &audit_dir).unwrap();
+    // The old admin audit path: admin verbs log in root's private folder now.
+    let old_admin = r.dir.join("var/k2sign/k2-signer/audit/admin");
+    std::fs::create_dir_all(&old_admin).unwrap();
+    std::os::unix::fs::symlink(&target, old_admin.join("signatures.tsv")).unwrap();
+    ok(run(&r.admin, "pairing-pins", &["k2", "required"], b"", None));
+    assert_eq!(std::fs::read(&target).unwrap(), b"root's file\n");
+    assert!(std::fs::read_to_string(r.dir.join("usr/local/etc/k2-signer/private/audit/signatures.tsv")).unwrap().contains("\tPAIRING-PINS\t"));
+    // A hard link to another file is refused too.
+    std::fs::remove_file(&audit).unwrap();
+    std::fs::hard_link(&target, &audit).unwrap();
+    refused(run(&r.admin, "clear-evidence", &["k2", version], b"", None), "single-link");
+    assert_eq!(std::fs::read(&target).unwrap(), b"root's file\n");
+    std::fs::remove_file(&audit).unwrap();
+    ok(run(&r.admin, "clear-evidence", &["k2", version], b"", None));
 }
 
 #[test]

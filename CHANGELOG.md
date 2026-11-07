@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.14 (2026-11-07): pairs with kit v0.12.0
+
+**Requires `k2-mpc-base` v0.12.0** (the tag at its public cut 178b449e; release commit
+33b41c81). This pack's code and tests are unchanged from v0.7.13.
+
+- Pairs with kit v0.12.0: the log entry's body (`LogEntry.body: EntryBody`), the grid row
+  limit (`Config::grid_max_rows`, `MPC-E802` `what` `rows`) and the grid paths made linear.
+  This pack's code builds and reads no `LogEntry` and holds no grid, so nothing here changes.
+- `Cargo.lock`: k2-mpc-base 0.12.0 (only the kit's crate version moves; no `mpce` entry); the
+  crate version.
+
 ## v0.7.13 (2026-11-04): pairs with kit v0.11.1
 
 **Requires `k2-mpc-base` v0.11.1** (the tag at its public cut d9927a6e; release commit

@@ -1359,7 +1359,8 @@ where
         },
     };
     r?;
-    Ok(shared.diverted.lock().unwrap_or_else(|p| p.into_inner()).take())
+    let diverted = shared.diverted.lock().unwrap_or_else(|p| p.into_inner()).take();
+    Ok(diverted)
 }
 
 // ── the first request, before the App is dialed ──────────────────────

@@ -242,6 +242,10 @@ export const CATALOG_ERROR_CODES = [
   // Catalog v38 (must-change at next sign-in, 0.46.6).
   'password_change_required',
   'password_unchanged',
+  // Catalog v53 (0.46.9 App sign-in door): a sign-in code that's unknown, used,
+  // expired or for another App; and a suspended App.
+  'bad_code',
+  'app_suspended',
   // Catalog v40 (0.46.7 Workbench): git reads on a folder that isn't a repo.
   'not_a_repo',
   // Catalog v50: thread.download's secret-file refusal, and agents.end /

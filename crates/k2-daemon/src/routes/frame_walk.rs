@@ -137,7 +137,7 @@ fn writers(src: &str) -> Vec<Writer> {
                 let is_decl = before.is_empty()
                     || before
                         .split_whitespace()
-                        .all(|w| matches!(w, "pub" | "pub(crate)" | "async" | "unsafe" | "const"));
+                        .all(|w| matches!(w, "async" | "unsafe" | "const") || is_visibility(w));
                 if !is_decl {
                     return None;
                 }
@@ -155,6 +155,12 @@ fn writers(src: &str) -> Vec<Writer> {
         });
     }
     out
+}
+
+/// `pub`, `pub(crate)` or `pub(super)` before a `fn`. Missing one names
+/// the wrong (earlier) fn, so an exempt writer reads as a new one.
+fn is_visibility(w: &str) -> bool {
+    w == "pub" || (w.starts_with("pub(") && w.ends_with(')'))
 }
 
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {

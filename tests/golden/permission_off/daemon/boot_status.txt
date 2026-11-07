@@ -44,9 +44,12 @@ features:
   capabilities-v1
   app-phone-pairing-v1
   app-user-profile-v1
+  app-account-deletion-v1
+  app-client-logs-v1
   email-notifications-v1
   app-chat-v1
   app-chat-space-v1
+  app-hosted-sign-in-v1
   live-access-v1
   activity-live-busy
   publish-dev-v1
@@ -80,5 +83,6 @@ features:
   llm-account-for-v1
   companion-pairing-v1
   files-download-v1
+  transfers-v1
   post-idempotency-v1
   boot-status-views-v1

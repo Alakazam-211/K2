@@ -433,7 +433,7 @@ fn bad_login() -> Out {
 /// The whole HTTP answer. `head`: a HEAD request (no body bytes).
 fn write(o: &Out, cors: Option<&str>, head: bool) -> Vec<u8> {
     let body = if o.status == 204 { String::new() } else { o.body.to_string() };
-    let mut h = format!("HTTP/1.1 {}\r\n", status_line(o.status));
+    let mut h = format!("HTTP/1.1 {}\r\n{}", status_line(o.status), k2_core::frame_policy::CONNECT_HEADER_LINES);
     if o.status != 204 {
         h.push_str("Content-Type: application/json\r\n");
     }
@@ -445,7 +445,7 @@ fn write(o: &Out, cors: Option<&str>, head: bool) -> Vec<u8> {
         h.push_str(&format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n"));
     }
     h.push_str(&o.extra);
-    h.push_str(&format!("Content-Length: {}\r\n{}Connection: close\r\n\r\n", body.len(), k2_core::frame_policy::CONNECT_HEADER_LINES));
+    h.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()));
     let mut out = h.into_bytes();
     if !head {
         out.extend_from_slice(body.as_bytes());

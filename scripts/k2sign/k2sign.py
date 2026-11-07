@@ -19,9 +19,12 @@ Signer verbs (the whole surface; anything else exits 2):
   approve <nonce>                       (DER approval signature on stdin)  -> session id
   sign <u1|u2> <asset> <version> raw|b64   (file bytes on stdin)           -> signature
   status <version>                                                         -> JSON
+  compute-evidence <version>   (L1+V1 signed receipts + commit object on stdin, S3b)
+  compute-pins                 (the pinned controller and compute nodes)    -> JSON
 Admin verbs (root):
   set-approver <pem>    repin    approve <version> <base> <asset>... [--windows] [--reapprove]
   generate-u2           import u1 <key file> [--password-stdin]
+  pin-compute-controller <fp>    pin-compute-node <name> <pem>    unpin-compute-node <name>
 
 Exit codes: 0 ok; 2 usage; 3 refused (one red line saying why); 4 internal.
 
@@ -35,7 +38,8 @@ process runs as root or as the signing user, so it can't open a hole even
 if sudo's env_reset were ever loosened. Only in test mode are these read:
 K2SIGN_TEST_NOW (epoch seconds), K2SIGN_TEST_SIGNER_USER (a user name that
 counts as the signing user: it can only add refusals) and
-K2SIGN_TEST_EVIDENCE=accept (stands in for the S3 per-file checks).
+K2SIGN_TEST_EVIDENCE=accept (stands in for the S3 per-file checks; the
+compute-evidence verb never takes it).
 """
 
 import base64
@@ -71,6 +75,7 @@ POLICY_KEYS = {
     "approval", "session_hours", "challenge_minutes", "max_stdin_mb",
     "assets.u1", "assets.u2", "windows_assets", "repo",
     "github_api", "daemon_workflow", "release_commit_files", "apple_team",
+    "compute_assets", "compute_argv", "compute_env", "compute_dual_names", "compute_receipt_max_hours",
 }
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
@@ -270,9 +275,10 @@ def check_root_owned(ctx, path):
 def pinned_files(ctx):
     files = [("libexec/" + n, os.path.join(ctx.libexec, n)) for n in PINNED_LIBEXEC]
     files += [("etc/" + n, os.path.join(ctx.etc, n)) for n in PINNED_ETC]
-    approver = os.path.join(ctx.etc, "approver.pem")
-    if os.path.exists(approver):
-        files.append(("etc/approver.pem", approver))
+    for n in ("approver.pem", COMPUTE_PINS):
+        p = os.path.join(ctx.etc, n)
+        if os.path.exists(p):
+            files.append(("etc/" + n, p))
     return files
 
 
@@ -341,9 +347,14 @@ def load_policy(ctx):
         raise Refused("policy: missing %s" % ", ".join(sorted(missing)))
     if pol["approval"] not in ("on", "off"):
         raise Refused("policy: approval must be on or off")
-    for k in ("session_hours", "challenge_minutes", "max_stdin_mb"):
+    for k in ("session_hours", "challenge_minutes", "max_stdin_mb", "compute_receipt_max_hours"):
         if not re.match(r"^[1-9][0-9]{0,4}$", pol[k]):
             raise Refused("policy: %s must be a positive number" % k)
+    for a in pol["compute_assets"].split():
+        if a not in LINUX_DAEMONS:
+            raise Refused("policy: compute_assets may list only the Linux daemons (not %s)" % a)
+    if not pol["compute_argv"].split() or not pol["compute_dual_names"].split():
+        raise Refused("policy: compute_argv and compute_dual_names must not be empty")
     return pol
 
 
@@ -412,7 +423,7 @@ class Locked:
 
 
 def state_dirs(ctx):
-    for d in ("challenges", "sessions", "assets"):
+    for d in ("challenges", "sessions", "assets", "compute"):
         mkdirs(ctx, os.path.join(ctx.state, d))
 
 
@@ -621,9 +632,18 @@ def tag_commit(ctx, pol, version):
 def check_release_commit(ctx, pol, version, base):
     """GitHub's tag v<x> is the base commit B, or B plus the release bump
     only; and B is on GitHub's main. Returns the tag commit T."""
+    return release_commit(ctx, pol, version, base)[0]
+
+
+def release_commit(ctx, pol, version, base):
+    """check_release_commit's checks; returns (T, B, T's tree or None)."""
     repo = pol["repo"]
     t = tag_commit(ctx, pol, version)
-    parents = [p.get("sha") for p in (gh_api(ctx, pol, "/repos/%s/commits/%s" % (repo, t)).get("parents") or [])]
+    tc = gh_api(ctx, pol, "/repos/%s/commits/%s" % (repo, t))
+    tree = (((tc.get("commit") or {}).get("tree")) or {}).get("sha")
+    if tree is not None and not BASE_RE.match(str(tree)):
+        raise Refused("GitHub says v%s's tree is %r" % (version, tree))
+    parents = [p.get("sha") for p in (tc.get("parents") or [])]
     if base is None:  # approval off (soft rollback): the bump's parent is the base
         if len(parents) != 1:
             raise Refused("release commit is not base+bump (%s has %d parents)" % (t[:12], len(parents)))
@@ -644,7 +664,7 @@ def check_release_commit(ctx, pol, version, base):
     onmain = gh_api(ctx, pol, "/repos/%s/compare/%s...main" % (repo, base))
     if onmain.get("status") not in ("ahead", "identical"):
         raise Refused("base commit is not on GitHub main (%s; compare says %s)" % (base[:12], onmain.get("status")))
-    return t
+    return t, base, tree
 
 
 def gh_env(ctx, d):
@@ -899,11 +919,403 @@ def pe_evidence(asset, path):
         raise Refused("%s is not an NSIS installer (no NSIS header on a 512-byte boundary)" % asset)
 
 
+# ── evidence (S3b): Linux files built on our own K2 Compute nodes ─────────
+#
+# A compute job ends with a receipt the NODE signs with its own P-256 key
+# (k2-node-proto frames.rs SignedReceipt: ECDSA P-256 / SHA-256, ASN.1 DER,
+# over "k2-compute-receipt-v1" 0x00 u32be(len(body)) body, where body is the
+# receipt's canonical JSON). A signed receipt is self-authenticating, so the
+# release user may hand it over: the signer checks it against node keys
+# pinned in /usr/local/etc/k2sign/compute-pins (root-owned, set with
+# k2sign-admin pin-compute-node), never against a key the caller sends.
+# What the release user writes (verdict files, compute_release.py's flags)
+# is never evidence here.
+#
+# The binding, all checked by the signer:
+#   the approved base B (Touch ID) -> GitHub's tag v<x> = T (B, or B plus the
+#   release files only) -> T's tree (GitHub) == the tree each receipt ran,
+#   and each receipt's commit is T itself, or a commit object (sent in the
+#   bundle, hashed here) whose tree is T's tree and whose only parent is B
+#   (release.sh builds a preview commit with the tag's tree before Step 8.9);
+#   L1 and V1 ran on two different pinned nodes, for this Mac's controller,
+#   the release build command, done/exit 0, no --dirty, no --cache, no env
+#   beyond the build's own; both started after this version's first
+#   approval; the root helper, k2-node and App engine are byte-identical in
+#   both (V1, G12); and the file on stdin is L1's signed artifact.
+
+COMPUTE_PINS = "compute-pins"
+COMPUTE_DOMAIN = b"k2-compute-receipt-v1"
+COMPUTE_LABELS = ("L1", "V1")
+COMPUTE_SKEW_SECS = 600
+COMPUTE_BUNDLE_MAX = 4 << 20
+FP_RE = re.compile(r"^[0-9a-f]{64}$")
+NODE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+# k2-node-proto env.rs NODE_SET_VARS: names every node sets for every job
+# (they are refused in --env). Every K2_* name is node-set too (--env
+# refuses the prefix), except K2_JOB_CACHE, which means a --cache mount.
+COMPUTE_NODE_ENV = {"HOME", "PATH", "CARGO_HOME", "RUSTUP_HOME", "CARGO_TARGET_DIR", "SCCACHE_DIR", "TMPDIR",
+                    "LANG", "CI", "USER", "LOGNAME", "SHELL", "RUSTUP_TOOLCHAIN"}
+JOB_CACHE_ENV = "K2_JOB_CACHE"
+# The DER header of a P-256 SubjectPublicKeyInfo (k2-node-proto crypto.rs).
+P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
+
+
+def canonical_json(v):
+    """k2-node-proto canonical.rs: sorted keys, no whitespace, serde_json's
+    escaping. Only used when a receipt comes without its signed body text
+    (a daemon older than S3b); the signature still has to verify."""
+    if isinstance(v, dict):
+        return "{" + ",".join(json.dumps(k, ensure_ascii=False) + ":" + canonical_json(v[k]) for k in sorted(v)) + "}"
+    if isinstance(v, list):
+        return "[" + ",".join(canonical_json(x) for x in v) + "]"
+    if isinstance(v, float):
+        raise Refused("a receipt holds a float; receipts carry only integers")
+    return json.dumps(v, ensure_ascii=False)
+
+
+def p256_spki(der):
+    if len(der) != 91 or der[:26] != P256_SPKI_PREFIX or der[26] != 4:
+        raise Refused("not a P-256 public key (SubjectPublicKeyInfo)")
+    return der
+
+
+def spki_from_pem(text):
+    m = re.search(r"-----BEGIN PUBLIC KEY-----(.*?)-----END PUBLIC KEY-----", text, re.S)
+    if not m:
+        raise Refused("no PUBLIC KEY block")
+    try:
+        der = base64.b64decode("".join(m.group(1).split()), validate=True)
+    except Exception:
+        raise Refused("the PUBLIC KEY block is not base64")
+    return p256_spki(der)
+
+
+def pem_of_spki(der):
+    b = base64.b64encode(der).decode()
+    return "-----BEGIN PUBLIC KEY-----\n" + "\n".join(b[i:i + 64] for i in range(0, len(b), 64)) + "\n-----END PUBLIC KEY-----\n"
+
+
+def receipt_signed_bytes(body):
+    raw = body.encode("utf-8")
+    return COMPUTE_DOMAIN + b"\0" + struct.pack(">I", len(raw)) + raw
+
+
+def receipt_signature_ok(ctx, spki_der, body, sig_b64, d):
+    """True when sig (base64 DER) is the node key's signature over body."""
+    try:
+        sig = base64.b64decode(sig_b64, validate=True)
+    except Exception:
+        return False
+    if not sig or len(sig) > 200:
+        return False
+    tag = secrets.token_hex(4)
+    pub, msg, sigp = (os.path.join(d, "%s.%s" % (tag, n)) for n in ("pub.pem", "msg", "sig.der"))
+    write_file(ctx, pub, pem_of_spki(spki_der))
+    write_file(ctx, msg, receipt_signed_bytes(body))
+    write_file(ctx, sigp, sig)
+    rc, out, err = run([OPENSSL, "dgst", "-sha256", "-verify", pub, "-signature", sigp, msg])
+    return rc == 0 and out.strip() == b"Verified OK"
+
+
+def load_compute_pins(ctx):
+    """(controller fp, {node fp: (name, spki der)}) from compute-pins."""
+    p = os.path.join(ctx.etc, COMPUTE_PINS)
+    controller, nodes, names = None, {}, set()
+    if not os.path.isfile(p):
+        return controller, nodes
+    for raw in open(p).read().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if parts[0] == "controller" and len(parts) == 2 and FP_RE.match(parts[1]):
+            if controller is not None:
+                raise Refused("compute-pins: two controller lines")
+            controller = parts[1]
+        elif parts[0] == "node" and len(parts) == 4 and NODE_NAME_RE.match(parts[1]) and FP_RE.match(parts[2]):
+            try:
+                der = p256_spki(base64.b64decode(parts[3], validate=True))
+            except Refused:
+                raise Refused("compute-pins: node %s's key is not a P-256 public key" % parts[1])
+            except Exception:
+                raise Refused("compute-pins: node %s's key is not base64" % parts[1])
+            if hashlib.sha256(der).hexdigest() != parts[2]:
+                raise Refused("compute-pins: node %s's fingerprint is not its key's" % parts[1])
+            if parts[2] in nodes or parts[1] in names:
+                raise Refused("compute-pins: node %s listed twice" % parts[1])
+            nodes[parts[2]] = (parts[1], der)
+            names.add(parts[1])
+        else:
+            raise Refused("compute-pins: bad line %r" % raw)
+    return controller, nodes
+
+
+def compute_state_path(ctx, version):
+    return os.path.join(ctx.state, "compute", version + ".json")
+
+
+def compute_bundle_receipts(bundle):
+    """The (label, body text, signature) of L1 and V1 from a bundle; any
+    shape problem is a refusal."""
+    if not isinstance(bundle, dict) or bundle.get("v") != 1:
+        raise Refused("the compute evidence is not a v1 bundle")
+    recs = bundle.get("receipts")
+    if not isinstance(recs, dict):
+        raise Refused("the compute evidence has no receipts")
+    out = []
+    for label in COMPUTE_LABELS:
+        r = recs.get(label)
+        if r is None:
+            if label == "V1":
+                raise Refused("no V1 receipt: the dual build on a second node is required for compute builds")
+            raise Refused("no %s receipt" % label)
+        if not isinstance(r, dict) or not isinstance(r.get("signature"), str):
+            raise Refused("%s: not a receipt (k2 compute receipt <job> --json)" % label)
+        body = r.get("body")
+        if body is None:
+            if not isinstance(r.get("receipt"), dict):
+                raise Refused("%s: the receipt has no body" % label)
+            body = canonical_json(r["receipt"])
+        if not isinstance(body, str) or len(body) > (1 << 20):
+            raise Refused("%s: the receipt body is not text" % label)
+        out.append((label, body, r["signature"]))
+    return out
+
+
+def parse_commit_object(raw):
+    """(sha1, tree, parents) of a git commit object's bytes."""
+    sha = hashlib.sha1(b"commit %d\0" % len(raw) + raw).hexdigest()
+    header = raw.split(b"\n\n", 1)[0].split(b"\n")
+    if not header or not re.match(rb"^tree [0-9a-f]{40}$", header[0]):
+        raise Refused("the commit object does not start with its tree")
+    if sum(1 for line in header if line.startswith(b"tree ")) != 1:
+        raise Refused("the commit object names more than one tree")
+    parents = []
+    for line in header[1:]:
+        if line.startswith(b"parent "):
+            if not re.match(rb"^parent [0-9a-f]{40}$", line):
+                raise Refused("the commit object has a bad parent line")
+            parents.append(line[7:].decode())
+    return sha, header[0][5:].decode(), parents
+
+
+def receipt_artifacts(label, rc):
+    arts = {}
+    for a in rc.get("artifacts") or []:
+        if not isinstance(a, dict) or not isinstance(a.get("name"), str):
+            raise Refused("%s: a receipt artifact has no name" % label)
+        if a["name"] in arts:
+            raise Refused("%s: the receipt lists %s twice" % (label, a["name"]))
+        if not re.match(r"^[0-9a-f]{64}$", str(a.get("sha256", ""))) or not isinstance(a.get("bytes"), int):
+            raise Refused("%s: the receipt's %s has no sha256 and size" % (label, a["name"]))
+        arts[a["name"]] = a
+    return arts
+
+
+def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
+    """Every S3b condition (header above). Returns a summary for the state
+    file and the audit log; refuses with the first failed condition."""
+    controller, nodes = load_compute_pins(ctx)
+    if controller is None:
+        raise Refused("compute builds: no controller pinned (sudo k2sign-admin pin-compute-controller <fp>)")
+    if not nodes:
+        raise Refused("compute builds: no compute nodes pinned (sudo k2sign-admin pin-compute-node <name> <pem>)")
+    t, base, t_tree = release_commit(ctx, pol, version, session["base_commit"] if session else None)
+    if not t_tree:
+        raise Refused("GitHub did not say which tree v%s (%s) has" % (version, t[:12]))
+    commit_obj = None
+    if bundle.get("commit_object") is not None:
+        try:
+            raw = base64.b64decode(bundle["commit_object"], validate=True)
+        except Exception:
+            raise Refused("the bundle's commit_object is not base64")
+        commit_obj = parse_commit_object(raw)
+    argv = pol["compute_argv"].split()
+    want_argv = hashlib.sha256(canonical_json(argv).encode()).hexdigest()
+    env_ok = set(pol["compute_env"].split())
+    now = ctx.now()
+    if session is not None:
+        not_before = int(session.get("opened", session["approved"])) - COMPUTE_SKEW_SECS
+        since = "this version's first signing approval (%s)" % hhmm(not_before + COMPUTE_SKEW_SECS)
+    else:
+        not_before = now - int(pol["compute_receipt_max_hours"]) * 3600
+        since = "the last %s hours" % pol["compute_receipt_max_hours"]
+    oldest = now - int(pol["compute_receipt_max_hours"]) * 3600
+    seen, out = {}, {}
+    for label, body, sig in compute_bundle_receipts(bundle):
+        try:
+            rc = json.loads(body)
+        except ValueError:
+            raise Refused("%s: the receipt body is not JSON" % label)
+        if not isinstance(rc, dict):
+            raise Refused("%s: the receipt body is not an object" % label)
+        fp = str(rc.get("node_fp", ""))
+        if fp not in nodes:
+            raise Refused("%s: the receipt is from node %s…, which is not pinned (k2sign-admin pin-compute-node)"
+                          % (label, fp[:16] or "?"))
+        name, spki = nodes[fp]
+        if not receipt_signature_ok(ctx, spki, body, sig, d):
+            raise Refused("%s: the receipt's signature does not verify with node %s's pinned key" % (label, name))
+        if rc.get("v") != 1:
+            raise Refused("%s: receipt version %r, want 1" % (label, rc.get("v")))
+        if rc.get("controller_fp") != controller:
+            raise Refused("%s: the job was sent by controller %s…, not this Mac's pinned controller %s…"
+                          % (label, str(rc.get("controller_fp"))[:16], controller[:16]))
+        ex = rc.get("exit") or {}
+        if rc.get("state") != "done" or not isinstance(ex, dict) or ex.get("code") != 0:
+            raise Refused("%s: the job did not end done/exit 0 (%s, exit %s)" % (label, rc.get("state"), ex.get("code") if isinstance(ex, dict) else ex))
+        if rc.get("argv_sha256") != want_argv:
+            raise Refused("%s: the job did not run the release build command (%s)" % (label, " ".join(argv)))
+        src = rc.get("src") or {}
+        if not isinstance(src, dict) or not BASE_RE.match(str(src.get("commit", ""))) or not BASE_RE.match(str(src.get("tree", ""))):
+            raise Refused("%s: the receipt names no source commit and tree" % label)
+        if src.get("dirty_sha256"):
+            raise Refused("%s: the job ran uncommitted changes (--dirty)" % label)
+        if src["tree"] != t_tree:
+            raise Refused("%s: the job built tree %s, but v%s's tree is %s" % (label, src["tree"][:12], version, t_tree[:12]))
+        if src["commit"] != t:
+            if commit_obj is None:
+                raise Refused("%s: the job built commit %s, not v%s (%s), and the bundle has no commit object to bind it"
+                              % (label, src["commit"][:12], version, t[:12]))
+            c_sha, c_tree, c_parents = commit_obj
+            if c_sha != src["commit"]:
+                raise Refused("%s: the job built commit %s, not the bundle's commit %s" % (label, src["commit"][:12], c_sha[:12]))
+            if c_tree != t_tree:
+                raise Refused("%s: commit %s has tree %s, not v%s's %s" % (label, c_sha[:12], c_tree[:12], version, t_tree[:12]))
+            if c_parents != [base]:
+                raise Refused("%s: commit %s's parent is %s, not the approved base %s"
+                              % (label, c_sha[:12], ",".join(p[:12] for p in c_parents) or "none", base[:12]))
+        names = [str(n) for n in (rc.get("env_names") or [])] + [str(n) for n in (rc.get("secret_env") or [])]
+        if JOB_CACHE_ENV in names:
+            raise Refused("%s: the job ran with a --cache mount" % label)
+        extra = sorted(n for n in set(names) if n not in env_ok and n not in COMPUTE_NODE_ENV and not n.startswith("K2_"))
+        if extra:
+            raise Refused("%s: the job ran with env the release build doesn't set: %s" % (label, ", ".join(extra[:5])))
+        started, ended = rc.get("started_at"), rc.get("ended_at")
+        if not isinstance(started, int) or not isinstance(ended, int) or ended < started:
+            raise Refused("%s: the receipt has no start and end time" % label)
+        if started < not_before or ended < oldest:
+            raise Refused("%s: an old receipt: the job started %s, before %s" % (label, hhmm(started), since))
+        if ended > now + COMPUTE_SKEW_SECS:
+            raise Refused("%s: the receipt ends in the future (%s)" % (label, hhmm(ended)))
+        rid = hashlib.sha256(body.encode()).hexdigest()
+        seen[label] = (rc, receipt_artifacts(label, rc), name)
+        out[label] = {"job": rc.get("job_id"), "node": name, "node_fp": fp, "receipt": rid,
+                      "ended": iso(ended), "tools_used": rc.get("tools_used") or {}}
+    (l1, a1, n1), (v1, av, nv) = seen["L1"], seen["V1"]
+    if l1.get("node_fp") == v1.get("node_fp"):
+        raise Refused("V1 ran on the same node as L1 (%s): the dual build needs a second node" % n1)
+    if l1.get("job_id") == v1.get("job_id"):
+        raise Refused("V1 is the same job as L1")
+    for n in pol["compute_dual_names"].split():
+        k = "dist/" + n
+        if k not in a1:
+            raise Refused("V1 match: L1's receipt lists no %s" % n)
+        if k not in av:
+            raise Refused("V1 match missing: V1's receipt lists no %s (the dual build must reproduce it)" % n)
+        if a1[k]["sha256"] != av[k]["sha256"] or a1[k]["bytes"] != av[k]["bytes"]:
+            raise Refused("V1 mismatch: %s differs between L1 on %s (%s…) and V1 on %s (%s…)"
+                          % (n, n1, a1[k]["sha256"][:12], nv, av[k]["sha256"][:12]))
+    summary = {"tag_commit": t, "tree": t_tree, "base": base, "built_commit": l1["src"]["commit"], "jobs": out}
+    if asset is not None:
+        k = "dist/" + asset
+        if k not in a1:
+            raise Refused("%s is not an artifact in L1's signed receipt" % asset)
+        sha = sha256_file(path)
+        if a1[k]["sha256"] != sha or a1[k]["bytes"] != os.path.getsize(path):
+            raise Refused("%s: these bytes (%s…) are not L1's signed artifact (%s…)" % (asset, sha[:12], a1[k]["sha256"][:12]))
+    return summary
+
+
+def compute_session(ctx, pol, version):
+    """The approved, unexpired session (approval on), else None."""
+    if pol["approval"] != "on":
+        return None
+    sess = load_session(ctx, version)
+    if sess is None:
+        raise Refused("no approved signing session for %s" % version)
+    if ctx.now() > sess["expires"]:
+        raise Refused("the signing session for %s expired at %s; re-approve (release.sh asks)" % (version, hhmm(sess["expires"])))
+    return sess
+
+
+def compute_evidence(ctx, pol, asset, version, path, session, d):
+    """A compute-built file: the registered bundle, checked again in full."""
+    st = read_json(compute_state_path(ctx, version))
+    compute_check(ctx, pol, version, session, st["bundle"], d, asset, path)
+    rc, out, err = run([sys.executable, "-I", os.path.join(ctx.libexec, "check-daemon-asset.py"),
+                        path, LINUX_DAEMONS[asset], version])
+    if rc != 0:
+        msg = "; ".join((out + err).decode(errors="replace").strip().splitlines()).replace(path + ": ", "").replace(path, "the file")
+        raise Refused("%s: %s" % (asset, msg[:300]))
+
+
+def verb_compute_evidence(ctx, args):
+    """Register a release's K2 Compute evidence (L1 + V1 signed receipts and
+    the built commit object, JSON on stdin) after checking all of it. From
+    then on that version's compute assets sign only on this evidence."""
+    if len(args) != 1:
+        raise Usage("compute-evidence <version>   (the evidence bundle on stdin)")
+    version = check_version(args[0])
+    check_pins(ctx)
+    pol = load_policy(ctx)
+    with Locked(ctx), Scratch(ctx) as d:
+        state_dirs(ctx)
+        sess = compute_session(ctx, pol, version)
+        p = os.path.join(d, "bundle.json")
+        if read_stdin_to(ctx, p, COMPUTE_BUNDLE_MAX) == 0:
+            raise Refused("no compute evidence on stdin")
+        try:
+            bundle = read_json(p)
+        except ValueError:
+            raise Refused("the compute evidence is not JSON")
+        try:
+            summary = compute_check(ctx, pol, version, sess, bundle, d)
+            used_path = os.path.join(ctx.state, "compute", "receipts.tsv")
+            used = {}
+            if os.path.exists(used_path):
+                for line in open(used_path).read().splitlines():
+                    rid, v = line.split("\t")
+                    used[rid] = v
+            for label, j in sorted(summary["jobs"].items()):
+                if used.get(j["receipt"], version) != version:
+                    raise Refused("%s: a replayed receipt: it was registered for %s" % (label, used[j["receipt"]]))
+        except Refused as e:
+            audit(ctx, version, "REFUSED-COMPUTE-EVIDENCE", detail=str(e))
+            raise
+        with open(used_path, "a") as f:
+            for j in summary["jobs"].values():
+                if j["receipt"] not in used:
+                    f.write("%s\t%s\n" % (j["receipt"], version))
+        ctx.own(used_path)
+        write_file(ctx, compute_state_path(ctx, version),
+                   json.dumps({"bundle": bundle, "registered": ctx.now(), "summary": summary}, sort_keys=True))
+        audit(ctx, version, "COMPUTE-EVIDENCE", detail="tree %s; %s" % (summary["tree"], "; ".join(
+            "%s job %s on %s receipt %s" % (k, v["job"], v["node"], v["receipt"][:16]) for k, v in sorted(summary["jobs"].items()))))
+    print(json.dumps({"ok": True, "version": version, "summary": summary}, sort_keys=True))
+    say("compute evidence for %s registered: L1 on %s, V1 on %s, tree %s"
+        % (version, summary["jobs"]["L1"]["node"], summary["jobs"]["V1"]["node"], summary["tree"][:12]))
+
+
+def verb_compute_pins(ctx, args):
+    """What the signer trusts for compute builds (release.sh's pre-flight)."""
+    if args:
+        raise Usage("compute-pins")
+    check_pins(ctx)
+    controller, nodes = load_compute_pins(ctx)
+    print(json.dumps({"controller": controller,
+                      "nodes": sorted(({"name": n, "fp": fp} for fp, (n, _) in nodes.items()), key=lambda x: x["name"])},
+                     sort_keys=True))
+
+
 def check_evidence(ctx, pol, slot, asset, version, path, session, d):
     """Every real file needs its own evidence; an approval alone never signs."""
     if ctx.test_evidence_accept():
         return
-    if asset in LINUX_DAEMONS:
+    if asset in pol["compute_assets"].split() and os.path.exists(compute_state_path(ctx, version)):
+        # Registered compute evidence decides this asset: no fallback.
+        compute_evidence(ctx, pol, asset, version, path, session, d)
+    elif asset in LINUX_DAEMONS:
         linux_evidence(ctx, pol, asset, version, path, session, d)
     elif asset == APP_TARBALL:
         app_evidence(ctx, pol, version, path, d)
@@ -1069,10 +1481,14 @@ def openssl_verify(ctx, data_path, sig_path):
 def write_session(ctx, pol, challenge, by):
     now = ctx.now()
     version = challenge["version"]
+    # "opened": this version's FIRST approval. A re-approval keeps it, so
+    # compute receipts from the same release run stay inside the window.
+    prev = load_session(ctx, version)
+    opened = int(prev.get("opened", prev["approved"])) if prev is not None and challenge["reapproval"] else now
     sess = {
         "version": version, "base_commit": challenge["base_commit"], "assets": challenge["assets"],
         "windows": challenge["windows"], "max_signatures": challenge["max_signatures"],
-        "approved": now, "expires": now + int(pol["session_hours"]) * 3600,
+        "approved": now, "opened": opened, "expires": now + int(pol["session_hours"]) * 3600,
         "nonce": challenge["nonce"], "reapproval": challenge["reapproval"], "by": by,
         "count": 0, "signed": [],
     }
@@ -1152,6 +1568,8 @@ def verb_status(ctx, args):
         }
     apath = os.path.join(ctx.state, "assets", version + ".tsv")
     out["signed"] = open(apath).read().split("\n")[:-1] if os.path.exists(apath) else []
+    cpath = compute_state_path(ctx, version)
+    out["compute"] = read_json(cpath)["summary"] if os.path.exists(cpath) else None
     print(json.dumps(out, sort_keys=True))
 
 
@@ -1371,7 +1789,8 @@ def admin_import(ctx, args):
 
 
 SIGNER_VERBS = {"preflight": verb_preflight, "challenge": verb_challenge, "approve": verb_approve,
-                "sign": verb_sign, "status": verb_status, "gh-selfcheck": verb_gh_selfcheck, "keys": verb_keys}
+                "sign": verb_sign, "status": verb_status, "gh-selfcheck": verb_gh_selfcheck, "keys": verb_keys,
+                "compute-evidence": verb_compute_evidence, "compute-pins": verb_compute_pins}
 def admin_set_gh_token(ctx, args):
     if args not in ([], ["--stdin"]):
         raise Usage("set-gh-token [--stdin]   (a fine-grained, read-only token for the repo)")
@@ -1397,8 +1816,71 @@ def admin_repin(ctx, args):
     repin(ctx)
 
 
+def write_compute_pins(ctx, controller, nodes):
+    lines = ["# K2 Compute pins (prd-signing-user-v1 S3b), written by k2sign-admin. Root-owned, in pins.sha256.",
+             "# The signer accepts a compute build only from a job this controller sent to these nodes."]
+    if controller:
+        lines.append("controller %s" % controller)
+    for fp, (name, der) in sorted(nodes.items(), key=lambda kv: kv[1][0]):
+        lines.append("node %s %s %s" % (name, fp, base64.b64encode(der).decode()))
+    dest = os.path.join(ctx.etc, COMPUTE_PINS)
+    tmp = dest + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o644)
+    os.rename(tmp, dest)
+    repin(ctx)
+
+
+def admin_pin_compute_controller(ctx, args):
+    """This Mac's K2 controller key fingerprint (the controller_fp every
+    receipt names; each node's run/status.json shows it as controller_fp)."""
+    if len(args) != 1 or not FP_RE.match(args[0]):
+        raise Usage("pin-compute-controller <fingerprint: 64 lowercase hex>")
+    check_pins(ctx)
+    _, nodes = load_compute_pins(ctx)
+    write_compute_pins(ctx, args[0], nodes)
+    say("compute controller pinned: %s" % args[0])
+
+
+def admin_pin_compute_node(ctx, args):
+    """A release node's public key. Compare the printed fingerprint with
+    node_fp in that node's own run/status.json before trusting it."""
+    if len(args) != 2 or not NODE_NAME_RE.match(args[0]):
+        raise Usage("pin-compute-node <node name> <public key pem file>")
+    if not os.path.isabs(args[1]):
+        raise Usage("pin-compute-node needs an absolute path (the wrapper runs from /)")
+    check_pins(ctx)
+    with open(args[1]) as f:
+        der = spki_from_pem(f.read(8192))
+    fp = hashlib.sha256(der).hexdigest()
+    controller, nodes = load_compute_pins(ctx)
+    for other_fp, (n, _) in list(nodes.items()):
+        if n == args[0]:
+            del nodes[other_fp]
+        elif other_fp == fp:
+            raise Refused("that key is already pinned as node %s" % n)
+    nodes[fp] = (args[0], der)
+    write_compute_pins(ctx, controller, nodes)
+    say("compute node %s pinned: fingerprint %s. Check it equals node_fp in that node's run/status.json." % (args[0], fp))
+
+
+def admin_unpin_compute_node(ctx, args):
+    if len(args) != 1 or not NODE_NAME_RE.match(args[0]):
+        raise Usage("unpin-compute-node <node name>")
+    check_pins(ctx)
+    controller, nodes = load_compute_pins(ctx)
+    left = {fp: v for fp, v in nodes.items() if v[0] != args[0]}
+    if len(left) == len(nodes):
+        raise Refused("no compute node %s is pinned" % args[0])
+    write_compute_pins(ctx, controller, left)
+    say("compute node %s unpinned" % args[0])
+
+
 ADMIN_VERBS = {"set-approver": admin_set_approver, "repin": admin_repin, "approve": admin_approve,
-               "generate-u2": admin_generate_u2, "import": admin_import, "set-gh-token": admin_set_gh_token}
+               "generate-u2": admin_generate_u2, "import": admin_import, "set-gh-token": admin_set_gh_token,
+               "pin-compute-controller": admin_pin_compute_controller, "pin-compute-node": admin_pin_compute_node,
+               "unpin-compute-node": admin_unpin_compute_node}
 
 
 def main(argv):

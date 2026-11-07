@@ -31,6 +31,11 @@ never runs a fetched binary.
 
   compute_release.py same-files --a DIR --b DIR --names N1,N2,...
       Dual build (G12): the named files are byte-identical in both dirs.
+
+  compute_release.py evidence-bundle --state DIR --git DIR
+      The JSON the signing user's `k2sign compute-evidence` reads (S3b):
+      <state>/L1 and V1 receipt.json as fetched, plus L1's commit object
+      from the git checkout. The signer trusts none of it unchecked.
 """
 import argparse
 import hashlib
@@ -359,6 +364,39 @@ def same_files(a):
     return 1 if bad else 0
 
 
+def evidence_bundle(a):
+    """The bundle the signing user's `k2sign compute-evidence` reads: L1's
+    and V1's signed receipts exactly as `k2 compute receipt --json` printed
+    them, and the git commit object L1 built (release.sh's preview commit:
+    the tag's tree on the approved base). Nothing here is trusted by the
+    signer: it checks the node signatures and hashes the commit itself."""
+    recs = {}
+    for label in ("L1", "V1"):
+        p = os.path.join(a.state, label, "receipt.json")
+        if os.path.isfile(p):
+            recs[label] = load(p)
+    if "L1" not in recs:
+        sys.stderr.write("evidence-bundle: no L1/receipt.json in %s\n" % a.state)
+        return 1
+    r = recs["L1"]
+    body = json.loads(r["body"]) if isinstance(r.get("body"), str) else (r.get("receipt") or {})
+    commit = (body.get("src") or {}).get("commit") or ""
+    if not re.match(r"^[0-9a-f]{40}$", commit):
+        sys.stderr.write("evidence-bundle: L1's receipt names no commit\n")
+        return 1
+    import base64
+    import subprocess
+    p = subprocess.run(["git", "-C", a.git, "cat-file", "commit", commit], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if p.returncode != 0:
+        sys.stderr.write("evidence-bundle: git cat-file commit %s in %s failed: %s\n"
+                         % (commit[:12], a.git, p.stderr.decode(errors="replace").strip()[:200]))
+        return 1
+    json.dump({"v": 1, "commit_object": base64.b64encode(p.stdout).decode(), "receipts": recs},
+              sys.stdout, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -379,7 +417,12 @@ def main():
     s.add_argument("--a", required=True)
     s.add_argument("--b", required=True)
     s.add_argument("--names", required=True)
+    s = sub.add_parser("evidence-bundle")
+    s.add_argument("--state", required=True)
+    s.add_argument("--git", required=True)
     a = p.parse_args()
+    if a.cmd == "evidence-bundle":
+        return evidence_bundle(a)
     if a.cmd == "argv-sha256":
         print(argv_sha256(a.argv))
         return 0

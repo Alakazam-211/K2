@@ -285,15 +285,38 @@ or tagged, and prints how to fall back. Then:
 A `K2_RELEASE_RESUME` run submits the jobs again at Step 7.9c.
 
 **Signing.** Since 0.46.6 the update keys live with the signing user
-(`K2_SIGNER=k2sign`, `scripts/k2sign/`). That signer doesn't accept
-compute builds yet: compute verdicts are written by the release user and
-trust the controller, so they are no evidence for it (prd-signing-user-v1
-A4). It needs S3b: the signer checks each node-signed receipt itself
-against node keys pinned in its policy. Until S3b ships, release.sh
-refuses `K2_LINUX_BUILDS=compute` under `K2_SIGNER=k2sign` in the
-pre-flight, before any build, rather than at Step 10.5 with the release
-already live. `shadow` needs no signer change (nothing from compute is
-signed).
+(`K2_SIGNER=k2sign`, `scripts/k2sign/`). Compute verdicts are written by
+the release user and trust the controller, so they are no evidence for
+it (prd-signing-user-v1 A4). Instead (S3b), Step 10.5 hands the signer
+L1's and V1's **node-signed receipts** and the commit object L1 built
+(`compute_release.py evidence-bundle`, `k2sign compute-evidence`). The
+signer signs the compute-built x86 daemon only when all of these hold,
+each checked by the signer itself:
+- each receipt's signature verifies with a node key pinned in
+  `/usr/local/etc/k2sign/compute-pins` (root, `k2sign-admin
+  pin-compute-node`), never a key the caller sends;
+- each receipt names the pinned controller (this Mac's K2) and the
+  release build command, ended done/exit 0, with no `--dirty`, no
+  `--cache` and no env beyond the build's own (`BUILD_OAUTH` included:
+  a placeholder daemon never ships);
+- each job built the tree GitHub's tag `v<x>` has, at the tag commit or
+  at a commit (hashed by the signer) with that tree whose only parent is
+  the base commit the Touch ID approval named;
+- both jobs started after this version's first approval (and within
+  `compute_receipt_max_hours`), and a receipt registered for one version
+  is refused for another;
+- L1 and V1 ran on two different pinned nodes and their receipts list
+  the same sha256 for the root helper, k2-node and App engine (V1);
+- the bytes on stdin are the `dist/k2-daemon-linux-x86_64` L1's receipt
+  lists.
+
+Once a version has compute evidence, its x86 daemon signs only on it
+(no fallback to an attestation). aarch64 still needs GitHub's
+attestation. The pre-flight (`k2_compute_signer_check`) refuses compute
+mode before any build unless the signer has the controller and both
+release nodes pinned and a V1 node is set. Pinning is in
+`docs/release/updater-key-ceremony.md`, "K2 Compute builds (S3b)".
+`shadow` needs none of this (nothing from compute is signed).
 
 **Fallback:**
 1. `gh variable set LINUX_BUILDS -b github --repo Alakazam-211/K2`
@@ -349,8 +372,9 @@ tag.
    V1 and L1; the daemon identical to GitHub's (same pin, same remap, same
    OAuth values); deb, rpm and AppImage differ (archive timestamps; not
    expected to match). A differing ELF lists its `rustc`/`GCC` lines.
-3. **0.46.10: compute mode,** once S3b is in and the 0.46.9 report is
-   clean: `gh variable set LINUX_BUILDS -b compute`, then
+3. **0.46.10: compute mode,** once S3b is installed on the signing Mac
+   (install.sh from the S3b commit, then the compute pins) and the
+   0.46.9 report is clean: `gh variable set LINUX_BUILDS -b compute`, then
    `K2_LINUX_BUILDS=compute ./scripts/release.sh 0.46.10`. Fallback as
    above.
 

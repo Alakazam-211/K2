@@ -3788,11 +3788,23 @@ fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
     let signed: k2_core::compute::proto::frames::SignedReceipt =
         serde_json::from_str(raw).map_err(|e| no("internal", 500, format!("stored receipt: {e}")))?;
     let body: serde_json::Value = serde_json::from_str(&signed.body).unwrap_or_default();
+    // The node's public key as this server pinned it at enrollment. Display
+    // only: whoever checks the receipt elsewhere (the release signer, S3b)
+    // pins node keys itself and never trusts this field.
+    let node_key = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_by_id(&conn, &j.node_id).map(|n| n.public_key_pem)
+    };
     let mut out = serde_json::json!({
         "job": compute::message::short(&j.id),
         "verified": j.receipt_ok == Some(true),
         "receipt": body,
+        // The exact bytes the node signed (canonical JSON), so a checker
+        // never has to re-serialize `receipt` to verify `signature`.
+        "body": signed.body,
         "signature": signed.sig,
+        "node_public_key_pem": node_key,
         "proves": "which node said it ran which inputs and got which outputs — not that the node is honest",
     });
     // SE8/SE29: the env names the node says the job got from the vault.

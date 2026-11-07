@@ -31,3 +31,18 @@ release_commit_files = package.json src-tauri/tauri.conf.json cli/k2 Cargo.lock 
 # The Developer ID team every Mac file must be signed by (K2.app, its daemon
 # helper, k2-ptyd inside the standalone macOS daemon).
 apple_team = 36B8R93HXV
+# K2 Compute builds (S3b; release.sh K2_LINUX_BUILDS=compute). The signer
+# signs these assets from our own nodes only on node-signed receipts it
+# checks itself: L1 and V1 on two nodes pinned in compute-pins (k2sign-admin
+# pin-compute-node), sent by the pinned controller, at the tag's tree.
+compute_assets = k2-daemon-linux-x86_64
+# The release build command both jobs must have run (compute-release.sh L1/V1).
+compute_argv = bash scripts/ci/build-linux-bins.sh x86_64
+# The only --env / vault env a release build job may carry. BUILD_OAUTH (the
+# placeholder switch) is not one: a placeholder daemon never ships.
+compute_env = BUILD_COMMIT BUILD_TREE BUILD_GMAIL_CLIENT_ID BUILD_GMAIL_CLIENT_SECRET BUILD_MICROSOFT_CLIENT_ID
+# V1 must reproduce these byte for byte (the root-key assets, plan G12;
+# compute-release.sh k2cr_dual_names, and a test keeps the two equal).
+compute_dual_names = k2-root-helper-linux-x86_64 k2-node-linux-x86_64 k2-app-engine-linux-x86_64
+# A receipt older than this is refused, even with the approval off.
+compute_receipt_max_hours = 24

@@ -119,11 +119,14 @@
 #                       compute (then daemon-binaries.yml builds only
 #                       aarch64 and app-linux.yml skips; the pre-flight
 #                       refuses a mismatch either way), K2_COMPUTE_OAUTH=
-#                       secret (the default) with the vault grants, and a
-#                       signer that accepts compute builds: the signing
-#                       user (K2_SIGNER=k2sign) doesn't yet (S3b, signed
-#                       receipts checked by the signer), so the pre-flight
-#                       refuses compute mode under k2sign.
+#                       secret (the default) with the vault grants.
+#                       Under the signing user (K2_SIGNER=k2sign, S3b),
+#                       10.5 hands the signer L1's and V1's node-signed
+#                       receipts and the built commit; it checks them
+#                       against node keys and the controller it pinned
+#                       (k2sign-admin pin-compute-*), so the pre-flight
+#                       needs both release nodes and the controller pinned
+#                       and a V1 node (k2_compute_signer_check).
 #                       Fallback: gh variable set LINUX_BUILDS -b github,
 #                       then K2_LINUX_BUILDS=github (add K2_RELEASE_RESUME=8
 #                       to reuse a finished Mac build).
@@ -340,6 +343,46 @@ K2_SHADOW_STATE=""
 K2_SHADOW_NOTE=""
 K2_SHADOW_LATE=0
 
+# Compute mode under the signing user (K2_SIGNER=k2sign, prd-signing-user-v1
+# S3b): at Step 10.5 the signer takes L1's and V1's node-signed receipts and
+# checks them against the node keys and controller IT pinned. Both release
+# nodes and the controller must be pinned there, and V1 must run on its own
+# node: the signer requires the dual build. Read-only (k2sign compute-pins).
+k2_compute_signer_check() {
+    local l1 v1 pins
+    l1="${K2_COMPUTE_X86_NODE:-${K2_COMPUTE_NODE:-k2n7-vin}}"
+    v1="$(k2cr_verify_node)"
+    if [ -z "$v1" ]; then
+        echo "ERROR: K2_COMPUTE_VERIFY_NODE=none, but the signing user (K2_SIGNER=k2sign) signs a compute-built" >&2
+        echo "  daemon only with the V1 dual build on a second node. Name a verify node, or use K2_LINUX_BUILDS=shadow." >&2
+        return 1
+    fi
+    if ! pins="$(k2u_compute_pins)"; then
+        echo "ERROR: the signing user can't list its K2 Compute pins (k2sign compute-pins). Re-run" >&2
+        echo "  scripts/k2sign/install.sh from this commit (S3b), then pin the nodes (docs/release/updater-key-ceremony.md)." >&2
+        return 1
+    fi
+    python3 -I - "$pins" "$l1" "$v1" <<'PY'
+import json, sys
+p, l1, v1 = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+names = {n["name"] for n in p.get("nodes") or []}
+bad = []
+if not p.get("controller"):
+    bad.append("no controller pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <this Mac's K2 controller fingerprint>")
+if l1 == v1:
+    bad.append("L1 and V1 are both %s: the dual build needs two nodes" % l1)
+for role, n in (("L1", l1), ("V1", v1)):
+    if n not in names:
+        bad.append("%s's node %s is not pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node %s /abs/path/%s.pem" % (role, n, n, n))
+if bad:
+    print("ERROR: K2_LINUX_BUILDS=compute: the signing user would refuse the compute-built daemon at Step 10.5:", file=sys.stderr)
+    for b in bad:
+        print("  - " + b, file=sys.stderr)
+    sys.exit(1)
+print("  Signing user: compute builds from L1 %s and V1 %s for controller %s… (prd-signing-user-v1 S3b)." % (l1, v1, p["controller"][:16]))
+PY
+}
+
 # The repo variable LINUX_BUILDS tells the tag-push workflows who builds
 # x86 Linux: "compute" = daemon-binaries.yml builds only aarch64 and
 # app-linux.yml skips. It must agree with this run, or GitHub would build
@@ -363,15 +406,11 @@ k2_linux_builds_preflight() {
                 exit 1
                 ;;
         esac
-        # sign-daemon.sh --from-dir is refused through the signing user until
-        # the signer checks the node-signed receipts itself (prd-signing-user-v1
-        # A4, S3b). Stop now, not at Step 10.5 after the release is live.
+        # The signing user signs the compute-built x86 daemon only on the
+        # node-signed receipts it checks itself (prd-signing-user-v1 S3b).
+        # Stop now, not at Step 10.5 after the release is live, if it can't.
         if [ "$K2_SIGNER" = "k2sign" ]; then
-            echo "ERROR: K2_LINUX_BUILDS=compute can't be signed through the signing user (K2_SIGNER=k2sign) yet:" >&2
-            echo "  the signer doesn't check K2 Compute receipts itself (prd-signing-user-v1 S3b), so sign-daemon.sh" >&2
-            echo "  would refuse the x86 daemon at Step 10.5, after the release is live." >&2
-            echo "  Use K2_LINUX_BUILDS=shadow until S3b ships (or, on the owner's call, K2_SIGNER=keychain)." >&2
-            exit 1
+            k2_compute_signer_check || exit 1
         fi
         if [ -z "$(k2cr_verify_node)" ]; then
             echo "  ⚠⚠ K2_COMPUTE_VERIFY_NODE=none: NO dual build. The root helper, k2-node and the App engine" >&2

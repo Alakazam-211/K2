@@ -166,8 +166,11 @@ rm -f "$TREE/.env"
 K2_SIGNER=vault expect 1 "K2_SIGNER must be k2sign or keychain" lib k2u_preflight 0.46.12 > "$tmp/r" && pass "an unknown K2_SIGNER is refused" || fail "K2_SIGNER" "$(cat "$tmp/r")"
 
 mkdir -p "$tmp/cdir"
-check "S3-9 sign-daemon.sh --from-dir under k2sign" 1 "compute builds are not signable through k2sign yet (S3b)" \
-    bash "$REPO/scripts/sign-daemon.sh" 0.46.12 --from-dir "$tmp/cdir" --compute-verdict "$tmp/cdir"
+# S3b: --from-dir under k2sign goes to the signer's own receipt checks
+# (tests/release/k2sign-s3b.sh); it is no longer refused up front.
+check "S3-9 sign-daemon.sh --from-dir under k2sign: no up-front refusal (S3b)" 1 "k2-daemon-linux-x86_64 (+ .sha256) not in $tmp/cdir" \
+    bash "$REPO/scripts/sign-daemon.sh" 0.46.12 --dry --from-dir "$tmp/cdir" --compute-verdict "$tmp/cdir" --manifest "$tmp/cdir/m.json" --out "$tmp/cdir/o"
+grep -q "not signable through k2sign" "$tmp/out" && fail "S3b: the old refusal is gone" "$(cat "$tmp/out")" || pass "S3b: the old refusal is gone"
 
 echo "== two signing Macs: the tree lists U2b (the other Mac) first; this Mac signs with its own key =="
 printf 'y\ny\n' | "$MINISIGN" -G -p "$tmp/keys/u2b.pub" -s "$tmp/keys/u2b.key" >/dev/null 2>&1

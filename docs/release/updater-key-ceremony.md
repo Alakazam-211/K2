@@ -191,6 +191,35 @@ then proves Touch ID, the password, and (hands off) that an SSH-started request 
 A failure in (a) or (b) switches the approval to the passphrase fallback
 (prd §11 Q1) before release use.
 
+### K2 Compute builds (S3b)
+
+With `K2_LINUX_BUILDS=compute`, the x86 Linux daemon is built on our own
+nodes. The signer signs it only on the jobs' **node-signed receipts**,
+which it checks itself against node keys **root pinned** in
+`/usr/local/etc/k2sign/compute-pins` (in `pins.sha256`, like
+`approver.pem`). The full rule list is in `docs/ci-on-k2-compute.md`
+("Signing"). The pins, once per signing Mac and again when a release node
+is re-enrolled (its key changes):
+
+1. `sudo bash scripts/k2sign/install.sh` from the reviewed S3b commit (new
+   signer, policy keys `compute_*`).
+2. The controller: this Mac's K2 compute key fingerprint. Derive it here,
+   then check it against `controller_fp` in a receipt this Mac's K2 got
+   (`k2 compute receipt <job> --json`):
+   `openssl pkey -in ~/.k2/tunnel-key.pem -pubout -outform DER | shasum -a 256`
+   then `sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <fp>`.
+3. Each release node (L1 and V1, at least `K2_COMPUTE_X86_NODE` and
+   `K2_COMPUTE_VERIFY_NODE`): save its public key from a receipt of a job
+   it ran, `k2 compute receipt <job> --json` (`node_public_key_pem`, as this
+   Mac's K2 pinned it at enrollment) to a file, then
+   `sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node <name> /abs/path/<name>.pem`.
+   It prints the key's fingerprint: it must equal `node_fp` in that node's
+   own `run/status.json` (read on the node, not through this Mac), or don't
+   use the pin (`unpin-compute-node <name>`).
+4. `sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-pins` lists
+   them; release.sh's pre-flight refuses compute mode until the controller
+   and both release nodes are there.
+
 ## What changes
 
 | Key | What it is | Where it lives | Who trusts it |

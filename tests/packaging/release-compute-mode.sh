@@ -30,7 +30,7 @@ trap 'rm -rf "$tmp"' EXIT
 python3 - "$REL" > "$tmp/fns.sh" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
-names = ["k2_linux_builds_preflight", "k2_shadow_warn", "k2_compute_problem", "k2_compute_on",
+names = ["k2_compute_signer_check", "k2_linux_builds_preflight", "k2_shadow_warn", "k2_compute_problem", "k2_compute_on",
          "k2_shadow_start", "k2_shadow_collect", "k2_shadow_tree_check", "k2_compute_stage"]
 for n in names:
     m = re.search(r"^%s\(\) \{\n.*?^\}\n" % re.escape(n), s, re.S | re.M) \
@@ -61,6 +61,8 @@ k2cr_wait() { echo "wait" >> "$STUB_CALLS"; return 0; }
 k2cr_collect() { echo "collect" >> "$STUB_CALLS"; [ "${STUB_COLLECT_FAIL:-0}" = 0 ] || return 1; [ "${STUB_NO_V1:-0}" = 1 ] || echo '{"ok":true}' > "$K2_SHADOW_STATE/V1.verdict.json"; }
 k2cr_stage() { echo "k2cr_stage $*" >> "$STUB_CALLS"; mkdir -p "$1"; printf 'k2-node-linux-x86_64\nK2_9.9.9_amd64.deb\n' > "$K2_SHADOW_STATE/staged.txt"; : > "$1/k2-node-linux-x86_64"; : > "$1/K2_9.9.9_amd64.deb"; }
 k2_release_preview_commit() { echo "c0ffee"; }
+# The signing user's compute pins (k2sign compute-pins), per $STUB_PINS.
+k2u_compute_pins() { echo "pins" >> "$STUB_CALLS"; [ "${STUB_PINS_FAIL:-0}" = 0 ] || return 1; if [ -n "${STUB_PINS:-}" ]; then printf '%s\n' "$STUB_PINS"; else echo '{"controller": null, "nodes": []}'; fi; }
 cargo() { return 0; }
 LIB
 
@@ -94,10 +96,34 @@ grep -q "will NOT build x86 Linux" "$tmp/out-pf-github-compute" && grep -q "gh v
     && pass "github mode with the variable on compute: refused, with both ways out" || fail "github hint" "$(cat "$tmp/out-pf-github-compute")"
 rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute K2_COMPUTE_OAUTH=placeholder run pf-placeholder k2_linux_builds_preflight)"
 [ "$rc" = 1 ] && grep -q "must never ship" "$tmp/out-pf-placeholder" && pass "compute refuses placeholder OAuth" || fail "placeholder" "rc=$rc $(cat "$tmp/out-pf-placeholder")"
-rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign run pf-k2sign k2_linux_builds_preflight)"
-[ "$rc" = 1 ] && grep -q "prd-signing-user-v1 S3b" "$tmp/out-pf-k2sign" && grep -q "K2_LINUX_BUILDS=shadow" "$tmp/out-pf-k2sign" \
-    && pass "compute under the signing user (k2sign): refused before any build (the signer can't take compute builds yet)" \
-    || fail "k2sign refusal" "rc=$rc $(cat "$tmp/out-pf-k2sign")"
+echo "pre-flight under the signing user (K2_SIGNER=k2sign, S3b): both release nodes and the controller pinned, V1 on:"
+PINS_OK='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": [{"name": "k2n7-vin", "fp": "aa"}, {"name": "k2n9-vin", "fp": "bb"}]}'
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS="$PINS_OK" run pf-k2sign k2_linux_builds_preflight)"
+[ "$rc" = 0 ] && grep -q "Signing user: compute builds from L1 k2n7-vin and V1 k2n9-vin" "$tmp/out-pf-k2sign" \
+    && ! grep -q "not signable\|S3b, signed receipts" "$tmp/out-pf-k2sign" && grep -q pins "$tmp/calls-pf-k2sign" \
+    && pass "compute under k2sign: the pre-flight passes once the signer pinned both nodes and the controller" \
+    || fail "k2sign pre-flight" "rc=$rc $(cat "$tmp/out-pf-k2sign")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign run pf-k2sign-none k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "no controller pinned" "$tmp/out-pf-k2sign-none" && grep -q "L1's node k2n7-vin is not pinned" "$tmp/out-pf-k2sign-none" \
+    && grep -q "V1's node k2n9-vin is not pinned" "$tmp/out-pf-k2sign-none" \
+    && pass "compute under k2sign, nothing pinned: refused before any build, with each pin command" \
+    || fail "k2sign no pins" "rc=$rc $(cat "$tmp/out-pf-k2sign-none")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": [{"name": "k2n7-vin", "fp": "aa"}]}' run pf-k2sign-v1 k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "V1's node k2n9-vin is not pinned" "$tmp/out-pf-k2sign-v1" && ! grep -q "L1's node" "$tmp/out-pf-k2sign-v1" \
+    && pass "compute under k2sign, the V1 node not pinned: refused" || fail "k2sign V1 pin" "rc=$rc $(cat "$tmp/out-pf-k2sign-v1")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS="$PINS_OK" STUB_VERIFY='' run pf-k2sign-nov1 k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "signs a compute-built" "$tmp/out-pf-k2sign-nov1" && ! grep -q pins "$tmp/calls-pf-k2sign-nov1" \
+    && pass "compute under k2sign without V1 (K2_COMPUTE_VERIFY_NODE=none): refused (the signer needs the dual build)" \
+    || fail "k2sign no V1" "rc=$rc $(cat "$tmp/out-pf-k2sign-nov1")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS_FAIL=1 run pf-k2sign-old k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "can't list its K2 Compute pins" "$tmp/out-pf-k2sign-old" \
+    && pass "compute under an older signer (no compute-pins verb): refused, re-install from this commit" || fail "k2sign old signer" "rc=$rc $(cat "$tmp/out-pf-k2sign-old")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS="$PINS_OK" STUB_COLLECT_FAIL=1 \
+    run pf-k2sign-bad 'k2_linux_builds_preflight; k2_shadow_start; k2_shadow_collect; echo AFTER')"
+[ "$rc" = 1 ] && grep -q "Signing user: compute builds" "$tmp/out-pf-k2sign-bad" \
+    && grep -q "FATAL (K2 Compute, stage 1): not every compute build verified" "$tmp/out-pf-k2sign-bad" && ! grep -q AFTER "$tmp/out-pf-k2sign-bad" \
+    && pass "compute under k2sign: through the pre-flight, then stopped at a bad verdict (Step 7.9c, before the tag)" \
+    || fail "k2sign bad verdict" "rc=$rc $(cat "$tmp/out-pf-k2sign-bad")"
 rc="$(STUB_VAR=github K2_LINUX_BUILDS=shadow STUB_SIGNER=k2sign run pf-k2sign-sh k2_linux_builds_preflight)"
 [ "$rc" = 0 ] && pass "shadow under the signing user: fine (nothing from compute is signed)" || fail "k2sign shadow" "rc=$rc $(cat "$tmp/out-pf-k2sign-sh")"
 rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_VERIFY='' run pf-nov1 k2_linux_builds_preflight)"

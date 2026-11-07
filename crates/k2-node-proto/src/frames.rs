@@ -1702,6 +1702,26 @@ mod tests {
         assert!(s.verify(SigningKey::generate().unwrap().spki_der()).is_none());
     }
 
+    /// The release signer (scripts/k2sign/k2sign.py, prd-signing-user-v1
+    /// S3b) checks receipts with openssl and its own canonical JSON. This
+    /// vector was signed by openssl over the bytes the signer builds; it
+    /// must verify here, and the Rust canonical form of the parsed receipt
+    /// must be the very body (escapes included), or the two sides disagree.
+    #[test]
+    fn receipt_vector_signed_by_openssl_verifies_and_is_canonical() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/release/fixtures/receipt-vector.json");
+        let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let spki = crypto::pem_decode("PUBLIC KEY", v["public_key_pem"].as_str().unwrap()).unwrap();
+        assert_eq!(crypto::fingerprint_of_spki_der(&spki), v["node_fp"].as_str().unwrap());
+        let s = SignedReceipt { body: v["body"].as_str().unwrap().into(), sig: v["signature"].as_str().unwrap().into() };
+        let r = s.verify(&spki).expect("openssl's signature over the receipt domain bytes verifies");
+        assert_eq!(crate::canonical::to_string(&r).unwrap(), s.body, "Rust's canonical form is the signed body");
+        assert_eq!(r.argv_sha256, argv_sha256(&["bash".into(), "scripts/ci/build-linux-bins.sh".into(), "x86_64".into()]));
+        let tampered = SignedReceipt { body: s.body.replace("\"code\":0", "\"code\":1"), sig: s.sig.clone() };
+        assert!(tampered.verify(&spki).is_none());
+    }
+
     /// Protocol 3 fields are absent when unset: a 0.46.2 plan's digest,
     /// offer, state and enrol request are unchanged (V66).
     #[test]

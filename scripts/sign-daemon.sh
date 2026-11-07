@@ -34,7 +34,12 @@
 #      where compute_release.py wrote <label>.verdict.json after checking
 #      each job's signed receipt; the daemon's sha256 must be in a verdict
 #      with ok:true (and, off --dry, that verdict's tree is the tag's tree:
-#      compute builds release.sh's preview commit, which has that tree);
+#      compute builds release.sh's preview commit, which has that tree).
+#      That check runs as this user, so under K2_SIGNER=k2sign it is only an
+#      early warning: step 1c hands the signing user L1's and V1's
+#      node-signed receipts and the built commit object
+#      (compute_release.py evidence-bundle), and the signer checks them
+#      itself against its pinned node keys (prd-signing-user-v1 S3b);
 #   2. check the sha256, then scripts/lib/check-daemon-asset.py (ELF of the
 #      right arch, exactly one K2_DAEMON_BUILD marker for this version, no
 #      test-keys, k2-ptyd embedded), then the OAuth bake check
@@ -159,10 +164,10 @@ else
 fi
 [ -z "$FROM_DIR" ] || [ -d "$FROM_DIR" ] || die "--from-dir $FROM_DIR is not a directory"
 # Compute verdicts are written as this user and trust the controller's
-# `verified` flag (prd-signing-user-v1 A4): not evidence for the signing user.
-if [ -n "$FROM_DIR" ] && [ "$(k2u_backend)" = k2sign ]; then
-    die "compute builds are not signable through k2sign yet (S3b); K2_SIGNER=keychain signs them (rollback only)"
-fi
+# `verified` flag (prd-signing-user-v1 A4): not evidence for the signing
+# user. Under k2sign the signer gets the node-signed receipts themselves
+# (step 1c below) and checks them against its own pinned node keys (S3b);
+# the verdict check here stays as an early warning.
 if [ -n "$FROM_DIR" ]; then
     [ -n "$VERDICTS" ] && [ -d "$VERDICTS" ] || die "--from-dir needs --compute-verdict <state dir> (compute_release.py's receipt checks): no provenance, no signature"
 fi
@@ -299,6 +304,21 @@ if [ "${#gh_needed[@]}" -gt 0 ]; then
     pats=()
     for a in "${gh_needed[@]}"; do pats+=(-p "$a"); done
     gh release download "$TAG" -R "$REPO" "${pats[@]}" -D "$ASSETS" --clobber
+fi
+
+# 1c. K2 Compute evidence for the signing user (prd-signing-user-v1 S3b):
+# L1's and V1's node-signed receipts and the commit L1 built, from the
+# audit dir. The signer checks every one of them itself (pinned node keys,
+# this Mac's controller, the tag's tree on the approved base, the build
+# command, the V1 match) and refuses anything else; then each compute-built
+# x86 daemon signs only if its bytes are L1's signed artifact.
+if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/k2-daemon-linux-x86_64" ] && [ "$(k2u_backend)" = k2sign ]; then
+    python3 -I "$ROOT/scripts/ci/compute_release.py" evidence-bundle --state "$VERDICTS" --git "$SRC_DIR" \
+        > "$WORK/compute-evidence.json" || die "can't build the K2 Compute evidence bundle from $VERDICTS (above) — not signing"
+    k2u_compute_evidence "$VERSION" "$WORK/compute-evidence.json" \
+        || die "the signing user refused the K2 Compute evidence (above) — not signing"
+    cp "$WORK/compute-evidence.registered.json" "$VERDICTS/k2sign-compute-evidence.json" \
+        || log "WARNING: could not copy the signer's compute-evidence answer into $VERDICTS (audit copy only)"
 fi
 
 # 2. Check, 3. sign.

@@ -125,6 +125,27 @@ k2u_k2sign() {
     fi
 }
 
+# k2sign backend, K2 Compute builds (prd-signing-user-v1 S3b): hand the
+# signer a release's evidence bundle (compute_release.py evidence-bundle:
+# L1 + V1 node-signed receipts and the built commit object). The signer
+# checks all of it itself and from then on signs that version's
+# compute-built x86 daemon only on it.
+#   k2u_compute_evidence <version> <bundle.json>
+k2u_compute_evidence() {
+    local version="$1" bundle="$2" out
+    [ "$(k2u_backend)" = k2sign ] || { k2u_fail "k2u_compute_evidence: only the k2sign backend takes compute evidence"; return 1; }
+    [ -s "$bundle" ] || { k2u_fail "k2u_compute_evidence: no bundle at $bundle"; return 1; }
+    out="$(k2u_k2sign compute-evidence "$version" < "$bundle")" || { k2u_fail "the signer refused the K2 Compute evidence for $version (above)"; return 1; }
+    printf '%s\n' "$out" > "${bundle%.json}.registered.json"
+    k2u_log "the signer checked and registered the K2 Compute evidence for $version"
+}
+
+# The signing user's compute pins as JSON ({"controller", "nodes": [{name, fp}]}).
+k2u_compute_pins() {
+    [ "$(k2u_backend)" = k2sign ] || { k2u_fail "k2u_compute_pins: k2sign backend only"; return 1; }
+    k2u_k2sign compute-pins
+}
+
 # The signing key must never reach a build. release.sh calls this right
 # after it sources .env, before any build step.
 k2u_env_guard() {

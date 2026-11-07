@@ -9,6 +9,9 @@
 #   sudo /usr/local/libexec/k2sign/k2sign-admin import u1 ~/.tauri/k2so-updater.key
 #   sudo /usr/local/libexec/k2sign/k2sign-admin approve <version> <base> <asset>... [--windows] [--reapprove]
 #   sudo /usr/local/libexec/k2sign/k2sign-admin repin
+#   sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <fp>        (S3b)
+#   sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node <name> /abs/node.pem
+#   sudo /usr/local/libexec/k2sign/k2sign-admin unpin-compute-node <name>
 #
 # Same fixed environment as k2sign; k2sign.py refuses its test mode as root.
 set -u

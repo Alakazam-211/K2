@@ -376,6 +376,17 @@ async fn compute_end_to_end_with_the_real_node() {
     let r = get(port, "/cli/compute/jobs/receipt", &agent, &format!("job={job}")).await;
     assert_eq!(j(&r)["verified"], true, "{}", r.body);
     assert_eq!(j(&r)["receipt"]["exit"]["code"], 3);
+    // S3b: the exact signed bytes and the node key ride along, so a checker
+    // outside the daemon (the release signer) verifies without re-serializing.
+    let rv = j(&r);
+    let body = rv["body"].as_str().expect("receipt body text");
+    let parsed: Value = serde_json::from_str(body).expect("body is JSON");
+    assert_eq!(parsed, rv["receipt"], "body and receipt disagree");
+    let pem = rv["node_public_key_pem"].as_str().expect("node public key pem");
+    let spki = k2_node_proto::crypto::pem_decode("PUBLIC KEY", pem).expect("pem");
+    assert_eq!(k2_node_proto::crypto::fingerprint_of_spki_der(&spki), parsed["node_fp"].as_str().unwrap());
+    let signed = k2_node_proto::frames::SignedReceipt { body: body.to_string(), sig: rv["signature"].as_str().unwrap().to_string() };
+    assert!(signed.verify(&spki).is_some(), "the route's body + signature verify with the node's key");
     // Another workspace's agent can't see it.
     let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": other.id, "toggle": "compute", "value": true})).await;
     assert_eq!(r.status, 200);

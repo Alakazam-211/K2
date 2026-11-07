@@ -345,7 +345,7 @@ if [ "$DRY" = 1 ]; then
 fi
 {
     for f in k2sign k2sign-admin k2sign.py minisign gh gh-release.zip check-daemon-asset.py; do printf '%s  libexec/%s\n' "$(sha256 "$LIBEXEC/$f")" "$f"; done
-    for f in policy pubkeys approver.pem; do
+    for f in policy pubkeys approver.pem compute-pins; do
         [ -f "$ETC/$f" ] && printf '%s  etc/%s\n' "$(sha256 "$ETC/$f")" "$f"
     done
 } > "$WORK/pins"

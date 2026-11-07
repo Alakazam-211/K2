@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The signing lane's gates in one place, for a compute node:
 #   bash tests/release/gates.sh rust     # -D warnings check (workspace, all targets, no k2) + k2-release-keys
-#   bash tests/release/gates.sh shell    # tests/packaging/updater-signing.sh + tests/release/k2sign-*.sh
+#   bash tests/release/gates.sh shell    # tests/packaging/{updater-signing,release-compute-mode}.sh + tests/release/k2sign-*.sh
 #   bash tests/release/gates.sh k2sign   # tests/release/k2sign-*.sh only (macOS: the signer is Mac tooling)
 #   bash tests/release/gates.sh all
 # Every step must pass; the first failure ends the run with its exit code.
@@ -25,6 +25,7 @@ k2sign_tests() {
 }
 shell_tests() {
     step bash tests/packaging/updater-signing.sh
+    step bash tests/packaging/release-compute-mode.sh
     k2sign_tests
 }
 case "$what" in

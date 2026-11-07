@@ -405,7 +405,11 @@ fn a_secret_job_runs_as_its_own_uid_and_nothing_else_reads_it() {
     let acl = String::from_utf8(std::process::Command::new("getfacl").args(["-p", "-c"]).arg(&a.root).output().unwrap().stdout).unwrap();
     assert!(acl.lines().any(|l| l == "group::---") && acl.lines().any(|l| l == "other::---"), "{acl}");
     assert!(acl.lines().any(|l| l == "user:k2nodet:rwx"), "{acl}");
-    assert!(!acl.contains("group:k2t-1"), "the slot's group has no way in: {acl}");
+    assert!(!acl.contains("group:k2t-1"), "the slot's group has no way in, nor into what it makes there: {acl}");
+    assert!(acl.lines().any(|l| l == "default:group::---") && acl.lines().any(|l| l == "default:user:k2nodet:rwx"), "{acl}");
+    // What it made at its top: the node user reads it, the slot's group doesn't.
+    let facl = String::from_utf8(std::process::Command::new("getfacl").args(["-p", "-c"]).arg(a.root.join("secret.txt")).output().unwrap().stdout).unwrap();
+    assert!(!facl.contains("group:k2t-1") && facl.lines().any(|l| l.starts_with("user:k2nodet:")), "{facl}");
     // Control: root reads its env and its file.
     let environ = std::fs::read(format!("/proc/{pid}/environ")).unwrap();
     assert!(environ.windows(18).any(|w| w == b"SECRET-a-env-value"), "control: the value is in its environ");

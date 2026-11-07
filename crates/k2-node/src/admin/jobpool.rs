@@ -400,7 +400,11 @@ impl Executor {
     pub(crate) fn job_uid_take_tree(&self, root: &Path, uid: u32, gid: u32) -> Result<(), AdminRefusal> {
         crate::wall::reclaim(root, uid, gid).map_err(|e| refuse(code::FAILED, e))?;
         let setfacl = jobs::find_program_in_sbin("setfacl").ok_or_else(|| refuse(code::NOT_CONFIGURED, "setfacl not found"))?;
-        let acl = format!("u::rwx,g::---,o::---,u:{}:rwx,m::rwx", self.node_user());
+        // The default ACL too: the root inherited `d:g:k2t-<slot>:rwx` from
+        // the slot's `jobs/`, which would hand the slot's group every file
+        // the job makes at its top (root e2e, 2026-11-07).
+        let n = self.node_user();
+        let acl = format!("u::rwx,g::---,o::---,u:{n}:rwx,m::rwx,d:u::rwx,d:g::---,d:o::---,d:u:{n}:rwx,d:m::rwx");
         super::exec::run_fixed(&setfacl.display().to_string(), &["-P", "--set", &acl, &root.display().to_string()]).map_err(|e| refuse(code::FAILED, e))
     }
 

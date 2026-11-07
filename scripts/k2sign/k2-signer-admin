@@ -1,0 +1,31 @@
+#!/bin/bash
+# k2-signer-admin — root-only admin verbs for k2-signer (a person with the
+# admin password, at the signing Mac). Installed by
+# scripts/k2sign/install-k2-signer.sh as
+# /usr/local/libexec/k2-signer/k2-signer-admin (root:wheel 0755). No sudoers
+# rule covers it.
+#
+#   sudo …/k2-signer-admin adopt-k2sign                       (once: k2sign's controller pin + approver)
+#   sudo …/k2-signer-admin pair-begin [<label>]               then on the K2 server: k2 ci signer add <code>
+#   sudo …/k2-signer-admin pair-accept <6 digits> < offer.json
+#   sudo …/k2-signer-admin trust-owner <fp read on the owner's screen> <ed25519:key> [<label>]
+#   sudo …/k2-signer-admin roster-accept <owner fp> [<digest>] < evidence.json
+#   sudo …/k2-signer-admin policy-approve <project> [<sha256>] < policy.toml
+#   sudo …/k2-signer-admin generate-key <project> <slot> | import-key <project> <slot> </abs/key>
+#   sudo …/k2-signer-admin clear-evidence <project> <version>   unpair <fp>   untrust-owner <fp>   repin
+#
+# Same fixed environment as k2-signer; the binary refuses its test mode as root.
+set -u
+root="${K2_SIGNER_TEST_ROOT:-}"
+keep=()
+if [ -n "$root" ]; then
+    keep+=("K2_SIGNER_TEST_ROOT=$root")
+    for v in K2_SIGNER_TEST_NOW K2_SIGNER_TEST_SIGNER_USER K2_SIGNER_TEST_GITHUB_API; do
+        if [ -n "${!v:-}" ]; then keep+=("$v=${!v}"); fi
+    done
+fi
+umask 077
+cd / || exit 4
+exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$root/var/k2sign" LANG=C \
+    ${keep[@]+"${keep[@]}"} \
+    "$root/usr/local/libexec/k2-signer/k2-signer-bin" admin "$@"

@@ -137,18 +137,30 @@ func approve(challengePath: String, outPath: String) {
     guard let data = FileManager.default.contents(atPath: challengePath), data.count < 16384 else {
         fail("can't read the challenge \(challengePath)", errFile: errFile)
     }
+    // Two kinds: k2sign's K2 release, and k2-signer's client project release
+    // (prd-ci-on-compute-for-clients-v1 C4, V29), which names its project so
+    // the sheet never reads "K2" for another project's files.
     guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          obj["kind"] as? String == "k2-release-approval",
+          let kind = obj["kind"] as? String,
+          kind == "k2-release-approval" || kind == "k2-signer-approval",
           let version = obj["version"] as? String,
           let base = obj["base_commit"] as? String,
           let assets = obj["assets"] as? [String],
           let expires = obj["expires"] as? String else {
         fail("the challenge is not a K2 release approval", errFile: errFile)
     }
+    var what = "K2 release"
+    if kind == "k2-signer-approval" {
+        guard let project = obj["project"] as? String, !project.isEmpty, project.count <= 63,
+              project.allSatisfy({ $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-") }) else {
+            fail("the challenge names no project", errFile: errFile)
+        }
+        what = "project \(project) release"
+    }
     let windows = (obj["windows"] as? Bool) ?? false
     let re = (obj["reapproval"] as? Bool) ?? false
     let until = expires.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "Z", with: " UTC")
-    var reason = "\(re ? "RE-APPROVE: " : "")approve K2 release \(version) (base \(base.prefix(7))): sign \(assets.count) update files until \(until)"
+    var reason = "\(re ? "RE-APPROVE: " : "")approve \(what) \(version) (base \(base.prefix(7))): sign \(assets.count) update files until \(until)"
     if windows { reason += ", including the Windows setup (no independent check)" }
     guard let blob = FileManager.default.contents(atPath: blobURL.path) else {
         fail("not enrolled (no \(blobURL.path)); open K2 Release Approve with --enrol first", errFile: errFile)

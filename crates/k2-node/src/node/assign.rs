@@ -456,6 +456,7 @@ impl Node {
             artifacts: Vec::new(),
             secret_env: Vec::new(),
             tools_used: Default::default(),
+            run: None,
         };
         SignedReceipt::sign(&self.key, &receipt)
     }

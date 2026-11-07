@@ -1,0 +1,40 @@
+# A signer policy (docs/ci-formats-v1.md §8) that accepts ci-formats-v1.json's evidence bundle.
+version = 1
+project = "acme-desktop"
+controllers = ["d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1"]
+owners = ["8745fa84cf4f4fd4cfcdcef242e45e9646777b7279e085207687874fe0f1f772"]
+workspaces = ["ws-client"]
+receipt_max_hours = 24
+roster_max_age_hours = 168
+roster_changes = "ask"
+seat_moves = "ask"
+taint_basis = ["owner_attested", "rekeyed", "self_clean"]
+
+[source]
+kind = "github_tag"
+repo = "acme/desktop"
+tag_prefix = "v"
+
+[build.linux-x86_64]
+argv = ["bash", "scripts/ci/build.sh", "x86_64"]
+needs = ["rust@{rust_pin}"]
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+secrets = ["BUILD_API_KEY"]
+isolation = ["job_uid", "exclusive"]
+walls = ["job_user"]
+dual = ["dist/acme"]
+independent = ["host"]
+
+[build.linux-x86_64.secret_sha256]
+BUILD_API_KEY = "4c806362b613f7496abf284146efd31da90e4b16169fe001841ca17290f427c4"
+
+[assets.acme]
+key = "updater"
+build = "linux-x86_64"
+artifact = "dist/acme"
+check = "artifact"
+
+[keys.updater]
+kind = "minisign"
+public = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"

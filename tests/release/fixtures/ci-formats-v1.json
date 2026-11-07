@@ -1,0 +1,311 @@
+{
+  "comment": "Golden vectors for docs/ci-formats-v1.md (prd-ci-on-compute-for-clients-v1 C-1). TEST KEYS ONLY. Every body is canonical JSON; sig covers domain || 0x00 || u32be(len(body)) || body. p256: ECDSA P-256 SHA-256 DER, base64 (randomized: verify it, don't compare it). ed25519: raw 64 bytes, base64 (deterministic: re-sign with seed_hex and compare). Written by make-ci-formats-v1.py; checked by crates/k2-node-proto/tests/ci_formats_v1.rs and tests/release/k2sign-ci-formats.sh.",
+  "commit_object_b64": "dHJlZSA1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1CnBhcmVudCA2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2CmF1dGhvciBjaSA8Y2lAZXhhbXBsZS5jb20+IDE4MDAwMDA2NTAgKzAwMDAKY29tbWl0dGVyIGNpIDxjaUBleGFtcGxlLmNvbT4gMTgwMDAwMDY1MCArMDAwMAoKcmVsZWFzZSAxLjIuMwo=",
+  "evidence_bundle": {
+    "attestations": [
+      {
+        "body": "{\"approved_by\":\"owner\",\"at\":1800000300,\"checked\":\"install log (no --no-job-wall) and the job ledger: no job under wall none (vérifié)\",\"installed_with_wall\":true,\"key_epoch\":0,\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"owner_id\":\"owner.example\",\"roster_key\":\"ed25519:Gxpry5a1Mj7atv2i1SHEMgje50rIbWTFP+GRYM1k/R8=\",\"statement_digest\":\"sha256:59c763a69512c5b996cd93db2f2425ab44449ab93d1a63c72332c2ee662f4c72\",\"unwalled_jobs_seen\":false,\"v\":1}",
+        "sig": "l5EmKor2ls0kuM9GyeTpqSIfUfie1Xy+lmUImp9CAXWJdaLUp0nuPlTr0lON1C/MLIBlH7c6J23s4UiD5pRCBQ=="
+      }
+    ],
+    "controller_fp": "d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1",
+    "created_at": 1800001400,
+    "kind": "k2-ci-evidence",
+    "pairing_pins": {
+      "7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==",
+      "916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHg445G6UFGEvjhktZta6xS3AfLm+zQR65hi1aCY5Nm13OpNuuat6M1Zjnm84j58Ot+ZmSF17wtYOPhswMfpiPQ=="
+    },
+    "project": "acme-desktop",
+    "receipts": {
+      "L1": {
+        "body": "{\"argv_sha256\":\"9e7121ff8382fc584ea0a9e01452a5aa8c84fe74971cdd3a734da45d246f08ca\",\"artifacts\":[{\"bytes\":4096,\"name\":\"dist/acme\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"}],\"attempt\":1,\"boot_id\":\"boot-7d8d77ba\",\"controller_fp\":\"d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1\",\"ended_at\":1800001310,\"env_names\":[\"BUILD_COMMIT\",\"BUILD_TREE\",\"CI\",\"HOME\",\"PATH\"],\"exit\":{\"code\":0,\"signal\":null},\"generation\":1,\"job_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"log\":{\"bytes\":1234,\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\",\"truncated\":false},\"node_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"plan_digest\":\"sha256:0e99ce0394b86532306c3b3cee7557727e9aec9ddd02fc335bfc9ef9397b0d05\",\"run\":{\"isolation\":\"job_uid\",\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"key_epoch\":1,\"lane\":\"ci-standard\",\"roster_seq_seen\":2,\"statement_digest\":\"sha256:873a937930bacc9200d71a6ad1b062578d064c1d0339b3c7e6c9dc4f4ba1eb62\",\"tenant_slot\":1,\"uid_index\":2,\"wall\":\"job_user\"},\"secret_env\":[\"BUILD_API_KEY\"],\"src\":{\"commit\":\"a147261b1d76c6e53643f9a74fbe0ffcb25912cf\",\"dirty_sha256\":null,\"slot\":0,\"tree\":\"5555555555555555555555555555555555555555\",\"warmth\":\"private\"},\"started_at\":1800000710,\"state\":\"done\",\"tools\":{\"rustc\":\"1.99.1\"},\"tools_used\":{\"rustc\":\"1.99.1\"},\"v\":2,\"workspace_id\":\"ws-client\"}",
+        "build": "linux-x86_64",
+        "plan": {
+          "argv": [
+            "bash",
+            "scripts/ci/build.sh",
+            "x86_64"
+          ],
+          "artifacts": [
+            "dist/*"
+          ],
+          "created_at": 1800000700,
+          "cwd": null,
+          "env": {
+            "BUILD_COMMIT": "a147261b1d76c6e53643f9a74fbe0ffcb25912cf",
+            "BUILD_TREE": "5555555555555555555555555555555555555555"
+          },
+          "exclusive": false,
+          "job_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "limits": {
+            "cpu_millis": 4000,
+            "disk_bytes": 107374182400,
+            "log_cap_bytes": 67108864,
+            "max_secs": 7200,
+            "mem_bytes": 8589934592
+          },
+          "needs": [
+            "rust@1.99.1"
+          ],
+          "node_id": "node-a",
+          "receipt_v": 2,
+          "requested_by": "agent",
+          "secret_env": [
+            "BUILD_API_KEY"
+          ],
+          "src": {
+            "commit": "a147261b1d76c6e53643f9a74fbe0ffcb25912cf",
+            "dirty": null,
+            "project_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "remote_url": null,
+            "slots": 1
+          },
+          "tier": "ci",
+          "workspace_id": "ws-client",
+          "workspace_label": "client"
+        },
+        "role": "build",
+        "sig": "MEUCIHDxvz12pQsIy9+7mojODqCW2TDGxPVSSHeCHhh35j6VAiEA8bmd7lcb/ghqt1kwfTAWe4k7q56GiIAOf+0RYqv6rYU="
+      },
+      "V1": {
+        "body": "{\"argv_sha256\":\"9e7121ff8382fc584ea0a9e01452a5aa8c84fe74971cdd3a734da45d246f08ca\",\"artifacts\":[{\"bytes\":4096,\"name\":\"dist/acme\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"}],\"attempt\":1,\"boot_id\":\"boot-916255f2\",\"controller_fp\":\"d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1\",\"ended_at\":1800001320,\"env_names\":[\"BUILD_COMMIT\",\"BUILD_TREE\",\"CI\",\"HOME\",\"PATH\"],\"exit\":{\"code\":0,\"signal\":null},\"generation\":1,\"job_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"log\":{\"bytes\":1234,\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\",\"truncated\":false},\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"plan_digest\":\"sha256:718b17393954f4a33152b73576b6375d6f035a564183d53d00289eb41f17e452\",\"run\":{\"isolation\":\"exclusive\",\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"key_epoch\":0,\"lane\":\"ci-standard\",\"roster_seq_seen\":2,\"statement_digest\":\"sha256:59c763a69512c5b996cd93db2f2425ab44449ab93d1a63c72332c2ee662f4c72\",\"tenant_slot\":1,\"uid_index\":null,\"wall\":\"job_user\"},\"secret_env\":[\"BUILD_API_KEY\"],\"src\":{\"commit\":\"a147261b1d76c6e53643f9a74fbe0ffcb25912cf\",\"dirty_sha256\":null,\"slot\":0,\"tree\":\"5555555555555555555555555555555555555555\",\"warmth\":\"private\"},\"started_at\":1800000720,\"state\":\"done\",\"tools\":{\"rustc\":\"1.99.1\"},\"tools_used\":{\"rustc\":\"1.99.1\"},\"v\":2,\"workspace_id\":\"ws-client\"}",
+        "build": "linux-x86_64",
+        "plan": {
+          "argv": [
+            "bash",
+            "scripts/ci/build.sh",
+            "x86_64"
+          ],
+          "artifacts": [
+            "dist/*"
+          ],
+          "created_at": 1800000700,
+          "cwd": null,
+          "env": {
+            "BUILD_COMMIT": "a147261b1d76c6e53643f9a74fbe0ffcb25912cf",
+            "BUILD_TREE": "5555555555555555555555555555555555555555"
+          },
+          "exclusive": false,
+          "job_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "limits": {
+            "cpu_millis": 4000,
+            "disk_bytes": 107374182400,
+            "log_cap_bytes": 67108864,
+            "max_secs": 7200,
+            "mem_bytes": 8589934592
+          },
+          "needs": [
+            "rust@1.99.1"
+          ],
+          "node_id": "node-b",
+          "receipt_v": 2,
+          "requested_by": "agent",
+          "secret_env": [
+            "BUILD_API_KEY"
+          ],
+          "src": {
+            "commit": "a147261b1d76c6e53643f9a74fbe0ffcb25912cf",
+            "dirty": null,
+            "project_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "remote_url": null,
+            "slots": 1
+          },
+          "tier": "ci",
+          "workspace_id": "ws-client",
+          "workspace_label": "client"
+        },
+        "role": "verify",
+        "sig": "MEQCIAENb8clM6qyCvLxmkCyMJIDrGeXRXEmst9ialPfaO9IAiBgxO8by3xNQpRpir/wSKSVmFVuM9P9flm9y77dyoDuuw=="
+      }
+    },
+    "rosters": [
+      {
+        "body": "{\"entries\":[{\"admin_reach\":[\"fleet-ssh\"],\"attestation_digest\":null,\"host\":\"host-a\",\"key_epoch\":1,\"name\":\"node-a\",\"node_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==\",\"pod\":null,\"point\":null,\"provider\":\"provider-x\",\"revoked_reason\":null,\"site\":\"site-1\",\"statement_digest\":\"sha256:873a937930bacc9200d71a6ad1b062578d064c1d0339b3c7e6c9dc4f4ba1eb62\",\"status\":\"active\",\"taint_basis\":\"rekeyed\",\"valid_from\":1800000500,\"valid_to\":null},{\"admin_reach\":[\"fleet-ssh\"],\"attestation_digest\":\"sha256:224b16022f1690d86839e4dcaf17b66db57d67fea4266babbfb87934485fbbf9\",\"host\":\"host-b\",\"key_epoch\":0,\"name\":\"node-b\",\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHg445G6UFGEvjhktZta6xS3AfLm+zQR65hi1aCY5Nm13OpNuuat6M1Zjnm84j58Ot+ZmSF17wtYOPhswMfpiPQ==\",\"pod\":null,\"point\":null,\"provider\":\"provider-x\",\"revoked_reason\":null,\"site\":\"site-1\",\"statement_digest\":\"sha256:59c763a69512c5b996cd93db2f2425ab44449ab93d1a63c72332c2ee662f4c72\",\"status\":\"active\",\"taint_basis\":\"owner_attested\",\"valid_from\":1800000000,\"valid_to\":null},{\"admin_reach\":[\"fleet-ssh\"],\"attestation_digest\":null,\"host\":\"host-a\",\"key_epoch\":0,\"name\":\"node-a\",\"node_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElgGyt59X+6yOip26Ki/MrH4LB/LgI5v3eG4ErKDdyG1kKJrC8I7zmJIxAqaKOomc5yfRZbHQKaGCUJz1SFqGDA==\",\"pod\":null,\"point\":null,\"provider\":\"provider-x\",\"revoked_reason\":null,\"site\":\"site-1\",\"statement_digest\":\"sha256:6d29c354071dbb79a55bd3739cbbc60986c7c160907630ee82811aa86f300b85\",\"status\":\"retired\",\"taint_basis\":null,\"valid_from\":1800000000,\"valid_to\":1800000500}],\"issued_at\":1800000600,\"owner_id\":\"owner.example\",\"owner_server_fp\":\"362c73057cf06b7f19151a075f160f769e7fe834922a45d88de81ce248f3fe2b\",\"prev_digest\":\"sha256:0ba08326d9a0884e09ec8b472ee61b6c8c1faf914adfc4c9d079fcd31327e86c\",\"roster_key\":\"ed25519:Gxpry5a1Mj7atv2i1SHEMgje50rIbWTFP+GRYM1k/R8=\",\"seq\":2,\"v\":1}",
+        "sig": "rfJsFXGCtihEz19YUq97fcKc0Jk5ElO4Bo1CxqE3mklVhs0asRT2/HZyga6YnbgujS8sDzLiDBdc9rlpOzyPCg=="
+      }
+    ],
+    "rotations": [
+      {
+        "body": "{\"at\":1800000500,\"new_epoch\":1,\"new_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"new_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==\",\"old_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"reason\":\"wall\",\"v\":1}",
+        "sig": "MEYCIQCVJS160OwnMcuvwrWEixena4izRIqp7kZ9An8s93iZNAIhAL4eW5F/WKWjFs3AfVt7V9xyy9hU6pm0EgJBk5fKEySL"
+      }
+    ],
+    "run_id": "run-1",
+    "seats": [
+      {
+        "body": "{\"client_fp\":\"d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1\",\"client_label\":\"client.example\",\"issued_at\":1800000600,\"lane\":\"ci-standard\",\"line\":null,\"nodes\":[\"node-a\",\"node-b\"],\"owner_id\":\"owner.example\",\"pod\":null,\"roster_key\":\"ed25519:Gxpry5a1Mj7atv2i1SHEMgje50rIbWTFP+GRYM1k/R8=\",\"roster_seq\":2,\"seat_id\":\"seat-1\",\"state\":\"active\",\"v\":1}",
+        "sig": "heTwBnJ57STZJYVKJOJoeeE813txngn3P/2bACNrpDuSkQiZRzUF5BkAqfPJuqSr94OfVEqMt9QujLFlIwZOAQ=="
+      }
+    ],
+    "source": {
+      "commit": "a147261b1d76c6e53643f9a74fbe0ffcb25912cf",
+      "commit_object": "dHJlZSA1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1CnBhcmVudCA2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2CmF1dGhvciBjaSA8Y2lAZXhhbXBsZS5jb20+IDE4MDAwMDA2NTAgKzAwMDAKY29tbWl0dGVyIGNpIDxjaUBleGFtcGxlLmNvbT4gMTgwMDAwMDY1MCArMDAwMAoKcmVsZWFzZSAxLjIuMwo=",
+      "tree": "5555555555555555555555555555555555555555"
+    },
+    "statements": [
+      {
+        "body": "{\"arch\":\"x86_64\",\"dev\":false,\"distro\":\"ubuntu\",\"distro_version\":\"24.04\",\"host_id\":\"2c02238df1f3aaf6b8bdf6c847fd76dbd9c3e110208d70cee23a766598948dbb\",\"issued_at\":1800000510,\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"kernel\":\"6.8.0-45-generic\",\"key_born_at\":1800000500,\"key_epoch\":1,\"key_exposure\":{\"job_readable\":false,\"mode\":384,\"owner\":\"k2node\",\"store\":\"file\"},\"node_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==\",\"os\":\"linux\",\"prev_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"protocol\":9,\"ptrace_scope\":1,\"taint\":\"clean\",\"v\":1,\"wall\":\"job_user\"}",
+        "sig": "MEQCIFvEtw0fUBhmhYb8qrB4KMVvio3tA9ykRuFDQbikuKDIAiAXtsjF4N+uRthaGvb6qejAa9uJW+qUi09yzjQSsJp70w=="
+      },
+      {
+        "body": "{\"arch\":\"x86_64\",\"dev\":false,\"distro\":\"ubuntu\",\"distro_version\":\"24.04\",\"host_id\":\"c068191f07f4b42cd2234c1a761c411bb1f05f06c44e78963952edc783179b9d\",\"issued_at\":1800000200,\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"kernel\":\"6.8.0-45-generic\",\"key_born_at\":1800000000,\"key_epoch\":0,\"key_exposure\":{\"job_readable\":false,\"mode\":384,\"owner\":\"k2node\",\"store\":\"file\"},\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHg445G6UFGEvjhktZta6xS3AfLm+zQR65hi1aCY5Nm13OpNuuat6M1Zjnm84j58Ot+ZmSF17wtYOPhswMfpiPQ==\",\"os\":\"linux\",\"prev_fp\":null,\"protocol\":9,\"ptrace_scope\":1,\"taint\":\"unknown\",\"v\":1,\"wall\":\"job_user\"}",
+        "sig": "MEYCIQDNlF0EVy5p6z0uLjth/DmBh6ylc+FdYzQiTEi51CSB4wIhAN+Q91Swxxt+KXQHCM93bKxbxocdTzvJsS08nbbY4plI"
+      },
+      {
+        "body": "{\"arch\":\"x86_64\",\"dev\":false,\"distro\":\"ubuntu\",\"distro_version\":\"24.04\",\"host_id\":\"2c02238df1f3aaf6b8bdf6c847fd76dbd9c3e110208d70cee23a766598948dbb\",\"issued_at\":1800000100,\"k2node_commit\":null,\"k2node_version\":\"0.46.9\",\"kernel\":\"6.8.0-45-generic\",\"key_born_at\":1800000000,\"key_epoch\":0,\"key_exposure\":{\"job_readable\":false,\"mode\":384,\"owner\":\"k2node\",\"store\":\"file\"},\"node_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElgGyt59X+6yOip26Ki/MrH4LB/LgI5v3eG4ErKDdyG1kKJrC8I7zmJIxAqaKOomc5yfRZbHQKaGCUJz1SFqGDA==\",\"os\":\"linux\",\"prev_fp\":null,\"protocol\":9,\"ptrace_scope\":1,\"taint\":\"unknown\",\"v\":1,\"wall\":\"job_user\"}",
+        "sig": "MEQCIGlq6UgWo0ETsgGA9CANtahrE0xyDIc/xtrOSMKaYrgAAiBWjPN2y61caRuNpTrlIfiUftcdZmBw61I7nrHbRtEX3Q=="
+      }
+    ],
+    "v": 2,
+    "version": "1.2.3"
+  },
+  "keys": {
+    "controller": {
+      "alg": "p256",
+      "fp": "d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1",
+      "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg1wJL6CADhPlHq6ig\nkiJ+cwr/k8gYUTuO1QdtMfdQCNihRANCAASl07lLticAl4m6AE9c/G4GpPssF1Ej\ncT4WC64gvjYOjiwzNiaiSakQJApxjWU0E2Wk6ZRHy87AVAXmVyZEYiY+\n-----END PRIVATE KEY-----\n",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpdO5S7YnAJeJugBPXPxuBqT7LBdR\nI3E+FguuIL42Do4sMzYmokmpECQKcY1lNBNlpOmUR8vOwFQF5lcmRGImPg==\n-----END PUBLIC KEY-----\n",
+      "spki_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpdO5S7YnAJeJugBPXPxuBqT7LBdRI3E+FguuIL42Do4sMzYmokmpECQKcY1lNBNlpOmUR8vOwFQF5lcmRGImPg=="
+    },
+    "node_a_epoch0": {
+      "alg": "p256",
+      "fp": "dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a",
+      "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgN1AAy+v6YBcmjIXX\nUfcnDwjcFS6PNj999yN2F+iX9DWhRANCAASWAbK3n1f7rI6KnboqL8ysfgsH8uAj\nm/d4bgSsoN3IbWQomsLwjvOYkjECpoo6iZznJ9FlsdApoYJQnPVIWoYM\n-----END PRIVATE KEY-----\n",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElgGyt59X+6yOip26Ki/MrH4LB/Lg\nI5v3eG4ErKDdyG1kKJrC8I7zmJIxAqaKOomc5yfRZbHQKaGCUJz1SFqGDA==\n-----END PUBLIC KEY-----\n",
+      "spki_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElgGyt59X+6yOip26Ki/MrH4LB/LgI5v3eG4ErKDdyG1kKJrC8I7zmJIxAqaKOomc5yfRZbHQKaGCUJz1SFqGDA=="
+    },
+    "node_a_epoch1": {
+      "alg": "p256",
+      "fp": "7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704",
+      "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg+y+5Zu0uQ9ZlpHYl\n2ZW+3hkGCDeFnMj61oPROqHRAG+hRANCAAS8eMcPERrcJ1vNttEqftcOlg/DbOdE\nYHDnMxyiIvhU3BdCR5dwTtm+PODTP8sdo5F3PejemWBcHnIRZDoCTgqZ\n-----END PRIVATE KEY-----\n",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2zn\nRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==\n-----END PUBLIC KEY-----\n",
+      "spki_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ=="
+    },
+    "node_b": {
+      "alg": "p256",
+      "fp": "916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b",
+      "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg1pBweb3HlfE5oHML\nmVuf+Rkf5XQV1mwY+wx8FWdULEuhRANCAAQeDjjkbpQUYS+OGS1m1rrFLcB8ub7N\nBHrmGLVoJjk2bXc6k265q3ozVmOebziPnw635mZIXXvC1g4+GzAx+mI9\n-----END PRIVATE KEY-----\n",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHg445G6UFGEvjhktZta6xS3AfLm+\nzQR65hi1aCY5Nm13OpNuuat6M1Zjnm84j58Ot+ZmSF17wtYOPhswMfpiPQ==\n-----END PUBLIC KEY-----\n",
+      "spki_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHg445G6UFGEvjhktZta6xS3AfLm+zQR65hi1aCY5Nm13OpNuuat6M1Zjnm84j58Ot+ZmSF17wtYOPhswMfpiPQ=="
+    },
+    "roster": {
+      "alg": "ed25519",
+      "fp": "8745fa84cf4f4fd4cfcdcef242e45e9646777b7279e085207687874fe0f1f772",
+      "public": "ed25519:Gxpry5a1Mj7atv2i1SHEMgje50rIbWTFP+GRYM1k/R8=",
+      "seed_hex": "40fb2bf062e5bb5aeff250e87ed4cfe62594a38ac91f55ac558310c23100e40b"
+    }
+  },
+  "owner_server_fp": "362c73057cf06b7f19151a075f160f769e7fe834922a45d88de81ce248f3fe2b",
+  "vectors": [
+    {
+      "alg": "p256",
+      "body": "{\"arch\":\"x86_64\",\"dev\":false,\"distro\":\"ubuntu\",\"distro_version\":\"24.04\",\"host_id\":\"2c02238df1f3aaf6b8bdf6c847fd76dbd9c3e110208d70cee23a766598948dbb\",\"issued_at\":1800000100,\"k2node_commit\":null,\"k2node_version\":\"0.46.9\",\"kernel\":\"6.8.0-45-generic\",\"key_born_at\":1800000000,\"key_epoch\":0,\"key_exposure\":{\"job_readable\":false,\"mode\":384,\"owner\":\"k2node\",\"store\":\"file\"},\"node_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElgGyt59X+6yOip26Ki/MrH4LB/LgI5v3eG4ErKDdyG1kKJrC8I7zmJIxAqaKOomc5yfRZbHQKaGCUJz1SFqGDA==\",\"os\":\"linux\",\"prev_fp\":null,\"protocol\":9,\"ptrace_scope\":1,\"taint\":\"unknown\",\"v\":1,\"wall\":\"job_user\"}",
+      "digest": "sha256:6d29c354071dbb79a55bd3739cbbc60986c7c160907630ee82811aa86f300b85",
+      "domain": "k2-node-statement-v1",
+      "kind": "node_statement",
+      "name": "node_statement_a_epoch0",
+      "sig": "MEQCIGlq6UgWo0ETsgGA9CANtahrE0xyDIc/xtrOSMKaYrgAAiBWjPN2y61caRuNpTrlIfiUftcdZmBw61I7nrHbRtEX3Q==",
+      "signed_bytes_hex": "6b322d6e6f64652d73746174656d656e742d763100000002ab7b2261726368223a227838365f3634222c22646576223a66616c73652c2264697374726f223a227562756e7475222c2264697374726f5f76657273696f6e223a2232342e3034222c22686f73745f6964223a2232633032323338646631663361616636623862646636633834376664373664626439633365313130323038643730636565323361373636353938393438646262222c226973737565645f6174223a313830303030303130302c226b326e6f64655f636f6d6d6974223a6e756c6c2c226b326e6f64655f76657273696f6e223a22302e34362e39222c226b65726e656c223a22362e382e302d34352d67656e65726963222c226b65795f626f726e5f6174223a313830303030303030302c226b65795f65706f6368223a302c226b65795f6578706f73757265223a7b226a6f625f7265616461626c65223a66616c73652c226d6f6465223a3338342c226f776e6572223a226b326e6f6465222c2273746f7265223a2266696c65227d2c226e6f64655f6670223a2264633866643863386532663132373037653835356333326333353532373438326636623330613037396462633835656432646262663863373932626538323261222c226e6f64655f73706b69223a224d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741456c674779743539582b36794f697032364b692f4d7248344c422f4c674935763365473445724b44647947316b4b4a72433849377a6d4a49784171614b4f6f6d63357966525a6248514b614743554a7a315346714744413d3d222c226f73223a226c696e7578222c22707265765f6670223a6e756c6c2c2270726f746f636f6c223a392c227074726163655f73636f7065223a312c227461696e74223a22756e6b6e6f776e222c2276223a312c2277616c6c223a226a6f625f75736572227d",
+      "signer": "node_a_epoch0"
+    },
+    {
+      "alg": "p256",
+      "body": "{\"at\":1800000500,\"new_epoch\":1,\"new_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"new_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==\",\"old_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"reason\":\"wall\",\"v\":1}",
+      "digest": "sha256:5c96f1858c23fa41ab0ba33dd42d81e4e10335298f19284d712eb9e843aa432c",
+      "domain": "k2-node-rotation-v1",
+      "kind": "rotation",
+      "name": "rotation_a",
+      "sig": "MEYCIQCVJS160OwnMcuvwrWEixena4izRIqp7kZ9An8s93iZNAIhAL4eW5F/WKWjFs3AfVt7V9xyy9hU6pm0EgJBk5fKEySL",
+      "signed_bytes_hex": "6b322d6e6f64652d726f746174696f6e2d763100000001577b226174223a313830303030303530302c226e65775f65706f6368223a312c226e65775f6670223a2237643864373762613635633565623564353262313066623937656533386336303331353034303665353465306564623864343161313737303365366337373034222c226e65775f73706b69223a224d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a3044415163445167414576486a4844784561334364627a6262524b6e37584470595077327a6e52474277357a4d636f694c34564e7758516b65586345375a766a7a67307a2f4c48614f52647a336f33706c675842357945575136416b344b6d513d3d222c226f6c645f6670223a2264633866643863386532663132373037653835356333326333353532373438326636623330613037396462633835656432646262663863373932626538323261222c22726561736f6e223a2277616c6c222c2276223a317d",
+      "signer": "node_a_epoch0"
+    },
+    {
+      "alg": "p256",
+      "body": "{\"arch\":\"x86_64\",\"dev\":false,\"distro\":\"ubuntu\",\"distro_version\":\"24.04\",\"host_id\":\"2c02238df1f3aaf6b8bdf6c847fd76dbd9c3e110208d70cee23a766598948dbb\",\"issued_at\":1800000510,\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"kernel\":\"6.8.0-45-generic\",\"key_born_at\":1800000500,\"key_epoch\":1,\"key_exposure\":{\"job_readable\":false,\"mode\":384,\"owner\":\"k2node\",\"store\":\"file\"},\"node_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==\",\"os\":\"linux\",\"prev_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"protocol\":9,\"ptrace_scope\":1,\"taint\":\"clean\",\"v\":1,\"wall\":\"job_user\"}",
+      "digest": "sha256:873a937930bacc9200d71a6ad1b062578d064c1d0339b3c7e6c9dc4f4ba1eb62",
+      "domain": "k2-node-statement-v1",
+      "kind": "node_statement",
+      "name": "node_statement_a_epoch1",
+      "sig": "MEQCIFvEtw0fUBhmhYb8qrB4KMVvio3tA9ykRuFDQbikuKDIAiAXtsjF4N+uRthaGvb6qejAa9uJW+qUi09yzjQSsJp70w==",
+      "signed_bytes_hex": "6b322d6e6f64652d73746174656d656e742d7631000000030e7b2261726368223a227838365f3634222c22646576223a66616c73652c2264697374726f223a227562756e7475222c2264697374726f5f76657273696f6e223a2232342e3034222c22686f73745f6964223a2232633032323338646631663361616636623862646636633834376664373664626439633365313130323038643730636565323361373636353938393438646262222c226973737565645f6174223a313830303030303531302c226b326e6f64655f636f6d6d6974223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434222c226b326e6f64655f76657273696f6e223a22302e34362e3130222c226b65726e656c223a22362e382e302d34352d67656e65726963222c226b65795f626f726e5f6174223a313830303030303530302c226b65795f65706f6368223a312c226b65795f6578706f73757265223a7b226a6f625f7265616461626c65223a66616c73652c226d6f6465223a3338342c226f776e6572223a226b326e6f6465222c2273746f7265223a2266696c65227d2c226e6f64655f6670223a2237643864373762613635633565623564353262313066623937656533386336303331353034303665353465306564623864343161313737303365366337373034222c226e6f64655f73706b69223a224d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a3044415163445167414576486a4844784561334364627a6262524b6e37584470595077327a6e52474277357a4d636f694c34564e7758516b65586345375a766a7a67307a2f4c48614f52647a336f33706c675842357945575136416b344b6d513d3d222c226f73223a226c696e7578222c22707265765f6670223a2264633866643863386532663132373037653835356333326333353532373438326636623330613037396462633835656432646262663863373932626538323261222c2270726f746f636f6c223a392c227074726163655f73636f7065223a312c227461696e74223a22636c65616e222c2276223a312c2277616c6c223a226a6f625f75736572227d",
+      "signer": "node_a_epoch1"
+    },
+    {
+      "alg": "p256",
+      "body": "{\"arch\":\"x86_64\",\"dev\":false,\"distro\":\"ubuntu\",\"distro_version\":\"24.04\",\"host_id\":\"c068191f07f4b42cd2234c1a761c411bb1f05f06c44e78963952edc783179b9d\",\"issued_at\":1800000200,\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"kernel\":\"6.8.0-45-generic\",\"key_born_at\":1800000000,\"key_epoch\":0,\"key_exposure\":{\"job_readable\":false,\"mode\":384,\"owner\":\"k2node\",\"store\":\"file\"},\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHg445G6UFGEvjhktZta6xS3AfLm+zQR65hi1aCY5Nm13OpNuuat6M1Zjnm84j58Ot+ZmSF17wtYOPhswMfpiPQ==\",\"os\":\"linux\",\"prev_fp\":null,\"protocol\":9,\"ptrace_scope\":1,\"taint\":\"unknown\",\"v\":1,\"wall\":\"job_user\"}",
+      "digest": "sha256:59c763a69512c5b996cd93db2f2425ab44449ab93d1a63c72332c2ee662f4c72",
+      "domain": "k2-node-statement-v1",
+      "kind": "node_statement",
+      "name": "node_statement_b",
+      "sig": "MEYCIQDNlF0EVy5p6z0uLjth/DmBh6ylc+FdYzQiTEi51CSB4wIhAN+Q91Swxxt+KXQHCM93bKxbxocdTzvJsS08nbbY4plI",
+      "signed_bytes_hex": "6b322d6e6f64652d73746174656d656e742d763100000002d27b2261726368223a227838365f3634222c22646576223a66616c73652c2264697374726f223a227562756e7475222c2264697374726f5f76657273696f6e223a2232342e3034222c22686f73745f6964223a2263303638313931663037663462343263643232333463316137363163343131626231663035663036633434653738393633393532656463373833313739623964222c226973737565645f6174223a313830303030303230302c226b326e6f64655f636f6d6d6974223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434222c226b326e6f64655f76657273696f6e223a22302e34362e3130222c226b65726e656c223a22362e382e302d34352d67656e65726963222c226b65795f626f726e5f6174223a313830303030303030302c226b65795f65706f6368223a302c226b65795f6578706f73757265223a7b226a6f625f7265616461626c65223a66616c73652c226d6f6465223a3338342c226f776e6572223a226b326e6f6465222c2273746f7265223a2266696c65227d2c226e6f64655f6670223a2239313632353566323766366633656264346163633232393534626432353633343739313433343538306134336662366639343435363637333339653332633962222c226e6f64655f73706b69223a224d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741454867343435473655464745766a686b745a74613678533341664c6d2b7a51523635686931614359354e6d31334f704e75756174364d315a6a6e6d38346a35384f742b5a6d534631377774594f506873774d66706950513d3d222c226f73223a226c696e7578222c22707265765f6670223a6e756c6c2c2270726f746f636f6c223a392c227074726163655f73636f7065223a312c227461696e74223a22756e6b6e6f776e222c2276223a312c2277616c6c223a226a6f625f75736572227d",
+      "signer": "node_b"
+    },
+    {
+      "alg": "ed25519",
+      "body": "{\"approved_by\":\"owner\",\"at\":1800000300,\"checked\":\"install log (no --no-job-wall) and the job ledger: no job under wall none (vérifié)\",\"installed_with_wall\":true,\"key_epoch\":0,\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"owner_id\":\"owner.example\",\"roster_key\":\"ed25519:Gxpry5a1Mj7atv2i1SHEMgje50rIbWTFP+GRYM1k/R8=\",\"statement_digest\":\"sha256:59c763a69512c5b996cd93db2f2425ab44449ab93d1a63c72332c2ee662f4c72\",\"unwalled_jobs_seen\":false,\"v\":1}",
+      "digest": "sha256:224b16022f1690d86839e4dcaf17b66db57d67fea4266babbfb87934485fbbf9",
+      "domain": "k2-node-attest-v1",
+      "kind": "owner_attestation",
+      "name": "owner_attestation_b",
+      "sig": "l5EmKor2ls0kuM9GyeTpqSIfUfie1Xy+lmUImp9CAXWJdaLUp0nuPlTr0lON1C/MLIBlH7c6J23s4UiD5pRCBQ==",
+      "signed_bytes_hex": "6b322d6e6f64652d6174746573742d763100000001dc7b22617070726f7665645f6279223a226f776e6572222c226174223a313830303030303330302c22636865636b6564223a22696e7374616c6c206c6f6720286e6f202d2d6e6f2d6a6f622d77616c6c2920616e6420746865206a6f62206c65646765723a206e6f206a6f6220756e6465722077616c6c206e6f6e65202876c3a972696669c3a929222c22696e7374616c6c65645f776974685f77616c6c223a747275652c226b65795f65706f6368223a302c226e6f64655f6670223a2239313632353566323766366633656264346163633232393534626432353633343739313433343538306134336662366639343435363637333339653332633962222c226f776e65725f6964223a226f776e65722e6578616d706c65222c22726f737465725f6b6579223a22656432353531393a47787072793561314d6a376174763269315348454d676a653530724962575446502b4752594d316b2f52383d222c2273746174656d656e745f646967657374223a227368613235363a35396337363361363935313263356239393663643933646232663234323561623434343439616239336431613633633732333332633265653636326634633732222c22756e77616c6c65645f6a6f62735f7365656e223a66616c73652c2276223a317d",
+      "signer": "roster"
+    },
+    {
+      "alg": "ed25519",
+      "body": "{\"entries\":[{\"admin_reach\":[\"fleet-ssh\"],\"attestation_digest\":null,\"host\":\"host-a\",\"key_epoch\":1,\"name\":\"node-a\",\"node_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvHjHDxEa3CdbzbbRKn7XDpYPw2znRGBw5zMcoiL4VNwXQkeXcE7Zvjzg0z/LHaORdz3o3plgXB5yEWQ6Ak4KmQ==\",\"pod\":null,\"point\":null,\"provider\":\"provider-x\",\"revoked_reason\":null,\"site\":\"site-1\",\"statement_digest\":\"sha256:873a937930bacc9200d71a6ad1b062578d064c1d0339b3c7e6c9dc4f4ba1eb62\",\"status\":\"active\",\"taint_basis\":\"rekeyed\",\"valid_from\":1800000500,\"valid_to\":null},{\"admin_reach\":[\"fleet-ssh\"],\"attestation_digest\":\"sha256:224b16022f1690d86839e4dcaf17b66db57d67fea4266babbfb87934485fbbf9\",\"host\":\"host-b\",\"key_epoch\":0,\"name\":\"node-b\",\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHg445G6UFGEvjhktZta6xS3AfLm+zQR65hi1aCY5Nm13OpNuuat6M1Zjnm84j58Ot+ZmSF17wtYOPhswMfpiPQ==\",\"pod\":null,\"point\":null,\"provider\":\"provider-x\",\"revoked_reason\":null,\"site\":\"site-1\",\"statement_digest\":\"sha256:59c763a69512c5b996cd93db2f2425ab44449ab93d1a63c72332c2ee662f4c72\",\"status\":\"active\",\"taint_basis\":\"owner_attested\",\"valid_from\":1800000000,\"valid_to\":null},{\"admin_reach\":[\"fleet-ssh\"],\"attestation_digest\":null,\"host\":\"host-a\",\"key_epoch\":0,\"name\":\"node-a\",\"node_fp\":\"dc8fd8c8e2f12707e855c32c35527482f6b30a079dbc85ed2dbbf8c792be822a\",\"node_spki\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElgGyt59X+6yOip26Ki/MrH4LB/LgI5v3eG4ErKDdyG1kKJrC8I7zmJIxAqaKOomc5yfRZbHQKaGCUJz1SFqGDA==\",\"pod\":null,\"point\":null,\"provider\":\"provider-x\",\"revoked_reason\":null,\"site\":\"site-1\",\"statement_digest\":\"sha256:6d29c354071dbb79a55bd3739cbbc60986c7c160907630ee82811aa86f300b85\",\"status\":\"retired\",\"taint_basis\":null,\"valid_from\":1800000000,\"valid_to\":1800000500}],\"issued_at\":1800000600,\"owner_id\":\"owner.example\",\"owner_server_fp\":\"362c73057cf06b7f19151a075f160f769e7fe834922a45d88de81ce248f3fe2b\",\"prev_digest\":\"sha256:0ba08326d9a0884e09ec8b472ee61b6c8c1faf914adfc4c9d079fcd31327e86c\",\"roster_key\":\"ed25519:Gxpry5a1Mj7atv2i1SHEMgje50rIbWTFP+GRYM1k/R8=\",\"seq\":2,\"v\":1}",
+      "digest": "sha256:249a3e9bd51e35cad905ff0933d2c7dbcea1ca9fe081b68f4067aefc45c71f30",
+      "domain": "k2-node-roster-v1",
+      "kind": "node_roster",
+      "name": "node_roster",
+      "sig": "rfJsFXGCtihEz19YUq97fcKc0Jk5ElO4Bo1CxqE3mklVhs0asRT2/HZyga6YnbgujS8sDzLiDBdc9rlpOzyPCg==",
+      "signed_bytes_hex": "6b322d6e6f64652d726f737465722d763100000008557b22656e7472696573223a5b7b2261646d696e5f7265616368223a5b22666c6565742d737368225d2c226174746573746174696f6e5f646967657374223a6e756c6c2c22686f7374223a22686f73742d61222c226b65795f65706f6368223a312c226e616d65223a226e6f64652d61222c226e6f64655f6670223a2237643864373762613635633565623564353262313066623937656533386336303331353034303665353465306564623864343161313737303365366337373034222c226e6f64655f73706b69223a224d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a3044415163445167414576486a4844784561334364627a6262524b6e37584470595077327a6e52474277357a4d636f694c34564e7758516b65586345375a766a7a67307a2f4c48614f52647a336f33706c675842357945575136416b344b6d513d3d222c22706f64223a6e756c6c2c22706f696e74223a6e756c6c2c2270726f7669646572223a2270726f76696465722d78222c227265766f6b65645f726561736f6e223a6e756c6c2c2273697465223a22736974652d31222c2273746174656d656e745f646967657374223a227368613235363a38373361393337393330626163633932303064373161366164316230363235373864303634633164303333396233633765366339646334663462613165623632222c22737461747573223a22616374697665222c227461696e745f6261736973223a2272656b65796564222c2276616c69645f66726f6d223a313830303030303530302c2276616c69645f746f223a6e756c6c7d2c7b2261646d696e5f7265616368223a5b22666c6565742d737368225d2c226174746573746174696f6e5f646967657374223a227368613235363a32323462313630323266313639306438363833396534646361663137623636646235376436376665613432363662616262666238373933343438356662626639222c22686f7374223a22686f73742d62222c226b65795f65706f6368223a302c226e616d65223a226e6f64652d62222c226e6f64655f6670223a2239313632353566323766366633656264346163633232393534626432353633343739313433343538306134336662366639343435363637333339653332633962222c226e6f64655f73706b69223a224d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741454867343435473655464745766a686b745a74613678533341664c6d2b7a51523635686931614359354e6d31334f704e75756174364d315a6a6e6d38346a35384f742b5a6d534631377774594f506873774d66706950513d3d222c22706f64223a6e756c6c2c22706f696e74223a6e756c6c2c2270726f7669646572223a2270726f76696465722d78222c227265766f6b65645f726561736f6e223a6e756c6c2c2273697465223a22736974652d31222c2273746174656d656e745f646967657374223a227368613235363a35396337363361363935313263356239393663643933646232663234323561623434343439616239336431613633633732333332633265653636326634633732222c22737461747573223a22616374697665222c227461696e745f6261736973223a226f776e65725f6174746573746564222c2276616c69645f66726f6d223a313830303030303030302c2276616c69645f746f223a6e756c6c7d2c7b2261646d696e5f7265616368223a5b22666c6565742d737368225d2c226174746573746174696f6e5f646967657374223a6e756c6c2c22686f7374223a22686f73742d61222c226b65795f65706f6368223a302c226e616d65223a226e6f64652d61222c226e6f64655f6670223a2264633866643863386532663132373037653835356333326333353532373438326636623330613037396462633835656432646262663863373932626538323261222c226e6f64655f73706b69223a224d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344516741456c674779743539582b36794f697032364b692f4d7248344c422f4c674935763365473445724b44647947316b4b4a72433849377a6d4a49784171614b4f6f6d63357966525a6248514b614743554a7a315346714744413d3d222c22706f64223a6e756c6c2c22706f696e74223a6e756c6c2c2270726f7669646572223a2270726f76696465722d78222c227265766f6b65645f726561736f6e223a6e756c6c2c2273697465223a22736974652d31222c2273746174656d656e745f646967657374223a227368613235363a36643239633335343037316462623739613535626433373339636262633630393836633763313630393037363330656538323831316161383666333030623835222c22737461747573223a2272657469726564222c227461696e745f6261736973223a6e756c6c2c2276616c69645f66726f6d223a313830303030303030302c2276616c69645f746f223a313830303030303530307d5d2c226973737565645f6174223a313830303030303630302c226f776e65725f6964223a226f776e65722e6578616d706c65222c226f776e65725f7365727665725f6670223a2233363263373330353763663036623766313931353161303735663136306637363965376665383334393232613435643838646538316365323438663366653262222c22707265765f646967657374223a227368613235363a30626130383332366439613038383465303965633862343732656536316236633863316661663931346164666334633964303739666364333133323765383663222c22726f737465725f6b6579223a22656432353531393a47787072793561314d6a376174763269315348454d676a653530724962575446502b4752594d316b2f52383d222c22736571223a322c2276223a317d",
+      "signer": "roster"
+    },
+    {
+      "alg": "ed25519",
+      "body": "{\"client_fp\":\"d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1\",\"client_label\":\"client.example\",\"issued_at\":1800000600,\"lane\":\"ci-standard\",\"line\":null,\"nodes\":[\"node-a\",\"node-b\"],\"owner_id\":\"owner.example\",\"pod\":null,\"roster_key\":\"ed25519:Gxpry5a1Mj7atv2i1SHEMgje50rIbWTFP+GRYM1k/R8=\",\"roster_seq\":2,\"seat_id\":\"seat-1\",\"state\":\"active\",\"v\":1}",
+      "digest": "sha256:57130b5c37cb1ce77eb644845ca3a6fe97391f026cca2121aa54aa85cb676441",
+      "domain": "k2-node-seat-v1",
+      "kind": "seat_statement",
+      "name": "seat_statement",
+      "sig": "heTwBnJ57STZJYVKJOJoeeE813txngn3P/2bACNrpDuSkQiZRzUF5BkAqfPJuqSr94OfVEqMt9QujLFlIwZOAQ==",
+      "signed_bytes_hex": "6b322d6e6f64652d736561742d763100000001677b22636c69656e745f6670223a2264373231303535303762653061323333333961363034643564633536666164303634396336623462653166613437303136346264623836326230656439306631222c22636c69656e745f6c6162656c223a22636c69656e742e6578616d706c65222c226973737565645f6174223a313830303030303630302c226c616e65223a2263692d7374616e64617264222c226c696e65223a6e756c6c2c226e6f646573223a5b226e6f64652d61222c226e6f64652d62225d2c226f776e65725f6964223a226f776e65722e6578616d706c65222c22706f64223a6e756c6c2c22726f737465725f6b6579223a22656432353531393a47787072793561314d6a376174763269315348454d676a653530724962575446502b4752594d316b2f52383d222c22726f737465725f736571223a322c22736561745f6964223a22736561742d31222c227374617465223a22616374697665222c2276223a317d",
+      "signer": "roster"
+    },
+    {
+      "alg": null,
+      "body": "{\"argv\":[\"bash\",\"scripts/ci/build.sh\",\"x86_64\"],\"artifacts\":[\"dist/*\"],\"created_at\":1800000700,\"cwd\":null,\"env\":{\"BUILD_COMMIT\":\"a147261b1d76c6e53643f9a74fbe0ffcb25912cf\",\"BUILD_TREE\":\"5555555555555555555555555555555555555555\"},\"exclusive\":false,\"job_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"limits\":{\"cpu_millis\":4000,\"disk_bytes\":107374182400,\"log_cap_bytes\":67108864,\"max_secs\":7200,\"mem_bytes\":8589934592},\"needs\":[\"rust@1.99.1\"],\"node_id\":\"node-a\",\"receipt_v\":2,\"requested_by\":\"agent\",\"secret_env\":[\"BUILD_API_KEY\"],\"src\":{\"commit\":\"a147261b1d76c6e53643f9a74fbe0ffcb25912cf\",\"dirty\":null,\"project_key\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"remote_url\":null,\"slots\":1},\"tier\":\"ci\",\"workspace_id\":\"ws-client\",\"workspace_label\":\"client\"}",
+      "digest": "sha256:0e99ce0394b86532306c3b3cee7557727e9aec9ddd02fc335bfc9ef9397b0d05",
+      "domain": null,
+      "kind": "plan",
+      "name": "plan_receipt_v2",
+      "sig": null,
+      "signed_bytes_hex": null,
+      "signer": null
+    },
+    {
+      "alg": "p256",
+      "body": "{\"argv_sha256\":\"9e7121ff8382fc584ea0a9e01452a5aa8c84fe74971cdd3a734da45d246f08ca\",\"artifacts\":[{\"bytes\":4096,\"name\":\"dist/acme\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"}],\"attempt\":1,\"boot_id\":\"boot-7d8d77ba\",\"controller_fp\":\"d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1\",\"ended_at\":1800001310,\"env_names\":[\"BUILD_COMMIT\",\"BUILD_TREE\",\"CI\",\"HOME\",\"PATH\"],\"exit\":{\"code\":0,\"signal\":null},\"generation\":1,\"job_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"log\":{\"bytes\":1234,\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\",\"truncated\":false},\"node_fp\":\"7d8d77ba65c5eb5d52b10fb97ee38c603150406e54e0edb8d41a17703e6c7704\",\"plan_digest\":\"sha256:0e99ce0394b86532306c3b3cee7557727e9aec9ddd02fc335bfc9ef9397b0d05\",\"run\":{\"isolation\":\"job_uid\",\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"key_epoch\":1,\"lane\":\"ci-standard\",\"roster_seq_seen\":2,\"statement_digest\":\"sha256:873a937930bacc9200d71a6ad1b062578d064c1d0339b3c7e6c9dc4f4ba1eb62\",\"tenant_slot\":1,\"uid_index\":2,\"wall\":\"job_user\"},\"secret_env\":[\"BUILD_API_KEY\"],\"src\":{\"commit\":\"a147261b1d76c6e53643f9a74fbe0ffcb25912cf\",\"dirty_sha256\":null,\"slot\":0,\"tree\":\"5555555555555555555555555555555555555555\",\"warmth\":\"private\"},\"started_at\":1800000710,\"state\":\"done\",\"tools\":{\"rustc\":\"1.99.1\"},\"tools_used\":{\"rustc\":\"1.99.1\"},\"v\":2,\"workspace_id\":\"ws-client\"}",
+      "digest": "sha256:a11fad0604d574fcae22b5163dc3036d2ea14c76de466fcbbb5771837f359c39",
+      "domain": "k2-compute-receipt-v1",
+      "kind": "receipt",
+      "name": "receipt_v2_l1",
+      "sig": "MEUCIHDxvz12pQsIy9+7mojODqCW2TDGxPVSSHeCHhh35j6VAiEA8bmd7lcb/ghqt1kwfTAWe4k7q56GiIAOf+0RYqv6rYU=",
+      "signed_bytes_hex": "6b322d636f6d707574652d726563656970742d763100000005857b22617267765f736861323536223a2239653731323166663833383266633538346561306139653031343532613561613863383466653734393731636464336137333464613435643234366630386361222c22617274696661637473223a5b7b226279746573223a343039362c226e616d65223a22646973742f61636d65222c22736861323536223a2237373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737227d5d2c22617474656d7074223a312c22626f6f745f6964223a22626f6f742d3764386437376261222c22636f6e74726f6c6c65725f6670223a2264373231303535303762653061323333333961363034643564633536666164303634396336623462653166613437303136346264623836326230656439306631222c22656e6465645f6174223a313830303030313331302c22656e765f6e616d6573223a5b224255494c445f434f4d4d4954222c224255494c445f54524545222c224349222c22484f4d45222c2250415448225d2c2265786974223a7b22636f6465223a302c227369676e616c223a6e756c6c7d2c2267656e65726174696f6e223a312c226a6f625f6964223a226161616161616161616161616161616161616161616161616161616161616161222c226c6f67223a7b226279746573223a313233342c22736861323536223a2238383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838222c227472756e6361746564223a66616c73657d2c226e6f64655f6670223a2237643864373762613635633565623564353262313066623937656533386336303331353034303665353465306564623864343161313737303365366337373034222c22706c616e5f646967657374223a227368613235363a30653939636530333934623836353332333036633362336365653735353737323765396165633964646430326663333335626663396566393339376230643035222c2272756e223a7b2269736f6c6174696f6e223a226a6f625f756964222c226b326e6f64655f636f6d6d6974223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434222c226b326e6f64655f76657273696f6e223a22302e34362e3130222c226b65795f65706f6368223a312c226c616e65223a2263692d7374616e64617264222c22726f737465725f7365715f7365656e223a322c2273746174656d656e745f646967657374223a227368613235363a38373361393337393330626163633932303064373161366164316230363235373864303634633164303333396233633765366339646334663462613165623632222c2274656e616e745f736c6f74223a312c227569645f696e646578223a322c2277616c6c223a226a6f625f75736572227d2c227365637265745f656e76223a5b224255494c445f4150495f4b4559225d2c22737263223a7b22636f6d6d6974223a2261313437323631623164373663366535333634336639613734666265306666636232353931326366222c2264697274795f736861323536223a6e756c6c2c22736c6f74223a302c2274726565223a2235353535353535353535353535353535353535353535353535353535353535353535353535353535222c227761726d7468223a2270726976617465227d2c22737461727465645f6174223a313830303030303731302c227374617465223a22646f6e65222c22746f6f6c73223a7b227275737463223a22312e39392e31227d2c22746f6f6c735f75736564223a7b227275737463223a22312e39392e31227d2c2276223a322c22776f726b73706163655f6964223a2277732d636c69656e74227d",
+      "signer": "node_a_epoch1"
+    },
+    {
+      "alg": "p256",
+      "body": "{\"argv_sha256\":\"9e7121ff8382fc584ea0a9e01452a5aa8c84fe74971cdd3a734da45d246f08ca\",\"artifacts\":[{\"bytes\":4096,\"name\":\"dist/acme\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"}],\"attempt\":1,\"boot_id\":\"boot-916255f2\",\"controller_fp\":\"d72105507be0a23339a604d5dc56fad0649c6b4be1fa470164bdb862b0ed90f1\",\"ended_at\":1800001320,\"env_names\":[\"BUILD_COMMIT\",\"BUILD_TREE\",\"CI\",\"HOME\",\"PATH\"],\"exit\":{\"code\":0,\"signal\":null},\"generation\":1,\"job_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"log\":{\"bytes\":1234,\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\",\"truncated\":false},\"node_fp\":\"916255f27f6f3ebd4acc22954bd25634791434580a43fb6f9445667339e32c9b\",\"plan_digest\":\"sha256:718b17393954f4a33152b73576b6375d6f035a564183d53d00289eb41f17e452\",\"run\":{\"isolation\":\"exclusive\",\"k2node_commit\":\"4444444444444444444444444444444444444444\",\"k2node_version\":\"0.46.10\",\"key_epoch\":0,\"lane\":\"ci-standard\",\"roster_seq_seen\":2,\"statement_digest\":\"sha256:59c763a69512c5b996cd93db2f2425ab44449ab93d1a63c72332c2ee662f4c72\",\"tenant_slot\":1,\"uid_index\":null,\"wall\":\"job_user\"},\"secret_env\":[\"BUILD_API_KEY\"],\"src\":{\"commit\":\"a147261b1d76c6e53643f9a74fbe0ffcb25912cf\",\"dirty_sha256\":null,\"slot\":0,\"tree\":\"5555555555555555555555555555555555555555\",\"warmth\":\"private\"},\"started_at\":1800000720,\"state\":\"done\",\"tools\":{\"rustc\":\"1.99.1\"},\"tools_used\":{\"rustc\":\"1.99.1\"},\"v\":2,\"workspace_id\":\"ws-client\"}",
+      "digest": "sha256:a69f9538aa85be426dde2db08a9af0d773c2c382a0a996abf54e5188ce55498a",
+      "domain": "k2-compute-receipt-v1",
+      "kind": "receipt",
+      "name": "receipt_v2_v1",
+      "sig": "MEQCIAENb8clM6qyCvLxmkCyMJIDrGeXRXEmst9ialPfaO9IAiBgxO8by3xNQpRpir/wSKSVmFVuM9P9flm9y77dyoDuuw==",
+      "signed_bytes_hex": "6b322d636f6d707574652d726563656970742d7631000000058a7b22617267765f736861323536223a2239653731323166663833383266633538346561306139653031343532613561613863383466653734393731636464336137333464613435643234366630386361222c22617274696661637473223a5b7b226279746573223a343039362c226e616d65223a22646973742f61636d65222c22736861323536223a2237373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737227d5d2c22617474656d7074223a312c22626f6f745f6964223a22626f6f742d3931363235356632222c22636f6e74726f6c6c65725f6670223a2264373231303535303762653061323333333961363034643564633536666164303634396336623462653166613437303136346264623836326230656439306631222c22656e6465645f6174223a313830303030313332302c22656e765f6e616d6573223a5b224255494c445f434f4d4d4954222c224255494c445f54524545222c224349222c22484f4d45222c2250415448225d2c2265786974223a7b22636f6465223a302c227369676e616c223a6e756c6c7d2c2267656e65726174696f6e223a312c226a6f625f6964223a226262626262626262626262626262626262626262626262626262626262626262222c226c6f67223a7b226279746573223a313233342c22736861323536223a2238383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838383838222c227472756e6361746564223a66616c73657d2c226e6f64655f6670223a2239313632353566323766366633656264346163633232393534626432353633343739313433343538306134336662366639343435363637333339653332633962222c22706c616e5f646967657374223a227368613235363a37313862313733393339353466346133333135326237333537366236333735643666303335613536343138336435336430303238396562343166313765343532222c2272756e223a7b2269736f6c6174696f6e223a226578636c7573697665222c226b326e6f64655f636f6d6d6974223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434222c226b326e6f64655f76657273696f6e223a22302e34362e3130222c226b65795f65706f6368223a302c226c616e65223a2263692d7374616e64617264222c22726f737465725f7365715f7365656e223a322c2273746174656d656e745f646967657374223a227368613235363a35396337363361363935313263356239393663643933646232663234323561623434343439616239336431613633633732333332633265653636326634633732222c2274656e616e745f736c6f74223a312c227569645f696e646578223a6e756c6c2c2277616c6c223a226a6f625f75736572227d2c227365637265745f656e76223a5b224255494c445f4150495f4b4559225d2c22737263223a7b22636f6d6d6974223a2261313437323631623164373663366535333634336639613734666265306666636232353931326366222c2264697274795f736861323536223a6e756c6c2c22736c6f74223a302c2274726565223a2235353535353535353535353535353535353535353535353535353535353535353535353535353535222c227761726d7468223a2270726976617465227d2c22737461727465645f6174223a313830303030303732302c227374617465223a22646f6e65222c22746f6f6c73223a7b227275737463223a22312e39392e31227d2c22746f6f6c735f75736564223a7b227275737463223a22312e39392e31227d2c2276223a322c22776f726b73706163655f6964223a2277732d636c69656e74227d",
+      "signer": "node_b"
+    }
+  ]
+}

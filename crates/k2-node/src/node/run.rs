@@ -2113,6 +2113,8 @@ impl Node {
             // SE29: names only.
             secret_env: a.plan.secret_env.clone(),
             tools_used: outputs.as_ref().map(|o| o.tools_used.clone()).unwrap_or_default(),
+            // Receipt v2 (`Plan.receipt_v`) is protocol 9's; this node sends v1.
+            run: None,
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
         if let Err(e) = &signed {

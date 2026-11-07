@@ -87,7 +87,22 @@ use crate::crypto::{self, SigningKey};
 /// `git-access` and sends `git_cred_need` only to a server that said
 /// protocol ≥ [`PROTOCOL_GIT`], and a server writes `Plan.git_access` only
 /// for a node offering the feature.
+///
+/// 9 = CI on compute for clients (prd-ci-on-compute-for-clients-v1;
+/// [`crate::ci`], `docs/ci-formats-v1.md`): node self-statements, the
+/// owner-signed node roster, receipt v2 (`Plan.receipt_v`, `Receipt.run`),
+/// lanes, per-job uids. Defined as [`PROTOCOL_CI`]; `PROTOCOL` itself moves
+/// to 9 in the commit that makes k2-node offer the first of
+/// [`crate::ci::FEATURES`] (one bump for every node part, vs-live B1). Until
+/// then the formats exist and nothing sends them, so protocol 8 is exactly
+/// 0.46.9's.
 pub const PROTOCOL: u32 = 8;
+
+/// The first protocol with the CI formats ([`crate::ci`]). Additive like
+/// every bump before it: a node offers a [`crate::ci::FEATURES`] entry only
+/// to a server that said protocol ≥ 9, and a server writes `Plan.receipt_v`
+/// (or any other CI field or frame) only to a node offering the feature.
+pub const PROTOCOL_CI: u32 = 9;
 
 /// The first server protocol that gets the `git-access` feature and frames.
 pub const PROTOCOL_GIT: u32 = 8;
@@ -700,6 +715,15 @@ pub struct Plan {
     /// nodes offering [`crate::gitcred::FEATURE_GIT_ACCESS`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_access: Vec<String>,
+    /// Protocol 9 (`receipt-v2`, prd-ci-on-compute-for-clients-v1 V7): the
+    /// receipt version this job's receipt must have. Only ever `Some(2)`
+    /// ([`RECEIPT_V2`]); absent asks for today's v1 receipt, so every older
+    /// plan, digest and receipt is unchanged and the S3b signer path stays
+    /// byte-identical (V4). Sent only to nodes offering
+    /// [`crate::ci::FEATURE_RECEIPT_V2`] (an older node would compute
+    /// another digest and refuse).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_v: Option<u32>,
 }
 
 impl Plan {
@@ -1425,6 +1449,33 @@ pub struct Receipt {
     /// older node's receipts are byte-identical.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tools_used: BTreeMap<String, String>,
+    /// Receipt v2 only (protocol 9, `Plan.receipt_v = 2`): how and where the
+    /// job ran ([`crate::ci::RunFacts`]). Absent in a v1 receipt, so v1
+    /// receipts stay byte-identical (V7). [`Receipt::check_version`] ties
+    /// it to `v`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<crate::ci::RunFacts>,
+}
+
+/// Receipt v1: every receipt before protocol 9, and every receipt whose plan
+/// has no `receipt_v`.
+pub const RECEIPT_V1: u32 = 1;
+/// Receipt v2: `run` is present. Sent only when the plan asks for it.
+pub const RECEIPT_V2: u32 = 2;
+
+impl Receipt {
+    /// `v` and the v2 facts agree: v1 has no `run`, v2 has one (and its
+    /// facts are well formed). Anything else is refused by name: a verifier
+    /// never guesses which schema a signed body meant.
+    pub fn check_version(&self) -> Result<(), String> {
+        match (self.v, &self.run) {
+            (RECEIPT_V1, None) => Ok(()),
+            (RECEIPT_V1, Some(_)) => Err("receipt v1 carries v2 run facts".into()),
+            (RECEIPT_V2, Some(run)) => run.check(),
+            (RECEIPT_V2, None) => Err("receipt v2 without its run facts".into()),
+            (v, _) => Err(format!("receipt version {v} is not 1 or 2")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1536,6 +1587,7 @@ mod tests {
             cache: None,
             src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(),
             with: Vec::new(),
+            receipt_v: None,
         }
     }
 
@@ -1706,6 +1758,7 @@ mod tests {
             artifacts: Vec::new(),
             secret_env: Vec::new(),
             tools_used: BTreeMap::new(),
+            run: None,
         };
         // Without secrets: byte-identical to a 0.46.3 receipt (SE29).
         assert!(!crate::canonical::to_string(&r).unwrap().contains("secret_env"));

@@ -35,17 +35,29 @@
 //!   requests and their frames (protocol 7).
 //! - [`gitcred`]: compute git access (protocol 8): repo keys, the sealed
 //!   git token, its codes.
+//! - [`ci`]: CI on compute for clients (protocol 9): the features, signing
+//!   domains, enums, the signed envelope, receipt v2's run facts
+//!   (`docs/ci-formats-v1.md`).
+//! - [`statement`]: the node self-statement and key rotation (protocol 9).
+//! - [`node_roster`]: the owner-signed node roster, seats, attestations.
+//! - [`evidence`]: the evidence bundle v2 the signer checks.
+//! - [`signer_policy`]: the signer's per-project policy file (TOML).
+//! - [`ci_config`]: `.k2/ci.toml`, the `k2 ci` config (TOML).
 
 pub mod admin;
 pub mod cache;
 pub mod canonical;
+pub mod ci;
+pub mod ci_config;
 pub mod crypto;
 pub mod env;
+pub mod evidence;
 pub mod frames;
 pub mod gitcred;
 pub mod health;
 pub mod host;
 pub mod needs;
+pub mod node_roster;
 pub mod pairing;
 pub mod pkgmap;
 pub mod pkgpolicy;
@@ -55,6 +67,8 @@ pub mod refusal;
 pub mod results;
 pub mod secret;
 pub mod share;
+pub mod signer_policy;
+pub mod statement;
 pub mod ticket;
 pub mod tiers;
 

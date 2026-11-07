@@ -2237,7 +2237,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         secret_env: crate::compute_secrets::pins(&secret_envs).1,
         // Protocol 8 (GH#78): filled per node at every assign
         // (`compute_ws::fit_plan_to`), from the grants live then.
-        git_access: Vec::new(),
+        git_access: Vec::new(), receipt_v: None,
         // Protocol 6: only ever placed on nodes offering `job-cache` (above,
         // and `required_features` for --any and moves).
         cache: cache.clone(),
@@ -3491,7 +3491,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(),
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

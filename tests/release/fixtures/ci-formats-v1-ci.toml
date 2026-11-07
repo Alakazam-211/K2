@@ -1,0 +1,34 @@
+# A .k2/ci.toml (docs/ci-formats-v1.md §9) matching ci-formats-v1-signer-policy.toml.
+version = 1
+
+[watch]
+remote = "origin"
+branches = ["main", "integ/*"]
+poll_secs = 60
+
+[statuses]
+token_secret = "K2_CI_STATUSES_TOKEN"
+env_name = "CI_STATUSES_TOKEN"
+context = "k2-ci"
+
+[checks.unit]
+argv = ["bash", "scripts/ci/checks.sh", "unit"]
+needs = ["rust@1.99.1"]
+os = "linux"
+timeout_secs = 3600
+cpus = 4
+mem_gb = 8
+
+[release]
+project = "acme-desktop"
+owner = "owner.example"
+lane = "ci-standard"
+
+[release.builds.linux-x86_64]
+argv = ["bash", "scripts/ci/build.sh", "x86_64"]
+needs = ["rust@1.99.1"]
+artifacts = ["dist/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+secrets = ["BUILD_API_KEY"]
+label = "L1"
+verify_label = "V1"

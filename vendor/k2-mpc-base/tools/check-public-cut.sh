@@ -30,7 +30,8 @@
 #                the file PATH. A missing or empty list blocks the tag too.
 #   dropped      no file is under a tree in DROPPED_TREES, and no kept text file names one
 #                (DROPPED_REFS; each hit printed as `check-public-cut: dropped: PATH:LINE: ...`).
-#                A CHANGELOG, vendor/ and the two cut scripts may.
+#                A CHANGELOG, vendor/ and the two cut scripts may. No file in DROPPED_FILES
+#                exists, and no kept text file names one (by its name without `.sh`).
 #   text         no line added since the commit recorded in TEXT_BASE (the previous host release;
 #                every tracked text file git diffs, vendored trees too) uses a term in
 #                TEXT_TERMS, printed as `check-public-cut: text: PATH:LINE: TERM`. Public text
@@ -57,10 +58,14 @@ PUBLIC_ENGINE_CRATES="mpce-model"
 NATIVE_FEATURES="native fuzzing"
 # Workspace crates a public cut drops whole, as PATH:PACKAGE.
 DROPPED_CRATES="crates/conformance:k2-mpc-conformance"
-# Trees a public cut removes whole (tooling no host builds or runs), and what names them in a
-# kept file: extended regexes, |-separated.
-DROPPED_TREES="fuzz tools/fuzz"
+# Trees a public cut removes whole (tooling no host builds or runs, and the evidence run
+# records: docs/evidence/runs, about 16 MB, checked on main), and what names them in a kept
+# file: extended regexes, |-separated. DROPPED_REFS has no pattern for the run records: the
+# evidence notes the cut keeps name the folder their citations point to.
+DROPPED_TREES="fuzz tools/fuzz docs/evidence/runs"
 DROPPED_REFS='(^|[^A-Za-z0-9_-])fuzz/|tools/fuzz([^A-Za-z0-9_-]|$)|(^[ \t]*|exclude.*)"fuzz"|cargo[- ]fuzz|k2[-_]mpc[-_]base[-_]fuzz|k2_mpc_base::fuzzing|(^|[^A-Z_])FUZZ_(CPUS|HOME|MAX_JOBS|MEM|NODES|SECS|SHIP|SUMMARY_DIR|TIMEOUT|TZ|USED|WINDOW|WITH|WS)'
+# Single files a public cut removes (a check of what the cut takes out), paths from the root.
+DROPPED_FILES="tools/check-engine-features.sh"
 # Files a public cut must carry at its root.
 LICENCE_FILES="LICENSE-MIT LICENSE-APACHE"
 # The pinned regression tests every cut must still have (relative to the root).
@@ -76,8 +81,8 @@ TEXT_EXCEPTIONS=tools/public-text-exceptions.txt
 # ---------------------------------------------------------------------------------------------
 
 if [ "${1:-}" = --print-config ]; then
-  printf 'PUBLIC_ENGINE_CRATES=%s\nNATIVE_FEATURES=%s\nDROPPED_CRATES=%s\nDROPPED_TREES=%s\nDROPPED_REFS=%s\nTEXT_TERMS=%s\nTEXT_CODE_TOKENS=%s\nTEXT_BASE=%s\nTEXT_EXCEPTIONS=%s\n' \
-    "'$PUBLIC_ENGINE_CRATES'" "'$NATIVE_FEATURES'" "'$DROPPED_CRATES'" "'$DROPPED_TREES'" "'$DROPPED_REFS'" "'$TEXT_TERMS'" "'$TEXT_CODE_TOKENS'" "'$TEXT_BASE'" "'$TEXT_EXCEPTIONS'"
+  printf 'PUBLIC_ENGINE_CRATES=%s\nNATIVE_FEATURES=%s\nDROPPED_CRATES=%s\nDROPPED_TREES=%s\nDROPPED_FILES=%s\nDROPPED_REFS=%s\nTEXT_TERMS=%s\nTEXT_CODE_TOKENS=%s\nTEXT_BASE=%s\nTEXT_EXCEPTIONS=%s\n' \
+    "'$PUBLIC_ENGINE_CRATES'" "'$NATIVE_FEATURES'" "'$DROPPED_CRATES'" "'$DROPPED_TREES'" "'$DROPPED_FILES'" "'$DROPPED_REFS'" "'$TEXT_TERMS'" "'$TEXT_CODE_TOKENS'" "'$TEXT_BASE'" "'$TEXT_EXCEPTIONS'"
   exit 0
 fi
 case ${1:-} in -*) echo "usage: tools/check-public-cut.sh [ROOT] | --print-config" >&2; exit 2 ;; esac
@@ -263,15 +268,24 @@ for t in $DROPPED_TREES; do
     bad "dropped: $t exists (a tree the cut removes)"
   fi
 done
-grep -Ev '^vendor/|(^|/)CHANGELOG\.md$|^tools/(check-public-cut|public-cut)\.sh$' "$LIST" | awk -v refs="$DROPPED_REFS" -v trees="$DROPPED_TREES" '
-  BEGIN { nt = split(trees, tree, " ") }
+for f in $DROPPED_FILES; do
+  if grep -qxF "$f" "$LIST" || [ -e "$f" ]; then bad "dropped: $f exists (a file the cut removes)"; fi
+done
+grep -Ev '^vendor/|(^|/)CHANGELOG\.md$|^tools/(check-public-cut|public-cut)\.sh$' "$LIST" | awk -v refs="$DROPPED_REFS" -v trees="$DROPPED_TREES" -v dfiles="$DROPPED_FILES" '
+  BEGIN {
+    nt = split(trees, tree, " ")
+    nf = split(dfiles, df, " ")
+    for (i = 1; i <= nf; i++) { s = df[i]; sub(/.*\//, "", s); sub(/\.sh$/, "", s); stem[i] = s }
+  }
   {
     file = $0
     for (i = 1; i <= nt; i++) if (index(file, tree[i] "/") == 1) next
+    for (i = 1; i <= nf; i++) if (file == df[i]) next
     n = 0
     while ((getline line < file) > 0) {
       n++
       if (line ~ refs) print "check-public-cut: dropped: " file ":" n ": names a tree the cut removes"
+      for (i = 1; i <= nf; i++) if (index(line, stem[i])) print "check-public-cut: dropped: " file ":" n ": names a file the cut removes"
     }
     close(file)
   }' >> "$OUT"

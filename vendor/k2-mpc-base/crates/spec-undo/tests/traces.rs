@@ -10,19 +10,35 @@ use std::collections::BTreeMap;
 const THREADS: u64 = 4;
 
 fn run_many(name: &str, seeds: std::ops::Range<u64>, min_per_class: u64) {
-    run_many_with(name, seeds, trace::CLASSES, min_per_class, trace::run);
+    let (conflicts, regions) = run_many_with(
+        name,
+        seeds,
+        trace::CLASSES,
+        min_per_class,
+        trace::run,
+        &MAIN,
+    );
+    // the comparison of write --base's conflict regions was reached
+    assert!(
+        conflicts > 0 && regions > 0,
+        "no write --base conflict regions compared ({conflicts} conflicts, {regions} regions)"
+    );
 }
 
 /// Run `seeds` through `run`; print the summary and one `RUNREC` line named `name` (the
 /// traces, steps, mismatching traces, each wanted class's hits and the U10a-on-the-kit
-/// counts); fail on any mismatch or a wanted class under `min_per_class` hits.
+/// counts, and the refused `write --base` steps whose conflict regions were compared, with
+/// their regions); fail on any mismatch or a wanted class under `min_per_class` hits.
+/// Returns those two counts.
 fn run_many_with(
     name: &str,
     seeds: std::ops::Range<u64>,
     want: &[&'static str],
     min_per_class: u64,
     run: fn(u64) -> trace::TraceResult,
-) {
+    floors: &Floors,
+) -> (u64, u64) {
+    let seeds_len = seeds.end - seeds.start;
     let mut classes: BTreeMap<&'static str, u64> =
         trace::CLASSES.iter().chain(want).map(|c| (*c, 0)).collect();
     let want: Vec<&'static str> = want.to_vec();
@@ -30,6 +46,12 @@ fn run_many_with(
     let (mut rr, mut rx, mut tr, mut tx, mut reverts) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut hunk_diffs = Vec::new();
     let (mut traces, mut steps) = (0u64, 0usize);
+    let (mut wb_conflicts, mut wb_regions) = (0u64, 0u64);
+    let (mut wb_multi, mut wb_multi_regions) = (0u64, 0u64);
+    let mut wb_labels: BTreeMap<String, u64> = [trace::WB_EXACT, trace::WB_COALESCED]
+        .into_iter()
+        .map(|k| (k.to_owned(), 0))
+        .collect();
     let mut restore_parts: BTreeMap<&'static str, u64> = BTreeMap::new();
     let mut own_only: BTreeMap<&'static str, u64> = ["own_only_checked", "own_only_unresolved"]
         .into_iter()
@@ -63,6 +85,13 @@ fn run_many_with(
         tr += r.touching_revert_regions;
         tx += r.touching_revert_extra;
         reverts += r.reverts_checked;
+        wb_conflicts += r.write_conflicts;
+        wb_regions += r.write_regions;
+        wb_multi += r.write_multi;
+        wb_multi_regions += r.write_multi_regions;
+        for (k, n) in r.write_labels {
+            *wb_labels.entry(k).or_default() += n;
+        }
         hunk_diffs.extend(r.hunk_diff);
         for (k, n) in r.restore_parts {
             *restore_parts.entry(k).or_default() += n;
@@ -80,6 +109,15 @@ fn run_many_with(
     }
     println!("concurrent restores of one root, by part (v1.8): {restore_parts:?}");
     println!("U10a by root on the kit (v1.8): {own_only:?}");
+    println!(
+        "write --base conflict regions compared (root, base range, lines in base, ours, \
+         theirs): {wb_conflicts} refused writes, {wb_regions} regions"
+    );
+    println!("write --base regions by label (kit against the oracle): {wb_labels:?}");
+    println!(
+        "write --base refused in several separate regions (oracle, no two touching): \
+         {wb_multi} writes, {wb_multi_regions} regions"
+    );
     let pct = |x: u64, n: u64| {
         if n == 0 {
             0.0
@@ -129,6 +167,21 @@ fn run_many_with(
     for (k, n) in &own_only {
         fields.push(format!("\"{k}\":{n}"));
     }
+    fields.push(format!("\"write_base_conflicts_compared\":{wb_conflicts}"));
+    fields.push(format!("\"write_base_regions_compared\":{wb_regions}"));
+    let wb_other: u64 = wb_labels
+        .iter()
+        .filter(|(k, _)| k.starts_with("other"))
+        .map(|(_, n)| n)
+        .sum();
+    fields.push(format!("\"wb_exact\":{}", wb_labels[trace::WB_EXACT]));
+    fields.push(format!(
+        "\"wb_coalesced_touching\":{}",
+        wb_labels[trace::WB_COALESCED]
+    ));
+    fields.push(format!("\"wb_other\":{wb_other}"));
+    fields.push(format!("\"wb_multi_separate\":{wb_multi}"));
+    fields.push(format!("\"wb_multi_separate_regions\":{wb_multi_regions}"));
     println!(
         "RUNREC {{\"job\":null,\"run\":\"{name}\",\"tool\":\"spec-undo\",\"status\":\"{}\",{}}}",
         if mismatches.is_empty() {
@@ -138,22 +191,348 @@ fn run_many_with(
         },
         fields.join(",")
     );
-    let missing: Vec<_> = classes
-        .iter()
-        .filter(|(c, n)| want.contains(c) && **n < min_per_class)
-        .map(|(c, _)| *c)
-        .collect();
+    // every refused write a class counts is one compared (the runner checks each step's side);
+    // the two classes never meet (an empty base against a whole base line): so the compared
+    // count is at least their sum. `write_base_shared_start_was_conflict` counts clean writes
+    // only, never one compared: no relation to assert. Asserted with the floors below.
+    let refused_classes =
+        classes["write_base_words_same_line"] + classes["empty_base_double_write"];
+    println!(
+        "write --base refused writes compared {wb_conflicts} >= write_base_words_same_line + \
+         empty_base_double_write {refused_classes}"
+    );
+    // ---- the floors: every count, asserted at or above its floor (one assert, at the end) ----
+    let n = seeds_len;
+    let mut counts: Vec<(String, u64, u64)> = vec![
+        ("traces".into(), traces, plant(n)),
+        ("steps".into(), steps as u64, floors.at("steps", n)),
+        (
+            "wb_conflicts_compared >= words_same_line + empty_base_double_write".into(),
+            wb_conflicts,
+            plant(refused_classes),
+        ),
+    ];
+    for (c, v) in &classes {
+        let f = floors.at(c, n);
+        let f = if want.contains(c) {
+            f.max(plant(min_per_class))
+        } else {
+            f
+        };
+        counts.push(((*c).into(), *v, f));
+    }
+    for k in ["base_by_root", "o4_restore", "o4a"] {
+        restore_parts.entry(k).or_default();
+    }
+    for (k, v) in &restore_parts {
+        let k = format!("restore_part:{k}");
+        counts.push((k.clone(), *v, floors.at(&k, n)));
+    }
+    for k in [
+        "own_only_checked",
+        "own_only_removed",
+        "own_only_removed_root_author_not_actor",
+        "own_only_unresolved",
+    ] {
+        own_only.entry(k).or_default();
+    }
+    for (k, v) in &own_only {
+        counts.push(((*k).into(), *v, floors.at(k, n)));
+    }
+    for (k, v) in [
+        ("reverts_checked", reverts),
+        ("revert_regions", rr),
+        ("revert_extra", rx),
+        ("touching_revert_regions", tr),
+        ("touching_revert_extra", tx),
+        ("wb_conflicts_compared", wb_conflicts),
+        ("wb_regions_compared", wb_regions),
+        ("wb_exact", wb_labels[trace::WB_EXACT]),
+        ("wb_coalesced_touching", wb_labels[trace::WB_COALESCED]),
+        ("wb_multi_separate", wb_multi),
+        ("wb_multi_separate_regions", wb_multi_regions),
+    ] {
+        counts.push((k.into(), v, floors.at(k, n)));
+    }
+    println!(
+        "floors ({n} traces; stated for {} traces, scaled):",
+        floors.per
+    );
+    let mut unmet = Vec::new();
+    for (k, v, f) in &counts {
+        let ok = *v >= *f && *f != NO_FLOOR;
+        println!(
+            "  FLOOR {k:70} {v:>9} >= {:>9} {}",
+            if *f == NO_FLOOR {
+                "none".into()
+            } else {
+                f.to_string()
+            },
+            if ok { "ok" } else { "UNMET" }
+        );
+        if !ok {
+            unmet.push(format!("{k} {v} < {f}"));
+        }
+    }
     assert!(
         mismatches.is_empty(),
         "{} of {traces} traces disagree with the oracle (first: seed {})",
         mismatches.len(),
         mismatches[0].seed
     );
-    assert!(
-        missing.is_empty(),
-        "case classes under {min_per_class} hits: {missing:?}"
-    );
+    assert!(unmet.is_empty(), "{} floors unmet: {unmet:?}", unmet.len());
+    (wb_conflicts, wb_regions)
 }
+
+/// A floor no table states (`Floors::at`): printed as `none` and failing, so every count
+/// must have one.
+const NO_FLOOR: u64 = u64::MAX;
+
+/// The floors' plant multiplier (1: none).
+const FLOOR_PLANT: u64 = 1;
+
+/// A floor under the plant: as it is when `FLOOR_PLANT` is 1.
+fn plant(f: u64) -> u64 {
+    if FLOOR_PLANT == 1 {
+        f
+    } else {
+        f.max(1) * FLOOR_PLANT
+    }
+}
+
+/// A run's floors: each count's floor at `per` traces, scaled to the run's traces (rounded
+/// up; at least 1 when the stated floor is). A floor guards against a vacuous run, not
+/// against drift: each is half of what the default run (its fixed seeds, at `per` traces)
+/// gives, rounded down, at least 1 (a rare class too); 0 only for a count that run gives 0
+/// (its generator can't make it: a stack-free trace has no undo, grouping traces no `write
+/// --base`, revert or restart; or not reached, the twin's `concurrent_restore_o4a`), or for a
+/// cost or a diagnostic (a revert's extra conflicts, unresolved U10a checks, touching
+/// coalescences of `write --base` regions).
+struct Floors {
+    per: u64,
+    of: &'static [(&'static str, u64)],
+}
+
+impl Floors {
+    fn at(&self, name: &str, n: u64) -> u64 {
+        let Some(&(_, f)) = self.of.iter().find(|(k, _)| *k == name) else {
+            return NO_FLOOR;
+        };
+        let f = if f == 0 {
+            0
+        } else {
+            ((f * n).div_ceil(self.per)).max(1)
+        };
+        plant(f)
+    }
+}
+
+/// `trace::run`'s floors, at 256 traces: half of what seeds 0..256 give (28632 steps; the
+/// write --base refused writes 790, regions 1107, 227 refused in separate regions with 544).
+const MAIN: Floors = Floors {
+    per: 256,
+    of: &[
+        ("steps", 14316),
+        ("append_at_end", 185),
+        ("insert_inside_another_range", 21),
+        ("multi_hunk_partial", 28),
+        ("stays_on_top", 108),
+        ("redo_after_partial", 2),
+        ("revert_after_restart", 203),
+        ("undo_across_purge", 98),
+        ("multi_connection_pid", 166),
+        ("empty_base_double_write", 60),
+        ("last_line_delete_after_append", 93),
+        ("whole_doc_delete_then_append", 83),
+        ("touching_regions_one_step", 101),
+        ("revert_beyond_compaction", 439),
+        ("revert_outside_window", 76),
+        ("taint", 402),
+        ("revert_over_erased", 20),
+        ("undo_for_person", 34),
+        ("steps_n", 85),
+        ("undo_drop", 41),
+        ("history_lost_after_restart", 153),
+        ("multi_root_batch", 40),
+        ("repeated_text_identity", 168),
+        ("revert_restart_transparent", 22),
+        ("exact_sides_differ_from_rediff", 751),
+        ("concurrent_restores_of_one_root", 82),
+        ("concurrent_restore_o4", 20),
+        ("concurrent_restore_o4a", 7),
+        ("concurrent_restore_base_by_root", 55),
+        ("d1_widened", 2808),
+        ("d1_widened_then_undone", 1215),
+        ("end_break_a", 43),
+        ("end_break_b", 38),
+        ("end_break_c", 36),
+        ("end_break_d", 38),
+        ("write_base_shared_start", 165),
+        ("write_base_shared_start_was_conflict", 39),
+        ("write_base_words_same_line", 243),
+        ("write_base_multiline_rewrite", 71),
+        ("restore_part:base_by_root", 55),
+        ("restore_part:o4_restore", 20),
+        ("restore_part:o4a", 7),
+        ("own_only_checked", 1214),
+        ("own_only_removed", 8545),
+        ("own_only_removed_root_author_not_actor", 1333),
+        ("own_only_unresolved", 0),
+        ("reverts_checked", 649),
+        ("revert_regions", 857),
+        ("revert_extra", 0),
+        ("touching_revert_regions", 117),
+        ("touching_revert_extra", 0),
+        ("wb_conflicts_compared", 395),
+        ("wb_regions_compared", 553),
+        ("wb_exact", 395),
+        ("wb_coalesced_touching", 0),
+        ("wb_multi_separate", 113),
+        ("wb_multi_separate_regions", 272),
+    ],
+};
+
+/// `trace::run_twin`'s floors (restart transparency, stack-free, with its own scenario
+/// weight), at 128 traces: half of what seeds 0..128 give (13538 steps; write --base 211
+/// compared, 297 regions, 63 refused in separate regions with 149). Undo-only classes are 0.
+const TWIN: Floors = Floors {
+    per: 128,
+    of: &[
+        ("steps", 6769),
+        ("append_at_end", 48),
+        ("insert_inside_another_range", 7),
+        ("multi_hunk_partial", 0),
+        ("stays_on_top", 0),
+        ("redo_after_partial", 0),
+        ("revert_after_restart", 677),
+        ("undo_across_purge", 0),
+        ("multi_connection_pid", 0),
+        ("empty_base_double_write", 21),
+        ("last_line_delete_after_append", 13),
+        ("whole_doc_delete_then_append", 7),
+        ("touching_regions_one_step", 72),
+        ("revert_beyond_compaction", 798),
+        ("revert_outside_window", 46),
+        ("taint", 262),
+        ("revert_over_erased", 19),
+        ("undo_for_person", 0),
+        ("steps_n", 0),
+        ("undo_drop", 0),
+        ("history_lost_after_restart", 0),
+        ("multi_root_batch", 0),
+        ("repeated_text_identity", 119),
+        ("revert_restart_transparent", 69),
+        ("exact_sides_differ_from_rediff", 244),
+        ("concurrent_restores_of_one_root", 73),
+        ("concurrent_restore_o4", 36),
+        ("concurrent_restore_o4a", 2),
+        ("concurrent_restore_base_by_root", 35),
+        ("d1_widened", 931),
+        ("d1_widened_then_undone", 472),
+        ("end_break_a", 21),
+        ("end_break_b", 18),
+        ("end_break_c", 11),
+        ("end_break_d", 13),
+        ("write_base_shared_start", 36),
+        ("write_base_shared_start_was_conflict", 6),
+        ("write_base_words_same_line", 64),
+        ("write_base_multiline_rewrite", 16),
+        ("restore_part:base_by_root", 35),
+        ("restore_part:o4_restore", 36),
+        ("restore_part:o4a", 2),
+        ("own_only_checked", 630),
+        ("own_only_removed", 1709),
+        ("own_only_removed_root_author_not_actor", 921),
+        ("own_only_unresolved", 0),
+        ("reverts_checked", 1058),
+        ("revert_regions", 1229),
+        ("revert_extra", 0),
+        ("touching_revert_regions", 152),
+        ("touching_revert_extra", 0),
+        ("wb_conflicts_compared", 105),
+        ("wb_regions_compared", 148),
+        ("wb_exact", 105),
+        ("wb_coalesced_touching", 0),
+        ("wb_multi_separate", 31),
+        ("wb_multi_separate_regions", 74),
+    ],
+};
+
+/// The grouping traces' floors, at 256 traces: half of what seeds 0..256 give (25188 steps).
+/// They make no `write --base`, revert, purge or restart: those counts are 0.
+const GROUP: Floors = Floors {
+    per: 256,
+    of: &[
+        ("steps", 12594),
+        ("append_at_end", 12),
+        ("insert_inside_another_range", 9),
+        ("multi_hunk_partial", 1),
+        ("stays_on_top", 33),
+        ("redo_after_partial", 0),
+        ("revert_after_restart", 0),
+        ("undo_across_purge", 0),
+        ("multi_connection_pid", 155),
+        ("empty_base_double_write", 0),
+        ("last_line_delete_after_append", 12),
+        ("whole_doc_delete_then_append", 1),
+        ("touching_regions_one_step", 1),
+        ("revert_beyond_compaction", 0),
+        ("revert_outside_window", 0),
+        ("taint", 127),
+        ("revert_over_erased", 0),
+        ("undo_for_person", 0),
+        ("steps_n", 78),
+        ("undo_drop", 0),
+        ("history_lost_after_restart", 39),
+        ("multi_root_batch", 0),
+        ("repeated_text_identity", 0),
+        ("revert_restart_transparent", 0),
+        ("exact_sides_differ_from_rediff", 504),
+        ("concurrent_restores_of_one_root", 20),
+        ("concurrent_restore_o4", 0),
+        ("concurrent_restore_o4a", 0),
+        ("concurrent_restore_base_by_root", 20),
+        ("d1_widened", 3032),
+        ("d1_widened_then_undone", 1287),
+        ("end_break_a", 0),
+        ("end_break_b", 0),
+        ("end_break_c", 0),
+        ("end_break_d", 0),
+        ("write_base_shared_start", 0),
+        ("write_base_shared_start_was_conflict", 0),
+        ("write_base_words_same_line", 0),
+        ("write_base_multiline_rewrite", 0),
+        ("group_joined", 878),
+        ("group_closed_idle", 47),
+        ("group_closed_noncontiguous", 235),
+        ("group_closed_boundary", 338),
+        ("group_closed_newline", 162),
+        ("group_closed_token", 109),
+        ("group_closed_foreign", 216),
+        ("group_self_undone", 54),
+        ("group_undone", 148),
+        ("group_redone", 9),
+        ("group_agent_token", 296),
+        ("restore_part:base_by_root", 20),
+        ("restore_part:o4_restore", 0),
+        ("restore_part:o4a", 0),
+        ("own_only_checked", 1275),
+        ("own_only_removed", 3732),
+        ("own_only_removed_root_author_not_actor", 221),
+        ("own_only_unresolved", 0),
+        ("reverts_checked", 0),
+        ("revert_regions", 0),
+        ("revert_extra", 0),
+        ("touching_revert_regions", 0),
+        ("touching_revert_extra", 0),
+        ("wb_conflicts_compared", 0),
+        ("wb_regions_compared", 0),
+        ("wb_exact", 0),
+        ("wb_coalesced_touching", 0),
+        ("wb_multi_separate", 0),
+        ("wb_multi_separate_regions", 0),
+    ],
+};
 
 /// The trace count: `SPEC_UNDO_TRACES`, else `default`.
 fn traces_or(default: u64) -> u64 {
@@ -181,6 +560,20 @@ fn f1_each_undoes_their_own_append() {
     }
 }
 
+/// Regression (job f77bab22, `trace_equivalence_large` seed 1001280, step 53): a refused
+/// `write --base` whose region holds a live insertion that clashes with nothing. The
+/// region's lines in the live text count it (live lines 6 to 15); the kit said 6 to 13, the
+/// oracle 6 to 11.
+#[test]
+fn regression_write_base_lines_seed_1001280() {
+    let r = trace::run(1_001_280);
+    assert!(
+        r.mismatch.is_none(),
+        "{}",
+        r.mismatch.map_or(String::new(), |m| m.what)
+    );
+}
+
 /// U22a (v1.5), minimal: a change's two regions; a deletion crosses the left one's end,
 /// then another deletes what separated them. Undo of the change conflicts on the left region
 /// only (U9); revert also on the right one, which touches the left one's tainted end
@@ -202,14 +595,15 @@ fn u22a_revert_inherits_a_tainted_neighbour() {
 
 /// Undo spec U22a (v1.6), restart transparency: stack-free traces, each also run on a kit
 /// that never restarts; a restart at any point changes no outcome (reverts included) and
-/// no text. 64 traces; the class `revert_restart_transparent` (a revert whose carry was
-/// persisted, with restarts between the change and the revert and between later changes
-/// on its root) must be hit.
+/// no text. 128 traces (64 before v0.11.1, whose small classes moved by half with any
+/// change to the generator); the class `revert_restart_transparent` (a revert whose carry
+/// was persisted, with restarts between the change and the revert and between later
+/// changes on its root) must be hit.
 #[test]
 fn restart_transparency() {
     run_many_with(
         "restart_transparency",
-        0..traces_or(64),
+        0..traces_or(128),
         &[
             "revert_restart_transparent",
             "revert_after_restart",
@@ -217,6 +611,7 @@ fn restart_transparency() {
         ],
         4,
         trace::run_twin,
+        &TWIN,
     );
 }
 
@@ -251,6 +646,7 @@ fn d1_traces_large() {
         trace::CLASSES,
         1,
         trace::run,
+        &MAIN,
     );
 }
 
@@ -268,7 +664,14 @@ fn group_trace_equivalence() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(256);
-    run_many_with("group_traces", 0..n, trace::GROUP_CLASSES, 1, group_trace);
+    run_many_with(
+        "group_traces",
+        0..n,
+        trace::GROUP_CLASSES,
+        1,
+        group_trace,
+        &GROUP,
+    );
 }
 
 /// The nodes' run of the grouping class: 10^4 traces, every grouping class hit at least 100
@@ -282,6 +685,7 @@ fn group_trace_equivalence_large() {
         trace::GROUP_CLASSES,
         100,
         group_trace,
+        &GROUP,
     );
 }
 
@@ -352,6 +756,7 @@ fn end_break_trace_class_large() {
         ],
         10_000,
         trace::run,
+        &MAIN,
     );
 }
 

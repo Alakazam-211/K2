@@ -6,25 +6,34 @@
 //! Modes:
 //! - `bfs` (default): level by level with an exact visited set. Its distinct-state count is
 //!   TLC's "distinct states found" on `spec/quint/undo.qnt` at the same bound (without
-//!   `--sym`). For small bounds.
+//!   `--sym`). For small bounds. Its case-class counts are **per first visit**: a class is
+//!   counted when a transition reaches a state not seen before, and a transition into an
+//!   already-visited state adds nothing. So a bfs class count of 0 does not mean no
+//!   transition hits the class (walks count per step taken). `cut=` in the SUMMARY counts
+//!   the transitions refused by the length cap, which no check sees (`bounded`, the cut).
 //! - `dfs`: for large bounds. The states at `--seed-depth` (found breadth-first, exactly)
 //!   are seeds; each seed's subtree is explored depth-first over `--threads`, with a visited
 //!   set of 128-bit fingerprints per seed (`--dedup seed`, O(subtree) memory; a state
 //!   reachable from two seeds counts once in each) or shared by all seeds (`--dedup global`,
 //!   exact distinct count up to fingerprint collisions, 16 bytes per state).
 //!   `--checkpoint FILE` appends one line per finished seed; a rerun with the same file and
-//!   configuration skips those seeds and adds their counts. Progress every `--progress`
+//!   configuration skips those seeds and adds their counts: the SUMMARY's `seeds=K/N` counts
+//!   them as finished, and `explored=` (finished in this run) and `resumed=` (taken from the
+//!   checkpoint) split K (also in the RUNREC). Progress every `--progress`
 //!   seconds (default 60). `--time-limit SECS` stops early (exit 3).
-//! - `walk`: `--probes` random walks to the bound's full depth, every transition checked
-//!   (not exhaustive: for bounds too large to enumerate, such as the literal G1 bound). The
-//!   summary counts the transitions that hit each case class (E-HIST-13, `bounded::CLASSES`).
+//! - `walk`: `--probes` random walks to the bound's full depth (not exhaustive: for bounds
+//!   too large to enumerate, such as the literal G1 bound). At each state every enabled step
+//!   is computed (each runs the transition checks), one is picked, and only the picked
+//!   step's violations are recorded: a violation on a step not taken is not reported. A
+//!   step past the length cap is not taken and not checked. The summary counts, per case
+//!   class (E-HIST-13, `bounded::CLASSES`), the steps taken that hit it.
 //!   A progress line (walks, steps, violations, classes so far) every `--progress` seconds.
 //!   `--bias redo-after-partial` weighs the next step instead of drawing it uniformly: a
 //!   step that redoes a partial undo's entry (the class `redo_after_partial`) weighs 256, a
 //!   step that leaves a new such redo entry (an undo that skipped regions) 64, any other
 //!   `undo --partial` 4, every other step 1. Every enabled step keeps a weight of at least
-//!   1, so no path of the bound is left out, and every step is checked as in a plain walk;
-//!   only the odds change (the walks are not a uniform sample of paths).
+//!   1, so no path of the bound is left out, and the step taken is checked and recorded as
+//!   in a plain walk; only the odds change (the walks are not a uniform sample of paths).
 //! - `knuth`: Knuth's random-probe estimate of the search tree's size per depth (an upper
 //!   bound on the states `dfs --dedup seed` visits), for runtime estimates.
 //!
@@ -387,6 +396,8 @@ fn classes_line(counts: &[u64]) -> String {
         .join(",")
 }
 
+/// bfs: the classes hit by the transition that first reached `s` (called on newly visited
+/// states only, so a class hit only on the way into a seen state is not counted).
 fn count_classes(counts: &mut [u64], s: &State) {
     for h in &s.hit {
         if let Some(k) = CLASSES.iter().position(|c| c == h) {
@@ -603,7 +614,7 @@ fn run_dfs(o: &Opts) -> i32 {
     let (mut seeds, above, seed_viol, seed_panic) = seeds(o, &perms);
     if let Some(msg) = seed_panic {
         println!(
-            "SUMMARY: mode=dfs states={above} seeds=0/0 complete=false max_depth=0 dedup={} violations=[{}] observed=[] wall={:.1}s{}",
+            "SUMMARY: mode=dfs states={above} seeds=0/0 explored=0 resumed=0 complete=false max_depth=0 dedup={} violations=[{}] observed=[] wall={:.1}s{}",
             if o.dedup_global { "global" } else { "seed" },
             seed_viol
                 .iter()
@@ -794,6 +805,10 @@ fn run_dfs(o: &Opts) -> i32 {
         }
     });
     let res = results.into_inner().expect("results");
+    // `res` starts from the checkpoint's seeds (`done`), so `seeds=` counts them too: say
+    // how many this run finished and how many it took from the checkpoint
+    let resumed = done.len();
+    let explored = res.len().saturating_sub(resumed);
     let states: u64 = above + res.values().map(|r| r.0).sum::<u64>();
     let max_depth = res.values().map(|r| r.1).max().unwrap_or(0);
     let mut viol: BTreeSet<String> = seed_viol.into_iter().collect();
@@ -857,7 +872,7 @@ fn run_dfs(o: &Opts) -> i32 {
         return 0;
     }
     println!(
-        "SUMMARY: mode=dfs states={states} seeds={}/{n} complete={complete} max_depth={max_depth} dedup={} violations=[{}] observed=[{}] wall={:.1}s{}",
+        "SUMMARY: mode=dfs states={states} seeds={}/{n} explored={explored} resumed={resumed} complete={complete} max_depth={max_depth} dedup={} violations=[{}] observed=[{}] wall={:.1}s{}",
         res.len(),
         if o.dedup_global { "global" } else { "seed" },
         fmt(true),
@@ -881,6 +896,8 @@ fn run_dfs(o: &Opts) -> i32 {
         ("depth", max_depth.to_string()),
         ("seeds", format!("{}", res.len())),
         ("seeds_all", n.to_string()),
+        ("explored", explored.to_string()),
+        ("resumed", resumed.to_string()),
     ];
     match least_stop {
         Some((r, d)) => {
@@ -991,8 +1008,9 @@ fn run_knuth(o: &Opts) -> i32 {
     0
 }
 
-/// Random walks to full depth over `--threads`, every transition checked; each rule's
-/// shortest witness seen is printed.
+/// Random walks to full depth over `--threads`: every enabled step is computed, and only
+/// the picked step's violations are recorded (module doc); each rule's shortest witness
+/// seen is printed.
 fn run_walk(o: &Opts) -> i32 {
     let t0 = Instant::now();
     let done = AtomicU64::new(0);

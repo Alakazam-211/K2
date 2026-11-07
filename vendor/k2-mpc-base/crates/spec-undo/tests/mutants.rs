@@ -11,7 +11,7 @@
 // the trace runner (shared with tests/traces.rs), for the D1 mutants' trace check
 #[allow(dead_code)]
 mod trace;
-use spec_undo::bounded::{bfs, Bound, STOP};
+use spec_undo::bounded::{bfs, Act, Bound, State, STOP};
 use spec_undo::model::mutant::{self, Mutant};
 use spec_undo::model::{Bounds, Edit, Mode, Model, Outcome, Request};
 use std::sync::{Mutex, MutexGuard};
@@ -95,6 +95,54 @@ fn no_o4a_bound() -> Bound {
     }
 }
 
+/// Mutant u13-refused-revert-applies' bound: two pids, one event each, one undo and one
+/// revert, from `abb` (counts.sh's `c_2x1u1r1`; three letters, so a change has two regions
+/// from the start: one can conflict while the other is clean).
+fn revert_bound() -> Bound {
+    Bound {
+        pids: 2,
+        events: 1,
+        undos: 1,
+        reverts: 1,
+        maxlen: 4,
+        init: "abb".into(),
+        ..Bound::small()
+    }
+}
+
+/// Where restorations meet: two pids, one event each, two undos and a revert, from `ab`
+/// (counts.sh's `c_2x1u2r1`): mutant r3-redo-rewrites-window's bound (an undo, then a redo).
+fn restorations_bound() -> Bound {
+    Bound {
+        pids: 2,
+        events: 1,
+        undos: 2,
+        reverts: 1,
+        maxlen: 4,
+        init: "ab".into(),
+        ..Bound::small()
+    }
+}
+
+/// Mutant i1-per-request's bound (counts.sh `PART=m`): two pids, two events each, one undo
+/// (`--steps 2`) and one revert, from `a`, texts up to 3 (a step's scratch text is not cut:
+/// only the request's end text is), no two-region edits, no purge. Its least depth (5) is the
+/// enumerator's and TLC's; the oracle's whole bound doesn't fit a test (about 10^6 states at
+/// depth 5 alone), so the test below replays the least counterexample.
+fn per_request_bound() -> Bound {
+    Bound {
+        pids: 2,
+        events: 2,
+        undos: 1,
+        reverts: 1,
+        maxlen: 3,
+        init: "a".into(),
+        multi: false,
+        purge: false,
+        ..Bound::small()
+    }
+}
+
 /// The oracle of record violates none of the rules the runs stop at, at each mutant's bound.
 fn the_oracle_passes_at(b: Bound) {
     let _one = one_at_a_time();
@@ -126,15 +174,31 @@ fn the_oracle_passes_at_the_no_o4a_bound() {
     the_oracle_passes_at(no_o4a_bound());
 }
 
+#[test]
+fn the_oracle_passes_at_the_revert_bound() {
+    the_oracle_passes_at(revert_bound());
+}
+
+#[test]
+fn the_oracle_passes_at_the_restorations_bound() {
+    the_oracle_passes_at(restorations_bound());
+}
+
 /// Mutant `m` violates `rule` at `depth` on the enumerator at bound `b`.
 fn fails_its_rule(m: Mutant, rule: &str, depth: usize, b: Bound) {
+    least_witness(m, rule, depth, b, STOP);
+}
+
+/// Mutant `m` violates `rule` at `depth` on the enumerator at bound `b`, stopping at the rules
+/// `stop`: the least counterexample's actions.
+fn least_witness(m: Mutant, rule: &str, depth: usize, b: Bound, stop: &[&str]) -> Vec<Act> {
     let _one = one_at_a_time();
     mutant::set(m);
-    let c = bfs(&b, false, STOP, true, |_, _| {});
+    let c = bfs(&b, false, stop, true, |_, _| {});
     let got: Vec<_> = c
         .violations
         .iter()
-        .filter(|(r, _)| STOP.contains(r))
+        .filter(|(r, _)| stop.contains(r))
         .map(|(r, (d, _))| (*r, *d))
         .collect();
     eprintln!("{}: {got:?}", m.name());
@@ -143,6 +207,7 @@ fn fails_its_rule(m: Mutant, rule: &str, depth: usize, b: Bound) {
         "{}: wanted {rule} at depth {depth}, got {got:?}",
         m.name()
     );
+    c.violations[rule].1.clone()
 }
 
 #[test]
@@ -199,6 +264,123 @@ fn no_o4a_fails_i1() {
     fails_its_rule(Mutant::NoO4a, "I1", 4, no_o4a_bound());
 }
 
+/// A refused all-or-nothing revert that applies its clean regions (U13). Least witness: p1
+/// deletes the first and the last letter of `abb` (two regions), p2 types `a` at 0 (into the
+/// first region's window), p1's all-or-nothing revert conflicts on the first region and
+/// applies the second anyway.
+#[test]
+fn refused_revert_applies_fails_u13() {
+    let path = least_witness(Mutant::RefusedRevertApplies, "U13", 3, revert_bound(), STOP);
+    assert!(
+        matches!(path.last(), Some(Act::Revert { partial: false, .. })),
+        "{path:?}"
+    );
+}
+
+/// A redo that rewrites its whole window (R3): own_only fails through the redo (undo and
+/// revert as specified).
+#[test]
+fn redo_rewrites_window_fails_own_only_through_redo() {
+    let path = least_witness(
+        Mutant::RedoRewritesWindow,
+        "own_only",
+        4,
+        restorations_bound(),
+        STOP,
+    );
+    assert!(matches!(path.last(), Some(Act::Redo { .. })), "{path:?}");
+}
+
+/// A revert that rewrites its whole window (R3): own_only fails through the revert.
+#[test]
+fn revert_rewrites_window_fails_own_only_through_revert() {
+    let path = least_witness(
+        Mutant::RevertRewritesWindow,
+        "own_only",
+        3,
+        no_o4a_bound(),
+        STOP,
+    );
+    assert!(matches!(path.last(), Some(Act::Revert { .. })), "{path:?}");
+}
+
+/// The request judged as one change (v1.8's I1): I1 fails at an intermediate step only. Its
+/// least counterexample (depth 5 at [`per_request_bound`], `undo_enum bfs --first` and TLC):
+/// p1 appends `a` (root R), p1 deletes it, p2 appends `a`, p2 reverts p1's delete (R back,
+/// after p2's `a`), p1 `undo --steps 2`. The first step puts R back beside p2's `a` at the
+/// doc's end (theirs inserts p2's `a` and R, ours R: not identical, O5 lands both); O4a
+/// refuses it on the oracle (R is live), the mutant waives it: two live R. The second step
+/// undoes p1's append and removes one R, so the request's end state has every root once and
+/// only the per-step check (`Hits::i1_violated`) fails I1.
+#[test]
+fn i1_per_request_fails_i1_at_an_intermediate_step() {
+    let b = per_request_bound();
+    let edit = |p, start, end, insert: &str| Act::Edit {
+        p,
+        hunks: vec![e(start, end, insert)],
+    };
+    let path = [
+        edit(0, 1, 1, "a"), // change 2: "aa"
+        edit(0, 1, 2, ""),  // change 3: "a"
+        edit(1, 1, 1, "a"), // "aa"
+        Act::Revert {
+            p: 1,
+            change: 3,
+            partial: false,
+        }, // "aaa"
+        Act::Undo {
+            p: 0,
+            mode: Mode::All,
+            steps: 2,
+        },
+    ];
+    let _one = one_at_a_time();
+    let run = |m: Mutant| {
+        mutant::set(m);
+        let mut s = State::init(&b);
+        let mut last = None;
+        for a in &path {
+            let (t, o) = s.step(&b, a).expect("within the bound");
+            s = t;
+            last = Some(o);
+        }
+        mutant::set(Mutant::None);
+        (s, last.expect("five steps"))
+    };
+    let (s, o) = run(Mutant::None);
+    assert!(
+        matches!(o, Outcome::Conflicts { step: 1, .. }) && s.viol.is_empty(),
+        "the oracle: O4a refuses the first step: {o:?} {:?}",
+        s.viol
+    );
+    let (s, o) = run(Mutant::I1PerRequest);
+    assert!(matches!(o, Outcome::Applied { steps: 2, .. }), "{o:?}");
+    assert_eq!(s.viol.iter().copied().collect::<Vec<_>>(), vec!["I1"]);
+    assert!(
+        s.m.i1(),
+        "the end state has a root live twice: {:?}",
+        s.text()
+    );
+    assert_eq!(s.text(), "aaa");
+}
+
+/// The independent formulations (bounded.rs's `O5doc`, `U17doc`) catch, on their own, the
+/// mutants that break the rules they restate.
+#[test]
+fn o5_every_window_end_fails_o5doc() {
+    least_witness(Mutant::O5EveryWindowEnd, "O5doc", 3, tiny(), &["O5doc"]);
+}
+
+#[test]
+fn o5_region_base_fails_o5doc() {
+    least_witness(Mutant::O5RegionBase, "O5doc", 3, tiny(), &["O5doc"]);
+}
+
+#[test]
+fn redo_retries_skipped_fails_u17doc() {
+    least_witness(Mutant::RedoRetriesSkipped, "U17doc", 3, tiny(), &["U17doc"]);
+}
+
 /// Every mutant of the model check has its test above (a new one fails this until it has).
 #[test]
 fn every_mutant_has_its_test() {
@@ -213,6 +395,10 @@ fn every_mutant_has_its_test() {
         Mutant::RestartSingleTaint,
         Mutant::ProvenanceIgnored,
         Mutant::NoO4a,
+        Mutant::RefusedRevertApplies,
+        Mutant::RedoRewritesWindow,
+        Mutant::RevertRewritesWindow,
+        Mutant::I1PerRequest,
     ];
     for (name, m) in Mutant::ALL {
         assert!(

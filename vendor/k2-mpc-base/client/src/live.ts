@@ -449,6 +449,7 @@ export class LiveText {
    * position back is no move, and sends nothing while a re-send is due.
    */
   setCursor(anchor: number, head: number): void {
+    if (this.dead) return;
     const c = this.cursor;
     if (c && c.anchor === anchor && c.head === head && this.resendTimer !== null) return;
     // this connection's own activity: read by `participants()`, no callback of its own
@@ -475,6 +476,7 @@ export class LiveText {
   }
 
   private undoRedo(kind: "undo" | "redo"): number {
+    if (this.dead) throw new Error("LiveText is closed");
     const op = this.nextWire++;
     // behind the queued edits typed before it, and before those typed after (`flush`)
     if (this.queue.length > 0) this.queue.push({ held: kind, op });
@@ -490,6 +492,7 @@ export class LiveText {
   /** Whether this connection's view is in front (the host's `set_visible`); re-sent after a
    * reconnect. */
   setVisible(visible: boolean): void {
+    if (this.dead) return;
     this.visible = visible;
     this.t.send({ type: "visible", visible });
   }
@@ -497,6 +500,7 @@ export class LiveText {
   /** The lines this connection shows (1-based, inclusive; the host's `set_view`); re-sent after
    * a reconnect. */
   setView(first: number, last: number): void {
+    if (this.dead) return;
     this.view = { root: this.root, first, last };
     this.t.send({ type: "view", ...this.view });
   }
@@ -991,6 +995,7 @@ export class LiveText {
    * handed to `onRejected`.
    */
   reset(snapshot: { text: string; version: number }): void {
+    if (this.dead) return;
     this.rejectAll(null);
     // every open region now moves by a diff of the texts, not the server's changes
     for (const r of this._rejected) this.reloaded.add(r.id);
@@ -1253,6 +1258,10 @@ export class LiveText {
    * replaced: either ID is this client's for this edit. */
   private isOwn(ev: ChangeEvent, e: Entry): boolean {
     if (this.stash && this.stash.op === e.op) return this.stash.hunks.length > 0 && ev.version === this.stash.version;
+    // only an edit is the edit in flight (an undo or redo can carry the same hunks); an older
+    // kit sends no kind (`kindOf`: none), and is read by client ID and hunks as before kinds
+    const k = this.kindOf(ev.kind);
+    if (k !== "edit" && k !== "none") return false;
     const ids = [e.sentClient, this.clientId].filter((c): c is number => c !== undefined);
     if (ids.length > 0 && !ids.includes(ev.client)) return false;
     const hs = coalesce(ev.hunks);

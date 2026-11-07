@@ -3,6 +3,28 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.13.1 (kit tag v0.11.1)
+
+The client for kit v0.11.1. No export is added, removed or renamed, and no frame changes; a host
+changes nothing.
+
+- **`write --base` conflict regions: a doc and spec clarification, no behaviour change.** A
+  refused write's conflicting hunks that overlap or touch are one region, its lines the union
+  (undo spec O6). The regions a client reads are the same as before.
+- **An undo with the same text as a lost reply's edit isn't taken for the edit.** After a reconnect,
+  the `since` reply's change from this client is taken as the edit in flight only when its
+  `kind` is `edit` (or, from a kit before v0.10.2, which sends no `kind`, by client ID and hunks
+  as before). An undo or redo whose hunks equal the edit's, applied after the host refused the
+  edit, is applied as a change instead, and the edit goes to `onRejected` (`MPC-E000`).
+- **A closed `LiveText` sends nothing:** after `close()`, `undo()` and `redo()` throw (as
+  `applyLocal` does), and `reset()`, `setCursor()`, `setVisible()` and `setView()` do nothing;
+  `reset()` sent an undo or redo still held, and the others their frame. `HOST.md` lists it.
+- **Tests only, no behaviour change:** `test/undo-held.test.ts` pins that a held undo or redo
+  always goes out, on every path that takes the edits before it out of the queue (acked, acked
+  past a version gap, refused, base expired, dropped by a rebase, composed away, several held,
+  a reconnect with only the hold, a refused snapshot then a connect without resume), and that
+  `close()` drops it with nothing sent after.
+
 ## 0.13.0 (kit tag v0.11.0)
 
 The client for kit v0.11.0. Additive only: no export is removed or renamed, and a client talking

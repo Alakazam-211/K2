@@ -1,4 +1,4 @@
-# Exact counts (each PART <= 15 min): TLC's "distinct states found" on undo.qnt at small bounds
+# Exact counts (PART a, b <= 15 min each; m about 18 min): TLC's "distinct states found" on undo.qnt at small bounds
 # against undo_enum bfs at the same bound (no --sym: both count the same states); ITF traces
 # replayed into spec_undo::model; every mutant on TLC (one worker) and on the enumerator.
 # Records (tools/evidence/): TLC's runs are read from their `=== tlc NAME` output; the
@@ -7,9 +7,12 @@
 #           at 2x1+1 undo+1 revert, 1,000 at 2x1+2 undos+1 revert, where restorations meet;
 #           the ITF regression traces, tools/undo/itf-regress)
 #   PART=b  2x2+1 undo (ab, 3), 1x3+1 revert+1 restart (abba), 2x1+2 undos+1 revert (ab, v1.8)
-#   PART=m  every mutant, TLC with one worker (a shortest counterexample) and the enumerator
+#   PART=m  every mutant, TLC with one worker (a shortest counterexample) and the enumerator;
+#           the audit's four (u13-refused-revert-applies, r3-redo-rewrites-window,
+#           r3-revert-rewrites-window, i1-per-request, each counterexample printed) and the
+#           independent checks O5doc, U17doc alone under (vi), (vii) and (iv)
 #   (unset: all three, which needs more than one 15-min job since v1.8)
-INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5"
+INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5 inv_O5doc inv_U17doc"
 need_apalache
 . "$ROOT/tools/undo/tlc.sh"
 # cmp NAME PIDS EVENTS UNDOS REVERTS MAXLEN "INIT" MULTI PURGE INITLETTERS SECONDS [RESTARTS]
@@ -61,4 +64,31 @@ timed "enumerator, mutant x-provenance-ignored-in-o4" E bfs --run e_m_x-provenan
 inst m_xi 2 1 1 1 4 "0, 1" true true xi-no-o4a
 TLC_WORKERS=1 tlc m_xi "$INV" 240
 timed "enumerator, mutant xi-no-o4a" E bfs --run e_m_xi-no-o4a --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant xi-no-o4a
+# the audit's mutants (each with its counterexample printed, TLC_TRACE): U13 (a refused
+# all-or-nothing revert applies its clean regions) at 2 x 1 + 1 undo + 1 revert, seed abb
+inst m_u13 2 1 1 1 4 "0, 1, 1" true true u13-refused-revert-applies
+TLC_TRACE=400 TLC_WORKERS=1 tlc m_u13 "$INV" 240
+timed "enumerator, mutant u13-refused-revert-applies" E bfs --run e_m_u13-refused-revert-applies --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init abb --first --mutant u13-refused-revert-applies
+# own_only through redo only, at 2 x 1 + 2 undos + 1 revert, seed ab (c_2x1u2r1)
+inst m_r3redo 2 1 2 1 4 "0, 1" true true r3-redo-rewrites-window
+TLC_TRACE=600 TLC_WORKERS=1 tlc m_r3redo "$INV" 300
+timed "enumerator, mutant r3-redo-rewrites-window" E bfs --run e_m_r3-redo-rewrites-window --pids 2 --events 1 --undos 2 --reverts 1 --maxlen 4 --init ab --first --mutant r3-redo-rewrites-window
+# own_only through revert only, at 2 x 1 + 1 undo + 1 revert, seed ab
+inst m_r3rev 2 1 1 1 4 "0, 1" true true r3-revert-rewrites-window
+TLC_TRACE=400 TLC_WORKERS=1 tlc m_r3rev "$INV" 240
+timed "enumerator, mutant r3-revert-rewrites-window" E bfs --run e_m_r3-revert-rewrites-window --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant r3-revert-rewrites-window
+# I1 at an intermediate step only (v1.8's I1, per request), at 2 x 2 + 1 undo + 1 revert,
+# seed a, maxlen 3, no two-region edits, no purge (depth 5; about 10^5 states before it)
+inst m_i1pr 2 2 1 1 3 "0" false false i1-per-request
+TLC_TRACE=800 TLC_WORKERS=1 tlc m_i1pr "$INV" 5400
+timed "enumerator, mutant i1-per-request" E bfs --run e_m_i1-per-request --pids 2 --events 2 --undos 1 --reverts 1 --maxlen 3 --init a --no-multi --no-purge --first --mutant i1-per-request
+# the independent formulations alone (O5doc, U17doc): each stops at its own rule only
+for m in vi-o5-every-window-end vii-o5-region-base; do
+  inst m_tiny 2 1 1 0 4 "0, 1, 1" true true $m
+  TLC_WORKERS=1 tlc m_tiny "inv_O5doc" 120
+  timed "enumerator, mutant $m, O5doc only" E bfs --run "e_m_o5doc_$m" --pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb --first --stop O5doc --mutant $m
+done
+inst m_tiny 2 1 1 0 4 "0, 1, 1" true true iv-redo-retries-skipped
+TLC_WORKERS=1 tlc m_tiny "inv_U17doc" 120
+timed "enumerator, mutant iv-redo-retries-skipped, U17doc only" E bfs --run e_m_u17doc_iv-redo-retries-skipped --pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb --first --stop U17doc --mutant iv-redo-retries-skipped
 ;; esac

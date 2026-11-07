@@ -5,11 +5,15 @@
 //! the table by key (live order, deleted keys, cells, names, meta), the version, the outcome
 //! (kind and the conflicting regions as an exact set), every participant's stack depths, and
 //! the holders of every facet the step wrote (the kit's `blame_elem`: the resolved change and
-//! its author); at the end of the trace, every facet's holder.
+//! its author, `on_behalf_of` and `restored_by`); at the end of the trace, every facet's holder
+//! (`Facet::Insert` holders are skipped: `blame_elem` has no insert facet; see
+//! `holders_differ`). Every comparison is counted, and each count and coverage key must reach
+//! its floor in each class ([`FLOORS`]); the mismatches are reported before the floors.
 //!
-//! `GRID_TRACES` sets the traces per class (by default 256 in all, as CI runs them: 16 per
-//! class; the node runs ≥ 10^4 per class), `GRID_CLASSES=a,b` a node shard's classes. Every
-//! class prints a run record (`grid_traces_<class>`). `grid_mutants_each_fail` runs the model
+//! `GRID_TRACES` sets the traces per class (by default 256 / the classes + 1, as CI runs them:
+//! 10 per class today; the node runs ≥ 10^4 per class), `GRID_CLASSES=a,b` a node shard's
+//! classes (the floors then hold per class for those). Every class prints a run record
+//! (`grid_traces_<class>`). `grid_mutants_each_fail` runs the model
 //! as each mutant of §8 (xv)–(xxvi) and records CAUGHT or SURVIVED per mutant
 //! (`grid_mutant_<name>`); over every class each must be caught (a shard only records).
 //! `write_with_no_identity` (KC7, Yrs only) plants writes with no identity through the kit's
@@ -817,45 +821,299 @@ pub struct TraceResult {
     pub class: &'static str,
     pub steps: usize,
     pub mismatch: Option<String>,
-    /// What the trace reached, by coverage key ([`COVERAGE`]).
+    /// What the trace reached and compared, by key ([`FLOORS`]).
     pub hits: BTreeMap<&'static str, u64>,
 }
 
-/// What the traces must reach, with the floor as traces per one hit (a run of N traces per class
-/// must hit each at least `N / floor`, and at least once): a generator's verb that no trace
-/// reached, or S13 never deciding, fails the test.
-const COVERAGE: &[(&str, u64)] = &[
-    ("cell set", 4),
-    ("cell clear", 16),
-    ("cells set", 4),
-    ("row insert", 4),
-    ("row move", 2),
-    ("block move", 8),
-    ("row delete", 2),
-    ("row restore", 16),
-    ("col insert", 8),
-    ("col move", 4),
-    ("col delete", 8),
-    ("col restore", 8),
-    ("col rename", 16),
-    ("header", 8),
-    ("sort", 8),
-    ("outside save", 2),
-    ("drop-deleted", 16),
-    ("restart", 8),
-    ("undo", 1),
-    ("redo", 2),
-    ("revert", 2),
-    ("undo --partial", 4),
-    ("undo --steps", 8),
-    ("undo --drop", 16),
-    ("undo --for", 2),
-    ("write --base clean", 1),
-    ("write --base conflict", 2),
-    ("write --base --partial", 2),
-    ("S13 held", 4),
-    ("S13 whole", 4),
+/// A floor on one key's count in one class's share of a run of N traces per class.
+#[derive(Debug, Clone, Copy)]
+enum Floor {
+    /// At least `N / f` (a hit per `f` traces; integer division, so below `N = f` it asks
+    /// nothing of a class).
+    Every(u64),
+    /// At least `N × k` (`k` a trace).
+    Each(u64),
+}
+
+impl Floor {
+    fn of(self, n: u64) -> u64 {
+        match self {
+            Floor::Every(f) => n / f,
+            Floor::Each(k) => n * k,
+        }
+    }
+}
+
+/// The classes a floor applies to.
+#[derive(Debug, Clone, Copy)]
+enum In {
+    /// Every class: every class's random tail can produce the key at the floor's rate.
+    All,
+    /// These classes: their scripts produce the key; elsewhere only the random tail does, too
+    /// rarely for a floor per class (some class reached it 0 times in 256 traces), and the key
+    /// counts only toward the run's "at least once".
+    Only(&'static [&'static str]),
+}
+
+/// What the traces must reach and compare, per class (spec §8: a run of N traces per class must
+/// hit each key at least N / floor in each class, and at least once): each row is a key (a
+/// coverage key, or a comparison count: `C_*`), its [`Floor`] and the classes it applies to
+/// ([`In`]). A class a row applies to that falls below the row's floor for the traces it ran
+/// fails the test; so does a key of this table that the whole run (every class: CI, the node's
+/// full run) never reached. A key may have two rows: a weak one in every class and a strong one
+/// in the classes that script it. Each floor is the strongest (the smallest `f`, the largest
+/// `k`) that leaves a 2× margin under the lowest class it applies to at N = 10 (CI), 64 and
+/// 256 (measured on node jobs 83c76426, ef65cc44 for `on_behalf_of` and 7f8275fd for
+/// `restored_by`); at N = 10 the rows `Every(f)` with `f > 10` ask nothing of a class.
+const FLOORS: &[(&str, Floor, In)] = &[
+    // the comparisons: every class runs them on every trace
+    (C_STATES, Floor::Each(2), In::All),
+    (C_VERSIONS, Floor::Each(4), In::All),
+    (C_STACKS, Floor::Each(8), In::All),
+    (C_OUTCOMES, Floor::Each(1), In::All),
+    (C_HOLDERS, Floor::Each(16), In::All),
+    (AUTHORS_COMPARED, Floor::Each(16), In::All),
+    (C_OBO, Floor::Each(16), In::All),
+    (C_OBO_AGENT, Floor::Every(16), In::All),
+    (
+        C_OBO_AGENT,
+        Floor::Each(1),
+        In::Only(&["undo_for_a_person"]),
+    ),
+    (C_RESTORED, Floor::Each(16), In::All),
+    (C_RESTORED_SOME, Floor::Every(8), In::All),
+    // its script's undos put b1's write back (S2)
+    (
+        C_RESTORED_SOME,
+        Floor::Each(4),
+        In::Only(&["own_lifo_chain"]),
+    ),
+    (C_CONFLICTS, Floor::Every(8), In::All),
+    (C_CONFLICTS, Floor::Every(2), In::Only(WRITE_BASE_CLASSES)),
+    (C_SYNCS, Floor::Every(16), In::All),
+    (C_SYNCS, Floor::Every(2), In::Only(OUTSIDE_CLASSES)),
+    // the generator's steps
+    ("cell set", Floor::Every(4), In::All),
+    ("cell clear", Floor::Every(16), In::All),
+    ("cells set", Floor::Every(128), In::All),
+    (
+        "cells set",
+        Floor::Every(4),
+        In::Only(&["column_and_block_verbs"]),
+    ),
+    ("row insert", Floor::Every(16), In::All),
+    ("row move", Floor::Every(16), In::All),
+    ("block move", Floor::Every(128), In::All),
+    (
+        "block move",
+        Floor::Every(8),
+        In::Only(&["column_and_block_verbs"]),
+    ),
+    ("row delete", Floor::Every(16), In::All),
+    ("row restore", Floor::Every(128), In::All),
+    (
+        "row restore",
+        Floor::Every(2),
+        In::Only(&["move_back_past_deleted_neighbour"]),
+    ),
+    ("col insert", Floor::Every(32), In::All),
+    ("col move", Floor::Every(128), In::All),
+    (
+        "col move",
+        Floor::Every(4),
+        In::Only(&["column_and_block_verbs"]),
+    ),
+    ("col delete", Floor::Every(32), In::All),
+    // no row in every class: the tail alone reaches it too rarely
+    (
+        "col restore",
+        Floor::Every(2),
+        In::Only(&["column_and_block_verbs"]),
+    ),
+    // no row in every class: the tail alone reaches it too rarely
+    (
+        "col rename",
+        Floor::Every(4),
+        In::Only(&["header_switch_partial"]),
+    ),
+    ("header", Floor::Every(128), In::All),
+    (
+        "header",
+        Floor::Every(2),
+        In::Only(&["header_switch_partial"]),
+    ),
+    ("sort", Floor::Every(16), In::All),
+    (
+        "sort",
+        Floor::Every(2),
+        In::Only(&["sort_vs_foreign_move", "redo_after_partial_sort_undo"]),
+    ),
+    ("outside save", Floor::Every(16), In::All),
+    ("outside save", Floor::Every(2), In::Only(OUTSIDE_CLASSES)),
+    ("drop-deleted", Floor::Every(32), In::All),
+    (
+        "drop-deleted",
+        Floor::Every(2),
+        In::Only(&["drop_between_batch_and_undo", "revert_over_a_drop"]),
+    ),
+    ("restart", Floor::Every(32), In::All),
+    (
+        "restart",
+        Floor::Every(2),
+        In::Only(&["revert_after_restart"]),
+    ),
+    ("undo", Floor::Every(4), In::All),
+    ("redo", Floor::Every(8), In::All),
+    (
+        "redo",
+        Floor::Every(2),
+        In::Only(&[
+            "redo_after_partial_sort_undo",
+            "own_lifo_chain",
+            "already_by_value",
+            "own_cell_clear_then_undo",
+        ]),
+    ),
+    ("revert", Floor::Every(32), In::All),
+    (
+        "revert",
+        Floor::Every(2),
+        In::Only(&[
+            "revert_after_restart",
+            "revert_vs_undo",
+            "revert_over_a_drop",
+            "revert_after_text_pair",
+        ]),
+    ),
+    ("undo --partial", Floor::Every(8), In::All),
+    ("undo --steps", Floor::Every(16), In::All),
+    (
+        "undo --steps",
+        Floor::Every(2),
+        In::Only(&[
+            "own_lifo_chain",
+            "drop_between_batch_and_undo",
+            "undo_across_outside_save",
+        ]),
+    ),
+    ("undo --drop", Floor::Every(16), In::All),
+    (
+        "undo --drop",
+        Floor::Every(2),
+        In::Only(&["own_later_write_off_stack"]),
+    ),
+    ("undo --for", Floor::Every(32), In::All),
+    (
+        "undo --for",
+        Floor::Every(1),
+        In::Only(&["undo_for_a_person"]),
+    ),
+    ("write --base clean", Floor::Every(16), In::All),
+    (
+        "write --base clean",
+        Floor::Every(2),
+        In::Only(&["undo_after_text_pair", "revert_after_text_pair"]),
+    ),
+    ("write --base conflict", Floor::Every(32), In::All),
+    (
+        "write --base conflict",
+        Floor::Every(4),
+        In::Only(&["text_row_both_changed"]),
+    ),
+    ("write --base --partial", Floor::Every(32), In::All),
+    (
+        "write --base --partial",
+        Floor::Every(2),
+        In::Only(&["partial_write_over_a_column_change"]),
+    ),
+    // no row in every class: the tail alone reaches it too rarely
+    (
+        "write --base --partial held by a column",
+        Floor::Every(8),
+        In::Only(&["partial_write_over_a_column_change"]),
+    ),
+    // S13: an undo or redo held a row (every class at 256 traces; strongly where scripted)
+    ("S13 held", Floor::Every(256), In::All),
+    (
+        "S13 held",
+        Floor::Every(16),
+        In::Only(&["undo_after_text_pair"]),
+    ),
+    // S13: a revert rewrote a row whole; no row in every class: the tail alone reaches it too
+    // rarely
+    (
+        "S13 whole",
+        Floor::Every(8),
+        In::Only(&["revert_after_text_pair"]),
+    ),
 ];
+
+/// The classes whose scripts run a write --base.
+const WRITE_BASE_CLASSES: &[&str] = &[
+    "text_row_both_changed",
+    "undo_after_text_pair",
+    "revert_after_text_pair",
+    "partial_write_over_a_column_change",
+];
+
+/// The classes whose scripts run an outside save.
+const OUTSIDE_CLASSES: &[&str] = &[
+    "undo_across_outside_save",
+    "row_rewritten_like_another",
+    "column_and_block_verbs",
+    "write_with_no_identity",
+];
+
+/// Every [`FLOORS`] row that a class falls below, one message each (a shard checks the classes
+/// it ran); with `whole_run`, also each key the run never reached. Prints each row's lowest
+/// class.
+fn floors_unmet(hits: &BTreeMap<&'static str, ClassRun>, whole_run: bool) -> Vec<String> {
+    let mut unmet = Vec::new();
+    for (key, _, within) in FLOORS {
+        if let In::Only(cs) = within {
+            for c in cs.iter() {
+                assert!(CLASSES.contains(c), "FLOORS: {key}: no class {c}");
+            }
+        }
+    }
+    for (i, (key, floor, within)) in FLOORS.iter().enumerate() {
+        let mut lowest: Option<(u64, u64, &str)> = None;
+        for (c, h) in hits {
+            if let In::Only(cs) = within {
+                if !cs.contains(c) {
+                    continue;
+                }
+            }
+            let got = h.cov.get(key).copied().unwrap_or(0);
+            let want = floor.of(h.traces);
+            if lowest.map_or(true, |(g, _, _)| got < g) {
+                lowest = Some((got, want, *c));
+            }
+            if got < want {
+                unmet.push(format!(
+                    "floor: {key} {floor:?} {within:?}: class {c} reached {got} in {} traces, \
+                     below {want}",
+                    h.traces
+                ));
+            }
+        }
+        if let Some((got, want, c)) = lowest {
+            println!(
+                "[grid traces] floor {key} {floor:?} {within:?}: lowest {got} ({c}), floor {want}"
+            );
+        }
+        // the run as a whole: once per key (a key may have two rows)
+        if whole_run
+            && FLOORS.iter().position(|r| r.0 == *key) == Some(i)
+            && hits
+                .values()
+                .all(|h| h.cov.get(key).copied().unwrap_or(0) == 0)
+        {
+            unmet.push(format!("floor: {key}: no trace of the run reached it"));
+        }
+    }
+    unmet
+}
 
 /// The spec's generator line (`SPEC-UNDO.md` §8, "**Generator**"), phrase by phrase, and the
 /// coverage key each means. A phrase with no key, or a key with no hit, fails the test.
@@ -933,6 +1191,8 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
     let mut kit = Kit::new(seed, &body);
     let mut g = Grid::new(&LISTS, &MAPS);
     g.mutant = mutant;
+    // the agent joins on p1's behalf (`Kit::open`)
+    g.acts_for.insert("a0".to_owned(), "p1".to_owned());
     // the import, as the kit's session imports
     let content = Lite.decode(body.as_bytes()).unwrap().roots;
     let mut imp = Vec::new();
@@ -1010,6 +1270,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
                     g.push_edit(p, s, None);
                     own.entry(p).or_default().push(s);
                 }
+                *cov.entry(C_VERSIONS).or_default() += 1;
                 if r.version != g.seq {
                     return fail(
                         done,
@@ -1130,6 +1391,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
                     k2_mpc_base::session::GridWrite::Applied(_) => says(&r.skipped),
                     o => return fail(done, step, format!("write --base: {o:?}")),
                 };
+                *cov.entry(C_CONFLICTS).or_default() += 1;
                 if got != want {
                     return fail(done, step, format!("conflicts: kit {got:?} merge {want:?}"));
                 }
@@ -1163,6 +1425,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
                 // the change ids later steps revert are the model's: if the kit's version moved
                 // otherwise, every later id would name another change (the seq skew): stop here
                 let kv = kit.s().read(conn).unwrap().version;
+                *cov.entry(C_VERSIONS).or_default() += 1;
                 if kv != g.seq {
                     return fail(done, step, format!("version: kit {kv} model {}", g.seq));
                 }
@@ -1272,6 +1535,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
                 // left as it was included (the change-counter marker re-syncs a replica that
                 // lagged a change that only deleted; v0.9.5's rule)
                 let drift = kit.s().audit_disk_sync().unwrap();
+                *cov.entry(C_SYNCS).or_default() += 1;
                 if !drift.is_empty() {
                     return fail(
                         done,
@@ -1317,6 +1581,9 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
                 rows(&keyed(&g))
             );
         }
+        if kit_out.is_some() || model_out.is_some() {
+            *cov.entry(C_OUTCOMES).or_default() += 1;
+        }
         if kit_out != model_out {
             return fail(
                 done,
@@ -1325,6 +1592,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
             );
         }
         let ks = kit.s().read(kit.conns["p1"]).unwrap();
+        *cov.entry(C_VERSIONS).or_default() += 1;
         if ks.version != g.seq {
             return fail(
                 done,
@@ -1333,6 +1601,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
             );
         }
         let kitk = kit_keyed(&kit);
+        *cov.entry(C_STATES).or_default() += 1;
         if shape(&kitk) != shape(&keyed(&g)) {
             return fail(
                 done,
@@ -1346,6 +1615,7 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
         }
         for p in PIDS.into_iter().chain(["a0"]) {
             let kd = kit.s().undo_depths(p).unwrap();
+            *cov.entry(C_STACKS).or_default() += 1;
             if kd != g.depths(p) {
                 return fail(
                     done,
@@ -1361,12 +1631,12 @@ fn run_trace(class: &'static str, seed: u64, mutant: GridMutant) -> TraceResult 
             .filter(|(k, h)| before_holders.get(*k) != Some(*h))
             .map(|(k, _)| k.clone())
             .collect();
-        if let Some(m) = holders_differ(&kit, &g, changed) {
+        if let Some(m) = holders_differ(&kit, &g, changed, &mut cov) {
             return fail(done, step, m);
         }
     }
     let all: Vec<(String, String, model::Facet)> = g.holders.keys().cloned().collect();
-    if let Some(m) = holders_differ(&kit, &g, all) {
+    if let Some(m) = holders_differ(&kit, &g, all, &mut cov) {
         return TraceResult {
             class,
             steps: done,
@@ -1389,10 +1659,55 @@ fn kit_keyed(kit: &Kit) -> KeyedState {
     kit.s().keyed_state_for_tests().unwrap()
 }
 
+// The comparison counts, kept beside the coverage keys in a trace's `hits` (a trace that
+// failed reports none): how often each comparison of kit and model ran.
+/// The table by key after a step (`shape`).
+const C_STATES: &str = "states compared";
+/// The version: after every step, and inside an edit and a write --base.
+const C_VERSIONS: &str = "versions compared";
+/// One participant's stack depths after a step (four participants a step).
+const C_STACKS: &str = "stacks compared";
+/// An undo, redo, revert or undo --for outcome (a step with one on either side).
+const C_OUTCOMES: &str = "outcomes compared";
+/// A facet holder's change (S2's resolved change against `blame_elem`'s), after a step that
+/// wrote it and at the end of the trace (`Facet::Insert` skipped).
+const C_HOLDERS: &str = "holders compared";
+/// A facet holder's author (the model's change author against `blame_elem`'s), after its change
+/// agreed.
+const AUTHORS_COMPARED: &str = "holder authors compared";
+/// A facet holder's `on_behalf_of` (the model's [`Grid::on_behalf_of`] of the resolved
+/// change against `blame_elem`'s), after its author agreed.
+const C_OBO: &str = "holder on_behalf_of compared";
+/// Of those, the holders whose change an agent made for a person (`on_behalf_of` set).
+const C_OBO_AGENT: &str = "holder on_behalf_of compared (an agent's)";
+/// A facet holder's `restored_by` (the author of the change that put the write back, when an
+/// undo, redo or revert did: the model's holder `seq` when it `restores` another, against
+/// `blame_elem`'s), after its `on_behalf_of` agreed.
+const C_RESTORED: &str = "holder restored_by compared";
+/// Of those, the holders whose write an undo, redo or revert put back (`restored_by` set).
+const C_RESTORED_SOME: &str = "holder restored_by compared (a restored write)";
+/// A write --base's conflicts as an exact set (the kit's against `merge3_text`'s).
+const C_CONFLICTS: &str = "write --base conflicts compared";
+/// K-AUD-1's disk sync check after an outside save.
+const C_SYNCS: &str = "disk syncs audited";
+
+/// Compare each facet's holder: the change it resolves to (S2), that change's author, whom it
+/// was made for (`on_behalf_of`) and who put the write back (`restored_by`), each exactly. The
+/// two sides name authors alike: the model records the pid that made the change (`p0`..`p2`,
+/// `a0`) or the kit's reserved pids (`kit:import`, `kit:external`), as the kit's change log
+/// does, so no mapping. An agent's change is the agent's (`a0`), made on p1's behalf (the
+/// model's `acts_for`, as `Kit::open` joins it), an undo --for step too. `restored_by` is the
+/// author of the holder's own change when that change restores another's write (an undo, redo
+/// or revert), else none; `restored_in` (that change) is not compared. `Facet::Insert` holders
+/// are skipped: the kit's `blame_elem` has no insert facet, and the traces don't compare who
+/// inserted a row or column. k2-mpc-base's `tests/blame.rs`,
+/// `grid::blame_structure_inserted_and_moved_by`, asserts it on one fixed case only
+/// (`blame_structure`'s inserting author per row: the import's and an agent's).
 fn holders_differ(
     kit: &Kit,
     g: &Grid,
     facets: Vec<(String, String, model::Facet)>,
+    cov: &mut BTreeMap<&'static str, u64>,
 ) -> Option<String> {
     let c = kit.conns["p1"];
     for (root, key, f) in facets {
@@ -1404,11 +1719,45 @@ fn holders_differ(
         };
         let h = g.holders.get(&(root.clone(), key.clone(), f))?;
         let b = kit.s().blame_elem(c, &root, &key, facet).ok().flatten();
+        let got_obo = b.as_ref().map(|b| b.on_behalf_of.clone());
+        let got_restored = b.as_ref().map(|b| b.restored_by.clone());
+        // S2: a holder that restores another's write was put back by its own change's author
+        let want_restored = h.restores.and_then(|_| g.authors.get(&h.seq).cloned());
         let want = (h.resolved(), g.authors.get(&h.resolved()).cloned());
+        let want_obo = g.on_behalf_of(h.resolved()).map(str::to_owned);
         let got = b.map(|b| (b.change, Some(b.author)));
+        *cov.entry(C_HOLDERS).or_default() += 1;
         if got.as_ref().map(|x| x.0) != Some(want.0) {
             return Some(format!(
                 "holder of {root}/{key}/{f:?}: kit {got:?} model {want:?}"
+            ));
+        }
+        *cov.entry(AUTHORS_COMPARED).or_default() += 1;
+        if got.as_ref().map(|x| &x.1) != Some(&want.1) {
+            return Some(format!(
+                "holder author of {root}/{key}/{f:?}: kit {got:?} model {want:?}"
+            ));
+        }
+        *cov.entry(C_OBO).or_default() += 1;
+        if want_obo.is_some() {
+            *cov.entry(C_OBO_AGENT).or_default() += 1;
+        }
+        if got_obo.as_ref() != Some(&want_obo) {
+            return Some(format!(
+                "holder on_behalf_of of {root}/{key}/{f:?}: kit {got_obo:?} model {want_obo:?} \
+                 (change {}, author {:?})",
+                want.0, want.1
+            ));
+        }
+        *cov.entry(C_RESTORED).or_default() += 1;
+        if want_restored.is_some() {
+            *cov.entry(C_RESTORED_SOME).or_default() += 1;
+        }
+        if got_restored.as_ref() != Some(&want_restored) {
+            return Some(format!(
+                "holder restored_by of {root}/{key}/{f:?}: kit {got_restored:?} model \
+                 {want_restored:?} (change {}, put back by change {})",
+                want.0, h.seq
             ));
         }
     }
@@ -1501,6 +1850,31 @@ fn grid_traces_model_equals_kit() {
     let per = traces_per_class();
     let t0 = std::time::Instant::now();
     let (steps, mismatches, hits) = run_classes(GridMutant::None, per, false);
+    // the mismatches first: a failed trace reports no coverage, so a run with many would fail
+    // the floors below and hide them
+    println!(
+        "[grid traces] {} traces ({per} per class), {steps} steps, {} mismatches, {:.1} s",
+        hits.values().map(|h| h.traces).sum::<u64>(),
+        mismatches.len(),
+        t0.elapsed().as_secs_f64()
+    );
+    for (c, h) in &hits {
+        println!("[grid traces]   {c:36} {}", h.traces);
+    }
+    for m in mismatches.iter().take(50) {
+        println!("[grid traces] MISMATCH {m}");
+    }
+    let job = std::env::var("K2_COMPUTE_JOB").unwrap_or_default();
+    for (c, h) in &hits {
+        println!(
+            "RUNREC {{\"job\":\"{job}\",\"run\":\"grid_traces_{c}\",\"tool\":\"grid_traces\",\"class\":\"{c}\",\"traces\":{},\"steps\":{},\"mismatches\":{},\"status\":\"{}\"}}",
+            h.traces,
+            h.steps,
+            h.mismatches,
+            if h.mismatches == 0 { "COMPLETE" } else { "MISMATCH" }
+        );
+    }
+    assert!(mismatches.is_empty(), "{} mismatches", mismatches.len());
     // coverage: every step the spec lists, and S13, reached (a full run only: a shard's classes
     // are only some)
     let mut reached: BTreeMap<&str, u64> = BTreeMap::new();
@@ -1510,15 +1884,18 @@ fn grid_traces_model_equals_kit() {
         }
     }
     println!("[grid traces] coverage {reached:?}");
+    for (c, h) in &hits {
+        println!("[grid traces] class {c} ({} traces): {:?}", h.traces, h.cov);
+    }
+    let authors = reached.get(AUTHORS_COMPARED).copied().unwrap_or(0);
+    println!("[grid traces] holder authors compared: {authors}");
+    // the floors per class (a shard checks its own classes), each unmet one printed
+    let unmet = floors_unmet(&hits, std::env::var("GRID_CLASSES").is_err());
+    for u in &unmet {
+        println!("[grid traces] UNMET {u}");
+    }
+    assert!(unmet.is_empty(), "{} floors unmet", unmet.len());
     if std::env::var("GRID_CLASSES").is_err() {
-        let n = hits.values().map(|h| h.traces).sum::<u64>() / hits.len().max(1) as u64;
-        for (k, floor) in COVERAGE {
-            let got = reached.get(k).copied().unwrap_or(0);
-            assert!(
-                got >= (n / floor).max(1),
-                "coverage: {k} reached {got} times in {n} traces per class"
-            );
-        }
         // the spec's generator line, phrase by phrase
         let spec = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/SPEC-UNDO.md"),
@@ -1546,29 +1923,6 @@ fn grid_traces_model_equals_kit() {
             );
         }
     }
-    println!(
-        "[grid traces] {} traces ({per} per class), {steps} steps, {} mismatches, {:.1} s",
-        hits.values().map(|h| h.traces).sum::<u64>(),
-        mismatches.len(),
-        t0.elapsed().as_secs_f64()
-    );
-    for (c, h) in &hits {
-        println!("[grid traces]   {c:36} {}", h.traces);
-    }
-    for m in mismatches.iter().take(50) {
-        println!("[grid traces] MISMATCH {m}");
-    }
-    let job = std::env::var("K2_COMPUTE_JOB").unwrap_or_default();
-    for (c, h) in &hits {
-        println!(
-            "RUNREC {{\"job\":\"{job}\",\"run\":\"grid_traces_{c}\",\"tool\":\"grid_traces\",\"class\":\"{c}\",\"traces\":{},\"steps\":{},\"mismatches\":{},\"status\":\"{}\"}}",
-            h.traces,
-            h.steps,
-            h.mismatches,
-            if h.mismatches == 0 { "COMPLETE" } else { "MISMATCH" }
-        );
-    }
-    assert!(mismatches.is_empty(), "{} mismatches", mismatches.len());
 }
 
 /// Each mutant of spec §8 (xv)–(xxvi) must disagree with the kit on some trace (a model
@@ -1634,7 +1988,8 @@ fn grid_trace_one() {
     println!("{:?}", r.mismatch);
 }
 
-/// Regression (node job fe1b0fb0, 3910b73): a map delete of an empty cell moves no byte and
+/// Regression (node job fe1b0fb0, indicative (bundle); source stated as 3910b73): a map
+/// delete of an empty cell moves no byte and
 /// only deletes, so v0.9.4's re-sync marker (the state vectors) left the replica holding the
 /// cell; the next outside save, aligned on that replica, paired two blank rows the other way
 /// round (right bytes, wrong keys and blame). Grid ingest now aligns on the live doc when it

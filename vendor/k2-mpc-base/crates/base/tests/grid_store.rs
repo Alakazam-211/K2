@@ -6243,8 +6243,8 @@ mod outside_merge {
         }
 
         /// K2 Engine's three `--partial` probes with a held column change (job c3d226ea at
-        /// 6886198): `--partial` applies nothing, the doc is unchanged, and its conflicts equal
-        /// plain `write --base`'s.
+        /// 6886198, K2 Engine's record at 114abcd7): `--partial` applies nothing, the doc is
+        /// unchanged, and its conflicts equal plain `write --base`'s.
         fn engine_partial_applies_nothing(
             name: &str,
             file: &str,

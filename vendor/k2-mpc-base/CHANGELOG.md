@@ -1,5 +1,81 @@
 # Changelog
 
+## v0.11.1 (2026-11-04)
+
+A host release on v0.11.0. The crate version is `0.11.1`; the client's is `0.13.1`. Pairs with
+the markdown and text pack tags of this release. **A host changes nothing in its own code:** no
+public item is added, removed or renamed, no wire frame changes, and the store format is the
+same.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.11.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). **New in this cut:** it also
+leaves out the evidence run records (`docs/evidence/runs`, about 16 MB of job records). The
+evidence notes stay in the tree; main keeps the records and checks every citation.
+
+For a host, in short (details below):
+
+- **The conflict details of a refused `write --base` (`MPC-E111`) are complete (fixed).**
+  `current_lines` and `theirs` now include every change of the current text that sits inside a
+  conflict region, also one that clashes with nothing (an insertion between two clashing
+  lines); `your_lines` and `ours` do the same for the writer's text. Before, such a change was
+  left out, so they could name too few lines. Nothing written changes, and which writes are
+  refused doesn't change; the regions and their base lines are as in v0.11.0.
+- **Conflict regions that overlap or touch are one region (O6).** The undo spec states it now
+  (`docs/SPEC-UNDO.md`); the kit has grouped them this way since its first cut. No behaviour
+  change.
+- **Client 0.13.1** (`client/CHANGELOG.md`). No export is added, removed or renamed, and no
+  frame changes.
+  - **A closed `LiveText` sends nothing:** after `close()`, `undo()` and `redo()` throw (as
+    `applyLocal` does), and `reset()`, `setCursor()`, `setVisible()` and `setView()` do nothing.
+  - **The own change in a `since` reply (fixed):** after a reconnect, the reply's change from
+    this client is taken for the edit in flight only when it is an edit. An undo or redo with
+    the same text is applied as a change, and the edit goes to `onRejected`.
+  - **Pinned regressions, tests only:** a held undo or redo always goes out, on every path, and
+    an undo or redo sent before a reconnect is settled, not sent again. Every public cut must
+    carry them (`tools/public-cut-regressions.txt`), with this release's `write --base` tests.
+- **`timers`:** the finish of a timed scope is `#[cold]`, so with timers off a scope stays one
+  load and a branch. No behaviour change.
+- **Going back to v0.11.0:** nothing to do. No store format, table or wire change; a v0.11.0
+  build opens, reads, writes and purges a store this release has run on.
+- **Model evidence, tests and docs only** (nothing a host builds changes): the undo model
+  check's stated claims corrected to what its runs check (`docs/MODEL-CHECK.md`), with new
+  mutants for its gaps and a debug-assertions run (`tools/undo/debug.sh`); the provenance of
+  every cited job run marked; every spec-undo trace comparison counted and asserted at a stated
+  floor, with `write --base` regions compared exactly against the spec oracle and grid holders'
+  authors, `on_behalf_of` and `restored_by` compared; and a main-only check that the vendored
+  engine's test-only features reach no build of the kit (`tools/check-engine-features.sh`, not
+  in a public cut).
+
+In detail:
+
+- **A public cut carries the evidence notes without their run records.** `docs/evidence/runs/`
+  (about 16 MB of job records) joins `DROPPED_TREES` in `tools/check-public-cut.sh`, so
+  `tools/public-cut.sh` removes it and the checker blocks a cut that still has a file there.
+  The notes (`docs/evidence/*.md`) stay. `python3 tools/evidence/check.py`, which needs the
+  records, sits in `public-cut: drop` markers in `scripts/check.sh` and in the `evidence` part
+  of `tools/tests/full.sh`, so a cut runs the evidence self-test, check-private, the
+  Windows-names checks and oss-check, and main still runs the citation check on every record.
+  The public-cut gate reads the dropped trees it plants under by position (the first and the
+  second), so a third tree leaves its plants as they were. Nothing in the kit's crates or the
+  JS client changes.
+
+- **`write --base` conflict regions: a doc and spec clarification, no behaviour change.**
+  Conflicting hunks of the two sides whose ranges overlap **or touch** are one region, with its
+  base range and its lines (in the base, in ours and in theirs) the union of those hunks'. The
+  kit has grouped them this way all along; `text::merge`'s doc comments said "overlapping", and
+  undo spec §4 had no rule. Now O6 states it (`docs/SPEC-UNDO.md`), and the spec oracle
+  (`spec_undo::model::merge::write_base_regions`) and the trace test compare a refused write's
+  regions exactly.
+
+- **Fixed: a refused `write --base` (`MPC-E111`) could name too few lines in the current
+  text.** When someone else's change inserted lines inside a conflict region without
+  clashing with the write (between two clashing lines), `current_lines` stopped short of the
+  region's last line in the current text and `theirs` left the inserted lines out; the same
+  held for `your_lines` and `ours` on the writer's side. Each side now holds every change of
+  that side inside the region, and its lines are where that text stands in that side's text
+  (undo spec O6). Nothing else changes: the same writes are refused, and the regions and
+  their base lines are as before.
+
 ## v0.11.0 (2026-11-04)
 
 The first host release after v0.10.2. The crate version is `0.11.0`; the client's is `0.13.0`.

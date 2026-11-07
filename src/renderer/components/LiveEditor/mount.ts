@@ -516,12 +516,14 @@ class LiveEditor implements LiveEditorHandle {
   }
 
   undo(): void {
+    if (this.destroyed) return;
     if (!this.live) return;
     if (this._state !== "live") return this.emit("error", { id: "MPC-E000", message: this.strings.offline });
     this.live.undo();
   }
 
   redo(): void {
+    if (this.destroyed) return;
     if (!this.live) return;
     if (this._state !== "live") return this.emit("error", { id: "MPC-E000", message: this.strings.offline });
     this.live.redo();

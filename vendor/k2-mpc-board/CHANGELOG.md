@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.3 (2026-11-04)
+
+Pairs with kit v0.11.1 (`d9927a6e`, the public cut). The bridge's lock moves to it; the pack's code doesn't change.
+
 ## v0.1.2 (2026-11-04)
 
 The bridge: the board's file verbs on the multiplayer kit's verb features, so a host serves board files with the same habits as its other docs. The format doesn't change.

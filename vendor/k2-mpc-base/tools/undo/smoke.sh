@@ -21,7 +21,7 @@ timed "simulate + ITF (2x1 +1 undo +1 revert, 300 traces)" q run itf_tiny.qnt --
 timed "ITF replay into spec_undo::model" R --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init abb "$ROOT/itf"
 need_apalache
 . "$ROOT/tools/undo/tlc.sh"
-INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5"
+INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5 inv_O5doc inv_U17doc"
 tlc u_tiny "$INV" 240
 timed "enumerator, same bound" E bfs $EB
 for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff; do
@@ -41,6 +41,18 @@ timed "enumerator, mutant x-provenance-ignored-in-o4" E bfs --pids 1 --events 1 
 inst m_xi 2 1 1 1 4 "0, 1" true true xi-no-o4a
 tlc m_xi "$INV" 240
 timed "enumerator, mutant xi-no-o4a" E bfs --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant xi-no-o4a
+# the audit's mutants at their own bounds (counts.sh PART=m has their least depths)
+inst m_u13 2 1 1 1 4 "0, 1, 1" true true u13-refused-revert-applies
+tlc m_u13 "$INV" 240
+timed "enumerator, mutant u13-refused-revert-applies" E bfs --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init abb --first --mutant u13-refused-revert-applies
+inst m_r3redo 2 1 2 1 4 "0, 1" true true r3-redo-rewrites-window
+tlc m_r3redo "$INV" 240
+timed "enumerator, mutant r3-redo-rewrites-window" E bfs --pids 2 --events 1 --undos 2 --reverts 1 --maxlen 4 --init ab --first --mutant r3-redo-rewrites-window
+inst m_r3rev 2 1 1 1 4 "0, 1" true true r3-revert-rewrites-window
+tlc m_r3rev "$INV" 240
+timed "enumerator, mutant r3-revert-rewrites-window" E bfs --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant r3-revert-rewrites-window
+# i1-per-request: the enumerator only here (TLC at its depth 5 is counts.sh PART=m's)
+timed "enumerator, mutant i1-per-request" E bfs --pids 2 --events 2 --undos 1 --reverts 1 --maxlen 3 --init a --no-multi --no-purge --first --mutant i1-per-request
 # ITF with a restart: 2 pids x 1 event + 1 undo + 1 revert + 1 restart
 itfinst itf_rst 2 1 1 1 4 "$I" true true none 1
 mkdir -p "$ROOT/itf_rst"

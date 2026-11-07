@@ -2,8 +2,9 @@
 //!
 //! A writer read version `base`, produced `ours`, and meanwhile the live doc moved to
 //! `theirs`. [`merge3`] applies only what the writer changed (base -> ours) on top of the
-//! live text, and refuses with the overlapping regions when the two sides touched the
-//! same lines. There is no last-writer-wins path. Undo, redo and revert merge exact hunk
+//! live text, and refuses with the conflicting regions when the two sides touched the
+//! same lines (conflicting hunks that overlap or touch form one region, its lines the
+//! union). There is no last-writer-wins path. Undo, redo and revert merge exact hunk
 //! sets with the same pair rules ([`merge3_hunks`]).
 //!
 //! **Whole lines (v0.9.7.1).** `write --base` merges by line, as an outside save does
@@ -48,7 +49,8 @@ pub struct Clean {
     pub text: String,
 }
 
-/// One region both sides changed.
+/// One region both sides changed: conflicting hunks that overlap or touch, joined (its
+/// range and lines the union).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conflict {
     /// Byte range in `base`.
@@ -58,7 +60,11 @@ pub struct Conflict {
     /// unterminated last line is reported as line N+1, N the base's line count.
     pub lines: (usize, usize),
     pub base_text: String,
+    /// The region's text in ours: the base range with every hunk of ours inside it applied
+    /// (v0.11.1: also one that clashes with nothing; an insertion at the region's start or
+    /// end is outside it).
     pub ours: String,
+    /// The region's text in theirs (the live text), the same way.
     pub theirs: String,
     /// The region's 1-based line range in ours' text (the writer's; v0.9.7.1), as `lines`
     /// (a region ours deleted gives one line: where it was).
@@ -604,7 +610,8 @@ fn overlaps(x: &Hunk, y: &Hunk) -> bool {
     }
 }
 
-/// Group clashing hunks into regions (a chain of overlaps is one region) and render each side.
+/// Group clashing hunks into regions (clashes whose ranges overlap or touch form one region)
+/// and render each side.
 fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Vec<Conflict> {
     let mut regions: Vec<(Range<usize>, Vec<usize>, Vec<usize>)> = Vec::new();
     for &(i, j) in clash {
@@ -626,6 +633,30 @@ fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Ve
     regions
         .into_iter()
         .map(|(r, ai, bj)| {
+            // a side's hunks in the region (v0.11.1): its clashing ones (`idx`) and every other
+            // one inside it, since a hunk that clashes with nothing (an insertion where two
+            // clashes touch) still changes the region's text and lines on that side. An
+            // insertion at the region's start or end is outside it: it lands before the region
+            // or after it, as O3 places it and as `overlaps` lets it clash with neither. In
+            // base order.
+            let inside = |hs: &[Hunk], idx: &[usize]| -> Vec<usize> {
+                (0..hs.len())
+                    .filter(|&k| {
+                        let h = &hs[k];
+                        debug_assert!(
+                            idx.contains(&k)
+                                || !((h.start < r.start && r.start < h.end)
+                                    || (h.start < r.end && r.end < h.end)),
+                            "a side's hunk crosses a region's edge without clashing"
+                        );
+                        idx.contains(&k)
+                            || (r.start <= h.start
+                                && h.end <= r.end
+                                && !(h.is_insertion() && (h.start == r.start || h.start == r.end)))
+                    })
+                    .collect()
+            };
+            let (ai, bj) = (inside(a, &ai), inside(b, &bj));
             let side = |hs: &[Hunk], idx: &[usize]| -> String {
                 let local: Vec<Hunk> = idx
                     .iter()

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.15 (2026-11-04): pairs with kit v0.11.1
+
+**Requires `k2-mpc-base` v0.11.1** (the tag at its public cut d9927a6e; release commit
+ae2ac947). This pack's code and tests are unchanged from v0.2.14.
+
+- `Cargo.lock`: k2-mpc-base 0.11.1 (only the kit's crate version moves; no `mpce` entry); the
+  crate version.
+
 ## v0.2.14 (2026-11-04): pairs with kit v0.11.0
 
 **Requires `k2-mpc-base` v0.11.0** (the tag at its public cut 386ccd77; release commit

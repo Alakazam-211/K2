@@ -318,6 +318,7 @@ pub mod workspace_sessions_routes;
 pub mod ticket_settings_routes;
 // K2 compute nodes (prd-k2-compute-nodes-v1): routes + the live engine.
 pub mod compute_admin;
+pub mod compute_trust;
 pub mod compute_advertise;
 // A workspace's compute node list (0.46.8): `k2 compute allow-nodes`.
 pub mod compute_allow;

@@ -2164,6 +2164,13 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Node admin (prd-k2-node-admin-v1 §7.4): approving a held request;
     // the token is bound to the request id (`secretId`).
     "node-admin",
+    // Node rosters, lanes, seats (0.46.10 C1/C3a): a person approving a
+    // held trust request (`secretId` = the `ctr_…` id) or turning a node
+    // owner's secrets consent on (`consent:<roster key fp>`); and signer
+    // pairing (`ci-signer`: `add:<signer fp prefix>`, then the `csp_…`
+    // pairing id to read the SAS). Every caller, the owner token included.
+    k2_core::compute::trust::CONFIRM_TRUST,
+    k2_core::compute::trust::CONFIRM_SIGNER,
     // Garden v3 data sources (contract-sources-v1 §4.3): binding a secret
     // to one source (`secretId` = the source id), and one confirm for a
     // batch approval (`secretId` = the batch hash).

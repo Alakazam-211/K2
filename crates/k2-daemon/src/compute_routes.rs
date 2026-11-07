@@ -186,11 +186,11 @@ pub const POST_ROUTES: &[&str] = &[
 ];
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p)
+    ROUTES.contains(&p) || crate::compute_trust::is_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p) || crate::compute_trust::POST_ROUTES.contains(&p)
 }
 
 pub fn is_socket(p: &str) -> bool {
@@ -689,6 +689,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params, mgr),
         // `k2 ci` (0.46.10, C6a): watch, run, status, init, freeze.
         p if crate::ci_routes::is_route(p) => crate::ci_routes::handle(p, &who, body, params, mgr),
+        // Node rosters, lanes, seats, signer pairing (0.46.10 C1/C3a).
+        p if crate::compute_trust::is_route(p) => crate::compute_trust::handle(p, &who, body, params),
         _ => Err(no("not_found", 404, "no such compute route")),
     };
     match r {
@@ -3890,6 +3892,15 @@ fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
         out["v"] = serde_json::json!(k2_core::compute::proto::frames::RECEIPT_V2);
         let stored: serde_json::Value = serde_json::from_str(raw).unwrap_or_default();
         out["statement"] = stored.get("statement").cloned().unwrap_or(serde_json::Value::Null);
+    }
+    // C1: the node's owner revoked this key in its roster: the receipt is
+    // void (compromised: every receipt, past and future). Absent otherwise,
+    // so a v1 answer is unchanged.
+    if let Some(fp) = body.get("node_fp").and_then(|v| v.as_str()) {
+        let started = body.get("started_at").and_then(|v| v.as_i64());
+        if let Some(why) = crate::compute_trust::receipt_void(fp, started) {
+            out["voided"] = why.into();
+        }
     }
     Ok(out)
 }

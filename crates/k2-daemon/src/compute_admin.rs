@@ -1850,6 +1850,9 @@ fn watch_pass() {
     }
     crate::compute_rollout::maybe_follow(now);
     crate::compute_rollout::tick(now);
+    // Node rosters (0.46.10 C1): expire trust requests; re-sign an
+    // unchanged roster before signers find it stale (V13).
+    crate::compute_trust::tick();
 }
 
 /// Start the 60 s watch (boot). Runs with no client attached. It also
@@ -2730,6 +2733,110 @@ fn servers_owner(who: &Who, body: &[u8]) -> R<Value> {
 }
 
 // ── test seams ───────────────────────────────────────────────────────
+
+// ── for compute_trust (node rosters, lanes, seats: 0.46.10 C1/C3a) ───
+
+/// The vault (test seam included).
+pub(crate) fn trust_vault() -> R<std::sync::Arc<k2_vault::LocalVault>> {
+    vault()
+}
+
+/// The controller (tunnel) key (test seam included).
+pub(crate) fn trust_controller_key() -> R<crypto::SigningKey> {
+    controller_key()
+}
+
+/// A node's offered features this session (test seam included).
+pub(crate) fn node_features(node_id: &str) -> Vec<String> {
+    features(node_id)
+}
+
+/// The vault actor a person's confirm token was minted for.
+pub(crate) fn person_stamp(who: &Who) -> Option<String> {
+    confirm_stamp(who)
+}
+
+/// One operate command now, signed by the controller alone, on the
+/// controller's own behalf (`label`, e.g. `controller:node-roster`): the
+/// node roster hand-over after a person approved the roster.
+pub(crate) fn send_operate_system(label: &str, node: &store::NodeRow, verb: &str, args: &Value) -> R<String> {
+    not_tenant(node)?;
+    let key = controller_key()?;
+    let cmd = build_command(node, &key.fingerprint(), Class::Operate, verb, args, None, label, None, compute::now())?;
+    let sealed = wire::sign_controller(&key, &cmd).map_err(|e| no("seal_failed", 500, e))?;
+    if !send(&node.id, Frame::Admin(frames::AdminFrame { cmd: sealed })) {
+        return Err(no(codes::NODE_OFFLINE, 409, format!("{} is offline", node.name)));
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::record_event(&conn, label, "admin_sent", Some(&node.id), None, None, json!({"cmdId": cmd.cmd_id, "verb": verb, "class": "operate"}));
+    Ok(cmd.cmd_id)
+}
+
+/// V21 (batch approval): one person's approval elsewhere (a seat card,
+/// whose confirm token the caller already took) seals one single-node plan
+/// per node. Each plan is filed, sealed with the controller key and the
+/// owner approval key (privileged steps), marked approved by that person
+/// and queued (sent when the node is online, within the hour) exactly like
+/// an approved admin request; the audit row names the batch and the trust
+/// request. Returns the admin request id.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn queue_approved_plan(
+    vault: &k2_vault::LocalVault,
+    node: &store::NodeRow,
+    steps: &[(String, Value)],
+    proposed_by: &str,
+    approved_by: &str,
+    via: &str,
+    trust_request: &str,
+    batch_id: &str,
+) -> R<String> {
+    not_tenant(node)?;
+    let body = json!({"steps": steps.iter().map(|(v, a)| json!({"verb": v, "args": a})).collect::<Vec<_>>()});
+    let (class, summary) = classify_body(&node.name, "plan", &body)?;
+    let now = compute::now();
+    let reason = format!("approved with {trust_request} (batch {batch_id})");
+    let req = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        admin::insert_request(
+            &conn,
+            &admin::NewRequest {
+                node_id: &node.id,
+                kind: "plan",
+                class,
+                body: &body,
+                summary: &summary,
+                reason: Some(&reason),
+                proposed_by,
+                proposer_workspace: None,
+                proposer_session: None,
+                now,
+            },
+        )
+        .map_err(|(code, hint)| no(code, 400, hint))?
+    };
+    let key = controller_key()?;
+    let owner_sign = |m: &[u8]| -> Result<[u8; 64], String> { approval_sign(vault, m) };
+    let (sealed, ids) = seal_request(&req, node, &key, approved_by, via, now, &owner_sign)?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let r = admin::decide(&conn, &req.id, "approved", approved_by, Some(via), None, now).map_err(decide_err)?;
+        admin::set_commands(&conn, &r.id, &sealed, &ids).map_err(|e| no("store", 500, e))?;
+        store::record_event(
+            &conn,
+            approved_by,
+            "admin_approved",
+            Some(&node.id),
+            None,
+            None,
+            json!({"request": r.id, "via": via, "digest": r.digest, "cmdIds": ids, "batch": batch_id, "trustRequest": trust_request}),
+        );
+    }
+    pump(&node.id);
+    Ok(req.id)
+}
 
 #[cfg(test)]
 pub(crate) mod test_seams {

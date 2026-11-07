@@ -25589,6 +25589,41 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    every compute:<ws>/* secret grant that starts reaching
                    it; you type the node's name, then Touch ID / vault
                    password. An offer alone never makes a node this server's.
+CI seats on shared nodes (0.46.10): node rosters, lanes, seats. Agents with
+"operate compute nodes" file and read; a person (owner or Admin, from a
+terminal outside K2, Touch ID / vault password) decides every change:
+  k2 compute roster [show] [--json]   this server's signed node roster (seq,
+                   keys, hosts), its nodes' self-statements, waiting changes
+  k2 compute roster key               mint/show the node-roster key's
+                   fingerprint (a person; clients compare it on this screen)
+  k2 compute roster set <node> [--host H] [--provider P] [--site S]
+                   [--admin-reach a,b] [--attest "what you checked"]
+                   list the node's current key as active. A key whose
+                   statement says taint: unknown needs --attest (the owner
+                   vouches it never ran a job without the job wall) or a
+                   re-key; a tainted key never goes on (node_key_tainted)
+  k2 compute roster retire <node>  |  revoke <node> --reason compromised|key_lost|other
+                   compromised voids every receipt that key ever signed
+  k2 compute roster publish [--resign]   hand the newest roster to the nodes
+                   (they relay it to their servers) and the seated clients;
+                   --resign signs an unchanged roster again (seq + 1)
+  k2 compute lanes [--json]           approved lane templates (ci-standard ships)
+  k2 compute lanes set <name> [--from ci-standard] [key=value …]   held
+  k2 compute seats [--json]           seats this server offered or holds
+  k2 compute seats request <owner-host> [--lane ci-standard] [--seat ID]
+                   [--no-secrets] [--why "…"]   (client) ask a paired node
+                   owner for a seat. Held for your person: approving pins that
+                   owner's node-roster key (compare its fingerprint with
+                   `k2 compute roster key` on the owner's screen) and agrees to
+                   send vault secrets to its nodes (its root can read them)
+  k2 compute seats offer <request> --nodes a,b,c   (owner) name a client's
+                   seat nodes; the owner approves: one card signs the seat and
+                   sets up every node (lanes file + the client as a server)
+  k2 compute trust [requests] [--all] [--json]  |  approve <id>  |  deny <id> [--why]
+                   |  withdraw <id>   approve/deny: a person, in person
+  k2 compute owners [--json]          node owners this server pinned (seq,
+                   secrets consent) and this server's own roster key
+  k2 compute owners consent <owner> on|off   off at once; on is a person's
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
                    [--max-parallel 1] [--max-queued 10] [--ci|--no-ci]
                    [--submitter-max-running N]   at most N running jobs per
@@ -29338,6 +29373,296 @@ _compute_distro_arg() {
     fi
 }
 
+# Pretty JSON of the last answer (the trust verbs print what the daemon said).
+_compute_trust_print() {
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), indent=2))'
+}
+
+# A person's confirm for a trust request (bound to its id), then approve.
+_compute_trust_approve() {
+    local id="${1:-}"
+    [ -n "$id" ] || { echo "usage: k2 compute trust approve <ctr_…>" >&2; exit 2; }
+    if _compute_in_session; then
+        echo '{"error":"person_only","hint":"a person approves this, from a terminal outside K2 (Touch ID / vault password). An agent never approves."}' >&2
+        exit 3
+    fi
+    _compute_call GET /cli/compute/trust/requests "state=all" tcp
+    local found full state label
+    found="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+want = sys.argv[1]
+rows = [r for r in json.load(sys.stdin)["requests"] if r["id"] == want or r["id"].startswith(want)]
+if len(rows) != 1:
+    sys.exit(1)
+r = rows[0]
+print(r["id"]); print(r["state"]); print(r["summary"][:64]); print("---"); print(r["summary"])
+if r.get("reason"): print("reason: " + r["reason"])
+' "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no single request matches '$id' (k2 compute trust)\"}" >&2; exit 3; }
+    full="$(printf '%s\n' "$found" | sed -n 1p)"
+    state="$(printf '%s\n' "$found" | sed -n 2p)"
+    label="$(printf '%s\n' "$found" | sed -n 3p)"
+    if [ "$state" != "pending" ]; then
+        echo "{\"error\":\"not_pending\",\"hint\":\"$full is $state\"}" >&2
+        exit 3
+    fi
+    printf '%s\n' "$found" | sed -n '5,$p' >&2
+    local tok
+    tok="$(_vault_confirm_token compute-trust "$full" "$label")" || exit 3
+    K2_CP_MAX_TIME=300 _compute_call POST /cli/compute/trust/approve "$(_compute_json K2_CJ_request="$full" K2_CJ_confirmToken="$tok")" tcp
+    tok=""
+    _compute_trust_print
+}
+
+# k2 compute roster|lanes|seats|trust|owners (0.46.10 C1/C3a).
+cmd_compute_trust() {
+    local noun="$1"; shift
+    local as_json=0 a
+    for a in "$@"; do [ "$a" = "--json" ] && as_json=1; done
+    case "$noun" in
+        roster)
+            local sub="${1:-show}"
+            [ $# -gt 0 ] && shift
+            case "$sub" in
+                show|--json)
+                    _compute_call GET /cli/compute/roster ""
+                    if [ "$as_json" = "1" ]; then _compute_trust_print; return 0; fi
+                    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+l = v.get("latest")
+if l:
+    print("node roster seq %s (key %s…), issued %s%s" % (l["seq"], l["keyFingerprint"][:16], l["issuedAt"], ", STALE: k2 compute roster publish --resign" if v.get("stale") else ""))
+    for e in l["entries"]:
+        print("  %-16s %-8s %-15s host %s  key %s…" % (e["name"], e["status"], e.get("taintBasis") or "-", e["host"], e["nodeFp"][:12]))
+else:
+    print("no node roster yet: k2 compute roster set <node> …, then a person approves it")
+for n in v.get("nodes", []):
+    st = n.get("statement") or {}
+    print("node %-16s statement %s, taint %s, on roster: %s" % (n["name"], "yes" if st else "none (k2-node older than protocol 9)", st.get("taint", "-"), n.get("roster") or "no"))
+for r in v.get("pending", []):
+    print("waiting: %s  %s" % (r["id"], r["summary"]))
+'
+                    ;;
+                key)
+                    if _compute_in_session; then
+                        echo '{"error":"person_only","hint":"the roster key is minted and shown to a person: run it from a terminal outside K2"}' >&2
+                        exit 3
+                    fi
+                    _compute_call POST /cli/compute/roster/key "{}" tcp
+                    _compute_trust_print
+                    ;;
+                set|attest)
+                    local node="${1:-}"; [ -n "$node" ] && shift
+                    [ -n "$node" ] || { echo "usage: k2 compute roster set <node> [--host H] [--provider P] [--site S] [--admin-reach a,b] [--attest TEXT]" >&2; exit 2; }
+                    local host="" prov="" site="" reach="" att="" why=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --host) host="${2:-}"; shift 2 ;;
+                            --provider) prov="${2:-}"; shift 2 ;;
+                            --site) site="${2:-}"; shift 2 ;;
+                            --admin-reach) reach="${2:-}"; shift 2 ;;
+                            --attest) att="${2:-}"; shift 2 ;;
+                            --why|--reason) why="${2:-}"; shift 2 ;;
+                            --json) shift ;;
+                            *) echo "usage: k2 compute roster set <node> [--host H] [--provider P] [--site S] [--admin-reach a,b] [--attest TEXT]" >&2; exit 2 ;;
+                        esac
+                    done
+                    _compute_call POST /cli/compute/roster/propose "$(_compute_json K2_CJ_op=set K2_CJ_node="$node" K2_CJ_host="$host" K2_CJ_provider="$prov" K2_CJ_site="$site" K2_CJ_adminReach="$reach" K2_CJ_attest="$att" K2_CJ_reason="$why")"
+                    _compute_trust_print
+                    ;;
+                retire|revoke)
+                    local node="${1:-}"; [ -n "$node" ] && shift
+                    [ -n "$node" ] || { echo "usage: k2 compute roster $sub <node>" >&2; exit 2; }
+                    local reason=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --reason) reason="${2:-}"; shift 2 ;;
+                            --json) shift ;;
+                            *) echo "usage: k2 compute roster $sub <node> [--reason compromised|key_lost|other]" >&2; exit 2 ;;
+                        esac
+                    done
+                    _compute_call POST /cli/compute/roster/propose "$(_compute_json K2_CJ_op="$sub" K2_CJ_node="$node" K2_CJ_reason="$reason")"
+                    _compute_trust_print
+                    ;;
+                publish)
+                    local resign=""
+                    for a in "$@"; do [ "$a" = "--resign" ] && resign=1; done
+                    K2_CP_MAX_TIME=300 _compute_call POST /cli/compute/roster/publish "$(_compute_json K2_CJ_resign_b="$resign")"
+                    _compute_trust_print
+                    ;;
+                *) echo "usage: k2 compute roster [show|key|set|retire|revoke|publish] (k2 compute --help)" >&2; exit 2 ;;
+            esac
+            ;;
+        lanes)
+            if [ "${1:-}" = "set" ]; then
+                shift
+                local name="${1:-}"; [ -n "$name" ] && shift
+                [ -n "$name" ] || { echo "usage: k2 compute lanes set <name> [--from ci-standard] [key=value …]" >&2; exit 2; }
+                local from="" sets="{}" why=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        --from) from="${2:-}"; shift 2 ;;
+                        --why|--reason) why="${2:-}"; shift 2 ;;
+                        --json) shift ;;
+                        *=*)
+                            sets="$(printf '%s' "$sets" | K2_LS_KV="$1" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+k, v = os.environ["K2_LS_KV"].split("=", 1)
+try:
+    d[k] = json.loads(v)
+except Exception:
+    d[k] = v.split(",") if k in ("isolation", "profiles") else v
+print(json.dumps(d))')"
+                            shift ;;
+                        *) echo "usage: k2 compute lanes set <name> [--from ci-standard] [key=value …]" >&2; exit 2 ;;
+                    esac
+                done
+                _compute_call POST /cli/compute/lanes/set "$(_compute_json K2_CJ_name="$name" K2_CJ_from="$from" K2_CJ_set_j="$sets" K2_CJ_reason="$why")"
+                _compute_trust_print
+                return 0
+            fi
+            _compute_call GET /cli/compute/lanes ""
+            if [ "$as_json" = "1" ]; then _compute_trust_print; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if not v["lanes"]:
+    print("no approved lanes: k2 compute lanes set ci-standard --from ci-standard")
+for l in v["lanes"]:
+    print("%s: %s (approved by %s)" % (l["name"], l["summary"], l["approvedBy"]))
+'
+            ;;
+        seats)
+            local sub="${1:-list}"
+            [ $# -gt 0 ] && shift
+            case "$sub" in
+                list|--json)
+                    _compute_call GET /cli/compute/seats ""
+                    if [ "$as_json" = "1" ]; then _compute_trust_print; return 0; fi
+                    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for s in v["offered"]:
+    print("offered %-24s to %-24s lane %-12s %-9s nodes %s" % (s["id"], s["clientLabel"], s["lane"], s["state"], ",".join(s["nodes"])))
+for s in v["held"]:
+    print("held    %-24s on %-24s lane %-12s %-9s nodes %s%s" % (s["id"], s["ownerId"], s["lane"], s["state"], ",".join(s["nodes"]) or "-", ("  (" + s["note"] + ")") if s.get("note") else ""))
+if not v["offered"] and not v["held"]:
+    print("no seats")
+'
+                    ;;
+                request)
+                    local owner="${1:-}"; [ -n "$owner" ] && shift
+                    [ -n "$owner" ] || { echo "usage: k2 compute seats request <owner-host> [--lane L] [--seat ID] [--no-secrets] [--why TEXT]" >&2; exit 2; }
+                    local lane="" seat="" secrets="1" why=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --lane) lane="${2:-}"; shift 2 ;;
+                            --seat) seat="${2:-}"; shift 2 ;;
+                            --no-secrets) secrets="0"; shift ;;
+                            --why) why="${2:-}"; shift 2 ;;
+                            --json) shift ;;
+                            *) echo "usage: k2 compute seats request <owner-host> [--lane L] [--seat ID] [--no-secrets] [--why TEXT]" >&2; exit 2 ;;
+                        esac
+                    done
+                    _compute_call POST /cli/compute/seats/request "$(_compute_json K2_CJ_owner="$owner" K2_CJ_lane="$lane" K2_CJ_seat="$seat" K2_CJ_secrets_b="$secrets" K2_CJ_why="$why")"
+                    _compute_trust_print
+                    ;;
+                offer)
+                    local req="${1:-}"; [ -n "$req" ] && shift
+                    local nodes=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --nodes) nodes="${2:-}"; shift 2 ;;
+                            --json) shift ;;
+                            *) echo "usage: k2 compute seats offer <request> --nodes a,b,c" >&2; exit 2 ;;
+                        esac
+                    done
+                    { [ -n "$req" ] && [ -n "$nodes" ]; } || { echo "usage: k2 compute seats offer <request> --nodes a,b,c" >&2; exit 2; }
+                    _compute_call POST /cli/compute/seats/offer "$(_compute_json K2_CJ_request="$req" K2_CJ_nodes="$nodes")"
+                    _compute_trust_print
+                    ;;
+                *) echo "usage: k2 compute seats [list|request|offer] (k2 compute --help)" >&2; exit 2 ;;
+            esac
+            ;;
+        trust)
+            local sub="${1:-requests}"
+            [ $# -gt 0 ] && shift
+            case "$sub" in
+                requests|list|ls|--json|--all)
+                    local st="open"
+                    for a in "$sub" "$@"; do [ "$a" = "--all" ] && st="all"; done
+                    _compute_call GET /cli/compute/trust/requests "state=$st"
+                    if [ "$as_json" = "1" ]; then _compute_trust_print; return 0; fi
+                    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for r in v["requests"]:
+    print("%s  %-9s %-12s %s" % (r["id"], r["state"], r["kind"], r["summary"]))
+if not v["requests"]:
+    print("nothing waits for a person")
+'
+                    ;;
+                approve) _compute_trust_approve "${1:-}" ;;
+                deny)
+                    local id="${1:-}"; [ -n "$id" ] && shift
+                    local why=""
+                    [ "${1:-}" = "--why" ] && why="${2:-}"
+                    [ -n "$id" ] || { echo "usage: k2 compute trust deny <id> [--why TEXT]" >&2; exit 2; }
+                    _compute_call POST /cli/compute/trust/deny "$(_compute_json K2_CJ_request="$id" K2_CJ_why="$why")"
+                    _compute_trust_print
+                    ;;
+                withdraw)
+                    [ -n "${1:-}" ] || { echo "usage: k2 compute trust withdraw <id>" >&2; exit 2; }
+                    _compute_call POST /cli/compute/trust/withdraw "$(_compute_json K2_CJ_request="$1")"
+                    _compute_trust_print
+                    ;;
+                *) echo "usage: k2 compute trust [requests|approve|deny|withdraw]" >&2; exit 2 ;;
+            esac
+            ;;
+        owners)
+            if [ "${1:-}" = "consent" ]; then
+                local owner="${2:-}" onoff="${3:-}"
+                case "$onoff" in on|off) ;; *) echo "usage: k2 compute owners consent <owner> on|off" >&2; exit 2 ;; esac
+                if [ "$onoff" = "on" ]; then
+                    if _compute_in_session; then
+                        echo '{"error":"person_only","hint":"sending vault secrets to another owner'"'"'s nodes is a person'"'"'s choice: a terminal outside K2"}' >&2
+                        exit 3
+                    fi
+                    _compute_call GET /cli/compute/owners "" tcp
+                    local kfp
+                    kfp="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+o=sys.argv[1]
+r=[t for t in json.load(sys.stdin)["trusted"] if t["ownerId"]==o or t["keyFp"]==o]
+print(r[0]["keyFp"] if len(r)==1 else "")' "$owner")"
+                    [ -n "$kfp" ] || { echo "{\"error\":\"node_owner_not_trusted\",\"hint\":\"no pinned node owner $owner (k2 compute owners)\"}" >&2; exit 3; }
+                    local tok
+                    tok="$(_vault_confirm_token compute-trust "consent:$kfp" "Send vault secrets to $owner's nodes")" || exit 3
+                    _compute_call POST /cli/compute/owners/consent "$(_compute_json K2_CJ_owner="$owner" K2_CJ_on_b=1 K2_CJ_confirmToken="$tok")" tcp
+                else
+                    _compute_call POST /cli/compute/owners/consent "$(_compute_json K2_CJ_owner="$owner" K2_CJ_on_b=0)"
+                fi
+                _compute_trust_print
+                return 0
+            fi
+            _compute_call GET /cli/compute/owners ""
+            if [ "$as_json" = "1" ]; then _compute_trust_print; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("self")
+if s:
+    print("this server (%s): node-roster key %s" % (s["ownerId"], s["key"]["fingerprint"]))
+for t in v["trusted"]:
+    l = t.get("latest") or {}
+    print("%s: key %s, roster seq %s, secrets %s" % (t["ownerId"], t["keyFp"], l.get("seq", "-"), "on" if t["secretsConsent"] else "off"))
+if not s and not v["trusted"]:
+    print("no node owners pinned, and this server has no node-roster key yet")
+'
+            ;;
+    esac
+}
+
 cmd_compute() {
     local sub="${1:-}"
     case "$sub" in
@@ -29378,6 +29703,8 @@ cmd_compute() {
             _compute_render info
             ;;
         run) cmd_compute_run "$@" ;;
+        # CI seats on shared nodes (0.46.10 C1/C3a).
+        roster|lanes|seats|trust|owners) cmd_compute_trust "$sub" "$@" ;;
         retier|tier) cmd_compute_retier "$@" ;;
         move) cmd_compute_move "$@" ;;
         allow-nodes) cmd_compute_allow_nodes "$@" ;;
@@ -33691,6 +34018,15 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
   --workspace <name>            people: which workspace (default: the
                                 one this folder is in)
 
+Signer pairing (a person at this server, never an agent; Touch ID / vault
+password each step). On the signing machine first: sudo k2-signer-admin
+pair-begin > pair.json
+  k2 ci signer add <CODE.FP> --hello pair.json [--out offer.json]
+  k2 ci signer reveal <pairing> --reveal reveal.json   prints the 6-digit
+                                SAS here only; type it at the signer
+  k2 ci signer finish <pairing> --done done.json
+  k2 ci signers                 paired signers;  k2 ci signer remove <fp>
+
 Each [checks.<name>] is one K2 Compute job on the commit (--tier ci,
 detached; a newer push to the branch replaces its jobs that haven't
 started). The jobs carry your workspace's compute grants: --tier ci needs
@@ -33869,12 +34205,101 @@ else:
 PY
 }
 
+# k2 ci signer … (0.46.10 C3a, vs-live V17): pair a signing machine
+# (k2-signer) with this server. People only: every step needs the owner or
+# an Admin at this server, with Touch ID / the vault password. The SAS is
+# printed only here, never sent back to whoever carries the files.
+cmd_ci_signer() {
+    local sub="$1"; shift
+    [ "$sub" = "signers" ] && sub="list"
+    if [ "$sub" = "signer" ]; then sub="${1:-list}"; [ $# -gt 0 ] && shift; fi
+    case "$sub" in
+        list|ls)
+            _compute_call GET /cli/ci/signers ""
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("this server (controller): %s" % v.get("controllerFp"))
+for s in v["signers"]:
+    print("signer %s  %s  paired by %s" % (s["signerFp"], s["label"], s["pairedBy"]))
+if not v["signers"]:
+    print("no signer paired (on the signing machine: sudo k2-signer-admin pair-begin)")
+'
+            return 0 ;;
+    esac
+    # A person only (checked after the usage, before any prompt or request).
+    _ci_signer_person() {
+        if _compute_in_session; then
+            echo '{"error":"person_only","hint":"signer pairing is a person'"'"'s, at this server: a terminal outside K2 (Touch ID / vault password)"}' >&2
+            exit 3
+        fi
+    }
+    case "$sub" in
+        add)
+            local code="${1:-}"; [ -n "$code" ] && shift
+            local hello="" out="k2-signer-offer.json"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --hello) hello="${2:-}"; shift 2 ;;
+                    --out) out="${2:-}"; shift 2 ;;
+                    *) echo "usage: k2 ci signer add <CODE.FP> --hello <pair-begin output file> [--out offer.json]" >&2; exit 2 ;;
+                esac
+            done
+            { [ -n "$code" ] && [ -f "$hello" ]; } || { echo "usage: k2 ci signer add <CODE.FP> --hello <pair-begin output file> [--out offer.json]" >&2; exit 2; }
+            _ci_signer_person
+            local prefix="${code##*.}" hj tok
+            hj="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(json.dumps(v.get("hello", v)))' "$hello")" || { echo "usage: --hello is the JSON pair-begin printed" >&2; exit 2; }
+            tok="$(_vault_confirm_token ci-signer "add:$prefix" "Pair a release signer with this server")" || exit 3
+            _compute_call POST /cli/ci/signer/add "$(_compute_json K2_CJ_code="$code" K2_CJ_hello_j="$hj" K2_CJ_confirmToken="$tok")" tcp
+            tok=""
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); json.dump(v["offer"], open(sys.argv[1], "w")); print("pairing %s: offer written to %s\non the signing machine: sudo k2-signer-admin pair-reveal < %s > reveal.json\nthen here: k2 ci signer reveal %s --reveal reveal.json" % (v["pairing"], sys.argv[1], sys.argv[1], v["pairing"]))' "$out"
+            ;;
+        reveal)
+            local id="${1:-}"; [ -n "$id" ] && shift
+            local rev=""
+            [ "${1:-}" = "--reveal" ] && rev="${2:-}"
+            { [ -n "$id" ] && [ -f "$rev" ]; } || { echo "usage: k2 ci signer reveal <pairing> --reveal reveal.json" >&2; exit 2; }
+            _ci_signer_person
+            local rj tok
+            rj="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$rev")" || { echo "usage: --reveal is the JSON pair-reveal printed" >&2; exit 2; }
+            tok="$(_vault_confirm_token ci-signer "$id" "Show the signer pairing code")" || exit 3
+            _compute_call POST /cli/ci/signer/reveal "$(_compute_json K2_CJ_pairing="$id" K2_CJ_reveal_j="$rj" K2_CJ_confirmToken="$tok")" tcp
+            tok=""
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("\n    %s\n\nType these 6 digits at the signing machine: sudo k2-signer-admin pair-accept %s > done.json\nthen here: k2 ci signer finish %s --done done.json" % (v["sas"], "<digits>", v["pairing"]))'
+            ;;
+        finish)
+            local id="${1:-}"; [ -n "$id" ] && shift
+            local done_f=""
+            [ "${1:-}" = "--done" ] && done_f="${2:-}"
+            { [ -n "$id" ] && [ -f "$done_f" ]; } || { echo "usage: k2 ci signer finish <pairing> --done done.json" >&2; exit 2; }
+            _ci_signer_person
+            local dj
+            dj="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$done_f")" || { echo "usage: --done is the JSON pair-accept printed" >&2; exit 2; }
+            _compute_call POST /cli/ci/signer/finish "$(_compute_json K2_CJ_pairing="$id" K2_CJ_done_j="$dj")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("paired: signer %s (%s)" % (v["signer"], v["label"]))'
+            ;;
+        remove|rm)
+            [ -n "${1:-}" ] || { echo "usage: k2 ci signer remove <signer fingerprint>" >&2; exit 2; }
+            _ci_signer_person
+            _compute_call POST /cli/ci/signer/remove "$(_compute_json K2_CJ_signer="$1")" tcp
+            echo "removed"
+            ;;
+        *) echo "usage: k2 ci signer [list|add|reveal|finish|remove] (k2 ci --help)" >&2; exit 2 ;;
+    esac
+}
+
 cmd_ci() {
     local sub="${1:-}"
     case "$sub" in
         ""|help|--help|-h) _ci_usage; return 0 ;;
     esac
     shift
+    # Signer pairing (0.46.10 C3a): its own verbs, people only.
+    if [ "$sub" = "signer" ] || [ "$sub" = "signers" ]; then
+        case "${1:-}" in -h|--help) _ci_usage; return 0 ;; esac
+        cmd_ci_signer "$sub" "$@"
+        return $?
+    fi
     local a
     for a in "$@"; do
         [ "$a" = "--" ] && break

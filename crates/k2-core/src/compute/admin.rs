@@ -737,6 +737,15 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
         super::proto::admin::VERB_PACKAGES_POLICY => {
             super::proto::pkgpolicy::check_policy_args(args).map_err(|e| (codes::BAD_ARGS, e))?;
         }
+        // Protocol 9 (C3a, C1): the lanes file whole; the owner's node
+        // roster and the seats naming the node (they verify themselves).
+        super::proto::lanes::VERB_LANES_WRITE => {
+            super::proto::lanes::check_write_args(args).map_err(|e| (codes::BAD_ARGS, e))?;
+        }
+        super::proto::lanes::VERB_NODE_ROSTER_SET => {
+            let doc: super::proto::lanes::NodeRosterDoc = serde_json::from_value(args.clone()).map_err(|e| (codes::BAD_ARGS, e.to_string()))?;
+            doc.open(None).map_err(|e| (codes::BAD_ARGS, e))?;
+        }
         "homes.private" => {
             // Absent = every open home the node reports; else named ones.
             only_keys(a, &["homes"]).map_err(bad)?;
@@ -780,6 +789,19 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
         "jobs.kill" => format!("kill job {} on {node}", s("job_id")),
         "unit.restart" => format!("restart {} on {node} (as root)", s("unit")),
         "packages.policy" => format!("set {node}'s package policy for {}: {}", s("server"), arg_list(a)),
+        "lanes.write" => {
+            let seats: Vec<String> = a
+                .get("file")
+                .and_then(|f| f.get("seats"))
+                .and_then(Value::as_array)
+                .map(|l| l.iter().filter_map(|x| Some(format!("{} ({})", x.get("label")?.as_str()?, x.get("lane")?.as_str()?))).collect())
+                .unwrap_or_default();
+            format!(
+                "write {node}'s CI lanes file (as root): {}",
+                if seats.is_empty() { "no client seats".to_string() } else { format!("client seats {}", seats.join(", ")) }
+            )
+        }
+        "node_roster.set" => format!("hand {node} this server's signed node roster (it relays it to the servers it serves)"),
         "wall.enable" => format!(
             "turn on the job wall on {node} (as root): create the k2job user, let it into the node home, run jobs as k2job; {}",
             if a.get("restart").and_then(Value::as_bool) == Some(true) {

@@ -896,6 +896,24 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/compute/admin/propose",
         "/cli/compute/admin/requests",
         "/cli/compute/admin/withdraw",
+        // Node rosters, lanes, seats (0.46.10 C1/C3a, `compute_trust`): an
+        // agent with the same switch reads, files (roster changes, lanes, a
+        // seat request, a seat's nodes), publishes an unchanged roster,
+        // withdraws its own and turns a secrets consent OFF. Approving,
+        // the roster key, consent ON and signer pairing are NOT here:
+        // a person only (the handler also refuses passports).
+        "/cli/compute/owners",
+        "/cli/compute/owners/consent",
+        "/cli/compute/roster",
+        "/cli/compute/roster/propose",
+        "/cli/compute/roster/publish",
+        "/cli/compute/lanes",
+        "/cli/compute/lanes/set",
+        "/cli/compute/seats",
+        "/cli/compute/seats/request",
+        "/cli/compute/seats/offer",
+        "/cli/compute/trust/requests",
+        "/cli/compute/trust/withdraw",
         "/cli/compute/nodes/health",
         "/cli/compute/nodes/policy",
         "/cli/compute/nodes/policy/set",

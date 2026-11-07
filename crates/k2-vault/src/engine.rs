@@ -99,6 +99,16 @@ impl LocalVault {
         Ok(self.engine_signing_key(engine, name)?.verifying_key().to_bytes())
     }
 
+    /// The public key, or `None` when the key was never minted (no side
+    /// effect: a peer asking for it never mints one).
+    pub fn engine_public_key_if_exists(&self, engine: &str, name: &str) -> Result<Option<[u8; 32]>> {
+        match self.meta(&Self::engine_sel(engine, name), &actor(engine)) {
+            Ok(m) if m.status == crate::model::SecretStatus::Active => self.engine_public_key(engine, name).map(Some),
+            Ok(_) | Err(VaultError { status: 404, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn engine_sign(&self, engine: &str, name: &str, msg: &[u8]) -> Result<[u8; 64]> {
         Ok(self.engine_signing_key(engine, name)?.sign(msg).to_bytes())
     }

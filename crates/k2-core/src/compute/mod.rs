@@ -32,6 +32,7 @@ pub mod share;
 pub mod store;
 pub mod sync;
 pub mod ticket;
+pub mod trust;
 
 pub use k2_node_proto as proto;
 

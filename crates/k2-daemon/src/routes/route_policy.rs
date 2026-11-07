@@ -576,6 +576,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/ci/freeze", Member),
     post("/cli/ci/init", Member),
     post("/cli/ci/run", Member),
+    // Signer pairing (0.46.10 C3a, vs-live V17; `compute_trust`): a person
+    // only (owner or Admin with a fresh confirm; the handler refuses every
+    // passport). The SAS is answered only to that person.
+    post("/cli/ci/signer/add", Admin),
+    post("/cli/ci/signer/finish", Admin),
+    post("/cli/ci/signer/remove", Admin),
+    post("/cli/ci/signer/reveal", Admin),
+    get("/cli/ci/signers", Admin),
     get("/cli/ci/status", Member),
     post("/cli/ci/watch", Member),
     post("/cli/claude-auth/install-scheduler", Member),
@@ -663,6 +671,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/compute/jobs/receipt", Member),
     post("/cli/compute/jobs/retry", Member),
     post("/cli/compute/jobs/tier", Member),
+    // Node rosters, lanes, seats (0.46.10 C1/C3a, `compute_trust`): an
+    // operator files (owner, Admin, or an agent with the operate switch);
+    // a person decides (trust/approve, roster/key, consent on: the handler
+    // refuses passports and needs a fresh confirm).
+    get("/cli/compute/lanes", Admin),
+    post("/cli/compute/lanes/set", Admin),
     post("/cli/compute/local/disable", Owner),
     post("/cli/compute/local/drain", Owner),
     post("/cli/compute/local/enable", Owner),
@@ -718,11 +732,24 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/update", Admin),
     // Q5 (0.46.4): an operator turns the Linux job wall on (handler: operator()).
     post("/cli/compute/nodes/wall", Admin),
+    get("/cli/compute/owners", Admin),
+    post("/cli/compute/owners/consent", Admin),
     // 0.46.7 (CE-18): Batch jobs that install --needs on granted nodes.
     post("/cli/compute/prewarm", Member),
     // A node's queue, redacted per §7 (an agent verb: its own workspace).
     get("/cli/compute/queue", Member),
+    get("/cli/compute/roster", Admin),
+    post("/cli/compute/roster/key", Admin),
+    post("/cli/compute/roster/propose", Admin),
+    post("/cli/compute/roster/publish", Admin),
     post("/cli/compute/run", Member),
+    get("/cli/compute/seats", Admin),
+    post("/cli/compute/seats/offer", Admin),
+    post("/cli/compute/seats/request", Admin),
+    post("/cli/compute/trust/approve", Admin),
+    post("/cli/compute/trust/deny", Admin),
+    get("/cli/compute/trust/requests", Admin),
+    post("/cli/compute/trust/withdraw", Admin),
     get("/cli/compute/usage", Admin),
     // 0.45.7: the CLI's K2 Connect control-plane calls, made with the
     // daemon-held tunnel token. Logins: Owner/Admin (the handler's
@@ -851,6 +878,10 @@ pub const ROUTES: &[Route] = &[
     both("/cli/email/verify", Public),
     post("/cli/events", Member),
     post("/cli/federation/address", Public),
+    // Compute seats between a node owner and a client server (0.46.10
+    // C3a, vs-live V19): the signed federation envelope from a pinned,
+    // trusted peer is the credential (`compute_trust::handle_federation`).
+    post("/cli/federation/compute-seat", Public),
     post("/cli/federation/inbound", Public),
     get("/cli/federation/outbox", Admin),
     post("/cli/federation/pair/confirm", Admin),
@@ -2573,6 +2604,9 @@ pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
     ("/cli/auth/device/pair-code/status", "moves pairing codes whose ten minutes ran out to expired (and reports them on the events bus)"),
     ("/cli/auth/devices", "validating the caller's session may reap it or slide a paired phone's expiry"),
     ("/cli/auth/whoami", "validating a session may reap an expired one"),
+    // 0.46.10 C1/C3a: lists held trust requests (approve, deny and withdraw
+    // are POST routes); listing marks requests past their time expired.
+    ("/cli/compute/trust/requests", "moves held trust requests whose time ran out to expired"),
     ("/cli/context/layers", "refreshes generated roster packs on disk when they changed"),
     ("/cli/db/dsn", "lazily mints the agent role's vaulted password / bind membership"),
     ("/cli/federation/peer-roster", "lazy-heals stale connection rows from the peer roster"),

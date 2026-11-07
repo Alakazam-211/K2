@@ -1823,6 +1823,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // freely on a slip (and edit the migration-order tests). The store
         // is `crate::ci`.
         ("0273_ci", include_str!("../../drizzle_sql/0273_ci.sql")),
+        // 0274 — node rosters, lanes, seats, signer pairing (0.46.10,
+        // prd-ci-on-compute-for-clients-v1 C1 + C3a). Renumber freely on a
+        // slip (and edit the migration-order tests). The store is
+        // `crate::compute::trust`.
+        ("0274_compute_node_roster", include_str!("../../drizzle_sql/0274_compute_node_roster.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2502,7 +2507,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0273_ci",
+            last_name, "0274_compute_node_roster",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2641,6 +2646,8 @@ mod tests {
                 "0272_compute_git_access",
                 // 0.46.10: k2 ci.
                 "0273_ci",
+                // 0.46.10: node rosters, lanes, seats.
+                "0274_compute_node_roster",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2787,6 +2794,8 @@ mod tests {
                 "0272_compute_git_access",
                 // 0.46.10: k2 ci.
                 "0273_ci",
+                // 0.46.10: node rosters, lanes, seats.
+                "0274_compute_node_roster",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3059,7 +3068,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0273_ci", "0273 (0.46.10) runs last");
+        assert_eq!(top, "0274_compute_node_roster", "0274 (0.46.10) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3117,9 +3126,10 @@ mod tests {
                 "0270_compute_node_rollouts",
                 "0271_compute_pkg_requests",
                 "0272_compute_git_access",
-                "0273_ci"
+                "0273_ci",
+                "0274_compute_node_roster"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273 and 0274)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3961,7 +3971,11 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0273 (k2 ci, 0.46.10) is the newest: its record goes (its
+            // 0274 (node rosters, 0.46.10) is the newest: its record goes
+            // (its tables and indexes are IF NOT EXISTS; its column re-adds
+            // are skipped as duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0274_compute_node_roster'", []).unwrap();
+            // 0273 (k2 ci, 0.46.10) came before it: its record goes (its
             // tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0273_ci'", []).unwrap();
             // 0272 (compute git access, 0.46.9) came before it: its record

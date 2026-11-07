@@ -197,6 +197,13 @@ fn hostname() -> String {
         .unwrap_or_else(|| "this server".to_string())
 }
 
+/// A hello's rotation names the key the hello comes with (its new key).
+fn rot_names_new_key(rot: &frames::KeyRotation, node_fp: &str) -> bool {
+    rot.rotation
+        .peek::<k2_core::compute::proto::statement::RotationStatement>(k2_core::compute::proto::ci::DOMAIN_NODE_ROTATION)
+        .is_ok_and(|r| r.new_fp == node_fp)
+}
+
 // ── shared socket helpers ────────────────────────────────────────────
 
 type Ws<'a> = tokio_tungstenite::WebSocketStream<&'a mut TcpStream>;
@@ -263,6 +270,7 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
         Err(_) => return refuse(&mut ws, "bad_key", "the node key is unreadable").await,
     };
     let mut binding = req.code_binding.trim().to_ascii_lowercase();
+    let mut seat_enrol: Option<k2_core::compute::trust::SeatRow> = None;
     let (entry, via) = if let Some(ticket) = req.ticket.as_deref() {
         // One-click (same Connect account): the control plane's signed
         // ticket stands in for the code. Still only `pending`.
@@ -289,6 +297,20 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
                 return refuse(&mut ws, r.code(), &r.message()).await;
             }
         }
+    } else if let Some((seat, name)) = crate::compute_trust::seat_enrol(&binding, &node_fp) {
+        // C3a (V20): a seat node, with the seat's code from the owner's
+        // `servers.add`: its key is active in the owner's node roster under
+        // a name the owner's signed seat lists. Confirmed below, no SAS.
+        seat_enrol = Some(seat.clone());
+        (
+            compute::enroll::CodeEntry {
+                binding: binding.clone(),
+                name: crate::compute_trust::seat_node_local_name(&name, &seat.id),
+                minted_by: format!("seat:{}", seat.id),
+                expires_at: compute::now() + 600,
+            },
+            "code",
+        )
     } else {
         match compute::enroll::take(&binding) {
             Ok(e) => (e, "code"),
@@ -388,18 +410,27 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
         // The node proved the code and its key; only this server's old row
         // for it is in the way. The code stays good (until its own expiry)
         // so the node's retry works once the owner removes that row.
-        if code == "already_enrolled" && via == "code" {
+        if code == "already_enrolled" && via == "code" && seat_enrol.is_none() {
             compute::enroll::restore(entry.clone());
         }
         return refuse(&mut ws, code, "a live node already has this name or key; remove it first").await;
     }
+    // C3a (V20): a seat node is confirmed by the owner's roster, not a SAS.
+    let state = match &seat_enrol {
+        Some(seat) => {
+            let (id, seat) = (node_id.clone(), seat.clone());
+            let _ = tokio::task::spawn_blocking(move || crate::compute_trust::seat_enrolled(&id, &seat)).await;
+            "active"
+        }
+        None => "pending",
+    };
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::SyncSettings,
         serde_json::json!({"compute": "node_pending", "name": entry.name}),
     );
     let _ = send_hs(
         &mut ws,
-        &HandshakeFrame::EnrollDone(EnrollDone { node_id, name: entry.name, state: "pending".into() }),
+        &HandshakeFrame::EnrollDone(EnrollDone { node_id, name: entry.name, state: state.into() }),
     )
     .await;
     let _ = ws.close(None).await;
@@ -428,6 +459,23 @@ pub async fn serve_attach(stream: &mut TcpStream, ingress: Ingress) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::latest_node_by_fp(&conn, &hello.node_fp)
+    };
+    // Protocol 9 (C1, V3): a re-keyed node proves its new key with the old
+    // one this server pins; the row moves to the new key in place. Then the
+    // handshake below proves the node holds the new key.
+    let row = match (row, hello.rotation.as_ref()) {
+        (None, Some(rot)) if rot_names_new_key(rot, &hello.node_fp) => {
+            let rot = rot.clone();
+            match tokio::task::spawn_blocking(move || crate::compute_trust::on_rotation(&rot)).await {
+                Ok(Ok(moved)) => Some(moved),
+                Ok(Err((code, why))) => {
+                    audit("node", "rotation_refused", None, serde_json::json!({"code": code, "why": why, "fp": hello.node_fp}));
+                    return refuse(&mut ws, code, &why).await;
+                }
+                Err(_) => return refuse(&mut ws, "internal", "rotation check failed").await,
+            }
+        }
+        (r, _) => r,
     };
     let Some(row) = row else {
         return refuse(&mut ws, "unknown_node", "this server doesn't know this node; enroll it again").await;
@@ -677,6 +725,8 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         Frame::Receipt(r) => on_receipt(&node_id, r),
         // Protocol 9: the node's signed self-statement.
         Frame::NodeStatement(st) => on_statement(&node_id, st),
+        // Protocol 9 (C1, V11): the node relays its owner's node roster.
+        Frame::NodeRoster(doc) => crate::compute_trust::on_node_roster(&node_id, doc),
         Frame::Goodbye(g) => audit("node", "goodbye", Some(&node_id), serde_json::json!({"reason": g.reason})),
         // Node admin (prd-k2-node-admin-v1). A node another server owns
         // gets no node admin from here (V52): an admin frame from it is
@@ -1685,6 +1735,8 @@ fn on_statement(node_id: &str, st: k2_core::compute::proto::ci::Signed) {
     let fp = pinned.as_deref().and_then(|p| crypto::fingerprint_of_spki_pem(p).ok());
     match k2_core::compute::proto::statement::NodeStatement::open(&st) {
         Ok(doc) if Some(&doc.node_fp) == fp.as_ref() => {
+            // C1: the latest statement, kept for the owner's roster entry.
+            crate::compute_trust::on_statement(node_id, &st);
             with_engine(|e| {
                 if let Some(c) = e.conns.get_mut(node_id) {
                     c.statement = Some(st);

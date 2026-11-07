@@ -247,7 +247,9 @@ function CompletionSoundRow(): React.JSX.Element {
 // When the user switches workspaces (icon rail / Active bar / workspace
 // tab), focus the terminal or the compose bar so they can type immediately.
 // Thin-client only (`k2.workspaceSwitchFocus` in localStorage) — not a
-// daemon setting. `"terminal"` is the default; `"off"` moves nothing.
+// daemon setting. `"composer"` (Message agent) is the default since 0.46.10
+// (`WORKSPACE_SWITCH_FOCUS_DEFAULT`); a saved pick keeps winning. `"off"`
+// moves nothing.
 function WorkspaceSwitchFocusRow(): React.JSX.Element {
   const value = useSettingsStore((s) => s.workspaceSwitchFocus)
   const setWorkspaceSwitchFocus = useSettingsStore((s) => s.setWorkspaceSwitchFocus)
@@ -284,6 +286,8 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
 // The view a conversation opens in when this client has no remembered view
 // for it (Terminal / Thread / Chatter / Split view — the same choices as the
 // view button on an agent). Conversations with a remembered view keep it.
+// Unset, it is Split view, Terminal left and Thread right, since 0.46.10
+// (`NEW_AGENT_VIEW_DEFAULT`).
 // Thin-client only (`k2.newAgentView` in localStorage), like the auto-select
 // row above and the per-conversation view memory. No Chat choice: the Chat
 // view is gone (deleted 0.46.5); a saved Chat pick reads back as Thread and

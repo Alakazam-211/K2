@@ -633,8 +633,39 @@ describe('#683 capability gate — fallback to legacy renderer-orchestrated path
 })
 
 describe('S2 overlay chrome (C3/C4/C10)', () => {
-  it('defaults to Terminal and keeps ChatHeader dropdown on Thread without unmounting PTY', async () => {
-    renderInRoom(room, 
+  it('a new pinned Chat opens in Split view: Terminal left, Thread right (0.46.10 default)', async () => {
+    localStorage.clear()
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+
+    const menu = screen.getByTestId('session-view-menu')
+    expect(menu.getAttribute('data-view')).toBe('split')
+    expect(menu.getAttribute('data-split-left')).toBe('terminal')
+    expect(menu.getAttribute('data-split-right')).toBe('thread')
+    // The ready pane hands the split to TerminalPane (mocked here) via the
+    // session chrome; it asks for both sides.
+    expect(h.terminalProps.current).not.toBeNull()
+    // Remembered for this conversation on first show.
+    expect(localStorage.getItem(sessionViewTabStorageKey('local', 'claude-1'))).toBe('split')
+    localStorage.clear()
+  })
+
+  it('a pinned Chat with a saved Terminal view keeps it', async () => {
+    localStorage.clear()
+    localStorage.setItem(sessionViewTabStorageKey('local', 'claude-1'), 'terminal')
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('terminal')
+    expect(screen.queryByTestId('session-split-right')).toBeNull()
+    expect(localStorage.getItem(sessionViewTabStorageKey('local', 'claude-1'))).toBe('terminal')
+    localStorage.clear()
+  })
+
+  it('from Terminal, keeps ChatHeader dropdown on Thread without unmounting PTY', async () => {
+    // A saved "New agents open in: Terminal" keeps winning over the default.
+    localStorage.clear()
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }))
+    renderInRoom(room,
       <>
         <AgentChatPane agentName="agent" projectPath="/ws" />
         <ContextMenu />
@@ -675,6 +706,7 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     expect(h.terminalProps.current!.showComposeBar).toBe(true)
     expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
     expect(screen.getByLabelText('Refresh chat session')).not.toBeNull()
+    localStorage.clear()
   })
 })
 
@@ -1196,6 +1228,37 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     expect(screen.queryByTestId('agent-session-ensuring')).toBeNull()
     localStorage.removeItem(sessionViewTabStorageKey('local', 'claude-restored'))
     h.daemonCliPost.mockImplementation(async () => mountEnsure())
+  })
+
+  it('a new agent with no Thread yet: Split view, terminal side left, the empty Thread on the right', async () => {
+    localStorage.clear()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        await gate
+        return mountEnsure()
+      }
+      return undefined
+    })
+    renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('thread', expect.objectContaining({ addr: 'sales' })))
+    expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy()
+    const left = screen.getByTestId('session-split-left')
+    const right = screen.getByTestId('session-split-right')
+    expect(left.getAttribute('data-split-view')).toBe('terminal')
+    expect(left.textContent).toContain('Loading session…')
+    expect(right.getAttribute('data-split-view')).toBe('thread')
+    expect(right.querySelector('[data-testid="agent-session-thread"]')).not.toBeNull()
+    expect(right.querySelector('[data-testid="thread-overlay-pane"]')).not.toBeNull()
+    // No Thread messages yet: the Thread's empty state, not a blank side.
+    await waitFor(() => expect(right.querySelector('[data-testid="thread-overlay-empty"]')).not.toBeNull())
+    await act(async () => release())
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.daemonCliPost.mockImplementation(async () => mountEnsure())
+    localStorage.clear()
   })
 
   it('a list without the handle looks the address up as before', async () => {

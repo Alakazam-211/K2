@@ -57,7 +57,8 @@ describe('session view memory follows the room server (Home)', () => {
   it('a view chosen directly on X shows when the agent is opened from Home', () => {
     windowOn(X)
     const direct = renderHook(() => useSessionViewTab(SESSION, primaryScope()))
-    expect(direct.result.current.viewTab).toBe('terminal')
+    // Never shown here: the new-agent default (Split view, 0.46.10).
+    expect(direct.result.current.viewTab).toBe('split')
     act(() => direct.result.current.setViewTab('split'))
     act(() => direct.result.current.setSplitLeft('chatter'))
     act(() => direct.result.current.setSplitRight('terminal'))
@@ -94,7 +95,7 @@ describe('session view memory follows the room server (Home)', () => {
     expect(localStorage.getItem(`local|k2:session-view-tab:${SESSION}`)).toBe('thread')
     // X's agent with the same session id keeps its own entry.
     const remote = renderHook(() => useSessionViewTab(SESSION, remoteRoomScope(scopeForHost(X))))
-    expect(remote.result.current.viewTab).toBe('terminal')
+    expect(remote.result.current.viewTab).toBe('split')
     // A Home room on this computer reads the same `local|` entry.
     const localRoom = renderHook(() => useSessionViewTab(SESSION, scopeForHost('local')))
     expect(localRoom.result.current.viewTab).toBe('thread')
@@ -104,8 +105,26 @@ describe('session view memory follows the room server (Home)', () => {
     localStorage.setItem(`x.k2.dev|k2:session-view-tab:${SESSION}`, 'thread')
     windowOn('local')
     const pane = renderHook(() => useSessionViewTab(SESSION, primaryScope()))
-    expect(pane.result.current.viewTab).toBe('terminal')
+    expect(pane.result.current.viewTab).toBe('split')
     act(() => windowOn(X))
     expect(pane.result.current.viewTab).toBe('thread')
+  })
+
+  it('a new agent opens in Split view (Terminal | Thread) the same on a remote server, from Home, and locally', () => {
+    for (const [label, scope, windowServer, key] of [
+      ['local, primary', () => primaryScope(), 'local' as const, 'local'],
+      ['X, primary', () => primaryScope(), X, 'x.k2.dev'],
+      ['X, from Home', () => remoteRoomScope(scopeForHost(X)), 'local' as const, 'x.k2.dev'],
+    ] as const) {
+      localStorage.clear()
+      windowOn(windowServer)
+      const session = `conv-new-${label}`
+      const hook = renderHook(() => useSessionViewTab(session, scope()))
+      expect(hook.result.current.viewTab, label).toBe('split')
+      expect(hook.result.current.splitLeft, label).toBe('terminal')
+      expect(hook.result.current.splitRight, label).toBe('thread')
+      expect(localStorage.getItem(`${key}|k2:session-view-tab:${session}`), label).toBe('split')
+      hook.unmount()
+    }
   })
 })

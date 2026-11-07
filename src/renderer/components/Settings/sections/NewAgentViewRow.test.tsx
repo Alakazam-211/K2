@@ -49,7 +49,28 @@ describe('New agents open in', () => {
     expect(focus).toBeGreaterThanOrEqual(0)
     expect(ids[focus + 1]).toBe('general.new-agent-view')
     expect(within(row()).getByText('New agents open in')).toBeTruthy()
+    // Default since 0.46.10: Split view, Terminal left, Thread right.
+    expect(within(row()).getByRole('button', { name: 'New agents open in' }).textContent).toContain('Split view')
+    const split = screen.getByTestId('new-agent-view-split')
+    expect(within(split).getByRole('button', { name: 'Split view left side' }).textContent).toContain('Terminal')
+    expect(within(split).getByRole('button', { name: 'Split view right side' }).textContent).toContain('Thread')
+  })
+
+  it('the default is Split view, Terminal | Thread, with nothing saved', () => {
+    expect(NEW_AGENT_VIEW_DEFAULT).toEqual({ view: 'split', split: { left: 'terminal', right: 'thread' } })
+    expect(localStorage.getItem(LS_NEW_AGENT_VIEW)).toBeNull()
+    expect(readNewAgentView()).toEqual({ view: 'split', split: { left: 'terminal', right: 'thread' } })
+  })
+
+  it('a saved Terminal pick keeps showing as Terminal', () => {
+    localStorage.setItem(LS_NEW_AGENT_VIEW, JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }))
+    useSettingsStore.setState({ newAgentView: readNewAgentView() })
+    render(<WorkspaceBehaviorRows />)
     expect(within(row()).getByRole('button', { name: 'New agents open in' }).textContent).toContain('Terminal')
+    expect(screen.queryByTestId('new-agent-view-split')).toBeNull()
+    expect(localStorage.getItem(LS_NEW_AGENT_VIEW)).toBe(
+      JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }),
+    )
   })
 
   it('is in the settings search manifest under Workspace settings', () => {
@@ -92,6 +113,7 @@ describe('New agents open in', () => {
 
   it('shows the side pickers only for Split view, with different sides', async () => {
     render(<WorkspaceBehaviorRows />)
+    await pick(row(), 'New agents open in', 'Terminal')
     expect(screen.queryByTestId('new-agent-view-split')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Split view left side' })).toBeNull()
 

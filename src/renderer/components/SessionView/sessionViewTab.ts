@@ -168,8 +168,13 @@ export interface NewAgentViewPref {
   split: SessionSplitSides
 }
 
+/** "New agents open in" when this install has never picked one: Split view,
+ *  Terminal left and Thread right (Rosson 2026-11-07, for 0.46.10: "Split
+ *  view is the default moving forward"). It was Terminal before 0.46.10.
+ *  Only a conversation this client has never shown reads it; a remembered
+ *  view, and a saved "New agents open in" pick, keep winning. */
 export const NEW_AGENT_VIEW_DEFAULT: NewAgentViewPref = {
-  view: SESSION_VIEW_TAB_DEFAULT,
+  view: 'split',
   split: DEFAULT_SPLIT_SIDES,
 }
 

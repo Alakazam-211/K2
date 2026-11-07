@@ -394,10 +394,19 @@ export type WorkspaceSwitchFocus = 'terminal' | 'composer' | 'off'
 /** Per-install caret target after a workspace switch. Not daemon SSOT. */
 export const LS_WORKSPACE_SWITCH_FOCUS = 'k2.workspaceSwitchFocus'
 
+/** The target when this install has never picked one: "Message agent"
+ *  (Rosson 2026-11-07, for 0.46.10: new agents open in Split view with the
+ *  Thread on the right, so a switch lands in its message box). It was
+ *  `'terminal'` before 0.46.10. A stored pick, `'terminal'` included, keeps
+ *  winning: only an unset (or unreadable) key reads as this default. */
+export const WORKSPACE_SWITCH_FOCUS_DEFAULT: WorkspaceSwitchFocus = 'composer'
+
 /** Coerce any stored / UI value to a legal target. Blank, missing, or
- *  garbage → `'terminal'` (today's default). */
+ *  garbage → `WORKSPACE_SWITCH_FOCUS_DEFAULT`. */
 export function normalizeWorkspaceSwitchFocus(value: unknown): WorkspaceSwitchFocus {
-  return value === 'composer' || value === 'off' ? value : 'terminal'
+  return value === 'terminal' || value === 'composer' || value === 'off'
+    ? value
+    : WORKSPACE_SWITCH_FOCUS_DEFAULT
 }
 
 export function readWorkspaceSwitchFocus(): WorkspaceSwitchFocus {
@@ -408,7 +417,7 @@ export function readWorkspaceSwitchFocus(): WorkspaceSwitchFocus {
         : null,
     )
   } catch {
-    return 'terminal'
+    return WORKSPACE_SWITCH_FOCUS_DEFAULT
   }
 }
 

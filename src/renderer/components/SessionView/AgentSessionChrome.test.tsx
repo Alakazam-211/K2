@@ -141,7 +141,8 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.getByLabelText('Refresh session')).not.toBeNull()
     expect(screen.queryByTestId('session-view-tabs')).toBeNull()
     expect(screen.queryByTestId('session-view-chat')).toBeNull()
-    expect(viewButtonLabel()).toBe('Terminal')
+    // A new agent opens in Split view (the 0.46.10 default).
+    expect(viewButtonLabel()).toBe('Split view')
     expect(viewButtonLabel()).not.toBe('View')
     const header = screen.getByTestId('sidecar-session-header')
     const title = screen.getByTestId('sidecar-session-title')
@@ -158,7 +159,36 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(header.className).toContain('grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]')
   })
 
+  it('a new agent opens in Split view: Terminal left, Thread right, nothing saved changed', () => {
+    const tabKey = sessionViewTabStorageKey('local', 'conv-r')
+    const splitKey = sessionViewSplitStorageKey('local', 'conv-r')
+    expect(localStorage.getItem(tabKey)).toBeNull()
+    renderChrome()
+    const menu = screen.getByTestId('session-view-menu')
+    expect(menu.getAttribute('data-view')).toBe('split')
+    expect(menu.getAttribute('data-split-left')).toBe('terminal')
+    expect(menu.getAttribute('data-split-right')).toBe('thread')
+    // Both sides mount: the PTY and the Thread viewer.
+    expect(screen.getByTestId('pty-visible')).not.toBeNull()
+    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('chatter-overlay-pane')).toBeNull()
+    // Remembered, so a later change to the setting does not move it.
+    expect(localStorage.getItem(tabKey)).toBe('split')
+    expect(JSON.parse(localStorage.getItem(splitKey) ?? 'null')).toEqual({ left: 'terminal', right: 'thread' })
+  })
+
+  it('an agent with a saved Terminal view keeps it', () => {
+    localStorage.setItem(sessionViewTabStorageKey('local', 'conv-r'), 'terminal')
+    renderChrome()
+    expect(screen.getByTestId('session-view-menu').getAttribute('data-view')).toBe('terminal')
+    expect(viewButtonLabel()).toBe('Terminal')
+    expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
+    expect(localStorage.getItem(sessionViewTabStorageKey('local', 'conv-r'))).toBe('terminal')
+  })
+
   it('keeps TerminalPane and Message-the-agent after switching to Thread', async () => {
+    // Start from Terminal (a saved "New agents open in" pick keeps winning).
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }))
     renderChrome()
     expect(screen.getByTestId('agent-session-terminal')).not.toBeNull()
     expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()

@@ -41,7 +41,8 @@ describe('useSessionViewTab', () => {
     expect(again.result.current.viewTab).toBe('split')
     expect(again.result.current.splitLeft).toBe('chatter')
     expect(again.result.current.splitRight).toBe('chatter')
-    expect(renderHook(() => useSessionViewTab('conv-other', PRIMARY)).result.current.viewTab).toBe('terminal')
+    // A conversation never shown here gets the default: Split view.
+    expect(renderHook(() => useSessionViewTab('conv-other', PRIMARY)).result.current.viewTab).toBe('split')
   })
 })
 
@@ -117,11 +118,56 @@ describe('useSessionViewTab — New agents open in', () => {
     expect(localStorage.getItem('local|k2:session-view-split:conv-legacy')).toBeNull()
   })
 
-  it('with no setting, new conversations still open in Terminal', () => {
+  it('with no setting, new conversations open in Split view: Terminal left, Thread right (0.46.10)', () => {
     const hook = renderHook(() => useSessionViewTab('conv-plain', PRIMARY))
-    expect(hook.result.current.viewTab).toBe('terminal')
+    expect(hook.result.current.viewTab).toBe('split')
     expect(hook.result.current.splitLeft).toBe('terminal')
     expect(hook.result.current.splitRight).toBe('thread')
+    // Remembered on first show, so a later setting change does not move it.
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-plain')).toBe('split')
+    expect(JSON.parse(localStorage.getItem('local|k2:session-view-split:conv-plain') ?? 'null')).toEqual({
+      left: 'terminal',
+      right: 'thread',
+    })
+  })
+
+  it('with no setting, a pane still waiting for its conversation id already shows Split view', () => {
+    const hook = renderHook(({ key }) => useSessionViewTab(key, PRIMARY), {
+      initialProps: { key: null as string | null },
+    })
+    expect(hook.result.current.viewTab).toBe('split')
+    expect(hook.result.current.splitLeft).toBe('terminal')
+    expect(hook.result.current.splitRight).toBe('thread')
+  })
+
+  it('the new default leaves saved views alone: Terminal, Thread and a saved Split stay as saved', () => {
+    localStorage.setItem('local|k2:session-view-tab:conv-was-terminal', 'terminal')
+    localStorage.setItem('local|k2:session-view-tab:conv-was-thread', 'thread')
+    localStorage.setItem('local|k2:session-view-tab:conv-was-split', 'split')
+    localStorage.setItem(
+      'local|k2:session-view-split:conv-was-split',
+      JSON.stringify({ left: 'thread', right: 'chatter' }),
+    )
+    expect(renderHook(() => useSessionViewTab('conv-was-terminal', PRIMARY)).result.current.viewTab).toBe('terminal')
+    expect(renderHook(() => useSessionViewTab('conv-was-thread', PRIMARY)).result.current.viewTab).toBe('thread')
+    const split = renderHook(() => useSessionViewTab('conv-was-split', PRIMARY))
+    expect(split.result.current.viewTab).toBe('split')
+    expect(split.result.current.splitLeft).toBe('thread')
+    expect(split.result.current.splitRight).toBe('chatter')
+    // Nothing rewritten.
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-was-terminal')).toBe('terminal')
+    expect(localStorage.getItem('local|k2:session-view-tab:conv-was-thread')).toBe('thread')
+    expect(localStorage.getItem('local|k2:session-view-split:conv-was-split')).toBe(
+      JSON.stringify({ left: 'thread', right: 'chatter' }),
+    )
+  })
+
+  it('a saved "New agents open in: Terminal" keeps winning over the new default', () => {
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }))
+    expect(renderHook(() => useSessionViewTab('conv-pref-terminal', PRIMARY)).result.current.viewTab).toBe('terminal')
+    expect(localStorage.getItem('k2.newAgentView')).toBe(
+      JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }),
+    )
   })
 })
 

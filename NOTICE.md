@@ -330,7 +330,7 @@ byte-exact codec, the text tier's parity list), vendored beside it.
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above); its tests use proptest (MIT OR Apache-2.0) |
 
-## Multiplayer kit: k2-mpc-board v0.1.2 (vendored)
+## Multiplayer kit: k2-mpc-board v0.1.3 (vendored)
 
 The `.k5board` file format and its pack (a strict zip reader and writer,
 canonical JSON, typed refusals, edits with per-object revisions, the agent
@@ -340,7 +340,7 @@ beside the kit.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-board`, with its own `NOTICE.md`, `THIRD-PARTY-NOTICES.md` and `CHANGELOG.md`. Its `fuzz/` workspace isn't built by K2 |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-board`, tag `v0.1.2` (`dab5d56`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-board`, tag `v0.1.3` (`e558fa3`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Credit** | Parts of this crate come from Board, Copyright (c) 2026 Baden Ballard, MIT: the schema tables, the templates, the verbs' rules, the parity list, and the shapes the widget conversion pairs describe. See `THIRD-PARTY-NOTICES.md` for which files, and the licence. |
 | **Dependencies** | miniz_oxide (MIT OR Zlib OR Apache-2.0), sha2 (MIT OR Apache-2.0); its `bridge/` adds the kit (k2-mpc-base, above) |

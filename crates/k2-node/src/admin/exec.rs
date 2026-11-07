@@ -481,6 +481,27 @@ impl Executor {
         }
     }
 
+    /// Root's lanes file (`/etc/k2-node-lanes.toml`; a scratch executor's
+    /// own copy beside its config).
+    pub fn lanes_file(&self) -> PathBuf {
+        if self.real_node() {
+            PathBuf::from(k2_node_proto::lanes::LANES_FILE)
+        } else {
+            self.paths.config_dir.join("k2-node-lanes.toml")
+        }
+    }
+
+    /// `lanes.write {file}` (protocol 9, C3a, V22): the owner server's
+    /// whole lanes file, written as root 0644. Privileged: the owner's
+    /// approval key signed it (checked before this runs).
+    fn lanes_write(&self, args: &Value) -> Result<Value, AdminRefusal> {
+        let f = k2_node_proto::lanes::check_write_args(args).map_err(|m| AdminRefusal::new(k2_node_proto::lanes::codes::BAD_LANES, m))?;
+        let text = f.render().map_err(|m| AdminRefusal::new(k2_node_proto::lanes::codes::BAD_LANES, m))?;
+        let path = self.lanes_file();
+        crate::util::atomic_write(&path, text.as_bytes(), 0o644).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
+        Ok(json!({"lanes": f.lanes.keys().collect::<Vec<_>>(), "seats": f.seats.iter().map(|s| &s.seat).collect::<Vec<_>>(), "path": path}))
+    }
+
     /// Another handle on the same executor (shared locks and flags) for a
     /// background thread (the health gate, a drain).
     pub fn bg_handle(&self) -> Executor {
@@ -765,6 +786,7 @@ impl Executor {
             "homes.private" => self.homes_private(args),
             k2_node_proto::admin::VERB_PACKAGES_ALLOW => self.packages_allow(args),
             k2_node_proto::admin::VERB_PACKAGES_POLICY => self.packages_policy(args),
+            k2_node_proto::lanes::VERB_LANES_WRITE => self.lanes_write(args),
             "wall.enable" => self.wall_enable(args, &c.opened.cmd.cmd_id, c.class == Class::Privileged && c.approval_key.is_some()),
             "policy.set" => super::policy::apply_set(&self.paths.layout(), args),
             "policy.narrow" => super::policy::apply_narrow(&self.paths.config_dir, args),

@@ -247,6 +247,17 @@ pub const VERBS: &[VerbSpec] = &[
     // a widening as privileged (the owner's approval, `full`), like
     // `servers.limits`. Arguments: `crate::pkgpolicy::check_policy_args`.
     VerbSpec { name: VERB_PACKAGES_POLICY, base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
+    // Protocol 9 (C3a, vs-live V22): write `/etc/k2-node-lanes.toml` whole
+    // (the lanes in use here and the client servers seated here). It
+    // widens what a `trust team` tenant gets, so always the owner's
+    // approval and `full`. Arguments: `crate::lanes::check_write_args`. A
+    // node without the `lanes` feature refuses it by name.
+    VerbSpec { name: crate::lanes::VERB_LANES_WRITE, base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
+    // Protocol 9 (C1, V11): hold and relay the owner's signed node roster
+    // and the seats naming this node. The documents verify themselves (the
+    // roster key, trust on first use; a key change needs the owner's
+    // approval), so operate at `policy`. Answered by the node.
+    VerbSpec { name: crate::lanes::VERB_NODE_ROSTER_SET, base: Class::Operate, min_level: Level::Policy, runs: Runs::Node },
 ];
 
 /// Protocol 7: one server's package policy.

@@ -54,6 +54,7 @@ pub mod job_cache;
 mod offer;
 pub mod owner_swap;
 pub mod pkgreq;
+pub mod roster;
 mod run;
 mod sync_src;
 pub mod tenant;

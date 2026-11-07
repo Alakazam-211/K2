@@ -214,6 +214,20 @@ impl Node {
                 }
             }
         }
+        // C1/C3a: the node relays its owner's node roster, and takes the
+        // lanes file verb (root's executor), protocol 9 only. A `--dev`
+        // node has no executor, so no lanes.
+        if t.speaks_ci() {
+            let mut add = vec![k2_node_proto::ci::FEATURE_NODE_ROSTER];
+            if !self.opts.dev {
+                add.push(k2_node_proto::ci::FEATURE_LANES);
+            }
+            for feat in add {
+                if !f.iter().any(|x| x == feat) {
+                    f.push(feat.to_string());
+                }
+            }
+        }
         // C2: secret jobs run as a per-job uid here (protocol 9 only).
         if t.speaks_ci() && self.job_uid_ready() && !f.iter().any(|x| x == k2_node_proto::ci::FEATURE_JOB_UID) {
             f.push(k2_node_proto::ci::FEATURE_JOB_UID.to_string());

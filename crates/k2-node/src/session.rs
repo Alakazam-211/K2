@@ -154,6 +154,7 @@ where
             ledger_id: ledger_id.to_string(),
             nonce_n: nonce_n.clone(),
             node_version: NODE_VERSION.to_string(),
+            rotation: None,
         }))
         .await?;
         let ch: Challenge = match parse_hs(&recv_text(ws).await?)? {
@@ -503,6 +504,10 @@ where
     if tenant.speaks_ci() {
         if let Some(s) = node.statement_signed() {
             let _ = tx.send(Frame::NodeStatement(s)).await;
+        }
+        // C1 (V11): the owner's node roster and this server's own seats.
+        if let Some(d) = node.roster_for(&tenant) {
+            let _ = tx.send(Frame::NodeRoster(d)).await;
         }
     }
     // Tell the owner server how the last self-update ended (it dedups).

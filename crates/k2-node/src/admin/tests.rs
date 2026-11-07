@@ -294,6 +294,37 @@ fn privileged_needs_owner_signature_and_full_level() {
     assert_eq!(code_of(&p.run(&p.approve(p.cmd("unit.restart", json!({"unit": "k2-node"}))))), code::REMOTE_ADMIN_OFF);
 }
 
+/// C3a (V22): `lanes.write` is privileged at `full`: the owner's approval
+/// key signs it; the whole file lands as root 0644, checked again here.
+#[test]
+fn lanes_write_is_the_owners_and_writes_the_whole_file() {
+    use k2_node_proto::lanes::{LaneSeat, LaneTemplate, LanesFile, LANE_CI_STANDARD};
+    let r = Rig::new("full");
+    let mut f = LanesFile::default();
+    f.lanes.insert(LANE_CI_STANDARD.into(), LaneTemplate::ci_standard());
+    f.seats.push(LaneSeat { seat: "seat-a".into(), server_fp: "a".repeat(64), lane: LANE_CI_STANDARD.into(), label: "client.k2.dev".into() });
+    let args = json!({"file": f});
+    // Controller-only: held for the owner, nothing written.
+    assert_eq!(code_of(&r.run(&r.sign(&r.cmd("lanes.write", args.clone())))), code::APPROVAL_REQUIRED);
+    let path = r.exec.lanes_file();
+    assert!(!path.exists());
+    let ok = r.run(&r.approve(r.cmd("lanes.write", args.clone())));
+    assert_eq!(ok.state, "done", "{ok:?}");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(LanesFile::parse(&text).unwrap(), f);
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
+    // A broken file is refused even approved; the old one stays.
+    let mut bad = serde_json::to_value(&f).unwrap();
+    bad["seats"][0]["lane"] = "nope".into();
+    let res = r.run(&r.approve(r.cmd("lanes.write", json!({"file": bad}))));
+    assert_eq!(code_of(&res), k2_node_proto::lanes::codes::BAD_LANES, "{res:?}");
+    assert_eq!(LanesFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap(), f);
+    // At `policy` the owner writes it at the machine only.
+    let p = Rig::new("policy");
+    assert_eq!(code_of(&p.run(&p.approve(p.cmd("lanes.write", args)))), code::REMOTE_ADMIN_OFF);
+}
+
 #[test]
 fn levels_off_allows_only_lowering_and_level_never_rises_remotely() {
     let r = Rig::new("off");

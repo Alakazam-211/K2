@@ -581,6 +581,7 @@ async fn node_sockets_fail_closed_over_the_tunnel() {
         ledger_id: "l".into(),
         nonce_n: k2_node_proto::crypto::nonce_b64().unwrap(),
         node_version: "test".into(),
+        rotation: None,
     });
     ws.send(Message::Text(serde_json::to_string(&hello).unwrap())).await.unwrap();
     let msg = ws.next().await.expect("an answer").expect("frame").into_text().unwrap();

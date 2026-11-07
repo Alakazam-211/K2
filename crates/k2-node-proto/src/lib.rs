@@ -40,6 +40,8 @@
 //!   (`docs/ci-formats-v1.md`).
 //! - [`statement`]: the node self-statement and key rotation (protocol 9).
 //! - [`node_roster`]: the owner-signed node roster, seats, attestations.
+//! - [`lanes`]: the node's lanes file, the `lanes.write` and
+//!   `node_roster.set` verbs, the roster the node relays (protocol 9).
 //! - [`evidence`]: the evidence bundle v2 the signer checks.
 //! - [`signer_policy`]: the signer's per-project policy file (TOML).
 //! - [`ci_config`]: `.k2/ci.toml`, the `k2 ci` config (TOML).
@@ -56,6 +58,7 @@ pub mod frames;
 pub mod gitcred;
 pub mod health;
 pub mod host;
+pub mod lanes;
 pub mod needs;
 pub mod node_roster;
 pub mod pairing;

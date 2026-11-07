@@ -185,6 +185,25 @@ pub struct Hello {
     /// 32 random bytes, base64.
     pub nonce_n: String,
     pub node_version: String,
+    /// Protocol 9 (C1, vs-live V3): a re-keyed node proves its new key to a
+    /// server that still pins the old one. The old key's signed
+    /// [`crate::statement::RotationStatement`] and the new key's statement
+    /// continuing it. Sent only when every active server on the node offers
+    /// `node-rekey` (older servers would refuse the new key as
+    /// `unknown_node`); absent otherwise, so a hello is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<KeyRotation>,
+}
+
+/// A re-keyed node's proof for a server that pins the old key (C1, V3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyRotation {
+    /// [`crate::statement::RotationStatement`], signed by the **old** key.
+    pub rotation: crate::ci::Signed,
+    /// The new key's [`crate::statement::NodeStatement`] (`prev_fp` = the
+    /// old key, `key_epoch` = the rotation's `new_epoch`).
+    pub statement: crate::ci::Signed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -437,6 +456,10 @@ pub enum Frame {
     /// sent when a session starts and whenever it changes. Only to a server
     /// that said protocol ≥ 9 (older parsers reject unknown variants).
     NodeStatement(crate::ci::Signed),
+    /// Protocol 9 (C1, V11): the owner's signed node roster and the
+    /// receiving server's **own** seat statements, relayed by the node
+    /// (feature `node-roster`). Only to a server that said protocol ≥ 9.
+    NodeRoster(crate::lanes::NodeRosterDoc),
 }
 
 impl Frame {
@@ -480,7 +503,8 @@ impl Frame {
             | Frame::PkgRequestFwd(_)
             | Frame::PkgRequestDone(_)
             | Frame::GitCredNeed(_)
-            | Frame::NodeStatement(_) => Direction::NodeToController,
+            | Frame::NodeStatement(_)
+            | Frame::NodeRoster(_) => Direction::NodeToController,
         }
     }
 
@@ -525,6 +549,7 @@ impl Frame {
             Frame::GitCred(_) => "git_cred",
             Frame::GitCredRefused(_) => "git_cred_refused",
             Frame::NodeStatement(_) => "node_statement",
+            Frame::NodeRoster(_) => "node_roster",
         }
     }
 }

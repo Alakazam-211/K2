@@ -125,6 +125,8 @@ async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, 
             super::exec::no_args(args)?;
             Ok(super::policy::show(node.layout(), &node.facts, &node.session_narrow()))
         }
+        // Protocol 9 (C1, V11): hold the owner's node roster and relay it.
+        k2_node_proto::lanes::VERB_NODE_ROSTER_SET => node.set_roster(args),
         _ => Err(AdminRefusal::new(code::VERB_NOT_ALLOWED, "verb is not built on this node yet")),
     }
 }

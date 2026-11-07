@@ -40,7 +40,7 @@ pub const RELEASES_URL: &str = "https://github.com/Alakazam-211/sew-releases/rel
 /// GitHub redirects release assets to.
 pub const GITHUB_HOSTS: [&str; 3] = ["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// A whole download (Sew 0.8.1 is about 25 MB; a slow line still finishes).
+/// A whole download (Sew 0.8.2 is about 26 MB; a slow line still finishes).
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// A preflight reachability check (HEAD).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(6);

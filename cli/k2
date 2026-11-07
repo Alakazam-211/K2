@@ -51639,6 +51639,8 @@ THE SHAPE
   verifier it kept, for the person's pass: the same pass guests.login gives
   (k2 study app-api). No password reaches your server; no K2 pass or cookie
   reaches the browser. It starts off: the owner runs k2 app auth door on.
+  K2 shows no screens: you design every one (web page or a phone's native
+  screens), with your own branding, steps and words.
 
   server:  const s = k2.auth.begin()   // {challenge, verifier, setCookie}, per attempt
            res.setHeader('set-cookie', s.setCookie)   // keeps s.verifier, HttpOnly

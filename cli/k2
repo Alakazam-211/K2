@@ -25259,8 +25259,9 @@ Agents:
                  and fetch just work, with short-lived read-only tokens, and the
                  node fetches the job's source itself (no relay cap). No --secret,
                  so jobs keep --cache and warm slots. A person grants (an agent
-                 gets git_access_needs_person, exit 3, and asks on a card);
-                 k2 compute git-access --help
+                 gets git_access_needs_person, exit 3, and asks on a card; with
+                 no GitHub credential yet, git_access_needs_setup and the
+                 setup card first); k2 compute git-access --help
   k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
                  No node: K2 picks one of the nodes granted to you that can
                  start the job now (a warm one if it isn't busier), else the
@@ -28876,6 +28877,11 @@ k2 compute git-access — let compute jobs read private GitHub repos
         token itself: make it read-only, for just these repos, with an
         expiry. Your gh login and classic tokens (ghp_…) are refused: they
         reach every repo you can, with write access.
+        An agent can't set it (nor see it). It asks a person on a card:
+          k2 permission request compute.git-access-setup --why "…"
+        The owner or an Admin then picks App or token in K2's own form on
+        the card; the value goes straight into this server's vault, the
+        same as this command.
 
   k2 compute git-access grant --github <owner>/<repo>[,<owner>/<repo>…]
         [--nodes all|<node>[,<node>…]] [--shared] [--workspace WS]
@@ -28892,7 +28898,10 @@ k2 compute git-access — let compute jobs read private GitHub repos
         A person grants. An agent gets git_access_needs_person (exit 3) and
         asks: k2 permission request compute.git-access repos=<owner>/<repo> --why "…"
         When a person approves that card, the grant is made (every node this
-        server owns); run the job again.
+        server owns); run the job again. With no credential on the server
+        yet, the agent gets git_access_needs_setup (exit 3) instead and
+        asks for the setup card first (above); then it runs the grant
+        again, which asks for the grant card.
 
   k2 compute git-access revoke --github <owner>/<repo>[,…] [--nodes …] | --all [--workspace WS]
         new asks are refused at once; an App's tokens already handed out are
@@ -28970,6 +28979,7 @@ t = (open(f).read() if f else sys.stdin.read()).strip()
 print(json.dumps({"token": t}))')"
             else
                 echo "usage: k2 compute git-access setup --github-app <app id> --key-file <app.pem> | --github-token-file <file> | --github-token-stdin | --clear" >&2
+                echo "  (a person's, from a terminal outside K2; an agent asks: k2 permission request compute.git-access-setup --why \"…\")" >&2
                 exit 2
             fi
             _compute_call POST /cli/compute/git-access/setup "$body"
@@ -29000,7 +29010,8 @@ c = v.get("credential")
 if c:
     print("credential: %s" % ("GitHub App " + str(c.get("appId")) if c.get("kind") == "app" else "a fine-grained token (nodes get the token itself)"))
 else:
-    print("credential: none (a person runs: k2 compute git-access setup --github-app <id> --key-file <app.pem>)")
+    print("credential: none (a person runs: k2 compute git-access setup --github-app <id> --key-file <app.pem>;")
+    print("  an agent asks: k2 permission request compute.git-access-setup --why \"<what you need it for>\")")
 for w in v.get("warnings") or []:
     print("warning: " + w)
 if v.get("granted"):
@@ -54374,6 +54385,13 @@ GIT ACCESS (0.46.9)
   k2 permission request compute.git-access repos=<o>/<r> --why "…".
   Once approved, run the job again. You may revoke your own
   (k2 compute git-access revoke --github …).
+  No GitHub credential on the server yet: the grant says
+  git_access_needs_setup (exit 3) instead. Ask with
+  k2 permission request compute.git-access-setup --why "…": the owner
+  or an Admin enters a GitHub App key or a read-only token in K2's own
+  form on that card, straight into the vault (you never see it). When
+  that card closes, run the grant again: it asks for its own card.
+  Never ask for a key or token in chat or on a secret card.
 
 RUN
   Attached (default): output streams; the exit code is the command's.
@@ -82726,6 +82744,14 @@ A job whose `--needs` asks for a system package its node's owner hasn't approved
 Run it as printed. `k2 compute node packages request <node> <names> --why "..."` (before a job) and `k2 compute prewarm` file the same kind of request and print the same line. The owner or an admin sees exactly what installs, on which machine, the number of packages with dependencies and the size. Several of your package requests can share one card; other kinds never join it. When the `[permission:]` turn says approved, root installs them on the node, and a `[compute]` message says when it's done: then run your job again. A node another server owns is that server's owner's to decide: you hear back in a `[compute]` message, and there is nothing to ask here.
 
 What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
+
+## GitHub access for compute jobs
+
+A job reads a private GitHub repo only with a grant, and every grant needs this server's GitHub credential. With none set yet, `k2 compute git-access grant --github <owner>/<repo>` is refused with `git_access_needs_setup` (exit 3) and ends with:
+
+    k2 permission request compute.git-access-setup --why "<what you need it for>"
+
+Run it as printed. The owner or an admin enters a GitHub App key or a read-only token in K2's own form on the card: it goes straight into this server's vault and you never see it. Never ask for a key or token in chat or on a secret card. When the `[permission:]` turn comes back (it may say "already on": they set it in the form), run the grant again: it ends with `k2 permission request compute.git-access repos=<owner>/<repo> --why "..."`, a second card. Once that's approved, run your job again. `k2 study compute` (GIT ACCESS).
 
 ## Apps
 

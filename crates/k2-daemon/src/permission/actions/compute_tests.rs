@@ -14,8 +14,10 @@ use k2_core::permission::request::RequestState;
 use serde_json::{json, Value};
 
 use super::super::held::tests::{
-    agent, answer_as, ask, ask_ok, ask_refused, below_floor, card_of, last_turn, login, not_requestable, row, seed, view, Ws,
+    agent, answer_as, apply_as, ask, ask_ok, ask_refused, below_floor, card_of, id_of, last_turn, login, not_requestable, refused_code, row,
+    seed, view, Ws,
 };
+use super::super::Answerer;
 use super::test_seams::COMPUTE_ON;
 use crate::compute_admin::{self, test_seams as nodes, APPROVE, PROPOSE, WITHDRAW};
 use crate::compute_routes::Who;
@@ -590,4 +592,116 @@ fn the_package_policy_card_checks_its_node() {
     let (s, v) = ask(&ws, "compute.packages-policy", json!({ "node": name, "server": "own", "level": "everything" }));
     assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{v}");
     assert!(v["error"]["hint"].as_str().unwrap_or("").contains("list, profiles, official"), "{v}");
+}
+
+// ── compute.git-access-setup (0.46.10) ───────────────────────────────
+
+/// This server's GitHub credential row, as `compute_git::setup` writes it
+/// after K2's own form posted the key (the vault half is the integration
+/// test's: `tests/permission_compute_git_setup.rs`).
+fn set_git_credential(on: bool) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if on {
+        k2_core::compute::git::set_credential(&conn, "app", Some("4242"), "owner", k2_core::compute::now()).expect("credential");
+    } else {
+        k2_core::compute::git::clear_credential(&conn).expect("clear");
+    }
+}
+
+const SETUP_ASK: &str = "k2 permission request compute.git-access-setup --why \"<what you need it for>\"";
+
+/// The setup card is a person's (the owner or an Admin), carries no value
+/// (the credential goes from K2's form to the setup route, never through
+/// the card), is read on its own, and says what the credential needs.
+#[test]
+fn git_access_setup_is_a_persons_card_with_no_value_on_it() {
+    use k2_core::permission::catalog::{Floor, Proof};
+    let r = super::super::find("compute.git-access-setup").expect("registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((r.spec.floor, r.spec.proof), (Floor::Admin, Proof::Click));
+    assert!(r.spec.params.is_empty(), "the card has no param that could carry a key or a token");
+    assert!(!crate::permission::present::batchable(&r), "never under Allow all");
+    assert!(crate::permission::actions::box_login_grant::never_batched(r.spec.id), "nothing joins it");
+    assert!(crate::routes::route_policy::lookup(crate::compute_git::SETUP).and_then(|x| x.post).is_some(), "the form's route has a POST row");
+
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("gsu");
+    set_git_credential(false);
+    // A value can't ride the ask.
+    for params in [json!({ "token": "github_pat_11K2TESTnotreal" }), json!({ "app_id": "4242", "key_pem": "x" })] {
+        let (s, v) = ask(&ws, "compute.git-access-setup", params.clone());
+        assert_eq!(s, "400 Bad Request", "{params}: {v}");
+    }
+    let v = ask_ok(&ws, "compute.git-access-setup", json!({}));
+    let id = id_of(&v);
+    let card = card_of(&v);
+    let vw = view(&ws, &card);
+    assert_eq!(vw["setting"], "GitHub access for compute jobs", "{vw}");
+    assert!(vw["whatChanges"].as_str().unwrap_or("").contains("K2's own form"), "{vw}");
+    let cons = vw["consequences"].as_str().unwrap_or_else(|| panic!("no consequences: {vw}"));
+    assert!(cons.contains("Contents read-only") && cons.contains(&format!("{} never sees it", ws.handle)), "{cons}");
+    assert!(!vw.to_string().contains('\u{2014}'), "no em dashes on the card: {vw}");
+    assert_eq!(vw["settingsPage"], "compute");
+
+    // Below the floor: a Member.
+    let member = login("gsum", Role::Member);
+    below_floor(answer_as(&member, &ws, &card, json!({ "answer": "Allow" })), "admin");
+
+    // An Admin's Allow before the form set anything: refused, the card
+    // stays open for the form.
+    let admin = login("gsua", Role::Admin);
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!((s.as_str(), &a["error"]["code"]), ("409 Conflict", &json!("git_access_setup_form_first")), "{a}");
+    assert!(a["error"]["hint"].as_str().unwrap_or("").contains("k2 compute git-access setup --github-app"), "{a}");
+    assert!(row(&id).is_answerable(), "nothing decided");
+    // `apply` itself never sets anything.
+    assert_eq!(refused_code(apply_as(&id, &Answerer::OwnerToken, None)), "git_access_setup_form_first");
+
+    // The form set the credential: Allow closes the card, "already on",
+    // and the agent is told to run its command again.
+    set_git_credential(true);
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!((s.as_str(), &a["action"]["result"]["outcome"]), ("200 OK", &json!("already_done")), "{a}");
+    assert_eq!(row(&id).state, RequestState::AlreadyDone);
+    let turn = last_turn(&ws);
+    assert!(turn.contains("Run your command again: the grant is a second card"), "{turn}");
+    // A new ask has nothing to ask.
+    let (s, v) = ask(&ws, "compute.git-access-setup", json!({}));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+    set_git_credential(false);
+}
+
+/// The grant card while the server has no credential: not asked (409,
+/// with the exact setup line), and one filed earlier goes stale at the
+/// click with that line in the agent's turn.
+#[test]
+fn the_grant_card_points_at_setup_while_there_is_no_credential() {
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("gsg");
+    set_git_credential(false);
+    let (s, v) = ask(&ws, "compute.git-access", json!({ "repos": "acme/app" }));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("git_access_needs_setup")), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap_or_else(|| panic!("no hint: {v}"));
+    assert!(hint.ends_with(SETUP_ASK), "{hint}");
+
+    // Set: the grant is asked as before.
+    set_git_credential(true);
+    let v = ask_ok(&ws, "compute.git-access", json!({ "repos": "acme/app" }));
+    // Cleared before anyone answered (a grant card waiting on a server
+    // with no credential): stale at the click.
+    set_git_credential(false);
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id_of(&v)).state, RequestState::Stale);
+    let turn = last_turn(&ws);
+    assert!(turn.contains("stale: this server has no GitHub credential yet") && turn.contains(SETUP_ASK), "{turn}");
+    let granted = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::git::grants_of(&conn, &ws.id)
+    };
+    assert!(granted.is_empty(), "nothing granted: {granted:?}");
 }

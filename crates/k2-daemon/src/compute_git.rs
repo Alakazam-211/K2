@@ -50,6 +50,9 @@ pub const SETUP: &str = "/cli/compute/git-access/setup";
 
 /// An agent's grant (exit 3; the card `compute.git-access`).
 pub const NEEDS_PERSON: &str = "git_access_needs_person";
+/// An agent's grant while this server has no GitHub credential (exit 3;
+/// the card `compute.git-access-setup`, 0.46.10). Its grant comes after.
+pub const NEEDS_SETUP: &str = "git_access_needs_setup";
 pub const BAD_REPO: &str = "git_access_bad_repo";
 pub const BAD_CREDENTIAL: &str = "git_access_bad_credential";
 /// GitHub said no while checking a repo at grant (or the App at setup).
@@ -181,7 +184,7 @@ fn check_repo(ws: &str, repo: &str) -> R<()> {
     };
     let fail = |m: String| no(CHECK_FAILED, 502, m);
     match is_app {
-        None => Err(no(gcodes::NO_CREDENTIAL, 409, "set the server's GitHub credential first (a person, from a terminal outside K2): k2 compute git-access setup --github-app <app id> --key-file <app.pem>, or --github-token-file <file> for a fine-grained token")),
+        None => Err(no(gcodes::NO_CREDENTIAL, 409, "set the server's GitHub credential first (a person, from a terminal outside K2): k2 compute git-access setup --github-app <app id> --key-file <app.pem>, or --github-token-file <file> for a fine-grained token; or Allow an agent's card for it (compute.git-access-setup)")),
         Some(true) => mint(ws, repo).map(|_| ()).map_err(|(c, m)| if c == gcodes::VAULT_LOCKED { no(gcodes::VAULT_LOCKED, 503, m) } else { fail(format!("{repo}: {m}")) }),
         Some(false) => {
             let (owner, name) = gitcred::owner_repo(repo).ok_or_else(|| no(BAD_REPO, 400, format!("{repo} isn't a GitHub repo")))?;
@@ -191,6 +194,19 @@ fn check_repo(ws: &str, repo: &str) -> R<()> {
         }
     }
 }
+
+/// This server has a GitHub credential (its kind is in `k2.db`; the key or
+/// token in the vault). The cards ask for setup while it has none.
+pub(crate) fn has_credential() -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    cgit::credential(&conn).is_some()
+}
+
+/// What an agent hears while the server has no credential: the grant
+/// route's refusal and the grant card at request time and at the click.
+pub(crate) const NEEDS_SETUP_HINT: &str = "this server has no GitHub credential yet, so no grant can work. A person (the owner or an Admin) sets it up first, on a card \
+     or from a terminal outside K2 (k2 compute git-access setup). Once it's set, run your command again: the grant itself is a second card";
 
 // ── who ──────────────────────────────────────────────────────────────
 
@@ -372,6 +388,11 @@ pub(crate) fn grant(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         }
         let ws = target_ws(who, s(&v, "workspace"))?;
         let list: Vec<String> = repos.iter().map(|r| short(r)).collect();
+        // No credential yet (0.46.10): the setup card first, then the
+        // grant. Asking for the grant now would only fail at the click.
+        if !has_credential() {
+            return Err(no(NEEDS_SETUP, 403, NEEDS_SETUP_HINT).with("workspace", ws.handle.clone()).with("repos", list.join(",")));
+        }
         return Err(no(
             NEEDS_PERSON,
             403,

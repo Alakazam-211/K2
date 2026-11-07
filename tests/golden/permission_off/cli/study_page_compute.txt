@@ -111,6 +111,13 @@ GIT ACCESS (0.46.9)
   k2 permission request compute.git-access repos=<o>/<r> --why "…".
   Once approved, run the job again. You may revoke your own
   (k2 compute git-access revoke --github …).
+  No GitHub credential on the server yet: the grant says
+  git_access_needs_setup (exit 3) instead. Ask with
+  k2 permission request compute.git-access-setup --why "…": the owner
+  or an Admin enters a GitHub App key or a read-only token in K2's own
+  form on that card, straight into the vault (you never see it). When
+  that card closes, run the grant again: it asks for its own card.
+  Never ask for a key or token in chat or on a secret card.
 
 RUN
   Attached (default): output streams; the exit code is the command's.

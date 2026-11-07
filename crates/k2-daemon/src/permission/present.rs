@@ -383,6 +383,7 @@ pub(crate) fn batchable(r: &Registered) -> bool {
         && !super::actions::password_reset::is_reveal(r.spec.id)
         && r.spec.id != super::actions::box_login_grant::ACTION
         && r.spec.id != super::actions::chat_refresh::REFRESH.id
+        && !super::actions::compute::never_batched(r.spec.id)
 }
 
 /// The `view` JSON for the requests on one card: a `permission` view for

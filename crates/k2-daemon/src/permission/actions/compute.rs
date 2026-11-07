@@ -935,6 +935,12 @@ fn check_git_access(ctx: &Ctx) -> Check {
         Ok(r) => r,
         Err(m) => return Check::Moved(m),
     };
+    // No credential yet (0.46.10): the grant can't work, so it isn't asked
+    // (409 at request time) and a card filed earlier goes stale at the
+    // click; both say the exact line for the setup card.
+    if !crate::compute_git::has_credential() {
+        return Check::Unavailable { code: crate::compute_git::NEEDS_SETUP, why: needs_setup_why() };
+    }
     let have: Vec<String> = {
         let h = k2_core::db::shared();
         let conn = h.lock();
@@ -971,9 +977,114 @@ fn apply_git_access(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applie
     super::switches::applied(&r, format!("{}'s compute jobs may read {} now.", ctx.workspace_handle, shown.join(", ")))
 }
 
+/// The grant's words while there's no credential: what to ask first.
+pub(crate) fn needs_setup_why() -> String {
+    format!(
+        "{}. Ask for the setup first: k2 permission request {} --why \"<what you need it for>\"",
+        crate::compute_git::NEEDS_SETUP_HINT,
+        GIT_SETUP.id
+    )
+}
+
+// ── compute.git-access-setup (0.46.10) ───────────────────────────────
+
+/// Allow before the credential is set: nothing is decided.
+pub(crate) const GIT_SETUP_FORM_FIRST: &str = "git_access_setup_form_first";
+
+/// `compute.git-access-setup`: this server's GitHub credential, which
+/// every git-access grant needs. A person (the owner or an Admin) types it
+/// into K2's own form on the card, which posts it straight to
+/// `POST /cli/compute/git-access/setup` (`crate::compute_git::setup`, the
+/// route `k2 compute git-access setup` uses) as that person: the key or
+/// token goes into this server's vault there and never passes through the
+/// card, the Thread or the agent. So the card holds no value: Allow is
+/// refused until the credential is set ([`gate_git_setup`]), and a server
+/// that has one is "already on". The pattern of `publish.pin` (PV-7).
+pub(crate) static GIT_SETUP: ActionSpec = ActionSpec {
+    id: "compute.git-access-setup",
+    area: Area::Compute,
+    params: &[],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "GitHub access for compute jobs",
+        what_changes: "Set this server's GitHub credential in K2's own form: a GitHub App (its App ID and private key) or a fine-grained token",
+        consequences: "It goes straight into this server's vault; {ws} never sees it. Give it Repository permissions: Contents read-only, on just the repos you'll grant (install the App on them, or pick them for the token). It reads nothing by itself: each workspace's repos are a separate grant.",
+        scope: "this server",
+        duration: "until someone replaces or clears it (k2 compute git-access setup)",
+        retry: "run your command again: the grant is a second card",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "compute", path: "k2 compute git-access setup (a terminal outside K2)" },
+    walls: &[
+        // The agent's grant while there's no credential.
+        Wall {
+            matches: WallMatch::Code { status: 403, code: crate::compute_git::NEEDS_SETUP },
+            route_prefix: crate::compute_git::GRANT,
+            method: WallMethod::Post,
+            params: &[],
+        },
+        // The agent's own `k2 compute git-access setup` (people only).
+        Wall {
+            matches: WallMatch::Code { status: 403, code: "owner_only" },
+            route_prefix: crate::compute_git::SETUP,
+            method: WallMethod::Post,
+            params: &[],
+        },
+    ],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+fn check_git_setup(_ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    if crate::compute_git::has_credential() {
+        Check::AlreadyDone
+    } else {
+        Check::Needed
+    }
+}
+
+/// Reached only past [`gate_git_setup`], and the check above turns a set
+/// credential into "already on". Nothing here can set one: it never holds
+/// a key or a token.
+fn apply_git_setup(_ctx: &Ctx, _who: &Answerer, _token: Option<&str>) -> Applied {
+    Applied::Refused { code: GIT_SETUP_FORM_FIRST.to_string(), message: git_setup_form_words() }
+}
+
+pub(crate) fn git_setup_form_words() -> String {
+    "Set it up first, in K2's own form on this card (K2 on your computer or the web), or from a terminal outside K2: \
+     k2 compute git-access setup --github-app <app id> --key-file <app.pem> (or --github-token-file <file>)"
+        .to_string()
+}
+
+/// Allow on `compute.git-access-setup` before the server has a credential
+/// (a client without the form: the phone, a terminal, an older build):
+/// refused, nothing decided, the request stays open.
+pub(crate) fn gate_git_setup(req: &k2_core::permission::request::PermissionRequest) -> Result<(), crate::cli_response::CliResponse> {
+    if req.action != GIT_SETUP.id {
+        return Ok(());
+    }
+    match check_git_setup(&super::super::present::ctx_of(req)) {
+        Check::Needed => Err(super::super::answer::err(409, GIT_SETUP_FORM_FIRST, git_setup_form_words())),
+        _ => Ok(()),
+    }
+}
+
+/// The setup card is read on its own: nothing joins it, never "Allow all".
+pub(crate) fn never_batched(action: &str) -> bool {
+    action == GIT_SETUP.id
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
     vec![
         Registered { spec: &GIT_ACCESS, check: check_git_access, apply: apply_git_access },
+        Registered { spec: &GIT_SETUP, check: check_git_setup, apply: apply_git_setup },
         Registered { spec: &ADMIN_APPROVE, check, apply },
         Registered { spec: &CI, check: check_ci, apply: apply_ci },
         Registered { spec: &CI_OFF, check: check_ci_off, apply: apply_ci_off },

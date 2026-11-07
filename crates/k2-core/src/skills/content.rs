@@ -1456,6 +1456,14 @@ Run it as printed. `k2 compute node packages request <node> <names> --why "..."`
 
 What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
 
+## GitHub access for compute jobs
+
+A job reads a private GitHub repo only with a grant, and every grant needs this server's GitHub credential. With none set yet, `k2 compute git-access grant --github <owner>/<repo>` is refused with `git_access_needs_setup` (exit 3) and ends with:
+
+    k2 permission request compute.git-access-setup --why "<what you need it for>"
+
+Run it as printed. The owner or an admin enters a GitHub App key or a read-only token in K2's own form on the card: it goes straight into this server's vault and you never see it. Never ask for a key or token in chat or on a secret card. When the `[permission:]` turn comes back (it may say "already on": they set it in the form), run the grant again: it ends with `k2 permission request compute.git-access repos=<owner>/<repo> --why "..."`, a second card. Once that's approved, run your job again. `k2 study compute` (GIT ACCESS).
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

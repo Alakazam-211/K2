@@ -421,6 +421,9 @@ fn decide_one(
     // from K2's own form. Refused here, before anything is decided.
     if matches!(d, Decision::Allow | Decision::Always) {
         super::actions::publish::gate_answer(req)?;
+        // `compute.git-access-setup` (0.46.10): the same for the server's
+        // GitHub credential; K2's own form on the card sets it first.
+        super::actions::compute::gate_git_setup(req)?;
     }
 
     // 1. The compare-and-set, before any apply (C12).

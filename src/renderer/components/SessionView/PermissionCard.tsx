@@ -19,6 +19,7 @@
 // the floor and the confirm at the click; nothing here decides who may.
 
 import { SitePinForm } from '@/components/WorkspacePanel/SitePinForm'
+import { GitAccessSetupForm } from './GitAccessSetupForm'
 import { useCallback, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
 import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
@@ -268,7 +269,7 @@ export function PermissionNoteBox({
   )
 }
 
-type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string } | { kind: 'pin' }
+type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string } | { kind: 'pin' } | { kind: 'git' }
 
 type CardConfirmAction =
   | 'app-approve'
@@ -289,6 +290,9 @@ const REVEAL_ALLOW_LABEL: Record<RevealMode, string> = {
 
 /** K2's card for putting a site behind a PIN (`publish_cards`). */
 const PUBLISH_PIN_ACTION = 'publish.pin'
+
+/** This server's GitHub credential for compute git access (0.46.10). */
+const GIT_ACCESS_SETUP_ACTION = 'compute.git-access-setup'
 
 /** The vault confirm actions a permission card may ask for (§17.4). */
 function confirmActionOf(action: string | undefined): CardConfirmAction | null {
@@ -415,6 +419,35 @@ function AnswerControls({
           <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
         </div>
         <Muted testId="permission-pin-note">You type the PIN into K2's form. The agent never sees it.</Muted>
+        <ErrorLine text={error} />
+      </div>
+    )
+  }
+  // `compute.git-access-setup` (0.46.10): the same pattern for this server's
+  // GitHub credential. "Set up GitHub access" opens K2's own form, which
+  // posts the App key or token straight to the setup route as this person
+  // (into the vault); only then is Allow sent, so the value never passes
+  // through the card, the Thread or the agent.
+  if (item.action === GIT_ACCESS_SETUP_ACTION && actions.confirmScope) {
+    if (step.kind === 'git') {
+      return (
+        <div className="flex flex-col gap-1">
+          <GitAccessSetupForm
+            scope={actions.confirmScope}
+            onDone={() => void send({ answer: PERMISSION_LABEL.allow })}
+            onCancel={() => setStep({ kind: 'idle' })}
+          />
+          <ErrorLine text={error} />
+        </div>
+      )
+    }
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap gap-1.5">
+          <CardButton label="Set up GitHub access" testId="permission-allow" primary disabled={busy} onClick={() => setStep({ kind: 'git' })} />
+          <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
+        </div>
+        <Muted testId="permission-git-note">You enter the key or token in K2's form. The agent never sees it.</Muted>
         <ErrorLine text={error} />
       </div>
     )

@@ -337,7 +337,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 51;
 /// v9 = 0.46.8: "Refreshing your own chat" (`chat.refresh`).
 /// v10 = 0.46.9: "System packages on compute nodes" (`compute.packages`,
 /// `compute.packages-policy`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 10;
+/// v11 = 0.46.10: "GitHub access for compute jobs" (`compute.git-access-setup`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 11;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

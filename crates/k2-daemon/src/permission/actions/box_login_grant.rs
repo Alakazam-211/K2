@@ -46,7 +46,7 @@ pub(crate) const ACTION: &str = "apps.user-grant-box";
 
 /// Cards that never join a batch, and are never under its "Allow all".
 pub(crate) fn never_batched(action: &str) -> bool {
-    action == ACTION || super::password_reset::is_reveal(action)
+    action == ACTION || super::password_reset::is_reveal(action) || super::compute::never_batched(action)
 }
 
 pub(crate) const ROUTE_ADD: &str = "/cli/skin/grants";

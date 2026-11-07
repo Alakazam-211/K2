@@ -3,6 +3,24 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.10 — Adding workspaces on a remote server works again
+
+### When you update
+- **`k2 db create` no longer prints the database password.** Its `dsn` (and the `--test` `migratorDsn`) come without the password, and `dsnHint` says how to get the full one: `k2 db dsn --db <name>`. Scripts that read the password from `create --json` need to call `k2 db dsn` instead.
+
+### Fixes
+- **Adding a workspace on a remote server works again.** In the desktop app, adding a workspace on a server you're connected to could show "workspace added", then empty the list and reconnect, and the new workspace never appeared. One request that didn't get through made the app treat the whole server as down. Now the app checks the server before reconnecting, the new workspace appears and is selected, and a server that's really down still shows "reconnecting" within a few seconds. The server now also closes its answer to a browser's CORS check cleanly, which is what lost that request.
+- **When a workspace's default CLI isn't installed on its server, its chat says so** ("codex isn't installed on <server>"), instead of showing a spawn error.
+- **Agents keep their K2 access through an update.** If K2's passport file was lost while agents kept running across a restart, every agent's `k2` calls were refused until its tab restarted. K2 now gives each running agent a new passport by itself and logs that it did. Closing a tab now also ends that tab's passport.
+- **Apps' call, transfer and signalling routes work on a reused connection.** A desktop or phone app, or its server, that sent a call-credential request on a connection already used for the App's own pages got the App's own 404. K2 now checks every request on the connection.
+
+### Databases
+- **Each workspace can have up to 25 active databases** (it was 1). The owner changes it with `k2 db cap <n>`, `k2 db cap default`, or `0` for no limit. Agents can read it, not change it.
+- **A new `--id` makes its own database.** `k2 db create --id <id>` used to hand back the workspace's existing database. Now each new `--id` gets its own, the same `--id` returns the one it made, and asking for a different Postgres version on an existing `--id` is refused with a clear message.
+- **`--db <name|id>`** picks which database `k2 db dsn`, `migrate`, `dump`, `restore` and `drop` work on. Without it they use the workspace's first database, as before.
+- **`k2 db restore` uses the newest Postgres client installed,** so a dump from a newer Postgres can be restored into an older database.
+- **`k2 db create --major <n>` on a Postgres cluster K2 didn't set up** now says which cluster it is and what the owner can do.
+
 ## 0.46.9 — Voice calls in the desktop app
 
 ### Voice rooms (preview)

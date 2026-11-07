@@ -66,6 +66,11 @@ tlc() {
   # a counterexample's length in actions (TLC's BFS finds a shortest one): its states - 1
   k=$(grep -oE "^(State )?[0-9]+: <" "$n.tlc.log" | grep -oE "[0-9]+" | sort -n | tail -1)
   [ -n "$k" ] && echo "counterexample: $k states, $((k - 1)) actions"
+  # TLC_TRACE=N: the counterexample itself, its first N lines (a mutant run whose violating
+  # action the log must show: the states' `undos`, `reverts` and stacks say which it was)
+  if [ -n "${TLC_TRACE:-}" ] && [ -n "$k" ]; then
+    echo "--- counterexample (TLC_TRACE=$TLC_TRACE)"; sed -n '/violated/,/states generated/p' "$n.tlc.log" | head -"$TLC_TRACE"; echo "--- end of counterexample"
+  fi
   if [ "$rc" = 150 ] || [ "$rc" = 75 ]; then grep -B2 -A12 -iE "semantic|parse error|multiply|unknown operator|was expected" "$n.tlc.log" | head -40; fi
   tlc_record "$n" "$n.tlc.log" "$secs" "$rc" "$(( $(date +%s) - s ))"
   echo "=== tlc $n [$inv]: exit $rc, wall $(( $(date +%s) - s ))s (124 = stopped by timeout)"

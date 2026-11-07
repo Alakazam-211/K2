@@ -1,12 +1,18 @@
-//! The Quint model's diff (`spec/quint/undo_diff.qnt`) is the kit's `diff::hunks` (spec
-//! D1–D2) on every text the model diffs. [`qdiff`] transcribes the Quint module definition by
-//! definition; it equals `diff::hunks` on **every** pair of texts over `{a, b}` up to
-//! [`DIFF_MAX`] long, and differs at `DIFF_MAX + 1` (so `DIFF_MAX` is a hard limit). The
-//! model's cut keeps every text it diffs (every region's before, after and window) within
-//! `MAXLEN` (`bounded::tests::the_cut_bounds_every_diffed_string`), and every instance has
-//! `MAXLEN ≤ DIFF_MAX`, so on every state a bound reaches the model's diff **is**
-//! `diff::hunks`. `align_insertions` is not involved: the merge (U10, §4) diffs with
-//! `diff::hunks` alone, and the bounded world's edits are explicit hunks.
+//! The Quint model's diff (`spec/quint/undo_diff.qnt`) against the kit's `diff::hunks` (spec
+//! D1–D2). [`qdiff`] is a hand transcription of the Quint module, definition by definition;
+//! the transcription equals `diff::hunks` on **every** pair of texts over `{a, b}` up to
+//! [`DIFF_MAX`] long (961 pairs), and differs at `DIFF_MAX + 1` (so `DIFF_MAX` is a hard
+//! limit). That part is exact, for the transcription. **Nothing here ties the transcription
+//! to the `.qnt` file mechanically:** the third test reads the file only to find
+//! `DIFF_MAX = 4`; a change to the module's algorithm would pass these tests.
+//!
+//! Who reaches the module: `undo.qnt` calls `hunks` only under mutant `f3-rediff` and under
+//! mutant (i) on a tainted region; the correct model never diffs. The model's cut keeps
+//! every text it diffs (every region's before, after and window) within `MAXLEN`
+//! (`bounded::tests::the_cut_bounds_every_diffed_string`), and every instance run so far has
+//! `MAXLEN ≤ DIFF_MAX` (a convention: nothing enforces it), so on every state those bounds
+//! reach the transcription is `diff::hunks`. `align_insertions` is not involved: the merge
+//! (U10, §4) diffs with `diff::hunks` alone, and the bounded world's edits are explicit hunks.
 
 use k2_mpc_base::text::diff;
 

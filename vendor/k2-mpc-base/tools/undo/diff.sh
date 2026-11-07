@@ -2,7 +2,7 @@
 # counts differ; tools/undo/statediff.py prints the states only one side has.
 need_apalache
 . "$ROOT/tools/undo/tlc.sh"
-INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5"
+INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5 inv_O5doc inv_U17doc"
 inst d_2x1r1 2 1 1 1 4 "0, 1, 1" true true none
 TLC_EXTRA="-dump $ROOT/d_2x1r1" tlc d_2x1r1 "$INV" 180
 E bfs --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init abb --dump "$ROOT/d_2x1r1.jsonl" | tail -1

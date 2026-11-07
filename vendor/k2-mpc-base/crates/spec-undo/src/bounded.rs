@@ -1,6 +1,7 @@
 //! The model check's bounded world (spec §8 "Model check"): `spec_undo::model` driven by a
 //! finite action space, with element authors tracked beside it and the spec's rules checked
-//! on every transition. The exhaustive enumerator (`undo_enum`) and the ITF replay of the
+//! on every transition it takes (a transition past the length cap is not taken, so not
+//! checked: the cut, below). The exhaustive enumerator (`undo_enum`) and the ITF replay of the
 //! Quint model (`spec/quint/undo.qnt`) both run on it, so the two are one abstraction.
 //!
 //! **Abstraction** (the same in `undo.qnt`, definition by definition):
@@ -25,7 +26,8 @@
 //!   letter), delete two, and (with `multi`) two single-character deletes or replacements
 //!   at least one character apart (two regions). A purge removes every live copy of a
 //!   letter, as the purger's batch, then clears the stacks (U19; R9's 8-byte windows never
-//!   match at these sizes, so no record region is ever erased).
+//!   match at these sizes, so no record region is ever erased: the merge's `erased`
+//!   branch, U9's `!erased` clause and the Erased report are never reached here).
 //! - **Undos** (budget `undos`, shared): `undo` all or nothing or `--partial`, `--steps` 1
 //!   or 2; `undo --drop`; `redo` all or nothing or `--partial`. Every request spends one,
 //!   whatever it finds.
@@ -39,11 +41,18 @@
 //! - **No** window move, `write --base`, `replace_text`, `restore`, `undo --for` or
 //!   on-behalf edits here: the trace test covers them (§8).
 //!
-//! **Reductions** (each machine-checked by a test at small bounds):
-//! - **The cut:** no state whose text is longer than `maxlen` (an action that would make
-//!   one is not taken). So every string the merge diffs is at most `maxlen` long, which is
-//!   what lets `undo.qnt` pin `diff::hunks` (`spec/quint/undo_diff.qnt`, equal on every pair of
-//!   texts up to 4 long: `maxlen` ≤ 4 for any bound compared with Quint).
+//! **Reductions** (each machine-checked by a test at small bounds; the cut is a bound):
+//! - **The cut:** no state whose text is longer than `maxlen`. An action that would make
+//!   one is not taken: `State::step` returns `None` before `check`, so that transition is
+//!   never checked (`undo.qnt`'s `step` disables it the same way, `r.ok`). The cut is a
+//!   bound, like the budgets, not an exact reduction: bfs's `cut=` counts these
+//!   transitions (624 at 2 × 1 + 1 undo + 1 revert, `abb`, 4; the others in
+//!   `docs/MODEL-CHECK.md`, Reductions). So every string the merge diffs is at most
+//!   `maxlen` long, which is what lets `undo.qnt` pin `diff::hunks`
+//!   (`spec/quint/undo_diff.qnt`; a hand transcription of it equals `diff::hunks` on every
+//!   pair of texts up to 4 long). `maxlen` ≤ 4 for a bound compared with Quint is a
+//!   convention: `Bound` and both binaries accept any `--maxlen`. Only mutants diff
+//!   (`f3-rediff`, and (i) on a tainted region), so the limit matters only for them.
 //! - **Records after the last revert:** once the revert budget is spent, no action reads
 //!   a revert record again, so they are dropped (and `head` with them).
 //! - **Fields no rule reads** are not state: a record's original hunks (diagnostics),
@@ -64,13 +73,18 @@
 //! first conflicting step), `U17` (a step pushes one region per region it applied),
 //! `U19` (a purge leaves every stack empty), `U22a` (revert's superset property) and `O5`
 //! (O5 lands exactly at the doc's end with a non-empty whole-doc base: never elsewhere, and
-//! never refused there).
+//! never refused there). Two restate rules whose checks above read what the code computed
+//! for itself (the model check's audit, 2026-11-04): `O5doc` (O5 and U10's `at_end` judged
+//! from the region's sides, the pre-state doc's length, the base flag its batch or record
+//! stored and the text the step left, never from the merge's `at_end`; [`o5_doc`]) and
+//! `U17doc` (the regions an undo or redo pushed, read off the stacks it left).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::hunk::{Edit, Prov};
 use crate::model::{
-    merge, Bounds, ChangeId, Hits, Kind, Mode, Model, Outcome, Region, Report, Request, StepNote,
+    merge, Bounds, ChangeId, Hits, Kind, Mode, Model, Outcome, Region, RegionNote, Report, Request,
+    StepNote,
 };
 
 /// A bound: what the enumeration (or a Quint instance) explores.
@@ -571,6 +585,25 @@ impl State {
                 self.viol.insert("O5");
             }
         }
+        // O5doc (an independent formulation of O5 and U10's at_end; `o5_doc`): judged from the
+        // doc, the stored base flag and the text the step left, never from the merge's at_end
+        let one_step = match a {
+            Act::Revert { .. } => true,
+            Act::Undo { mode, .. } | Act::Redo { mode, .. } => {
+                *mode != Mode::Drop && hits.steps.len() == 1
+            }
+            _ => false,
+        };
+        if one_step
+            && o5_doc(
+                pre,
+                self,
+                &hits.notes,
+                matches!(out, Outcome::Applied { .. }),
+            )
+        {
+            self.viol.insert("O5doc");
+        }
         // U13: a refused or blocked request changes nothing
         if matches!(out, Outcome::Conflicts { .. } | Outcome::Blocked { .. })
             && self.view_core() != pre.view_core()
@@ -584,6 +617,35 @@ impl State {
             .any(|s| !s.applied.is_empty() && s.pushed != s.applied.len())
         {
             self.viol.insert("U17");
+        }
+        // U17doc (independent of the step's own count): the batches an applied undo or redo
+        // pushed on the opposite stack, read off the state it left, hold one region per region
+        // each step applied, in order
+        if matches!(out, Outcome::Applied { .. }) {
+            let opp = |s: &State, redo: bool| -> Vec<usize> {
+                s.m.stacks.get(&pid(a.pid())).map_or(Vec::new(), |st| {
+                    let v = if redo { &st.undo } else { &st.redo };
+                    v.iter().map(|b| b.regions.len()).collect()
+                })
+            };
+            let redo = match a {
+                Act::Undo { .. } => Some(false),
+                Act::Redo { .. } => Some(true),
+                _ => None,
+            };
+            if let Some(redo) = redo {
+                let (was, now) = (opp(pre, redo), opp(self, redo));
+                let pushed = now.get(was.len()..).unwrap_or(&[]);
+                let applied: Vec<usize> = hits
+                    .steps
+                    .iter()
+                    .filter(|s| !s.applied.is_empty())
+                    .map(|s| s.applied.len())
+                    .collect();
+                if pushed != applied.as_slice() {
+                    self.viol.insert("U17doc");
+                }
+            }
         }
         // the case classes (E-HIST-13) this transition hit
         let applied = matches!(out, Outcome::Applied { .. });
@@ -1013,9 +1075,80 @@ impl Counts {
     }
 }
 
+/// `O5doc`: O5 and U10's `at_end` judged independently of the merge's own `at_end` (the
+/// model check's audit: the `O5` check reads the flags the merge computed from that very
+/// expression, so it can't fail on correct code). For a request that merged one step (a
+/// revert, or an undo or redo of one batch: its notes are that step's, one per region, on
+/// the pre-state's text), each untainted region is judged from its own exact sides (ours'
+/// insertions met by a different insertion of theirs at the same point, O4 by roots), the
+/// doc's length **as the pre-state holds it**, the whole-doc base flag **its batch or record
+/// stored** when the change was made, and **the text the step left**. Spec O5: two different
+/// insertions at one point land, both, only at the doc's end with a non-empty whole-doc base,
+/// theirs first, then ours; anywhere else they conflict. Violated when such a region:
+/// - merged clean with such a pair anywhere else (not at the base's end of a window that
+///   ends at the doc's end with a non-empty base): landed elsewhere;
+/// - was refused at the doc's end though the pair is all there is to merge (one insertion
+///   each side) and O4a didn't refuse it;
+/// - landed there, applied, and is the step's last region, but the text the step left
+///   doesn't end with ours' insertion (its letters and roots): not theirs first, then ours.
+///
+/// The undo spec's `undo.qnt` `o5doc` is the same, definition by definition.
+fn o5_doc(pre: &State, post: &State, notes: &[RegionNote], applied: bool) -> bool {
+    let doc_len = pre.text().len();
+    let last = notes.len().saturating_sub(1);
+    notes.iter().enumerate().any(|(i, n)| {
+        if n.tainted || n.erased {
+            return false;
+        }
+        let m = n.after.len();
+        let ins = |e: &Edit| e.start == e.end && !e.insert.is_empty();
+        let pts: Vec<usize> = (0..n.ours.len())
+            .filter(|&k| {
+                ins(&n.ours[k])
+                    && (0..n.theirs.len()).any(|j| {
+                        ins(&n.theirs[j])
+                            && n.theirs[j].start == n.ours[k].start
+                            && n.theirs_roots[j] != n.ours_roots[k]
+                    })
+            })
+            .collect();
+        if pts.is_empty() {
+            return false;
+        }
+        let at_doc_end = n.end == doc_len && n.base_doc_nonempty;
+        let elsewhere = n.clean && pts.iter().any(|&k| !(at_doc_end && n.ours[k].start == m));
+        let refused = !n.clean
+            && !n.o4a
+            && at_doc_end
+            && n.ours.len() == 1
+            && n.theirs.len() == 1
+            && n.ours[0].start == m;
+        let misplaced = applied
+            && n.clean
+            && i == last
+            && at_doc_end
+            && pts.iter().any(|&k| {
+                let x = &n.ours[k];
+                if x.start != m {
+                    return false;
+                }
+                let els = &post.m.elems[0];
+                let c = x.insert.chars().count();
+                c > els.len()
+                    || !post.text().ends_with(x.insert.as_str())
+                    || els[els.len() - c..]
+                        .iter()
+                        .map(|e| e.prov)
+                        .ne(n.ours_roots[k].iter().copied())
+            });
+        elsewhere || refused || misplaced
+    })
+}
+
 /// Every rule the transition checks can record.
 pub const RULES: &[&str] = &[
-    "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5", "U12",
+    "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5", "O5doc", "U17doc",
+    "U12",
 ];
 
 /// The rules a run stops at by default: every rule but the diagnostic `U12` (`--u12` only).
@@ -1035,7 +1168,7 @@ pub fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
 }
 
 pub const STOP: &[&str] = &[
-    "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5",
+    "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5", "O5doc", "U17doc",
 ];
 
 /// The case classes the walks count (E-HIST-13, as far as the bounded world reaches; the

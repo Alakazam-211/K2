@@ -305,6 +305,8 @@ impl Drop for Scope<'_> {
     }
 }
 
+// The on path only: out of line and cold, so a scope's off path stays one load and a branch.
+#[cold]
 #[inline(never)]
 fn finish(hist: &Hist, t: Instant) {
     let ns = u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX);

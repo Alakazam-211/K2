@@ -6,6 +6,42 @@
 #   PATH IDENT   the word IDENT in the file PATH
 # A line's `#` starts a comment.
 
+# v0.11.1: a refused write --base (MPC-E111) names every line of a conflict region on each side,
+# a change that clashes with nothing inside the region included (crates/base/tests/write_base_lines.rs)
+conflict_live_side_holds_every_live_hunk_inside_the_region
+conflict_writer_side_holds_every_hunk_of_the_write_inside_the_region
+write_conflict_report_names_the_region_in_the_current_text
+write_conflict_report_names_the_region_in_the_writers_text
+write_base_conflict_counts_a_non_clashing_live_insertion_inside_the_region
+write_base_conflict_counts_a_non_clashing_insertion_of_the_write_inside_the_region
+# the same, against the spec oracle at its pinned seed (crates/spec-undo/tests/traces.rs)
+regression_write_base_lines_seed_1001280
+
+# main, after v0.11.0: a held undo or redo always goes out (client/test/undo-held.test.ts)
+client/test/undo-held.test.ts held_ack
+client/test/undo-held.test.ts held_gap
+client/test/undo-held.test.ts held_refused
+client/test/undo-held.test.ts held_base_expired
+client/test/undo-held.test.ts held_recarry
+client/test/undo-held.test.ts held_empty
+client/test/undo-held.test.ts held_several
+client/test/undo-held.test.ts held_reconnect_only
+client/test/undo-held.test.ts held_snapshot_refused
+client/test/undo-held.test.ts held_close
+# main, after v0.11.0: a closed LiveText sends nothing; undo and redo throw (client/test/undo-held.test.ts)
+client/test/undo-held.test.ts closed_reset
+client/test/undo-held.test.ts closed_undo
+client/test/undo-held.test.ts closed_redo
+client/test/undo-held.test.ts closed_visible
+client/test/undo-held.test.ts closed_view
+client/test/undo-held.test.ts closed_cursor
+# main, after v0.11.0: an undo or redo sent before a reconnect is settled, not re-sent; a since reply's own change is the edit in flight only when it is an edit (client/test/undo-reconnect.test.ts)
+client/test/undo-reconnect.test.ts reconnect_settle_undo
+client/test/undo-reconnect.test.ts reconnect_settle_redo
+client/test/undo-reconnect.test.ts reconnect_settle_snapshot
+client/test/undo-reconnect.test.ts reconnect_own_kind_undo
+client/test/undo-reconnect.test.ts reconnect_own_kindless
+
 # v0.10.2.1 (client 0.12.1): an undo or redo goes in order with the edits typed around it
 client/test/live.test.ts undo_order_undo
 client/test/live.test.ts undo_order_redo

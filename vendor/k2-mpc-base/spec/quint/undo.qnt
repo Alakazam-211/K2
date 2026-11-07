@@ -35,17 +35,25 @@
 //   not state). O4 on (range, roots); O4a: a kept ours hunk that would put back a root live
 //   in the text as the step merges it (after earlier steps), window included, conflicts
 //   (overlap). Nothing is diffed, except by mutant "f3-rediff" (the old sides)
-//   and mutant (i) on a tainted region; there the diff is undo_diff.qnt's.
-// - The cut: no state with a text longer than MAXLEN (at most 4). So the merge only diffs
-//   texts up to 4 long, where `undo_diff.qnt`'s pinned diff is the kit's diff::hunks
-//   (D1–D2) on every pair (crates/spec-undo/tests/quint_diff.rs).
+//   and mutant (i) on a tainted region; there the diff is undo_diff.qnt's. The correct
+//   model (MUTANT = "none") never calls `hunks`.
+// - The cut: no state with a text longer than MAXLEN. `step` disables a transition that
+//   would make one (`r.ok`; an insert is not offered at MAXLEN), so that transition is
+//   never checked, as bounded.rs's State::step returns None before its check. The cut is
+//   a bound, not an exact reduction (docs/MODEL-CHECK.md, Reductions). MAXLEN at most 4
+//   is a convention of the instances run, not enforced here. Under it the merge only
+//   diffs texts up to 4 long, where a hand transcription of `undo_diff.qnt` equals the
+//   kit's diff::hunks (D1–D2) on every pair (crates/spec-undo/tests/quint_diff.rs; nothing
+//   ties the transcription to the module mechanically).
 // - REDUCE: once the revert budget is spent, records (and head) are dropped: nothing reads
 //   them again. Fields no rule reads are not state (a record's original hunks, a batch's
 //   after_partial and on_behalf_of; the authors sets when RESTARTS = 0).
 // - Not modelled (the trace test covers them, §8): the revert window, write --base,
 //   replace_text, restore, undo --for, on-behalf edits, the U6 bounds (100 batches and
 //   4 MiB per pid are never reached here), purge redaction of records (R9's 8-byte windows
-//   never match a one-letter secret).
+//   never match a one-letter secret). So nothing here sets a region's `erased`: the
+//   `erased` branch of mergeRegions, inv_U9's not(erased) clause and the "erased" report
+//   are never reached (TLC cover COMPLETE, job 240529ae, tag ev-240529ae; docs/MODEL-CHECK.md, U9).
 //
 // ## Readings (the oracle's; crates/spec-undo/src/model/mod.rs)
 //
@@ -58,7 +66,7 @@
 // undo or redo request spends the budget whatever it finds.
 //
 // ## Invariants (rule ids; each transition records what it violates in `st.viol`, as
-// bounded.rs's `State::check` does)
+// bounded.rs's `State::check` does; a transition past MAXLEN is disabled, so not checked)
 //
 //   inv_own_only  hist.undo_own_only (U10a by root, v1.8): every character an undo, redo or
 //                 revert deletes has a root the change it reverses inserted (the base roots
@@ -77,7 +85,18 @@
 //   inv_U22a      revert's conflicts ⊇ undo's on the same state, same bounds, same text.
 //   inv_O5        O5 lands exactly at the doc's end with a non-empty whole-doc base: never
 //                 elsewhere, and never refused there (U10's at_end, both ways).
+//   inv_O5doc     the same, judged independently of the merge's own at_end (`o5doc`): from
+//                 each region's sides, the doc's length as the pre-state holds it, the base
+//                 flag its batch or record stored, and the text the step left.
+//   inv_U17doc    U17 read off the state a request left: the batches it pushed on the
+//                 opposite stack hold one region per region each step applied.
 //   inv           all of them.
+//
+// U9, U13, U15, U17, U19 and O5 hold by construction here and in the oracle (the code
+// that computes a step already makes each true), so their COMPLETE shows only that the
+// code implementing each rule agrees with itself: their evidence is their mutants (U13
+// has none yet). The relational checks are own_only, I1, RT and U22a
+// (docs/MODEL-CHECK.md, Invariants).
 //
 // ## Mutants (MUTANT; the same set as crates/spec-undo/src/model/mutant.rs)
 //
@@ -86,7 +105,11 @@
 //   sides found by diffing strings), "restart-single-taint" (a restart reads a record
 //   region's one taint flag back at both edges), "x-provenance-ignored-in-o4" (v1.8: O4 on
 //   element identity, so restorations are never identical, and no O4a), "xi-no-o4a" (v1.9:
-//   O4 on (range, roots) as specified, but no O4a).
+//   O4 on (range, roots) as specified, but no O4a), "u13-refused-revert-applies" (a refused
+//   all-or-nothing revert applies its clean regions), "r3-redo-rewrites-window" and
+//   "r3-revert-rewrites-window" (a redo, or a revert, rewrites each clean region's window
+//   whole instead of applying the merge's own hunks, R3), "i1-per-request" (v1.8's I1: O4a
+//   waived on a request's steps but the last when the request then leaves each root once).
 
 module undo {
   import undo_diff.* from "./undo_diff"
@@ -484,7 +507,8 @@ module undo {
   /// window read by root (U8, v1.8); O4 on (range, roots); then O4a against the live text as
   /// the step merges it (after earlier steps), window included. Mutant (i) has no taint
   /// rule; mutant (x) judges O4 on identity and has no O4a; mutant (xi) has no O4a
-  def mergeRegions(st: St, rs: List[Region]): Merges = {
+  /// (`waive`: mutant i1-per-request's waiver of O4a; false on the oracle of record)
+  def mergeRegions(st: St, rs: List[Region], waive: bool): Merges = {
     val live = chars(st.doc)
     val lr = rootsOf(st.doc)
     val n = live.length()
@@ -506,7 +530,7 @@ module undo {
             mergeE(r.after, withRoots(hunks(r.after, r.before), r.br), withRoots(hunks(r.after, win), wr), atEndFor(r, n), mode)
           else mergeE(r.after, withRoots(r.ours, r.br), exact, atEndFor(r, n), mode)
         // O4a (v1.8): a kept ours hunk would put back a root live in the text
-        val o4a = mode == "root" and MUTANT != "xi-no-o4a" and m0.clean
+        val o4a = not(waive) and mode == "root" and MUTANT != "xi-no-o4a" and m0.clean
           and m0.edits.indices().exists(k => m0.edits[k].rts.indices().exists(j => has(lr, m0.edits[k].rts[j])))
         val m = if (o4a) { ...m0, clean: false, o5: false } else m0
         val nt2 = { ...nt, clean: m.clean, o5: m.o5, samePointEnd: m.samePointEnd, o4a: o4a }
@@ -525,6 +549,16 @@ module undo {
     acc.concat(c._3.foldl([], (l, e) => l.append({ ...e, s: e.s + r.start, e: e.e + r.start })))
   }))
 
+  /// mutants r3-*: each clean region applied by rewriting its whole window (deleted, and the
+  /// merged text put back with the roots the merge gives it), not the merge's own hunks (R3);
+  /// `lr` the live roots (bounded::model's rewrite_windows)
+  pure def rewrite(lr: List[int], rs: List[Region], clean: List[Clean]): List[Clean] =
+    clean.foldl([], (l, c) => {
+      val r = rs[c._1]
+      val rts = applyL(lr.slice(r.start, r.end), c._3.foldl([], (h, e) => h.append(hk(e.s, e.e, e.rts))))
+      l.append((c._1, c._2, [{ s: 0, e: r.end - r.start, ins: c._2, rts: rts }]))
+    })
+
   /// own_roots (U10a by root, v1.8): the base roots the regions' ours deletes, the roots
   /// the change a step reverses inserted; over the regions the step applied (`applied`,
   /// indices into `rs`; v1.9)
@@ -535,9 +569,11 @@ module undo {
   /// apply_step: one undo or redo step's clean regions as one change by p; the regions for
   /// the opposite stack (R4), in the coordinates after the step: br the window's roots, ar
   /// the roots of what the step left
-  def applyStep(st: St, p: int, rs: List[Region], clean: List[Clean]): { st: St, inverse: List[Region], dels: List[int], edits: List[Hunk] } = {
+  /// (`rw`: mutant r3-redo-rewrites-window's rewrite of each clean region's window)
+  def applyStep(st: St, p: int, rs: List[Region], clean0: List[Clean], rw: bool): { st: St, inverse: List[Region], dels: List[int], edits: List[Hunk] } = {
     val pre = chars(st.doc)
     val pr = rootsOf(st.doc)
+    val clean = if (rw) rewrite(pr, rs, clean0) else clean0
     val es = stepEdits(rs, clean)
     val cm = commit(st, p, es)
     val post = rootsOf(cm.st.doc)
@@ -560,8 +596,19 @@ module undo {
       conflicts.foldl([], (l, c) => if (c.kind != "taint") l.append(c) else l)
     else conflicts
 
-  /// undo_redo (U13, U14, U17; R7): plan the top `steps` batches on a scratch copy
+  /// undo_redo (U13, U14, U17; R7). Mutant i1-per-request (v1.8's I1, per request): O4a
+  /// waived on every step but the last when the request, so planned all or nothing, applies
+  /// and leaves each root live at most once (the same plan in both modes)
   def undoRedo(st: St, p: int, mode: str, steps: int, redo: bool): Res = {
+    val waive = MUTANT == "i1-per-request" and mode != "drop" and perRequest(undoRedoW(st, p, "all", steps, redo, true))
+    // waived: the plan all or nothing (no conflict, so --partial's is the same)
+    undoRedoW(st, p, if (waive) "all" else mode, steps, redo, waive)
+  }
+  /// mutant i1-per-request: the request so planned applied and leaves each root once
+  pure def perRequest(w: Res): bool = w.out.kind == "applied" and not(dup(rootsOf(w.st.doc)))
+
+  /// plan_steps: the top `steps` batches planned on a scratch copy (`waive`: the mutant's)
+  def undoRedoW(st: St, p: int, mode: str, steps: int, redo: bool, waive: bool): Res = {
     val x = st.stacks.get(p)
     val src = if (redo) x.redo else x.undo
     val want = if (mode == "drop") 1 else maxI(steps, 1)
@@ -584,7 +631,7 @@ module undo {
         else {
           val xs = acc.work.stacks.get(p)
           val batch = if (redo) lastOf(xs.redo) else lastOf(xs.undo)
-          val m = mergeRegions(acc.work, batch)
+          val m = mergeRegions(acc.work, batch, waive and i < k - 1)
           val applied = m.clean.foldl([], (l, c) => l.append(c._1))
           val rep = shown(m.conflicts, mode)
           val notes = acc.notes.concat(m.notes)
@@ -596,7 +643,8 @@ module undo {
             { ...acc, stop: true, hasBlocked: true, blocked: rep, notes: notes,
               steps: acc.steps.append({ applied: [], reports: rep, pushed: 0 }) }
           else {
-            val ap = applyStep(acc.work, p, batch, m.clean)
+            // mutant r3-redo-rewrites-window: a redo rewrites each clean region's window whole
+            val ap = applyStep(acc.work, p, batch, m.clean, redo and MUTANT == "r3-redo-rewrites-window")
             // mutant (iv): the redo entry also carries the skipped regions
             val extra = if (not(redo) and MUTANT == "iv-redo-retries-skipped")
               range(0, batch.length()).foldl([], (l, j) =>
@@ -640,8 +688,8 @@ module undo {
   def revert(st: St, p: int, change: int, partial: bool): Res = {
     val rec = st.records.get(change)
     val rs = revertRegions(rec)
-    val m = mergeRegions(st, rs)
-    val u = mergeRegions(st, rec.regions)
+    val m = mergeRegions(st, rs, false)
+    val u = mergeRegions(st, rec.regions, false)
     val sameBounds = rs.length() == rec.regions.length()
       and rs.indices().forall(i => rs[i].start == rec.regions[i].start and rs[i].end == rec.regions[i].end)
     val sameText = m.clean.indices().forall(q =>
@@ -649,14 +697,19 @@ module undo {
     val ok = sameBounds and sameText
       and conflicting(rec.regions.length(), u.clean).subseteq(conflicting(rs.length(), m.clean))
     val res0 = { st: st, out: OUT0, notes: m.notes, steps: [], foreign: false, supersetOk: ok }
-    if (m.conflicts.length() > 0 and not(partial))
+    // mutant u13-refused-revert-applies: a refused all-or-nothing revert applies its clean regions
+    val leaks = MUTANT == "u13-refused-revert-applies" and not(partial) and m.clean.length() > 0
+    if (m.conflicts.length() > 0 and not(partial) and not(leaks))
       { ...res0, out: { ...OUT0, kind: "conflicts", step: 1, regions: m.conflicts } }
     else if (m.conflicts.length() > 0 and m.clean.length() == 0)
       { ...res0, out: { ...OUT0, kind: "blocked", regions: m.conflicts } }
     else {
-      val c = newBatch(st, p, stepEdits(rs, m.clean))
+      // mutant r3-revert-rewrites-window: each clean region's window rewritten whole
+      val cl = if (MUTANT == "r3-revert-rewrites-window") rewrite(rootsOf(st.doc), rs, m.clean) else m.clean
+      val c = newBatch(st, p, stepEdits(rs, cl))
       { ...res0, st: c.st, foreign: foreignIn(c.dels, ownRoots(rs, m.clean.foldl([], (l, q) => l.append(q._1)))),
-        out: { ...OUT0, kind: "applied", steps: 1, skipped: m.conflicts } }
+        out: if (m.conflicts.length() > 0 and not(partial)) { ...OUT0, kind: "conflicts", step: 1, regions: m.conflicts }
+             else { ...OUT0, kind: "applied", steps: 1, skipped: m.conflicts } }
     }
   }
 
@@ -728,39 +781,102 @@ module undo {
     }
   }
 
+  /// O5doc (bounded.rs's o5_doc): O5 and U10's at_end judged independently of the merge's
+  /// own at_end, for a request that merged one step: each untainted region from its own
+  /// exact sides (ours' insertions met by a different insertion of theirs at the same point,
+  /// O4 by roots), the doc's length as the pre-state holds it (`pd`), the whole-doc base flag
+  /// its batch or record stored (`bdn`), and the text the step left (`post`). Two different
+  /// insertions at one point land only at the doc's end with a non-empty whole-doc base,
+  /// theirs first, then ours (O5); anywhere else they conflict
+  pure def isPair(x: RH, ts: List[RH]): bool = x.s == x.e and x.ins.length() > 0 and ts.indices().exists(j =>
+    ts[j].s == ts[j].e and ts[j].ins.length() > 0 and ts[j].s == x.s and ts[j].rts != x.rts)
+  /// the text left doesn't end with x's letters and roots
+  pure def tailDiffers(post: List[Elem], x: RH): bool = {
+    val c = x.ins.length()
+    val n = post.length()
+    c > n or chars(post).slice(n - c, n) != x.ins or rootsOf(post).slice(n - c, n) != x.rts
+  }
+  pure def o5docAt(r: Region, nt: Note, pd: List[Elem], post: List[Elem], lastApplied: bool): bool = {
+    val ours = withRoots(r.ours, r.br)
+    val theirs = byRoot(r.after, r.ar, chars(pd).slice(r.start, r.end), rootsOf(pd).slice(r.start, r.end))
+    val m = r.after.length()
+    val pts = ours.indices().filter(k => isPair(ours[k], theirs))
+    val atDocEnd = r.end == pd.length() and r.bdn
+    not(r.tainted) and not(r.erased) and pts.size() > 0 and (
+      // landed off the doc's end
+      (nt.clean and pts.exists(k => not(atDocEnd and ours[k].s == m)))
+      // refused at the doc's end, the pair all there is to merge, O4a not the reason
+      or (not(nt.clean) and not(nt.o4a) and atDocEnd and ours.length() == 1 and theirs.length() == 1 and ours[0].s == m)
+      // landed and applied, but the text left doesn't end with ours (theirs first, then ours)
+      or (lastApplied and nt.clean and atDocEnd and pts.exists(k => ours[k].s == m and tailDiffers(post, ours[k])))
+    )
+  }
+  pure def o5doc(rs: List[Region], notes: List[Note], pd: List[Elem], post: List[Elem], applied: bool): bool =
+    rs.indices().exists(i => o5docAt(rs[i], notes[i], pd, post, applied and i == rs.length() - 1))
+  /// the regions a one-step request merged: its record's (revert), or the top batch of the
+  /// pid's undo or redo stack
+  pure def stepRegions(recs: int -> Record, stacks: int -> Stacks, a: Act): List[Region] =
+    if (a.kind == "revert") revertRegions(recs.get(a.change))
+    else if (a.kind == "redo") lastOf(stacks.get(a.p).redo)
+    else lastOf(stacks.get(a.p).undo)
+  /// U17doc: the stack an undo (redo) pushes on, and its batches' region counts past `was`;
+  /// the steps' applied counts, of the steps that applied any
+  pure def oppStack(stacks: int -> Stacks, a: Act): List[List[Region]] =
+    if (a.kind == "redo") stacks.get(a.p).undo else stacks.get(a.p).redo
+  pure def pushedLens(v: List[List[Region]], was: int): List[int] = v.slice(was, v.length()).foldl([], (l, b) => l.append(b.length()))
+  pure def appliedLens(ss: List[StepNote]): List[int] =
+    ss.foldl([], (l, x) => if (x.applied.length() > 0) l.append(x.applied.length()) else l)
+
   /// bounded::State::check: the rules this transition violates
   def checks(pre: St, a: Act, r: Res): Set[str] = {
+    // what the checks read, each projected once: every expression whose type holds the
+    // whole state carries that type in the IR (docs/MODEL-CHECK.md, "The model's size")
+    val nts = r.notes
+    val sts = r.steps
+    val kind = r.out.kind
+    val post = r.st.doc
+    val postStacks = r.st.stacks
+    val preStacks = pre.stacks
+    val preRecs = pre.records
+    val ur = a.kind == "undo" or a.kind == "redo"
     // own_only (U10a by root, v1.8): the request deleted a root the change it reverses
     // didn't insert in the regions applied (v1.9)
-    val ownOnly = (a.kind == "undo" or a.kind == "redo" or a.kind == "revert") and r.foreign
+    val ownOnly = (ur or a.kind == "revert") and r.foreign
     // I1 (v1.8): at most one live element per root; after every step of an undo or redo (v1.9)
-    val i1 = dup(rootsOf(r.st.doc))
-    val u9 = r.notes.indices().exists(i => r.notes[i].tainted and not(r.notes[i].erased) and r.notes[i].clean)
-    val o5 = r.notes.indices().exists(i => {
-      val n = r.notes[i]
+    val i1 = dup(rootsOf(post))
+    val u9 = nts.indices().exists(i => nts[i].tainted and not(nts[i].erased) and nts[i].clean)
+    val o5 = nts.indices().exists(i => {
+      val n = nts[i]
       val atDocEnd = n.end == n.liveLen and n.bdn
       // O5 landed off the doc's end, or was refused at it
       if (atDocEnd) n.samePointEnd else n.o5
     })
-    val u13 = (r.out.kind == "conflicts" or r.out.kind == "blocked")
-      and (r.st.doc != pre.doc or r.st.stacks != pre.stacks or r.st.records != pre.records)
-    val u17 = r.steps.indices().exists(i => r.steps[i].applied.length() > 0 and r.steps[i].pushed != r.steps[i].applied.length())
-    val u15v = if ((a.kind == "undo" or a.kind == "redo") and a.mode != "drop") {
+    // O5doc (o5doc): O5 judged from the doc, independently of the merge's own at_end
+    val o5d = nts.length() > 0 and (a.kind == "revert" or sts.length() == 1)
+      and o5doc(stepRegions(preRecs, preStacks, a), nts, pre.doc, post, kind == "applied")
+    // U17doc: read off the stacks an applied undo or redo left
+    val u17d = kind == "applied" and ur
+      and pushedLens(oppStack(postStacks, a), oppStack(preStacks, a).length()) != appliedLens(sts)
+    val u13 = (kind == "conflicts" or kind == "blocked")
+      and (post != pre.doc or postStacks != preStacks or r.st.records != preRecs)
+    val u17 = sts.indices().exists(i => sts[i].applied.length() > 0 and sts[i].pushed != sts[i].applied.length())
+    val u15v = if (ur and a.mode != "drop") {
         val other = undoRedo(pre, a.p, if (a.mode == "all") "partial" else "all", a.steps, a.kind == "redo").steps
-        if (a.mode == "all") not(u15(r.steps, other)) else not(u15(other, r.steps))
+        if (a.mode == "all") not(u15(sts, other)) else not(u15(other, sts))
       } else false
-    val u19 = a.kind == "purge" and r.st.stacks.keys().exists(k =>
-      r.st.stacks.get(k).undo.length() > 0 or r.st.stacks.get(k).redo.length() > 0)
+    val u19 = a.kind == "purge" and postStacks.keys().exists(k =>
+      postStacks.get(k).undo.length() > 0 or postStacks.get(k).redo.length() > 0)
     val u22a = a.kind == "revert" and not(r.supersetOk)
     // RT (U22a v1.6): a restart changes no revert's outcome or text
-    val rt = a.kind == "restart" and pre.records.keys().exists(c => Set(false, true).exists(b => {
-      val x = revert(pre, pre.records.get(c).author, c, b)
-      val y = revert(r.st, pre.records.get(c).author, c, b)
+    val rt = a.kind == "restart" and preRecs.keys().exists(c => Set(false, true).exists(b => {
+      val x = revert(pre, preRecs.get(c).author, c, b)
+      val y = revert(r.st, preRecs.get(c).author, c, b)
       x.out != y.out or chars(x.st.doc) != chars(y.st.doc)
     }))
     Set(("own_only", ownOnly), ("I1", i1), ("U9", u9), ("O5", o5), ("U13", u13), ("U15", u15v), ("U17", u17),
-        ("U19", u19), ("U22a", u22a), ("RT", rt)).filter(x => x._2).map(x => x._1)
+        ("U19", u19), ("U22a", u22a), ("RT", rt), ("O5doc", o5d), ("U17doc", u17d)).filter(x => x._2).map(x => x._1)
   }
+
 
   /// model::restart (U6, U18, U22a v1.6): every stack lost, records kept; who made a change
   /// so far is who lost history. Mutant restart-single-taint: a record region's one flag
@@ -840,6 +956,8 @@ module undo {
   val inv_U22a = not(st.viol.contains("U22a"))
   val inv_O5 = not(st.viol.contains("O5"))
   val inv_RT = not(st.viol.contains("RT"))
+  val inv_O5doc = not(st.viol.contains("O5doc"))
+  val inv_U17doc = not(st.viol.contains("U17doc"))
   val inv = inv_own_only and inv_I1 and inv_U9 and inv_U13 and inv_U15 and inv_U17 and inv_U19 and inv_U22a
-    and inv_RT and inv_O5
+    and inv_RT and inv_O5 and inv_O5doc and inv_U17doc
 }

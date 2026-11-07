@@ -9,12 +9,28 @@ mutants that must fail in both.
 |---|---|
 | The Quint model | `spec/quint/undo.qnt` (SPEC-UNDO v1.9, over abstract text) |
 | Evidence for G1 | `docs/evidence/g1-undo.md` |
-| The pinned diff | `spec/quint/undo_diff.qnt`, equal to `diff::hunks` on every pair of texts up to 4 long (`crates/spec-undo/tests/quint_diff.rs`) |
+| The pinned diff | `spec/quint/undo_diff.qnt`, reached only by the mutants `f3-rediff` and (i); a hand transcription of it equals `diff::hunks` on every pair of texts up to 4 long (`crates/spec-undo/tests/quint_diff.rs`; The diff, below) |
 | The bounded world (the same abstraction, in Rust, over the oracle) | `crates/spec-undo/src/bounded.rs` |
 | ITF replay | `crates/spec-undo/src/itf.rs`, `src/bin/undo_itf_replay.rs` |
 | The enumerator | `crates/spec-undo/src/bin/undo_enum.rs` |
 | Mutants | `crates/spec-undo/src/model/mutant.rs` (feature `mutants`), `MUTANT` in `undo.qnt` |
 | Node jobs | `tools/undo/job.sh` (a `--repo` job), `tools/undo/*.sh`; the env-chunk fallback `tools/undo-quint-job.sh`, `tools/undo-enum-job.sh` (`tools/README.md`) |
+
+## Provenance of the cited runs
+
+Each job cited here and in `docs/evidence/` says what source it ran (checked 2026-11-04 against
+the job records). **No mark:** the record names a commit that is pushed. **(tag `ev-<job>`):**
+the record names a commit that was on no pushed branch; the pushed tag `ev-<job>` now holds
+that commit. **indicative (bundle):** the source went to the node as env chunks (the env-chunk
+fallback), so the record names no commit and the exact source can't be rebuilt from it;
+**source stated as <commit>** is the commit the note names for that run, which the record
+can't confirm. **indicative (dirty: ...):** a pushed commit plus files that were not
+committed. **rerun at a pushed sha: pending:** the run is being repeated at a pushed commit,
+and that job will be cited here. **K2 Engine's record at `<commit>`:** K2 Engine's job (its
+record isn't readable from this repo's side); K2 Engine's record names that commit.
+**indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pending:** K2 Engine's
+job ran an uploaded tree with no commit. A mark changes no figure: an indicative run's result
+is what it printed.
 
 ## One abstraction, two implementations
 
@@ -58,17 +74,20 @@ state `st` is exactly a `bounded::View`, so:
   Nothing is diffed, but by the mutants `f3-rediff` and (i) on a tainted region.
 - **Not here** (the trace test covers them): the revert window, `write --base`,
   `replace_text`, `restore`, `undo --for`, on-behalf edits, the U6 bounds (never reached),
-  purge redaction of records (R9's 8-byte windows never match a one-letter secret).
+  purge redaction of records (R9's 8-byte windows never match a one-letter secret). So
+  **`erased` is not modelled**: no region is ever erased, and the merge's `erased` branch,
+  U9's `!erased` clause and the Erased report are never reached by any model-check run
+  (Invariants, U9).
 
-### Reductions (each machine-checked)
+### Reductions (each machine-checked; the cut is a bound, not exact)
 
 | Reduction | Why it is exact | Check |
 |---|---|---|
-| **The cut**: no state with a text longer than `MAXLEN` | a bound, like the budgets: an action that would make a longer text is not taken, in both implementations | `bounded::tests::the_cut_bounds_every_diffed_string` |
-| **Records dropped** once the revert budget is spent (and `head`) | nothing reads a record again | `bounded::tests::dropping_spent_records_is_exact`: with and without it, the same states (minus records) and the same violations |
+| **The cut**: no state with a text longer than `MAXLEN` | **not exact: a bound**, like the budgets. An action that would make a longer text is not taken, in both implementations (`bounded::State::step` returns `None` before `check`; `undo.qnt`'s `step` disables it, `r.ok`), so **that transition is never checked**. The bfs SUMMARY's `cut=` counts them: 624 at 2 × 1 + 1 undo + 1 revert (`abb`, 4), 18,912 at 3 × 1 + 1 undo, 30,104 at 2 × 2 + 1 undo (`ab`, 3), 17,790 at 1 × 3 + 1 revert + 1 restart (jobs `f57e1522`, `5d514715`, `95a4221d` (tag `ev-95a4221d`)). At `MAXLEN` 5 the 2 × 1 + 1 undo + 1 revert bound takes those 624: 39,790 states, no violation (`95a4221d`; the enumerator only) | `bounded::tests::the_cut_bounds_every_diffed_string` (the states kept stay within `MAXLEN`; it does not check the cut transitions) |
+| **Records dropped** once the revert budget is spent (and `head`) | nothing reads a record again | `bounded::tests::dropping_spent_records_is_exact`: with and without it, the same states (minus records). It also asserts the same violations, but it runs the oracle of record, which has none, and no mutant runs there: **that half compares empty with empty** |
 | **Fields no rule reads** are not state: a record's original hunks, a batch's `after_partial` and `on_behalf_of`, the authors sets | no rule or outcome reads them | the ITF replay compares every state field the model has |
 | **The view** (v1.8): roots as labels, the carried theirs and a reduced head left out | the rules compare roots only for equality; theirs is read by root from the live window; nothing reads a head once the records are dropped | `bounded::tests::the_view_is_exact`: oracle states found with one view (4,000 pairs at 2 × 1 + 2 undos + 1 revert, 1,780 of them under other root names) have the same actions, outcomes and next views |
-| **Pid symmetry** (enumerator, `--sym`; not in TLC) | pids have the same budgets and rights | `bounded::tests::pid_symmetry_is_exact_*` (one test per bound): the canonical forms of the plain enumeration's states are exactly the symmetric enumeration's states, same violations |
+| **Pid symmetry** (enumerator, `--sym`; not in TLC) | pids have the same budgets and rights | `bounded::tests::pid_symmetry_is_exact_*` (one test per bound): the canonical forms of the plain enumeration's states are exactly the symmetric enumeration's states. The "same violations" half runs the oracle of record, which has none, with no mutant: **it compares empty with empty** |
 
 ### The diff (D1–D2)
 
@@ -80,12 +99,22 @@ middles are one replacement hunk. The only choice left is which characters a one
 keeps, and on every pair of texts up to 4 long Myers keeps the **right-greedy embedding**
 (the latest matching characters). `undo_diff.qnt` is that algorithm.
 
-The proof is exhaustive: `crates/spec-undo/tests/quint_diff.rs` transcribes the module and
-checks it equals `diff::hunks` on **every** pair of texts over `{a, b}` up to 4 long (961
-pairs), and that it differs at 5 (4 is a hard limit, `DIFF_MAX`). The cut keeps every text the
-merge diffs (every region's before, after and window) within `MAXLEN`
-(`the_cut_bounds_every_diffed_string`), and every instance compared with Quint has
-`MAXLEN ≤ 4`, so on every state the bound reaches the model's diff **is** `diff::hunks`.
+**Only mutants reach it.** In `undo.qnt`, `hunks` is called only under mutant `f3-rediff`
+and under mutant (i) on a tainted region (`mergeRegions`); the correct model never diffs.
+So no count, ITF replay or TLC run of the correct model depends on the pinned diff.
+
+**What is checked is a hand transcription.** `crates/spec-undo/tests/quint_diff.rs`
+transcribes the module into Rust by hand and checks that the transcription equals
+`diff::hunks` on **every** pair of texts over `{a, b}` up to 4 long (961 pairs), and that
+it differs at 5 (4 is a hard limit, `DIFF_MAX`). That part is exact. Nothing mechanically
+ties the transcription to the `.qnt` file: the third test
+(`the_quint_module_names_the_limit`) only checks that the file names `DIFF_MAX = 4`. The
+cut keeps every text the merge diffs (every region's before, after and window) within
+`MAXLEN` (`the_cut_bounds_every_diffed_string`), and every instance compared with Quint so
+far has `MAXLEN ≤ 4`. **That is a convention, not enforced:** `Bound`, `undo_enum` and
+`undo_itf_replay` accept any `--maxlen`, and `undo.qnt` any `MAXLEN`. Under it, on every
+state the bound reaches, the transcription **is** `diff::hunks`, and the model's diff is
+too as far as the module matches the transcription.
 `align_insertions` is not involved (the merge uses `diff::hunks` alone; the bounded world's
 edits are explicit hunks). A first version pinned the diff as a generated table of 3,906
 entries; Quint's typechecker took over 8 minutes on it, so the table gave way to the
@@ -101,14 +130,74 @@ appears.
 | `own_only` | `hist.undo_own_only` (U10a; by root since v1.8): every character an undo, redo or revert deletes has a root the change it reverses inserted (an undo of a batch: its inserted roots; a redo: the roots the undo put back; a revert of `c`: `c`'s inserted roots), **in the regions the step applied** (v1.9). **Enforced** (stopped at) since v1.7 |
 | `I1` | (v1.8) at most one live element per provenance root, in every state, and (v1.9) after every step of an undo or redo: each step is its own change |
 | `RT` | restart transparency (U22a v1.6): a restart changes no revert's outcome or text, for every record, all or nothing and `--partial` (v1.7) |
-| `U9` | a tainted region is never applied |
+| `U9` | a tainted region is never applied (by construction; its `erased` case is not modelled: below) |
 | `U13` | a refused all-or-nothing request, or a blocked one, changes nothing |
 | `U15` | all or nothing's conflicts = `--partial`'s reports, first conflicting step |
 | `U17` | a step pushes one region per region it applied: redo reapplies exactly the applied regions |
 | `U19` | a purge leaves every stack empty |
 | `U22a` | revert's conflicts ⊇ undo's on the same state, same bounds, same text where both apply |
 | `O5` | O5 lands exactly at the doc's end with a non-empty whole-doc base: never elsewhere, never refused there (U10's `at_end`, both ways) |
+| `O5doc` (2026-11-04) | O5 and U10's `at_end` **restated independently** of the merge's own `at_end`: for a request that merged one step (a revert, or an undo or redo of one batch), each untainted region judged from its own exact sides, the doc's length as the pre-state holds it, the whole-doc base flag its batch or record stored, and the text the step left (landed elsewhere; refused at the doc's end; or landed there but the text left doesn't end with ours). `bounded::o5_doc`, `undo.qnt` `o5doc` |
+| `U17doc` (2026-11-04) | U17 read off the state an applied undo or redo left: the batches it pushed on the opposite stack hold one region per region each step applied, in order |
 | `U12` (Rust only, `--u12`) | a diagnostic: outside taint, the window merge of the exact sets equals the whole-text merge of the same sets (v1.7). Clean; the old re-diff form (F4) is informative only |
+
+### What the runs check
+
+- **A transition past the length cap is never checked**, in the enumerator and in the model
+  (Reductions, the cut).
+- **`bfs` and TLC** check every transition they take. A violation is part of the state, so
+  a violation on a transition into a seen state was recorded when that state was first
+  reached.
+- **A walk** (`undo_enum walk`, with or without `--bias`) computes every enabled step at each
+  state (each runs the checks), picks one, and records **only the picked step's
+  violations**. A violation on a step it did not take is not reported.
+- **Case-class counts differ by mode.** A walk counts per step taken. `bfs` counts **per
+  first visit**: a class is counted on the transition that reaches a new state, and a
+  transition into an already-visited state adds nothing. So a bfs class count of 0 does not
+  mean no transition hits the class. At the seven exact bounds the bfs counts 0
+  all-or-nothing undo refusals at six bounds and 0 blocked requests at all seven, while
+  200,000 G1 walks count 12,633 and 7,487 (audit job `95a4221d`, tag `ev-95a4221d`), and TLC reaches both at
+  2 × 1 + 2 undos + 1 revert (`240529ae`, tag `ev-240529ae`).
+
+### Six rules hold by construction
+
+**Six of the ten rules hold by construction on the oracle and the model: U9, U13, U15, U17,
+U19 and O5.** The code that computes a step already makes each true, so no state of the
+correct oracle or model can break it. **Their evidence is their mutants, not their
+COMPLETE:** a COMPLETE shows only that the code implementing each rule agrees with itself.
+
+- **U9:** a tainted region takes the conflict branch with `clean` false (`model/mod.rs`
+  ~1253-1257; `undo.qnt` `mergeRegions`), so "tainted and clean" can't occur. Mutant (i).
+  **U9's `!erased` clause is never reached**: no code in `undo.qnt` sets a region's
+  `erased`, and the bounded world never redacts a record (one-letter secrets; R9's 8-byte
+  windows), so the merge's `erased` branch, the clause and the Erased report are reached by
+  no model-check run: TLC cover COMPLETE (`240529ae`, tag `ev-240529ae`), the oracle 0 at all seven bounds and
+  in 400,000 G1 walks (`95a4221d`, tag `ev-95a4221d`). The only evidence for the erased clause is the trace
+  test's class `revert_over_erased`: 31 hits in 256 traces (job `38fdc54f`, tag `ev-38fdc54f`, a run of
+  `trace_equivalence` with `--nocapture` at main's spec-undo code plus two counters).
+- **U13:** undo and redo plan on a scratch copy and return before `*self = work`; revert
+  returns before `new_batch` (`undo.qnt`: the conflicts and blocked branches return the
+  input state), so a refusal can't change the state. Mutant `u13-refused-revert-applies`
+  (added by the audit; results below) shows its check can fail.
+- **U15:** both modes plan identical steps up to the first conflicting one and report the
+  same set there. Mutant (iii).
+- **U17:** `apply_step` pushes exactly one inverse region per clean region. Mutant (iv).
+- **U19:** `purge_text` always clears every stack. Mutant skip-U19.
+- **O5:** the check's "at the doc's end" (`end == live.len() && base_doc_nonempty`) is the
+  same expression as the merge's `at_end` (`model/mod.rs` ~1268, `undo.qnt` `atEndFor`);
+  `o5_landed` requires `at_end` and `same_point_at_window_end` requires `!at_end`
+  (`merge.rs` ~253-257), so neither failure state is reachable. TLC, with each failure
+  state as a cover: on the correct model neither is reached (both COMPLETE at 2 × 1 + 2
+  undos + 1 revert, `240529ae`, tag `ev-240529ae`); under mutant (vi) only the landing-off-the-end state is
+  reached, under (vii) only the refusal-at-the-end state.
+
+**The genuinely relational checks are `own_only`, `I1`, `RT` and `U22a`.** No TLC or bfs
+run at the documented bounds had shown U22a can fail. Its only failing witnesses are
+mutant (i) in G1 walks (`48962ffa`) and, now, mutant (i) at 2 pids × 2 events + 1 revert
+(`abb`, 4): TLC `Invariant m_u22a2_undo_inv_U22a is violated`, 5 states, and the enumerator
+`U22a@4` (job `b9742756`, tag `ev-b9742756`). Its control is job `528c615e` (tag `ev-528c615e`):
+TLC on `undo.qnt` at 2 pids × 2 events + 0 undos + 1 revert (`abb`, 4, `MULTI`, purge,
+`REDUCE`), no mutant, only `inv_U22a` checked: COMPLETE, 7,059,123 states, depth 6.
 
 ## Readings
 
@@ -146,6 +235,158 @@ p2 replaced p1's letter), which is right by identity; whole-text merge3 of the s
 clean (its diff deletes the seed's `a` instead). U12 says the region form is the definition,
 so the definition stands; the note's claim "U10 equals whole-text merge3 outside the taint
 case" needs "outside repeated text" (or to be dropped).
+
+## The audit's additions (2026-11-04)
+
+An audit of the model check found that six of the ten rules hold **by construction** on the
+oracle and the model (U9, U13, U15, U17, U19, O5), so their evidence is their mutants alone;
+that U13 had no mutant; that `own_only` failed only through undo (`f3-rediff`), never through
+redo or revert; that no mutant broke I1 at an intermediate step only (v1.9's per-step flag:
+`commit` in `undo.qnt`, `Hits::i1_violated` in the oracle); and that the `O5` check read the
+flags the merge computed from its own `at_end` (`end == live.len() && base_doc_nonempty`;
+`atEndFor`), so it could not fail on correct code. No behaviour of the oracle changed: the
+additions are four mutants, two independently formulated checks and a debug-assertion job.
+
+### Four mutants (`Mutant::ALL`, `MUTANT` in `undo.qnt`, `counts.sh` `PART=m`, `smoke.sh`)
+
+| Mutant | Rule | Bound | Least depth: enumerator / TLC (one worker) | Violating action |
+|---|---|---|---|---|
+| `u13-refused-revert-applies`: a refused all-or-nothing revert still applies its clean regions | U13 | 2 × 1 + 1 undo + 1 revert (`abb`, 4) | 3 / 3 | a revert (all or nothing) |
+| `r3-redo-rewrites-window`: a redo rewrites each clean region's whole window (R3) | own_only | 2 × 1 + 2 undos + 1 revert (`ab`, 4) | 4 / 4 | a redo |
+| `r3-revert-rewrites-window`: the same, for revert only | own_only | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 / 3 | a revert |
+| `i1-per-request`: v1.8's I1, per request | I1 (per step only) | 2 × 2 + 1 undo + 1 revert (`a`, 3; no two-region edits, no purge) | 5 / 5 | an `undo --steps 2` |
+
+Jobs `66736440` (`counts.sh` `PART=m`) and `03aa049f` (the same on the committed model): the
+same depths, TLC's `violated` line naming the mutant's own invariant (`inv_U13`,
+`inv_own_only`, `inv_own_only`, `inv_I1`) and the enumerator's `SUMMARY` reading
+`violations=[U13@3]`, `[own_only@4]`, `[own_only@3]`, `[I1@5]`. `tests/mutants.rs`:
+`refused_revert_applies_fails_u13`, `redo_rewrites_window_fails_own_only_through_redo`,
+`revert_rewrites_window_fails_own_only_through_revert` (each asserting the violating
+action's kind), `i1_per_request_fails_i1_at_an_intermediate_step`, and the oracle at the two
+new bounds (`the_oracle_passes_at_the_revert_bound`, `…_restorations_bound`); job `ba6a024c`.
+
+Each fails its own rule and no other at that depth (the enumerator's `--first` lists every
+rule violated at the level it stops on: one each), and each leaves the oracle as it was (the
+`--mutants` feature only).
+
+- **`u13-refused-revert-applies`**: p1 deletes the first and the last letter of `abb` (two
+  regions: `b`); p2 types `a` at 0 (`ab`, into the first region's window); p1's
+  all-or-nothing revert conflicts on the first region and applies the second anyway
+  (`abb`), reporting the conflict. TLC: `Invariant m_u13_undo_inv_U13 is violated`, 4
+  states; the enumerator: `violations=[U13@3]`. The same trace in both.
+- **`r3-redo-rewrites-window`** (and `r3-revert-…`): the step applies, for each clean region,
+  one hunk deleting its whole window and putting the merged text back, each character with
+  the root the merge gives it. Text and roots come out as the oracle's; a foreign element in
+  the window is deleted (and put back as a new element), which U10a forbids. Redo's least
+  witness (enumerator and TLC alike): p1 types `a` at 0 (`aab`); p1 undoes (`ab`); p2 reverts
+  p1's undo (`aab`, the root back); p1 redoes, rewriting a window that holds p2's
+  restoration: `own_only`. In TLC's trace the last transition raises `undos` from 1 to 2,
+  moves p1's batch from its redo stack to its undo stack and leaves `events` and `reverts`
+  alone: a redo. Revert's (depth 3): p1 types `a` at 0, p2 types `a` at 0 (pulled into p1's
+  region, U8), p1 reverts its change; the last transition raises `reverts`.
+- **`i1-per-request`**: O4a is waived on every step but the last of a multi-step request
+  when the request, so planned all or nothing, applies and leaves each root live at most
+  once; otherwise the request is planned as specified. The decision is the same for both
+  modes, so U15 can't see it, and no end state ever holds a root twice: only the per-step
+  check can fail. Least witness: p1 appends `a` (root R), p1 deletes it, p2 appends `a`, p2
+  reverts p1's delete (R back after p2's `a`), p1 `undo --steps 2`. The first step puts R
+  back beside p2's `a` at the doc's end (theirs inserts `a` and R, ours R: not identical,
+  O5 lands both; O4a, waived, would refuse), two live R; the second undoes p1's append and
+  removes one. TLC's last state: `doc` roots `0, 1, 2` (no duplicate), `viol {"I1"}`, `undos`
+  0 → 1; the enumerator ends at `aaa`, authors `[0, 2, 1]`. `tests/mutants.rs` replays the
+  witness: the oracle refuses the request (O4a, step 1), the mutant applies both steps and
+  its end state passes `Model::i1` with `I1` in `viol`. The bound's whole oracle run doesn't
+  fit a test (about 10^6 states at depth 5 alone, over 20 GB for a full `bfs`), so its least
+  depth is the jobs'. TLC took 496 s with one worker (301,577 states); the enumerator 52 s.
+
+### Independent formulations
+
+| Check | Restates | Fails under | Enumerator (`--stop` it alone) | TLC (that invariant alone, one worker) |
+|---|---|---|---|---|
+| `O5doc` | O5, U10's `at_end` | (vi) `vi-o5-every-window-end` | `violations=[O5doc@3] observed=[O5@3]` | `Invariant m_tiny_undo_inv_O5doc is violated`, 4 states |
+| `O5doc` | | (vii) `vii-o5-region-base` | `violations=[O5doc@3] observed=[O5@3]` | the same, 4 states |
+| `U17doc` | U17 | (iv) `iv-redo-retries-skipped` | `violations=[U17doc@3] observed=[U17@3]` | `Invariant m_tiny_undo_inv_U17doc is violated`, 4 states |
+
+**`O5doc`** (`bounded::o5_doc`, `undo.qnt` `o5doc`) never reads the merge's `at_end`, its
+`o5_landed` or its `same_point_at_window_end`. For a request that merged one step, each
+untainted region is judged from its own exact sides (an insertion of ours met by a different
+insertion of theirs at the same point, O4 by roots), **the doc's length as the pre-state
+holds it**, **the whole-doc base flag its batch or record stored** when the change was made,
+and **the text the step left**: such a region violates O5 when it merged clean with the pair
+anywhere but the base's end of a window ending at the doc's end with a non-empty base; when
+it was refused there though the pair is all there is to merge (one insertion each side) and
+O4a didn't refuse it; or when it landed there, applied, and is the step's last region, but
+the text the step left doesn't end with ours' letters and roots (theirs first, then ours).
+Requests of two steps are left to `O5`: a Quint result doesn't split its region notes by
+step, and carrying that would grow the IR. **`U17doc`** reads the batches an applied undo or
+redo pushed off the stacks it left, not the step's own count.
+
+**Not restated**, and why: **U9** (the oracle refuses a tainted region in one `if`; an
+independent reading needs each region's own edits traced through the step, which neither
+side records); **U13** and **U19** (their checks already compare the states before and after,
+not anything the code computed; U13 now has its mutant); **U15** (its check already plans
+the other mode; a second, independent planner is not cheap).
+
+**Clean on correct code** at the seven exact bounds, on the enumerator (explore job
+`57835476`: the counts below, `violations=[]` with both new rules in the stop set) and on
+TLC (`PART=a`, `b` with every invariant, both new ones included: jobs `3e209dc0`, `03aa049f`, `9037e1fe`); `the_oracle_passes_at_*` (job `ba6a024c`).
+Every older mutant fails as before (job `66736440`: the same rules at the same depths in
+both tools; (vi), (vii) also `O5doc@3`, (iv) also `U17doc@3`, TLC naming the earlier
+invariant in the configuration's order, `inv_O5` or `inv_U17`).
+
+### Debug assertions (`tools/undo/debug.sh`)
+
+The release jobs build without debug assertions, so the oracle's own `debug_assert!`s never
+ran in a model job. `debug.sh` (`sh tools/undo/job.sh enum tools/undo/debug.sh`) rebuilds
+`undo_enum` with `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true` in its own target dir and runs
+the oracle at the seven exact bounds and on walks at the literal G1 bound, with and without a
+restart. Job `16f98d6f`: the
+seven counts as below, no rule violated, no assertion failed; 100,000 walks at G1 (1,200,000
+steps) and 100,000 with a restart (1,300,000 steps), none violated. About 12 minutes on 4
+threads (the build 82 s).
+
+### Counts after the changes (TLC = enumerator)
+
+Unchanged at all seven bounds, on the model as committed (job `03aa049f`, and `9037e1fe`
+for `PART=b`) and before the IR reduction below (job `3e209dc0`):
+
+| Bound | TLC = enumerator |
+|---|---|
+| 2 × 1 + 1 undo (`abb`, 4) | 3,889 |
+| 2 × 1 + 1 undo + 1 revert (`abb`, 4) | 35,758 |
+| 3 × 1 + 1 undo (`abb`, 4) | 220,210 |
+| 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 144 |
+| 2 × 2 + 1 undo (`ab`, 3) | 542,418 |
+| 1 × 3 + 1 revert + 1 restart (`abba`, 4) | 199,268 |
+| 2 × 1 + 2 undos + 1 revert (`ab`, 4) | 49,644 |
+
+ITF replay: 1,000 traces at 2 × 1 + 1 undo + 1 revert, 1,000 at 2 × 1 + 2 undos + 1 revert
+and the regression traces (`PART=a`), 300 with and 300 without a restart (`smoke.sh`): **0
+mismatches**. The Quint export guard: 113 definitions compared, 0 differ.
+
+**The model's IR** (`smoke.sh`, `u_tiny`): **21,334,452 bytes**, against 19,862,706 for main's
+model before these changes (`ab16c7e4`, the same instance, job `03aa049f`): +1.47 MB, past
+Jackson's default of 20,000,000 (the export check's instance was already past it), so every
+Quint job depends on `tools/quint-jvm`'s agent (limit 200,000,000), as it already did. The first
+draft was 22,522,104 (job `16f98d6f`): every expression whose type holds the whole state
+(`St`, or `Res` around it) carries that type, about 90 KB each. The committed model projects
+what `checks` reads once (`nts`, `sts`, `kind`, `post`, the stacks and records; the existing
+checks now use them too), passes maps rather than states to `stepRegions` and `oppStack`,
+and folds the redo rewrite into `applyStep`, which already holds the window's roots.
+
+### Jobs (an x86 compute node, `--cpus 4 --mem 20G`)
+
+| Job | What | Result |
+|---|---|---|
+| `57835476` | enumerator only: the oracle at the seven exact bounds; every older mutant; the new mutants at candidate bounds | the seven counts unchanged, no violation; every older mutant as before; the four caught |
+| `1994ea8e` | enumerator only: `i1-per-request`'s bound at `MAXLEN` 3 | caught at depth 5 (with and without purge); the oracle's whole bound didn't finish (a 600 s cap, then the 20 GB memory cap) |
+| `66736440` | `counts.sh` `PART=m` | every mutant caught in both tools at the depths above; `O5doc`, `U17doc` alone under (vi), (vii), (iv) |
+| `ba6a024c` | `tools/tests/full.sh` `PART=lint`, then `PART=spec-undo` | fmt, clippy (with and without `mutants`) clean; 62 + 27 tests pass |
+| `3e209dc0` | `counts.sh` `PART=ab` (the first draft) | the seven counts equal; ITF 2,000 traces and the regressions, 0 mismatches |
+| `16f98d6f` | `smoke.sh`, then `debug.sh` (the first draft) | smoke clean (IR 22,522,104); debug assertions as above |
+| `03aa049f` | the committed model: `PART=abm`, `smoke.sh`, the IR before | export check 0 differ; `PART=m` as `66736440` (the same states and depths in TLC; `i1-per-request` 301,577 states, 818 s); six exact counts equal, ITF 0 mismatches; 2 × 2 + 1 undo stopped at its 540 s TLC cap on a slower node (PARTIAL); IR 21,334,452 (19,862,706 before) |
+| `9037e1fe` | the committed model: `PART=b` | the three counts equal (542,418, 199,268, 49,644; TLC complete), no violation |
+
 
 ## Results v1.9 (fidelity review of v1.8)
 
@@ -193,8 +434,8 @@ hunks, as the trace oracle since commit `04487c5`; under the old per-copy readin
 was one hunk per copy): 2 × 1 + 1 undo + 1 revert **35,758** (was 35,792), 1 × 3 + 1 revert + 1
 restart **199,268** (was 200,530), 2 × 1 + 2 undos + 1 revert **49,644** (was 49,656). The other
 four are unchanged: 3,889, 220,210, 144 and 542,418. TLC = enumerator at all seven. Recorded in
-`docs/evidence/g1-undo.md` (runs `88555d19`, `ee85bf3c`; the re-runs after the revision `3f360ca1`,
-`708bd100`). Latest: v0.10.0's merge commit `260ef4e`, jobs `f57e1522` (`counts.sh` `PART=a`: the
+`docs/evidence/g1-undo.md` (runs `88555d19`, `ee85bf3c`; the re-runs after the revision `3f360ca1` (tag `ev-3f360ca1`),
+`708bd100` (tag `ev-708bd100`)). Latest: v0.10.0's merge commit `260ef4e`, jobs `f57e1522` (`counts.sh` `PART=a`: the
 first four bounds; ITF 2,000 traces and the regression traces, 0 mismatches) and `5d514715`
 (`PART=b`: the other three), the same seven counts, TLC = enumerator.
 
@@ -235,19 +476,20 @@ v1.9's 19,868,662. A first v1.9 draft that carried the per-step I1 flag in a new
 request's result record, then one that read and rebuilt the state in `undoRedo`, grew it to
 about 20.03 MB and every compile failed: every expression whose type holds the whole state
 carries that type in the IR. The per-step flag therefore lives in `commit` (one record
-update, inside the state). `smoke.sh` prints the size.
+update, inside the state). `smoke.sh` prints the size. **Since 2026-11-04** (the audit's additions above):
+21,334,452 bytes, every Quint job running its servers with `tools/quint-jvm`'s agent.
 
 ### Jobs (an x86 compute node, `--cpus 4 --mem 8G`, `APA_HEAP=4g TLC_HEAP=2g NODE_HEAP_MB=2048`)
 
 | Job | What | Result |
 |---|---|---|
-| `5597f6ea` | enumerator only, v0.9.0 (baseline): every mutant without `--first`, and the oracle at every bound | the v1.8 violation sets and counts |
-| `03867f52`, `cbf8cddd` | `counts.sh` `PART=m`, first drafts | IR over 20 MB: every compile failed (above) |
-| `20db2b75` | IR sizes (v1.8, v1.9 with and without the per-step flag), then `counts.sh` `PART=m` | every mutant, one TLC worker: the depths above; (xi) 4 and 4 |
-| `0b8fedfe` | `counts.sh` `PART=a` | four bounds equal, as v1.8; ITF 2,000 traces, 0 mismatches |
-| `e6427b49` | `counts.sh` `PART=b` | three bounds equal, as v1.8 |
-| `3951cf03` | enumerator only, this commit: as `5597f6ea`, plus (xi) | the counts and violation sets of `5597f6ea`, exactly; (xi) as above |
-| `e4c17c6c` | `smoke.sh` | typechecks; IR 19,853,379 bytes (`u_tiny`); ITF 0 mismatches (with and without a restart); TLC = enumerator at 2 × 1 + 1 undo (3,889); every mutant fails in both, (xi) at 4 |
+| `5597f6ea` (indicative (bundle)) | enumerator only, v0.9.0 (baseline): every mutant without `--first`, and the oracle at every bound | the v1.8 violation sets and counts |
+| `03867f52`, `cbf8cddd` (both indicative (bundle)) | `counts.sh` `PART=m`, first drafts | IR over 20 MB: every compile failed (above) |
+| `20db2b75` (indicative (bundle)) | IR sizes (v1.8, v1.9 with and without the per-step flag), then `counts.sh` `PART=m` | every mutant, one TLC worker: the depths above; (xi) 4 and 4 |
+| `0b8fedfe` (indicative (bundle)) | `counts.sh` `PART=a` | four bounds equal, as v1.8; ITF 2,000 traces, 0 mismatches |
+| `e6427b49` (indicative (bundle)) | `counts.sh` `PART=b` | three bounds equal, as v1.8 |
+| `3951cf03` (indicative (bundle)) | enumerator only, this commit: as `5597f6ea`, plus (xi) | the counts and violation sets of `5597f6ea`, exactly; (xi) as above |
+| `e4c17c6c` (indicative (bundle)) | `smoke.sh` | typechecks; IR 19,853,379 bytes (`u_tiny`); ITF 0 mismatches (with and without a restart); TLC = enumerator at 2 × 1 + 1 undo (3,889); every mutant fails in both, (xi) at 4 |
 
 ## Results v1.8 (provenance roots)
 
@@ -272,7 +514,7 @@ update, inside the state). `smoke.sh` prints the size.
 ### Counts: v1.7 → v1.8
 
 TLC's distinct states = `undo_enum bfs`'s at every bound (an 8-core x86 node; v1.7's figures from
-job `7a899e60`). Roots add states (a restoration differs from the element it restores only by
+job `7a899e60`, indicative (bundle); source stated as `a5bc7d0`). Roots add states (a restoration differs from the element it restores only by
 being one), the carried theirs leaves them (two windows read the same by root are one state):
 
 | Bound | v1.7 (TLC = enumerator) | v1.8 enumerator | v1.8 TLC | TLC wall |
@@ -291,11 +533,13 @@ states since the purge revision of 2026-10-29, commit `04487c5`).
 Case class `concurrent_restore` (distinct states whose transition hit it): 4,661 at
 2 × 1 + 2 undos + 1 revert; 10,654 at 2 × 2 + 1 undo (`--steps 2`: the second step reads the
 first's restoration as its base, by root); 0 at the bounds with one undo and no second
-restoration.
+restoration. *These are bfs counts, per first visit* (What the runs check): a transition
+into a state already visited is not counted, so the 0 says no transition into a new state
+hit the class there, not that no transition does.
 
 ITF replay (whole state after every step): 300 traces at 2 × 1 + 1 undo + 1 revert and 300
-with a restart (smoke `ac55d0a0`); 1,000 at 2 × 1 + 1 undo + 1 revert (4,000 steps) and 1,000
-at 2 × 1 + 2 undos + 1 revert (5,000 steps; 1,422 undos, 578 redos, 1,000 reverts) (`00d8b0dc`):
+with a restart (smoke `ac55d0a0`, indicative (bundle); source stated as `c906453`); 1,000 at 2 × 1 + 1 undo + 1 revert (4,000 steps) and 1,000
+at 2 × 1 + 2 undos + 1 revert (5,000 steps; 1,422 undos, 578 redos, 1,000 reverts) (`00d8b0dc`, indicative (bundle)):
 **0 mismatches**.
 
 ### Mutants, least depth inside an exhaustive bound
@@ -308,12 +552,14 @@ at 2 × 1 + 2 undos + 1 revert (5,000 steps; 1,422 undos, 578 redos, 1,000 rever
 | `restart-single-taint` | RT | 1 × 3 + 1 revert + 1 restart (`abba`, 4) | 4 | 4 |
 | **(x) `x-provenance-ignored-in-o4`** (v1.8) | **I1** | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 | 3 |
 
-Job `a75a2670` (counts `PART=m`); the smoke job `ac55d0a0` (TLC with every worker) agrees, and
+Job `a75a2670` (counts `PART=m`; indicative (bundle)); the smoke job `ac55d0a0` (TLC with every worker; indicative (bundle), source stated as `c906453`) agrees, and
 `cargo test --features mutants --test mutants` gives the same rules and depths.
 
-**Latest (2026-10-31):** v0.10.0's merge commit `260ef4e`, job `f292077c` (`counts.sh` `PART=m`):
+**Latest (2026-11-04):** jobs `66736440` and `03aa049f` (`PART=m`): every mutant above at the
+same rule and depth in both tools; the audit's four in "The audit's additions" above.
+**Before (2026-10-31):** v0.10.0's merge commit `260ef4e`, job `f292077c` (`counts.sh` `PART=m`):
 every mutant above fails its own rule only, at the same depths on the enumerator and on TLC
-with one worker; (xi) `xi-no-o4a` at 4 and 4, as v1.9 recorded (`20db2b75`).
+with one worker; (xi) `xi-no-o4a` at 4 and 4, as v1.9 recorded (`20db2b75`, indicative (bundle)).
 
 **(x)'s witness** (depth 3, 1 × 1 + 1 undo + 1 revert, seed `ab`): p1 deletes `b` at the doc's
 end (`a`); p1 undoes (`ab`, the new `b` has the seed `b`'s root); p1 reverts its delete. By
@@ -363,10 +609,10 @@ The jobs ran branch `g1/u4-oracle` (commits `c906453`, `cbe337e`), cherry-picked
 
 | Job | What | Result |
 |---|---|---|
-| `ac55d0a0` | `smoke.sh` (commit `c906453`) | Quint typechecks; ITF 0 mismatches (with and without a restart); TLC = enumerator at 2 × 1 + 1 undo; every mutant fails in both |
-| `00d8b0dc` | `counts.sh`, `PART=a` | four bounds equal; ITF 2,000 traces, 0 mismatches |
-| `85262144` | `counts.sh`, `PART=b` | three bounds equal (one quint compile retried, the known flake) |
-| `a75a2670` | `counts.sh`, `PART=m` | every mutant, one TLC worker: the depths above |
+| `ac55d0a0` (indicative (bundle); source stated as `c906453`, kept by tag `ev-ac55d0a0`) | `smoke.sh` (commit `c906453`) | Quint typechecks; ITF 0 mismatches (with and without a restart); TLC = enumerator at 2 × 1 + 1 undo; every mutant fails in both |
+| `00d8b0dc` (indicative (bundle)) | `counts.sh`, `PART=a` | four bounds equal; ITF 2,000 traces, 0 mismatches |
+| `85262144` (indicative (bundle)) | `counts.sh`, `PART=b` | three bounds equal (one quint compile retried, the known flake) |
+| `a75a2670` (indicative (bundle)) | `counts.sh`, `PART=m` | every mutant, one TLC worker: the depths above |
 
 The G1-bound estimates below are v1.7's; v1.8's states are a few percent more at the bounds
 above.
@@ -386,9 +632,9 @@ same state with and without it counted twice), so the counts move:
 | 2 × 2 + 1 undo (`ab`, 3) | 531,261 | 500,176 | 500,176 | 200 s |
 | 1 × 3 + 1 revert + 1 restart (`abba`, 4) (new) | – | 193,161 | 193,161 | 75 s |
 
-An 8-core x86 node, job `7a899e60` (`tools/undo/counts.sh`, commit a5bc7d0): every count equal. ITF
+An 8-core x86 node, job `7a899e60` (`tools/undo/counts.sh`, commit a5bc7d0; indicative (bundle), source stated as `a5bc7d0`): every count equal. ITF
 replay in the same job: 1,000 traces at 2 × 1 + 1 undo + 1 revert, 4,000 steps, 0
-mismatches; and in the smoke job `0c00aee0`: 300 traces with a restart (1,500 steps), 0
+mismatches; and in the smoke job `0c00aee0` (indicative (bundle)): 300 traces with a restart (1,500 steps), 0
 mismatches.
 
 ### Mutants, least depth inside an exhaustive bound
@@ -400,7 +646,7 @@ mismatches.
 | `f3-rediff` (F3) | own_only | same | 3 | 3 |
 | `restart-single-taint` | RT | 1 × 3 + 1 revert + 1 restart (`abba`, 4) | 4 | 4 |
 
-Job `7a899e60`; the smoke job `0c00aee0` (TLC with every worker) agrees.
+Job `7a899e60` (indicative (bundle); source stated as `a5bc7d0`); the smoke job `0c00aee0` (TLC with every worker; indicative (bundle)) agrees.
 
 `restart-single-taint`'s witness: from `abba`, a two-region edit (`[1, 2)` → `a`, `[3, 4)`
 deleted: `aab`); a delete of what separates the regions (`aa`: they touch); a delete of

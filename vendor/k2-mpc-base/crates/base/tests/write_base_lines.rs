@@ -23,7 +23,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use k2_mpc_base::text::merge::{merge3, Merge};
+use k2_mpc_base::session::WriteOutcome;
+use k2_mpc_base::text::diff::Hunk;
+use k2_mpc_base::text::merge::{merge3, merge3_hunks, Conflict, Merge};
 use proptest::prelude::*;
 
 fn lines(s: &str) -> Vec<&str> {
@@ -413,4 +415,268 @@ fn the_judge_catches_a_splice_and_a_join() {
     assert!(check_lcs("a\nb\n", "a\n", "a\nb\n", "a\nb\n").is_err());
     assert!(check_lcs("a\nb\n", "a\nb\nc\n", "a\nb\n", "a\nb\n").is_err());
     check_lcs("a\nb\n", "a\nb\nc\n", "x\na\nb\n", "x\na\nb\nc\n").unwrap();
+}
+
+/// The one conflict of a refused merge.
+fn one_conflict(m: Merge) -> Conflict {
+    match m {
+        Merge::Conflicts(cs) if cs.len() == 1 => cs.into_iter().next().unwrap(),
+        m => panic!("one conflict expected: {m:#?}"),
+    }
+}
+
+fn h(start: usize, end: usize, insert: &str) -> Hunk {
+    Hunk {
+        start,
+        end,
+        insert: insert.into(),
+    }
+}
+
+/// The boundary cases on the base `a b c d` (lines 2 and 3, `b` and `c`, are bytes 2..6):
+/// (name, the writer's hunks, the live hunks, the region, its base lines and text, the
+/// writer's region text and lines, the live region text and lines).
+type Boundary = (
+    &'static str,
+    Vec<Hunk>,
+    Vec<Hunk>,
+    std::ops::Range<usize>,
+    (usize, usize),
+    &'static str,
+    &'static str,
+    (usize, usize),
+    &'static str,
+    (usize, usize),
+);
+
+const BOUNDARY_BASE: &str = "a\nb\nc\nd\n";
+
+fn boundary_cases() -> Vec<Boundary> {
+    vec![
+        // (a) inside, at the point where two clashes touch: lines 2 and 3 rewritten on both
+        // sides, one line at a time, and the live side inserts `I` between its two (no clash:
+        // an insertion at a hunk's edge). The live text is a X I Y d: the region is lines 2-4.
+        (
+            "(a) at the touch point",
+            vec![h(2, 4, "B\n"), h(4, 6, "C\n")],
+            vec![h(2, 4, "X\n"), h(4, 4, "I\n"), h(4, 6, "Y\n")],
+            2..6,
+            (2, 3),
+            "b\nc\n",
+            "B\nC\n",
+            (2, 3),
+            "X\nI\nY\n",
+            (2, 4),
+        ),
+        // (b) at the region's start: `I` before the live side's rewritten line 2 (a I X c d):
+        // outside, before the region, which is line 3
+        (
+            "(b) at the region's start",
+            vec![h(2, 4, "B\n")],
+            vec![h(2, 2, "I\n"), h(2, 4, "X\n")],
+            2..4,
+            (2, 2),
+            "b\n",
+            "B\n",
+            (2, 2),
+            "X\n",
+            (3, 3),
+        ),
+        // (c) at the region's end: `I` after the live side's rewritten line 2 (a X I c d):
+        // outside, after the region, which stays line 2
+        (
+            "(c) at the region's end",
+            vec![h(2, 4, "B\n")],
+            vec![h(2, 4, "X\n"), h(4, 4, "I\n")],
+            2..4,
+            (2, 2),
+            "b\n",
+            "B\n",
+            (2, 2),
+            "X\n",
+            (2, 2),
+        ),
+        // (d) an empty region (two insertions at one point, O5's conflict): the live side
+        // also rewrites the line after the point (a Q X c d), which clashes with nothing and
+        // starts at the region's start and end: outside, after the region
+        (
+            "(d) an empty region",
+            vec![h(2, 2, "P\n")],
+            vec![h(2, 2, "Q\n"), h(2, 4, "X\n")],
+            2..2,
+            (2, 2),
+            "",
+            "P\n",
+            (2, 2),
+            "Q\n",
+            (2, 2),
+        ),
+    ]
+}
+
+/// A conflict's sides are the base range with **every** hunk of that side inside it applied,
+/// its lines where that text stands in that side's whole text (`MPC-E111`'s `current_lines`
+/// and `theirs`): a live hunk inside the region that clashes with nothing still moves its
+/// lines. An insertion at the region's start or end is outside it (as O3 places it: before
+/// the region, or after it); only one strictly inside counts. The live side's hunks here.
+#[test]
+fn conflict_live_side_holds_every_live_hunk_inside_the_region() {
+    for (name, o, t, base, lines, base_text, ours, ours_lines, theirs, theirs_lines) in
+        boundary_cases()
+    {
+        let c = one_conflict(merge3_hunks(BOUNDARY_BASE, &o, &t, false));
+        let want = Conflict {
+            base,
+            lines,
+            base_text: base_text.into(),
+            ours: ours.into(),
+            theirs: theirs.into(),
+            ours_lines,
+            theirs_lines,
+        };
+        assert_eq!(c, want, "{name}");
+    }
+}
+
+/// [`conflict_live_side_holds_every_live_hunk_inside_the_region`] on the writer's side
+/// (`your_lines` and `ours`): the same cases with the two hunk sets swapped, so the hunk that
+/// clashes with nothing is the writer's.
+#[test]
+fn conflict_writer_side_holds_every_hunk_of_the_write_inside_the_region() {
+    for (name, o, t, base, lines, base_text, ours, ours_lines, theirs, theirs_lines) in
+        boundary_cases()
+    {
+        let c = one_conflict(merge3_hunks(BOUNDARY_BASE, &t, &o, false));
+        let want = Conflict {
+            base,
+            lines,
+            base_text: base_text.into(),
+            ours: theirs.into(),
+            theirs: ours.into(),
+            ours_lines: theirs_lines,
+            theirs_lines: ours_lines,
+        };
+        assert_eq!(c, want, "{name}, swapped");
+    }
+}
+
+/// Case (a)'s two hunk sets: the writer's lines 2 and 3, the live side's, with its `I` at
+/// the touch point.
+fn case_a() -> ([Hunk; 2], [Hunk; 3]) {
+    (
+        [h(2, 4, "B\n"), h(4, 6, "C\n")],
+        [h(2, 4, "X\n"), h(4, 4, "I\n"), h(4, 6, "Y\n")],
+    )
+}
+
+/// The `MPC-E111` refusal of writing `ours` over `theirs` (version 1, the current version
+/// 2): its message, and its `details.conflicts` as JSON.
+fn e111(ours: &[Hunk], theirs: &[Hunk]) -> (String, Option<String>) {
+    let c = one_conflict(merge3_hunks(BOUNDARY_BASE, ours, theirs, false));
+    let r = WriteOutcome::Conflicts(vec![c])
+        .refusal_at(1, 2)
+        .expect("a refusal");
+    assert_eq!(r.id(), "MPC-E111");
+    (
+        r.message().to_owned(),
+        r.detail("conflicts").map(|v| v.to_json()),
+    )
+}
+
+/// `MPC-E111`'s message with the writer's lines `yours` and the current text's `now`.
+fn e111_message(yours: &str, now: &str) -> String {
+    format!(
+        "your write touches lines someone else changed since version 1: 1 region(s), your \
+         {yours} (now {now} of version 2); nothing applied. To retry: read the current text \
+         again (cat; it is version 2), redo your change on it, then write --base 2"
+    )
+}
+
+/// `MPC-E111` carries the corrected lines and texts: its message names the region's lines in
+/// the current text, and `details.conflicts` has its `current_lines` and `theirs`. Case (a):
+/// the live side's `I`, inside the region, clashes with nothing.
+#[test]
+fn write_conflict_report_names_the_region_in_the_current_text() {
+    let (o, t) = case_a();
+    assert_eq!(
+        e111(&o, &t),
+        (
+            e111_message("lines 2–3", "lines 2–4"),
+            Some(
+                r#"[{"lines":[2,3],"your_lines":[2,3],"current_lines":[2,4],"base":"b\nc\n","ours":"B\nC\n","theirs":"X\nI\nY\n"}]"#
+                    .into()
+            )
+        )
+    );
+}
+
+/// [`write_conflict_report_names_the_region_in_the_current_text`] on the writer's side: case
+/// (a) swapped, the writer's `I` inside the region (`your_lines` and `ours`).
+#[test]
+fn write_conflict_report_names_the_region_in_the_writers_text() {
+    let (o, t) = case_a();
+    assert_eq!(
+        e111(&t, &o),
+        (
+            e111_message("lines 2–4", "lines 2–3"),
+            Some(
+                r#"[{"lines":[2,3],"your_lines":[2,4],"current_lines":[2,3],"base":"b\nc\n","ours":"X\nI\nY\n","theirs":"B\nC\n"}]"#
+                    .into()
+            )
+        )
+    );
+}
+
+/// Trace seed 1001280 (job f77bab22), `write --base` end to end (whole-line sides).
+const SEED_BASE: &str = " aaa日 b日a日aé\na日 a日é\nb日aa\na\nabba\n bab日b日\nalps p10\n";
+const SEED_OURS: &str = " aaa日 b日a日aé\na日 a日é\nb日aa\na\nabba\n bab日\naalps p10\n";
+const SEED_LIVE: &str = " a日日 b日a日aé\na日\nb日 a日bé\nb日aa\na\naabba\né日bab\na a日\nalph日 日éa a\nalps\nal alpha\n日b\nb日éq\nao\na\n";
+
+/// Seed 1001280: the live side inserts two lines at byte 58, where the writer's two hunks
+/// meet (46..58 and 58..67, clashing with the live 41..58 and 58..67), inside the region
+/// [41, 67). Worked by hand: the base's line 5 is live line 6 (the live side split line 2
+/// before it), and the region's live text is bytes 48..119, lines 6 to 15, not 6 to 13 (the
+/// clashing hunks alone).
+#[test]
+fn write_base_conflict_counts_a_non_clashing_live_insertion_inside_the_region() {
+    let (mine, now) = (&SEED_OURS[41..], &SEED_LIVE[48..]);
+    assert_eq!((mine.lines().count(), now.lines().count()), (3, 10));
+    let c = one_conflict(merge3(SEED_BASE, SEED_OURS, SEED_LIVE));
+    assert_eq!(
+        (c.base.clone(), c.lines, c.ours_lines, c.ours.as_str()),
+        (41..67, (5, 7), (5, 7), mine)
+    );
+    assert_eq!((c.theirs_lines, c.theirs.as_str()), ((6, 15), now));
+    let r = WriteOutcome::Conflicts(vec![c])
+        .refusal_at(1, 2)
+        .expect("a refusal");
+    assert!(
+        r.message()
+            .contains("your lines 5–7 (now lines 6–15 of version 2)"),
+        "{}",
+        r.message()
+    );
+}
+
+/// [`write_base_conflict_counts_a_non_clashing_live_insertion_inside_the_region`] swapped:
+/// the live text written over the base against the writer's text as the live one, so the
+/// insertion that clashes with nothing is the writer's (`your_lines`, `ours`).
+#[test]
+fn write_base_conflict_counts_a_non_clashing_insertion_of_the_write_inside_the_region() {
+    let (mine, now) = (&SEED_OURS[41..], &SEED_LIVE[48..]);
+    let c = one_conflict(merge3(SEED_BASE, SEED_LIVE, SEED_OURS));
+    assert_eq!(
+        (c.base.clone(), c.lines, c.theirs_lines, c.theirs.as_str()),
+        (41..67, (5, 7), (5, 7), mine)
+    );
+    assert_eq!((c.ours_lines, c.ours.as_str()), ((6, 15), now));
+    let r = WriteOutcome::Conflicts(vec![c])
+        .refusal_at(1, 2)
+        .expect("a refusal");
+    assert!(
+        r.message()
+            .contains("your lines 6–15 (now lines 5–7 of version 2)"),
+        "{}",
+        r.message()
+    );
 }

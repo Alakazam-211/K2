@@ -25,6 +25,11 @@ them (historical); runs from the v0.10.0 release candidate on print the new ones
 
 Below, numerals in prose are the old ones unless marked new.
 
+**Provenance marks** on the cited jobs (indicative (bundle), tag `ev-<job>`, K2 Engine's record at a
+commit, indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pending) are explained in
+`docs/MODEL-CHECK.md`, Provenance of the cited runs. A job with no mark ran a
+pushed commit its record names.
+
 **Status 2026-10-29:** the evidence baseline is **`20e65f7`** on `c1/structured` (k2-mpc-base
 v0.9.4 merged, plus fix (a) below). Every run here is at that commit. Spec: v1.10 §6a
 (`docs/SPEC-UNDO.md`, S1–S12, reviewed by K2 Engine), §8 (the structured case classes and
@@ -85,7 +90,7 @@ column layout change on either side conflicts with it. The conflicts that count:
 
 A text's column insert on its own never conflicts. Against a live column delete it can: the text's
 fields still meet the deleted column, as `deleted_col` conflicts at its cells. K2 Engine's probe
-(job `c3d226ea` at `6886198`; base [`,`, `,a`], text [`x,,`, `x,,a`], the live side deleted column
+(job `c3d226ea` at `6886198`, K2 Engine's record at `114abcd7`; base [`,`, `,a`], text [`x,,`, `x,,a`], the live side deleted column
 1) showed `--partial` applying the insert anyway: the text's `x` into the deleted column was held,
 but its new empty column went in where column 1 had been, so column 1 looked as if it had come back.
 By key it was a new column, and the deleted one stayed deleted. Since ruling (a), any `deleted_col`
@@ -110,11 +115,11 @@ The first runs below used throwaway branches; with the bar at 300 cases per form
 `row_rule_review`:
 
 - **(xxxii) `xxxii-outside-whole-row-live-cols`:** puts back the old outside-save whole-row loop.
-  Caught by the bar in job `b18d0e4b`: Rewrite/Outside, 2 failures of 300. First failure:
+  Caught by the bar in job `b18d0e4b` (tag `ev-b18d0e4b`): Rewrite/Outside, 2 failures of 300. First failure:
   `width 3, rows 4, a 2, b 1, picks [Keep, Borrow, Borrow], live_col Some((true, 182))`.
   `a_file_bringing_back_a_live_deleted_column_wins_its_rows_whole` also fails.
 - **(xxxiii) `xxxiii-by-cell-live-cols`:** puts back the old both-changed test. Caught by the bar
-  in job `d0eac34c`: Rewrite/Outside, 1 failure of 300. First failure:
+  in job `d0eac34c` (tag `ev-d0eac34c`): Rewrite/Outside, 1 failure of 300. First failure:
   `width 4, rows 4, a 0, b 2, twin_deleted, live_col Some((true, 224))`. Under `write --base`,
   only the named test `write_base_a_live_write_then_delete_of_a_column_the_text_kept_is_edited_row`
   catches it. There the old test merged the row by cell and the live value stayed hidden in the
@@ -164,7 +169,7 @@ test `a_byte_neutral_live_unset_in_a_row_both_changed_is_not_noted`, and the pro
   - Tests: `a_dirty_outside_save_raises_no_replica_mismatch` and
     `a_planted_replica_mismatch_is_still_reported`.
 
-**K2 Engine's verdict at 582b8b8 (PASS on safety, its job 097cc248), and the item fixed after it:**
+**K2 Engine's verdict at 582b8b8 (PASS on safety, its job 097cc248, K2 Engine's record at `d2f1d82c`), and the item fixed after it:**
 - **12 false conflicts on `write --base`.** A live undo, revert or restore took c1 from `""` back
   to absent, which renders the same. The text `q,a`, `q,`, `q,z` or `b,a` got a cell conflict.
   - The per-cell `neutral_live` rule now reaches `write --base`'s cell-conflict path.
@@ -191,15 +196,15 @@ test `a_byte_neutral_live_unset_in_a_row_both_changed_is_not_noted`, and the pro
 
 **K2 Engine's final reconcile evidence.** Source: k2-mpc-engine main 04905c1,
 `docs/evidence/g1-reconcile-pairing-draft.md`.
-- **The model at our final rules,** all COMPLETE with 0 violations (7e4cd8af):
+- **The model at our final rules,** all COMPLETE with 0 violations (7e4cd8af, K2 Engine's record at `9252e171`):
   - merge: 15,498,046,224 + 5,219,134,080 cases;
   - livegrid: 1,305,748,920;
   - named: 272,898;
   - bounce: 2,797,589.
 
   All 37 of its mutants fail.
-- **The kit verdict:** PASS on safety at 582b8b8 (job 097cc248). The session test is green at
-  aaf9d5e (98664f62).
+- **The kit verdict:** PASS on safety at 582b8b8 (job 097cc248, K2 Engine's record at `d2f1d82c`). The session test is green at
+  aaf9d5e (98664f62, K2 Engine's record at `61727028`).
 - **The kit differential test** is on branch `engine/reconcile-diff-aaf9d5e` (6172702). It is
   **not** in v0.10.0. It's a v0.10.1 candidate, to be vendored as a kit test, with the other
   v0.10.1 items (restore from a `BeforeDrop` version; a clearer refusal for restoring a dropped
@@ -236,7 +241,7 @@ and is read from its result lines.
   - S13's undo and redo branch: a conflict region only, no note.
   - **The gap: the hidden-write message.** A raw keyed cell write under a dropped (or never
     existing) row or column was taken as a hidden write: an orphan cell nobody could see, restore
-    or sweep, reported with `row restore --row r2`, which refuses a dropped key (probe 0f164b53).
+    or sweep, reported with `row restore --row r2`, which refuses a dropped key (probe 0f164b53, tag `ev-0f164b53`).
     Fixed at 6a7a2ce (K2 Cores' ruling A): `edit_ops` refuses the whole edit as `MPC-E805
     no_element` (exit 4, the grid verbs' unknown-key id), naming the drop while its record is in
     the revert window; a deleted but known key stays a hidden write (§4.3); a key the same edit
@@ -246,14 +251,14 @@ and is read from its result lines.
 - **K2 Engine's evidence at k2-mpc-engine main 04905c1:**
   - the model's S11-over-S13 rule: gate_drop_r4 at 32,646,240 and gate_named with redo at
     272,903, both COMPLETE, the rule's mutant failing;
-  - kit 6a7a2ce's session diff green at 10/10 (job 52e6b13c): the revert over a dropped row
+  - kit 6a7a2ce's session diff green at 10/10 (job 52e6b13c, K2 Engine's record at `e15f27a8`): the revert over a dropped row
     passes on every path (revert, undo and redo, each with and without `--partial`; the
     text-marked shape and its per-op twin), and (xxxv), (xxxvi) and (xxxvii) are caught;
   - `MPC-E805` for unknown keys; text undo unchanged.
 
 - **K2 Engine's grid model evidence at k2-mpc-engine main d03217f**
   (`docs/evidence/g1-table-enum-draft.md` §9): ≤4 ops 25,632,883 (SORT3: 32,469,595), ≤5 ops
-  2,637,547,571, all COMPLETE with 0 violations, cross-checked by a checkpoint audit (82868ba7);
+  2,637,547,571, all COMPLETE with 0 violations, cross-checked by a checkpoint audit (82868ba7, indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pending);
   it includes the cell-delete rule (E-MAP-1) and our rulings. Its stated gap: TLC can't reach
   the batches at the bounds it finishes, so those rest on the enumerator, fixtures and unit
   tests.
@@ -447,7 +452,7 @@ listed for v0.10.1.
 
 ## Model against kit, per class
 
-Node jobs `6676b43b` (grid-a) and `49943ef3` (grid-b), release build,
+Node jobs `6676b43b` (grid-a) and `49943ef3` (grid-b) (both indicative (bundle); source stated as `20e65f7`, the baseline above), release build,
 `GRID_TRACES=10000 GRID_CLASSES=<shard>`, `grid_traces_model_equals_kit`. Each trace is a class's
 scripted start and a random tail of grid verbs, undos (all-or-nothing, `--partial`, `--drop`),
 redos, reverts, outside saves (by key through the pack's reconcile) and restarts; pids `p0`
@@ -486,7 +491,7 @@ else's. It runs on Yrs only: a pinned deviation, not a rule a native engine repr
 disagrees with the kit. "Traces" is how many traces had run when the run stopped (4 threads, so
 it is not the index of the first failing seed). A shard records CAUGHT or SURVIVED and doesn't
 fail; the all-class run (no `GRID_CLASSES`: CI and the node part `grid-m`, job `3dbc09a0`)
-fails if any mutant survives.
+fails if any mutant survives. `6676b43b`, `49943ef3` and `3dbc09a0` are each indicative (bundle) (source stated as `20e65f7`).
 
 | Mutant | grid-a shard (`6676b43b`) | grid-b shard (`49943ef3`) | All classes (`3dbc09a0`, 300 per class) | Caught by at least one shard |
 |---|---|---|---|---|
@@ -508,7 +513,7 @@ fails if any mutant survives.
 
 ## The regression found on the way (fixed at `20e65f7`)
 
-The first grid-a run at `3910b73` (job `fe1b0fb0`) found
+The first grid-a run at `3910b73` (job `fe1b0fb0`, indicative (bundle); source stated as `3910b73`) found
 1 [run fe1b0fb0/grid_traces_revert_after_restart:mismatches] mismatch:
 `revert_after_restart` seed 7420, step 13. A map delete of an empty cell moves no byte and only
 deletes, so v0.9.4's re-sync marker (the state vector) left the disk replica holding the cell;
@@ -528,7 +533,7 @@ Both come back when v0.9.5 is merged.
 
 ## The grid no-byte property (v0.9.4's grid twin)
 
-Node job `86462d2b`, release: **10,000 [run 86462d2b/nobyte_grid:cases] cases passed** (`grid_store`, `no_byte::grid_outside_edit_after_any_change_that_moved_no_byte_is_kept`, through proptest's `TestRunner`), plus the planted stale-replica test. CI runs 256.
+Node job `86462d2b` (indicative (bundle); source stated as `20e65f7`), release: **10,000 [run 86462d2b/nobyte_grid:cases] cases passed** (`grid_store`, `no_byte::grid_outside_edit_after_any_change_that_moved_no_byte_is_kept`, through proptest's `TestRunner`), plus the planted stale-replica test. CI runs 256.
 
 A grid doc (1–3 columns, 2–6 rows from a small vocabulary, so values repeat); one change that
 moves no byte (header on; header on and off; a cell set and set back; undo, revert or version
@@ -540,6 +545,8 @@ live table; every cell the edit didn't change keeps its author, the others are t
 edit's; K-AUD-1 and the store audit are clean.
 
 ## Costs (node job `66075ba8`, release)
+
+`66075ba8` is indicative (bundle) (source stated as `20e65f7`).
 
 **A cell set on the doc** (`structured_mem`, `measure_cell_set_latency_at_the_cap`; times in
 tenths of a millisecond, as recorded):
@@ -571,21 +578,21 @@ The node was shared with other jobs; the max column carries their noise.
 
 ## The rest of the suite at `20e65f7`
 
-Plain `cargo test` parts (debug, as CI runs them, except `pt`), every one exit 0:
+Plain `cargo test` parts (debug, as CI runs them, except `pt`), every one exit 0 (every job indicative (bundle), source stated as `20e65f7`):
 
 | Part | What | Job |
 |---|---|---|
-| lib | unit tests, 254 passed | `2cbebf88` |
-| doc | doctests | `55f5508a` |
-| int1 | structured, structured_mem, convergence, disk (sim with K-AUD-1 after every outside save and tick), edit_check(_structured, with the scalar-only wire guard), … | `56ffb7d1` |
-| int2 | history, sessions, presence, tools, soak (short) | `8f66c9ab` |
-| int3 | tier0, promote, edit_paths, edit_cost | `6d892678` |
-| int4 | parity, erasure | `2106eaac` |
-| int5 | grid_store (the undo class ITs, the no-byte twin at 256) | `5ea753cf` |
-| nobyte | the grid no-byte twin at 10^4 (section above) | `86462d2b` |
-| conformance-a, -b | the conformance suite | `9a35e187`, `64985f36` |
-| spec-undo | the text model's suite and mutants; grid traces at CI size (256), the seed-7420 IT | `116648d5` |
-| pt | table property tests, `PROPTEST_CASES` at 10^4, release | `67d8751f` |
+| lib | unit tests, 254 passed | `2cbebf88` (indicative (bundle)) |
+| doc | doctests | `55f5508a` (indicative (bundle)) |
+| int1 | structured, structured_mem, convergence, disk (sim with K-AUD-1 after every outside save and tick), edit_check(_structured, with the scalar-only wire guard), … | `56ffb7d1` (indicative (bundle)) |
+| int2 | history, sessions, presence, tools, soak (short) | `8f66c9ab` (indicative (bundle)) |
+| int3 | tier0, promote, edit_paths, edit_cost | `6d892678` (indicative (bundle)) |
+| int4 | parity, erasure | `2106eaac` (indicative (bundle)) |
+| int5 | grid_store (the undo class ITs, the no-byte twin at 256) | `5ea753cf` (indicative (bundle)) |
+| nobyte | the grid no-byte twin at 10^4 (section above) | `86462d2b` (indicative (bundle)) |
+| conformance-a, -b | the conformance suite | `9a35e187`, `64985f36` (both indicative (bundle)) |
+| spec-undo | the text model's suite and mutants; grid traces at CI size (256), the seed-7420 IT | `116648d5` (indicative (bundle)) |
+| pt | table property tests, `PROPTEST_CASES` at 10^4, release | `67d8751f` (indicative (bundle)) |
 
 ## The enumerator (`undo_enum`)
 
@@ -629,10 +636,12 @@ among them) and no violation. It ran as 14 resumable slices, job `8d31fd70` firs
 last, and job `59a5c699` audited the checkpoint (every seed counted once, totals matching)
 [unverified: k2-mpc-engine 8645866 records]. With the 2×3 case, both splits complete
 (2 × (2 + 1): 3,664,616,698 states; 2 × (1 + 2): 2,822,953,870 states [unverified: k2-mpc-engine
-8645866 records]), the anchored grid move is exhaustive at both bounds G1-9 §2 asks for. The run
+8645866 records]), the anchored grid move is exhaustive at both bounds G1-9 §2 asks for.
+`8d31fd70`, `24049f4d` and `59a5c699` are each indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pending. The run
 records stay in the engine's repo; none are copied into `runs/`.
 
-**Model against kit at `5fb84d6`**, 10^4 traces per class, grid-a and grid-b on build nodes:
+**Model against kit at `5fb84d6`**, 10^4 traces per class, grid-a and grid-b on build nodes (`f9a4c72b`,
+`fed30e62`: both indicative (bundle); source stated as `5fb84d6`):
 
 | Class | Traces | Steps | Mismatches | Job |
 |---|---|---|---|---|
@@ -656,7 +665,8 @@ records stay in the engine's repo; none are copied into `runs/`.
 | `write_with_no_identity` | 10,000 [run fed30e62/grid_traces_write_with_no_identity:traces] | 114,411 [run fed30e62/grid_traces_write_with_no_identity:steps] | 0 [run fed30e62/grid_traces_write_with_no_identity:mismatches] | `fed30e62` |
 | **all 18** | **180,000** [derived] | **2,030,642** [derived] | **0** | |
 
-**Mutants at `5fb84d6`** (13; (xxiv) runs on the engine's oracle, above):
+**Mutants at `5fb84d6`** (13; (xxiv) runs on the engine's oracle, above; `f9a4c72b`, `fed30e62` and
+`b6d0f9b6` are each indicative (bundle), source stated as `5fb84d6`):
 
 | Mutant | grid-a (`f9a4c72b`) | grid-b (`fed30e62`) | All classes (`b6d0f9b6`) |
 |---|---|---|---|
@@ -675,7 +685,7 @@ records stay in the engine's repo; none are copied into `runs/`.
 | `xxv-anchor-on-nearest-live` | CAUGHT after 59 [run f9a4c72b/grid_mutant_xxv-anchor-on-nearest-live:traces] | CAUGHT after 11 [run fed30e62/grid_mutant_xxv-anchor-on-nearest-live:traces] | CAUGHT after 55 [run b6d0f9b6/grid_mutant_xxv-anchor-on-nearest-live:traces] |
 
 (xxi) and (xxii) survive the grid-a shard (their classes are in grid-b), as before; every mutant
-is caught by at least one shard and by the all-class run. The CI-size check (`f4476017`:
+is caught by at least one shard and by the all-class run. The CI-size check (`f4476017`, indicative (bundle), source stated as `5fb84d6`:
 grid_store, the grid traces at 256 and the mutants) is green at the same commit.
 
 ## Open for later stages

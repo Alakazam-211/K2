@@ -132,8 +132,8 @@ pub struct KitChar {
 #[derive(Debug)]
 pub enum KitOut {
     Edit(Result<bool, SessionError>),
-    /// The outcome and the version before the write.
-    Write(Result<WriteOutcome, SessionError>, u64),
+    /// The outcome, the version before the write, and the root written.
+    Write(Result<WriteOutcome, SessionError>, u64, usize),
     Undo(Result<UndoOutcome, SessionError>),
     /// A live edit (the hunk channel, `edit_at_base`): changed or not, or the refusal.
     Live(Result<bool, String>),
@@ -384,7 +384,11 @@ impl Kit {
 
     pub fn write_base(&self, c: ConnId, root: usize, base: u64, new: &str) -> KitOut {
         let before = self.version();
-        KitOut::Write(self.session.write_base(c, ROOTS[root], base, new), before)
+        KitOut::Write(
+            self.session.write_base(c, ROOTS[root], base, new),
+            before,
+            root,
+        )
     }
 
     pub fn name_version(&self, c: ConnId, name: &str) -> VersionId {

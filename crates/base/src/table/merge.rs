@@ -120,6 +120,38 @@ pub enum ElemAt {
     },
 }
 
+/// [`ElemAt::of`] for many keys of one axis: its live keys and their indexes, read once, so
+/// each lookup is O(1) (a merge's conflicts, one per row or column).
+pub(crate) struct ElemIndex<'a> {
+    axis: &'a Axis,
+    keys: Vec<&'a Key>,
+    at: HashMap<&'a Key, usize>,
+}
+
+impl<'a> ElemIndex<'a> {
+    pub(crate) fn new(axis: &'a Axis) -> Self {
+        let keys: Vec<&Key> = axis.live().collect();
+        let at = axis.live_index();
+        ElemIndex { axis, keys, at }
+    }
+
+    /// What [`ElemAt::of`] gives for `k` (the planted
+    /// [`crate::differential::GridCostMutant::ConflictWalk`]: by its walk).
+    pub(crate) fn of(&self, k: &Key) -> ElemAt {
+        if super::conflict_walk() {
+            return ElemAt::of(self.axis, k);
+        }
+        match self.at.get(k) {
+            Some(&index) => ElemAt::Live {
+                index,
+                after: index.checked_sub(1).map(|i| self.keys[i].clone()),
+            },
+            None if self.axis.knows(k) => ElemAt::Deleted,
+            None => ElemAt::Unknown,
+        }
+    }
+}
+
 impl ElemAt {
     pub fn of(a: &Axis, k: &Key) -> ElemAt {
         match a.state(k) {
@@ -312,7 +344,7 @@ fn rekey(base: &Table, ours: &Table, theirs: &Table) -> (Table, Vec<(Key, Key)>)
     let mut out = Vec::new();
     let mut remint = |b: &Axis, o: &Axis, t: &Axis, next: &mut u64, prefix: char| {
         let mut map = HashMap::new();
-        for k in &o.order {
+        for k in o.places() {
             if b.knows(k) || !t.knows(k) {
                 continue;
             }
@@ -439,6 +471,8 @@ fn merge3_with(
     ) = planted();
     let (ours, rekeyed) = rekey(base, ours, theirs);
     let ours = &ours;
+    // each live column's position, by key: a row's rendering compared in O(its cells)
+    let (base_cols_at, ours_cols_at) = (base.col_positions(), ours.col_positions());
     let mut w = theirs.clone();
     let mut ch = Change::new(&w);
     w.next_row = w.next_row.max(ours.next_row);
@@ -518,7 +552,7 @@ fn merge3_with(
             && b.unwrap_or("").is_empty()
             && t.unwrap_or("").is_empty()
             && base.rows.is_live(r)
-            && base.render_row_with(r, c, t) == base.render_row_with(r, c, b)
+            && base.row_same_with(r, c, t, b, &base_cols_at)
     };
     // through a text, the rows ours and theirs render the same (the same decoded fields: an
     // empty field and an absent cell alike): the same row, so no conflict on any of its cells,
@@ -533,7 +567,7 @@ fn merge3_with(
             && o.unwrap_or("").is_empty()
             && t.unwrap_or("").is_empty()
             && ours.rows.is_live(r)
-            && ours.render_row_with(r, c, t) == ours.render_row_with(r, c, o)
+            && ours.row_same_with(r, c, t, o, &ours_cols_at)
     };
     if let Some(exact) = exact {
         let shown = |t: &Table| -> HashMap<Key, Vec<String>> {
@@ -580,10 +614,15 @@ fn merge3_with(
                         .live()
                         .all(|c| !kept(c) || a.cell(k, c) == b.cell(k, c));
                 }
-                ours.cols
-                    .live()
-                    .filter(|c| theirs.cols.knows(c))
-                    .all(|c| a.cell(k, c) == b.cell(k, c))
+                // the cells either side holds in the row (absent on both is the same), O(the
+                // row's cells): every other column's cell is absent on both sides
+                let kept_known = |c: &Key| kept(c) && theirs.cols.knows(c);
+                a.row_cells(k)
+                    .filter(|(c, _)| kept_known(c))
+                    .all(|(c, v)| b.cell(k, c) == Some(v))
+                    && b.row_cells(k)
+                        .filter(|(c, _)| kept_known(c))
+                        .all(|(c, v)| a.cell(k, c) == Some(v))
             };
             let unchanged = if bt_cols && !gone {
                 s_base.get(k) == s_theirs.get(k)
@@ -608,11 +647,22 @@ fn merge3_with(
     }
 
     let moved_then_deleted = std::cell::RefCell::new(Vec::new());
+    // where a conflict's row or column is in each version: each axis's live index read once,
+    // on first need, so each conflict is O(1) however many there are
+    let tables = [base, ours, theirs];
+    let idx: [std::cell::OnceCell<ElemIndex<'_>>; 6] = Default::default();
+    let elem_at = |side: usize, row: bool, k: &Key| -> ElemAt {
+        let t = tables[side];
+        idx[side * 2 + usize::from(row)]
+            .get_or_init(|| ElemIndex::new(if row { &t.rows } else { &t.cols }))
+            .of(k)
+    };
     let elem = |a: fn(&Table) -> &Axis, k: &Key| {
+        let row = std::ptr::eq(a(base), &base.rows);
         (
-            Held::Elem(ElemAt::of(a(base), k)),
-            Held::Elem(ElemAt::of(a(ours), k)),
-            Held::Elem(ElemAt::of(a(theirs), k)),
+            Held::Elem(elem_at(0, row, k)),
+            Held::Elem(elem_at(1, row, k)),
+            Held::Elem(elem_at(2, row, k)),
         )
     };
     let structure = |root: &'static str,
@@ -745,9 +795,9 @@ fn merge3_with(
             conflicts.push(Conflict {
                 rule: ConflictRule::EditedRow,
                 at: Region::Row(k.clone()),
-                base: Held::Elem(ElemAt::of(&base.rows, k)),
-                ours: Held::Elem(ElemAt::of(&ours.rows, k)),
-                theirs: Held::Elem(ElemAt::of(&theirs.rows, k)),
+                base: Held::Elem(elem_at(0, true, k)),
+                ours: Held::Elem(elem_at(1, true, k)),
+                theirs: Held::Elem(elem_at(2, true, k)),
                 theirs_writes: tw.clone(),
             });
             // the row stays where theirs has it
@@ -808,19 +858,25 @@ fn merge3_with(
         }
     }
 
-    // cells, by row then column in ours' order
-    let pos = |s: &Sided, b: &Axis, k: &Key| {
+    // cells, by row then column in ours' order (else the base's)
+    let live_at = |a: &Axis| -> HashMap<Key, usize> {
+        a.live().enumerate().map(|(i, k)| (k.clone(), i)).collect()
+    };
+    let (base_rows_at, base_cols_live_at) = (live_at(&base.rows), live_at(&base.cols));
+    let pos = |s: &Sided, b: &HashMap<Key, usize>, k: &Key| {
         s.idx
             .get(k)
+            .or_else(|| b.get(k))
             .copied()
-            .or_else(|| match b.state(k) {
-                ElemState::Live(i) => Some(i),
-                _ => None,
-            })
             .unwrap_or(usize::MAX)
     };
     let mut order: Vec<(&(Key, Key), &Option<String>)> = cells.0.iter().collect();
-    order.sort_by_key(|((r, c), _)| (pos(&rows.0, &base.rows, r), pos(&cols.0, &base.cols, c)));
+    order.sort_by_key(|((r, c), _)| {
+        (
+            pos(&rows.0, &base_rows_at, r),
+            pos(&cols.0, &base_cols_live_at, c),
+        )
+    });
     let mut held_cells: HashSet<(Key, Key)> = HashSet::new();
     for ((r, c), v) in order {
         if !carried(&w, Some(r), c) {
@@ -920,12 +976,18 @@ fn merge3_with(
             } else {
                 // the file's kept columns the result knows: live (one the file brings back
                 // included), or one the live side deleted, whose hidden cell takes the file's
-                // value too (the file's row wins whole; restoring the column shows it)
-                ours.cols
-                    .live()
-                    .filter(|c| w.cols.knows(c))
-                    .cloned()
-                    .collect()
+                // value too (the file's row wins whole; restoring the column shows it). Only
+                // the columns of the cells the live side changed in this row can take part
+                // (below), in ours' column order: O(those cells), whatever the width
+                let mut at: Vec<(usize, Key)> = cells
+                    .1
+                    .range((k.clone(), Key::lowest())..)
+                    .take_while(|((r, _), _)| r == k)
+                    .filter(|((_, c), _)| w.cols.knows(c))
+                    .filter_map(|((_, c), _)| ours_cols_at.get(c).map(|&i| (i, c.clone())))
+                    .collect();
+                at.sort_unstable();
+                at.into_iter().map(|(_, c)| c).collect()
             };
             for c in &file_cols {
                 let at = (k.clone(), c.clone());

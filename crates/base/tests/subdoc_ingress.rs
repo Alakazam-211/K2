@@ -229,14 +229,14 @@ fn a_stored_doc_holding_a_subdocument_is_quarantined_at_load() {
             store
                 .append(
                     id,
-                    &[LogEntry {
-                        author: "someone".into(),
-                        client: 4242,
-                        at_ms: 1_000,
-                        via: "cli".into(),
+                    &[LogEntry::yrs(
+                        "someone".into(),
+                        4242,
+                        1_000,
+                        "cli".into(),
                         update,
-                        on_behalf_of: None,
-                    }],
+                        None,
+                    )],
                 )
                 .unwrap();
         }

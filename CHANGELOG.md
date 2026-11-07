@@ -1,5 +1,168 @@
 # Changelog
 
+## v0.12.0 (2026-11-07)
+
+A host release on v0.11.1. The crate version is `0.12.0`; the client's is `0.13.2`. Pairs with
+the markdown, text and board pack tags of this release. **One breaking change, for a host that
+builds or reads a kit `LogEntry`:** its `update` bytes are now `body: EntryBody` (below). No
+wire frame changes, and the store format is the same: Yrs log entries stay record version 3,
+byte for byte, so a store needs no migration.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.11.1 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The cut leaves out what
+v0.11.1's did: the native-engine crates (`vendor/mpce-core`, `vendor/mpce-codec`,
+`vendor/mpce-sync`, `vendor/mpce-licences`; `vendor/mpce-model` stays), the kit's
+native-engine adapter (features `native`, `fuzzing`), the conformance crate, the fuzz trees and
+the evidence run records.
+
+For a host, in short (details below):
+
+- **The log entry's body is a type (breaking).** `LogEntry.update: Vec<u8>` is
+  `LogEntry.body: EntryBody`: `EntryBody::Yrs(update)` for a doc on Yrs, which is every doc a
+  session stores today. `LogEntry::yrs(author, client, at_ms, via, update, on_behalf_of)`
+  builds one; a reader matches `EntryBody`, or takes `EntryBody::yrs_len`. A host whose code
+  neither builds nor reads a `LogEntry` changes nothing: a build that names `update` fails to
+  compile (`E0609`), so the build is the check. `DocStore::load` refuses a log that mixes
+  engines, and a doc another engine stamped (`MPC-E520`).
+- **A grid's rows are a limit of their own: `Config::grid_max_rows`** (default 100,000 rows,
+  live or deleted, blank ones included). A change past it is `AtLimit` (`MPC-E802`, exit 2,
+  `what` `rows`), with the same message and next step as cells and columns; an import past it
+  opens as text (`too_large`), and an outside save past it declines the file. A host that
+  shows `MPC-E802` by its `what` adds `rows`; one that shows the row's message changes
+  nothing. In `capabilities` with the other limits.
+- **A grid's paths are linear in its stored cells and rows** (render, line maps, the aligner,
+  the merge, blame, the conflict listing, the row list, an axis's inserts and moves, and the
+  rekey of dropped rows). Results are unchanged. `Table::row_cells` and `Table::row_quotes`
+  are new (additive).
+- **Not for hosts yet:** `NativeKeys` and `session::NativeKeysFor` are behind the `native`
+  feature, which this cut leaves out; `MPCE-E566`'s next step says the host supplies a native
+  store's secret and keeps it outside the store.
+- **Client 0.13.2** (`client/CHANGELOG.md`): the client's code is as in 0.13.1; a wording fix
+  in 0.13.0's entry.
+- **Going back to v0.11.1:** no store format constant changes (`STORE_FORMAT` 6,
+  `STORE_FORMAT_READ` 7, `STORE_FORMAT_BASE` 5). No session makes a native entry, so a store
+  this release has run on holds Yrs entries only, record version 3 byte for byte, which
+  v0.11.1 reads.
+- **Main-only tooling** (not in this cut): the fuzz night's record carries each target's
+  capped-input count and the host's load while fuzzing, its counters are read from libFuzzer's
+  own lines only, and a build that changes the fuzz crate's lock fails the night.
+- **Docs:** `docs/evidence/README.md` (new) says the run records the evidence notes cite live
+  on the kit's main branch only, as a public cut leaves them out; `docs/SESSIONS.md` states
+  the erasure limit; `docs/POSITIONS.md` is read against the code.
+
+In detail:
+
+### Grids: render and reconcile linear in a grid's stored cells and rows
+
+- **`Table::render`, `Table::line_map`, the aligner (`table::reconcile`), the structured
+  pack's default reconcile, `merge3_text` / `merge3_outside_text` and a grid's blame** read
+  each row's own present cells, placed by a column-position map built once: every path is
+  linear in the grid's stored cells, rows and columns, plus the records it writes, and a
+  blank row costs O(1). Before this release each visited every live column of every row,
+  both keys cloned per lookup, so a wide grid of blank rows (which hold no cell, so the cell
+  limit didn't bound them) cost rows × columns per call. Results are unchanged: the same
+  records, line maps, pairings (the aligner's fingerprints keep their equality, and its diff
+  budget still counts their full length), edits, conflicts and blame. Measured with
+  `tests/grid_scaling.rs` (allocations, timing-free; its regression holds each path to a
+  fixed multiple of the stored size, and the per-column walk is a planted fault,
+  `differential::GridCostMutant::PerColumn`).
+- **`Table::row_cells`** and **`Table::row_quotes`** (new): a row's present cells and its
+  quote exceptions, in column-key order, O(log n + the row's entries).
+- **An axis's places are a linked list over an arena**, each known key's place in a map, so
+  finding a place, inserting, moving and dropping are O(1): a change that inserts or moves
+  many rows costs O(its ops), not ops × rows. `Axis::live_index` and `LineMap::row_spans`
+  (new) read each live key's index and each row's lines in one pass. The merge's conflicts,
+  the session's conflict listing (`write --base`), the undo report's regions, an outside
+  save's overrides and `row list` read their indexes once and each row's own cells. Outputs
+  are unchanged; the walks stay as planted faults (`GridCostMutant::AxisWalk`,
+  `ConflictWalk`, `RowListWalk`).
+- **The rekey of the rows and columns the live side dropped** (an outside save, or a live
+  write from an older version) reads each version's live places once, a row's cells by its own
+  range and the candidate columns' cells in one pass: O(the tables) however many were
+  dropped, where each dropped element scanned both versions' cells. Keys are minted in the
+  same order; the walk stays as the planted fault `GridCostMutant::RekeyWalk`.
+- **`Config::grid_max_rows`** (new knob, default 100,000): at most this many rows, live or
+  deleted, blank ones included. A change past it is `AtLimit` (`MPC-E802`, exit 2, `what`
+  `rows`; the same message and next step as cells and columns), an import past it is declined
+  `too_large` (it opens as text), and an outside save past it declines the file. In
+  `capabilities` with the other limits.
+
+### The log entry's body (C3; breaking for hosts that build a `LogEntry`)
+
+- **`LogEntry.update: Vec<u8>` is replaced by `LogEntry.body: EntryBody`**, with
+  `EntryBody::Yrs(update)` for a doc on Yrs and `EntryBody::Native(NativeRef { at })` for a
+  doc on the native engine (the change's apply position; no bytes). A host that builds a
+  `LogEntry` changes its code: `LogEntry::yrs(author, client, at_ms, via, update,
+  on_behalf_of)` builds a Yrs entry. A host that reads one matches `EntryBody`
+  (`EntryBody::yrs_len` gives a Yrs update's length).
+- **A replay takes the log's bytes through `Loaded::yrs_updates` only**, all or nothing: a
+  log holding a native entry is refused (`Corrupt("log entry engine")`) before anything is
+  replayed, and `Doc::from_store` gives `DocError::Malformed`.
+- **`DocStore::load` checks every entry against its doc's engine stamp:** a log that mixes
+  engines is `Corrupt("log entry engine")`, and a doc another engine stamped is refused whole
+  (`ForeignEngine`, `MPC-E520`) before any entry is decoded. A purge's log pass checks the
+  same.
+- **Storage:** Yrs entries stay log record version 3, byte for byte, so a store with no native
+  doc is unchanged and the previous release reads it. Native entries are a new version 4 (body
+  tag 2, the position); versions 1 to 3 read as Yrs. No session makes a native entry yet: a
+  native doc can't be stored until C3 stamps it.
+
+### Native documents' keys (C3; feature `native`, not for hosts until the switch)
+
+- **`NativeKeys`** (new): a document's two keys on the native engine, its digest key and its
+  store secret, per document for its whole life, host-made and kept outside the store.
+  `Debug` prints neither (`NativeKeys { .. }`); it isn't serialisable or cloneable, and it
+  converts into `EngineChoice::Native`. **`session::NativeKeysFor`** (new) is the host trait
+  that gives a document's keys; sessions don't call it until they store native docs. The kit
+  makes no keys and has no random source for them. `docs/SESSIONS.md`, "Native documents:
+  keys", states the host's duties, with `MPCE-E566`.
+- **`MPCE-E566`'s next step** says the host supplies the store's secret and keeps it in a file
+  of its own, never in the store, and never makes a new secret for a store that has native
+  records (its explain golden with it).
+- **`docs/SESSIONS.md`, "Erasure":** a purge holds against the store as it stands, not
+  against an older copy of it. On the native engine a record put back or edited in place is
+  refused at load, but a restored older copy, or one cut short at its end, loads as the doc
+  was before the purge: erasing backups and older copies is the host's job. A `K-PURGE-12`
+  row; `purge_docs_state_the_erasure_limit` holds the text.
+
+### Tooling and docs
+
+- **The fuzz night (main only; not in a public cut):** each target's capped-input count
+  (`capped=m/n`) and the host's load while fuzzing (a `LOAD` line) are in the night's record
+  and the ledger; the record's counters are read from libFuzzer's own lines only (digits or
+  `?`), with a self-test in the evidence part; and a build that changes the fuzz crate's lock
+  fails the night (`exit=lock`).
+- **`docs/evidence/README.md`** (new): the run records the evidence notes cite live on the
+  kit's main branch only; a public cut leaves `docs/evidence/runs/` out.
+- **`docs/POSITIONS.md`** read against the code: its file and line references, the client's
+  presence and marks data in UTF-16 code units, and the grid verb header's own declaration.
+- **The undo model's job tools:** `tools/undo/expect.sh` refuses a second source, and
+  `expect_mutants` prints its variant and refuses an unknown one.
+
+### Corrections (the spec-undo large trace runs, kit `856e5000`)
+
+- **`d1_traces_large`:** the v0.9.7 note that `d1_traces_large` ran 50,000 traces on a node had
+  no recorded run; it was first run of record at `856e5000` (job `19c369bd`): 50,000 traces,
+  0 mismatches, D1's classes hit (`d1_widened` 1,078,940, `d1_widened_then_undone` 474,091),
+  every floor met.
+- **The undo spec's Volume target (at least 10^4 per case class) is not met for every
+  class.** The runs now named (`tools/undo/traces-large.sh`) enforce each class at half its
+  measured rate at their own seeds, and reach:
+  - `trace_equivalence_large`, 400,000 traces in five parts (jobs `66c739e3`, `6cc3792a`,
+    `d9b2296a`, `1e6e6175`, `61eff0f4`), 0 mismatches: `redo_after_partial` enforced at about
+    2,500 and reached 5,417; `concurrent_restore_o4a` enforced at about 7,750 and reached
+    14,504; every other class enforced above 10^4;
+  - `group_trace_equivalence_large`, 10,000 traces (job `c74bd3f6`), 0 mismatches: its rarest
+    grouping class, a redo of a group, reached 1,227 (each grouping class at least 100, and
+    at least half its measured rate);
+  - `end_break_trace_class_large`, 50,000 traces (job `c844bc1b`), 0 mismatches: each of its
+    classes at least 10^4 (the least, `write_base_shared_start_was_conflict`, 12,270).
+  The `#[ignore]`d large runs had floors scaled from 256 traces and no script. Class counts
+  are repeatable: the trace harness seeds client IDs (compaction timing reads ID-dependent
+  snapshot sizes).
+- Compaction timing in the kit depends on client IDs through snapshot sizes (by design; no
+  effect on outcomes).
+
 ## v0.11.1 (2026-11-04)
 
 A host release on v0.11.0. The crate version is `0.11.1`; the client's is `0.13.1`. Pairs with

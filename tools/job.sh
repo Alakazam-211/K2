@@ -97,7 +97,48 @@ ran() {
   [ "$r" = 0 ] || return "$r"
   [ "$n" -gt 0 ] || { echo "ran: NO TESTS RAN (a filter or --ignored matched nothing): $*"; return 1; }
 }
-RC=0
-timed() { l=$1; shift; s=$(date +%s); set +e; "$@"; rc=$?; set -e; echo "=== $l: exit $rc, wall $(( $(date +%s) - s ))s"; [ $rc -eq 0 ] || RC=$rc; }
+# passed "NAME ..." CMD...: a test command that must pass each named test, by name (`timed
+# LABEL passed "a b" cargo nextest run ...`): a named test removed, renamed or #[ignore]d
+# passes in silence otherwise (cargo test's `test NAME ... ok`, nextest's `PASS [...] ... NAME`).
+passed() {
+  p_names=$1; shift
+  p_log=$(mktemp); p_rc=$(mktemp)
+  { "$@" 2>&1; echo $? > "$p_rc"; } | tee "$p_log"
+  r=$(cat "$p_rc"); p_miss=""
+  for t in $p_names; do
+    if ! sed 's/\x1b\[[0-9;]*m//g' "$p_log" | grep -qE "^test (.*::)?$t \.\.\. ok *\$|^ *PASS \[.*[ :]$t *\$"; then p_miss="$p_miss $t"; fi
+  done
+  rm -f "$p_log" "$p_rc"
+  [ "$r" = 0 ] || return "$r"
+  [ -z "$p_miss" ] || { echo "passed: NOT PASSED BY NAME (removed, renamed or ignored):$p_miss"; return 1; }
+}
+# ignored_exactly "NAME ..." CMD...: CMD lists the ignored tests (libtest's `-- --list --ignored`,
+# `NAME: test` lines); they must be exactly NAMEs, by name: a test that should run never turns
+# into a skip quietly (another ignored test fails the step, and so does a named one gone).
+ignored_exactly() {
+  i_want=$1; shift
+  i_log=$(mktemp); i_rc=$(mktemp)
+  { "$@" 2>&1; echo $? > "$i_rc"; } | tee "$i_log"
+  r=$(cat "$i_rc")
+  i_got=$(sed -n 's/^\(.*\): test$/\1/p' "$i_log" | sed 's/.*:://' | sort -u)
+  rm -f "$i_log" "$i_rc"
+  [ "$r" = 0 ] || return "$r"
+  i_bad=""
+  for t in $i_got; do case " $(echo $i_want) " in *" $t "*) ;; *) i_bad="$i_bad $t" ;; esac; done
+  [ -z "$i_bad" ] || echo "ignored_exactly: IGNORED BUT NOT EXPECTED:$i_bad"
+  i_miss=""
+  for t in $i_want; do printf '%s\n' "$i_got" | grep -qx "$t" || i_miss="$i_miss $t"; done
+  [ -z "$i_miss" ] || echo "ignored_exactly: EXPECTED IGNORED, NOT FOUND:$i_miss"
+  [ -z "$i_bad$i_miss" ] || return 1
+  echo "ignored_exactly: exactly the $(echo $i_want | wc -w | tr -d ' ') expected ignored tests"
+}
+# settings NAME[=DEFAULT]...: one `=== settings:` line with each variable's value in this job, its
+# default when unset (a job's record shows env names, not values: the log must)
+settings() { _st=""; for _sk in "$@"; do _sn=${_sk%%=*}; _sd=""; case $_sk in *=*) _sd=${_sk#*=} ;; esac; eval "_sv=\${$_sn:-}"; _st="$_st $_sn=${_sv:-${_sd:-(unset)}}"; done; echo "=== settings:$_st"; }
+RC=0; STEPS=0
+timed() { l=$1; shift; s=$(date +%s); set +e; "$@"; rc=$?; set -e; echo "=== $l: exit $rc, wall $(( $(date +%s) - s ))s"; [ $rc -eq 0 ] || RC=$rc; STEPS=$((STEPS + 1)); }
+settings CARGO_BUILD_JOBS RUST_TEST_THREADS NEXTEST_TEST_THREADS CARGO_TARGET_DIR
 . "$CMDS"
+# a commands file that ran no step ran nothing: never exit 0 for it
+[ "$STEPS" -gt 0 ] || { echo "job.sh: no step ran ($CMDS): nothing checked"; RC=1; }
 exit $RC

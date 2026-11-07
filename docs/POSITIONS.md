@@ -3,11 +3,13 @@
 How each surface of the kit counts positions (K-ADDR-4). In one line: **UTF-8 bytes inside
 the kit and on the hunk channel; `line:col` (1-based lines, 1-based columns in Unicode scalar
 values) for people and command-line verbs; UTF-16 code units only inside the update bytes
-exchanged with Yjs clients.** What an engine counts internally (element clocks, provenance) is
+exchanged with Yjs clients, and in the JS client library's presence and marks data for a
+host's editor.** What an engine counts internally (element clocks, provenance) is
 not part of this contract.
 
 `capabilities` states this as data: its `positions` key (`--json`), or the "Positions"
-section of its text form. The rows for the kit's verbs and its grid verbs come from one table,
+section of its text form. The rows for the kit's verbs and its grid verbs (but `header`: the
+"Pack verbs" note below) come from one table,
 `crates/base/src/parity/positions.rs` (`VERB_POSITIONS`), and a pack verb's from its own
 declaration (the "Pack verbs" note below). `crates/base/tests/positions.rs` checks them: every
 verb whose usage names a position has a row, every row's flags are in that verb's usage, and each
@@ -20,14 +22,15 @@ unit is the one the verbs actually use.
 | Line tools and line forms (`cat -n`, `head`/`tail -n`, `view --lines`, `grep -n`, `sed` addresses, `insert --line`/`--after`, `replace`/`delete --lines`, `claim --lines`, `blame -L` on text, a diff's hunk headers) | lines of the doc text (on a grid, of its rendered file), `\n` ending a line; ranges inclusive, `$` the last (`lines`) | 1 | `tools/edit.rs`:3-7; `tools/read.rs`:3-5; on a grid, "A grid's two line counts" below |
 | Byte tools (`cat` with no flags, `head -c`, `tail -c`, `wc -c`) | bytes of the file as the pack encodes it, BOM and CRLF included (`file_bytes`) | counts | `tools/mod.rs`:31-33; `tools/read.rs`:3-5, 386 |
 | `wc -m` | Unicode scalar values of the file's bytes: a BOM is one, a CR one (`file_chars`) | counts | `tools/read.rs`:383 |
-| The hunk channel (`client/WIRE.md`): `edit` hunks, `cursor` frames, `ChangeEvent`s, roster carets | UTF-8 byte offsets, as the kit's API (`utf8_bytes`); a caret's `anchor_lc`/`head_lc` are `line:col`, for display only | 0 | `client/WIRE.md`:59-60, 405; `docs/SESSIONS.md`, "The hunk channel" |
-| JS client library (`client/src`): `LiveText.edit`, `setCursor`, `RemoteCaret`, `transform`, `apply` | UTF-8 byte offsets of the replica's text (JS strings are UTF-16: the library converts with `byteToIndex`/`indexToByte`, `hunk.ts`:36, 60) | 0 | `client/src/hunk.ts`:1-5; `live.ts`:108, 288, 323; `position.ts`:1-3 |
+| The hunk channel (`client/WIRE.md`): `edit` hunks, `cursor` frames, `ChangeEvent`s, roster carets | UTF-8 byte offsets, as the kit's API (`utf8_bytes`); a caret's `anchor_lc`/`head_lc` are `line:col`, for display only | 0 | `client/WIRE.md`:59-60, 573; `docs/SESSIONS.md`, "The hunk channel" |
+| JS client library (`client/src`): `LiveText.applyLocal`, `setCursor`, `carets()` (`RemoteCaret`), `transform`, `apply` | UTF-8 byte offsets of the replica's text (JS strings are UTF-16: the library converts with `byteToIndex`/`indexToByte`, `hunk.ts`:36, 60) | 0 | `client/src/hunk.ts`:1-5; `live.ts`:118-124, 409, 447; `position.ts`:1-3 |
+| JS client library's presence and marks data (`participants()`, `marks()`, `insertHerePreview`) | UTF-16 code units of the replica's text, what a JS string and CodeMirror index (`utf16_code_units`), for the host's editor | 0 | `client/src/presence.ts`:5-6; `client/HOST.md`:9-12 |
 | A host's editor binding (the host's own code: the client is a library with no editor; a host draws its editor over it) | The editor's own units (CodeMirror's positions are UTF-16 code units); the binding converts between them and bytes, with the library's `byteToIndex`/`indexToByte` | 0 | `client/HOST.md`:3-12 |
 | The Yjs wire: sync updates exchanged with Yjs clients (feature `untrusted-wire`; `Doc::encode_diff`, `Doc::apply_client_update`) | UTF-16 code units inside the update bytes, as Yjs counts (`yjs_wire`: `utf16_code_units`); never an offset of the kit's API | 0 | the kit's Yrs runs with `OffsetKind::Utf16` to match (`engine/yrs.rs`:4, 217, 1677); bytes to UTF-16 at the adapter, `engine/yrs.rs`:389-404 (`to_utf16`) |
-| Grid rows and columns (`--row`, `--col`, `--after`, `--before`; `claim --rows`/`--cols`) | a key (`r17`, `c3`: identity, never shifts), `#N` (the Nth live row or column), `LN` for a row (the row rendered line N belongs to; refused on a file holding a lone CR, `MPC-E176`), a header name for a column (`grid_row`, `grid_col`) | `#N`, `LN`: 1 | `table/verbs.rs`:6-13, 306-316 (`parse_row`) |
-| Grid cells (`--from R,C`, `--to R,C`, `cursor --cell`, `claim --cells`, `blame --cell`) | `R,C`: a row and a column as above (`grid_cell`) | as its parts | `table/verbs.rs`:6-11 |
+| Grid rows and columns (`--row`, `--col`, `--after`, `--before`; `claim --rows`/`--cols`) | a key (`r17`, `c3`: identity, never shifts), `#N` (the Nth live row or column), `LN` for a row (the row rendered line N belongs to; refused on a file holding a lone CR, `MPC-E176`), a header name for a column (`grid_row`, `grid_col`) | `#N`, `LN`: 1 | `table/verbs.rs`:6-13, 318-330 (`parse_row`) |
+| Grid cells (`--from R,C`, `--to R,C`, `cursor --cell`, `claim --cells`, `blame --cell`) | `R,C`: a row and a column as above (`grid_cell`) | as its parts | `table/verbs.rs`:6-13, 541-547 (`cell_arg`) |
 | Grid insert and move targets (`row`/`col insert --at #N`, `move --to #N`) | `#N` (`ordinal`) | 1 | `table/verbs.rs` (`VERBS`) |
-| Grid rendered lines (`LN`, `row list`, `blame`, conflict reports, and the lines a grid's views, claims and roster report; `row list` and conflict reports print none on a file holding a lone CR, and `LN` refuses there: "A grid's two line counts") | lines of the rendered file as the pack's line map counts them: the header's first, and a line break inside a value (LF, CR or CRLF) starts a line (`rendered_lines`) | 1 | `table/mod.rs`:741-744 (`line_map`), 862-872 |
+| Grid rendered lines (`LN`, `row list`, `blame`, conflict reports, and the lines a grid's views, claims and roster report; `row list` and conflict reports print none on a file holding a lone CR, and `LN` refuses there: "A grid's two line counts") | lines of the rendered file as the pack's line map counts them: the header's first, and a line break inside a value (LF, CR or CRLF) starts a line (`rendered_lines`) | 1 | `table/mod.rs`:741-746 (`line_map`), 859-878 (`lone_crs`, `LineCounts`) |
 | A pack's own objects (`--nth K` on a pack verb that declares it) | the Nth of them, as the verb's usage names them (`pack_nth`) | 1 | `parity/positions.rs` (`Unit::PackNth`); `PackVerb::positions` |
 | Doc coordinates (`pointer --at X,Y`, `viewport --rect X,Y,W,H`, and what `who` prints for them on a grid) | a place or an area in the doc's own coordinates: finite numbers the kit stores and doesn't interpret (`doc_coords`) | none | `session/participant.rs`:235, 274 (`Point`, `Rect`) |
 | Structured ops' applied stream (`ListApplied.index_before`/`index_after`) | positions in the live order (Rust indices) | 0 | `elem.rs`:488-490 |
@@ -44,7 +47,7 @@ unit is the one the verbs actually use.
   `chars + 1`; a range `L:C-L:C` is half-open.
 - **Where UTF-16 meets bytes.** On the server, only the engine adapter converts
   (`engine/yrs.rs`:389-404, and the sticky positions of the conformance hooks,
-  `doc.rs`:876, 891-900); `engine/mod.rs`:61-66 says the kit never assumes UTF-16 outside
+  `doc.rs`:925, 940-949, `sticky` and `resolve_sticky`); `engine/mod.rs`:61-66 says the kit never assumes UTF-16 outside
   the Yrs adapter. Another engine (the native one, feature `native`) may count differently
   inside; that stays behind the seam, so nothing in this table changes for a doc on it. In clients, the JS library converts between JS strings and bytes, and a
   host's editor binding between its editor's units and bytes.
@@ -62,7 +65,9 @@ unit is the one the verbs actually use.
   pack verb. A verb that declares nothing still runs, and its row says `undeclared` (`--json`:
   `"undeclared": true`), so its units are unknown, not zero. A pack's test runs
   `parity::positions::check` on `Registry::for_pack(&pack)?` to refuse that, and to hold each
-  declared flag to the verb's usage. The kit's grid verbs keep their rows in the kit's table.
+  declared flag to the verb's usage. The kit's grid verbs keep their rows in the kit's table,
+  but `header`, which takes and prints none and declares `.positions(&[])` itself
+  (`table/verbs.rs`:166).
 
 ## A grid's two line counts
 

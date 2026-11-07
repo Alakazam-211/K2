@@ -12,6 +12,7 @@
 # action sequences exported from the revised model (2026-10-29, seed 0x2a): replayed, they
 # pin the oracle's side (a purge whose copies touch is one hunk, and it taints what it
 # deletes across); the simulator replays (smoke.sh, counts.sh) cover the model's side.
+expect itf:itf_regress COMPLETE    # (tools/undo/expect.sh; a file that sources this one declares it too)
 export RUNREC_RUN=itf_regress
 timed "ITF regression traces" R --show 10 --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init abb "$ROOT"/tools/undo/itf-regress/*.itf
 unset RUNREC_RUN

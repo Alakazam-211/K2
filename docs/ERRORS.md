@@ -1138,7 +1138,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 ### MPC-E802 `at_limit`
 
 - **Message:** `this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted``
-- **Next:** The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
+- **Next:** The table can't grow past its limit (details.what: cells, columns or rows); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
 - **Next step:** `rows drop-deleted`. The table is at its size limit; remove rows or columns first, or have an owner free the space deleted rows still hold.
 - **Rule:** K-CSV-7 (KC4)
 - **Exit:** 2

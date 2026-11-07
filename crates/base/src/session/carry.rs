@@ -791,8 +791,8 @@ mod tests {
     #[test]
     fn index_built_from_the_store_equals_the_live_one() {
         use crate::store::{
-            Carry, ChangeInfo, ChangeKind, DocKey, DocMeta, LogEntry, NewChange, RecordHunk,
-            RecordRoot, RevertRecord,
+            Carry, ChangeInfo, ChangeKind, DocKey, DocMeta, EntryBody, LogEntry, NewChange,
+            RecordHunk, RecordRoot, RevertRecord,
         };
         let dir = std::env::temp_dir().join(format!("k2mb-carry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -880,7 +880,7 @@ mod tests {
                 client: 7,
                 at_ms: 0,
                 via: "t".into(),
-                update: vec![1],
+                body: EntryBody::Yrs(vec![1]),
                 on_behalf_of: None,
             };
             let change = NewChange {

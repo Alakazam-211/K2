@@ -1,4 +1,4 @@
-k2-mpc-base 0.11.1
+k2-mpc-base 0.12.0
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -393,6 +393,7 @@ Limits in effect:
   conflict_copy_keep_ms = 2592000000
   grid_max_cells = 25000
   grid_max_cols = 1024
+  grid_max_rows = 100000
   grid_max_value_len = 65536
   tool_output_max_bytes = 33554432
 

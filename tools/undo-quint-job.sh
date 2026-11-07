@@ -14,5 +14,7 @@
 #   q ARGS                     quint ARGS
 #   tlc NAME "INVS" SECONDS    TLC on an instance (after `. "$ROOT/tools/undo/tlc.sh"`)
 #   E ARGS / R ARGS            undo_enum / undo_itf_replay (release, mutants on)
-#   timed LABEL CMD...         CMD with its wall time and exit code; never fails the job
+#   timed LABEL CMD...         CMD with its wall time and exit code
+#   expect KEY VERDICT [RULES] a row the job must end with (tools/undo/expect.sh: a row that
+#                              didn't run, or ended with another verdict, fails the job)
 exec "$(dirname "$0")/undo-bundle.sh" quint "$@"

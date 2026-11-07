@@ -198,7 +198,8 @@ pub enum SessionError {
     #[error(transparent)]
     Pack(#[from] PackError),
     /// A grid change would take the table past a size limit (K-CSV-7, KC4): nothing applied,
-    /// and nothing already in the table is dropped. Exit 2. `what` is `cells` or `columns`;
+    /// and nothing already in the table is dropped. Exit 2. `what` is `cells`, `columns` or
+    /// `rows` (blank rows included);
     /// or `value bytes` for a cell value or column name longer than
     /// `Config::grid_max_value_len` (C1k; `would_be` is its length).
     #[error("{}", at_limit(what, *limit, *would_be))]

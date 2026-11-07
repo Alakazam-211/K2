@@ -23,7 +23,7 @@ counts cite them; what those records don't carry (seeds, depth, walk counts, per
 stays marked `[unverified: ...]`. Their summary lines are quoted verbatim
 [below](#log-lines-of-the-runs-before-run-records), and
 `k2 compute logs <job>` prints the whole log. The provenance marks on cited jobs (indicative (bundle),
-tag `ev-<job>`, rerun at a pushed sha: pending) are explained in `docs/MODEL-CHECK.md`, Provenance of the cited runs.
+tag `ev-<job>`, rerun at pushed `<commit>`: `<job>`) are explained in `docs/MODEL-CHECK.md`, Provenance of the cited runs.
 
 ## The claim
 
@@ -42,17 +42,18 @@ in exactly these senses:
 - **1,000,000 random walks at the literal G1 bound** (3 pids × 3 events + 2 undos + 1 revert),
   each to full depth, and **1,000,000 with 1 restart**: no violation. (Under the per-copy
   reading, 5,000,000 and 1,000,000: no violation; history.)
-- *History, under the per-copy purge reading (oracle before `04487c5`), not re-run:*
-  **1,000,000 biased walks at the literal G1 bound** (`walk --bias redo-after-partial`: the
+- **1,000,000 biased walks at the literal G1 bound** (`walk --bias redo-after-partial`: the
   steps toward a redo of a partial undo weigh more; no step is left out, and the step taken
-  is checked as in a plain walk): no violation, and the class `redo_after_partial` hit
-  28,568 times.
-- **1,000,000 biased walks at the literal G1 bound plus 1 restart**: no violation, and
-  `redo_after_partial` hit 28,208 times.
+  is checked as in a plain walk), on the current oracle at pushed `ab16c7e4` (`14f4c310`): no
+  violation, and the class `redo_after_partial` hit
+  28,658 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial] times.
+- **1,000,000 biased walks at the literal G1 bound plus 1 restart** (`6c40147e`, the same commit): no violation, and
+  `redo_after_partial` hit 28,091 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] times. (Under the
+  per-copy reading, 28,568 and 28,208, indicative (bundle); history.)
 - **Every mutant is caught** on 50,000 walks at the literal G1 bound (the restart mutant with
   1 restart added), on the current oracle as before: nine by an invariant, one (iv) by the
-  oracle's own assertion. Under the bias (history) every mutant was caught again, all ten by
-  an invariant ((iv) by `U17`).
+  oracle's own assertion. Under the bias every mutant was caught again, all ten by an
+  invariant ((iv) by `U17`), on the current oracle (`14f4c310`) as in the history run.
 
 Nothing more: the literal G1 bound is sampled, not exhausted (≥ 10^13 states,
 `docs/MODEL-CHECK.md`, "The G1 bound").
@@ -65,27 +66,48 @@ per-copy purge reading, oracle before `04487c5`** (`docs/MODEL-CHECK.md`, Readin
 are kept as they were taken. The current oracle (canonical purge hunks, `04487c5`; D1 of
 spec v1.10 is the identity on the bounded world's single letters) re-ran the exhaustive pair
 and the uniform walks (1,000,000 at G1 and 1,000,000 with a restart, with every mutant); the
-biased walks were not re-run.
+biased walks were re-run at pushed `ab16c7e4` on 2026-11-04 (`14f4c310`, `6c40147e`), and
+`2x2u2r1` again in seven seed-range parts (the rows marked rerun).
 
 | Run | Bound (seed `abb`, `MAXLEN` 4) | Mode | States or walks | Status | Violations | Job | Record |
 |---|---|---|---|---|---|---|---|
 | `3x1u2r1` | 3 pids × 1 event + 2 undos + 1 revert | `dfs --sym`, exhaustive | 8,494,185 / 6 [run baaedbc1/dfs_3x1_u2_r1_rs0_none_sym] states, 499 [run baaedbc1/dfs_3x1_u2_r1_rs0_none_sym:seeds] / 499 seeds | COMPLETE | 0 | `baaedbc1` (`d3eccbc`) | RUNREC |
-| `2x2u2r1` | 2 pids × 2 events + 2 undos + 1 revert | `dfs --sym`, exhaustive | 716,142,148 / 7 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym] states, 28,858 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym:seeds] / 28,858 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym:seeds_all] seeds | COMPLETE | 0 | `cd232421` (`d3eccbc`; indicative (dirty: pushed `d3eccbc8` plus an untracked checkpoint); rerun at a pushed sha: pending), in two jobs: `baaedbc1` (8 threads) finished 24,721 of the 28,858 seeds before its 2 h limit; `cd232421` (6 threads) resumed from a checkpoint file rebuilt from `baaedbc1`'s log by `tools/undo/ck-from-log.py` (24,721 seeds, sha256 `206d8459…`), shipped untracked with the commit, and ran the other 4,137 | RUNREC |
+| `2x2u2r1` | 2 pids × 2 events + 2 undos + 1 revert | `dfs --sym`, exhaustive | 716,142,148 / 7 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym] states, 28,858 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym:seeds] / 28,858 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym:seeds_all] seeds | COMPLETE | 0 | `cd232421` (`d3eccbc`; indicative (dirty: pushed `d3eccbc8` plus an untracked checkpoint); rerun at pushed `ab16c7e4`: `4001ec32`, `0f093c6e`, `4f681c81`, `6606fd4e`, `2826cd5e`, `334ad64d`, `ce3ad700`, seven seed-range parts, the next row), in two jobs: `baaedbc1` (8 threads) finished 24,721 of the 28,858 seeds before its 2 h limit; `cd232421` (6 threads) resumed from a checkpoint file rebuilt from `baaedbc1`'s log by `tools/undo/ck-from-log.py` (24,721 seeds, sha256 `206d8459…`), shipped untracked with the commit, and ran the other 4,137 | RUNREC |
+| `2x2u2r1` (rerun at pushed `ab16c7e4`, 2026-11-04) | 2 pids × 2 events + 2 undos + 1 revert | `dfs --sym`, exhaustive, in 7 seed-range parts | 716,142,148 [derived] states (the sum, below the table), max depth 7; each part (the same 915-state baseline plus its own seeds): 102,357,362 / 7 [run 4001ec32/dfs_2x2_u2_r1_rs0_none_sym_part_0_4251], 102,304,274 / 7 [run 0f093c6e/dfs_2x2_u2_r1_rs0_none_sym_part_4251_8219], 102,269,567 / 7 [run 4f681c81/dfs_2x2_u2_r1_rs0_none_sym_part_8219_12178], 102,308,745 / 7 [run 6606fd4e/dfs_2x2_u2_r1_rs0_none_sym_part_12178_16223], 102,295,128 / 7 [run 2826cd5e/dfs_2x2_u2_r1_rs0_none_sym_part_16223_20574], 102,346,623 / 7 [run 334ad64d/dfs_2x2_u2_r1_rs0_none_sym_part_20574_24686], 102,265,939 / 7 [run ce3ad700/dfs_2x2_u2_r1_rs0_none_sym_part_24686_28858] | COMPLETE (each part) | 0 | `4001ec32`, `0f093c6e`, `4f681c81`, `6606fd4e`, `2826cd5e`, `334ad64d`, `ce3ad700` (`ab16c7e4`) | RUNREC |
+| `3x1u2r1` (rerun at pushed `ab16c7e4`, 2026-11-04) | 3 pids × 1 event + 2 undos + 1 revert | `dfs --sym`, exhaustive | 8,494,185 / 6 [run 4001ec32/dfs_3x1_u2_r1_rs0_none_sym] states, 499 [run 4001ec32/dfs_3x1_u2_r1_rs0_none_sym:seeds] / 499 [run 4001ec32/dfs_3x1_u2_r1_rs0_none_sym:seeds_all] seeds | COMPLETE | 0 | `4001ec32` (`ab16c7e4`) | RUNREC |
 | walks at G1 | 3 pids × 3 events + 2 undos + 1 revert | `walk`, sampled | 1,000,000 [run 48962ffa/walk_3x3_u2_r1_rs0_none:walks] walks, 12,000,000 [run 48962ffa/walk_3x3_u2_r1_rs0_none:steps] steps | SAMPLED: every walk asked ran | 0 | `48962ffa` (`d3eccbc`) | RUNREC |
 | walks at G1 + 1 restart | the same + 1 restart | `walk`, sampled | 1,000,000 [run 48962ffa/walk_3x3_u2_r1_rs1_none:walks] walks, 13,000,000 [run 48962ffa/walk_3x3_u2_r1_rs1_none:steps] steps | SAMPLED: every walk asked ran | 0 | `48962ffa` (`d3eccbc`) | RUNREC |
+| biased walks at G1 (rerun at pushed `ab16c7e4`, current oracle) | 3 pids × 3 events + 2 undos + 1 revert | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] walks, 12,000,000 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:steps] steps; `redo_after_partial` 28,658 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial] | SAMPLED: every walk asked ran | 0 | `14f4c310` (`ab16c7e4`) | RUNREC |
+| biased walks at G1 + 1 restart (rerun at pushed `ab16c7e4`, current oracle) | the same + 1 restart | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000,000 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps; `redo_after_partial` 28,091 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] | SAMPLED: every walk asked ran | 0 | `6c40147e` (`ab16c7e4`) | RUNREC |
+| biased walks at G1 + 1 restart (smoke) (rerun at pushed `ab16c7e4`, current oracle) | the same + 1 restart | `walk --bias redo-after-partial` | 1,000 [run 14f4c310/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000 [run 14f4c310/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `14f4c310` (`ab16c7e4`) | RUNREC |
 | `3x1u2r1` (history: under the per-copy purge reading, oracle before `04487c5`) | 3 pids × 1 event + 2 undos + 1 revert | `dfs --sym`, exhaustive | 8,516,359 [run 6a6c1557/enumerator_3x1u2r1] states, 502 / 502 seeds, max depth 6 [unverified: seeds and depth, before run records] | COMPLETE | 0 | `6a6c1557` (indicative (bundle); source stated as kit v0.9.2) | log line L1 |
 | `2x2u2r1` (history: under the per-copy purge reading, oracle before `04487c5`) | 2 pids × 2 events + 2 undos + 1 revert | `dfs --sym`, exhaustive | 717,352,254 [run 6a6c1557/enumerator_2x2u2r1] states, 28,886 / 28,886 seeds, max depth 7 [unverified: seeds and depth, before run records] | COMPLETE | 0 | `6a6c1557` (indicative (bundle); source stated as kit v0.9.2) | log line L2 |
 | walks at G1 (history: under the per-copy purge reading, oracle before `04487c5`) | 3 pids × 3 events + 2 undos + 1 revert | `walk`, sampled | 5,000,000 walks, 60,000,000 steps [unverified: before run records] | SAMPLED: every walk asked ran | 0 | `41f256f3` (indicative (bundle); source stated as kit v0.9.1) | log line L3 |
 | walks at G1 + 1 restart (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk`, sampled | 1,000,000 [run d810536a/walk_3x3_u2_r1_rs1_none:walks] walks, 13,000,000 [run d810536a/walk_3x3_u2_r1_rs1_none:steps] steps | SAMPLED: every walk asked ran | 0 | `d810536a` (indicative (bundle); source stated as `bbbfc17`) | RUNREC |
-| biased walks at G1 (history: under the per-copy purge reading, oracle before `04487c5`) | 3 pids × 3 events + 2 undos + 1 revert | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] walks, 12,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (indicative (bundle); source stated as `194048f`; rerun at a pushed sha: pending) | RUNREC |
-| biased walks at G1 + 1 restart (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps; `redo_after_partial` 28,208 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] | SAMPLED: every walk asked ran | 0 | `d9b8d20f` (indicative (bundle); source stated as `ab3bc8a`; rerun at a pushed sha: pending) | RUNREC |
-| biased walks at G1 + 1 restart (smoke) (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk --bias redo-after-partial` | 1,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (indicative (bundle); source stated as `194048f`; rerun at a pushed sha: pending) | RUNREC |
+| biased walks at G1 (history: under the per-copy purge reading, oracle before `04487c5`) | 3 pids × 3 events + 2 undos + 1 revert | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] walks, 12,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (indicative (bundle); source stated as `194048f`; rerun at pushed `ab16c7e4`: `14f4c310`) | RUNREC |
+| biased walks at G1 + 1 restart (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps; `redo_after_partial` 28,208 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] | SAMPLED: every walk asked ran | 0 | `d9b8d20f` (indicative (bundle); source stated as `ab3bc8a`; rerun at pushed `ab16c7e4`: `6c40147e`) | RUNREC |
+| biased walks at G1 + 1 restart (smoke) (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk --bias redo-after-partial` | 1,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (indicative (bundle); source stated as `194048f`; rerun at pushed `ab16c7e4`: `14f4c310`) | RUNREC |
 | exact counts, ITF replay | small bounds (`tools/undo/counts.sh`, `PART=a`, `PART=b`) | TLC, `bfs`, ITF replay | 7 bounds, TLC = enumerator ([The exact counts](#the-exact-counts)) | COMPLETE | 0 | `88555d19`, `ee85bf3c` (`f8e2aad`); before the rebase `3f360ca1` (tag `ev-3f360ca1`), `708bd100` (tag `ev-708bd100`); before the purge revision `85045092` (indicative (bundle)) | RUNREC |
 | TLC mutants | `tools/undo/counts.sh`, `PART=m` | TLC (one worker), `bfs --first` | every mutant ([Teeth](#teeth-mutants-each-must-fail-minimal-counterexample-inside-an-exhaustive-bound)) | VIOLATION, each its rule | as expected | `545f3ae0` (`f8e2aad`); before the rebase `41730937` (tag `ev-41730937`); before the purge revision `a885a72a` (indicative (bundle)) | RUNREC |
 
 Every walk runs to full depth (12 actions at G1, 13 with the restart: the steps are exactly 12
 and 13 times the walks). The walks are independent draws, not deduplicated: the same path can
 recur.
+
+**The `2x2u2r1` rerun at pushed `ab16c7e4`** (2026-11-04) repeats `cd232421`'s count at a
+pushed commit. The 28,858 seeds are split into seven ranges, one job each: `4001ec32` seeds
+[0, 4251), `0f093c6e` [4251, 8219), `4f681c81` [8219, 12178), `6606fd4e` [12178, 16223),
+`2826cd5e` [16223, 20574), `334ad64d` [20574, 24686), `ce3ad700` [24686, 28858). Each part
+skips the other seeds through the enumerator's own resume (a skip file whose header is the
+binary's own; the commands file, sha256 `1068c121…`, is in each job's commands). Each part's
+record counts the resume header's baseline of 915 states plus the states of the seeds it
+explored, so the parts' `states` do not simply add. `check.py` verifies each part's record as
+cited; the sum is from a scratch check over the seven logs (`cover.py`): the headers are
+identical, each part explored exactly its range, no seed twice, the union is every seed 0 to
+28,857, and 915 + 716,141,233 = 716,142,148 states, max depth 7, 0 violations: the count of
+`cd232421`, which keeps its own figure and marks (indicative, dirty). No seed's states or max
+depth differ from `baaedbc1`'s and `cd232421`'s logs. `4001ec32` also re-ran `3x1u2r1`, with
+the count of `baaedbc1` (the table's first row).
 
 ## Mutants at the literal G1 bound
 
@@ -136,17 +158,46 @@ every other step. Every enabled step keeps a weight of at least 1, so no path of
 left out, and the step taken is checked against every invariant as in a plain walk (a walk
 computes every enabled step but records only the picked step's violations). The biased walks
 are not a uniform sample of paths: they add depth on this class, they do not replace the
-uniform walks. **These are history: under the per-copy purge reading, oracle before `04487c5`** (not re-run; the current oracle's uniform walks hit the class
-275 [run 48962ffa/walk_3x3_u2_r1_rs0_none:redo_after_partial] times in 1,000,000 walks). Job `f51260dc` (indicative (bundle); source stated as `194048f`; rerun at a pushed sha: pending), `g1.sh PART=walks-bias`:
+uniform walks. **The first runs below are history: under the per-copy purge reading, oracle before `04487c5`**; they were
+re-run on the current oracle at pushed `ab16c7e4` (the rerun, below; the current oracle's uniform walks hit the class
+275 [run 48962ffa/walk_3x3_u2_r1_rs0_none:redo_after_partial] times in 1,000,000 walks). Job `f51260dc` (indicative (bundle); source stated as `194048f`; rerun at pushed `ab16c7e4`: `14f4c310`), `g1.sh PART=walks-bias`:
 
 - **1,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] biased walks at the literal G1 bound:** 0 violations; `redo_after_partial` hit
   **28,568 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial]** times (all classes in the coverage table below).
 - **1,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] biased walks at G1 + 1 restart (a smoke run):** 0 violations; `redo_after_partial` hit 27 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] times.
-- **1,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] biased walks at G1 + 1 restart** (job `d9b8d20f`, indicative (bundle); source stated as `ab3bc8a`; rerun at a pushed sha: pending; `g1.sh PART=walks-bias-restart`): 0
+- **1,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] biased walks at G1 + 1 restart** (job `d9b8d20f`, indicative (bundle); source stated as `ab3bc8a`; rerun at pushed `ab16c7e4`: `6c40147e`; `g1.sh PART=walks-bias-restart`): 0
   violations; `redo_after_partial` hit **28,208 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial]** times, and `restart` 780,299 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:restart].
 
+**The rerun at pushed `ab16c7e4`, on the current oracle** (2026-11-04): job `14f4c310`
+(`g1.sh PART=walks-bias`, `WALKS_BIAS=1000000`, `THREADS=4`) and job `6c40147e`
+(`g1.sh PART=walks-bias-restart`, 1,000,000 walks by default, `THREADS=4`):
+
+- **1,000,000 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] biased walks at the literal G1 bound:** 12,000,000 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:steps] steps, 0 violations; `redo_after_partial` hit
+  **28,658 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial]** times (28,568 in `f51260dc`, indicative (bundle)).
+- **1,000 [run 14f4c310/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] biased walks at G1 + 1 restart (the smoke run):** 0 violations; `redo_after_partial` hit 22 [run 14f4c310/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] times (27 in `f51260dc`).
+- **1,000,000 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] biased walks at G1 + 1 restart:** 13,000,000 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps, 0 violations; `redo_after_partial` hit
+  **28,091 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial]** times, and `restart` 779,968 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:restart] (28,208 and 780,299 in `d9b8d20f`, indicative (bundle)).
+
+Three classes moved between the history run `f51260dc` and its rerun `14f4c310`; the other
+classes are within 3 % (the coverage table below): `taint` 101,191 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] → 130,829 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint],
+`touching_regions` 124,865 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] → 83,246 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions], `revert_extra_conflict` 5,642 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] → 8,757 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict]; the cause is commit
+`04487c54` (the oracle's purge made canonical: copies that touch are one hunk, so one region
+instead of several touching ones, and a joined hunk that deletes across another region's edge
+taints it, U9). An A/B across that one commit, the same biased walk at its parent `4f7b7fcb` and
+at `04487c54` (200,000 walks, 4 threads, `--rng 1`), moves the three the same way and by the same
+proportion: `taint` 20,153 [run 30d212e9/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] → 26,160 [run ea47ed45/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] (×1.30;
+the shift above ×1.29), `touching_regions` 24,972 [run 30d212e9/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] →
+16,561 [run ea47ed45/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] (×0.66; ×0.67), `revert_extra_conflict`
+1,181 [run 30d212e9/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] → 1,790 [run ea47ed45/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] (×1.52;
+×1.55); the other classes within about 3 %. Of the 21 commits in `194048f..ab16c7e4` that touch
+the enumerator, the oracle or the bounded world, it is the only one that changes code the
+bounded walk runs (the others: `write --base`, grouping and D1 paths the bounded world doesn't
+call, D1 being the identity on its one-letter tokens; tests; formatting; the run record's job
+field). The uniform walks moved the same way across it: `d810536a` (`bbbfc17`) → `48962ffa`
+(`d3eccbc`), taint 96,633 → 125,942, touching_regions 115,253 → 71,879.
+
 **The bias hides no mutant.** Every mutant again on 50,000 biased walks (restart-single-taint
-with 1 restart added), in job `f51260dc` (indicative (bundle); rerun at a pushed sha: pending):
+with 1 restart added), in job `f51260dc` (indicative (bundle); rerun at pushed `ab16c7e4`: `14f4c310`, the second table below):
 
 | Mutant | Caught | How (shortest witness seen) | Walks run | redo_after_partial hits |
 |---|---|---|---|---|
@@ -167,32 +218,48 @@ with 1 restart added), in job `f51260dc` (indicative (bundle); rerun at a pushed
 (overlap) and the redo entry carries more regions than were applied. The walks then reached
 the oracle's panic at depth 4, as in the uniform run, and stopped.
 
+**The rerun at pushed `ab16c7e4`** (`14f4c310`, the current oracle): every mutant caught again,
+by the same rule with the same trace length as in `f51260dc`:
+
+| Mutant | Caught | How (shortest witness seen) | Walks run | redo_after_partial hits |
+|---|---|---|---|---|
+| (i) `i-no-taint` | yes | `U9` at depth 3; trace of 4 [run 14f4c310/walk_3x3_u2_r1_rs0_i-no-taint_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_i-no-taint_bias-redo-after-partial:walks] | 1,304 [run 14f4c310/walk_3x3_u2_r1_rs0_i-no-taint_bias-redo-after-partial:redo_after_partial] |
+| (iii) `iii-partial-hides-taint` | yes | `U15` at depth 3; trace of 4 [run 14f4c310/walk_3x3_u2_r1_rs0_iii-partial-hides-taint_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_iii-partial-hides-taint_bias-redo-after-partial:walks] | 1,020 [run 14f4c310/walk_3x3_u2_r1_rs0_iii-partial-hides-taint_bias-redo-after-partial:redo_after_partial] |
+| (iv) `iv-redo-retries-skipped` | yes | `U17` at depth 3; trace of 4 [run 14f4c310/walk_3x3_u2_r1_rs0_iv-redo-retries-skipped_bias-redo-after-partial] states; then the oracle's assertion stop at depth 8 (`window.rs:199`; at depth 4 in `f51260dc`), which ended the run | 78 [run 14f4c310/walk_3x3_u2_r1_rs0_iv-redo-retries-skipped_bias-redo-after-partial:walks] (the run ends there; 153 in `f51260dc`) | 0 [run 14f4c310/walk_3x3_u2_r1_rs0_iv-redo-retries-skipped_bias-redo-after-partial:redo_after_partial] |
+| (vi) `vi-o5-every-window-end` | yes | `O5` at depth 3; trace of 4 [run 14f4c310/walk_3x3_u2_r1_rs0_vi-o5-every-window-end_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_vi-o5-every-window-end_bias-redo-after-partial:walks] | 1,211 [run 14f4c310/walk_3x3_u2_r1_rs0_vi-o5-every-window-end_bias-redo-after-partial:redo_after_partial] |
+| (vii) `vii-o5-region-base` | yes | `O5` at depth 3; trace of 4 [run 14f4c310/walk_3x3_u2_r1_rs0_vii-o5-region-base_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_vii-o5-region-base_bias-redo-after-partial:walks] | 1,300 [run 14f4c310/walk_3x3_u2_r1_rs0_vii-o5-region-base_bias-redo-after-partial:redo_after_partial] |
+| `skip-u19` | yes | `U19` at depth 1; trace of 2 [run 14f4c310/walk_3x3_u2_r1_rs0_skip-u19_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_skip-u19_bias-redo-after-partial:walks] | 1,414 [run 14f4c310/walk_3x3_u2_r1_rs0_skip-u19_bias-redo-after-partial:redo_after_partial] |
+| (viii) `f3-rediff` | yes | `own_only` at depth 3; trace of 4 [run 14f4c310/walk_3x3_u2_r1_rs0_f3-rediff_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_f3-rediff_bias-redo-after-partial:walks] | 1,406 [run 14f4c310/walk_3x3_u2_r1_rs0_f3-rediff_bias-redo-after-partial:redo_after_partial] |
+| (ix) `restart-single-taint` | yes | `RT` at depth 8; trace of 9 [run 14f4c310/walk_3x3_u2_r1_rs1_restart-single-taint_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs1_restart-single-taint_bias-redo-after-partial:walks] | 1,398 [run 14f4c310/walk_3x3_u2_r1_rs1_restart-single-taint_bias-redo-after-partial:redo_after_partial] |
+| (x) `x-provenance-ignored-in-o4` | yes | `I1` at depth 3; trace of 4 [run 14f4c310/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4_bias-redo-after-partial:walks] | 1,358 [run 14f4c310/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4_bias-redo-after-partial:redo_after_partial] |
+| (xi) `xi-no-o4a` | yes | `I1` at depth 4; trace of 5 [run 14f4c310/walk_3x3_u2_r1_rs0_xi-no-o4a_bias-redo-after-partial] states | 50,000 [run 14f4c310/walk_3x3_u2_r1_rs0_xi-no-o4a_bias-redo-after-partial:walks] | 1,451 [run 14f4c310/walk_3x3_u2_r1_rs0_xi-no-o4a_bias-redo-after-partial:redo_after_partial] |
+
 ## Per-class coverage at G1
 
 Transitions per case class (E-HIST-13), from the clean walks: a walk counts each step it
 takes, not the steps it computed and left (unlike `bfs`, which counts per first visit;
-`docs/MODEL-CHECK.md`, What the runs check). The first two columns are the
-current oracle's; the other three are history: under the per-copy purge reading, oracle before `04487c5`. The biased column is not a uniform
+`docs/MODEL-CHECK.md`, What the runs check). The first four columns are the
+current oracle's (the two biased ones from the rerun at pushed `ab16c7e4`); the other three are history: under the per-copy purge reading, oracle before `04487c5`. The biased columns are not a uniform
 sample (weighted steps, above).
 
-| Class | Walks at G1, current oracle (`48962ffa`) | Walks at G1 + 1 restart, current oracle | Walks at G1 (`41f256f3`, history; indicative (bundle)) [unverified: before run records] | Walks at G1 + 1 restart (history; `d810536a`, indicative (bundle)) | Biased walks at G1 (`--bias redo-after-partial`, history; `f51260dc`, indicative (bundle); rerun at a pushed sha: pending) |
-|---|---|---|---|---|---|
-| eof_append | 42,530 [run 48962ffa/walk_3x3_u2_r1_rs0_none:eof_append] | 41,675 [run 48962ffa/walk_3x3_u2_r1_rs1_none:eof_append] | 215,358 [unverified: before run records] | 42,272 [run d810536a/walk_3x3_u2_r1_rs1_none:eof_append] | 41,305 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:eof_append] |
-| edge_insert | 336,276 [run 48962ffa/walk_3x3_u2_r1_rs0_none:edge_insert] | 329,478 [run 48962ffa/walk_3x3_u2_r1_rs1_none:edge_insert] | 1,708,451 [unverified: before run records] | 333,934 [run d810536a/walk_3x3_u2_r1_rs1_none:edge_insert] | 360,586 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:edge_insert] |
-| taint | 127,685 [run 48962ffa/walk_3x3_u2_r1_rs0_none:taint] | 125,942 [run 48962ffa/walk_3x3_u2_r1_rs1_none:taint] | 494,519 [unverified: before run records] | 96,633 [run d810536a/walk_3x3_u2_r1_rs1_none:taint] | 101,191 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] |
-| partial | 85,836 [run 48962ffa/walk_3x3_u2_r1_rs0_none:partial] | 82,635 [run 48962ffa/walk_3x3_u2_r1_rs1_none:partial] | 443,021 [unverified: before run records] | 85,204 [run d810536a/walk_3x3_u2_r1_rs1_none:partial] | 163,897 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:partial] |
-| redo_after_partial | 275 [run 48962ffa/walk_3x3_u2_r1_rs0_none:redo_after_partial] | 242 [run 48962ffa/walk_3x3_u2_r1_rs1_none:redo_after_partial] | 1,289 [unverified: before run records] | 242 [run d810536a/walk_3x3_u2_r1_rs1_none:redo_after_partial] | **28,568** [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial] |
-| identical_reports | 125,553 [run 48962ffa/walk_3x3_u2_r1_rs0_none:identical_reports] | 118,652 [run 48962ffa/walk_3x3_u2_r1_rs1_none:identical_reports] | 630,349 [unverified: before run records] | 118,720 [run d810536a/walk_3x3_u2_r1_rs1_none:identical_reports] | 152,741 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:identical_reports] |
-| import_kept | 638,593 [run 48962ffa/walk_3x3_u2_r1_rs0_none:import_kept] | 632,929 [run 48962ffa/walk_3x3_u2_r1_rs1_none:import_kept] | 3,207,597 [unverified: before run records] | 636,841 [run d810536a/walk_3x3_u2_r1_rs1_none:import_kept] | 778,697 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:import_kept] |
-| purge_drops | 1,009,414 [run 48962ffa/walk_3x3_u2_r1_rs0_none:purge_drops] | 967,518 [run 48962ffa/walk_3x3_u2_r1_rs1_none:purge_drops] | 5,043,303 [unverified: before run records] | 968,317 [run d810536a/walk_3x3_u2_r1_rs1_none:purge_drops] | 1,006,462 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:purge_drops] |
-| restart | 0 (no restart in this bound) | 779,113 [run 48962ffa/walk_3x3_u2_r1_rs1_none:restart] | 0 (no restart in this bound) | 779,665 [run d810536a/walk_3x3_u2_r1_rs1_none:restart] | 0 (no restart in this bound) |
-| exact_vs_rediff | 68,855 [run 48962ffa/walk_3x3_u2_r1_rs0_none:exact_vs_rediff] | 67,093 [run 48962ffa/walk_3x3_u2_r1_rs1_none:exact_vs_rediff] | 355,050 [unverified: before run records] | 68,876 [run d810536a/walk_3x3_u2_r1_rs1_none:exact_vs_rediff] | 68,093 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:exact_vs_rediff] |
-| touching_regions | 72,932 [run 48962ffa/walk_3x3_u2_r1_rs0_none:touching_regions] | 71,879 [run 48962ffa/walk_3x3_u2_r1_rs1_none:touching_regions] | 582,025 [unverified: before run records] | 115,253 [run d810536a/walk_3x3_u2_r1_rs1_none:touching_regions] | 124,865 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] |
-| revert_extra_conflict | 9,701 [run 48962ffa/walk_3x3_u2_r1_rs0_none:revert_extra_conflict] | 9,628 [run 48962ffa/walk_3x3_u2_r1_rs1_none:revert_extra_conflict] | 31,880 [unverified: before run records] | 6,279 [run d810536a/walk_3x3_u2_r1_rs1_none:revert_extra_conflict] | 5,642 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] |
-| concurrent_restore | 54,358 [run 48962ffa/walk_3x3_u2_r1_rs0_none:concurrent_restore] | 52,312 [run 48962ffa/walk_3x3_u2_r1_rs1_none:concurrent_restore] | 272,790 [unverified: before run records] | 52,395 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore] | 76,083 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore] |
-| concurrent_restore_o4 (O4 took a restoration once) | 25,511 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 24,752 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | not counted (v0.9.1) | 24,780 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 41,232 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] |
-| concurrent_restore_o4a (O4a fired) | 3,883 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 3,894 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | not counted (v0.9.1) | 3,914 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 5,841 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] |
-| concurrent_restore_base_by_root | 25,716 [run 48962ffa/walk_3x3_u2_r1_rs0_none:concurrent_restore_base_by_root] | 24,387 [run 48962ffa/walk_3x3_u2_r1_rs1_none:concurrent_restore_base_by_root] | not counted (v0.9.1) | 24,424 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore_base_by_root] | 30,681 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore_base_by_root] |
+| Class | Walks at G1, current oracle (`48962ffa`) | Walks at G1 + 1 restart, current oracle | Biased walks at G1, current oracle (`14f4c310`, at pushed `ab16c7e4`) | Biased walks at G1 + 1 restart, current oracle (`6c40147e`, at pushed `ab16c7e4`) | Walks at G1 (`41f256f3`, history; indicative (bundle)) [unverified: before run records] | Walks at G1 + 1 restart (history; `d810536a`, indicative (bundle)) | Biased walks at G1 (`--bias redo-after-partial`, history; `f51260dc`, indicative (bundle); rerun at pushed `ab16c7e4`: `14f4c310`) |
+|---|---|---|---|---|---|---|---|
+| eof_append | 42,530 [run 48962ffa/walk_3x3_u2_r1_rs0_none:eof_append] | 41,675 [run 48962ffa/walk_3x3_u2_r1_rs1_none:eof_append] | 41,047 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:eof_append] | 40,158 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:eof_append] | 215,358 [unverified: before run records] | 42,272 [run d810536a/walk_3x3_u2_r1_rs1_none:eof_append] | 41,305 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:eof_append] |
+| edge_insert | 336,276 [run 48962ffa/walk_3x3_u2_r1_rs0_none:edge_insert] | 329,478 [run 48962ffa/walk_3x3_u2_r1_rs1_none:edge_insert] | 355,908 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:edge_insert] | 351,920 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:edge_insert] | 1,708,451 [unverified: before run records] | 333,934 [run d810536a/walk_3x3_u2_r1_rs1_none:edge_insert] | 360,586 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:edge_insert] |
+| taint | 127,685 [run 48962ffa/walk_3x3_u2_r1_rs0_none:taint] | 125,942 [run 48962ffa/walk_3x3_u2_r1_rs1_none:taint] | 130,829 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] | 128,763 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:taint] | 494,519 [unverified: before run records] | 96,633 [run d810536a/walk_3x3_u2_r1_rs1_none:taint] | 101,191 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] |
+| partial | 85,836 [run 48962ffa/walk_3x3_u2_r1_rs0_none:partial] | 82,635 [run 48962ffa/walk_3x3_u2_r1_rs1_none:partial] | 160,843 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:partial] | 157,750 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:partial] | 443,021 [unverified: before run records] | 85,204 [run d810536a/walk_3x3_u2_r1_rs1_none:partial] | 163,897 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:partial] |
+| redo_after_partial | 275 [run 48962ffa/walk_3x3_u2_r1_rs0_none:redo_after_partial] | 242 [run 48962ffa/walk_3x3_u2_r1_rs1_none:redo_after_partial] | **28,658** [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial] | **28,091** [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] | 1,289 [unverified: before run records] | 242 [run d810536a/walk_3x3_u2_r1_rs1_none:redo_after_partial] | **28,568** [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial] |
+| identical_reports | 125,553 [run 48962ffa/walk_3x3_u2_r1_rs0_none:identical_reports] | 118,652 [run 48962ffa/walk_3x3_u2_r1_rs1_none:identical_reports] | 151,962 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:identical_reports] | 147,872 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:identical_reports] | 630,349 [unverified: before run records] | 118,720 [run d810536a/walk_3x3_u2_r1_rs1_none:identical_reports] | 152,741 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:identical_reports] |
+| import_kept | 638,593 [run 48962ffa/walk_3x3_u2_r1_rs0_none:import_kept] | 632,929 [run 48962ffa/walk_3x3_u2_r1_rs1_none:import_kept] | 774,624 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:import_kept] | 769,852 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:import_kept] | 3,207,597 [unverified: before run records] | 636,841 [run d810536a/walk_3x3_u2_r1_rs1_none:import_kept] | 778,697 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:import_kept] |
+| purge_drops | 1,009,414 [run 48962ffa/walk_3x3_u2_r1_rs0_none:purge_drops] | 967,518 [run 48962ffa/walk_3x3_u2_r1_rs1_none:purge_drops] | 1,006,236 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:purge_drops] | 963,477 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:purge_drops] | 5,043,303 [unverified: before run records] | 968,317 [run d810536a/walk_3x3_u2_r1_rs1_none:purge_drops] | 1,006,462 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:purge_drops] |
+| restart | 0 (no restart in this bound) | 779,113 [run 48962ffa/walk_3x3_u2_r1_rs1_none:restart] | 0 (no restart in this bound) | 779,968 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:restart] | 0 (no restart in this bound) | 779,665 [run d810536a/walk_3x3_u2_r1_rs1_none:restart] | 0 (no restart in this bound) |
+| exact_vs_rediff | 68,855 [run 48962ffa/walk_3x3_u2_r1_rs0_none:exact_vs_rediff] | 67,093 [run 48962ffa/walk_3x3_u2_r1_rs1_none:exact_vs_rediff] | 66,321 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:exact_vs_rediff] | 65,208 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:exact_vs_rediff] | 355,050 [unverified: before run records] | 68,876 [run d810536a/walk_3x3_u2_r1_rs1_none:exact_vs_rediff] | 68,093 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:exact_vs_rediff] |
+| touching_regions | 72,932 [run 48962ffa/walk_3x3_u2_r1_rs0_none:touching_regions] | 71,879 [run 48962ffa/walk_3x3_u2_r1_rs1_none:touching_regions] | 83,246 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] | 81,925 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:touching_regions] | 582,025 [unverified: before run records] | 115,253 [run d810536a/walk_3x3_u2_r1_rs1_none:touching_regions] | 124,865 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] |
+| revert_extra_conflict | 9,701 [run 48962ffa/walk_3x3_u2_r1_rs0_none:revert_extra_conflict] | 9,628 [run 48962ffa/walk_3x3_u2_r1_rs1_none:revert_extra_conflict] | 8,757 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] | 8,810 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:revert_extra_conflict] | 31,880 [unverified: before run records] | 6,279 [run d810536a/walk_3x3_u2_r1_rs1_none:revert_extra_conflict] | 5,642 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] |
+| concurrent_restore | 54,358 [run 48962ffa/walk_3x3_u2_r1_rs0_none:concurrent_restore] | 52,312 [run 48962ffa/walk_3x3_u2_r1_rs1_none:concurrent_restore] | 75,817 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore] | 73,921 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:concurrent_restore] | 272,790 [unverified: before run records] | 52,395 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore] | 76,083 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore] |
+| concurrent_restore_o4 (O4 took a restoration once) | 25,511 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 24,752 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 41,165 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 40,409 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | not counted (v0.9.1) | 24,780 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 41,232 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] |
+| concurrent_restore_o4a (O4a fired) | 3,883 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 3,894 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 5,738 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 5,572 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | not counted (v0.9.1) | 3,914 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 5,841 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] |
+| concurrent_restore_base_by_root | 25,716 [run 48962ffa/walk_3x3_u2_r1_rs0_none:concurrent_restore_base_by_root] | 24,387 [run 48962ffa/walk_3x3_u2_r1_rs1_none:concurrent_restore_base_by_root] | 30,570 [run 14f4c310/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore_base_by_root] | 29,543 [run 6c40147e/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:concurrent_restore_base_by_root] | not counted (v0.9.1) | 24,424 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore_base_by_root] | 30,681 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore_base_by_root] |
 
 ## The exact counts
 
@@ -239,9 +306,9 @@ those of v1.8 and v1.9's runs (`00d8b0dc`, `85262144`; `0b8fedfe`, `e6427b49`; a
   undos + 1 revert. 3 × 2 + 2 undos (`g1.sh PART=long`, ≈ 2.6 × 10^10 states) has not been run;
   neither exhaustive run has a restart (restarts are exhaustive only at the small bound of the
   counts, 1 × 3 + 1 revert + 1 restart).
-- **`redo_after_partial` past 10^4 only in biased walks** (history, per-copy reading; not
-  re-run on the current oracle, whose uniform walks hit it 275 and 242 times in 1,000,000 each): 28,568 hits in 1,000,000 biased walks
-  (cited above) and 28,208 in 1,000,000 biased walks with a restart, against 1,289 in
+- **`redo_after_partial` past 10^4 only in biased walks** (on the current oracle, whose
+  uniform walks hit it 275 and 242 times in 1,000,000 each, the biased walks re-run at pushed `ab16c7e4`): 28,658 hits in 1,000,000 biased walks
+  and 28,091 in 1,000,000 biased walks with a restart (cited above; 28,568 and 28,208 under the per-copy reading, history), against 1,289 in
   5,000,000 uniform walks and 242 with a restart. The biased walks weigh their steps, so they
   are not a uniform sample of the bound's paths.
 - **One seed, one length cap:** every run starts from `abb` with `MAXLEN` 4 (texts longer than 4
@@ -358,7 +425,7 @@ modes), `O5` (the end-of-text rule exactly at the doc's end with a non-empty bas
 restated equivalence) is a diagnostic (`--u12`), clean at every bound run.
 
 ## Teeth (mutants: each must fail, minimal counterexample inside an exhaustive bound)
-Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least) and TLC with one worker (a shortest counterexample), both re-run with run records on the revised model at the branch head `f8e2aad` in `545f3ae0` (`tools/undo/counts.sh`, `PART=m`; the same before the rebase, `41730937`, tag `ev-41730937`; each TLC record with its worker count, 1: a least depth cites a one-worker run, `tools/evidence/README.md` section 4), the same depths as before it (`a885a72a`, indicative (bundle); TLC's `13b3e348`, indicative (bundle), rerun at a pushed sha: pending): TLC's trace is one state longer than the enumerator's depth (it counts the initial state), at every mutant:
+Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least) and TLC with one worker (a shortest counterexample), both re-run with run records on the revised model at the branch head `f8e2aad` in `545f3ae0` (`tools/undo/counts.sh`, `PART=m`; the same before the rebase, `41730937`, tag `ev-41730937`; each TLC record with its worker count, 1: a least depth cites a one-worker run, `tools/evidence/README.md` section 4), the same depths as before it (`a885a72a`, indicative (bundle); TLC's `13b3e348`, indicative (bundle), rerun at pushed `ab16c7e4`: `12df4c09`, whose 20 records equal `545f3ae0`'s and `41730937`'s; 18 equal `13b3e348`'s, and the restart mutant's two (`m_rst`, `e_m_restart-single-taint`) differ from it by the purge revision `04487c5`, which `13b3e348` ran before): TLC's trace is one state longer than the enumerator's depth (it counts the initial state), at every mutant:
 
 | Mutant | Fails | Bound (exhaustive) | Least depth (enumerator) | TLC's shortest trace (states, one worker) |
 |---|---|---|---|---|
@@ -446,7 +513,7 @@ enabled, cut, outcome, whole state):
   would give): 877 hits in 256 traces.
 - **U22a's cost** (revert conflicting where undo of the same change would apply): 7 of 2,304
   revert regions (0.30%); with touching regions 7 of 443 (1.58%).
-- Large run (≥ 10^4 per class): not run yet (the trace test `trace_equivalence_large` exists; no script runs it).
+- Large run: `trace_equivalence_large`, 400,000 traces in five parts (`tools/undo/traces-large.sh` `PART=main1`…`main5`), each class at least half its measured rate (`LARGE_MAIN`, job 301c3906): enforced minimums over the 400,000 of about 2,500 for `redo_after_partial` and about 7,750 for `concurrent_restore_o4a`, every other class above 10^4 (≥ 10^4 per class would take about 800,000 traces).
 
 ## Conformance
 v1.8: `hist.undo_own_only` reads roots and asserts the expected outcomes of (a) and (b); the
@@ -463,11 +530,19 @@ v0.8.2's kit and pass here.
 
 
 ## Log
+- 2026-11-04: the reruns at pushed `ab16c7e4` of four cited jobs whose records name no pushed
+  commit: `13b3e348` → `12df4c09` (`counts.sh PART=m`, every record equal to `545f3ae0`'s);
+  `cd232421` → `4001ec32`, `0f093c6e`, `4f681c81`, `6606fd4e`, `2826cd5e`, `334ad64d`, `ce3ad700` (seven seed-range parts: 716,142,148
+  states, max depth 7, 0 violations, the same count); `f51260dc` → `14f4c310` (biased walks,
+  0 violations; every mutant caught by the same rule under the bias); `d9b8d20f` → `6c40147e`
+  (biased walks with a restart, 0 violations). Three classes of the biased walks moved
+  (`taint`, `touching_regions`, `revert_extra_conflict`), by commit `04487c54` (the canonical
+  purge), shown by an A/B across it (`30d212e9` → `ea47ed45`).
 - 2026-10-30: counts.sh (`PART=a`, `b`, `m`) at the branch head `f8e2aad` (`88555d19`, `ee85bf3c`, `545f3ae0`):
   TLC = enumerator at all seven bounds with the same counts as before the rebase, the ITF
   replays and the regression traces 0 mismatches, every mutant caught at the same depths.
 - 2026-10-30: the G1 headline on the current oracle (canonical purge hunks, `04487c5`): exhaustive
-  3 × 1 + 2 undos + 1 revert 8,494,185 states (`baaedbc1`) and 2 × 2 + 2 undos + 1 revert 716,142,148 states (`cd232421`, resumed from `baaedbc1`; `cd232421` indicative (dirty: pushed `d3eccbc8` plus an untracked checkpoint), rerun at a pushed sha: pending),
+  3 × 1 + 2 undos + 1 revert 8,494,185 states (`baaedbc1`) and 2 × 2 + 2 undos + 1 revert 716,142,148 states (`cd232421`, resumed from `baaedbc1`; `cd232421` indicative (dirty: pushed `d3eccbc8` plus an untracked checkpoint), rerun at pushed `ab16c7e4`: `4001ec32`, `0f093c6e`, `4f681c81`, `6606fd4e`, `2826cd5e`, `334ad64d`, `ce3ad700`),
   no violation (before: 8,516,359 and 717,352,254, 725.9M together, under the per-copy reading);
   1,000,000 walks at G1 and 1,000,000 with a restart, 0 violations, every mutant caught at the
   same depths (`48962ffa`). The biased walks and the earlier walks stay as history.
@@ -478,9 +553,9 @@ v0.8.2's kit and pass here.
   replays clean again, at G1 too (`03743fd6`, tag `ev-03743fd6`). The Apalache servers now run with the Jackson limits
   agent (`tools/quint-jvm`): the export check's IR is 20,001,757 bytes since the revision.
 - 2026-10-28: the exact counts, the ITF replay and the TLC mutants re-run with run records (`85045092`, `a885a72a`; both indicative (bundle)); the exhaustive pair's counts cite records collected from its log (`6a6c1557`, indicative (bundle)).
-- 2026-10-29: biased walks with 1 restart (`d9b8d20f`, indicative (bundle); source stated as `ab3bc8a`; rerun at a pushed sha: pending): `redo_after_partial` at 28,208 hits
+- 2026-10-29: biased walks with 1 restart (`d9b8d20f`, indicative (bundle); source stated as `ab3bc8a`; rerun at pushed `ab16c7e4`: `6c40147e`): `redo_after_partial` at 28,208 hits
   in 1,000,000 walks, 0 violations.
-- 2026-10-28: biased walks (`walk --bias redo-after-partial`, `f51260dc`, indicative (bundle); source stated as `194048f`; rerun at a pushed sha: pending): `redo_after_partial`
+- 2026-10-28: biased walks (`walk --bias redo-after-partial`, `f51260dc`, indicative (bundle); source stated as `194048f`; rerun at pushed `ab16c7e4`: `14f4c310`): `redo_after_partial`
   at 28,568 hits in 1,000,000 walks, 0 violations; every mutant caught under the bias.
 - 2026-10-28: the G1 runs: exhaustive pair (`6a6c1557`), 5,000,000 walks at G1 (`41f256f3`),
   1,000,000 walks with a restart (`d810536a`), every mutant on walks (`5cfc0edf`: (iv) by an

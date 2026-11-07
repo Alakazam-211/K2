@@ -51,8 +51,8 @@ use crate::elem::Value;
 use super::{
     dec_approval, dec_entry_full, dec_meta, dec_version_full, enc_approval, enc_doc_key,
     enc_entry_as, enc_meta, enc_snapshot, enc_sync, enc_version_redacted, ApprovalState, DocId,
-    DocStore, Needles, Neutral, Redaction, Seq, StoreError, SyncState, APPROVALS, CLIENTS, DOCS,
-    DOC_KEYS, PENDING, SNAPSHOTS, SYNC, SYNCED, UPDATES, VERSIONS,
+    DocStore, EntryEngine, Needles, Neutral, Redaction, Seq, StoreError, SyncState, APPROVALS,
+    CLIENTS, DOCS, DOC_KEYS, PENDING, SNAPSHOTS, SYNC, SYNCED, UPDATES, VERSIONS,
 };
 
 /// Which records a purge takes whole (by change seq, or by version id).
@@ -253,7 +253,7 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
         dec_meta(m.value())?
     };
     // another engine's doc: its rows aren't all this build's to reach (v0.10.1)
-    DocStore::check_owned(&meta)?;
+    let engine = EntryEngine::of(&meta)?;
     // the log: metadata only from here on
     {
         let mut t = w.open_table(UPDATES)?;
@@ -263,11 +263,13 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
             .collect::<Result<_, _>>()?;
         for (seq, b) in rows {
             let (mut e, red) = dec_entry_full(&b)?;
+            // every entry is of the doc's engine (as at load), so each is a Yrs one here
+            engine.check(&e.body)?;
             let mut changed = red.is_none();
             if changed {
                 c.log_entries += 1;
             }
-            let n = red.unwrap_or(e.update.len() as u64);
+            let n = red.unwrap_or(e.body.yrs_len());
             if rename(&mut e.author, er) | rename_opt(&mut e.on_behalf_of, er) {
                 c.attributions += 1;
                 changed = true;

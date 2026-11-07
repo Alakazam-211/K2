@@ -124,7 +124,34 @@ opened by a text pack is still `PackMismatch`.
 - **Tier 0** reads no engine state (blob versions are bytes), so no stamp applies; a blob
   doc is known by its pack, `kit:blob`.
 - `Doc::from_store` and `DocStore::load` are below the check: a host that rebuilds a doc
-  from the store itself checks `DocMeta` first.
+  from the store itself checks `DocMeta` first. `DocStore::load` refuses another engine's doc
+  whole itself (`ForeignEngine`, `MPC-E520`), before decoding any of its log, and refuses a
+  log whose entries aren't all of its doc's engine (`Corrupt("log entry engine")`).
+
+### Native documents: keys
+
+A document on the native engine (feature `native`; not for hosts until the switch) needs two
+keys, `NativeKeys`: its equivocation-digest key and its store secret. In the engine's words,
+and in `MPCE-E566`'s, "the store" is one document's records, so both keys are **per
+document**. A session gets them from the host per document (`NativeKeysFor::keys`; sessions
+don't store native documents yet, so nothing calls it until C3). The host's duties:
+
+- **Make both** from its own CSPRNG: two independent 32-byte values, one pair per document.
+  The kit makes neither and has no random source for them.
+- **Keep them together, outside the store:** never in the kit's store file, and pass both on
+  every open of that document.
+- **Never reuse them** for another document, and never make new ones for a document that has
+  native records.
+- **Losing them loses the document:** its records can't be opened without both, and nothing in
+  the kit recovers them.
+- **Rotation isn't supported** (C3).
+
+Once sessions store native documents (C3), one the host has no keys for (`keys` gives `None`)
+is refused with [`MPCE-E566`](ERRORS.md#engine-ids-mpce-ennn) `store_secret_missing`, and
+nothing is written.
+Its next step says the same: "The host supplies the store's secret and keeps it outside the
+store; pass it on every open. Never make a new secret for a store that has native records."
+`NativeKeys`'s `Debug` prints neither value, and nothing serialises it.
 
 ## Identity, connections and attribution
 
@@ -1519,6 +1546,13 @@ everything the kit holds for a doc; **participant erasure** removes a person fro
 attribution. Both are owner only (`Rights::owner`; others get `Forbidden { need: Owner }`
 and `AuditEvent::Refused { action: Purge }`) and audited as metadata only.
 
+**The erasure limit.** A purge holds against the store as it stands, not against an older copy
+of it. On the native engine, a purge holds against changes made to the store in place: a
+purged record put back, or any record edited where it stands, is refused when the doc loads.
+It does not hold against restoring an older copy of the store, or a copy cut short at its end:
+such a copy loads as the doc was before the purge. On either engine, an older copy of the store
+file holds what it held when it was taken. Erasing backups and older copies is the host's job.
+
 ### Purge removes history, not live text
 
 What the doc says **now** stays; every other copy goes. To take text out of the doc as well,
@@ -1648,7 +1682,8 @@ show a deleted row is still in the file until the rewrite.
 
 **What the rewrite doesn't reach:** the old file's disk blocks are released to the file
 system, not overwritten (raw-device forensics, until reused); APFS snapshots and backups
-taken before; the kit's process memory (freed, not scrubbed).
+taken before; an older copy of the store (the erasure limit, [above](#erasure)); the kit's
+process memory (freed, not scrubbed).
 
 ### The byte scan
 
@@ -1698,6 +1733,7 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | Echo-suppression hashes | **Not kept** | in memory, keyed, expire after 60 s, forgotten by a purge |
 | Connected clients (`purged` frame), offline clients | **Not yet** / when they reconnect | the wire isn't built; `OfflineClients` |
 | The host's own rows (`host_*`) | **No** | opaque to the kit: `HostRows` |
+| An older copy of the store file (a backup, a snapshot, a copy taken before the purge) | **No** | it loads as the doc was then; erase older copies (the host's job) |
 | Git history; agent transcripts and terminal scrollback; Spotlight; APFS snapshots and Time Machine; synced-folder history; K2 backups made before the purge; other apps and sent notifications | **No** | outside the kit: `NotReached::ALWAYS`; **rotate the secret** |
 
 ## Limits (`Config`)
@@ -2367,7 +2403,9 @@ like a text pack. What differs (`session/live/grid.rs`, `store/structured.rs`):
   base. Facets a verb wants checked beyond its ops (a sort's every row) are the verb's to
   add (C1i).
 - **Size limits** (K-CSV-7, KC4; `Config::grid_max_cells` 25,000 present cells, live or
-  hidden, and `grid_max_cols` 1,024): a change that would grow a table past one is
+  hidden, `grid_max_cols` 1,024, and `grid_max_rows` 100,000 rows, live or deleted, blank
+  ones included: a blank row holds no cell, so the cell limit doesn't bound the rows, and
+  every render and reconcile is linear in them): a change that would grow a table past one is
   `AtLimit` (exit 2: "this table is at its size limit (… cells, deleted rows included); the
   owner can free space with `rows drop-deleted`"); a change that doesn't grow it always
   passes, so nothing is ever trapped or dropped. An import over a limit is declined

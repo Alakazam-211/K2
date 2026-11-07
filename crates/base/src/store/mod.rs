@@ -715,12 +715,123 @@ pub struct LogEntry {
     pub at_ms: u64,
     /// Surface it came through, e.g. "cli", "tab", "app", "disk", "restore".
     pub via: String,
-    /// The engine update (kit-made).
-    pub update: Vec<u8>,
+    /// The change itself: a Yrs update (kit-made), or a reference to a native engine
+    /// change. Every entry of a doc's log is of its doc's engine: [`DocStore::load`]
+    /// refuses a log that mixes them.
+    pub body: EntryBody,
     /// The person an assistant agent made this change for (`author` is the agent). An
     /// entry with this set gets a `Pending` [`Approval`] in the same transaction it is
     /// appended in. Record version 2; version-1 records decode with `None`.
     pub on_behalf_of: Option<String>,
+}
+
+impl LogEntry {
+    /// An entry holding a Yrs update (`body` is [`EntryBody::Yrs`]): every entry a doc on
+    /// Yrs logs.
+    pub fn yrs(
+        author: String,
+        client: ClientId,
+        at_ms: u64,
+        via: String,
+        update: Vec<u8>,
+        on_behalf_of: Option<String>,
+    ) -> Self {
+        Self {
+            author,
+            client,
+            at_ms,
+            via,
+            body: EntryBody::Yrs(update),
+            on_behalf_of,
+        }
+    }
+}
+
+/// What a [`LogEntry`] holds of its change, by the doc's engine.
+///
+/// A [`EntryBody::Native`] body has no bytes: the change's content is the native engine's
+/// own record, so the only update bytes an entry ever gives are a [`EntryBody::Yrs`] body's,
+/// and a replay takes them only through [`Loaded::yrs_updates`]. A native body can't be
+/// handed to a byte path:
+///
+/// ```compile_fail,E0308
+/// use k2_mpc_base::store::{EntryBody, LogEntry, NativeRef};
+/// fn replay(_update: &[u8]) {}
+/// let e = LogEntry {
+///     author: "p".into(), client: 7, at_ms: 0, via: "cli".into(),
+///     body: EntryBody::Native(NativeRef { at: 1 }), on_behalf_of: None,
+/// };
+/// if let EntryBody::Native(r) = &e.body {
+///     replay(r); // a NativeRef is not bytes
+/// }
+/// ```
+///
+/// Its twin through the Yrs arm compiles, so the one above fails for the reason it states:
+///
+/// ```
+/// use k2_mpc_base::store::{EntryBody, LogEntry};
+/// fn replay(_update: &[u8]) {}
+/// let e = LogEntry::yrs("p".into(), 7, 0, "cli".into(), vec![1, 2], None);
+/// if let EntryBody::Yrs(u) = &e.body {
+///     replay(u);
+/// }
+/// ```
+///
+/// Nor does a native body convert to bytes:
+///
+/// ```compile_fail,E0277
+/// use k2_mpc_base::store::NativeRef;
+/// let r = NativeRef { at: 1 };
+/// let _bytes: Vec<u8> = r.into();
+/// ```
+///
+/// ```
+/// use k2_mpc_base::store::NativeRef;
+/// let r = NativeRef { at: 1 };
+/// let _at: u64 = r.at;
+/// ```
+///
+/// The entry's old `update` field is gone, so a reader written against it doesn't build:
+///
+/// ```compile_fail,E0609
+/// use k2_mpc_base::store::LogEntry;
+/// let e = LogEntry::yrs("p".into(), 7, 0, "cli".into(), vec![1, 2], None);
+/// let _ = e.update.len();
+/// ```
+///
+/// ```
+/// use k2_mpc_base::store::LogEntry;
+/// let e = LogEntry::yrs("p".into(), 7, 0, "cli".into(), vec![1, 2], None);
+/// assert_eq!(e.body.yrs_len(), 2);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryBody {
+    /// A doc on Yrs: the change's update (kit-made bytes). Empty for an entry a purge
+    /// redacted (its byte length is kept beside it).
+    Yrs(Vec<u8>),
+    /// A doc on the native engine: the change, by its apply position. No bytes: the
+    /// content is the engine's record.
+    Native(NativeRef),
+}
+
+impl EntryBody {
+    /// The Yrs update's length in bytes; 0 for a native body (its content is the engine's
+    /// record, not the kit's log).
+    pub fn yrs_len(&self) -> u64 {
+        match self {
+            EntryBody::Yrs(u) => u.len() as u64,
+            EntryBody::Native(_) => 0,
+        }
+    }
+}
+
+/// A native engine change, named by its apply position: strictly increasing per doc, one per
+/// change, and the same in every generation of the doc's records (a cut moves records, never
+/// positions). It gives no bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NativeRef {
+    /// The change's apply position.
+    pub at: u64,
 }
 
 /// Where an on-behalf change stands with the person it was made for.
@@ -855,6 +966,67 @@ pub struct Loaded {
     pub updates: Vec<(Seq, LogEntry)>,
 }
 
+impl Loaded {
+    /// The log's Yrs updates, in order: what a Yrs replay applies, and its only way to the
+    /// log's bytes. All or nothing: any native entry is `Corrupt("log entry engine")`
+    /// before a single update is given (a native doc loads from its engine's records, never
+    /// by a Yrs replay).
+    pub fn yrs_updates(&self) -> Result<Vec<&[u8]>, StoreError> {
+        #[cfg(test)]
+        if plant::planted(plant::EntryPlant::NativeViaYrsReplay) {
+            // the plant: a native entry is skipped instead of refused
+            return Ok(self
+                .updates
+                .iter()
+                .filter_map(|(_, e)| match &e.body {
+                    EntryBody::Yrs(u) => Some(u.as_slice()),
+                    EntryBody::Native(_) => None,
+                })
+                .collect());
+        }
+        self.updates
+            .iter()
+            .map(|(_, e)| match &e.body {
+                EntryBody::Yrs(u) => Ok(u.as_slice()),
+                EntryBody::Native(_) => Err(StoreError::Corrupt(LOG_ENTRY_ENGINE)),
+            })
+            .collect()
+    }
+}
+
+/// The corruption a log entry of another engine than its doc's is (a mixed log).
+pub(crate) const LOG_ENTRY_ENGINE: &str = "log entry engine";
+
+/// The engine a doc's log entries are of, by its stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryEngine {
+    Yrs,
+    /// No stamp maps here in this build (C3 stamps native docs); the check is ready for it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Native,
+}
+
+impl EntryEngine {
+    /// The engine of the entries of a doc stamped as `meta` is: a doc this build owns
+    /// ([`DocStore::check_owned`]: Yrs's, an unstamped one, or a tier-0 one) logs Yrs
+    /// entries. Another engine's doc is refused whole ([`StoreError::ForeignEngine`]),
+    /// before any of its entries is decoded.
+    pub(crate) fn of(meta: &DocMeta) -> Result<Self, StoreError> {
+        DocStore::check_owned(meta)?;
+        Ok(EntryEngine::Yrs)
+    }
+
+    /// `Corrupt("log entry engine")` unless `body` is of this engine.
+    pub(crate) fn check(self, body: &EntryBody) -> Result<(), StoreError> {
+        match (self, body) {
+            (EntryEngine::Yrs, EntryBody::Yrs(_)) | (EntryEngine::Native, EntryBody::Native(_)) => {
+                Ok(())
+            }
+            _ => Err(StoreError::Corrupt(LOG_ENTRY_ENGINE)),
+        }
+    }
+}
+
 pub struct DocStore {
     /// Every transaction holds a read guard for its whole life; [`DocStore::rewrite_file`]
     /// takes the write guard to swap in the rewritten file, so no transaction ever spans
@@ -937,30 +1109,53 @@ fn dec_meta(b: &[u8]) -> Result<DocMeta, StoreError> {
     Ok(m)
 }
 
-/// Log record version 3: version 2 with the update either present (`0`, its bytes) or
-/// purged (`1`, its byte length only: K-PURGE-2's `redacted {byte length}`).
+/// Log record version 3 (a Yrs entry): version 2 with the update either present (`0`, its
+/// bytes) or purged (`1`, its byte length only: K-PURGE-2's `redacted {byte length}`). Every
+/// Yrs entry is written as version 3, byte for byte as before native entries existed, so a
+/// store with no native doc is unchanged.
+///
+/// Log record version 4 (a native entry): `u8 4 | str author | u64 client | u64 at_ms |
+/// str via | u8 2 | u64 at | opt_str on_behalf_of`. Body tag 2 is the change's apply
+/// position ([`NativeRef`]); version 4 carries no other tag and versions 1-3 never carry it.
 fn enc_entry(e: &LogEntry) -> Vec<u8> {
     enc_entry_as(e, None)
 }
 
 /// [`enc_entry`], or (`redacted: Some(n)`) the entry's metadata with `redacted {n}` in place
-/// of its update.
+/// of its update. A native entry holds no content, so it is never redacted: `redacted` is
+/// `None` for it.
 fn enc_entry_as(e: &LogEntry, redacted: Option<u64>) -> Vec<u8> {
+    #[cfg(test)]
+    if plant::planted(plant::EntryPlant::YrsAsVersion4) {
+        if let EntryBody::Yrs(u) = &e.body {
+            // the plant: a Yrs entry written as version 4 (its update's length as the position)
+            let body = EntryBody::Native(NativeRef { at: u.len() as u64 });
+            return enc_entry_as(&LogEntry { body, ..e.clone() }, None);
+        }
+    }
+    debug_assert!(
+        matches!(e.body, EntryBody::Yrs(_)) || redacted.is_none(),
+        "a native entry is never redacted"
+    );
     let mut w = W::default();
-    w.u8(3)
-        .str(&e.author)
-        .u64(e.client)
-        .u64(e.at_ms)
-        .str(&e.via);
-    match redacted {
-        None => w.u8(0).bytes(&e.update),
-        Some(n) => w.u8(1).u64(n),
+    w.u8(match e.body {
+        EntryBody::Yrs(_) => 3,
+        EntryBody::Native(_) => 4,
+    })
+    .str(&e.author)
+    .u64(e.client)
+    .u64(e.at_ms)
+    .str(&e.via);
+    match (&e.body, redacted) {
+        (EntryBody::Yrs(u), None) => w.u8(0).bytes(u),
+        (EntryBody::Yrs(_), Some(n)) => w.u8(1).u64(n),
+        (EntryBody::Native(r), _) => w.u8(2).u64(r.at),
     };
     w.opt_str(e.on_behalf_of.as_deref());
     w.0
 }
 
-/// Decodes log records version 1, 2 and 3. A purged entry decodes with an empty update.
+/// Decodes log records version 1 to 4. A purged entry decodes with an empty update.
 #[cfg(test)]
 fn dec_entry(b: &[u8]) -> Result<LogEntry, StoreError> {
     Ok(dec_entry_full(b)?.0)
@@ -970,25 +1165,23 @@ fn dec_entry(b: &[u8]) -> Result<LogEntry, StoreError> {
 fn dec_entry_full(b: &[u8]) -> Result<(LogEntry, Option<u64>), StoreError> {
     let mut r = R::new(b, "log entry");
     let v = r.u8()?;
-    if !(1..=3).contains(&v) {
+    if !(1..=4).contains(&v) {
         return Err(StoreError::Corrupt("log entry version"));
     }
     let (author, client, at_ms, via) = (r.str()?, r.u64()?, r.u64()?, r.str()?);
-    let (update, redacted) = if v < 3 {
-        (r.bytes()?, None)
-    } else {
-        match r.u8()? {
-            0 => (r.bytes()?, None),
-            1 => (Vec::new(), Some(r.u64()?)),
-            _ => return Err(StoreError::Corrupt("log entry")),
-        }
+    let (body, redacted) = match (v, if v < 3 { None } else { Some(r.u8()?) }) {
+        (1 | 2, None) => (EntryBody::Yrs(r.bytes()?), None),
+        (3, Some(0)) => (EntryBody::Yrs(r.bytes()?), None),
+        (3, Some(1)) => (EntryBody::Yrs(Vec::new()), Some(r.u64()?)),
+        (4, Some(2)) => (EntryBody::Native(NativeRef { at: r.u64()? }), None),
+        _ => return Err(StoreError::Corrupt("log entry")),
     };
     let e = LogEntry {
         author,
         client,
         at_ms,
         via,
-        update,
+        body,
         on_behalf_of: if v >= 2 { r.opt_str()? } else { None },
     };
     r.end()?;
@@ -1662,11 +1855,17 @@ impl DocStore {
     }
 
     /// The latest snapshot and every logged update after it, in order.
+    ///
+    /// A doc another engine stamped is refused whole ([`StoreError::ForeignEngine`]) before
+    /// any of its entries is decoded. Every entry must be of the doc's engine: a log that
+    /// mixes them is `Corrupt("log entry engine")`, and nothing is returned.
     pub fn load(&self, id: DocId) -> Result<Loaded, StoreError> {
         let r = self.begin_read()?;
-        if r.open_table(DOCS)?.get(id)?.is_none() {
-            return Err(StoreError::NoDoc(id));
-        }
+        let meta = match r.open_table(DOCS)?.get(id)? {
+            Some(m) => dec_meta(m.value())?,
+            None => return Err(StoreError::NoDoc(id)),
+        };
+        let engine = EntryEngine::of(&meta)?;
         let snapshot = r
             .open_table(SNAPSHOTS)?
             .get(id)?
@@ -1681,6 +1880,13 @@ impl DocStore {
                 // a purge snapshots past every entry it redacts
                 return Err(StoreError::Corrupt("purged log entry after the snapshot"));
             }
+            #[cfg(test)]
+            let skip = plant::planted(plant::EntryPlant::LoadSkipsEngineCheck);
+            #[cfg(not(test))]
+            let skip = false;
+            if !skip {
+                engine.check(&e.body)?;
+            }
             updates.push((k.value().1, e));
         }
         Ok(Loaded { snapshot, updates })
@@ -1691,7 +1897,7 @@ impl DocStore {
         let l = self.load(id)?;
         Ok((
             l.updates.len() as u64,
-            l.updates.iter().map(|(_, e)| e.update.len() as u64).sum(),
+            l.updates.iter().map(|(_, e)| e.body.yrs_len()).sum(),
         ))
     }
 
@@ -2191,6 +2397,67 @@ impl DocStore {
         }
         w.commit()?;
         Ok(())
+    }
+}
+
+/// Planted faults of the log entry's body (test builds only), each caught by its row in
+/// `tests.rs`: installed per thread, for one call, by the row from `MPC_ENTRY_PLANT`.
+#[cfg(test)]
+pub(crate) mod plant {
+    use std::cell::Cell;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum EntryPlant {
+        /// A Yrs entry is written as version 4 (`yrs-as-version-4`).
+        YrsAsVersion4,
+        /// [`super::DocStore::load`] skips the entries' engine check
+        /// (`load-skips-engine-check`).
+        LoadSkipsEngineCheck,
+        /// [`super::Loaded::yrs_updates`] skips a native entry instead of refusing the log
+        /// (`native-via-yrs-replay`).
+        NativeViaYrsReplay,
+    }
+
+    impl EntryPlant {
+        fn named(name: &str) -> Option<Self> {
+            Some(match name {
+                "yrs-as-version-4" => EntryPlant::YrsAsVersion4,
+                "load-skips-engine-check" => EntryPlant::LoadSkipsEngineCheck,
+                "native-via-yrs-replay" => EntryPlant::NativeViaYrsReplay,
+                _ => return None,
+            })
+        }
+    }
+
+    thread_local! {
+        static PLANT: Cell<Option<EntryPlant>> = const { Cell::new(None) };
+    }
+
+    /// Whether `p` is planted on this thread.
+    pub(crate) fn planted(p: EntryPlant) -> bool {
+        PLANT.with(|c| c.get() == Some(p))
+    }
+
+    /// Run `f` with `p` planted on this thread when `MPC_ENTRY_PLANT` names it (printed
+    /// either way, since a job's record shows the variable's name, not its value); any other
+    /// value is refused, so a misspelt plant can't pass as a clean run.
+    pub(crate) fn under<R>(p: EntryPlant, f: impl FnOnce() -> R) -> R {
+        let v = std::env::var("MPC_ENTRY_PLANT");
+        println!("MPC_ENTRY_PLANT={}", v.as_deref().unwrap_or("(unset)"));
+        let on = match v.as_deref() {
+            Ok(name) => match EntryPlant::named(name) {
+                Some(named) => named == p,
+                None => unreachable!("MPC_ENTRY_PLANT={name}: no such plant"),
+            },
+            Err(_) => false,
+        };
+        if !on {
+            return f();
+        }
+        PLANT.with(|c| c.set(Some(p)));
+        let r = f();
+        PLANT.with(|c| c.set(None));
+        r
     }
 }
 

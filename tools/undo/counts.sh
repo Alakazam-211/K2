@@ -10,11 +10,22 @@
 #   PART=m  every mutant, TLC with one worker (a shortest counterexample) and the enumerator;
 #           the audit's four (u13-refused-revert-applies, r3-redo-rewrites-window,
 #           r3-revert-rewrites-window, i1-per-request, each counterexample printed) and the
-#           independent checks O5doc, U17doc alone under (vi), (vii) and (iv)
+#           (vi), (vii) and (iv) one invariant a row: O5 and O5doc, U17 and U17doc
 #   (unset: all three, which needs more than one 15-min job since v1.8)
+settings PART=a
 INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5 inv_O5doc inv_U17doc"
 need_apalache
 . "$ROOT/tools/undo/tlc.sh"
+# the rows each PART must end with, each with its verdict (tools/undo/expect.sh)
+case ${PART:-a} in *a*) expect_complete tlc:c_2x1u1 enum:e_c_2x1u1 tlc:c_2x1u1r1 enum:e_c_2x1u1r1 \
+  tlc:c_3x1u1 enum:e_c_3x1u1 tlc:c_1x1u1r1 enum:e_c_1x1u1r1 itf:itf_2x1u1r1 itf:itf_2x1u2r1 itf:itf_regress ;; esac
+case ${PART:-a} in *b*) expect_complete tlc:c_2x2u1_l3 enum:e_c_2x2u1_l3 tlc:c_1x3r1s1 enum:e_c_1x3r1s1 \
+  tlc:c_2x1u2r1 enum:e_c_2x1u2r1 ;; esac
+case ${PART:-a} in *m*) _one='-iv-redo-retries-skipped -vi-o5-every-window-end -vii-o5-region-base'
+  expect_mutants tlc $_one; expect_mutants enum $_one    # (those three: one invariant a row)
+  for _o in tlc enum; do for _r in O5 O5doc; do expect $_o@vi-o5-every-window-end/$_r VIOLATION $_r
+    expect $_o@vii-o5-region-base/$_r VIOLATION $_r; done
+    for _r in U17 U17doc; do expect $_o@iv-redo-retries-skipped/$_r VIOLATION $_r; done; done ;; esac
 # cmp NAME PIDS EVENTS UNDOS REVERTS MAXLEN "INIT" MULTI PURGE INITLETTERS SECONDS [RESTARTS]
 cmp() {
   inst "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" none "${12:-0}"
@@ -49,7 +60,8 @@ cmp c_1x3r1s1   1 3 0 1 4 "0, 1, 1, 0" true true abba 300 1
 cmp c_2x1u2r1   2 1 2 1 4 "0, 1"    true  true  ab  240
 ;; esac
 case ${PART:-a} in *m*)
-for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff; do
+# (iv), (vi) and (vii) at the end, one invariant at a time
+for m in i-no-taint iii-partial-hides-taint skip-u19 f3-rediff; do
   inst m_tiny 2 1 1 0 4 "0, 1, 1" true true $m
   TLC_WORKERS=1 tlc m_tiny "$INV" 120
   timed "enumerator, mutant $m" E bfs --run "e_m_$m" --pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb --first --mutant $m
@@ -82,13 +94,16 @@ timed "enumerator, mutant r3-revert-rewrites-window" E bfs --run e_m_r3-revert-r
 inst m_i1pr 2 2 1 1 3 "0" false false i1-per-request
 TLC_TRACE=800 TLC_WORKERS=1 tlc m_i1pr "$INV" 5400
 timed "enumerator, mutant i1-per-request" E bfs --run e_m_i1-per-request --pids 2 --events 2 --undos 1 --reverts 1 --maxlen 3 --init a --no-multi --no-purge --first --mutant i1-per-request
-# the independent formulations alone (O5doc, U17doc): each stops at its own rule only
-for m in vi-o5-every-window-end vii-o5-region-base; do
+# (vi), (vii) and (iv) against each invariant meant to catch them, that invariant alone (TLC:
+# alone in the cfg; the enumerator: --stop it): O5 and the independent O5doc, U17 and U17doc.
+# Each row shows its invariant failing, whatever order or company the others would fail in.
+for mr in vi-o5-every-window-end:O5 vii-o5-region-base:O5 iv-redo-retries-skipped:U17; do
+  m=${mr%%:*}; r=${mr#*:}
   inst m_tiny 2 1 1 0 4 "0, 1, 1" true true $m
-  TLC_WORKERS=1 tlc m_tiny "inv_O5doc" 120
-  timed "enumerator, mutant $m, O5doc only" E bfs --run "e_m_o5doc_$m" --pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb --first --stop O5doc --mutant $m
+  for rr in $r ${r}doc; do
+    TLC_WORKERS=1 tlc m_tiny "inv_$rr" 120
+    n=e_m_$m; [ "$rr" = "$r" ] || n=e_m_$(echo "$rr" | tr 'A-Z' 'a-z')_$m
+    timed "enumerator, mutant $m, $rr only" E bfs --run "$n" --pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb --first --stop "$rr" --mutant $m
+  done
 done
-inst m_tiny 2 1 1 0 4 "0, 1, 1" true true iv-redo-retries-skipped
-TLC_WORKERS=1 tlc m_tiny "inv_U17doc" 120
-timed "enumerator, mutant iv-redo-retries-skipped, U17doc only" E bfs --run e_m_u17doc_iv-redo-retries-skipped --pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb --first --stop U17doc --mutant iv-redo-retries-skipped
 ;; esac

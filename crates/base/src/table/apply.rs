@@ -4,7 +4,9 @@
 use super::*;
 
 impl Axis {
-    /// Where an op anchored at `at` puts a new place: an index into the place order.
+    /// The place an op anchored at `at` goes after (`NIL`: first), or why it can't be placed.
+    /// `moving`: the key a move places, never its own anchor (a move takes it out first, then
+    /// resolves again).
     fn resolve(&self, root: &str, at: &Anchor, moving: Option<&Key>) -> Result<usize, TableError> {
         let place = |k: &Key| -> Result<usize, TableError> {
             if Some(k) == moving {
@@ -13,19 +15,20 @@ impl Axis {
                     key: k.clone(),
                 });
             }
-            self.raw(k).ok_or_else(|| TableError::Unknown {
+            self.place(k).ok_or_else(|| TableError::Unknown {
                 root: axis_root(root),
                 key: k.clone(),
             })
         };
         Ok(match at {
-            Anchor::Start => 0,
-            Anchor::End => self.order.len(),
-            Anchor::After(k) => place(k)? + 1,
-            Anchor::Before(k) => place(k)?,
+            Anchor::Start => NIL,
+            Anchor::End => self.tail(),
+            Anchor::After(k) => place(k)?,
+            Anchor::Before(k) => self.prev_of(place(k)?),
         })
     }
 
+    /// One op, O(1): every place is found through the key map, and linking is O(1).
     pub(crate) fn apply(&mut self, root: &str, op: &ListOp) -> Result<(), TableError> {
         let key = op.key();
         let unknown = || TableError::Unknown {
@@ -40,30 +43,31 @@ impl Axis {
                         key: key.clone(),
                     });
                 }
-                let p = self.resolve(root, at, None)?;
-                self.order.insert(p, key.clone());
-                self.known.insert(key.clone());
+                let after = self.resolve(root, at, None)?;
+                self.make(key.clone(), after);
             }
             ListOp::Move { to, .. } => {
-                let from = self.raw(key).ok_or_else(unknown)?;
-                let mut p = self.resolve(root, to, Some(key))?;
-                self.order.remove(from);
-                if from < p {
-                    p -= 1;
-                }
-                self.order.insert(p, key.clone());
+                let i = self.place(key).ok_or_else(unknown)?;
+                // checked before anything changes; resolved again once the key is out, so
+                // `Before` and `End` read the order without it
+                self.resolve(root, to, Some(key))?;
+                self.unlink(i);
+                let after = self
+                    .resolve(root, to, Some(key))
+                    .expect("an anchor checked above");
+                self.link(i, after);
             }
             ListOp::Delete { .. } => {
                 if !self.knows(key) {
                     return Err(unknown());
                 }
-                self.dead.insert(key.clone());
+                self.set_dead(key, true);
             }
             ListOp::Restore { .. } => {
                 if !self.knows(key) {
                     return Err(unknown());
                 }
-                self.dead.remove(key);
+                self.set_dead(key, false);
             }
             ListOp::Set { .. } => {
                 if !self.knows(key) {
@@ -74,28 +78,39 @@ impl Axis {
                 if !self.knows(key) {
                     return Err(unknown());
                 }
-                if !self.dead.contains(key) {
+                if !self.is_dead(key) {
                     return Err(TableError::Usage(format!(
                         "{key} is live; only a deleted {} can be dropped",
                         if root == ROWS { "row" } else { "column" }
                     )));
                 }
-                let at = self.raw(key).expect("a known key has a place");
-                self.order.remove(at);
-                self.dead.remove(key);
-                self.known.remove(key);
+                let i = self.place(key).expect("a known key has a place");
+                self.unlink(i);
+                self.forget(key);
             }
         }
         Ok(())
     }
 
-    /// The first live key after `k`'s place (`None`: from the start).
+    /// The first live key after `k`'s place (`None`: from the start). O(the deleted places
+    /// skipped).
     pub(crate) fn next_live_after(&self, k: Option<&Key>) -> Option<&Key> {
-        let from = match k {
-            Some(k) => self.raw(k)? + 1,
-            None => 0,
+        let mut i = match k {
+            Some(k) => self.next_of(self.place(k)?),
+            None => self.head(),
         };
-        self.order[from..].iter().find(|x| !self.dead.contains(*x))
+        let mut n = 0;
+        while i != NIL {
+            n += 1;
+            let x = self.key_at(i);
+            if !self.is_dead(x) {
+                visited(n);
+                return Some(x);
+            }
+            i = self.next_of(i);
+        }
+        visited(n);
+        None
     }
 }
 

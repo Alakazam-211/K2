@@ -53,13 +53,14 @@ fn meta(p: &str) -> DocMeta {
 }
 
 fn entry(author: &str, client: u64, update: Vec<u8>) -> LogEntry {
-    LogEntry {
-        author: author.into(),
-        client,
-        at_ms: 5,
-        via: "cli".into(),
-        update,
-        on_behalf_of: None,
+    LogEntry::yrs(author.into(), client, 5, "cli".into(), update, None)
+}
+
+/// The Yrs update of a Yrs entry.
+fn yrs_bytes(e: &LogEntry) -> &[u8] {
+    match &e.body {
+        EntryBody::Yrs(u) => u,
+        EntryBody::Native(r) => unreachable!("a Yrs entry, not {r:?}"),
     }
 }
 
@@ -112,7 +113,7 @@ fn append_is_ordered_and_durable_across_reopen() {
     assert_eq!(
         l.updates
             .iter()
-            .map(|(q, e)| (*q, e.update.clone()))
+            .map(|(q, e)| (*q, yrs_bytes(e).to_vec()))
             .collect::<Vec<_>>(),
         vec![(1, vec![1]), (2, vec![2]), (3, vec![3])]
     );
@@ -771,7 +772,7 @@ fn enc_entry_v1(e: &LogEntry) -> Vec<u8> {
         .u64(e.client)
         .u64(e.at_ms)
         .str(&e.via)
-        .bytes(&e.update);
+        .bytes(yrs_bytes(e));
     w.0
 }
 
@@ -782,7 +783,7 @@ fn enc_entry_v2(e: &LogEntry) -> Vec<u8> {
         .u64(e.client)
         .u64(e.at_ms)
         .str(&e.via)
-        .bytes(&e.update)
+        .bytes(yrs_bytes(e))
         .opt_str(e.on_behalf_of.as_deref());
     w.0
 }
@@ -808,7 +809,7 @@ fn log_records_v3_v2_and_v1_all_decode() {
     let red = enc_entry_as(&e, Some(3));
     let (d, n) = dec_entry_full(&red).unwrap();
     assert_eq!(n, Some(3));
-    assert!(d.update.is_empty());
+    assert_eq!(d.body, EntryBody::Yrs(Vec::new()));
     assert_eq!(
         (d.author.as_str(), d.client, d.at_ms),
         ("agent-a", 9, e.at_ms)
@@ -816,11 +817,14 @@ fn log_records_v3_v2_and_v1_all_decode() {
     assert_eq!(d.on_behalf_of.as_deref(), Some("alice"));
     // damaged records are loud
     let mut bad = enc_entry(&e);
-    bad[0] = 4;
+    bad[0] = 5;
     assert_eq!(
         dec_entry(&bad),
         Err(StoreError::Corrupt("log entry version"))
     );
+    // version 4 is a native entry's: a Yrs body's tag under it is damage
+    bad[0] = 4;
+    assert_eq!(dec_entry(&bad), Err(StoreError::Corrupt("log entry")));
     let mut trailing = v1.clone();
     trailing.push(0);
     assert!(
@@ -1125,7 +1129,7 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
         client: 7,
         at_ms: 5,
         via: "cli".into(),
-        update: vec![1],
+        body: EntryBody::Yrs(vec![1]),
         on_behalf_of: None,
     };
     let change = NewChange {
@@ -2027,4 +2031,288 @@ fn an_edit_and_its_row_land_together() {
         Some("pseudonym"),
         "a row already there stays as it is"
     );
+}
+
+// ---- the log entry's body (C3, design §1.7): EntryBody, versions 3 and 4 ----
+
+fn hex_bytes(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// A native entry (version 4): its body is a position, never bytes.
+fn native_entry(author: &str, client: u64, at: u64) -> LogEntry {
+    LogEntry {
+        body: EntryBody::Native(NativeRef { at }),
+        ..entry(author, client, Vec::new())
+    }
+}
+
+/// Every log row of doc `id`, as stored.
+fn raw_rows(s: &DocStore, id: DocId) -> Vec<(Seq, Vec<u8>)> {
+    let r = s.begin_read().unwrap();
+    let t = r.open_table(UPDATES).unwrap();
+    let mut rows = Vec::new();
+    for kv in t.range((id, 0)..=(id, u64::MAX)).unwrap() {
+        let (k, v) = kv.unwrap();
+        rows.push((k.value().1, v.value().to_vec()));
+    }
+    rows
+}
+
+/// Version 3's bytes: a Yrs entry and a redacted one (author `agent-a`, client 9, at 5 ms, via
+/// `cli`, on behalf of `alice`, update `[1, 2, 3]`).
+const V3_YRS: &str = "03070000006167656e742d610900000000000000050000000000000003000000636c69\
+                      00030000000102030105000000616c696365";
+const V3_REDACTED: &str = "03070000006167656e742d610900000000000000050000000000000003000000636c69\
+                           0103000000000000000105000000616c696365";
+/// Version 4's bytes: the same metadata, body tag 2, position 0x0102030405060708.
+const V4_NATIVE: &str = "04070000006167656e742d610900000000000000050000000000000003000000636c69\
+                         0208070605040302010105000000616c696365";
+
+/// A Yrs entry is written as version 3, byte for byte as before native entries existed (tag 0,
+/// and tag 1 when a purge redacted it), and so is every row a Yrs doc's log holds: a store with
+/// no native doc is unchanged. `MPC_ENTRY_PLANT=yrs-as-version-4` (Yrs entries written as
+/// version 4) fails at the first golden.
+#[test]
+fn yrs_entries_stay_version_3_byte_for_byte() {
+    plant::under(plant::EntryPlant::YrsAsVersion4, || {
+        let mut e = entry("agent-a", 9, vec![1, 2, 3]);
+        e.on_behalf_of = Some("alice".into());
+        assert_eq!(
+            enc_entry(&e),
+            hex_bytes(V3_YRS),
+            "a Yrs entry is version 3, tag 0"
+        );
+        assert_eq!(
+            enc_entry_as(&e, Some(3)),
+            hex_bytes(V3_REDACTED),
+            "a redacted Yrs entry is version 3, tag 1"
+        );
+        // a Yrs doc's log, through the store: every row is the version-3 encoding
+        let t = TmpDir::new("entry-v3");
+        let s = DocStore::open(t.db()).unwrap();
+        let id = s.create(&meta("a.md")).unwrap();
+        let mut doc = Doc::new(S).unwrap();
+        let mut logged = Vec::new();
+        for (i, text) in ["one\n", "one\ntwo\n", "two\n"].into_iter().enumerate() {
+            let u = doc.replace_text_as(5, "source", text).unwrap().unwrap();
+            let mut e = entry("a", 5, u);
+            e.on_behalf_of = (i == 1).then(|| "alice".into());
+            logged.push(e);
+        }
+        s.append(id, &logged).unwrap();
+        let rows = raw_rows(&s, id);
+        assert_eq!(rows.len(), 3);
+        for ((seq, b), e) in rows.iter().zip(&logged) {
+            assert_eq!(b[0], 3, "row {seq} is version 3");
+            let mut want = W::default();
+            want.u8(3)
+                .str(&e.author)
+                .u64(e.client)
+                .u64(e.at_ms)
+                .str(&e.via)
+                .u8(0)
+                .bytes(yrs_bytes(e))
+                .opt_str(e.on_behalf_of.as_deref());
+            assert_eq!(b, &want.0, "row {seq} is version 3's layout, byte for byte");
+        }
+    });
+}
+
+/// Every entry an older kit wrote (versions 1, 2 and 3, a redacted one included) reads as a
+/// Yrs body.
+#[test]
+fn old_entries_read_as_yrs() {
+    let mut e = entry("agent-a", 9, vec![1, 2, 3]);
+    let v1 = dec_entry(&enc_entry_v1(&e)).unwrap();
+    assert_eq!(v1.body, EntryBody::Yrs(vec![1, 2, 3]), "version 1");
+    e.on_behalf_of = Some("alice".into());
+    let v2 = dec_entry(&enc_entry_v2(&e)).unwrap();
+    assert_eq!(v2.body, EntryBody::Yrs(vec![1, 2, 3]), "version 2");
+    let (v3, red) = dec_entry_full(&hex_bytes(V3_YRS)).unwrap();
+    assert_eq!(
+        (v3.body, red),
+        (EntryBody::Yrs(vec![1, 2, 3]), None),
+        "version 3"
+    );
+    let (v3r, red) = dec_entry_full(&hex_bytes(V3_REDACTED)).unwrap();
+    assert_eq!(
+        (v3r.body, red),
+        (EntryBody::Yrs(Vec::new()), Some(3)),
+        "version 3, redacted: an empty Yrs body and its length"
+    );
+    assert_eq!(v3r.on_behalf_of.as_deref(), Some("alice"));
+}
+
+/// A native entry is version 4 with body tag 2, and decodes to the same position; the store
+/// keeps it as written. Version 4 with a Yrs tag, and version 3 with tag 2, are damage, as are
+/// a trailing byte and a cut record.
+#[test]
+fn native_entry_round_trips_as_version_4() {
+    let mut e = native_entry("agent-a", 9, 0x0102_0304_0506_0708);
+    e.on_behalf_of = Some("alice".into());
+    let b = enc_entry(&e);
+    assert_eq!(b, hex_bytes(V4_NATIVE), "version 4's layout");
+    assert_eq!(dec_entry_full(&b).unwrap(), (e.clone(), None));
+    // through the store: the row is the encoding, and decodes to the entry
+    let t = TmpDir::new("entry-v4");
+    let s = DocStore::open(t.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    s.append(id, std::slice::from_ref(&e)).unwrap();
+    let rows = raw_rows(&s, id);
+    assert_eq!(rows, vec![(1, b.clone())]);
+    assert_eq!(dec_entry(&rows[0].1).unwrap(), e);
+    // the pairings no build writes
+    for tag in [0u8, 1] {
+        let mut w = W::default();
+        w.u8(4)
+            .str("a")
+            .u64(9)
+            .u64(5)
+            .str("cli")
+            .u8(tag)
+            .u64(1)
+            .opt_str(None);
+        assert_eq!(
+            dec_entry(&w.0),
+            Err(StoreError::Corrupt("log entry")),
+            "v4, tag {tag}"
+        );
+    }
+    let mut w = W::default();
+    w.u8(3)
+        .str("a")
+        .u64(9)
+        .u64(5)
+        .str("cli")
+        .u8(2)
+        .u64(1)
+        .opt_str(None);
+    assert_eq!(
+        dec_entry(&w.0),
+        Err(StoreError::Corrupt("log entry")),
+        "v3, tag 2"
+    );
+    let mut trailing = b.clone();
+    trailing.push(0);
+    assert!(dec_entry(&trailing).is_err(), "a trailing byte");
+    assert!(dec_entry(&b[..b.len() - 1]).is_err(), "a cut record");
+}
+
+/// A log whose entries aren't all of its doc's engine is refused at load, typed, and nothing is
+/// returned: a native entry in a Yrs doc's log is `Corrupt("log entry engine")`, and so (at the
+/// check, since no doc is stamped native in this build) is a Yrs entry where native ones are
+/// due. A purge's log pass refuses the same log before changing anything.
+/// `MPC_ENTRY_PLANT=load-skips-engine-check` fails at the first load assert.
+#[test]
+fn a_mixed_log_is_refused() {
+    plant::under(plant::EntryPlant::LoadSkipsEngineCheck, || {
+        let t = TmpDir::new("mixed-log");
+        let s = DocStore::open(t.db()).unwrap();
+        let id = s.create(&meta("a.md")).unwrap();
+        let mut doc = Doc::new(S).unwrap();
+        let u = doc.replace_text_as(5, "source", "one\n").unwrap().unwrap();
+        s.append(id, &[entry("a", 5, u)]).unwrap();
+        assert_eq!(s.load(id).unwrap().updates.len(), 1, "a Yrs log loads");
+        s.append(id, &[native_entry("a", 5, 1)]).unwrap();
+        assert_eq!(
+            s.load(id),
+            Err(StoreError::Corrupt(LOG_ENTRY_ENGINE)),
+            "a native entry in a Yrs doc's log"
+        );
+        assert_eq!(s.log_size(id), Err(StoreError::Corrupt(LOG_ENTRY_ENGINE)));
+    });
+    // the reverse, at the check the load runs per entry
+    assert_eq!(
+        EntryEngine::Native.check(&EntryBody::Yrs(vec![1])),
+        Err(StoreError::Corrupt(LOG_ENTRY_ENGINE))
+    );
+    assert_eq!(
+        EntryEngine::Native.check(&EntryBody::Native(NativeRef { at: 1 })),
+        Ok(())
+    );
+    assert_eq!(
+        EntryEngine::Yrs.check(&EntryBody::Native(NativeRef { at: 1 })),
+        Err(StoreError::Corrupt(LOG_ENTRY_ENGINE))
+    );
+    assert_eq!(EntryEngine::Yrs.check(&EntryBody::Yrs(vec![1])), Ok(()));
+}
+
+/// A doc another engine stamped is refused whole at load (`MPC-E520`), before any of its
+/// entries is decoded: a row this build can't read doesn't turn the refusal into damage.
+#[test]
+fn a_doc_of_another_engine_is_refused_whole_at_load() {
+    let t = TmpDir::new("foreign-load");
+    let s = DocStore::open(t.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    s.append(id, &[native_entry("a", 5, 1)]).unwrap();
+    {
+        let w = s.begin_write().unwrap();
+        w.open_table(UPDATES)
+            .unwrap()
+            .insert((id, 2), [9u8, 9, 9].as_slice())
+            .unwrap();
+        w.commit().unwrap();
+    }
+    let foreign = DocMeta {
+        engine: "mpce-0.1".into(),
+        engine_format: 1,
+        ..s.meta(id).unwrap()
+    };
+    s.put_meta(id, &foreign).unwrap();
+    let e = s.load(id).unwrap_err();
+    assert_eq!(
+        e,
+        StoreError::ForeignEngine {
+            stored: "mpce-0.1".into(),
+            stored_format: 1
+        }
+    );
+    assert_eq!(crate::errors::Refusal::report(&e).id(), "MPC-E520");
+}
+
+/// A native entry never reaches the Yrs replay: [`Loaded::yrs_updates`] is all or nothing, so
+/// [`Doc::from_store`] refuses a log holding one before it replays a single update, and its Yrs
+/// twin replays every update. `MPC_ENTRY_PLANT=native-via-yrs-replay` (a native entry skipped
+/// instead of refused) fails at the replay counter.
+#[test]
+fn a_native_doc_never_reaches_the_yrs_replay() {
+    let mut doc = Doc::new(S).unwrap();
+    let u1 = doc.replace_text_as(5, "source", "one\n").unwrap().unwrap();
+    let u2 = doc
+        .replace_text_as(5, "source", "one\ntwo\n")
+        .unwrap()
+        .unwrap();
+    let yrs = Loaded {
+        snapshot: None,
+        updates: vec![(1, entry("a", 5, u1)), (2, entry("a", 5, u2))],
+    };
+    let mut mixed = yrs.clone();
+    mixed.updates.push((3, native_entry("a", 5, 1)));
+    plant::under(plant::EntryPlant::NativeViaYrsReplay, || {
+        crate::doc::YRS_REPLAYS.with(|n| n.set(0));
+        let r = Doc::from_store(S, &mixed);
+        assert_eq!(
+            crate::doc::YRS_REPLAYS.with(|n| n.get()),
+            0,
+            "nothing is replayed from a log holding a native entry"
+        );
+        assert!(
+            matches!(r, Err(crate::doc::DocError::Malformed(_))),
+            "{:?}",
+            r.as_ref().err()
+        );
+        assert_eq!(
+            mixed.yrs_updates(),
+            Err(StoreError::Corrupt(LOG_ENTRY_ENGINE))
+        );
+    });
+    // the twin: the same log without the native entry replays every update
+    crate::doc::YRS_REPLAYS.with(|n| n.set(0));
+    let d = Doc::from_store(S, &yrs).unwrap();
+    assert_eq!(crate::doc::YRS_REPLAYS.with(|n| n.get()), 2);
+    assert_eq!(d.text("source").unwrap(), "one\ntwo\n");
 }

@@ -6,6 +6,21 @@
 #   PATH IDENT   the word IDENT in the file PATH
 # A line's `#` starts a comment.
 
+# v0.12.0: a grid's paths are linear in its stored cells and rows, a blank row included
+# (crates/base/tests/grid_scaling.rs)
+grid_paths_are_linear_in_stored_size
+grid_blame_is_linear_in_stored_size
+axis_inserts_and_moves_are_linear
+conflict_listing_is_linear
+row_list_is_linear
+rekey_of_dropped_rows_is_linear
+# the same: a grid's rows are a limit of their own, MPC-E802 what=rows (crates/base/tests/grid_store.rs)
+grid_rows_past_the_row_cap_exit_2_blank_ones_included
+grid_import_over_the_row_cap_is_declined_too_large
+# the same: Yrs log entries stay record version 3, byte for byte (crates/base/src/store/tests.rs)
+yrs_entries_stay_version_3_byte_for_byte
+old_entries_read_as_yrs
+
 # v0.11.1: a refused write --base (MPC-E111) names every line of a conflict region on each side,
 # a change that clashes with nothing inside the region included (crates/base/tests/write_base_lines.rs)
 conflict_live_side_holds_every_live_hunk_inside_the_region

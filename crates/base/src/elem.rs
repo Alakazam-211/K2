@@ -78,6 +78,12 @@ impl Key {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The empty key, which sorts before every key: never a valid key, only the lower bound
+    /// of a range over keys (a row's cells in [`crate::table::Table::cells`]).
+    pub(crate) fn lowest() -> Self {
+        Self(String::new())
+    }
 }
 
 impl fmt::Display for Key {

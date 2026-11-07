@@ -50,7 +50,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
   # mpc example
   errors) echo "$KIT_LIB" $(for t in $E; do printf ' crates/base/tests/%s.rs' "$t"; done) crates/base/tests/golden/errors docs/ERRORS.md crates/base/examples crates/base/tests/grid_pack crates/base/tests/board_verbs ;;
   # live_edit and its shared vectors since v0.9.8 (base-a2 was at a job's limit)
-  base-b) echo "$KIT_LIB crates/base/tests/tier0.rs crates/base/tests/tier0_large.rs crates/base/tests/promote.rs crates/base/tests/parity.rs crates/base/tests/parity_blob.rs crates/base/tests/parity_grid.rs crates/base/tests/grid_pack crates/base/tests/erasure.rs crates/base/tests/fixtures crates/base/tests/live_edit.rs crates/base/tests/vectors/live_rebase.json" ;;
+  base-b) echo "$KIT_LIB crates/base/tests/tier0.rs crates/base/tests/tier0_large.rs crates/base/tests/promote.rs crates/base/tests/parity.rs crates/base/tests/parity_blob.rs crates/base/tests/parity_grid.rs crates/base/tests/grid_pack crates/base/tests/erasure.rs crates/base/tests/fixtures crates/base/tests/live_edit.rs crates/base/tests/vectors/live_rebase.json docs/SESSIONS.md" ;;
   # spec/quint: only the file its tests read (v0.9.4: the whole folder put the part over a
   # job's limit, 65 chunks)
   # bundled with STRIP_DOCS=1 since v0.9.7 (D1 put it at 145,656 inline characters;

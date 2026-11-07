@@ -6,6 +6,11 @@
 B="2 1 1 0 4"            # pids events undos reverts maxlen
 I="0, 1, 1"              # the seed text abb
 EB="--pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb"
+# the rows this job must end with, each with its verdict (tools/undo/expect.sh)
+expect_complete tlc:u_tiny enum:bfs_2x1_u1_r0_rs0_none itf:itf_regress \
+  itf:itf_pids_2_events_1_undos_1_reverts_1_restarts_0_maxlen_4_init__abb__multi_true_purge_true_reduce_true_u12_false \
+  itf:itf_pids_2_events_1_undos_1_reverts_1_restarts_1_maxlen_4_init__abb__multi_true_purge_true_reduce_true_u12_false
+expect_mutants tlc -i1-per-request; expect_mutants enum    # (i1-per-request: TLC in counts.sh PART=m)
 timed "typecheck undo" q typecheck undo.qnt
 inst u_tiny $B "$I" true true none
 timed "typecheck u_tiny" q typecheck u_tiny.qnt

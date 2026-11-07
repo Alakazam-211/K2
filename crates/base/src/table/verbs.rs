@@ -20,7 +20,7 @@
 //! bad flag: **2**. `--if-version`, `--base` and the claim
 //! policy are the kit's (taken out of the arguments before these see them).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use super::{Axis, LineOwner, SortKey, Table, TableError, ROWS};
@@ -1093,6 +1093,65 @@ pub fn row_listing(
     filter: Option<(&Key, &str)>,
     limit: Option<usize>,
 ) -> (String, usize) {
+    if super::row_list_walk() {
+        return row_listing_walk(t, map, cols, filter, limit);
+    }
+    // read once: each row's lines, and each listed column's positions (a column may be
+    // listed twice); then a row writes from its own present cells, an absent one as an empty
+    // field, so a row costs O(its cells) plus the fields written
+    let spans = map.row_spans();
+    let mut col_at: HashMap<&Key, Vec<usize>> = HashMap::new();
+    for (j, c) in cols.iter().enumerate() {
+        col_at.entry(c).or_default().push(j);
+    }
+    let mut out = String::new();
+    let mut n = 0;
+    let listed: HashSet<&Key> = listed_rows(t, filter, limit).into_iter().collect();
+    for (i, r) in t.rows.live().enumerate() {
+        if !listed.contains(r) {
+            continue;
+        }
+        n += 1;
+        let _ = write!(out, "{r}\t#{}\t", i + 1);
+        match spans.get(r) {
+            Some(l) if l.len() == 1 => {
+                let _ = write!(out, "L{}", l.start);
+            }
+            Some(l) => {
+                let _ = write!(out, "L{}-{}", l.start, l.end - 1);
+            }
+            None => out.push('-'),
+        }
+        out.push('\t');
+        let mut vals: Vec<(usize, &str)> = t
+            .row_cells(r)
+            .flat_map(|(c, v)| col_at.get(c).into_iter().flatten().map(move |&j| (j, v)))
+            .collect();
+        vals.sort_unstable_by_key(|x| x.0);
+        let mut vals = vals.into_iter().peekable();
+        for j in 0..cols.len() {
+            if j > 0 {
+                out.push('\t');
+            }
+            if let Some((_, v)) = vals.next_if(|x| x.0 == j) {
+                push_tsv(&mut out, v);
+            }
+        }
+        out.push('\n');
+    }
+    (out, n)
+}
+
+/// [`row_listing`] by the walk: a row's lines by a scan of the line map, each column's field
+/// its own string, both keys cloned per lookup (the planted
+/// [`crate::differential::GridCostMutant::RowListWalk`] only).
+fn row_listing_walk(
+    t: &Table,
+    map: &super::LineMap,
+    cols: &[Key],
+    filter: Option<(&Key, &str)>,
+    limit: Option<usize>,
+) -> (String, usize) {
     let mut out = String::new();
     let mut n = 0;
     let listed: HashSet<&Key> = listed_rows(t, filter, limit).into_iter().collect();
@@ -1133,6 +1192,12 @@ pub fn col_listing(t: &Table) -> String {
 /// A value in a TSV listing: tabs, line breaks and backslashes escaped (one row, one line).
 fn tsv_field(v: &str) -> String {
     let mut o = String::with_capacity(v.len());
+    push_tsv(&mut o, v);
+    o
+}
+
+/// [`tsv_field`], appended to `o`.
+fn push_tsv(o: &mut String, v: &str) {
     for ch in v.chars() {
         match ch {
             '\t' => o.push_str("\\t"),
@@ -1142,7 +1207,6 @@ fn tsv_field(v: &str) -> String {
             c => o.push(c),
         }
     }
-    o
 }
 
 fn col_insert(args: &[String]) -> Result<StructEdit, ToolError> {

@@ -32,7 +32,7 @@
 //! re-inserting its key. Values are checked here ([`check_value`]: no NUL, at most
 //! [`MAX_VALUE_LEN`] bytes), the per-op check that is the pack's, not the kit Doc's (E10).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 
@@ -265,11 +265,44 @@ pub fn records(rows: &[&[&str]]) -> Vec<Record> {
 /// the doc does. One read from a state without places (a version, a hand-built state) puts
 /// them after the live ones. Equality compares what readers see: the live order and the
 /// deleted keys.
-#[derive(Debug, Clone, Default)]
+///
+/// The places are a doubly linked list over an arena, with each known key's place in a map:
+/// finding a place, inserting, moving and dropping are O(1), so a change of n ops costs O(n)
+/// however long the axis. A position (`state`, `at`) is still a walk of the live order.
+#[derive(Debug, Clone)]
 pub struct Axis {
-    order: Vec<Key>,
+    /// Every place linked so far, in the order made; a dropped one stays here, unlinked.
+    places: Vec<Place>,
+    /// Each known key's place in `places`.
+    at: HashMap<Key, usize>,
+    head: usize,
+    tail: usize,
+    /// How many places are linked (live and deleted).
+    len: usize,
     dead: BTreeSet<Key>,
-    known: HashSet<Key>,
+}
+
+/// No place: either end of the list.
+const NIL: usize = usize::MAX;
+
+#[derive(Debug, Clone)]
+struct Place {
+    key: Key,
+    prev: usize,
+    next: usize,
+}
+
+impl Default for Axis {
+    fn default() -> Self {
+        Axis {
+            places: Vec::new(),
+            at: HashMap::new(),
+            head: NIL,
+            tail: NIL,
+            len: 0,
+            dead: BTreeSet::new(),
+        }
+    }
 }
 
 impl PartialEq for Axis {
@@ -279,6 +312,42 @@ impl PartialEq for Axis {
 }
 
 impl Eq for Axis {}
+
+/// An axis's places in order, live and deleted ([`Axis::places`]).
+pub(crate) struct Places<'a> {
+    axis: &'a Axis,
+    front: usize,
+    back: usize,
+    left: usize,
+}
+
+impl<'a> Iterator for Places<'a> {
+    type Item = &'a Key;
+    fn next(&mut self) -> Option<&'a Key> {
+        if self.left == 0 {
+            return None;
+        }
+        let p = &self.axis.places[self.front];
+        self.front = p.next;
+        self.left -= 1;
+        Some(&p.key)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl DoubleEndedIterator for Places<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.left == 0 {
+            return None;
+        }
+        let p = &self.axis.places[self.back];
+        self.back = p.prev;
+        self.left -= 1;
+        Some(&p.key)
+    }
+}
 
 impl Axis {
     /// Live keys, in order.
@@ -291,17 +360,147 @@ impl Axis {
     }
 
     fn push(&mut self, k: Key, dead: bool) {
-        if self.known.insert(k.clone()) {
-            if dead {
-                self.dead.insert(k.clone());
+        if self.at.contains_key(&k) {
+            return;
+        }
+        if dead {
+            self.dead.insert(k.clone());
+        }
+        let tail = self.tail;
+        self.make(k, tail);
+    }
+
+    /// A new place for `k` (not known yet), linked after place `after` (`NIL`: first).
+    pub(super) fn make(&mut self, k: Key, after: usize) {
+        let i = self.places.len();
+        self.places.push(Place {
+            key: k.clone(),
+            prev: NIL,
+            next: NIL,
+        });
+        self.at.insert(k, i);
+        self.link(i, after);
+    }
+
+    /// Link place `i` after place `after` (`NIL`: first). O(1).
+    pub(super) fn link(&mut self, i: usize, after: usize) {
+        let next = if after == NIL {
+            self.head
+        } else {
+            self.places[after].next
+        };
+        self.places[i].prev = after;
+        self.places[i].next = next;
+        if after == NIL {
+            self.head = i;
+        } else {
+            self.places[after].next = i;
+        }
+        if next == NIL {
+            self.tail = i;
+        } else {
+            self.places[next].prev = i;
+        }
+        self.len += 1;
+        visited(1);
+    }
+
+    /// Take place `i` out of the order (it stays in the arena). O(1).
+    pub(super) fn unlink(&mut self, i: usize) {
+        let (p, n) = (self.places[i].prev, self.places[i].next);
+        if p == NIL {
+            self.head = n;
+        } else {
+            self.places[p].next = n;
+        }
+        if n == NIL {
+            self.tail = p;
+        } else {
+            self.places[n].prev = p;
+        }
+        self.places[i].prev = NIL;
+        self.places[i].next = NIL;
+        self.len -= 1;
+        visited(1);
+    }
+
+    /// `k`'s place, if known: O(1) (the planted [`crate::differential::GridCostMutant::AxisWalk`]
+    /// walks from the first place, as the axis's vector did).
+    pub(super) fn place(&self, k: &Key) -> Option<usize> {
+        if axis_walk() {
+            let mut i = self.head;
+            let mut n = 0;
+            while i != NIL {
+                n += 1;
+                if self.places[i].key == *k {
+                    visited(n);
+                    return Some(i);
+                }
+                i = self.places[i].next;
             }
-            self.order.push(k);
+            visited(n);
+            return None;
+        }
+        visited(1);
+        self.at.get(k).copied()
+    }
+
+    /// The place before `i` (`NIL`: it is first).
+    pub(super) fn prev_of(&self, i: usize) -> usize {
+        self.places[i].prev
+    }
+
+    /// The last place (`NIL`: none).
+    pub(super) fn tail(&self) -> usize {
+        self.tail
+    }
+
+    /// The place after `i` (`NIL`: the end).
+    pub(super) fn next_of(&self, i: usize) -> usize {
+        self.places[i].next
+    }
+
+    /// The first place (`NIL`: none).
+    pub(super) fn head(&self) -> usize {
+        self.head
+    }
+
+    /// The key at place `i`.
+    pub(super) fn key_at(&self, i: usize) -> &Key {
+        &self.places[i].key
+    }
+
+    pub(super) fn is_dead(&self, k: &Key) -> bool {
+        self.dead.contains(k)
+    }
+
+    pub(super) fn set_dead(&mut self, k: &Key, dead: bool) {
+        if dead {
+            self.dead.insert(k.clone());
+        } else {
+            self.dead.remove(k);
+        }
+    }
+
+    /// Forget `k` (a dropped element): its place is already unlinked.
+    pub(super) fn forget(&mut self, k: &Key) {
+        self.at.remove(k);
+        self.dead.remove(k);
+    }
+
+    /// Every place in order, live and deleted.
+    pub(crate) fn places(&self) -> Places<'_> {
+        Places {
+            axis: self,
+            front: self.head,
+            back: self.tail,
+            left: self.len,
         }
     }
 
     /// The live keys, in order.
     pub fn live(&self) -> impl DoubleEndedIterator<Item = &Key> + '_ {
-        self.order.iter().filter(|k| !self.dead.contains(*k))
+        self.places().filter(|k| !self.dead.contains(*k))
     }
 
     pub fn live_keys(&self) -> Vec<Key> {
@@ -309,7 +508,7 @@ impl Axis {
     }
 
     pub fn live_len(&self) -> usize {
-        self.order.len() - self.dead.len()
+        self.len - self.dead.len()
     }
 
     /// The deleted keys.
@@ -319,22 +518,31 @@ impl Axis {
 
     /// Ever inserted (live or deleted).
     pub fn knows(&self, k: &Key) -> bool {
-        self.known.contains(k)
+        self.at.contains_key(k)
     }
 
     pub fn is_live(&self, k: &Key) -> bool {
-        self.known.contains(k) && !self.dead.contains(k)
+        self.at.contains_key(k) && !self.dead.contains(k)
     }
 
-    /// Where `k` is: live at an index, deleted, or never inserted. O(n).
+    /// Where `k` is: live at an index, deleted, or never inserted. O(n): for many keys, read
+    /// [`Axis::live_index`] once.
     pub fn state(&self, k: &Key) -> ElemState {
-        if !self.known.contains(k) {
+        if !self.at.contains_key(k) {
             ElemState::Unknown
         } else if self.dead.contains(k) {
             ElemState::Deleted
         } else {
-            ElemState::Live(self.live().position(|x| x == k).expect("a live key"))
+            let i = self.live().position(|x| x == k).expect("a live key");
+            visited(i + 1);
+            ElemState::Live(i)
         }
+    }
+
+    /// Each live key's index in the live order, read in one pass: O(1) lookups after.
+    pub fn live_index(&self) -> HashMap<&Key, usize> {
+        visited(self.len);
+        self.live().enumerate().map(|(i, k)| (k, i)).collect()
     }
 
     /// The live key at `index`.
@@ -342,14 +550,15 @@ impl Axis {
         self.live().nth(index)
     }
 
-    fn raw(&self, k: &Key) -> Option<usize> {
-        self.order.iter().position(|x| x == k)
-    }
-
     fn rename(&mut self, f: &dyn Fn(&Key) -> Key) {
-        self.order = self.order.iter().map(f).collect();
-        self.dead = self.dead.iter().map(f).collect();
-        self.known = self.known.iter().map(f).collect();
+        let keys: Vec<(Key, bool)> = self
+            .places()
+            .map(|k| (f(k), self.dead.contains(k)))
+            .collect();
+        *self = Axis::default();
+        for (k, dead) in keys {
+            self.push(k, dead);
+        }
     }
 }
 
@@ -670,7 +879,39 @@ impl Table {
     /// a row with no present cell renders as a blank line (an empty record). The header
     /// renders by the same rule over the names, when it renders at all
     /// ([`Table::header_renders`]).
+    ///
+    /// Cost: linear in the stored cells, names and quote exceptions, the rows and the
+    /// columns, plus the records written; a blank row is O(1). Each row reads only its own
+    /// present cells.
     pub fn render(&self) -> Vec<Record> {
+        if per_column() {
+            return self.render_per_column();
+        }
+        let pos = self.col_positions();
+        let mut out = Vec::with_capacity(self.rows.live_len() + 1);
+        if self.header_renders() {
+            let mut quotes = self.header_quotes().peekable();
+            let mut fields = Vec::new();
+            for (c, v) in &self.names {
+                while quotes.next_if(|(qc, _)| *qc < c).is_some() {}
+                let q = quotes.next_if(|(qc, _)| *qc == c).map(|(_, q)| q);
+                if let Some(&i) = pos.get(c) {
+                    fields.push((i, v.as_str(), q));
+                }
+            }
+            out.push(self.line_of(pos.len(), &fields));
+        }
+        for r in self.rows.live() {
+            let fields = self.row_fields(r, &pos);
+            out.push(self.line_of(pos.len(), &fields));
+        }
+        out
+    }
+
+    /// [`Table::render`] by the per-column walk: every live column of every row, both keys
+    /// cloned for each lookup. The planted fault [`crate::differential::GridCostMutant`]
+    /// only.
+    fn render_per_column(&self) -> Vec<Record> {
         let cols = self.live_cols();
         let mut out = Vec::with_capacity(self.rows.live_len() + 1);
         if self.header_renders() {
@@ -689,16 +930,121 @@ impl Table {
         out
     }
 
-    /// Row `r`'s record, as [`Table::render`] gives it, with cell `c` taken as `v` (`None`:
-    /// absent): a row renders on its own, so this is the row's bytes with only that cell set.
-    pub(crate) fn render_row_with(&self, r: &Key, c: &Key, v: Option<&str>) -> Record {
-        let cols = self.live_cols();
-        self.render_line(&cols, |x| {
-            (
-                if x == c { v } else { self.cell(r, x) },
-                self.quote(&QuoteAt::Cell(r.clone(), x.clone())),
-            )
+    /// Each live column's position, by key.
+    pub(crate) fn col_positions(&self) -> HashMap<&Key, usize> {
+        self.cols.live().enumerate().map(|(i, c)| (c, i)).collect()
+    }
+
+    /// Row `r`'s present cells (under live or deleted columns), in column-key order: a range
+    /// of [`Table::cells`], O(log n + the row's cells).
+    pub fn row_cells<'a>(&'a self, r: &'a Key) -> impl Iterator<Item = (&'a Key, &'a str)> + 'a {
+        self.cells
+            .range((r.clone(), Key::lowest())..)
+            .take_while(move |((x, _), _)| x == r)
+            .map(|((_, c), v)| (c, v.as_str()))
+    }
+
+    /// Row `r`'s quote exceptions (under live or deleted columns, present cell or not), in
+    /// column-key order: a range of [`Table::quoting`], O(log n + the row's exceptions).
+    pub fn row_quotes<'a>(&'a self, r: &'a Key) -> impl Iterator<Item = (&'a Key, Quote)> + 'a {
+        self.quoting
+            .range(QuoteAt::Cell(r.clone(), Key::lowest())..)
+            .map_while(move |(at, q)| match at {
+                QuoteAt::Cell(x, c) if x == r => Some((c, *q)),
+                _ => None,
+            })
+    }
+
+    /// The header fields' quote exceptions, in column-key order (they sort before every
+    /// cell's).
+    fn header_quotes(&self) -> impl Iterator<Item = (&Key, Quote)> + '_ {
+        self.quoting.iter().map_while(|(at, q)| match at {
+            QuoteAt::Header(c) => Some((c, *q)),
+            QuoteAt::Cell(..) => None,
         })
+    }
+
+    /// Row `r`'s present cells under live columns: (position, value, quote exception), in
+    /// column-key order. `pos`: [`Table::col_positions`].
+    fn row_fields<'a>(
+        &'a self,
+        r: &'a Key,
+        pos: &HashMap<&Key, usize>,
+    ) -> Vec<(usize, &'a str, Option<Quote>)> {
+        let mut quotes = self.row_quotes(r).peekable();
+        let mut out = Vec::new();
+        for (c, v) in self.row_cells(r) {
+            while quotes.next_if(|(qc, _)| *qc < c).is_some() {}
+            let q = quotes.next_if(|(qc, _)| *qc == c).map(|(_, q)| q);
+            if let Some(&i) = pos.get(c) {
+                out.push((i, v, q));
+            }
+        }
+        out
+    }
+
+    /// One record over `width` live columns from its present fields (position, value, quote
+    /// exception; any order), by the shape's rule: what [`Table::render_line`] gives.
+    fn line_of(&self, width: usize, present: &[(usize, &str, Option<Quote>)]) -> Record {
+        let w = match self.shape {
+            Shape::Rect if !present.is_empty() => width,
+            Shape::Rect => 0,
+            Shape::Ragged => present.iter().map(|p| p.0 + 1).max().unwrap_or(0),
+        };
+        if w == 0 {
+            return Vec::new();
+        }
+        let mut rec = vec![Field::default(); w];
+        for &(i, v, q) in present {
+            rec[i] = Field {
+                value: v.to_owned(),
+                quote: q,
+            };
+        }
+        rec
+    }
+
+    /// Whether row `r` renders the same with cell `c` taken as `a` as with it taken as `b`
+    /// (`None`: absent), every other cell as it is: the row renders on its own, so this is
+    /// whether only that cell's switch changes the row's bytes. O(the row's cells), whatever
+    /// the width. `pos`: [`Table::col_positions`].
+    pub(crate) fn row_same_with(
+        &self,
+        r: &Key,
+        c: &Key,
+        a: Option<&str>,
+        b: Option<&str>,
+        pos: &HashMap<&Key, usize>,
+    ) -> bool {
+        // a column that doesn't render: the row is the same either way
+        let Some(&at) = pos.get(c) else {
+            return true;
+        };
+        // the row's other present cells under live columns: whether any, and the last
+        let (mut any, mut last) = (false, None);
+        for (x, _) in self.row_cells(r) {
+            if x != c {
+                if let Some(&i) = pos.get(x) {
+                    any = true;
+                    last = last.max(Some(i));
+                }
+            }
+        }
+        let width = |v: Option<&str>| match self.shape {
+            Shape::Rect if any || v.is_some() => pos.len(),
+            Shape::Rect => 0,
+            Shape::Ragged => last.max(v.map(|_| at)).map_or(0, |i| i + 1),
+        };
+        let w = width(a);
+        if w != width(b) {
+            return false;
+        }
+        if at >= w {
+            return true;
+        }
+        let q = self.quote(&QuoteAt::Cell(r.clone(), c.clone()));
+        // an absent cell inside the width is an empty field with no exception
+        a.map_or(("", None), |v| (v, q)) == b.map_or(("", None), |v| (v, q))
     }
 
     /// Whether the header line is written (the codec's rule): the header is on, and the
@@ -744,6 +1090,36 @@ impl Table {
     /// fields). A codec preamble (`sep=;`) is the codec's to add in front, as
     /// [`LineOwner::Preamble`].
     pub fn line_map(&self) -> LineMap {
+        if per_column() {
+            return self.line_map_rendered();
+        }
+        // a record's lines: one, plus its fields' line breaks; an absent field adds none, and
+        // every present cell under a live column is inside its row's width (`rect`: every
+        // column; `ragged`: through the last present cell)
+        let pos = self.col_positions();
+        let span = |vals: &mut dyn Iterator<Item = &str>| 1 + vals.map(line_breaks).sum::<usize>();
+        let mut lines = Vec::new();
+        if self.header_renders() {
+            let mut names = self
+                .names
+                .iter()
+                .filter(|(c, _)| pos.contains_key(*c))
+                .map(|(_, v)| v.as_str());
+            lines.extend(std::iter::repeat(LineOwner::Header).take(span(&mut names)));
+        }
+        for r in self.rows.live() {
+            let mut vals = self
+                .row_cells(r)
+                .filter(|(c, _)| pos.contains_key(*c))
+                .map(|(_, v)| v);
+            let n = span(&mut vals);
+            lines.extend(std::iter::repeat(LineOwner::Row(r.clone())).take(n));
+        }
+        LineMap { lines }
+    }
+
+    /// [`Table::line_map`] read off the rendered records (the planted fault's path).
+    fn line_map_rendered(&self) -> LineMap {
         let mut lines = Vec::new();
         let span = |rec: &Record| 1 + rec.iter().map(|f| line_breaks(&f.value)).sum::<usize>();
         let rendered = self.render();
@@ -832,8 +1208,8 @@ impl Table {
 fn next_free(axis: &Axis, prefix: char) -> u64 {
     let mut buf = [0; 4];
     let prefix = &*prefix.encode_utf8(&mut buf);
-    axis.known
-        .iter()
+    axis.at
+        .keys()
         .filter_map(crate::mint::KeyShape::parse)
         .filter(|s| s.prefix == prefix)
         .map(|s| s.n)
@@ -849,6 +1225,67 @@ fn mint(axis: &Axis, next: &mut u64, prefix: char) -> Key {
             return k;
         }
     }
+}
+
+/// The planted per-column walk ([`crate::differential::GridCostMutant::PerColumn`]): never
+/// outside the kit's tests and the `differential` feature.
+#[cfg(any(test, feature = "differential"))]
+pub(crate) fn per_column() -> bool {
+    crate::differential::grid_cost_mutant() == Some(crate::differential::GridCostMutant::PerColumn)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+pub(crate) fn per_column() -> bool {
+    false
+}
+
+/// The planted walks of the second sweep ([`crate::differential::GridCostMutant`]): never
+/// outside the kit's tests and the `differential` feature.
+#[cfg(any(test, feature = "differential"))]
+fn planted(m: crate::differential::GridCostMutant) -> bool {
+    crate::differential::grid_cost_mutant() == Some(m)
+}
+
+pub(crate) fn axis_walk() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if planted(crate::differential::GridCostMutant::AxisWalk) {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn conflict_walk() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if planted(crate::differential::GridCostMutant::ConflictWalk) {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn rekey_walk() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if planted(crate::differential::GridCostMutant::RekeyWalk) {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn row_list_walk() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if planted(crate::differential::GridCostMutant::RowListWalk) {
+        return true;
+    }
+    false
+}
+
+/// Count `n` elements visited ([`crate::differential::visits`]); nothing outside the kit's
+/// tests and the `differential` feature.
+#[inline]
+pub(crate) fn visited(n: usize) {
+    #[cfg(any(test, feature = "differential"))]
+    crate::differential::visit(n);
+    #[cfg(not(any(test, feature = "differential")))]
+    let _ = n;
 }
 
 /// One blank record and nothing else: a file that is one blank line. It is never a header.
@@ -980,11 +1417,34 @@ impl LineMap {
         }
     }
 
-    /// The lines (1-based, end exclusive) row `row` renders on.
+    /// Each row's lines (1-based, end exclusive), read in one pass: what [`LineMap::lines_of`]
+    /// gives for each row, for O(1) lookups after.
+    pub fn row_spans(&self) -> HashMap<&Key, Range<usize>> {
+        visited(self.lines.len());
+        let mut out: HashMap<&Key, Range<usize>> = HashMap::new();
+        for (i, o) in self.lines.iter().enumerate() {
+            if let LineOwner::Row(k) = o {
+                let n = i + 1;
+                let r = out.entry(k).or_insert(n..n);
+                // a row's first run of lines, as lines_of reads it
+                if r.end == n {
+                    r.end = n + 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// The lines (1-based, end exclusive) row `row` renders on. O(the map): for many rows,
+    /// read [`LineMap::row_spans`] once.
     pub fn lines_of(&self, row: &Key) -> Option<Range<usize>> {
         let is = |o: &LineOwner| matches!(o, LineOwner::Row(k) if k == row);
-        let start = self.lines.iter().position(is)?;
+        let Some(start) = self.lines.iter().position(is) else {
+            visited(self.lines.len());
+            return None;
+        };
         let len = self.lines[start..].iter().take_while(|o| is(o)).count();
+        visited(start + len);
         Some(start + 1..start + 1 + len)
     }
 }

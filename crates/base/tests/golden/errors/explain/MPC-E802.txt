@@ -1,7 +1,7 @@
 MPC-E802 at_limit (structured and CSV)
 exit:     2
 message:  this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted`
-next:     The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
+next:     The table can't grow past its limit (details.what: cells, columns or rows); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
 step:     rows drop-deleted; why: The table is at its size limit; remove rows or columns first, or have an owner free the space deleted rows still hold.
 rule:     K-CSV-7 (KC4)
 verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
@@ -13,7 +13,7 @@ status:   live
   "area": "structured and CSV",
   "exit": 2,
   "message": "this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted`",
-  "next": "The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.",
+  "next": "The table can't grow past its limit (details.what: cells, columns or rows); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.",
   "next_step": {
     "verb": "rows drop-deleted",
     "args": [],

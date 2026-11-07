@@ -96,6 +96,11 @@ fn register_inner(key: String, session: Arc<DaemonPtySession>) {
             // DA2: the displaced session's row goes with it (it will never
             // be unregistered under this key).
             crate::activity_store::unregister(&old.session_id.to_string());
+            // Its passport goes with it (never one under the same id: that
+            // would be the session now taking the key).
+            if old.session_id != session.session_id && !old.is_detached() {
+                crate::session_token::revoke_if_minted(&old.session_id);
+            }
             old.kill();
         }
     }
@@ -328,6 +333,14 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         let terminal_id = session.session_id.to_string();
         // K2 vault: the session's secrets dir and proxy placeholders go.
         crate::vault::spawn::session_ended(&terminal_id);
+        // Its passport and cell socket go too: every caller of this ends the
+        // session (the `kill` below; none registers the same session again,
+        // and a re-key moves the map entry without coming through here). A
+        // session detached for the next daemon keeps them: that daemon adopts
+        // it, and `kill` leaves it running.
+        if !session.is_detached() {
+            crate::session_token::revoke_if_minted(&session.session_id);
+        }
         // DA2: the activity row goes with the session (RL5 compat `stop`
         // for a client that last heard `start`).
         crate::activity_store::unregister(&terminal_id);

@@ -1643,8 +1643,29 @@ pub fn workspace_for_session(session_id: &str) -> Option<String> {
 // COMPAT-58: remove in Phase 3 (owner-token deprecation).
 pub fn revoke_session(session_id: &SessionId) {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    // Two teardown paths can reach one session: the second has nothing to do.
+    if g.passport_state(&session_id.to_string()) == PassportState::Revoked && !g.records.contains_key(&session_id.to_string()) {
+        return;
+    }
     g.revoke(session_id);
     save_to_disk(&g);
+}
+
+/// A session left the session map for good: its passport goes, if it has one.
+/// (`v2_session_map::unregister`, whichever way the session ended. Its exit
+/// observer can't do this alone: an unregister drops the session, its event
+/// channel closes, and the observer never sees a `ChildExit`.) A session with
+/// no record changes nothing, on disk or off.
+pub fn revoke_if_minted(session_id: &SessionId) {
+    let sid = session_id.to_string();
+    let Some(reg) = REGISTRY.get() else { return };
+    if reg.lock().unwrap_or_else(|e| e.into_inner()).records.contains_key(&sid) {
+        revoke_session(session_id);
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(crate::cell_uds::cell_socket_path(session_id));
+        }
+    }
 }
 
 /// Selector prefix of a `k2 job` run's passport (`job-<run id>`).
@@ -2048,6 +2069,28 @@ mod tests {
 
     fn heal_principal() -> Option<HookPrincipal> {
         Some(HookPrincipal { workspace_uuid: "ws".into(), agent_address: "a".into() })
+    }
+
+    /// Leaving the session map revokes a passport once, and a session with no
+    /// passport changes nothing.
+    #[test]
+    fn revoke_if_minted_revokes_a_real_passport_once() {
+        with_temp_home(|| {
+            let id = SessionId::new();
+            let token = mint_session_token(&id, "p", heal_principal().unwrap(), CredMode::ApiKey, Provider::Anthropic);
+            assert!(validate_hook(&token).is_some());
+            revoke_if_minted(&id);
+            assert!(validate_hook(&token).is_none(), "revoked");
+            revoke_session(&id);
+            revoke_if_minted(&id);
+            let g = registry().lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(g.session_epochs.get(&id.to_string()), Some(&1), "a second teardown path doesn't bump again");
+            drop(g);
+            let none = SessionId::new();
+            revoke_if_minted(&none);
+            let g = registry().lock().unwrap_or_else(|e| e.into_inner());
+            assert!(!g.session_epochs.contains_key(&none.to_string()), "no passport, no epoch");
+        });
     }
 
     /// The kill switch counts as a revoke: records stay but are inert, and

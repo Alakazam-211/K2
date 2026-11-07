@@ -2687,6 +2687,58 @@ mod tests {
         );
     }
 
+    fn passport_for(session: &k2_core::terminal::DaemonPtySession) -> String {
+        crate::session_token::mint_session_token(
+            &session.session_id,
+            "pane",
+            crate::session_token::HookPrincipal { workspace_uuid: "ws".into(), agent_address: "a".into() },
+            crate::session_token::CredMode::ApiKey,
+            crate::session_token::Provider::Anthropic,
+        )
+    }
+
+    /// A passport ends with the session, not with a map key. Re-keyed: the
+    /// same session is still served. Closed, or displaced by a newer session
+    /// under its key: refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_passport_ends_with_the_session_not_with_its_map_key() {
+        let _ = k2_core::db::init_for_tests();
+        let (_home, ws) = clean_spawn_dir();
+        let spawn = |agent: &str| {
+            let result = handle_v2_spawn(&sleep_spawn_body(agent, &ws, false));
+            assert_eq!(result.status, "200 OK", "spawn {agent}: {}", result.body);
+            crate::v2_session_map::lookup_by_agent_name(agent).expect("registered")
+        };
+
+        // Re-keyed (the boot's legacy-key sweep): same session, still served.
+        let pid = uuid::Uuid::new_v4().to_string();
+        let legacy = format!("{pid}:legacy");
+        let session = spawn(&legacy);
+        let token = passport_for(&session);
+        crate::v2_session_map::migrate_legacy_keys_to_bare_pid();
+        let rekeyed = crate::v2_session_map::lookup_by_agent_name(&pid).expect("under the bare key");
+        assert_eq!(rekeyed.session_id, session.session_id);
+        assert!(rekeyed.is_child_alive(), "a re-key doesn't end the session");
+        assert!(crate::session_token::validate_hook(&token).is_some(), "a re-keyed session keeps its passport");
+
+        // Closed: refused, at once.
+        crate::v2_session_map::unregister(&pid);
+        assert!(!rekeyed.is_child_alive(), "unregister ends the session");
+        assert!(crate::session_token::validate_hook(&token).is_none(), "a closed session's passport is refused");
+
+        // Displaced: the old one is refused, the new one served.
+        let (name_a, name_b) = (uniq_agent_name(), uniq_agent_name());
+        let (a, b) = (spawn(&name_a), spawn(&name_b));
+        let (token_a, token_b) = (passport_for(&a), passport_for(&b));
+        crate::v2_session_map::register(name_a.clone(), std::sync::Arc::clone(&b));
+        assert!(!a.is_child_alive(), "a displaced session is killed");
+        assert!(crate::session_token::validate_hook(&token_a).is_none(), "a displaced session's passport is refused");
+        assert!(crate::session_token::validate_hook(&token_b).is_some(), "the session that took the key keeps its own");
+        crate::v2_session_map::unregister(&name_a);
+        crate::v2_session_map::unregister(&name_b);
+        b.kill();
+    }
+
     #[test]
     fn spawn_request_rejects_malformed_json() {
         let body = b"not json at all";

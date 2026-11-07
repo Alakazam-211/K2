@@ -14,8 +14,10 @@
 //!   back through `/cli/terminal/read?id=`);
 //! - no `seq` line is missing across the restart (replay from the ring);
 //! - zero unsolicited bytes reached the agent's stdin (P75);
-//! - the agent's hook token and cell socket still work (a 200 after the
-//!   restart, P31, P44).
+//! - the agent's hook token still works over its cell socket and over TCP
+//!   (a 200 after the restart, no 401/403 ever, P31, P44);
+//! - a passport revoked before the restarts stays revoked, and the store's
+//!   records and epochs are unchanged.
 //!
 //! Then `POST /cli/daemon/stop` (L2, P52): the agent and ptyd are gone.
 //!
@@ -314,6 +316,24 @@ fn hook_lines(dir: &Path) -> Vec<(u128, String)> {
     log_lines(dir, "hook.log")
 }
 
+/// `GET /cli/whoami` over TCP with `token` as a Bearer: (status, body).
+fn bearer_whoami(port: u16, token: &str) -> (u16, String) {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    write!(s, "GET /cli/whoami HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n").unwrap();
+    let mut raw = Vec::new();
+    let _ = s.read_to_end(&mut raw);
+    let text = String::from_utf8_lossy(&raw).to_string();
+    let status = text.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+    (status, text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default())
+}
+
+/// `~/.k2/hook-sessions.json`.
+fn hook_store(k2: &Path) -> serde_json::Value {
+    let raw = std::fs::read_to_string(k2.join("hook-sessions.json")).expect("hook-sessions.json");
+    serde_json::from_str(&raw).unwrap_or_else(|e| panic!("hook-sessions.json: {e}: {raw}"))
+}
+
 /// The agent's TCP (`K2_PORT`) calls: `<unix_ms> <status|ERR:…>`.
 fn tcp_lines(dir: &Path) -> Vec<(u128, String)> {
     log_lines(dir, "tcp.log")
@@ -475,6 +495,35 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
     assert_eq!(std::fs::read_to_string(&secret_file).expect("secret file at spawn"), "kept-across-restarts");
     agent_thread_post(port, &token, &dir, "before-restarts");
 
+    // A second session, closed now: its passport stays revoked through every
+    // restart below, on the epoch the store keeps.
+    let closed_probe = h.home.join("closed-probe.json");
+    let body = serde_json::json!({
+        "agent_name": "tab-closed",
+        "cwd": ws.to_string_lossy(),
+        "command": "k2-ptyd-test-agent",
+        "args": ["probe", closed_probe.to_string_lossy()],
+        "cols": 100,
+        "rows": 30,
+    })
+    .to_string();
+    let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "spawn tab-closed: {resp}");
+    let closed_sid = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string();
+    let closed_env: serde_json::Value = wait_for("tab-closed's env probe", Duration::from_secs(15), || serde_json::from_str(&std::fs::read_to_string(&closed_probe).ok()?).ok());
+    let closed_env_of = |k: &str| closed_env["env"].as_array().expect("env").iter().find(|p| p[0] == k).and_then(|p| p[1].as_str()).unwrap_or_else(|| panic!("tab-closed: no {k}")).to_string();
+    let closed_token = closed_env_of("K2_HOOK_TOKEN");
+    let closed_sock = PathBuf::from(closed_env_of("K2_HOOK_SOCK"));
+    let (s, b) = bearer_whoami(port, &closed_token);
+    assert_ne!(s, 403, "tab-closed's passport before the close: {b}");
+    let (s, b) = http(port, "POST", &format!("/cli/sessions/v2/close?token={token}"), &serde_json::json!({"agent_name": "tab-closed", "force": true}).to_string());
+    assert_eq!(s, 200, "close tab-closed: {b}");
+    wait_for("tab-closed's passport to be revoked", Duration::from_secs(15), || (bearer_whoami(port, &closed_token).0 == 403).then_some(()));
+    let kept_store = hook_store(&h.k2);
+    assert_eq!(kept_store["session_epochs"][&closed_sid], 1, "a revoke leaves its epoch: {kept_store}");
+    assert!(kept_store["records"][&closed_sid].is_null(), "a revoked session keeps no record: {kept_store}");
+    assert!(kept_store["records"][&sid]["token_digest"].is_string(), "no record of the agent: {kept_store}");
+
     let mut port = port;
     // S5: calls the agent started between a daemon's exit and its
     // successor's ready (they must all have completed, see below).
@@ -515,8 +564,16 @@ fn agents_survive_daemon_restarts_and_end_on_stop() {
         wait_for(&format!("{what}: a served hook call after ready"), Duration::from_secs(15), || {
             hook_lines(&dir).iter().any(|(t, r)| *t >= ready_at && served(r)).then_some(())
         });
-        let refused: Vec<_> = hook_lines(&dir).into_iter().filter(|(_, r)| r == "401" || r == "403").collect();
+        let refused: Vec<_> = hook_lines(&dir).into_iter().chain(tcp_lines(&dir)).filter(|(_, r)| r == "401" || r == "403").collect();
         assert!(refused.is_empty(), "{what}: the agent's passport was refused: {refused:?}");
+        // The revoked one stays revoked, and the store kept every record.
+        let (s, b) = bearer_whoami(port, &closed_token);
+        assert_eq!(s, 403, "{what}: tab-closed's revoked passport: {b}");
+        assert!(!closed_sock.exists(), "{what}: tab-closed's cell socket came back");
+        let store = hook_store(&h.k2);
+        assert_eq!(store["session_epochs"], kept_store["session_epochs"], "{what}: session_epochs changed");
+        assert_eq!(store["records"], kept_store["records"], "{what}: passport records changed");
+        assert_eq!(store["global_epoch"], kept_store["global_epoch"], "{what}: global_epoch changed");
         // S5: calls the agent started while no daemon was ready completed
         // once it was (they queued in the sockets ptyd held, and the new
         // daemon held them until ready), and none failed.

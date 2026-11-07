@@ -1481,10 +1481,13 @@ pub(crate) async fn send_login_rate_limited(stream: &mut TcpStream) {
 /// the WebView accepts the subsequent GET/POST. 204 No Content is
 /// the conventional preflight response status.
 ///
-/// **0.39.7:** as with [`send_response`], no longer emits
-/// `Connection: close`. The same TCP connection is then reused for
-/// the actual GET/POST that the preflight authorized — saves a
-/// socket per write-side operation.
+/// **0.46.10:** says `Connection: close`, because the dispatcher closes
+/// the socket after a preflight (`DispatchOutcome::Done`). Without the
+/// header the client may treat the socket as reusable (HTTP/1.1
+/// keep-alive), send the authorized GET/POST on it, and lose that
+/// request when the socket closes under it. WebKit then reports a
+/// CORS failure or "Load failed" for a request the daemon never saw,
+/// which a remote desktop client read as its host going down.
 pub(crate) async fn send_cors_preflight(stream: &mut TcpStream) {
     // X-K2-Client / X-K2-CSRF listed so a future cross-origin web SPA
     // preflight accepts the CSRF header (same-origin hosted path does
@@ -1494,7 +1497,8 @@ pub(crate) async fn send_cors_preflight(stream: &mut TcpStream) {
         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
         Access-Control-Allow-Headers: Content-Type, Authorization, X-K2-Client, X-K2-CSRF\r\n\
         Access-Control-Max-Age: 600\r\n\
-        Content-Length: 0\r\n\r\n";
+        Content-Length: 0\r\n\
+        Connection: close\r\n\r\n";
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 

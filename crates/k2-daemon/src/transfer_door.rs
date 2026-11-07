@@ -14,9 +14,10 @@
 //!
 //! **Where.** On the box's own address (the dispatcher, never on an App's
 //! gateway link) and on every App address while any transfer is live
-//! (`apps::router` reads the first request head, as for the call door).
-//! Every answer closes the connection, so the next request on an App's
-//! keep-alive connection can't slip past to the App.
+//! (`apps::router` reads the first request head, as for the call door, and
+//! on the App's rewrite path every later one too: `apps::voice_door::is_k2s`,
+//! 0.46.10). Every answer closes the connection, so the next request on an
+//! App's keep-alive connection can't slip past to the App.
 //!
 //! **The token** (`k2up_…` / `k2dn_…`) opens its one upload or file and
 //! nothing else; K2's own passes and cookies never count here. Before any

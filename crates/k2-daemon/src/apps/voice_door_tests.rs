@@ -442,3 +442,240 @@ async fn a_shut_gate_or_no_sew_signal_leaves_rtc_to_the_app() {
     assert_eq!(dials.load(Ordering::SeqCst), 2);
     nothing_reached(&mut seen, "a shut gate's socket").await;
 }
+
+// ── every request, not only the first (0.46.10) ──────────────────────
+
+/// A fake keep-alive App: records every byte it receives, answers each
+/// request `200 app` (a `Content-Length` body is read first) and keeps the
+/// connection; a WebSocket upgrade gets `101`, then everything is echoed.
+/// Counts its dials.
+async fn keep_alive_app() -> (u16, Arc<std::sync::Mutex<Vec<u8>>>, Arc<AtomicUsize>) {
+    let l = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = l.local_addr().expect("addr").port();
+    let seen: Arc<std::sync::Mutex<Vec<u8>>> = Arc::default();
+    let dials = Arc::new(AtomicUsize::new(0));
+    let (seen2, dials2) = (seen.clone(), dials.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = l.accept().await else { return };
+            dials2.fetch_add(1, Ordering::SeqCst);
+            let seen = seen2.clone();
+            tokio::spawn(async move {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut b = [0u8; 4096];
+                loop {
+                    let end = loop {
+                        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break i + 4;
+                        }
+                        match s.read(&mut b).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                seen.lock().expect("seen").extend_from_slice(&b[..n]);
+                                buf.extend_from_slice(&b[..n]);
+                            }
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                    buf.drain(..end);
+                    let len = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().expect("len")))
+                        .unwrap_or(0);
+                    while buf.len() < len {
+                        match s.read(&mut b).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                seen.lock().expect("seen").extend_from_slice(&b[..n]);
+                                buf.extend_from_slice(&b[..n]);
+                            }
+                        }
+                    }
+                    buf.drain(..len);
+                    if head.contains("\r\nupgrade: websocket\r\n") {
+                        if s.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n").await.is_err() {
+                            return;
+                        }
+                        if !buf.is_empty() && s.write_all(&buf).await.is_err() {
+                            return;
+                        }
+                        loop {
+                            let n = match s.read(&mut b).await {
+                                Ok(n) if n > 0 => n,
+                                _ => return,
+                            };
+                            seen.lock().expect("seen").extend_from_slice(&b[..n]);
+                            if s.write_all(&b[..n]).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    if s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\napp").await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (port, seen, dials)
+}
+
+/// Read one `200 app` answer from the App (the connection stays open).
+async fn app_answer(c: &mut TcpStream) -> String {
+    let mut got = Vec::new();
+    let mut b = [0u8; 1024];
+    while !got.ends_with(b"\r\n\r\napp") {
+        let n = tokio::time::timeout(Duration::from_secs(5), c.read(&mut b)).await.expect("in time").expect("read");
+        assert!(n > 0, "closed before the App's answer: {}", String::from_utf8_lossy(&got));
+        got.extend_from_slice(&b[..n]);
+    }
+    let got = String::from_utf8_lossy(&got).to_string();
+    assert!(got.starts_with("HTTP/1.1 200 OK\r\n"), "{got}");
+    got
+}
+
+fn seen_by(app: &std::sync::Mutex<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&app.lock().expect("seen")).to_string()
+}
+
+const CREDENTIAL: &str = "POST /_k2/voice/sew/api/v1/me/voice/credential HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\nAuthorization: Bearer sewcc_vdsel.vdsecret\r\nContent-Type: application/json\r\nConnection: keep-alive\r\nContent-Length: 2\r\n\r\n{}";
+
+/// The field report: an App's server reuses a pooled keep-alive connection
+/// that already carried an App request for its call-credential POST. Before
+/// 0.46.10 only a connection's first request was read, so the POST reached
+/// the App (its own 404). It must reach Sew, and never the App.
+#[tokio::test]
+async fn a_call_door_request_later_on_a_keep_alive_connection_reaches_sew_not_the_app() {
+    let _home = crate::test_support::TempHome::new();
+    let (sew, mut seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"sew\":\"yes\"}", false).await;
+    let (app_port, app_seen, dials) = keep_alive_app().await;
+    let id = "voice-door-keep-alive";
+    let _ = crate::apps::router::switch(id, app_port);
+    set_test_door(id, true, &sew);
+
+    // An App request, its answer, then the door request on the same socket.
+    let mut c = via_app(id).await;
+    c.write_all(b"GET /page HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\nConnection: keep-alive\r\n\r\n").await.expect("first");
+    app_answer(&mut c).await;
+    c.write_all(CREDENTIAL.as_bytes()).await.expect("door");
+    let out = read_all(c).await;
+    assert!(out.starts_with("HTTP/1.1 200 OK") && out.ends_with("{\"sew\":\"yes\"}"), "Sew's answer, not the App's: {out}");
+    let got = seen.recv().await.expect("Sew saw it");
+    assert!(got.starts_with("POST /api/v1/me/voice/credential HTTP/1.1\r\n"), "{got}");
+    assert!(got.contains("Authorization: Bearer sewcc_vdsel.vdsecret\r\n") && got.ends_with("{}"), "{got}");
+    let app = seen_by(&app_seen);
+    assert!(app.contains("GET /page HTTP/1.1"), "{app}");
+    assert!(!app.contains("_k2/voice") && !app.contains("sewcc_"), "the App saw the door request: {app}");
+    assert_eq!(dials.load(Ordering::SeqCst), 1);
+
+    // Pipelined in one write: the App's answer first, then Sew's, in order;
+    // nothing after the door request moves.
+    let mut c = via_app(id).await;
+    let all = format!("GET /a HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\n\r\n{CREDENTIAL}GET /smuggled HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\n\r\n");
+    c.write_all(all.as_bytes()).await.expect("pipelined");
+    let out = read_all(c).await;
+    let (app_at, sew_at) = (out.find("\r\n\r\napp").expect("the App's answer"), out.find("{\"sew\":\"yes\"}").expect("Sew's answer"));
+    assert!(app_at < sew_at, "in order: {out}");
+    assert!(seen.recv().await.expect("Sew saw it").starts_with("POST /api/v1/me/voice/credential "));
+    let app = seen_by(&app_seen);
+    assert!(app.contains("GET /a HTTP/1.1"), "{app}");
+    assert!(!app.contains("_k2/voice") && !app.contains("sewcc_") && !app.contains("/smuggled"), "the App saw: {app}");
+    assert_eq!(dials.load(Ordering::SeqCst), 2);
+
+    // A shut gate: the later door request is still K2's (its 404), never the App's.
+    set_test_door(id, false, &sew);
+    let mut c = via_app(id).await;
+    c.write_all(b"GET /page HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\n\r\n").await.expect("first");
+    app_answer(&mut c).await;
+    c.write_all(CREDENTIAL.as_bytes()).await.expect("door");
+    let out = read_all(c).await;
+    assert!(out.starts_with("HTTP/1.1 404") && out.contains(crate::voice::sew_lane::APP_DOOR_OFF), "{out}");
+    nothing_reached(&mut seen, "a shut door's later request").await;
+    assert!(!seen_by(&app_seen).contains("sewcc_"), "the App never saw a credential");
+    crate::apps::router::clear(id);
+}
+
+/// The transfer door holds for later requests too.
+#[tokio::test]
+async fn a_transfer_door_request_later_on_a_keep_alive_connection_is_k2s() {
+    let _home = crate::test_support::TempHome::new();
+    let (sew, _seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    let (app_port, app_seen, _) = keep_alive_app().await;
+    let id = "transfer-door-keep-alive";
+    let _ = crate::apps::router::switch(id, app_port);
+    set_test_door(id, false, &sew);
+    let mut c = via_app(id).await;
+    c.write_all(b"GET /page HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\n\r\n").await.expect("first");
+    app_answer(&mut c).await;
+    c.write_all(b"PUT /_k2/transfers/uploads/0123456789abcdef0123456789abcdef HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\nContent-Range: bytes 0-1/2\r\nContent-Length: 2\r\n\r\nab")
+        .await
+        .expect("door");
+    let out = read_all(c).await;
+    assert!(out.starts_with("HTTP/1.1 401") && out.contains("transfer_token_required"), "{out}");
+    let app = seen_by(&app_seen);
+    assert!(app.contains("GET /page") && !app.contains("_k2/transfers"), "the App saw: {app}");
+    crate::apps::router::clear(id);
+}
+
+/// The native signal lane holds for later requests too, and the socket
+/// goes to the engine with K2's own client address.
+#[tokio::test]
+async fn a_native_signal_socket_later_on_a_keep_alive_connection_goes_to_the_engine() {
+    let _home = crate::test_support::TempHome::new();
+    let (sew, _sew_seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    let (engine, mut seen) = fake_sew("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", true).await;
+    let (app_port, app_seen, _) = keep_alive_app().await;
+    let id = "signal-door-keep-alive";
+    let _ = crate::apps::router::switch(id, app_port);
+    set_test_signal(id, true, &sew, Some(&engine));
+    let mut c = via_tunnel(id, "203.0.113.30").await;
+    c.write_all(b"GET /page HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\n\r\n").await.expect("first");
+    app_answer(&mut c).await;
+    c.write_all(rtc("/rtc/v1?join_request=Q2dFeA", &format!("Authorization: Bearer {MEDIA_JWT}\r\n")).as_bytes()).await.expect("handshake");
+    assert!(handshake(&mut c).await.starts_with("HTTP/1.1 101"));
+    let up = seen.recv().await.expect("the engine saw it");
+    assert!(up.starts_with("GET /rtc/v1?join_request=Q2dFeA HTTP/1.1\r\n") && up.contains("\r\nX-Forwarded-For: 203.0.113.30\r\n"), "{up}");
+    c.write_all(b"ping").await.expect("frame");
+    let mut f = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(5), c.read_exact(&mut f)).await.expect("in time").expect("echo");
+    assert_eq!(&f, b"ping");
+    let app = seen_by(&app_seen);
+    assert!(app.contains("GET /page") && !app.contains("/rtc/v1") && !app.contains(MEDIA_JWT), "the App saw: {app}");
+    crate::apps::router::clear(id);
+}
+
+/// With the doors watching, the App's own keep-alive traffic and its
+/// WebSocket are unchanged: later App requests stay on one App connection,
+/// and after a `101` the bytes are the App's protocol (even ones that look
+/// like a door request).
+#[tokio::test]
+async fn the_apps_own_keep_alive_and_websocket_pass_while_the_doors_watch() {
+    let _home = crate::test_support::TempHome::new();
+    let (sew, mut seen) = fake_sew("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", false).await;
+    let (app_port, app_seen, dials) = keep_alive_app().await;
+    let id = "voice-door-app-ws";
+    let _ = crate::apps::router::switch(id, app_port);
+    set_test_door(id, true, &sew);
+    let mut c = via_app(id).await;
+    for path in ["/one", "/_k2/voice/sewx", "/rtc/v1/validate", "/two"] {
+        c.write_all(format!("GET {path} HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\n\r\n").as_bytes()).await.expect("request");
+        app_answer(&mut c).await;
+    }
+    c.write_all(b"GET /ws HTTP/1.1\r\nHost: jobs.acme.k2.dev\r\nCookie: app_session=x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+        .await
+        .expect("upgrade");
+    assert!(handshake(&mut c).await.starts_with("HTTP/1.1 101"));
+    let frame = CREDENTIAL.as_bytes();
+    c.write_all(frame).await.expect("frame");
+    let mut back = vec![0u8; frame.len()];
+    tokio::time::timeout(Duration::from_secs(5), c.read_exact(&mut back)).await.expect("in time").expect("echo");
+    assert_eq!(back, frame, "raw after the 101");
+    nothing_reached(&mut seen, "bytes inside the App's WebSocket").await;
+    assert_eq!(dials.load(Ordering::SeqCst), 1, "one App connection for all of it");
+    let app = seen_by(&app_seen);
+    for path in ["/one", "/_k2/voice/sewx", "/rtc/v1/validate", "/two", "/ws"] {
+        assert!(app.contains(&format!("GET {path} HTTP/1.1")), "{path}: {app}");
+    }
+    drop(c);
+    crate::apps::router::clear(id);
+}

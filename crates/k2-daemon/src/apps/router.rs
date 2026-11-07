@@ -222,6 +222,25 @@ pub async fn splice_with<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    splice_doors(client, be, mode, local, door, None).await.map(|_| ())
+}
+
+/// [`splice_with`] plus K2's other doors on every request (`divert`, the
+/// rewrite path only). `Ok(Some(bytes))`: a later request on the connection
+/// is K2's; the App's connection is closed, nothing of that request reached
+/// it, and `bytes` (that request's head as sent, and everything read after
+/// it) are for K2 to serve on `client`.
+async fn splice_doors<S>(
+    client: &mut S,
+    be: Arc<Backend>,
+    mode: Option<crate::client_ip::Mode>,
+    local: Option<crate::client_ip::LocalAnswer>,
+    door: Option<crate::client_ip::DoorHook>,
+    divert: Option<crate::client_ip::Divert>,
+) -> Result<Option<Vec<u8>>, String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // Count first, then look at `draining` (both SeqCst; the drain sets
     // `draining` and then reads the count): either the drain sees this
     // connection and waits for it, or this connection sees the drain and
@@ -255,15 +274,15 @@ where
     let _guard = guard;
     let mut cut = be.cut_tx.subscribe();
     if *cut.borrow() {
-        return Ok(());
+        return Ok(None);
     }
-    if let Some(mode) = mode {
+    let diverted = if let Some(mode) = mode {
         // G2 (0.46.6): per-visitor writes for this App, wherever the
         // connection carries the visitor (`apps::guard`).
         let gate = Some(crate::apps::guard::write_gate(&be.app_id));
         tokio::select! {
-            _ = crate::client_ip::forward_doored(&mut *client, &mut upstream, mode, local, gate, door) => {}
-            _ = cut.changed() => {}
+            r = crate::client_ip::forward_diverted(&mut *client, &mut upstream, mode, local, gate, door, divert) => r.ok().flatten(),
+            _ = cut.changed() => None,
         }
     } else {
         // `host.clientIp: false`: the pre-0.46.3 raw splice, unchanged.
@@ -271,9 +290,10 @@ where
             _ = tokio::io::copy_bidirectional(client, &mut upstream) => {}
             _ = cut.changed() => {}
         }
-    }
+        None
+    };
     let _ = upstream.shutdown().await;
-    Ok(())
+    Ok(diverted)
 }
 
 /// The rewrite for `be` reached as `label`: on when the App's manifest
@@ -399,6 +419,14 @@ pub enum TlsAppOutcome {
 /// answers for the App's pairing link files and the native call door
 /// (`voice_door`; read before the backend is dialed), then the counted
 /// splice to `be`. The caller answers a failure.
+///
+/// On the rewrite path K2's doors hold for **every** request of the
+/// connection, not only the first (0.46.10): the sign-in door and the local
+/// answers inside the forwarder, and the call door, the transfer door and
+/// the native signal lane through its divert (`voice_door::is_k2s`). A
+/// diverted request is served here exactly as a first request would be
+/// (then the connection closes); should that find it isn't K2's after all
+/// (a gate that just changed), the App is dialed again with its bytes.
 pub async fn serve_tls_app<S>(client: &mut S, be: Arc<Backend>, label: &str, mode: crate::client_ip::Mode) -> TlsAppOutcome
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -410,22 +438,39 @@ where
     // The sign-in door (0.46.9, `auth_door`): only where every request is
     // parsed (the rewrite), never on a raw splice.
     let door = mode.and_then(|m| super::auth_door::hook_for(&be.app_id).map(|h| (m, h)));
-    match read_first(client, label, local.as_ref(), visitor, door.as_ref()).await {
-        Some(FirstRequest::Answered) => TlsAppOutcome::Answered,
-        Some(FirstRequest::Pass(bytes)) => {
-            let r = {
-                let mut r = crate::client_ip::Replay::new(bytes, client);
-                splice_with(&mut r, be, mode, local, door.map(|(_, h)| h)).await
-            };
-            match r {
-                Ok(()) => TlsAppOutcome::Spliced,
-                Err(why) => TlsAppOutcome::Failed { head_read: true, why },
+    // K2's other doors on every later request (0.46.10): the rewrite only.
+    let divert = mode.map(|_| super::voice_door::divert_for(label));
+    let (mut pending, mut head_read) = match read_first(client, label, local.as_ref(), visitor, door.as_ref()).await {
+        Some(FirstRequest::Answered) => return TlsAppOutcome::Answered,
+        Some(FirstRequest::Pass(bytes)) => (bytes, true),
+        None => (Vec::new(), false),
+    };
+    loop {
+        let r = {
+            let mut r = crate::client_ip::Replay::new(pending, client);
+            let got = splice_doors(&mut r, be.clone(), mode, local.clone(), door.as_ref().map(|(_, h)| h.clone()), divert.clone()).await;
+            got.map(|d| {
+                d.map(|mut rest| {
+                    rest.extend_from_slice(&r.unread());
+                    rest
+                })
+            })
+        };
+        let rest = match r {
+            Ok(None) => return TlsAppOutcome::Spliced,
+            Ok(Some(rest)) => rest,
+            Err(why) => return TlsAppOutcome::Failed { head_read, why },
+        };
+        // A later request is K2's: served as a first request, App up or down.
+        let mut r = crate::client_ip::Replay::new(rest, client);
+        match super::voice_door::first_request(&mut r, label, None, visitor).await {
+            FirstRequest::Answered => return TlsAppOutcome::Answered,
+            FirstRequest::Pass(mut bytes) => {
+                bytes.extend_from_slice(&r.unread());
+                pending = bytes;
+                head_read = true;
             }
         }
-        None => match splice(client, be, mode).await {
-            Ok(()) => TlsAppOutcome::Spliced,
-            Err(why) => TlsAppOutcome::Failed { head_read: false, why },
-        },
     }
 }
 

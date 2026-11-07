@@ -47,9 +47,18 @@
 //! dials the App, as it does for the pairing link files. A head on the door
 //! is K2's (answered or relayed, then the connection closes); anything else
 //! goes to the App with the bytes replayed. A box without voice reads
-//! nothing and changes nothing. A door request later on an App's keep-alive
-//! connection reaches the App: the engine's own connections only ever carry
-//! door requests, and K2 closes each one after its answer.
+//! nothing and changes nothing.
+//!
+//! **Every request, not only the first** (0.46.10). An App's own server
+//! pools keep-alive connections, so its door request (a `sewcc_` call
+//! credential on `/_k2/voice/sew/…`) can ride a connection that already
+//! carried App requests. On the App's rewrite path, where K2 parses every
+//! request, [`divert_for`] asks [`is_k2s`] about each later request: a door
+//! request stops the forwarder before a byte of it moves, the App's earlier
+//! responses are written, and K2 serves it exactly as a first request
+//! (`apps::router::serve_tls_app`). The App's own requests pay one prefix
+//! check. A raw App (`host.clientIp: false`) is never parsed, so there the
+//! doors still see only the first request.
 
 use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};
@@ -178,6 +187,47 @@ pub fn watching(app_id: &str) -> bool {
     voice_installed()
 }
 
+/// Where `app_id`'s native signalling socket goes now (its gate open and its
+/// `sew-signal` approved), or `None`.
+fn signal_for(app_id: &str) -> Option<String> {
+    #[cfg(test)]
+    {
+        if let Some(t) = test_door(app_id) {
+            return t.signal.filter(|_| t.open);
+        }
+    }
+    signal_addr(app_id)
+}
+
+/// Is the request whose complete head (as the client sent it) starts `head`
+/// one [`first_request`] keeps for K2 on `app_id`'s address: the transfer
+/// door, the call door (open or shut), or the native signal lane with its
+/// gate open? Only while the App path watches at all ([`watching`], or a
+/// live transfer), as for a first request. A target on none of the doors is
+/// answered after one prefix check, without a lock.
+pub fn is_k2s(app_id: &str, head: &[u8]) -> bool {
+    let Some(target) = crate::client_ip::first_target(head) else {
+        return false;
+    };
+    let path = target.split_once('?').map_or(target.as_str(), |(p, _)| p);
+    if !(crate::transfer_door::is_door(&target) || sew_lane::is_lane(&target) || path == signal_lane::PATH) {
+        return false;
+    }
+    if !(watching(app_id) || crate::transfer_door::watching()) {
+        return false;
+    }
+    crate::transfer_door::door_head(head).is_some()
+        || lane_head(head).is_some()
+        || (signal_lane::native_head(head).is_some() && signal_for(app_id).is_some())
+}
+
+/// The forwarder's [`Divert`](crate::client_ip::Divert) for `app_id`: every
+/// request after the first is checked with [`is_k2s`].
+pub fn divert_for(app_id: &str) -> crate::client_ip::Divert {
+    let id = app_id.to_string();
+    std::sync::Arc::new(move |head: &[u8]| is_k2s(&id, head))
+}
+
 /// The head at the start of `bytes` when it is complete and its target is on
 /// the door: `(head text, head length in bytes with its blank line)`.
 pub fn lane_head(bytes: &[u8]) -> Option<(String, usize)> {
@@ -199,8 +249,7 @@ where
     #[cfg(test)]
     {
         if let Some(t) = test_door(app_id) {
-            let signal = t.signal.clone().filter(|_| t.open);
-            return first_request_door(client, local, || t.open, &t.sew_addr, None, visitor, move || signal).await;
+            return first_request_door(client, local, || t.open, &t.sew_addr, None, visitor, || signal_for(app_id)).await;
         }
     }
     let kit = KitCtx::live(Door::App { app_id: app_id.to_string() });
@@ -211,7 +260,7 @@ where
         &crate::sew::ops::client_addr(),
         Some(&kit),
         visitor,
-        || signal_addr(app_id),
+        || signal_for(app_id),
     )
     .await
 }

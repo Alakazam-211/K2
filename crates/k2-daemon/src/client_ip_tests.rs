@@ -570,6 +570,49 @@ async fn refusal_waits_for_earlier_responses() {
     assert!(ok < refused, "{out}");
 }
 
+/// 0.46.10: a request the [`Divert`] claims never moves. The App's earlier
+/// answer (to a chunked request) is written, then the forwarder stops with
+/// the client still open and hands back the claimed head exactly as sent
+/// (spoofed headers and all: it was never rewritten) and every byte after it.
+#[tokio::test]
+async fn a_diverted_request_never_moves_and_comes_back_byte_for_byte() {
+    let app = echo_app().await;
+    let (client, mut server_side, _) = pair().await;
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let asked2 = asked.clone();
+    let divert: Divert = std::sync::Arc::new(move |head: &[u8]| {
+        asked2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        head.starts_with(b"POST /k2door ") && head.ends_with(b"\r\n\r\n")
+    });
+    let h = tokio::spawn(async move {
+        let mut up = TcpStream::connect(("127.0.0.1", app)).await.unwrap();
+        let got = forward_diverted(&mut server_side, &mut up, Mode::Tunnel(Some(ip(CLIENT))), None, None, None, Some(divert)).await;
+        (got, server_side)
+    });
+    let first = "POST /up HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+    let door = "POST /k2door HTTP/1.1\r\nHost: a\r\nX-Forwarded-For: 6.6.6.6\r\nContent-Length: 5\r\n\r\nhello";
+    let after = "GET /after HTTP/1.1\r\nHost: a\r\n\r\n";
+    let mut c = Client { s: client, buf: Vec::new() };
+    c.send(format!("{first}{door}{after}").as_bytes()).await.unwrap();
+    let (head, seen) = c.response().await;
+    assert!(head.starts_with("HTTP/1.1 200") && seen.starts_with("POST /up HTTP/1.1\r\n"), "{head}{seen}");
+    let (got, mut server_side) = tokio::time::timeout(TEST_WAIT, h).await.expect("the forwarder stopped").unwrap();
+    let mut rest = got.expect("no error").expect("diverted");
+    // Bytes not read yet are still on the socket, in order.
+    let want = format!("{door}{after}");
+    while rest.len() < want.len() {
+        let mut b = [0u8; 1024];
+        let n = tokio::time::timeout(TEST_WAIT, server_side.read(&mut b)).await.expect("in time").unwrap();
+        assert!(n > 0, "the client closed");
+        rest.extend_from_slice(&b[..n]);
+    }
+    assert_eq!(String::from_utf8_lossy(&rest), want);
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2, "asked once per request, up to the claimed one");
+    // The client is still open, and nothing more came from the App.
+    server_side.write_all(b"K2").await.unwrap();
+    assert_eq!(c.take(2).await, b"K2");
+}
+
 #[tokio::test]
 async fn oversized_head_is_431() {
     let mut c = through(Mode::Tunnel(Some(ip(CLIENT)))).await;

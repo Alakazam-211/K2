@@ -65,6 +65,16 @@
 //! out of what the site receives. [`peek_gate_request`] gives `site_gate`
 //! the first request before anything is dialed, so a visitor who fails
 //! never causes a connection to the site.
+//!
+//! **K2's other doors on an App's host** (0.46.10): [`forward_diverted`]
+//! takes a [`Divert`], asked about every request with its head exactly as
+//! the client sent it (the call door, the transfer door and the native
+//! signal lane, `apps::voice_door`). A request it claims never moves: the
+//! responses before it are written in order, the forwarder stops, and every
+//! byte of that request and after it is handed back for K2 to serve, as if
+//! it were the first request of a fresh connection. Before this, those doors
+//! read only a connection's first request, and a door request later on a
+//! keep-alive connection reached the App.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -482,6 +492,9 @@ struct RequestHead {
     /// `Content-Type` and `User-Agent`, for the sign-in door ([`DoorHook`]).
     content_type: Option<String>,
     user_agent: Option<String>,
+    /// The head exactly as the client sent it, kept only for a [`Divert`]
+    /// (empty otherwise).
+    raw: Vec<u8>,
 }
 
 /// One request, as K2's gate sees it ([`GateHooks`]).
@@ -668,7 +681,7 @@ where
     let rule = resolve(mode);
     let answer = {
         let mut rd = Reader::new(Replay::new(pre, &mut *client));
-        match read_request(&mut rd, rule, &[]).await {
+        match read_request(&mut rd, rule, &[], false).await {
             Ok(ReadRequest::Head(head)) if (hook.claims)(&head.path) => {
                 let call = door_call(&mut rd, &head, hook, rule.visitor()).await;
                 Some((hook.answer)(call).await)
@@ -872,10 +885,12 @@ fn rewrite_request(req: &httparse::Request, rule: Rule, strip: &[&str]) -> Resul
         sec_fetch_dest,
         content_type,
         user_agent,
+        raw: Vec::new(),
     })
 }
 
-async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule, strip: &[&str]) -> io::Result<ReadRequest> {
+/// `keep_raw`: keep the head as sent in [`RequestHead::raw`] (a [`Divert`]).
+async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule, strip: &[&str], keep_raw: bool) -> io::Result<ReadRequest> {
     loop {
         if !rd.data().is_empty() {
             let mut headers = [httparse::EMPTY_HEADER; MAX_REQ_HEADERS];
@@ -887,9 +902,10 @@ async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule, stri
                 }
                 Ok(httparse::Status::Complete(n)) => {
                     let out = rewrite_request(&req, rule, strip);
+                    let raw = if keep_raw { rd.data()[..n].to_vec() } else { Vec::new() };
                     rd.consume(n);
                     return Ok(match out {
-                        Ok(h) => ReadRequest::Head(h),
+                        Ok(h) => ReadRequest::Head(RequestHead { raw, ..h }),
                         Err(status) => ReadRequest::Refuse(status),
                     });
                 }
@@ -918,11 +934,17 @@ enum Expect {
     /// K2's own answer (a refusal, or a [`LocalAnswer`]): written after the
     /// responses before it, then the connection closes.
     Own(Vec<u8>),
+    /// A request a [`Divert`] claimed: the responses before it are written,
+    /// then the forwarder stops with the client still open.
+    Divert,
 }
 
 struct Shared {
     queue: Mutex<VecDeque<Expect>>,
     pushed: Notify,
+    /// What a [`Divert`] took: the claimed request's head as sent and every
+    /// byte read after it.
+    diverted: Mutex<Option<Vec<u8>>>,
 }
 
 impl Shared {
@@ -955,6 +977,7 @@ async fn requests<R, W>(
     gate: Option<&WriteGate>,
     access: Option<&GateHooks>,
     door: Option<&DoorHook>,
+    divert: Option<&Divert>,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -971,7 +994,7 @@ where
             return Ok(());
         }
         let r = *rule.get_or_insert_with(|| resolve(mode));
-        let head = match read_request(&mut rd, r, strip).await? {
+        let mut head = match read_request(&mut rd, r, strip, divert.is_some()).await? {
             ReadRequest::Eof => {
                 let _ = up.shutdown().await;
                 return Ok(());
@@ -988,6 +1011,17 @@ where
             if (door.claims)(&head.path) {
                 let call = door_call(&mut rd, &head, door, r.visitor()).await;
                 shared.push(Expect::Own((door.answer)(call).await));
+                return Ok(());
+            }
+        }
+        // K2's other doors on an App's host (0.46.10): nothing of a claimed
+        // request moves; it and everything after it go back to the caller.
+        if let Some(divert) = divert {
+            if divert(&head.raw) {
+                let mut rest = std::mem::take(&mut head.raw);
+                rest.extend_from_slice(rd.data());
+                *shared.diverted.lock().unwrap_or_else(|p| p.into_inner()) = Some(rest);
+                shared.push(Expect::Divert);
                 return Ok(());
             }
         }
@@ -1113,6 +1147,10 @@ where
                 let _ = cw.shutdown().await;
                 return Ok(());
             }
+            Some(Expect::Divert) => {
+                cw.flush().await?;
+                return Ok(());
+            }
             Some(e) => Some(e),
             None if rd.data().is_empty() => {
                 tokio::select! {
@@ -1228,7 +1266,7 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, None, None, Some(&hooks), None).await
+    run_forward(client, upstream, mode, None, None, Some(&hooks), None, None).await.map(|_| ())
 }
 
 /// [`forward_with`] plus G2's write gate (`apps::guard::write_gate`).
@@ -1243,7 +1281,7 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, local, gate, None, None).await
+    run_forward(client, upstream, mode, local, gate, None, None, None).await.map(|_| ())
 }
 
 /// [`forward_guarded`] plus the sign-in door on every request
@@ -1260,7 +1298,35 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    run_forward(client, upstream, mode, local, gate, None, door.as_ref()).await
+    run_forward(client, upstream, mode, local, gate, None, door.as_ref(), None).await.map(|_| ())
+}
+
+/// K2's other doors on an App's host (0.46.10, `apps::voice_door`): given a
+/// complete request head exactly as the client sent it, is the request
+/// K2's? Asked for every request on the connection after the sign-in door
+/// ([`DoorHook`]) and before G2 and the local answers. Keep it cheap for the
+/// App's own traffic: it runs on every request.
+pub type Divert = std::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+/// [`forward_doored`] plus a [`Divert`]. `Ok(Some(bytes))`: a request was
+/// claimed. Nothing of it reached the App, every earlier response was
+/// written, and the client is still open; `bytes` are the claimed head as
+/// sent and everything read after it (replay them, then the client, with
+/// [`Replay`]). `Ok(None)`: the connection ended as [`forward`] ends.
+pub async fn forward_diverted<C, U>(
+    client: C,
+    upstream: U,
+    mode: Mode,
+    local: Option<LocalAnswer>,
+    gate: Option<WriteGate>,
+    door: Option<DoorHook>,
+    divert: Option<Divert>,
+) -> io::Result<Option<Vec<u8>>>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    run_forward(client, upstream, mode, local, gate, None, door.as_ref(), divert.as_ref()).await
 }
 
 async fn run_forward<C, U>(
@@ -1271,26 +1337,29 @@ async fn run_forward<C, U>(
     gate: Option<WriteGate>,
     access: Option<&GateHooks>,
     door: Option<&DoorHook>,
-) -> io::Result<()>
+    divert: Option<&Divert>,
+) -> io::Result<Option<Vec<u8>>>
 where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
     let (cr, cw) = tokio::io::split(client);
     let (ur, uw) = tokio::io::split(upstream);
-    let shared = Shared { queue: Mutex::new(VecDeque::new()), pushed: Notify::new() };
+    let shared = Shared { queue: Mutex::new(VecDeque::new()), pushed: Notify::new(), diverted: Mutex::new(None) };
     let (decide, decided) = watch::channel::<Decision>((0, false));
-    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref(), access, door);
+    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref(), access, door, divert);
     let lines = access.map_or(&[][..], |a| a.response_lines.as_slice());
     let resp = responses(Reader::new(ur), cw, &shared, decide, lines);
     tokio::pin!(req, resp);
-    tokio::select! {
+    let r = tokio::select! {
         r = &mut resp => r,
         r = &mut req => match r {
             Ok(()) => resp.await,
             Err(e) => Err(e),
         },
-    }
+    };
+    r?;
+    Ok(shared.diverted.lock().unwrap_or_else(|p| p.into_inner()).take())
 }
 
 // ── the first request, before the App is dialed ──────────────────────

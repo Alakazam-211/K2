@@ -403,7 +403,7 @@ struct CameraControl {
     ctx: *mut Ctx,
     stop: Arc<AtomicBool>,
     watch: Option<JoinHandle<()>>,
-    life: Arc<Mutex<Life>>,
+    life: Arc<Watched>,
     observers: Vec<Observer>,
 }
 
@@ -415,15 +415,19 @@ impl SourceControl for CameraControl {}
 
 impl Drop for CameraControl {
     fn drop(&mut self) {
-        // No events once the caller is closing it. Closing under the lock
-        // waits for an observer block that is sending one now, and a block
-        // that still runs after removeObserver (it can, on another thread)
-        // sends nothing.
-        lock(&self.life).close();
+        // No new events once the caller is closing it. Closing only sets a
+        // flag (it never waits on the life's lock), and a block that still
+        // runs after removeObserver (it can, on another thread) sends
+        // nothing new.
+        self.life.close();
         self.observers.clear();
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.watch.take() {
-            let _ = t.join();
+            // Dropped from the watch thread itself (its event's wake): it
+            // sees `stop` and ends on its own.
+            if t.thread().id() != std::thread::current().id() {
+                let _ = t.join();
+            }
         }
         autoreleasepool(|_| {
             // SAFETY: live objects; stopRunning blocks until the session has
@@ -491,9 +495,15 @@ pub(crate) fn interruption_for_reason(reason: Option<isize>) -> Interruption {
 pub(crate) enum Signal {
     /// `AVCaptureDeviceWasDisconnectedNotification` for the source's device.
     Disconnected,
-    /// `AVCaptureSessionRuntimeErrorNotification`: the `AVError` code and
-    /// the error's description.
-    RuntimeError(i64, String),
+    /// `AVCaptureSessionRuntimeErrorNotification`.
+    RuntimeError {
+        /// The `AVError` code.
+        code: i64,
+        /// The error's description.
+        detail: String,
+        /// `AVCaptureDevice.isSuspended` when the error came.
+        suspended: bool,
+    },
     /// `AVCaptureSessionWasInterruptedNotification` (iOS), with its
     /// `AVCaptureSessionInterruptionReason` when it has one.
     Interrupted(Option<isize>),
@@ -517,17 +527,15 @@ pub(crate) enum Signal {
 pub(crate) enum Next {
     /// Keep watching.
     Watch,
-    /// Start the session again (iOS reset its media services), then keep
-    /// watching: a session that still doesn't run ends the source.
+    /// Start the session again (iOS reset its media services, or the
+    /// session stopped while the camera was suspended and it is back), then
+    /// keep watching: a session that still doesn't run ends the source.
     Restart,
     /// The source ended or was closed: stop watching.
     Stop,
 }
 
-/// A camera source's life: which events its signals send. The observers
-/// (on AVFoundation's threads) and the watch thread share one behind a
-/// mutex, so events go out in order, `Ended` once, and nothing after the
-/// source is closed.
+/// A camera source's life: which events its signals send.
 ///
 /// - The device going away, or the session dying, is the end:
 ///   `Ended(DeviceLost)`. A runtime error says so at once on macOS (the
@@ -538,6 +546,11 @@ pub(crate) enum Next {
 ///   the background, multitasking, heat) sends `Interrupted(why)` and later
 ///   `Resumed`; so does a device that reports itself suspended
 ///   (`Interrupted(Suspended)`: a closed laptop lid).
+/// - Suspension comes first: while the device says it is suspended, a
+///   session that stopped, or a runtime error that doesn't say the device
+///   is gone, is part of the pause, not the end. When the device comes
+///   back, `Resumed`, and a session that stopped meanwhile starts again
+///   once.
 /// - iOS resetting its media services sends the runtime error as `Error`
 ///   and starts the session once more.
 #[derive(Debug)]
@@ -549,7 +562,10 @@ pub(crate) struct Life {
     suspended: bool,
     /// iOS reset its media services: start the session again, once.
     media_reset: bool,
-    /// `Ended` was sent, or the source was closed.
+    /// The session stopped while the device was suspended: start it again,
+    /// once, when the device is back.
+    stopped_suspended: bool,
+    /// `Ended` was sent.
     done: bool,
 }
 
@@ -561,13 +577,9 @@ impl Life {
             interruption: None,
             suspended: false,
             media_reset: false,
+            stopped_suspended: false,
             done: false,
         }
-    }
-
-    /// The caller is closing the source: no more events.
-    pub(crate) fn close(&mut self) {
-        self.done = true;
     }
 
     fn paused(&self) -> bool {
@@ -588,13 +600,25 @@ impl Life {
         let was_paused = self.paused();
         let next = match signal {
             Signal::Disconnected => return self.end(send),
-            Signal::RuntimeError(code, detail) => {
+            Signal::RuntimeError {
+                code,
+                detail,
+                suspended,
+            } => {
                 let e = av_error_code(code, &format!("capture session: {detail}"));
                 let lost = e == VideoError::DeviceLost;
                 send(SourceEvent::Error(e));
+                if lost {
+                    return self.end(send);
+                }
                 if self.phone && code == MEDIA_SERVICES_RESET {
                     self.media_reset = true;
-                } else if lost || !self.phone {
+                } else if suspended {
+                    // A closed lid, not a lost camera: pause, and start the
+                    // session again when the camera is back.
+                    self.suspended = true;
+                    self.stopped_suspended = true;
+                } else if !self.phone {
                     return self.end(send);
                 }
                 Next::Watch
@@ -618,14 +642,22 @@ impl Life {
                 if !connected {
                     return self.end(send);
                 }
-                if !running && !interrupted {
-                    if std::mem::take(&mut self.media_reset) {
-                        return Next::Restart;
-                    }
+                self.suspended = suspended;
+                if running && !suspended {
+                    self.stopped_suspended = false;
+                }
+                if running || interrupted {
+                    Next::Watch
+                } else if suspended {
+                    self.stopped_suspended = true;
+                    Next::Watch
+                } else if std::mem::take(&mut self.media_reset)
+                    | std::mem::take(&mut self.stopped_suspended)
+                {
+                    Next::Restart
+                } else {
                     return self.end(send);
                 }
-                self.suspended = suspended;
-                Next::Watch
             }
         };
         match (was_paused, self.paused()) {
@@ -639,9 +671,56 @@ impl Life {
     }
 }
 
-/// Hand `signal` to `life`, sending its events to the source.
-pub(crate) fn signal(life: &Mutex<Life>, shared: &SourceShared, signal: Signal) -> Next {
-    lock(life).on(signal, &mut |e| shared.event(e))
+/// A source's [`Life`], shared by its observers (on AVFoundation's
+/// threads), its watch thread and the source itself, with the source's
+/// closed flag.
+///
+/// Events are sent under the life's lock, so they reach the queue in order
+/// and `Ended` once. Closing never takes that lock: the source's `Drop`
+/// only sets the flag, so a `Wake` that runs while an event is sent can't
+/// stall or deadlock a drop, even one that drops the source itself. After
+/// `close`, no new event is sent; one that another thread is sending at
+/// that moment may still reach the queue (and its wake).
+#[derive(Debug)]
+pub(crate) struct Watched {
+    pub(crate) life: Mutex<Life>,
+    closed: AtomicBool,
+}
+
+impl Watched {
+    /// A running source's: `phone` for iOS's rules.
+    pub(crate) fn new(phone: bool) -> Watched {
+        Watched {
+            life: Mutex::new(Life::new(phone)),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    /// The source is closing: no more events. Never waits.
+    pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+}
+
+/// Hand `signal` to the source's life, sending its events to the source.
+pub(crate) fn signal(w: &Watched, shared: &SourceShared, signal: Signal) -> Next {
+    if w.is_closed() {
+        return Next::Stop;
+    }
+    let next = lock(&w.life).on(signal, &mut |e| {
+        if !w.is_closed() {
+            shared.event(e);
+        }
+    });
+    if w.is_closed() {
+        Next::Stop
+    } else {
+        next
+    }
 }
 
 /// The names of the notifications a camera source observes (NSStrings).
@@ -689,7 +768,7 @@ impl Notices {
 pub(crate) unsafe fn observers(
     session: &AnyObject,
     device: &AnyObject,
-    life: &Arc<Mutex<Life>>,
+    life: &Arc<Watched>,
     shared: &Arc<SourceShared>,
     names: &Notices,
 ) -> Vec<Observer> {
@@ -700,14 +779,27 @@ pub(crate) unsafe fn observers(
             signal(&l, &s, Signal::Disconnected);
         }));
     }
-    if let Some(name) = names.runtime_error {
-        let (l, s) = (life.clone(), shared.clone());
+    if let (Some(name), Some(dev)) = (
+        names.runtime_error,
+        Retained::retain(device as *const AnyObject as *mut AnyObject),
+    ) {
+        let (l, s, dev) = (life.clone(), shared.clone(), ObjSend(dev));
         out.extend(Observer::named(name, session, move |n| {
             // SAFETY: Foundation hands the block an NSNotification; its
-            // error is nil or an NSError.
-            let (code, detail) =
-                unsafe { error_of(user_info_object(n, c"AVCaptureSessionErrorKey")) };
-            signal(&l, &s, Signal::RuntimeError(code, detail));
+            // error is nil or an NSError. The device is held alive.
+            let (code, detail, suspended) = unsafe {
+                let (code, detail) = error_of(user_info_object(n, c"AVCaptureSessionErrorKey"));
+                (code, detail, is_suspended(&*dev))
+            };
+            signal(
+                &l,
+                &s,
+                Signal::RuntimeError {
+                    code,
+                    detail,
+                    suspended,
+                },
+            );
         }));
     }
     if let Some(name) = names.interrupted {
@@ -886,7 +978,7 @@ unsafe fn open_in_pool(
         ctx,
         stop: Arc::new(AtomicBool::new(false)),
         watch: None,
-        life: Arc::new(Mutex::new(Life::new(cfg!(target_os = "ios")))),
+        life: Arc::new(Watched::new(cfg!(target_os = "ios"))),
         observers: Vec::new(),
     };
     let ok: Bool = msg_send![&*control.session, canAddOutput: &*control.output];

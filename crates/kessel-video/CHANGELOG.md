@@ -20,7 +20,8 @@ a suspended one. Additions only: nothing in
   `SourceEvent::Ended(EndReason::DeviceLost)` (after the error as
   `SourceEvent::Error`) when:
   - its device disconnects;
-  - on macOS, its session posts any runtime error;
+  - on macOS, its session posts any runtime error, unless the device says
+    it is suspended (see below);
   - on either OS, the runtime error says the device is gone
     (`AVErrorDeviceWasDisconnected`, `AVErrorDeviceNotConnected`);
   - as before, the device stops being connected, or the session stops
@@ -29,9 +30,12 @@ a suspended one. Additions only: nothing in
   iPad multitasking or heat sends `Interrupted(...)` and later `Resumed`,
   as before, and never `DeviceLost`. iOS resetting its media services still
   sends the error and restarts the session once.
-- `Ended` is sent once, and nothing is sent after the source is dropped:
-  the observers are removed then, and one already running on another
-  thread sends nothing.
+- `Ended` is sent once. Dropping the source removes the observers, and no
+  new event is sent after it; an event another thread is sending at that
+  moment may still reach the queue and its wake. The drop never waits on
+  the thread that sends events, so a `Wake` running then can't stall it.
+  The `Wake` documentation now also says not to drop a source, encoder or
+  decoder from inside it.
 - `AVErrorDeviceWasDisconnected` (-11808) now maps to `VideoError::DeviceLost`
   and `AVErrorDeviceInUseByAnotherApplication` (-11815) to
   `VideoError::DeviceBusy` (both were `Os`).
@@ -58,6 +62,12 @@ a suspended one. Additions only: nothing in
 - `Interruption` has a new variant, `Suspended`: an open camera source on
   macOS or iOS whose device becomes suspended sends
   `Interrupted(Suspended)`, then `Resumed` when it comes back.
+- Suspension is a pause, never a lost camera. While the device says it is
+  suspended, a session that stops, or a runtime error whose code doesn't
+  say the device is gone, keeps the source paused instead of ending it.
+  When the device comes back, the source sends `Resumed`, and a session
+  that stopped meanwhile starts again once (if it still doesn't run, the
+  source ends with `DeviceLost`). A disconnect still ends it at once.
 - `CameraInfo::id` is unchanged and now documented per platform:
   `AVCaptureDevice.uniqueID` on macOS and iOS, which stays the same when a
   camera goes away and comes back.

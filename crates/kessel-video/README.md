@@ -193,7 +193,9 @@ On macOS:
   without it.
 - A camera source ends with `Ended(DeviceLost)` when its device
   disconnects (a Continuity Camera that goes away, an unplugged camera) or
-  its capture session posts a runtime error. Open another camera then.
+  its capture session posts a runtime error. Open another camera then. A
+  suspended camera (below) is a pause, never this, even if its session
+  stops.
 - `cameras()` sets `suspended` on a camera that is listed but can't deliver
   frames now: a MacBook's built-in camera while the lid is closed.
   `open_camera(None, ...)` passes over a suspended default for the first

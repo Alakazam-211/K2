@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 /// Called from any thread after something was queued (a frame, an encoded
 /// frame, an event). Must be cheap and never block; never call back into
-/// kessel-video from it.
+/// kessel-video from it, and never drop the source, encoder or decoder it
+/// belongs to there: it can run on that object's own thread or queue. Send
+/// a message to the thread that owns the object instead.
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// A one-shot completion (permission prompts, system pickers). Called

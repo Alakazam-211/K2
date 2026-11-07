@@ -1502,7 +1502,7 @@ fn cf_values_are_read_only_as_the_type_they_are() {
 
 // ───────────────────────────── losing the camera ─────────────────────────────
 
-use camera::{Life, Next, Signal};
+use camera::{Life, Next, Signal, Watched};
 
 /// Feed `signals` to `life`: the events each one sent, and what came next.
 fn feed(life: &mut Life, signals: Vec<Signal>) -> Vec<(Vec<SourceEvent>, Next)> {
@@ -1539,7 +1539,7 @@ fn a_disconnected_device_ends_the_source_once() {
                     Signal::Disconnected,
                     Signal::Disconnected,
                     look(false, false, false, false),
-                    Signal::RuntimeError(-11800, "late".into()),
+                    rt(-11800, "late"),
                 ]
             ),
             vec![
@@ -1570,7 +1570,7 @@ fn a_runtime_error_ends_a_mac_camera_at_once() {
         feed(
             &mut life,
             vec![
-                Signal::RuntimeError(-11800, "device went away".into()),
+                rt(-11800, "device went away"),
                 look(true, true, false, false),
             ]
         ),
@@ -1631,7 +1631,7 @@ fn a_phone_tells_device_lost_from_interruptions() {
     // An error that says the device is gone ends it at once.
     let mut life = Life::new(true);
     assert_eq!(
-        feed(&mut life, vec![Signal::RuntimeError(-11814, "gone".into())]),
+        feed(&mut life, vec![rt(-11814, "gone")]),
         vec![(
             vec![SourceEvent::Error(VideoError::DeviceLost), LOST],
             Next::Stop
@@ -1644,7 +1644,7 @@ fn a_phone_tells_device_lost_from_interruptions() {
         feed(
             &mut life,
             vec![
-                Signal::RuntimeError(-11800, "x".into()),
+                rt(-11800, "x"),
                 look(true, true, false, false),
                 look(true, false, false, false),
             ]
@@ -1676,11 +1676,11 @@ fn a_media_services_reset_restarts_the_session_once() {
         feed(
             &mut life,
             vec![
-                Signal::RuntimeError(camera::MEDIA_SERVICES_RESET, "reset".into()),
+                rt(camera::MEDIA_SERVICES_RESET, "reset"),
                 look(true, false, false, false),
                 // Running again after the restart.
                 look(true, true, false, false),
-                Signal::RuntimeError(camera::MEDIA_SERVICES_RESET, "reset".into()),
+                rt(camera::MEDIA_SERVICES_RESET, "reset"),
                 look(true, false, false, false),
                 // This restart didn't take: lost.
                 look(true, false, false, false),
@@ -1744,25 +1744,212 @@ fn a_suspended_camera_pauses_without_ending() {
     );
 }
 
+/// A runtime error while the device isn't suspended.
+fn rt(code: i64, detail: &str) -> Signal {
+    Signal::RuntimeError {
+        code,
+        detail: detail.into(),
+        suspended: false,
+    }
+}
+
 #[test]
-fn a_closed_source_sends_nothing() {
+fn a_closed_lid_is_a_pause_even_when_the_session_stops() {
+    let err = || SourceEvent::Error(VideoError::os(-11800, "capture session: lid"));
+    // macOS: the lid closes and the session posts a runtime error. The
+    // device says it is suspended, so it is a pause, not a lost camera.
     let mut life = Life::new(false);
-    life.close();
     assert_eq!(
         feed(
             &mut life,
             vec![
-                Signal::Disconnected,
-                Signal::RuntimeError(-11800, "x".into()),
-                look(true, true, false, true),
+                look(true, true, false, false),
+                Signal::RuntimeError {
+                    code: -11800,
+                    detail: "lid".into(),
+                    suspended: true,
+                },
+                // Stopped, still suspended: still the same pause.
+                look(true, false, false, true),
+                // The lid opens: resumed, and the session starts again.
+                look(true, false, false, false),
+                look(true, true, false, false),
             ]
         ),
         vec![
-            (vec![], Next::Stop),
-            (vec![], Next::Stop),
-            (vec![], Next::Stop)
+            (vec![], Next::Watch),
+            (
+                vec![err(), SourceEvent::Interrupted(Interruption::Suspended)],
+                Next::Watch
+            ),
+            (vec![], Next::Watch),
+            (vec![SourceEvent::Resumed], Next::Restart),
+            (vec![], Next::Watch),
         ]
     );
+    // The session stops with the lid closed, with no runtime error: a
+    // pause too. Back, it restarts once; still not running, it is lost.
+    let mut life = Life::new(false);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                look(true, false, false, true),
+                look(true, false, false, false),
+                look(true, false, false, false),
+            ]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Interrupted(Interruption::Suspended)],
+                Next::Watch
+            ),
+            (vec![SourceEvent::Resumed], Next::Restart),
+            (vec![LOST], Next::Stop),
+        ]
+    );
+    // A session that kept running while suspended needs no restart: and a
+    // later stop is the end, not a second restart.
+    let mut life = Life::new(false);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                look(true, true, false, true),
+                look(true, true, false, false),
+                look(true, false, false, false),
+            ]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Interrupted(Interruption::Suspended)],
+                Next::Watch
+            ),
+            (vec![SourceEvent::Resumed], Next::Watch),
+            (vec![LOST], Next::Stop),
+        ]
+    );
+    // An error that says the device is gone ends it, suspended or not;
+    // and so does a disconnect.
+    let mut life = Life::new(false);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![
+                look(true, true, false, true),
+                Signal::RuntimeError {
+                    code: -11808,
+                    detail: "gone".into(),
+                    suspended: true,
+                },
+            ]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Interrupted(Interruption::Suspended)],
+                Next::Watch
+            ),
+            (
+                vec![SourceEvent::Error(VideoError::DeviceLost), LOST],
+                Next::Stop
+            ),
+        ]
+    );
+    let mut life = Life::new(false);
+    assert_eq!(
+        feed(
+            &mut life,
+            vec![look(true, true, false, true), look(false, false, false, true)]
+        ),
+        vec![
+            (
+                vec![SourceEvent::Interrupted(Interruption::Suspended)],
+                Next::Watch
+            ),
+            (vec![LOST], Next::Stop),
+        ]
+    );
+}
+
+/// A source's queue and life, and how many times it woke.
+fn watched_source(
+    wake: impl Fn() + Send + Sync + 'static,
+) -> (Arc<Watched>, Arc<crate::kit::SourceShared>) {
+    let shared =
+        crate::kit::SourceShared::new(CaptureConstraints::new(640, 360, 30), 30, Arc::new(wake));
+    (Arc::new(Watched::new(false)), shared)
+}
+
+#[test]
+fn a_closed_source_sends_nothing() {
+    let woke = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let w = woke.clone();
+    let (life, shared) = watched_source(move || {
+        w.fetch_add(1, Ordering::SeqCst);
+    });
+    let mut src = crate::kit::QueuedSource::new(shared.clone(), NoControl);
+    life.close();
+    for s in [
+        Signal::Disconnected,
+        rt(-11800, "x"),
+        look(true, true, false, true),
+    ] {
+        assert_eq!(camera::signal(&life, &shared, s), Next::Stop);
+    }
+    assert_eq!(src.try_event(), None);
+    assert_eq!(woke.load(Ordering::SeqCst), 0);
+}
+
+/// The source side of a camera: closing its life on drop, as
+/// `CameraControl` does.
+struct Closing(Arc<Watched>);
+impl crate::kit::SourceControl for Closing {}
+impl Drop for Closing {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
+/// A Wake that drops the source while an event is being sent must not
+/// deadlock (the event is sent under the life's lock; closing never takes
+/// it), and nothing is sent after.
+#[test]
+fn a_wake_that_drops_the_source_does_not_deadlock() {
+    type Slot = Arc<Mutex<Option<crate::kit::QueuedSource<Closing>>>>;
+    let slot: Slot = Arc::new(Mutex::new(None));
+    let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (s, d) = (slot.clone(), dropped.clone());
+    let (life, shared) = watched_source(move || {
+        if lock(&s).take().is_some() {
+            d.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    *lock(&slot) = Some(crate::kit::QueuedSource::new(
+        shared.clone(),
+        Closing(life.clone()),
+    ));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (l, sh) = (life.clone(), shared.clone());
+    std::thread::spawn(move || {
+        // Suspended: Interrupted, whose wake drops the source.
+        let first = camera::signal(&l, &sh, look(true, true, false, true));
+        // Then the lid opens: closed, so nothing more.
+        let second = camera::signal(&l, &sh, look(true, true, false, false));
+        let _ = tx.send((first, second));
+    });
+    let (first, second) = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("signal returned: no deadlock");
+    assert_eq!(dropped.load(Ordering::SeqCst), 1, "the wake dropped it");
+    assert_eq!(first, Next::Stop, "closed while it was sent");
+    assert_eq!(second, Next::Stop);
+    // The queue holds only the one event sent before the drop.
+    let mut probe = crate::kit::QueuedSource::new(shared, NoControl);
+    assert_eq!(
+        probe.try_event(),
+        Some(SourceEvent::Interrupted(Interruption::Suspended))
+    );
+    assert_eq!(probe.try_event(), None);
 }
 
 struct NoControl;
@@ -1846,7 +2033,7 @@ impl TestNames {
 /// A camera source's queue, life and observers, on two stand-ins.
 struct Observed {
     src: crate::kit::QueuedSource<NoControl>,
-    life: Arc<Mutex<Life>>,
+    life: Arc<Watched>,
     observers: Vec<objc::Observer>,
     names: TestNames,
     session: Obj,
@@ -1866,7 +2053,7 @@ fn observed() -> Observed {
         }),
     );
     let (session, device, names) = (stand_in(), stand_in(), TestNames::new());
-    let life = Arc::new(Mutex::new(Life::new(cfg!(target_os = "ios"))));
+    let life = Arc::new(Watched::new(cfg!(target_os = "ios")));
     // SAFETY: live objects (the observers only compare them by identity)
     // and live NSStrings.
     let observers =
@@ -1966,7 +2153,7 @@ fn interruption_notifications_pause_and_resume() {
     assert_eq!(o.src.try_event(), None);
     // Still running: the next look sends nothing.
     let mut sent = Vec::new();
-    let next = lock(&o.life).on(look(true, true, false, false), &mut |e| sent.push(e));
+    let next = lock(&o.life.life).on(look(true, true, false, false), &mut |e| sent.push(e));
     assert_eq!((sent, next), (vec![], Next::Watch));
 }
 
@@ -1982,7 +2169,7 @@ fn no_events_after_the_source_closes() {
         wakes,
     } = observed();
     // What CameraControl's Drop does first: close, then remove.
-    lock(&life).close();
+    life.close();
     post(&names.disconnected, &device, None);
     drop(observers);
     post(&names.disconnected, &device, None);

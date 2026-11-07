@@ -264,10 +264,18 @@ Check:
   `kernel.yama.ptrace_scope >= 1`, so a job can't ptrace another process
   of its uid). If it prints 0:
   `echo 'kernel.yama.ptrace_scope = 1' | sudo tee /etc/sysctl.d/60-k2-ptrace.conf && sudo sysctl --system`
-- Release builds are `--exclusive` (alone on the node). If z3mbpZ is not
-  the node's owner server, its share there needs `exclusive`
-  (`k2 compute node servers <node> limits <server> exclusive=true` from the
-  owner server); its grant needs `--ci` as before.
+- Release builds are `--exclusive` (alone on the node). z3mbpZ
+  (`z3thon.k2.dev`) is a tenant on the Ryzens, whose owner server is
+  rosson.k2.dev, and its share there has `exclusive: false` (11-07). On
+  rosson.k2.dev, from a terminal outside K2:
+  `for N in k2n7-vin k2n8-vin k2n9-vin; do k2 compute node servers "$N" limits z3thon.k2.dev exclusive=true; done`
+  Each is a widening, so it is held: approve each with
+  `k2 compute node admin approve <id>` (Touch ID or the vault password;
+  `k2 compute node admin list` lists the ids), or Settings → Compute →
+  Approvals. An agent may file these but never approve them. On z3mbpZ,
+  pod-leader's grants need `--ci` (they already do if `--tier ci` jobs
+  run); only z3mbpZ's owner sets that:
+  `k2 compute grant <node> --workspace pod-leader --ci`.
 
 **4. The controller pin** (back at z3mbpZ). Root reads this Mac's K2 key and
 refuses a fingerprint that isn't its own:

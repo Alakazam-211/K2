@@ -31,7 +31,7 @@ python3 - "$REL" > "$tmp/fns.sh" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
 names = ["k2_compute_signer_check", "k2_linux_builds_preflight", "k2_shadow_warn", "k2_compute_problem", "k2_compute_on",
-         "k2_shadow_start", "k2_shadow_collect", "k2_shadow_tree_check", "k2_compute_stage"]
+         "k2_shadow_start", "k2_shadow_collect", "k2_shadow_tree_check", "k2_compute_stage", "k2_shadow_report"]
 for n in names:
     m = re.search(r"^%s\(\) \{\n.*?^\}\n" % re.escape(n), s, re.S | re.M) \
         or re.search(r"^%s\(\) \{ .* \}\n" % re.escape(n), s, re.M)
@@ -257,6 +257,69 @@ assert m, "no on: block"
 keys = re.findall(r"^  ([a-z_]+):", m.group(1), re.M)
 assert keys == ["workflow_dispatch"], keys
 PY
+
+echo "github and shadow with the REAL compute-release.sh, a controller that refuses --exclusive (a share without it, as today):"
+# Every new check (two nodes, node_fp, the daemon match, --exclusive) may
+# only warn outside compute mode: github and shadow must be as safe as on
+# 0.46.9. A stub k2 refuses every --exclusive submit and has no receipts.
+mkdir -p "$tmp/bin-real"
+cat > "$tmp/bin-real/k2" <<'STUB'
+#!/usr/bin/env bash
+echo "k2 $*" >> "$STUB_CALLS"
+[ "$1" = compute ] || exit 2
+case "$2" in
+    run)
+        case " $* " in *" --exclusive "*) echo "exclusive_not_allowed: this server's share doesn't allow exclusive jobs" >&2; exit 3 ;; esac
+        n=$(( $(cat "$STUB_N" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_N"
+        printf '{"job": "job%04d"}\n' "$n" ;;
+    wait) exit 0 ;;
+    *) echo "stub k2: no compute $2 here" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$tmp/bin-real/k2"
+cat > "$tmp/lib-real.sh" <<LIB
+source "$ROOT/scripts/lib/compute-release.sh"
+k2_release_preview_commit() { git rev-parse HEAD; }
+k2u_compute_pins() { echo "pins" >> "\$STUB_CALLS"; echo '{"controller": null, "nodes": []}'; }
+cargo() { return 0; }
+LIB
+rgit="$tmp/rgit"; git init -q "$rgit"; git -C "$rgit" -c user.email=t@t -c user.name=t commit -q --allow-empty -m r
+# run_real <name> <snippet>: like run, with the real lib, in a git repo; echoes rc.
+run_real() {
+    local name="$1" snippet="$2" rc=0
+    export STUB_CALLS="$tmp/calls-$name" STUB_N="$tmp/n-$name"
+    : > "$STUB_CALLS"; rm -f "$STUB_N"
+    (cd "$rgit" && PATH="$tmp/bin:$PATH" K2_BIN="$tmp/bin-real/k2" RELEASE_REPO="Alakazam-211/K2" VERSION="9.9.9" TAG="v9.9.9" PROJECT_DIR="$tmp/proj-$name" \
+        K2_SIGNER="${STUB_SIGNER:-keychain}" K2_RELEASE_AUDIT_DIR="$tmp/audit-$name" DIST_DIR="$tmp/dist-$name" K2_COMPUTE_RUST=1.99.1 K2_COMPUTE_WAIT_MIN=1 \
+        bash -c 'set -euo pipefail; K2_SHADOW_STATE=""; K2_SHADOW_NOTE=""; K2_SHADOW_LATE=""; source "$1"; source "$2"; eval "$3"' \
+        _ "$tmp/lib-real.sh" "$tmp/fns.sh" "$snippet") > "$tmp/out-$name" 2>&1 || rc=$?
+    echo "$rc"
+}
+FLOW='k2_linux_builds_preflight; k2_shadow_start; k2_shadow_collect; k2_compute_stage; k2_shadow_report; echo AFTER'
+for sg in keychain k2sign; do
+    rc="$(STUB_SIGNER="$sg" K2_LINUX_BUILDS=github K2_COMPUTE_NODE=k2n9-vin run_real "real-gh-$sg" "$FLOW")"
+    [ "$rc" = 0 ] && grep -q AFTER "$tmp/out-real-gh-$sg" && ! grep -q '^k2 ' "$tmp/calls-real-gh-$sg" && ! grep -q '^pins' "$tmp/calls-real-gh-$sg" \
+        && pass "github mode ($sg), even with L1 = V1 set: no compute call, no new check, the release goes on" \
+        || fail "github real ($sg)" "rc=$rc $(cat "$tmp/out-real-gh-$sg" "$tmp/calls-real-gh-$sg")"
+done
+rc="$(K2_LINUX_BUILDS=shadow run_real real-sh-excl "$FLOW")"
+[ "$rc" = 0 ] && grep -q AFTER "$tmp/out-real-sh-excl" && grep -q "shadow (K2 Compute): not every compute job was submitted" "$tmp/out-real-sh-excl" \
+    && grep -q "k2 compute run k2n8-vin" "$tmp/calls-real-sh-excl" \
+    && pass "shadow: --exclusive refused by the share (L1, V1): a warning, L3 still runs, the release goes on" \
+    || fail "shadow exclusive refused" "rc=$rc $(cat "$tmp/out-real-sh-excl")"
+rc="$(K2_LINUX_BUILDS=shadow K2_COMPUTE_NODE=k2n9-vin run_real real-sh-same "$FLOW")"
+[ "$rc" = 0 ] && grep -q AFTER "$tmp/out-real-sh-same" && grep -q "L1 and V1 are both on k2n9-vin" "$tmp/out-real-sh-same" \
+    && ! grep -q "compute run" "$tmp/calls-real-sh-same" \
+    && pass "shadow: L1 = V1 refused at submit, only a warning; the release goes on" || fail "shadow same node" "rc=$rc $(cat "$tmp/out-real-sh-same")"
+rc="$(K2_LINUX_BUILDS=shadow K2_COMPUTE_EXCLUSIVE=0 run_real real-sh-noexcl "$FLOW")"
+[ "$rc" = 0 ] && grep -q AFTER "$tmp/out-real-sh-noexcl" && [ "$(grep -c 'k2 compute run' "$tmp/calls-real-sh-noexcl")" = 3 ] \
+    && ! grep -q -- '--exclusive' "$tmp/calls-real-sh-noexcl" \
+    && grep -q "shadow (K2 Compute): not every compute build verified" "$tmp/out-real-sh-noexcl" \
+    && pass "shadow, K2_COMPUTE_EXCLUSIVE=0: all three submitted without --exclusive; a failed collect only warns" \
+    || fail "shadow no exclusive" "rc=$rc $(cat "$tmp/out-real-sh-noexcl" "$tmp/calls-real-sh-noexcl")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute K2_COMPUTE_EXCLUSIVE=0 run pf-noexcl k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "needs the release builds --exclusive" "$tmp/out-pf-noexcl" \
+    && pass "compute with K2_COMPUTE_EXCLUSIVE=0: refused at the pre-flight" || fail "compute no exclusive" "rc=$rc $(cat "$tmp/out-pf-noexcl")"
 
 echo "syntax:"
 bash -n "$REL" && pass "bash -n release.sh" || fail "bash -n" "release.sh"

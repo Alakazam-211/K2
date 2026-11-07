@@ -92,6 +92,11 @@
 #                                        there while it holds the values;
 #                                        needs a grant with --ci, and on a
 #                                        shared node a share with exclusive)
+#   K2_COMPUTE_EXCLUSIVE     1           0: the bins jobs go without
+#                                        --exclusive (shadow and by-hand runs
+#                                        while the share lacks exclusive;
+#                                        such builds can't be signed). Refused
+#                                        in compute mode.
 #   K2_COMPUTE_OAUTH_SECRETS vault names for secret mode: Gmail id, Gmail
 #                                        secret[, Microsoft id]. Default
 #                                        K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET
@@ -183,7 +188,16 @@ k2cr_submit() {
         # Alone on the node: a job of any workspace (its own too) beside it
         # would share its uid and could read the OAuth values in /proc or
         # ptrace cargo. The signer refuses a plan that isn't exclusive.
-        args+=(--exclusive --why "K2 release build: alone on the node while it holds the OAuth values")
+        case "${K2_COMPUTE_EXCLUSIVE:-1}" in
+            1) args+=(--exclusive --why "K2 release build: alone on the node while it holds the OAuth values") ;;
+            0)
+                if [ "${K2_LINUX_BUILDS:-}" = "compute" ]; then
+                    echo "  ✗ $label: K2_COMPUTE_EXCLUSIVE=0 is for shadow and by-hand runs: the signing user refuses a release build that wasn't exclusive" >&2
+                    return 1
+                fi
+                ;;
+            *) echo "  ✗ $label: K2_COMPUTE_EXCLUSIVE must be 1 or 0 (got $K2_COMPUTE_EXCLUSIVE)" >&2; return 1 ;;
+        esac
         # Path remap is always on in build-linux-bins.sh (repro-build-env.sh).
     fi
     local out job argv_json

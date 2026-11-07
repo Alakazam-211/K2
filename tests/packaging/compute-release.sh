@@ -426,6 +426,21 @@ rc="$(run_case split-node)"
 grep -q 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-split-node" && grep -q 'k2 compute run k2n10-vin .*build-linux-app.sh' "$tmp/calls-split-node" \
     && pass "K2_COMPUTE_X86_NODE beats K2_COMPUTE_NODE for L1 only" || fail "per-job node" "$(cat "$tmp/calls-split-node")"
 unset K2_COMPUTE_NODE K2_COMPUTE_X86_NODE K2_COMPUTE_VERIFY_NODE
+echo "K2_COMPUTE_EXCLUSIVE (a share without exclusive, before its owner widens it):"
+export K2_COMPUTE_EXCLUSIVE=0 K2_LINUX_BUILDS=shadow
+rc="$(run_case noexcl-sh)"
+[ "$(grep -c 'k2 compute run' "$tmp/calls-noexcl-sh")" = 3 ] && ! grep -q -- '--exclusive' "$tmp/calls-noexcl-sh" \
+    && pass "shadow, K2_COMPUTE_EXCLUSIVE=0: the bins jobs go without --exclusive" || fail "noexcl shadow" "$(cat "$tmp/calls-noexcl-sh")"
+export K2_LINUX_BUILDS=compute
+rc="$(run_case noexcl-c)"
+grep -q 'K2_COMPUTE_EXCLUSIVE=0 is for shadow and by-hand runs' "$tmp/noexcl-c.submit" && ! grep -q 'build-linux-bins.sh' "$tmp/calls-noexcl-c" \
+    && pass "compute mode, K2_COMPUTE_EXCLUSIVE=0: no bins job is sent" || fail "noexcl compute" "$(cat "$tmp/noexcl-c.submit" "$tmp/calls-noexcl-c")"
+export K2_COMPUTE_EXCLUSIVE=maybe K2_LINUX_BUILDS=shadow
+rc="$(run_case excl-bogus)"
+grep -q 'K2_COMPUTE_EXCLUSIVE must be 1 or 0' "$tmp/excl-bogus.submit" && ! grep -q 'build-linux-bins.sh' "$tmp/calls-excl-bogus" \
+    && pass "K2_COMPUTE_EXCLUSIVE must be 1 or 0" || fail "excl bogus" "$(cat "$tmp/excl-bogus.submit")"
+unset K2_COMPUTE_EXCLUSIVE K2_LINUX_BUILDS
+
 echo "L1 and V1 never on one node (review: finding 2), in every mode:"
 for mode in shadow compute; do
     export K2_LINUX_BUILDS="$mode" K2_COMPUTE_NODE=k2n9-vin

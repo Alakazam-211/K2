@@ -419,6 +419,11 @@ k2_linux_builds_preflight() {
         # V1 on L1's node is no second build, whoever signs (Step 1.6c
         # refuses it too, in every mode).
         k2cr_check_dual_nodes || exit 1
+        if [ "${K2_COMPUTE_EXCLUSIVE:-1}" != 1 ]; then
+            echo "ERROR: K2_LINUX_BUILDS=compute needs the release builds --exclusive (K2_COMPUTE_EXCLUSIVE=${K2_COMPUTE_EXCLUSIVE}):" >&2
+            echo "  the signing user refuses a build that other jobs could have run beside." >&2
+            exit 1
+        fi
         if [ "$K2_SIGNER" = "k2sign" ]; then
             k2_compute_signer_check || exit 1
         fi

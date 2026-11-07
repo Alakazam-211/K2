@@ -237,7 +237,13 @@ change the nodes (`K2_COMPUTE_NODE` moves L1 and L3 together; never onto
 V1's node, so `K2_COMPUTE_NODE=k2n9-vin` needs another
 `K2_COMPUTE_VERIFY_NODE`). L1, V1 (and L2) are `--exclusive`: each runs
 alone on its node, so no other job, its own workspace's included, shares
-its uid while the OAuth values are in its env.
+its uid while the OAuth values are in its env. That needs the node
+owner's share for the release server to allow `exclusive` (see the
+ceremony doc); until it does, the controller refuses those submits, which
+in shadow is only a warning. `K2_COMPUTE_EXCLUSIVE=0` sends them without
+`--exclusive` in shadow and by-hand runs (such builds can't be signed);
+compute mode refuses it at the pre-flight. None of the compute checks run
+in github mode, and in shadow every one of them only warns.
 `K2_COMPUTE_VERIFY_NODE=none` drops V1, with a loud warning.
 `K2_COMPUTE_BINS_MEM` and `K2_COMPUTE_APP_MEM` change the memory. The jobs
 name their nodes on purpose (the dual build needs two different ones), so

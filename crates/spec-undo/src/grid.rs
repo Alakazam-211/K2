@@ -236,6 +236,9 @@ pub struct Grid {
     pub holders: HashMap<(String, String, Facet), Holder>,
     pub records: HashMap<Seq, Vec<RecOp>>,
     pub authors: HashMap<Seq, String>,
+    /// Whom a participant acts for (an agent joined on a person's behalf): every change it
+    /// makes is on that person's behalf ([`Grid::on_behalf_of`]).
+    pub acts_for: HashMap<String, String>,
     pub seq: Seq,
     stacks: HashMap<String, (Vec<Entry>, Vec<Entry>)>,
     loaded_seq: Seq,
@@ -287,6 +290,7 @@ impl Grid {
             holders: HashMap::new(),
             records: HashMap::new(),
             authors: HashMap::new(),
+            acts_for: HashMap::new(),
             seq: 0,
             stacks: HashMap::new(),
             loaded_seq: 0,
@@ -525,6 +529,13 @@ impl Grid {
         if s.0.len() > depth {
             s.0.remove(0);
         }
+    }
+
+    /// Whom change `seq` was made for: its author's person, when its author acts for one
+    /// (an edit, an undo, redo or revert step alike); `None` otherwise.
+    pub fn on_behalf_of(&self, seq: Seq) -> Option<&str> {
+        let a = self.authors.get(&seq)?;
+        self.acts_for.get(a).map(String::as_str)
     }
 
     pub fn depths(&self, pid: &str) -> (usize, usize) {

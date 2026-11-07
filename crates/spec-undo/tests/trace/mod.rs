@@ -4,8 +4,13 @@
 //! oracle's state (so edits land on region edges, deletes cross others' regions, reverts
 //! name real changes), then replayed through (a) `spec_undo::model` and (b) the kit's
 //! sessions on Yrs. After **every** step the runner compares every root's text, the
-//! outcome, the reported conflict regions as an exact set (U11), and every pid's stack
-//! depths. The first difference stops the trace and is reported, never adjusted.
+//! outcome, the reported conflict regions as an exact set, and every pid's stack depths.
+//! The regions: an undo, redo or revert's (U11) by root, live range, live lines and kind;
+//! a refused `write --base`'s (K-BR-2, grouped by O6) by root, range in the base, and lines
+//! in the base, in the writer's text and in the live text (the kit's `Conflict` without its
+//! texts; the oracle's are its own, from its merge's conflicting pairs,
+//! `merge::write_base_regions`).
+//! The first difference stops the trace and is reported, never adjusted.
 //!
 //! **Provenance (v1.8, U23; §8 Run).** After every step the kit's char blame is compared
 //! with the oracle's elements position by position: element identity, each live character's
@@ -34,11 +39,12 @@ use k2_mpc_base::session::{
 };
 use k2_mpc_base::store::VersionId;
 use k2_mpc_base::text::diff::Hunk;
+use k2_mpc_base::text::merge::Conflict;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use spec_undo::model::{
     Bounds, ChangeId, Closer, Edit, GroupNote, Kind, Mode, Model, Notice, Outcome, Prov, Report,
-    Request,
+    Request, WriteRegion,
 };
 
 use kit::{Kit, KitChar, KitId, KitOut, Knobs};
@@ -167,6 +173,16 @@ pub struct TraceResult {
     /// runner can't name, or a change some of whose inserted elements a later step of the
     /// same request removed before the runner could read their roots; rare).
     pub own_only: BTreeMap<&'static str, u64>,
+    /// Refused `write --base` steps whose conflict regions were compared with the oracle's
+    /// (equal), and the regions in them.
+    pub write_conflicts: u64,
+    pub write_regions: u64,
+    /// Every compared refused write by [`classify_write`]'s label.
+    pub write_labels: BTreeMap<String, u64>,
+    /// Of those, the writes the oracle refused in two regions or more, no two touching, and
+    /// their regions.
+    pub write_multi: u64,
+    pub write_multi_regions: u64,
 }
 
 /// The kit's pid for the import's text (blame's author of the seed text).
@@ -355,6 +371,11 @@ enum Plan {
         p: usize,
         oldest: bool,
     },
+    /// A revert of change `head - back` (all or nothing), as the head stands when it resolves.
+    RevertBack {
+        p: usize,
+        back: u64,
+    },
     Restart,
     Tick,
     /// The newest change becomes the scenario's marked change (if it is `p`'s, with two
@@ -440,6 +461,17 @@ enum Plan {
         p: usize,
         root: usize,
         with: String,
+    },
+    /// Several separate regions: of `root`'s last `k` lines, each line `at[n]` replaced by
+    /// `with[n]` (whole lines), live (`write` false) or as a `write --base` from `p`'s last
+    /// read (`write` true).
+    SetLines {
+        p: usize,
+        root: usize,
+        k: usize,
+        at: Vec<usize>,
+        with: Vec<String>,
+        write: bool,
     },
     /// v0.9.8: `write --base` from `p`'s last read with word `word` of `root`'s last line
     /// replaced by `with`.
@@ -903,16 +935,97 @@ fn reports(cs: &[ConflictRegion]) -> Vec<Report> {
     v
 }
 
+/// A refused `write --base`'s regions in the oracle's terms: the root written, each
+/// region's base range and its lines in the base, the writer's text and the live text.
+fn write_regions(root: usize, cs: &[Conflict]) -> Vec<WriteRegion> {
+    let mut v: Vec<WriteRegion> = cs
+        .iter()
+        .map(|c| WriteRegion {
+            root,
+            start: c.base.start,
+            end: c.base.end,
+            lines: c.lines,
+            ours_lines: c.ours_lines,
+            theirs_lines: c.theirs_lines,
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// [`classify_write`]: the kit's regions equal the oracle's.
+pub const WB_EXACT: &str = "exact";
+/// [`classify_write`]: the kit merged runs of touching oracle regions, nothing else differs.
+pub const WB_COALESCED: &str = "coalesced-touching";
+
+/// A diagnostic, never a verdict (the regions are compared exactly): how a refused write's
+/// kit regions `k` stand to the oracle's `m` (both sorted): `exact` (equal);
+/// `coalesced-touching` (each kit region is the union of a run of consecutive oracle
+/// regions on one root, each next start the previous end, with no gap, none left out or
+/// split across two kit regions, and its `lines`, `ours_lines` and `theirs_lines` the
+/// run's first's first and last's last); else `other:<reason>`.
+fn classify_write(m: &[WriteRegion], k: &[WriteRegion]) -> String {
+    if m == k {
+        return WB_EXACT.into();
+    }
+    let mut o = 0;
+    for (n, kr) in k.iter().enumerate() {
+        let Some(first) = m.get(o) else {
+            return format!("other:kit region {n} has no oracle region left");
+        };
+        if first.root != kr.root {
+            return format!("other:kit region {n} root");
+        }
+        if first.start != kr.start {
+            return format!("other:kit region {n} start (a gap, or a split oracle region)");
+        }
+        let mut last = first;
+        o += 1;
+        while last.end < kr.end {
+            let Some(next) = m.get(o) else {
+                return format!("other:kit region {n} spans past the oracle's last (a gap)");
+            };
+            if next.root != kr.root {
+                return format!("other:kit region {n} root");
+            }
+            if next.start != last.end {
+                return format!("other:kit region {n} spans a gap");
+            }
+            last = next;
+            o += 1;
+        }
+        if last.end != kr.end {
+            return format!("other:kit region {n} ends inside an oracle region (a split)");
+        }
+        let union = |a: (usize, usize), b: (usize, usize)| (a.0, b.1);
+        if kr.lines != union(first.lines, last.lines) {
+            return format!("other:kit region {n} lines");
+        }
+        if kr.ours_lines != union(first.ours_lines, last.ours_lines) {
+            return format!("other:kit region {n} ours_lines");
+        }
+        if kr.theirs_lines != union(first.theirs_lines, last.theirs_lines) {
+            return format!("other:kit region {n} theirs_lines");
+        }
+    }
+    if o != m.len() {
+        return "other:an oracle region left out".into();
+    }
+    WB_COALESCED.into()
+}
+
 /// The kit's reply in the oracle's terms (`Err`: a refusal the oracle has no counterpart
 /// for).
 fn normalise(out: KitOut) -> Result<Outcome, String> {
     Ok(match out {
         KitOut::Edit(Ok(changed)) => Outcome::Changed(changed.then_some(0)),
-        KitOut::Write(Ok(WriteOutcome::Applied(r)), before) => {
+        KitOut::Write(Ok(WriteOutcome::Applied(r)), before, _) => {
             Outcome::Changed((r.version != before).then_some(0))
         }
-        KitOut::Write(Ok(WriteOutcome::Conflicts(_)), _) => Outcome::WriteConflict,
-        KitOut::Write(Ok(WriteOutcome::BaseExpired), _) => return Err("base expired".into()),
+        KitOut::Write(Ok(WriteOutcome::Conflicts(cs)), _, root) => {
+            Outcome::WriteConflict(write_regions(root, &cs))
+        }
+        KitOut::Write(Ok(WriteOutcome::BaseExpired), _, _) => return Err("base expired".into()),
         KitOut::Undo(Ok(u)) => match u {
             UndoOutcome::Applied {
                 steps,
@@ -940,7 +1053,7 @@ fn normalise(out: KitOut) -> Result<Outcome, String> {
         KitOut::Undo(Err(SessionError::RevertTooOld { .. })) => Outcome::TooOld,
         KitOut::Live(Ok(changed)) => Outcome::Changed(changed.then_some(0)),
         KitOut::Live(Err(e)) => return Err(format!("the kit refused a live edit: {e}")),
-        KitOut::Edit(Err(e)) | KitOut::Write(Err(e), _) | KitOut::Undo(Err(e)) => {
+        KitOut::Edit(Err(e)) | KitOut::Write(Err(e), _, _) | KitOut::Undo(Err(e)) => {
             return Err(format!("the kit refused: {e}"))
         }
     })
@@ -1162,6 +1275,95 @@ impl Runner {
                 5..=7 => self.words_scenario(),
                 _ => self.multiline_scenario(),
             }
+            while !self.queue.is_empty() {
+                let plan = self.queue.remove(0);
+                if let Some(s) = self.resolve(plan) {
+                    return s;
+                }
+            }
+        }
+        // the restart twin's own weight (stack-free traces only; nothing drawn elsewhere): the
+        // end of the text, a secret purged then reverted, two restorations of one root, a
+        // window character the base's by root only, an insertion inside another's range, and the
+        // general scenarios, which the multi-region scenario's draw thinned at the twin's 64
+        // traces
+        if self.stackless && self.rng.gen_bool(0.06) {
+            match self.rng.gen_range(0..6) {
+                0 => self.end_break_scenario(),
+                // two restorations of one root: a deletes a line; b reverts that; a reverts it
+                // too (O4 by root, or O4a)
+                3 => {
+                    let a = self.pick_pid();
+                    let b = (a + 1 + self.rng.gen_range(0..self.pids.len() - 1)) % self.pids.len();
+                    let root = usize::from(self.rng.gen_bool(0.3));
+                    self.queue.extend([
+                        Plan::DeleteLastLine { p: a, root },
+                        Plan::RevertBack { p: b, back: 0 },
+                        Plan::RevertBack { p: a, back: 1 },
+                    ]);
+                }
+                // a window character the base's by root only: a appends a line; b deletes it
+                // and reverts that (the line's roots back, as new elements); a reverts the append
+                5 => {
+                    let a = self.pick_pid();
+                    let b = (a + 1 + self.rng.gen_range(0..self.pids.len() - 1)) % self.pids.len();
+                    let root = usize::from(self.rng.gen_bool(0.3));
+                    let text = self.words_lines(1);
+                    self.queue.extend([
+                        Plan::AppendLines { p: a, root, text },
+                        Plan::DeleteLastLine { p: b, root },
+                        Plan::RevertBack { p: b, back: 0 },
+                        Plan::RevertBack { p: a, back: 2 },
+                    ]);
+                }
+                // an insertion inside another's range: a appends a line of words; b types
+                // into one of its words; a reverts the append (O2)
+                4 => {
+                    let a = self.pick_pid();
+                    let b = (a + 1 + self.rng.gen_range(0..self.pids.len() - 1)) % self.pids.len();
+                    let root = usize::from(self.rng.gen_bool(0.3));
+                    let text = self.words_lines(1);
+                    self.queue.extend([
+                        Plan::AppendLines { p: a, root, text },
+                        Plan::LiveWord {
+                            p: b,
+                            root,
+                            word: 0,
+                            with: "x".into(),
+                            typed: true,
+                        },
+                        Plan::RevertBack { p: a, back: 1 },
+                    ]);
+                }
+                1 => {
+                    let p = self.pick_pid();
+                    let q = (p + 1 + self.rng.gen_range(0..self.pids.len() - 1)) % self.pids.len();
+                    let root = usize::from(self.rng.gen_bool(0.3));
+                    self.queue.extend([
+                        Plan::TypeSecret {
+                            p,
+                            root,
+                            split: self.rng.gen_bool(0.5),
+                        },
+                        Plan::Purge { p: q },
+                        Plan::Revert {
+                            p: q,
+                            oldest: false,
+                        },
+                    ]);
+                }
+                _ => self.scenario(),
+            }
+            while !self.queue.is_empty() {
+                let plan = self.queue.remove(0);
+                if let Some(s) = self.resolve(plan) {
+                    return s;
+                }
+            }
+        }
+        // a write --base refused in several separate regions, drawn apart too
+        if self.rng.gen_bool(0.01) {
+            self.multi_region_scenario();
             while !self.queue.is_empty() {
                 let plan = self.queue.remove(0);
                 if let Some(s) = self.resolve(plan) {
@@ -1710,6 +1912,59 @@ impl Runner {
         ]);
     }
 
+    /// A `write --base` refused in several separate regions: `k` (4 to 7) tagged lines of
+    /// words appended; a read; live, two or three of them rewritten, no two adjacent; then a
+    /// `write --base` from the read rewriting the same lines otherwise. Every line is unique
+    /// (its tag), so each side's whole-line diff is those lines, and the merge conflicts on
+    /// each, with an untouched line between any two: regions that don't touch.
+    fn multi_region_scenario(&mut self) {
+        let n = self.pids.len();
+        let a = self.pick_pid();
+        let b = (a + 1 + self.rng.gen_range(0..n - 1)) % n;
+        let root = usize::from(self.rng.gen_bool(0.3));
+        let k = self.rng.gen_range(4..=7);
+        let tag = self.rng.gen_range(0..1000);
+        let words: Vec<String> = (0..k)
+            .map(|i| {
+                let w = self.words_lines(1);
+                format!("{} m{tag}x{i}", w.trim_end())
+            })
+            .collect();
+        let text: String = words.iter().map(|w| format!("{w}\n")).collect();
+        let mut at = vec![self.rng.gen_range(0..2)];
+        loop {
+            let next = at[at.len() - 1] + self.rng.gen_range(2..=3);
+            if next >= k || at.len() == 3 {
+                break;
+            }
+            at.push(next);
+        }
+        if at.len() < 2 {
+            at = vec![0, 2];
+        }
+        let line = |i: usize, side: &str| format!("{} {side}\n", words[i]);
+        self.queue.extend([
+            Plan::AppendLines { p: b, root, text },
+            Plan::Read { p: a },
+            Plan::SetLines {
+                p: b,
+                root,
+                k,
+                at: at.clone(),
+                with: at.iter().map(|&i| line(i, "T")).collect(),
+                write: false,
+            },
+            Plan::SetLines {
+                p: a,
+                root,
+                k,
+                with: at.iter().map(|&i| line(i, "O")).collect(),
+                at,
+                write: true,
+            },
+        ]);
+    }
+
     /// v0.9.8: a line of words appended; a read; live, that line rewritten
     /// into two or three lines (or one word changed); then a `write --base` rewriting it into
     /// two or three lines (or changing a word), at least one side rewriting it.
@@ -2041,6 +2296,54 @@ impl Runner {
                     edits: vec![(root, vec![e])],
                 }
             }
+            Plan::SetLines {
+                p,
+                root,
+                k,
+                at,
+                with,
+                write,
+            } => {
+                let read = if write {
+                    Some(
+                        (0..self.reads.len())
+                            .rev()
+                            .find(|&i| self.reads[i].p == p)?,
+                    )
+                } else {
+                    None
+                };
+                let t = match read {
+                    Some(r) => self.reads[r].texts[root].clone(),
+                    None => self.model.texts[root].clone(),
+                };
+                let spans = last_lines(&t, k)?;
+                // whole lines, in order, an untouched line between any two
+                let edits: Vec<Edit> = at
+                    .iter()
+                    .zip(&with)
+                    .map(|(&i, w)| Edit {
+                        start: spans[i].0,
+                        end: spans[i].1,
+                        insert: w.clone(),
+                    })
+                    .collect();
+                let s = self.slot(p);
+                match read {
+                    Some(read) => Step::WriteBase {
+                        p,
+                        s,
+                        root,
+                        read,
+                        ours: spec_undo::model::hunk::apply(&t, &edits),
+                    },
+                    None => Step::Edit {
+                        p,
+                        s,
+                        edits: vec![(root, edits)],
+                    },
+                }
+            }
             Plan::WriteWord {
                 p,
                 root,
@@ -2267,6 +2570,19 @@ impl Runner {
             Plan::Revert { p, oldest } => {
                 let s = self.slot(p);
                 self.revert_step(p, s, oldest)
+            }
+            Plan::RevertBack { p, back } => {
+                let change = self.model.head.checked_sub(back)?;
+                if change < self.first_change {
+                    return None;
+                }
+                let s = self.slot(p);
+                Step::Revert {
+                    p,
+                    s,
+                    change,
+                    partial: false,
+                }
             }
             Plan::Restart => Step::Restart,
             Plan::Tick => Step::Tick,
@@ -2684,6 +3000,25 @@ impl Runner {
         }
         // ---- compare with the oracle ----
         if let Some(ko) = &ko {
+            // a refused write's regions, compared exactly (O6: overlapping or touching
+            // conflicting hunks are one region on both sides); classified as a diagnostic
+            if let (Outcome::WriteConflict(m), Outcome::WriteConflict(k)) = (&mo, ko) {
+                self.res.write_conflicts += 1;
+                self.res.write_regions += m.len() as u64;
+                // several separate regions on the oracle's side: no two touching
+                if m.len() >= 2 && m.windows(2).all(|w| w[0].end < w[1].start) {
+                    self.res.write_multi += 1;
+                    self.res.write_multi_regions += m.len() as u64;
+                }
+                let label = classify_write(m, k);
+                *self.res.write_labels.entry(label.clone()).or_default() += 1;
+                if m != k {
+                    return Err(format!(
+                        "write --base conflict regions (root, base range, lines in base, ours, \
+                         theirs; {label}):\n  oracle {m:?}\n  kit    {k:?}"
+                    ));
+                }
+            }
             if !same(&mo, ko) {
                 self.revert_taints_more =
                     matches!(step, Step::Revert { .. }) && taints_more(&mo, ko);
@@ -2792,6 +3127,21 @@ impl Runner {
         }
         if !matches!(step, Step::Restart) && self.kit.log_entries() < log_before {
             self.compacted_head = self.model.head;
+        }
+        // ---- the write --base classes against the refused writes compared ----
+        // `write_base_shared_start_was_conflict` is read off clean merges only (merge.rs,
+        // `classes`: it returns before it when the merge conflicts); `write_base_words_same_line`
+        // and `empty_base_double_write` only off refused ones. So the first is never a compared
+        // refused write, and the other two always are (traces.rs asserts the count).
+        let refused = matches!(mo, Outcome::WriteConflict(_));
+        if hits.shared_start_was_conflict && refused {
+            return Err("write_base_shared_start_was_conflict on a refused write".into());
+        }
+        if (hits.words_same_line || hits.empty_base_double_write) && !refused {
+            return Err(
+                "write_base_words_same_line or empty_base_double_write on a write not refused"
+                    .into(),
+            );
         }
         // ---- classes ----
         let applied_ok = matches!(mo, Outcome::Applied { .. });

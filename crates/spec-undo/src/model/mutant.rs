@@ -43,6 +43,27 @@ pub enum Mutant {
     /// ours hunk that puts back a root live elsewhere in the text (at the doc's end beside a
     /// foreign insertion, or in mid-text outside the region's window) applies, failing I1.
     NoO4a,
+    /// `u13-refused-revert-applies` (U13): a refused all-or-nothing revert (some region
+    /// conflicts, some is clean) still applies its clean regions, as `--partial` would, and
+    /// reports the conflict. Fails U13 (a refused request changed the doc).
+    RefusedRevertApplies,
+    /// `r3-redo-rewrites-window` (R3, U10, U17): a redo applies each clean region by rewriting
+    /// its whole window (every window element deleted, the merged text put back, each
+    /// character with its root), not the merge's own hunks. The text and its roots come out
+    /// as the oracle's; a foreign element inside the window is deleted (and put back), so
+    /// own_only fails, through redo only.
+    RedoRewritesWindow,
+    /// `r3-revert-rewrites-window`: the same, for revert only (undo and redo as specified).
+    RevertRewritesWindow,
+    /// `i1-per-request` (v1.8's reading of I1, before v1.9's per step): an undo or redo
+    /// request is judged as one change. O4a is waived on every step but the last of a
+    /// multi-step request when the request, planned all or nothing with that waiver, applies
+    /// and leaves every root live at most once; otherwise the request is planned as
+    /// specified (both modes alike, so U15 can't tell). A step may then put back a root that
+    /// is live, and a later step of the same request remove the copy: the request's end
+    /// state satisfies I1, and only the per-step check (`Hits::i1_violated`; `commit` in
+    /// `undo.qnt`) fails I1.
+    I1PerRequest,
     /// Not a spec mutant: the oracle panics on an undo with something to undo (depth 2 at
     /// the least). The enumerator's own test (a panic in the oracle must end a run promptly,
     /// as a violation, in every mode: `tests/mutants.rs`).
@@ -59,7 +80,7 @@ pub enum Mutant {
 
 impl Mutant {
     /// Every mutant, by its command-line name.
-    pub const ALL: [(&'static str, Mutant); 10] = [
+    pub const ALL: [(&'static str, Mutant); 14] = [
         ("i-no-taint", Mutant::NoTaint),
         ("iii-partial-hides-taint", Mutant::PartialHidesTaint),
         ("iv-redo-retries-skipped", Mutant::RedoRetriesSkipped),
@@ -70,6 +91,10 @@ impl Mutant {
         ("restart-single-taint", Mutant::RestartSingleTaint),
         ("x-provenance-ignored-in-o4", Mutant::ProvenanceIgnored),
         ("xi-no-o4a", Mutant::NoO4a),
+        ("u13-refused-revert-applies", Mutant::RefusedRevertApplies),
+        ("r3-redo-rewrites-window", Mutant::RedoRewritesWindow),
+        ("r3-revert-rewrites-window", Mutant::RevertRewritesWindow),
+        ("i1-per-request", Mutant::I1PerRequest),
     ];
 
     /// Harness mutants: not wrong variants of the spec, so not in [`Mutant::ALL`] (nor in

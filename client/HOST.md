@@ -31,7 +31,7 @@ with `utf8Len`, `byteToIndex` and `indexToByte`.
 | `undo()` / `redo()` | Requests to the server, sent in order behind the edits typed before them. Their text arrives as a `change`; then `onUndo` (`steps: 0`: nothing to undo), or `onError` (`MPC-E201`-`E203`). |
 | `onAck`, `onLanded`, `onReload`, `onError`, `onClosed` | Pending state; a lost change that landed after all; a reload (call `reload()`, which asks for a snapshot and resets); errors to show. |
 | `disconnected()` / `reconnected(welcome)` | Around every reconnect (below). |
-| `setVisible(v)`, `resync()`, `close()` | The view is (not) in front; the host suspects lost frames; the tab closed. |
+| `setVisible(v)`, `resync()`, `close()` | The view is (not) in front; the host suspects lost frames; the tab closed. After `close()` nothing is sent: `applyLocal`, `undo` and `redo` throw, every other call (`reset`, `reload`, `resync`, `reconnected`, `setCursor`, `setVisible`, `setView`) does nothing, frames are ignored, and an undo or redo still held is dropped. |
 
 ## Selection, pointer and viewport
 

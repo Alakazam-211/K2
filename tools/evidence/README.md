@@ -7,6 +7,11 @@ match its run, or is a partial (capped) count written as if it were exact.
 
 Self-contained: POSIX sh and Python 3 (stdlib only). Copy the directory as is.
 
+The run records live in the kit repo's `docs/evidence/runs/` and are checked there
+(`scripts/check.sh`, and the `evidence` part of `tools/tests/full.sh`). A release's public cut
+keeps the notes and leaves the records out, so `check.py` doesn't run on a cut; the self-test
+does.
+
 | File | Does |
 |---|---|
 | `collect.py` | job logs → `docs/evidence/runs/<job>.json` |
@@ -116,7 +121,7 @@ mutants (`docs/evidence/g1-layers-draft.md`) and 3 of 16 map/list teeth (`docs/e
   trace / counterexample") makes every `VIOLATION` citation under it a least-depth citation.
   Write least-depth claims with those words, so the check sees them.
 
-`tools/check.sh` (the repository's check flow) runs `check.py` and `test.sh`. To run the check
+`scripts/check.sh` (the repository's check flow) runs `check.py` and `test.sh`. To run the check
 before every commit that touches the evidence:
 
 ```

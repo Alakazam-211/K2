@@ -119,7 +119,7 @@ text_start() {
   TB=$(printf '%s\n' "$TEXT_TERMS" | tr '|' '\n' | awk 'NF == 1' | sed -n 2p)
   TM=$(printf '%s\n' "$TEXT_TERMS" | tr '|' '\n' | awk 'NF == 2' | sed -n 1p)
   [ -n "$TA" ] && [ -n "$TB" ] && [ -n "$TM" ] || { echo "SETUP FAILED: terms not read from the checker"; return 1; }
-  T1=${DROPPED_TREES%% *}; T2=${DROPPED_TREES#* }
+  T1=$(printf '%s\n' $DROPPED_TREES | sed -n 1p); T2=$(printf '%s\n' $DROPPED_TREES | sed -n 2p)
   [ -n "$T1" ] && [ -n "$T2" ] && [ "$T1" != "$T2" ] || { echo "SETUP FAILED: two trees not read from the checker"; return 1; }
   D=$TP
   printf '# none\n' > "$D/$TEXT_EXCEPTIONS"
@@ -284,6 +284,9 @@ case ${PART:-none} in
       timed plant_windows_name expect_block windows-name "$P-win" "windows-names: nul.txt: reserved name nul"
       cp -R "$P" "$P-wmi"; rm -f "$P-wmi/tools/check-windows-names.sh"
       timed plant_windows_check_missing expect_block windows-missing "$P-wmi" "windows-names: tools/check-windows-names.sh missing"
+      DF=$(eval "$(sh "$P/tools/check-public-cut.sh" --print-config)"; printf '%s' "${DROPPED_FILES%% *}")
+      cp -R "$P" "$P-dfl"; mkdir -p "$P-dfl/$(dirname "$DF")"; printf '#!/bin/sh\n' > "$P-dfl/$DF"
+      timed plant_dropped_file_left expect_block dropped-file-left "$P-dfl" "dropped: $DF exists (a file the cut removes)"
     else
       RC=1
     fi
@@ -309,6 +312,7 @@ case ${PART:-none} in
         set -- "$@" "[[package]] name: names $n"
       done
       for t in $DROPPED_TREES; do set -- "$@" "dropped: $(cd "$P" && find "$t" -type f | sort | sed -n 1p) (under $t, which the cut removes)"; done
+      for f in $DROPPED_FILES; do [ -e "$P/$f" ] && set -- "$@" "dropped: $f exists (a file the cut removes)"; done
       echo "expected findings: $#"
       [ $# -gt 0 ] || { echo "SETUP FAILED: no expectation read from the pre-cut commit"; RC=1; }
       timed checker_precut_blocks expect_block precut "$P" "$@"

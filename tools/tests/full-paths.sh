@@ -35,8 +35,9 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
   # the evidence notes and their run records, checked (Python only; no cargo)
   # oss-check (K-OSS-3) reads the licence files, NOTICE.md and every manifest of ours (not the
   # lockfiles, which are large: in a bundle it checks package.json files without them)
-  evidence) echo "tools/evidence docs/evidence tools/check-private.sh tools/private-allow.txt" \
-      "tools/check-windows-names.sh tools/test-windows-names.sh" \
+  evidence) EF=
+      echo "tools/evidence docs/evidence tools/check-private.sh tools/private-allow.txt" \
+      "tools/check-windows-names.sh tools/test-windows-names.sh" $EF \
       "tools/oss-check.sh tools/test-oss-check.sh LICENSE-MIT LICENSE-APACHE NOTICE.md" \
       "client/LICENSE-MIT client/LICENSE-APACHE" \
       $(git ls-files '*Cargo.toml' '*package.json' | grep -v '^vendor/' | tr '\n' ' ') ;;

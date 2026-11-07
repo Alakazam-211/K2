@@ -9,11 +9,18 @@
 // which characters to keep is, on every pair of texts up to DIFF_MAX = 4 long, the
 // right-greedy embedding below (keep the latest matching characters).
 //
-// crates/spec-undo/tests/quint_diff.rs transcribes this module and checks it against
-// diff::hunks on EVERY pair of texts over {a, b} up to 4 long (961 pairs, all equal), and
-// that it differs at 5 (so 4 is the limit). The model's cut keeps every text it diffs
+// Who calls it: undo.qnt calls `hunks` only under mutant "f3-rediff" and under mutant (i)
+// on a tainted region. The correct model (MUTANT = "none") never diffs.
+//
+// crates/spec-undo/tests/quint_diff.rs transcribes this module into Rust by hand and checks
+// the transcription against diff::hunks on EVERY pair of texts over {a, b} up to 4 long
+// (961 pairs, all equal), and that it differs at 5 (so 4 is the limit). That is exact for
+// the transcription. Nothing ties the transcription to this file mechanically: the test
+// reads this file only to find `DIFF_MAX = 4`. The model's cut keeps every text it diffs
 // within MAXLEN (bounded::tests::the_cut_bounds_every_diffed_string), so MAXLEN must be at
-// most DIFF_MAX: then on every state the bound reaches, this is diff::hunks.
+// most DIFF_MAX (a convention of the instances run; nothing enforces it): then, as far as
+// this module matches the transcription, on every state the bound reaches this is
+// diff::hunks.
 
 module undo_diff {
   type Hunk = { s: int, e: int, ins: List[int] }

@@ -82,7 +82,7 @@ fn class_b_in_one_line_the_write_conflicts() {
         m.replace("p1", None, 0, "alpha BETA gamma\n");
         m.replace("p2", None, 0, "alpha BETA GAMMA\n");
         let (o, _) = m.write_base("ag", None, 0, base, "ALPHA beta gamma\n");
-        assert!(matches!(o, Outcome::WriteConflict), "{o:?}");
+        assert!(matches!(o, Outcome::WriteConflict(_)), "{o:?}");
         assert_eq!(m.texts[0], "alpha BETA GAMMA\n");
     });
 }

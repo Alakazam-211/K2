@@ -137,6 +137,20 @@ pub struct Report {
     pub kind: Kind,
 }
 
+/// One conflicting region of a refused `write --base` (K-BR-2, O1–O5;
+/// [`merge::write_base_regions`]): its root, its byte range `[start, end)` in the **base**,
+/// and its 1-based lines (first, last) in the base, in the writer's text (`ours_lines`) and
+/// in the live text (`theirs_lines`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WriteRegion {
+    pub root: usize,
+    pub start: usize,
+    pub end: usize,
+    pub lines: (usize, usize),
+    pub ours_lines: (usize, usize),
+    pub theirs_lines: (usize, usize),
+}
+
 /// One live character (v1.8): who inserted it, its own id, and its provenance root (U23).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Elem {
@@ -309,8 +323,8 @@ pub enum Outcome {
     /// An edit, replace, restore, `write --base` or purge removal: the change it made, if
     /// any.
     Changed(Option<ChangeId>),
-    /// `write --base` overlapped (O1, O2, O5); nothing applied.
-    WriteConflict,
+    /// `write --base` overlapped (O1, O2, O5); nothing applied. Its regions, sorted.
+    WriteConflict(Vec<WriteRegion>),
     /// Undo, redo or revert applied `steps` steps (U13–U17, U22). `skipped`: regions
     /// `--partial` left; `blocked`: the next step's regions, all conflicting, which stays on
     /// top. Sorted.
@@ -383,7 +397,8 @@ pub struct Hits {
     pub end_break: Option<merge::EndBreak>,
     /// A clean `write --base` a character diff reads one line off ([`merge::Rules::shared_start`]).
     pub shared_start: bool,
-    /// ... where v0.9.7's character-trimmed sides conflicted.
+    /// ... where v0.9.7's character-trimmed sides conflicted. Clean writes only (set after
+    /// `merge::classes`'s `if !clean { return; }`), never a refused one.
     pub shared_start_was_conflict: bool,
     /// A `write --base` refused over two different changes of one line.
     pub words_same_line: bool,
@@ -682,7 +697,9 @@ impl Model {
             }
             Merged::Conflict => {
                 hits.empty_base_double_write = base.is_empty() && rules.same_point_at_window_end;
-                (Outcome::WriteConflict, hits)
+                let regions = merge::write_base_regions(root, base, ours, &self.texts[root]);
+                debug_assert!(!regions.is_empty(), "a conflict has a region");
+                (Outcome::WriteConflict(regions), hits)
             }
         }
     }
@@ -933,6 +950,34 @@ impl Model {
         req: &Request,
         redo: bool,
     ) -> (Outcome, Hits) {
+        // mutant i1-per-request: the request judged as one change (v1.8's I1). O4a waived on
+        // every step but the last when the request, so planned all or nothing, applies and
+        // leaves each root live at most once (the same plan for both modes: no conflict)
+        if mutant::active() == Mutant::I1PerRequest && req.mode != Mode::Drop {
+            let mut w = self.clone();
+            let all = Request {
+                mode: Mode::All,
+                ..req.clone()
+            };
+            let (o, h) = w.plan_steps(pid, obo, &all, redo, true);
+            if matches!(o, Outcome::Applied { .. }) && w.i1() {
+                *self = w;
+                return (o, h);
+            }
+        }
+        self.plan_steps(pid, obo, req, redo, false)
+    }
+
+    /// [`Model::undo_redo`]'s plan (U13, U14, U17; R7). `waive`: mutant i1-per-request's
+    /// waiver of O4a on every step but the last (false on the oracle of record).
+    fn plan_steps(
+        &mut self,
+        pid: &str,
+        obo: Option<&str>,
+        req: &Request,
+        redo: bool,
+        waive: bool,
+    ) -> (Outcome, Hits) {
         let mut hits = Hits::default();
         let st = self.stacks.entry(pid.to_owned()).or_default();
         // an undo or redo closes the person's open group (U3 (f)), whatever it finds
@@ -998,7 +1043,8 @@ impl Model {
             if touching(&batch.regions) {
                 hits.touching_regions = true;
             }
-            let (clean, conflicts) = work.merge_regions(&batch.regions, &mut hits);
+            let last = k + 1 == picked.len();
+            let (clean, conflicts) = work.merge_regions(&batch.regions, &mut hits, waive && !last);
             let applied: Vec<usize> = clean.iter().map(|c| c.0).collect();
             // mutant (iii): --partial reports a different set (it leaves taints out)
             let reported: Vec<Report> =
@@ -1049,6 +1095,12 @@ impl Model {
                 .filter(|i| !applied.contains(i))
                 .collect();
             skipped.extend(reported.iter().cloned());
+            // mutant r3-redo-rewrites-window: a redo rewrites each clean region's window whole
+            let clean = if redo && mutant::active() == Mutant::RedoRewritesWindow {
+                work.rewrite_windows(&batch.regions, clean)
+            } else {
+                clean
+            };
             let edits = step_edits(&work.texts, &batch.regions, &clean);
             let (mut inverse, gone) = work.apply_step(pid, obo, &batch.regions, &clean);
             // U10a by root (v1.8; v1.9: over the regions applied): only roots the change
@@ -1158,10 +1210,10 @@ impl Model {
         if touching(&regions) {
             hits.touching_regions = true;
         }
-        let (clean, conflicts) = self.merge_regions(&regions, &mut hits);
+        let (clean, conflicts) = self.merge_regions(&regions, &mut hits, false);
         // U22a's property, against undo of the same change on the same state
         let mut probe = Hits::default();
-        let (u_clean, u_conflicts) = self.merge_regions(&undo_regions, &mut probe);
+        let (u_clean, u_conflicts) = self.merge_regions(&undo_regions, &mut probe, false);
         let bounds = |r: &Region| (r.root, r.start, r.end);
         let same_bounds = regions.len() == undo_regions.len()
             && regions
@@ -1185,7 +1237,13 @@ impl Model {
         hits.revert_regions = regions.len();
         hits.revert_extra_conflicts = r_conflicting.difference(&u_conflicting).count();
         debug_assert_eq!(u_conflicts.len(), u_conflicting.len());
-        if !conflicts.is_empty() {
+        // mutant u13-refused-revert-applies: a refused all-or-nothing revert still applies
+        // its clean regions (and reports the conflict)
+        let leaks = !conflicts.is_empty()
+            && !partial
+            && !clean.is_empty()
+            && mutant::active() == Mutant::RefusedRevertApplies;
+        if !conflicts.is_empty() && !leaks {
             if !partial {
                 let regions = sorted(conflicts);
                 return (Outcome::Conflicts { step: 1, regions }, hits);
@@ -1195,6 +1253,12 @@ impl Model {
                 return (Outcome::Blocked { regions }, hits);
             }
         }
+        // mutant r3-revert-rewrites-window: each clean region's window rewritten whole
+        let clean = if mutant::active() == Mutant::RevertRewritesWindow {
+            self.rewrite_windows(&regions, clean)
+        } else {
+            clean
+        };
         let edits = step_edits(&self.texts, &regions, &clean);
         let (_, deleted) = self.new_batch_del(pid, obo, edits);
         // hist.undo_own_only (enforced; U10a by root, v1.8): only roots the change inserted,
@@ -1204,6 +1268,10 @@ impl Model {
         hits.foreign_deleted = deleted.iter().any(|x| !own.contains(&x.prov));
         hits.own_roots = own;
         hits.i1_violated = !self.i1();
+        if leaks {
+            let regions = sorted(conflicts);
+            return (Outcome::Conflicts { step: 1, regions }, hits);
+        }
         (
             Outcome::Applied {
                 steps: 1,
@@ -1217,7 +1285,13 @@ impl Model {
     /// Merge each region against the live text (U10): the clean ones, and the reports of
     /// the conflicting ones (U11). The window is read by root (U8, v1.8); O4 on (range,
     /// roots); then O4a against the live text.
-    fn merge_regions(&self, regions: &[Region], hits: &mut Hits) -> (Vec<Clean>, Vec<Report>) {
+    /// `waive_o4a`: mutant i1-per-request's waiver (always false on the oracle of record).
+    fn merge_regions(
+        &self,
+        regions: &[Region],
+        hits: &mut Hits,
+        waive_o4a: bool,
+    ) -> (Vec<Clean>, Vec<Report>) {
         let mut clean = Vec::new();
         let mut conflicts = Vec::new();
         for (i, r) in regions.iter().enumerate() {
@@ -1347,6 +1421,7 @@ impl Model {
                 Merged::Clean { provs, .. }
                     if same == merge::Same::Root
                         && mutant::active() != Mutant::NoO4a
+                        && !waive_o4a
                         && provs.iter().flatten().any(|p| self.live(r.root, *p)) =>
                 {
                     note.o4a = true;
@@ -1392,6 +1467,41 @@ impl Model {
         }
         hits.concurrent_restore = hits.o4_restore || hits.o4a || hits.base_by_root;
         (clean, conflicts)
+    }
+
+    /// Mutants r3-redo-rewrites-window and r3-revert-rewrites-window: each clean region applied
+    /// by rewriting its whole window (every window element deleted, the merged text put back,
+    /// each character with the root the merge gives it) instead of the merge's own hunks
+    /// (R3, U10). The text and its roots come out the same; the elements don't.
+    fn rewrite_windows(&self, regions: &[Region], clean: Vec<Clean>) -> Vec<Clean> {
+        clean
+            .into_iter()
+            .map(|(i, text, edits, provs)| {
+                let r = &regions[i];
+                let live = &self.texts[r.root];
+                let window = &live[r.start..r.end];
+                let wroots: Vec<Prov> = self.elems[r.root][hunk::chars_in(live, r.start, r.end)]
+                    .iter()
+                    .map(|x| x.prov)
+                    .collect();
+                // the merged text's roots: the window's, the merge's edits applied
+                let mut roots = Vec::new();
+                let mut at = 0;
+                for (e, p) in edits.iter().zip(&provs) {
+                    roots.extend(&wroots[hunk::chars_in(window, at, e.start)]);
+                    roots.extend(p.iter().copied());
+                    at = e.end;
+                }
+                roots.extend(&wroots[hunk::chars_in(window, at, window.len())]);
+                debug_assert_eq!(roots.len(), text.chars().count(), "a root per character");
+                let whole = Edit {
+                    start: 0,
+                    end: window.len(),
+                    insert: text.clone(),
+                };
+                (i, text, vec![whole], vec![roots])
+            })
+            .collect()
     }
 
     /// A live element of `root` has provenance root `p` (O4a).

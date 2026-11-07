@@ -21,7 +21,8 @@
 #   - every vendor/mpce* directory except PUBLIC_ENGINE_CRATES (the engine's vendored source);
 #   - the crates in DROPPED_CRATES (whole: the conformance suite, which hard-depends on the
 #     engine's sync layer and core), and their workspace membership;
-#   - the trees in DROPPED_TREES (whole: tooling no host builds or runs);
+#   - the trees in DROPPED_TREES (whole: tooling no host builds or runs, and the evidence run
+#     records), and the single files in DROPPED_FILES;
 #   - in every Cargo.toml outside vendor/ (the root, crates/*, tools/, any other):
 #     dependencies on non-public mpce-* crates in every dependency table ([dependencies],
 #     [dev-dependencies], [build-dependencies], their [target.'cfg(..)'.*] forms,
@@ -128,6 +129,9 @@ for dc in $DROPPED_CRATES; do
 done
 for t in $DROPPED_TREES; do
   if [ -n "$(git ls-files "$t")" ]; then git rm -r -q -f -- "$t"; echo "  removed $t"; fi
+done
+for f in $DROPPED_FILES; do
+  if [ -n "$(git ls-files "$f")" ]; then git rm -q -f -- "$f"; echo "  removed $f"; fi
 done
 
 # ---- 2. manifests ---------------------------------------------------------------------------
@@ -621,7 +625,7 @@ MSG=$WORK/msg
   echo
   echo "tools/public-cut.sh on $(git rev-parse --short HEAD): the engine's vendored source, the"
   echo "kit's native-engine adapter (features: $NATIVE_FEATURES) and the crates"
-  echo "$DROPPATHS and the trees $DROPPED_TREES removed; the lockfile pruned (packages removed, no"
+  echo "$DROPPATHS, the trees $DROPPED_TREES and the files $DROPPED_FILES removed; the lockfile pruned (packages removed, no"
   echo "version changed)."
   echo "Never merged into main."
   echo

@@ -208,7 +208,17 @@ fn write_base_rules() {
     let mut m = Model::new(vec![String::new()], 1, chars());
     m.write_base("a", None, 0, "", "x\n");
     let (o, h) = m.write_base("b", None, 0, "", "y\n");
-    assert_eq!(o, Outcome::WriteConflict);
+    assert_eq!(
+        o,
+        Outcome::WriteConflict(vec![WriteRegion {
+            root: 0,
+            start: 0,
+            end: 0,
+            lines: (1, 1),
+            ours_lines: (1, 1),
+            theirs_lines: (1, 1),
+        }])
+    );
     assert!(h.empty_base_double_write);
     let (o, h) = m.write_base("b", None, 0, "x\n", "x\ny\n");
     assert_eq!(o, Outcome::Changed(Some(3)));

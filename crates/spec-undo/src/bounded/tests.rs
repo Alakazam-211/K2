@@ -104,6 +104,8 @@ fn restarts_are_transparent() {
 
 /// Pid symmetry is exact at `b`: the canonical forms of every state of the plain enumeration
 /// are exactly the states of the symmetric one, and both find the same violations (none).
+/// The violation half compares empty with empty: it runs the oracle of record, which has no
+/// violation at these bounds, and no mutant runs here, so only the state half has teeth.
 /// One test per bound, so a runner with a process per test runs them in parallel.
 fn pid_symmetry_is_exact_at(b: Bound) {
     let mut canon = BTreeSet::new();
@@ -150,6 +152,8 @@ fn pid_symmetry_is_exact_with_a_restart() {
 
 /// Dropping the records once the revert budget is spent loses nothing: with and without
 /// it, the states minus records and head are the same set, with the same violations.
+/// The violation half compares empty with empty: it runs the oracle of record, which has no
+/// violation at this bound, and no mutant runs here, so only the state half has teeth.
 #[test]
 fn dropping_spent_records_is_exact() {
     let strip = |v: &View| View {
@@ -180,8 +184,9 @@ fn dropping_spent_records_is_exact() {
     assert_eq!(a.violations.len(), c.violations.len());
 }
 
-/// The cut keeps every string the merge diffs within `maxlen`: the Quint model's diff table
-/// covers them.
+/// The cut keeps every string the merge diffs within `maxlen`: the Quint model's pinned diff
+/// (`undo_diff.qnt`) covers them. It checks the states kept, not the transitions cut: those
+/// are not taken and not checked (bfs counts them as `cut`).
 #[test]
 fn the_cut_bounds_every_diffed_string() {
     let b = tiny();

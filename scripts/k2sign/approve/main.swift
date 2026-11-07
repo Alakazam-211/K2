@@ -16,6 +16,7 @@
 //                                write the DER signature to <out> (or the reason to <out>.err);
 //                                --timeout cancels the sheet after <s> seconds with no answer
 //   --key-dir <dir>              (with the above) use <dir> instead of ~/.k2-release-approve
+//   --describe <f>               print the sheet's text for challenge <f> (no key use)
 //   --capabilities               print what this build supports (release.sh refuses a build
 //                                without "timeout"; no sheet, no key use)
 //   --soft-selftest <dir>        S0 (c): a SOFTWARE P-256 key (no Secure Enclave, no Touch ID)
@@ -131,12 +132,8 @@ final class Flag {
     var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
 }
 
-func approve(challengePath: String, outPath: String) {
-    let out = URL(fileURLWithPath: outPath)
-    let errFile = URL(fileURLWithPath: outPath + ".err")
-    guard let data = FileManager.default.contents(atPath: challengePath), data.count < 16384 else {
-        fail("can't read the challenge \(challengePath)", errFile: errFile)
-    }
+/// What the Touch ID sheet says for a challenge; nil when it isn't one.
+func challengeReason(_ data: Data) -> String? {
     // Two kinds: k2sign's K2 release, and k2-signer's client project release
     // (prd-ci-on-compute-for-clients-v1 C4, V29), which names its project so
     // the sheet never reads "K2" for another project's files.
@@ -145,23 +142,39 @@ func approve(challengePath: String, outPath: String) {
           kind == "k2-release-approval" || kind == "k2-signer-approval",
           let version = obj["version"] as? String,
           let base = obj["base_commit"] as? String,
+          base.count == 40, base.allSatisfy({ $0.isASCII && $0.isHexDigit && !$0.isUppercase }),
           let assets = obj["assets"] as? [String],
           let expires = obj["expires"] as? String else {
-        fail("the challenge is not a K2 release approval", errFile: errFile)
+        return nil
     }
     var what = "K2 release"
     if kind == "k2-signer-approval" {
         guard let project = obj["project"] as? String, !project.isEmpty, project.count <= 63,
               project.allSatisfy({ $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-") }) else {
-            fail("the challenge names no project", errFile: errFile)
+            return nil
         }
         what = "project \(project) release"
     }
     let windows = (obj["windows"] as? Bool) ?? false
     let re = (obj["reapproval"] as? Bool) ?? false
     let until = expires.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "Z", with: " UTC")
-    var reason = "\(re ? "RE-APPROVE: " : "")approve \(what) \(version) (base \(base.prefix(7))): sign \(assets.count) update files until \(until)"
+    // The whole base commit and every file name (security review M2): a
+    // 7-character prefix and a count are too little to check against.
+    let names = assets.map { a in a.filter { $0.isASCII && !$0.isNewline && $0 != "\u{1b}" } }.joined(separator: ", ")
+    var reason = "\(re ? "RE-APPROVE: " : "")approve \(what) \(version) at base commit \(base): sign \(names) until \(until)"
     if windows { reason += ", including the Windows setup (no independent check)" }
+    return reason
+}
+
+func approve(challengePath: String, outPath: String) {
+    let out = URL(fileURLWithPath: outPath)
+    let errFile = URL(fileURLWithPath: outPath + ".err")
+    guard let data = FileManager.default.contents(atPath: challengePath), data.count < 16384 else {
+        fail("can't read the challenge \(challengePath)", errFile: errFile)
+    }
+    guard let reason = challengeReason(data) else {
+        fail("the challenge is not a K2 release approval", errFile: errFile)
+    }
     guard let blob = FileManager.default.contents(atPath: blobURL.path) else {
         fail("not enrolled (no \(blobURL.path)); open K2 Release Approve with --enrol first", errFile: errFile)
     }
@@ -208,7 +221,7 @@ func softSelftest(dir: String) {
 }
 
 // Bump when a release depends on a new behaviour (Step 0.46 checks "timeout").
-let capabilities = "k2-release-approve 2 timeout replace key-dir"
+let capabilities = "k2-release-approve 2 timeout replace key-dir describe"
 
 let args = CommandLine.arguments
 if args.contains("--capabilities") {
@@ -216,6 +229,14 @@ if args.contains("--capabilities") {
     exit(0)
 } else if args.contains("--enrol") {
     enrol()
+} else if let c = arg("--describe") {
+    // The sheet's text for a challenge, with no key use (tests, and a person
+    // who wants to read it first).
+    guard let d = FileManager.default.contents(atPath: c), d.count < 16384, let r = challengeReason(d) else {
+        FileHandle.standardError.write("not a K2 release approval\n".data(using: .utf8)!)
+        exit(2)
+    }
+    print(r)
 } else if let dir = arg("--soft-selftest") {
     softSelftest(dir: dir)
 } else if let c = arg("--challenge"), let o = arg("--out") {

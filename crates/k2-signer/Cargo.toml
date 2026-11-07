@@ -28,5 +28,7 @@ scrypt = { version = "0.11", default-features = false }
 # An independent verifier for every signature made (as k2sign re-checks
 # with the minisign binary): its own BLAKE2b and Ed25519.
 minisign-verify = "0.2"
+# Wipes passwords and decrypted key bytes (security review L9).
+zeroize = "1"
 # geteuid / getpwnam (the role user check) and chown.
 libc = "0.2"

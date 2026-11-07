@@ -19,7 +19,8 @@
 //!   policy-approve <project> [<sha256>]         (policy TOML on stdin: no sha = show the diff and its sha256)
 //!   trust-owner <fp> <ed25519:key> [<label>]    untrust-owner <fp>
 //!   roster-accept <owner fp> [<digest>]         (evidence bundle or signed roster on stdin: no digest = show the changes)
-//!   pair-begin [<label>]                        pair-accept <sas>  (the server's offer on stdin)    unpair <fp>
+//!   pair-begin [<label>]   pair-reveal (the server's offer on stdin)   pair-accept <sas>   unpair <fp>
+//!   pairing-pins <project> required|optional
 //!   set-approver </abs/approver.pem>            adopt-k2sign
 //!   generate-key <project> <slot>               import-key <project> <slot> </abs/key> (password on stdin)
 //!   set-gh-token <project>                      (token on stdin)
@@ -90,7 +91,9 @@ pub fn admin_verbs() -> BTreeMap<&'static str, Verb> {
     m.insert("untrust-owner", admin_untrust_owner);
     m.insert("roster-accept", admin_roster_accept);
     m.insert("pair-begin", admin_pair_begin);
+    m.insert("pair-reveal", admin_pair_reveal);
     m.insert("pair-accept", admin_pair_accept);
+    m.insert("pairing-pins", admin_pairing_pins);
     m.insert("unpair", admin_unpair);
     m.insert("set-approver", admin_set_approver);
     m.insert("adopt-k2sign", admin_adopt_k2sign);
@@ -199,17 +202,43 @@ fn release_files(ctx: &Ctx, project: &str) -> R<Option<Vec<String>>> {
     if project != "k2" {
         return Ok(None);
     }
+    match k2sign_policy_value(ctx, "release_commit_files")? {
+        Some(v) => Ok(Some(v.split_whitespace().map(String::from).collect())),
+        None => refused("k2sign's policy has no release_commit_files"),
+    }
+}
+
+/// One `key = value` of k2sign's installed (root-owned, pinned) policy.
+fn k2sign_policy_value(ctx: &Ctx, key: &str) -> R<Option<String>> {
     let p = ctx.k2sign_etc().join("policy");
     let raw = ctx::read_trusted(ctx, &p, 64 * 1024)?;
     for line in String::from_utf8_lossy(&raw).lines() {
         let l = line.split('#').next().unwrap_or_default().trim();
         if let Some((k, v)) = l.split_once('=') {
-            if k.trim() == "release_commit_files" {
-                return Ok(Some(v.split_whitespace().map(String::from).collect()));
+            if k.trim() == key {
+                return Ok(Some(v.trim().to_string()));
             }
         }
     }
-    refused("k2sign's policy has no release_commit_files")
+    Ok(None)
+}
+
+/// M3: for project `k2`, k2-signer signs only what k2sign itself would sign
+/// from compute (its `compute_assets`), and a Windows setup only when the
+/// session approved Windows.
+fn k2_asset_rules(ctx: &Ctx, project: &str, asset: &str, version: &str, sess: &Session) -> R<()> {
+    if project != "k2" {
+        return Ok(());
+    }
+    let compute = k2sign_policy_value(ctx, "compute_assets")?.unwrap_or_default();
+    if !compute.split_whitespace().any(|a| a == asset) {
+        return refused(format!("{asset}: project k2's k2-signer signs only k2sign's compute_assets ({compute}); the rest is k2sign's"));
+    }
+    let windows = k2sign_policy_value(ctx, "windows_assets")?.unwrap_or_default();
+    if windows.split_whitespace().any(|a| a.replace("{version}", version) == asset) && !sess.windows {
+        return refused(format!("Windows setup not approved for {version}"));
+    }
+    Ok(())
 }
 
 /// Check a bundle for a release under its session (the forge's binding).
@@ -438,9 +467,11 @@ fn open_key(ctx: &Ctx, project: &str, slot: &str) -> R<SecretKey> {
         }
     }
     let raw = std::fs::read(&k)?;
-    let password = std::fs::read_to_string(&pw)?;
-    let password = password.strip_suffix('\n').unwrap_or(&password);
-    SecretKey::open(&raw, password.as_bytes()).map_err(|e| Fail::Refused(format!("{project}'s {slot} key: {e}")))
+    // L9: the password and the key file never outlive this call in memory.
+    let password = zeroize::Zeroizing::new(std::fs::read(&pw)?);
+    let raw = zeroize::Zeroizing::new(raw);
+    let pw = password.strip_suffix(b"\n").unwrap_or(&password);
+    SecretKey::open(&raw, pw).map_err(|e| Fail::Refused(format!("{project}'s {slot} key: {e}")))
 }
 
 /// The comments a signature carries: k2sign's for project `k2` (U1 as
@@ -519,6 +550,7 @@ fn verb_verdict(env: &Env, args: &[String]) -> R<Vec<u8>> {
     if !sess.assets.contains(asset) {
         return refused(format!("{asset} is not in {project} {version}'s approved asset list"));
     }
+    k2_asset_rules(ctx, project, asset, version, &sess)?;
     let data = (env.stdin)(MAX_SIGN_BYTES)?;
     let sha = ctx::sha256_hex(&data);
     if let Some(f) = registry::signed_assets(ctx, project, version)?.get(asset.as_str()) {
@@ -570,6 +602,7 @@ fn verb_sign(env: &Env, args: &[String]) -> R<Vec<u8>> {
     if !sess.assets.contains(asset) {
         return refused(format!("{asset} is not in {project} {version}'s approved asset list"));
     }
+    k2_asset_rules(ctx, project, asset, version, &sess)?;
     let data = (env.stdin)(MAX_SIGN_BYTES)?;
     let sha = ctx::sha256_hex(&data);
     let first = registry::signed_assets(ctx, project, version)?;
@@ -825,8 +858,18 @@ fn admin_roster_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let mut lines = vec![format!("{}'s node roster seq {} (issued {}), digest {digest}", r.owner_id, r.seq, ctx::hhmm(r.issued_at))];
     let mut new_keys = Vec::new();
     for e in &r.entries {
-        let known = accepted.contains_key(&e.node_fp);
-        let tag = if known { "  accepted" } else if e.status == k2_node_proto::ci::KeyStatus::Revoked { "  revoked " } else { "+ NEW     " };
+        let attrs = trust::entry_attrs(e);
+        let prior = accepted.get(&e.node_fp);
+        let known = prior.is_some_and(|a| a.attrs == attrs);
+        let tag = if known {
+            "  accepted"
+        } else if e.status == k2_node_proto::ci::KeyStatus::Revoked {
+            "  revoked "
+        } else if prior.is_some() {
+            "~ CHANGED "
+        } else {
+            "+ NEW     "
+        };
         let link = match rotated.get(&e.node_fp) {
             Some(old) if accepted.contains_key(old) => format!(", re-key of accepted {}…", &old[..16]),
             Some(old) => format!(", re-key of {}… (not accepted)", &old[..16]),
@@ -859,7 +902,7 @@ fn admin_roster_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
             lines.push("Nothing new to accept.".into());
         } else {
             lines.push(format!(
-                "{} new key(s). Check them with the owner, then accept exactly this roster:\n  sudo k2-signer-admin roster-accept {owner} {digest} < the-same-input",
+                "{} new or changed key(s). Check them with the owner, then accept exactly this roster:\n  sudo k2-signer-admin roster-accept {owner} {digest} < the-same-input",
                 new_keys.len()
             ));
         }
@@ -874,7 +917,7 @@ fn admin_roster_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let names: Vec<String> = new_keys.iter().map(|e| e.name.clone()).collect();
     if let Some(o) = t.owners.get_mut(owner.as_str()) {
         for e in &new_keys {
-            o.accepted.insert(e.node_fp.clone(), AcceptedKey { name: e.name.clone(), seq: r.seq, at: now });
+            o.accepted.insert(e.node_fp.clone(), AcceptedKey { name: e.name.clone(), seq: r.seq, at: now, attrs: trust::entry_attrs(e) });
         }
     }
     t.save(ctx)?;
@@ -904,21 +947,19 @@ fn admin_pair_begin(env: &Env, args: &[String]) -> R<Vec<u8>> {
         }
     };
     let label = args.first().cloned().unwrap_or_else(|| "k2-signer".into());
+    pairing::check_label("the label", &label).map_err(Fail::Usage)?;
     let (code, hello, pending) = pairing::signer_begin(&identity, &label, ctx.now()).map_err(Fail::Internal)?;
     ctx::mkdirs(ctx, &ctx.own_dir().join("pairing"))?;
     ctx::write_file(ctx, &pending_path(ctx), &serde_json::to_vec(&pending).map_err(|e| Fail::Internal(e.to_string()))?, 0o600)?;
     admin_audit(ctx, "PAIR-BEGIN", &format!("signer {}", identity.fingerprint()))?;
     env.say(format!(
-        "On your K2 server, as its owner or an Admin (never an agent): k2 ci signer add {code}\nThen type the 6-digit code it shows here: sudo k2-signer-admin pair-accept <code> < offer.json (within {} minutes)",
+        "On your K2 server, as its owner or an Admin (never an agent): k2 ci signer add {code}\nThen, within {} minutes: sudo k2-signer-admin pair-reveal < offer.json, and type the 6-digit code the server then shows: sudo k2-signer-admin pair-accept <code>",
         pairing::CODE_TTL_SECS / 60
     ));
     json_out(&json!({"code": code, "hello": hello}))
 }
 
-fn admin_pair_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
-    need(args, 1, "pair-accept <the 6-digit code your K2 server shows>   (its offer on stdin)")?;
-    let ctx = env.ctx;
-    ctx::check_pins(ctx)?;
+fn load_pending(ctx: &Ctx) -> R<(SigningKey, pairing::Pending)> {
     let Some(identity) = load_identity(ctx)? else {
         return refused("no pairing started (pair-begin first)");
     };
@@ -927,9 +968,42 @@ fn admin_pair_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
         return refused("no pairing started (pair-begin first)");
     }
     let pending: pairing::Pending = serde_json::from_slice(&std::fs::read(&pp)?).map_err(|e| Fail::Internal(e.to_string()))?;
+    Ok((identity, pending))
+}
+
+/// H2: check the server's offer (signature, the code's MAC, this pairing's
+/// commitment) and reveal the nonce for that one offer.
+fn admin_pair_reveal(env: &Env, args: &[String]) -> R<Vec<u8>> {
+    need(args, 0, "pair-reveal   (the server's offer on stdin)")?;
+    let ctx = env.ctx;
+    ctx::check_pins(ctx)?;
+    let (identity, mut pending) = load_pending(ctx)?;
     let raw = (env.stdin)(64 * 1024)?;
-    let offer: Signed = serde_json::from_slice(&raw).map_err(|e| Fail::Refused(format!("the offer: {e}")))?;
-    let (fp, spki, label, done) = match pairing::signer_accept(&identity, &pending, &offer, &args[0], ctx.now()) {
+    let msg: pairing::OfferMsg = serde_json::from_slice(&raw).map_err(|e| Fail::Refused(format!("the offer: {e}")))?;
+    let (offer, reveal) = match pairing::signer_reveal(&identity, &pending, &msg, ctx.now()) {
+        Ok(x) => x,
+        Err(e) => {
+            admin_audit(ctx, "REFUSED-PAIR", &e)?;
+            return refused(e);
+        }
+    };
+    pending.offer = Some(msg.offer.clone());
+    ctx::write_file(ctx, &pending_path(ctx), &serde_json::to_vec(&pending).map_err(|e| Fail::Internal(e.to_string()))?, 0o600)?;
+    admin_audit(ctx, "PAIR-REVEAL", &format!("server {} {}", offer.server_fp, offer.server_label))?;
+    env.say(format!(
+        "offer from {} (key {}…) checked. Give this answer to the server; it then shows a 6-digit code: sudo k2-signer-admin pair-accept <code>",
+        offer.server_label,
+        &offer.server_fp[..16]
+    ));
+    json_out(&serde_json::to_value(&reveal).map_err(|e| Fail::Internal(e.to_string()))?)
+}
+
+fn admin_pair_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
+    need(args, 1, "pair-accept <the 6-digit code your K2 server shows>")?;
+    let ctx = env.ctx;
+    ctx::check_pins(ctx)?;
+    let (identity, pending) = load_pending(ctx)?;
+    let (fp, spki, label, done) = match pairing::signer_accept(&identity, &pending, &args[0], ctx.now()) {
         Ok(x) => x,
         Err(e) => {
             admin_audit(ctx, "REFUSED-PAIR", &e)?;
@@ -939,10 +1013,28 @@ fn admin_pair_accept(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let mut t = Trust::load(ctx)?;
     t.controllers.insert(fp.clone(), ControllerPin { label: label.clone(), spki: Some(spki), how: PinHow::Sas, at: ctx.now() });
     t.save(ctx)?;
-    std::fs::remove_file(&pp)?;
+    std::fs::remove_file(pending_path(ctx))?;
     admin_audit(ctx, "PAIRED", &format!("controller {fp} {label}"))?;
     env.say(format!("paired with {label}: controller {fp} pinned. Name it in a project's policy (controllers) to let it build that project."));
     json_out(&serde_json::to_value(&done).map_err(|e| Fail::Internal(e.to_string()))?)
+}
+
+/// M7: `pairing-pins <project> required|optional`.
+fn admin_pairing_pins(env: &Env, args: &[String]) -> R<Vec<u8>> {
+    need(args, 2, "pairing-pins <project> required|optional")?;
+    let ctx = env.ctx;
+    policy::check_project_name(&args[0])?;
+    let on = match args[1].as_str() {
+        "required" => true,
+        "optional" => false,
+        _ => return usage("pairing-pins <project> required|optional"),
+    };
+    ctx::check_pins(ctx)?;
+    let mut t = Trust::load(ctx)?;
+    t.pairing_pins.insert(args[0].clone(), on);
+    t.save(ctx)?;
+    admin_audit(ctx, "PAIRING-PINS", &format!("{} {}", args[0], args[1]))?;
+    Ok(Vec::new())
 }
 
 fn admin_unpair(env: &Env, args: &[String]) -> R<Vec<u8>> {
@@ -1079,13 +1171,13 @@ fn admin_generate_key(env: &Env, args: &[String]) -> R<Vec<u8>> {
     check_slot(&args[1])?;
     ctx::check_pins(ctx)?;
     let (k, pw) = new_key_files(ctx, &args[0], &args[1])?;
-    let password = k2_node_proto::crypto::hex(&k2_node_proto::crypto::random_bytes(32).map_err(Fail::Internal)?);
+    let password = zeroize::Zeroizing::new(k2_node_proto::crypto::hex(&k2_node_proto::crypto::random_bytes(32).map_err(Fail::Internal)?));
     let (sk, file, public) =
         SecretKey::generate(password.as_bytes(), minisign::OPSLIMIT_SENSITIVE, minisign::MEMLIMIT_SENSITIVE).map_err(Fail::Internal)?;
     let test = sk.sign(b"k2-signer generate self-test\n", "self-test", "timestamp:0\tfile:self-test").map_err(Fail::Internal)?;
     minisign::verify(&public.line(), b"k2-signer generate self-test\n", &test).map_err(|e| Fail::Internal(format!("self-test: {e}")))?;
     ctx::write_file(ctx, &k, file.as_bytes(), 0o600)?;
-    ctx::write_file(ctx, &pw, format!("{password}\n").as_bytes(), 0o600)?;
+    ctx::write_file(ctx, &pw, zeroize::Zeroizing::new(format!("{}\n", password.as_str())).as_bytes(), 0o600)?;
     admin_audit(ctx, "KEY-GENERATED", &format!("{} {} {}", args[0], args[1], public.key_id()))?;
     env.say(format!(
         "{}'s {} key generated (its password is random and was never shown). Key id {}. Put this public line in the policy's [keys.{}]:",
@@ -1105,13 +1197,25 @@ fn admin_import_key(env: &Env, args: &[String]) -> R<Vec<u8>> {
     ctx::check_pins(ctx)?;
     let raw = read_abs_file(&args[2], 64 * 1024)?;
     let pw_raw = (env.stdin)(4096)?;
-    let pw_text = String::from_utf8(pw_raw).map_err(|_| Fail::Refused("the password is not UTF-8".into()))?;
-    let password = pw_text.lines().next().unwrap_or_default().to_string();
+    let pw_text = String::from_utf8(pw_raw).map_err(|e| {
+        let mut b = e.into_bytes();
+        zeroize::Zeroize::zeroize(&mut b);
+        Fail::Refused("the password is not UTF-8".into())
+    })?;
+    let mut pw_text = pw_text;
+    let password = zeroize::Zeroizing::new(pw_text.lines().next().unwrap_or_default().to_string());
+    zeroize::Zeroize::zeroize(&mut pw_text);
+    if password.is_empty() {
+        return refused("an empty password: the signer imports only encrypted keys");
+    }
+    if !minisign::is_encrypted(&raw).map_err(Fail::Refused)? {
+        return refused("an unencrypted minisign key: the signer imports only password-encrypted keys");
+    }
     let sk = SecretKey::open(&raw, password.as_bytes()).map_err(Fail::Refused)?;
     let text = minisign::unwrap_key_file(&raw).map_err(Fail::Refused)?;
     let (k, pw) = new_key_files(ctx, &args[0], &args[1])?;
     ctx::write_file(ctx, &k, text.as_bytes(), 0o600)?;
-    ctx::write_file(ctx, &pw, format!("{password}\n").as_bytes(), 0o600)?;
+    ctx::write_file(ctx, &pw, zeroize::Zeroizing::new(format!("{}\n", password.as_str())).as_bytes(), 0o600)?;
     admin_audit(ctx, "KEY-IMPORTED", &format!("{} {} {}", args[0], args[1], sk.public().key_id()))?;
     env.say(format!("{}'s {} key imported: key id {}", args[0], args[1], sk.public().key_id()));
     Ok(format!("{}\n", sk.public().line()).into_bytes())

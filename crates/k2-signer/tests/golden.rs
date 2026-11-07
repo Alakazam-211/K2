@@ -44,8 +44,11 @@ fn trust(g: &Golden, accept: &[&str]) -> Trust {
     let roster_key = ApprovalKey::parse(&format!("ed25519:{}", keys["roster"]["public"].as_str().unwrap().trim_start_matches("ed25519:"))).unwrap();
     assert_eq!(roster_key.fingerprint(), roster_fp);
     let mut accepted = BTreeMap::new();
+    let roster: k2_node_proto::node_roster::NodeRoster = g.bundle.rosters[0].peek(k2_node_proto::ci::DOMAIN_NODE_ROSTER).unwrap();
     for k in accept {
-        accepted.insert(keys[*k]["fp"].as_str().unwrap().to_string(), AcceptedKey { name: k.to_string(), seq: 2, at: 0 });
+        let fp = keys[*k]["fp"].as_str().unwrap().to_string();
+        let attrs = k2_signer::trust::entry_attrs(roster.entry(&fp).unwrap());
+        accepted.insert(fp, AcceptedKey { name: k.to_string(), seq: 2, at: 0, attrs });
     }
     t.owners.insert(roster_fp, OwnerPin { key: roster_key.encode(), label: "owner".into(), at: 0, accepted });
     t.check().unwrap();

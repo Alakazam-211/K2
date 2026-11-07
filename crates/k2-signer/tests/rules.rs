@@ -26,11 +26,15 @@ struct Run {
     source: Option<ReleaseSource>,
     rehearse: bool,
     opened: Option<i64>,
+    /// Node names a person accepted, with the attributes the bundle's roster
+    /// gives them (off: `trust` as it is).
+    accept: Vec<&'static str>,
+    accept_from_bundle: bool,
 }
 
 impl Run {
     fn new(w: &World) -> Self {
-        Self { policy: w.policy(), trust: w.trust(&["node-a", "node-b", "node-c"]), marks: BTreeMap::new(), now: NOW, source: Some(w.source()), rehearse: false, opened: Some(NOW - 3600) }
+        Self { policy: w.policy(), trust: w.trust(&["node-a", "node-b", "node-c"]), marks: BTreeMap::new(), now: NOW, source: Some(w.source()), rehearse: false, opened: Some(NOW - 3600), accept: vec!["node-a", "node-b", "node-c"], accept_from_bundle: true }
     }
     fn go(&self, b: &EvidenceBundle) -> Result<Summary, String> {
         let base = self.source.as_ref().map(|s| s.base.clone()).unwrap_or_default();
@@ -39,7 +43,11 @@ impl Run {
         } else {
             Target::Release { version: VERSION, base: &base, opened: self.opened, source: self.source.as_ref() }
         };
-        check(&Input { policy: &self.policy, trust: &self.trust, marks: &self.marks, bundle: b, now: self.now, target }).map_err(|e| e.message().to_string())
+        let mut trust = self.trust.clone();
+        if self.accept_from_bundle {
+            accept_from(&mut trust, b, &self.accept);
+        }
+        check(&Input { policy: &self.policy, trust: &trust, marks: &self.marks, bundle: b, now: self.now, target }).map_err(|e| e.message().to_string())
     }
 }
 
@@ -128,16 +136,31 @@ fn signature_and_key_rules() {
     refuses(&w, &r, s, "does not verify with node node-a's key");
     // §4.1.6: the bundle carries the client server's pairing pins, and it
     // never paired node-a's key.
-    let mut b = w.build(w.spec());
+    // (The owner's nodes are the client's own here, so M7's rule below doesn't fire first.)
+    let mut own = w.spec();
+    own.roster.owner_server_fp = w.controller.fingerprint();
+    let mut b = w.build(own);
     b.pairing_pins.remove(&w.fp("node-a"));
     assert!(r.go(&b).unwrap_err().contains("L1: the client server never paired node node-a's key"));
     // A pin whose key isn't its fingerprint is a shape error.
     b.pairing_pins.insert(w.fp("node-a"), w.spki("node-b"));
     assert!(b.check().is_err());
-    // No pins at all (an owner's own nodes): the roster alone decides.
+    // M7: no pins for nodes another owner runs: refused for a client project …
     let mut s = w.spec();
     s.pairing_pins = false;
+    refuses(&w, &r, s, "L1: node node-a belongs to owner.example, and the evidence carries no pairing pin");
+    // … fine for the client's own nodes (its own roster) …
+    let mut s = w.spec();
+    s.pairing_pins = false;
+    s.roster.owner_server_fp = w.controller.fingerprint();
     passes(&w, &r, s);
+    // … and when the person made the pins optional for the project.
+    let mut r2 = Run::new(&w);
+    r2.trust.pairing_pins.insert("acme-desktop".into(), false);
+    let mut s = w.spec();
+    s.pairing_pins = false;
+    passes(&w, &r2, s);
+    assert!(Trust::default().pairing_pins_required("acme-desktop") && !Trust::default().pairing_pins_required("k2"));
     // A roster signed by an owner the policy doesn't trust.
     let mut s = w.spec();
     s.roster_signer_is_owner2 = true;
@@ -152,12 +175,60 @@ fn signature_and_key_rules() {
 fn roster_change_needs_a_person_unless_auto() {
     let w = World::new();
     let mut r = Run::new(&w);
-    r.trust = w.trust(&["node-a"]);
+    r.accept = vec!["node-a"];
     refuses(&w, &r, w.spec(), "roster_change_needs_person: V1: node node-b's key");
     r.policy.roster_changes = Changes::Auto;
     let s = passes(&w, &r, w.spec());
-    assert!(s.new_marks[&w.owner_fp].auto_accepted.contains_key(&w.fp("node-b")));
+    assert!(s.new_marks[&w.owner_fp].auto_accepted["acme-desktop"].contains_key(&w.fp("node-b")));
     assert!(s.notes.iter().any(|n| n.contains("roster_changes = auto")));
+}
+
+/// H1: one project's `auto` never accepts a key for another project that says `ask`.
+#[test]
+fn auto_acceptance_is_per_project() {
+    let w = World::new();
+    let mut a = Run::new(&w);
+    a.accept = vec!["node-a"];
+    a.policy.roster_changes = Changes::Auto;
+    let marks = passes(&w, &a, w.spec()).new_marks;
+    // Another project on the same owner's nodes, which says ask.
+    let mut b = Run::new(&w);
+    b.accept = vec!["node-a"];
+    b.marks = marks.clone();
+    b.policy = k2_signer::policy::parse(&w.policy_text(TEST_PUB).replace("project = \"acme-desktop\"", "project = \"other-app\""), "other-app").unwrap();
+    let mut s = w.spec();
+    s.project = "other-app".into();
+    refuses(&w, &b, s, "roster_change_needs_person: V1: node node-b's key");
+    // The same project switched from auto to ask: what auto accepted no longer counts …
+    let mut c = Run::new(&w);
+    c.accept = vec!["node-a"];
+    c.marks = marks.clone();
+    refuses(&w, &c, w.spec(), "roster_change_needs_person: V1: node node-b's key");
+    // … and the next registration under ask drops it from the mark.
+    c.accept = vec!["node-a", "node-b", "node-c"];
+    let out = passes(&w, &c, w.spec());
+    assert!(!out.new_marks[&w.owner_fp].auto_accepted.contains_key("acme-desktop"), "{:?}", out.new_marks);
+}
+
+/// M4: a person's acceptance holds for the attributes they saw.
+#[test]
+fn acceptance_is_tied_to_the_roster_attributes() {
+    let w = World::new();
+    let mut r = Run::new(&w);
+    r.accept_from_bundle = false; // the person accepted the default roster (host-b for node-b)
+    passes(&w, &r, w.spec());
+    for (what, f) in [
+        ("host", Box::new(|e: &mut k2_node_proto::node_roster::RosterEntry| e.host = "host-z".into()) as Box<dyn Fn(&mut k2_node_proto::node_roster::RosterEntry)>),
+        ("provider", Box::new(|e: &mut k2_node_proto::node_roster::RosterEntry| e.provider = Some("other-cloud".into()))),
+        ("site", Box::new(|e: &mut k2_node_proto::node_roster::RosterEntry| e.site = Some("site-9".into()))),
+        ("admin reach", Box::new(|e: &mut k2_node_proto::node_roster::RosterEntry| e.admin_reach = vec!["contractor-ssh".into()])),
+        ("taint basis", Box::new(|e: &mut k2_node_proto::node_roster::RosterEntry| e.taint_basis = Some(TaintBasis::Rekeyed))),
+    ] {
+        let mut s = w.spec();
+        f(entry_mut(&mut s, &w.fp("node-b")));
+        let e = r.go(&w.build(s)).map(|_| ()).unwrap_err();
+        assert!(e.contains("V1: node node-b") && e.contains("changed since a person accepted it"), "{what}: {e}");
+    }
 }
 
 #[test]
@@ -382,6 +453,52 @@ fn what_ran_rules() {
     l1(&mut s).build = "other-build".into();
     v1(&mut s).build = "other-build".into();
     refuses(&w, &r, s, "build other-build is not in the policy");
+}
+
+/// M1: the controller picks env values; only the build facts may carry one.
+#[test]
+fn env_values() {
+    let w = World::new();
+    let mut r = Run::new(&w);
+    let out = passes(&w, &r, w.spec());
+    assert_eq!(out.jobs["L1"].env["BUILD_COMMIT"], w.commit);
+    assert_eq!(out.jobs["L1"].env["BUILD_TREE"], w.tree);
+    r.policy.build.get_mut("linux-x86_64").unwrap().env.push("BUILD_FLAVOR".into());
+    let with_flavor = |v: &str| {
+        let mut s = w.spec();
+        for rc in s.receipts.values_mut() {
+            rc.plan["env"]["BUILD_FLAVOR"] = json!(v);
+            rc.receipt.env_names.push("BUILD_FLAVOR".into());
+            rc.receipt.env_names.sort();
+        }
+        s
+    };
+    refuses(&w, &r, with_flavor("--features=evil"), "the plan sets BUILD_FLAVOR=\"--features=evil\": only BUILD_COMMIT and BUILD_TREE carry values");
+    let out = passes(&w, &r, with_flavor(""));
+    assert_eq!(out.jobs["V1"].env["BUILD_FLAVOR"], "");
+}
+
+/// L1: node-set K2_* names are an explicit list.
+#[test]
+fn node_env_names_are_an_explicit_list() {
+    let w = World::new();
+    let r = Run::new(&w);
+    let mut s = w.spec();
+    l1(&mut s).receipt.env_names.push("K2_JOB_CPUS".into());
+    passes(&w, &r, s);
+    let mut s = w.spec();
+    l1(&mut s).receipt.env_names.push("K2_EXTRA_SWITCH".into());
+    refuses(&w, &r, s, "env the build doesn't set: K2_EXTRA_SWITCH");
+}
+
+/// L3: a seat statement expires with the roster's max age.
+#[test]
+fn old_seats_expire() {
+    let w = World::new();
+    let r = Run::new(&w);
+    let mut s = w.spec();
+    s.seats[0].issued_at = NOW - 169 * 3600;
+    refuses(&w, &r, s, "seat seat-1 from owner.example was issued");
 }
 
 #[test]

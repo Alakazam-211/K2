@@ -57,6 +57,10 @@ pub const SKEW_SECS: i64 = 600;
 pub const ROSTER_FUTURE_SECS: i64 = 600;
 /// The `--cache` mount's env name.
 pub const JOB_CACHE_ENV: &str = "K2_JOB_CACHE";
+/// Node-set names a receipt may list beyond `NODE_SET_VARS` (L1: an
+/// explicit list, never "any K2_*").
+pub const NODE_JOB_VARS: &[&str] =
+    &[k2_node_proto::env::ENV_JOB_CPUS, k2_node_proto::env::ENV_JOB_PORT_BASE, k2_node_proto::env::ENV_JOB_PORT_COUNT];
 /// Refusal code: a node key no person (or `auto`) has accepted yet.
 pub const ROSTER_CHANGE_NEEDS_PERSON: &str = "roster_change_needs_person";
 
@@ -111,6 +115,8 @@ pub struct JobSummary {
     pub started: String,
     pub ended: String,
     pub statement_digest: String,
+    /// Every `--env` value the plan set (M1: shown, not only named).
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -273,7 +279,13 @@ pub fn check(inp: &Input) -> R<Summary> {
                 ));
             }
         }
-        let auto = mark.map(|m| m.auto_accepted.clone()).unwrap_or_default();
+        // Auto acceptances are per project (H1): another project's `auto`
+        // never stands in for this one's person, and a project that now
+        // says `ask` drops what it accepted under `auto`.
+        let mut auto = mark.map(|m| m.auto_accepted.clone()).unwrap_or_default();
+        if p.roster_changes == Changes::Ask {
+            auto.remove(&p.project);
+        }
         new_marks.insert(
             fp.clone(),
             RosterMark { seq: newest.seq, digest: newest_digest.clone(), issued_at: newest.issued_at, seen_at: inp.now, auto_accepted: auto },
@@ -398,7 +410,17 @@ pub fn check(inp: &Input) -> R<Summary> {
         };
         let name = entry.name.clone();
         // §4.1.6 cross-check: when the bundle carries the client server's
-        // pairing pins, the key must be one it paired, and the same key.
+        // pairing pins, the key must be one it paired, and the same key. For a
+        // node another owner runs, the pins are required unless the person
+        // made them optional for this project (M7: default required for
+        // client projects, optional for `k2`).
+        let foreign = owned.newest.owner_server_fp != *ctl;
+        if foreign && inp.trust.pairing_pins_required(&p.project) && !b.pairing_pins.contains_key(&fp) {
+            return refused(format!(
+                "{label}: node {name} belongs to {}, and the evidence carries no pairing pin for its key: the client server's own                  SAS-checked pin is required (k2-signer-admin pairing-pins {} optional to drop it)",
+                owned.newest.owner_id, p.project
+            ));
+        }
         if !b.pairing_pins.is_empty() {
             let Some(pin) = b.pairing_pins.get(&fp) else {
                 return refused(format!("{label}: the client server never paired node {name}'s key {}… (its pairing pins don't list it)", fp16(&fp)));
@@ -429,14 +451,23 @@ pub fn check(inp: &Input) -> R<Summary> {
         if !p.workspaces.contains(&rc.workspace_id) {
             return refused(format!("{label}: workspace {} may not build project {}", rc.workspace_id, p.project));
         }
-        // The person accepted this key (S1), or the policy says auto.
-        let person = inp.trust.owners.get(owner_fp).is_some_and(|o| o.accepted.contains_key(&fp));
-        let auto_ok = new_marks.get(owner_fp).is_some_and(|m| m.auto_accepted.contains_key(&fp));
-        if !person && !auto_ok {
+        // A person accepted this key with these roster attributes (S1, M4),
+        // or this project says auto (H1: never another project's auto).
+        let attrs = crate::trust::entry_attrs(entry);
+        let person = inp.trust.owners.get(owner_fp).and_then(|o| o.accepted.get(&fp));
+        let person_ok = person.is_some_and(|a| a.attrs == attrs);
+        let auto_ok = p.roster_changes == Changes::Auto
+            && new_marks.get(owner_fp).and_then(|m| m.auto_accepted.get(&p.project)).and_then(|m| m.get(&fp)).is_some_and(|a| a.attrs == attrs);
+        if !person_ok && !auto_ok {
             match p.roster_changes {
                 Changes::Ask => {
+                    let why = if person.is_some() {
+                        "its roster attributes (host, provider, site, admin reach, taint basis…) changed since a person accepted it"
+                    } else {
+                        "it is new to this signer"
+                    };
                     return refused(format!(
-                        "{ROSTER_CHANGE_NEEDS_PERSON}: {label}: node {name}'s key {}… (owner {}, roster seq {}) is new to this signer: \
+                        "{ROSTER_CHANGE_NEEDS_PERSON}: {label}: node {name}'s key {}… (owner {}, roster seq {}): {why}: \
                          a person checks and accepts it (sudo k2-signer-admin roster-accept {owner_fp} < the evidence bundle)",
                         fp16(&fp),
                         owned.newest.owner_id,
@@ -450,7 +481,10 @@ pub fn check(inp: &Input) -> R<Summary> {
                     };
                     notes.push(format!("roster_changes = auto: accepted node {name}'s key {}… ({how}) from {}'s roster seq {}", fp16(&fp), owned.newest.owner_id, owned.newest.seq));
                     if let Some(m) = new_marks.get_mut(owner_fp) {
-                        m.auto_accepted.insert(fp.clone(), AcceptedKey { name: name.clone(), seq: owned.newest.seq, at: inp.now });
+                        m.auto_accepted
+                            .entry(p.project.clone())
+                            .or_default()
+                            .insert(fp.clone(), AcceptedKey { name: name.clone(), seq: owned.newest.seq, at: inp.now, attrs: attrs.clone() });
                     }
                 }
             }
@@ -540,6 +574,18 @@ pub fn check(inp: &Input) -> R<Summary> {
         let Some(seat) = seat else {
             return refused(format!("{label}: node {name} is not on an active seat of this client from {}", owned.newest.owner_id));
         };
+        // Seat v1 has no expiry field: a seat statement lives as long as a
+        // roster may (roster_max_age_hours), so a suspended or ended seat
+        // can't be replayed by keeping an old `active` one (L3).
+        if inp.now - seat.issued_at > i64::from(p.roster_max_age_hours) * 3600 {
+            return refused(format!(
+                "{label}: seat {} from {} was issued {}, over {} hours ago (roster_max_age_hours): the owner reissues it",
+                seat.seat_id,
+                owned.newest.owner_id,
+                hhmm(seat.issued_at),
+                p.roster_max_age_hours
+            ));
+        }
         if run.lane.as_deref() != Some(seat.lane.as_str()) {
             return refused(format!("{label}: the job ran under lane {:?}, not the seat's lane {}", run.lane, seat.lane));
         }
@@ -595,7 +641,7 @@ pub fn check(inp: &Input) -> R<Summary> {
                 !rule.env.contains(n)
                     && !k2_node_proto::env::NODE_SET_VARS.contains(&n.as_str())
                     && !k2_node_proto::env::SCCACHE_SERVER_VARS.contains(&n.as_str())
-                    && !n.starts_with("K2_")
+                    && !NODE_JOB_VARS.contains(&n.as_str())
             })
             .collect();
         if !extra.is_empty() {
@@ -625,7 +671,7 @@ pub fn check(inp: &Input) -> R<Summary> {
                 return refused(format!("{label}: the job's rustc was {ran}, the commit pins {pin}"));
             }
         }
-        check_plan(label, er, &rc, rule, rust_pin.as_deref())?;
+        let env = check_plan(label, er, &rc, rule, rust_pin.as_deref())?;
         let rid = crate::ctx::sha256_hex(er.body.as_bytes());
         jobs.insert(
             label.clone(),
@@ -643,6 +689,7 @@ pub fn check(inp: &Input) -> R<Summary> {
                 started: iso(started),
                 ended: iso(ended),
                 statement_digest: run.statement_digest.clone(),
+                env,
             },
         );
         parsed.insert(label.clone(), (rc, entry.clone(), owner_fp.clone()));
@@ -853,7 +900,7 @@ fn independent(dim: Dimension, bl: &str, vl: &str, b: (&RosterEntry, &String), v
 
 /// The job's plan (S3b review H1): what it is (its digest), and that nothing
 /// in it changes the build beyond the policy's own inputs.
-fn check_plan(label: &str, er: &EvidenceReceipt, rc: &Receipt, rule: &BuildRule, pin: Option<&str>) -> R<()> {
+fn check_plan(label: &str, er: &EvidenceReceipt, rc: &Receipt, rule: &BuildRule, pin: Option<&str>) -> R<BTreeMap<String, String>> {
     let plan: Plan = serde_json::from_value(er.plan.clone()).map_err(|e| Fail::Refused(format!("{label}: the plan is not a job plan: {e}")))?;
     if canonical::to_string(&plan).map_err(Fail::Internal)? != canonical::to_string(&er.plan).map_err(Fail::Internal)? {
         return refused(format!("{label}: the plan has fields the signer doesn't know (or is not the controller's form)"));
@@ -913,6 +960,17 @@ fn check_plan(label: &str, er: &EvidenceReceipt, rc: &Receipt, rule: &BuildRule,
             }
         }
     }
+    // M1: the controller picks env values; the signer can vouch only for the
+    // build facts. Signer policy v1 lists env names, not values, so any other
+    // name must be empty.
+    for (k, v) in &plan.env {
+        if k != "BUILD_COMMIT" && k != "BUILD_TREE" && !v.is_empty() {
+            return refused(format!(
+                "{label}: the plan sets {k}={:?}: only BUILD_COMMIT and BUILD_TREE carry values (the policy can't pin one; signer policy v1 lists names only)",
+                v.chars().take(80).collect::<String>()
+            ));
+        }
+    }
     let want_needs: Vec<String> = rule.needs.iter().map(|n| n.replace("{rust_pin}", pin.unwrap_or("{rust_pin}"))).collect();
     let mut a = plan.needs.clone();
     let mut w = want_needs.clone();
@@ -959,5 +1017,5 @@ fn check_plan(label: &str, er: &EvidenceReceipt, rc: &Receipt, rule: &BuildRule,
             unused.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
         ));
     }
-    Ok(())
+    Ok(plan.env.clone())
 }

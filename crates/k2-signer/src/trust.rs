@@ -33,11 +33,16 @@ pub struct Trust {
     pub v: u32,
     pub controllers: BTreeMap<String, ControllerPin>,
     pub owners: BTreeMap<String, OwnerPin>,
+    /// M7: per project, whether a node another owner runs needs the client
+    /// server's pairing pin in the evidence. Unset = required for client
+    /// projects, optional for `k2` ([`Trust::pairing_pins_required`]).
+    #[serde(default)]
+    pub pairing_pins: BTreeMap<String, bool>,
 }
 
 impl Default for Trust {
     fn default() -> Self {
-        Self { v: TRUST_V, controllers: BTreeMap::new(), owners: BTreeMap::new() }
+        Self { v: TRUST_V, controllers: BTreeMap::new(), owners: BTreeMap::new(), pairing_pins: BTreeMap::new() }
     }
 }
 
@@ -81,6 +86,22 @@ pub struct AcceptedKey {
     /// The roster `seq` it was accepted from.
     pub seq: u64,
     pub at: i64,
+    /// M4: [`entry_attrs`] of the entry as accepted; another value (a new
+    /// host, provider, site, admin reach or taint basis) asks again.
+    pub attrs: String,
+}
+
+/// The digest of what a person accepts about a roster entry (M4): the key
+/// and the owner's word on it, not its status (retire and revoke only
+/// narrow) nor its statement (checked on every receipt).
+pub fn entry_attrs(e: &k2_node_proto::node_roster::RosterEntry) -> String {
+    let v = serde_json::json!({
+        "node_fp": e.node_fp, "node_spki": e.node_spki, "name": e.name, "key_epoch": e.key_epoch,
+        "taint_basis": e.taint_basis, "attestation_digest": e.attestation_digest, "host": e.host,
+        "provider": e.provider, "site": e.site, "admin_reach": e.admin_reach, "pod": e.pod, "point": e.point,
+    });
+    let text = k2_node_proto::canonical::to_string(&v).unwrap_or_default();
+    format!("sha256:{}", k2_node_proto::crypto::sha256_hex(text.as_bytes()))
 }
 
 impl Trust {
@@ -117,6 +138,11 @@ impl Trust {
                 }
             }
         }
+        for p in self.pairing_pins.keys() {
+            if !k2_node_proto::ci::is_name(p) {
+                return refused("trust.json: pairing_pins names a bad project");
+            }
+        }
         for (fp, o) in &self.owners {
             let k = ApprovalKey::parse(&o.key).ok_or_else(|| Fail::Refused(format!("trust.json: owner {fp}: not ed25519:<b64>")))?;
             if k.fingerprint() != *fp {
@@ -129,6 +155,11 @@ impl Trust {
             }
         }
         Ok(())
+    }
+
+    /// M7: does `project` require pairing pins for nodes it doesn't own?
+    pub fn pairing_pins_required(&self, project: &str) -> bool {
+        self.pairing_pins.get(project).copied().unwrap_or(project != "k2")
     }
 
     pub fn owner_key(&self, fp: &str) -> Option<ApprovalKey> {
@@ -161,8 +192,9 @@ pub struct RosterMark {
     pub digest: String,
     pub issued_at: i64,
     pub seen_at: i64,
-    /// Keys accepted under `roster_changes = auto` (with an audit note).
-    pub auto_accepted: BTreeMap<String, AcceptedKey>,
+    /// Keys accepted under `roster_changes = auto`, **by project** (H1):
+    /// project → node fp → acceptance. Only that project's `auto` reads them.
+    pub auto_accepted: BTreeMap<String, BTreeMap<String, AcceptedKey>>,
 }
 
 pub fn marks_dir(ctx: &Ctx) -> PathBuf {

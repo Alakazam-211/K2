@@ -29,11 +29,19 @@ check() { # <name> <want rc> <want text> <stdin file or -> <cmd…>
     if [ "$rc" = "$want" ] && grep -qF -- "$text" "$tmp/out" "$tmp/err"; then pass "$name"; else fail "$name" "rc=$rc $(cat "$tmp/out" "$tmp/err" | head -5)"; fi
 }
 
+I="$REPO/scripts/k2sign/install-k2-signer.sh"
+SHA="$(shasum -a 256 "$BIN" | awk '{print $1}')"
 echo "== install (test mode) =="
-check "the installer refuses a missing binary" 1 "--binary" - bash "$REPO/scripts/k2sign/install-k2-signer.sh" --test --binary "$tmp/nope"
-check "a dry run changes nothing" 0 "dry run" - bash "$REPO/scripts/k2sign/install-k2-signer.sh" --test --dry-run --binary "$BIN"
+check "the installer refuses a missing binary" 1 "--binary" - bash "$I" --test --binary "$tmp/nope" --expect-sha256 "$SHA"
+check "M6: no independent build's sha256: refused" 1 "--expect-sha256" - bash "$I" --test --binary "$BIN"
+check "M6: another build's sha256: refused" 1 "not the independent build's" - bash "$I" --test --binary "$BIN" --expect-sha256 "$(printf '0%.0s' $(seq 64))"
+mkdir -p "$K2_SIGNER_TEST_ROOT/usr/local"
+chmod 777 "$K2_SIGNER_TEST_ROOT/usr/local"
+check "L10: a world-writable folder above the signer's: refused" 1 "group/world-writable" - bash "$I" --test --binary "$BIN" --expect-sha256 "$SHA"
+chmod 755 "$K2_SIGNER_TEST_ROOT/usr/local"
+check "a dry run changes nothing" 0 "dry run" - bash "$I" --test --dry-run --binary "$BIN" --expect-sha256 "$SHA"
 [ ! -e "$L/k2-signer-bin" ] && pass "…nothing installed by the dry run" || fail "dry run installed" ""
-check "install" 0 "installed. Hashes" - bash "$REPO/scripts/k2sign/install-k2-signer.sh" --test --binary "$BIN"
+check "install" 0 "installed. Hashes" - bash "$I" --test --binary "$BIN" --expect-sha256 "$SHA"
 for f in k2-signer k2-signer-admin k2-signer-bin; do
     grep -q "  libexec/$f\$" "$K2_SIGNER_TEST_ROOT/usr/local/etc/k2-signer/pins.sha256" && pass "pins.sha256 pins $f" || fail "pin $f" "$(cat "$K2_SIGNER_TEST_ROOT/usr/local/etc/k2-signer/pins.sha256")"
 done
@@ -41,6 +49,24 @@ grep -q "NOPASSWD: /usr/local/libexec/k2-signer/k2-signer\$" "$K2_SIGNER_TEST_RO
 [ "$(stat -f '%Lp' "$K2_SIGNER_TEST_ROOT/var/k2sign/k2-signer")" = 700 ] && pass "/var/k2sign/k2-signer is 0700" || fail "var mode" ""
 
 echo "== the wrappers =="
+# M5: the wrappers refuse a test root as the signing user before anything
+# under it runs (here a fake binary that would leave a mark).
+FAKE="$tmp/fake"
+mkdir -p "$FAKE/usr/local/libexec/k2-signer" "$FAKE/usr/local/libexec/k2sign"
+printf '#!/bin/sh\ntouch "%s/ran"\n' "$tmp" > "$FAKE/usr/local/libexec/k2-signer/k2-signer-bin"
+chmod 755 "$FAKE/usr/local/libexec/k2-signer/k2-signer-bin"
+printf 'open("%s/ran", "w"); print("fake-ran")\n' "$tmp" > "$FAKE/usr/local/libexec/k2sign/k2sign.py"
+sed "s#@PYTHON@#/usr/bin/python3#" "$REPO/scripts/k2sign/k2sign" > "$tmp/k2sign-wrapper"
+for w in "$REPO/scripts/k2sign/k2-signer" "$REPO/scripts/k2sign/k2-signer-admin"; do
+    rm -f "$tmp/ran"
+    K2_SIGNER_TEST_ROOT="$FAKE" K2_SIGNER_TEST_SIGNER_USER="$(id -un)" check "M5: $(basename "$w") refuses a test root as the signing user" 3 "is refused as root or the signing user" - bash "$w" pins
+    [ ! -e "$tmp/ran" ] && pass "…and ran nothing under it" || fail "$(basename "$w") ran the test root's binary" ""
+done
+rm -f "$tmp/ran"
+K2SIGN_TEST_ROOT="$FAKE" K2SIGN_TEST_SIGNER_USER="$(id -un)" check "M5: k2sign's wrapper refuses the same way" 3 "test mode (K2SIGN_TEST_ROOT) is refused" - bash "$tmp/k2sign-wrapper" status 0.46.6
+[ ! -e "$tmp/ran" ] && pass "…and ran no k2sign.py under it" || fail "k2sign wrapper ran the test root's python" ""
+K2SIGN_TEST_ROOT="$FAKE" check "(control) the k2sign wrapper runs the test root's file otherwise" 0 "fake-ran" - bash "$tmp/k2sign-wrapper" status 0.46.6
+[ -e "$tmp/ran" ] && pass "…it did" || fail "the control did not run" ""
 check "pins: nothing trusted yet" 0 '"controllers":[]' - "$S" pins
 check "an unknown verb is usage (exit 2)" 2 "verbs:" - "$S" nope
 check "an admin verb through the signer wrapper is usage" 2 "verbs:" - "$S" trust-owner
@@ -60,5 +86,16 @@ check "a policy edited without the admin's repin: refused" 3 "pins mismatch: etc
 check "root's repin pins the edit (admin only)" 0 "etc/projects/acme-desktop.toml" - "$A" repin
 check "pair-begin prints the code for k2 ci signer add" 0 "k2 ci signer add" - "$A" pair-begin z3mbpZ
 check "identity: the pairing key" 0 '"fp":"' - "$S" identity
+
+echo "== the Approve sheet's text (M2) =="
+if /usr/bin/swiftc -O "$REPO/scripts/k2sign/approve/main.swift" -o "$tmp/approve" 2>"$tmp/swift.err"; then
+    BASE="0123456789abcdef0123456789abcdef01234567"
+    printf '{"v":1,"kind":"k2-signer-approval","project":"acme-desktop","version":"1.2.3","base_commit":"%s","assets":["acme","acme.AppImage"],"reapproval":false,"max_signatures":8,"expires":"2027-01-01T00:00:00Z","nonce":"00000000000000000000000000000000","issued":"2027-01-01T00:00:00Z"}' "$BASE" > "$tmp/c.json"
+    check "M2: the sheet shows the project, the whole base commit and every file" 0 "approve project acme-desktop release 1.2.3 at base commit $BASE: sign acme, acme.AppImage until" - "$tmp/approve" --describe "$tmp/c.json"
+    sed "s/$BASE/0123456/" "$tmp/c.json" > "$tmp/c2.json"
+    check "M2: a challenge without a whole base commit is not one" 2 "not a K2 release approval" - "$tmp/approve" --describe "$tmp/c2.json"
+else
+    fail "swiftc could not build K2 Release Approve" "$(head -5 "$tmp/swift.err")"
+fi
 echo
 if [ "$FAILS" = 0 ]; then echo "k2-signer-install: all passed"; else echo "k2-signer-install: $FAILS FAILED"; exit 1; fi

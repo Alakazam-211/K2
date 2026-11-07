@@ -24,6 +24,7 @@ use blake2::digest::consts::U32;
 use blake2::{Blake2b, Blake2b512, Digest};
 use k2_node_proto::admin::ApprovalSigner;
 use k2_node_proto::crypto::{b64, unb64};
+use zeroize::{Zeroize, Zeroizing};
 
 type Blake2b256 = Blake2b<U32>;
 
@@ -123,7 +124,7 @@ pub fn scrypt_params(opslimit: u64, memlimit: u64) -> (u8, u32, u32) {
     }
 }
 
-fn kdf_stream(password: &[u8], salt: &[u8], opslimit: u64, memlimit: u64) -> Result<[u8; 104], String> {
+fn kdf_stream(password: &[u8], salt: &[u8], opslimit: u64, memlimit: u64) -> Result<Zeroizing<[u8; 104]>, String> {
     let (log_n, r, p) = scrypt_params(opslimit, memlimit);
     if log_n > 22 || p == 0 || p > 64 {
         // 2^22 × 8 × 128 = 4 GiB: a key file asking for more is refused, not run.
@@ -131,8 +132,8 @@ fn kdf_stream(password: &[u8], salt: &[u8], opslimit: u64, memlimit: u64) -> Res
     }
     // `len` is only the PHC string's length (10–64); the output is 104 bytes.
     let params = scrypt::Params::new(log_n, r, p, 32).map_err(|e| format!("scrypt params: {e}"))?;
-    let mut out = [0u8; 104];
-    scrypt::scrypt(password, salt, &params, &mut out).map_err(|e| format!("scrypt: {e}"))?;
+    let mut out = Zeroizing::new([0u8; 104]);
+    scrypt::scrypt(password, salt, &params, &mut *out).map_err(|e| format!("scrypt: {e}"))?;
     Ok(out)
 }
 
@@ -147,17 +148,28 @@ fn checksum(keynum: &[u8; 8], sk: &[u8]) -> [u8; 32] {
 }
 
 /// k2sign's `decode_secret_key`: a minisign key file, or Tauri's base64 of one.
-pub fn unwrap_key_file(raw: &[u8]) -> Result<String, String> {
-    let text = if raw.starts_with(b"untrusted comment:") {
+pub fn unwrap_key_file(raw: &[u8]) -> Result<Zeroizing<String>, String> {
+    let text = Zeroizing::new(if raw.starts_with(b"untrusted comment:") {
         raw.to_vec()
     } else {
-        let squeezed: String = String::from_utf8_lossy(raw).split_whitespace().collect();
+        let squeezed = Zeroizing::new(String::from_utf8_lossy(raw).split_whitespace().collect::<String>());
         unb64(&squeezed).map_err(|_| "not a minisign or Tauri secret key".to_string())?
-    };
+    });
     if !text.starts_with(b"untrusted comment:") {
         return Err("not a minisign or Tauri secret key".into());
     }
-    String::from_utf8(text).map_err(|_| "the secret key file is not text".into())
+    Ok(Zeroizing::new(String::from_utf8(text.to_vec()).map_err(|_| "the secret key file is not text".to_string())?))
+}
+
+/// Whether a key file is password-encrypted (scrypt), not `-W` plain (L9).
+pub fn is_encrypted(file: &[u8]) -> Result<bool, String> {
+    let text = unwrap_key_file(file)?;
+    let line = text.lines().nth(1).ok_or("the secret key file has no key line")?;
+    let raw = Zeroizing::new(unb64(line.trim())?);
+    if raw.len() != SK_LEN {
+        return Err("not a minisign Ed25519 secret key".into());
+    }
+    Ok(&raw[2..4] == KDF_SCRYPT)
 }
 
 impl SecretKey {
@@ -165,14 +177,14 @@ impl SecretKey {
     pub fn open(file: &[u8], password: &[u8]) -> Result<Self, String> {
         let text = unwrap_key_file(file)?;
         let line = text.lines().nth(1).ok_or("the secret key file has no key line")?;
-        let raw = unb64(line.trim())?;
+        let raw = Zeroizing::new(unb64(line.trim())?);
         if raw.len() != SK_LEN || &raw[..2] != SIG_ALG || &raw[4..6] != CHK_ALG {
             return Err("not a minisign Ed25519 secret key".into());
         }
         let salt = &raw[6..38];
         let ops = u64::from_le_bytes(raw[38..46].try_into().map_err(|_| "opslimit")?);
         let mem = u64::from_le_bytes(raw[46..54].try_into().map_err(|_| "memlimit")?);
-        let mut keynum_sk = [0u8; 104];
+        let mut keynum_sk = Zeroizing::new([0u8; 104]);
         keynum_sk.copy_from_slice(&raw[54..]);
         match &raw[2..4] {
             k if k == KDF_SCRYPT => {
@@ -195,10 +207,12 @@ impl SecretKey {
         if !k2_node_proto::crypto::ct_eq(&checksum(&keynum, sk), chk) {
             return Err("wrong password for the secret key (or a damaged key)".into());
         }
-        let seed: [u8; 32] = sk[..32].try_into().map_err(|_| "seed")?;
+        let mut seed: [u8; 32] = sk[..32].try_into().map_err(|_| "seed")?;
         let mut pk = [0u8; 32];
         pk.copy_from_slice(&sk[32..64]);
-        let signer = ApprovalSigner::from_seed(&seed)?;
+        let signer = ApprovalSigner::from_seed(&seed);
+        seed.zeroize();
+        let signer = signer?;
         if signer.public().0 != pk {
             return Err("the secret key's public half does not match its seed".into());
         }
@@ -208,16 +222,17 @@ impl SecretKey {
     /// A new key: `(key, key file text, public key)`, encrypted with
     /// `password` and the given scrypt limits.
     pub fn generate(password: &[u8], opslimit: u64, memlimit: u64) -> Result<(Self, String, PublicKey), String> {
-        let rnd = k2_node_proto::crypto::random_bytes(8 + 32 + 32)?;
+        let rnd = Zeroizing::new(k2_node_proto::crypto::random_bytes(8 + 32 + 32)?);
         let mut keynum = [0u8; 8];
         keynum.copy_from_slice(&rnd[..8]);
-        let seed: [u8; 32] = rnd[8..40].try_into().map_err(|_| "seed")?;
+        let mut seed: [u8; 32] = rnd[8..40].try_into().map_err(|_| "seed")?;
         let salt = &rnd[40..72];
         let signer = ApprovalSigner::from_seed(&seed)?;
         let pk = signer.public().0;
-        let mut sk = seed.to_vec();
+        let mut sk = Zeroizing::new(seed.to_vec());
+        seed.zeroize();
         sk.extend_from_slice(&pk);
-        let mut keynum_sk = Vec::with_capacity(104);
+        let mut keynum_sk = Zeroizing::new(Vec::with_capacity(104));
         keynum_sk.extend_from_slice(&keynum);
         keynum_sk.extend_from_slice(&sk);
         keynum_sk.extend_from_slice(&checksum(&keynum, &sk));

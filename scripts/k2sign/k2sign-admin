@@ -20,6 +20,13 @@ K2SIGN_PYTHON='@PYTHON@'
 root="${K2SIGN_TEST_ROOT:-}"
 keep=()
 if [ -n "$root" ]; then
+    # Refused here, before anything under the test root runs (security
+    # review M5): root and the signing user never take a test root.
+    me="$(/usr/bin/id -un)"
+    if [ "$(/usr/bin/id -u)" = 0 ] || [ "$me" = _k2sign ] || [ "$me" = "${K2SIGN_TEST_SIGNER_USER:-}" ]; then
+        printf '\033[1;31mk2sign: refused: test mode (K2SIGN_TEST_ROOT) is refused as root or the signing user\033[0m\n' >&2
+        exit 3
+    fi
     keep+=("K2SIGN_TEST_ROOT=$root")
     for v in K2SIGN_TEST_NOW K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_GITHUB_API; do
         if [ -n "${!v:-}" ]; then keep+=("$v=${!v}"); fi

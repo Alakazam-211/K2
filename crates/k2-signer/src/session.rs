@@ -39,7 +39,8 @@ pub struct Session {
     pub windows: bool,
     pub max_signatures: u64,
     pub approved: i64,
-    #[serde(default)]
+    /// Never written as `null` (L6): k2sign reads `opened` as a number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened: Option<i64>,
     pub expires: i64,
     pub nonce: String,
@@ -48,6 +49,10 @@ pub struct Session {
     pub by: String,
     pub count: u64,
     pub signed: Vec<String>,
+    /// Fields this build doesn't know (a newer k2sign's), kept as they are
+    /// when the session is written back (L6).
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl Session {
@@ -248,6 +253,7 @@ pub fn approve(ctx: &Ctx, project: &str, nonce: &str, sig_der: &[u8]) -> R<Sessi
         // As k2sign: a re-approval opens a fresh count (it keeps `opened`).
         count: 0,
         signed: Vec::new(),
+        extra: Default::default(),
     };
     save(ctx, project, &s)?;
     let lp = last_version_path(ctx, project);
@@ -264,6 +270,18 @@ pub fn approve(ctx: &Ctx, project: &str, nonce: &str, sig_der: &[u8]) -> R<Sessi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sessions_keep_unknown_fields_and_never_write_null_opened() {
+        let j = r#"{"version":"0.47.1","base_commit":"aa","assets":["x"],"max_signatures":4,"approved":1,"expires":2,
+            "nonce":"n","reapproval":false,"by":"touchid","count":0,"signed":[],"future_field":{"x":1}}"#;
+        let s: Session = serde_json::from_str(j).unwrap();
+        assert_eq!(s.opened(), 1);
+        let out = serde_json::to_value(&s).unwrap();
+        assert_eq!(out["future_field"]["x"], 1);
+        assert!(out.get("opened").is_none(), "{out}");
+        assert!(out.get("project").is_none(), "{out}");
+    }
 
     #[test]
     fn versions() {

@@ -142,7 +142,9 @@ impl World {
         );
         let mut acc = BTreeMap::new();
         for n in accepted {
-            acc.insert(self.fp(n), AcceptedKey { name: n.to_string(), seq: 1, at: NOW - 86_400 });
+            let host = if *n == "node-b" { "host-b" } else { "host-a" };
+            let attrs = k2_signer::trust::entry_attrs(&self.entry(n, host));
+            acc.insert(self.fp(n), AcceptedKey { name: n.to_string(), seq: 1, at: NOW - 86_400, attrs });
         }
         t.owners.insert(self.owner_fp.clone(), OwnerPin { key: self.owner.public().encode(), label: "owner".into(), at: NOW - 86_400, accepted: acc });
         t
@@ -419,6 +421,22 @@ impl World {
             checked: "install log and job ledger".into(),
             approved_by: "owner".into(),
             at: NOW - 7200,
+        }
+    }
+}
+
+/// Accept (as a person) the named entries of the bundle's rosters, with the
+/// attributes they have there.
+pub fn accept_from(t: &mut Trust, b: &EvidenceBundle, names: &[&str]) {
+    for s in &b.rosters {
+        let Ok(r) = s.peek::<NodeRoster>(k2_node_proto::ci::DOMAIN_NODE_ROSTER) else { continue };
+        let Ok(fp) = r.key_fp() else { continue };
+        let Some(o) = t.owners.get_mut(&fp) else { continue };
+        o.accepted.clear();
+        for e in &r.entries {
+            if names.contains(&e.name.as_str()) {
+                o.accepted.insert(e.node_fp.clone(), AcceptedKey { name: e.name.clone(), seq: r.seq, at: NOW - 86_400, attrs: k2_signer::trust::entry_attrs(e) });
+            }
         }
     }
 }

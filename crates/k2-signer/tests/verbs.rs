@@ -144,16 +144,26 @@ fn pair(r: &Root, controller: &SigningKey) {
     let v: Value = serde_json::from_str(&out).unwrap();
     let code = v["code"].as_str().unwrap();
     let hello: pairing::Hello = serde_json::from_value(v["hello"].clone()).unwrap();
-    let (offer, sas) = pairing::server_offer(controller, "client.example", code, &hello, NOW).unwrap();
-    let offer_json = serde_json::to_vec(&offer).unwrap();
+    let (msg, sp) = pairing::server_offer(controller, "client.example", code, &hello, NOW).unwrap();
+    let msg_json = serde_json::to_vec(&msg).unwrap();
+    refused(run(&r.admin, "pair-accept", &["123456"], b"", None), "pair-reveal first");
+    // An offer from a server the person never gave the code to: refused.
+    let (other_code, _, _) = pairing::signer_begin(&SigningKey::generate().unwrap(), "x", NOW).unwrap();
+    let evil_hello = pairing::Hello { signer_fp: hello.signer_fp.clone(), ..hello.clone() };
+    let fake = format!("{}.{}", other_code.split('.').next().unwrap(), code.split('.').nth(1).unwrap());
+    let (evil, _) = pairing::server_offer(&SigningKey::generate().unwrap(), "client.example", &fake, &evil_hello, NOW).unwrap();
+    refused(run(&r.admin, "pair-reveal", &[], &serde_json::to_vec(&evil).unwrap(), None), "not made with this pairing code");
+    let reveal = ok(run(&r.admin, "pair-reveal", &[], &msg_json, None));
+    let reveal: Signed = serde_json::from_str(&reveal).unwrap();
+    let sas = pairing::server_sas(&sp, &reveal).unwrap();
     let wrong = if sas == "123456" { "654321" } else { "123456" };
-    refused(run(&r.admin, "pair-accept", &[wrong], &offer_json, None), "not the one this signer computed");
-    let done = ok(run(&r.admin, "pair-accept", &[&sas], &offer_json, None));
+    refused(run(&r.admin, "pair-accept", &[wrong], b"", None), "not the one this signer computed");
+    let done = ok(run(&r.admin, "pair-accept", &[&sas], b"", None));
     let done: Signed = serde_json::from_str(&done).unwrap();
-    assert_eq!(pairing::server_finish(&offer, &hello, &done).unwrap(), v["hello"]["signer_fp"].as_str().unwrap());
+    assert_eq!(pairing::server_finish(&sp, &done).unwrap(), v["hello"]["signer_fp"].as_str().unwrap());
     let t = Trust::load(&r.admin).unwrap();
     assert_eq!(t.controllers[&controller.fingerprint()].how, PinHow::Sas);
-    refused(run(&r.admin, "pair-accept", &[&sas], &offer_json, None), "no pairing started");
+    refused(run(&r.admin, "pair-accept", &[&sas], b"", None), "no pairing started");
 }
 
 fn forge_for(w: &World, version: &str) -> FakeForge {
@@ -192,11 +202,19 @@ fn a_client_release_end_to_end() {
     // S1: every new node key is a person's decision.
     refused(run(&r.signer, "rehearse", &["acme-desktop"], &bj, None), "roster_change_needs_person");
     let show = ok(run(&r.admin, "roster-accept", &[&w.owner_fp], &bj, None));
-    assert!(show.contains("+ NEW") && show.contains("node-a") && show.contains("3 new key(s)"), "{show}");
+    assert!(show.contains("+ NEW") && show.contains("node-a") && show.contains("3 new or changed key(s)"), "{show}");
     let digest = b.rosters[0].digest();
     refused(run(&r.admin, "roster-accept", &[&w.owner_fp, &format!("sha256:{}", "0".repeat(64))], &bj, None), "nothing accepted");
     ok(run(&r.admin, "roster-accept", &[&w.owner_fp, &digest], &bj, None));
     assert!(ok(run(&r.admin, "roster-accept", &[&w.owner_fp], &bj, None)).contains("Nothing new to accept"));
+    // M4: the same key with another host is a change a person sees and accepts again.
+    let mut moved = w.spec();
+    let fpb = w.fp("node-b");
+    moved.roster.entries.iter_mut().find(|e| e.node_fp == fpb).unwrap().host = "host-z".into();
+    let mj = bundle_json(&w.build(moved));
+    refused(run(&r.signer, "rehearse", &["acme-desktop"], &mj, None), "changed since a person accepted it");
+    let show = ok(run(&r.admin, "roster-accept", &[&w.owner_fp], &mj, None));
+    assert!(show.contains("~ CHANGED  node-b") && show.contains("host host-z"), "{show}");
 
     // Rehearse: passes, registers and signs nothing.
     let out = ok(run(&r.signer, "rehearse", &["acme-desktop"], &bj, None));
@@ -297,7 +315,14 @@ fn project_k2_shares_k2sign_state() {
         .replace("dual = [\"dist/acme\"]", "dual = [\"dist/k2-daemon-linux-x86_64\"]")
         .replace("[assets.acme]\nkey = \"updater\"", "[assets.k2-daemon-linux-x86_64]\nkey = \"u2\"")
         .replace("artifact = \"dist/acme\"", "artifact = \"dist/k2-daemon-linux-x86_64\"")
-        .replace("[keys.updater]", &format!("[keys.u1]\nkind = \"minisign\"\npublic = \"{u1}\"\n\n[keys.u2]"));
+        .replace("[keys.updater]", &format!("[keys.u1]\nkind = \"minisign\"\npublic = \"{u1}\"\n\n[keys.u2]"))
+        // M3: two assets k2sign checks more strictly than k2-signer would.
+        .replace(
+            "[assets.k2-daemon-linux-x86_64]",
+            "[assets.k2-root-helper-linux-x86_64]\nkey = \"u2\"\nbuild = \"linux-x86_64\"\nartifact = \"dist/k2-daemon-linux-x86_64\"\ncheck = \"artifact\"\n\n\
+             [assets.\"setup.exe\"]\nkey = \"u2\"\nbuild = \"linux-x86_64\"\nartifact = \"dist/k2-daemon-linux-x86_64\"\ncheck = \"artifact\"\n\n\
+             [assets.k2-daemon-linux-x86_64]",
+        );
     approve_policy(&r, "k2", &text);
     pair(&r, &w.controller);
     ok(run(&r.admin, "trust-owner", &[&w.owner_fp, &w.owner.public().encode()], b"", None));
@@ -313,10 +338,14 @@ fn project_k2_shares_k2sign_state() {
     // k2sign's installed policy names the release commit's files; its session opened the version.
     let k2etc = r.dir.join("usr/local/etc/k2sign");
     std::fs::create_dir_all(&k2etc).unwrap();
-    std::fs::write(k2etc.join("policy"), "approval = on\nrelease_commit_files = package.json Cargo.lock WHATS_NEW.md\n").unwrap();
+    std::fs::write(
+        k2etc.join("policy"),
+        "approval = on\nrelease_commit_files = package.json Cargo.lock WHATS_NEW.md\ncompute_assets = k2-daemon-linux-x86_64 setup.exe\nwindows_assets = setup.exe K2_{version}_x64-setup.exe\n",
+    )
+    .unwrap();
     let state = r.dir.join("var/k2sign/state");
     std::fs::create_dir_all(state.join("sessions")).unwrap();
-    let sess = serde_json::json!({"version": version, "base_commit": w.base, "assets": ["k2-daemon-linux-x86_64"], "windows": false,
+    let sess = serde_json::json!({"version": version, "base_commit": w.base, "assets": ["k2-daemon-linux-x86_64", "k2-root-helper-linux-x86_64", "setup.exe"], "windows": false,
         "max_signatures": 6, "approved": NOW - 3600, "opened": NOW - 3600, "expires": NOW + 3600, "nonce": "0".repeat(32),
         "reapproval": false, "by": "touchid", "count": 0, "signed": []});
     std::fs::write(state.join("sessions").join(format!("{version}.json")), sess.to_string()).unwrap();
@@ -341,6 +370,13 @@ fn project_k2_shares_k2sign_state() {
     ok(run(&r.signer, "evidence", &["k2", version], &bj, Some(&f)));
     let receipts = std::fs::read_to_string(state.join("compute/receipts.tsv")).unwrap();
     assert!(receipts.lines().all(|l| l.ends_with(&format!("\t{version}"))) && receipts.lines().count() == 2, "{receipts}");
+    // M3: k2-signer signs only k2sign's compute_assets, and a Windows setup only under a Windows approval.
+    refused(
+        run(&r.signer, "sign", &["k2", "u2", "k2-root-helper-linux-x86_64", version, "raw"], &daemon, Some(&f)),
+        "signs only k2sign's compute_assets",
+    );
+    refused(run(&r.signer, "verdict", &["k2", "k2-root-helper-linux-x86_64", version], &daemon, Some(&f)), "signs only k2sign's compute_assets");
+    refused(run(&r.signer, "sign", &["k2", "u2", "setup.exe", version, "raw"], &daemon, Some(&f)), "Windows setup not approved");
     // U2, and U1 (the bridge until SS6), both on the shared one-sha registry.
     let sig2 = ok(run(&r.signer, "sign", &["k2", "u2", "k2-daemon-linux-x86_64", version, "raw"], &daemon, Some(&f)));
     assert!(minisign::verify(&u2, &daemon, &sig2).unwrap().ends_with(&format!("version:{version}")));
@@ -384,6 +420,10 @@ fn adopt_k2sign_and_admin_refusals() {
     let kp = r.dir.join("acme.key");
     std::fs::write(&kp, file).unwrap();
     refused(run(&r.admin, "import-key", &["acme", "updater", kp.to_str().unwrap()], b"wrong\n", None), "wrong password");
+    // L9: no unencrypted keys, no empty passwords.
+    let plain = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-unencrypted.minisign");
+    refused(run(&r.admin, "import-key", &["acme", "updater", plain.to_str().unwrap()], b"x\n", None), "an unencrypted minisign key");
+    refused(run(&r.admin, "import-key", &["acme", "updater", kp.to_str().unwrap()], b"\n", None), "an empty password");
     let line = ok(run(&r.admin, "import-key", &["acme", "updater", kp.to_str().unwrap()], b"pw\n", None));
     assert_eq!(line.trim(), public.line());
     refused(run(&r.admin, "import-key", &["acme", "updater", kp.to_str().unwrap()], b"pw\n", None), "already exists");

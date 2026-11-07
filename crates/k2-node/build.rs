@@ -2,6 +2,13 @@
 //! controller from one release agree, self-update compares real release
 //! versions, and release.sh bumps one file (prd-k2-node-admin-v1 §8.2).
 //!
+//! The build commit (vs-live V8): `K2_NODE_BUILD_COMMIT` (40 lowercase hex,
+//! set by `scripts/ci/build-linux-bins.sh` and the release workflow) goes
+//! into a second marker, `K2_NODE_COMMIT c=<sha>;` (`c=none` without it),
+//! which the node's self-statement reports as `k2node_commit`. A separate
+//! marker, not a field of `K2_NODE_BUILD`: older nodes and signers parse
+//! that one strictly and would refuse an update that grew a field.
+//!
 //! TEST ONLY (`--features test-keys`): `K2_NODE_TEST_VERSION` overrides the
 //! version and `K2_NODE_TEST_BROKEN=1` builds a node whose `run` exits at
 //! once, so the Linux end-to-end can make "newer good" and "newer bad"
@@ -13,6 +20,19 @@ fn main() {
     println!("cargo:rerun-if-changed={manifest}");
     println!("cargo:rerun-if-env-changed=K2_NODE_TEST_VERSION");
     println!("cargo:rerun-if-env-changed=K2_NODE_TEST_BROKEN");
+    println!("cargo:rerun-if-env-changed=K2_NODE_BUILD_COMMIT");
+    let commit = match std::env::var("K2_NODE_BUILD_COMMIT") {
+        Ok(c) if c.is_empty() => "none".to_string(),
+        Ok(c) => {
+            assert!(
+                c.len() == 40 && c.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "K2_NODE_BUILD_COMMIT must be a 40-hex lowercase commit, got {c:?}"
+            );
+            c
+        }
+        Err(_) => "none".to_string(),
+    };
+    println!("cargo:rustc-env=K2_NODE_COMMIT={commit}");
     println!("cargo::rustc-check-cfg=cfg(k2_node_test_broken)");
     let text = fs::read_to_string(manifest).expect("read crates/k2-daemon/Cargo.toml");
     let mut version = text

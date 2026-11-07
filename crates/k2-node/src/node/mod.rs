@@ -47,6 +47,7 @@ use crate::wall::Wall;
 
 pub mod adopt;
 mod assign;
+pub mod ci;
 mod disk;
 pub mod git_access;
 pub mod job_cache;
@@ -197,6 +198,41 @@ pub async fn detect_wall(dev: bool, admin_socket: &Path) -> Wall {
     }
 }
 
+/// V10: what root's executor holds about `node_fp`'s taint mark, after
+/// handing it the node's own mark if root doesn't have it yet. `None`
+/// without an answer (`--dev`, no executor, an older one): the node's own
+/// file then decides alone. Root's mark is copied into the node's file too.
+async fn sync_root_taint(opts: &NodeOptions, layout: &Layout, node_fp: &str) -> Option<bool> {
+    if opts.dev {
+        return None;
+    }
+    let path = layout.state().join(crate::statement::TAINT_FILE);
+    let mine = crate::statement::read_taint(&path).ok().and_then(|f| f.keys.get(node_fp).cloned());
+    let op = crate::admin::jobs::JobOp::KeyTaint { node_fp: node_fp.to_string(), mark: mine.as_ref().filter(|m| !m.root_ack).map(|m| m.why.clone()) };
+    let sock = opts.admin_socket.clone();
+    let r = tokio::task::spawn_blocking(move || crate::admin::server::job_request(&sock, &op, &[], Duration::from_secs(10))).await;
+    let tainted = match r {
+        Ok(Ok(crate::admin::jobs::JobAnswer::KeyTaint { tainted })) => tainted,
+        _ => return None,
+    };
+    let now = opts.clock.now();
+    match (&mine, tainted) {
+        (Some(m), true) if !m.root_ack => {
+            if let Ok(mut f) = crate::statement::read_taint(&path) {
+                if let Some(e) = f.keys.get_mut(node_fp) {
+                    e.root_ack = true;
+                }
+                let _ = crate::statement::write_taint(&path, &f);
+            }
+        }
+        (None, true) => {
+            let _ = crate::statement::mark_taint(&path, node_fp, "root's record", now);
+        }
+        _ => {}
+    }
+    Some(tainted)
+}
+
 /// May this `--dev` node act as walled for sharing (V59), run other
 /// servers' jobs with no wall, and run `k2-node servers` without sudo?
 /// Only a test node: a DEBUG build (tests and the S5 harness run debug
@@ -340,6 +376,17 @@ pub struct Node {
     /// Running jobs' git credential helpers (protocol 8), by (slot, job,
     /// gen): `finish_job` drops each (its socket goes with it).
     git_helpers: Mutex<HashMap<(Slot, String, u32), git_access::GitHelper>>,
+    /// Protocol 9 (C0): the node key's own facts (epoch, birth, whether the
+    /// taint flag existed when it was made).
+    pub key_meta: crate::statement::KeyMeta,
+    /// The signed self-statement in force ([`crate::statement`]).
+    pub statement: Mutex<crate::statement::Current>,
+    /// Root's answer about this key's taint mark (V10): `None` = no answer
+    /// (no executor, an older one).
+    root_taint: Mutex<Option<bool>>,
+    /// Receipt v2's start-time facts of running attempts, by (slot, job,
+    /// gen): what `finish_job` signs when the plan asked for v2.
+    ci_runs: Mutex<HashMap<(Slot, String, u32), k2_node_proto::ci::RunFacts>>,
 }
 
 /// The running-jobs key prefix of a stand-in for a lingering unit, and the
@@ -401,7 +448,11 @@ impl Node {
     pub async fn open(opts: NodeOptions) -> Result<Arc<Self>, String> {
         let layout = opts.layout.clone();
         layout.ensure()?;
+        let key_existed = layout.key().exists();
         let key = crate::identity::load_or_create_key(&layout.key())?;
+        // Protocol 9 (C0): the key's facts, made with the key when this
+        // build made it (then its taint flag covers its whole life, V10).
+        let key_meta = crate::statement::key_meta(&layout.state(), &key, !key_existed, opts.clock.now())?;
         // `servers.owner`: swap the owner's and a slot's files before any
         // is opened (prd-macos-tenant-compute-v1 §6.2).
         owner_swap::apply(&layout, crate::util::now())?;
@@ -415,6 +466,9 @@ impl Node {
             Wall::JobUser { user } => format!(" (jobs run as {user})"),
             Wall::Seatbelt => String::new(),
         });
+        // V10: root's copy of this key's taint mark (and a mark the node
+        // couldn't hand to root before, handed now).
+        let root_taint = sync_root_taint(&opts, &layout, &key_meta.node_fp).await;
         // Phase 1 (C1): this boot's adoptable rows stay open; the rest end.
         let (lingering, adoptable) = tenant::reconcile(&owner, &opts, &wall, true).await?;
         let exec_stdin = match (opts.exec_stdin, &wall) {
@@ -463,6 +517,10 @@ impl Node {
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
             git_helpers: Mutex::new(HashMap::new()),
+            key_meta,
+            statement: Mutex::new(Default::default()),
+            root_taint: Mutex::new(root_taint),
+            ci_runs: Mutex::new(HashMap::new()),
             opts,
         });
         node.hold_lingering(OWNER_SLOT, lingering);
@@ -489,6 +547,8 @@ impl Node {
             s.since = crate::util::now();
             s.notes = vec!["idle-based availability is not built yet; idle modes act like always / plugged_in".into()];
         }
+        // `probe_tools` above signed the first statement (host facts known).
+        node.refresh_statement();
         node.write_status();
         Ok(node)
     }
@@ -741,6 +801,9 @@ impl Node {
         let _ = tokio::task::spawn_blocking(move || {
             me.refresh_host();
             me.refresh_pkg_cache();
+            // Protocol 9: a fact the statement carries may have changed
+            // (kernel, distro, ptrace_scope).
+            me.refresh_statement();
         })
         .await;
         self.notify_offers();

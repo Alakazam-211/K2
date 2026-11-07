@@ -288,7 +288,9 @@ async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sen
                 tx.send(node.row_state_frame(&row)).await.map_err(|_| ())?;
             }
             if let Some(receipt) = row.receipt.clone() {
-                tx.send(Frame::Receipt(ReceiptFrame { job_id: key.0.clone(), generation: key.1, receipt })).await.map_err(|_| ())?;
+                // Protocol 9: a v2 receipt brings the statement it names.
+                let statement = if tenant.speaks_ci() { node.statement_for_receipt(&receipt) } else { None };
+                tx.send(Frame::Receipt(ReceiptFrame { job_id: key.0.clone(), generation: key.1, receipt, statement })).await.map_err(|_| ())?;
                 continue; // done with this attempt
             }
             t.sent = Some(state_key);
@@ -496,6 +498,13 @@ where
     }
     let first = node.offer(&tenant);
     let _ = tx.send(Frame::Offer(first.clone())).await;
+    // Protocol 9: the node's signed self-statement, once per session (and
+    // again whenever it changes, `Node::refresh_statement`).
+    if tenant.speaks_ci() {
+        if let Some(s) = node.statement_signed() {
+            let _ = tx.send(Frame::NodeStatement(s)).await;
+        }
+    }
     // Tell the owner server how the last self-update ended (it dedups).
     if owner {
         let (n, t) = (node.clone(), tx.clone());

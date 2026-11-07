@@ -126,6 +126,9 @@ pub struct Want {
     pub cache: Option<String>,
     /// `--with` (protocol 6): the node must offer `multi-repo`.
     pub multi_repo: bool,
+    /// Protocol 9: the plan asks for receipt v2 (`Plan.receipt_v = 2`);
+    /// the node must offer `receipt-v2`.
+    pub receipt_v2: bool,
 }
 
 impl Want {
@@ -148,6 +151,7 @@ impl Want {
             tier: j.tier(),
             cache: plan.cache.clone(),
             multi_repo: !plan.with.is_empty(),
+            receipt_v2: plan.receipt_v.is_some(),
         }
     }
 
@@ -798,6 +802,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     }
     if w.multi_repo {
         f.push(frames::FEATURE_MULTI_REPO);
+    }
+    if w.receipt_v2 {
+        f.push(k2_core::compute::proto::ci::FEATURE_RECEIPT_V2);
     }
     f
 }
@@ -2332,6 +2339,7 @@ mod tests {
             tier: JobTier::Normal,
             cache: None,
             multi_repo: false,
+            receipt_v2: false,
         }
     }
 

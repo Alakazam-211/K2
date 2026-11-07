@@ -25341,6 +25341,9 @@ Agents:
                  [--exclusive --why "<one line>"]  the whole node to itself; needs
                                 a reason (else exit 2) and a grant with --ci, or the
                                 owner or an Admin (else exit 3 exclusive_needs_grant)
+                 [--receipt-v2]  the node signs receipt v2 (how and where the job
+                                ran, and its signed self-statement; k2 compute receipt
+                                shows both); only nodes on protocol 9 take it
                  [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--wait [--failures] [--max-wait 9m] [--quiet]]
                                 print the job id, then stream its output and exit
@@ -26506,7 +26509,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node="" distro=""
+    local preset="" now=0 tag="" same_node="" distro="" receipt_v=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -26597,6 +26600,7 @@ sys.exit(0 if ok else 1)'; then
             --mem) mem="$(_compute_bytes "${2:-}")"; shift 2 ;;
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
             --exclusive) exclusive=1; shift ;;
+            --receipt-v2) receipt_v=2; shift ;;
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; retries=0; shift ;;
             --retries) retries="${2:-}"; shift 2
@@ -26764,7 +26768,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
-        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node")"
+        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -27101,7 +27105,7 @@ cmd_compute_test() {
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only)
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
+            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
             *) if [ -z "$node" ]; then node="$1"; shift; else echo "usage: put nextest's own arguments after --" >&2; exit 2; fi ;;
         esac

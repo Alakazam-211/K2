@@ -620,6 +620,17 @@ for call, tool, tail in zip(calls, ("cc", "c++", "aarch64-linux-gnu-gcc"), ("-c 
 PY
 sde2="$(cd "$fake/src" && env SOURCE_DATE_EPOCH=12345 PATH="$fake/realbin:$PATH" CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null; echo "$SOURCE_DATE_EPOCH"' _ "$ROOT/scripts/ci/repro-build-env.sh")"
 [ "$sde2" = 12345 ] && pass "repro env keeps a SOURCE_DATE_EPOCH the caller set" || fail "sde kept" "$sde2"
+# V8: k2-node's build commit comes from the checkout (the same for compute
+# and GitHub builds), a caller's own is kept, a malformed one is refused.
+nc="$(cd "$fake/src" && env -u K2_NODE_BUILD_COMMIT PATH="$fake/realbin:$PATH" CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null; echo "$K2_NODE_BUILD_COMMIT"' _ "$ROOT/scripts/ci/repro-build-env.sh")"
+[ "$nc" = "$(git -C "$fake/src" rev-parse HEAD)" ] && pass "repro env sets K2_NODE_BUILD_COMMIT from the checkout" || fail "node commit" "$nc"
+nc2="$(cd "$fake/src" && env K2_NODE_BUILD_COMMIT=0123456789abcdef0123456789abcdef01234567 PATH="$fake/realbin:$PATH" CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$PWD" >/dev/null; echo "$K2_NODE_BUILD_COMMIT"' _ "$ROOT/scripts/ci/repro-build-env.sh")"
+[ "$nc2" = 0123456789abcdef0123456789abcdef01234567 ] && pass "repro env keeps a K2_NODE_BUILD_COMMIT the caller set" || fail "node commit kept" "$nc2"
+if (cd "$fake/src" && env K2_NODE_BUILD_COMMIT=nope CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$PWD"' _ "$ROOT/scripts/ci/repro-build-env.sh" >/dev/null 2>&1); then
+    fail "node commit malformed" "accepted"
+else
+    pass "repro env refuses a malformed K2_NODE_BUILD_COMMIT"
+fi
 rf2="$(env RUSTFLAGS="-C keep" CARGO_HOME="$fake/cargo" bash -c 'source "$1"; k2_repro_build_env "$2" >/dev/null; printf "%s" "$RUSTFLAGS"' _ "$ROOT/scripts/ci/repro-build-env.sh" "$fake/src")"
 [[ "$rf2" == "-C keep --remap-path-prefix="* ]] && pass "repro env keeps the caller's RUSTFLAGS first" || fail "repro env append" "$rf2"
 mkdir -p "$fake/with space"

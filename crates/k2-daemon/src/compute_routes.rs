@@ -1452,6 +1452,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         tier: Tier::Batch,
         cache: None,
         multi_repo: false,
+        receipt_v2: false,
     };
     // Every matching node: each one's package states are reported, and the
     // names their owners must approve go out as ONE batched request (§7.3).
@@ -1698,6 +1699,14 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         None if b(&v, "retryInterrupted") == Some(false) => 0,
         None => 1,
     };
+    // Protocol 9 (`receiptV: 2`, prd-ci-on-compute-for-clients-v1 C0): the
+    // node signs receipt v2 (its run facts and self-statement); placed
+    // only on nodes offering `receipt-v2`. Absent = v1, as before.
+    let receipt_v = match v.get("receiptV") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(x) if x.as_u64() == Some(u64::from(k2_core::compute::proto::frames::RECEIPT_V2)) => Some(k2_core::compute::proto::frames::RECEIPT_V2),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "receiptV is 2 (receipt v2), or absent for v1")),
+    };
     let stall = match n(&v, "stallSecs") {
         None => None,
         Some(0) => Some(0),
@@ -1753,6 +1762,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         tier: tier_ask,
         cache: cache.clone(),
         multi_repo: !with_asks(v)?.is_empty(),
+        receipt_v2: receipt_v.is_some(),
     };
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = Vec::new();
@@ -1830,6 +1840,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             409,
             format!(
                 "'{}' runs a k2-node older than 0.46.6, which can't lay out --with repos; update it (k2 compute node update {}), or pick another node",
+                node.name, node.name
+            ),
+        ));
+    }
+    if want.receipt_v2 && !node_features(&node).iter().any(|f| f == k2_core::compute::proto::ci::FEATURE_RECEIPT_V2) {
+        return Err(no(
+            "node_upgrade_required",
+            409,
+            format!(
+                "'{}' runs a k2-node that doesn't sign receipt v2 (it needs protocol 9); update it (k2 compute node update {}), pick another node, or run without --receipt-v2",
                 node.name, node.name
             ),
         ));
@@ -2237,7 +2257,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         secret_env: crate::compute_secrets::pins(&secret_envs).1,
         // Protocol 8 (GH#78): filled per node at every assign
         // (`compute_ws::fit_plan_to`), from the grants live then.
-        git_access: Vec::new(), receipt_v: None,
+        git_access: Vec::new(),
+        // Protocol 9: only ever placed on nodes offering `receipt-v2`.
+        receipt_v,
         // Protocol 6: only ever placed on nodes offering `job-cache` (above,
         // and `required_features` for --any and moves).
         cache: cache.clone(),
@@ -3815,6 +3837,15 @@ fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
     // SE8/SE29: the env names the node says the job got from the vault.
     if let Some(s) = body.get("secret_env").filter(|s| s.as_array().is_some_and(|a| !a.is_empty())) {
         out["secrets"] = s.clone();
+    }
+    // Protocol 9, receipt v2: the receipt's version, and the node's signed
+    // self-statement it names (`run.statement_digest`), exactly as the node
+    // signed it, for the evidence bundle (`docs/ci-formats-v1.md` §2, §8).
+    // A v1 receipt's answer is unchanged (S3b reads it).
+    if body.get("v").and_then(|v| v.as_u64()) == Some(u64::from(k2_core::compute::proto::frames::RECEIPT_V2)) {
+        out["v"] = serde_json::json!(k2_core::compute::proto::frames::RECEIPT_V2);
+        let stored: serde_json::Value = serde_json::from_str(raw).unwrap_or_default();
+        out["statement"] = stored.get("statement").cloned().unwrap_or(serde_json::Value::Null);
     }
     Ok(out)
 }

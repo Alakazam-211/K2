@@ -29,6 +29,11 @@
 #   SOURCE_DATE_EPOCH: the checkout's commit time (git; else
 #          BUILD_SOURCE_DATE_EPOCH), unless already set. OpenSSL's
 #          "built on:" and other build dates use it instead of now.
+#   K2_NODE_BUILD_COMMIT: the checkout's commit (git; else BUILD_COMMIT),
+#          unless already set. k2-node bakes it into its own marker
+#          (`K2_NODE_COMMIT c=<sha>;`, vs-live V8) and reports it in its
+#          signed self-statement. Every builder sets it the same way, so
+#          compute and GitHub builds of one commit stay byte-identical.
 #
 # The same rustc is still needed for equal bytes (rust-toolchain.toml).
 # Never reads ~/.k2, never talks to a daemon.
@@ -111,5 +116,19 @@ k2_repro_build_env() {
     else
         echo "  ⚠ k2_repro_build_env: no commit time (no git, no BUILD_SOURCE_DATE_EPOCH): build dates will differ" >&2
     fi
+    if [ -z "${K2_NODE_BUILD_COMMIT:-}" ]; then
+        K2_NODE_BUILD_COMMIT="$(git -c safe.directory='*' -C "$src" rev-parse HEAD 2>/dev/null || true)"
+        [ -n "$K2_NODE_BUILD_COMMIT" ] || K2_NODE_BUILD_COMMIT="${BUILD_COMMIT:-}"
+    fi
+    case "$K2_NODE_BUILD_COMMIT" in
+        "") echo "  ⚠ k2_repro_build_env: no commit (no git, no BUILD_COMMIT): k2-node reports none" >&2 ;;
+        *)
+            if ! printf '%s' "$K2_NODE_BUILD_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+                echo "FATAL: k2_repro_build_env: K2_NODE_BUILD_COMMIT is not a 40-hex commit ($K2_NODE_BUILD_COMMIT)" >&2
+                return 1
+            fi
+            export K2_NODE_BUILD_COMMIT
+            ;;
+    esac
     echo "  path remap on: $src → /k2, $cargo_home → /cargo, $target → /target (rustc flags; C/C++ via $wdir); SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-unset}"
 }

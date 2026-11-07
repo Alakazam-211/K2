@@ -60,6 +60,14 @@ pub struct Status {
     /// the job ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spool_punch_error: Option<String>,
+    /// Protocol 9 (C0): the digest of the self-statement in force, the
+    /// key's taint (`clean` | `tainted` | `unknown`, V10) and its epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_epoch: Option<u32>,
 }
 
 /// One running job that kept running through a k2-node update.

@@ -60,6 +60,9 @@ struct Conn {
     tx: mpsc::UnboundedSender<Out>,
     route: &'static str,
     offer: Option<Offer>,
+    /// Protocol 9: the node's self-statement, checked against the key
+    /// this server pinned for it (`node_statement`).
+    statement: Option<k2_core::compute::proto::ci::Signed>,
     bytes_in: Arc<AtomicU64>,
     bytes_out: Arc<AtomicU64>,
 }
@@ -143,6 +146,12 @@ pub fn is_online(node_id: &str) -> bool {
 }
 
 /// `(online, route, live offer)` for display.
+/// Protocol 9: the node's self-statement this session (checked against
+/// its pinned key), while it's connected.
+pub fn node_statement(node_id: &str) -> Option<k2_core::compute::proto::ci::Signed> {
+    with_engine(|e| e.conns.get(node_id).and_then(|c| c.statement.clone()))
+}
+
 pub fn live_view(node_id: &str) -> (bool, Option<&'static str>, Option<Offer>) {
     with_engine(|e| match e.conns.get(node_id) {
         Some(c) => (true, Some(c.route), c.offer.clone()),
@@ -490,7 +499,7 @@ async fn run_session(
         let id = e.next_conn;
         if let Some(old) = e.conns.insert(
             node_id.clone(),
-            Conn { conn_id: id, tx: tx.clone(), route, offer: None, bytes_in: bytes_in.clone(), bytes_out: bytes_out.clone() },
+            Conn { conn_id: id, tx: tx.clone(), route, offer: None, statement: None, bytes_in: bytes_in.clone(), bytes_out: bytes_out.clone() },
         ) {
             let _ = old.tx.send(Out::Close);
         }
@@ -666,6 +675,8 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         }
         Frame::Log(l) => on_log(tallies, l),
         Frame::Receipt(r) => on_receipt(&node_id, r),
+        // Protocol 9: the node's signed self-statement.
+        Frame::NodeStatement(st) => on_statement(&node_id, st),
         Frame::Goodbye(g) => audit("node", "goodbye", Some(&node_id), serde_json::json!({"reason": g.reason})),
         // Node admin (prd-k2-node-admin-v1). A node another server owns
         // gets no node admin from here (V52): an admin frame from it is
@@ -725,7 +736,7 @@ pub fn test_attach(node_id: &str, offer: Offer) -> TestConn {
         let id = e.next_conn;
         e.conns.insert(
             node_id.to_string(),
-            Conn { conn_id: id, tx, route: "loopback", offer: None, bytes_in: Arc::new(AtomicU64::new(0)), bytes_out: Arc::new(AtomicU64::new(0)) },
+            Conn { conn_id: id, tx, route: "loopback", offer: None, statement: None, bytes_in: Arc::new(AtomicU64::new(0)), bytes_out: Arc::new(AtomicU64::new(0)) },
         );
     });
     let conn_id = with_engine(|e| e.conns.get(node_id).map(|c| c.conn_id)).unwrap_or(0);
@@ -1662,6 +1673,29 @@ fn stop_stale(node_id: &str, j: &frames::LedgerJob) {
     }
 }
 
+/// Protocol 9: a node's self-statement. Kept only when it opens with the
+/// key this server pinned for the node (a node never vouches for another
+/// key here; rotation is C1's).
+fn on_statement(node_id: &str, st: k2_core::compute::proto::ci::Signed) {
+    let pinned = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_by_id(&conn, node_id).map(|n| n.public_key_pem)
+    };
+    let fp = pinned.as_deref().and_then(|p| crypto::fingerprint_of_spki_pem(p).ok());
+    match k2_core::compute::proto::statement::NodeStatement::open(&st) {
+        Ok(doc) if Some(&doc.node_fp) == fp.as_ref() => {
+            with_engine(|e| {
+                if let Some(c) = e.conns.get_mut(node_id) {
+                    c.statement = Some(st);
+                }
+            });
+        }
+        Ok(_) => audit("node", "statement_refused", Some(node_id), serde_json::json!({"why": "signed by another key than this server pinned"})),
+        Err(e) => audit("node", "statement_refused", Some(node_id), serde_json::json!({"why": e})),
+    }
+}
+
 fn on_receipt(node_id: &str, r: ReceiptFrame) {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -1670,11 +1704,31 @@ fn on_receipt(node_id: &str, r: ReceiptFrame) {
         return;
     }
     let Some(node) = store::node_by_id(&conn, node_id) else { return };
-    let ok = crypto::pem_decode("PUBLIC KEY", &node.public_key_pem)
-        .ok()
-        .and_then(|spki| r.receipt.verify(&spki))
-        .is_some_and(|rc| rc.job_id == job.id && rc.generation == r.generation && rc.plan_digest == job.plan_digest);
-    let body = serde_json::to_string(&r.receipt).unwrap_or_default();
+    // The version the plan asked for (receipt v2 only with `receipt_v: 2`;
+    // V7): a v2 receipt also needs the statement it names, signed by the
+    // same pinned key.
+    let want_v = job.plan().and_then(|p| p.receipt_v).unwrap_or(frames::RECEIPT_V1);
+    let spki = crypto::pem_decode("PUBLIC KEY", &node.public_key_pem).ok();
+    let pinned_fp = spki.as_deref().map(crypto::fingerprint_of_spki_der);
+    let ok = spki.as_deref().and_then(|spki| r.receipt.verify(spki)).is_some_and(|rc| {
+        rc.job_id == job.id
+            && rc.generation == r.generation
+            && rc.plan_digest == job.plan_digest
+            && rc.v == want_v
+            && rc.check_version().is_ok()
+            && (rc.v == frames::RECEIPT_V1
+                || (pinned_fp.as_deref() == Some(rc.node_fp.as_str()) && r.statement.as_ref().is_some_and(|st| rc.check_statement(st).is_ok())))
+    });
+    // The statement rides in the stored receipt (`statement`): readers of
+    // the plain signed receipt ignore the key.
+    let body = match (serde_json::to_value(&r.receipt), &r.statement) {
+        (Ok(mut v), Some(st)) => {
+            v["statement"] = serde_json::to_value(st).unwrap_or_default();
+            v.to_string()
+        }
+        (Ok(v), None) => v.to_string(),
+        (Err(_), _) => String::new(),
+    };
     store::set_job_receipt(&conn, &job.id, &body, ok);
     // The receipt lists the kept files too: if the terminal state with
     // the outputs was missed (a reconnect snapshot ended the job first),
@@ -2297,6 +2351,11 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             wait(cache_feature_wait(), &mut pass);
             continue;
         }
+        // Receipt v2 (protocol 9): only from a node offering `receipt-v2`.
+        if plan.receipt_v.is_some() && !offer.features.iter().any(|f| f == k2_core::compute::proto::ci::FEATURE_RECEIPT_V2) {
+            wait(receipt_v2_feature_wait(), &mut pass);
+            continue;
+        }
         let class = pshare::JobClass::parse(&j.class).unwrap_or_default();
         let ask = share::ShareAsk { cpu_millis: plan.limits.cpu_millis, mem_bytes: plan.limits.mem_bytes, max_secs: plan.limits.max_secs, exclusive: j.exclusive, class };
         if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
@@ -2551,6 +2610,15 @@ pub fn kick(node_id: &str) {
         }
         return;
     }
+    // Receipt v2 (protocol 9): never to a node without `receipt-v2` (an
+    // older one would compute another plan digest and refuse it).
+    if plan.receipt_v.is_some() && !has(k2_core::compute::proto::ci::FEATURE_RECEIPT_V2) {
+        let w = receipt_v2_feature_wait();
+        if job.reason.as_deref() != Some(w.code.as_str()) {
+            store::set_job_reason(&conn, &job.id, Some(&w.code), Some(&w.message));
+        }
+        return;
+    }
     let features = offer.as_ref().map(|o| o.features.clone()).unwrap_or_default();
     let Some((job, plan)) = fit_plan_to(&conn, job, plan, &features) else { return };
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
@@ -2613,6 +2681,18 @@ fn secret_feature_wait() -> frames::Refusal {
 
 /// Why a `--cache` job waits for its node (protocol 6): the node's
 /// k2-node is older than 0.46.6 (or rolled back since the job was sent).
+/// Why a receipt-v2 job waits for its node: it doesn't offer `receipt-v2`
+/// (a k2-node before protocol 9, or a node that can't sign its statement).
+pub(crate) fn receipt_v2_feature_wait() -> frames::Refusal {
+    frames::Refusal::new(
+        RECEIPT_V2_WAIT,
+        "the node's k2-node doesn't sign receipt v2 yet (protocol 9; k2 compute node update <node>)",
+    )
+}
+
+/// [`receipt_v2_feature_wait`]'s code.
+pub const RECEIPT_V2_WAIT: &str = "node_too_old_for_receipt_v2";
+
 fn cache_feature_wait() -> frames::Refusal {
     frames::Refusal::new(
         pcache::codes::NODE_TOO_OLD_FOR_CACHE,

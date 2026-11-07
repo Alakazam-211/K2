@@ -34,6 +34,7 @@ pub mod session;
 pub mod setup;
 pub mod slots;
 pub mod spool;
+pub mod statement;
 pub mod status;
 pub mod sync;
 pub mod sysinfo;
@@ -50,16 +51,32 @@ pub const PRODUCT_VERSION: &str = env!("K2_PRODUCT_VERSION");
 /// `k2_node_proto::PROTOCOL` (a test pins them together).
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=8 os=linux arch=x86_64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=9 os=linux arch=x86_64;");
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=8 os=linux arch=aarch64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=9 os=linux arch=aarch64;");
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=8 os=macos arch=x86_64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=9 os=macos arch=x86_64;");
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=8 os=macos arch=aarch64;");
+pub static BUILD_MARKER: &str = concat!("K2_NODE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=9 os=macos arch=aarch64;");
+
+/// The build commit marker (vs-live V8; `build.rs`): `c=` 40 hex, or
+/// `none` for a build without `K2_NODE_BUILD_COMMIT`. Exactly once in the
+/// binary, beside [`BUILD_MARKER`] (never inside it: older verifiers parse
+/// that one strictly).
+#[used]
+pub static COMMIT_MARKER: &str = concat!("K2_NODE_COMMIT c=", env!("K2_NODE_COMMIT"), ";");
+
+/// The commit this build was made from ([`COMMIT_MARKER`]), when known.
+pub fn build_commit() -> Option<&'static str> {
+    // `env!`, not a parse of the marker: no second copy of its prefix
+    // lands in the binary (the release checks count the marker).
+    let _ = COMMIT_MARKER;
+    let c = env!("K2_NODE_COMMIT");
+    (c.len() == 40 && c.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))).then_some(c)
+}
 
 /// Present only in a `test-keys` build (it also trusts the TEST minisign
 /// key); release signing must refuse a binary that contains it.
@@ -82,5 +99,18 @@ mod build_tests {
         assert_eq!(m[0].version.to_string(), super::PRODUCT_VERSION);
         assert_eq!(m[0].os, crate::sysinfo::os_label());
         assert_eq!(m[0].arch, std::env::consts::ARCH, "asset arch names are Rust arch names (aarch64), not labels (arm64)");
+    }
+
+    /// V8: the commit marker is its own string (the build marker keeps its
+    /// four fields, so older nodes and `sign-k2-node.sh` still parse it),
+    /// and `build_commit` reads it back only when it is a real commit.
+    #[test]
+    fn commit_marker_is_separate_and_reads_back() {
+        assert!(super::COMMIT_MARKER.starts_with("K2_NODE_COMMIT c=") && super::COMMIT_MARKER.ends_with(';'));
+        assert!(!super::BUILD_MARKER.contains("commit"));
+        match env!("K2_NODE_COMMIT") {
+            "none" => assert_eq!(super::build_commit(), None),
+            c => assert_eq!(super::build_commit(), Some(c)),
+        }
     }
 }

@@ -122,6 +122,12 @@ impl Node {
                 return None;
             }
         }
+        // Protocol 9: a receipt version this node doesn't make (a v2 plan
+        // from a session below 9 can't be honest either).
+        if let Some(detail) = self.receipt_v_refusal(t, &a.plan) {
+            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(super::ci::RECEIPT_V_UNKNOWN), Some(&detail)));
+            return None;
+        }
         // Only the owner, on a node nobody shares, takes today's path. Any
         // other server always goes through its share (a paused, expired or
         // revoked share must never fall back to "solo").
@@ -434,8 +440,10 @@ impl Node {
     fn unrun_receipt(&self, t: &Tenant, r: &crate::ledger::Row) -> Result<SignedReceipt, String> {
         let mut env_names: Vec<String> = r.plan.env.keys().cloned().collect();
         env_names.sort();
+        // Receipt v2 when the plan asked: the facts as it ended unrun.
+        let run = (r.plan.receipt_v == Some(frames::RECEIPT_V2)).then(|| self.run_facts(t, self.base_isolation(&r.plan), None)).flatten();
         let receipt = Receipt {
-            v: 1,
+            v: if run.is_some() { frames::RECEIPT_V2 } else { frames::RECEIPT_V1 },
             job_id: r.job_id.clone(),
             attempt: r.attempt,
             generation: r.generation,
@@ -456,7 +464,7 @@ impl Node {
             artifacts: Vec::new(),
             secret_env: Vec::new(),
             tools_used: Default::default(),
-            run: None,
+            run,
         };
         SignedReceipt::sign(&self.key, &receipt)
     }

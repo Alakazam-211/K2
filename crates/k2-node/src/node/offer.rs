@@ -204,6 +204,16 @@ impl Node {
                 }
             }
         }
+        // Protocol 9 (C0): the signed self-statement (`node_statement`)
+        // and receipt v2, only to a server that speaks 9, and only while
+        // the node holds a signed statement (receipt v2 names it).
+        if t.speaks_ci() && self.statement_signed().is_some() {
+            for feat in [k2_node_proto::ci::FEATURE_NODE_STATEMENT, k2_node_proto::ci::FEATURE_RECEIPT_V2] {
+                if !f.iter().any(|x| x == feat) {
+                    f.push(feat.to_string());
+                }
+            }
+        }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.
         if t.speaks_easy() {

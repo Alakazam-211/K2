@@ -145,6 +145,11 @@ pub struct RunFacts {
     /// The Rust channels it resolved (never moved under it).
     #[serde(default)]
     pub rust: Vec<String>,
+    /// Protocol 9: receipt v2's start-time facts (a plan with
+    /// `receipt_v: 2`), so the process that adopts the job signs what was
+    /// true when it started. Absent otherwise (older rows read as none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_run: Option<k2_node_proto::ci::RunFacts>,
 }
 
 /// Phase 1's sort of this boot's open rows with run facts.
@@ -319,6 +324,7 @@ impl Node {
         }
         let caps = self.queue_caps();
         self.fairq.started(t.slot, &a, self.now(), &caps);
+        self.set_ci_run(t, &job, gen, f.ci_run.clone());
         let lease = f.lease.as_ref().map(|l| {
             if let Some(n) = l.slot {
                 self.slots.lock().unwrap().mark_busy(&l.project_key, n);

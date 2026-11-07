@@ -260,6 +260,18 @@ pub enum JobOp {
     /// `tenant.wipe` (V64): only for a slot `servers.toml` no longer
     /// approves (revoked, or no line), with no unit of that slot loaded.
     TenantWipe(share::TenantWipe),
+    /// Protocol 9 (C0, vs-live V10): root's copy of the node key's taint
+    /// mark, in the executor's state (`key-taint.json`), where a job running
+    /// as the node user can't erase it. `mark` set: a job of that key
+    /// started under the wall `none` (recorded once, never cleared). The
+    /// answer says whether root holds a mark for the key. Needs no wall. An
+    /// older executor refuses the op; the node keeps its own mark and asks
+    /// again at its next start.
+    KeyTaint {
+        node_fp: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mark: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +350,8 @@ pub enum JobAnswer {
     Done { detail: Value },
     Refused(AdminRefusal),
     Tenants(TenantWall),
+    /// [`JobOp::KeyTaint`]: root holds a taint mark for the key.
+    KeyTaint { tainted: bool },
 }
 
 /// What `systemctl show` says about a job unit.
@@ -1174,8 +1188,31 @@ impl Executor {
             JobOp::Tenants => Ok(JobAnswer::Tenants(self.tenant_wall())),
             JobOp::TenantPrepare(p) => self.tenant_prepare(p).map(|detail| JobAnswer::Done { detail }),
             JobOp::TenantWipe(w) => self.tenant_wipe(w).map(|detail| JobAnswer::Done { detail }),
+            JobOp::KeyTaint { node_fp, mark } => self.key_taint(node_fp, mark.as_deref()),
         };
         r.unwrap_or_else(JobAnswer::Refused)
+    }
+
+    /// [`JobOp::KeyTaint`]: read (and with `mark`, add) root's taint mark
+    /// for a node key. Audited when a mark is new.
+    fn key_taint(&self, node_fp: &str, mark: Option<&str>) -> Result<JobAnswer, AdminRefusal> {
+        if !k2_node_proto::ci::is_fp(node_fp) {
+            return Err(refuse(code::BAD_ARGS, "node_fp is 64 lowercase hex"));
+        }
+        let path = self.paths.state_dir.join(crate::statement::TAINT_FILE);
+        if let Some(why) = mark {
+            let new = crate::statement::mark_taint(&path, node_fp, why, self.now()).map_err(|e| refuse(code::FAILED, e))?;
+            if new {
+                let _ = self.audit().append(
+                    super::store::AuditEntry { event: "key_taint".into(), detail: json!({"node_fp": node_fp, "why": why}), ..Default::default() },
+                    self.now(),
+                );
+            }
+            return Ok(JobAnswer::KeyTaint { tainted: true });
+        }
+        // An unreadable root file is a mark (fail closed).
+        let tainted = crate::statement::read_taint(&path).map(|f| f.keys.contains_key(node_fp)).unwrap_or(true);
+        Ok(JobAnswer::KeyTaint { tainted })
     }
 
     /// A K2 job unit (the slot is in its name, so an op can only ever

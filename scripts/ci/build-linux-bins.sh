@@ -160,6 +160,11 @@ test "$(grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;
     || { echo "FATAL: $HELPER has no single build marker" >&2; exit 1; }
 test "$(grep -a -o 'K2_NODE_BUILD v=[0-9.]* proto=[0-9]* os=linux arch=[a-z0-9_]*;' "$OUT/$NODE" | wc -l)" = 1 \
     || { echo "FATAL: $NODE has no single build marker" >&2; exit 1; }
+# V8: the commit k2-node reports in its signed self-statement.
+if [ -n "${K2_NODE_BUILD_COMMIT:-}" ]; then
+    test "$(grep -a -o "K2_NODE_COMMIT c=$K2_NODE_BUILD_COMMIT;" "$OUT/$NODE" | wc -l)" = 1 \
+        || { echo "FATAL: $NODE doesn't carry K2_NODE_COMMIT c=$K2_NODE_BUILD_COMMIT exactly once" >&2; exit 1; }
+fi
 test "$(grep -a -o 'K2_APP_ENGINE_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "$OUT/$ENGINE" | wc -l)" = 1 \
     || { echo "FATAL: $ENGINE has no single build marker" >&2; exit 1; }
 if [ "$OAUTH_MODE" = "baked" ]; then

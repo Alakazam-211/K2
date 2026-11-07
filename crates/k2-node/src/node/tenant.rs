@@ -378,6 +378,14 @@ impl Tenant {
         self.protocol() >= k2_node_proto::host::PROTOCOL_HOST
     }
 
+    /// Does this session get the CI formats (protocol 9,
+    /// [`k2_node_proto::frames::PROTOCOL_CI`]): the `node_statement` frame,
+    /// the `node-statement` / `receipt-v2` / `job-uid` features, receipt v2
+    /// and per-job uids? A protocol-8 server sees 0.46.9's node.
+    pub fn speaks_ci(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_CI
+    }
+
     pub fn share(&self) -> Option<ShareInfo> {
         self.share.lock().unwrap().clone()
     }

@@ -102,6 +102,9 @@ pub struct Fake {
     pub last_sas: Arc<Mutex<Option<String>>>,
     /// The routes its `Welcome` teaches the node (none by default).
     pub welcome_routes: Arc<Mutex<Vec<String>>>,
+    /// What it says in `Challenge.protocol` (default this build's
+    /// `PROTOCOL`; mixed-version tests set an older one).
+    pub server_protocol: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Fake {
@@ -116,12 +119,14 @@ impl Fake {
         let last_sas = Arc::new(Mutex::new(None));
         let welcome_routes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let wr = welcome_routes.clone();
+        let server_protocol = Arc::new(std::sync::atomic::AtomicU32::new(frames::PROTOCOL));
+        let sp = server_protocol.clone();
         let (ctx, crx) = mpsc::unbounded_channel();
         let (k, n, c, r, a, s) = (key.clone(), nodes.clone(), codes.clone(), resume.clone(), attaches.clone(), last_sas.clone());
         tokio::spawn(async move {
             loop {
                 let Ok((tcp, _)) = listener.accept().await else { return };
-                let (k, n, c, r, a, s, ctx, wr) = (k.clone(), n.clone(), c.clone(), r.clone(), a.clone(), s.clone(), ctx.clone(), wr.clone());
+                let (k, n, c, r, a, s, ctx, wr, sp) = (k.clone(), n.clone(), c.clone(), r.clone(), a.clone(), s.clone(), ctx.clone(), wr.clone(), sp.clone());
                 tokio::spawn(async move {
                     let path = Arc::new(Mutex::new(String::new()));
                     let p2 = path.clone();
@@ -137,12 +142,12 @@ impl Fake {
                         serve_enroll(ws, &k, &n, &c, &s).await;
                     } else if p == "/cli/compute/attach" {
                         a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        serve_attach(ws, k, n, r, ctx, wr).await;
+                        serve_attach(ws, k, n, r, ctx, wr, sp.load(std::sync::atomic::Ordering::SeqCst)).await;
                     }
                 });
             }
         });
-        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas, welcome_routes }
+        Self { key, base, nodes, codes, resume, conns: crx, attaches, last_sas, welcome_routes, server_protocol }
     }
 
     pub async fn next_conn(&mut self) -> Conn {
@@ -255,6 +260,7 @@ async fn serve_attach<S>(
     resume: Arc<Mutex<Vec<ResumeHint>>>,
     conns: mpsc::UnboundedSender<Conn>,
     welcome_routes: Arc<Mutex<Vec<String>>>,
+    protocol: u32,
 ) where
     S: futures_util::Sink<Message> + futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin + Send + 'static,
 {
@@ -264,7 +270,7 @@ async fn serve_attach<S>(
     let cfp = key.fingerprint();
     let nonce_c = crypto::nonce_b64().unwrap();
     let sig = key.sign_domain(frames::DOMAIN_ATTACH_CONTROLLER, &[h.nonce_n.as_bytes(), h.node_fp.as_bytes(), nonce_c.as_bytes()]).unwrap();
-    send_hs(&mut ws, &HandshakeFrame::Challenge(Challenge { controller_fp: cfp.clone(), nonce_c: nonce_c.clone(), sig, protocol: frames::PROTOCOL })).await;
+    send_hs(&mut ws, &HandshakeFrame::Challenge(Challenge { controller_fp: cfp.clone(), nonce_c: nonce_c.clone(), sig, protocol })).await;
     let Some(HandshakeFrame::Proof(p)) = recv_hs(&mut ws).await else { return };
     if !crypto::verify_domain(&spki, frames::DOMAIN_ATTACH_NODE, &[nonce_c.as_bytes(), cfp.as_bytes(), h.nonce_n.as_bytes()], &p.sig) {
         return;

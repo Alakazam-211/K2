@@ -76,10 +76,22 @@ and the signed `v` names its schema. "Node roster" is never shortened to
   byte-identical (§7).
 - **TOML files (§8 policy, §9 ci.toml):** they carry `version = 1`. Unknown
   keys are refused, and enum values are `snake_case` like the wire.
-- **Protocol 9** is `frames::PROTOCOL_CI`. `frames::PROTOCOL` stays 8 until
-  the commit that makes k2-node offer the first protocol-9 feature: one
-  bump for all node parts. Until then nothing sends these formats, and
-  protocol 8 is exactly 0.46.9's.
+- **Protocol 9** is `frames::PROTOCOL_CI`. `frames::PROTOCOL` moved to 9
+  with slice C0, the first node part that offers a protocol-9 feature
+  (one bump for all node parts). How the node's documents travel:
+  - the self-statement (§2): the `node_statement` frame, once per session
+    and again whenever it changes;
+  - receipt v2 (§7): the `receipt` frame, with the statement its
+    `run.statement_digest` names beside it (`ReceiptFrame.statement`).
+    The server keeps that statement with the receipt, and
+    `/cli/compute/jobs/receipt` returns it (`statement`) next to `body`,
+    `signature`, `node_public_key_pem` and `plan`;
+  - a submit asks for v2 with `receiptV: 2` (`k2 compute run
+    --receipt-v2`).
+- The k2-node build commit (§2 `k2node_commit`, V8) is its own marker,
+  `K2_NODE_COMMIT c=<40 hex>;`, beside `K2_NODE_BUILD …;`. It is not a
+  field of the build marker, because older nodes and `sign-k2-node.sh`
+  parse that marker strictly.
 - The rule is additive, as in every protocol before it:
   - A node offers a protocol-9 feature only to a server that said protocol
     ≥ 9.

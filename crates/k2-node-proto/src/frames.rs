@@ -91,12 +91,13 @@ use crate::crypto::{self, SigningKey};
 /// 9 = CI on compute for clients (prd-ci-on-compute-for-clients-v1;
 /// [`crate::ci`], `docs/ci-formats-v1.md`): node self-statements, the
 /// owner-signed node roster, receipt v2 (`Plan.receipt_v`, `Receipt.run`),
-/// lanes, per-job uids. Defined as [`PROTOCOL_CI`]; `PROTOCOL` itself moves
-/// to 9 in the commit that makes k2-node offer the first of
-/// [`crate::ci::FEATURES`] (one bump for every node part, vs-live B1). Until
-/// then the formats exist and nothing sends them, so protocol 8 is exactly
-/// 0.46.9's.
-pub const PROTOCOL: u32 = 8;
+/// lanes, per-job uids. Defined as [`PROTOCOL_CI`] (one bump for every node
+/// part, vs-live B1). Additive: a node offers `node-statement` and
+/// `receipt-v2` (and later the other [`crate::ci::FEATURES`]) and sends the
+/// `node_statement` frame and `ReceiptFrame.statement` only to a server
+/// that said protocol ≥ 9; a server writes `Plan.receipt_v` only for a node
+/// offering `receipt-v2`. A protocol-8 peer sees exactly 0.46.9's frames.
+pub const PROTOCOL: u32 = 9;
 
 /// The first protocol with the CI formats ([`crate::ci`]). Additive like
 /// every bump before it: a node offers a [`crate::ci::FEATURES`] entry only
@@ -431,6 +432,11 @@ pub enum Frame {
     /// Protocol 8: a git token for one granted repo of a job (only to a
     /// server that said protocol ≥ 8).
     GitCredNeed(GitCredNeed),
+    /// Protocol 9: the node's signed self-statement
+    /// ([`crate::statement::NodeStatement`], `docs/ci-formats-v1.md` §2),
+    /// sent when a session starts and whenever it changes. Only to a server
+    /// that said protocol ≥ 9 (older parsers reject unknown variants).
+    NodeStatement(crate::ci::Signed),
 }
 
 impl Frame {
@@ -473,7 +479,8 @@ impl Frame {
             | Frame::SecretNeed(_)
             | Frame::PkgRequestFwd(_)
             | Frame::PkgRequestDone(_)
-            | Frame::GitCredNeed(_) => Direction::NodeToController,
+            | Frame::GitCredNeed(_)
+            | Frame::NodeStatement(_) => Direction::NodeToController,
         }
     }
 
@@ -517,6 +524,7 @@ impl Frame {
             Frame::GitCredNeed(_) => "git_cred_need",
             Frame::GitCred(_) => "git_cred",
             Frame::GitCredRefused(_) => "git_cred_refused",
+            Frame::NodeStatement(_) => "node_statement",
         }
     }
 }
@@ -1313,6 +1321,13 @@ pub struct ReceiptFrame {
     pub job_id: String,
     pub generation: u32,
     pub receipt: SignedReceipt,
+    /// Protocol 9, receipt v2 only: the node self-statement its
+    /// `run.statement_digest` names (the one in force when the job
+    /// started), so the controller can keep it beside the receipt for the
+    /// evidence bundle. Absent for a v1 receipt, so a protocol-8 server
+    /// sees 0.46.9's frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement: Option<crate::ci::Signed>,
 }
 
 /// `artifact_get`: send one kept artifact of an attempt.
@@ -1475,6 +1490,25 @@ impl Receipt {
             (RECEIPT_V2, None) => Err("receipt v2 without its run facts".into()),
             (v, _) => Err(format!("receipt version {v} is not 1 or 2")),
         }
+    }
+
+    /// Receipt v2: `st` is the node self-statement `run.statement_digest`
+    /// names, signed by this receipt's own node key at the same key epoch;
+    /// returned opened. Whose key that is stays the caller's pin (the
+    /// receipt's own signature is checked against it).
+    pub fn check_statement(&self, st: &crate::ci::Signed) -> Result<crate::statement::NodeStatement, String> {
+        let run = self.run.as_ref().ok_or("a v1 receipt names no statement")?;
+        if st.digest() != run.statement_digest {
+            return Err("the statement is not the one the receipt names (statement_digest)".into());
+        }
+        let doc = crate::statement::NodeStatement::open(st)?;
+        if doc.node_fp != self.node_fp {
+            return Err("the statement is another node key's".into());
+        }
+        if doc.key_epoch != run.key_epoch {
+            return Err("the statement's key epoch is not the receipt's".into());
+        }
+        Ok(doc)
     }
 }
 
@@ -2041,5 +2075,103 @@ mod tests {
         assert!(seal(&k, Direction::ControllerToNode, "s", 0, &view).is_err());
         let t = seal(&k, Direction::NodeToController, "s", 0, &view).unwrap();
         assert_eq!(open(k.spki_der(), Direction::NodeToController, "s", 0, &t).unwrap(), view);
+    }
+
+    /// Protocol 9 (C0): the statement frame travels node → controller only;
+    /// a v1 receipt frame is 0.46.9's (no `statement` key); a v2 receipt's
+    /// statement is checked against the digest, key and epoch it names.
+    #[test]
+    fn statement_frames_and_receipt_v2_statement_check() {
+        use crate::ci::{Isolation, RunFacts, Signed, Taint, Wall};
+        use crate::statement::{KeyExposure, NodeStatement};
+        let k = SigningKey::generate().unwrap();
+        let doc = |epoch: u32| NodeStatement {
+            v: 1,
+            node_fp: k.fingerprint(),
+            node_spki: crypto::b64(k.spki_der()),
+            key_epoch: epoch,
+            key_born_at: 10,
+            prev_fp: (epoch > 0).then(|| "a".repeat(64)),
+            issued_at: 20,
+            wall: Wall::JobUser,
+            dev: false,
+            taint: Taint::Clean,
+            key_exposure: KeyExposure { store: crate::ci::KeyStore::File, owner: "k2node".into(), mode: Some(0o600), job_readable: false },
+            k2node_version: "0.46.10".into(),
+            k2node_commit: None,
+            protocol: PROTOCOL,
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            distro: None,
+            distro_version: None,
+            kernel: None,
+            ptrace_scope: Some(1),
+            host_id: None,
+        };
+        let st = doc(0).sign(&k).unwrap();
+        let f = Frame::NodeStatement(st.clone());
+        assert_eq!((f.direction(), f.kind()), (Direction::NodeToController, "node_statement"));
+        assert!(seal(&k, Direction::ControllerToNode, "s", 0, &f).is_err());
+        let t = seal(&k, Direction::NodeToController, "s", 0, &f).unwrap();
+        assert_eq!(open(k.spki_der(), Direction::NodeToController, "s", 0, &t).unwrap(), f);
+        // A v1 receipt frame: no `statement` key at all.
+        let sr = SignedReceipt { body: "{}".into(), sig: "x".into() };
+        let rf = ReceiptFrame { job_id: "j".into(), generation: 1, receipt: sr.clone(), statement: None };
+        assert_eq!(serde_json::to_string(&rf).unwrap(), r#"{"job_id":"j","generation":1,"receipt":{"body":"{}","sig":"x"}}"#);
+        // A 0.46.9 frame (no key) still parses.
+        let old: ReceiptFrame = serde_json::from_str(r#"{"job_id":"j","generation":1,"receipt":{"body":"{}","sig":"x"}}"#).unwrap();
+        assert_eq!(old.statement, None);
+        let run = RunFacts {
+            isolation: Isolation::JobUid,
+            uid_index: Some(2),
+            wall: Wall::JobUser,
+            tenant_slot: 1,
+            k2node_version: "0.46.10".into(),
+            k2node_commit: None,
+            key_epoch: 0,
+            statement_digest: st.digest(),
+            roster_seq_seen: None,
+            lane: None,
+        };
+        let r = Receipt {
+            v: RECEIPT_V2,
+            job_id: "j".into(),
+            attempt: 1,
+            generation: 1,
+            plan_digest: "sha256:x".into(),
+            node_fp: k.fingerprint(),
+            controller_fp: "c".into(),
+            workspace_id: "w".into(),
+            argv_sha256: argv_sha256(&["true".into()]),
+            env_names: vec![],
+            src: None,
+            tools: BTreeMap::new(),
+            boot_id: "b".into(),
+            started_at: Some(1),
+            ended_at: 2,
+            state: JobState::Done,
+            exit: None,
+            log: ReceiptLog { sha256: "s".into(), bytes: 0, truncated: false },
+            artifacts: Vec::new(),
+            secret_env: Vec::new(),
+            tools_used: BTreeMap::new(),
+            run: Some(run.clone()),
+        };
+        r.check_version().unwrap();
+        assert_eq!(r.check_statement(&st).unwrap(), doc(0));
+        // Another statement (the digest differs), a doctored one, another
+        // key's, another epoch's: refused.
+        let st1 = doc(1).sign(&k).unwrap();
+        assert!(r.check_statement(&st1).unwrap_err().contains("statement_digest"));
+        let forged = Signed { body: st.body.replace("\"dev\":false", "\"dev\":true"), sig: st.sig.clone() };
+        assert!(r.check_statement(&forged).is_err());
+        let other = SigningKey::generate().unwrap();
+        let theirs = NodeStatement { node_fp: other.fingerprint(), node_spki: crypto::b64(other.spki_der()), ..doc(0) }.sign(&other).unwrap();
+        let r2 = Receipt { run: Some(RunFacts { statement_digest: theirs.digest(), ..run.clone() }), ..r.clone() };
+        assert!(r2.check_statement(&theirs).unwrap_err().contains("another node key"));
+        let r3 = Receipt { run: Some(RunFacts { key_epoch: 1, statement_digest: st.digest(), ..run }), ..r.clone() };
+        assert!(r3.check_statement(&st).unwrap_err().contains("epoch"));
+        let v1 = Receipt { v: RECEIPT_V1, run: None, ..r };
+        assert!(v1.check_statement(&st).is_err());
     }
 }

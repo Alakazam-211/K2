@@ -583,6 +583,19 @@ impl Node {
         let gen = a.fence.generation;
         let dirs = JobDirs::new(t.paths.job_dir(&job, gen));
         let unit_mode = matches!(self.wall, Wall::JobUser { .. });
+        // V10: a job starting under the wall `none` taints the node key,
+        // whatever the reason (`--dev`, an executor that isn't ready,
+        // `--no-job-wall`). Before receipt v2's facts are taken, so they
+        // name the statement that says so.
+        if let Wall::None { why } = &self.wall {
+            self.mark_unwalled_start(why);
+        }
+        // Protocol 9: receipt v2's facts as the job starts (a per-job uid
+        // is filled in when the executor gives one).
+        if a.plan.receipt_v == Some(k2_node_proto::frames::RECEIPT_V2) {
+            let f = self.run_facts(&t, self.base_isolation(&a.plan), None);
+            self.set_ci_run(&t, &job, gen, f);
+        }
         // A tenant's job runs only behind its own wall (V59): nothing of it
         // is made before that's sure.
         let network = match self.tenant_wall_check(&t).await.and_then(|_| self.job_network(&t)) {
@@ -911,6 +924,7 @@ impl Node {
             tools_used: tools_used.clone(),
             log_dropped: 0,
             rust: self.jobs.lock().unwrap().get(&(t.slot, job.clone())).map(|j| j.rust.clone()).unwrap_or_default(),
+            ci_run: self.ci_run(&t, &job, gen),
         });
         // C18: the provisional facts are on disk before anything starts, so
         // a crash between the spawn and `set_running` still leaves what the
@@ -2090,8 +2104,19 @@ impl Node {
             env_names.push(k2_node_proto::cache::ENV_JOB_CACHE.to_string());
         }
         env_names.sort();
+        // Receipt v2 (protocol 9) when the plan asked and the start-time
+        // facts are here; otherwise v1, exactly as before (V7).
+        let run = self.take_ci_run(t, job, gen);
+        let run = match (a.plan.receipt_v, run) {
+            (Some(k2_node_proto::frames::RECEIPT_V2), Some(r)) => Some(r),
+            (Some(k2_node_proto::frames::RECEIPT_V2), None) => {
+                crate::nlog!("receipt for {job} gen {gen}: no start-time facts for receipt v2; it is signed as v1");
+                None
+            }
+            _ => None,
+        };
         let receipt = Receipt {
-            v: 1,
+            v: if run.is_some() { k2_node_proto::frames::RECEIPT_V2 } else { k2_node_proto::frames::RECEIPT_V1 },
             job_id: job.clone(),
             attempt: a.fence.attempt,
             generation: gen,
@@ -2113,8 +2138,7 @@ impl Node {
             // SE29: names only.
             secret_env: a.plan.secret_env.clone(),
             tools_used: outputs.as_ref().map(|o| o.tools_used.clone()).unwrap_or_default(),
-            // Receipt v2 (`Plan.receipt_v`) is protocol 9's; this node sends v1.
-            run: None,
+            run,
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
         if let Err(e) = &signed {

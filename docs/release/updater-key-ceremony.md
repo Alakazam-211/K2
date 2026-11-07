@@ -193,45 +193,176 @@ A failure in (a) or (b) switches the approval to the passphrase fallback
 
 ### K2 Compute builds (S3b)
 
-With `K2_LINUX_BUILDS=compute`, the x86 Linux daemon is built on our own
-nodes. The signer signs it only on the jobs' **node-signed receipts**,
-which it checks itself against node keys **root pinned** in
+With `K2_LINUX_BUILDS=compute`, the x86 Linux files are built on our own
+nodes: L1 (the binaries) and V1 (the same binaries again, on a second node).
+The signer signs the daemon only on the jobs' **node-signed receipts**,
+which it checks itself against keys **root pinned** in
 `/usr/local/etc/k2sign/compute-pins` (in `pins.sha256`, like
-`approver.pem`). The full rule list is in `docs/ci-on-k2-compute.md`
-("Signing"). The pins, once per signing Mac and again when a release node
-is re-enrolled (its key changes):
+`approver.pem`): the pinned controller sent both jobs, L1 and V1 ran on two
+different pinned nodes, both were exclusive secret jobs, and V1 rebuilt the
+daemon, root helper, k2-node and App engine byte for byte. The full rule
+list is in `docs/ci-on-k2-compute.md` ("Signing").
 
-1. `sudo bash scripts/k2sign/install.sh` from the reviewed S3b commit (new
-   signer, policy keys `compute_*`).
-2. The controller: this Mac's K2 compute key fingerprint. Derive it here,
-   then check it against `controller_fp` in a receipt this Mac's K2 got
-   (`k2 compute receipt <job> --json`):
-   `openssl pkey -in ~/.k2/tunnel-key.pem -pubout -outform DER | shasum -a 256`
-   then `sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <fp>`.
-3. Each release node (L1 and V1, at least `K2_COMPUTE_X86_NODE` and
-   `K2_COMPUTE_VERIFY_NODE`):
-   - **The fingerprint, out of band.** Read `node_fp` in that node's own
-     `run/status.json` on the node itself: at its console, or over ssh from
-     another machine (not this Mac, whose release user is what the pin
-     guards against). Write the 64 hex down.
-   - **The key.** Save `node_public_key_pem` from a receipt of a job it ran
-     (`k2 compute receipt <job> --json`, as this Mac's K2 pinned it at
-     enrollment) to a file.
-   - `sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node <name> /abs/path/<name>.pem <the fingerprint you wrote down>`.
-     Type the fingerprint yourself. The signer refuses the pin unless the
-     key's fingerprint is that one, so a key swapped on this Mac's side is
-     never pinned.
-   - A re-enrolled node has a new key: `unpin-compute-node <name>`, then pin again.
-4. `sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-pins` lists
-   them; release.sh's pre-flight refuses compute mode until the controller
-   and both release nodes are there.
+**The sitting (z3mbpZ, once, and again when a release node gets a new
+key).** At z3mbpZ in a GUI terminal (iTerm), as the release user, in the
+release checkout. About 1–1.5 h, most of it the shadow build in step 5.
+Each block is one copy-paste; replace only the `<…>` parts.
+
+**1. The reviewed commit, and the signer**
+
+```
+cd ~/DevProjects/Alakazam\ Labs/K2 && git fetch origin && git checkout --detach <the sha K2 names>
+sudo bash scripts/k2sign/install.sh
+```
+
+**2. The OAuth values in the vault** (the release builds get them as
+secrets; never typed on a command line). Each `read` waits for you to paste
+the value (nothing is shown), then press Enter. The values are in the
+checkout's `.env` (`K2_GMAIL_CLIENT_ID=…`, `K2_GMAIL_CLIENT_SECRET=…`): open
+it in an editor, don't `cat` it.
+
+```
+WS=pod-leader
+printf 'Gmail client id: '; read -rs V; echo; printf %s "$V" | k2 vault set K2_GMAIL_CLIENT_ID --scope "ws:$WS" --kind generic --delivery env; unset V
+printf 'Gmail client secret: '; read -rs V; echo; printf %s "$V" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --kind generic --delivery env; unset V
+```
+
+Then share both with each release node, as the env names the build reads
+(each grant asks for Touch ID or the vault password):
+
+```
+WS=pod-leader
+for N in k2n7-vin k2n8-vin k2n9-vin; do
+  k2 vault grant K2_GMAIL_CLIENT_ID --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_ID
+  k2 vault grant K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_SECRET
+done
+```
+
+(If `.env` has a real `K2_MICROSOFT_CLIENT_ID`, do the same for it, as
+`BUILD_MICROSOFT_CLIENT_ID`.) Copy some other text afterwards so the secret
+isn't left on the clipboard.
+
+**3. On each release node, at its own console** (k2n7-vin = L1 and
+k2n9-vin = V1; k2n8-vin too if it may stand in): its keyboard and screen,
+or ssh from a machine that is **not** z3mbpZ. Never copy these numbers from
+`k2 compute nodes` or anything else on z3mbpZ: the pins guard against
+z3mbpZ's own user.
+
+```
+python3 -c 'import json; s = json.load(open("/var/lib/k2node/run/status.json")); print("node_fp      ", s["node_fp"]); print("wall         ", s["wall"], " dev", s.get("dev", False)); print("owner server ", s.get("controller"), s.get("controller_fp")); [print("server       ", x["label"], x.get("fp"), x["trust"]) for x in s.get("servers", [])]'
+cat /proc/sys/kernel/yama/ptrace_scope
+```
+
+Write down, per node: `node_fp` (64 hex), and the fingerprint on z3mbpZ's
+line (`z3thon.k2.dev`: the owner line, or a `server` line with trust `own`).
+Check:
+- `wall` is `job_user` and `dev` is `False`. A node that ever ran without
+  the job wall (an install from before the wall, or any `--dev` run) needs a
+  **new node key before it is pinned**: don't pin it; tell K2, which sends
+  the re-key steps, or use another release node.
+- `ptrace_scope` prints 1, 2 or 3 (the release nodes need
+  `kernel.yama.ptrace_scope >= 1`, so a job can't ptrace another process
+  of its uid). If it prints 0:
+  `echo 'kernel.yama.ptrace_scope = 1' | sudo tee /etc/sysctl.d/60-k2-ptrace.conf && sudo sysctl --system`
+- Release builds are `--exclusive` (alone on the node). If z3mbpZ is not
+  the node's owner server, its share there needs `exclusive`
+  (`k2 compute node servers <node> limits <server> exclusive=true` from the
+  owner server); its grant needs `--ci` as before.
+
+**4. The controller pin** (back at z3mbpZ). Root reads this Mac's K2 key and
+refuses a fingerprint that isn't its own:
+
+```
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <z3mbpZ's fingerprint from step 3> "$HOME/.k2/tunnel-key.pem"
+```
+
+**5. A shadow build of this commit** (L1, L3, V1 on the nodes; nothing is
+tagged, signed or published):
+
+```
+SHA="$(git rev-parse HEAD)"; A="$HOME/k2-release-audit/shadow-$(printf %s "$SHA" | cut -c1-12)/compute"
+K2_COMPUTE_WORKSPACE=pod-leader bash scripts/lib/compute-release.sh --shadow-only "$SHA"
+python3 -c 'import json,sys; [print(l, "missing:", [k for k in ("body", "plan", "node_public_key_pem") if k not in json.load(open(sys.argv[1] + "/" + l + "/receipt.json"))] or "none") for l in ("L1", "V1")]' "$A"
+```
+
+It must end with every job verified (`two nodes`, `identical in both
+builds`), and both lines must say `missing: none`. `missing: [...]` means
+z3mbpZ's running K2 is older than this commit's receipt route: install a
+K2 built from this commit first.
+
+**6. The node pins.** The keys come from the receipts; the fingerprints you
+type are the ones you wrote down at each node. The signer refuses a key
+whose fingerprint differs.
+
+```
+mkdir -p ~/k2-pins
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L1/receipt.json" > ~/k2-pins/k2n7-vin.pem
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V1/receipt.json" > ~/k2-pins/k2n9-vin.pem
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n7-vin "$HOME/k2-pins/k2n7-vin.pem" <k2n7-vin's node_fp from step 3>
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n9-vin "$HOME/k2-pins/k2n9-vin.pem" <k2n9-vin's node_fp from step 3>
+```
+
+**7. Check the pins:**
+
+```
+(cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-pins)
+```
+
+It lists the controller from step 4 and k2n7-vin and k2n9-vin with the
+fingerprints you wrote down.
+
+**8. A dry signing pass** (this commit's signer, with throwaway keys in a
+temp dir, as you; no sudo; needs `minisign` 0.11+ from Homebrew). It must
+print the two `sign-daemon.sh` lines as `ok:` (a dry pass that signs, and a
+tampered V1 receipt that is refused) and end `0 failed`:
+
+```
+bash tests/release/k2sign-s3b.sh 2>&1 | grep -E 'sign-daemon.sh|passed'
+```
+
+**9. The real pins against the real receipts** (read-only: nothing is
+registered or signed). First the shadow build from step 5, which must pass:
+
+```
+python3 scripts/ci/compute_release.py evidence-bundle --state "$A" --git . > /tmp/k2-rehearse.json
+(cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-rehearse) < /tmp/k2-rehearse.json
+```
+
+It must print `rehearsal passed: L1 on k2n7-vin and V1 on k2n9-vin …`.
+Then the same with V1's receipt tampered (one byte of its signed body),
+which must be refused (exit 3, `V1: the receipt's signature does not
+verify with node k2n9-vin's pinned key`):
+
+```
+T="$(mktemp -d)"; cp -R "$A"/. "$T"/
+python3 -c 'import json,sys; p = sys.argv[1] + "/V1/receipt.json"; r = json.load(open(p)); assert "\"code\":0" in r["body"]; r["body"] = r["body"].replace("\"code\":0", "\"code\":1", 1); json.dump(r, open(p, "w"))' "$T"
+python3 scripts/ci/compute_release.py evidence-bundle --state "$T" --git . > /tmp/k2-rehearse-bad.json
+(cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-rehearse) < /tmp/k2-rehearse-bad.json; echo "exit $?"
+```
+
+Send K2 the outputs of steps 7–9. Then back to main: `git checkout main`.
+
+**A node gets a new key** (re-enrolled, or re-keyed): unpin it
+(`sudo /usr/local/libexec/k2sign/k2sign-admin unpin-compute-node <name>`),
+then steps 3, 5 and 6 for it.
+
+**Registered evidence is never replaced.** `sign-daemon.sh` registers a
+version's evidence once; a re-run with the same bundle is checked again
+and kept, and any other bundle for that version is refused. New evidence
+for the same version (the jobs were re-run) needs root first:
+`sudo /usr/local/libexec/k2sign/k2sign-admin clear-compute-evidence <version>`
+(audited as `COMPUTE-EVIDENCE-CLEARED-BY-ADMIN`).
 
 **Falling back to GitHub for a version that already has compute evidence.**
 Once evidence is registered, that version's x86 daemon signs only on it.
 To use GitHub's build instead (the fallback in `docs/ci-on-k2-compute.md`):
-`sudo /usr/local/libexec/k2sign/k2sign-admin clear-compute-evidence <version>`
-(audited as `COMPUTE-EVIDENCE-CLEARED-BY-ADMIN`). An x86 daemon already
-signed for that version stays the only bytes it signs (one sha per asset).
+the same `clear-compute-evidence <version>`. An x86 daemon already signed
+for that version stays the only bytes it signs (one sha per asset).
+
+**Tracked, not built:** the OAuth client IDs are public values, but the
+vault hands them out by name, so whoever can change the vault entries can
+change which OAuth client the daemon has baked in. Next: pin their sha256
+in the signer's policy and check the daemon's baked values against it.
 
 ## What changes
 

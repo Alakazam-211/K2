@@ -229,11 +229,15 @@ Rust). L is a Linux build, V the verify build:
 |---|---|---|
 | L1 | k2n7-vin | `scripts/ci/build-linux-bins.sh x86_64`: the daemon, k2-node, the root helper and the App engine (`--mem 20G`) |
 | L3 | k2n8-vin | `scripts/ci/build-linux-app.sh`: deb, rpm and AppImage. The app links the native voice stack (on by default since 0.46.9), so the job asks for `sys:libasound2-dev` and `--mem 24G` (a release link needs at least 20G) |
-| V1 | k2n9-vin | the same as L1, a second time on another node |
+| V1 | k2n9-vin | the same as L1, a second time on another node (never L1's: submit refuses it in every mode) |
 | L2 | — | aarch64. Waits for the ARM Linux VM node (`K2_COMPUTE_ARM_NODE`); until then GitHub builds it. |
 
 `K2_COMPUTE_X86_NODE`, `K2_COMPUTE_APP_NODE` and `K2_COMPUTE_VERIFY_NODE`
-change the nodes (`K2_COMPUTE_NODE` moves L1 and L3 together).
+change the nodes (`K2_COMPUTE_NODE` moves L1 and L3 together; never onto
+V1's node, so `K2_COMPUTE_NODE=k2n9-vin` needs another
+`K2_COMPUTE_VERIFY_NODE`). L1, V1 (and L2) are `--exclusive`: each runs
+alone on its node, so no other job, its own workspace's included, shares
+its uid while the OAuth values are in its env.
 `K2_COMPUTE_VERIFY_NODE=none` drops V1, with a loud warning.
 `K2_COMPUTE_BINS_MEM` and `K2_COMPUTE_APP_MEM` change the memory. The jobs
 name their nodes on purpose (the dual build needs two different ones), so
@@ -254,13 +258,17 @@ It then runs read-only byte checks: ELF arch, exactly one build marker,
 no test keys, ptyd embedded, and the OAuth mode (`compute` requires
 `baked`).
 
-V1 must equal L1 byte for byte for the root helper, k2-node and the App
-engine, which run as root on customer boxes. The daemon is compared and
-reported only.
+V1 must come from another node than L1 (by name, and by each signed
+receipt's `node_fp`), and equal L1 byte for byte for the daemon, the root
+helper, k2-node and the App engine: the last three run as root on customer
+boxes, and the daemon is the file the signing user signs from compute
+(0.46.9's shadow run reproduced it). Any difference fails the collect.
 
 **Running a compute release.** Before the first one:
 - the release checkout's workspace on z3mbpZ (`pod-leader`) needs grants
-  with `--ci` on k2n7-vin, k2n8-vin and k2n9-vin;
+  with `--ci` on k2n7-vin, k2n8-vin and k2n9-vin (`--ci` also allows
+  `--exclusive`; on a node z3mbpZ shares, its share needs `exclusive`);
+- each release node has `kernel.yama.ptrace_scope >= 1`;
 - the OAuth vault grants below exist;
 - the repo variable is set:
   `gh variable set LINUX_BUILDS -b compute --repo Alakazam-211/K2`;
@@ -318,14 +326,22 @@ each checked by the signer itself:
 - both jobs started after this version's first approval (and within
   `compute_receipt_max_hours`), and a receipt registered for one version
   is refused for another;
+- each job's plan is `exclusive` (alone on its node while it held the
+  OAuth values);
 - L1 and V1 ran on two different pinned nodes and their receipts list
-  the same sha256 for the root helper, k2-node and App engine (V1);
+  the same sha256 for every `compute_dual_names` file: the daemon, the
+  root helper, k2-node and App engine (V1). The signer's policy won't load
+  if a compute-signed asset isn't in that list;
 - the bytes on stdin are the `dist/k2-daemon-linux-x86_64` L1's receipt
   lists.
 
 Once a version has compute evidence, its x86 daemon signs only on it
-(no fallback to an attestation) until root runs `k2sign-admin
-clear-compute-evidence <version>` (audited) for the GitHub fallback. aarch64 still needs GitHub's
+(no fallback to an attestation), and the evidence is never replaced: the
+same bundle again is checked and kept, another one is refused, until root
+runs `k2sign-admin clear-compute-evidence <version>` (audited), for new
+evidence or the GitHub fallback. `k2sign compute-rehearse` runs every
+check but the tag on a shadow run's receipts against the real pins
+(read-only), for the ceremony and before a release. aarch64 still needs GitHub's
 attestation. The pre-flight (`k2_compute_signer_check`) refuses compute
 mode before any build unless the signer has the controller and both
 release nodes pinned and a V1 node is set. Pinning is in
@@ -382,12 +398,15 @@ tag.
    Read `~/k2-release-audit/0.46.9/compute/summary.txt` and
    `shadow-report.json`. Needs the OAuth grants (or
    `K2_COMPUTE_OAUTH=placeholder`, which can't match GitHub's daemon).
-2. **What to look for:** the root helper, k2-node and engine identical in
-   V1 and L1; the daemon identical to GitHub's (same pin, same remap, same
-   OAuth values); deb, rpm and AppImage differ (archive timestamps; not
-   expected to match). A differing ELF lists its `rustc`/`GCC` lines.
+2. **What to look for:** the daemon, root helper, k2-node and engine
+   identical in V1 and L1 (required); the daemon identical to GitHub's
+   (same pin, same remap, same OAuth values); deb, rpm and AppImage differ
+   (archive timestamps; not expected to match). A differing ELF lists its
+   `rustc`/`GCC` lines.
 3. **0.46.10: compute mode,** once S3b is installed on the signing Mac
-   (install.sh from the S3b commit, then the compute pins) and the
+   and its sitting is done (`docs/release/updater-key-ceremony.md`, "K2
+   Compute builds (S3b)": install.sh, the pins, the rehearsal), z3mbpZ's
+   running K2 has the S3b receipt route (the rehearsal checks it), and the
    0.46.9 report is clean: `gh variable set LINUX_BUILDS -b compute`, then
    `K2_LINUX_BUILDS=compute ./scripts/release.sh 0.46.10`. Fallback as
    above.
@@ -419,7 +438,7 @@ or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
    works today (job 288ebba1).
 
 **B. OAuth values for the release builds (owner, release checkout)**
-1. `(set -a; . ./.env; set +a; printf %s "$K2_GMAIL_CLIENT_ID" | k2 vault set K2_GMAIL_CLIENT_ID --scope ws:pod-leader; printf %s "$K2_GMAIL_CLIENT_SECRET" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope ws:pod-leader)`
+1. `(set -a; . ./.env; set +a; printf %s "$K2_GMAIL_CLIENT_ID" | k2 vault set K2_GMAIL_CLIENT_ID --scope ws:pod-leader --kind generic --delivery env; printf %s "$K2_GMAIL_CLIENT_SECRET" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope ws:pod-leader --kind generic --delivery env)`
    and the same for `K2_MICROSOFT_CLIENT_ID` if `.env` has a real one.
 2. For each of k2n7-vin, k2n8-vin, k2n9-vin:
    `k2 vault grant K2_GMAIL_CLIENT_ID --to compute:pod-leader/<node> --as env --env-name BUILD_GMAIL_CLIENT_ID`

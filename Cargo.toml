@@ -47,6 +47,10 @@ members = [
     # Resumable uploads and downloads against K2's transfer door, for a
     # Tauri app's Rust side; MIT OR Apache-2.0.
     "crates/k2-transfer-client",
+    # The release signer for clients (prd-ci-on-compute-for-clients-v1 C4):
+    # runs as the `_k2sign` role user beside k2sign; checks evidence
+    # bundles v2 and signs minisign/Tauri updater files.
+    "crates/k2-signer",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos
@@ -65,6 +69,13 @@ exclude = [
 # Hot-path crates below escalate to opt-level=3 in dev too.
 [profile.dev]
 opt-level = 1
+
+# k2-signer: minisign secret keys are scrypt-encrypted (N = 2^20, 1 GiB):
+# its tests decrypt one, which crawls unoptimized.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
 
 [profile.dev.package.qoi]
 opt-level = 3

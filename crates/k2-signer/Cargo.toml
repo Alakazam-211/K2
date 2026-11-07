@@ -1,0 +1,32 @@
+[package]
+name = "k2-signer"
+# Installed from a reviewed commit by scripts/k2sign/install-k2-signer.sh;
+# release.sh does not bump it.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2's release signer for clients (prd-ci-on-compute-for-clients-v1 C4): checks K2 Compute evidence bundles v2 against a per-project policy and the person's pins, and signs minisign / Tauri updater files. Runs as the `_k2sign` role user."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-signer"
+path = "src/main.rs"
+
+[dependencies]
+k2-node-proto = { path = "../k2-node-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# The approver's P-256 signature (the K2 Release Approve app).
+aws-lc-rs = "1"
+# minisign secret keys: BLAKE2b (prehash, key checksum) and scrypt (the
+# key's password). Pure Rust, already in the lock.
+blake2 = "0.10"
+scrypt = { version = "0.11", default-features = false }
+# An independent verifier for every signature made (as k2sign re-checks
+# with the minisign binary): its own BLAKE2b and Ed25519.
+minisign-verify = "0.2"
+# geteuid / getpwnam (the role user check) and chown.
+libc = "0.2"

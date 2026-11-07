@@ -4742,6 +4742,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-signer"
+version = "0.1.0"
+dependencies = [
+ "aws-lc-rs",
+ "blake2",
+ "k2-node-proto",
+ "libc",
+ "minisign-verify",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "k2-simvideo"
 version = "0.1.0"
 dependencies = [

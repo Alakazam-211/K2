@@ -41,6 +41,10 @@ for l in sys.stdin:
     mkdir -p "$OUT_REL"
     cp "$exe" "$OUT_REL/job_uid_linux"
     cp "${CARGO_TARGET_DIR:-target}/debug/k2-node" "$OUT_REL/k2-node"
+    # Debug info off: the two would be ~200 MB through the relay.
+    if command -v strip >/dev/null; then
+        strip --strip-debug "$OUT_REL/job_uid_linux" "$OUT_REL/k2-node"
+    fi
     (cd "$OUT_REL" && sha256sum job_uid_linux k2-node)
 }
 
@@ -79,7 +83,7 @@ job="$(sed -n -E 's/^\[k2 compute\] job ([0-9a-f]+) on .*/\1/p' "$tmp/build.log"
 [ -n "$job" ] || { echo "FATAL: no job id in the build output" >&2; exit 1; }
 grep -q '^\[k2 compute\] exit 0 ' "$tmp/build.log" || { echo "FATAL: the build job $job failed" >&2; exit 1; }
 mkdir -p "$tmp/bin"
-k2 compute fetch "$job" --out "$tmp/bin"
+k2 compute fetch "$job" --out "$tmp/bin" --over-relay
 bin_dir="$(dirname "$(find "$tmp/bin" -name job_uid_linux -type f | head -1)")"
 [ -f "$bin_dir/job_uid_linux" ] && [ -f "$bin_dir/k2-node" ] || { echo "FATAL: fetched artifacts lack job_uid_linux/k2-node" >&2; exit 1; }
 

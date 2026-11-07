@@ -91,9 +91,35 @@ run="$(start_run reader)"
 [ "$(wait_run reader "$run")" = "ok" ] || fail "reader run 1"
 log="$(log_of reader "$run")"
 case "$log" in *"len=0"*) ok "no grant: the workspace's own secret does not reach the job" ;; *) fail "ungranted run: $log" ;; esac
-k2 vault grant JOB_SECRET --scope "ws:$WSNAME" --to "job:$WSNAME/reader" --as env >/dev/null \
-    || fail "grant to job:reader"
-ok "granted --to job:$WSNAME/reader --as env"
+# VC-B2: a share the job can read (--as env) from the owner token
+# needs a person's confirm. The daemon refuses it without one...
+st="$(curl -s -o "$WORK/grant-noconfirm.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"scope": "workspace", "workspace": sys.argv[1], "name": "JOB_SECRET", "to": "job:" + sys.argv[1] + "/reader", "as": "env"}))' "$WSNAME")" \
+    "$BASE/cli/vault/grant?token=$TOK")"
+[ "$st" = "403" ] && grep -q '"vault_confirm_required"' "$WORK/grant-noconfirm.json" \
+    && ok "a readable grant without a confirm is refused (403 vault_confirm_required)" \
+    || fail "grant without a confirm: $st $(cat "$WORK/grant-noconfirm.json")"
+# ...so a person shares it: an Admin signed in over Connect (a login is a
+# person, so no extra confirm). Touch ID and the vault password need a
+# terminal outside K2's own process group, which a test node can't give.
+ADMIN_PW="k2test-Admin-$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+printf '%s\n' "$ADMIN_PW" | k2 users add jobadmin --role admin --password-stdin --keep-password >/dev/null \
+    || fail "users add jobadmin"
+login="$(curl -s -X POST -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"username": "jobadmin", "password": sys.argv[1]}))' "$ADMIN_PW")" \
+    "$BASE/cli/auth/login")"
+ADMIN_TOK="$(jget "$login" 'j.get("token") or j.get("session_token") or ""')"
+[ -n "$ADMIN_TOK" ] || fail "admin login: $login"
+# admin_grant JOB → JOB_SECRET shared --as env with job:$WSNAME/JOB.
+admin_grant() {
+    local st
+    st="$(curl -s -o "$WORK/grant.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+        -d "$(python3 -c 'import json,sys; print(json.dumps({"scope": "workspace", "workspace": sys.argv[1], "name": "JOB_SECRET", "to": "job:" + sys.argv[1] + "/" + sys.argv[2], "as": "env"}))' "$WSNAME" "$1")" \
+        "$BASE/cli/vault/grant?token=$ADMIN_TOK")"
+    [ "$st" = "200" ] || fail "grant to job:$1 (an Admin's login): $st $(cat "$WORK/grant.json")"
+}
+admin_grant reader
+ok "granted --to job:$WSNAME/reader --as env by an Admin's login"
 run="$(start_run reader)"
 [ "$(wait_run reader "$run")" = "ok" ] || fail "reader run 2"
 log="$(log_of reader "$run")"
@@ -119,7 +145,7 @@ bash "$K2CLI" job list > "$WS/joblist.txt" 2>&1; echo "joblist_rc=\$?"
 EOF
 chmod +x "$WS/scripts/passport.sh"
 k2 job add passport --workspace "$WS" --every 1h --timeout 60s -- ./scripts/passport.sh >/dev/null
-k2 vault grant JOB_SECRET --scope "ws:$WSNAME" --to "job:$WSNAME/passport" --as env >/dev/null || fail "grant passport"
+admin_grant passport
 run="$(start_run passport)"
 [ "$(wait_run passport "$run")" = "ok" ] || fail "passport run: $(log_of passport "$run")"
 log="$(log_of passport "$run")"

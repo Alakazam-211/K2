@@ -48,6 +48,22 @@ exit: 0
       ]
     },
     {
+      "name": "ci",
+      "usage": "k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB] [--cpus N] [--timeout 1h] [--branches a,b/*] [--remote R] [--statuses-token NAME] [--force] [-- <cmd…>] | k2 ci run [<rev>] [--check a,b] [--ref B] [--tier ci|standard] [--wait] [--json] | k2 ci status [<run|commit|branch>] [--json] | k2 ci logs <run|commit|branch> [--check NAME] [--failures] | k2 ci watch [on|off] [--remote R] [--branches a,b/*] [--poll S] [--tier ci|standard] [--max-inflight N] [--skip-current] | k2 ci freeze --until <3d|time> [--why text] | k2 ci freeze off",
+      "description": "CI on K2 Compute, run by the daemon: .k2/ci.toml (committed; read at each commit) lists [checks.<name>]; each is one compute job on the commit (--tier ci, --supersede ci/<branch>/<check>) carrying the workspace's own grants. watch on: the daemon polls the remote and checks every new tip; run: one commit now (--wait: exit 0 passed, 1 failed). GitHub commit statuses <context>/<check> with the [statuses] token from the workspace vault. Agents: their own workspace, with Allow compute nodes on. See k2 study ci.",
+      "args": [{"name": "verb", "required": true, "description": "init | run | status | logs | watch | freeze"}],
+      "flags": [
+        {"name": "--check", "arg": "NAME|a,b", "description": "init: the check's name (default test); run: only these checks; logs: one check."},
+        {"name": "--tier", "arg": "ci|standard", "description": "CI tier (default; the grant needs --ci) or Standard."},
+        {"name": "--wait", "arg": null, "description": "run: wait for the verdict (exit 0 passed, 1 failed or error)."},
+        {"name": "--branches", "arg": "a,b/*", "description": "watch on / init: branch names or prefix/*."},
+        {"name": "--skip-current", "arg": null, "description": "watch on: start at the next push."},
+        {"name": "--force", "arg": null, "description": "init: replace an existing .k2/ci.toml."},
+        {"name": "--workspace", "arg": "ws", "description": "People: the workspace (default: this folder's). Agents: their own only."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
       "name": "msg",
       "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…]",
       "description": "Send to another workspace agent. For files use --inbox-wake (copy + knock, preferred) or --inbox-silent (copy only). Live text is SHORT, one line. Not k2 mail. Spawns the agent if needed. Federated live AND tray: agent::host over the same federation plane (connected peer is the gate, not a Connect token). Wire form fp::ws::agent is k2 fed send only.",

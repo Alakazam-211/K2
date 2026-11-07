@@ -128,6 +128,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       },
       { noun: 'activity', blurb: 'Audit log.', example: 'k2 activity --limit 20' },
       { noun: 'compute', blurb: 'Run builds and tests on your own machines (compute nodes).', example: 'k2 compute nodes' },
+      { noun: 'ci', blurb: 'CI on compute: check every push, post GitHub statuses.', example: 'k2 ci status' },
       {
         noun: 'sources',
         also: ['source'],

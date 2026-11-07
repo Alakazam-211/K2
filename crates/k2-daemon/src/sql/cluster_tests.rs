@@ -157,6 +157,87 @@ fn client_tools_use_that_majors_binaries_when_installed() {
     assert_eq!(Cluster::legacy_primary(0).client_bin(&with17, "pg_dump"), "/usr/bin/pg_dump");
 }
 
+/// `k2 db restore`'s `pg_restore`: the newest installed major at or above
+/// the cluster's (a newer pg_restore reads a newer pg_dump's archive into
+/// an older server; an older one can't), never an older major's, else
+/// today's `client_bin` choice.
+#[test]
+fn restore_bin_takes_the_newest_installed_major_at_or_above_the_cluster() {
+    const R16: &str = "/usr/lib/postgresql/16/bin/pg_restore";
+    const R17: &str = "/usr/lib/postgresql/17/bin/pg_restore";
+    const R18: &str = "/usr/lib/postgresql/18/bin/pg_restore";
+    let with = |paths: &[&str]| {
+        let mut o = FakeSystemOps::baked();
+        o.existing_paths.extend(paths.iter().map(|p| p.to_string()));
+        o
+    };
+    let c16 = Cluster::layout(16, 5432, "baked");
+    let c17 = Cluster::layout(17, 5433, "created");
+
+    assert_eq!(c16.restore_bin(&with(&[R16, R17])), (R17.to_string(), Some(17)), "16 cluster, 16 + 17 installed");
+    assert_eq!(c16.restore_bin(&with(&[R16])), (R16.to_string(), Some(16)), "16 cluster, only 16");
+    assert_eq!(c16.restore_bin(&with(&[R16, R17, R18])), (R18.to_string(), Some(18)), "the newest one");
+    assert_eq!(c16.restore_bin(&with(&[])), ("/usr/bin/pg_restore".to_string(), None), "none: today's wrapper");
+
+    assert_eq!(c17.restore_bin(&with(&[R16, R17])), (R17.to_string(), Some(17)), "17 cluster, 16 + 17");
+    assert_eq!(c17.restore_bin(&with(&[R16])), ("/usr/bin/pg_restore".to_string(), None), "17 never takes 16's");
+
+    // An unknown major keeps today's choice even with clients installed.
+    assert_eq!(Cluster::legacy_primary(0).restore_bin(&with(&[R16, R17])), ("/usr/bin/pg_restore".to_string(), None));
+    // Only pg_restore: the other tools keep their own major's binary.
+    let both = with(&[R16, R17, "/usr/lib/postgresql/16/bin/pg_dump", "/usr/lib/postgresql/17/bin/pg_dump"]);
+    assert_eq!(c16.client_bin(&both, "pg_dump"), "/usr/lib/postgresql/16/bin/pg_dump");
+    assert_eq!(c16.client_bin(&both, "pg_restore"), R16, "client_bin itself is unchanged");
+}
+
+/// End to end through `k2 db restore`: a database on the 16 cluster is
+/// restored with 17's pg_restore when 17's client is installed, with 16's
+/// when only 16's is, and a database on 17 never gets 16's.
+#[test]
+fn restore_runs_the_newest_pg_restore_for_the_databases_cluster() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    record(17, 5433, "k2");
+    let mut ops = FakeSystemOps::baked();
+    let secrets = MemSecretStore::default();
+    let (p16, path16) = insert_project("restore16");
+    let (p17, path17) = insert_project("restore17");
+    ops::create_database_on(&ops, &secrets, &p16, 1, None, None, Some(16)).unwrap();
+    ops::create_database_on(&ops, &secrets, &p17, 1, None, None, Some(17)).unwrap();
+    let rel = ".k2/db/dumps/r.dump";
+    for path in [&path16, &path17] {
+        let dumps = std::path::Path::new(path).join(".k2/db/dumps");
+        std::fs::create_dir_all(&dumps).unwrap();
+        std::fs::write(dumps.join("r.dump"), b"FAKE-PG-DUMP").unwrap();
+        std::fs::write(dumps.join("r.dump.grants.json"), br#"{"databaseId":"","databaseName":"","grants":[]}"#).unwrap();
+    }
+    let restore_line = |ops: &FakeSystemOps, pid: &str, path: &str| -> String {
+        let before = ops.recorded().len();
+        let v = ops::restore(ops, &secrets, pid, path, rel).unwrap();
+        assert_eq!(v["ok"], true, "{v}");
+        let lines: Vec<String> =
+            ops.recorded()[before..].iter().filter(|l| l.contains("pg_restore")).cloned().collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        lines[0].clone()
+    };
+
+    ops.existing_paths.push("/usr/lib/postgresql/16/bin/pg_restore".into());
+    let l = restore_line(&ops, &p16, &path16);
+    assert!(l.starts_with("cmd /usr/lib/postgresql/16/bin/pg_restore -h 127.0.0.1 -p 5432 "), "only 16: {l}");
+    let l = restore_line(&ops, &p17, &path17);
+    assert!(l.starts_with("cmd /usr/bin/pg_restore -h 127.0.0.1 -p 5433 "), "17 never takes 16's: {l}");
+
+    ops.existing_paths.push("/usr/lib/postgresql/17/bin/pg_restore".into());
+    let l = restore_line(&ops, &p16, &path16);
+    assert!(l.starts_with("cmd /usr/lib/postgresql/17/bin/pg_restore -h 127.0.0.1 -p 5432 "), "16 + 17 on a 16 cluster: {l}");
+    let l = restore_line(&ops, &p17, &path17);
+    assert!(l.starts_with("cmd /usr/lib/postgresql/17/bin/pg_restore -h 127.0.0.1 -p 5433 "), "{l}");
+    for path in [path16, path17] {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
 #[test]
 fn helper_view_parses_and_folds_roles() {
     let _g = crate::sql::sql_server_test_lock();

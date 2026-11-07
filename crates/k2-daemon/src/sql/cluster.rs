@@ -19,6 +19,9 @@
 //!   adds `--cluster <major>`, which needs `pgmajor` (protocol 9).
 //! - [`Cluster::client_bin`] + `port`: client tools run that major's own
 //!   binaries with `-p <port>` (V2, V39: pg_dump must be ≥ the server).
+//! - [`Cluster::restore_bin`]: `k2 db restore` alone takes the newest
+//!   installed `pg_restore` at or above the cluster's major, so a dump
+//!   written by a newer `pg_dump` restores into an older cluster.
 //!
 //! The helper's answers for `pg clusters` / `pg ensure-cluster <M>` (S2)
 //! are parsed by [`parse_helper_clusters`] / [`parse_helper_cluster`].
@@ -110,6 +113,35 @@ impl Cluster {
             }
         }
         format!("/usr/bin/{tool}")
+    }
+
+    /// The `pg_restore` for a restore into this cluster, and its major.
+    ///
+    /// A `pg_restore` can't read an archive from a newer `pg_dump`
+    /// ("unsupported version in file header"), but a newer `pg_restore`
+    /// restores into an older server. So: the highest major (in
+    /// [`pg_major::LAYOUT`], plus this cluster's own) that is at or above
+    /// this cluster's major and has `/usr/lib/postgresql/<N>/bin/pg_restore`
+    /// installed. Never an older major's. None of them installed, or an
+    /// unknown major (0): [`Self::client_bin`]'s choice, as before (Debian's
+    /// wrapper in /usr/bin; also what macOS layouts get), with no major.
+    /// Only restore uses this; pg_dump, psql and the rest keep `client_bin`.
+    pub fn restore_bin(&self, ops: &dyn SystemOps) -> (String, Option<u32>) {
+        if self.major > 0 {
+            let mut majors: Vec<u32> =
+                pg_major::LAYOUT.iter().copied().filter(|m| *m >= self.major).collect();
+            if !majors.contains(&self.major) {
+                majors.push(self.major);
+            }
+            majors.sort_unstable_by(|a, b| b.cmp(a));
+            for m in majors {
+                let p = format!("{}/pg_restore", pg_major::bin_dir(m));
+                if ops.path_exists(&p) {
+                    return (p, Some(m));
+                }
+            }
+        }
+        (self.client_bin(ops, "pg_restore"), None)
     }
 
     /// `-p <port>` as a string, for client argv.

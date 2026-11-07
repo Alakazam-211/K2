@@ -2202,7 +2202,9 @@ pub fn restore(
 
 /// `k2 db restore <file> [--db <name|id>]`. Without `--db` a workspace
 /// with no database gets one first (as before); `--db` names one it owns
-/// and never creates.
+/// and never creates. `pg_restore` is the newest installed one at or above
+/// the database's cluster major ([`Cluster::restore_bin`]), so a dump from
+/// a newer `pg_dump` restores into an older cluster; the choice is logged.
 pub fn restore_db(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -2236,8 +2238,16 @@ pub fn restore_db(
     replay_grants_for_restore(ops, secrets, &row, ws_path, file, &src)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
     let cl = cluster_of(&row.name)?;
+    let (restore_bin, restore_major) = cl.restore_bin(ops);
+    eprintln!(
+        "[db] restore {}: pg_restore {restore_bin} (major {}) into the {} cluster on port {}",
+        row.name,
+        restore_major.map_or_else(|| "unknown".to_string(), |m| m.to_string()),
+        cl.major,
+        cl.port,
+    );
     ops.run_cmd(
-        &cl.client_bin(ops, "pg_restore"),
+        &restore_bin,
         &[
             "-h",
             "127.0.0.1",

@@ -5,9 +5,10 @@
 #   scripts/ci/node-root-e2e.sh <ssh-host> [--sha REV] [--test NAME]
 #
 # 1. Builds k2-node and the test binary for x86_64 Linux on K2 Compute
-#    (never on this Mac): a job at REV (default HEAD) on an Ubuntu 24.04
-#    node (NODE_E2E_DISTRO, default ubuntu@24.04, so glibc matches the
-#    box), kept as artifacts and fetched.
+#    (never on this Mac): a job at REV (default HEAD), on a node of
+#    NODE_E2E_DISTRO (default ubuntu@24.04, so glibc matches the box; set
+#    it empty for any Linux node), kept as artifacts and fetched. The
+#    binaries are tried on the box before the run.
 # 2. Copies both to <ssh-host>:/tmp/k2-node-root-e2e/ and runs, as root:
 #      K2_NODE_ROOT_E2E=1 K2_NODE_E2E_BIN=<k2-node> job_uid_linux \
 #        --ignored --test-threads=1 --nocapture [NAME]
@@ -60,15 +61,20 @@ while [ $# -gt 0 ]; do
         *) echo "usage: unknown argument $1" >&2; exit 2 ;;
     esac
 done
-DISTRO="${NODE_E2E_DISTRO:-ubuntu@24.04}"
+DISTRO="${NODE_E2E_DISTRO-ubuntu@24.04}"
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/k2-node-root-e2e.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
-echo "== build on K2 Compute ($DISTRO, $SHA)"
-k2 compute run --sha "$SHA" --distro "$DISTRO" --needs rust@1.99.1,cmake@3 --cpus 8 --mem 16G \
+echo "== build on K2 Compute (${DISTRO:-any distro}, $SHA)"
+distro_arg=()
+[ -n "$DISTRO" ] && distro_arg=(--distro "$DISTRO")
+if ! k2 compute run --sha "$SHA" ${distro_arg[@]+"${distro_arg[@]}"} --needs rust@1.99.1,cmake@3 --cpus 8 --mem 16G \
     --stall-timeout off --artifact "$OUT_REL/*" \
-    -- bash scripts/ci/node-root-e2e.sh --build-job 2>&1 | tee "$tmp/build.log"
+    -- bash scripts/ci/node-root-e2e.sh --build-job 2>&1 | tee "$tmp/build.log"; then
+    echo "FATAL: the build job didn't run or failed (NODE_E2E_DISTRO='' builds on any Linux node)" >&2
+    exit 1
+fi
 job="$(sed -n -E 's/^\[k2 compute\] job ([0-9a-f]+) on .*/\1/p' "$tmp/build.log" | head -1)"
 [ -n "$job" ] || { echo "FATAL: no job id in the build output" >&2; exit 1; }
 grep -q '^\[k2 compute\] exit 0 ' "$tmp/build.log" || { echo "FATAL: the build job $job failed" >&2; exit 1; }
@@ -82,6 +88,10 @@ echo "== copy to $HOST:$REMOTE"
 ssh "$HOST" "rm -rf $REMOTE && mkdir -p $REMOTE"
 scp -q "$bin_dir/job_uid_linux" "$bin_dir/k2-node" "$HOST:$REMOTE/"
 ssh "$HOST" "chmod 0755 $REMOTE/job_uid_linux $REMOTE/k2-node"
+
+echo "== the binaries run there (glibc: a build on a newer distro may not)"
+ssh "$HOST" "$REMOTE/job_uid_linux --list >/dev/null && ldd $REMOTE/k2-node >/dev/null" \
+    || { echo "FATAL: the binaries don't run on $HOST; set NODE_E2E_DISTRO to a node distro as old as the box's" >&2; exit 1; }
 
 echo "== run on $HOST (root, K2_NODE_ROOT_E2E=1)"
 ssh "$HOST" "command -v setfacl >/dev/null || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q acl >/dev/null"

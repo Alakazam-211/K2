@@ -9,7 +9,7 @@
 #   sudo /usr/local/libexec/k2sign/k2sign-admin import u1 ~/.tauri/k2so-updater.key
 #   sudo /usr/local/libexec/k2sign/k2sign-admin approve <version> <base> <asset>... [--windows] [--reapprove]
 #   sudo /usr/local/libexec/k2sign/k2sign-admin repin
-#   sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <fp>        (S3b)
+#   sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <fp read on a node> /Users/<release user>/.k2/tunnel-key.pem   (S3b)
 #   sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node <name> /abs/node.pem <fp read on the node>
 #   sudo /usr/local/libexec/k2sign/k2sign-admin clear-compute-evidence <version>
 #   sudo /usr/local/libexec/k2sign/k2sign-admin unpin-compute-node <name>

@@ -32,6 +32,10 @@ never runs a fetched binary.
   compute_release.py same-files --a DIR --b DIR --names N1,N2,...
       Dual build (G12): the named files are byte-identical in both dirs.
 
+  compute_release.py dual-nodes --a L1.verdict.json --b V1.verdict.json
+      Dual build (G12): the two jobs ran on different nodes, by name and
+      by node key (each signed receipt's node_fp). Exit 1 when not.
+
   compute_release.py evidence-bundle --state DIR --git DIR
       The JSON the signing user's `k2sign compute-evidence` reads (S3b):
       <state>/L1 and V1 receipt.json as fetched, plus L1's commit object
@@ -364,6 +368,27 @@ def same_files(a):
     return 1 if bad else 0
 
 
+def dual_nodes(a):
+    """V1 is a second build only from a second node: the two verdicts (L1,
+    V1) must name different nodes AND different node keys (node_fp, from
+    each signed receipt). A missing fingerprint fails: nothing to compare."""
+    va, vb = load(a.a), load(a.b)
+    bad = []
+    fa, fb = va.get("node_fp"), vb.get("node_fp")
+    la, lb = va.get("label") or "L1", vb.get("label") or "V1"
+    if not fa or not fb:
+        bad.append(f"no node_fp in the {la if not fa else lb} receipt: can't tell the two nodes apart")
+    elif fa == fb:
+        bad.append(f"{la} and {lb} ran on the same node key ({str(fa)[:16]}…): the dual build needs two nodes")
+    if va.get("node") and va.get("node") == vb.get("node"):
+        bad.append(f"{la} and {lb} both ran on {va.get('node')}: the dual build needs two nodes")
+    for b in bad:
+        print("  ✗ " + b)
+    if not bad:
+        print(f"  ✓ {la} on {va.get('node')} and {lb} on {vb.get('node')}: two nodes ({str(fa)[:12]}… / {str(fb)[:12]}…)")
+    return 1 if bad else 0
+
+
 def evidence_bundle(a):
     """The bundle the signing user's `k2sign compute-evidence` reads: L1's
     and V1's signed receipts exactly as `k2 compute receipt --json` printed
@@ -420,7 +445,12 @@ def main():
     s = sub.add_parser("evidence-bundle")
     s.add_argument("--state", required=True)
     s.add_argument("--git", required=True)
+    s = sub.add_parser("dual-nodes")
+    s.add_argument("--a", required=True)
+    s.add_argument("--b", required=True)
     a = p.parse_args()
+    if a.cmd == "dual-nodes":
+        return dual_nodes(a)
     if a.cmd == "evidence-bundle":
         return evidence_bundle(a)
     if a.cmd == "argv-sha256":

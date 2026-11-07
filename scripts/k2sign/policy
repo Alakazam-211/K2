@@ -51,8 +51,14 @@ compute_artifacts = dist/*
 # it may share the node's warm target, CARGO_HOME and sccache.
 compute_secret_env = BUILD_GMAIL_CLIENT_ID BUILD_GMAIL_CLIENT_SECRET
 compute_secret_env_optional = BUILD_MICROSOFT_CLIENT_ID
-# V1 must reproduce these byte for byte (the root-key assets, plan G12;
-# compute-release.sh k2cr_dual_names, and a test keeps the two equal).
-compute_dual_names = k2-root-helper-linux-x86_64 k2-node-linux-x86_64 k2-app-engine-linux-x86_64
+# TODO (tracked, not built): the OAuth client IDs are public values, but the
+# vault serves them by name, so whoever can edit the vault entry can swap
+# the client baked into the daemon. Pin their sha256 here and have the
+# build record what it baked, so the signer can compare.
+# V1 must reproduce these byte for byte (plan G12; compute-release.sh
+# k2cr_dual_names, and a test keeps the two equal): the root-key assets
+# and every compute_assets entry (the signer refuses a policy whose
+# compute asset isn't here: one node alone must never get a file signed).
+compute_dual_names = k2-root-helper-linux-x86_64 k2-node-linux-x86_64 k2-app-engine-linux-x86_64 k2-daemon-linux-x86_64
 # A receipt older than this is refused, even with the approval off.
 compute_receipt_max_hours = 24

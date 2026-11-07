@@ -13,7 +13,13 @@ REPOP="/repos/Alakazam-211/K2"
 NOW0=1800000000
 export K2SIGN_TEST_NOW="$NOW0"
 ASSETS=(K2.app.tar.gz k2-daemon-linux-aarch64 k2-daemon-linux-x86_64 k2-daemon-macos-aarch64)
-CTL="$(printf 'c7%.0s' $(seq 32))"
+# The controller's key, the way K2 keeps it (~/.k2/tunnel-key.pem: a PKCS#8
+# P-256 private key); its fingerprint is sha256 of the public key's DER.
+"$OPENSSL" ecparam -name prime256v1 -genkey -noout 2>/dev/null | "$OPENSSL" pkcs8 -topk8 -nocrypt -out "$tmp/keys/tunnel-key.pem"
+"$OPENSSL" ecparam -name prime256v1 -genkey -noout 2>/dev/null | "$OPENSSL" pkcs8 -topk8 -nocrypt -out "$tmp/keys/other-tunnel-key.pem"
+CTL="$("$OPENSSL" pkey -in "$tmp/keys/tunnel-key.pem" -pubout -outform DER 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+CTL_OTHER="$("$OPENSSL" pkey -in "$tmp/keys/other-tunnel-key.pem" -pubout -outform DER 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+[ "${#CTL}" = 64 ] && [ "$CTL" != "$CTL_OTHER" ] || { echo "FAIL: could not make the controller test keys" >&2; exit 1; }
 NOOVER='{}'
 PY_CR="$REPO/scripts/ci/compute_release.py"
 
@@ -151,7 +157,7 @@ for k, v in over.items():
 plan = {"job_id": r["job_id"], "node_id": "node-1", "workspace_id": "ws-release", "workspace_label": "release",
         "requested_by": "release", "argv": ["bash", "scripts/ci/build-linux-bins.sh", "x86_64"],
         "env": {"BUILD_COMMIT": r["src"]["commit"], "BUILD_TREE": r["src"]["tree"]}, "cwd": None,
-        "limits": {"max_secs": 7200, "cpu_millis": 4000}, "exclusive": False, "created_at": int(started) - 30,
+        "limits": {"max_secs": 7200, "cpu_millis": 4000}, "exclusive": True, "created_at": int(started) - 30,
         "src": {"project_key": "pk-release", "remote_url": None, "commit": r["src"]["commit"], "dirty": None, "slots": 1},
         "needs": ["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"], "artifacts": ["dist/*"],
         "packages": ["pkg-config", "zlib1g-dev"], "secret_env": list(r["secret_env"]), "tier": "ci"}
@@ -249,7 +255,16 @@ export K2SIGN_TEST_NOW=$((NOW0 + 3600))
 echo "== pins: nothing is trusted until root pins it =="
 bundle good1 "$tmp/set-0.47.1"
 register "no controller or nodes pinned: refused" 3 "no controller pinned" 0.47.1 good1
-check "pin the controller (admin)" 0 "compute controller pinned" "$ADM" pin-compute-controller "$CTL"
+check "pin-compute-controller without the controller's key: usage" 2 "tunnel-key.pem" "$ADM" pin-compute-controller "$CTL"
+check "pin-compute-controller needs an absolute key path" 2 "absolute key path" "$ADM" pin-compute-controller "$CTL" keys/tunnel-key.pem
+check "a typed fingerprint that is not the controller key's: refused" 3 "has fingerprint $CTL, not the $CTL_OTHER you typed: not pinned" \
+    "$ADM" pin-compute-controller "$CTL_OTHER" "$tmp/keys/tunnel-key.pem"
+ln -s "$tmp/keys/other-tunnel-key.pem" "$tmp/keys/link-tunnel-key.pem"
+check "the controller key through a symlink: refused (root never follows one)" 3 "can't read the controller key" \
+    "$ADM" pin-compute-controller "$CTL_OTHER" "$tmp/keys/link-tunnel-key.pem"
+check "a file that is not a private key: refused" 3 "is not a PEM private key" "$ADM" pin-compute-controller "$CTL" "$tmp/keys/build-a.pem"
+[ ! -e "$TROOT/usr/local/etc/k2sign/compute-pins" ] && pass "nothing was pinned by the refused tries" || fail "refused controller pins" "$(cat "$TROOT/usr/local/etc/k2sign/compute-pins")"
+check "pin the controller: the typed fingerprint is the key's (admin)" 0 "compute controller pinned" "$ADM" pin-compute-controller "$CTL" "$tmp/keys/tunnel-key.pem"
 register "a controller but no nodes: refused" 3 "no compute nodes pinned" 0.47.1 good1
 check "M2 pin-compute-node without the fingerprint read from the node: usage" 2 "expected fingerprint" "$ADM" pin-compute-node build-a "$tmp/keys/build-a.pem"
 check "M2 a key whose fingerprint is not the one read from the node: refused" 3 "not the $FP_B you read from node build-a: not pinned" \
@@ -268,6 +283,24 @@ printf 'node build-r %s %s\n' "$FP_R" "$("$OPENSSL" ec -in "$tmp/keys/rogue.key"
 register "compute-pins edited without root's repin: refused" 3 "pins mismatch: compute-pins" 0.47.1 good1
 cp "$tmp/pins.bak" "$TROOT/usr/local/etc/k2sign/compute-pins"
 
+echo "== compute-rehearse: the ceremony's dry run against the real pins (read-only) =="
+ls -R "$TROOT/var/k2sign/state" > "$tmp/state.before"
+bundle reh "$tmp/set-0.47.1"
+check_in "a shadow run's good bundle rehearses: passes, with no session and no tag" "$tmp/reh/bundle.json" 0 "rehearsal passed" "$K" compute-rehearse
+bundle rehv1 "$tmp/set-0.47.1" build-a '{}' build-b '{"tamper": true}'
+check_in "a tampered V1 receipt: the rehearsal refuses" "$tmp/rehv1/bundle.json" 3 "V1: the receipt's signature does not verify with node build-b's pinned key" "$K" compute-rehearse
+bundle rehd "$tmp/set-0.47.1" build-a '{}' build-b "{\"set_art\": {\"k2-daemon-linux-x86_64\": \"$(printf 'e%.0s' $(seq 64))\"}}"
+check_in "a V1 daemon mismatch: the rehearsal refuses" "$tmp/rehd/bundle.json" 3 "V1 mismatch: k2-daemon-linux-x86_64" "$K" compute-rehearse
+bundle rehc "$tmp/set-0.47.1" build-a '{}' build-b "{\"src.commit\": \"$T\"}"
+check_in "V1 built another commit than L1: the rehearsal refuses" "$tmp/rehc/bundle.json" 3 "V1: the job built commit ${T:0:12}" "$K" compute-rehearse
+bundle rehx "$tmp/set-0.47.1" build-a '{"plan.exclusive": false}'
+check_in "a job that was not exclusive: the rehearsal refuses" "$tmp/rehx/bundle.json" 3 "L1: the job was not exclusive" "$K" compute-rehearse
+check "compute-rehearse takes no arguments" 2 "compute-rehearse" "$K" compute-rehearse 0.47.1
+ls -R "$TROOT/var/k2sign/state" > "$tmp/state.after"
+cmp -s "$tmp/state.before" "$tmp/state.after" && pass "rehearsals registered nothing (state unchanged)" || fail "rehearsal wrote state" "$(diff "$tmp/state.before" "$tmp/state.after")"
+grep -q $'\tCOMPUTE-REHEARSAL\t' "$AUDIT/rehearsal/signatures.tsv" && grep -q $'\tREFUSED-COMPUTE-REHEARSAL\t' "$AUDIT/rehearsal/signatures.tsv" \
+    && pass "rehearsals are in the signer's audit log" || fail "rehearsal audit" ""
+
 echo "== accepted: a good receipt, matching hashes and a V1 match =="
 D1="$tmp/set-0.47.1/k2-daemon-linux-x86_64"
 refuses "before any evidence: the x86 daemon goes the GitHub way (no attestation here)" "$D1" u2 k2-daemon-linux-x86_64 0.47.1 "no build attestation"
@@ -278,14 +311,38 @@ signs "S3b the compute-built x86 daemon signs (u2)" "$D1" u2 k2-daemon-linux-x86
 signs "…and u1 (the bridge)" "$D1" u1 k2-daemon-linux-x86_64 0.47.1
 grep -q $'\tCOMPUTE-EVIDENCE\t' "$AUDIT/0.47.1/signatures.tsv" && pass "the registration is in the signer's audit log" || fail "audit" ""
 check "status shows the compute evidence" 0 "\"built_commit\": \"$C\"" "$K" status 0.47.1
+
+echo "== registered evidence is never replaced (review L3) =="
+STATE1="$TROOT/var/k2sign/state/compute/0.47.1.json"
+cp "$STATE1" "$tmp/state1.before"
+register "the same bundle again (a sign-daemon.sh re-run): checked again, kept" 0 '"again": true' 0.47.1 good1
+cmp -s "$STATE1" "$tmp/state1.before" && pass "…and the registered state is untouched" || fail "state rewritten on the same bundle" ""
+grep -q $'\tCOMPUTE-EVIDENCE-AGAIN\t' "$AUDIT/0.47.1/signatures.tsv" && pass "the re-registration is in the audit log" || fail "again audit" ""
+bundle other1 "$tmp/set-0.47.1"
+register "L3 other evidence for a registered version: refused" 3 "0.47.1 already has other compute evidence" 0.47.1 other1
+grep -q "clear-compute-evidence 0.47.1" "$tmp/out" && pass "…and the refusal names the root step (clear-compute-evidence)" || fail "clear hint" "$(cat "$tmp/out")"
+cmp -s "$STATE1" "$tmp/state1.before" && pass "…and the registered evidence is unchanged" || fail "state replaced" ""
+cp "$tmp/good1/bundle.json" "$tmp/good1-ws.json"
+printf '\n' >> "$tmp/good1/bundle.json"
+register "L3 the same bundle with one byte more (not byte-identical): refused" 3 "already has other compute evidence" 0.47.1 good1
+cp "$tmp/good1-ws.json" "$tmp/good1/bundle.json"
+signs "the first evidence still decides: its daemon still signs" "$D1" u2 k2-daemon-linux-x86_64 0.47.1
+# Each variant below is new evidence for 0.47.1: root clears the old one first.
+clear1() { check "clear 0.47.1 for the next variant (admin)" 0 "compute evidence for 0.47.1 cleared" "$ADM" clear-compute-evidence 0.47.1; }
+clear1
+register "after root's clear, other evidence registers" 0 '"ok": true' 0.47.1 other1
+clear1
 bundle nobody "$tmp/set-0.47.1" build-a '{"no_body": true}' build-b '{"no_body": true}'
 register "a receipt without its body text (an older daemon): canonical JSON, still verified" 0 '"ok": true' 0.47.1 nobody
+clear1
 bundle attag "$tmp/set-0.47.1" build-a "{\"src.commit\": \"$T\"}" build-b "{\"src.commit\": \"$T\"}"
 edit_bundle attag 'b.pop("commit_object")'
 register "built at the tag commit itself: no commit object needed" 0 '"ok": true' 0.47.1 attag
+clear1
 MS='["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET", "BUILD_MICROSOFT_CLIENT_ID"]'
 bundle withms "$tmp/set-0.47.1" build-a "{\"secret_env\": $MS}" build-b "{\"secret_env\": $MS}"
 register "the optional Microsoft client id from the vault too (both jobs)" 0 '"ok": true' 0.47.1 withms
+clear1
 bundle nopkgs "$tmp/set-0.47.1" build-a '{"plan.packages": null}' build-b '{"plan.packages": null}'
 register "a plan without packages (a node without pkg-map installs the sys: needs itself)" 0 '"ok": true' 0.47.1 nopkgs
 grep -q '"rust": "1.99.1"' "$tmp/out" && pass "the summary names the rust pin read from GitHub at the tag" || fail "rust in summary" "$(cat "$tmp/out")"
@@ -349,6 +406,12 @@ bundle srcpath "$S2" build-a '{"plan.src_path": "k2"}'
 register "H1 a --with layout (src_path) without repos" 3 "the plan has a --with layout (src_path 'k2')" 0.47.2 srcpath
 bundle cwd "$S2" build-a '{"plan.cwd": "crates"}'
 register "H1 a cwd" 3 "the plan runs in another folder (cwd 'crates')" 0.47.2 cwd
+bundle notexcl "$S2" build-a '{"plan.exclusive": false}'
+register "M4 a job that was not exclusive (other jobs could share its uid)" 3 "L1: the job was not exclusive" 0.47.2 notexcl
+bundle notexclv1 "$S2" build-a '{}' build-b '{"plan.exclusive": false}'
+register "M4 …V1 too" 3 "V1: the job was not exclusive" 0.47.2 notexclv1
+bundle noexclfield "$S2" build-a '{"plan.exclusive": null}'
+register "M4 a plan with no exclusive field" 3 "L1: the job was not exclusive" 0.47.2 noexclfield
 bundle plancache "$S2" build-a '{"plan.cache": "target"}'
 register "H1 a --cache in the plan" 3 "the plan mounts a --cache ('target')" 0.47.2 plancache
 bundle pkgs "$S2" build-a '{"plan.packages": ["evil-tools", "pkg-config", "zlib1g-dev"]}'
@@ -399,6 +462,17 @@ mkset 0.47.2 "$tmp/set-0.47.2-v1"
 cp "$S2"/k2-root-helper-linux-x86_64 "$S2"/k2-node-linux-x86_64 "$tmp/set-0.47.2-v1/"
 bundle v1engine "$S2" build-a '{}' build-b '{}' "$tmp/set-0.47.2-v1"
 register "S3b-6 V1 mismatch on the App engine (other bytes)" 3 "V1 mismatch: k2-app-engine-linux-x86_64 differs" 0.47.2 v1engine
+# H1 (review): the daemon is the file signed from compute, so V1 must have
+# built it too. A pinned L1 that ships a trojaned daemon, while V1 (honest)
+# builds the real one: everything else matches.
+mkdir -p "$tmp/set-0.47.2-v1d"
+cp "$S2"/* "$tmp/set-0.47.2-v1d/"
+printf 'trojan' >> "$tmp/set-0.47.2-v1d/k2-daemon-linux-x86_64"
+bundle v1daemon "$S2" build-a '{}' build-b '{}' "$tmp/set-0.47.2-v1d"
+register "H1 V1 mismatch on the daemon (L1's daemon is not what V1 built): refused" 3 \
+    "V1 mismatch: k2-daemon-linux-x86_64 differs between L1 on build-a" 0.47.2 v1daemon
+bundle v1nodaemon "$S2" build-a '{}' build-b '{"drop_art": ["k2-daemon-linux-x86_64"]}'
+register "H1 V1 did not build the daemon: refused" 3 "V1 match missing: V1's receipt lists no k2-daemon-linux-x86_64" 0.47.2 v1nodaemon
 bundle samenode "$S2" build-a '{}' build-a
 register "V1 on the same node as L1" 3 "V1 ran on the same node as L1 (build-a)" 0.47.2 samenode
 
@@ -430,9 +504,11 @@ PY
 refuses "registered compute evidence decides: a GitHub attestation for other bytes doesn't get around it" "$tmp/other-0.47.4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4 "are not L1's signed artifact"
 signs "0.47.4's own compute-built daemon signs" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4
 S5="$tmp/set-0.47.5"
-bundle noart "$S5" build-a '{"drop_art": ["k2-daemon-linux-x86_64"]}'
-register "a bundle whose L1 lists no daemon still registers (the V1 set matches)" 0 '"ok": true' 0.47.5 noart
-refuses "S3b-8 an artifact not listed in L1's receipt" "$S5/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.5 "k2-daemon-linux-x86_64 is not an artifact in L1's signed receipt"
+bundle noart "$S5" build-a '{"drop_art": ["k2-daemon-linux-x86_64"]}' build-b '{"drop_art": ["k2-daemon-linux-x86_64"]}'
+register "S3b-8 a bundle whose receipts list no daemon: refused at registration (the daemon is dual-built)" 3 \
+    "V1 match: L1's receipt lists no k2-daemon-linux-x86_64" 0.47.5 noart
+bundle good5 "$S5"
+register "0.47.5's good bundle registers" 0 '"ok": true' 0.47.5 good5
 refuses "aarch64 is never a compute asset: GitHub's attestation is still required" "$S5/k2-daemon-linux-aarch64" u2 k2-daemon-linux-aarch64 0.47.5 "no build attestation"
 
 echo "== L1: clear-compute-evidence (root) puts a version back on GitHub's path =="
@@ -515,6 +591,24 @@ bash -c 'source "$1"; k2u_verify_u2 "$2" "$3" k2-daemon-linux-x86_64 "$4"' _ "$T
 grep -q "\"sha256\": \"$(shasum -a 256 "$S6/k2-daemon-linux-x86_64" | awk '{print $1}')\"" "$tmp/sd/daemon-latest.json" \
     && pass "daemon-latest.json lists the compute-built x86 daemon" || fail "manifest" "$(cat "$tmp/sd/daemon-latest.json")"
 unset K2_SIGNER K2_SIGN_SOURCE_DIR
+
+echo "== the policy: every compute asset is dual-built (review H1) =="
+POL="$TROOT/usr/local/etc/k2sign/policy"
+cp "$POL" "$tmp/policy.bak"
+python3 -I - "$POL" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s, n = re.subn(r"^(compute_dual_names = .*) k2-daemon-linux-x86_64$", r"\1", s, flags=re.M)
+assert n == 1, "the policy's compute_dual_names has no daemon to drop"
+open(p, "w").write(s)
+PY
+check "repin the edited policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
+register "a policy whose compute asset is not dual-built does not load" 3 \
+    "policy: compute asset k2-daemon-linux-x86_64 is not in compute_dual_names" 0.47.4 good4
+refuses "…and nothing signs under it" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4 "is not in compute_dual_names"
+cp "$tmp/policy.bak" "$POL"
+check "repin the reviewed policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
+signs "the reviewed policy back: 0.47.4's daemon signs again" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4
 
 echo "== policy drift =="
 python3 -I - "$REPO/scripts/lib/compute-release.sh" "$REPO/scripts/k2sign/policy" <<'PY' && pass "policy compute_dual_names == k2cr_dual_names; compute_argv == the L1/V1 command" || fail "compute policy drift"

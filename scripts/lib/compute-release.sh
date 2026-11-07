@@ -37,13 +37,18 @@
 # with --tier ci (the same as --gate on a pre-0.46.5 CLI): it runs first in
 # the node's queue, and the workspace needs a grant with --ci on each node.
 #   K2_COMPUTE_NODE          (unset)     one node for both L1 and L3 (by-hand
-#                                        runs; the per-job names below win)
+#                                        runs; the per-job names below win).
+#                                        Never V1's node: k2n9-vin here
+#                                        needs another K2_COMPUTE_VERIFY_NODE
 #   K2_COMPUTE_X86_NODE      k2n7-vin    L1: daemon, node, root helper, engine
 #   K2_COMPUTE_APP_NODE      k2n8-vin    L3: deb, rpm, AppImage
 #   K2_COMPUTE_VERIFY_NODE   k2n9-vin    V1: a second x86 build of the same
-#                                        set on another node; the root helper,
-#                                        node and engine must be byte-identical
-#                                        to L1's (G12). "none" = no V1 (loud in
+#                                        set on another node; the daemon, root
+#                                        helper, node and engine must be byte-
+#                                        identical to L1's (G12). Never L1's
+#                                        node: submit refuses it (every mode)
+#                                        and collect checks the receipts'
+#                                        node_fp. "none" = no V1 (loud in
 #                                        compute mode)
 #   K2_COMPUTE_ARM_NODE      (unset)     L2: aarch64, natively. Unset until the
 #                                        ARM Linux VM exists (G10); GitHub still
@@ -81,7 +86,12 @@
 #                                        plan; tests only). Only secret/env bake
 #                                        the daemon the way GitHub does. Every
 #                                        linux-bins job (L1, V1, L2) gets the
-#                                        same mode.
+#                                        same mode, and is --exclusive
+#                                        (alone on its node: no other job,
+#                                        its own workspace's included, runs
+#                                        there while it holds the values;
+#                                        needs a grant with --ci, and on a
+#                                        shared node a share with exclusive)
 #   K2_COMPUTE_OAUTH_SECRETS vault names for secret mode: Gmail id, Gmail
 #                                        secret[, Microsoft id]. Default
 #                                        K2_GMAIL_CLIENT_ID,K2_GMAIL_CLIENT_SECRET
@@ -170,6 +180,10 @@ k2cr_submit() {
             echo "  ✗ $label: K2_COMPUTE_OAUTH must be placeholder, env or secret (got $K2_COMPUTE_OAUTH)" >&2
             return 1
         fi
+        # Alone on the node: a job of any workspace (its own too) beside it
+        # would share its uid and could read the OAuth values in /proc or
+        # ptrace cargo. The signer refuses a plan that isn't exclusive.
+        args+=(--exclusive --why "K2 release build: alone on the node while it holds the OAuth values")
         # Path remap is always on in build-linux-bins.sh (repro-build-env.sh).
     fi
     local out job argv_json
@@ -201,6 +215,23 @@ k2cr_verify_node() {
     printf '%s' "$v"
 }
 
+# L1's node (the x86 binaries).
+k2cr_x86_node() { printf '%s' "${K2_COMPUTE_X86_NODE:-${K2_COMPUTE_NODE:-k2n7-vin}}"; }
+
+# V1 is a second build only on a second node. 0 = V1 is off, or on another
+# node than L1.
+k2cr_check_dual_nodes() {
+    local l1 v1
+    l1="$(k2cr_x86_node)"
+    v1="$(k2cr_verify_node)"
+    [ -n "$v1" ] || return 0
+    if [ "$l1" = "$v1" ]; then
+        echo "  ✗ L1 and V1 are both on $l1: the dual build needs two nodes. Set K2_COMPUTE_VERIFY_NODE to another" >&2
+        echo "    release node (or move K2_COMPUTE_X86_NODE / K2_COMPUTE_NODE off $v1). Nothing was submitted." >&2
+        return 1
+    fi
+}
+
 k2cr_submit_release_set() {
     local rust rc=0 verify
     if [ -n "${K2_COMPUTE_RUST:-}" ]; then
@@ -211,9 +242,11 @@ k2cr_submit_release_set() {
             || { echo "  ✗ can't read the Rust pin at ${K2CR_COMMIT:0:12}" >&2; return 1; }
     fi
     echo "  Rust for every job: $rust" | tee -a "$K2CR_STATE/summary.txt"
+    # Before anything is submitted, in every mode (shadow too).
+    k2cr_check_dual_nodes || return 1
     local bins_needs="$rust,cmake@3,sys:pkg-config,sys:zlib1g-dev"
     local app_needs="$rust,cmake@3,bun@1.2,sys:pkg-config,sys:libwebkit2gtk-4.1-dev,sys:libgtk-3-dev,sys:libayatana-appindicator3-dev,sys:librsvg2-dev,sys:patchelf,sys:libxdo-dev,sys:file,sys:xdg-utils,sys:libssl-dev,sys:libasound2-dev"
-    k2cr_submit L1 "${K2_COMPUTE_X86_NODE:-${K2_COMPUTE_NODE:-k2n7-vin}}" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
+    k2cr_submit L1 "$(k2cr_x86_node)" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
     k2cr_submit L3 "${K2_COMPUTE_APP_NODE:-${K2_COMPUTE_NODE:-k2n8-vin}}" linux-app x86_64 "$app_needs" -- bash scripts/ci/build-linux-app.sh || rc=1
     verify="$(k2cr_verify_node)"
     if [ -n "$verify" ]; then
@@ -283,24 +316,28 @@ k2cr_collect() {
             bad=1
         fi
     done < "$K2CR_STATE/jobs.tsv"
-    # G12: the verify build must equal L1 for the root-key assets.
+    # G12: the verify build must come from another node than L1 and equal
+    # L1 for every dual-built file (the daemon and the root-key assets).
     if [ -s "$K2CR_STATE/V1.verdict.json" ] && [ -s "$K2CR_STATE/L1.verdict.json" ]; then
+        # PIPESTATUS, not the pipeline's status: this lib sets no shell
+        # options, and without pipefail tee's 0 would hide a failure.
+        if python3 "$K2CR_PY" dual-nodes --a "$K2CR_STATE/L1.verdict.json" --b "$K2CR_STATE/V1.verdict.json" \
+            | tee -a "$K2CR_STATE/summary.txt"; [ "${PIPESTATUS[0]}" = 0 ]; then :; else bad=1; fi
         if python3 "$K2CR_PY" same-files --a "$K2CR_FILES/L1/dist" --b "$K2CR_FILES/V1/dist" \
             --names "$(k2cr_dual_names)" \
-            | tee -a "$K2CR_STATE/summary.txt"; then :; else bad=1; fi
-        echo "  (reported only) the daemon:" | tee -a "$K2CR_STATE/summary.txt"
-        python3 "$K2CR_PY" same-files --a "$K2CR_FILES/L1/dist" --b "$K2CR_FILES/V1/dist" \
-            --names k2-daemon-linux-x86_64 | tee -a "$K2CR_STATE/summary.txt" || true
+            | tee -a "$K2CR_STATE/summary.txt"; [ "${PIPESTATUS[0]}" = 0 ]; then :; else bad=1; fi
     fi
     K2CR_COLLECTED=1
     return "$bad"
 }
 
 # The files V1 must reproduce byte for byte: the root-key assets (they
-# run as root on customer boxes). The daemon is compared too, but only
-# reported (plan §6: measure whether the daemons reproduce first).
+# run as root on customer boxes) and the daemon, the file the signing user
+# signs from compute (it refuses one V1 didn't reproduce: policy
+# compute_dual_names, which a test keeps equal to this list). The daemons
+# reproduce since 0.46.9's shadow run.
 k2cr_dual_names() {
-    printf '%s' "k2-root-helper-linux-x86_64,k2-node-linux-x86_64,k2-app-engine-linux-x86_64"
+    printf '%s' "k2-root-helper-linux-x86_64,k2-node-linux-x86_64,k2-app-engine-linux-x86_64,k2-daemon-linux-x86_64"
 }
 
 # Compute mode (stage 1): copy every verified x86 file into <dist-dir>,

@@ -55,6 +55,8 @@ STUB
 chmod +x "$tmp/bin/gh"
 cat > "$tmp/lib.sh" <<'LIB'
 k2cr_verify_node() { printf '%s' "${STUB_VERIFY-k2n9-vin}"; }
+k2cr_x86_node() { printf '%s' "${STUB_X86-k2n7-vin}"; }
+k2cr_check_dual_nodes() { echo "dual-nodes" >> "$STUB_CALLS"; [ -z "$(k2cr_verify_node)" ] || [ "$(k2cr_x86_node)" != "$(k2cr_verify_node)" ] || { echo "  ✗ L1 and V1 are both on $(k2cr_x86_node)" >&2; return 1; }; }
 k2cr_init() { echo "k2cr_init $*" >> "$STUB_CALLS"; K2CR_TREE="${STUB_TREE:-t1}"; mkdir -p "$3"; : > "$3/jobs.tsv"; echo "L1	j" > "$3/jobs.tsv"; }
 k2cr_submit_release_set() { echo "submit" >> "$STUB_CALLS"; [ "${STUB_SUBMIT_FAIL:-0}" = 0 ]; }
 k2cr_wait() { echo "wait" >> "$STUB_CALLS"; return 0; }
@@ -111,6 +113,13 @@ rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign run pf-k2sign-
 rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": [{"name": "k2n7-vin", "fp": "aa"}]}' run pf-k2sign-v1 k2_linux_builds_preflight)"
 [ "$rc" = 1 ] && grep -q "V1's node k2n9-vin is not pinned" "$tmp/out-pf-k2sign-v1" && ! grep -q "L1's node" "$tmp/out-pf-k2sign-v1" \
     && pass "compute under k2sign, the V1 node not pinned: refused" || fail "k2sign V1 pin" "rc=$rc $(cat "$tmp/out-pf-k2sign-v1")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS="$PINS_OK" STUB_X86=k2n9-vin run pf-k2sign-same k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "L1 and V1 are both on k2n9-vin" "$tmp/out-pf-k2sign-same" && ! grep -q pins "$tmp/calls-pf-k2sign-same" \
+    && pass "compute under k2sign with L1 on V1's node: refused before any build" || fail "k2sign same node" "rc=$rc $(cat "$tmp/out-pf-k2sign-same")"
+rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_X86=k2n9-vin run pf-same k2_linux_builds_preflight)"
+[ "$rc" = 1 ] && grep -q "L1 and V1 are both on k2n9-vin" "$tmp/out-pf-same" \
+    && pass "compute with L1 on V1's node: refused whoever signs (keychain too)" || fail "same node keychain" "rc=$rc $(cat "$tmp/out-pf-same")"
+grep -q dual-nodes "$tmp/calls-pf-k2sign" && pass "the pre-flight checks L1 and V1 are two nodes" || fail "dual-nodes not called" "$(cat "$tmp/calls-pf-k2sign")"
 rc="$(STUB_VAR=compute K2_LINUX_BUILDS=compute STUB_SIGNER=k2sign STUB_PINS="$PINS_OK" STUB_VERIFY='' run pf-k2sign-nov1 k2_linux_builds_preflight)"
 [ "$rc" = 1 ] && grep -q "signs a compute-built" "$tmp/out-pf-k2sign-nov1" && ! grep -q pins "$tmp/calls-pf-k2sign-nov1" \
     && pass "compute under k2sign without V1 (K2_COMPUTE_VERIFY_NODE=none): refused (the signer needs the dual build)" \

@@ -62,6 +62,8 @@ if kind == "linux-bins":
     files[f"k2-app-engine-linux-{arch}"] = elf(b"engine K2_APP_ENGINE_BUILD v=%s proto=1 arch=%s;" % (v.encode(), arch.encode()))
     if os.environ.get("GEN_SALT"):
         files[f"k2-node-linux-{arch}"] += os.environ["GEN_SALT"].encode()
+    if os.environ.get("GEN_DAEMON_SALT"):
+        files[f"k2-daemon-linux-{arch}"] += os.environ["GEN_DAEMON_SALT"].encode()
 else:
     files[f"K2_{version}_amd64.deb"] = b"!<arch>\ndebian-binary   " + b"x" * 40
     files[f"K2-{version}-1.x86_64.rpm"] = b"\xed\xab\xee\xdb" + b"r" * 40
@@ -154,7 +156,7 @@ for dp, _, names in os.walk(root):
         p = os.path.join(dp, n)
         arts.append({"name": os.path.relpath(p, root), "sha256": hashlib.sha256(open(p, "rb").read()).hexdigest(), "bytes": os.path.getsize(p)})
 print(json.dumps({"job": os.path.basename(d)[:8], "verified": t != "unverified", "receipt": {
-    "node_fp": "fp-" + open(os.path.join(d, "node")).read().strip(),
+    "node_fp": os.environ.get("STUB_FP") or "fp-" + open(os.path.join(d, "node")).read().strip(),
     "argv_sha256": cr.argv_sha256(argv + (["x"] if t == "argv" else [])),
     "src": {"commit": os.environ["STUB_COMMIT"], "tree": "0" * 40 if t == "tree" else os.environ["STUB_TREE"],
             "dirty_sha256": "d" * 64 if t == "dirty" else None},
@@ -259,7 +261,16 @@ grep -q 'k2 compute run k2n8-vin .*rust@1.98.7,.*bun@1.2.*sys:libwebkit2gtk-4.1-
     && pass "L3 goes to k2n8-vin with the pin, bun + GTK packages" || fail "L3 submit" "$(cat "$tmp/calls-ok")"
 grep -q 'k2 compute run k2n8-vin .*sys:libasound2-dev --mem 24G .*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
     && pass "L3 asks for ALSA headers and 24G (native-voice release link)" || fail "L3 voice needs" "$(grep build-linux-app "$tmp/calls-ok")"
-grep -q '(reported only) the daemon' "$tmp/ok.collect" && pass "the daemon's dual build is reported, not required" || fail "daemon dual" "$(cat "$tmp/ok.collect")"
+grep -q 'identical in both builds: .*k2-daemon-linux-x86_64' "$tmp/ok.collect" && ! grep -q 'reported only' "$tmp/ok.collect" \
+    && pass "the daemon's dual build is required, not only reported (review H1)" || fail "daemon dual" "$(cat "$tmp/ok.collect")"
+grep -q 'L1 on k2n7-vin and V1 on k2n9-vin: two nodes' "$tmp/ok.collect" && pass "collect checks L1 and V1 came from two node keys" \
+    || fail "dual nodes line" "$(cat "$tmp/ok.collect")"
+for n in k2n7-vin k2n9-vin; do
+    line="$(grep -m1 "k2 compute run $n " "$tmp/calls-ok" || true)"
+    [[ "$line" == *"--exclusive --why "* ]] && pass "the release build on $n is --exclusive (with a reason)" || fail "$n not exclusive" "$line"
+done
+! grep 'k2 compute run k2n8-vin ' "$tmp/calls-ok" | grep -q -- '--exclusive' && pass "L3 (no OAuth values) is not exclusive" \
+    || fail "L3 exclusive" "$(grep k2n8-vin "$tmp/calls-ok")"
 grep -q 'k2 compute fetch .* --over-relay --json' "$tmp/calls-ok" && pass "fetch passes --over-relay (AppImage > 100 MB)" || fail "fetch flags" "$(cat "$tmp/calls-ok")"
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and v["oauth"]=="placeholder" and v["node"]=="k2n7-vin", v' "$tmp/ok/L1.verdict.json" \
     && pass "L1 verdict: ok, node, oauth mode recorded" || fail "L1 verdict" "$(cat "$tmp/ok/L1.verdict.json")"
@@ -370,17 +381,71 @@ rc="$(
 [ "$rc" != 0 ] && grep -q 'k2-node-linux-x86_64: the two builds differ' "$tmp/v-diff.collect" && pass "V1 differing from L1 fails" \
     || fail "V1 diff" "rc=$rc $(cat "$tmp/v-diff.collect")"
 unset K2_COMPUTE_VERIFY_NODE
+# collect_pair <name> <L1 node> <V1 node> [V1 daemon salt]: L1 and V1 by hand, then collect; echoes rc.
+collect_pair() {
+    local name="$1" l1="$2" v1="$3" salt="${4:-}"
+    export STUB_DIR="$tmp/stub-$name"
+    (
+        export STUB_CALLS="$tmp/calls-$name"; rm -rf "$STUB_DIR" "${tmp:?}/$name" "${tmp:?}/$name-files"; mkdir -p "$STUB_DIR"
+        cd "$repo"
+        source "$ROOT/scripts/lib/compute-release.sh"
+        k2cr_init "$VERSION" "$COMMIT" "$tmp/$name" "$tmp/$name-files"
+        k2cr_submit L1 "$l1" linux-bins x86_64 rust@1.98.7 -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
+        GEN_DAEMON_SALT="$salt" k2cr_submit V1 "$v1" linux-bins x86_64 rust@1.98.7 -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
+        r=0; k2cr_collect >"$tmp/$name.collect" 2>&1 || r=$?; echo "$r"
+    )
+}
+rc="$(collect_pair v-daemon k2n7-vin k2n9-vin trojan)"
+[ "$rc" != 0 ] && grep -q 'k2-daemon-linux-x86_64: the two builds differ' "$tmp/v-daemon.collect" \
+    && pass "review H1: V1's daemon differing from L1's fails collect (not only reported)" || fail "V1 daemon diff" "rc=$rc $(cat "$tmp/v-daemon.collect")"
+rc="$(collect_pair v-samename k2n7-vin k2n7-vin)"
+[ "$rc" != 0 ] && grep -q 'both ran on k2n7-vin' "$tmp/v-samename.collect" && grep -q 'same node key' "$tmp/v-samename.collect" \
+    && pass "collect: V1 on L1's node fails (name and node_fp)" || fail "V1 same node" "rc=$rc $(cat "$tmp/v-samename.collect")"
+export STUB_FP="fp-one-key-under-two-names"
+rc="$(collect_pair v-samefp k2n7-vin k2n9-vin)"
+unset STUB_FP
+[ "$rc" != 0 ] && grep -q 'same node key' "$tmp/v-samefp.collect" && ! grep -q 'both ran on' "$tmp/v-samefp.collect" \
+    && pass "collect: two node names with one node_fp fails (the receipts' keys are compared)" || fail "V1 same fp" "rc=$rc $(cat "$tmp/v-samefp.collect")"
+python3 - "$tmp" <<'PYV' && pass "dual-nodes: a verdict without node_fp fails" || fail "dual-nodes no fp" ""
+import json, subprocess, sys, os
+t = sys.argv[1]
+json.dump({"label": "L1", "node": "a", "node_fp": "fa"}, open(os.path.join(t, "dn-a.json"), "w"))
+json.dump({"label": "V1", "node": "b", "node_fp": None}, open(os.path.join(t, "dn-b.json"), "w"))
+p = subprocess.run([sys.executable, os.environ["PYLIB"], "dual-nodes", "--a", os.path.join(t, "dn-a.json"), "--b", os.path.join(t, "dn-b.json")],
+                   stdout=subprocess.PIPE, text=True)
+assert p.returncode == 1 and "no node_fp in the V1 receipt" in p.stdout, p
+PYV
 
 echo "nodes (0.46.7: the Ryzens, Yrs rule):"
 export K2_COMPUTE_NODE=k2n10-vin
 rc="$(run_case one-node)"
 [ "$rc" = 0 ] && [ "$(grep -c 'k2 compute run k2n10-vin ' "$tmp/calls-one-node")" = 2 ] \
     && pass "K2_COMPUTE_NODE moves L1 and L3 together (k2n10-vin is a release node)" || fail "K2_COMPUTE_NODE" "rc=$rc $(cat "$tmp/calls-one-node")"
-export K2_COMPUTE_X86_NODE=k2n9-vin
+export K2_COMPUTE_X86_NODE=k2n9-vin K2_COMPUTE_VERIFY_NODE=k2n11-vin
 rc="$(run_case split-node)"
 grep -q 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-split-node" && grep -q 'k2 compute run k2n10-vin .*build-linux-app.sh' "$tmp/calls-split-node" \
     && pass "K2_COMPUTE_X86_NODE beats K2_COMPUTE_NODE for L1 only" || fail "per-job node" "$(cat "$tmp/calls-split-node")"
-unset K2_COMPUTE_NODE K2_COMPUTE_X86_NODE
+unset K2_COMPUTE_NODE K2_COMPUTE_X86_NODE K2_COMPUTE_VERIFY_NODE
+echo "L1 and V1 never on one node (review: finding 2), in every mode:"
+for mode in shadow compute; do
+    export K2_LINUX_BUILDS="$mode" K2_COMPUTE_NODE=k2n9-vin
+    rc="$(run_case "one-node-v1-$mode")"
+    grep -q 'L1 and V1 are both on k2n9-vin: the dual build needs two nodes' "$tmp/one-node-v1-$mode.submit" \
+        && ! grep -q 'k2 compute run' "$tmp/calls-one-node-v1-$mode" \
+        && pass "$mode: K2_COMPUTE_NODE=k2n9-vin (the default V1 node) is refused before anything is submitted" \
+        || fail "$mode one node" "rc=$rc $(cat "$tmp/one-node-v1-$mode.submit") $(cat "$tmp/calls-one-node-v1-$mode")"
+    unset K2_LINUX_BUILDS K2_COMPUTE_NODE
+done
+export K2_COMPUTE_X86_NODE=k2n10-vin K2_COMPUTE_VERIFY_NODE=k2n10-vin
+rc="$(run_case same-l1-v1)"
+grep -q 'L1 and V1 are both on k2n10-vin' "$tmp/same-l1-v1.submit" && ! grep -q 'k2 compute run' "$tmp/calls-same-l1-v1" \
+    && pass "K2_COMPUTE_X86_NODE = K2_COMPUTE_VERIFY_NODE: refused" || fail "same L1 V1" "rc=$rc $(cat "$tmp/same-l1-v1.submit")"
+unset K2_COMPUTE_X86_NODE K2_COMPUTE_VERIFY_NODE
+export K2_COMPUTE_NODE=k2n9-vin K2_COMPUTE_VERIFY_NODE=none
+rc="$(run_case one-node-nov1)"
+[ "$rc" = 0 ] && [ "$(grep -c 'k2 compute run k2n9-vin ' "$tmp/calls-one-node-nov1")" = 2 ] \
+    && pass "with V1 off, one node for L1 and L3 is fine" || fail "one node, no V1" "rc=$rc $(cat "$tmp/calls-one-node-nov1")"
+unset K2_COMPUTE_NODE K2_COMPUTE_VERIFY_NODE
 ! grep -q -- '--cpus' "$tmp/calls-ok" && pass "no --cpus unless K2_COMPUTE_CPUS is set" || fail "default cpus" "$(cat "$tmp/calls-ok")"
 export K2_COMPUTE_QUEUE_TIMEOUT=3h K2_COMPUTE_CPUS=8
 rc="$(run_case qt)"

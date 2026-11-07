@@ -100,9 +100,11 @@
 #                       the compute-built x86 Linux files ARE the release.
 #                       - 1.6c: submit L1 (the binaries), L3 (deb/rpm/
 #                         AppImage) and V1 (the binaries again on another
-#                         node), --tier ci, OAuth as vault secrets.
+#                         node, never L1's), --tier ci, OAuth as vault
+#                         secrets; L1 and V1 --exclusive.
 #                       - 7.9c: wait, fetch, verify. V1 must reproduce the
-#                         root helper, k2-node and engine byte for byte.
+#                         daemon, root helper, k2-node and engine byte for
+#                         byte, on another node (node_fp) than L1.
 #                       - 8.5: stage the verified files in daemon-dist.
 #                       - 8.9: the release commit's tree must be the tree
 #                         compute built, before anything is pushed.
@@ -350,7 +352,7 @@ K2_SHADOW_LATE=0
 # node: the signer requires the dual build. Read-only (k2sign compute-pins).
 k2_compute_signer_check() {
     local l1 v1 pins
-    l1="${K2_COMPUTE_X86_NODE:-${K2_COMPUTE_NODE:-k2n7-vin}}"
+    l1="$(k2cr_x86_node)"
     v1="$(k2cr_verify_node)"
     if [ "${K2_COMPUTE_OAUTH:-secret}" != secret ]; then
         echo "ERROR: K2_COMPUTE_OAUTH=${K2_COMPUTE_OAUTH}, but the signing user signs a compute-built daemon only from" >&2
@@ -368,12 +370,12 @@ k2_compute_signer_check() {
         return 1
     fi
     python3 -I - "$pins" "$l1" "$v1" <<'PY'
-import json, sys
+import json, os, sys
 p, l1, v1 = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
 names = {n["name"] for n in p.get("nodes") or []}
 bad = []
 if not p.get("controller"):
-    bad.append("no controller pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <this Mac's K2 controller fingerprint>")
+    bad.append("no controller pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <controller_fp read on a node> /Users/%s/.k2/tunnel-key.pem" % os.environ.get("USER", "<you>"))
 if l1 == v1:
     bad.append("L1 and V1 are both %s: the dual build needs two nodes" % l1)
 for role, n in (("L1", l1), ("V1", v1)):
@@ -414,11 +416,14 @@ k2_linux_builds_preflight() {
         # The signing user signs the compute-built x86 daemon only on the
         # node-signed receipts it checks itself (prd-signing-user-v1 S3b).
         # Stop now, not at Step 10.5 after the release is live, if it can't.
+        # V1 on L1's node is no second build, whoever signs (Step 1.6c
+        # refuses it too, in every mode).
+        k2cr_check_dual_nodes || exit 1
         if [ "$K2_SIGNER" = "k2sign" ]; then
             k2_compute_signer_check || exit 1
         fi
         if [ -z "$(k2cr_verify_node)" ]; then
-            echo "  ⚠⚠ K2_COMPUTE_VERIFY_NODE=none: NO dual build. The root helper, k2-node and the App engine" >&2
+            echo "  ⚠⚠ K2_COMPUTE_VERIFY_NODE=none: NO dual build. The daemon, the root helper, k2-node and the App engine" >&2
             echo "  ⚠⚠ ship from ONE node's word (plan §6). Use it only when a release node is down." >&2
         fi
         echo "  Linux x86: K2 Compute (stage 1); aarch64 and Arch: GitHub. Repo variable LINUX_BUILDS=compute."

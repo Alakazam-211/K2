@@ -21,10 +21,12 @@ Signer verbs (the whole surface; anything else exits 2):
   status <version>                                                         -> JSON
   compute-evidence <version>   (L1+V1 signed receipts + commit object on stdin, S3b)
   compute-pins                 (the pinned controller and compute nodes)    -> JSON
+  compute-rehearse             (a shadow run's bundle on stdin: every S3b check but the
+                                tag, against the real pins; read-only)       -> JSON
 Admin verbs (root):
   set-approver <pem>    repin    approve <version> <base> <asset>... [--windows] [--reapprove]
   generate-u2           import u1 <key file> [--password-stdin]
-  pin-compute-controller <fp>    pin-compute-node <name> <pem> <fp>    unpin-compute-node <name>
+  pin-compute-controller <fp> <key>    pin-compute-node <name> <pem> <fp>    unpin-compute-node <name>
   clear-compute-evidence <version>
 
 Exit codes: 0 ok; 2 usage; 3 refused (one red line saying why); 4 internal.
@@ -352,12 +354,18 @@ def load_policy(ctx):
     for k in ("session_hours", "challenge_minutes", "max_stdin_mb", "compute_receipt_max_hours"):
         if not re.match(r"^[1-9][0-9]{0,4}$", pol[k]):
             raise Refused("policy: %s must be a positive number" % k)
-    for a in pol["compute_assets"].split():
-        if a not in LINUX_DAEMONS:
-            raise Refused("policy: compute_assets may list only the Linux daemons (not %s)" % a)
     for k in ("compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env", "compute_dual_names"):
         if not pol[k].split():
             raise Refused("policy: %s must not be empty" % k)
+    dual = set(pol["compute_dual_names"].split())
+    for a in pol["compute_assets"].split():
+        if a not in LINUX_DAEMONS:
+            raise Refused("policy: compute_assets may list only the Linux daemons (not %s)" % a)
+        # A file signed from compute must have been built twice, on two
+        # nodes: one node alone could get anything signed.
+        if a not in dual:
+            raise Refused("policy: compute asset %s is not in compute_dual_names: a compute-built file is signed only "
+                          "when V1 reproduced it byte for byte" % a)
     return pol
 
 
@@ -943,8 +951,11 @@ def pe_evidence(asset, path):
 #   L1 and V1 ran on two different pinned nodes, for this Mac's controller,
 #   the release build command, done/exit 0, no --dirty, no --cache, no env
 #   beyond the build's own; both started after this version's first
-#   approval; the root helper, k2-node and App engine are byte-identical in
-#   both (V1, G12); and the file on stdin is L1's signed artifact.
+#   approval; every file in compute_dual_names is byte-identical in both
+#   (V1, G12): the root helper, k2-node, the App engine and the daemon
+#   itself, so every file this signer signs from compute was built twice on
+#   two nodes (load_policy refuses a compute asset that isn't dual-built);
+#   and the file on stdin is L1's signed artifact.
 #   The receipt only digests the job's plan, so the bundle carries the plan
 #   itself (S3b review H1): it must hash to the receipt's plan_digest and
 #   ship nothing that changes the build (no --with, src_path, cwd, --cache,
@@ -952,7 +963,10 @@ def pe_evidence(asset, path):
 #   exactly BUILD_COMMIT/BUILD_TREE; the OAuth values only as the expected
 #   vault secret names). A secret job never touches a node's shared caches
 #   (no warm target, its own CARGO_HOME and sccache), so warmth must be
-#   "private" (H2) and the rustc that ran must be the pin.
+#   "private" (H2) and the rustc that ran must be the pin. The plan must be
+#   exclusive: k2-node starts it only on an idle node and starts nothing
+#   else (no tenant, no workspace) while it runs, so no other job of the
+#   same workspace shares its uid while the OAuth values are in its env.
 
 COMPUTE_PINS = "compute-pins"
 COMPUTE_DOMAIN = b"k2-compute-receipt-v1"
@@ -1172,6 +1186,9 @@ def check_plan(label, plan, rc, pol, argv, want_needs):
         raise Refused("%s: the plan runs in another folder (cwd %r)" % (label, plan["cwd"]))
     if plan.get("cache") is not None:
         raise Refused("%s: the plan mounts a --cache (%r)" % (label, plan["cache"]))
+    if plan.get("exclusive") is not True:
+        raise Refused("%s: the job was not exclusive: other jobs (its own workspace's too) could run beside it on the "
+                      "node, as its uid, while the OAuth values were in its env (k2 compute run --exclusive)" % label)
     src, rsrc = plan.get("src"), rc.get("src") or {}
     if not isinstance(src, dict) or src.get("commit") != rsrc.get("commit") or src.get("dirty") is not None:
         raise Refused("%s: the plan's source is not the commit the receipt ran, clean" % label)
@@ -1202,19 +1219,44 @@ def check_plan(label, plan, rc, pol, argv, want_needs):
         raise Refused("%s: the job got vault secrets the release build doesn't use: %s" % (label, ", ".join(sorted(set(sec) - req - opt))))
 
 
-def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
+def rehearsal_target(bundle):
+    """compute-rehearse: no tag yet, so L1's own commit, tree and rustc
+    stand in for the tag's (V1 must match them); every other check runs."""
+    recs = compute_bundle_receipts(bundle)
+    try:
+        l1 = json.loads(recs[0][1])
+    except ValueError:
+        raise Refused("L1: the receipt body is not JSON")
+    src = (l1.get("src") if isinstance(l1, dict) else None) or {}
+    commit, tree = str(src.get("commit", "")), str(src.get("tree", ""))
+    if not BASE_RE.match(commit) or not BASE_RE.match(tree):
+        raise Refused("L1: the receipt names no source commit and tree")
+    rustc = str((l1.get("tools_used") or {}).get("rustc") or "")
+    if not re.match(r"^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$", rustc):
+        raise Refused("L1: the receipt names no rustc it ran")
+    return commit, tree, rustc
+
+
+def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None, rehearse=False):
     """Every S3b condition (header above). Returns a summary for the state
-    file and the audit log; refuses with the first failed condition."""
+    file and the audit log; refuses with the first failed condition.
+    rehearse: a dry run before the tag exists (compute-rehearse): L1's
+    commit, tree and rustc stand in for the tag's; nothing else is relaxed."""
     controller, nodes = load_compute_pins(ctx)
     if controller is None:
-        raise Refused("compute builds: no controller pinned (sudo k2sign-admin pin-compute-controller <fp>)")
+        raise Refused("compute builds: no controller pinned (sudo k2sign-admin pin-compute-controller <fp> <the controller key>)")
     if not nodes:
         raise Refused("compute builds: no compute nodes pinned (sudo k2sign-admin pin-compute-node <name> <pem>)")
-    t, base, t_tree = release_commit(ctx, pol, version, session["base_commit"] if session else None)
-    if not t_tree:
-        raise Refused("GitHub did not say which tree v%s (%s) has" % (version, t[:12]))
+    if rehearse:
+        t, t_tree, pin = rehearsal_target(bundle)
+        base = None
+    else:
+        t, base, t_tree = release_commit(ctx, pol, version, session["base_commit"] if session else None)
+        if not t_tree:
+            raise Refused("GitHub did not say which tree v%s (%s) has" % (version, t[:12]))
+        pin = rust_pin_at(ctx, pol, version, t)
     commit_obj = None
-    if bundle.get("commit_object") is not None:
+    if bundle.get("commit_object") is not None and not rehearse:
         try:
             raw = base64.b64decode(bundle["commit_object"], validate=True)
         except Exception:
@@ -1223,7 +1265,6 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None):
     argv = pol["compute_argv"].split()
     want_argv = hashlib.sha256(canonical_json(argv).encode()).hexdigest()
     env_ok = set(COMPUTE_PLAN_ENV)
-    pin = rust_pin_at(ctx, pol, version, t)
     want_needs = [n.replace("{rust_pin}", pin) for n in pol["compute_needs"].split()]
     now = ctx.now()
     if session is not None:
@@ -1354,7 +1395,12 @@ def compute_evidence(ctx, pol, asset, version, path, session, d):
 def verb_compute_evidence(ctx, args):
     """Register a release's K2 Compute evidence (L1 + V1 signed receipts and
     the built commit object, JSON on stdin) after checking all of it. From
-    then on that version's compute assets sign only on this evidence."""
+    then on that version's compute assets sign only on this evidence.
+
+    Registered evidence is never replaced: the same bundle again (byte for
+    byte: a sign-daemon.sh re-run) is checked again and kept; any other
+    bundle is refused until root clears the version
+    (k2sign-admin clear-compute-evidence, audited)."""
     if len(args) != 1:
         raise Usage("compute-evidence <version>   (the evidence bundle on stdin)")
     version = check_version(args[0])
@@ -1366,10 +1412,28 @@ def verb_compute_evidence(ctx, args):
         p = os.path.join(d, "bundle.json")
         if read_stdin_to(ctx, p, COMPUTE_BUNDLE_MAX) == 0:
             raise Refused("no compute evidence on stdin")
+        bundle_sha = sha256_file(p)
         try:
             bundle = read_json(p)
         except ValueError:
             raise Refused("the compute evidence is not JSON")
+        state_path = compute_state_path(ctx, version)
+        again = False
+        if os.path.exists(state_path):
+            old = read_json(state_path)
+            # Evidence registered before this rule has no bundle_sha256: the
+            # parsed bundle must then be the same.
+            if old.get("bundle_sha256"):
+                again = old["bundle_sha256"] == bundle_sha
+            else:
+                again = old.get("bundle") == bundle
+            if not again:
+                msg = ("%s already has other compute evidence (registered %s, bundle sha256 %s…): registered evidence "
+                       "is never replaced. To register new evidence, root clears it first: "
+                       "sudo /usr/local/libexec/k2sign/k2sign-admin clear-compute-evidence %s"
+                       % (version, hhmm(int(old.get("registered") or 0)), str(old.get("bundle_sha256") or "?")[:16], version))
+                audit(ctx, version, "REFUSED-COMPUTE-EVIDENCE", detail=msg)
+                raise Refused(msg)
         try:
             summary = compute_check(ctx, pol, version, sess, bundle, d)
             used_path = os.path.join(ctx.state, "compute", "receipts.tsv")
@@ -1389,13 +1453,50 @@ def verb_compute_evidence(ctx, args):
                 if j["receipt"] not in used:
                     f.write("%s\t%s\n" % (j["receipt"], version))
         ctx.own(used_path)
-        write_file(ctx, compute_state_path(ctx, version),
-                   json.dumps({"bundle": bundle, "registered": ctx.now(), "summary": summary}, sort_keys=True))
-        audit(ctx, version, "COMPUTE-EVIDENCE", detail="tree %s; %s" % (summary["tree"], "; ".join(
-            "%s job %s on %s receipt %s" % (k, v["job"], v["node"], v["receipt"][:16]) for k, v in sorted(summary["jobs"].items()))))
-    print(json.dumps({"ok": True, "version": version, "summary": summary}, sort_keys=True))
-    say("compute evidence for %s registered: L1 on %s, V1 on %s, tree %s"
-        % (version, summary["jobs"]["L1"]["node"], summary["jobs"]["V1"]["node"], summary["tree"][:12]))
+        if not again:
+            write_file(ctx, state_path, json.dumps({"bundle": bundle, "bundle_sha256": bundle_sha,
+                                                    "registered": ctx.now(), "summary": summary}, sort_keys=True))
+        jobs = "; ".join("%s job %s on %s receipt %s" % (k, v["job"], v["node"], v["receipt"][:16])
+                         for k, v in sorted(summary["jobs"].items()))
+        audit(ctx, version, "COMPUTE-EVIDENCE-AGAIN" if again else "COMPUTE-EVIDENCE",
+              detail="bundle %s; tree %s; %s" % (bundle_sha[:16], summary["tree"], jobs))
+    print(json.dumps({"ok": True, "version": version, "again": again, "summary": summary}, sort_keys=True))
+    say("compute evidence for %s %s: L1 on %s, V1 on %s, tree %s"
+        % (version, "already registered (the same bundle, checked again)" if again else "registered",
+           summary["jobs"]["L1"]["node"], summary["jobs"]["V1"]["node"], summary["tree"][:12]))
+
+
+def verb_compute_rehearse(ctx, args):
+    """A dry run of compute-evidence before a release (the ceremony, and any
+    time): L1's and V1's receipts from a shadow run (bundle on stdin) are
+    checked against the REAL pins, every S3b rule but the tag (none yet:
+    L1's own commit, tree and rustc stand in for it, and V1 must match
+    them). Read-only: no session needed, nothing registered, nothing signed,
+    no replay entry; one audit line."""
+    if args:
+        raise Usage("compute-rehearse   (an evidence bundle on stdin: compute_release.py evidence-bundle of a shadow run)")
+    check_pins(ctx)
+    pol = load_policy(ctx)
+    with Locked(ctx), Scratch(ctx) as d:
+        state_dirs(ctx)
+        p = os.path.join(d, "bundle.json")
+        if read_stdin_to(ctx, p, COMPUTE_BUNDLE_MAX) == 0:
+            raise Refused("no compute evidence on stdin")
+        bundle_sha = sha256_file(p)
+        try:
+            bundle = read_json(p)
+        except ValueError:
+            raise Refused("the compute evidence is not JSON")
+        try:
+            summary = compute_check(ctx, pol, "(rehearsal)", None, bundle, d, rehearse=True)
+        except Refused as e:
+            audit(ctx, "rehearsal", "REFUSED-COMPUTE-REHEARSAL", detail="bundle %s; %s" % (bundle_sha[:16], e))
+            raise
+        audit(ctx, "rehearsal", "COMPUTE-REHEARSAL", detail="bundle %s; tree %s; %s" % (bundle_sha[:16], summary["tree"], "; ".join(
+            "%s job %s on %s" % (k, v["job"], v["node"]) for k, v in sorted(summary["jobs"].items()))))
+    print(json.dumps({"ok": True, "rehearsal": True, "summary": summary}, sort_keys=True))
+    say("rehearsal passed: L1 on %s and V1 on %s verify with the pinned keys and controller, and every dual-built file "
+        "matches (nothing was registered or signed)" % (summary["jobs"]["L1"]["node"], summary["jobs"]["V1"]["node"]))
 
 
 def verb_compute_pins(ctx, args):
@@ -1891,7 +1992,8 @@ def admin_import(ctx, args):
 
 SIGNER_VERBS = {"preflight": verb_preflight, "challenge": verb_challenge, "approve": verb_approve,
                 "sign": verb_sign, "status": verb_status, "gh-selfcheck": verb_gh_selfcheck, "keys": verb_keys,
-                "compute-evidence": verb_compute_evidence, "compute-pins": verb_compute_pins}
+                "compute-evidence": verb_compute_evidence, "compute-pins": verb_compute_pins,
+                "compute-rehearse": verb_compute_rehearse}
 def admin_set_gh_token(ctx, args):
     if args not in ([], ["--stdin"]):
         raise Usage("set-gh-token [--stdin]   (a fine-grained, read-only token for the repo)")
@@ -1933,15 +2035,55 @@ def write_compute_pins(ctx, controller, nodes):
     repin(ctx)
 
 
+def controller_fp_of_key(ctx, path):
+    """sha256 of the SubjectPublicKeyInfo of the controller's key file (K2's
+    ~/.k2/tunnel-key.pem: k2-core compute::controller_key, fingerprint =
+    sha256 of the SPKI DER). Root reads it without following a link, hands
+    it to openssl on stdin (never copied to disk) and keeps only the public
+    half's hash."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise Refused("can't read the controller key %s (%s)" % (path, e.strerror))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refused("the controller key %s is not a regular file" % path)
+        with os.fdopen(fd, "rb") as f:
+            fd = None
+            pem = f.read(16385)
+    finally:
+        if fd is not None:
+            os.close(fd)
+    if len(pem) > 16384 or b"PRIVATE KEY-----" not in pem:
+        raise Refused("%s is not a PEM private key (K2's ~/.k2/tunnel-key.pem)" % path)
+    rc, out, err = run([OPENSSL, "pkey", "-pubout", "-outform", "DER"], input_bytes=pem)
+    if rc != 0:
+        raise Refused("openssl can't read the controller key %s (%s)" % (path, err.decode(errors="replace").strip()[:200]))
+    try:
+        der = p256_spki(out)
+    except Refused:
+        raise Refused("the controller key %s is not a P-256 key" % path)
+    return hashlib.sha256(der).hexdigest()
+
+
 def admin_pin_compute_controller(ctx, args):
     """This Mac's K2 controller key fingerprint (the controller_fp every
-    receipt names; each node's run/status.json shows it as controller_fp)."""
-    if len(args) != 1 or not FP_RE.match(args[0]):
-        raise Usage("pin-compute-controller <fingerprint: 64 lowercase hex>")
+    receipt names; each node's run/status.json shows it as controller_fp).
+    Pinned only when the fingerprint a person typed (read on a node's own
+    console) is the one root derives from the controller's key on this Mac
+    (S3b review: the pin must prove what it says)."""
+    if len(args) != 2 or not FP_RE.match(args[0]):
+        raise Usage("pin-compute-controller <fingerprint: 64 lowercase hex, controller_fp read on a node> "
+                    "<the controller's key: /Users/<release user>/.k2/tunnel-key.pem>")
+    if not os.path.isabs(args[1]):
+        raise Usage("pin-compute-controller needs an absolute key path (the wrapper runs from /)")
     check_pins(ctx)
+    fp = controller_fp_of_key(ctx, args[1])
+    if fp != args[0]:
+        raise Refused("the controller key %s has fingerprint %s, not the %s you typed: not pinned" % (args[1], fp, args[0]))
     _, nodes = load_compute_pins(ctx)
     write_compute_pins(ctx, args[0], nodes)
-    say("compute controller pinned: %s" % args[0])
+    say("compute controller pinned: %s (it equals the fingerprint of %s)" % (args[0], args[1]))
 
 
 def admin_pin_compute_node(ctx, args):

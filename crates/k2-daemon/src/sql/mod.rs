@@ -232,6 +232,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// 0.46.10 (cap 25): a new --id makes a second database with its own
+    /// name instead of handing back the default one; the same --id answers
+    /// the one it made; the cap still refuses, naming the way out; --db
+    /// reaches the second database for dsn and drop; an unknown --db is 404.
+    #[test]
+    fn second_database_by_new_id_dsn_and_drop_by_db() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-second-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = insert_project("sql-second", &dir.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let cap = k2_core::workspace::settings::DEFAULT_DB_ACTIVE_CAP;
+        assert_eq!(cap, 25);
+
+        let first = ops::create_database(&ops, &secrets, &pid, cap, None, None).expect("first");
+        let base = first["name"].as_str().expect("name").to_string();
+        assert_eq!(base, ops::pg_ident_for_project(&pid));
+        assert_eq!(first["existing"], false);
+        // No --id, no --name: still the default one (hire, App install, restore rely on it).
+        let again = ops::create_database(&ops, &secrets, &pid, cap, None, None).expect("again");
+        assert_eq!(again["existing"], true, "{again}");
+        assert_eq!(again["name"], base.as_str());
+
+        let second = ops::create_database(&ops, &secrets, &pid, cap, Some("sb-findatime"), None)
+            .expect("second");
+        assert_eq!(second["existing"], false, "a new --id is a new database: {second}");
+        assert_eq!(second["name"], format!("{base}_sb_findatime").as_str(), "{second}");
+        assert_eq!(second["cap"]["used"], 2, "{second}");
+        assert_eq!(second["cap"]["cap"], 25, "{second}");
+        let same = ops::create_database(&ops, &secrets, &pid, cap, Some("sb-findatime"), None)
+            .expect("same id");
+        assert_eq!(same["existing"], true, "{same}");
+        assert_eq!(same["name"], second["name"]);
+
+        // The cap still refuses, with what to do.
+        let err = ops::create_database(&ops, &secrets, &pid, 2, Some("third"), None)
+            .expect_err("cap 2 is full");
+        assert_eq!(err.code(), "cap_reached", "{}", err.hint());
+        assert!(err.hint().contains("2 active databases"), "{}", err.hint());
+        assert!(err.hint().contains("k2 db drop --db"), "{}", err.hint());
+        assert!(err.hint().contains("k2 db cap"), "{}", err.hint());
+
+        // --db by Postgres name and by create --id; unknown is 404.
+        let second_name = second["name"].as_str().unwrap().to_string();
+        let by_name = ops::dsn_for_db(&ops, &secrets, &pid, cap, &second_name).expect("dsn --db name");
+        assert!(by_name["dsn"].as_str().unwrap().contains(&format!("/{second_name}")), "{by_name}");
+        let by_id = ops::dsn_for_db(&ops, &secrets, &pid, cap, "sb-findatime").expect("dsn --db id");
+        assert_eq!(by_id["name"], second_name.as_str());
+        let missing = ops::dsn_for_db(&ops, &secrets, &pid, cap, "nope").expect_err("unknown");
+        assert_eq!(missing.code(), "not_found", "{}", missing.hint());
+
+        // drop --db takes the named one; the default stays.
+        let dropped = ops::drop_database_db(&ops, &pid, Some("sb-findatime")).expect("drop --db");
+        assert_eq!(dropped["dropped"], second_name.as_str(), "{dropped}");
+        let left = ops::dsn_for_project(&ops, &secrets, &pid, cap).expect("default left");
+        assert_eq!(left["name"], base.as_str(), "{left}");
+        let gone = ops::drop_database_db(&ops, &pid, Some(&second_name)).expect_err("already dropped");
+        assert_eq!(gone.code(), "not_found", "{}", gone.hint());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn create_database_grants_agent_on_k2_store() {
         let _g = sql_server_test_lock();

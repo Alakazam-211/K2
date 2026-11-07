@@ -669,7 +669,8 @@ fn load_active_by_client(
 ) -> Option<DbRow> {
     conn.query_row(
         &format!(
-            "SELECT {DB_ROW_COLS} FROM sql_databases WHERE project_id = ?1 AND client_id = ?2"
+            "SELECT {DB_ROW_COLS} FROM sql_databases WHERE project_id = ?1 AND client_id = ?2 \
+             ORDER BY (status = 'active') DESC, created_at DESC LIMIT 1"
         ),
         rusqlite::params![project_id, client_id],
         db_row_from,
@@ -699,6 +700,99 @@ fn load_active_default(conn: &rusqlite::Connection, project_id: &str) -> Option<
         db_row_from,
     )
     .ok()
+}
+
+/// A free database name for a new `--id` when the workspace's default
+/// name is taken: `{base}_{client id}` (lower-case, `_` for anything else,
+/// at most 63 bytes), then `_2`, `_3`, ... Never `{base}_test` (the test
+/// database's name) or a name any live, test or moving row holds.
+fn fresh_db_name(conn: &rusqlite::Connection, base: &str, client_id: &str) -> String {
+    let slug: String = client_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    let test_name = format!("{base}_test");
+    let taken = |n: &str| -> bool {
+        n == test_name
+            || conn
+                .query_row(
+                    "SELECT 1 FROM sql_databases WHERE name = ?1 AND status != 'dropped'",
+                    rusqlite::params![n],
+                    |_| Ok(()),
+                )
+                .is_ok()
+    };
+    let fit = |s: &str, room: usize| -> String { s.chars().take(63 - room).collect() };
+    let first = fit(&format!("{base}_{slug}"), 0);
+    if !slug.is_empty() && !taken(&first) {
+        return first;
+    }
+    let stem = if slug.is_empty() { base.to_string() } else { first };
+    (2u32..)
+        .map(|n| {
+            let suffix = format!("_{n}");
+            format!("{}{suffix}", fit(&stem, suffix.len()))
+        })
+        .find(|n| !taken(n))
+        .expect("an unbounded range always finds a free name")
+}
+
+/// `k2 db create --major M` that matches a database already there (same
+/// `--id` or name) on another major: refuse instead of handing back the
+/// old one as if it were new.
+fn refuse_other_major(
+    conn: &rusqlite::Connection,
+    row: &DbRow,
+    major: Option<u32>,
+    matched: &str,
+) -> Result<(), OpsError> {
+    let Some(want) = major else { return Ok(()) };
+    let have = cluster::db_major_in(conn, &row.name).unwrap_or_else(|| cluster::primary_in(conn).major);
+    if have == 0 || have == want {
+        return Ok(());
+    }
+    Err(OpsError::Refused(
+        "major_mismatch",
+        format!(
+            "{matched} is database {name}, which is on Postgres {have}, not {want}. \
+             For a new database on Postgres {want}, use a new --id (or --name); \
+             to move this one, 'k2 db upgrade {name} --to {want}'.",
+            name = row.name
+        ),
+    ))
+}
+
+/// The active database this workspace owns that `spec` names: its id, its
+/// Postgres name or the `--id` it was created with (`--db`, 0.46.10).
+fn owned_row(project_id: &str, spec: &str) -> Result<DbRow, OpsError> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Err(OpsError::Usage("--db needs a database name or id (k2 db list)".into()));
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        &format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases \
+             WHERE project_id = ?1 AND status = 'active' AND (id = ?2 OR name = ?2 OR client_id = ?2) \
+             ORDER BY (id = ?2) DESC, (name = ?2) DESC, created_at ASC LIMIT 1"
+        ),
+        rusqlite::params![project_id, spec],
+        db_row_from,
+    )
+    .map_err(|_| {
+        OpsError::NotFound(format!(
+            "this workspace has no active database '{spec}' — see 'k2 db list'"
+        ))
+    })
+}
+
+/// `--db` when given, else the workspace's default database.
+fn target_row(project_id: &str, db: Option<&str>) -> Result<DbRow, OpsError> {
+    match db.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(spec) => owned_row(project_id, spec),
+        None => active_row(project_id),
+    }
 }
 
 /// The workspace's default database: the oldest active one, the one
@@ -988,13 +1082,7 @@ fn target_cluster(
     }
     match cluster::ensure_cluster(ops, want, false) {
         Ok(cl) if cl.role == "k2" => Ok((cl, None)),
-        Ok(cl) => Err(OpsError::Refused(
-            "cluster_refused",
-            format!(
-                "the Postgres {want} cluster on port {} was set up outside K2 (adopted); K2 creates databases only in its own clusters",
-                cl.port
-            ),
-        )),
+        Ok(cl) => Err(OpsError::Refused("cluster_refused", cluster::not_k2_cluster_hint(&cl))),
         Err(e) if !exact => {
             let p = cluster::primary();
             let primary_ok = p.role == "k2"
@@ -1039,7 +1127,7 @@ fn create_database_inner(
     } else {
         pg_ident_for_project(project_id)
     };
-    let name = name_override
+    let mut name = name_override
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| {
@@ -1091,6 +1179,7 @@ fn create_database_inner(
             if let Some(cid) = client_id {
                 if let Some(row) = load_active_by_client(&conn, project_id, cid) {
                     if row.status == "active" {
+                        refuse_other_major(&conn, &row, major, &format!("--id {cid}"))?;
                         let used = count_active(&conn, project_id);
                         return dsn_json(
                             ops,
@@ -1104,8 +1193,17 @@ fn create_database_inner(
                         );
                     }
                 }
+                // A new --id is a new database (0.46.10, cap 25): without
+                // --name it would take the workspace's default name and hand
+                // back the database already there, so it gets its own name.
+                if name_override.map(str::trim).is_none_or(str::is_empty)
+                    && load_active_by_name(&conn, project_id, &name).is_some()
+                {
+                    name = fresh_db_name(&conn, &name, cid);
+                }
             }
             if let Some(row) = load_active_by_name(&conn, project_id, &name) {
+                refuse_other_major(&conn, &row, major, &format!("the name {name}"))?;
                 let used = count_active(&conn, project_id);
                 return dsn_json(
                     ops,
@@ -1121,8 +1219,9 @@ fn create_database_inner(
             let used = count_active(&conn, project_id);
             if cap != 0 && used >= cap {
                 return Err(OpsError::CapReached(format!(
-                    "database cap reached ({used}/{cap}). Drop one with 'k2 db drop --yes' \
-                     or ask your human to raise the cap."
+                    "this workspace already has {used} active databases and its cap is {cap}, so no new one was made. \
+                     Drop one it no longer needs ('k2 db list', then 'k2 db drop --db <name> --yes') \
+                     or ask your human to raise the cap ('k2 db cap <n>', owner only)."
                 )));
             }
             (used, false)
@@ -1336,6 +1435,44 @@ pub fn dsn_for_project(
     cap: u32,
 ) -> Result<serde_json::Value, OpsError> {
     dsn_for_project_opts(ops, secrets, project_id, cap, false, false)
+}
+
+/// `k2 db dsn --db <name|id>` (0.46.10): the agent DSN for one database
+/// by name, id or create `--id`: one this workspace owns (its own agent
+/// login), else one granted to it (the workspace's grantee login). No
+/// such database, or no grant on it: 404, as for the unscoped dsn.
+pub fn dsn_for_db(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    cap: u32,
+    spec: &str,
+) -> Result<serde_json::Value, OpsError> {
+    require_running()?;
+    let used = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        count_active(&conn, project_id)
+    };
+    match owned_row(project_id, spec) {
+        Ok(row) => return dsn_json(ops, secrets, &row, ResolvedVia::Owned, project_id, true, used, cap),
+        Err(OpsError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to this workspace — see 'k2 db list'", spec.trim()));
+    let row = find_database(spec, None).map_err(|e| match e {
+        OpsError::NotFound(_) => missing(),
+        other => other,
+    })?;
+    let granted = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        grant_level_on(&conn, &row.id, project_id).is_some()
+    };
+    if !granted {
+        return Err(missing());
+    }
+    dsn_json(ops, secrets, &row, ResolvedVia::Grant, project_id, true, used, cap)
 }
 
 /// `test`: load `status=test` only. `migrator`: return the migrator DSN
@@ -1586,8 +1723,21 @@ pub fn migrate(
     ws_path: &str,
     dir: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
+    migrate_db(ops, secrets, project_id, None, ws_path, dir)
+}
+
+/// `k2 db migrate [--db <name|id>]`: `db` None = the workspace's default
+/// database; else one it owns (0.46.10).
+pub fn migrate_db(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    db: Option<&str>,
+    ws_path: &str,
+    dir: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
     require_running()?;
-    let row = active_row(project_id)?;
+    let row = target_row(project_id, db)?;
     refuse_if_moving(&row.name)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
     let rel = dir.unwrap_or(".k2/db/migrations");
@@ -1961,8 +2111,20 @@ pub fn dump(
     ws_path: &str,
     out: Option<&str>,
 ) -> Result<(serde_json::Value, Option<Vec<u8>>), OpsError> {
+    dump_db(ops, secrets, project_id, None, ws_path, out)
+}
+
+/// `k2 db dump [--db <name|id>]` (see [`migrate_db`]).
+pub fn dump_db(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    db: Option<&str>,
+    ws_path: &str,
+    out: Option<&str>,
+) -> Result<(serde_json::Value, Option<Vec<u8>>), OpsError> {
     require_running()?;
-    let row = active_row(project_id)?;
+    let row = target_row(project_id, db)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
     let rel = match out.map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => p.to_string(),
@@ -2035,6 +2197,20 @@ pub fn restore(
     ws_path: &str,
     file: &str,
 ) -> Result<serde_json::Value, OpsError> {
+    restore_db(ops, secrets, project_id, None, ws_path, file)
+}
+
+/// `k2 db restore <file> [--db <name|id>]`. Without `--db` a workspace
+/// with no database gets one first (as before); `--db` names one it owns
+/// and never creates.
+pub fn restore_db(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    db: Option<&str>,
+    ws_path: &str,
+    file: &str,
+) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     // Jail first (D17) so `..` / abs fail loud even on a fresh workspace.
     let src = match resolve_in_path(ws_path, file) {
@@ -2042,9 +2218,10 @@ pub fn restore(
         Err(InPathError::Usage(h)) => return Err(OpsError::Usage(h)),
         Err(InPathError::NotFound(h)) => return Err(OpsError::NotFound(h)),
     };
-    let row = match active_row(project_id) {
+    let named = db.map(str::trim).filter(|s| !s.is_empty());
+    let row = match target_row(project_id, named) {
         Ok(r) => r,
-        Err(OpsError::NotFound(_)) => {
+        Err(OpsError::NotFound(_)) if named.is_none() => {
             let cap = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
@@ -2081,9 +2258,20 @@ pub fn restore(
     Ok(serde_json::json!({ "ok": true, "restored": file }))
 }
 
+#[cfg(test)]
 pub fn drop_database(ops: &dyn SystemOps, project_id: &str) -> Result<serde_json::Value, OpsError> {
+    drop_database_db(ops, project_id, None)
+}
+
+/// `k2 db drop --yes [--db <name|id>]`: without `--db`, the workspace's
+/// default database (the oldest active one).
+pub fn drop_database_db(
+    ops: &dyn SystemOps,
+    project_id: &str,
+    db: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
     require_running()?;
-    let row = active_row(project_id)?;
+    let row = target_row(project_id, db)?;
     refuse_if_moving(&row.name)?;
     let sql = format!(
         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = {name};\n\
@@ -2527,7 +2715,7 @@ fn project_cap(conn: &rusqlite::Connection, project_id: &str) -> u32 {
         .flatten();
     match cap {
         Some(n) if n >= 0 => n as u32,
-        _ => 1,
+        _ => k2_core::workspace::settings::DEFAULT_DB_ACTIVE_CAP,
     }
 }
 

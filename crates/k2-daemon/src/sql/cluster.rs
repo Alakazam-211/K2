@@ -510,10 +510,7 @@ pub fn ensure_cluster(ops: &dyn SystemOps, major: u32, preview: bool) -> Result<
     pg_major::check_target(major, preview, pg_major::today_days()).map_err(EnsureError::Policy)?;
     if let Some(c) = for_major(major) {
         if c.role == "foreign" {
-            return Err(EnsureError::Refused(format!(
-                "the {major} cluster on port {} was set up outside K2's layout; K2 never creates databases in it",
-                c.port
-            )));
+            return Err(EnsureError::Refused(not_k2_cluster_hint(&c)));
         }
         return Ok(c);
     }
@@ -548,6 +545,26 @@ pub fn ensure_cluster(ops: &dyn SystemOps, major: u32, preview: bool) -> Result<
     c.origin = if c.is_primary() && list_in(&conn).is_empty() { "baked".into() } else { "created".into() };
     record_in(&conn, &c, false).map_err(EnsureError::Helper)?;
     Ok(c)
+}
+
+/// Why `k2 db create --major M` refuses a cluster K2 didn't make
+/// (`foreign`: off K2's layout; `adopted`: K2's layout, made by hand):
+/// which cluster, the one-cluster-per-major rule, and what the owner can
+/// do. K2 has no verb that takes over, forgets or removes such a cluster
+/// (the root helper refuses `pg drop-cluster`), so the hint says so.
+pub fn not_k2_cluster_hint(c: &Cluster) -> String {
+    let dir = if c.data_dir.is_empty() { "unknown".to_string() } else { c.data_dir.clone() };
+    format!(
+        "Postgres {major} on this box is a cluster K2 didn't make ({major}/{name}, port {port}, data {dir}; recorded {role}). \
+K2 runs one cluster per Postgres major and never creates databases in, takes over or removes a cluster made outside K2. \
+The owner can create on a major K2 runs instead (`k2 db clusters` lists them; without --major K2 uses the box default). \
+K2 has no command yet to take this cluster over or forget it, and removing it by hand isn't enough today (K2 keeps its record and still refuses): \
+ask for it with `k2 feedback ask`.",
+        major = c.major,
+        name = c.name,
+        port = c.port,
+        role = c.role,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

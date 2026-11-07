@@ -44465,12 +44465,22 @@ cmd_schema() {
     {
       "name": "db create",
       "usage": "k2 db create [--id <client-id>] [--db-access off|read|write] [--json]",
-      "description": "Mint this workspace's Postgres database (ws_<project_id>) and return a loopback DSN for the agent role. --id is idempotency only. --db-access persists the create-only passport (default off). Owner always; agent only if db_agent_access=write. List/dsn/store do not need this flag when the workspace owns a DB or has a grant. Never returns superuser. Cap counts ACTIVE DBs (drop frees).",
+      "description": "Mint a Postgres database for this workspace and answer its name and a loopback DSN for the agent role WITHOUT the password (fetch the full DSN with k2 db dsn --db <name>). No --id and no --name: the workspace's default database (ws_<project_id>), made once. A new --id makes another database (ws_<project_id>_<id>); the same --id answers the one it made, and with --major on another major it exits 3 (major_mismatch). --db-access persists the create-only passport (default off). Owner always; agent only if db_agent_access=write. List/dsn/store do not need this flag when the workspace owns a DB or has a grant. Never returns superuser. Cap: 25 ACTIVE databases per workspace by default (k2 db cap; drop frees one; test DBs don't count).",
       "args": [],
       "flags": [
-        {"name": "--id", "arg": "client-id", "description": "Idempotency key."},
+        {"name": "--id", "arg": "client-id", "description": "Your key for this database: a new key makes a new database, the same key answers the one it made."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
         {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cap",
+      "usage": "k2 db cap [<n>|default] [--workspace <ws>] [--json]",
+      "description": "How many ACTIVE databases a workspace (its agent) may hold: 25 by default, 0 = unlimited; test databases don't count. With no number anyone may read it. Setting it is the owner's only (the owner token, or a person signed in to this server): an agent's own terminal is refused with exit 3, so an agent asks its human instead. default goes back to 25.",
+      "args": [{"name": "n", "required": false}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid (default: this one). Alias --project."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -44566,10 +44576,11 @@ cmd_schema() {
     },
     {
       "name": "db dsn",
-      "usage": "k2 db dsn [--ref] [--json] [--workspace <ws>]",
-      "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (owned first, else first grant). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
+      "usage": "k2 db dsn [--db <name|id>] [--ref] [--json] [--workspace <ws>]",
+      "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (its default: the oldest one it owns, else the first grant), or with --db on one database by name, id or create --id (owned or granted). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
       "args": [],
       "flags": [
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (k2 db list). Not with --test, --actor or --ref."},
         {"name": "--json", "arg": null, "description": "JSON output."},
         {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
         {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
@@ -50766,11 +50777,23 @@ TWO ACTORS
   Do not hard-code `ws_*_agent` in files. Do not hand-mint cluster
   roles; use `k2 db create --test` for two-role tests.
 
+HOW MANY (the cap)
+  Each workspace (its agent) may hold up to 25 ACTIVE databases by
+  default; `k2 db cap` shows yours. Only the owner changes it
+  (`k2 db cap <n> --workspace <ws>`, 0 = unlimited): ask, don't loop.
+  `k2 db create --id <key>` with a new key makes another database
+  (`ws_<id>_<key>`); the same key answers the one it made. Without
+  --id or --name, create answers the workspace's default database.
+  Create shows no password: fetch the DSN with `k2 db dsn --db <name>`.
+  dsn / migrate / dump / restore / drop take `--db <name|id|key>`;
+  without it they act on the default (oldest) database.
+
 --test (disposable scratch; not cap)
-  `k2 db create --test` while the live Skin occupies cap=1. JSON is
-  agent `dsn` + `migratorDsn`. Owner or owning-workspace cell only.
+  `k2 db create --test` next to the live databases (not counted).
+  Its answer shows no passwords: `k2 db dsn --test` is the agent DSN,
+  `k2 db dsn --test --actor migrator` the migrator's. Owner or
+  owning-workspace cell only.
   Guest GET dsn is 403; guests never hold a DSN. Grant-path 403.
-  `k2 db dsn --test` agent; `--test --actor migrator` migrator.
   `k2 db drop --test --yes` loads status=test only (404 if missing,
   never the live Skin). No `migrate --test` — apply SQL via psql
   on the migrator DSN. Do not point destructive tests at the live DB.
@@ -50785,14 +50808,15 @@ PASSPORT VS OWNERSHIP
 AGENT VERBS (workspace identity from the token)
   k2 db create [--id <key>] [--db-access write] [--json]
   k2 db create --test
-  k2 db list | dsn | dsn --test | dsn --test --actor migrator
-  k2 db migrate [--dir .k2/db/migrations]
-  k2 db dump / restore <workspace-relative-file>
-  k2 db drop --yes | drop --test --yes
+  k2 db list | cap | dsn [--db <name>] | dsn --test | dsn --test --actor migrator
+  k2 db migrate [--dir .k2/db/migrations] [--db <name>]
+  k2 db dump / restore <workspace-relative-file> [--db <name>]
+  k2 db drop --yes [--db <name>] | drop --test --yes
   k2 store put <name> --id <id> --json '{…}'
 
 OWNER VERBS (agents exit 3)
   enable / disable / uninstall / doctor / bind / status-as-engine
+  cap <n> (set this workspace's database cap)
   Ask your human. Do not retry-loop.
 
 DSN
@@ -80103,7 +80127,8 @@ def die(err, exit_code=None):
         hint = (hint + " — " if hint else "") + "requires owner/admin — ask your human"
     sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
     refused = ("gated", "forbidden", "owner_only", "unknown_major", "unsupported_major", "preview_major",
-               "major_eol", "not_upward", "cluster_refused", "helper_needed", "db_upgrade_off")
+               "major_eol", "not_upward", "cluster_refused", "helper_needed", "db_upgrade_off",
+               "major_mismatch")
     if exit_code is None:
         exit_code = 3 if code in refused else 2 if code == "usage" else 1
     sys.exit(exit_code)
@@ -80188,28 +80213,38 @@ elif verb == "dsn":
         params["actor"] = os.environ["D_ACTOR"]
     if os.environ.get("D_REF") == "true":
         params["ref"] = "1"
+    if os.environ.get("D_DB"):
+        params["db"] = os.environ["D_DB"]
     status, raw = request("GET", "/cli/db/dsn", params)
     d = load(raw)
 elif verb == "migrate":
     body = {"project": ws_path}
     if os.environ.get("D_DIR"):
         body["dir"] = os.environ["D_DIR"]
+    if os.environ.get("D_DB"):
+        body["db"] = os.environ["D_DB"]
     status, raw = request("POST", "/cli/db/migrate", body=body)
     d = load(raw)
 elif verb == "dump":
     body = {"project": ws_path}
     if os.environ.get("D_OUT"):
         body["out"] = os.environ["D_OUT"]
+    if os.environ.get("D_DB"):
+        body["db"] = os.environ["D_DB"]
     status, raw = request("POST", "/cli/db/dump", body=body)
     d = load(raw)
 elif verb == "restore":
     body = {"project": ws_path, "file": os.environ.get("D_FILE", "")}
+    if os.environ.get("D_DB"):
+        body["db"] = os.environ["D_DB"]
     status, raw = request("POST", "/cli/db/restore", body=body)
     d = load(raw)
 elif verb == "drop":
     body = {"project": ws_path, "yes": os.environ.get("D_YES") == "true"}
     if os.environ.get("D_TEST") == "true":
         body["test"] = True
+    if os.environ.get("D_DB"):
+        body["db"] = os.environ["D_DB"]
     status, raw = request("POST", "/cli/db/drop", body=body)
     d = load(raw)
 elif verb == "grant":
@@ -80329,13 +80364,17 @@ elif verb == "create":
     print("created %s%s" % (d.get("name"), (" on Postgres %s" % d["major"]) if d.get("major") else ""))
     if d.get("majorNote"):
         print("note: %s" % d["majorNote"])
+    if d.get("existing"):
+        print("(already there: same --id or name)")
     if d.get("dsn"):
         print("dsn: %s" % d.get("dsn"))
     if d.get("migratorDsn"):
         print("migratorDsn: %s" % d.get("migratorDsn"))
+    if d.get("dsnHint"):
+        print("no password shown; %s" % d["dsnHint"])
     cap = d.get("cap") or {}
     if cap:
-        print("cap %s/%s used" % (cap.get("used"), cap.get("cap")))
+        print("cap %s/%s used" % (cap.get("used"), cap.get("cap") if cap.get("cap") else "unlimited"))
 elif verb == "dsn":
     print(d.get("ref") or d.get("dsn") or "")
 elif verb == "list":
@@ -80418,6 +80457,12 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
   versions-access on|off [--workspace <ws>]
                                  "Allow this agent to manage Postgres versions"
                                  (owner turns on; owner or Admin turns off; never an agent)
+  cap [<n>|default] [--workspace <ws>] [--json]
+                                 how many ACTIVE databases this workspace (its agent)
+                                 may hold: default 25, 0 = unlimited, test DBs don't count.
+                                 Anyone may read it (no number); only the owner (or a
+                                 person signed in to this server) sets it; an agent's
+                                 own terminal is refused (exit 3)
 
 K2'S OWN DATABASE (~/.k2/k2.db; k2so.db is a link to it)
   home [--json]                  which file K2 uses and what the 0.46.6 switch did
@@ -80431,7 +80476,12 @@ K2'S OWN DATABASE (~/.k2/k2.db; k2so.db is a link to it)
 
 AGENT (workspace — identity from token, never body project=)
   create [--id <client-id>] [--db-access off|read|write] [--json]
-                                 needs db_agent_access=write (create-only passport)
+                                 needs db_agent_access=write (create-only passport).
+                                 Up to the cap (default 25) per workspace: a new --id
+                                 makes another database (ws_<id>_<client-id>); the same
+                                 --id answers the one it made. No --id, no --name: the
+                                 workspace's default database. Shows no password: get the
+                                 DSN with k2 db dsn [--db <name>]
   create --test                  disposable scratch DB (not cap; owner/cell only)
   create --major 16|17           pick the Postgres major (default: the box's: 17 on new
                                  boxes, the current major on existing ones until
@@ -80440,12 +80490,18 @@ AGENT (workspace — identity from token, never body project=)
   list [--json]                  active + test (no dropped tombstones)
   dsn | creds [--json] [--workspace <ws>]
                                  owned or granted; always re-fetchable; never logged
+  dsn --db <name|id>             one database by name, id or create --id (owned or
+                                 granted). Without --db, dsn/migrate/dump/restore/drop
+                                 use the workspace's default database (the oldest one)
   dsn --test                     agent DSN on the test DB
   dsn --test --actor migrator    migrator DSN on the test DB (two-role tests)
-  migrate [--dir .k2/db/migrations]
-  dump  [--out .k2/db/dumps/<ts>.dump]
-  restore <file>                 workspace-relative (no .. / abs)
-  drop --yes                     live Skin only
+  migrate [--dir .k2/db/migrations] [--db <name|id>]
+  dump  [--out .k2/db/dumps/<ts>.dump] [--db <name|id>]
+  restore <file> [--db <name|id>]
+                                 workspace-relative (no .. / abs)
+  drop --yes [--db <name|id>]    a live database (default: the default one).
+                                 --db on migrate/dump/restore/drop: one this
+                                 workspace owns (a grant reaches dsn --db only)
   drop --test --yes              test DB only (404 if missing; never the live Skin)
   grant <workspace> --db … --level read|write [--relation schema.name …] [--manage]
   revoke <workspace> --db …
@@ -80621,6 +80677,86 @@ b = h.get("blocked") or {}
 if b.get("message"): print("\n" + b["message"])
 c = h.get("choice") or {}
 if c.get("keep"): print("\nChosen: keep %s (applies at the next K2 start)." % c["keep"])
+'
+}
+
+# `--db` needs a value (a database name, id or create --id; k2 db list).
+_db_need_db_value() {
+    if [ $# -lt 2 ] || [ -z "${2:-}" ] || [ "${2:0:1}" = "-" ]; then
+        _db_err "usage" "--db needs a database name or id (k2 db list)"
+        exit 2
+    fi
+}
+
+# `k2 db cap [<n>|default] [--workspace WS] [--json]`: show or set how many
+# ACTIVE databases a workspace (= its agent) may hold (projects.db_active_cap;
+# unset = the default 25; 0 = unlimited; test databases don't count).
+# Showing: anyone who can list the workspace's databases. Setting: the
+# owner (the owner token, or a person signed in to this server) through
+# POST /cli/workspace/set; an agent's passport is refused (exit 3): an
+# agent never raises its own cap.
+_db_cap() {
+    local val="$1" as_json="$2"
+    local ws_path="${PROJECT:-}"
+    [ -n "$ws_path" ] || ws_path="$(pwd)"
+    if [ -z "$val" ]; then
+        local out rc=0
+        out="$(cli_request "/cli/db/list" "project=$(urlencode "$ws_path")")" || rc=$?
+        [ "$rc" -eq 0 ] || exit "$rc"
+        D_OUT="$out" D_JSON="$as_json" python3 -c '
+import json, os, sys
+raw = os.environ["D_OUT"]
+try:
+    v = json.loads(raw)
+except Exception:
+    print(raw); sys.exit(1)
+err = v.get("error")
+if err:
+    e = err if isinstance(err, dict) else {"code": "error", "hint": str(err)}
+    print(json.dumps({"error": e}), file=sys.stderr)
+    sys.exit(3 if e.get("code") in ("forbidden", "owner_only", "unsupported") else 1)
+cap = v.get("cap")
+if os.environ["D_JSON"] == "true":
+    print(json.dumps({"ok": True, "cap": cap, "unlimited": cap == 0})); sys.exit(0)
+print("database cap: %s" % ("unlimited (0)" if cap == 0 else cap))
+print("the owner sets it: k2 db cap <n> [--workspace WS]   (0 = unlimited, default = back to 25)")
+'
+        return
+    fi
+    local stored
+    case "$val" in
+        default) stored="default" ;;
+        *[!0-9]*) _db_err "usage" "k2 db cap takes a whole number (0 = unlimited) or 'default'"; exit 2 ;;
+        *)
+            [ "${#val}" -le 6 ] || { _db_err "usage" "k2 db cap: at most 999999 (0 = unlimited)"; exit 2; }
+            stored="$((10#$val))" ;;
+    esac
+    local body out rc=0
+    body="$(python3 -c 'import json,sys
+print(json.dumps({"project": sys.argv[1], "fields": {"db_active_cap": sys.argv[2]}}))' "$ws_path" "$stored")"
+    out="$(cli_post_json "/cli/workspace/set" "$body")" || rc=$?
+    [ "$rc" -eq 0 ] || { _db_err "error" "could not reach the K2 daemon"; exit 1; }
+    D_OUT="$out" D_JSON="$as_json" D_STORED="$stored" python3 -c '
+import json, os, sys
+raw = os.environ["D_OUT"]
+try:
+    v = json.loads(raw)
+except Exception:
+    print(json.dumps({"error": {"code": "error", "hint": raw[:200] or "no answer from the K2 daemon"}}), file=sys.stderr); sys.exit(1)
+err = v.get("error")
+if err or v.get("ok") is False:
+    hint = (err.get("hint") or err.get("code")) if isinstance(err, dict) else str(err or v.get("message") or raw[:200])
+    if "token" in hint or v.get("error") == "role_required":
+        print(json.dumps({"error": {"code": "owner_only", "hint": "only the owner sets a workspace database cap (an agent never raises its own) — ask your human to run: k2 db cap <n> --workspace <ws>"}}), file=sys.stderr)
+        sys.exit(3)
+    print(json.dumps({"error": {"code": "usage" if "db_active_cap" in hint else "error", "hint": hint}}), file=sys.stderr)
+    sys.exit(2 if "db_active_cap" in hint else 1)
+stored = os.environ["D_STORED"]
+cap = None if stored == "default" else int(stored)
+out = {"ok": True, "cap": 25 if cap is None else cap, "default": cap is None, "unlimited": cap == 0}
+if os.environ["D_JSON"] == "true":
+    print(json.dumps(out)); sys.exit(0)
+print("database cap: %s%s" % ("unlimited (0)" if cap == 0 else out["cap"], " (the default)" if cap is None else ""))
 '
 }
 
@@ -80870,13 +81006,15 @@ else:
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
             D_VERB="list" D_JSON="$as_json" _db_py ;;
         dsn|creds)
-            local test=false actor="" vref=false
+            local test=false actor="" vref=false db_sel=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --test) test=true; shift ;;
                     --ref) vref=true; shift ;;
                     --actor) actor="${2:-}"; shift 2 ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
@@ -80884,41 +81022,74 @@ else:
                 _db_err "usage" "--actor must be migrator"
                 exit 2
             fi
-            D_VERB="dsn" D_JSON="$as_json" D_TEST="$test" D_ACTOR="$actor" D_REF="$vref" _db_py ;;
+            D_VERB="dsn" D_JSON="$as_json" D_TEST="$test" D_ACTOR="$actor" D_REF="$vref" D_DB="$db_sel" _db_py ;;
         migrate)
+            local db_sel=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --dir) dir="${2:-}"; shift 2 ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
-            D_VERB="migrate" D_JSON="$as_json" D_DIR="$dir" _db_py ;;
+            D_VERB="migrate" D_JSON="$as_json" D_DIR="$dir" D_DB="$db_sel" _db_py ;;
         dump)
+            local db_sel=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --out) out="${2:-}"; shift 2 ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
-            D_VERB="dump" D_JSON="$as_json" D_OUT="$out" _db_py ;;
+            D_VERB="dump" D_JSON="$as_json" D_OUT="$out" D_DB="$db_sel" _db_py ;;
         restore)
-            file="${1:-}"; shift || true
-            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
-            [ -n "$file" ] || { _db_err "usage" "k2 db restore <file>"; exit 2; }
-            D_VERB="restore" D_JSON="$as_json" D_FILE="$file" _db_py ;;
+            local db_sel=""
+            file=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
+                    -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                    *) [ -z "$file" ] || { _db_err "usage" "unexpected '$1'"; exit 2; }; file="$1"; shift ;;
+                esac
+            done
+            [ -n "$file" ] || { _db_err "usage" "k2 db restore <file> [--db <name>]"; exit 2; }
+            D_VERB="restore" D_JSON="$as_json" D_FILE="$file" D_DB="$db_sel" _db_py ;;
         drop)
-            local test=false
+            local test=false db_sel=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --yes) yes=true; shift ;;
                     --test) test=true; shift ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
-            D_VERB="drop" D_JSON="$as_json" D_YES="$yes" D_TEST="$test" _db_py ;;
+            D_VERB="drop" D_JSON="$as_json" D_YES="$yes" D_TEST="$test" D_DB="$db_sel" _db_py ;;
+        cap)
+            # `k2 db cap [<n>|default] [--workspace WS]` (0.46.10): how many
+            # ACTIVE databases a workspace (= its agent) may hold. Reading:
+            # anyone who can read the workspace. Setting: the owner only
+            # (owner token, outside an agent's K2 terminal); an agent's
+            # passport is refused (exit 3): an agent never raises its own cap.
+            local cap_val=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    -h|--help|help) cmd_help_db; exit 0 ;;
+                    -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                    *) [ -z "$cap_val" ] || { _db_err "usage" "k2 db cap [<n>|default] [--workspace WS]"; exit 2; }; cap_val="$1"; shift ;;
+                esac
+            done
+            _db_cap "$cap_val" "$as_json" ;;
         grant)
             local grantee="" db_spec="" level="" manage=false
             local relations=()

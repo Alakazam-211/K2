@@ -113,7 +113,8 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // fail-closed 'off'. List/dsn/store use ownership or sql_grants.
         "db_agent_access",
         // D9: per-workspace ACTIVE-DB cap. Non-negative integer, 0 =
-        // unlimited (write-validated below); NULL = inherit default 1.
+        // unlimited (write-validated below); NULL = inherit default 25
+        // (`DEFAULT_DB_ACTIVE_CAP`).
         "db_active_cap",
         // Phase 0b (prd-wiki-public-chat-api-loopback-v1) — per-workspace
         // owner API guest policy text. Free-form; empty/NULL → platform
@@ -182,7 +183,15 @@ pub const MOBILE_TAB_VALUES: [&str; 3] = ["0", "1", "auto"];
 pub const DB_AGENT_ACCESS_MODES: [&str; 3] = ["off", "read", "write"];
 
 /// Default ACTIVE workspace-DB cap when `projects.db_active_cap` is NULL (D9).
-pub const DEFAULT_DB_ACTIVE_CAP: u32 = 1;
+/// A workspace is an agent, so this is the per-agent cap. 25 since 0.46.10
+/// (Rosson 2026-11-07; was 1). Test databases (`--test`) don't count.
+pub const DEFAULT_DB_ACTIVE_CAP: u32 = 25;
+
+/// A `db_active_cap` write that goes back to the default (stores NULL).
+fn db_cap_clears(value: &str) -> bool {
+    let v = value.trim();
+    v.is_empty() || v.eq_ignore_ascii_case("default") || v.eq_ignore_ascii_case("null")
+}
 
 /// Update a single project setting. Field names are allowlisted —
 /// the SQL interpolates the column name directly so any arbitrary
@@ -329,9 +338,9 @@ pub fn update_project_setting(
             "db_agent_access must be 'off', 'read', or 'write', got {value:?}"
         ));
     }
-    if field == "db_active_cap" && value.parse::<u32>().is_err() {
+    if field == "db_active_cap" && !db_cap_clears(value) && value.trim().parse::<u32>().is_err() {
         return Err(format!(
-            "db_active_cap must be a non-negative integer (0 = unlimited), got {value:?}"
+            "db_active_cap must be a non-negative integer (0 = unlimited), or 'default' (back to {DEFAULT_DB_ACTIVE_CAP}), got {value:?}"
         ));
     }
     // Per-workspace host-session cell cap: empty / "default" / "null"
@@ -383,6 +392,22 @@ pub fn update_project_setting(
             let n: i64 = trimmed.parse().expect("validated positive integer");
             conn.execute(
                 "UPDATE projects SET host_session_cell_cap = ?1 WHERE path = ?2",
+                rusqlite::params![n, project_path],
+            )
+            .map_err(|e| format!("DB update failed: {}", e))?
+        }
+    } else if field == "db_active_cap" {
+        // 'default' / empty / 'null' → SQL NULL (inherit DEFAULT_DB_ACTIVE_CAP).
+        if db_cap_clears(value) {
+            conn.execute(
+                "UPDATE projects SET db_active_cap = NULL WHERE path = ?1",
+                rusqlite::params![project_path],
+            )
+            .map_err(|e| format!("DB update failed: {}", e))?
+        } else {
+            let n: i64 = value.trim().parse::<u32>().expect("validated non-negative integer").into();
+            conn.execute(
+                "UPDATE projects SET db_active_cap = ?1 WHERE path = ?2",
                 rusqlite::params![n, project_path],
             )
             .map_err(|e| format!("DB update failed: {}", e))?
@@ -1750,7 +1775,7 @@ pub fn db_agent_access_for_path(project_path: &str) -> String {
 }
 
 /// EFFECTIVE ACTIVE-DB cap for `project_path` (D9). 0 = unlimited.
-/// NULL / unknown → [`DEFAULT_DB_ACTIVE_CAP`] (1).
+/// NULL / unknown → [`DEFAULT_DB_ACTIVE_CAP`] (25).
 pub fn db_active_cap_for_path(project_path: &str) -> u32 {
     let per_workspace: Option<i64> = {
         let db = crate::db::shared();
@@ -2830,7 +2855,7 @@ mod tests {
     }
 
     /// Data sidecar passport: NULL/unknown → off; write-validated
-    /// off/read/write; cap NULL → 1, 0 = unlimited.
+    /// off/read/write; cap NULL → 25, 0 = unlimited, an explicit value wins.
     #[test]
     fn db_agent_access_and_cap_defaults_and_validation() {
         let path = unique_path("db-access");
@@ -2839,7 +2864,9 @@ mod tests {
         assert_eq!(db_agent_access_for_path(&path), "off");
         assert_eq!(db_agent_access_for_path("/tmp/never-registered-db"), "off");
         assert_eq!(db_active_cap_for_path(&path), DEFAULT_DB_ACTIVE_CAP);
-        assert_eq!(db_active_cap_for_path("/tmp/never-registered-db"), 1);
+        assert_eq!(DEFAULT_DB_ACTIVE_CAP, 25);
+        assert_eq!(db_active_cap_for_path(&path), 25);
+        assert_eq!(db_active_cap_for_path("/tmp/never-registered-db"), 25);
 
         update_project_setting(&path, "db_agent_access", "read").expect("read");
         assert_eq!(db_agent_access_for_path(&path), "read");
@@ -2856,6 +2883,12 @@ mod tests {
         assert_eq!(db_active_cap_for_path(&path), 0);
         update_project_setting(&path, "db_active_cap", "3").expect("3");
         assert_eq!(db_active_cap_for_path(&path), 3);
+        update_project_setting(&path, "db_active_cap", "1").expect("1");
+        assert_eq!(db_active_cap_for_path(&path), 1, "an explicit 1 still wins over the default");
+        update_project_setting(&path, "db_active_cap", "default").expect("default");
+        assert_eq!(db_active_cap_for_path(&path), DEFAULT_DB_ACTIVE_CAP, "'default' goes back to 25");
+        update_project_setting(&path, "db_active_cap", "0").expect("unlimited again");
+        assert_eq!(db_active_cap_for_path(&path), 0, "0 = unlimited still wins");
         let err = update_project_setting(&path, "db_active_cap", "-1").expect_err("neg");
         assert!(err.contains("db_active_cap"), "got {err:?}");
     }

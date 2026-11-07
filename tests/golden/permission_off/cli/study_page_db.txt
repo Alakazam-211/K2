@@ -16,11 +16,23 @@ TWO ACTORS
   Do not hard-code `ws_*_agent` in files. Do not hand-mint cluster
   roles; use `k2 db create --test` for two-role tests.
 
+HOW MANY (the cap)
+  Each workspace (its agent) may hold up to 25 ACTIVE databases by
+  default; `k2 db cap` shows yours. Only the owner changes it
+  (`k2 db cap <n> --workspace <ws>`, 0 = unlimited): ask, don't loop.
+  `k2 db create --id <key>` with a new key makes another database
+  (`ws_<id>_<key>`); the same key answers the one it made. Without
+  --id or --name, create answers the workspace's default database.
+  Create shows no password: fetch the DSN with `k2 db dsn --db <name>`.
+  dsn / migrate / dump / restore / drop take `--db <name|id|key>`;
+  without it they act on the default (oldest) database.
+
 --test (disposable scratch; not cap)
-  `k2 db create --test` while the live Skin occupies cap=1. JSON is
-  agent `dsn` + `migratorDsn`. Owner or owning-workspace cell only.
+  `k2 db create --test` next to the live databases (not counted).
+  Its answer shows no passwords: `k2 db dsn --test` is the agent DSN,
+  `k2 db dsn --test --actor migrator` the migrator's. Owner or
+  owning-workspace cell only.
   Guest GET dsn is 403; guests never hold a DSN. Grant-path 403.
-  `k2 db dsn --test` agent; `--test --actor migrator` migrator.
   `k2 db drop --test --yes` loads status=test only (404 if missing,
   never the live Skin). No `migrate --test` — apply SQL via psql
   on the migrator DSN. Do not point destructive tests at the live DB.
@@ -35,14 +47,15 @@ PASSPORT VS OWNERSHIP
 AGENT VERBS (workspace identity from the token)
   k2 db create [--id <key>] [--db-access write] [--json]
   k2 db create --test
-  k2 db list | dsn | dsn --test | dsn --test --actor migrator
-  k2 db migrate [--dir .k2/db/migrations]
-  k2 db dump / restore <workspace-relative-file>
-  k2 db drop --yes | drop --test --yes
+  k2 db list | cap | dsn [--db <name>] | dsn --test | dsn --test --actor migrator
+  k2 db migrate [--dir .k2/db/migrations] [--db <name>]
+  k2 db dump / restore <workspace-relative-file> [--db <name>]
+  k2 db drop --yes [--db <name>] | drop --test --yes
   k2 store put <name> --id <id> --json '{…}'
 
 OWNER VERBS (agents exit 3)
   enable / disable / uninstall / doctor / bind / status-as-engine
+  cap <n> (set this workspace's database cap)
   Ask your human. Do not retry-loop.
 
 DSN

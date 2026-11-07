@@ -884,12 +884,22 @@ exit: 0
     {
       "name": "db create",
       "usage": "k2 db create [--id <client-id>] [--db-access off|read|write] [--json]",
-      "description": "Mint this workspace's Postgres database (ws_<project_id>) and return a loopback DSN for the agent role. --id is idempotency only. --db-access persists the create-only passport (default off). Owner always; agent only if db_agent_access=write. List/dsn/store do not need this flag when the workspace owns a DB or has a grant. Never returns superuser. Cap counts ACTIVE DBs (drop frees).",
+      "description": "Mint a Postgres database for this workspace and answer its name and a loopback DSN for the agent role WITHOUT the password (fetch the full DSN with k2 db dsn --db <name>). No --id and no --name: the workspace's default database (ws_<project_id>), made once. A new --id makes another database (ws_<project_id>_<id>); the same --id answers the one it made, and with --major on another major it exits 3 (major_mismatch). --db-access persists the create-only passport (default off). Owner always; agent only if db_agent_access=write. List/dsn/store do not need this flag when the workspace owns a DB or has a grant. Never returns superuser. Cap: 25 ACTIVE databases per workspace by default (k2 db cap; drop frees one; test DBs don't count).",
       "args": [],
       "flags": [
-        {"name": "--id", "arg": "client-id", "description": "Idempotency key."},
+        {"name": "--id", "arg": "client-id", "description": "Your key for this database: a new key makes a new database, the same key answers the one it made."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
         {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cap",
+      "usage": "k2 db cap [<n>|default] [--workspace <ws>] [--json]",
+      "description": "How many ACTIVE databases a workspace (its agent) may hold: 25 by default, 0 = unlimited; test databases don't count. With no number anyone may read it. Setting it is the owner's only (the owner token, or a person signed in to this server): an agent's own terminal is refused with exit 3, so an agent asks its human instead. default goes back to 25.",
+      "args": [{"name": "n", "required": false}],
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid (default: this one). Alias --project."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -985,10 +995,11 @@ exit: 0
     },
     {
       "name": "db dsn",
-      "usage": "k2 db dsn [--ref] [--json] [--workspace <ws>]",
-      "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (owned first, else first grant). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
+      "usage": "k2 db dsn [--db <name|id>] [--ref] [--json] [--workspace <ws>]",
+      "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (its default: the oldest one it owns, else the first grant), or with --db on one database by name, id or create --id (owned or granted). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
       "args": [],
       "flags": [
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (k2 db list). Not with --test, --actor or --ref."},
         {"name": "--json", "arg": null, "description": "JSON output."},
         {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
         {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}

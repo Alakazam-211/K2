@@ -403,9 +403,68 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
                     "refusing to return a superuser DSN",
                 );
             }
-            ok_json(v)
+            ok_json(without_passwords(v, b.test))
         }
         Err(e) => ops_err(e),
+    }
+}
+
+/// `k2 db create` answers (0.46.10): the DSNs without their passwords, so
+/// the password never lands in a terminal, a log or a `--json` capture;
+/// `dsnHint` says how to fetch the full one when it's needed. The App
+/// install path and `/v1` keep calling ops directly and are not changed.
+fn without_passwords(mut v: serde_json::Value, test: bool) -> serde_json::Value {
+    let name = v["name"].as_str().unwrap_or_default().to_string();
+    for key in ["dsn", "migratorDsn"] {
+        let redacted = v.get(key).and_then(|d| d.as_str()).map(redact_dsn_password);
+        if let Some(r) = redacted {
+            v[key] = serde_json::json!(r);
+        }
+    }
+    v["dsnHasPassword"] = serde_json::json!(false);
+    v["dsnHint"] = serde_json::json!(if test {
+        "full DSNs: k2 db dsn --test (agent) and k2 db dsn --test --actor migrator".to_string()
+    } else {
+        format!("full DSN: k2 db dsn --db {name} (or k2 db dsn --ref to keep it in the vault)")
+    });
+    v
+}
+
+/// `postgres://user:secret@host:port/db` → `postgres://user@host:port/db`.
+fn redact_dsn_password(dsn: &str) -> String {
+    let Some((scheme, rest)) = dsn.split_once("://") else { return dsn.to_string() };
+    let Some((creds, host)) = rest.rsplit_once('@') else { return dsn.to_string() };
+    let user = creds.split_once(':').map_or(creds, |(u, _)| u);
+    format!("{scheme}://{user}@{host}")
+}
+
+#[cfg(test)]
+mod create_answer_tests {
+    use super::{redact_dsn_password, without_passwords};
+
+    #[test]
+    fn create_answers_carry_no_passwords() {
+        assert_eq!(
+            redact_dsn_password("postgresql://ws_a_agent:s3cr%40t@127.0.0.1:5433/ws_a"),
+            "postgresql://ws_a_agent@127.0.0.1:5433/ws_a"
+        );
+        assert_eq!(redact_dsn_password("postgresql://u@h:1/d"), "postgresql://u@h:1/d");
+        let live = without_passwords(
+            serde_json::json!({"ok": true, "name": "ws_a_x", "dsn": "postgresql://ws_a_x_agent:pw1@127.0.0.1:5432/ws_a_x"}),
+            false,
+        );
+        assert!(!live.to_string().contains("pw1"), "{live}");
+        assert_eq!(live["dsnHasPassword"], false);
+        assert!(live["dsnHint"].as_str().unwrap().contains("k2 db dsn --db ws_a_x"), "{live}");
+        let test = without_passwords(
+            serde_json::json!({"ok": true, "name": "ws_a_test", "dsn": "postgresql://a:pw2@h:1/ws_a_test",
+                               "migratorDsn": "postgresql://m:pw3@h:1/ws_a_test", "test": true}),
+            true,
+        );
+        let s = test.to_string();
+        assert!(!s.contains("pw2") && !s.contains("pw3"), "{s}");
+        assert_eq!(test["migratorDsn"], "postgresql://m@h:1/ws_a_test");
+        assert!(test["dsnHint"].as_str().unwrap().contains("--actor migrator"), "{test}");
     }
 }
 
@@ -463,6 +522,23 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
         return resp;
     }
     let secrets = FileSecretStore::default();
+    if let Some(spec) = params.get("db").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if test || migrator {
+            return err_json("400 Bad Request", "usage", "--db does not go with --test or --actor (one test database per workspace)");
+        }
+        if truthy_param(params, "ref") {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                "--ref keeps DATABASE_URL for the workspace's default database only; it does not take --db yet",
+            );
+        }
+        // Owned or granted is checked in ops (else 404, as unscoped).
+        return match ops::dsn_for_db(ops(), &secrets, &project_id, cap_for(&path), spec) {
+            Ok(v) => ok_json(v),
+            Err(e) => ops_err(e),
+        };
+    }
     match ops::dsn_for_project_opts(ops(), &secrets, &project_id, cap_for(&path), test, migrator) {
         Ok(v) => {
             if !test {
@@ -579,6 +655,25 @@ struct ProjectBody {
     file: Option<String>,
     yes: Option<bool>,
     test: bool,
+    /// `--db <name|id>` (0.46.10): one database this workspace owns;
+    /// absent = the workspace's default (oldest active) database.
+    db: Option<String>,
+}
+
+impl ProjectBody {
+    fn db(&self) -> Option<&str> {
+        self.db.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
+}
+
+/// The gate for migrate/dump/restore/drop: with `--db` the database must
+/// be one this workspace owns (owning it is write; checked in ops), else
+/// [`interact_for`] on the default database, as before.
+fn interact_for_target(project_id: &str, b: &ProjectBody) -> Result<(), CliResponse> {
+    if b.db().is_some() {
+        return Ok(());
+    }
+    interact_for(project_id, "write")
 }
 
 pub fn handle_migrate(body: &[u8]) -> CliResponse {
@@ -596,11 +691,11 @@ pub fn handle_migrate(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = interact_for(&project_id, "write") {
+    if let Err(resp) = interact_for_target(&project_id, &b) {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::migrate(ops(), &secrets, &project_id, &path, b.dir.as_deref()) {
+    match ops::migrate_db(ops(), &secrets, &project_id, b.db(), &path, b.dir.as_deref()) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -621,11 +716,11 @@ pub fn handle_dump(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = interact_for(&project_id, "write") {
+    if let Err(resp) = interact_for_target(&project_id, &b) {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::dump(ops(), &secrets, &project_id, &path, b.out.as_deref()) {
+    match ops::dump_db(ops(), &secrets, &project_id, b.db(), &path, b.out.as_deref()) {
         Ok((v, _)) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -650,11 +745,11 @@ pub fn handle_restore(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = interact_for(&project_id, "write") {
+    if let Err(resp) = interact_for_target(&project_id, &b) {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::restore(ops(), &secrets, &project_id, &path, file) {
+    match ops::restore_db(ops(), &secrets, &project_id, b.db(), &path, file) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -683,6 +778,9 @@ pub fn handle_drop(body: &[u8]) -> CliResponse {
         Err(resp) => return resp,
     };
     if b.test {
+        if b.db().is_some() {
+            return err_json("400 Bad Request", "usage", "k2 db drop --test does not take --db (one test database per workspace)");
+        }
         if grant_path_blocks_test(&project_id) {
             return test_db_forbidden();
         }
@@ -691,10 +789,10 @@ pub fn handle_drop(body: &[u8]) -> CliResponse {
             Err(e) => ops_err(e),
         }
     } else {
-        if let Err(resp) = interact_for(&project_id, "write") {
+        if let Err(resp) = interact_for_target(&project_id, &b) {
             return resp;
         }
-        match ops::drop_database(ops(), &project_id) {
+        match ops::drop_database_db(ops(), &project_id, b.db()) {
             Ok(v) => ok_json(v),
             Err(e) => ops_err(e),
         }

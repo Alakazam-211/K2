@@ -452,6 +452,18 @@ fn create_major_choice_and_refusals() {
         }
         other => panic!("adopted cluster must refuse, got {other:?}"),
     }
+    // A hand-made cluster off K2's layout (foreign) is refused too, and the
+    // hint names it, the one-cluster-per-major rule and what the owner can do.
+    record(17, 5433, "foreign");
+    match ops::create_database_on(&ops, &secrets, &pb, 1, None, None, Some(17)) {
+        Err(OpsError::Refused(code, hint)) => {
+            assert_eq!(code, "cluster_refused");
+            for want in ["17/main", "port 5433", "recorded foreign", "one cluster per Postgres major", "k2 db clusters", "no command yet"] {
+                assert!(hint.contains(want), "missing {want:?}: {hint}");
+            }
+        }
+        other => panic!("foreign cluster must refuse, got {other:?}"),
+    }
     assert!(lines_with(&ops, "--cluster").is_empty(), "nothing was sent to a cluster K2 doesn't own");
 }
 

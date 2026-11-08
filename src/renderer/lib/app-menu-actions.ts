@@ -24,7 +24,6 @@ export const APP_MENU_ACTION_IDS = [
   'projects',
   'toggle-sidebar',
   'server-switcher',
-  'toggle-assistant',
   'focus-window',
   'zen-toggle',
   'zen-shortcuts',
@@ -51,7 +50,6 @@ const EVENT_ACTIONS: ReadonlySet<AppMenuActionId> = new Set([
   'projects',
   'toggle-sidebar',
   'server-switcher',
-  'toggle-assistant',
   'focus-window',
 ])
 

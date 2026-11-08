@@ -141,7 +141,6 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
             // accelerator and that keydown both toggled and the second
             // call closed the switcher. The item stays clickable.
             &MenuItem::with_id(handle, "server-switcher", "Switch Server", true, None::<&str>)?,
-            &MenuItem::with_id(handle, "toggle-assistant", "Toggle Assistant", true, Some("CmdOrCtrl+Shift+L"))?,
             &MenuItem::with_id(handle, "focus-window", "Open in Focus Window", true, Some("CmdOrCtrl+Shift+F"))?,
             &zen_item,
             &zen_shortcuts_item,
@@ -265,9 +264,6 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         }
         "server-switcher" => {
             emit_to_focused(app, "menu:server-switcher");
-        }
-        "toggle-assistant" => {
-            emit_to_focused(app, "menu:toggle-assistant");
         }
         "focus-window" => {
             emit_to_focused(app, "menu:focus-window");

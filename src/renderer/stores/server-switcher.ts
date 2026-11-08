@@ -16,17 +16,9 @@ export const useServerSwitcherStore = create<ServerSwitcherState>((set) => ({
   toggle: () => set((s) => ({ open: !s.open })),
 }))
 
-/** Cmd+L / the Switch Server menu item. Shift stays the assistant.
- *  Otherwise open once. Never toggle: a second event in the same turn
- *  must not close what the first opened. */
-export function applyCmdL(args: {
-  shift: boolean
-  focusAddress: () => boolean
-  toggleAssistant: () => void
-}): void {
-  if (args.shift) {
-    args.toggleAssistant()
-    return
-  }
+/** Cmd+L / the Switch Server menu item. Focus a visible browser address
+ *  bar if there is one, otherwise open the switcher once. Never toggle: a
+ *  second event in the same turn must not close what the first opened. */
+export function applyCmdL(args: { focusAddress: () => boolean }): void {
   if (!args.focusAddress()) useServerSwitcherStore.getState().setOpen(true)
 }

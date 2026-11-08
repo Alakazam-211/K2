@@ -72,7 +72,6 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'components/Settings/sections/K2ConnectSection.tsx': 'raw /cli fetch via getDaemonWs(scope)',
   'hooks/useTunnelUrls.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/federation.ts': 'raw /cli fetch via getDaemonWs(scope)',
-  'lib/llmDaemonClient.ts': 'assistant LLM, window server (MS22)',
   'lib/daemon-settings.ts': 'settings fetch via getDaemonWs(scope)',
   'stores/claude-auth.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/app-update-driver.ts': 'local app-update driver',
@@ -245,7 +244,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/TopBar/top-bar-scope.ts',
   'components/WhatsNewModal/WhatsNewModal.tsx',
   'components/Wiki/wiki-api.ts',
-  'components/WorkspaceAssistant/AssistantBar.tsx',
   'components/WorkspacePanel/WorkspaceCompletionSoundToggle.tsx',
   'components/common/HeartbeatSessionPicker.tsx',
   'hooks/useCursorMigrationCheck.ts',
@@ -260,7 +258,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // server (Settings → General row, Add Workspace / Git Init banners).
   'lib/git-tools.ts',
   'lib/heartbeat-delivery.ts',
-  'lib/llmDaemonClient.ts',
   'lib/pick-remote-image.ts',
   'lib/start-clone-to.ts',
   // 0.45.4: the landing-tab pref is keyed by the window's server + login.
@@ -271,7 +268,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.4 Settings → App Approvals badge: the window's server's held App
   // requests (its push on that server's events bus; a server switch reloads).
   'stores/app-approvals.ts',
-  'stores/assistant.ts',
   'stores/claude-auth.ts',
   'stores/custom-themes.ts',
   'stores/feedback.ts',

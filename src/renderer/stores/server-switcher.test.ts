@@ -40,7 +40,7 @@ describe('useServerSwitcherStore', () => {
   })
 })
 
-describe('Cmd+L / Cmd+Shift+L wiring', () => {
+describe('Cmd+L wiring', () => {
   afterEach(() => {
     useServerSwitcherStore.setState({ open: false })
     vi.restoreAllMocks()
@@ -50,21 +50,10 @@ describe('Cmd+L / Cmd+Shift+L wiring', () => {
   it('one Cmd+L with no visible address leaves the switcher open; a second call does not toggle it closed', () => {
     const toggle = vi.spyOn(useServerSwitcherStore.getState(), 'toggle')
     const focusAddress = vi.fn(() => false)
-    const toggleAssistant = vi.fn()
-    applyCmdL({ shift: false, focusAddress, toggleAssistant })
-    applyCmdL({ shift: false, focusAddress, toggleAssistant })
+    applyCmdL({ focusAddress })
+    applyCmdL({ focusAddress })
     expect(useServerSwitcherStore.getState().open).toBe(true)
     expect(toggle).not.toHaveBeenCalled()
-    expect(toggleAssistant).not.toHaveBeenCalled()
-  })
-
-  it('Cmd+Shift+L calls toggleAssistant and does not open the switcher', () => {
-    const focusAddress = vi.fn(() => false)
-    const toggleAssistant = vi.fn()
-    applyCmdL({ shift: true, focusAddress, toggleAssistant })
-    expect(toggleAssistant).toHaveBeenCalledTimes(1)
-    expect(focusAddress).not.toHaveBeenCalled()
-    expect(useServerSwitcherStore.getState().open).toBe(false)
   })
 
   it('a visible address is selected only after a YES resign, not before and not on NO', async () => {
@@ -181,25 +170,20 @@ describe('Cmd+L / Cmd+Shift+L wiring', () => {
     const ignored = vi.fn(() => Promise.resolve(true))
     expect(focusVisibleBrowserAddress(ignored)).toBe(false)
     expect(ignored).not.toHaveBeenCalled()
-    applyCmdL({
-      shift: false,
-      focusAddress: () => focusVisibleBrowserAddress(ignored),
-      toggleAssistant: vi.fn(),
-    })
+    applyCmdL({ focusAddress: () => focusVisibleBrowserAddress(ignored) })
     expect(useServerSwitcherStore.getState().open).toBe(true)
   })
 
   it('renderer: keydown owns Cmd+L; the menu click opens once and does not toggle', () => {
     const app = readFileSync(resolve(here, '../App.tsx'), 'utf8')
-    const keydown = sliceFn(app, "if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L'))", 'if (e.metaKey && e.key === \'j\')')
-    expect(keydown).toContain('shift: e.shiftKey')
+    // Plain Cmd+L only: Cmd+Shift+L is no longer bound.
+    const keydown = sliceFn(app, "if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === 'l' || e.key === 'L'))", 'if (e.metaKey && e.key === \'j\')')
     expect(keydown).toContain('focusAddress: focusVisibleBrowserAddress')
     expect(keydown).toContain('applyCmdL(')
     expect(keydown).not.toContain('toggle()')
     expect(keydown).not.toContain('setFocus')
 
     const menu = sliceFn(app, "listen('menu:server-switcher'", "listen('menu:focus-window'")
-    expect(menu).toContain('shift: false')
     expect(menu).toContain('focusAddress: focusVisibleBrowserAddress')
     expect(menu).toContain('applyCmdL(')
     expect(menu).not.toContain('toggle()')
@@ -208,7 +192,6 @@ describe('Cmd+L / Cmd+Shift+L wiring', () => {
 
     const chord = readFileSync(resolve(here, './server-switcher.ts'), 'utf8')
     const apply = sliceFn(chord, 'export function applyCmdL', null)
-    expect(apply).toContain('args.toggleAssistant()')
     expect(apply).toContain('setOpen(true)')
     expect(apply).not.toContain('toggle()')
 
@@ -228,18 +211,12 @@ describe('Cmd+L / Cmd+Shift+L wiring', () => {
     expect(pane).toContain("invoke<boolean>('ui_webview_make_first_responder')")
   })
 
-  it('macOS View menu: Switch Server has no accelerator; Cmd+Shift+L stays the assistant', () => {
+  it('macOS View menu: Switch Server has no accelerator and nothing claims Cmd+L', () => {
     const menu = readFileSync(resolve(here, '../../../src-tauri/src/menu.rs'), 'utf8')
     expect(menu).toContain(
       'MenuItem::with_id(handle, "server-switcher", "Switch Server", true, None::<&str>)',
     )
     expect(menu).not.toContain('Some("CmdOrCtrl+L")')
-    expect(menu).toContain(
-      'MenuItem::with_id(handle, "toggle-assistant", "Toggle Assistant", true, Some("CmdOrCtrl+Shift+L"))',
-    )
-    expect(menu).not.toContain(
-      'MenuItem::with_id(handle, "toggle-assistant", "Toggle Assistant", true, Some("CmdOrCtrl+L"))',
-    )
     expect(menu).toContain('emit_to_focused(app, "menu:server-switcher")')
 
     const resign = readFileSync(

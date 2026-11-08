@@ -110,7 +110,6 @@ export function searchPickPage(entry: Pick<SettingEntry, 'section' | 'group'>): 
     const subByGroup: Record<string, GeneralSubTab> = {
       General: 'general',
       Server: 'server',
-      'Local LLM': 'local-llm',
     }
     const sub = subByGroup[entry.group]
     return sub ? { generalSubTab: sub } : {}

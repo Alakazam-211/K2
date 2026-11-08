@@ -292,7 +292,8 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
     (compute:<you>/* = every node this server owns, never one it shares
     from another server). Agents can't: secret_not_granted (exit 3)
     prints the owner's exact command.
-  On another owner's nodes (0.46.10, lane secrets): one grant per lane,
+  On another owner's nodes (0.46.10, lane secrets)
+  (preview: k2 settings set ciPreview true): one grant per lane,
     k2 vault grant NAME --to compute:<you>/lane:<owner-host>/<lane> --as env
     (<you> is your workspace, as above),
     sealed only while a person here consents for that owner (the seat

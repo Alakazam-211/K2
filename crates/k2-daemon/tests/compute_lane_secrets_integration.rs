@@ -58,6 +58,7 @@ impl Drop for Env {
             None => std::env::remove_var("HOME"),
         }
         std::env::remove_var("K2_COMPUTE");
+        std::env::remove_var("K2_CI");
         k2_core::compute::retry::set_tuning_for_tests(Default::default());
         let _ = std::fs::remove_dir_all(&self.home);
     }
@@ -72,6 +73,8 @@ fn setup() -> Env {
     let env = Env { prev_home: std::env::var_os("HOME"), home: home.clone(), _guard: guard };
     std::env::set_var("HOME", &home);
     std::env::set_var("K2_COMPUTE", "1");
+    // CI on compute is its own preview (0.46.10 ships it dark).
+    std::env::set_var("K2_CI", "1");
     k2_core::compute::retry::set_tuning_for_tests(k2_core::compute::retry::Tuning {
         tick_millis: 3_600_000,
         any_hold_secs: 0,

@@ -297,7 +297,9 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
                 return refuse(&mut ws, r.code(), &r.message()).await;
             }
         }
-    } else if let Some((seat, name)) = crate::compute_trust::seat_enrol(&binding, &node_fp) {
+    } else if let Some((seat, name)) = k2_core::compute::ci_enabled().then(|| crate::compute_trust::seat_enrol(&binding, &node_fp)).flatten() {
+        // (Seat codes only while CI on compute is on: 0.46.10 ships it
+        // dark, and then a code is today's enroll code or nothing.)
         // C3a (V20): a seat node, with the seat's code from the owner's
         // `servers.add`: its key is active in the owner's node roster under
         // a name the owner's signed seat lists. Confirmed below, no SAS.
@@ -463,8 +465,10 @@ pub async fn serve_attach(stream: &mut TcpStream, ingress: Ingress) {
     // Protocol 9 (C1, V3): a re-keyed node proves its new key with the old
     // one this server pins; the row moves to the new key in place. Then the
     // handshake below proves the node holds the new key.
+    // (Only while CI on compute is on: dark, a re-keyed node is an
+    // unknown key, exactly 0.46.9's answer.)
     let row = match (row, hello.rotation.as_ref()) {
-        (None, Some(rot)) if rot_names_new_key(rot, &hello.node_fp) => {
+        (None, Some(rot)) if k2_core::compute::ci_enabled() && rot_names_new_key(rot, &hello.node_fp) => {
             let rot = rot.clone();
             match tokio::task::spawn_blocking(move || crate::compute_trust::on_rotation(&rot)).await {
                 Ok(Ok(moved)) => Some(moved),
@@ -726,7 +730,12 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         // Protocol 9: the node's signed self-statement.
         Frame::NodeStatement(st) => on_statement(&node_id, st),
         // Protocol 9 (C1, V11): the node relays its owner's node roster.
-        Frame::NodeRoster(doc) => crate::compute_trust::on_node_roster(&node_id, doc),
+        // Dropped while CI on compute is off (0.46.10 ships it dark).
+        Frame::NodeRoster(doc) => {
+            if k2_core::compute::ci_enabled() {
+                crate::compute_trust::on_node_roster(&node_id, doc)
+            }
+        }
         Frame::Goodbye(g) => audit("node", "goodbye", Some(&node_id), serde_json::json!({"reason": g.reason})),
         // Node admin (prd-k2-node-admin-v1). A node another server owns
         // gets no node admin from here (V52): an admin frame from it is
@@ -1636,6 +1645,11 @@ fn store_outputs(node_id: &str, job_id: &str, generation: u32, o: Outputs) {
 /// its copy ([`secret_artifacts_fetch_then_delete`]): a secret a build
 /// baked in never sits on another owner's disk longer than the fetch.
 pub fn secret_artifacts_due(job: &store::JobRow, node: &store::NodeRow, offer: Option<&Offer>) -> Option<Vec<ArtifactInfo>> {
+    // CI on compute's (0.46.10 ships it dark): off, artifacts stay on the
+    // node until its own expiry, exactly as in 0.46.9.
+    if !compute::ci_enabled() {
+        return None;
+    }
     let secret = !job.ctl.secrets.is_empty() || job.plan().is_some_and(|p| !p.secret_env.is_empty());
     if !secret || node.owned_for_secrets() || job.node_id != node.id {
         return None;
@@ -1801,7 +1815,10 @@ fn on_statement(node_id: &str, st: k2_core::compute::proto::ci::Signed) {
     match k2_core::compute::proto::statement::NodeStatement::open(&st) {
         Ok(doc) if Some(&doc.node_fp) == fp.as_ref() => {
             // C1: the latest statement, kept for the owner's roster entry.
-            crate::compute_trust::on_statement(node_id, &st);
+            // Not stored while CI on compute is off (0.46.10, dark).
+            if k2_core::compute::ci_enabled() {
+                crate::compute_trust::on_statement(node_id, &st);
+            }
             with_engine(|e| {
                 if let Some(c) = e.conns.get_mut(node_id) {
                     c.statement = Some(st);

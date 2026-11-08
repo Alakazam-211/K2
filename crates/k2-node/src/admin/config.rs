@@ -69,6 +69,26 @@ pub struct AdminFile {
     /// The node user, the only non-root peer the socket accepts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_user: Option<String>,
+    /// CI on compute (0.46.10, C2): give each secret job of a protocol-9
+    /// server a throwaway uid of its own (the per-job uid pool). **Off by
+    /// default**: off, such a job runs as in 0.46.9 (its slot's job user,
+    /// alone on it, or `--exclusive`), and the node never offers
+    /// `job-uid`. Only the machine owner turns it on, here (`sudo k2-node
+    /// admin job-uid on`); the executor and the node both read it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub job_uid_pool: bool,
+    /// CI on compute (0.46.10, C3b): secret env for a server that isn't
+    /// `trust own`, under its lane in root's lanes file. **Off by default**:
+    /// off, secret env goes only to `trust own` servers (0.46.9's rule)
+    /// and the node never offers `lane-secrets`, whatever the lanes file
+    /// says. Only the machine owner turns it on, here (`sudo k2-node admin
+    /// lane-secrets on`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lane_secrets: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn follow() -> String {
@@ -85,6 +105,8 @@ impl Default for AdminFile {
             auto_update: follow(),
             alerts_local: true,
             node_user: None,
+            job_uid_pool: false,
+            lane_secrets: false,
         }
     }
 }
@@ -167,6 +189,16 @@ pub fn read(path: &Path) -> Result<Option<AdminConfig>, String> {
     AdminConfig::from_file(f).map(Some).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// The machine owner's CI-on-compute opt-ins in `config_dir`'s admin.toml
+/// (0.46.10): `(job_uid_pool, lane_secrets)`. A missing or broken file is
+/// both off (fail closed).
+pub fn ci_opt_ins(config_dir: &Path) -> (bool, bool) {
+    match read(&config_dir.join(ADMIN_FILE)) {
+        Ok(Some(c)) => (c.file.job_uid_pool, c.file.lane_secrets),
+        _ => (false, false),
+    }
+}
+
 /// Write (root, 0644). Validates first: a file that wouldn't load is
 /// never written.
 pub fn write(path: &Path, f: &AdminFile) -> Result<(), String> {
@@ -205,6 +237,26 @@ mod tests {
         assert_eq!(c.controller.unwrap().fp, k.fingerprint());
         assert_eq!(c.approval_keys, vec![a.public()]);
         assert!(c.auto_update);
+    }
+
+    /// 0.46.10: the per-job uid pool and lane secrets are the machine
+    /// owner's opt-ins, off unless admin.toml says so.
+    #[test]
+    fn ci_opt_ins_default_off() {
+        let d = crate::util::temp_dir("admincfg-ci");
+        assert_eq!(ci_opt_ins(&d), (false, false), "no admin.toml: both off");
+        let p = d.join(ADMIN_FILE);
+        std::fs::write(&p, "remote_admin = \"off\"\n").unwrap();
+        assert_eq!(ci_opt_ins(&d), (false, false), "an older file: both off");
+        write(&p, &AdminFile::default()).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(!text.contains("job_uid_pool") && !text.contains("lane_secrets"), "off is never written: {text}");
+        std::fs::write(&p, "remote_admin = \"off\"\njob_uid_pool = true\n").unwrap();
+        assert_eq!(ci_opt_ins(&d), (true, false));
+        std::fs::write(&p, "remote_admin = \"off\"\nlane_secrets = true\n").unwrap();
+        assert_eq!(ci_opt_ins(&d), (false, true));
+        std::fs::write(&p, "remote_admin = \"bogus\"\njob_uid_pool = true\nlane_secrets = true\n").unwrap();
+        assert_eq!(ci_opt_ins(&d), (false, false), "a broken file: both off");
     }
 
     #[test]

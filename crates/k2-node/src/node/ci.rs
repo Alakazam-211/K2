@@ -127,10 +127,15 @@ impl Node {
         }
     }
 
-    /// Can a secret job get a uid of its own here (C2)? Linux, the job
-    /// wall, and an executor whose `Ready` said `job_uid`.
+    /// Can a secret job get a uid of its own here (C2)? The machine
+    /// owner's opt-in (admin.toml `job_uid_pool`, off by default in
+    /// 0.46.10), Linux, the job wall, and an executor whose `Ready` said
+    /// `job_uid`.
     pub fn job_uid_ready(&self) -> bool {
-        cfg!(target_os = "linux") && matches!(self.wall, Wall::JobUser { .. }) && self.exec_job_uid.load(std::sync::atomic::Ordering::SeqCst)
+        self.opts.job_uid_pool == Some(true)
+            && cfg!(target_os = "linux")
+            && matches!(self.wall, Wall::JobUser { .. })
+            && self.exec_job_uid.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// How a job of `t` with `plan` shares its uid (C2, vs-live V15/V16).
@@ -255,7 +260,9 @@ mod job_uid_tests {
     use crate::node::{Node, NodeOptions};
     use crate::wall::Wall;
 
-    async fn node(job_uid: bool) -> std::sync::Arc<Node> {
+    /// `pool`: the machine owner's opt-in (`None`: read admin.toml, which
+    /// this test node doesn't have, so off).
+    async fn node_with(job_uid: bool, pool: Option<bool>) -> std::sync::Arc<Node> {
         let d = crate::util::temp_dir("job-uid-share");
         let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
         layout.ensure().unwrap();
@@ -267,9 +274,35 @@ mod job_uid_tests {
         o.wall = Some(Wall::JobUser { user: "k2job".into() });
         o.exec_stdin = Some(true);
         o.exec_job_uid = Some(job_uid);
+        o.job_uid_pool = pool;
         o.cancel_grace = Duration::from_millis(100);
         o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
         Node::open(o).await.unwrap()
+    }
+
+    async fn node(job_uid: bool) -> std::sync::Arc<Node> {
+        node_with(job_uid, Some(true)).await
+    }
+
+    /// 0.46.10 ships the pool off: with no admin.toml opt-in, even an
+    /// executor that could give a uid gets no `job-uid` offered, and a
+    /// protocol-9 secret job runs as in 0.46.9: its slot's job user, with
+    /// no other job beside it (or `--exclusive`).
+    #[tokio::test]
+    async fn the_pool_is_off_without_the_machine_owners_opt_in() {
+        let n = node_with(true, None).await;
+        assert!(!n.job_uid_ready(), "no admin.toml job_uid_pool: off");
+        let owner = n.owner();
+        owner.protocol.store(9, Ordering::SeqCst);
+        let mut p = crate::ledger::tests::assign("j", 1).plan;
+        p.secret_env = vec!["K2T_SECRET".into()];
+        assert_eq!(n.uid_share(&owner, &p), UidShare::SlotAlone);
+        assert!(!n.session_features(&owner).iter().any(|f| f == k2_node_proto::ci::FEATURE_JOB_UID), "job-uid never offered");
+        p.exclusive = true;
+        assert_eq!(n.uid_share(&owner, &p), UidShare::Slot);
+        // The same with the opt-in written off explicitly.
+        let n = node_with(true, Some(false)).await;
+        assert!(!n.job_uid_ready());
     }
 
     #[tokio::test]

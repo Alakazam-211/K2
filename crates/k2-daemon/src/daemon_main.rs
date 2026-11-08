@@ -479,6 +479,8 @@ async fn async_main() {
     // wins in federation::enabled()).
     k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
     k2_core::compute::set_enabled(k2_core::app_settings::load().compute_preview);
+    // CI on compute (0.46.10, dark): its own preview on top of compute's.
+    k2_core::compute::set_ci_enabled(k2_core::app_settings::load().ci_preview);
     // Voice rooms previews (dark by default; K2_VOICE_ROOMS / K2_VOICE_TUNNEL
     // force them on).
     k2_core::board_preview::set_enabled(k2_core::app_settings::load().board_file_preview);
@@ -500,7 +502,9 @@ async fn async_main() {
     // Connect it offers compute and applies one-click enroll offers.
     crate::compute_advertise::spawn();
     // Lane secrets (0.46.10 C3b, V25): the controller reads this server's
-    // own seats, lanes, rosters and consents (C1/C3a's tables).
+    // own seats, lanes, rosters and consents (C1/C3a's tables). Installed
+    // always; `lane_secrets::seat_book()` answers "no seats" while the CI
+    // preview (`ciPreview`) is off.
     k2_core::compute::lane_secrets::set_seat_book(Some(std::sync::Arc::new(k2_core::compute::lane_secrets::TrustSeats)));
     // Node admin: offline alerts and request expiry, headless (60 s).
     crate::compute_admin::spawn_watch();

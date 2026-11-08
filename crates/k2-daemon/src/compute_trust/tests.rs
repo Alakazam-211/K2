@@ -32,6 +32,16 @@ const CLIENT: &str = "client.k2.dev";
 
 type Db = Arc<ReentrantMutex<Connection>>;
 
+/// CI on compute is a preview (0.46.10 ships it dark, `ciPreview`): these
+/// tests run with it on (compute and CI), under the one env lock, so no
+/// other test sees the switches (they are put back on drop).
+fn ci_on() -> k2_core::test_env::EnvLock {
+    let g = k2_core::test_env::lock();
+    k2_core::compute::set_enabled(true);
+    k2_core::compute::set_ci_enabled(true);
+    g
+}
+
 /// Run `f` as one server: its DB and its host.
 fn on<T>(db: &Db, host: &str, f: impl FnOnce() -> T) -> T {
     let prev = test_seams::owner_id_now();
@@ -173,6 +183,7 @@ fn routes_agree() {
 /// node-roster key, chained, and handed to every node that relays it.
 #[test]
 fn roster_changes_need_a_person_and_reach_the_nodes() {
+    let _ci = ci_on();
     let _db = k2_core::db::scoped_for_test();
     test_seams::set_owner_id(Some(OWNER));
     let ws = operating_ws("o");
@@ -256,6 +267,7 @@ fn roster_changes_need_a_person_and_reach_the_nodes() {
 /// C1: revoke and retire, and the roster's freshness refresh in the tick.
 #[test]
 fn revoke_retire_and_refresh() {
+    let _ci = ci_on();
     let _db = k2_core::db::scoped_for_test();
     test_seams::set_owner_id(Some(OWNER));
     let (_n1, k1) = owned_node("n1", Taint::Clean, P9);
@@ -295,6 +307,7 @@ fn peer(label: &str, host: &str) -> FederationPeer {
 /// a revocation reaching the client, and the refusals on the way.
 #[test]
 fn a_seat_end_to_end_between_two_servers() {
+    let _ci = ci_on();
     let owner_guard = k2_core::db::scoped_for_test();
     let client_guard = k2_core::db::scoped_for_test();
     let (odb, cdb) = (owner_guard.handle(), client_guard.handle());
@@ -502,6 +515,7 @@ fn a_seat_end_to_end_between_two_servers() {
 /// a seat it never asked for.
 #[test]
 fn client_refuses_unpinned_owners_and_unasked_seats() {
+    let _ci = ci_on();
     let _db = k2_core::db::scoped_for_test();
     test_seams::set_owner_id(Some(CLIENT));
     let o = wire::ApprovalSigner::from_seed(&[3u8; 32]).unwrap();
@@ -551,6 +565,7 @@ fn client_refuses_unpinned_owners_and_unasked_seats() {
 /// place and the owner files the roster change for a person.
 #[test]
 fn rotation_repins_in_place_and_files_the_roster_change() {
+    let _ci = ci_on();
     let _db = k2_core::db::scoped_for_test();
     test_seams::set_owner_id(Some(OWNER));
     let (n1, old) = owned_node("n1", Taint::Unknown, P9);
@@ -586,6 +601,7 @@ fn rotation_repins_in_place_and_files_the_roster_change() {
 #[cfg(unix)]
 #[test]
 fn signer_pairing_is_a_persons_and_the_sas_stays_here() {
+    let _ci = ci_on();
     use k2_signer::pairing as sp;
     let _db = k2_core::db::scoped_for_test();
     test_seams::set_owner_id(Some(CLIENT));
@@ -711,6 +727,7 @@ fn wait_frame<T>(conn: &mut crate::compute_ws::TestConn, mut f: impl FnMut(&Fram
 /// from the node (V27). Fakes only; the vault is a temp vault.
 #[test]
 fn lane_secrets_end_to_end_between_two_servers() {
+    let _ci = ci_on();
     use k2_core::compute::lane_secrets::{self as ls, TrustSeats};
     use k2_core::compute::proto::secret::{self as psecret, codes as scodes, NodeKey};
     use k2_vault::{Actor, Delivery, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes, SecretStore, Selector};

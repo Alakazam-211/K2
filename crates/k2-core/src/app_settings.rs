@@ -488,6 +488,13 @@ pub struct AppSettings {
     /// set. Owner-only to change. Default MUST stay OFF.
     #[serde(default)]
     pub compute_preview: bool,
+    /// CI on K2 Compute preview (prd-ci-on-compute-for-clients-v1; 0.46.10
+    /// ships it dark): `k2 ci` and its loop, node rosters, lanes, seats,
+    /// owner trust, signer pairing, lane secrets, receipt v2 on submit.
+    /// Persisted mirror of `K2_CI`; [`crate::compute::ci_enabled`] also
+    /// needs compute on. Owner-only to change. Default MUST stay OFF.
+    #[serde(default)]
+    pub ci_preview: bool,
     /// Voice rooms preview (prd-k2-voice-rooms-v1, lane B; vs-live §3):
     /// the K2 Admin Space, its rooms, the fixed default Space, the
     /// `/cli/voice/*` routes, the `voice-rooms-v1` feature and S6's
@@ -1289,6 +1296,7 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             compute_preview: false,
+            ci_preview: false,
             voice_rooms_preview: false,
             board_file_preview: false,
             video_rooms_preview: true,

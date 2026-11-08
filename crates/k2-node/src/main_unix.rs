@@ -93,6 +93,11 @@ Remote admin (prd-k2-node-admin-v1; root, at this machine):
   sudo k2-node admin job-user <name>             Linux: jobs run as <name> in a walled unit (setup: k2job)
   k2-node admin homes [--json]                   home folders other users (and unwalled jobs) can read
   sudo k2-node admin homes --fix [--yes]         make them private (chmod 700); asks first unless --yes
+  sudo k2-node admin job-uid on|off              CI on compute (preview, off by default): a throwaway uid
+                                                 per secret job of a protocol-9 server (Linux, job wall)
+  sudo k2-node admin lane-secrets on|off         CI on compute (preview, off by default): secret env for a
+                                                 server on a lane in root's lanes file (not only trust own)
+                                                 Both: restart k2-node-admin and k2-node afterwards
 
 The job wall (0.46.3): Linux jobs run as k2job in a sandboxed systemd unit; macOS
 jobs run under a Seatbelt profile. Neither can read the node's key or state or
@@ -1205,8 +1210,19 @@ fn cmd_admin(a: &Args) -> Result<(), String> {
             Ok(())
         }
         Some("homes") => cmd_homes(a),
-        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve, job-user, homes")),
-        None => Err("admin: use level, pin, audit, status, serve, job-user, homes".into()),
+        // CI on compute (0.46.10 preview, off by default): the machine
+        // owner's opt-ins in admin.toml.
+        Some(v @ ("job-uid" | "lane-secrets")) => {
+            let on = match a.positional.get(2).map(String::as_str) {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err(format!("admin {v} on|off")),
+            };
+            println!("{}", cli::ci_opt_in(&config_dir, if v == "job-uid" { "job_uid_pool" } else { "lane_secrets" }, on)?);
+            Ok(())
+        }
+        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets")),
+        None => Err("admin: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets".into()),
     }
 }
 

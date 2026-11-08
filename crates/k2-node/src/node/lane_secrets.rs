@@ -173,6 +173,10 @@ pub fn lane_refusal(speaks_ci: bool, lane: Option<&LaneRule>, job_wall: bool, pt
     None
 }
 
+/// Why a server that isn't `trust own` gets no secret env while the
+/// machine owner hasn't turned lane secrets on (0.46.10 ships them off).
+pub const LANE_SECRETS_OFF: &str = "secret env goes only to servers this node trusts as its own (trust own); lane secrets are off on this machine (the machine owner turns them on with sudo k2-node admin lane-secrets on)";
+
 impl Node {
     /// The lane `t`'s seat runs under here (root's lanes file, by `t`'s
     /// pinned key), with a valid name: receipt v2's `run.lane`. The lane
@@ -202,6 +206,11 @@ impl Node {
     /// yet: the offer and the first assign check). `None`: its lane lets
     /// it have secret env here.
     pub(super) fn lane_secret_refusal(&self, t: &Tenant) -> Option<(&'static str, &'static str)> {
+        // 0.46.10: the machine owner's opt-in (admin.toml `lane_secrets`),
+        // off by default: off, 0.46.9's rule (trust own only).
+        if self.opts.lane_secrets != Some(true) {
+            return Some((codes::UNTRUSTED_SERVER, LANE_SECRETS_OFF));
+        }
         let speaks = t.speaks_ci();
         let lane = if speaks { self.lane_of(t) } else { None };
         lane_refusal(speaks, lane.as_ref(), matches!(self.wall, Wall::JobUser { .. }), self.ptrace_scope_now())
@@ -318,6 +327,12 @@ mod tests {
     /// lane), slot 2 `trust team` on `lane2`, slot 3 `trust team` with no
     /// lane. Every tenant speaks `protocol`, with the tenant wall on.
     async fn node(lane2: Option<LaneRule>, job_uid: bool, ptrace: Option<u8>, protocol: u32) -> (Arc<Node>, Vec<Arc<Tenant>>) {
+        node_in(lane2, job_uid, ptrace, protocol, Some(true)).await
+    }
+
+    /// `opt_in`: the machine owner's admin.toml opt-ins (`None`: read the
+    /// file, which this test node doesn't have, so off).
+    async fn node_in(lane2: Option<LaneRule>, job_uid: bool, ptrace: Option<u8>, protocol: u32, opt_in: Option<bool>) -> (Arc<Node>, Vec<Arc<Tenant>>) {
         let d = crate::util::temp_dir("lane-secrets");
         let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
         layout.ensure().unwrap();
@@ -343,6 +358,9 @@ mod tests {
         o.exec_job_uid = Some(job_uid);
         o.ptrace_scope = Some(ptrace);
         o.lanes = lane2.map(|l| Arc::new(StaticLanes([(2u8, l)].into())) as Arc<dyn super::LaneSource>);
+        // The machine owner's opt-ins (0.46.10, off by default).
+        o.job_uid_pool = opt_in;
+        o.lane_secrets = opt_in;
         o.cancel_grace = Duration::from_millis(100);
         o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
         let n = Node::open(o).await.unwrap();
@@ -395,6 +413,21 @@ mod tests {
         assert_eq!(n.lane_of(on_lane).map(|l| l.lane), Some("ci-standard".into()));
         assert_eq!(n.lane_of(own), None);
         assert_eq!(n.lane_of(&n.owner()), None);
+    }
+
+    /// 0.46.10 ships lane secrets off: without the machine owner's
+    /// opt-in, a `trust team` server on a lane that allows secrets gets
+    /// 0.46.9's answer (untrusted, no `secret-env`, no `lane-secrets`); the
+    /// `trust own` server keeps its secret env.
+    #[tokio::test]
+    async fn lane_secrets_are_off_without_the_machine_owners_opt_in() {
+        for opt_in in [None, Some(false)] {
+            let (n, ts) = node_in(Some(lane(true, Isolation::JobUid)), true, Some(1), 9, opt_in).await;
+            assert_eq!(n.secret_env_refusal(&ts[1]), Some((codes::UNTRUSTED_SERVER, super::LANE_SECRETS_OFF)), "{opt_in:?}");
+            assert_eq!(feats(&n, &ts[1]), (false, false), "nothing offered: {opt_in:?}");
+            assert_eq!(feats(&n, &ts[0]), (true, false), "trust own: today's secret env");
+            assert!(!n.session_features(&ts[0]).iter().any(|f| f == k2_node_proto::ci::FEATURE_JOB_UID), "no job-uid either");
+        }
     }
 
     #[tokio::test]

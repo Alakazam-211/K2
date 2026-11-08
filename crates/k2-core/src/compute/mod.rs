@@ -10,6 +10,8 @@
 //!
 //! Dark until `K2_COMPUTE=1` or the Settings switch "Compute nodes
 //! (preview)" (`computePreview`) is on (CN30): every compute route 404s.
+//! CI on compute (0.46.10) has its own preview on top, [`ci_enabled`]
+//! (`ciPreview` / `K2_CI`), default off.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -61,6 +63,61 @@ pub fn enabled() -> bool {
         }
     }
     SETTING_ENABLED.load(Ordering::Relaxed)
+}
+
+// ── CI on compute: its own preview (0.46.10 ships it dark) ───────────
+
+/// The env var that forces the CI-on-compute preview on (`1`/`true`/`yes`/
+/// `on`), like `K2_COMPUTE` for compute itself.
+pub const CI_ENV: &str = "K2_CI";
+
+/// The refusal code every CI-on-compute surface answers while its preview
+/// is off (409, the `voice_tunnel_preview_off` pattern: a preview on top
+/// of a preview that is on).
+pub const CI_PREVIEW_OFF: &str = "ci_preview_off";
+
+/// How the owner turns it on (help, study pages and every refusal say it).
+pub const CI_PREVIEW_HOW: &str = "k2 settings set ciPreview true";
+
+static CI_SETTING: AtomicBool = AtomicBool::new(false);
+
+/// Sync the persisted `ciPreview` setting into this process (boot and
+/// every settings update/reset).
+pub fn set_ci_enabled(on: bool) {
+    CI_SETTING.store(on, Ordering::Relaxed);
+}
+
+/// The in-process CI setting alone (no env force), for `test_env`.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) fn ci_setting_raw() -> bool {
+    CI_SETTING.load(Ordering::Relaxed)
+}
+
+/// True when CI on compute is on (prd-ci-on-compute-for-clients-v1: `k2
+/// ci` and its loop, node rosters, lanes, seats, owner trust and consent,
+/// signer pairing, lane secrets, the V27 artifact delete, receipt v2 on
+/// submit, the node roster / statement / rotation / seat-enrol hooks on the
+/// node sockets): compute is on ([`enabled`]) **and** `K2_CI` or the
+/// persisted `ciPreview` switch. Default OFF: 0.46.10 ships it dark, and
+/// compute without CI is exactly 0.46.9's.
+pub fn ci_enabled() -> bool {
+    if !enabled() {
+        return false;
+    }
+    if let Ok(v) = std::env::var(CI_ENV) {
+        if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+            return true;
+        }
+    }
+    CI_SETTING.load(Ordering::Relaxed)
+}
+
+/// The one line a CI-on-compute refusal carries: what was refused and how
+/// the owner turns the preview on.
+pub fn ci_preview_hint(what: &str) -> String {
+    format!(
+        "{what} is part of CI on K2 Compute, a preview that is off on this server: the owner turns it on ({CI_PREVIEW_HOW}, or {CI_ENV}=1 in the daemon's environment; compute must be on too)"
+    )
 }
 
 /// How auto-placement ranks the nodes that fit (`computePlacement`,
@@ -183,6 +240,33 @@ mod tests {
         assert!(enabled(), "computePreview setting turns it on");
         set_enabled(false);
         assert!(!enabled());
+    }
+
+    #[test]
+    fn ci_preview_defaults_off_and_needs_compute_on_too() {
+        let _env = crate::test_env::lock();
+        let _unset = crate::test_env::EnvVar::remove("K2_COMPUTE");
+        let _unset_ci = crate::test_env::EnvVar::remove(CI_ENV);
+        assert!(!ci_enabled(), "CI on compute must default OFF");
+        // Compute on alone (0.46.9's switch) never turns CI on.
+        set_enabled(true);
+        assert!(!ci_enabled(), "computePreview alone leaves CI off");
+        set_ci_enabled(true);
+        assert!(ci_enabled(), "ciPreview with compute on turns it on");
+        // CI without compute is off: every CI surface rides compute.
+        set_enabled(false);
+        assert!(!ci_enabled(), "ciPreview without compute stays off");
+        set_ci_enabled(false);
+        {
+            let _c = crate::test_env::EnvVar::set("K2_COMPUTE", "1");
+            assert!(!ci_enabled());
+            let _ci = crate::test_env::EnvVar::set(CI_ENV, "1");
+            assert!(ci_enabled(), "K2_CI=1 forces it on (with compute on)");
+            let _off = crate::test_env::EnvVar::set(CI_ENV, "off");
+            assert!(!ci_enabled());
+        }
+        let hint = ci_preview_hint("k2 ci");
+        assert!(hint.contains(CI_PREVIEW_HOW) && hint.contains("K2_CI=1"), "{hint}");
     }
 
     #[test]

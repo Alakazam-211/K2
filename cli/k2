@@ -25361,6 +25361,7 @@ Agents:
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it
+                                (preview: k2 settings set ciPreview true)
                  [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--wait [--failures] [--max-wait 9m] [--quiet]]
                                 print the job id, then stream its output and exit
@@ -25589,7 +25590,8 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    every compute:<ws>/* secret grant that starts reaching
                    it; you type the node's name, then Touch ID / vault
                    password. An offer alone never makes a node this server's.
-CI seats on shared nodes (0.46.10): node rosters, lanes, seats. Agents with
+CI seats on shared nodes (0.46.10): node rosters, lanes, seats (preview: k2 settings set ciPreview true).
+Off, every verb below exits 3 (ci_preview_off). Agents with
 "operate compute nodes" file and read; a person (owner or Admin, from a
 terminal outside K2, Touch ID / vault password) decides every change:
   k2 compute roster [show] [--json]   this server's signed node roster (seq,
@@ -33581,7 +33583,8 @@ delivery; a new one replaces the old).
                      compute:<ws>/lane:<owner>/<lane> (every node of your
                      seat on that owner's lane, while a person here consents
                      for that owner: k2 compute owners consent <owner> on;
-                     the seat request card gives it). People
+                     the seat request card gives it;
+                     (preview: k2 settings set ciPreview true)). People
                      only (the value leaves this machine), --as env only.
   --as fetch|agent|file|env|api   default: the secret's delivery; --env-name alone
                      means env, --file-name alone means file. Never above
@@ -34011,6 +34014,9 @@ EOF
 _ci_usage() {
     cat <<'EOF'
 k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
+(preview: k2 settings set ciPreview true): off, every k2 ci verb exits 3
+(ci_preview_off) and the daemon checks nothing; the owner turns it on
+(compute must be on too)
 
   k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB]
              [--cpus N] [--timeout 1h] [--branches main,integ/*]
@@ -43867,7 +43873,7 @@ cmd_settings() {
 # on POST /cli/settings/update (settings_routes OWNER_ONLY_KEYS); the daemon
 # refuses agents and every other login, so this CLI decides nothing but the
 # allowlist and the value. Order = the order help prints them.
-_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview boardFilePreview videoRoomsPreview)
+_K2_SETTINGS_SET_KEYS=(voiceRoomsPreview voiceTunnelPreview computePreview ciPreview boardFilePreview videoRoomsPreview)
 
 _settings_set_keys_line() {
     local IFS=","
@@ -43932,6 +43938,7 @@ nxt = {
     "voiceRoomsPreview": "k2 voice status says whether this server can host rooms, and why not.",
     "voiceTunnelPreview": "k2 hostchat media tier tunnel moves voice onto K2'"'"'s tunnel.",
     "computePreview": "k2 compute nodes lists the machines.",
+    "ciPreview": "k2 study ci (CI on K2 Compute: k2 ci, node rosters, lanes, seats, signer pairing; needs computePreview on too).",
     "boardFilePreview": "Board files open in a tab in the K2 app.",
     "videoRoomsPreview": "Video in voice rooms shows in the K2 desktop app'"'"'s call panel (preview).",
 }
@@ -48378,7 +48385,7 @@ cmd_schema() {
     {
       "name": "settings",
       "usage": "k2 settings [--mode <off|custom|manager|k2>] | k2 settings set <key> <true|false>",
-      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview, boardFilePreview or videoRoomsPreview (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
+      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview or videoRoomsPreview (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
       "args": [],
       "flags": []
     },
@@ -49054,6 +49061,15 @@ _study_page() {
 _study_page_ci() {
     cat <<'EOF'
 k2 study ci — CI on K2 Compute (k2 ci): every push checked, no runner
+(preview: k2 settings set ciPreview true)
+
+A PREVIEW IN 0.46.10
+  Off by default. Off, k2 ci, node rosters, lanes, seats, owners consent,
+  signer pairing, lane secrets and --receipt-v2 answer ci_preview_off
+  (exit 3) and the daemon's CI loop does nothing. The owner turns it on,
+  in a plain terminal on the server: k2 settings set ciPreview true
+  (compute nodes must be on too: k2 compute preview on). An agent asks its
+  human (k2 thread).
 
 WHAT IT IS
   The K2 daemon checks your repo's commits on K2 Compute nodes. You write
@@ -55008,7 +55024,8 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
     (compute:<you>/* = every node this server owns, never one it shares
     from another server). Agents can't: secret_not_granted (exit 3)
     prints the owner's exact command.
-  On another owner's nodes (0.46.10, lane secrets): one grant per lane,
+  On another owner's nodes (0.46.10, lane secrets)
+  (preview: k2 settings set ciPreview true): one grant per lane,
     k2 vault grant NAME --to compute:<you>/lane:<owner-host>/<lane> --as env
     (<you> is your workspace, as above),
     sealed only while a person here consents for that owner (the seat
@@ -55765,6 +55782,11 @@ SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
   at the top of each job log). A job could read them anyway.
 
 SEATS AND LANES (0.46.10: your CI on another owner's nodes)
+  (preview: k2 settings set ciPreview true) on BOTH servers (the node owner's
+  and yours); off, these verbs exit 3 (ci_preview_off). On the node
+  machine, lane secrets and per-job uids are also the machine owner's,
+  off by default: sudo k2-node admin lane-secrets on, sudo k2-node admin
+  job-uid on (then restart k2-node-admin and k2-node).
   A seat is your server's place on a set of another owner's nodes, under
   one of that owner's lanes (their standing rules: the CI tier, caps, and
   whether vault secrets may go there). K2 ships one lane, ci-standard
@@ -60932,6 +60954,10 @@ SERVER SWITCHES (the owner only)
     voiceTunnelPreview      voice through K2's tunnel
                             (k2 hostchat media tier tunnel)
     computePreview          compute nodes (same as k2 compute preview on|off)
+    ciPreview               CI on K2 Compute: k2 ci, node rosters, lanes,
+                            seats, owners consent, signer pairing, lane
+                            secrets, --receipt-v2 (needs computePreview on
+                            too)
     boardFilePreview        board files open in a tab
     videoRoomsPreview       video in voice rooms: camera and screen share
                             in the K2 desktop app's call panel (needs

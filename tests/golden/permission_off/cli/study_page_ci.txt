@@ -2,6 +2,15 @@ $ k2 study ci
 exit: 0
 --- stdout
 k2 study ci — CI on K2 Compute (k2 ci): every push checked, no runner
+(preview: k2 settings set ciPreview true)
+
+A PREVIEW IN 0.46.10
+  Off by default. Off, k2 ci, node rosters, lanes, seats, owners consent,
+  signer pairing, lane secrets and --receipt-v2 answer ci_preview_off
+  (exit 3) and the daemon's CI loop does nothing. The owner turns it on,
+  in a plain terminal on the server: k2 settings set ciPreview true
+  (compute nodes must be on too: k2 compute preview on). An agent asks its
+  human (k2 thread).
 
 WHAT IT IS
   The K2 daemon checks your repo's commits on K2 Compute nodes. You write

@@ -827,3 +827,26 @@ fn auto_update_off_refuses_auto_offers_only() {
     assert_eq!(code_of(&r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "auto"), &sig, &new)), code::AUTO_UPDATE_OFF);
     assert_eq!(r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &sig, &new).state, "done");
 }
+
+/// 0.46.10 ships the per-job uid pool (C2) off: the executor gives no uid
+/// of its own, says so in `Ready` (no `job_uid`, so the node offers no
+/// `job-uid` and a secret job runs as in 0.46.9), and refuses a start that
+/// asks for one, until the machine owner sets `job_uid_pool = true`.
+#[test]
+fn the_job_uid_pool_is_off_until_the_machine_owner_turns_it_on() {
+    use super::jobs::{JobAnswer, JobOp};
+    let r = Rig::new("full");
+    let e = r.exec.job_uid_ready().unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), (code::NOT_CONFIGURED, super::jobpool::JOB_UID_POOL_OFF));
+    if let JobAnswer::Ready { job_uid, .. } = r.exec.handle_job(&JobOp::Ready, vec![]) {
+        assert!(!job_uid, "Ready never offers a per-job uid while the pool is off");
+    }
+    // The owner's opt-in (admin.toml): past that check (the machine's own
+    // facts decide next: Linux, the wall, systemd, useradd).
+    let mut f = config::read(&r.exec.paths.admin()).unwrap().unwrap().file;
+    f.job_uid_pool = true;
+    config::write(&r.exec.paths.admin(), &f).unwrap();
+    if let Err(e) = r.exec.job_uid_ready() {
+        assert_ne!(e.message, super::jobpool::JOB_UID_POOL_OFF, "the opt-in is read");
+    }
+}

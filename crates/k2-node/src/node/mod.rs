@@ -125,6 +125,16 @@ pub struct NodeOptions {
     pub lanes: Option<Arc<dyn lane_secrets::LaneSource>>,
     /// Tests only: Yama `ptrace_scope` as if read (`None` = read /proc).
     pub ptrace_scope: Option<Option<u8>>,
+    /// The machine owner's opt-in to the per-job uid pool (admin.toml
+    /// `job_uid_pool`, 0.46.10: off by default). `None`: [`Node::open`]
+    /// reads admin.toml. Off, the node never offers `job-uid` (whatever the
+    /// executor says) and a secret job runs as in 0.46.9.
+    pub job_uid_pool: Option<bool>,
+    /// The machine owner's opt-in to lane secrets (admin.toml
+    /// `lane_secrets`, 0.46.10: off by default). `None`: [`Node::open`]
+    /// reads admin.toml. Off, secret env goes only to `trust own` servers
+    /// and `lane-secrets` is never offered, whatever the lanes file says.
+    pub lane_secrets: Option<bool>,
 }
 
 /// The installed `k2-node` this process runs from, when it is one (a test
@@ -171,6 +181,8 @@ impl NodeOptions {
             lanes: None,
             ptrace_scope: None,
             pkg_host: None,
+            job_uid_pool: None,
+            lane_secrets: None,
         }
     }
 }
@@ -483,6 +495,13 @@ impl Node {
         // no job wall, so it never gives lane secrets either way.
         if opts.lanes.is_none() {
             opts.lanes = Some(Arc::new(lane_secrets::FileLanes::new(roster::lanes_file_for(&opts.layout))));
+        }
+        // 0.46.10: the machine owner's CI opt-ins (admin.toml), both off by
+        // default; a change takes a k2-node restart.
+        if opts.job_uid_pool.is_none() || opts.lane_secrets.is_none() {
+            let (pool, lanes) = crate::admin::config::ci_opt_ins(&opts.layout.config);
+            opts.job_uid_pool.get_or_insert(pool);
+            opts.lane_secrets.get_or_insert(lanes);
         }
         let layout = opts.layout.clone();
         layout.ensure()?;

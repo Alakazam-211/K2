@@ -182,7 +182,14 @@ impl SeatBook for TrustSeats {
 static BOOK: RwLock<Option<Arc<dyn SeatBook>>> = RwLock::new(None);
 
 /// The installed seat book ([`NoSeats`] until one is set).
+///
+/// While CI on compute is off ([`super::ci_enabled`], 0.46.10's default)
+/// this is always [`NoSeats`], whatever is installed: no lane grant
+/// resolves, nothing is sealed under a lane's rules.
 pub fn seat_book() -> Arc<dyn SeatBook> {
+    if !super::ci_enabled() {
+        return Arc::new(NoSeats);
+    }
     BOOK.read().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| Arc::new(NoSeats))
 }
 

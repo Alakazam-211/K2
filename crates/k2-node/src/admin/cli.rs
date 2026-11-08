@@ -131,6 +131,31 @@ pub fn level(config_dir: &Path, l: Level) -> Result<String, String> {
     Ok(format!("remote admin: {was} → {}", l.as_str()))
 }
 
+/// `admin job-uid on|off` and `admin lane-secrets on|off` (0.46.10, CI on
+/// compute preview, both off by default): the machine owner's opt-ins in
+/// admin.toml. `which` is `job_uid_pool` or `lane_secrets`. Restart k2-node
+/// (and k2-node-admin for the pool) for it to take effect.
+pub fn ci_opt_in(config_dir: &Path, which: &str, on: bool) -> Result<String, String> {
+    need_root(&format!("admin {}", which.replace('_', "-")))?;
+    let path = config_dir.join(config::ADMIN_FILE);
+    let mut f = config::read(&path)?.map(|c| c.file).unwrap_or_default();
+    let was = match which {
+        "job_uid_pool" => std::mem::replace(&mut f.job_uid_pool, on),
+        "lane_secrets" => std::mem::replace(&mut f.lane_secrets, on),
+        o => return Err(format!("{o:?}: job_uid_pool or lane_secrets")),
+    };
+    config::write(&path, &f)?;
+    let _ = super::store::Audit::new(&config::default_state_dir().join("audit.log")).append(
+        super::store::AuditEntry { event: which.into(), detail: serde_json::json!({"from": was, "to": on, "by": "local"}), ..Default::default() },
+        crate::util::now(),
+    );
+    Ok(format!(
+        "{which}: {} → {} (CI on compute preview). Restart the node for it to take effect (systemctl restart k2-node-admin k2-node, or the launchd equivalents).",
+        if was { "on" } else { "off" },
+        if on { "on" } else { "off" }
+    ))
+}
+
 /// `admin audit`: check the chain, print the tail.
 pub fn audit(state_dir: &Path, tail: usize, json: bool) -> Result<(), String> {
     let lines = super::store::Audit::new(&state_dir.join("audit.log")).verify()?;

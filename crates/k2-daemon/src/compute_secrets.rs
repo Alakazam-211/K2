@@ -69,6 +69,11 @@ pub fn consumer(spec: &str, caller_ws: Option<&str>) -> Result<Consumer, VaultEr
         return Err(bad("name a node or *"));
     }
     if let Some(l) = node_tok.strip_prefix(LANE_TOKEN) {
+        // Lane grants are CI on compute's (0.46.10 ships it dark): no new
+        // lane grant while its preview is off.
+        if !compute::ci_enabled() {
+            return Err(VaultError::new(compute::CI_PREVIEW_OFF, 409, compute::ci_preview_hint("A lane grant (compute:<workspace>/lane:<owner>/<lane>)")));
+        }
         let Some((owner, lane)) = l.split_once('/').filter(|(o, l)| !o.is_empty() && !l.is_empty() && !l.contains('/')) else {
             return Err(bad("a lane is lane:<owner>/<lane>"));
         };
@@ -263,8 +268,12 @@ pub fn covering(ws_id: &str, node: &NodeRow, secret_id: &str) -> Option<(k2_vaul
     if node.owned_for_secrets() {
         consumers.push((Consumer::compute(ws_id, "*"), Via::Star));
     }
-    for s in lanes::seat_book().seats_with_node(&node.id) {
-        consumers.push((Consumer::compute_lane(ws_id, &s.seat_id), Via::Lane(s.seat_id)));
+    // Lane grants count only while CI on compute is on (0.46.10, dark):
+    // off, a lane grant made earlier covers nothing.
+    if compute::ci_enabled() {
+        for s in lanes::seat_book().seats_with_node(&node.id) {
+            consumers.push((Consumer::compute_lane(ws_id, &s.seat_id), Via::Lane(s.seat_id)));
+        }
     }
     consumers.into_iter().find_map(|(c, via)| {
         vault
@@ -312,6 +321,7 @@ pub fn secret_gate(node: &NodeRow, offer: Option<&Offer>, via: &Via, exclusive: 
         lanes::lane_gate(&lanes::GateInput { node, offer, seat, standing, consent: consent.as_ref(), exclusive })
     };
     match via {
+        Via::Lane(_) if !compute::ci_enabled() => Err((compute::CI_PREVIEW_OFF, compute::ci_preview_hint("A lane secret"))),
         Via::Lane(seat_id) => {
             let seat = book.seat(seat_id).ok_or_else(|| (scodes::UNTRUSTED_SERVER, format!("the seat {seat_id} this secret is granted to is gone")))?;
             check(&seat).map(|()| Some(seat.seat_id))
@@ -400,7 +410,8 @@ pub(crate) fn not_granted(found: &[(Found, String, bool)], ws_handle: &str, node
         return None;
     }
     // On a seat: the lane form (one grant for every node of the seat).
-    let target = match lanes::seat_book().seats_with_node(&node.id).into_iter().find(|s| s.active) {
+    let on_seat = if compute::ci_enabled() { lanes::seat_book().seats_with_node(&node.id).into_iter().find(|s| s.active) } else { None };
+    let target = match on_seat {
         Some(s) => format!("{LANE_TOKEN}{}/{}", s.owner_id, s.lane),
         None => node.name.clone(),
     };

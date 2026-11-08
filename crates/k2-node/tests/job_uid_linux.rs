@@ -151,7 +151,9 @@ fn rig(tag: &str, slots: &[Slot]) -> Rig {
     std::os::unix::fs::chown(base.join("home"), Some(0), Some(node_gid)).unwrap();
     std::fs::set_permissions(base.join("home"), std::fs::Permissions::from_mode(0o750)).unwrap();
     k2_node::paths::Layout::new(base.join("home"), &config).ensure().unwrap();
-    std::fs::write(config.join("admin.toml"), format!("remote_admin = \"off\"\nnode_user = \"{node_user}\"\n")).unwrap();
+    // The machine owner's opt-in to the per-job uid pool (0.46.10: off by
+    // default).
+    std::fs::write(config.join("admin.toml"), format!("remote_admin = \"off\"\nnode_user = \"{node_user}\"\njob_uid_pool = true\n")).unwrap();
     jobs::write_jobs_file(&config, "nobody", &node_user).expect("nobody is a job user");
     std::fs::create_dir_all(base.join("bin")).unwrap();
     let bin = base.join("bin/k2-node");

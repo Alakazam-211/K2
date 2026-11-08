@@ -59,6 +59,7 @@ struct Switches {
     permission_cards: bool,
     federation: bool,
     compute: bool,
+    compute_ci: bool,
     compute_placement_v1: bool,
     apps: bool,
     apps_process_engine: bool,
@@ -76,6 +77,7 @@ impl Switches {
         permission_cards: false,
         federation: false,
         compute: false,
+        compute_ci: false,
         compute_placement_v1: false,
         apps: false,
         apps_process_engine: false,
@@ -92,6 +94,7 @@ impl Switches {
             permission_cards: crate::permission::gate::setting_raw(),
             federation: crate::federation::setting_raw(),
             compute: crate::compute::setting_raw(),
+            compute_ci: crate::compute::ci_setting_raw(),
             compute_placement_v1: crate::compute::placement_policy() == crate::compute::PlacementPolicy::V1,
             apps: crate::deploy::setting_raw(),
             apps_process_engine: crate::deploy::process_engine_setting_raw(),
@@ -108,6 +111,7 @@ impl Switches {
         crate::permission::gate::set_server_switch(self.permission_cards);
         crate::federation::set_enabled(self.federation);
         crate::compute::set_enabled(self.compute);
+        crate::compute::set_ci_enabled(self.compute_ci);
         crate::compute::set_placement_policy(if self.compute_placement_v1 { crate::compute::PlacementPolicy::V1 } else { crate::compute::PlacementPolicy::V2 });
         crate::deploy::set_enabled(self.apps);
         crate::deploy::set_process_engine(self.apps_process_engine);

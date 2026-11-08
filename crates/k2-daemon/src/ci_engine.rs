@@ -5,7 +5,9 @@
 //! daemon-owned replacement for `scripts/ci/k2-ci-poll.sh` + `run-checks.sh`
 //! + `post-status.sh` as a `k2 job`.
 //!
-//! One tick ([`tick`], every [`TICK`] while compute is on):
+//! One tick ([`tick`], every [`TICK`] while CI on compute is on: compute
+//! and its own preview, `ciPreview` / `K2_CI`; 0.46.10 ships it dark, and
+//! then the loop never touches git, compute, the forge or k2.db, [`pass`]):
 //! 1. **reap** every run in flight: each check's compute job is read; once
 //!    every job ended the run gets its verdict (`k2_core::ci::verdict`, the
 //!    port of `run-checks.sh`'s reap) and its final statuses;
@@ -119,7 +121,7 @@ fn db() -> Arc<parking_lot::ReentrantMutex<rusqlite::Connection>> {
 // ── the loop ─────────────────────────────────────────────────────────
 
 /// The CI loop (spawned after the readiness gate, like `k2 job`'s). It
-/// does nothing while compute is off.
+/// does nothing while CI on compute is off ([`pass`]).
 pub fn spawn_loop() -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -127,14 +129,26 @@ pub fn spawn_loop() -> tokio::task::JoinHandle<()> {
         t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             t.tick().await;
-            if !k2_core::compute::enabled() {
+            if !k2_core::compute::ci_enabled() {
                 continue;
             }
-            if let Err(e) = tokio::task::spawn_blocking(|| tick(ops().as_ref(), now())).await {
+            if let Err(e) = tokio::task::spawn_blocking(|| pass(ops().as_ref(), now())).await {
                 log_debug!("[ci] tick panicked: {e}");
             }
         }
     })
+}
+
+/// One turn of the loop: [`tick`] only while CI on compute is on
+/// (`k2_core::compute::ci_enabled`). Off (the 0.46.10 default), nothing at
+/// all: no reap, no status retry, no `git ls-remote`, no submit, no read or
+/// write of k2.db. `true` when it ticked.
+pub fn pass(o: &dyn Ops, now: i64) -> bool {
+    if !k2_core::compute::ci_enabled() {
+        return false;
+    }
+    tick(o, now);
+    true
 }
 
 /// One tick with the real world (tests drive the loop by hand).
@@ -919,6 +933,55 @@ mod tests {
         assert_eq!(finals.len(), 4, "{finals:?}");
         assert!(finals.iter().any(|p| p.1 == "k2-ci/lint" && p.2 == "failure" && p.0.ends_with(&a[..7])));
         assert_eq!(finals.iter().filter(|p| p.2 == "success").count(), 3);
+    }
+
+    /// 0.46.10 ships CI on compute dark: with its preview off (even with
+    /// compute on) the loop's pass touches nothing: no `git ls-remote`, no
+    /// submit, no status, no run, no poll stamp. With it on, the same watch
+    /// runs.
+    #[test]
+    fn the_loop_does_nothing_while_the_ci_preview_is_off() {
+        let _env = k2_core::test_env::lock();
+        let _no_ci = k2_core::test_env::EnvVar::remove(k2_core::compute::CI_ENV);
+        let _no_compute = k2_core::test_env::EnvVar::remove("K2_COMPUTE");
+        let _db = k2_core::db::scoped_for_test();
+        let f = Fake::default();
+        let ws = seed_ws();
+        watch(&ws, 2);
+        let a = sha('a');
+        *f.tips.lock().unwrap() = format!("{a}\trefs/heads/main\n");
+        f.configs.lock().unwrap().insert(a.clone(), CFG.into());
+        *f.slug.lock().unwrap() = Some("acme/app".into());
+        // ls_remote failing loudly proves it is never asked while off.
+        *f.ls_fails.lock().unwrap() = Some("ls-remote must not run while the CI preview is off".into());
+        let last_poll = || {
+            let db = db();
+            let conn = db.lock();
+            ci::watched(&conn).into_iter().find(|w| w.workspace_id == ws.id).expect("watched").last_poll_at
+        };
+
+        for (compute_on, at) in [(false, 100), (true, 200)] {
+            k2_core::compute::set_enabled(compute_on);
+            k2_core::compute::set_ci_enabled(false);
+            assert!(!pass(&f, at), "no pass with ciPreview off (compute {compute_on})");
+            assert!(f.bodies.lock().unwrap().is_empty(), "nothing submitted");
+            assert!(f.posts().is_empty(), "no status posted");
+            assert!(runs(&ws).is_empty(), "no run written");
+            assert_eq!(last_poll(), None, "the watch was never polled");
+        }
+        // ciPreview without compute is still off.
+        k2_core::compute::set_enabled(false);
+        k2_core::compute::set_ci_enabled(true);
+        assert!(!pass(&f, 300));
+        assert!(runs(&ws).is_empty());
+
+        // On (compute and ciPreview): the same watch runs its tip.
+        *f.ls_fails.lock().unwrap() = None;
+        k2_core::compute::set_enabled(true);
+        assert!(pass(&f, 400), "a pass with the preview on");
+        assert_eq!(runs(&ws).len(), 1, "main's tip runs");
+        assert_eq!(f.bodies.lock().unwrap().len(), 2, "one job per check");
+        assert_eq!(last_poll(), Some(400));
     }
 
     #[test]

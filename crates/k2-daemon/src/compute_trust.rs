@@ -1404,6 +1404,8 @@ fn fed_send(peer_fp: &str, kind: &str, payload: Value) -> R<Value> {
     if let Some(r) = test_seams::fed_send(peer_fp, kind, &payload) {
         return r;
     }
+    // Nothing leaves for a peer while CI on compute is off (0.46.10, dark).
+    crate::compute_routes::ci_gate("A compute seat")?;
     let peer = trusted_peer(peer_fp)?;
     let base = crate::federation_routes::gated_peer_base_url(&peer).map_err(|e| no("not_connected", 403, e))?;
     let me = federation::local_fingerprint().unwrap_or_default();
@@ -1445,6 +1447,11 @@ pub fn handle_federation(body: &[u8]) -> CliResponse {
     }
     if !compute::enabled() {
         return crate::compute_routes::dark();
+    }
+    // CI on compute (0.46.10, dark): no seat request, offer or roster is
+    // read (nothing is verified, nothing written) while the preview is off.
+    if let Err(r) = crate::compute_routes::ci_gate("A compute seat") {
+        return crate::compute_routes::refusal_response(&r);
     }
     let store = match PeerStore::load() {
         Ok(s) => s,

@@ -127,7 +127,7 @@ class H(BaseHTTPRequestHandler):
         path, q = self.record(body)
         v = json.loads(body or "{}")
         if path == "/cli/ci/run":
-            refusals = {"nocfg": (404, "ci_no_config"), "forbid": (403, "compute_off"), "bad": (400, "bad_request"), "busy": (409, "ci_not_a_repo")}
+            refusals = {"nocfg": (404, "ci_no_config"), "forbid": (403, "compute_off"), "bad": (400, "bad_request"), "busy": (409, "ci_not_a_repo"), "dark": (409, "ci_preview_off")}
             if v.get("rev") in refusals:
                 st, code = refusals[v["rev"]]
                 return self.reply({"error": {"code": code, "hint": "the hint for " + code}}, st)
@@ -244,6 +244,11 @@ rc "403" 3 ci run forbid
 has "403 says code" "$(cat "$WORK/err")" "compute_off:"
 rc "400" 2 ci run bad
 rc "409" 3 ci run busy
+# 0.46.10 ships CI on compute dark: the daemon's preview-off refusal.
+rc "ci_preview_off" 3 ci run dark
+has "ci_preview_off says code: hint" "$(cat "$WORK/err")" "ci_preview_off: the hint for ci_preview_off"
+has "help names the preview switch" "$("$K2" ci --help)" "(preview: k2 settings set ciPreview true)"
+has "study names the preview switch" "$("$K2" study ci)" "k2 settings set ciPreview true"
 
 echo "== status =="
 rc "status" 0 ci status

@@ -107,6 +107,11 @@ SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
   at the top of each job log). A job could read them anyway.
 
 SEATS AND LANES (0.46.10: your CI on another owner's nodes)
+  (preview: k2 settings set ciPreview true) on BOTH servers (the node owner's
+  and yours); off, these verbs exit 3 (ci_preview_off). On the node
+  machine, lane secrets and per-job uids are also the machine owner's,
+  off by default: sudo k2-node admin lane-secrets on, sudo k2-node admin
+  job-uid on (then restart k2-node-admin and k2-node).
   A seat is your server's place on a set of another owner's nodes, under
   one of that owner's lanes (their standing rules: the CI tier, caps, and
   whether vault secrets may go there). K2 ships one lane, ci-standard

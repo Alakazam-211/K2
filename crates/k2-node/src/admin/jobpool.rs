@@ -281,6 +281,11 @@ fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
 /// runs as a shared uid instead.
 pub const JOB_UID_UNAVAILABLE: &str = "job_uid_unavailable";
 
+/// Why there's no per-job uid pool while the machine owner hasn't turned
+/// it on (0.46.10 ships it off).
+pub const JOB_UID_POOL_OFF: &str =
+    "the per-job uid pool is off on this machine (CI on compute preview): the machine owner turns it on with sudo k2-node admin job-uid on (admin.toml job_uid_pool = true)";
+
 impl Executor {
     fn pool_path(&self) -> PathBuf {
         self.paths.state_dir.join(POOL_FILE)
@@ -290,6 +295,12 @@ impl Executor {
     /// systemd ≥ 247 (`ProtectProc=invisible`: other uids' processes are
     /// hidden), and the user tools. The node asks through `Ready`.
     pub fn job_uid_ready(&self) -> Result<(), AdminRefusal> {
+        // 0.46.10: the machine owner's opt-in, off by default (admin.toml
+        // `job_uid_pool`). Off, `Ready` says no `job_uid`, the node offers
+        // no `job-uid`, and every start asking for one is refused here.
+        if !super::config::ci_opt_ins(&self.paths.config_dir).0 {
+            return Err(refuse(code::NOT_CONFIGURED, JOB_UID_POOL_OFF));
+        }
         if !cfg!(target_os = "linux") {
             return Err(refuse(code::NOT_CONFIGURED, "per-job uids are Linux only"));
         }

@@ -341,6 +341,31 @@ pub fn too_large() -> CliResponse {
     refusal_response(&no(codes::BAD_REQUEST, 413, format!("request bodies here are at most {} KiB", MAX_BODY / 1024)))
 }
 
+/// CI on compute (0.46.10 ships it dark): the refusal every CI surface
+/// answers while [`compute::ci_enabled`] is off (409 `ci_preview_off`,
+/// with how the owner turns it on).
+pub(crate) fn ci_preview_off(what: &str) -> Refusal {
+    no(compute::CI_PREVIEW_OFF, 409, compute::ci_preview_hint(what))
+}
+
+/// `Ok` when CI on compute is on, else [`ci_preview_off`].
+pub(crate) fn ci_gate(what: &str) -> R<()> {
+    if compute::ci_enabled() {
+        Ok(())
+    } else {
+        Err(ci_preview_off(what))
+    }
+}
+
+/// The routes CI on compute added on the compute router (0.46.10): `k2 ci`
+/// (`ci_routes`) and node rosters, lanes, seats, owners, trust requests and
+/// signer pairing (`compute_trust`). All of them answer [`ci_preview_off`]
+/// while the CI preview is off; the federation leg
+/// (`/cli/federation/compute-seat`) does too, in its own handler.
+pub fn is_ci_route(p: &str) -> bool {
+    crate::ci_routes::is_route(p) || crate::compute_trust::is_route(p)
+}
+
 /// 404 for every compute route while the preview flag is off (CN30).
 pub fn dark() -> CliResponse {
     CliResponse {
@@ -623,6 +648,12 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
 pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>, local: bool) -> CliResponse {
     if !compute::enabled() {
         return dark();
+    }
+    // CI on compute (0.46.10, dark): its routes answer `ci_preview_off`
+    // before anything is read or written.
+    if is_ci_route(path) && !compute::ci_enabled() {
+        let what = if path.starts_with("/cli/ci/") { "k2 ci" } else { "k2 compute roster, lanes, seats, trust and owners" };
+        return refusal_response(&ci_preview_off(what));
     }
     let mgr = crate::compute_manage::manager(&who, local);
     let mgr = mgr.as_ref();
@@ -1753,6 +1784,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         Some(x) if x.as_u64() == Some(u64::from(k2_core::compute::proto::frames::RECEIPT_V2)) => Some(k2_core::compute::proto::frames::RECEIPT_V2),
         Some(_) => return Err(no(codes::BAD_REQUEST, 400, "receiptV is 2 (receipt v2), or absent for v1")),
     };
+    // Receipt v2 is CI on compute's (0.46.10 ships it dark): a v1 submit is
+    // 0.46.9's, untouched; asking for v2 needs the CI preview.
+    if receipt_v.is_some() {
+        ci_gate("--receipt-v2 (receiptV: 2)")?;
+    }
     let stall = match n(&v, "stallSecs") {
         None => None,
         Some(0) => Some(0),

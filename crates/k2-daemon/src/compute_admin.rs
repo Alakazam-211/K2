@@ -610,6 +610,11 @@ fn classify_body(node_name: &str, kind: &str, body: &Value) -> R<(Class, String)
                 "servers.owner is never proposed: the server's owner asks for it in Settings → Compute or with k2 compute node servers <node> owner <server>",
             ));
         }
+        // Protocol 9's CI steps (a node's lanes file, the owner's node
+        // roster) only while CI on compute is on (0.46.10 ships it dark).
+        if st.verb == k2_core::compute::proto::lanes::VERB_LANES_WRITE || st.verb == k2_core::compute::proto::lanes::VERB_NODE_ROSTER_SET {
+            crate::compute_routes::ci_gate(&format!("The node admin step {}", st.verb))?;
+        }
         let c = admin::validate_step(&st.verb, &st.args).map_err(|(code, hint)| no(code, 400, hint))?;
         if kind == "service" && !st.verb.starts_with("svc.") {
             return Err(no(acodes::BAD_ARGS, 400, "a service request is svc.apply, svc.adopt or svc.remove"));
@@ -1851,8 +1856,11 @@ fn watch_pass() {
     crate::compute_rollout::maybe_follow(now);
     crate::compute_rollout::tick(now);
     // Node rosters (0.46.10 C1): expire trust requests; re-sign an
-    // unchanged roster before signers find it stale (V13).
-    crate::compute_trust::tick();
+    // unchanged roster before signers find it stale (V13). Not while CI on
+    // compute is off (0.46.10 ships it dark): nothing signed, sent or written.
+    if compute::ci_enabled() {
+        crate::compute_trust::tick();
+    }
 }
 
 /// Start the 60 s watch (boot). Runs with no client attached. It also
@@ -2760,6 +2768,7 @@ pub(crate) fn person_stamp(who: &Who) -> Option<String> {
 /// controller's own behalf (`label`, e.g. `controller:node-roster`): the
 /// node roster hand-over after a person approved the roster.
 pub(crate) fn send_operate_system(label: &str, node: &store::NodeRow, verb: &str, args: &Value) -> R<String> {
+    crate::compute_routes::ci_gate("Handing a node the node roster")?;
     not_tenant(node)?;
     let key = controller_key()?;
     let cmd = build_command(node, &key.fingerprint(), Class::Operate, verb, args, None, label, None, compute::now())?;

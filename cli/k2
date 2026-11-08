@@ -5105,95 +5105,6 @@ EOF
     return 0
 }
 
-# 0.39.0f Phase 2.1c: `k2 daemon companion <start|stop|status>` —
-# wired to existing /cli/companion/{start,stop,status} routes (Unit 1
-# + Unit 7c). Replaces the top-level `k2 companion` verb cut by
-# Phase 2.1b. The daemon owns the companion (ngrok tunnel + server),
-# so the verb lives under `k2 daemon`.
-cmd_daemon_companion() {
-    local sub="${1:-status}"
-    shift || true
-    case "$sub" in
-        start)
-            # /cli/companion/start is a GET in the dispatch table (no body).
-            # Returns {"ok":true,"url":"<tunnel-url>"} on success or
-            # {"error":"..."} on failure.
-            cli_request_post "/cli/companion/start" | python3 -c '
-import json, sys
-try:
-    data = json.loads(sys.stdin.read())
-    if data.get("ok"):
-        url = data.get("url") or ""
-        suffix = (" Tunnel: " + url) if url else ""
-        print(f"Companion started.{suffix}")
-    else:
-        msg = data.get("error") or "unknown error"
-        print(f"Failed to start companion: {msg}", file=sys.stderr)
-        sys.exit(1)
-except Exception as e:
-    print(f"Failed to parse daemon response: {e}", file=sys.stderr)
-    sys.exit(1)
-'
-            ;;
-        stop)
-            cli_request_post "/cli/companion/stop" | python3 -c '
-import json, sys
-try:
-    data = json.loads(sys.stdin.read())
-    if data.get("ok"):
-        print("Companion stopped.")
-    else:
-        msg = data.get("error") or "unknown error"
-        print(f"Failed to stop companion: {msg}", file=sys.stderr)
-        sys.exit(1)
-except Exception as e:
-    print(f"Failed to parse daemon response: {e}", file=sys.stderr)
-    sys.exit(1)
-'
-            ;;
-        status)
-            local as_json=0
-            [ "${1:-}" = "--json" ] && as_json=1
-            local raw
-            raw=$(cli_request "/cli/companion/status")
-            if [ "$as_json" = "1" ]; then
-                printf '%s\n' "$raw"
-                return 0
-            fi
-            printf '%s' "$raw" | python3 -c '
-import json, sys
-try:
-    data = json.loads(sys.stdin.read())
-except Exception as e:
-    print(f"Failed to parse companion status: {e}", file=sys.stderr)
-    sys.exit(1)
-running = data.get("running", False)
-url = data.get("tunnelUrl") or ""
-clients = data.get("connectedClients", 0)
-ws_clients = data.get("wsClients", 0)
-sessions = data.get("sessions") or []
-print("Companion server")
-running_label = "yes" if running else "no"
-print(f"  Running:    {running_label}")
-if running:
-    tunnel_label = url or "(not connected)"
-    print(f"  Tunnel URL: {tunnel_label}")
-    print(f"  Sessions:   {clients}")
-    print(f"  WS clients: {ws_clients}")
-    for s in sessions:
-        tok = s.get("token", "")
-        addr = s.get("remoteAddr", "")
-        created = s.get("createdAt", "")
-        print(f"    - {tok} from {addr} (created {created})")
-'
-            ;;
-        *)
-            echo "Usage: k2 daemon companion <start|stop|status [--json]>" >&2
-            exit 1
-            ;;
-    esac
-}
-
 cmd_reviews() {
     cli_request "/cli/reviews" | python3 -c "
 import json, sys
@@ -36862,10 +36773,9 @@ print('Disconnected.')
     esac
 }
 
-# 0.39.0f Phase 2.1b: cmd_companion orphan removed. The `companion`
-# top-level verb is hard-deprecated at dispatch; the new home is
-# `k2 daemon companion <start|stop|status>` — wired into the
-# `daemon` dispatch by Phase 2.1c (see cmd_daemon_companion above).
+# The `companion` top-level verb is hard-deprecated at dispatch: the
+# old ngrok Companion server is gone, and K2 Companion phones pair with
+# `k2 users pair-phone`.
 
 # POST to a query-string route (no JSON body). The daemon parses the
 # token + params from the query; the body is empty/drained. Used by the
@@ -47172,7 +47082,7 @@ cmd_schema() {
     },
     {
       "name": "daemon",
-      "usage": "k2 daemon <status|start|stop|restart|survive|log|install|uninstall|companion> [...]",
+      "usage": "k2 daemon <status|start|stop|restart|survive|log|install|uninstall> [...]",
       "description": "Manage the local (or, with --host, a remote) K2 daemon.",
       "args": [],
       "flags": []
@@ -61701,7 +61611,7 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
   mode off|agent|manager          → settings --mode <value>
   app-update                      → update --app
   commit-merge                    → commit --merge
-  companion                       → daemon companion
+  companion                       → users pair-phone
   whatsnew                        → whats-new
   roster                          → connections list  (0.39.0)
   who                             → connections list  (0.39.0)
@@ -62331,7 +62241,6 @@ DAEMON LIFECYCLE
   daemon status [--json]                        PID, port, uptime
   daemon start|stop|restart                     launchctl bootstrap/bootout
   daemon log [--lines N]                        Tail daemon log
-  daemon companion start|stop|status            Companion (ngrok tunnel) server
   daemon hooks status [--limit N] [--json]      Hook pipeline state
   daemon reap                                   GC dead-PID sessions
   daemon uninstall                              Remove daemon plist
@@ -62436,8 +62345,6 @@ SETTINGS
   settings                                      Show current settings
   settings --mode <off|agent|manager>           Workspace mode
   settings --agentic <on|off>                   (always on — no-op; agentic is GA)
-  settings --companion <on|off>                 Enable/disable companion tunnel
-  settings --companion-password "<pw>"          Rotate companion password
 
 SKILLS (documentation profiles — NOT spawnable; harness handles spawn)
   skills list                                   Skill profiles in this workspace
@@ -94626,9 +94533,8 @@ EOF
             log|logs)  shift 2; cmd_daemon_log "$@" ;;
             install)   shift 2; cmd_daemon_install "$@" ;;
             uninstall) shift 2; cmd_daemon_uninstall "$@" ;;
-            companion) shift 2; cmd_daemon_companion "$@" ;;
             *)
-                echo "Usage: k2 daemon <status|start|stop|restart|survive|log|install|uninstall|companion>" >&2
+                echo "Usage: k2 daemon <status|start|stop|restart|survive|log|install|uninstall>" >&2
                 echo "" >&2
                 echo "  survive [on|off|status]" >&2
                 echo "    On by default: agents keep running through K2 updates, restarts and crashes" >&2
@@ -95029,8 +94935,9 @@ EOF
         shift; cmd_connect "$@"
         ;;
     companion)
-        # Phase 2.1: hard-deprecated. Companion is daemon-owned.
-        fail_deprecated "companion" "k2 daemon companion <start|stop|status>"
+        # Hard-deprecated. The old Companion server is gone; phones pair
+        # through K2 Connect.
+        fail_deprecated "companion" "k2 users pair-phone"
         ;;
     skills)
         shift; cmd_skills "$@"

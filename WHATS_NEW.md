@@ -6,6 +6,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.46.10 — Adding workspaces on a remote server works again
 
 ### When you update
+- **Update the root helper after updating** (`k2 root-helper update`): moving a server's voice to the tunnel needs root helper protocol 14. An older helper refuses the move with `helper_outdated` and changes nothing.
 - **`k2 db create` no longer prints the database password.** Its `dsn` (and the `--test` `migratorDsn`) come without the password, and `dsnHint` says how to get the full one: `k2 db dsn --db <name>`. Scripts that read the password from `create --json` need to call `k2 db dsn` instead.
 
 ### Voice & Chat only logins
@@ -19,8 +20,14 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Desktop app
 - **New agents open in Split view:** the agent's terminal on the left and its Thread on the right. Agents you already set to a view keep it, and Settings → Workspace settings → "New agents open in" still changes the default.
 - **Switching workspaces puts you in the message box.** "When moving between workspaces, auto-select" now defaults to Message agent. If you picked Terminal, that stays.
+- **Tables in chat take the least height.** Markdown tables in Threads, project and ticket chat and the Garden Thread widget now pick their own column widths instead of giving all the room to the longest column, so a table with one long column no longer squeezes the others into a few letters per line.
+
+### Permission cards
+- **Accept a secret another agent sends you on a permission card, on the desktop or the phone.** A pending secret handoff now arrives as K2's own permission card on the receiving agent's Thread: Allow accepts, Deny declines, and a name clash asks for a free name or Replace. Deciding anywhere else (another card, Settings, the CLI) closes every card for that delivery. `k2 vault incoming` shows where each card is.
+- **Set up compute git access from a card.** When an agent needs git access for its compute jobs and the server has no GitHub credential yet, the owner or an Admin gets a card with K2's own form: a GitHub App (App ID and private key) or a fine-grained token. The value goes straight into the vault as that person and never passes through the card, the Thread or the agent.
 
 ### Fixes
+- **Moving voice to the tunnel works on a server that used to run voice direct.** Settings left over from direct mode made Sew refuse the move, and K2 reported it as a relay-only refusal. The move now clears them (Sew 0.8.2 or later), and when Sew refuses its settings K2 shows Sew's own line (`sew_config_refused`).
 - **Adding a workspace on a remote server works again.** In the desktop app, adding a workspace on a server you're connected to could show "workspace added", then empty the list and reconnect, and the new workspace never appeared. One request that didn't get through made the app treat the whole server as down. Now the app checks the server before reconnecting, the new workspace appears and is selected, and a server that's really down still shows "reconnecting" within a few seconds. The server now also closes its answer to a browser's CORS check cleanly, which is what lost that request.
 - **When a workspace's default CLI isn't installed on its server, its chat says so** ("codex isn't installed on <server>"), instead of showing a spawn error.
 - **Agents keep their K2 access through an update.** If K2's passport file was lost while agents kept running across a restart, every agent's `k2` calls were refused until its tab restarted. K2 now gives each running agent a new passport by itself and logs that it did. Closing a tab now also ends that tab's passport.

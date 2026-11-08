@@ -46,7 +46,6 @@ MIN_FREE_GB=${K2_GATE_MIN_FREE_GB:-20}
 # Ignored tests the gate accepts (anything else ignored fails the gate).
 ALLOWLIST=(
   "tunnel::connector::tests::live_start_stop_roundtrip"            # real frpc vs live Connect; manual only
-  "classify_routes::tests::checkbox_on_no_marker_reaches_model_path" # needs the bundled GGUF model
   "cell_egress::tests::refused_localhost_port_is_refused_while_a_cell_table_exists" # root + nft; run below as root
   "sql::tests::real_pg::real_pg_guest_doors_smoke"                  # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
   "sql::tests::real_pg::real_pg_search_path_pin_holds"              # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set

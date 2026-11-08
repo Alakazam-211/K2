@@ -4,16 +4,16 @@ exit: 0
 k2 study source — license + repo boundary
 
 LICENSE
-  K2 is Fair Source: FSL-1.1-Apache-2.0 (Functional Source License).
-  It is source-available. It is not MIT. It is not a permissive
-  "do anything, including competing hosted clones" license.
+  K2 is open source under the MIT License, from 0.46.10 on. Anyone may
+  use, copy, change and redistribute it, commercially too, as long as
+  the copyright and licence notice go with it.
 
-  Free for personal and internal / business use. Each release converts
-  to Apache 2.0 two years after that release. Competing commercial
-  hosting of K2 is not a Permitted Purpose under FSL.
+  Releases up to and including 0.46.9 were FSL-1.1-Apache-2.0 and stay
+  under it; each of them converts to Apache 2.0 two years after its
+  release.
 
-  Third-party MIT assets (for example a file-icon font) do not relicense
-  the product. K2 code remains FSL-1.1-Apache-2.0.
+  Third-party code keeps its own licence (NOTICE.md lists each one);
+  it does not relicense K2.
 
 WHAT LIVES IN THIS REPO
   - The K2 app (desktop UI)
@@ -31,20 +31,20 @@ WHAT DOES NOT
   license. The license text ships as LICENSE.md in the K2 repo.
   NOTICE.md is the trademark + third-party map, not a second license.
 
-COMMERCIAL HOSTING
-  Official Connect is the intended multi-tenant remote-access path.
-  Air-gapped / LAN-only daemon hosting is not the same grant — that
-  needs a written Enterprise agreement. Do not invent a hosting
-  story from CLI flags.
+HOSTING
+  The MIT License puts no limit on hosting K2. K2 Connect (accounts,
+  hostnames, tunnels) is a separate service with its own terms; see
+  `k2 study connect-boundary`. Do not invent a hosting story from CLI
+  flags.
 
 TRADEMARKS
-  "K2" is the product name. Do not call it K2SO. The license does not
-  grant trademark rights.
+  "K2" is the product name. Do not call it K2SO. The MIT License does
+  not grant trademark rights (TRADEMARKS.md).
 
 IF YOU WANT THIS BOX TO CHANGE
   You do not patch license policy from an agent session. File a
   durable ask: `k2 feedback ask`. To talk here: `k2 thread`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

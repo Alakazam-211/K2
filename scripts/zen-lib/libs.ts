@@ -73,9 +73,10 @@ export interface LibSpec {
   urls?: Record<string, string>
   notes?: string
   /** K2's own widget kit (0.46.3: k2-thread, k2-help): no npm package; its
-   *  files are `{own: true}`, its licence is K2's (FSL-1.1-Apache-2.0, only
-   *  allowed here) and `licenses` names `k2:LICENSE.md`. A change ships as
-   *  a new version folder; a shipped one is never edited. */
+   *  files are `{own: true}`, its licence is K2's (MIT from 0.46.10; the
+   *  versions before were FSL-1.1-Apache-2.0) and `licenses` names
+   *  `k2:LICENSE.md`. A change ships as a new version folder; a shipped one
+   *  is never edited. */
   own?: boolean
   /** 0.46.5 (WL3): other libraries it needs, as line requests
    *  (`marked@18`); K2 loads them first, once. */
@@ -580,14 +581,16 @@ export const LIBS: LibSpec[] = [
     notes: 'Downloaded once by K2 on first use (about 4.8 MB), then cached; refused on air-gapped computers.',
   },
   // ── K2's own widget kit (0.46.3) ────────────────────────────────────
+  // 0.46.10: K2 is MIT. Each kit library moved up one patch version under
+  // MIT (code unchanged); the FSL versions before it are never edited.
   {
     id: 'k2-help',
-    version: '1.0.0',
+    version: '1.0.1',
     fingerprints: ['/*! k2-help '],
     title: 'K2 help button (widget kit)',
     global: 'K2Help',
-    license: 'FSL-1.1-Apache-2.0',
-    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    license: 'MIT',
+    copyright: 'Copyright (c) 2025-2026 Alakazam Labs',
     source: 'bundled',
     own: true,
     licenses: ['k2:LICENSE.md'],
@@ -601,12 +604,12 @@ export const LIBS: LibSpec[] = [
     // scripts/zen-lib/build-k2-activity.mjs; the built file is checked in.
     // Before k2-thread, which needs it.
     id: 'k2-activity',
-    version: '1.0.0',
+    version: '1.0.1',
     fingerprints: ['/*! k2-activity '],
     title: 'K2 activity bar (widget kit)',
     global: 'K2Activity',
-    license: 'FSL-1.1-Apache-2.0',
-    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    license: 'MIT',
+    copyright: 'Copyright (c) 2025-2026 Alakazam Labs',
     source: 'bundled',
     own: true,
     licenses: ['k2:LICENSE.md'],
@@ -617,13 +620,13 @@ export const LIBS: LibSpec[] = [
     // 1.1.0 (0.46.5 activity SDK): the working tab is k2-activity@1's turn
     // from k2.thread.onActivity, never row.working or send timing.
     id: 'k2-thread',
-    version: '1.1.0',
+    version: '1.1.1',
     needs: ['k2-activity@1'],
     fingerprints: ['/*! k2-thread '],
     title: 'K2 Thread panel (widget kit)',
     global: 'K2Thread',
-    license: 'FSL-1.1-Apache-2.0',
-    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    license: 'MIT',
+    copyright: 'Copyright (c) 2025-2026 Alakazam Labs',
     source: 'bundled',
     own: true,
     licenses: ['k2:LICENSE.md'],
@@ -635,13 +638,13 @@ export const LIBS: LibSpec[] = [
     // 0.46.5 (prd-widget-size-and-shared-libs-v1 WL13, vs-live L12): from
     // Kanban's md.js, safe by default, with a private DOMPurify instance.
     id: 'k2-markdown',
-    version: '1.0.0',
+    version: '1.0.1',
     needs: ['marked@18', 'dompurify@3'],
     fingerprints: ['/*! k2-markdown '],
     title: 'K2 markdown (widget kit)',
     global: 'K2Markdown',
-    license: 'FSL-1.1-Apache-2.0',
-    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    license: 'MIT',
+    copyright: 'Copyright (c) 2025-2026 Alakazam Labs',
     source: 'bundled',
     own: true,
     licenses: ['k2:LICENSE.md'],
@@ -652,12 +655,12 @@ export const LIBS: LibSpec[] = [
     // 0.46.6 (prd-gardens-on-phone-v1 Q11): canvas pixels to PNG without
     // toDataURL / toBlob, empty in a sealed frame on WebKit (Board U0).
     id: 'k2-png',
-    version: '1.0.0',
+    version: '1.0.1',
     fingerprints: ['/*! k2-png '],
     title: 'K2 PNG encoder (widget kit)',
     global: 'K2Png',
-    license: 'FSL-1.1-Apache-2.0',
-    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    license: 'MIT',
+    copyright: 'Copyright (c) 2025-2026 Alakazam Labs',
     source: 'bundled',
     own: true,
     licenses: ['k2:LICENSE.md'],
@@ -668,12 +671,12 @@ export const LIBS: LibSpec[] = [
     // 0.46.7 Workbench (B6, catalog v40): the Review column's diff and
     // changed-files tree, for git.diffFile / git.snapshot answers.
     id: 'k2-diff',
-    version: '1.0.0',
+    version: '1.0.1',
     fingerprints: ['/*! k2-diff '],
     title: 'K2 diff view (widget kit)',
     global: 'K2Diff',
-    license: 'FSL-1.1-Apache-2.0',
-    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    license: 'MIT',
+    copyright: 'Copyright (c) 2025-2026 Alakazam Labs',
     source: 'bundled',
     own: true,
     licenses: ['k2:LICENSE.md'],

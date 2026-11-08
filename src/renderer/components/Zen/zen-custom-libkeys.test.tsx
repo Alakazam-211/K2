@@ -154,7 +154,7 @@ afterEach(() => {
 
 describe('the frame loads the daemon’s resolved libKeys (WL7)', () => {
   it('libKeys present: exactly those keys, in that order', async () => {
-    const keys = ['marked@18.0.14', 'dompurify@3.4.17', 'k2-markdown@1.0.0']
+    const keys = ['marked@18.0.14', 'dompurify@3.4.17', 'k2-markdown@1.0.1']
     await show(page({ libKeys: keys }))
     expect(h.asked).toEqual([keys])
   })

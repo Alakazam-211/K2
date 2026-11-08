@@ -11228,7 +11228,7 @@ AFTERWARDS
   k2 app handover undo <app>       the owner, within 72 hours
   The agent that takes it gets "Apps you maintain" in its context.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -11483,7 +11483,7 @@ Recording is off by default. Guide: docs/app-chat-sew.md.
 VOICE ROOMS AND PROJECT CHANNELS, start to finish (who does which step,
 in what order, what goes wrong): k2 study chat-voice.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -11632,7 +11632,7 @@ WHAT GOES WRONG
 
 NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents never join calls.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -11734,7 +11734,7 @@ visitor per App (the Owner: k2 firewall guard). Sew 0.8.2, this K2's
 pin, carries 0.5.1's fixes for the quota gaps (call limits on moves and
 DM calls, upload and message-rate quotas) and the unbound-Space gaps.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -11875,7 +11875,7 @@ is still on that person's last one. ROLLBACK: before taking a box below 0.46.10,
 voice_chat logins to member and disable them, or remove them; an older
 K2 can't read the role and refuses every login until it rolls forward.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -48760,7 +48760,7 @@ cmd_schema() {
     {
       "name": "study",
       "usage": "k2 study [list|<topic>|--json]",
-      "description": "Bounded teaching pages (not --help). Catalog, or one topic page. Daemon-optional. Fair Source, people lists, errors.",
+      "description": "Bounded teaching pages (not --help). Catalog, or one topic page. Daemon-optional. License, people lists, errors.",
       "args": [{"name": "topic", "required": false, "description": "list, or a topic id: what, source, map, identity, send, human, people, auth, errors, context, db, mail, connect-boundary, skins, feedback-loop, ticket-brief, notifications."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable: catalog {topics:[{id,title}]} or page {id,body}."}
@@ -49246,10 +49246,10 @@ _study_catalog() {
     cat <<'EOF'
 k2 study — bounded teaching pages (not --help)
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 
   what                What this product is (agents as infrastructure)
-  source              License + repo boundary (Fair Source, not MIT)
+  source              License + repo boundary (MIT)
   map                 How the surface is organized (pages, not --help)
   identity            Who you are; handles vs names; sidecars
   send                k2 msg vs k2 thread vs k2 mail vs talk
@@ -51461,7 +51461,7 @@ WHAT YOU GET
 
 WHAT K2 IS NOT
   - Not a hosted model. Bring your own keys / subscriptions.
-  - Not MIT-licensed SaaS. Source-available Fair Source — see `k2 study source`.
+  - Not a hosted SaaS. K2 is MIT-licensed software you run — see `k2 study source`.
   - Not K2 Connect. Connect is a separate product (tunnel + account).
     The app, daemon, and CLI live in the K2 repo. See `k2 study connect-boundary`.
   - Not a dump of this workspace's wiki, PRDs, or release runbooks.
@@ -51485,7 +51485,7 @@ WHEN SOMETHING IS REFUSED
 RELATED PAGES
   source · map · identity · send · people · errors · connect-boundary
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51494,16 +51494,16 @@ _study_page_source() {
 k2 study source — license + repo boundary
 
 LICENSE
-  K2 is Fair Source: FSL-1.1-Apache-2.0 (Functional Source License).
-  It is source-available. It is not MIT. It is not a permissive
-  "do anything, including competing hosted clones" license.
+  K2 is open source under the MIT License, from 0.46.10 on. Anyone may
+  use, copy, change and redistribute it, commercially too, as long as
+  the copyright and licence notice go with it.
 
-  Free for personal and internal / business use. Each release converts
-  to Apache 2.0 two years after that release. Competing commercial
-  hosting of K2 is not a Permitted Purpose under FSL.
+  Releases up to and including 0.46.9 were FSL-1.1-Apache-2.0 and stay
+  under it; each of them converts to Apache 2.0 two years after its
+  release.
 
-  Third-party MIT assets (for example a file-icon font) do not relicense
-  the product. K2 code remains FSL-1.1-Apache-2.0.
+  Third-party code keeps its own licence (NOTICE.md lists each one);
+  it does not relicense K2.
 
 WHAT LIVES IN THIS REPO
   - The K2 app (desktop UI)
@@ -51521,21 +51521,21 @@ WHAT DOES NOT
   license. The license text ships as LICENSE.md in the K2 repo.
   NOTICE.md is the trademark + third-party map, not a second license.
 
-COMMERCIAL HOSTING
-  Official Connect is the intended multi-tenant remote-access path.
-  Air-gapped / LAN-only daemon hosting is not the same grant — that
-  needs a written Enterprise agreement. Do not invent a hosting
-  story from CLI flags.
+HOSTING
+  The MIT License puts no limit on hosting K2. K2 Connect (accounts,
+  hostnames, tunnels) is a separate service with its own terms; see
+  `k2 study connect-boundary`. Do not invent a hosting story from CLI
+  flags.
 
 TRADEMARKS
-  "K2" is the product name. Do not call it K2SO. The license does not
-  grant trademark rights.
+  "K2" is the product name. Do not call it K2SO. The MIT License does
+  not grant trademark rights (TRADEMARKS.md).
 
 IF YOU WANT THIS BOX TO CHANGE
   You do not patch license policy from an agent session. File a
   durable ask: `k2 feedback ask`. To talk here: `k2 thread`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51584,7 +51584,7 @@ DAEMON-OPTIONAL
   `k2 study` and `k2 --schema` work with no heartbeat.port / token.
   Live unknown verbs do not. `k2 help` does not skip that gate.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51663,7 +51663,7 @@ FEDERATED SHAPE
   host token. Cover .md + small attachments; files stay out of the PTY.
   Wire form fp::ws::agent is `k2 fed send` only, not `k2 msg`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51714,7 +51714,7 @@ PEEK FIRST
   `k2 read <handle>` peeks their live terminal. Use it before injecting
   when you are not sure they are idle. `k2 talk` fuses read-then-send.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51800,7 +51800,7 @@ THREAD VS FEEDBACK
   Do not `--wait` on thread ask/secret. Feedback `--wait` is the
   one that blocks on a durable item.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51848,7 +51848,7 @@ PROJECT NAMES
   workspace handle. `[project:<name>]` → `k2 project msg`. Msg'ing
   the project name looks up a workspace and fails.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51894,7 +51894,7 @@ PASSPORTS
   are a different surface (`/v1`). Remote-session grants are another.
   Do not mix them. Do not print secrets. See `k2 study apps`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -51958,7 +51958,7 @@ JSON ERRORS
   `usage` is usually exit 2. Teaching codes above are exit 3.
   Stop looping on 3. Fix the flag on 2. Check the daemon on 1.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -52004,7 +52004,7 @@ STUDY VS CONTEXT
   context layer and does not compose into AGENTS.md. Point at study
   from Tooling; keep ROLE.md / PROJECT.md for this workspace's job.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -52249,7 +52249,7 @@ NO EXPOSE
   as a hosted process. Point a hostname at a port that is already
   listening if the human wants off-box reach.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -52537,7 +52537,7 @@ SENDING ON
   own domain passes it. Use approval for any agent that reads mail from
   outside.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -52547,7 +52547,7 @@ k2 study connect-boundary — K2 vs Connect
 
 TWO PRODUCTS
   K2         app + daemon + CLI in this repo. Device-local agent
-             server. Fair Source. See `k2 study source`.
+             server. MIT-licensed. See `k2 study source`.
   Connect    separate control plane: accounts, purchased hostnames,
              tunnel pairing. Not "the daemon with extra flags".
 
@@ -52603,7 +52603,7 @@ PASSWORD SIGN-IN OVER THE TUNNEL
   Every attempt is audited: `k2 users audit` (~/.k2/auth-audit.jsonl).
   Sessions last 7 days; the desktop app re-signs in silently.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -52733,7 +52733,7 @@ SUPPORT CHECK
   heartbeats:read gets 403 at the socket, and assign answers 404: refetch
   on focus instead.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -52803,7 +52803,7 @@ SUPPORT CHECK
   Shipped in K2 0.45.5. On an older server the routes answer gateway 404
   and the caps are refused at grant time.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -53792,7 +53792,7 @@ AFTER A K2 UPDATE (the App's agent)
   5. Check the App answers as before; tell your owner what still waits.
   K2 tells you of a deferral older than an hour and of a rehost_failed.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -53916,7 +53916,7 @@ ERRORS
 Types: sdk/server/src/generated/verbs.ts (AppSurfaces.room, .app) and
 sdk/generated/k2.d.ts (k2.room, k2.app, k2.widget.self). k2 study app-api.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -54746,7 +54746,7 @@ WALLED APPS AND SERVICES ON THIS BOX
   The owner approves it in person; then the App dials 127.0.0.1:<port>
   in its wall (env K2_BOX_<NAME>). Details: k2 study app-deploys.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -54807,11 +54807,11 @@ WHEN NOT TO
   Do not loop owner verbs hoping they become allowed.
 
 THE COPY LINE
-  K2 is source-available Fair Source, not MIT. That is the product
-  fact. Changing it is a human decision (`k2 feedback ask`), not a
-  CLI flag. Talking in this chat is `k2 thread`.
+  K2 is MIT-licensed open source. That is the product fact. Changing
+  it is a human decision (`k2 feedback ask`), not a CLI flag. Talking
+  in this chat is `k2 thread`.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -54896,7 +54896,7 @@ AFTER FILING
   k2 tickets show <id>            body + brief text extract
   k2 tickets show <id> --html     the cleaned HTML only
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -54973,7 +54973,7 @@ THE WIDGET KIT (0.46.3): don't hand-build these, require them
   "k2-help@1"    K2Help.tip(text, {label}) → an ⓘ. Put explanations
                  behind an ⓘ, not on the canvas.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -55020,7 +55020,7 @@ HANDBACK
 SEE ALSO
   k2 study sessions: everyone in this workspace, past conversations to reopen.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -55082,7 +55082,7 @@ WHO MAY
 EXIT CODES
   0 ok · 1 conflict (409/410) · 2 usage · 3 refused · 4 not found
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -56025,7 +56025,7 @@ SHARED NODES
   (sudo k2-node servers add). Moving the node to another of your own
   servers: k2 compute node servers <node> owner <server> (0.46.4).
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -56270,7 +56270,7 @@ CHANGING THE NODE'S OWNER (0.46.4)
   owner_change_pending (one at a time), no_owner_claim (take-owner on a
   node that doesn't say this server owns it).
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -56464,7 +56464,7 @@ WHY
   If your App already sets a Content-Security-Policy, add frame-ancestors
   to that same header; two CSP headers both apply.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -56599,7 +56599,7 @@ NEEDS SIGN-IN
 `k2 llm accounts` is an alias of `k2 llm tokens`; `k2 study llm-accounts`
 is an alias of this page.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
 
@@ -62063,7 +62063,7 @@ INFO
   help --advanced                       Power-user verbs (heartbeat, daemon, etc.)
   help --internal                       Orchestrator-RPC verbs (rare)
   help-deprecated                       Map: old verb → new equivalent
-  study [list|<topic>|--json]           Bounded pages (Fair Source, people, errors). Not --help.
+  study [list|<topic>|--json]           Bounded pages (license, people, errors). Not --help.
   glossary [<term>]                     Define K2-specific terms (try `glossary inbox`)
   whats-new                             Changelog popup
   version                               CLI version
@@ -86369,12 +86369,12 @@ EVERY LIBRARY: request, global, licence, size
   font-caveat@5         K2Fonts          OFL-1.1              182 KB
   babylonjs@8           BABYLON          Apache-2.0           7.5 MB  download
   plotly.js-dist-min@4  Plotly           MIT                  4.6 MB  download
-  k2-help@1             K2Help           FSL-1.1-Apache-2.0    14 KB
-  k2-activity@1         K2Activity       FSL-1.1-Apache-2.0    15 KB
-  k2-thread@1           K2Thread         FSL-1.1-Apache-2.0    54 KB
-  k2-markdown@1         K2Markdown       FSL-1.1-Apache-2.0     7 KB
-  k2-png@1              K2Png            FSL-1.1-Apache-2.0     4 KB
-  k2-diff@1             K2Diff           FSL-1.1-Apache-2.0    23 KB
+  k2-help@1             K2Help           MIT                   14 KB
+  k2-activity@1         K2Activity       MIT                   15 KB
+  k2-thread@1           K2Thread         MIT                   54 KB
+  k2-markdown@1         K2Markdown       MIT                    7 KB
+  k2-png@1              K2Png            MIT                    4 KB
+  k2-diff@1             K2Diff           MIT                   23 KB
 
 "download": fetched once by this computer's K2 on first use, checked, then
 kept (refused when the computer is air-gapped). Notes on each library are in

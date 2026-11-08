@@ -14,7 +14,7 @@ const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
   JSDOM: new (html: string, opts: { runScripts: 'outside-only'; pretendToBeVisual: boolean }) => { window: unknown }
 }
 
-const HELP = readFileSync(resolve(__dirname, '../../zen-lib/k2-help@1.0.0/k2-help.js'), 'utf8')
+const HELP = readFileSync(resolve(__dirname, '../../zen-lib/k2-help@1.0.1/k2-help.js'), 'utf8')
 
 function boot(body = '') {
   const dom = new JSDOM(`<!doctype html><html><head></head><body>${body}<p id="out">outside</p></body></html>`, {
@@ -42,7 +42,7 @@ function boot(body = '') {
 describe('k2-help@1', () => {
   it('defines K2Help once and injects its style once', () => {
     const { win, doc } = boot()
-    expect(win.K2Help.version).toBe('1.0.0')
+    expect(win.K2Help.version).toBe('1.0.1')
     win.eval(HELP)
     expect(doc.querySelectorAll('style[data-k2-lib="k2-help"]')).toHaveLength(1)
   })

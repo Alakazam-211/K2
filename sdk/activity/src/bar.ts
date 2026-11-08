@@ -1,5 +1,5 @@
 // @k2/activity bar: K2's activity bar as a few DOM nodes (0.46.5 activity
-// SDK, review §2.3). FSL-1.1-Apache-2.0, Alakazam Labs.
+// SDK, review §2.3). MIT, Alakazam Labs.
 //
 // Draws `describe(turn)` from ./core: the same words the desktop drawer
 // says. textContent only (never markup from data); one <style> per root

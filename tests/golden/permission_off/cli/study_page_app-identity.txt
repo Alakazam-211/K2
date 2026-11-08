@@ -65,6 +65,6 @@ SUPPORT CHECK
   Shipped in K2 0.45.5. On an older server the routes answer gateway 404
   and the caps are refused at grant time.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

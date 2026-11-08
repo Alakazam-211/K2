@@ -4,7 +4,8 @@ name = "k2-root-helper"
 # from crates/k2-daemon/Cargo.toml by build.rs (release.sh bumps that one).
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "/usr/local/libexec/k2-root-helper: K2's one root door on Linux. Exact-argv verbs (helper, mail, pg, keep), caller-is-daemon for destructive verbs, signed self-update. Links nothing from k2-daemon or k2-core."
 
 [lib]

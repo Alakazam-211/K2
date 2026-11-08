@@ -219,7 +219,7 @@ function depTree(name: string, seen = new Set<string>()): Set<string> {
   return seen
 }
 
-/** Licences K2 may ship inside its FSL-1.1-Apache-2.0 app. */
+/** Licences K2 may ship inside its MIT-licensed app. */
 const ALLOWED = new Set(['MIT', 'MIT-0', 'ISC', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0', '0BSD', 'Zlib', 'CC0-1.0', 'Unlicense', 'BlueOak-1.0.0', 'OFL-1.1'])
 
 /** An SPDX expression is shippable when every AND term has an allowed OR choice. */
@@ -336,8 +336,8 @@ for (const lib of LIBS) {
       files.push({ name, bytes: buf.length, sha256: sha256(buf), url })
     }
   }
-  // K2's own kit carries K2's licence; every other library a shippable one.
-  if (lib.own ? lib.license !== 'FSL-1.1-Apache-2.0' : !licenceOk(lib.license)) {
+  // K2's own kit carries K2's licence (MIT from 0.46.10); every other library a shippable one.
+  if (lib.own ? lib.license !== 'MIT' : !licenceOk(lib.license)) {
     die(`${key}: licence "${lib.license}" is not on the shippable list; flag it, don't guess`)
   }
 

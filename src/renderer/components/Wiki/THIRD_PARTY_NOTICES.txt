@@ -10,7 +10,7 @@ src/renderer/components/FileViewerPane/THIRD_PARTY_NOTICES.txt.
 Most are MIT-licensed. ngraph.forcelayout, ngraph.graph, ngraph.events and
 ngraph.random are BSD-3-Clause. Their full notices follow.
 
-K2's own source code remains licensed under FSL-1.1-Apache-2.0
+K2's own source code is licensed under the MIT License
 (see LICENSE.md / NOTICE.md). These components do not relicense K2.
 
   Package                Version  Licence       Upstream

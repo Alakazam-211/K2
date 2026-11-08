@@ -1,4 +1,4 @@
-/*! k2-png 1.0.0 (FSL-1.1-Apache-2.0), K2's widget kit: canvas pixels to PNG without toDataURL. Copyright 2025-2026 Alakazam Labs. */
+/*! k2-png 1.0.1 (MIT), K2's widget kit: canvas pixels to PNG without toDataURL. Copyright 2025-2026 Alakazam Labs. */
 // K2Png: make a PNG from canvas pixels inside a Garden.
 //
 //   requires.libs: ["k2-png@1"]
@@ -105,5 +105,5 @@
     return 'data:image/png;base64,' + btoa(s)
   }
 
-  window.K2Png = Object.freeze({ version: '1.0.0', encode: encode, fromCanvas: encode, toBlob: toBlob, toDataURL: toDataURL })
+  window.K2Png = Object.freeze({ version: '1.0.1', encode: encode, fromCanvas: encode, toBlob: toBlob, toDataURL: toDataURL })
 })()

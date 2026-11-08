@@ -17,7 +17,7 @@ const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
 }
 
 const LIB = resolve(__dirname, '../../zen-lib')
-const THREAD = readFileSync(resolve(LIB, 'k2-thread@1.1.0/k2-thread.js'), 'utf8')
+const THREAD = readFileSync(resolve(LIB, 'k2-thread@1.1.1/k2-thread.js'), 'utf8')
 const MARKED = readFileSync(resolve(LIB, 'marked@18.0.14/marked.umd.js'), 'utf8')
 const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.17/purify.min.js'), 'utf8')
 
@@ -76,7 +76,7 @@ function fakeK2(opts: { caps?: string[]; postError?: string } = {}) {
 }
 
 /** k2-thread 1.1.0 needs k2-activity@1: K2 loads it first. */
-const ACTIVITY = readFileSync(resolve(LIB, 'k2-activity@1.0.0/k2-activity.js'), 'utf8')
+const ACTIVITY = readFileSync(resolve(LIB, 'k2-activity@1.0.1/k2-activity.js'), 'utf8')
 
 function boot(f: ReturnType<typeof fakeK2>, opts: { markdown?: boolean; scheme?: 'light' | 'dark' } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body><div id="t" style="height:300px"></div></body></html>', {
@@ -149,7 +149,7 @@ describe('k2-thread@1: mounting', () => {
   it('defines K2Thread once, with both looks, and injects its style once', () => {
     const f = fakeK2()
     const { win, doc } = boot(f)
-    expect(win.K2Thread.version).toBe('1.1.0')
+    expect(win.K2Thread.version).toBe('1.1.1')
     expect([...win.K2Thread.looks]).toEqual(['chamfer', 'glass'])
     win.eval(THREAD)
     expect(doc.querySelectorAll('style[data-k2-lib="k2-thread"]')).toHaveLength(1)

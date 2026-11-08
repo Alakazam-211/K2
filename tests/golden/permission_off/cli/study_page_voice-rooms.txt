@@ -136,6 +136,6 @@ is still on that person's last one. ROLLBACK: before taking a box below 0.46.10,
 voice_chat logins to member and disable them, or remove them; an older
 K2 can't read the role and refuses every login until it rolls forward.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

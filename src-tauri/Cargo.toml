@@ -3,7 +3,8 @@ name = "k2"
 version = "0.46.9"
 edition = "2021"
 description = "Developer workspace with terminals, git worktrees, and agent presets"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 
 [lib]
 name = "k2_lib"

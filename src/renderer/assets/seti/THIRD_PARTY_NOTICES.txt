@@ -8,7 +8,7 @@ Microsoft Visual Studio Code's built-in "Seti" file icon theme
   Upstream: https://github.com/jesseweed/seti-ui
   VS Code packaging: https://github.com/microsoft/vscode/tree/main/extensions/theme-seti
 
-K2's own source code remains licensed under FSL-1.1-Apache-2.0
+K2's own source code is licensed under the MIT License
 (see LICENSE.md / NOTICE.md). The Seti assets below are MIT and do not
 relicense the rest of K2.
 

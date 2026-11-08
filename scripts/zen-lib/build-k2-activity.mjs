@@ -4,7 +4,7 @@
 // `--check` writes nothing and exits 1 when either is stale. The vitest
 // twin (sdk/activity/test/build.test.ts) runs the same build.
 //
-// - src/renderer/zen-lib/k2-activity@1.0.0/k2-activity.js: the Garden
+// - src/renderer/zen-lib/k2-activity@1.0.1/k2-activity.js: the Garden
 //   widget library `k2-activity@1` (global K2Activity), from widget.ts.
 //   Its zen-lib.json row carries the bytes and sha256 (run
 //   scripts/zen-lib/vendor.ts after a rebuild).
@@ -21,18 +21,18 @@ import * as esbuild from 'esbuild'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
-export const K2_ACTIVITY_VERSION = '1.0.0'
+export const K2_ACTIVITY_VERSION = '1.0.1'
 
 export const OUTPUTS = [
   {
     entry: 'sdk/activity/src/widget.ts',
     out: `src/renderer/zen-lib/k2-activity@${K2_ACTIVITY_VERSION}/k2-activity.js`,
-    banner: `/*! k2-activity ${K2_ACTIVITY_VERSION} (FSL-1.1-Apache-2.0), K2's widget kit: the activity bar. Copyright 2025-2026 Alakazam Labs. */`,
+    banner: `/*! k2-activity ${K2_ACTIVITY_VERSION} (MIT), K2's widget kit: the activity bar. Copyright 2025-2026 Alakazam Labs. */`,
   },
   {
     entry: 'sdk/activity/src/element.ts',
     out: 'sdk/activity/browser/k2-activity-bar.js',
-    banner: `/*! k2-activity-bar ${K2_ACTIVITY_VERSION} (FSL-1.1-Apache-2.0), <k2-activity-bar> for K2 App pages. Copyright 2025-2026 Alakazam Labs. */`,
+    banner: `/*! k2-activity-bar ${K2_ACTIVITY_VERSION} (MIT), <k2-activity-bar> for K2 App pages. Copyright 2025-2026 Alakazam Labs. */`,
   },
 ]
 

@@ -115,7 +115,7 @@ mint/read/wait, send under your human's governance). \
 `k2 app` manages guests/roles/tokens for apps on this box (Thread from an app; \
 pass prefix still `k2skn_`; leftover `k2 skin` / `k2 skin-token`). Not Connect. \
 Desktop binary updates are `k2 update --app`. \
-`k2 study` prints bounded pages (Fair Source, people lists, errors) — not `--help`.\n";
+`k2 study` prints bounded pages (license, people lists, errors) — not `--help`.\n";
 
 pub fn compose_agents_md_public(project_path: &str) -> String {
     compose_agents_md(project_path)
@@ -758,7 +758,7 @@ problem); a refused App command's id → `k2 explain <id>` (the fix, who fixes
 it; no daemon); what this server can do → `k2 capabilities`.
 Guests/roles/tokens: `k2 app` (leftover `k2 skin` / `k2 skin-token`). Pass prefix `k2skn_`.
 
-K2 is source-available Fair Source (FSL-1.1-Apache-2.0), not MIT. Connect is a
+K2 is MIT-licensed open source (from 0.46.10). Connect is a
 separate product. Four people lists: connections (agents), Connect users, app guests
 (leftover: skin guests), `k2 connections list --users` humans. Never `k2 msg` usernames.
 
@@ -2374,8 +2374,8 @@ mod tests {
             "k2-cli skill must mention `k2 study`"
         );
         assert!(
-            body.contains("Fair Source") && body.contains("not MIT"),
-            "k2-cli skill must say Fair Source, not MIT"
+            body.contains("MIT-licensed") && !body.contains("not MIT") && !body.contains("Fair Source"),
+            "k2-cli skill must say K2 is MIT-licensed"
         );
         assert!(
             body.contains("connections (agents)"),

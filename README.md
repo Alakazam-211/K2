@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Alakazam-211/K2/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg" alt="FSL-1.1-Apache-2.0"></a>
+  <a href="https://github.com/Alakazam-211/K2/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
   <a href="https://k2.dev"><img src="https://img.shields.io/badge/k2.dev-8B5CF6.svg" alt="k2.dev"></a>
   <a href="https://discord.gg/73b3sg6pSQ"><img src="https://img.shields.io/badge/Discord-K2%20Community-5865F2?logo=discord&logoColor=white" alt="K2 Discord"></a>
   <a href="https://github.com/Alakazam-211/K2/releases"><img src="https://img.shields.io/github/v/release/Alakazam-211/K2?display_name=tag&sort=semver" alt="Latest release"></a>
@@ -149,11 +149,11 @@ Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
-## Fair Source
+## License
 
-[FSL-1.1-Apache-2.0](LICENSE.md) — free for personal and internal/business use; each release converts to Apache 2.0 two years later.
+[MIT](LICENSE.md), from 0.46.10 on. Releases up to 0.46.9 were FSL-1.1-Apache-2.0.
 
-Commercial multi-tenant hosting via official **K2 Connect** — [COMMERCIAL_HOSTING_GRANT.md](COMMERCIAL_HOSTING_GRANT.md). Air-gapped / LAN-only daemon: written Enterprise agreement (not a GitHub Release asset).
+The K2 name and logo are not covered by the MIT License — see [TRADEMARKS.md](TRADEMARKS.md).
 
 ---
 

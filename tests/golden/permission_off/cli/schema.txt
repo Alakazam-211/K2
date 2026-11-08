@@ -3985,7 +3985,7 @@ exit: 0
     {
       "name": "study",
       "usage": "k2 study [list|<topic>|--json]",
-      "description": "Bounded teaching pages (not --help). Catalog, or one topic page. Daemon-optional. Fair Source, people lists, errors.",
+      "description": "Bounded teaching pages (not --help). Catalog, or one topic page. Daemon-optional. License, people lists, errors.",
       "args": [{"name": "topic", "required": false, "description": "list, or a topic id: what, source, map, identity, send, human, people, auth, errors, context, db, mail, connect-boundary, skins, feedback-loop, ticket-brief, notifications."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable: catalog {topics:[{id,title}]} or page {id,body}."}

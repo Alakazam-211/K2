@@ -237,7 +237,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// through the widget, `canDownload`), and `k2.agents.end` /
 /// `k2.agents.archive` for sidecars.
 /// (Integrator: renumber if another held branch took 49.)
-pub const SKILL_VERSION_ZEN: u32 = 49;
+/// v50 (0.46.10): K2 is MIT; the widget kit libraries (k2-help, k2-activity,
+/// k2-thread, k2-markdown, k2-png, k2-diff) move up one patch version under
+/// MIT, so the library list shows new versions and licences.
+/// (Integrator: renumber if another held branch took 50.)
+pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).
@@ -319,7 +323,8 @@ pub const SKILL_VERSION_ZEN: u32 = 49;
 /// Bumped to 49 (0.46.8): `k2 mail forward-message` in the mail verbs.
 /// Bumped to 50 (0.46.8): the Study topics gain `chat-refresh`.
 /// Bumped to 51 (0.46.8): the k2-cli skill names `k2 sidecar archive`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 51;
+/// Bumped to 52 (0.46.10): K2 is MIT-licensed (was Fair Source, FSL).
+pub const SKILL_VERSION_WORKSPACE: u32 = 52;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

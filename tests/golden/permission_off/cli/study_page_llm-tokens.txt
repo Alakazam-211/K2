@@ -130,6 +130,6 @@ NEEDS SIGN-IN
 `k2 llm accounts` is an alias of `k2 llm tokens`; `k2 study llm-accounts`
 is an alias of this page.
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

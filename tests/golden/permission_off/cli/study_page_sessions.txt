@@ -57,6 +57,6 @@ WHO MAY
 EXIT CODES
   0 ok · 1 conflict (409/410) · 2 usage · 3 refused · 4 not found
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

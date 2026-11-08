@@ -1762,11 +1762,12 @@ mod tests {
         }
         let m = stdlib::zen_lib_manifest();
         // 0.46.5 activity SDK: k2-thread 1.1.0 (its working tab is
-        // k2-activity@1's turn) replaces 1.0.0 in its line.
-        for (id, version, global) in [("k2-thread", "1.1.0", "K2Thread"), ("k2-help", "1.0.0", "K2Help"), ("k2-activity", "1.0.0", "K2Activity")] {
+        // k2-activity@1's turn) replaces 1.0.0 in its line. 0.46.10: K2 is
+        // MIT, and each kit library moved up one patch version under it.
+        for (id, version, global) in [("k2-thread", "1.1.1", "K2Thread"), ("k2-help", "1.0.1", "K2Help"), ("k2-activity", "1.0.1", "K2Activity")] {
             let l = m.libs.iter().find(|l| l.id == id).unwrap_or_else(|| panic!("{id} is in zen-lib.json"));
             assert_eq!((l.version.as_str(), l.global.as_str(), l.source), (version, global, stdlib::LibSource::Bundled), "{id}");
-            assert_eq!(l.license, "FSL-1.1-Apache-2.0", "{id} is K2's own code");
+            assert_eq!(l.license, "MIT", "{id} is K2's own code");
         }
     }
 

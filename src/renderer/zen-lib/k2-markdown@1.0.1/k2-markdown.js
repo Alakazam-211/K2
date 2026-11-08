@@ -1,4 +1,4 @@
-/*! k2-markdown 1.0.0 (FSL-1.1-Apache-2.0), K2's widget kit: markdown, safe by default. Copyright 2025-2026 Alakazam Labs. */
+/*! k2-markdown 1.0.1 (MIT), K2's widget kit: markdown, safe by default. Copyright 2025-2026 Alakazam Labs. */
 // K2Markdown.render(text, opts) -> DocumentFragment; K2Markdown.into(el, text, opts).
 // Needs marked@18 and dompurify@3 (K2 loads them first). Safe by default:
 //  - raw HTML in the text is escaped, never passed on;

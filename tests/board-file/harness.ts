@@ -10,7 +10,7 @@ import type { Page } from '@playwright/test'
 const ROOT = resolve(__dirname, '../..')
 export const DIR = resolve(ROOT, 'crates/k2-core/src/zen/builtin_widgets/board-file-1')
 const FAKE = readFileSync(resolve(ROOT, 'tests/board/fake-k2.js'), 'utf8')
-const K2PNG = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-png@1.0.0/k2-png.js'), 'utf8')
+const K2PNG = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-png@1.0.1/k2-png.js'), 'utf8')
 const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' }
 
 const BF = buildSync({

@@ -21,7 +21,7 @@ type Lib = {
   describe(turn: unknown, now: number): { headline: string; animate: boolean; tone: string } | null
 }
 
-const LIB = resolve(__dirname, '../../zen-lib/k2-activity@1.0.0/k2-activity.js')
+const LIB = resolve(__dirname, '../../zen-lib/k2-activity@1.0.1/k2-activity.js')
 const subs = new Map<string, Handlers>()
 let offs = 0
 let K2Activity: Lib
@@ -42,7 +42,7 @@ const state = (address: string, turn: Record<string, unknown> | null): State => 
 beforeAll(() => {
   const r = zenLibResolve(['k2-activity@1'])
   expect(r.findings.filter((f) => f.error)).toEqual([])
-  expect(r.keys.map(String)).toEqual(['k2-activity@1.0.0'])
+  expect(r.keys.map(String)).toEqual(['k2-activity@1.0.1'])
   ;(window as unknown as { k2: unknown }).k2 = {
     thread: {
       onActivity(address: string, h: Handlers) {
@@ -56,7 +56,7 @@ beforeAll(() => {
   }
   ;(0, eval)(readFileSync(LIB, 'utf8'))
   K2Activity = (window as unknown as { K2Activity: Lib }).K2Activity
-  expect(K2Activity.version).toBe('1.0.0')
+  expect(K2Activity.version).toBe('1.0.1')
 })
 
 afterEach(() => {

@@ -2,7 +2,8 @@
 name = "k2-client"
 version = "0.46.2"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "What the K2 thin client needs without k2-core: paths, process bootstrap, launchd/bundle layout, keychain account session, release sums, small views. k2-core re-exports it."
 
 [lib]

@@ -6,7 +6,7 @@ The file viewer's DXF and 3D model previews
 ModelViewer.tsx, modelParse.ts, modelScene.ts) bundle the npm packages
 below into lazy-loaded chunks. Each is MIT-licensed; their notices follow.
 
-K2's own source code remains licensed under FSL-1.1-Apache-2.0
+K2's own source code is licensed under the MIT License
 (see LICENSE.md / NOTICE.md). These MIT components do not relicense K2.
 
   three.js    0.186.0  https://github.com/mrdoob/three.js

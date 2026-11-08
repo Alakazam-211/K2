@@ -14,11 +14,12 @@ or obtained.
 
 ## Code license vs. trademarks
 
-K2's source code is licensed under the
-[Functional Source License](./LICENSE), and each version becomes
-Apache-2.0 two years after its release. **Neither license grants any
-right to use the Marks.** Trademark rights are separate from copyright
-and do not expire with the license conversion.
+K2's source code is licensed under the [MIT License](./LICENSE.md)
+(from 0.46.10 on; earlier releases were FSL-1.1-Apache-2.0). **The MIT
+License covers the code only and grants no right to use the Marks.**
+Trademark rights are separate from copyright: you may copy, change and
+redistribute the code under the MIT License, but not under the K2 name
+or logo except as this policy allows.
 
 ## Allowed without asking
 

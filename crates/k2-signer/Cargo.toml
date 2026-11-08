@@ -4,7 +4,8 @@ name = "k2-signer"
 # release.sh does not bump it.
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "K2's release signer for clients (prd-ci-on-compute-for-clients-v1 C4): checks K2 Compute evidence bundles v2 against a per-project policy and the person's pins, and signs minisign / Tauri updater files. Runs as the `_k2sign` role user."
 
 [lib]

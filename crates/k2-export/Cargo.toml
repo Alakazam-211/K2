@@ -5,7 +5,8 @@ name = "k2-export"
 # this number. release.sh does not bump it.
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "K2 export worker: turns a doc version's bytes into another format in its own process (prd-k2-core-exports-v1 §4.3, vs-live §3). Never links k2-core."
 
 # The worker parses hostile bytes (P1+ decoders), so it holds no tokens, no

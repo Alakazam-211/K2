@@ -37,7 +37,7 @@ export function renderZenLibNotice(m: ZenLibManifest): string {
     '|--|--|--|--|--|',
     ...rows,
     '',
-    'K2 code remains **FSL-1.1-Apache-2.0**. These libraries keep their own',
+    'K2 code is **MIT**. These libraries keep their own',
     'licences and do **not** relicense K2.',
     '',
     ZEN_LIB_NOTICE_END,

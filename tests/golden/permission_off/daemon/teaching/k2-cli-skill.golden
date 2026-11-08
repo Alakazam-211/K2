@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 51
-skill_checksum: c17e9023db438e6e
+skill_version: 52
+skill_checksum: 6a4c18245a398893
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -368,7 +368,7 @@ problem); a refused App command's id → `k2 explain <id>` (the fix, who fixes
 it; no daemon); what this server can do → `k2 capabilities`.
 Guests/roles/tokens: `k2 app` (leftover `k2 skin` / `k2 skin-token`). Pass prefix `k2skn_`.
 
-K2 is source-available Fair Source (FSL-1.1-Apache-2.0), not MIT. Connect is a
+K2 is MIT-licensed open source (from 0.46.10). Connect is a
 separate product. Four people lists: connections (agents), Connect users, app guests
 (leftover: skin guests), `k2 connections list --users` humans. Never `k2 msg` usernames.
 

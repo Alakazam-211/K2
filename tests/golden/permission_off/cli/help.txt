@@ -133,7 +133,7 @@ INFO
   help --advanced                       Power-user verbs (heartbeat, daemon, etc.)
   help --internal                       Orchestrator-RPC verbs (rare)
   help-deprecated                       Map: old verb → new equivalent
-  study [list|<topic>|--json]           Bounded pages (Fair Source, people, errors). Not --help.
+  study [list|<topic>|--json]           Bounded pages (license, people, errors). Not --help.
   glossary [<term>]                     Define K2-specific terms (try `glossary inbox`)
   whats-new                             Changelog popup
   version                               CLI version

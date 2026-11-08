@@ -632,51 +632,51 @@
     },
     {
       "id": "k2-help",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "line": "1",
       "fingerprints": [
         "/*! k2-help "
       ],
       "title": "K2 help button (widget kit)",
       "global": "K2Help",
-      "license": "FSL-1.1-Apache-2.0",
+      "license": "MIT",
       "licenseFile": "LICENSE.txt",
-      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "copyright": "Copyright (c) 2025-2026 Alakazam Labs",
       "source": "bundled",
       "files": [
         {
           "name": "k2-help.js",
-          "bytes": 14631,
-          "sha256": "3adca8a2a8af38fd97f3eb885f6a03d8f1133022cc9308f87ccddf110a716609"
+          "bytes": 14616,
+          "sha256": "1b7e8107584f795b9355e9731974d5bc53a3d0f7579ce196522bdf4da704e815"
         }
       ],
       "notes": "K2's own: the (i) help button. K2Help.tip(text, {label, key, title}) returns an (i) that shows a tooltip on hover or focus and pins it on click, tap, Enter or Space; text over 160 characters opens a popover with Close instead. Esc, a tap outside or the same (i) closes it; it stays inside the frame and follows the Garden's light/dark. Markup works too: class=\"k2h-btn\" with data-tip, or data-help=\"<id>\" for a popover. Put explanations behind an (i), not on the canvas."
     },
     {
       "id": "k2-activity",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "line": "1",
       "fingerprints": [
         "/*! k2-activity "
       ],
       "title": "K2 activity bar (widget kit)",
       "global": "K2Activity",
-      "license": "FSL-1.1-Apache-2.0",
+      "license": "MIT",
       "licenseFile": "LICENSE.txt",
-      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "copyright": "Copyright (c) 2025-2026 Alakazam Labs",
       "source": "bundled",
       "files": [
         {
           "name": "k2-activity.js",
-          "bytes": 15773,
-          "sha256": "0ed47fa705c48929f2c2550aa1740ac50abf6ec9c927d7e9be86dba4e8c754e9"
+          "bytes": 15758,
+          "sha256": "b38526823c57121777f49d0c73ce62d336d83a09c50977fae1c84cb6160e4503"
         }
       ],
       "notes": "K2's own: the activity bar K2's Conversation shows, for one agent. K2Activity.mount(el, {address: 'handle::host', look: 'chamfer', 'glass' or 'plain'}) then bar.setAddress(address), bar.setLook(look), bar.destroy(). It listens with k2.thread.onActivity (caps thread:read and activity:read): the turn an App guest gets, counts and step kinds, never text. Working pulses; monitoring, needs-you and a quiet turn never do (no typing dots); an end shows Done, Stopped or Failed briefly. K2Activity.describe(K2Activity.coerce(state.turn, Date.now()), Date.now()) gives {tone, headline, animate, counters, clock, aria, detail} for your own drawing. No turn means no bar: never guess from messages. Colours follow the Garden (--zen-*, or --k2a-*)."
     },
     {
       "id": "k2-thread",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "line": "1",
       "needs": [
         "k2-activity@1"
@@ -686,22 +686,22 @@
       ],
       "title": "K2 Thread panel (widget kit)",
       "global": "K2Thread",
-      "license": "FSL-1.1-Apache-2.0",
+      "license": "MIT",
       "licenseFile": "LICENSE.txt",
-      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "copyright": "Copyright (c) 2025-2026 Alakazam Labs",
       "source": "bundled",
       "files": [
         {
           "name": "k2-thread.js",
-          "bytes": 55478,
-          "sha256": "b86bfa6ae058acd24389613ededd0e96232af873d95ff97efb9abf8f9b7f45e3"
+          "bytes": 55463,
+          "sha256": "022f02fed642f95f41b6f6a3a3727f396bb307343e1506f2329117845809ddb2"
         }
       ],
       "notes": "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab (the agent's Thread turn in k2-activity@1's words, never a guess), stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names, activity:read for the working tab; K2 loads k2-activity@1 for you). Add marked and dompurify for markdown bodies."
     },
     {
       "id": "k2-markdown",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "line": "1",
       "needs": [
         "marked@18",
@@ -712,59 +712,59 @@
       ],
       "title": "K2 markdown (widget kit)",
       "global": "K2Markdown",
-      "license": "FSL-1.1-Apache-2.0",
+      "license": "MIT",
       "licenseFile": "LICENSE.txt",
-      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "copyright": "Copyright (c) 2025-2026 Alakazam Labs",
       "source": "bundled",
       "files": [
         {
           "name": "k2-markdown.js",
-          "bytes": 6792,
-          "sha256": "7f91a358820eb3c10ba9c254714d6a40638099e74fb34e8d817a7a80d22e8d31"
+          "bytes": 6777,
+          "sha256": "52ff56bd57fb8f0cead0a06c8380d3b9d72a7f82740c4bec8fa1a80525b0b2d2"
         }
       ],
       "notes": "K2's own: markdown, safe by default. K2Markdown.into(el, text, opts) fills el; K2Markdown.render(text, opts) returns a DocumentFragment (never a string, so no innerHTML). Raw HTML is escaped; links show as text with the URL visible, or with opts.links = 'open' and the links:open cap as buttons that call k2.open; images show as text, or with opts.images = 'data' as data: PNG, JPEG, GIF and WebP only. It loads marked and DOMPurify for you (its own DOMPurify instance: your settings never change its rules). Colours follow the Garden (--zen-*)."
     },
     {
       "id": "k2-png",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "line": "1",
       "fingerprints": [
         "/*! k2-png "
       ],
       "title": "K2 PNG encoder (widget kit)",
       "global": "K2Png",
-      "license": "FSL-1.1-Apache-2.0",
+      "license": "MIT",
       "licenseFile": "LICENSE.txt",
-      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "copyright": "Copyright (c) 2025-2026 Alakazam Labs",
       "source": "bundled",
       "files": [
         {
           "name": "k2-png.js",
-          "bytes": 4385,
-          "sha256": "0ba54bc61b35106208d13664c18031686e6422f84fab10805e052b41030ca4c1"
+          "bytes": 4370,
+          "sha256": "cd3f17c14a1140021c0ebef5aafc0ca889b6a47fd3462f25d888036ae0e880fb"
         }
       ],
       "notes": "K2's own: canvas pixels to a PNG without toDataURL or toBlob, which come back empty in a sealed frame on WebKit (the Mac app, iPhone, iPad). K2Png.toBlob(canvas), K2Png.toDataURL(canvas) and K2Png.encode(canvas or ImageData) read the pixels with getImageData and write an 8-bit RGBA PNG with the browser's CompressionStream; each answers a Promise. Hand the Blob to k2.blobs.put or k2.download."
     },
     {
       "id": "k2-diff",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "line": "1",
       "fingerprints": [
         "/*! k2-diff "
       ],
       "title": "K2 diff view (widget kit)",
       "global": "K2Diff",
-      "license": "FSL-1.1-Apache-2.0",
+      "license": "MIT",
       "licenseFile": "LICENSE.txt",
-      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "copyright": "Copyright (c) 2025-2026 Alakazam Labs",
       "source": "bundled",
       "files": [
         {
           "name": "k2-diff.js",
-          "bytes": 23279,
-          "sha256": "6c94e1c2be17dbd0efa7ea5d077f5d08d4f6a5abd9fec5b39577db845b7efbe2"
+          "bytes": 23264,
+          "sha256": "66057bf71912808fe569969aa8f8a2608696302a4f36f58a7ac6963e1908f6e0"
         }
       ],
       "notes": "K2's own: diffs for the Workbench and your own review widgets. K2Diff.render(el, await k2.git.diffFile(address, {file}), {view: 'unified' or 'split', wrap, ignoreWhitespace, context: 3, onLine(info)}) draws a file's change (binary, too large, new and deleted files in plain words; long unchanged runs fold behind Expand N lines; onLine puts a + on each line for a note: {file, side, line, text}). K2Diff.tree(el, files, {selected, onSelect(file)}) draws the changed files as a folder tree with status letters and +/− counts. K2Diff.lines(oldText, newText, {ignoreWhitespace}), K2Diff.hunks(lines, {context}) and K2Diff.stats(lines) give the diff as data. Add highlight.js@11 to your libs for colours (from the file's extension). Text is only ever text (no innerHTML); colours follow the Garden (--zen-*)."

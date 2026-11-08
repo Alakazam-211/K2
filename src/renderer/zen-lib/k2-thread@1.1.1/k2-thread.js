@@ -1,4 +1,4 @@
-/*! k2-thread 1.1.0 (FSL-1.1-Apache-2.0), K2's widget kit: a Thread panel. Copyright 2025-2026 Alakazam Labs. */
+/*! k2-thread 1.1.1 (MIT), K2's widget kit: a Thread panel. Copyright 2025-2026 Alakazam Labs. */
 // K2Thread: talk to one of your agents inside a custom widget, in K2's
 // Thread look, with one call.
 //
@@ -1234,5 +1234,5 @@
     }
   }
 
-  window.K2Thread = Object.freeze({ version: '1.1.0', looks: LOOKS.slice(), mount: mount })
+  window.K2Thread = Object.freeze({ version: '1.1.1', looks: LOOKS.slice(), mount: mount })
 })()

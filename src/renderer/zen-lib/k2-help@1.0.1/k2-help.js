@@ -1,4 +1,4 @@
-/*! k2-help 1.0.0 (FSL-1.1-Apache-2.0), K2's widget kit: the (i) help button. Copyright 2025-2026 Alakazam Labs. */
+/*! k2-help 1.0.1 (MIT), K2's widget kit: the (i) help button. Copyright 2025-2026 Alakazam Labs. */
 // K2Help: put explanations behind a small (i), not on the canvas.
 //
 //   requires.libs: ["k2-help@1"]
@@ -380,7 +380,7 @@
   else wire(d)
 
   window.K2Help = Object.freeze({
-    version: '1.0.0',
+    version: '1.0.1',
     tip: tip,
     wire: wire,
     close: closeAll,

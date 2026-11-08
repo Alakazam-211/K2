@@ -1,5 +1,5 @@
 // <k2-activity-bar addr="sales" look="glass">: K2's activity bar for an App
-// page (0.46.5 activity SDK, review §2.3). FSL-1.1-Apache-2.0, Alakazam Labs.
+// page (0.46.5 activity SDK, review §2.3). MIT, Alakazam Labs.
 //
 // Built by scripts/zen-lib/build-k2-activity.mjs into
 // sdk/activity/browser/k2-activity-bar.js (one classic script; it defines the

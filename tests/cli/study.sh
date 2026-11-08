@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# k2 study — daemon-optional bounded pages (Fair Source, people, errors).
+# k2 study — daemon-optional bounded pages (license, people, errors).
 # No daemon: skip-conn-gate matches --schema. Never touch real ~/.k2.
 
 set -euo pipefail
@@ -62,9 +62,9 @@ source_out="$("$K2" study source 2>&1)"
 source_rc=$?
 set -e
 assert_eq "study source exit 0" "$source_rc" "0"
-assert_contains "FSL" "$source_out" "FSL"
-assert_contains "Fair Source" "$source_out" "Fair Source"
-assert_contains "not MIT" "$source_out" "not MIT"
+assert_contains "MIT License" "$source_out" "open source under the MIT License, from 0.46.10 on"
+assert_contains "releases up to 0.46.9 stay FSL" "$source_out" "up to and including 0.46.9 were FSL-1.1-Apache-2.0"
+assert_absent "no not-MIT claim" "$source_out" "not MIT"
 
 echo "== k2 study app-heartbeats (AH23 / T13: every wait reason) =="
 hb_out="$("$K2" study app-heartbeats)"
@@ -530,7 +530,7 @@ done
 
 echo "== k2 study source --json =="
 source_json="$("$K2" study source --json)"
-python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("id")=="source" and "FSL" in d.get("body",""), d' "$source_json"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("id")=="source" and "MIT License" in d.get("body",""), d' "$source_json"
 echo "  PASS: source --json id+body"
 pass=$((pass + 1))
 

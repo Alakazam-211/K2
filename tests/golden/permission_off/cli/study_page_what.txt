@@ -18,7 +18,7 @@ WHAT YOU GET
 
 WHAT K2 IS NOT
   - Not a hosted model. Bring your own keys / subscriptions.
-  - Not MIT-licensed SaaS. Source-available Fair Source — see `k2 study source`.
+  - Not a hosted SaaS. K2 is MIT-licensed software you run — see `k2 study source`.
   - Not K2 Connect. Connect is a separate product (tunnel + account).
     The app, daemon, and CLI live in the K2 repo. See `k2 study connect-boundary`.
   - Not a dump of this workspace's wiki, PRDs, or release runbooks.
@@ -42,6 +42,6 @@ WHEN SOMETHING IS REFUSED
 RELATED PAGES
   source · map · identity · send · people · errors · connect-boundary
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

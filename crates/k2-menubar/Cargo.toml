@@ -2,7 +2,8 @@
 name = "k2-menubar"
 version = "0.46.9"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "macOS menu-bar helper for this Mac's K2 daemon. Bare Mach-O LaunchAgent; not the Tauri app and not k2-daemon."
 
 [lib]

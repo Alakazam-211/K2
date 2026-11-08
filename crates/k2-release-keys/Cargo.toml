@@ -4,7 +4,8 @@ name = "k2-release-keys"
 # change only through scripts/updater-key-ceremony.sh.
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "The one list of update-signing keys every K2 updater verifier trusts (prd-security-sweep-0464-v1 SS4), and the shared verify: minisign, prehashed only, strict file:/version: trusted-comment checks. Verify-only; linked by k2-daemon and the desktop app (not k2-core)."
 
 [lib]

@@ -98,4 +98,4 @@ Omarchy default is Wayland. No `WEBKIT_*` / GSK env hacks until a real window sm
 
 ## License
 
-`FSL-1.1-ALv2` (the SPDX id for the licence `LICENSE.md` calls FSL-1.1-Apache-2.0) — see `LICENSE.md`.
+`MIT` (from 0.46.10 on; releases up to 0.46.9 were `FSL-1.1-ALv2`) — see `LICENSE.md`. The package installs it to `/usr/share/licenses/k2/LICENSE.md`, as Arch requires for MIT.

@@ -86,8 +86,9 @@ need_file "$ARCH/README.md" "packaging/arch/README.md"
 
 # O4 / O24 — pkgname k2 (k2-bin is a later AUR rename, not this file)
 matches "PKGBUILD pkgname=k2" "$ARCH/PKGBUILD" '^pkgname=k2$'
-# The SPDX id for what LICENSE.md calls FSL-1.1-Apache-2.0; Arch uses SPDX ids.
-matches "PKGBUILD license FSL-1.1-ALv2" "$ARCH/PKGBUILD" "license=\\('FSL-1.1-ALv2'\\)"
+# LICENSE.md is MIT (SPDX id MIT); Arch uses SPDX ids and wants the text installed.
+matches "PKGBUILD license MIT" "$ARCH/PKGBUILD" "license=\\('MIT'\\)"
+matches "PKGBUILD installs LICENSE.md" "$ARCH/PKGBUILD" "usr/share/licenses/\\$\\{pkgname\\}/LICENSE.md"
 matches "PKGBUILD arch x86_64 first" "$ARCH/PKGBUILD" "^arch=\\('x86_64'\\)"
 
 # pkgver: release.sh does not bump the PKGBUILD, so the committed pkgver

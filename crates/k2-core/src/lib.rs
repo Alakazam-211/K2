@@ -415,7 +415,7 @@ pub mod themes;
 // prd-daemon-activity-and-thread-working-v1 S3: the one transcript
 // follower the Chat view and the activity store share.
 pub mod transcript_follow;
-// K2 Connect tunnel connector (source-available client side): renders an frpc
+// K2 Connect tunnel connector (the client side, in this repo): renders an frpc
 // config + supervises the `frpc` child that dials our hosted frps so the
 // local daemon is reachable at https://<user>.k2.dev. See module docs +
 // the proprietary `k2-connect` repo for the server contract.

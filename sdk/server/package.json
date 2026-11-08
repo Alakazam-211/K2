@@ -2,7 +2,7 @@
   "name": "@k2/server",
   "version": "0.46.1",
   "description": "K2's server SDK for App code: the App pass, guests, and every App-facing verb (typed from K2's verb catalog).",
-  "license": "FSL-1.1-Apache-2.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {

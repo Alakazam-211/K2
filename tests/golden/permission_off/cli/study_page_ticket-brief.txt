@@ -80,6 +80,6 @@ AFTER FILING
   k2 tickets show <id>            body + brief text extract
   k2 tickets show <id> --html     the cleaned HTML only
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

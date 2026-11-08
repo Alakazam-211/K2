@@ -7,7 +7,8 @@
 #   - the install hooks are the same bytes as packaging/arch/k2.install, and the
 #     recipe's sum for them is right;
 #   - the licence is the SPDX id of what LICENSE.md actually says, so a licence
-#     change can't leave the recipe claiming the old one;
+#     change can't leave the recipe claiming the old one; for MIT, the recipe
+#     installs LICENSE.md under /usr/share/licenses/${pkgname}/;
 #   - depends and optdepends list the same names as packaging/arch/PKGBUILD;
 #   - nothing is compiled: no build() or prepare(), no OAuth or signing names;
 #   - the source is our GitHub release, with a real sha256 and noextract;
@@ -62,19 +63,18 @@ values() { # <PKGBUILD> <array name>
 }
 
 # ── Licence ──
-ABBR="$(sed -n '/^## Abbreviation/,/^## /{/^## /d;/^$/d;p;}' "$ROOT/LICENSE.md" | head -1)"
-case "$ABBR" in
-    FSL-1.1-Apache-2.0) SPDX=FSL-1.1-ALv2 ;;
-    FSL-1.1-MIT) SPDX=FSL-1.1-MIT ;;
-    *)
-        # No "## Abbreviation" (MIT's text has none): read the first heading or line.
-        if grep -q '^MIT License\|^# MIT License\|Permission is hereby granted, free of charge' "$ROOT/LICENSE.md"; then
-            SPDX=MIT
-        else
-            SPDX=""
-        fi
-        ;;
-esac
+# K2 is MIT from 0.46.10 on. MIT's text has no "## Abbreviation"; the FSL
+# texts (releases up to 0.46.9) do, so they are still told apart here.
+if grep -q '^MIT License$\|^# MIT License$\|Permission is hereby granted, free of charge' "$ROOT/LICENSE.md"; then
+    SPDX=MIT
+else
+    ABBR="$(sed -n '/^## Abbreviation/,/^## /{/^## /d;/^$/d;p;}' "$ROOT/LICENSE.md" | head -1)"
+    case "$ABBR" in
+        FSL-1.1-Apache-2.0) SPDX=FSL-1.1-ALv2 ;;
+        FSL-1.1-MIT) SPDX=FSL-1.1-MIT ;;
+        *) SPDX="" ;;
+    esac
+fi
 HAVE_LIC="$(values "$RECIPE/PKGBUILD" license | tr '\n' ' ' | sed 's/ $//')"
 if [ -z "$SPDX" ]; then
     bad "can't tell which licence LICENSE.md is; add it to this script's SPDX table (recipe says $HAVE_LIC)"
@@ -82,6 +82,15 @@ elif [ "$HAVE_LIC" = "$SPDX" ]; then
     ok "license=($HAVE_LIC) is what LICENSE.md says"
 else
     bad "license=($HAVE_LIC), but LICENSE.md is $SPDX"
+fi
+# Arch wants an MIT package to carry the licence text under its own name.
+if [ "$SPDX" = MIT ]; then
+    if grep -Eq 'install -Dm644 .*LICENSE\.md' "$RECIPE/PKGBUILD" \
+        && grep -Eq '"\$\{pkgdir\}/usr/share/licenses/\$\{pkgname\}/LICENSE\.md"' "$RECIPE/PKGBUILD"; then
+        ok "the recipe installs LICENSE.md to /usr/share/licenses/\${pkgname}/"
+    else
+        bad "the recipe doesn't install LICENSE.md to /usr/share/licenses/\${pkgname}/ (Arch needs it for MIT)"
+    fi
 fi
 
 # ── Dependencies match the package we repackage ──

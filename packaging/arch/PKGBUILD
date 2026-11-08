@@ -21,7 +21,7 @@ pkgrel=1
 pkgdesc="AI workspace orchestration by Alakazam Labs (GUI + daemon + CLI)"
 arch=('x86_64')
 url="https://k2.dev"
-license=('FSL-1.1-ALv2')
+license=('MIT')
 depends=(
     'webkit2gtk-4.1'
     'gtk3'

@@ -5,7 +5,8 @@ name = "k2-app-engine"
 # speaks k2_root_proto::engine::ENGINE_PROTOCOL on its socket.
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "/usr/local/libexec/k2-app-engine: runs as k2app and drives rootless Podman/Quadlet for guarded K2 Apps on the daemon's orders only (caller = the daemon's main process). Links nothing from k2-daemon or k2-core."
 
 [lib]

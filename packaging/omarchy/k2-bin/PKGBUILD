@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc="AI workspace orchestration by Alakazam Labs (GUI + daemon + CLI)"
 arch=('x86_64')
 url="https://k2.dev"
-license=('FSL-1.1-ALv2')
+license=('MIT')
 depends=(
     'webkit2gtk-4.1'
     'gtk3'
@@ -32,4 +32,7 @@ sha256sums=('d4aa363d4a3f26c441467651ae9a372a30f770d9f45cf891bdc2ac6ad3bcb28c'
 package() {
     bsdtar -xf "${srcdir}/${_pkgname}-${pkgver}-x86_64.pkg.tar.zst" -C "${pkgdir}" \
         --exclude '.PKGINFO' --exclude '.BUILDINFO' --exclude '.MTREE' --exclude '.INSTALL'
+    # MIT: the licence text goes under this package's own name too.
+    install -Dm644 "${pkgdir}/usr/share/licenses/${_pkgname}/LICENSE.md" \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.md"
 }

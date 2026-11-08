@@ -43,10 +43,10 @@ let K2Diff: Diff
 beforeAll(() => {
   const r = zenLibResolve(['k2-diff@1'])
   expect(r.findings.filter((f) => f.error)).toEqual([])
-  expect(r.keys.map(String)).toEqual(['k2-diff@1.0.0'])
-  ;(0, eval)(load('k2-diff@1.0.0'))
+  expect(r.keys.map(String)).toEqual(['k2-diff@1.0.1'])
+  ;(0, eval)(load('k2-diff@1.0.1'))
   K2Diff = (window as unknown as { K2Diff: Diff }).K2Diff
-  expect(K2Diff.version).toBe('1.0.0')
+  expect(K2Diff.version).toBe('1.0.1')
 })
 
 const kinds = (ls: Line[]): string => ls.map((l) => (l.type === 'ctx' ? ' ' : l.type === 'add' ? '+' : '-') + l.text).join('|')
@@ -257,8 +257,8 @@ describe('k2-diff@1: tree', () => {
 describe('k2-diff@1: shipped', () => {
   it('is small, K2 licensed, and in NOTICE', () => {
     const row = ZEN_LIB_MANIFEST.libs.find((l) => l.id === 'k2-diff')
-    expect(row?.license).toBe('FSL-1.1-Apache-2.0')
+    expect(row?.license).toBe('MIT')
     expect(row?.files[0].bytes).toBeLessThanOrEqual(25 * 1024)
-    expect(readFileSync(resolve(__dirname, '../../../../NOTICE.md'), 'utf8')).toContain('(`k2-diff`) | 1.0.0 | FSL-1.1-Apache-2.0')
+    expect(readFileSync(resolve(__dirname, '../../../../NOTICE.md'), 'utf8')).toContain('(`k2-diff`) | 1.0.1 | MIT')
   })
 })

@@ -1,4 +1,4 @@
-//! K2 Connect tunnel connector (CLIENT / source-available side).
+//! K2 Connect tunnel connector (CLIENT side, in this MIT repo).
 //!
 //! This is the **open-core** half: the daemon-side machinery that
 //! exposes the local K2 daemon to the internet at

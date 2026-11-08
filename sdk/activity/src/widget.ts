@@ -1,7 +1,7 @@
 // k2-activity@1: the Garden widget library (global `K2Activity`), built
 // from ./core and ./bar by scripts/zen-lib/build-k2-activity.mjs into
-// src/renderer/zen-lib/k2-activity@1.0.0/k2-activity.js (0.46.5 activity
-// SDK). FSL-1.1-Apache-2.0, Alakazam Labs.
+// src/renderer/zen-lib/k2-activity@1.0.1/k2-activity.js (0.46.5 activity
+// SDK). MIT, Alakazam Labs.
 //
 //   manifest.json: "caps": ["agents:read", "thread:read", "activity:read"],
 //                  "requires": {"libs": ["k2-activity@1"]}
@@ -85,7 +85,7 @@ function mount(el: HTMLElement, opts: MountOptions = {}) {
 }
 
 export const K2Activity = Object.freeze({
-  version: '1.0.0',
+  version: '1.0.1',
   mount,
   coerce: coerceTurn,
   reduce: reduceTurn,

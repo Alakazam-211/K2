@@ -47,7 +47,7 @@ pub fn package_json() -> String {
         "name": NAME,
         "version": version(),
         "description": "K2's server SDK for App code: the App pass, guests, and every App-facing verb (typed from K2's verb catalog).",
-        "license": "FSL-1.1-Apache-2.0",
+        "license": "MIT",
         "type": "module",
         "engines": { "node": ">=22.18" },
         "main": format!("./{ENTRY}"),

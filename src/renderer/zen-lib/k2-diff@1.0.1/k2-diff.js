@@ -1,4 +1,4 @@
-/*! k2-diff 1.0.0 (FSL-1.1-Apache-2.0), K2's widget kit: line diffs, a diff view and a changed-files tree. Copyright 2025-2026 Alakazam Labs. */
+/*! k2-diff 1.0.1 (MIT), K2's widget kit: line diffs, a diff view and a changed-files tree. Copyright 2025-2026 Alakazam Labs. */
 // K2Diff: show what changed in a file inside a Garden (the Workbench's
 // Review column, catalog v40 git.diffFile).
 //
@@ -554,5 +554,5 @@
     }
   }
 
-  window.K2Diff = Object.freeze({ version: '1.0.0', lines: lines, hunks: hunks, stats: stats, render: render, tree: tree })
+  window.K2Diff = Object.freeze({ version: '1.0.1', lines: lines, hunks: hunks, stats: stats, render: render, tree: tree })
 })()

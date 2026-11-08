@@ -15,7 +15,7 @@ import { createSandbox, type Sandbox } from './daemon'
 const ROOT = resolve(__dirname, '../../..')
 const DIR = resolve(ROOT, 'crates/k2-core/src/zen/builtin_widgets/board-file-1')
 const FAKE = readFileSync(resolve(ROOT, 'tests/board/fake-k2.js'), 'utf8')
-const K2PNG = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-png@1.0.0/k2-png.js'), 'utf8')
+const K2PNG = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-png@1.0.1/k2-png.js'), 'utf8')
 const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' }
 const ORIGIN = 'http://localhost:58125'
 const BF = buildSync({ entryPoints: [resolve(__dirname, 'page-entry.ts')], bundle: true, write: false, format: 'iife', platform: 'browser', alias: { '@': resolve(ROOT, 'src/renderer') } }).outputFiles[0].text

@@ -14,7 +14,7 @@ const ROOT = resolve(__dirname, '../../..')
 describe('@k2/activity browser builds', () => {
   it('are fresh', async () => {
     const outs = (await buildAll()) as Array<{ out: string; text: string }>
-    expect(outs.map((o) => o.out)).toEqual(['src/renderer/zen-lib/k2-activity@1.0.0/k2-activity.js', 'sdk/activity/browser/k2-activity-bar.js'])
+    expect(outs.map((o) => o.out)).toEqual(['src/renderer/zen-lib/k2-activity@1.0.1/k2-activity.js', 'sdk/activity/browser/k2-activity-bar.js'])
     for (const o of outs) {
       expect(readFileSync(resolve(ROOT, o.out), 'utf8'), `${o.out} is stale: node scripts/zen-lib/build-k2-activity.mjs`).toBe(o.text)
     }
@@ -25,10 +25,10 @@ describe('@k2/activity browser builds', () => {
       libs: Array<{ id: string; version: string; global: string; files: Array<{ name: string; bytes: number; sha256: string }> }>
     }
     const row = manifest.libs.find((l) => l.id === 'k2-activity')
-    expect(row).toMatchObject({ version: '1.0.0', global: 'K2Activity' })
-    const bytes = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-activity@1.0.0/k2-activity.js'))
+    expect(row).toMatchObject({ version: '1.0.1', global: 'K2Activity' })
+    const bytes = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-activity@1.0.1/k2-activity.js'))
     expect(row!.files).toEqual([{ name: 'k2-activity.js', bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }])
     expect(bytes.length, 'the bar stays a small library (16 KB)').toBeLessThanOrEqual(16 * 1024)
-    expect(bytes.toString('utf8').startsWith('/*! k2-activity 1.0.0 ')).toBe(true)
+    expect(bytes.toString('utf8').startsWith('/*! k2-activity 1.0.1 ')).toBe(true)
   })
 })

@@ -1,6 +1,6 @@
 // @k2/activity: one model of an agent's Thread turn, one set of words for
 // it, and one driver that keeps it live and right (0.46.5 activity SDK,
-// review-thread-activity-surface-v1 §2). FSL-1.1-Apache-2.0, Alakazam Labs.
+// review-thread-activity-surface-v1 §2). MIT, Alakazam Labs.
 //
 // Pure TypeScript, no imports, no DOM: the desktop renderer, the Garden's
 // `k2-activity@1` library, the App server SDK (`@k2/server`) and App pages

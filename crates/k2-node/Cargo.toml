@@ -3,7 +3,8 @@ name = "k2-node"
 # Versioned by k2-node-proto's PROTOCOL, not the product version.
 version = "0.1.0"
 edition = "2021"
-license = "FSL-1.1-Apache-2.0"
+license = "MIT"
+publish = false
 description = "K2 compute node runtime: runs a controller's jobs as its own OS user. Never links k2-core or k2-daemon (CN26)."
 
 [lib]

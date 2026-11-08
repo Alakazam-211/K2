@@ -3,10 +3,10 @@ exit: 0
 --- stdout
 k2 study — bounded teaching pages (not --help)
 
-K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 
   what                What this product is (agents as infrastructure)
-  source              License + repo boundary (Fair Source, not MIT)
+  source              License + repo boundary (MIT)
   map                 How the surface is organized (pages, not --help)
   identity            Who you are; handles vs names; sidecars
   send                k2 msg vs k2 thread vs k2 mail vs talk

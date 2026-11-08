@@ -52,12 +52,12 @@ pub static FILES: &[(&str, &str, &[u8])] = &[
     ("lit@3.3.3", "lit.js", include_bytes!("../../../src/renderer/zen-lib/lit@3.3.3/lit.js")),
     ("font-caveat@5.3.0", "caveat-style.js", include_bytes!("../../../src/renderer/zen-lib/font-caveat@5.3.0/caveat-style.js")),
     ("font-caveat@5.3.0", "caveat-k2.js", include_bytes!("../../../src/renderer/zen-lib/font-caveat@5.3.0/caveat-k2.js")),
-    ("k2-help@1.0.0", "k2-help.js", include_bytes!("../../../src/renderer/zen-lib/k2-help@1.0.0/k2-help.js")),
-    ("k2-activity@1.0.0", "k2-activity.js", include_bytes!("../../../src/renderer/zen-lib/k2-activity@1.0.0/k2-activity.js")),
-    ("k2-thread@1.1.0", "k2-thread.js", include_bytes!("../../../src/renderer/zen-lib/k2-thread@1.1.0/k2-thread.js")),
-    ("k2-markdown@1.0.0", "k2-markdown.js", include_bytes!("../../../src/renderer/zen-lib/k2-markdown@1.0.0/k2-markdown.js")),
-    ("k2-png@1.0.0", "k2-png.js", include_bytes!("../../../src/renderer/zen-lib/k2-png@1.0.0/k2-png.js")),
-    ("k2-diff@1.0.0", "k2-diff.js", include_bytes!("../../../src/renderer/zen-lib/k2-diff@1.0.0/k2-diff.js")),
+    ("k2-help@1.0.1", "k2-help.js", include_bytes!("../../../src/renderer/zen-lib/k2-help@1.0.1/k2-help.js")),
+    ("k2-activity@1.0.1", "k2-activity.js", include_bytes!("../../../src/renderer/zen-lib/k2-activity@1.0.1/k2-activity.js")),
+    ("k2-thread@1.1.1", "k2-thread.js", include_bytes!("../../../src/renderer/zen-lib/k2-thread@1.1.1/k2-thread.js")),
+    ("k2-markdown@1.0.1", "k2-markdown.js", include_bytes!("../../../src/renderer/zen-lib/k2-markdown@1.0.1/k2-markdown.js")),
+    ("k2-png@1.0.1", "k2-png.js", include_bytes!("../../../src/renderer/zen-lib/k2-png@1.0.1/k2-png.js")),
+    ("k2-diff@1.0.1", "k2-diff.js", include_bytes!("../../../src/renderer/zen-lib/k2-diff@1.0.1/k2-diff.js")),
 ];
 
 /// The bytes of `file` in the bundled library `key` (`<id>@<version>`).

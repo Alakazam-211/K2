@@ -67,11 +67,11 @@ function parse(png: Uint8Array): { width: number; height: number; rgba: Uint8Arr
 beforeAll(() => {
   const r = zenLibResolve(['k2-png@1'])
   expect(r.findings.filter((f) => f.error)).toEqual([])
-  expect(r.keys).toEqual(['k2-png@1.0.0'])
+  expect(r.keys).toEqual(['k2-png@1.0.1'])
   const row = ZEN_LIB_MANIFEST.libs.find((l) => l.id === 'k2-png')
   if (!row) throw new Error('no k2-png row in zen-lib.json')
   expect(row.source).toBe('bundled')
-  const text = readFileSync(resolve(LIB_DIR, 'k2-png@1.0.0', 'k2-png.js'), 'utf8')
+  const text = readFileSync(resolve(LIB_DIR, 'k2-png@1.0.1', 'k2-png.js'), 'utf8')
   expect(Buffer.byteLength(text)).toBe(row.files[0].bytes)
   expect(createHash('sha256').update(text).digest('hex')).toBe(row.files[0].sha256)
   const win: Record<string, unknown> = {}

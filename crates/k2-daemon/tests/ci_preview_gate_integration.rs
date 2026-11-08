@@ -48,6 +48,7 @@ impl Drop for Env {
             None => std::env::remove_var("HOME"),
         }
         std::env::remove_var("K2_COMPUTE");
+        std::env::remove_var("K2_FEDERATION");
         k2_core::compute::set_ci_enabled(false);
         let _ = std::fs::remove_dir_all(&self.home);
     }
@@ -64,6 +65,9 @@ fn setup() -> Env {
     // Compute ON (0.46.9's switch), the CI preview OFF (0.46.10's default).
     std::env::set_var("K2_COMPUTE", "1");
     std::env::remove_var("K2_CI");
+    // Federation on, so the compute-seat leg reaches its handler (off,
+    // every /cli/federation/* route is already dark).
+    std::env::set_var("K2_FEDERATION", "1");
     k2_core::compute::set_ci_enabled(false);
     env
 }

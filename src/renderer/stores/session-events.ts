@@ -123,17 +123,6 @@ export interface ActiveChangedEvent {
 // subscriber's `?path=` (cwd-prefix rule). Field names are camelCase on the
 // wire (per-field serde `rename`).
 
-/** APP-LEVEL — local LLM (AI Workspace Assistant) model status changed.
- *  Replaces the `/cli/llm/status` poll in `stores/assistant.ts`. */
-export interface LlmStatusChangedEvent {
-  kind: 'llm_status_changed'
-  loaded: boolean
-  modelPath: string | null
-  downloading: boolean
-  /** `0.0..=100.0` while a download is in flight, `null` otherwise. */
-  downloadPercent: number | null
-}
-
 /** APP-LEVEL — an agent's working/idle status flipped. Replaces the
  *  list-running + agent-status poll in `stores/active-agents.ts`.
  *  Deprecated compat (prd-daemon-activity-and-thread-working-v1 RL5): the
@@ -938,7 +927,6 @@ export type SessionEventMessage =
   | SessionRenamedEvent
   | HelloEvent
   | ActiveChangedEvent
-  | LlmStatusChangedEvent
   | AgentStatusChangedEvent
   | SessionActivityChangedEvent
   | TunnelStatusChangedEvent
@@ -1405,7 +1393,6 @@ export async function refreshActiveSnapshot(scope: ServerScope): Promise<void> {
 // switch the consumers' own host-aware snapshot fetch (fired from
 // `onAppHello`) re-establishes truth against the new host.
 
-type LlmStatusHandler = (e: LlmStatusChangedEvent) => void
 type AgentStatusHandler = (e: AgentStatusChangedEvent) => void
 type TunnelStatusHandler = (e: TunnelStatusChangedEvent) => void
 // URLs & Ports drawer — the nested-subdomain map (whole-map replace, the
@@ -1518,7 +1505,6 @@ type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 // does that; M1 never does.
 
 interface AppBusHandlers {
-  llmStatus: Set<LlmStatusHandler>
   projectsChanged: Set<ProjectsChangedHandler>
   sessionActivity: Set<SessionActivityHandler>
   agentStatus: Set<AgentStatusHandler>
@@ -1582,7 +1568,6 @@ function createBusState(scopeId: string): BusState {
     scopeId,
     openSockets: 0,
     handlers: {
-      llmStatus: new Set(),
       projectsChanged: new Set(),
       sessionActivity: new Set(),
       agentStatus: new Set(),
@@ -1657,11 +1642,6 @@ function addHandler<T>(set: Set<T>, fn: T): UnsubscribeFn {
  *  Returns an unsubscribe fn. */
 export function onProjectsChanged(scope: ServerScope, fn: ProjectsChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.projectsChanged, fn)
-}
-
-/** Subscribe to APP-LEVEL `llm_status_changed`. Returns an unsubscribe fn. */
-export function onLlmStatusChanged(scope: ServerScope, fn: LlmStatusHandler): UnsubscribeFn {
-  return addHandler(busFor(scope).handlers.llmStatus, fn)
 }
 
 /** Subscribe to APP-LEVEL `session_activity_changed` (0.40.39 daemon-side
@@ -2116,9 +2096,6 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   active_changed: (h, m) => {
     for (const fn of h.activeChanged) fn(m)
   },
-  llm_status_changed: (h, m) => {
-    for (const fn of h.llmStatus) fn(m)
-  },
   projects_changed: (h, m) => {
     for (const fn of h.projectsChanged) fn(m)
   },
@@ -2293,7 +2270,6 @@ export interface AppBus {
   /** Registered handler count, for tests and leak checks. */
   handlerCount(): number
   onProjectsChanged(fn: ProjectsChangedHandler): UnsubscribeFn
-  onLlmStatusChanged(fn: LlmStatusHandler): UnsubscribeFn
   onSessionActivityChanged(fn: SessionActivityHandler): UnsubscribeFn
   onAgentStatusChanged(fn: AgentStatusHandler): UnsubscribeFn
   onTunnelStatusChanged(fn: TunnelStatusHandler): UnsubscribeFn
@@ -2349,7 +2325,6 @@ export function openAppBus(scope: ServerScope): AppBus {
       return n
     },
     onProjectsChanged: (fn) => onProjectsChanged(scope, fn),
-    onLlmStatusChanged: (fn) => onLlmStatusChanged(scope, fn),
     onSessionActivityChanged: (fn) => onSessionActivityChanged(scope, fn),
     onAgentStatusChanged: (fn) => onAgentStatusChanged(scope, fn),
     onTunnelStatusChanged: (fn) => onTunnelStatusChanged(scope, fn),
@@ -2396,9 +2371,9 @@ export function openAppBus(scope: ServerScope): AppBus {
  * wiring) so a remote host's Active set mirrors 1:1.
  *
  * This socket is ALSO the carrier for the Wave B APP-LEVEL broadcasts
- * (llm/agent/tunnel, #675). They're dispatched to the registries above so
- * consumers (`stores/assistant.ts`, `stores/active-agents.ts`,
- * `CompanionSection.tsx`) can drop their polling loops. On (re)connect the
+ * (agent/tunnel, #675). They're dispatched to the registries above so
+ * consumers (`stores/active-agents.ts`, `CompanionSection.tsx`) can drop
+ * their polling loops. On (re)connect the
  * `Hello` frame also fans out to `onAppHello` so those consumers re-snapshot.
  */
 export function subscribeToActiveState(scope: ServerScope): UnsubscribeFn {

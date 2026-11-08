@@ -59,7 +59,6 @@ export const SESSION_EVENT_ROUTES = {
   session_removed: { class: 'workspace', workspace: true, app: true },
   session_renamed: { class: 'workspace', workspace: true },
   active_changed: { class: 'app', app: true, carried: true },
-  llm_status_changed: { class: 'app', app: true },
   // Home 0.43.2 (Z22): a pinned room applies hook status through its own
   // server's carrier. Both are deprecated compat since
   // prd-daemon-activity-and-thread-working-v1 S4 (RL5): the daemon derives

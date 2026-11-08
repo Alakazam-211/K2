@@ -69,9 +69,8 @@ export const FEATURES = {
   'daemon-pinned-chat': '0.39.39',
   /** Daemon push broadcasts that retire renderer polling loops (#675/#677,
    *  Wave B spine). Over the existing `/cli/sessions/events` WS the daemon
-   *  emits `llm_status_changed`, `agent_status_changed`,
-   *  `tunnel_status_changed` (APP-LEVEL) and `review_queue_changed`,
-   *  `review_changed` (WORKSPACE-SCOPED). When SUPPORTED (always true for
+   *  emits `agent_status_changed`, `tunnel_status_changed` (APP-LEVEL) and
+   *  `review_queue_changed`, `review_changed` (WORKSPACE-SCOPED). When SUPPORTED (always true for
    *  `local`) the renderer drops its `setInterval` polls and subscribes;
    *  when NOT (an older / remote daemon that doesn't emit these frames) it
    *  KEEPS the existing polling fallback so status still updates. */

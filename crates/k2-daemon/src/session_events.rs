@@ -162,7 +162,7 @@ pub enum SessionEvent {
     //
     // **Routing classes** (see `session_events_ws::event_matches_workspace`):
     //   - APP-LEVEL  (forwarded to EVERY subscriber regardless of `?path=`):
-    //     `LlmStatusChanged`, `TunnelStatusChanged`, `AgentStatusChanged`,
+    //     `TunnelStatusChanged`, `AgentStatusChanged`,
     //     `SessionActivityChanged`, `ActivityChanged`.
     //   - WORKSPACE-SCOPED (forwarded only when the carried path matches
     //     the subscriber's `?path=` via the cwd-prefix rule):
@@ -170,27 +170,6 @@ pub enum SessionEvent {
     //     `TabOrderChanged`, `HeartbeatStateChanged`,
     //     `HeartbeatRosterChanged` — each carries a `workspacePath` used
     //     by the prefix filter.
-
-    /// #675.1 — local LLM (AI Workspace Assistant) model status changed.
-    /// APP-LEVEL. Replaces the renderer's `/cli/llm/status` poll
-    /// (assistant.ts). Emitted on every transition that the renderer
-    /// cares about: model load, download begin/end, and download
-    /// progress ticks.
-    ///
-    /// Wire: `{ "kind": "llm_status_changed", "loaded": bool,
-    /// "modelPath": string|null, "downloading": bool,
-    /// "downloadPercent": number|null }`.
-    ///
-    /// `downloadPercent` is `Some(0.0..=100.0)` while a download is in
-    /// flight (carried on the progress emits), `None` otherwise.
-    LlmStatusChanged {
-        loaded: bool,
-        #[serde(rename = "modelPath")]
-        model_path: Option<String>,
-        downloading: bool,
-        #[serde(rename = "downloadPercent")]
-        download_percent: Option<f64>,
-    },
 
     /// #675.2 — an agent's working/idle status flipped. APP-LEVEL.
     /// Replaces the renderer's terminal/list-running + agent-status poll
@@ -1152,7 +1131,6 @@ impl SessionEvent {
             SessionEvent::SessionRemoved { .. } => "session_removed",
             SessionEvent::ActiveChanged { .. } => "active_changed",
             SessionEvent::SessionRenamed { .. } => "session_renamed",
-            SessionEvent::LlmStatusChanged { .. } => "llm_status_changed",
             SessionEvent::AgentStatusChanged { .. } => "agent_status_changed",
             SessionEvent::SessionActivityChanged { .. } => "session_activity_changed",
             SessionEvent::ReviewQueueChanged { .. } => "review_queue_changed",
@@ -1776,31 +1754,6 @@ mod tests {
             keys.len(),
             "unexpected key set: {obj:?} (expected exactly {keys:?})"
         );
-    }
-
-    #[test]
-    fn llm_status_changed_frozen_contract() {
-        let json = as_json(&SessionEvent::LlmStatusChanged {
-            loaded: true,
-            model_path: Some("/m/q.gguf".into()),
-            downloading: false,
-            download_percent: Some(42.5),
-        });
-        assert_eq!(json["kind"], "llm_status_changed");
-        assert_eq!(json["loaded"], true);
-        assert_eq!(json["modelPath"], "/m/q.gguf");
-        assert_eq!(json["downloading"], false);
-        assert_eq!(json["downloadPercent"], 42.5);
-        assert_keys(&json, &["kind", "loaded", "modelPath", "downloading", "downloadPercent"]);
-        // null model_path + percent serialize as JSON null (present key).
-        let json2 = as_json(&SessionEvent::LlmStatusChanged {
-            loaded: false,
-            model_path: None,
-            downloading: true,
-            download_percent: None,
-        });
-        assert!(json2["modelPath"].is_null());
-        assert!(json2["downloadPercent"].is_null());
     }
 
     #[test]

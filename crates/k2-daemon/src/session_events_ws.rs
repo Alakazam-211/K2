@@ -78,7 +78,7 @@ pub async fn serve_session_events_connection(
     // Empty / missing `path` = the APP-LEVEL subscriber (0.39.39 #675). It is
     // NOT an error: `event_matches_workspace` treats an empty workspace_path as
     // the `/`-prefix rule, so the subscriber receives every app-level event
-    // (llm/agent/tunnel/active_changed/projects) AND every absolute-cwd event
+    // (agent/tunnel/active_changed/projects) AND every absolute-cwd event
     // (session_added/removed) — exactly what the renderer's `subscribeToActiveState`
     // consumer (which connects with `?path=`) needs. Rejecting it here silently
     // broke app-level events over K2 Connect (the local `daemon_events` Tauri
@@ -675,15 +675,13 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // single workspace. Forward to EVERY subscriber so each client
         // mirrors the truth regardless of `?path=`. The renderer's
         // app-level consumers filter by `kind`.
-        //   - LlmStatusChanged    — one model host per daemon.
         //   - TunnelStatusChanged — one tunnel per daemon.
         //   - TunnelSubdomainsChanged — same: the nested-subdomain map
         //     belongs to the daemon's ONE tunnel, not any workspace.
         //   - AgentStatusChanged  — keyed by paneId (the v2 session id),
         //     not a workspace path; `workspacePath` rides along for
         //     attribution only.
-        SessionEvent::LlmStatusChanged { .. }
-        | SessionEvent::TunnelStatusChanged { .. }
+        SessionEvent::TunnelStatusChanged { .. }
         | SessionEvent::TunnelSubdomainsChanged { .. }
         | SessionEvent::TunnelIdentityChanged { .. }
         | SessionEvent::PublishServicesChanged { .. }
@@ -934,14 +932,8 @@ mod tests {
 
     #[test]
     fn app_level_events_forward_to_every_subscriber() {
-        // LLM / tunnel / agent-status are daemon-global: must match ANY
+        // Tunnel / agent-status are daemon-global: must match ANY
         // ?path= (same rule as ActiveChanged).
-        let llm = SessionEvent::LlmStatusChanged {
-            loaded: true,
-            model_path: None,
-            downloading: false,
-            download_percent: None,
-        };
         let tunnel = SessionEvent::TunnelStatusChanged {
             running: true,
             public_url: None,
@@ -997,7 +989,6 @@ mod tests {
             workspace_id: "proj-uuid".into(),
         };
         for ev in [
-            &llm,
             &tunnel,
             &tunnel_subs,
             &agent,
@@ -1082,12 +1073,6 @@ mod tests {
                 title: "t".into(),
             },
             SessionEvent::ActiveChanged { active_project_ids: vec![], active_window_hours: 24 },
-            SessionEvent::LlmStatusChanged {
-                loaded: false,
-                model_path: None,
-                downloading: false,
-                download_percent: None,
-            },
             SessionEvent::AgentStatusChanged {
                 pane_id: "sid".into(),
                 tab_id: "tab".into(),

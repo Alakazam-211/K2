@@ -4,7 +4,6 @@
   "session_removed": "workspace",
   "session_renamed": "workspace",
   "active_changed": "app",
-  "llm_status_changed": "app",
   "agent_status_changed": "app",
   "session_activity_changed": "app",
   "review_queue_changed": "workspace",

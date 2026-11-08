@@ -2,7 +2,7 @@
 //!
 //! Home of the device-local runtime that was previously embedded inside
 //! `src-tauri/src/`: SQLite database, llama-cpp LLM integration, Alacritty
-//! terminal backend, companion WebSocket server, heartbeat scheduler,
+//! terminal backend, heartbeat scheduler,
 //! agent-lifecycle HTTP hooks, and the pluggable `PushTarget` interface for
 //! notification delivery.
 //!

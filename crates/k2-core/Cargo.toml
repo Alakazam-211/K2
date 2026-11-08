@@ -4,7 +4,7 @@ version = "0.46.10"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "K2 device-local core library: db, llm, terminal, companion, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2-daemon (persistent-agent runtime)."
+description = "K2 device-local core library: db, llm, terminal, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2-daemon (persistent-agent runtime)."
 
 [lib]
 path = "src/lib.rs"
@@ -225,9 +225,8 @@ k2-term-wire = { path = "../k2-term-wire" }
 # Low-level OS calls.
 libc = "0.2"
 
-# Companion WS + auth + HTTP proxy — pulled over from src-tauri along
-# with crates/k2so-core/src/companion/. argon2 + subtle cover the
-# companion password hash + constant-time equality.
+# argon2 + subtle: password hashes and constant-time compares
+# (connect_users, skin, federation).
 argon2 = "0.5"
 base64 = "0.22"
 subtle = "2.6"
@@ -258,7 +257,6 @@ p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithm
 # text extract + removal check use is the same copy ammonia parses with.
 ammonia = "=4.2.1"
 html5ever = "0.40"
-tungstenite = "0.24"
 # Mobile dev (prd-mobile-dev-v1, 0.46.6): a minimal gRPC client for the
 # Android emulator's loopback controller (sim::android::grpc). Hand-written
 # prost messages over h2: no tonic, no protoc. All four are already in the
@@ -285,9 +283,7 @@ oxc_span = "=0.139.0"
 oxc_diagnostics = "=0.139.0"
 oxc_syntax = "=0.139.0"
 
-# Companion tunnel (ngrok) + its supporting async stack. Moved over
-# from src-tauri along with the orchestrator.
-ngrok = "0.18"
+# Async runtime and URL parsing used across the crate.
 tokio = { version = "1", features = ["full"] }
 url = "2"
 

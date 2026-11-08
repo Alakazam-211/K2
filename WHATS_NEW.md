@@ -8,6 +8,12 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### When you update
 - **`k2 db create` no longer prints the database password.** Its `dsn` (and the `--test` `migratorDsn`) come without the password, and `dsnHint` says how to get the full one: `k2 db dsn --db <name>`. Scripts that read the password from `create --json` need to call `k2 db dsn` instead.
 
+### Voice & Chat only logins
+- **A new login role below Member: Voice & Chat only.** The person can join this server's voice rooms (audio, video, screen share) and nothing else: no terminals, workspaces, files, vault, settings or agent controls. The server checks every request; the app hides the server from the switcher and Home and lists it in the headset with a "Voice & Chat only" chip.
+- **Share one agent or one Garden with it.** The owner or an Admin can share agents (the person reads that agent's Thread and posts in it as themselves) and Gardens (read-only on a phone): `k2 users add <name> --role voice_chat --share-agent <agent> --share-garden <garden>`, `k2 users share`, or Settings → Users and Access.
+- **Admins can move people between Member and Voice & Chat only,** with `k2 users set-role` or Settings. It applies at once, with no sign-out.
+- **Before going back to an older K2,** change Voice & Chat only logins to Member and disable them, or remove them: an older K2 can't read the role.
+
 ### Desktop app
 - **New agents open in Split view:** the agent's terminal on the left and its Thread on the right. Agents you already set to a view keep it, and Settings → Workspace settings → "New agents open in" still changes the default.
 - **Switching workspaces puts you in the message box.** "When moving between workspaces, auto-select" now defaults to Message agent. If you picked Terminal, that stays.

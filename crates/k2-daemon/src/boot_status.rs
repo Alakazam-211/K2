@@ -1153,6 +1153,9 @@ pub fn features() -> Vec<&'static str> {
     // GET /cli/workbench/agents (sidecars in a Garden's reach).
     out.push("workbench-v1");
     out.push(crate::zen_remote_routes::FEATURE);
+    // 0.46.10: the Voice & Chat only login role, its shares and
+    // `/cli/shared*` (prd-voice-chat-only-members-v1 §8.1).
+    out.push(crate::shared_routes::FEATURE);
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);
     out.push(FEATURE_GUESTS_ROOMS);
@@ -1353,6 +1356,7 @@ mod tests {
                 // /cli/workbench/agents (sidecars in the Garden reach).
                 "workbench-v1",
                 "gardens-remote-v1",
+                "voice-chat-role-v1",
                 "grokbots-v1",
                 "app-api-v1",
                 "guests-rooms-v1",

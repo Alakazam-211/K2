@@ -140,19 +140,15 @@ fn apply_row(row: &SeedUser) -> SeedOutcome {
     if connect_users::role_for_user(&row.username).is_some() {
         return SeedOutcome::SkippedExists;
     }
-    if let Err(e) = connect_users::add_user(&row.username, &row.password) {
+    // prd-voice-chat-only-members-v1 V5: made at its role and password
+    // flag in one write (a voice_chat row is never a Member, even briefly).
+    let new = connect_users::NewLogin {
+        role: Some(role),
+        must_change_password: row.must_change_password,
+        shares: Default::default(),
+    };
+    if let Err(e) = connect_users::add_user_with_role(&row.username, &row.password, None, None, &new) {
         return SeedOutcome::Failed(format!("add_user: {e}"));
-    }
-    // add_user defaults to Member; only non-default roles need a write.
-    if role != Role::Member {
-        if let Err(e) = connect_users::set_role(&row.username, role) {
-            return SeedOutcome::Failed(format!("created, but set_role: {e}"));
-        }
-    }
-    if row.must_change_password {
-        if let Err(e) = connect_users::set_must_change_password(&row.username, true) {
-            return SeedOutcome::Failed(format!("created, but mustChangePassword: {e}"));
-        }
     }
     SeedOutcome::Created
 }

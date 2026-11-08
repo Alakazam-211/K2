@@ -69,12 +69,20 @@ const LOCKOUT_DURATION_MINUTES: i64 = 15;
 /// stored `"viewer"` row loads as a DISABLED Member flagged `was_viewer`
 /// (see [`ConnectUser`]'s deserializer and [`migrate_removed_viewers`]).
 /// Every role parser refuses `"viewer"` with [`VIEWER_ROLE_REMOVED`].
+///
+/// **Voice & Chat only** (`voice_chat`, prd-voice-chat-only-members-v1,
+/// 0.46.10) is the one narrow exception to "every login is a trusted
+/// operator": a role BELOW Member that clears only the route table's
+/// `VoiceChat` rows (voice rooms, its own account, and what the owner shares
+/// with this login by id: agents' Threads, Gardens). Every Member row
+/// refuses it (`route_policy::Floor::admits`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Lowest tier — listed first so the derived `Ord` ranks
-    /// `Member < Admin < Owner`. VARIANT ORDER IS LOAD-BEARING for
-    /// `derive(Ord)`; the `role_ordering_*` test pins it.
+    /// `VoiceChat < Member < Admin < Owner`. VARIANT ORDER IS LOAD-BEARING
+    /// for `derive(Ord)`; the `role_ordering_*` test pins it.
+    VoiceChat,
     Member,
     Admin,
     Owner,
@@ -90,7 +98,7 @@ impl Default for Role {
 /// The error every role parser gives for the retired `"viewer"` string
 /// (`k2 users add --role viewer`, `POST /cli/users/set-role`, the boot
 /// seed-users file). The CLI and Settings show it as-is.
-pub const VIEWER_ROLE_REMOVED: &str = "the viewer role was removed: a login is owner, admin or member. For limited access, give the person an app pass instead (k2 app).";
+pub const VIEWER_ROLE_REMOVED: &str = "the viewer role was removed: a login is owner, admin or member, or Voice & Chat only (voice_chat) for someone who should only use voice rooms. For other limited access, give the person an app pass instead (k2 app).";
 
 impl Role {
     /// Parse a wire role string (`"owner"` | `"admin"` | `"member"`).
@@ -102,15 +110,18 @@ impl Role {
 
     /// [`Role::from_wire`] with a caller-facing error: `"viewer"` gets
     /// [`VIEWER_ROLE_REMOVED`]; anything else unknown gets
-    /// `invalid role '<s>' (expected owner|admin|member)`.
+    /// `invalid role '<s>' (expected owner|admin|member|voice_chat)`.
     pub fn parse_wire(s: &str) -> Result<Role, String> {
         match s.trim().to_ascii_lowercase().as_str() {
             "owner" => Ok(Role::Owner),
             "admin" => Ok(Role::Admin),
             "member" => Ok(Role::Member),
+            // `voice-chat` is the CLI spelling people type; the wire and
+            // the store say `voice_chat`.
+            "voice_chat" | "voice-chat" => Ok(Role::VoiceChat),
             "viewer" => Err(VIEWER_ROLE_REMOVED.to_string()),
             _ => Err(format!(
-                "invalid role '{}' (expected owner|admin|member)",
+                "invalid role '{}' (expected owner|admin|member|voice_chat)",
                 s.trim()
             )),
         }
@@ -122,6 +133,17 @@ impl Role {
             Role::Owner => "owner",
             Role::Admin => "admin",
             Role::Member => "member",
+            Role::VoiceChat => "voice_chat",
+        }
+    }
+
+    /// The person-facing label ("Voice & Chat only" for `voice_chat`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Owner => "Owner",
+            Role::Admin => "Admin",
+            Role::Member => "Member",
+            Role::VoiceChat => "Voice & Chat only",
         }
     }
 }
@@ -147,7 +169,62 @@ pub fn can_act_on(actor: Role, target: Role) -> bool {
     match actor {
         Role::Owner => true,
         Role::Admin => target != Role::Owner,
-        Role::Member => false,
+        Role::Member | Role::VoiceChat => false,
+    }
+}
+
+/// Whether an actor of `actor` role may change a login from `from` to `to`
+/// (prd-voice-chat-only-members-v1 §5.3, Q1, V8). The Owner changes any
+/// role. An Admin changes only between Member and Voice & Chat only, for a
+/// target below Admin: lowering the route floor alone would let an Admin
+/// make another Admin.
+pub fn can_set_role(actor: Role, from: Role, to: Role) -> bool {
+    match actor {
+        Role::Owner => true,
+        Role::Admin => {
+            matches!(from, Role::Member | Role::VoiceChat) && matches!(to, Role::Member | Role::VoiceChat)
+        }
+        Role::Member | Role::VoiceChat => false,
+    }
+}
+
+/// What the owner shares with one Voice & Chat only login
+/// (prd-voice-chat-only-members-v1, the reviewer extension): agents (by
+/// workspace project id) whose Thread this login may read and post in, and
+/// Gardens (by id) it may view read-only on a phone. Ids only: the daemon
+/// resolves them to today's address and name on every read, so a renamed
+/// agent or Garden keeps its share and a removed one drops out. They act
+/// only while the login's role is `voice_chat` (a Member already reaches
+/// everything a share names, through the Member routes).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Shares {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gardens: Vec<String>,
+}
+
+/// The most agents (and, separately, Gardens) one login may be shared.
+pub const MAX_SHARES: usize = 16;
+
+impl Shares {
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty() && self.gardens.is_empty()
+    }
+
+    /// Trimmed, sorted, deduplicated, blanks dropped; at most
+    /// [`MAX_SHARES`] of each.
+    pub fn normalized(mut self) -> Result<Shares, String> {
+        for (what, list) in [("agents", &mut self.agents), ("gardens", &mut self.gardens)] {
+            let mut v: Vec<String> = list.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            v.sort();
+            v.dedup();
+            if v.len() > MAX_SHARES {
+                return Err(format!("at most {MAX_SHARES} shared {what} per login"));
+            }
+            *list = v;
+        }
+        Ok(self)
     }
 }
 
@@ -159,6 +236,7 @@ pub fn can_act_on(actor: Role, target: Role) -> bool {
 #[serde(rename_all = "snake_case")]
 enum StoredRole {
     Viewer,
+    VoiceChat,
     #[default]
     Member,
     Admin,
@@ -193,6 +271,8 @@ struct StoredConnectUser {
     last_name: Option<String>,
     #[serde(default)]
     id: String,
+    #[serde(default)]
+    shares: Shares,
 }
 
 /// Clone permissions (prd-clone-carries-threads-and-vault-v1 D2, Rosson
@@ -210,6 +290,7 @@ impl From<StoredConnectUser> for ConnectUser {
             // login. It becomes a disabled Member that the owner must
             // re-enable on purpose (nobody is silently upgraded).
             StoredRole::Viewer | StoredRole::Member => Role::Member,
+            StoredRole::VoiceChat => Role::VoiceChat,
             StoredRole::Admin => Role::Admin,
             StoredRole::Owner => Role::Owner,
         };
@@ -228,6 +309,7 @@ impl From<StoredConnectUser> for ConnectUser {
             color: s.color,
             first_name: s.first_name,
             last_name: s.last_name,
+            shares: s.shares,
         }
     }
 }
@@ -323,6 +405,11 @@ pub struct ConnectUser {
     pub first_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_name: Option<String>,
+    /// Voice & Chat only shares ([`Shares`]). Omitted on disk when empty,
+    /// so older stores load unchanged. Kept across a role change (they act
+    /// only while the role is `voice_chat`).
+    #[serde(default, skip_serializing_if = "Shares::is_empty")]
+    pub shares: Shares,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -779,6 +866,11 @@ pub fn list_people_for_agents(owner_display: &str) -> Result<Vec<PeopleRow>, Str
         });
     }
     for u in users {
+        // prd-voice-chat-only-members-v1 §6.4 (Q5): a Voice & Chat only
+        // person is not someone an agent works with on this box.
+        if u.role == Role::VoiceChat {
+            continue;
+        }
         rows.push(PeopleRow {
             username: u.username,
             role: u.role,
@@ -786,6 +878,12 @@ pub fn list_people_for_agents(owner_display: &str) -> Result<Vec<PeopleRow>, Str
         });
     }
     Ok(rows)
+}
+
+/// Whether `username` is a Voice & Chat only login right now (agents may
+/// not assign it tickets or message it, §6.4). `false` for an unknown name.
+pub fn is_voice_chat_only(username: &str) -> bool {
+    role_for_user(username) == Some(Role::VoiceChat)
 }
 
 /// Provision a new account. Validates + lowercases the username, rejects
@@ -803,14 +901,38 @@ pub fn add_user_with_names(
     first_name: Option<&str>,
     last_name: Option<&str>,
 ) -> Result<(), String> {
-    add_user_inner(username, password, first_name, last_name, false)
+    add_user_inner(username, password, first_name, last_name, false, &NewLogin::default())
+}
+
+/// What a new login starts as, written in the SAME store write that makes
+/// the account (prd-voice-chat-only-members-v1 V5): a Voice & Chat only
+/// login is never a Member, not even between two writes.
+#[derive(Debug, Clone, Default)]
+pub struct NewLogin {
+    /// `None` = Member.
+    pub role: Option<Role>,
+    pub must_change_password: bool,
+    pub shares: Shares,
+}
+
+/// [`add_user_with_names`] made at its role, temporary-password flag and
+/// shares in one write. Shares are only for `voice_chat` (an error for any
+/// other role).
+pub fn add_user_with_role(
+    username: &str,
+    password: &str,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    new: &NewLogin,
+) -> Result<(), String> {
+    add_user_inner(username, password, first_name, last_name, false, new)
 }
 
 /// Tests only: a login with a reserved name, as one made before 0.46.6
 /// (when nothing refused it) would be stored.
 #[cfg(any(test, feature = "test-util"))]
 pub fn test_add_legacy_reserved_user(username: &str, password: &str) -> Result<(), String> {
-    add_user_inner(username, password, None, None, true)
+    add_user_inner(username, password, None, None, true, &NewLogin::default())
 }
 
 fn add_user_inner(
@@ -819,8 +941,14 @@ fn add_user_inner(
     first_name: Option<&str>,
     last_name: Option<&str>,
     allow_reserved: bool,
+    new: &NewLogin,
 ) -> Result<(), String> {
     let username = normalize_username(username)?;
+    let role = new.role.unwrap_or(Role::Member);
+    let shares = new.shares.clone().normalized()?;
+    if role != Role::VoiceChat && !shares.is_empty() {
+        return Err("shares are only for a Voice & Chat only (voice_chat) login".to_string());
+    }
     if is_reserved_username(&username) && !allow_reserved {
         return Err(reserved_username_hint(&username));
     }
@@ -851,15 +979,15 @@ fn add_user_inner(
             created_at: Utc::now(),
             disabled: false,
             // New users default to Member (K2SO #629); an Owner promotes
-            // via set_role.
-            role: Role::Member,
+            // via set_role. A Voice & Chat only login is made at that role
+            // here, never a Member first (V5).
+            role,
             // Fresh users start at epoch 0 (K2 Connect #4). The first
             // revoke event bumps it to 1.
             token_epoch: 0,
-            // K2 Cloud S1: the route layer (`users/add`, temporary by
-            // default since 0.46.8) and the seed-users file flip this via
-            // set_must_change_password after add.
-            must_change_password: false,
+            // K2 Cloud S1: `users/add` (temporary by default since
+            // 0.46.8) and the seed-users file pass it in `new`.
+            must_change_password: new.must_change_password,
             was_viewer: false,
             legacy_viewer_unmigrated: false,
             // D2: "Can clone" starts ON; the Owner narrows per person.
@@ -867,6 +995,7 @@ fn add_user_inner(
             color: None,
             first_name,
             last_name,
+            shares,
         });
         Ok(())
     })?;
@@ -1097,7 +1226,7 @@ pub fn can_clone(username: &str) -> bool {
         .users
         .iter()
         .find(|u| u.username == normalized)
-        .is_some_and(|u| !u.disabled && (u.role == Role::Owner || u.can_clone))
+        .is_some_and(|u| !u.disabled && u.role != Role::VoiceChat && (u.role == Role::Owner || u.can_clone))
 }
 
 /// Set a user's permission role (K2SO #629). Authorization (only an
@@ -1107,27 +1236,118 @@ pub fn can_clone(username: &str) -> bool {
 /// up to the token TTL on already-issued sessions. Errors when the user
 /// doesn't exist.
 pub fn set_role(username: &str, role: Role) -> Result<(), String> {
+    set_role_from(username, role).map(|_| ())
+}
+
+/// [`set_role`], returning the role the login had before (for the audit
+/// line, `prd-voice-chat-only-members-v1` V7).
+///
+/// **Live for Voice & Chat only (§7, Q2):** a change INTO or OUT OF
+/// `voice_chat` doesn't bump the epoch or revoke sessions. The route gate
+/// reads the role on every request and every socket re-checks its floor
+/// when the store moves ([`auth_generation`]), so the change acts at once
+/// without a sign-out. Any other change keeps today's forced re-login. A
+/// change INTO `voice_chat` ends the login's paired phones (Q3).
+pub fn set_role_from(username: &str, role: Role) -> Result<Role, String> {
     let username = normalize_username(username)?;
-    update_store(|store| {
+    let before = update_store(|store| {
         let user = store
             .users
             .iter_mut()
             .find(|u| u.username == username)
             .ok_or_else(|| format!("user '{username}' not found"))?;
+        let before = user.role;
         user.role = role;
-        // K2 Connect #4: bump the durable epoch so a session minted under
-        // the OLD role can't keep that baked-in role across a restart.
-        user.token_epoch = user.token_epoch.wrapping_add(1);
-        Ok(())
+        if !role_change_is_live(before, role) {
+            // K2 Connect #4: bump the durable epoch so a session minted
+            // under the OLD role can't keep that baked-in role across a
+            // restart.
+            user.token_epoch = user.token_epoch.wrapping_add(1);
+        }
+        Ok(before)
     })?;
-    revoke_user_sessions(&username);
+    if !role_change_is_live(before, role) {
+        revoke_user_sessions(&username);
+    } else if role == Role::VoiceChat && before != Role::VoiceChat {
+        let ended = revoke_user_device_sessions(&username);
+        if ended > 0 {
+            crate::log_debug!("[connect_users] {username} is Voice & Chat only: {ended} paired phone(s) ended");
+        }
+    }
     // Voice rooms (V13): a role change is a level sync in the K2 Admin
     // Space (Owner/Admin → moderator, Member → member). The sweep plans it.
     if crate::voice_preview::enabled() {
         crate::tool_hook::kick_reconcile();
     }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
-    Ok(())
+    Ok(before)
+}
+
+/// A role change that applies live, with no sign-out: into or out of
+/// Voice & Chat only (or no change at all).
+pub fn role_change_is_live(from: Role, to: Role) -> bool {
+    from == to || from == Role::VoiceChat || to == Role::VoiceChat
+}
+
+/// Replace a Voice & Chat only login's shares. Errors for an unknown user
+/// and for any other role (`not_voice_chat`). The store write moves
+/// [`auth_generation`], so open sockets re-check at once.
+pub fn set_shares(username: &str, shares: Shares) -> Result<Shares, String> {
+    let username = normalize_username(username)?;
+    let shares = shares.normalized()?;
+    update_store(|store| {
+        let user = store
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or_else(|| format!("user '{username}' not found"))?;
+        if user.role != Role::VoiceChat {
+            return Err(format!("not_voice_chat: '{username}' is {}; shares are only for a Voice & Chat only login", user.role.as_wire()));
+        }
+        user.shares = shares.clone();
+        Ok(shares)
+    })
+}
+
+/// The shares of a live (not disabled) Voice & Chat only login. `None` for
+/// any other role, an unknown or disabled login, or an unreadable store
+/// (fail closed: nothing is shared).
+pub fn voice_chat_shares(username: &str) -> Option<Shares> {
+    let normalized = normalize_username(username).ok()?;
+    let store = load_store().ok()?;
+    store
+        .users
+        .iter()
+        .find(|u| u.username == normalized && !u.disabled && u.role == Role::VoiceChat)
+        .map(|u| u.shares.clone())
+}
+
+/// The stored shares of every login, by username (`GET /cli/users`).
+pub fn shares_by_user() -> Result<HashMap<String, Shares>, String> {
+    let store = load_store()?;
+    Ok(store.users.iter().map(|u| (u.username.clone(), u.shares.clone())).collect())
+}
+
+/// End every paired phone (device session) of `username`; password
+/// sessions stay. Returns how many ended.
+pub fn revoke_user_device_sessions(username: &str) -> usize {
+    let Ok(username) = normalize_username(username) else { return 0 };
+    let ids: Vec<String> = match device_sessions(Some(&username)) {
+        Ok(v) => v.into_iter().map(|d| d.id).collect(),
+        Err(e) => {
+            crate::log_debug!("[connect_users] device sessions of {username}: {e}");
+            return 0;
+        }
+    };
+    let mut n = 0;
+    for id in ids {
+        match revoke_device_session(&id, Some(&username)) {
+            Ok(Some(_)) => n += 1,
+            Ok(None) => {}
+            Err(e) => crate::log_debug!("[connect_users] end device {id} of {username}: {e}"),
+        }
+    }
+    n
 }
 
 /// Viewer removal boot migration (`prd-remove-viewer-role-v1.md` RV3).
@@ -2981,6 +3201,7 @@ mod tests {
     #[test]
     fn role_ordering_is_member_lt_admin_lt_owner() {
         // VARIANT ORDER IS LOAD-BEARING for derive(Ord).
+        assert!(Role::VoiceChat < Role::Member);
         assert!(Role::Member < Role::Admin);
         assert!(Role::Admin < Role::Owner);
         assert!(Role::Member < Role::Owner);
@@ -2988,9 +3209,128 @@ mod tests {
         assert_eq!(Role::default(), Role::Member);
     }
 
+    // ── Voice & Chat only (prd-voice-chat-only-members-v1) ────────────
+
+    #[test]
+    fn voice_chat_parses_both_spellings_and_serializes_snake_case() {
+        assert_eq!(Role::parse_wire("voice_chat"), Ok(Role::VoiceChat));
+        assert_eq!(Role::parse_wire(" Voice-Chat "), Ok(Role::VoiceChat));
+        assert_eq!(Role::VoiceChat.as_wire(), "voice_chat");
+        assert_eq!(serde_json::to_string(&Role::VoiceChat).unwrap(), "\"voice_chat\"");
+        assert!(VIEWER_ROLE_REMOVED.contains("voice_chat"));
+    }
+
+    #[test]
+    fn admin_may_only_move_people_between_member_and_voice_chat() {
+        use Role::*;
+        assert!(can_set_role(Admin, Member, VoiceChat));
+        assert!(can_set_role(Admin, VoiceChat, Member));
+        assert!(!can_set_role(Admin, Member, Admin), "an Admin never makes an Admin");
+        assert!(!can_set_role(Admin, VoiceChat, Admin));
+        assert!(!can_set_role(Admin, Admin, VoiceChat), "an Admin can't demote an Admin");
+        assert!(!can_set_role(Admin, Owner, VoiceChat));
+        assert!(!can_set_role(Member, VoiceChat, Member));
+        assert!(!can_set_role(VoiceChat, VoiceChat, Member));
+        assert!(can_set_role(Owner, Admin, VoiceChat));
+        assert!(!can_act_on(VoiceChat, VoiceChat));
+        assert!(can_act_on(Admin, VoiceChat));
+    }
+
+    #[test]
+    fn add_user_with_role_writes_the_role_and_shares_in_one_write() {
+        with_temp_home(|| {
+            let new = NewLogin {
+                role: Some(Role::VoiceChat),
+                must_change_password: false,
+                shares: Shares { agents: vec![" p-1 ".into(), "p-1".into()], gardens: vec!["g-1".into()] },
+            };
+            add_user_with_role("rev", "password", None, None, &new).expect("add");
+            // Read the file itself: the one row on disk is already voice_chat.
+            let raw = std::fs::read_to_string(store_path()).expect("store");
+            let v: serde_json::Value = serde_json::from_str(&raw).expect("json");
+            let row = v["users"].as_array().expect("users").iter().find(|u| u["username"] == "rev").expect("row").clone();
+            assert_eq!(row["role"], "voice_chat");
+            assert_eq!(row["shares"]["agents"], serde_json::json!(["p-1"]), "trimmed + deduped");
+            assert_eq!(row["shares"]["gardens"], serde_json::json!(["g-1"]));
+            assert_eq!(row["must_change_password"], false);
+            assert_eq!(role_for_user("rev"), Some(Role::VoiceChat));
+            assert!(!can_clone("rev"), "V11: never canClone");
+            assert_eq!(voice_chat_shares("rev").expect("shares").agents, vec!["p-1".to_string()]);
+            // Shares on any other role are refused, nothing written.
+            let bad = NewLogin { role: None, must_change_password: false, shares: Shares { agents: vec!["p".into()], gardens: vec![] } };
+            assert!(add_user_with_role("mem", "password", None, None, &bad).is_err());
+            assert_eq!(role_for_user("mem"), None);
+        });
+    }
+
+    #[test]
+    fn a_voice_chat_store_row_loads() {
+        with_temp_home(|| {
+            add_user("xv", "password").expect("seed the file");
+            let raw = std::fs::read_to_string(store_path()).expect("store");
+            let mut v: serde_json::Value = serde_json::from_str(&raw).expect("json");
+            v["users"][0]["role"] = serde_json::json!("voice_chat");
+            v["users"][0]["shares"] = serde_json::json!({"gardens": ["g-9"]});
+            std::fs::write(store_path(), v.to_string()).expect("write");
+            assert_eq!(role_for_user("xv"), Some(Role::VoiceChat));
+            assert_eq!(voice_chat_shares("xv").expect("shares").gardens, vec!["g-9".to_string()]);
+        });
+    }
+
+    #[test]
+    fn voice_chat_role_changes_are_live_and_others_still_sign_out() {
+        with_temp_home(|| {
+            add_user("dana", "password").expect("add");
+            let tok = create_session("dana");
+            let epoch0 = live_user_epoch("dana").expect("epoch");
+            assert_eq!(set_role_from("dana", Role::VoiceChat).expect("down"), Role::Member);
+            assert_eq!(live_user_epoch("dana"), Some(epoch0), "a downgrade keeps the epoch");
+            assert_eq!(validate_session(&tok), Some("dana".to_string()), "no sign-out on a downgrade");
+            set_role("dana", Role::Member).expect("up");
+            assert_eq!(validate_session(&tok), Some("dana".to_string()), "no sign-out on an upgrade");
+            set_role("dana", Role::Admin).expect("to admin");
+            assert_ne!(live_user_epoch("dana"), Some(epoch0), "Member -> Admin bumps the epoch");
+            assert_eq!(validate_session(&tok), None, "Member -> Admin still signs out");
+        });
+    }
+
+    #[test]
+    fn voice_chat_logins_are_not_people_agents_see() {
+        with_temp_home(|| {
+            add_user("pat", "password").expect("add");
+            add_user_with_role("rev", "password", None, None, &NewLogin { role: Some(Role::VoiceChat), ..Default::default() }).expect("add");
+            let rows = list_people_for_agents("owner").expect("rows");
+            assert!(rows.iter().any(|r| r.username == "pat"));
+            assert!(!rows.iter().any(|r| r.username == "rev"), "voice_chat left out: {rows:?}");
+            assert!(is_voice_chat_only("rev"));
+            assert!(!is_voice_chat_only("pat"));
+        });
+    }
+
+    #[test]
+    fn shares_are_only_for_voice_chat_logins() {
+        with_temp_home(|| {
+            add_user("pat", "password").expect("add");
+            let e = set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec![] }).expect_err("member");
+            assert!(e.starts_with("not_voice_chat"), "{e}");
+            set_role("pat", Role::VoiceChat).expect("down");
+            set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec!["g".into()] }).expect("set");
+            assert_eq!(voice_chat_shares("pat").expect("s").gardens, vec!["g".to_string()]);
+            // A Member's stored shares never act.
+            set_role("pat", Role::Member).expect("up");
+            assert_eq!(voice_chat_shares("pat"), None);
+            // Disabled: nothing shared.
+            set_role("pat", Role::VoiceChat).expect("down");
+            set_disabled("pat", true).expect("disable");
+            assert_eq!(voice_chat_shares("pat"), None);
+            let too_many = Shares { agents: (0..=MAX_SHARES).map(|i| format!("p{i}")).collect(), gardens: vec![] };
+            assert!(too_many.normalized().is_err());
+        });
+    }
+
     #[test]
     fn role_wire_round_trips() {
-        for r in [Role::Owner, Role::Admin, Role::Member] {
+        for r in [Role::Owner, Role::Admin, Role::Member, Role::VoiceChat] {
             assert_eq!(Role::from_wire(r.as_wire()), Some(r));
         }
         // Case-insensitive + trimmed.
@@ -3015,7 +3355,7 @@ mod tests {
             VIEWER_ROLE_REMOVED
         );
         let other = Role::parse_wire("guest").expect_err("unknown must be refused");
-        assert_eq!(other, "invalid role 'guest' (expected owner|admin|member)");
+        assert_eq!(other, "invalid role 'guest' (expected owner|admin|member|voice_chat)");
         // The bare Role type no longer deserializes "viewer" — only the
         // ConnectUser store row tolerates it (and disables the account).
         let bare: Result<Role, _> = serde_json::from_str("\"viewer\"");

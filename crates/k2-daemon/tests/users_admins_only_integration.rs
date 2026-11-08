@@ -36,6 +36,8 @@ const KNOWN_ARMS: &[(&str, &[&str])] = &[
     ("/cli/users/unlock", &["POST"]),
     ("/cli/users/set-disabled", &["POST"]),
     ("/cli/users/set-role", &["POST"]),
+    // 0.46.10: a Voice & Chat only login's shares.
+    ("/cli/users/set-shares", &["POST"]),
     ("/cli/users/set-can-clone", &["POST"]),
     ("/cli/users/policy", &["GET", "POST"]),
     ("/cli/users/audit", &["GET"]),
@@ -96,6 +98,7 @@ fn body_for(path: &str) -> String {
         "/cli/users/add" => json!({ "username": "intruder", "password": "Intruder-pass-123" }),
         "/cli/users/policy" => json!({ "minLength": 4 }),
         "/cli/users/set-role" => json!({ "username": "admin1", "role": "owner" }),
+        "/cli/users/set-shares" => json!({ "username": "admin1", "agents": [], "gardens": [] }),
         "/cli/users/set-disabled" => json!({ "username": "admin1", "disabled": true }),
         "/cli/users/set-can-clone" => json!({ "username": "admin1", "canClone": true }),
         _ => json!({ "username": "admin1", "password": "Changed-pass-123" }),
@@ -243,7 +246,7 @@ async fn t1_1_no_agent_credential_reaches_any_users_arm() {
             }
         }
     }
-    assert_eq!(checked, 11 * creds.len(), "every arm × method × credential ran");
+    assert_eq!(checked, 12 * creds.len(), "every arm × method × credential ran");
     assert_eq!(store_snapshot(), before, "the Connect user store is unchanged");
     assert!(!k2_core::connect_users::verify("intruder", "Intruder-pass-123"), "no user was added");
     assert!(k2_core::connect_users::verify("admin1", "Admin-pass-1234"), "the admin's password is unchanged");

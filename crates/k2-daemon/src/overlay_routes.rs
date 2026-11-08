@@ -2720,7 +2720,11 @@ fn card_answerer(params: &HashMap<String, String>, resolved: &ResolvedOverlay, s
     let role = match k2_core::connect_users::role_for_user(session_author) {
         Some(k2_core::connect_users::Role::Owner) => k2_vault::Role::Owner,
         Some(k2_core::connect_users::Role::Admin) => k2_vault::Role::Admin,
-        Some(_) => k2_vault::Role::Member,
+        Some(k2_core::connect_users::Role::Member) => k2_vault::Role::Member,
+        // prd-voice-chat-only-members-v1 §11.3: never treated as a Member.
+        Some(k2_core::connect_users::Role::VoiceChat) => {
+            return Err(forbidden("a Voice & Chat only login can't answer cards"))
+        }
         None => return Err(forbidden("that login no longer exists")),
     };
     Ok(k2_vault::Actor::Login { username: session_author.to_string(), role })

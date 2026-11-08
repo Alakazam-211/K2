@@ -248,6 +248,8 @@ pub mod cell_egress;
 // spawn path (linux + sandbox-microvm + K2_SANDBOX); inert otherwise.
 pub mod cell_uid_pool;
 pub mod session_token;
+/// Voice & Chat only shares (`/cli/shared*`, prd-voice-chat-only-members-v1).
+pub mod shared_routes;
 // Wave 0: caller-asserted workspace must never be identity (mail/DNS grants).
 pub mod caller_workspace;
 // C2 (0.40.45): connection-required local agent msg/read/inbox.

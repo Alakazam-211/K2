@@ -38,15 +38,20 @@
 use crate::cli_response::CliResponse;
 
 /// The lowest login that may reach a route. Ordered: a login passes when
-/// its role is at or above the floor. `Public` and `Member` admit every
-/// login (every role is Member or above since the Viewer role was
-/// removed); `NoLogin` admits none.
+/// its role is at or above the floor. `Public` and `VoiceChat` admit every
+/// login; `Member` admits Member and above, so it REFUSES a Voice & Chat
+/// only login (prd-voice-chat-only-members-v1 V1: that one comparison is
+/// the role's whole safety); `NoLogin` admits none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Floor {
     /// No credential needed (login, app-pass login/reset, federation
-    /// envelopes). A stray login token on it is never refused.
+    /// envelopes). A stray login token on it is never refused, except a
+    /// Voice & Chat only login's on a row outside [`VOICE_CHAT_PUBLIC`].
     Public,
-    /// Any login.
+    /// Any login, Voice & Chat only included: ONLY the rows on
+    /// [`VOICE_CHAT_ALLOWLIST`] (a test pins the two together).
+    VoiceChat,
+    /// Member, Admin or Owner login.
     Member,
     /// Admin or Owner login.
     Admin,
@@ -62,6 +67,7 @@ impl Floor {
     pub fn as_wire(self) -> &'static str {
         match self {
             Floor::Public => "public",
+            Floor::VoiceChat => "voice_chat",
             Floor::Member => "member",
             Floor::Admin => "admin",
             Floor::Owner => "owner",
@@ -73,7 +79,8 @@ impl Floor {
     pub fn admits(self, role: k2_core::connect_users::Role) -> bool {
         use k2_core::connect_users::Role;
         match self {
-            Floor::Public | Floor::Member => true,
+            Floor::Public | Floor::VoiceChat => true,
+            Floor::Member => role >= Role::Member,
             Floor::Admin => role >= Role::Admin,
             Floor::Owner => role >= Role::Owner,
             Floor::NoLogin => false,
@@ -104,7 +111,76 @@ const fn split(path: &'static str, g: Floor, p: Floor) -> Route {
     Route { path, get: Some(g), post: Some(p) }
 }
 
-use Floor::{Admin, Member, NoLogin, Owner, Public};
+use Floor::{Admin, Member, NoLogin, Owner, Public, VoiceChat};
+
+/// Every `(method, path)` a Voice & Chat only login may use
+/// (prd-voice-chat-only-members-v1 §5.1, plus the reviewer shares). These
+/// are exactly the `VoiceChat` cells of [`ROUTES`]; the test
+/// `voice_chat_floor_is_exactly_the_allowlist` walks every row and fails
+/// when they differ, so adding a route a Voice & Chat only login can reach
+/// is always a reviewed change here. Everything else answers 403
+/// `role_required`.
+pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
+    // Its own account: the client reads the role; first sign-in may use a
+    // temporary password; sign out.
+    ("GET", "/cli/auth/whoami"),
+    ("POST", "/cli/auth/logout"),
+    ("POST", "/cli/auth/change-password"),
+    ("GET", "/cli/users/policy"),
+    // V3 compat only: answers an empty summary and reads nothing, so an
+    // older client's Home pool doesn't loop on sign-in.
+    ("GET", "/cli/presence/summary"),
+    // Voice rooms (the role's core).
+    ("GET", "/cli/voice/events"),
+    ("GET", "/cli/voice/rooms"),
+    ("POST", "/cli/voice/join"),
+    ("POST", "/cli/voice/recording/consent"),
+    ("POST", "/cli/voice/session/keys/join"),
+    ("POST", "/cli/voice/session/keys/key_packages"),
+    ("POST", "/cli/voice/session/leave"),
+    ("POST", "/cli/voice/session/state"),
+    ("POST", "/cli/voice/session/stats"),
+    // What the owner shares with this login by id (`shared_routes`): the
+    // list, one shared agent's Thread (read, post as the person).
+    ("GET", "/cli/shared"),
+    ("GET", "/cli/shared/thread"),
+    ("POST", "/cli/shared/thread/post"),
+    // A shared Garden, read-only, through the phone's remote Garden door
+    // (`zen_remote_routes::gate` admits only the shared Gardens and only
+    // read verbs for this role).
+    ("GET", "/cli/zen/remote/blob/get"),
+    ("POST", "/cli/zen/remote/call"),
+    ("GET", "/cli/zen/remote/frame"),
+    ("GET", "/cli/zen/remote/gardens"),
+    ("GET", "/cli/zen/remote/lib"),
+    ("POST", "/cli/zen/remote/lib/fetch"),
+    ("GET", "/cli/zen/remote/page"),
+    ("GET", "/cli/zen/remote/sources-changes"),
+];
+
+/// `Public` rows a Voice & Chat only login's token may be presented on
+/// (signing in again, an App's own sign-in pages in a browser that also
+/// holds the login's cookie, an email link). Every other `Public` row
+/// (federation envelopes, compute node doors, webhooks, and any `Public`
+/// row added later) refuses it: deny by default.
+pub const VOICE_CHAT_PUBLIC: &[&str] = &[
+    "/cli/auth/device/pair",
+    "/cli/auth/device/pair/check",
+    "/cli/auth/login",
+    "/cli/email/stop",
+    "/cli/email/verify",
+    "/cli/skin/app-info",
+    "/cli/skin/auth/exchange",
+    "/cli/skin/login",
+    "/cli/skin/logout",
+    "/cli/skin/pair",
+    "/cli/skin/pair/check",
+    "/cli/skin/password/change",
+    "/cli/skin/password/forgot",
+    "/cli/skin/password/reset",
+    "/cli/skin/password/set",
+    "/cli/skin/refresh",
+];
 
 /// Every `/cli/*` route the daemon answers, sorted by path (the lookup is
 /// a binary search; a unit test pins the order and uniqueness).
@@ -504,7 +580,7 @@ pub const ROUTES: &[Route] = &[
     split("/cli/app/wallet/settings", Admin, Admin),
     // 0.46.0 grace: what breaks when a service moves to an App.
     get("/cli/app/warnings", Member),
-    post("/cli/auth/change-password", Member),
+    post("/cli/auth/change-password", VoiceChat),
     // phone-web-off (2026-10-24): Companion pairing. The pair redeem is
     // Public (the one-time code is the credential); minting a code, the
     // paired-phone list and revoke take a login (the owner sees and ends
@@ -518,8 +594,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/auth/device/revoke", Member),
     get("/cli/auth/devices", Member),
     post("/cli/auth/login", Public),
-    post("/cli/auth/logout", Member),
-    get("/cli/auth/whoami", Member),
+    post("/cli/auth/logout", VoiceChat),
+    get("/cli/auth/whoami", VoiceChat),
     post("/cli/awareness/publish", Member),
     get("/cli/awareness/subscribe", Member),
     // Board files (`board_file/routes.rs`): any login; the handler checks
@@ -1439,7 +1515,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/power/status", Member),
     post("/cli/presence/kick", Admin),
     get("/cli/presence/roster", Member),
-    get("/cli/presence/summary", Member),
+    get("/cli/presence/summary", VoiceChat),
     post("/cli/presets/create", Admin),
     post("/cli/presets/delete", Admin),
     get("/cli/presets/get", Member),
@@ -1750,6 +1826,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/users/reset", Admin),
     post("/cli/sew/users/revoke", Admin),
     post("/cli/sew/users/role", Admin),
+    // Voice & Chat only shares (`shared_routes`): what the owner shared
+    // with this login, one shared agent's Thread, a post to it.
+    get("/cli/shared", VoiceChat),
+    get("/cli/shared/thread", VoiceChat),
+    post("/cli/shared/thread/post", VoiceChat),
     // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1), and Workbench W1
     // (0.46.7): interrupt is a keystroke (Member, like terminal write);
     // land and retire change the workspace's main branch / delete a
@@ -2092,12 +2173,17 @@ pub const ROUTES: &[Route] = &[
     get("/cli/users", Admin),
     post("/cli/users/add", Admin),
     get("/cli/users/audit", Owner),
-    split("/cli/users/policy", Member, NoLogin),
+    split("/cli/users/policy", VoiceChat, NoLogin),
     post("/cli/users/remove", Owner),
     post("/cli/users/set-can-clone", Owner),
     post("/cli/users/set-disabled", Admin),
     post("/cli/users/set-password", Owner),
-    post("/cli/users/set-role", Owner),
+    // prd-voice-chat-only-members-v1 Q1/V8: an Admin moves people between
+    // Member and Voice & Chat only; the handler keeps every other change
+    // Owner-only (`connect_users::can_set_role`).
+    post("/cli/users/set-role", Admin),
+    // The shares of a Voice & Chat only login (agents' Threads, Gardens).
+    post("/cli/users/set-shares", Admin),
     post("/cli/users/unlock", Owner),
     // K2 vault (prd-k2-vault-v1 §22.3, KV14). Passports reach the Member
     // rows through is_agent_verb and are checked in the handler; confirm,
@@ -2168,18 +2254,19 @@ pub const ROUTES: &[Route] = &[
     // login's (the handler refuses the bare owner token and passports);
     // moderation, the count, renames and closing are Owner/Admin; status is
     // Owner/Admin (agents read it with a passport, which this table never gates).
-    post("/cli/voice/join", Member),
+    get("/cli/voice/events", VoiceChat),
+    post("/cli/voice/join", VoiceChat),
     post("/cli/voice/moderate", Admin),
-    post("/cli/voice/recording/consent", Member),
+    post("/cli/voice/recording/consent", VoiceChat),
     post("/cli/voice/repair", Admin),
-    get("/cli/voice/rooms", Member),
+    get("/cli/voice/rooms", VoiceChat),
     post("/cli/voice/rooms/close", Admin),
     post("/cli/voice/rooms/rename", Admin),
-    post("/cli/voice/session/keys/join", Member),
-    post("/cli/voice/session/keys/key_packages", Member),
-    post("/cli/voice/session/leave", Member),
-    post("/cli/voice/session/state", Member),
-    post("/cli/voice/session/stats", Member),
+    post("/cli/voice/session/keys/join", VoiceChat),
+    post("/cli/voice/session/keys/key_packages", VoiceChat),
+    post("/cli/voice/session/leave", VoiceChat),
+    post("/cli/voice/session/state", VoiceChat),
+    post("/cli/voice/session/stats", VoiceChat),
     post("/cli/voice/settings", Admin),
     get("/cli/voice/status", Admin),
     get("/cli/whats_new", Member),
@@ -2345,18 +2432,18 @@ pub const ROUTES: &[Route] = &[
     // handler's gate takes only the owner token or a paired phone of the
     // owner person (zen_remote_routes::gate).
     get("/cli/zen/remote/agents-order", Member),
-    get("/cli/zen/remote/blob/get", Member),
+    get("/cli/zen/remote/blob/get", VoiceChat),
     post("/cli/zen/remote/blob/put", Member),
-    post("/cli/zen/remote/call", Member),
-    get("/cli/zen/remote/frame", Member),
-    get("/cli/zen/remote/gardens", Member),
-    get("/cli/zen/remote/lib", Member),
-    post("/cli/zen/remote/lib/fetch", Member),
-    get("/cli/zen/remote/page", Member),
+    post("/cli/zen/remote/call", VoiceChat),
+    get("/cli/zen/remote/frame", VoiceChat),
+    get("/cli/zen/remote/gardens", VoiceChat),
+    get("/cli/zen/remote/lib", VoiceChat),
+    post("/cli/zen/remote/lib/fetch", VoiceChat),
+    get("/cli/zen/remote/page", VoiceChat),
     post("/cli/zen/remote/pause", Member),
     post("/cli/zen/remote/report", Member),
     post("/cli/zen/remote/resume", Member),
-    get("/cli/zen/remote/sources-changes", Member),
+    get("/cli/zen/remote/sources-changes", VoiceChat),
     post("/cli/zen/reset", Member),
     post("/cli/zen/setup", Member),
     // Garden access (live only with the switch on): View this version.
@@ -2696,11 +2783,12 @@ pub fn is_post_shaped_get_verb(path: &str) -> bool {
 }
 
 /// Refusal for a login below the route's floor.
-fn role_required(floor: Floor, role: k2_core::connect_users::Role) -> CliResponse {
+pub(crate) fn role_required(floor: Floor, role: k2_core::connect_users::Role) -> CliResponse {
     let message = match floor {
         Floor::NoLogin => {
             "No login can use this route. It takes the owner token on the server.".to_string()
         }
+        _ if role == k2_core::connect_users::Role::VoiceChat => VOICE_CHAT_REFUSAL.to_string(),
         other => format!(
             "This needs an {} login on this server. You are signed in as {}.",
             other.as_wire(),
@@ -2718,6 +2806,23 @@ fn role_required(floor: Floor, role: k2_core::connect_users::Role) -> CliRespons
         })
         .to_string(),
     }
+}
+
+/// The message every refusal of a Voice & Chat only login carries.
+pub const VOICE_CHAT_REFUSAL: &str = "This server gives you Voice & Chat only: you can join its voice rooms and use what the owner shared with you, not open it.";
+
+/// For a door outside `/cli` that takes any login (`/events`, `/status`):
+/// 403 `role_required` when the request's credential is a live Voice & Chat
+/// only login, else `None` (the door's own check runs as before). Never the
+/// "invalid or missing token" text, which starts the client's re-login loop
+/// (V4).
+pub fn refuse_voice_chat_login(query: &str, owner_token: &str) -> Option<CliResponse> {
+    let tok = super::http::extract_token(query)?;
+    if tok.is_empty() || super::http::ct_eq_token(tok, owner_token) {
+        return None;
+    }
+    let role = k2_core::connect_users::role_for_session(tok)?;
+    (role == k2_core::connect_users::Role::VoiceChat).then(|| role_required(Floor::Member, role))
 }
 
 /// Refusal for a login on a `/cli/*` path that is not in [`ROUTES`].
@@ -2776,6 +2881,14 @@ pub fn role_gate(
     let Some(floor) = floor else {
         return Some(unclassified());
     };
+    // Deny by default for Voice & Chat only on Public rows too: a token it
+    // presents is refused on any Public row not reviewed for it.
+    if role == k2_core::connect_users::Role::VoiceChat
+        && floor == Floor::Public
+        && !VOICE_CHAT_PUBLIC.contains(&path)
+    {
+        return Some(role_required(Floor::Member, role));
+    }
     if floor.admits(role) {
         None
     } else {
@@ -3648,6 +3761,152 @@ mod tests {
         assert!(post_allowed("/cli/tickets/settings"));
     }
 
+    // ── Voice & Chat only (prd-voice-chat-only-members-v1 §11) ─────────
+
+    /// Every `(method, row floor)` cell the table declares.
+    fn cells() -> Vec<(&'static str, &'static Route, Floor)> {
+        let mut out = Vec::new();
+        for r in ROUTES {
+            if let Some(f) = r.get {
+                out.push(("GET", r, f));
+            }
+            if let Some(f) = r.post {
+                out.push(("POST", r, f));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_member_floor_refuses_voice_chat() {
+        // V1: this comparison is the role's whole safety.
+        assert!(!Floor::Member.admits(Role::VoiceChat));
+        assert!(Floor::Member.admits(Role::Member));
+        assert!(Floor::VoiceChat.admits(Role::VoiceChat));
+        assert!(!Floor::Admin.admits(Role::VoiceChat));
+        assert!(!Floor::Owner.admits(Role::VoiceChat));
+        assert!(!Floor::NoLogin.admits(Role::VoiceChat));
+        assert_eq!(Floor::VoiceChat.as_wire(), "voice_chat");
+    }
+
+    /// Deny by default: the `VoiceChat` cells are EXACTLY the reviewed
+    /// allowlist, both ways. Adding a route with a `VoiceChat` floor, or a
+    /// floor change that lets this role in, fails here until
+    /// `VOICE_CHAT_ALLOWLIST` changes with it (a reviewed edit).
+    #[test]
+    fn voice_chat_floor_is_exactly_the_allowlist() {
+        let mut table: BTreeSet<(String, String)> = BTreeSet::new();
+        for (m, r, f) in cells() {
+            if f == Floor::VoiceChat {
+                table.insert((m.to_string(), r.path.to_string()));
+            }
+        }
+        let list: BTreeSet<(String, String)> =
+            VOICE_CHAT_ALLOWLIST.iter().map(|(m, p)| (m.to_string(), p.to_string())).collect();
+        assert_eq!(list.len(), VOICE_CHAT_ALLOWLIST.len(), "the allowlist has a duplicate");
+        assert_eq!(table, list, "VoiceChat rows in ROUTES vs VOICE_CHAT_ALLOWLIST");
+        // The PRD's 14 rows plus the reviewer shares (3 + 8 Garden reads).
+        assert_eq!(list.len(), 14 + 3 + 8);
+        for p in VOICE_CHAT_PUBLIC {
+            let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
+            assert!(
+                r.get == Some(Floor::Public) || r.post == Some(Floor::Public),
+                "{p} on VOICE_CHAT_PUBLIC must be a Public row"
+            );
+        }
+    }
+
+    /// The full-route walk through the real gate with a real Voice & Chat
+    /// only session: every row, every declared method (and a GET on every
+    /// row) is refused (403 `role_required`, or 404 for a row its switch
+    /// hides) unless the cell is on the allowlist or a reviewed Public row.
+    #[test]
+    fn every_route_refuses_a_voice_chat_login_except_the_allowlist() {
+        crate::test_support::with_temp_home(|| {
+            let vc = session("rp_voicechat", Role::VoiceChat);
+            let q = format!("token={vc}");
+            let mut passed = Vec::new();
+            let mut checked = 0;
+            for r in ROUTES {
+                for m in ["GET", "POST"] {
+                    let declared = if m == "POST" { r.post.or(r.get) } else { r.get.or(r.post) };
+                    let Some(floor) = declared else { continue };
+                    checked += 1;
+                    let got = role_gate(m, r.path, &q, OWNER);
+                    // The cell the gate reads for this method.
+                    let cell_m = if m == "POST" { if r.post.is_some() { "POST" } else { "GET" } } else if r.get.is_some() { "GET" } else { "POST" };
+                    let allowed = VOICE_CHAT_ALLOWLIST.contains(&(cell_m, r.path))
+                        || (floor == Floor::Public && VOICE_CHAT_PUBLIC.contains(&r.path));
+                    match (&got, allowed) {
+                        (None, true) => passed.push(format!("{m} {}", r.path)),
+                        (None, false) => panic!("{m} {} lets a voice_chat login through (floor {floor:?})", r.path),
+                        (Some(resp), true) => panic!("{m} {} is allowlisted but refused: {}", r.path, resp.body),
+                        (Some(resp), false) => {
+                            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+                            if live_row(r.path).is_some() {
+                                assert_eq!(resp.status, "403 Forbidden", "{m} {}: {}", r.path, resp.body);
+                                assert_eq!(v["error"], "role_required", "{m} {}", r.path);
+                                assert_eq!(v["role"], "voice_chat");
+                                if floor != Floor::NoLogin {
+                                    assert_eq!(v["message"], VOICE_CHAT_REFUSAL, "{m} {}", r.path);
+                                }
+                            } else {
+                                assert_eq!(resp.status, "404 Not Found", "{m} {} (switch off)", r.path);
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(checked > 1700, "walked only {checked} cells");
+            // Spot checks the PRD names (§13).
+            for (m, p) in [
+                ("POST", "/cli/users/add"),
+                ("GET", "/cli/projects/list"),
+                ("POST", "/cli/voice/moderate"),
+                ("POST", "/cli/terminal/spawn"),
+                ("POST", "/cli/sessions/v2/spawn"),
+                ("GET", "/cli/sessions/grid"),
+                ("GET", "/cli/sessions/events"),
+                ("GET", "/cli/vault/list"),
+                ("GET", "/cli/thread"),
+                ("POST", "/cli/thread/post"),
+                ("GET", "/cli/agent/list"),
+                ("POST", "/cli/users/set-role"),
+                ("POST", "/cli/users/set-shares"),
+                ("GET", "/cli/zen/remote/agents-order"),
+                ("POST", "/cli/zen/remote/blob/put"),
+                ("POST", "/cli/sew/pass"),
+                ("GET", "/cli/federation/roster"),
+            ] {
+                if lookup(p).is_none() {
+                    continue;
+                }
+                assert!(role_gate(m, p, &q, OWNER).is_some(), "{m} {p} must refuse voice_chat");
+            }
+            assert!(role_gate("POST", "/cli/voice/join", &q, OWNER).is_none());
+            assert!(role_gate("GET", "/cli/shared", &q, OWNER).is_none());
+            assert!(role_gate("POST", "/cli/auth/login", &q, OWNER).is_none());
+            // An unclassified path still 404s.
+            assert_eq!(status(&role_gate("GET", "/cli/not-a-route", &q, OWNER)), "404 Not Found");
+            // Outside /cli: the /events and /status doors refuse it, never
+            // with the stale-session text.
+            let r = refuse_voice_chat_login(&q, OWNER).expect("refused");
+            assert_eq!(r.status, "403 Forbidden");
+            assert!(r.body.contains("role_required") && !r.body.contains("invalid or missing token"));
+            assert!(refuse_voice_chat_login(&format!("token={OWNER}"), OWNER).is_none());
+            let member = session("rp_vcmember", Role::Member);
+            assert!(refuse_voice_chat_login(&format!("token={member}"), OWNER).is_none());
+            // A downgrade acts on the next request with no sign-out, and an
+            // upgrade gives the Member rows back.
+            assert!(role_gate("GET", "/cli/projects/list", &format!("token={member}"), OWNER).is_none());
+            connect_users::set_role("rp_vcmember", Role::VoiceChat).expect("down");
+            assert_eq!(status(&role_gate("GET", "/cli/projects/list", &format!("token={member}"), OWNER)), "403 Forbidden");
+            connect_users::set_role("rp_vcmember", Role::Member).expect("up");
+            assert!(role_gate("GET", "/cli/projects/list", &format!("token={member}"), OWNER).is_none());
+            assert!(passed.len() >= VOICE_CHAT_ALLOWLIST.len(), "{passed:?}");
+        });
+    }
+
     #[test]
     fn gate_matrix_by_caller_and_floor() {
         crate::test_support::with_temp_home(|| {
@@ -3658,7 +3917,7 @@ mod tests {
             // (path, method) for one row of each floor.
             let member_route = ("POST", "/cli/sessions/v2/spawn");
             let admin_route = ("POST", "/cli/users/add");
-            let owner_route = ("POST", "/cli/users/set-role");
+            let owner_route = ("POST", "/cli/users/set-can-clone");
             let nologin_route = ("POST", "/cli/tunnel/start");
             let public_route = ("POST", "/cli/auth/login");
             let get_split = ("GET", "/cli/users/policy");

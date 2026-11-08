@@ -221,11 +221,7 @@ pub(crate) fn floor_str(f: Floor) -> &'static str {
 }
 
 fn role_str(r: Role) -> &'static str {
-    match r {
-        Role::Owner => "owner",
-        Role::Admin => "admin",
-        Role::Member => "member",
-    }
+    r.as_wire()
 }
 
 /// An answerer from the Thread route's caller: the owner token, or a

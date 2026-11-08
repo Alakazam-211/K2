@@ -287,11 +287,12 @@ pub(crate) fn person_or_manager(who: &Who) -> R<()> {
     approve_routes::util::need_person_or_manager(who)
 }
 
-/// The `viewers` floor for reads: a Member login can't read an `admin`
-/// source. The owner token and passports skip it (passports are masked).
+/// The `viewers` floor for reads: a login below Admin (a Member, or a Voice
+/// & Chat only login reading a shared Garden) can't read an `admin` source.
+/// The owner token and passports skip it (passports are masked).
 pub(crate) fn can_read(who: &Who, row: &SourceRow) -> R<()> {
-    if let Who::Login { role: Role::Member, .. } = who {
-        if row.viewers == Viewers::Admin {
+    if let Who::Login { role, .. } = who {
+        if *role < Role::Admin && row.viewers == Viewers::Admin {
             return Err(SourceErr::new("cap_not_granted", 403, "this source is for admins on this server").with("role", "admin"));
         }
     }

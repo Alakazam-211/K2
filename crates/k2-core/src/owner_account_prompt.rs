@@ -81,11 +81,7 @@ pub struct PromptView {
 }
 
 fn role_wire(r: Role) -> &'static str {
-    match r {
-        Role::Owner => "owner",
-        Role::Admin => "admin",
-        Role::Member => "member",
-    }
+    r.as_wire()
 }
 
 /// Enabled Owner/Admin logins, sorted by username.

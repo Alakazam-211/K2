@@ -169,7 +169,10 @@ pub fn who_of(presented: &str, owner_token: &str) -> RemoteWho {
 /// The person the door answers, after [`gate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Person {
-    /// `phone` or `owner-token`.
+    /// `phone`, `owner-token`, or `shared`: a Voice & Chat only login
+    /// (password or paired phone) the owner shared one or more Gardens with
+    /// (prd-voice-chat-only-members-v1, the reviewer extension). A `shared`
+    /// person reaches only those Gardens, read-only ([`shared_check`]).
     pub client: &'static str,
     /// The login (`owner` for the owner token).
     pub login: String,
@@ -186,6 +189,15 @@ pub fn gate(who: &RemoteWho) -> Result<Person, CliResponse> {
         RemoteWho::Phone { login, device } if crate::zen_routes::login_is_owner_person(login) => {
             Ok(Person { client: "phone", login: login.clone(), device: device.clone() })
         }
+        // A Voice & Chat only login with shared Gardens: on a phone or a
+        // password sign-in (the reviewer signs in with a password). Which
+        // Garden and which verb is [`shared_check`]'s, per request.
+        RemoteWho::Phone { login, device } if shared_viewer(login) => {
+            Ok(Person { client: SHARED, login: login.clone(), device: device.clone() })
+        }
+        RemoteWho::Login { login } if shared_viewer(login) => {
+            Ok(Person { client: SHARED, login: login.clone(), device: "-".into() })
+        }
         RemoteWho::Login { login } if crate::zen_routes::login_is_owner_person(login) => Err(refuse(
             "403 Forbidden",
             "garden_device_only",
@@ -196,6 +208,81 @@ pub fn gate(who: &RemoteWho) -> Result<Person, CliResponse> {
             "garden_person_only",
             "Gardens on a phone are only for this server's owner, on a phone they paired.",
         )),
+    }
+}
+
+/// [`Person::client`] for a Voice & Chat only login's shared Gardens.
+pub const SHARED: &str = "shared";
+
+/// A live Voice & Chat only login with at least one shared Garden.
+fn shared_viewer(login: &str) -> bool {
+    k2_core::connect_users::voice_chat_shares(login).is_some_and(|s| !s.gardens.is_empty())
+}
+
+/// The data verbs a shared (read-only) viewer's widget may call: a bound
+/// source's card view and the Garden's own store and blobs, read. Never a
+/// write, a refresh (a real fetch with the source's secret), anything that
+/// reads Threads, files, tickets, activity, git, compute, guests or the
+/// owner's own saved state, whatever caps the widget holds.
+pub const SHARED_READ_VERBS: &[&str] = &[
+    "blobs.get",
+    "blobs.info",
+    "blobs.list",
+    "sources.history",
+    "sources.list",
+    "sources.read",
+    "store.changes",
+    "store.get",
+    "store.list",
+    "widget.self",
+];
+
+fn read_only(what: &str) -> CliResponse {
+    refuse("403 Forbidden", "not_granted", format!("{what}: a Garden shared with you is read-only"))
+}
+
+fn not_shared_garden(garden: &str) -> CliResponse {
+    refuse("403 Forbidden", "not_granted", format!("the Garden '{}' isn't shared with you", audit_id(garden)))
+}
+
+/// A `shared` person's per-request rule: only routes that read, only a
+/// Garden shared with this login, only [`SHARED_READ_VERBS`]. `Ok(())` for
+/// any other person (their own gate already decided).
+fn shared_check(p: &Person, path: &str, params: &HashMap<String, String>, body: &[u8]) -> Result<(), CliResponse> {
+    if p.client != SHARED {
+        return Ok(());
+    }
+    let shared = |g: &str| -> Result<(), CliResponse> {
+        crate::shared_routes::shared_garden(&p.login, g).map(|_| ()).ok_or_else(|| not_shared_garden(g))
+    };
+    match path {
+        // Filtered to the shared Gardens in [`gardens`].
+        GARDENS => Ok(()),
+        // Libraries are K2's own pinned files, the same for everyone; a
+        // fetch by URL (a CDN library) is the owner's to start.
+        LIB => Ok(()),
+        LIB_FETCH => {
+            let b: J = serde_json::from_slice(body).unwrap_or_default();
+            if b["id"].is_string() && b["version"].is_string() && b.get("url").is_none() {
+                Ok(())
+            } else {
+                Err(read_only("fetching a library by URL"))
+            }
+        }
+        PAGE | FRAME | SOURCES_CHANGES | BLOB_GET => shared(param(params, "garden").unwrap_or("")),
+        CALL => {
+            let b: J = serde_json::from_slice(body).unwrap_or_default();
+            shared(b["garden"].as_str().unwrap_or(""))?;
+            let verb = b["verb"].as_str().unwrap_or("");
+            if SHARED_READ_VERBS.contains(&verb) {
+                Ok(())
+            } else {
+                Err(read_only(&format!("the verb {}", audit_id(verb))))
+            }
+        }
+        // Writes, the run report, pause/resume and the Agents widget's order
+        // (it names every agent): never for a shared viewer.
+        _ => Err(read_only(path)),
     }
 }
 
@@ -355,6 +442,10 @@ pub fn handle(path: &str, who: &RemoteWho, params: &HashMap<String, String>, bod
             return r;
         }
     };
+    if let Err(r) = shared_check(&person, path, params, body) {
+        audit("zen.remote.refused", &person, format!("{path}: shared viewer"));
+        return r;
+    }
     match path {
         GARDENS => gardens(&person, params),
         PAGE => page(&person, params),
@@ -429,6 +520,9 @@ fn gardens(p: &Person, params: &HashMap<String, String>) -> CliResponse {
         let pauses = crate::zen_routes::current_pauses();
         for g in f.gardens_json() {
             let id = g["id"].as_str().unwrap_or_default().to_string();
+            if p.client == SHARED && crate::shared_routes::shared_garden(&p.login, &id).is_none() {
+                continue;
+            }
             let version = match f.resolve_with(Some(&id), &pauses) {
                 Ok(v) => v["version"].clone(),
                 Err(e) => return zen_err(e),
@@ -447,15 +541,21 @@ fn gardens(p: &Person, params: &HashMap<String, String>) -> CliResponse {
     let cursor = cursor_of(&list);
     let full = param(params, "since") != Some(cursor.as_str());
     audit("zen.remote.gardens", p, format!("gardens={} full={full}", list.len()));
-    ok(json!({
+    let mut body = json!({
         "ok": true,
         "serverId": crate::boot_status::server_id(),
-        "person": "owner",
+        "person": if p.client == SHARED { "shared" } else { "owner" },
         "setUp": set_up,
         "cursor": cursor,
         "full": full,
         "gardens": if full { list } else { Vec::new() },
-    }))
+    });
+    // A Voice & Chat only login's shared Gardens: read-only (the owner's
+    // phone answer is unchanged, so its golden stays byte for byte).
+    if p.client == SHARED {
+        body["readOnly"] = json!(true);
+    }
+    ok(body)
 }
 
 // ── GET page ────────────────────────────────────────────────────────
@@ -729,7 +829,8 @@ fn source_who(p: &Person) -> crate::compute_routes::Who {
     if p.client == "owner-token" {
         return crate::compute_routes::Who::Owner;
     }
-    let role = k2_core::connect_users::role_for_user(&p.login).unwrap_or(k2_core::connect_users::Role::Member);
+    // An unreadable role fails closed to the lowest (V10).
+    let role = k2_core::connect_users::role_for_user(&p.login).unwrap_or(k2_core::connect_users::Role::VoiceChat);
     crate::compute_routes::Who::Login { username: p.login.clone(), role }
 }
 

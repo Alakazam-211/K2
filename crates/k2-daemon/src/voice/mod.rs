@@ -21,6 +21,7 @@
 //! read its ledger and call its owner actions (count, rename, Close now).
 
 pub mod bff;
+pub mod events_ws;
 pub mod kit_door;
 pub mod kit_feed;
 pub mod lane;

@@ -34,11 +34,7 @@ pub(crate) fn pending(who: &Who) -> CliResponse {
 }
 
 fn role_str(r: k2_core::connect_users::Role) -> &'static str {
-    match r {
-        k2_core::connect_users::Role::Owner => "owner",
-        k2_core::connect_users::Role::Admin => "admin",
-        k2_core::connect_users::Role::Member => "member",
-    }
+    r.as_wire()
 }
 
 /// The rows of `reqs` that `who` may answer (floor met, still open, still

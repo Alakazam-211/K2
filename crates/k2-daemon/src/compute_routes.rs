@@ -265,7 +265,8 @@ pub fn who_from_tcp(query: &str, bearer: Option<&str>, owner_token: &str) -> Who
         return Who::Owner;
     }
     if let Some(username) = k2_core::connect_users::validate_session(presented) {
-        let role = k2_core::connect_users::role_for_user(&username).unwrap_or(Role::Member);
+        // V10: an unreadable role fails closed to the lowest.
+        let role = k2_core::connect_users::role_for_user(&username).unwrap_or(Role::VoiceChat);
         return Who::Login { username, role };
     }
     // Any valid passport is classified (even on an owner route) so the

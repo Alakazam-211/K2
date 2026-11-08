@@ -804,6 +804,26 @@ async fn an_unstamped_space_is_checked_once_after_an_upgrade() {
     env.sew.assert_clean();
 }
 
+/// prd-voice-chat-only-members-v1 §6.1: a Voice & Chat only login is in the
+/// K5 Space at `member`, never `moderator`, and Member <-> Voice & Chat only
+/// moves no level.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_voice_chat_login_is_a_k5_member_never_a_moderator() {
+    let env = setup(&SEW_070, true, Hosting::Ok).await;
+    let rev = login("revk5", Role::VoiceChat);
+    settle(&env).await;
+    let sp = space(&env);
+    assert!(env.sew.space(&sp).unwrap().members.contains(&rev), "voice_chat is in the K5 Space");
+    assert_eq!(env.sew.level(&sp, &rev).as_deref(), Some("member"));
+    connect_users::set_role("revk5", Role::Member).expect("up");
+    settle(&env).await;
+    assert_eq!(env.sew.level(&sp, &rev).as_deref(), Some("member"));
+    connect_users::set_role("revk5", Role::VoiceChat).expect("down");
+    settle(&env).await;
+    assert_eq!(env.sew.level(&sp, &rev).as_deref(), Some("member"), "never moderator");
+    env.sew.assert_clean();
+}
+
 /// Phones (gap-voice-calls-mobile-v1 §11 row 4), through the real
 /// `/cli/voice/*` handler and the real login store: a paired phone's device
 /// session joins exactly like the same person's desktop login (same rules,
@@ -1025,6 +1045,67 @@ mod phone {
         assert_eq!(sew.calls.lock().unwrap().len(), before, "an ended pairing reaches nothing");
         let (s, v) = call(&desk, routes::JOIN, true, join);
         assert_eq!(s, "200 OK", "the desktop still joins: {v}");
+        env.sew.assert_clean();
+    }
+
+    /// prd-voice-chat-only-members-v1: a Voice & Chat only login (a password
+    /// sign-in, as the store reviewer's phone uses) lists rooms, joins with
+    /// a call credential, leaves and answers a recording notice like a
+    /// Member; it never moderates or reads status, and occupancy names its
+    /// role `voice_chat` (V9).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_voice_chat_login_joins_like_a_member_and_never_moderates() {
+        let env = setup(&SEW_070, true, Hosting::Ok).await;
+        let _reset = Reset;
+        let rev = login("revvc", Role::VoiceChat);
+        settle(&env).await;
+        let sp = space(&env);
+        let sew = Arc::new(ClientSew::default());
+        bff::set_deps(Some(Arc::new(Deps {
+            sew: sew.clone(),
+            mint: Arc::new(|i: &k2_daemon::chat_pass::identity::PassIdentity| Ok::<_, String>(format!("pass-for-{}", i.sub))),
+            connect_gate: Arc::new(|_: &str, _: &str| Ok::<_, String>(ConnectChatGate::Ready)),
+            level_pending: Arc::new(|_: &ExternalId| Ok::<_, String>(false)),
+            lane_hold: Duration::from_millis(200),
+            member_wait: Duration::from_millis(100),
+            presence: Arc::new(bff::live_presence),
+        })));
+        let tok = connect_users::create_session("revvc");
+        match Caller::from_tcp("", Some(&tok), OWNER_TOKEN) {
+            Caller::Login { username, role, .. } => assert_eq!((username.as_str(), role), ("revvc", Role::VoiceChat)),
+            other => panic!("a login caller, got {other:?}"),
+        }
+        let (s, v) = call(&tok, routes::ROOMS, false, json!({}));
+        assert_eq!(s, "200 OK", "{v}");
+        let join = json!({"room": "room-1", "join": {"call_credential": true, "self_mute": false, "self_deaf": false}});
+        let (s, j) = call(&tok, routes::JOIN, true, join);
+        assert_eq!(s, "200 OK", "{j}");
+        assert_eq!(j["join"]["call_credential"]["token"], "sewcc_sel.secret");
+        assert_eq!(sew.passes()[0]["pass"], format!("pass-for-{rev}"), "its own person, never the owner");
+        let (s, v) = call(&tok, routes::MODERATE, true, json!({"room": "room-1", "person": "revvc", "action": "mute"}));
+        assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("moderator_only")), "{v}");
+        for (path, post, body) in [(routes::STATUS, false, json!({})), (routes::SETTINGS, true, json!({"count": 2}))] {
+            let (s, v) = call(&tok, path, post, body);
+            assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("owner_or_admin_only")), "{path}: {v}");
+        }
+        // In the room on Sew: it is listed like anyone (its row's role name
+        // is pinned by voice::routes' role_name test).
+        env.sew.voice_join(&sp, "room-1", &rev).expect("in room-1 on Sew");
+        let mgmt = MgmtClient::new(env.sew.socket.clone(), env.sew.token_file.clone());
+        let mut feed = Feed::default();
+        feed.step(&mgmt, &sp, 0).await.expect("voice/states");
+        let (_, rooms) = call(OWNER_TOKEN, routes::ROOMS, false, json!({}));
+        let occupants: Vec<Value> = rooms["rooms"]
+            .as_array()
+            .expect("rooms")
+            .iter()
+            .flat_map(|r| r["occupants"].as_array().cloned().unwrap_or_default())
+            .collect();
+        assert!(occupants.iter().any(|o| o["externalId"] == rev.as_str()), "revvc in a room: {rooms}");
+        let (s, v) = call(&tok, routes::RECORDING_CONSENT, true, json!({"recording_id": "77", "consent": true, "notice_version": 2}));
+        assert_eq!(s, "200 OK", "{v}");
+        let (s, v) = call(&tok, routes::LEAVE, true, json!({"callId": j["callId"]}));
+        assert_eq!(s, "200 OK", "{v}");
         env.sew.assert_clean();
     }
 }

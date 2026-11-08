@@ -125,7 +125,9 @@ impl People {
             return (name.eq_ignore_ascii_case(OWNER) && self.user(name).is_none()).then(|| OWNER.to_string());
         }
         let user = self.user(name)?;
-        if user.disabled {
+        // A Voice & Chat only login gets no Thread, ticket or project push
+        // (prd-voice-chat-only-members-v1 §6.4): its devices reach nobody.
+        if user.disabled || user.role == Role::VoiceChat {
             return None;
         }
         self.login_person_key(&user.username)
@@ -536,6 +538,13 @@ mod tests {
             }
         }
         (g, a, b)
+    }
+
+    #[test]
+    fn a_voice_chat_login_gets_no_pushes() {
+        let p = People { linked: vec![], users: vec![user("rev", Role::VoiceChat, false), user("mo", Role::Member, false)] };
+        assert_eq!(p.device_person("rev"), None);
+        assert_eq!(p.device_person("mo").as_deref(), Some("mo"));
     }
 
     #[test]

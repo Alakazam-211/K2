@@ -353,7 +353,9 @@ fn role_name(person: &str, external_id: Option<&str>) -> Option<&'static str> {
     match k2_core::connect_users::role_for_user(person)? {
         Role::Owner => Some("owner"),
         Role::Admin => Some("admin"),
-        _ => Some("member"),
+        Role::Member => Some("member"),
+        // prd-voice-chat-only-members-v1 §6.2 (V9): explicit, no wildcard.
+        Role::VoiceChat => Some("voice_chat"),
     }
 }
 
@@ -880,5 +882,27 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
         RECORDING_CONSENT => consent(&caller, owner_token, &b),
         REPAIR => repair(&caller),
         _ => CliResponse::not_found(),
+    }
+}
+
+#[cfg(test)]
+mod role_name_tests {
+    use super::*;
+
+    /// prd-voice-chat-only-members-v1 V9: every role has its own name, no
+    /// wildcard; a Voice & Chat only occupant reads `voice_chat`.
+    #[test]
+    fn each_role_names_itself() {
+        crate::test_support::with_temp_home(|| {
+            for (name, role) in [("rnown", Role::Owner), ("rnadm", Role::Admin), ("rnmem", Role::Member), ("rnvc", Role::VoiceChat)] {
+                k2_core::connect_users::add_user(name, "password123").expect("add");
+                if role != Role::Member {
+                    k2_core::connect_users::set_role(name, role).expect("role");
+                }
+                assert_eq!(role_name(name, None), Some(role.as_wire()), "{name}");
+            }
+            assert_eq!(role_name("whoever", Some("k2:owner")), Some("owner"));
+            assert_eq!(role_name("nobody-here", None), None);
+        });
     }
 }

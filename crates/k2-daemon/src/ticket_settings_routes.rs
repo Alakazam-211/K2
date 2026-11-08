@@ -78,7 +78,7 @@ pub fn writer_from_tcp(query: &str, bearer: Option<&str>, owner_token: &str) -> 
     }
     if let Some(username) = k2_core::connect_users::validate_session(presented) {
         let role = k2_core::connect_users::role_for_user(&username)
-            .unwrap_or(k2_core::connect_users::Role::Member);
+            .unwrap_or(k2_core::connect_users::Role::VoiceChat);
         return if k2_core::connect_users::can_manage_users(role) {
             Writer::Manager { username }
         } else {

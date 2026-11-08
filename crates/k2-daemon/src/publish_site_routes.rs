@@ -527,7 +527,9 @@ pub(crate) fn who_of(answerer: &crate::permission::actions::Answerer) -> Who {
             role: match role.as_str() {
                 "owner" => Role::Owner,
                 "admin" => Role::Admin,
-                _ => Role::Member,
+                "member" => Role::Member,
+                // §11.3: an unknown role string fails closed to the lowest.
+                _ => Role::VoiceChat,
             },
         },
     }

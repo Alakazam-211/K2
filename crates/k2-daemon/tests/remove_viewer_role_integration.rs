@@ -327,11 +327,19 @@ async fn member_routes_pass_and_admin_owner_routes_refuse_members() {
             let r = http(
                 d.port,
                 "POST",
-                &format!("/cli/users/set-role?token={tok}"),
-                Some(r#"{"username":"rv_member","role":"admin"}"#),
+                &format!("/cli/users/set-can-clone?token={tok}"),
+                Some(r#"{"username":"rv_member","canClone":false}"#),
             );
-            assert_role_required(&r, "owner", &format!("{who} POST users/set-role"));
+            assert_role_required(&r, "owner", &format!("{who} POST users/set-can-clone"));
         }
+        // set-role is Admin-floor since 0.46.10 (Voice & Chat only, Q1/V8):
+        // a Member is refused at the floor, and an Admin's Member -> Admin
+        // is refused by the handler (only Member <-> voice_chat for Admins).
+        let r = http(d.port, "POST", &format!("/cli/users/set-role?token={member}"), Some(r#"{"username":"rv_member","role":"admin"}"#));
+        assert_role_required(&r, "admin", "member POST users/set-role");
+        let r = http(d.port, "POST", &format!("/cli/users/set-role?token={admin}"), Some(r#"{"username":"rv_member","role":"admin"}"#));
+        assert_eq!(r.status, 403, "admin makes an admin: {}", r.body);
+        assert_eq!(r.json()["error"], "role_change_not_allowed", "{}", r.body);
         assert_eq!(connect_users::role_for_user("rv_member"), Some(Role::Member));
 
         // Owner-token-only route: refused for every login.

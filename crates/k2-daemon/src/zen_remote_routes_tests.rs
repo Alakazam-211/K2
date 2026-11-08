@@ -725,3 +725,85 @@ mod phone_layout;
 
 #[path = "remote_door_sources_tests.rs"]
 mod door_card_rows;
+
+// ── Voice & Chat only: a shared Garden, read-only ───────────────────
+// (prd-voice-chat-only-members-v1, the reviewer extension)
+
+/// A Voice & Chat only login shared `gardens`, signed in with a password
+/// (the reviewer's Companion sign-in).
+fn reviewer(name: &str, gardens: &[&str]) -> String {
+    cu::add_user_with_role(
+        name,
+        PASSWORD,
+        None,
+        None,
+        &cu::NewLogin {
+            role: Some(Role::VoiceChat),
+            must_change_password: false,
+            shares: cu::Shares { agents: vec![], gardens: gardens.iter().map(|g| g.to_string()).collect() },
+        },
+    )
+    .expect("add a voice_chat login");
+    cu::create_session(name)
+}
+
+#[test]
+fn a_shared_garden_opens_read_only_for_its_voice_chat_login() {
+    let fx = fx(&["store:read", "store:write"]);
+    let tok = reviewer("reviewerg", &[fx.d.garden.as_str()]);
+    let p = match gate(&who_of(&tok, OWNER_TOKEN)) {
+        Ok(p) => p,
+        Err(r) => panic!("the shared viewer is admitted: {}", r.body),
+    };
+    assert_eq!(p.client, SHARED);
+
+    let list = ok_of(GARDENS, &tok, &[], J::Null);
+    assert_eq!(list["person"], "shared");
+    assert_eq!(list["readOnly"], true);
+    let ids: Vec<&str> = list["gardens"].as_array().expect("gardens").iter().map(|g| g["id"].as_str().expect("id")).collect();
+    assert_eq!(ids, vec![fx.d.garden.as_str()], "only the shared Garden");
+
+    let page = ok_of(PAGE, &tok, &[("garden", fx.d.garden.as_str())], J::Null);
+    assert_eq!(page["garden"]["id"], fx.d.garden.as_str());
+
+    // A Garden not shared with this login.
+    assert_eq!(refused(PAGE, &tok, &[("garden", "g-not-shared")], J::Null), (403, "not_granted".into()));
+    // Read verbs pass the shared rule; writes and owner-only reads never do.
+    let params = HashMap::new();
+    for verb in SHARED_READ_VERBS {
+        let body = call_body(&fx, verb, json!([]));
+        assert!(shared_check(&p, CALL, &params, body.to_string().as_bytes()).is_ok(), "{verb} is a shared read");
+    }
+    for verb in [
+        "store.put", "store.delete", "sources.refresh", "viewer.get", "save.get", "thread.catchup", "files.read",
+        "tickets.list", "activity.snapshot", "git.log", "compute.jobs", "guests.list", "store.grantees",
+    ] {
+        assert_eq!(refused(CALL, &tok, &[], call_body(&fx, verb, json!([]))), (403, "not_granted".into()), "{verb}");
+    }
+    // Every route that writes or names agents is refused.
+    for path in [BLOB_PUT, REPORT, PAUSE, RESUME, AGENTS_ORDER] {
+        let (q, body) = any_request(&fx, path);
+        let q: Vec<(&str, &str)> = q.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        assert_eq!(refused(path, &tok, &q, body), (403, "not_granted".into()), "{path}");
+    }
+    // A library fetch by URL is the owner's to start.
+    assert_eq!(
+        refused(LIB_FETCH, &tok, &[], json!({ "url": "https://cdn.example/x.js", "integrity": "sha384-x" })),
+        (403, "not_granted".into())
+    );
+}
+
+#[test]
+fn a_voice_chat_login_without_a_shared_garden_is_turned_away() {
+    let fx = fx(&["store:read"]);
+    let tok = reviewer("reviewernog", &[]);
+    for path in all_routes() {
+        let (q, body) = any_request(&fx, path);
+        let q: Vec<(&str, &str)> = q.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        assert_eq!(refused(path, &tok, &q, body), (403, "garden_person_only".into()), "{path}");
+    }
+    // Upgraded to Member, stored shares stop acting: still not the owner person.
+    cu::set_shares("reviewernog", cu::Shares { agents: vec![], gardens: vec![fx.d.garden.clone()] }).expect("share");
+    cu::set_role("reviewernog", Role::Member).expect("up");
+    assert_eq!(refused(GARDENS, &tok, &[], J::Null), (403, "garden_person_only".into()));
+}

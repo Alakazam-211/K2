@@ -169,7 +169,7 @@ pub fn resolve_identity(token: &str, owner_token: &str) -> Option<PresenceIdenti
     }
     let username = k2_core::connect_users::validate_session(token)?;
     let role = k2_core::connect_users::role_for_user(&username)
-        .unwrap_or(Role::Member);
+        .unwrap_or(Role::VoiceChat);
     Some(PresenceIdentity::ConnectUser { username, role })
 }
 

@@ -59,6 +59,8 @@ impl Who {
             C::Login { role: Role::Owner, .. } => Who::Owner,
             C::Login { username, role: Role::Admin } => Who::Admin { username: username.clone() },
             C::Login { username, role: Role::Member } => Who::Member { username: username.clone() },
+            // prd-voice-chat-only-members-v1: never a Member here.
+            C::Login { role: Role::VoiceChat, .. } => Who::Other,
             C::Agent { project_id, session_id } | C::Shell { project_id, session_id } => Who::Agent {
                 project_id: project_id.clone(),
                 session_id: session_id.clone(),

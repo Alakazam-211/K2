@@ -280,7 +280,7 @@ pub(crate) fn run_upgrade_card(answer: &str, by: &str) -> Result<J, String> {
     } else {
         crate::compute_routes::Who::Login {
             username: by.to_string(),
-            role: k2_core::connect_users::role_for_user(by).unwrap_or(k2_core::connect_users::Role::Member),
+            role: k2_core::connect_users::role_for_user(by).unwrap_or(k2_core::connect_users::Role::VoiceChat),
         }
     };
     let db = k2_core::db::shared();

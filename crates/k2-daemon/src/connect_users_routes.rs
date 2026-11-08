@@ -40,6 +40,12 @@ pub fn handle_list() -> CliResponse {
                 Ok(s) => s,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            // 0.46.10: a Voice & Chat only login's shares (agents' Threads,
+            // Gardens), as people see them; empty lists for everyone else.
+            let shares = match connect_users::shares_by_user() {
+                Ok(s) => s,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             // Re-key to camelCase wire shape (createdAt) for the client.
             let users: Vec<serde_json::Value> = views
                 .iter()
@@ -63,6 +69,11 @@ pub fn handle_list() -> CliResponse {
                         // 0.46.8: a temporary password ("Temporary
                         // password" in Settings / `k2 users list`).
                         "mustChangePassword": temporary.contains(&v.username),
+                        "shares": if v.role == connect_users::Role::VoiceChat {
+                            crate::shared_routes::shares_view(&shares.get(&v.username).cloned().unwrap_or_default())
+                        } else {
+                            serde_json::json!({ "agents": [], "gardens": [] })
+                        },
                     })
                 })
                 .collect();
@@ -92,13 +103,20 @@ struct AddReq {
     /// own login, a service user, tests).
     #[serde(default, rename = "mustChangePassword")]
     must_change_password: Option<bool>,
-    /// Optional, and only ever `"member"`: users/add always creates a
-    /// Member (owner/admin go through `/cli/users/set-role`, which is
-    /// Owner-only). It exists so a caller asking for the retired
-    /// `"viewer"` gets a 400 instead of a silently-created Member
-    /// (prd-remove-viewer-role-v1.md RV4). Before, the field was ignored.
+    /// Optional: `"member"` (the default) or `"voice_chat"` (0.46.10, made
+    /// at that role in the same write, V5). Owner/Admin go through
+    /// `/cli/users/set-role`. The retired `"viewer"` is a 400
+    /// (prd-remove-viewer-role-v1.md RV4).
     #[serde(default)]
     role: Option<String>,
+    /// Voice & Chat only shares (only with `role: "voice_chat"`): agent
+    /// addresses whose Thread the login may read and post in, and Garden
+    /// ids or names it may view read-only. Resolved to ids before anything
+    /// is written; an unknown one is a 404 and no login is made.
+    #[serde(default, rename = "shareAgents")]
+    share_agents: Vec<String>,
+    #[serde(default, rename = "shareGardens")]
+    share_gardens: Vec<String>,
     /// Optional first / last name (0.46.0, `k2_core::person_name`): plain
     /// text, at most 64 characters. A bad value is a 400 and no user is
     /// created; `null` / `""` = unset.
@@ -122,41 +140,49 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    if let Some(raw) = req.role.as_deref() {
-        match connect_users::Role::parse_wire(raw) {
-            Ok(connect_users::Role::Member) => {}
+    let role = match req.role.as_deref() {
+        None => connect_users::Role::Member,
+        Some(raw) => match connect_users::Role::parse_wire(raw) {
+            Ok(r @ (connect_users::Role::Member | connect_users::Role::VoiceChat)) => r,
             Ok(other) => {
                 return CliResponse::bad_request(format!(
-                    "users/add creates a member; set the {} role with /cli/users/set-role",
+                    "users/add creates a member or a voice_chat login; set the {} role with /cli/users/set-role",
                     other.as_wire()
                 ))
             }
             Err(e) => return CliResponse::bad_request(e),
-        }
+        },
+    };
+    let has_shares = !req.share_agents.is_empty() || !req.share_gardens.is_empty();
+    if has_shares && role != connect_users::Role::VoiceChat {
+        return CliResponse::bad_request("shareAgents and shareGardens are only for a voice_chat login".to_string());
     }
-    match connect_users::add_user_with_names(
+    // V12/§9: a login the owner linked is the owner in Sew; it can't be
+    // made Voice & Chat only.
+    if role == connect_users::Role::VoiceChat && is_owner_linked_login(&req.username) {
+        return CliResponse::bad_request(format!("'{}' is one of the owner's own logins; it can't be Voice & Chat only", req.username));
+    }
+    let shares = match crate::shared_routes::resolve_shares(&req.share_agents, &req.share_gardens) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let must = req.must_change_password.unwrap_or(true);
+    let new = connect_users::NewLogin { role: Some(role), must_change_password: must, shares: shares.clone() };
+    match connect_users::add_user_with_role(
         &req.username,
         &req.password,
         req.first_name.as_deref(),
         req.last_name.as_deref(),
+        &new,
     ) {
         Ok(()) => {}
         Err(e) => return CliResponse::bad_request(e),
     }
-    let must = req.must_change_password.unwrap_or(true);
-    if must {
-        // The user was just created, so a failure here is an unexpected
-        // store error — surface it LOUDLY rather than reporting success
-        // for an account that silently missed its restriction.
-        if let Err(e) = connect_users::set_must_change_password(&req.username, true) {
-            return CliResponse::internal_error(format!(
-                "user created but mustChangePassword could not be set: {e}"
-            ));
-        }
+    let mut body = serde_json::json!({ "success": true, "mustChangePassword": must, "role": role.as_wire() });
+    if role == connect_users::Role::VoiceChat {
+        body["shares"] = crate::shared_routes::shares_view(&shares);
     }
-    CliResponse::ok_json(
-        serde_json::json!({ "success": true, "mustChangePassword": must }).to_string(),
-    )
+    CliResponse::ok_json(body.to_string())
 }
 
 /// True when `username` is one of the owner's own logins (Settings →
@@ -402,17 +428,106 @@ struct SetRoleReq {
 /// only allowed because the daemon-token owner remains. We therefore allow
 /// the demote (the token owner is the floor) — the guard exists to reject a
 /// nonsensical role string and surface a clear error.
-pub fn handle_set_role(body: &[u8]) -> CliResponse {
+pub fn handle_set_role(actor_role: connect_users::Role, body: &[u8]) -> CliResponse {
+    handle_set_role_audited(actor_role, body).0
+}
+
+/// [`handle_set_role`] plus `(target, from, to)` for the `set-role` audit
+/// line (V7) when the role changed.
+pub fn handle_set_role_audited(
+    actor_role: connect_users::Role,
+    body: &[u8],
+) -> (CliResponse, Option<(String, connect_users::Role, connect_users::Role)>) {
     let req: SetRoleReq = match serde_json::from_slice(body) {
         Ok(r) => r,
-        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+        Err(e) => return (CliResponse::bad_request(format!("invalid JSON body: {e}")), None),
     };
     let role = match connect_users::Role::parse_wire(&req.role) {
         Ok(r) => r,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(e) => return (CliResponse::bad_request(e), None),
     };
-    match connect_users::set_role(&req.username, role) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+    let Some(from) = connect_users::role_for_user(&req.username) else {
+        return (CliResponse::bad_request(format!("user '{}' not found", req.username.trim())), None);
+    };
+    // Q1/V8: the Owner changes any role; an Admin only Member <-> Voice &
+    // Chat only, for a target below Admin.
+    if !connect_users::can_set_role(actor_role, from, role) {
+        return (
+            CliResponse {
+                status: "403 Forbidden",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "error": "role_change_not_allowed",
+                    "message": "An Admin moves people only between Member and Voice & Chat only. Other role changes are the Owner's.",
+                })
+                .to_string(),
+            },
+            None,
+        );
+    }
+    if role == connect_users::Role::VoiceChat && is_owner_linked_login(&req.username) {
+        return (
+            CliResponse::bad_request(format!("'{}' is one of the owner's own logins; it can't be Voice & Chat only", req.username.trim())),
+            None,
+        );
+    }
+    match connect_users::set_role_from(&req.username, role) {
+        Ok(before) => (
+            CliResponse::ok_json(
+                serde_json::json!({ "success": true, "from": before.as_wire(), "role": role.as_wire(), "live": connect_users::role_change_is_live(before, role) })
+                    .to_string(),
+            ),
+            Some((req.username.trim().to_ascii_lowercase(), before, role)),
+        ),
+        Err(e) => (CliResponse::bad_request(e), None),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetSharesReq {
+    username: String,
+    #[serde(default)]
+    agents: Vec<String>,
+    #[serde(default)]
+    gardens: Vec<String>,
+}
+
+/// `POST /cli/users/set-shares {username, agents: [address…], gardens: [id
+/// or name…]}` → `{success, shares: {agents, gardens}}`: replace a Voice &
+/// Chat only login's shares (Admin floor; `can_act_on` on the target). 400
+/// `not_voice_chat` for any other role; 404 for an unknown agent or Garden
+/// (nothing written).
+pub fn handle_set_shares(actor_role: connect_users::Role, body: &[u8]) -> CliResponse {
+    let req: SetSharesReq = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let Some(target) = connect_users::role_for_user(&req.username) else {
+        return CliResponse::bad_request(format!("user '{}' not found", req.username.trim()));
+    };
+    if !connect_users::can_act_on(actor_role, target) {
+        return CliResponse::forbidden();
+    }
+    if target != connect_users::Role::VoiceChat {
+        return CliResponse {
+            status: "400 Bad Request",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": "not_voice_chat",
+                "message": format!("'{}' is {}; shares are only for a Voice & Chat only login", req.username.trim(), target.as_wire()),
+            })
+            .to_string(),
+        };
+    }
+    let shares = match crate::shared_routes::resolve_shares(&req.agents, &req.gardens) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match connect_users::set_shares(&req.username, shares) {
+        Ok(s) => CliResponse::ok_json(
+            serde_json::json!({ "success": true, "shares": crate::shared_routes::shares_view(&s) }).to_string(),
+        ),
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -1031,6 +1146,9 @@ pub fn handle_whoami(
             "owner": owner,
             "role": role.as_wire(),
             "mustChangePassword": must_change,
+            // 0.46.10: always present; true for a Voice & Chat only login
+            // (prd-voice-chat-only-members-v1 §8.1).
+            "voiceChatOnly": !owner && role == connect_users::Role::VoiceChat,
             "canClone": can_clone,
             "clonePersonalComputers": personal,
             "ticketMe": ticket_me,
@@ -1120,14 +1238,14 @@ mod tests {
 
     #[test]
     fn set_role_rejects_invalid_role_string() {
-        let r = handle_set_role(br#"{"username":"bob","role":"superuser"}"#);
+        let r = handle_set_role(connect_users::Role::Owner, br#"{"username":"bob","role":"superuser"}"#);
         assert_eq!(r.status, "400 Bad Request");
         assert!(r.body.contains("invalid role"), "got: {}", r.body);
     }
 
     #[test]
     fn set_role_malformed_body_is_400() {
-        let r = handle_set_role(b"not json");
+        let r = handle_set_role(connect_users::Role::Owner, b"not json");
         assert_eq!(r.status, "400 Bad Request");
     }
 
@@ -1137,7 +1255,7 @@ mod tests {
         // removal text, and the stored role is untouched.
         with_temp_home(|| {
             connect_users::add_user("viewer_wire", "password1").expect("add");
-            let r = handle_set_role(br#"{"username":"viewer_wire","role":"viewer"}"#);
+            let r = handle_set_role(connect_users::Role::Owner, br#"{"username":"viewer_wire","role":"viewer"}"#);
             assert_eq!(r.status, "400 Bad Request", "body: {}", r.body);
             let v: serde_json::Value = serde_json::from_str(&r.body).expect("json body");
             assert_eq!(v["error"], connect_users::VIEWER_ROLE_REMOVED);

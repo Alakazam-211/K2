@@ -187,6 +187,17 @@ async fn device_pair_code(
             return r;
         }
     };
+    // prd-voice-chat-only-members-v1 §6.5 (V15): no phone pairing for a
+    // Voice & Chat only login, the owner pairing on its behalf included.
+    // (The person signs in on a phone with their password instead.)
+    if k2_core::connect_users::is_voice_chat_only(&target) {
+        audit(&target, "refused_voice_chat");
+        return dev::refusal(
+            "400 Bad Request",
+            "voice_chat_no_phone",
+            "a Voice & Chat only login can't be paired with a code; it signs in on the phone with its password",
+        );
+    }
     if let crate::connect_device_routes::Caller::Login { username, .. } = &caller {
         let trusted = trusted_proxies_from_env();
         let peer = peer_ip(stream);
@@ -2131,7 +2142,11 @@ async fn handle_one_request(
             let _ = stream.read(&mut buf).await;
             // Token-gated. Returns a small JSON blob describing the
             // daemon's state so the Tauri app can verify it's talking to
-            // the right process.
+            // the right process. Not for a Voice & Chat only login (§5.2).
+            if let Some(r) = super::route_policy::refuse_voice_chat_login(&query, state.token.as_str()) {
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
             if !super::http::token_ok(&query, state.token.as_str()) {
                 super::http::send_response(
                     &mut *stream,
@@ -4838,8 +4853,10 @@ async fn handle_one_request(
         // A managing Admin reaches the other routes but NOT this one.
         "/cli/users/set-role" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            // Owner token, an Owner login, or (0.46.10, Q1/V8) an Admin
+            // login, which the handler holds to Member <-> Voice & Chat only.
             let actor_role = super::http::actor_role(&query, state.token.as_str());
-            if !actor_role.map(k2_core::connect_users::can_change_roles).unwrap_or(false) {
+            let Some(actor_role) = actor_role.filter(|r| k2_core::connect_users::can_manage_users(*r)) else {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -4849,9 +4866,66 @@ async fn handle_one_request(
                 )
                 .await;
                 return DispatchOutcome::Done;
-            }
+            };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let r = crate::connect_users_routes::handle_set_role(&body_bytes);
+            let actor_for_audit = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner-token".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|u| format!("user:{u}"))
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            let target_for_audit = crate::connect_users_routes::login_body_username(&body_bytes);
+            let (r, changed) = crate::connect_users_routes::handle_set_role_audited(actor_role, &body_bytes);
+            // V7: every role change writes one line, {from, to}.
+            let outcome = match &changed {
+                Some((_, from, to)) => format!("{}->{}", from.as_wire(), to.as_wire()),
+                None => format!("rejected:{}", r.status.split_whitespace().next().unwrap_or("?")),
+            };
+            k2_core::auth_audit::record(
+                &k2_core::auth_audit::AuditEvent::new(
+                    "set-role",
+                    &target_for_audit,
+                    outcome,
+                    ingress.as_str(),
+                    "-",
+                    if web_client_header { "web" } else { "api" },
+                )
+                .with_actor(&actor_for_audit),
+            );
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/users/set-shares (0.46.10): a Voice & Chat only login's
+        // shared agents and Gardens. Owner token or an Admin/Owner login;
+        // the handler applies `can_act_on` to the target.
+        "/cli/users/set-shares" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let actor_role = super::http::actor_role(&query, state.token.as_str());
+            let Some(actor_role) = actor_role.filter(|r| k2_core::connect_users::can_manage_users(*r)) else {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let target_for_audit = crate::connect_users_routes::login_body_username(&body_bytes);
+            let r = tokio::task::spawn_blocking(move || crate::connect_users_routes::handle_set_shares(actor_role, &body_bytes))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "set-shares",
+                &target_for_audit,
+                if r.status.starts_with("200") { "ok".to_string() } else { format!("rejected:{}", r.status.split_whitespace().next().unwrap_or("?")) },
+                ingress.as_str(),
+                "-",
+                if web_client_header { "web" } else { "api" },
+            ));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // POST /cli/users/set-can-clone — Settings → Admin Access → "Can
@@ -5550,6 +5624,19 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            // prd-voice-chat-only-members-v1 V3: a Voice & Chat only login
+            // gets the empty summary and nothing is read (an older client's
+            // Home pool treats a 403 here as a dead login and signs in again).
+            if username.as_deref().is_some_and(k2_core::connect_users::is_voice_chat_only) {
+                super::http::send_response(
+                    &mut *stream,
+                    "200 OK",
+                    "application/json",
+                    r#"{"workspaces":[],"agentActivity":[],"activeProjectIds":[]}"#,
+                )
+                .await;
+                return if client_wants_close { DispatchOutcome::Done } else { DispatchOutcome::KeepAlive };
+            }
             let r = tokio::task::spawn_blocking(move || crate::presence::handle_summary(owner, username))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
@@ -5633,8 +5720,9 @@ async fn handle_one_request(
             } else if let Some(username) =
                 k2_core::connect_users::validate_session(tok)
             {
+                // V10: an unreadable role fails closed to the lowest.
                 let role = k2_core::connect_users::role_for_user(&username)
-                    .unwrap_or(k2_core::connect_users::Role::Member);
+                    .unwrap_or(k2_core::connect_users::Role::VoiceChat);
                 crate::connect_users_routes::handle_whoami(Some(username), false, role)
             } else {
                 crate::cli::CliResponse::forbidden()
@@ -8541,6 +8629,32 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // WS /cli/voice/events (prd-voice-chat-only-members-v1 §6.3): only
+        // `voice_rooms_changed`. Any live login (a Voice & Chat only one
+        // included, the VoiceChat row) or the owner token; dark like the
+        // rest of the family.
+        p if p == crate::voice::events_ws::PATH => {
+            if !k2_core::voice_preview::enabled() {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::voice::routes::dark();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let token = super::http::extract_token(&query).unwrap_or_default().to_string();
+            crate::voice::events_ws::serve(stream, token, state.token.to_string()).await;
+            return DispatchOutcome::Done;
+        }
         // Voice rooms (preview, prd-k2-voice-rooms-v1 §9.1, lane C): dark
         // (404 voice_rooms_off) while voice_rooms_preview is off. Floors for
         // logins live in route_policy; the handler classifies every caller.
@@ -8905,6 +9019,35 @@ async fn handle_one_request(
             .unwrap_or_else(|e| {
                 crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
             });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Voice & Chat only shares (prd-voice-chat-only-members-v1, the
+        // reviewer extension): `/cli/shared*`. VoiceChat policy rows; the
+        // handler answers only a live voice_chat login and builds every
+        // inner Thread request itself (shared_routes module doc).
+        p if crate::shared_routes::is_route(p) => {
+            if crate::shared_routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::shared_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::shared_routes::refuse("413 Payload Too Large", "too_large", "request bodies here are at most 64 KiB");
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let login = crate::shared_routes::login_of(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::shared_routes::handle(&p_owned, login.as_deref(), &params, &body_bytes))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Gardens on the phone (prd-gardens-on-phone-v1 §3): the remote
@@ -15531,6 +15674,16 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
         "/events" => {
+            // prd-voice-chat-only-members-v1 §5.2/V4: a Voice & Chat only
+            // login is refused BEFORE the upgrade with 403 role_required
+            // (never the stale-session text below, which starts a re-login
+            // loop). Its 5 s re-check (`token_still_valid`, Member and up)
+            // closes a socket whose login was moved to the role.
+            if let Some(r) = super::route_policy::refuse_voice_chat_login(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
             // Token check BEFORE the upgrade so unauthenticated clients
             // see an HTTP 403 instead of a dangling WS close.
             if !super::http::token_ok(&query, state.token.as_str()) {

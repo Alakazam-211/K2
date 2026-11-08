@@ -1024,14 +1024,26 @@ pub(crate) fn token_ok(query: &str, owner_token: &str) -> bool {
 /// off their LIVE socket, not just blocked on the next new request. The
 /// owner token is never revoked, so it always re-validates. Empty never
 /// authorizes (mirrors [`token_ok`]).
+///
+/// prd-voice-chat-only-members-v1 §7: every socket that calls this (and
+/// `socket_access::LoginCheck`) is a Member-floor socket, so a login moved
+/// to Voice & Chat only is no longer valid here: its next frame or tick
+/// closes the socket, with no sign-out (the role change keeps its session).
+/// `/cli/voice/events` asks [`login_still_admitted`] at its own floor.
 pub(crate) fn token_still_valid(token: &str, owner_token: &str) -> bool {
+    login_still_admitted(token, owner_token, super::route_policy::Floor::Member)
+}
+
+/// [`token_still_valid`] at a given route floor: the owner token always; a
+/// live login whose role clears `floor` now. Empty never authorizes.
+pub(crate) fn login_still_admitted(token: &str, owner_token: &str, floor: super::route_policy::Floor) -> bool {
     if token.is_empty() {
         return false;
     }
     if ct_eq_token(token, owner_token) {
         return true;
     }
-    k2_core::connect_users::validate_session(token).is_some()
+    k2_core::connect_users::role_for_session(token).is_some_and(|role| floor.admits(role))
 }
 
 /// Resolve the effective permission [`Role`](k2_core::connect_users::Role)

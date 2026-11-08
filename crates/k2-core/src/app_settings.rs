@@ -5,24 +5,9 @@
 //! k2so-core so the daemon can serve `/cli/settings/{get,update,reset}`
 //! without Tauri being present.
 //!
-//! # Two-writers race (F3) — resolved here
-//!
-//! Pre-Unit-7a, both Tauri (`settings_update`) and the daemon
-//! (`companion_host::persist_companion_password_fields`) wrote to the
-//! same `~/.k2so/settings.json`. tmp+rename meant readers never saw a
-//! torn file, but a Tauri-side rotate of `companion.username` was a
-//! no-op on the daemon's in-memory companion runtime (Tauri's `STATE`
-//! is empty post-Unit-1). The legacy live tokens stayed valid until
-//! their TTL expired.
-//!
-//! After Unit 7a, Tauri's `settings_update` proxies to
-//! `POST /cli/settings/update`. The daemon takes the global
-//! [`SETTINGS_LOCK`] before load+merge+save, then — after the file is
-//! durable — compares old-vs-new companion-affecting fields and calls
-//! `k2_core::companion::invalidate_all_sessions` server-side, where
-//! the live `STATE` actually lives. The race window collapses to zero:
-//! a single critical section owns the merge, and the post-write
-//! invalidation is in-process with the sessions it's killing.
+//! The daemon is the only writer: Tauri's `settings_update` proxies to
+//! `POST /cli/settings/update`, and [`update`] holds [`SETTINGS_LOCK`]
+//! across load+merge+save.
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -916,8 +901,6 @@ pub struct AppSettings {
     /// persist.
     #[serde(default)]
     pub style: StyleSettings,
-    #[serde(default)]
-    pub companion: CompanionSettings,
     /// Heartbeat wake scheduler — controls whether/how often launchd
     /// wakes the laptop to fire agent heartbeats.
     #[serde(default)]
@@ -1096,37 +1079,6 @@ impl Default for WakeSchedulerSettings {
             wake_on_battery: false,
         }
     }
-}
-
-/// Mobile Companion API settings.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CompanionSettings {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub auto_start: bool,
-    #[serde(default)]
-    pub username: String,
-    /// Legacy on-disk copy of the argon2 password hash. Post-0.32.12 the
-    /// canonical hash lives in the macOS Keychain; this field is cleared
-    /// after migration.
-    #[serde(default)]
-    pub password_hash: String,
-    /// True once a companion password has been configured.
-    #[serde(default)]
-    pub password_set: bool,
-    #[serde(default)]
-    pub ngrok_auth_token: String,
-    #[serde(default)]
-    pub ngrok_domain: String,
-    /// Allowlist of browser origins permitted to use the companion API.
-    #[serde(default)]
-    pub cors_origins: Vec<String>,
-    /// When false (default), the companion API refuses
-    /// `/companion/terminal/spawn` and `/companion/terminal/spawn-background`.
-    #[serde(default)]
-    pub allow_remote_spawn: bool,
 }
 
 /// Style System P3 (prd-style-system-v1 §5/§6) — persisted Style
@@ -1349,7 +1301,6 @@ impl Default for AppSettings {
             linked_calendars: default_linked_calendars(),
             editor: EditorSettings::default(),
             style: StyleSettings::default(),
-            companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),
             keep_awake: KeepAwakeSettings::default(),
             tickets: TicketSettings::default(),
@@ -1589,35 +1540,58 @@ pub fn load() -> AppSettings {
 
 /// Write `settings` to `~/.k2so/settings.json` via tmp+rename so a
 /// concurrent reader never sees a partial file. Restricts the result
-/// to mode 0o600 because the payload includes the legacy password
-/// hash and the ngrok auth token.
+/// to mode 0o600 because the payload holds tokens (for example the
+/// push gateway token).
 pub fn save(settings: &AppSettings) -> Result<(), String> {
     ensure_dir();
-    let file = settings_file();
-    let tmp = file.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("serialize settings: {e}"))?;
-    fs::write(&tmp, &json).map_err(|e| format!("write {tmp:?}: {e}"))?;
-    fs::rename(&tmp, &file).map_err(|e| format!("rename {tmp:?} -> {file:?}: {e}"))?;
-    restrict_mode(&file);
+    write_settings_file(&json)?;
     // Sew S27: `ownerAccounts` picks the `k2:owner` chat profile's name.
     crate::tool_hook::kick_reconcile();
     Ok(())
 }
 
+/// The tmp+rename write behind [`save`], mode 0o600.
+fn write_settings_file(json: &str) -> Result<(), String> {
+    let file = settings_file();
+    let tmp = file.with_extension("json.tmp");
+    fs::write(&tmp, json).map_err(|e| format!("write {tmp:?}: {e}"))?;
+    fs::rename(&tmp, &file).map_err(|e| format!("rename {tmp:?} -> {file:?}: {e}"))?;
+    restrict_mode(&file);
+    Ok(())
+}
+
+/// One-time scrub for the removed ngrok Companion server. Its settings
+/// lived in a top-level `companion` block that can still hold a live
+/// ngrok auth token and an old argon2 password hash. Nothing reads the
+/// block any more, so drop it from settings.json and leave every other
+/// key's value as it was. Called at daemon boot; a file without the key
+/// (or with no file, or a file that isn't a JSON object) is not touched.
+/// `Ok(true)` when it wrote.
+pub fn scrub_legacy_companion_block() -> Result<bool, String> {
+    let _guard = settings_lock().lock();
+    let file = settings_file();
+    let raw = match fs::read_to_string(&file) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("read {file:?}: {e}")),
+    };
+    let Ok(serde_json::Value::Object(mut obj)) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Ok(false);
+    };
+    if obj.remove("companion").is_none() {
+        return Ok(false);
+    }
+    let json = serde_json::to_string_pretty(&serde_json::Value::Object(obj))
+        .map_err(|e| format!("serialize settings: {e}"))?;
+    write_settings_file(&json)?;
+    Ok(true)
+}
+
 /// Atomic load + deep-merge `partial` + save. Returns the post-merge
 /// `AppSettings` so callers can echo it back to the renderer in one
 /// round-trip.
-///
-/// **F3 closure:** if companion-affecting fields (`companion.username`,
-/// `companion.passwordHash`, derived credentials) change between old
-/// and new, calls
-/// [`crate::companion::invalidate_all_sessions`] **after** the write
-/// completes. The invalidation runs in the same process as the live
-/// companion runtime — no two-writers race, no stale TTL window. The
-/// emit is best-effort: a missing companion runtime (e.g. during
-/// daemon boot before the autostart hook has fired) is a no-op inside
-/// `invalidate_all_sessions`, which is exactly the correct behavior.
 pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
     let _guard = settings_lock().lock();
     normalize_legacy_apps_partial(&mut partial);
@@ -1709,22 +1683,13 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
         }
     }
 
-    let creds_changed = current.companion.password_hash != merged.companion.password_hash
-        || current.companion.username != merged.companion.username;
-
     save(&merged)?;
-
-    if creds_changed {
-        crate::companion::invalidate_all_sessions("credentials changed");
-    }
-
     Ok(merged)
 }
 
 /// Restore defaults: write `AppSettings::default()` over the on-disk
-/// file, clear the macOS-Keychain password hash (so it can't outlive
-/// a reset and re-activate later), and invalidate every live companion
-/// session.
+/// file and delete the old Companion password hash from the macOS
+/// Keychain if an older install left one there.
 pub fn reset() -> Result<AppSettings, String> {
     let _guard = settings_lock().lock();
     let defaults = AppSettings::default();
@@ -1735,7 +1700,6 @@ pub fn reset() -> Result<AppSettings, String> {
     // also won't fail the reset, which matches the legacy Tauri
     // behavior.
     crate::companion::keychain::delete_password_hash();
-    crate::companion::invalidate_all_sessions("settings reset");
 
     Ok(defaults)
 }
@@ -1832,11 +1796,11 @@ mod tests {
         let _home = HomeGuard::new();
         let mut s = AppSettings::default();
         s.default_agent = "codex".into();
-        s.companion.username = "rosson".into();
+        s.terminal.font_size = 15;
         save(&s).expect("save");
         let loaded = load();
         assert_eq!(loaded.default_agent, "codex");
-        assert_eq!(loaded.companion.username, "rosson");
+        assert_eq!(loaded.terminal.font_size, 15);
     }
 
     /// Garden access has no off switch (0.46.3, Rosson 2026-10-23): a new
@@ -1895,16 +1859,17 @@ mod tests {
         let _g = TEST_LOCK.lock();
         let _home = HomeGuard::new();
         let mut s = AppSettings::default();
-        s.companion.username = "old".into();
-        s.companion.ngrok_auth_token = "tok".into();
+        s.terminal.font_family = "Fira Code".into();
+        s.terminal.font_size = 15;
         save(&s).expect("save");
         let merged = update(serde_json::json!({
-            "companion": { "username": "new" }
+            "terminal": { "fontSize": 16 }
         }))
         .expect("update");
-        // Username updates, ngrok_auth_token preserved by deep merge.
-        assert_eq!(merged.companion.username, "new");
-        assert_eq!(merged.companion.ngrok_auth_token, "tok");
+        // fontSize updates, the sibling fontFamily is kept by the deep merge.
+        assert_eq!(merged.terminal.font_size, 16);
+        assert_eq!(merged.terminal.font_family, "Fira Code");
+        assert_eq!(load().terminal, merged.terminal, "the merge is on disk");
     }
 
     #[test]
@@ -1918,6 +1883,91 @@ mod tests {
         assert_eq!(after.default_agent, "claude");
         let loaded = load();
         assert_eq!(loaded.default_agent, "claude");
+    }
+
+    /// A settings.json from an install that used the removed ngrok
+    /// Companion server: a `companion` block with a token and a hash,
+    /// beside ordinary settings.
+    fn settings_with_companion_block() -> serde_json::Value {
+        serde_json::json!({
+            "defaultAgent": "codex",
+            "terminal": { "fontFamily": "Fira Code", "fontSize": 15 },
+            "pushGatewayToken": "gw-token-kept",
+            "projectSettings": { "/work/acme": { "agentic": true } },
+            "someFutureKey": [1, "two", { "three": 3.5 }],
+            "companion": {
+                "enabled": true,
+                "autoStart": true,
+                "username": "acme",
+                "passwordHash": "$argon2id$v=19$m=19456,t=2,p=1$K2TESTsalt$K2TESThash",
+                "passwordSet": true,
+                "ngrokAuthToken": "K2TEST_NGROK_TOKEN",
+                "ngrokDomain": "acme.example.test",
+                "corsOrigins": ["https://acme.example.test"],
+                "allowRemoteSpawn": true
+            }
+        })
+    }
+
+    /// An old file with a `companion` block still loads: the block is
+    /// ignored and the rest of the file is read.
+    #[test]
+    fn a_file_with_the_old_companion_block_still_loads() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let raw = serde_json::to_string_pretty(&settings_with_companion_block()).expect("serialize");
+        fs::write(settings_file(), raw).expect("write old file");
+        let s = load();
+        assert_eq!(s.default_agent, "codex");
+        assert_eq!(s.terminal.font_family, "Fira Code");
+        assert_eq!(s.terminal.font_size, 15);
+        let on_wire = serde_json::to_value(&s).expect("to value");
+        assert!(on_wire.get("companion").is_none(), "{on_wire}");
+    }
+
+    /// The boot scrub drops the `companion` block (token and hash with it),
+    /// keeps every other key's value, writes the file owner-only, and a
+    /// second run changes nothing.
+    #[test]
+    fn scrub_removes_the_companion_block_once_and_keeps_every_other_value() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let before = settings_with_companion_block();
+        fs::write(settings_file(), serde_json::to_string_pretty(&before).expect("serialize")).expect("write old file");
+
+        assert_eq!(scrub_legacy_companion_block(), Ok(true), "first run writes");
+        let raw = fs::read_to_string(settings_file()).expect("read scrubbed file");
+        assert!(!raw.contains("K2TEST_NGROK_TOKEN") && !raw.contains("argon2id"), "{raw}");
+        let after: serde_json::Value = serde_json::from_str(&raw).expect("scrubbed file is JSON");
+        let mut expected = before.as_object().expect("object").clone();
+        expected.remove("companion");
+        assert_eq!(after, serde_json::Value::Object(expected), "only the companion key goes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(settings_file()).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "owner-only after the rewrite");
+        }
+        assert!(!settings_file().with_extension("json.tmp").exists(), "no tmp file left behind");
+
+        assert_eq!(scrub_legacy_companion_block(), Ok(false), "second run is a no-op");
+        assert_eq!(fs::read_to_string(settings_file()).expect("read again"), raw, "file unchanged by the second run");
+    }
+
+    /// No file, a file without the key, and a file that isn't a JSON
+    /// object are all left alone.
+    #[test]
+    fn scrub_leaves_files_without_the_block_alone() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        assert!(!settings_file().exists());
+        assert_eq!(scrub_legacy_companion_block(), Ok(false), "no file");
+        assert!(!settings_file().exists(), "no file created");
+        for raw in ["{\"defaultAgent\": \"codex\"}", "not json", "[1, 2]"] {
+            fs::write(settings_file(), raw).expect("write");
+            assert_eq!(scrub_legacy_companion_block(), Ok(false), "{raw}");
+            assert_eq!(fs::read_to_string(settings_file()).expect("read"), raw, "untouched: {raw}");
+        }
     }
 
     /// "Your display name" (composer `from` attribution) must persist
@@ -2658,89 +2708,6 @@ mod tests {
         assert!(!s.apps_process_engine, "an old client's on opens Apps, never the unwalled engine");
         let s = update(serde_json::json!({"apps": false, "appsPreview": true})).unwrap();
         assert!(!s.apps, "apps wins when a caller sends both");
-    }
-
-    /// F3 closure smoke: when `update()` sees `companion.username`
-    /// change, it must invoke `crate::companion::invalidate_all_sessions`.
-    /// We can't easily start a real companion (needs ngrok + a
-    /// listener), so we stuff a fake `Session` into the live
-    /// `crate::companion::STATE` and assert that `update()` empties
-    /// `state.sessions` for us.
-    ///
-    /// Pre-Unit-7a this was Tauri's job and the invalidate landed on
-    /// an empty in-process state; the daemon-side `STATE` (where the
-    /// live sessions actually live) stayed populated. This test pins
-    /// down that the call now lands on the daemon-side `STATE` —
-    /// which is exactly what closes the F3 gap.
-    #[test]
-    fn update_with_credential_change_invalidates_companion_sessions() {
-        use crate::companion::types::{
-            AuthRateLimiter, CompanionState, Session,
-        };
-        use parking_lot::Mutex as PlMutex;
-        use std::collections::HashMap;
-        use std::sync::atomic::AtomicBool;
-
-        let _g = TEST_LOCK.lock();
-        let _home = HomeGuard::new();
-
-        // Seed disk with a settings.json whose companion.username we
-        // can rotate. Disk read happens inside `update()` to compute
-        // the old-vs-new diff.
-        let mut s = AppSettings::default();
-        s.companion.username = "before".into();
-        save(&s).expect("save initial");
-
-        // Build a CompanionState with one fake session keyed "tok-A".
-        // All fields private to types::CompanionState are public, so
-        // we can construct one for the test without test-only helpers.
-        let mut sessions = HashMap::new();
-        let now = chrono::Utc::now();
-        sessions.insert(
-            "tok-A".to_string(),
-            Session {
-                token: "tok-A".to_string(),
-                created_at: now,
-                expires_at: now + chrono::Duration::hours(24),
-                last_active: now,
-                remote_addr: "127.0.0.1".to_string(),
-                request_count: 0,
-                window_start: std::time::Instant::now(),
-            },
-        );
-        let fake_state = CompanionState {
-            tunnel_url: PlMutex::new(None),
-            sessions: PlMutex::new(sessions),
-            ws_clients: PlMutex::new(Vec::new()),
-            shutdown: AtomicBool::new(false),
-            hook_port: 0,
-            hook_token: String::new(),
-            cors_origins: Vec::new(),
-            allow_remote_spawn: false,
-            auth_limiter: PlMutex::new(AuthRateLimiter::new()),
-            reflow_cache: PlMutex::new(HashMap::new()),
-            _tunnel_keepalive: PlMutex::new(None),
-        };
-        // Install the fake state in the live companion module.
-        *crate::companion::STATE.lock() = Some(fake_state);
-
-        // Rotate the username — F3-relevant field.
-        let _ = update(serde_json::json!({
-            "companion": { "username": "after" }
-        }))
-        .expect("update");
-
-        // Sessions map should be empty post-update.
-        let guard = crate::companion::STATE.lock();
-        let state = guard.as_ref().expect("state installed above");
-        assert!(
-            state.sessions.lock().is_empty(),
-            "F3 close: companion.sessions must be empty after a credential rotate"
-        );
-
-        // Cleanup so subsequent tests don't see a stale state.
-        drop(guard);
-        *crate::companion::STATE.lock() = None;
     }
 
     /// Voice rooms (prd-k2-voice-rooms-v1, lane B): both previews default

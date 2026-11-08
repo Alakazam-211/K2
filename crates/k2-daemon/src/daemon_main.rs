@@ -1388,6 +1388,15 @@ async fn async_main() {
     // its first connection (we register synchronously here).
     terminal_event_sink::register((*event_tx).clone());
 
+    // The old ngrok Companion server is gone. Its settings block can hold
+    // a live ngrok token and an old password hash: drop it from
+    // settings.json once, so it stops riding along in settings reads.
+    match k2_core::app_settings::scrub_legacy_companion_block() {
+        Ok(true) => log_debug!("[daemon] settings: removed the old Companion block (ngrok token, password hash)"),
+        Ok(false) => {}
+        Err(e) => log_debug!("[daemon] settings: removing the old Companion block failed: {e}"),
+    }
+
     // Phase 2 Unit 2 — LLM first-boot discovery. Cheap synchronous
     // check that the default model file exists, then caches its
     // path on `llm_host::shared()`. We do NOT load the model in the

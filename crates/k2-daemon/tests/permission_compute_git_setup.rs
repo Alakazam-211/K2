@@ -175,13 +175,30 @@ fn assert_not_on_disk(root: &Path, secret: &str) {
     let mut stack = vec![root.to_path_buf()];
     let mut scanned = 0;
     while let Some(p) = stack.pop() {
-        let m = std::fs::symlink_metadata(&p).unwrap();
+        // The daemon is still running: SQLite journals and temp files can be
+        // deleted between listing a folder and reading a file. A file that is
+        // gone can't hold the secret, so skip exactly that case; any other
+        // error still fails the test.
+        let m = match std::fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => panic!("stat {}: {e}", p.display()),
+        };
         if m.is_dir() {
-            for e in std::fs::read_dir(&p).unwrap() {
+            let entries = match std::fs::read_dir(&p) {
+                Ok(it) => it,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => panic!("read_dir {}: {e}", p.display()),
+            };
+            for e in entries {
                 stack.push(e.unwrap().path());
             }
         } else if m.is_file() {
-            let bytes = std::fs::read(&p).unwrap();
+            let bytes = match std::fs::read(&p) {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => panic!("read {}: {e}", p.display()),
+            };
             scanned += 1;
             assert!(!bytes.windows(secret.len()).any(|w| w == secret.as_bytes()), "the credential is on disk in {}", p.display());
         }

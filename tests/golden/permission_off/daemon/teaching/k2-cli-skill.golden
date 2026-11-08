@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
 skill_version: 51
-skill_checksum: 78d73a8b573359ba
+skill_checksum: c17e9023db438e6e
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -355,7 +355,7 @@ app-runtime, app-handover, app-push, app-pairing, auth-pages, app-profile,
 app-account-deletion, app-transfers, app-chat,
 chat-voice, chat-voice-rooms, voice-rooms, tauri, tauri-voice, skins, feedback-loop, ticket-brief, zen,
 sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
-publish-visibility, publish-dev, compute, compute-shared, vault,
+publish-visibility, publish-dev, compute, compute-shared, ci, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, docs, sim, design, db-upgrade, jobs, folder-trust,
 email-notifications, box-move, board, chat-refresh.

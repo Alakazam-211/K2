@@ -60,6 +60,18 @@ pub fn take_slot(login: &str) -> Option<Slot> {
     Some(Slot(login.to_string()))
 }
 
+/// The cap is for Voice & Chat only logins (re-review L9): the owner, Admins
+/// and Members open as many as their windows need. `Ok(None)` = not counted,
+/// `Ok(Some)` = counted, `Err(())` = a Voice & Chat only login already holds
+/// [`MAX_PER_LOGIN`].
+#[allow(clippy::result_unit_err)]
+pub fn slot_for(login: &str, role: k2_core::connect_users::Role) -> Result<Option<Slot>, ()> {
+    if role != k2_core::connect_users::Role::VoiceChat {
+        return Ok(None);
+    }
+    take_slot(login).map(Some).ok_or(())
+}
+
 /// The one frame this socket forwards, as JSON (None for every other event).
 pub fn frame_for(event: &SessionEvent) -> Option<String> {
     match event {
@@ -163,6 +175,21 @@ mod tests {
         let d = take_slot("slotcap").expect("a place came free");
         assert!(take_slot("slotcap").is_none());
         drop((a, c, d));
+    }
+
+    #[test]
+    fn only_voice_chat_logins_are_capped() {
+        use k2_core::connect_users::Role;
+        let member: Vec<_> = (0..6).map(|i| slot_for("slotmember", Role::Member).unwrap_or_else(|_| panic!("Member socket {i} refused"))).collect();
+        assert!(member.iter().all(Option::is_none), "a Member's sockets aren't counted");
+        for role in [Role::Admin, Role::Owner] {
+            for _ in 0..5 {
+                assert!(matches!(slot_for("slotadmin", role), Ok(None)), "{role:?} isn't capped");
+            }
+        }
+        let held: Vec<_> = (0..MAX_PER_LOGIN).map(|_| slot_for("slotvc", Role::VoiceChat).expect("under the cap").expect("counted")).collect();
+        assert!(slot_for("slotvc", Role::VoiceChat).is_err(), "a fourth Voice & Chat only socket is refused");
+        drop(held);
     }
 
     #[test]

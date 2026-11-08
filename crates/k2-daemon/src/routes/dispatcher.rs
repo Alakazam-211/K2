@@ -8676,17 +8676,19 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let token = super::http::extract_token(&query).unwrap_or_default().to_string();
-            // H2: at most MAX_PER_LOGIN of these sockets per login.
-            let _slot = match k2_core::connect_users::validate_session(&token) {
-                Some(login) => match crate::voice::events_ws::take_slot(&login) {
-                    Some(s) => Some(s),
-                    None => {
+            // H2 / L9: at most MAX_PER_LOGIN of these sockets per Voice &
+            // Chat only login; every other login and the owner token open
+            // as many as their windows need.
+            let _slot = match k2_core::connect_users::validate_session_role(&token) {
+                Some((login, role)) => match crate::voice::events_ws::slot_for(&login, role) {
+                    Ok(s) => s,
+                    Err(()) => {
                         let _ = stream.read(&mut buf).await;
                         super::http::send_response(
                             &mut *stream,
                             "429 Too Many Requests",
                             "application/json",
-                            r#"{"ok":false,"error":{"code":"too_many_sockets","hint":"at most 3 voice event sockets per login"}}"#,
+                            r#"{"ok":false,"error":{"code":"too_many_sockets","hint":"at most 3 voice event sockets per Voice & Chat only login"}}"#,
                         )
                         .await;
                         return DispatchOutcome::Done;

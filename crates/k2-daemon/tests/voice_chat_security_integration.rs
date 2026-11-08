@@ -279,3 +279,51 @@ async fn fixed_password_demo_check_and_the_set_shares_actor() {
         assert_eq!(json_of(&r)["error"], "role_change_not_allowed");
     });
 }
+
+/// Re-review L9: the voice events socket cap is for Voice & Chat only logins.
+/// A Member opens five at once; a Voice & Chat only login gets three and the
+/// fourth is refused 429 `too_many_sockets`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_voice_chat_logins_are_held_to_three_voice_event_sockets() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    struct PreviewOff;
+    impl Drop for PreviewOff {
+        fn drop(&mut self) {
+            k2_core::voice_preview::set_enabled(false);
+        }
+    }
+    let _off = PreviewOff;
+    k2_core::voice_preview::set_enabled(true);
+    with_temp_home(|| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = d.port;
+        let r = post(port, "/cli/users/add", OWNER_TOKEN, json!({"username": "manysock", "password": PW, "mustChangePassword": false}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let member = login(port, "manysock");
+        let vc = voice_chat_login(port, "fewsock");
+        futures_block(async {
+            let url = |tok: &str| format!("ws://127.0.0.1:{port}/cli/voice/events?token={tok}");
+            let mut held = Vec::new();
+            for i in 0..5 {
+                let (mut ws, _) = tokio_tungstenite::connect_async(url(&member)).await.unwrap_or_else(|e| panic!("Member socket {i}: {e}"));
+                let hello = tokio::time::timeout(Duration::from_secs(5), ws.next())
+                    .await
+                    .unwrap_or_else(|_| panic!("Member socket {i}: no hello"));
+                match hello {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t))) => assert!(t.contains("\"hello\""), "{t}"),
+                    other => panic!("Member socket {i}: {other:?}"),
+                }
+                held.push(ws);
+            }
+            for i in 0..3 {
+                let (ws, _) = tokio_tungstenite::connect_async(url(&vc)).await.unwrap_or_else(|e| panic!("Voice & Chat only socket {i}: {e}"));
+                held.push(ws);
+            }
+            match tokio_tungstenite::connect_async(url(&vc)).await {
+                Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => assert_eq!(resp.status().as_u16(), 429),
+                other => panic!("a fourth Voice & Chat only socket must be refused 429: {:?}", other.map(|_| ())),
+            }
+            drop(held);
+        });
+    });
+}

@@ -189,7 +189,6 @@ bincode = "1.3"
 
 # Terminal backend — VT-compliant parser + PTY management + reflow.
 alacritty_terminal = "0.26.0-rc1"
-portable-pty = "0.8"
 
 # ANSI tokenizer used by the line-mux producer (`term::line_mux`).
 # Pinned to "0.15" to match alacritty_terminal's transitive pin
@@ -200,10 +199,8 @@ portable-pty = "0.8"
 # `EventLoop::spawn()`.
 vte = { version = "0.15", features = ["std", "ansi"] }
 
-# Glyph rendering (bitmap renderer path) + QOI image encoding for mobile
-# companion snapshots.
+# Glyph rendering (bitmap renderer path).
 fontdue = "0.9"
-qoi = "0.4"
 
 # Phase 2 Unit 4 — image decode + resize for `projects_ops::detect_project_icon`.
 # Loads PNG/JPG/ICO icons from user projects and resamples to 48×48 for
@@ -225,9 +222,8 @@ k2-ptyd = { path = "../k2-ptyd" }
 k2-term-grid = { path = "../k2-term-grid" }
 k2-term-wire = { path = "../k2-term-wire" }
 
-# Low-level primitives used by the alacritty PTY event loop.
+# Low-level OS calls.
 libc = "0.2"
-polling = "3"
 
 # Companion WS + auth + HTTP proxy — pulled over from src-tauri along
 # with crates/k2so-core/src/companion/. argon2 + subtle cover the
@@ -321,14 +317,6 @@ x509-parser = { version = "0.18", default-features = false }
 # swaps in a freshly-issued chain WITHOUT dropping the live TLS listener.
 arc-swap = "1"
 
-# Unix-only: alacritty PTY event-loop helpers (signal-hook-mio needs UnixStream).
-# Not used on Windows MSVC — leave out so `cargo check -p k2-core` can start there.
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["termios", "process"] }
-mio = { version = "1", features = ["os-poll", "os-ext"] }
-signal-hook = "0.3"
-signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
-
 # Windows: owner-only DACLs stand in for 0700/0600 (k2-winsec). socket2
 # (already in Cargo.lock via tokio/hyper) holds test_env::ClosedPort's
 # bound, non-listening socket there.
@@ -350,12 +338,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 #   native macOS daemon. cargo unions feature sets per crate, so the macOS
 #   build gets `["sampler", "metal"]`.
 [target.'cfg(target_os = "macos")'.dependencies]
-# Keychain writes (`macos_keychain`): set an item's data in process so the
-# secret is never on a `security` argv and never split by `security -i`'s
-# line buffer. Same versions already in Cargo.lock (rustls/keyring).
-security-framework = "3"
+# Keychain item calls in `macos_keychain_tests` (the keychain code itself
+# now lives in k2-client and the daemon's vault). Same version already in
+# Cargo.lock (rustls/keyring).
 security-framework-sys = "2.17"
-core-foundation = "0.10"
 cocoa = "0.26"
 objc = "0.2"
 llama-cpp-2 = { version = "0.1", features = ["metal"] }

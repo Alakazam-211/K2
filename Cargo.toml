@@ -77,9 +77,6 @@ opt-level = 3
 [profile.dev.package.salsa20]
 opt-level = 3
 
-[profile.dev.package.qoi]
-opt-level = 3
-
 [profile.dev.package.fontdue]
 opt-level = 3
 

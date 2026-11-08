@@ -437,3 +437,62 @@ fn replies_stay_in_their_conversation() {
         }
     }
 }
+
+// ── re-review M3: one lock for the slot and the hold ──────────────────
+
+/// N parallel posts from one login: exactly one is stored, the others are
+/// refused 429 (the slot is taken before the post is stored).
+#[test]
+fn parallel_posts_from_one_login_store_exactly_one() {
+    let _home = crate::test_support::TempHome::new();
+    let (a, ha) = agent("shrp");
+    reviewer("revpar", &[a.as_str()]);
+    forget_limits();
+    const N: usize = 8;
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(N));
+    let workers: Vec<_> = (0..N)
+        .map(|i| {
+            let (gate, ha) = (gate.clone(), ha.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                call(THREAD_POST, Some("revpar"), &[], json!({ "agent": ha, "text": format!("parallel {i}") }))
+            })
+        })
+        .collect();
+    let answers: Vec<(u16, J)> = workers.into_iter().map(|w| w.join().expect("worker")).collect();
+    let passed = answers.iter().filter(|(s, _)| *s == 200).count();
+    assert_eq!(passed, 1, "exactly one post is stored: {answers:?}");
+    for (s, v) in answers.iter().filter(|(s, _)| *s != 200) {
+        assert_eq!(*s, 429, "{v}");
+        assert!(matches!(code(v), "rate_limited" | "agent_busy"), "{v}");
+    }
+    forget_limits();
+    let (s, t) = call(THREAD, Some("revpar"), &[("agent", ha.as_str()), ("limit", "0")], J::Null);
+    assert_eq!(s, 200, "{t}");
+    let items = t["items"].as_array().unwrap_or_else(|| panic!("items: {t}"));
+    let stored = items.iter().filter(|it| it["doc"]["body"].as_str().is_some_and(|b| b.contains("parallel "))).count();
+    assert_eq!(stored, 1, "one post in the conversation: {t}");
+}
+
+/// The hold keeps a conversation busy past the 10 s spacing until delivery
+/// starts the agent's turn; a post that isn't stored gives its slot and
+/// hold back.
+#[test]
+fn a_reserved_post_holds_until_its_turn_starts_and_a_failed_one_gives_back() {
+    let _home = crate::test_support::TempHome::new();
+    forget_limits();
+    let (conv, vc) = ("vc:no-such-agent:revhold", "vc:no-such-agent:revhold");
+    let t0 = std::time::Instant::now();
+    reserve("revhold", conv, vc, t0, 1).unwrap_or_else(|r| panic!("first: {}", r.body));
+    let later = t0 + POST_EVERY + std::time::Duration::from_secs(1);
+    let busy = reserve("revhold", conv, vc, later, 1).err().expect("held");
+    assert!(busy.body.contains("agent_busy"), "{}", busy.body);
+    turn_started(conv);
+    let r = reserve("revhold", conv, vc, later, 1).unwrap_or_else(|r| panic!("after the turn started: {}", r.body));
+    release(r);
+    // Given back: the same instant may reserve again (no 10 s wait, no hold).
+    reserve("revhold", conv, vc, later, 1).unwrap_or_else(|r| panic!("after release: {}", r.body));
+    let stale = later + HOLD_MAX + std::time::Duration::from_secs(1);
+    reserve("revhold", conv, vc, stale, 1).unwrap_or_else(|r| panic!("a hold older than HOLD_MAX lapses: {}", r.body));
+    forget_limits();
+}

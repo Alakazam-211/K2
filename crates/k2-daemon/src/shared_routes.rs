@@ -415,9 +415,79 @@ impl ReadBucket {
     }
 }
 
-fn post_budgets() -> &'static std::sync::Mutex<HashMap<String, PostBudget>> {
-    static M: std::sync::OnceLock<std::sync::Mutex<HashMap<String, PostBudget>>> = std::sync::OnceLock::new();
+/// How long a stored post holds its conversation busy at most while it
+/// waits on the delivery lane (the hold normally ends when delivery starts
+/// the agent's turn; this only frees a conversation whose job never ran).
+pub const HOLD_MAX: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Every login's post budget and every conversation's busy hold, behind
+/// ONE lock (re-review M3): a post reserves its slot and its hold together
+/// before anything is stored, so parallel posts can't all pass the checks.
+#[derive(Default)]
+struct PostState {
+    budgets: HashMap<String, PostBudget>,
+    /// Conversation id → when a stored post took it (cleared by
+    /// [`turn_started`] once delivery opens the agent's turn).
+    holds: HashMap<String, std::time::Instant>,
+}
+
+fn post_state() -> &'static std::sync::Mutex<PostState> {
+    static M: std::sync::OnceLock<std::sync::Mutex<PostState>> = std::sync::OnceLock::new();
     M.get_or_init(Default::default)
+}
+
+/// A post's reserved slot and hold; [`release`] gives both back when the
+/// post isn't stored.
+struct Reservation {
+    login: String,
+    conversation: String,
+    prior: Option<PostBudget>,
+}
+
+/// Check the budget, the hold and the agent's turn, and take the slot and
+/// the hold, all under one lock.
+fn reserve(login: &str, conversation: &str, vc: &str, now: std::time::Instant, day: i64) -> Result<Reservation, CliResponse> {
+    let mut m = post_state().lock().unwrap_or_else(|p| p.into_inner());
+    if let Err((code, secs)) = m.budgets.get(login).map_or(Ok(()), |b| b.check(now, day)) {
+        return Err(limited(code, "too many posts from this login", secs * 1000));
+    }
+    let held = m.holds.get(conversation).is_some_and(|at| now.saturating_duration_since(*at) < HOLD_MAX);
+    if held || activity_of(vc) != "idle" {
+        return Err(limited("agent_busy", "the agent is still on your last message; send this when it answers", 5000));
+    }
+    if m.budgets.len() > 10_000 {
+        m.budgets.clear();
+    }
+    if m.holds.len() > 10_000 {
+        m.holds.retain(|_, at| now.saturating_duration_since(*at) < HOLD_MAX);
+    }
+    let prior = m.budgets.get(login).cloned();
+    m.budgets.entry(login.to_string()).or_default().spend(now, day);
+    m.holds.insert(conversation.to_string(), now);
+    Ok(Reservation { login: login.to_string(), conversation: conversation.to_string(), prior })
+}
+
+/// The post wasn't stored: give its slot and hold back.
+fn release(r: Reservation) {
+    let mut m = post_state().lock().unwrap_or_else(|p| p.into_inner());
+    match r.prior {
+        Some(b) => {
+            m.budgets.insert(r.login, b);
+        }
+        None => {
+            m.budgets.remove(&r.login);
+        }
+    }
+    m.holds.remove(&r.conversation);
+}
+
+/// Delivery opened the agent's turn on `conversation_id` (or, in tests,
+/// reached the test sink): from here the turn itself keeps it busy.
+pub(crate) fn turn_started(conversation_id: &str) {
+    if !conversation_id.starts_with(crate::overlay_routes::VC_PREFIX) {
+        return;
+    }
+    post_state().lock().unwrap_or_else(|p| p.into_inner()).holds.remove(conversation_id);
 }
 
 fn read_buckets() -> &'static std::sync::Mutex<HashMap<String, ReadBucket>> {
@@ -452,7 +522,7 @@ fn take_read(login: &str) -> Result<(), CliResponse> {
 /// Tests: forget every login's budgets.
 #[cfg(test)]
 pub(crate) fn forget_limits() {
-    post_budgets().lock().unwrap_or_else(|p| p.into_inner()).clear();
+    *post_state().lock().unwrap_or_else(|p| p.into_inner()) = PostState::default();
     read_buckets().lock().unwrap_or_else(|p| p.into_inner()).clear();
 }
 
@@ -654,11 +724,12 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
     if let Some(v) = b.via.as_deref().filter(|v| *v != "compose") {
         return refuse("403 Forbidden", "compose_only", format!("a shared Thread takes only your own posts (via=compose), not via={}", v.chars().take(16).collect::<String>()));
     }
-    let Some((_, address)) = shared_agent(shares, &b.agent) else {
+    let Some((agent_id, address)) = shared_agent(shares, &b.agent) else {
         audit("shared.thread.post", login, "refused not_shared".into());
         return not_shared(&b.agent);
     };
     let vc = crate::overlay_routes::vc_addr(&address, login);
+    let conversation = crate::overlay_routes::vc_conversation(&agent_id, login);
     // M4: no control characters (but `\n`) or bidi overrides, ever.
     let cleaned = crate::overlay_routes::strip_untrusted_controls(&b.text);
     let text = cleaned.trim();
@@ -672,19 +743,6 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
     if text.starts_with(REPLY_MARK) {
         return refuse("400 Bad Request", "reply_header_not_allowed", "send replyTo (the message's seq) instead of a reply header; K2 writes the header");
     }
-    // H2: one post per 10 s and 200 a day per login, and none while the
-    // agent is still on this person's last message (held at the source).
-    let (now, day) = (std::time::Instant::now(), utc_day());
-    {
-        let m = post_budgets().lock().unwrap_or_else(|p| p.into_inner());
-        if let Err((code, secs)) = m.get(login).map_or(Ok(()), |b| b.check(now, day)) {
-            return limited(code, "too many posts from this login", secs * 1000);
-        }
-    }
-    let busy = activity_of(&vc);
-    if busy != "idle" {
-        return limited("agent_busy", "the agent is still on your last message; send this when it answers", 5000);
-    }
     // H1: a reply quotes only this person's own conversation.
     let text = match b.reply_to {
         None => text.to_string(),
@@ -694,13 +752,18 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
         },
         Some(_) => return refuse("400 Bad Request", "usage", "replyTo is a message's seq (a whole number above 0)"),
     };
+    // H2 / M3: one post per 10 s and 200 a day per login, and none while
+    // the agent is still on this person's last message. The slot and the
+    // conversation's hold are taken together under one lock BEFORE the
+    // post is stored, and given back if it isn't.
+    let (now, day) = (std::time::Instant::now(), utc_day());
+    let reservation = match reserve(login, &conversation, &vc, now, day) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
     let r = crate::overlay_routes::post_voice_chat(login, &vc, &text, b.client_msg_id.as_deref());
-    if r.status.starts_with('2') {
-        let mut m = post_budgets().lock().unwrap_or_else(|p| p.into_inner());
-        if m.len() > 10_000 {
-            m.clear();
-        }
-        m.entry(login.to_string()).or_default().spend(now, day);
+    if !r.status.starts_with('2') {
+        release(reservation);
     }
     audit("shared.thread.post", login, format!("addr={vc} status={}", r.status.split(' ').next().unwrap_or("")));
     reshape(r, &[])

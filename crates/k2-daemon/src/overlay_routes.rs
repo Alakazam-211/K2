@@ -4551,10 +4551,16 @@ fn deliver_thread_to_pty(
     retry: bool,
 ) -> ThreadDelivery {
     if sink == DeliverySink::Test {
+        if let Some(t) = &turn {
+            crate::shared_routes::turn_started(t.conversation_id);
+        }
         return test_delivery(addr, payload);
     }
     if let Some(t) = turn {
         crate::thread_activity::start_turn(t.conversation_id, addr, t.turn_id, t.started_at);
+        // A Voice & Chat only post's hold ends here: the turn keeps the
+        // conversation busy from now on (re-review M3).
+        crate::shared_routes::turn_started(t.conversation_id);
     }
     let t0 = std::time::Instant::now();
     let resp = crate::workspace_msg::deliver_live_as(

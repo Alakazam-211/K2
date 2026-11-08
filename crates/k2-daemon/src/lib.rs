@@ -48,7 +48,6 @@ pub mod clone_gate;
 pub mod clone_preview;
 pub mod clone_proposal_routes;
 pub mod thread_transfer_routes;
-pub mod companion_host;
 pub mod companion_routes;
 pub mod connect_users_routes;
 // phone-web-off (2026-10-24): Companion pairing codes + device sessions.

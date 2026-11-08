@@ -584,12 +584,10 @@ async fn async_main() {
     #[cfg(unix)]
     k2_core::enrich_path_from_login_shell();
 
-    // Phase 2 Unit 1 — install a rustls CryptoProvider so the
-    // daemon-owned companion ngrok tunnel can negotiate TLS. Rustls
-    // 0.23 compiles both aws-lc-rs (via reqwest rustls-tls) and ring
-    // (via ngrok) into the binary; it refuses to auto-pick and
-    // panics on first TLS use unless a provider is explicitly
-    // installed. Mirrors the same call in src-tauri/src/lib.rs.
+    // Install a rustls CryptoProvider before any TLS use. Rustls 0.23
+    // refuses to auto-pick when more than one provider is compiled in
+    // and panics on first TLS use unless one is installed. Mirrors the
+    // same call in src-tauri/src/lib.rs.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     log_debug!("[daemon] {}", BANNER);
@@ -1379,15 +1377,6 @@ async fn async_main() {
         }
     }
 
-    // Phase 2 Unit 1 — register daemon-side companion bridges so
-    // k2so-core's companion module can run without Tauri being
-    // present. The terminal/settings/event bridges all read from
-    // daemon-owned state (TerminalManager singleton, ~/.k2so/settings.json,
-    // the broadcast event channel created above). Must precede the
-    // autostart fire below so the tunnel start sees a configured
-    // settings provider.
-    companion_host::register((*event_tx).clone());
-
     // Phase 2 Unit 3 — daemon-side terminal event sink. Wires
     // `k2_core::terminal::TerminalManager`'s event emissions onto
     // the daemon's broadcast channel as `WireEvent` frames named
@@ -1398,15 +1387,6 @@ async fn async_main() {
     // request can land, which means before `start_listener` accepts
     // its first connection (we register synchronously here).
     terminal_event_sink::register((*event_tx).clone());
-
-    // First-boot companion autostart. If `companion.auto_start` is
-    // true and credentials are present, kick off `start_companion()`
-    // on a detached thread (the tunnel takes a few seconds to come
-    // up and we don't want to block daemon boot on ngrok). Replaces
-    // the pre-Phase-2 Tauri-side autostart in `src-tauri/src/lib.rs`
-    // — the daemon now owns the tunnel lifecycle so Mobile Companion
-    // + K2SO Connect can reach it even with Tauri closed.
-    companion_host::maybe_autostart();
 
     // Phase 2 Unit 2 — LLM first-boot discovery. Cheap synchronous
     // check that the default model file exists, then caches its
@@ -2185,8 +2165,7 @@ async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
     }
 }
 
-/// K2 Connect tunnel first-boot autostart. Mirrors
-/// [`companion_host::maybe_autostart`]: when the user opted in
+/// K2 Connect tunnel first-boot autostart: when the user opted in
 /// (`~/.k2so/tunnel.json` `auto_start: true`) and the stored config is
 /// connectable (token + server present), re-launch the `frpc` tunnel for
 /// the saved subdomain so the daemon is reachable at `<sub>.k2.dev`

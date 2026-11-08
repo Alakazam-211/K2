@@ -21988,12 +21988,28 @@ def size(n):
         if n < 1024 or unit == "GB":
             return ("%d %s" % (n, unit)) if unit == "B" else ("%.0f %s" % (n, unit))
         n=n/1024.0
+LINE_BREAKS=("\r\n","\r","\x0b","\x0c","\x1c","\x1d","\x1e","\x85","\u2028","\u2029")
+def body_lines(s):
+    # Every break kind is a new line; each line after the first is quoted
+    # (re-review L6) so no body can print a line that reads as its own
+    # "[N] from ..." header, a [file] or a [context] line.
+    for b in LINE_BREAKS:
+        s=s.replace(b,"\n")
+    return s.split("\n")
 for it in items:
     doc=it.get("doc") or {}
     body=doc.get("body") or ""
     frm=doc.get("from") or ""
+    author=doc.get("author") if isinstance(doc.get("author"), dict) else {}
+    if author.get("kind") == "guest":
+        # An App guest or a Voice & Chat only login: never a person on this
+        # box, never the owner (re-review L6).
+        frm="guest %s" % (author.get("name") or author.get("login") or frm or "?")
     seq=it.get("seq")
-    print("[%s] from %s: %s" % (seq, frm, body))
+    lines=body_lines(body)
+    print("[%s] from %s: %s" % (seq, frm, lines[0]))
+    for l in lines[1:]:
+        print("  | %s" % l)
     ctx=doc.get("context")
     if isinstance(ctx, dict) and isinstance(ctx.get("text"), str):
         # thread-context-v1: a line a Garden widget set, never words the person typed.

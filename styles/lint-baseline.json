@@ -50,7 +50,6 @@
   "src/renderer/components/Settings/sections/ProjectsSection.tsx": 20,
   "src/renderer/components/Settings/sections/WakeSchedulerSection.tsx": 8,
   "src/renderer/components/Settings/sections/restart-host.ts": 1,
-  "src/renderer/components/Settings/shared/LocalLLMSettings.tsx": 3,
   "src/renderer/components/Sidebar/ActiveBar.tsx": 14,
   "src/renderer/components/Sidebar/FocusGroupDropdown.tsx": 1,
   "src/renderer/components/Sidebar/IconRail.tsx": 4,

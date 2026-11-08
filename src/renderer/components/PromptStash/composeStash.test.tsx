@@ -7,6 +7,7 @@
 import 'fake-indexeddb/auto'
 import { IDBFactory } from 'fake-indexeddb'
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -42,6 +43,7 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { usePromptStashStore, type StashSaveResult } from '@/stores/prompt-stash'
 import { useContextMenuStore } from '@/stores/context-menu'
+import { useSettingsStore } from '@/stores/settings'
 
 const chrome: SessionViewChromeValue = {
   viewTab: 'thread',
@@ -91,6 +93,12 @@ function type(text: string): void {
 function pressStash(target: Element = box()): void {
   const mac = isMacPlatform()
   fireEvent.keyDown(target, { key: 's', metaKey: mac, ctrlKey: !mac })
+}
+
+/** Let pending requestAnimationFrame callbacks run (the compose bar takes
+ *  the caret one frame after it mounts or its session changes). */
+async function nextFrame(): Promise<void> {
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
 }
 
 function activityPhase(): string | null {
@@ -306,7 +314,7 @@ describe('the button and the drawer', () => {
     // default, workspaceSwitchFocus 'composer'). A person can't press before
     // that frame, so let it run first; otherwise it lands after the drawer
     // focused its list and takes the focus back.
-    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    await nextFrame()
     pressStash()
     const drawer = await screen.findByTestId('stash-drawer')
     const rows = drawer.querySelectorAll('[data-stash-row]')
@@ -317,6 +325,30 @@ describe('the button and the drawer', () => {
     expect(rows[1].querySelector('[data-stash-age]')?.textContent).toBe('3h')
     expect(rows[1].querySelector('[data-stash-files]')).toBeNull()
     // The list has the keys.
+    expect(document.activeElement).toBe(screen.getByTestId('stash-list'))
+  })
+
+  it('a session change while the drawer is open leaves the keys on the list ("Message agent" focus)', async () => {
+    useSettingsStore.setState({ workspaceSwitchFocus: 'composer' })
+    await realSave({ text: 'kept', source: { server_id: 'local', server_label: 'This computer', user: 'owner', agent: 'sales', agent_name: 'Sales' } }, [], { now: Date.now() - 60_000 })
+    const room = testRoom({ tabs: {}, scope: primaryScope(), isPrimary: true, projects: [] })
+    const bar = (sessionId: string): ReactElement => (
+      <SessionViewChromeContext.Provider value={chrome}>
+        <ThreadComposeDrawerContext.Provider value={null}>
+          <TerminalComposeBar sessionId={sessionId} workspacePath="/ws/sales" sendDestination="thread" />
+        </ThreadComposeDrawerContext.Provider>
+      </SessionViewChromeContext.Provider>
+    )
+    const r = renderInRoom(room, bar('sess-1'))
+    await waitFor(() => expect(screen.getByTestId('stash-button').getAttribute('aria-label')).toBe('Stash (1 item)'))
+    await nextFrame()
+    pressStash()
+    await screen.findByTestId('stash-drawer')
+    expect(document.activeElement).toBe(screen.getByTestId('stash-list'))
+    // The session changes under the open drawer: the bar's focus frame runs again.
+    r.rerender(bar('sess-2'))
+    await nextFrame()
+    expect(screen.getByTestId('stash-drawer')).toBeTruthy()
     expect(document.activeElement).toBe(screen.getByTestId('stash-list'))
   })
 

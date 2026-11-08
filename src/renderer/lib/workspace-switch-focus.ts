@@ -155,10 +155,15 @@ export function preferredWorkspaceSwitchFocus(): 'terminal' | 'composer' | 'off'
 /** Compose-bar mount (`TerminalComposeBar`): may this bar take the caret?
  *  Only with "Message agent", only when a switch could (no dialog, not
  *  typing elsewhere), and a PTY bar yields to a visible Thread composer in
- *  the same room (split view mounts both; Thread first). */
+ *  the same room (split view mounts both; Thread first). Focus already
+ *  inside this bar (its stash drawer's list, a button) stays where it is:
+ *  a session change with the stash open must not pull the keys away. */
 export function composeBarMayTakeFocus(textarea: HTMLTextAreaElement): boolean {
   if (preferredWorkspaceSwitchFocus() !== 'composer') return false
   if (isEffectivelyHidden(textarea)) return false
+  const active = typeof document === 'undefined' ? null : document.activeElement
+  const bar = textarea.closest('[data-compose-bar]')
+  if (bar && active instanceof HTMLElement && active !== textarea && bar.contains(active)) return false
   if (isModalOpen() || isTypingElsewhere()) return false
   if (textarea.closest('[data-testid="agent-session-thread-compose-slot"]')) return true
   const room = textarea.closest('[data-terminal-pane-wrapper]')

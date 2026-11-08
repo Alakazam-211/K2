@@ -302,6 +302,11 @@ describe('the button and the drawer', () => {
     )
     renderThreadBar()
     await waitFor(() => expect(screen.getByTestId('stash-button').getAttribute('aria-label')).toBe('Stash (2 items)'))
+    // The bar takes the caret one frame after it mounts (the "Message agent"
+    // default, workspaceSwitchFocus 'composer'). A person can't press before
+    // that frame, so let it run first; otherwise it lands after the drawer
+    // focused its list and takes the focus back.
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
     pressStash()
     const drawer = await screen.findByTestId('stash-drawer')
     const rows = drawer.querySelectorAll('[data-stash-row]')

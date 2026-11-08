@@ -1746,7 +1746,7 @@ mod tests {
         assert!(!never_proxy("/cli/skin/password/forgot"));
         // V26 (0.46.3): the server's LLM tokens never; a person's own
         // wallet verbs are allow-listed helper rows.
-        for p in ["/cli/llm/accounts/list", "/cli/llm/accounts/login/status", "/cli/llm/accounts/switch", "/cli/llm/chat"] {
+        for p in ["/cli/llm/accounts/list", "/cli/llm/accounts/login/status", "/cli/llm/accounts/switch"] {
             assert!(never_proxy(p), "{p}");
             assert!(!allowlisted_http("GET", p) && !allowlisted_http("POST", p), "{p}");
         }

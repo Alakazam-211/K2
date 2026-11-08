@@ -905,4 +905,37 @@ mod role_name_tests {
             assert_eq!(role_name("nobody-here", None), None);
         });
     }
+
+    /// The call door (`/_k2/voice/sew/*`, follow-up 2): its kit routes run as
+    /// `person_of`'s person, and a Voice & Chat only login is one exactly as a
+    /// Member is: its own `k2:connect:<uuid>` member, a login client. The
+    /// engine routes take only the join's `sewcc_` call credential, which
+    /// carries no K2 role at all (Sew scopes it, and both roles are Sew
+    /// `member`s), so video and `local:screen` publish are Sew's decision for
+    /// both alike.
+    #[test]
+    fn a_voice_chat_login_is_the_same_kind_of_person_as_a_member_at_the_call_door() {
+        crate::test_support::with_temp_home(|| {
+            const OWNER: &str = "owner-token-call-door-test";
+            let mut seen = Vec::new();
+            for (name, role) in [("cdmem", Role::Member), ("cdvc", Role::VoiceChat)] {
+                k2_core::connect_users::add_user(name, "password123").expect("add");
+                if role != Role::Member {
+                    k2_core::connect_users::set_role(name, role).expect("role");
+                }
+                let tok = k2_core::connect_users::create_session(name);
+                let caller = Caller::from_tcp("", Some(&tok), OWNER);
+                let p = match person_of(&caller, OWNER) {
+                    Ok(p) => p,
+                    Err(r) => panic!("{name}: the call door's person rule refused it: {} {}", r.code, r.hint),
+                };
+                assert_eq!(p.login, name);
+                assert_eq!(p.role, role);
+                let id = k2_core::connect_users::user_uuid(name).expect("store").expect("an id");
+                assert_eq!(p.ident.sub, format!("k2:connect:{id}"), "{name}: its own Sew member");
+                seen.push(p.ident.sew_role.as_str());
+            }
+            assert_eq!(seen, vec!["member", "member"], "the same Sew level for both");
+        });
+    }
 }

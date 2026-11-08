@@ -17,12 +17,21 @@
 //! included, which reads Threads through `/cli/thread`):
 //!
 //! ```text
-//! GET  /cli/shared                        {ok, role, agents:[{id,address,name}], gardens:[{id,name}]}
+//! GET  /cli/shared                        {ok, role, agents:[{id,address,name,color,icon,activity}], gardens:[{id,name}]}
 //! GET  /cli/shared/thread?agent=<address|id>[&limit][&after_seq|&since_seq|&before_seq]
 //!                                         the agent's Thread: GET /cli/thread's answer for it
-//! POST /cli/shared/thread/post {agent, text, clientMsgId?, via?: "compose"}
+//!                                         (same thread-delta-v1 shape), plus `activity`
+//! POST /cli/shared/thread/post {agent, text, clientMsgId?, via?: "compose", replyTo?: <seq>}
 //!                                         POST /cli/thread/post's answer (via=compose, as this login)
 //! ```
+//!
+//! **What this role never gets in those answers (0.46.10 follow-up):**
+//! `attachments` / `attachmentCount` (the role can't open files), and the
+//! agent's working state only as one coarse word, `activity: idle | working
+//! | waiting`, from the guest projection of the live turn (no labels, no
+//! commands, no paths). A reply is rendered here from `replyTo` (a seq in
+//! the same Thread): the desktop's `↩ #N <from>:` header and the quoted
+//! words are built from the stored message, never taken from the client.
 //!
 //! **Why its own routes and not `/cli/thread` with a check.** The route gate
 //! sees the path and the query, never a POST body, and the Thread routes
@@ -96,16 +105,76 @@ fn shares_of(login: Option<&str>) -> Result<(String, Shares), CliResponse> {
 
 // ── resolving shares (also used by users/add and users/set-shares) ──
 
-/// One shared agent as people see it: `{id, address, name}`. `None` when the
+/// One shared agent as people see it: `{id, address, name, color, icon}`
+/// (`color` `#rrggbb` or null; `icon` the agent's picture as an image data
+/// URL, the same checked view an App gets, or null). `None` when the
 /// workspace is gone (its share then lists nothing).
 pub fn agent_view(project_id: &str) -> Option<J> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let name: String = conn
-        .query_row("SELECT name FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0))
+    let (name, color, icon): (String, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT name, color, icon_url FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
         .ok()?;
     let address = k2_core::workspace_session_handles::workspace_address_name(&conn, project_id).ok()?;
-    Some(json!({ "id": project_id, "address": address, "name": name }))
+    let color = color.as_deref().and_then(|c| k2_core::workspace::agent_look::normalize_color(c).ok());
+    let icon = k2_core::workspace::agent_look::guest_image_view(icon.as_deref());
+    Some(json!({ "id": project_id, "address": address, "name": name, "color": color, "icon": icon }))
+}
+
+/// The shared agent's working state as one coarse word, from the guest
+/// projection of its pinned Chat's live turn (`thread_activity`): `waiting`
+/// (on a person), `working`, or `idle` (no live turn, or it ended).
+pub fn activity_of(address: &str) -> &'static str {
+    let Some(conv) = crate::overlay_routes::resolve_login_addr(address) else { return "idle" };
+    activity_word(crate::thread_activity::current_turn_guest(&conv).as_ref())
+}
+
+/// [`activity_of`]'s mapping over a guest turn body (pure; tests).
+pub fn activity_word(turn: Option<&J>) -> &'static str {
+    let Some(t) = turn else { return "idle" };
+    if !t["end"].is_null() || matches!(t["state"].as_str(), Some("idle") | Some("stopped")) {
+        return "idle";
+    }
+    if !t["waitingOn"].is_null() || t["state"] == "needs-you" || t["phase"] == "waiting" {
+        return "waiting";
+    }
+    "working"
+}
+
+/// Drop `attachments` / `attachmentCount` anywhere in an answer: this role
+/// can't open Thread files, so it is never shown a chip it can't use.
+pub fn strip_attachments(v: &mut J) {
+    match v {
+        J::Object(o) => {
+            o.remove("attachments");
+            o.remove("attachmentCount");
+            for x in o.values_mut() {
+                strip_attachments(x);
+            }
+        }
+        J::Array(a) => a.iter_mut().for_each(strip_attachments),
+        _ => {}
+    }
+}
+
+/// A 2xx JSON answer with attachments stripped and `extra` keys added;
+/// anything else as is.
+fn reshape(r: CliResponse, extra: &[(&str, J)]) -> CliResponse {
+    if !r.status.starts_with('2') {
+        return r;
+    }
+    let Ok(mut v) = serde_json::from_str::<J>(&r.body) else { return r };
+    strip_attachments(&mut v);
+    if let Some(o) = v.as_object_mut() {
+        for (k, x) in extra {
+            o.insert((*k).to_string(), x.clone());
+        }
+    }
+    CliResponse { status: r.status, content_type: r.content_type, body: v.to_string() }
 }
 
 /// One shared Garden: `{id, name}`, `None` when it's gone (or Zen isn't set
@@ -226,7 +295,16 @@ pub fn handle(path: &str, login: Option<&str>, params: &HashMap<String, String>,
 
 /// `GET /cli/shared`.
 fn list(shares: &Shares) -> CliResponse {
-    let agents: Vec<J> = shares.agents.iter().filter_map(|id| agent_view(id)).collect();
+    let agents: Vec<J> = shares
+        .agents
+        .iter()
+        .filter_map(|id| agent_view(id))
+        .map(|mut a| {
+            let word = activity_of(a["address"].as_str().unwrap_or_default());
+            a["activity"] = json!(word);
+            a
+        })
+        .collect();
     let gardens: Vec<J> = shares.gardens.iter().filter_map(|id| garden_view(id)).collect();
     CliResponse::ok_json(json!({ "ok": true, "role": "voice_chat", "agents": agents, "gardens": gardens }).to_string())
 }
@@ -251,7 +329,72 @@ fn thread(shares: &Shares, params: &HashMap<String, String>) -> CliResponse {
             inner.insert((*k).to_string(), v.clone());
         }
     }
-    crate::overlay_routes::dispatch("/cli/thread", &inner).unwrap_or_else(|| refuse("404 Not Found", "not_found", "no Thread"))
+    let r = crate::overlay_routes::dispatch("/cli/thread", &inner).unwrap_or_else(|| refuse("404 Not Found", "not_found", "no Thread"));
+    reshape(r, &[("activity", json!(activity_of(&address)))])
+}
+
+/// The desktop's reply marker (`THREAD_REPLY_MARK`).
+pub const REPLY_MARK: char = '↩';
+
+/// How much of the replied-to message a reply quotes (the desktop's
+/// `THREAD_REPLY_QUOTE_MAX`).
+pub const REPLY_QUOTE_MAX: usize = 600;
+
+/// The stored message at `seq` in `address`'s Thread: `(from, body)`.
+fn message_at(address: &str, seq: i64) -> Option<(String, String)> {
+    let mut q: HashMap<String, String> = HashMap::new();
+    q.insert("addr".into(), address.to_string());
+    q.insert("before_seq".into(), (seq + 1).to_string());
+    q.insert("limit".into(), "1".into());
+    let r = crate::overlay_routes::dispatch("/cli/thread", &q)?;
+    if !r.status.starts_with('2') {
+        return None;
+    }
+    let v: J = serde_json::from_str(&r.body).ok()?;
+    let item = v["items"].as_array()?.iter().find(|i| i["seq"].as_i64() == Some(seq))?.clone();
+    let doc = &item["doc"];
+    let from = doc["from"].as_str().unwrap_or_default().to_string();
+    let body = doc["body"].as_str().unwrap_or_default().to_string();
+    Some((from, body))
+}
+
+/// The desktop's reply text (`src/renderer/lib/thread-reply.ts`), built
+/// here from the stored message: `↩ #N <from>:`, the quote as `> ` lines,
+/// a blank line, then the person's words. Every line of the person's words
+/// is indented two spaces, so none of them starts a line that could read as
+/// a person's or K2's own (the same reason a plain post quotes its later
+/// lines); the header and the quote are K2's.
+pub fn reply_text(seq: i64, from: &str, quoted: &str, words: &str) -> String {
+    let from: String = from
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|c| !matches!(c, '[' | ']' | ':'))
+        .collect();
+    let from = from.split_whitespace().collect::<Vec<_>>().join(" ");
+    let from: String = from.chars().take(64).collect();
+    let from = if from.is_empty() { "someone".to_string() } else { from };
+    let unified = one_break(quoted);
+    let q = unified.trim_matches(|c: char| c.is_whitespace());
+    let q: String = if q.chars().count() > REPLY_QUOTE_MAX {
+        format!("{}…", q.chars().take(REPLY_QUOTE_MAX).collect::<String>().trim_end())
+    } else if q.is_empty() {
+        "…".to_string()
+    } else {
+        q.to_string()
+    };
+    let quote = q.split('\n').map(|l| if l.is_empty() { ">".to_string() } else { format!("> {l}") }).collect::<Vec<_>>().join("\n");
+    let w = one_break(words.trim())
+        .split('\n')
+        .map(|l| if l.is_empty() { String::new() } else { format!("  {l}") })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("↩ #{seq} {from}:\n{quote}\n\n{w}")
+}
+
+/// Every kind of line break as `\n` (the same set `quote_guest_lines`
+/// counts), so no break hides inside a line.
+fn one_break(s: &str) -> String {
+    s.replace("\r\n", "\n").replace(['\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}'], "\n")
 }
 
 #[derive(Deserialize)]
@@ -264,6 +407,10 @@ struct PostBody {
     /// Only `"compose"` (the person's own words, delivered to the agent).
     #[serde(default)]
     via: Option<String>,
+    /// A reply: the replied-to message's seq in the same Thread. K2 renders
+    /// the reply header and quote from the stored message.
+    #[serde(default, rename = "replyTo")]
+    reply_to: Option<i64>,
 }
 
 /// Longest post a shared Thread takes.
@@ -289,9 +436,21 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
     if text.chars().count() > MAX_TEXT_CHARS {
         return refuse("400 Bad Request", "too_large", format!("a post is at most {MAX_TEXT_CHARS} characters"));
     }
+    // A reply header is K2's to write (from `replyTo`), never the client's.
+    if text.starts_with(REPLY_MARK) {
+        return refuse("400 Bad Request", "reply_header_not_allowed", "send replyTo (the message's seq) instead of a reply header; K2 writes the header");
+    }
+    let text = match b.reply_to {
+        None => crate::workspace_msg::quote_guest_lines(text),
+        Some(seq) if seq > 0 => match message_at(&address, seq) {
+            Some((from, body)) => reply_text(seq, &from, &body, text),
+            None => return refuse("404 Not Found", "reply_not_found", format!("no message #{seq} in this Thread")),
+        },
+        Some(_) => return refuse("400 Bad Request", "usage", "replyTo is a message's seq (a whole number above 0)"),
+    };
     let mut inner = json!({
         "addr": address,
-        "text": crate::workspace_msg::quote_guest_lines(text),
+        "text": text,
         "via": "compose",
     });
     if let Some(id) = b.client_msg_id {
@@ -299,7 +458,7 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
     }
     let r = crate::overlay_routes::dispatch_post_as("/cli/thread/post", &HashMap::new(), inner.to_string().as_bytes(), login);
     audit("shared.thread.post", login, format!("addr={address} status={}", r.status.split(' ').next().unwrap_or("")));
-    r
+    reshape(r, &[])
 }
 
 #[cfg(test)]

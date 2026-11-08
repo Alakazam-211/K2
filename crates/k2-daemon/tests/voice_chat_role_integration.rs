@@ -348,3 +348,32 @@ async fn a_member_socket_closes_when_the_login_becomes_voice_chat_only() {
         assert_eq!(get(port, "/cli/auth/whoami", &tok).status, 200, "no sign-out");
     });
 }
+
+/// Follow-up 1: `/boot-status` off this box (the tunnel ingress, as a phone
+/// reaches it) with a Voice & Chat only session is the FULL view, like any
+/// live login, so the phone's stale-session check (`view != "full"` after
+/// sending a token) never fires; its `features` is the one list every view
+/// carries. With no token the default compat view carries the same list.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn boot_status_gives_a_voice_chat_session_the_full_view_and_every_feature() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_temp_home(|| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let r = post(d.port, "/cli/users/add", OWNER_TOKEN, json!({"username": "bsrev", "password": PW, "mustChangePassword": false, "role": "voice_chat"}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let tok = login(d.port, "bsrev", PW)["token"].as_str().expect("token").to_string();
+        let full = http(d.tunnel_port, "GET", &format!("/boot-status?token={tok}"), None);
+        assert_eq!(full.status, 200, "{}", full.body);
+        let full = full.json();
+        assert_eq!(full["view"], "full", "{full}");
+        let open = http(d.tunnel_port, "GET", "/boot-status", None).json();
+        assert_ne!(open["view"], "full", "no token off-box is not the full view: {open}");
+        for v in [&full, &open] {
+            let feats: Vec<&str> = v["features"].as_array().expect("features").iter().filter_map(|f| f.as_str()).collect();
+            for want in ["voice-chat-role-v1", "gardens-remote-v1"] {
+                assert!(feats.contains(&want), "{want} in {feats:?}");
+            }
+        }
+        assert_eq!(full["features"], open["features"], "one list for every view");
+    });
+}

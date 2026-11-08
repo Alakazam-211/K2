@@ -24,8 +24,9 @@ answers allow.
 ## Sign in
 
 `POST /cli/auth/login {"username", "password"}` → `{token,
-mustChangePassword, …}`, as for any login. A reviewer login is made with a
-**fixed** password (`k2 users add … --keep-password --fixed-password`): it
+mustChangePassword, …}`, as for any login. A Voice & Chat only login is
+made with a **fixed**, kept password by default (`k2 users add <login>
+--role voice_chat`; `--no-fixed-password` to let the person change it): it
 goes straight in, `POST /cli/auth/change-password` answers
 `403 password_fixed`, and wrong guesses lock only the address they came
 from (the lockout of this role is per username AND address). QR pairing

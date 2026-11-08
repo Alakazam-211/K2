@@ -106,6 +106,13 @@ export function splitShareList(text: string): string[] {
   return out
 }
 
+/** Re-review L4: the "Temporary password" box starts off for a Voice &
+ *  Chat only login (the daemon makes its password fixed and kept unless
+ *  told otherwise) and on for everyone else (0.46.8). */
+export function temporaryDefaultFor(role: K2Role): boolean {
+  return role !== 'voice_chat'
+}
+
 /** The `users/add` body (§5.3, V5): the role rides the add itself, so a
  *  Voice & Chat only login is never a Member, not even for one write. */
 export function addUserBody(input: {

@@ -135,6 +135,16 @@ expect_has "agents in the body" "$body" '"shareAgents": ["demo"]'
 expect_has "gardens in the body" "$body" '"shareGardens": ["g-1"]'
 expect_has "kept password" "$body" '"mustChangePassword": false'
 
+echo "== L4: a voice_chat add sends no password flags unless given (fixed + kept by default) =="
+printf 'review-pass-1\n' | "$K2" users add rev3 --role voice_chat --password-stdin >/dev/null 2>&1
+body="$(last body)"
+expect_eq "no mustChangePassword for voice_chat" "$(printf '%s' "$body" | python3 -c 'import json,sys; print("mustChangePassword" in json.load(sys.stdin))')" "False"
+expect_eq "no fixedPassword for voice_chat" "$(printf '%s' "$body" | python3 -c 'import json,sys; print("fixedPassword" in json.load(sys.stdin))')" "False"
+printf 'review-pass-1\n' | "$K2" users add rev4 --role voice_chat --no-fixed-password --password-stdin >/dev/null 2>&1
+expect_has "--no-fixed-password sends false" "$(last body)" '"fixedPassword": false'
+printf 'member-pass-12\n' | "$K2" users add mem3 --password-stdin >/dev/null 2>&1
+expect_has "a Member stays temporary" "$(last body)" '"mustChangePassword": true'
+
 echo "== shares need voice_chat: usage error, no request =="
 n="$(count)"
 set +e
@@ -228,7 +238,8 @@ expect_has "help: role" "$help" "--role owner|admin|member|voice_chat"
 expect_has "help: set-role" "$help" "k2 users set-role <username> owner|admin|member|voice_chat"
 expect_has "help: share" "$help" "k2 users share <username>"
 expect_has "help: demo agent only" "$help" "Share ONLY a dedicated"
-expect_has "help: fixed password" "$help" "--keep-password --fixed-password"
+expect_has "help: fixed password" "$help" "password is fixed and kept by default"
+expect_has "help: shared memory" "$help" "agent's memory is shared by every login"
 
 echo
 echo "users voice_chat CLI: $pass passed, $fail failed"

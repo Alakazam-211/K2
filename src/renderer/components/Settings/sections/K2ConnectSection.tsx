@@ -34,6 +34,7 @@ import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
 import {
   addUserBody,
+  temporaryDefaultFor,
   canSetRole,
   needsEnableAsMember,
   parseK2Role,
@@ -2068,7 +2069,10 @@ export function K2ConnectSection({
                     ariaLabel="New user role"
                     onChange={(value) => {
                       const r = parseK2Role(value)
-                      if (r) setNewRole(r)
+                      if (r) {
+                        setNewRole(r)
+                        setNewTemporary(temporaryDefaultFor(r))
+                      }
                     }}
                     menuAlign="left"
                   />

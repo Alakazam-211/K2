@@ -2499,15 +2499,16 @@ exit: 0
     },
     {
       "name": "users add",
-      "usage": "k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]... [--fixed-password] [--force] [--password-stdin] [--keep-password]",
-      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). member and voice_chat are made at that role in the add; owner/admin are set by set-role after it. voice_chat (Voice & Chat only) joins voice rooms and uses only what is shared with it: --share-agent (that agent's Thread, read and post as themselves) and --share-garden (a Garden, read-only on a phone).",
+      "usage": "k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]... [--fixed-password|--no-fixed-password] [--force] [--password-stdin] [--keep-password]",
+      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). member and voice_chat are made at that role in the add; owner/admin are set by set-role after it. voice_chat (Voice & Chat only) joins voice rooms and uses only what is shared with it: --share-agent (their own conversation with that agent; its memory is shared by every login and its own Thread, so a dedicated demo agent only) and --share-garden (a Garden, read-only on a phone). A voice_chat password is fixed and kept unless --no-fixed-password.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--role", "arg": "role", "description": "owner | admin | member | voice_chat (there is no viewer role)"},
         {"name": "--share-agent", "arg": "agent", "description": "voice_chat only: an agent address whose Thread it may read and post in (repeat)."},
         {"name": "--share-garden", "arg": "garden", "description": "voice_chat only: a Garden id or name it may view read-only (repeat)."},
         {"name": "--share-source", "arg": "name", "description": "voice_chat only: a data source a shared Garden may show (repeat)."},
-        {"name": "--fixed-password", "arg": null, "description": "The person can't change the password (a login many people share, e.g. a store reviewer: with --keep-password)."},
+        {"name": "--fixed-password", "arg": null, "description": "The person can't change the password (a login many people share, e.g. a store reviewer). The default for --role voice_chat, whose password is also kept (not temporary)."},
+        {"name": "--no-fixed-password", "arg": null, "description": "voice_chat: the person may change the password (still kept, not temporary)."},
         {"name": "--force", "arg": null, "description": "Share an agent that isn't a dedicated demo agent anyway (warnings printed)."},
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
         {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the first sign-in."}

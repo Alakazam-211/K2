@@ -126,9 +126,11 @@ struct AddReq {
     #[serde(default)]
     force: bool,
     /// A fixed password (M3): the person can't change it and is never asked
-    /// to (a review login several people share).
+    /// to (a review login several people share). Absent: on for a
+    /// `voice_chat` login unless `mustChangePassword: true` was sent, off
+    /// for a Member (re-review L4, [`add_password_flags`]).
     #[serde(default, rename = "fixedPassword")]
-    fixed_password: bool,
+    fixed_password: Option<bool>,
     /// Optional first / last name (0.46.0, `k2_core::person_name`): plain
     /// text, at most 64 characters. A bad value is a 400 and no user is
     /// created; `null` / `""` = unset.
@@ -183,8 +185,8 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
         Ok(w) => w,
         Err(r) => return r,
     };
-    let must = req.must_change_password.unwrap_or(true) && !req.fixed_password;
-    let new = connect_users::NewLogin { role: Some(role), must_change_password: must, shares: shares.clone(), fixed_password: req.fixed_password };
+    let (must, fixed) = add_password_flags(role, req.must_change_password, req.fixed_password);
+    let new = connect_users::NewLogin { role: Some(role), must_change_password: must, shares: shares.clone(), fixed_password: fixed };
     match connect_users::add_user_with_role(
         &req.username,
         &req.password,
@@ -195,7 +197,7 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
         Ok(()) => {}
         Err(e) => return CliResponse::bad_request(e),
     }
-    let mut body = serde_json::json!({ "success": true, "mustChangePassword": must, "role": role.as_wire(), "fixedPassword": req.fixed_password });
+    let mut body = serde_json::json!({ "success": true, "mustChangePassword": must, "role": role.as_wire(), "fixedPassword": fixed });
     if role == connect_users::Role::VoiceChat {
         body["shares"] = crate::shared_routes::shares_view(&shares);
         body["warnings"] = serde_json::json!(warnings);
@@ -205,6 +207,22 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
         }
     }
     CliResponse::ok_json(body.to_string())
+}
+
+/// `(mustChangePassword, fixedPassword)` for a new login from what the add
+/// body said (re-review L4). A Voice & Chat only login is usually a shared
+/// review login: its password is fixed and kept unless the body says
+/// otherwise (`fixedPassword: false`, or `mustChangePassword: true`, which
+/// asks for a temporary one and so isn't fixed). A Member's is temporary
+/// (0.46.8) and not fixed unless the body says so. A fixed password is
+/// never temporary.
+pub fn add_password_flags(role: connect_users::Role, must: Option<bool>, fixed: Option<bool>) -> (bool, bool) {
+    let fixed = match role {
+        connect_users::Role::VoiceChat => fixed.unwrap_or(must != Some(true)),
+        _ => fixed.unwrap_or(false),
+    };
+    let must_default = role != connect_users::Role::VoiceChat;
+    (must.unwrap_or(must_default) && !fixed, fixed)
 }
 
 /// True when `username` is one of the owner's own logins (Settings →
@@ -1379,6 +1397,37 @@ mod tests {
     }
 
     // ── K2 Cloud S1 — mustChangePassword wire shapes ─────────────────
+
+    /// Re-review L4: a voice_chat add with neither flag is fixed and kept; a
+    /// Member's stays temporary and not fixed; explicit flags win.
+    #[test]
+    fn voice_chat_add_defaults_to_a_fixed_kept_password() {
+        use connect_users::Role::{Member, VoiceChat};
+        assert_eq!(add_password_flags(VoiceChat, None, None), (false, true));
+        assert_eq!(add_password_flags(VoiceChat, Some(false), None), (false, true));
+        assert_eq!(add_password_flags(VoiceChat, Some(true), None), (true, false), "asked for temporary: not fixed");
+        assert_eq!(add_password_flags(VoiceChat, None, Some(false)), (false, false));
+        assert_eq!(add_password_flags(VoiceChat, Some(true), Some(true)), (false, true), "fixed is never temporary");
+        assert_eq!(add_password_flags(Member, None, None), (true, false));
+        assert_eq!(add_password_flags(Member, Some(false), None), (false, false));
+        assert_eq!(add_password_flags(Member, None, Some(true)), (false, true));
+        with_temp_home(|| {
+            let r = handle_add(br#"{"username":"vcdefault","password":"password1","role":"voice_chat"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!((v["mustChangePassword"].clone(), v["fixedPassword"].clone()), (serde_json::json!(false), serde_json::json!(true)), "{v}");
+            assert!(connect_users::is_fixed_password("vcdefault"));
+            assert!(!connect_users::must_change_password("vcdefault"));
+            let r = handle_add(br#"{"username":"vcnotfixed","password":"password1","role":"voice_chat","fixedPassword":false}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            assert!(!connect_users::is_fixed_password("vcnotfixed"));
+            assert!(!connect_users::must_change_password("vcnotfixed"));
+            let r = handle_add(br#"{"username":"memdefault","password":"password1"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            assert!(!connect_users::is_fixed_password("memdefault"));
+            assert!(connect_users::must_change_password("memdefault"));
+        });
+    }
 
     #[test]
     fn add_accepts_must_change_password_and_flags_the_user() {

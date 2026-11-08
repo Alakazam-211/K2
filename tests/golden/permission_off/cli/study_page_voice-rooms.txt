@@ -127,7 +127,7 @@ other route answers 403 role_required. Agents don't see it in
 k2 connections list --users and can't assign it tickets.
   k2 users add <login> --role voice_chat [--share-agent <agent>]...
       [--share-garden <garden>]... [--share-source <name>]...
-      [--keep-password --fixed-password]   (a shared review login)
+      [--no-fixed-password]   (default: fixed and kept, a review login)
   k2 users set-role <login> member|voice_chat   (an Admin may; live,
       no sign-out; moving someone to voice_chat ends their paired phones)
   k2 users share <login> --agent <agent> --garden <garden>   (replaces)

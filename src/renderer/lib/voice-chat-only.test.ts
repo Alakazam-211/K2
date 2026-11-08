@@ -13,6 +13,7 @@ import {
 import { isPossibleAuthFailure } from './remote-session'
 import {
   addUserBody,
+  temporaryDefaultFor,
   canSetRole,
   parseK2Role,
   parseShares,
@@ -25,6 +26,13 @@ const ROLE_REQUIRED = JSON.stringify({
   required: 'member',
   role: 'voice_chat',
   message: 'This server gives you Voice & Chat only: you can join its voice rooms, not open it.',
+})
+
+describe('a new login\'s temporary password box (re-review L4)', () => {
+  it('starts off for Voice & Chat only and on for everyone else', () => {
+    expect(temporaryDefaultFor('voice_chat')).toBe(false)
+    for (const r of ['member', 'admin', 'owner'] as const) expect(temporaryDefaultFor(r)).toBe(true)
+  })
 })
 
 describe('the role and its hint', () => {

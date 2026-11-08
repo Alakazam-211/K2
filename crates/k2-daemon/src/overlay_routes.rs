@@ -4596,7 +4596,6 @@ fn post_not_taken_notice(job: &ThreadDeliveryJob, why: NotTaken) {
 /// 0.46.9: every delivery logs one `[thread-delivery]` line, delivered or
 /// not ([`thread_delivery_log_line`]).
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn deliver_thread_to_pty(
     sink: DeliverySink,
     addr: &str,

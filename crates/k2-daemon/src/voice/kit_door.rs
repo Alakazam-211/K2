@@ -624,9 +624,6 @@ async fn own_device(ctx: &KitCtx, p: &KitPerson, sew_addr: &str, id: &str) -> Re
     }
 }
 
-/// One kit request whose head is consumed. `sew_path` has the door prefix
-/// stripped; `bearer` is the request's bearer (never `sewcc_`).
-#[allow(clippy::too_many_arguments)]
 /// L8: the kit routes a Voice & Chat only login may never use.
 pub fn voice_chat_kit_refusal(route: KitRoute) -> Option<Refusal> {
     matches!(route, KitRoute::RecordingStart | KitRoute::RecordingStop | KitRoute::MemberVoice | KitRoute::MemberMove)
@@ -649,6 +646,9 @@ pub fn narrow_members_query(q: &str, allowed: &[String]) -> Option<String> {
     (!kept.is_empty()).then(|| format!("ids={}", kept.join(",")))
 }
 
+/// One kit request whose head is consumed. `sew_path` has the door prefix
+/// stripped; `bearer` is the request's bearer (never `sewcc_`).
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     client: &mut S,
     method: &str,

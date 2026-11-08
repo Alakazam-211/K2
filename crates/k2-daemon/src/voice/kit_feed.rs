@@ -26,6 +26,12 @@
 //! When the check itself fails, the feed closes [`CLOSE_RESET`] rather than
 //! drop an event without a word.
 //!
+//! **A Voice & Chat only login** (re-review L7) sees who is in a room only
+//! for the room it is in itself, as `GET /cli/voice/rooms` and `/members`
+//! do: READY's `voice_states` keep only that room's (and its own), and
+//! someone else's `voice_state_updated` passes only when it enters or
+//! leaves that room ([`narrow_ready`], [`voice_chat_keeps`]).
+//!
 //! `voice_server_updated` carries a media token: it is forwarded, never
 //! logged. Nothing here logs a frame body.
 
@@ -172,6 +178,50 @@ impl Seen {
             _ => {}
         }
     }
+}
+
+// ── Voice & Chat only (re-review L7) ──────────────────────────────────
+
+/// The room `me` is in, by READY's `voice_states`.
+pub fn own_room(ready: &Value, me: &str) -> Option<String> {
+    if me.is_empty() {
+        return None;
+    }
+    ready.get("voice_states").and_then(Value::as_array)?.iter().find(|v| id_of(v.get("member_id")).as_deref() == Some(me)).and_then(|v| id_of(v.get("channel_id")))
+}
+
+/// READY for a Voice & Chat only login: `voice_states` keep only the room
+/// it is in (and its own state); every other room's people go. Returns
+/// that room.
+pub fn narrow_ready(ready: &mut Value, me: &str) -> Option<String> {
+    let mine = own_room(ready, me);
+    if let Some(states) = ready.get_mut("voice_states").and_then(Value::as_array_mut) {
+        states.retain(|v| {
+            id_of(v.get("member_id")).as_deref() == Some(me) || (mine.is_some() && id_of(v.get("channel_id")) == mine)
+        });
+    }
+    mine
+}
+
+/// Does someone's `voice_state_updated` reach a Voice & Chat only login in
+/// room `mine`? Only when it enters or leaves that room. The login's own
+/// always does (and moves `mine`: the caller updates it with
+/// [`room_after`]).
+pub fn voice_chat_keeps(d: &Value, me: &str, mine: Option<&str>) -> bool {
+    if !me.is_empty() && id_of(d.get("member_id")).as_deref() == Some(me) {
+        return true;
+    }
+    let Some(mine) = mine else { return false };
+    [id_of(d.get("channel_id")), id_of(d.get("previous_channel_id"))].iter().any(|c| c.as_deref() == Some(mine))
+}
+
+/// The login's room after a `voice_state_updated` (unchanged when it isn't
+/// the login's own).
+pub fn room_after(d: &Value, me: &str, mine: Option<String>) -> Option<String> {
+    if me.is_empty() || id_of(d.get("member_id")).as_deref() != Some(me) {
+        return mine;
+    }
+    id_of(d.get("channel_id"))
 }
 
 // ── limits ───────────────────────────────────────────────────────────
@@ -377,6 +427,9 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(
 ) {
     let Upstream { ws: mut upws, mut ready, ready_s, beat } = up;
     let mut seen = Seen::from_ready(&ready);
+    // L7: a Voice & Chat only login's feed names only its own room's people.
+    let narrow = person.is_voice_chat();
+    let mut mine = if narrow { narrow_ready(&mut ready, &seen.me) } else { None };
     if let Some(o) = ready.as_object_mut() {
         if o.contains_key("resume_url") {
             o.insert("resume_url".into(), json!(""));
@@ -406,8 +459,14 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(
                             }
                             let name = f.get("t").and_then(Value::as_str).unwrap_or("").to_string();
                             let d = f.get("d").cloned().unwrap_or(Value::Null);
-                            let verdict = decide(&mut seen, &name, &d, ctx, person, sew_addr).await;
+                            let mut verdict = decide(&mut seen, &name, &d, ctx, person, sew_addr).await;
                             seen.after(&name);
+                            if narrow && name == "voice_state_updated" {
+                                if matches!(verdict, Ok(true)) && !voice_chat_keeps(&d, &seen.me, mine.as_deref()) {
+                                    verdict = Ok(false);
+                                }
+                                mine = room_after(&d, &seen.me, mine);
+                            }
                             match verdict {
                                 Ok(true) => {
                                     if send(&mut down, &mut s, &name, d).await.is_err() {
@@ -465,4 +524,58 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(
     };
     let _ = upws.close(None).await;
     let _ = down.close(Some(CloseFrame { code: CloseCode::from(end.0), reason: end.1.into() })).await;
+}
+
+#[cfg(test)]
+mod voice_chat_feed_tests {
+    use super::*;
+
+    fn ready(states: Value) -> Value {
+        json!({ "member": {"id": "1001"}, "voice_states": states, "voice_channels": [{"id": "20"}, {"id": "30"}] })
+    }
+
+    /// Re-review L7: READY keeps only the login's own room's people.
+    #[test]
+    fn ready_keeps_only_the_logins_own_room() {
+        let mut r = ready(json!([
+            {"member_id": "1001", "channel_id": "20"},
+            {"member_id": "1002", "channel_id": "20", "member": {"username": "mate"}},
+            {"member_id": "1003", "channel_id": "30", "member": {"username": "stranger"}},
+        ]));
+        assert_eq!(narrow_ready(&mut r, "1001").as_deref(), Some("20"));
+        let text = r.to_string();
+        assert!(text.contains("mate") && !text.contains("stranger") && !text.contains("1003"), "{text}");
+        assert_eq!(r["voice_states"].as_array().map(Vec::len), Some(2));
+        // In no room: nobody else.
+        let mut r = ready(json!([
+            {"member_id": "1002", "channel_id": "20", "member": {"username": "mate"}},
+            {"member_id": "1003", "channel_id": "30"},
+        ]));
+        assert_eq!(narrow_ready(&mut r, "1001"), None);
+        assert_eq!(r["voice_states"], json!([]));
+        assert_eq!(r["voice_channels"].as_array().map(Vec::len), Some(2), "rooms themselves stay");
+    }
+
+    /// Re-review L7: someone else's voice state passes only when it enters
+    /// or leaves the login's room; its own always does and moves the room.
+    #[test]
+    fn voice_states_pass_only_for_the_logins_own_room() {
+        let me = "1001";
+        let other = |ch: Value, prev: Value| json!({"member_id": "1002", "channel_id": ch, "previous_channel_id": prev, "member": {"username": "x"}});
+        assert!(!voice_chat_keeps(&other(json!("30"), Value::Null), me, None), "in no room: nobody's");
+        assert!(!voice_chat_keeps(&other(json!("30"), Value::Null), me, Some("20")));
+        assert!(voice_chat_keeps(&other(json!("20"), Value::Null), me, Some("20")), "enters mine");
+        assert!(voice_chat_keeps(&other(json!("30"), json!("20")), me, Some("20")), "leaves mine");
+        assert!(voice_chat_keeps(&other(Value::Null, json!("20")), me, Some("20")), "leaves mine for nowhere");
+        let mine_now = json!({"member_id": "1001", "channel_id": "30"});
+        assert!(voice_chat_keeps(&mine_now, me, None), "its own always");
+        assert_eq!(room_after(&mine_now, me, Some("20".into())).as_deref(), Some("30"));
+        assert_eq!(room_after(&json!({"member_id": "1001", "channel_id": null}), me, Some("30".into())), None, "left");
+        assert_eq!(room_after(&other(json!("40"), Value::Null), me, Some("30".into())).as_deref(), Some("30"), "someone else's: unchanged");
+    }
+
+    #[test]
+    fn a_stand_in_is_not_voice_chat() {
+        assert!(!kit_door::KitPerson::stand_in("cu_x", false).is_voice_chat());
+    }
 }

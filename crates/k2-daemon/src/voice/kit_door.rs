@@ -195,6 +195,12 @@ pub struct KitPerson {
 }
 
 impl KitPerson {
+    /// A Voice & Chat only login (re-review L7: its feed is narrowed to its
+    /// own room).
+    pub fn is_voice_chat(&self) -> bool {
+        matches!(&self.who, Who::Login(p) if p.role == k2_core::connect_users::Role::VoiceChat)
+    }
+
     /// A person with no K2 login behind it (tests).
     #[doc(hidden)]
     pub fn stand_in(sid: &str, app_session: bool) -> KitPerson {

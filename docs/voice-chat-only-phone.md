@@ -198,9 +198,14 @@ The web kit's routes on that door run as the person's own login, and this
 role resolves to its own `k2:connect:<uuid>` member there too, with three
 limits K2 adds: recording start/stop and muting or moving a member answer
 `403 voice_chat_not_allowed`, and `GET /members` names only the people in
-the person's own room. `GET /cli/voice/rooms` lists who is in a room only
-for the room the person is in (every room keeps its `count`).
-`WS /cli/voice/events` allows 3 sockets per login (`429 too_many_sockets`).
+the person's own room. The kit's event feed (`GET /_k2/voice/sew/feed`)
+does the same: READY's `voice_states` keep only the person's own room (and
+their own state), and someone else's `voice_state_updated` arrives only
+when they enter or leave that room. `GET /cli/voice/rooms` lists who is in
+a room only for the room the person is in (every room keeps its `count`):
+after joining, read who is there from it. `WS /cli/voice/events` allows 3
+sockets per Voice & Chat only login (`429 too_many_sockets`; other logins
+aren't capped).
 
 ## Push
 

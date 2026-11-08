@@ -414,7 +414,7 @@ async fn cross_server_send_seals_to_the_peer_vault_and_never_sends_plaintext() {
     assert_eq!(st, 200, "{raw}");
     assert_eq!(j["status"], "pending");
     assert_eq!(j["cross"], true);
-    assert!(j["who"].as_str().unwrap().contains("must accept it"), "{raw}");
+    assert!(j["who"].as_str().unwrap().contains("K2 puts a card on that agent's Thread there"), "{raw}");
     let g = seen.lock().unwrap();
     assert_eq!(g.recipient_hits, 1, "learned the peer vault once");
     assert_eq!(g.inbound_hits, 0, "H4: never posted to /inbound");

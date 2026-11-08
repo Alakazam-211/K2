@@ -436,7 +436,7 @@ fn two_daemons_hand_a_secret_over_sealed_and_old_peers_get_peer_too_old() {
         let (code, out, err) = cli(&b, &["vault", "send", "STRIPE_KEY", "--scope", "ws:ops", "--to", "billing"], None);
         assert_eq!(code, 3, "pending: a person must act: {out} {err}");
         assert!(out.contains(": pending"), "{out}");
-        assert!(err.contains("a person on this server must accept it"), "{err}");
+        assert!(err.contains("a person on this server accepts it on the card K2 put on billing's Thread"), "{err}");
         let (code, out, err) = cli(&b, &["vault", "accept-from", "add", "ops", "--workspace", "billing"], None);
         assert_eq!(code, 0, "{out} {err}");
         let (code, out, err) = cli(&b, &["vault", "send", "STRIPE_KEY", "--scope", "ws:ops", "--to", "billing", "--as", "STRIPE_FROM_OPS"], None);

@@ -384,16 +384,29 @@ pub fn vc_conversation(project_id: &str, login: &str) -> String {
     format!("{VC_PREFIX}{project_id}:{login}")
 }
 
-/// `Some` for a `vc:` address: its conversation, or a refusal (malformed, an
-/// unknown agent, or an agent not shared with that live login).
-fn resolve_vc_addr(addr: &str) -> Option<Result<ResolvedOverlay, CliResponse>> {
-    let rest = addr.trim().strip_prefix(VC_PREFIX)?;
-    let unknown = || Err(not_found(format!("no Voice & Chat only conversation '{addr}'")));
-    let Some((handle, login)) = rest.rsplit_once(':') else { return Some(unknown()) };
-    let Ok(login) = k2_core::connect_users::normalize_username(login) else { return Some(unknown()) };
-    if handle.is_empty() || handle.contains(':') || handle.contains('/') {
-        return Some(unknown());
+/// `(agent handle, login)` when `addr` has EXACTLY the shape
+/// `vc:<agent>:<login>` (re-review L10): one `vc:` prefix, a non-empty
+/// handle with no `:`, `/`, whitespace or control character, and a login
+/// already in its normalized form. Anything else (`vc::host`, a federated
+/// `vc:x::host`, `vc:name`, a handle that only starts with `vc:`) is not
+/// a Voice & Chat only address and resolves the usual way.
+pub fn parse_vc_addr(addr: &str) -> Option<(&str, &str)> {
+    let rest = addr.strip_prefix(VC_PREFIX)?;
+    let (handle, login) = rest.split_once(':')?;
+    let bad = |c: char| c == ':' || c == '/' || c.is_whitespace() || c.is_control();
+    if handle.is_empty() || handle.chars().any(bad) || login.contains(':') {
+        return None;
     }
+    (k2_core::connect_users::normalize_username(login).ok()? == login).then_some((handle, login))
+}
+
+/// `Some` for a `vc:<agent>:<login>` address ([`parse_vc_addr`]): its
+/// conversation, or a refusal (an unknown agent, or an agent not shared
+/// with that live login). `None` for any other address.
+fn resolve_vc_addr(addr: &str) -> Option<Result<ResolvedOverlay, CliResponse>> {
+    let (handle, login) = parse_vc_addr(addr.trim())?;
+    let login = login.to_string();
+    let unknown = || Err(not_found(format!("no Voice & Chat only conversation '{addr}'")));
     let Ok(project_id) = workspace_of_addr(handle) else { return Some(unknown()) };
     let shared = k2_core::connect_users::voice_chat_shares(&login).is_some_and(|s| s.agents.iter().any(|a| a == &project_id));
     if !shared {
@@ -457,6 +470,34 @@ mod vc_payload_tests {
     fn untrusted_controls_are_stripped() {
         let s = strip_untrusted_controls("a\u{7}b\tc\u{1b}[31m\u{9b}d\u{202e}e\u{2066}f\ng\r");
         assert_eq!(s, "abc[31mdef\ng");
+    }
+
+    /// Re-review L10: only the exact `vc:<agent>:<login>` shape is a Voice &
+    /// Chat only address; federated `vc::host` and look-alikes fall through.
+    #[test]
+    fn only_the_exact_vc_shape_is_a_voice_chat_address() {
+        assert_eq!(parse_vc_addr("vc:demo:rev"), Some(("demo", "rev")));
+        assert_eq!(parse_vc_addr("vc:Demo.Agent_1:rev-2"), Some(("Demo.Agent_1", "rev-2")));
+        for addr in [
+            "vc::host",
+            "vc::host.k2.dev",
+            "vc:demo::host",
+            "vc:demo",
+            "vc:",
+            "vc:demo:",
+            "vc:demo:rev:extra",
+            "vc:a:b:c",
+            "vc:de mo:rev",
+            "vc:de/mo:rev",
+            "vc:demo:Rev",
+            "vc:demo: rev",
+            "vc:demo:r",
+            "vcdemo:rev",
+            "demo:rev",
+        ] {
+            assert_eq!(parse_vc_addr(addr), None, "{addr}");
+            assert!(resolve_vc_addr(addr).is_none(), "{addr} falls through to the usual address rules");
+        }
     }
 
     /// Re-review L8: zero-width characters and Unicode tag characters (an

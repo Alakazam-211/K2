@@ -692,15 +692,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/clone/vault/plan", Member),
     post("/cli/commit", Member),
     post("/cli/commit-merge", Member),
-    post("/cli/companion/disconnect-session", Member),
     get("/cli/companion/presets", Member),
     get("/cli/companion/projects", Member),
     get("/cli/companion/projects-summary", Member),
     get("/cli/companion/sessions", Member),
-    post("/cli/companion/set-password", Member),
-    post("/cli/companion/start", Member),
-    get("/cli/companion/status", Member),
-    post("/cli/companion/stop", Member),
     // K2 compute nodes (prd-k2-compute-nodes-v1 §15.1, CN18). attach and
     // enroll are the node's sockets: no HTTP credential, handlers fail
     // closed (CN11). Agent verbs are also `is_agent_verb` rows; owner/admin
@@ -2609,8 +2604,6 @@ pub const FORMERLY_GET_WRITES: &[&str] = &[
     "/cli/checkin",
     "/cli/commit",
     "/cli/commit-merge",
-    "/cli/companion/start",
-    "/cli/companion/stop",
     "/cli/dns-manage",
     "/cli/done",
     "/cli/events",
@@ -3585,33 +3578,6 @@ mod tests {
         }
         assert_no_bad(bad);
         assert!(total > 100, "renderer GET extractor found only {total} call sites — broken?");
-    }
-
-    #[test]
-    fn companion_proxy_posts_exactly_the_post_only_routes() {
-        // Every WS method the mobile Companion can call (proxy.rs
-        // `map_ws_method`); the HTTP map reaches the same internal routes.
-        let methods = [
-            "projects.list", "projects.summary", "sessions.list", "agents.list",
-            "agents.running", "agents.work", "agents.wake", "reviews.list",
-            "review.approve", "review.reject", "review.feedback", "terminal.read",
-            "terminal.write", "terminal.spawn", "terminal.spawn_background",
-            "presets.list", "status",
-        ];
-        let mut writes = 0;
-        for m in methods {
-            let (route, _) = k2_core::companion::proxy::map_ws_method(m)
-                .unwrap_or_else(|| panic!("companion method {m} unmapped"));
-            let row = lookup(route).unwrap_or_else(|| panic!("{route} not classified"));
-            let post_only = row.get.is_none() && row.post.is_some();
-            assert_eq!(
-                k2_core::companion::proxy::internal_route_is_write(route),
-                post_only,
-                "companion {m} → {route}: the proxy must POST exactly the POST-only routes"
-            );
-            writes += usize::from(post_only);
-        }
-        assert_eq!(writes, 7, "terminal write/spawn×2, agents.wake, review ×3");
     }
 
     /// Q7 (prd-agent-app-permissions-v1 slice C): Members are read-only for

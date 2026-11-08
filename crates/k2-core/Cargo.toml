@@ -143,18 +143,7 @@ git2 = { version = "0.19", default-features = false }
 # recover a reject-then-reject-again worktree from the Finder trash.
 trash = "5"
 
-# Local LLM inference (llama.cpp bindings). The `metal` feature compiles
-# ggml-metal, which is macOS-only — keep it OFF in the base dependency so
-# the crate (and therefore k2so-daemon) can compile on Linux for headless
-# servers. macOS re-enables `metal` via the per-target block below, so the
-# desktop app + native daemon keep GPU acceleration. The `sampler` feature
-# is platform-neutral and stays here. The Rust API surface llm/mod.rs uses
-# is identical with or without `metal`; the only effect is whether GPU
-# offload layers (`with_n_gpu_layers`) actually engage at runtime.
-llama-cpp-2 = { version = "0.1", default-features = false, features = ["sampler"] }
-
-# Blocking HTTP client for llm::download (reqwest with rustls — same
-# stack src-tauri uses).
+# Blocking HTTP client (reqwest with rustls, the same stack src-tauri uses).
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # IDN → punycode A-label normalization for mail domains
@@ -164,12 +153,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 idna = "1"
 
 # Parallel work-stealing directory walker respecting .gitignore /
-# .k2soignore — llm::file_index::search_walk uses it for fuzzy file find.
+# .k2soignore (clone inventory, deploy seed, app grace scan).
 ignore = "0.4"
-
-# Character-encoding detection for llm::file_index when files are mixed
-# UTF-8 / UTF-16 / Latin-1.
-encoding_rs = "0.8"
 
 # Clone-to bundle engine (clone/) — tar+gz the scrubbed workspace +
 # memory + session bundle for one-click migration to a remote K2 Connect
@@ -328,11 +313,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 #   `NSFilenamesPboardType` pasteboard entry (Finder Cmd+C file copy).
 #   Phase 2 Unit 6 — migrated from src-tauri so the daemon owns the
 #   pasteboard read alongside the rest of the filesystem surface.
-# - llama-cpp-2 `metal`: re-enables ggml-metal GPU acceleration on macOS
-#   only. The base [dependencies] entry above keeps `metal` OFF (so Linux
-#   headless builds compile); this turns it back on for the desktop app +
-#   native macOS daemon. cargo unions feature sets per crate, so the macOS
-#   build gets `["sampler", "metal"]`.
 [target.'cfg(target_os = "macos")'.dependencies]
 # Keychain item calls in `macos_keychain_tests` (the keychain code itself
 # now lives in k2-client and the daemon's vault). Same version already in
@@ -340,7 +320,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 security-framework-sys = "2.17"
 cocoa = "0.26"
 objc = "0.2"
-llama-cpp-2 = { version = "0.1", features = ["metal"] }
 
 # The `objc` crate's `msg_send!` macro expands to `#[cfg(cargo-clippy)]`
 # gates that the newer Rust `unexpected_cfgs` lint doesn't recognize.

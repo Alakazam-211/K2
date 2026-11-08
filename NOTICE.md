@@ -26,7 +26,7 @@ The Files drawer uses the **Seti** icon font for file-type glyphs
 | **What** | `seti.woff` + generated name/extension maps under `src/renderer/assets/seti/` and `src/renderer/lib/seti-file-icons/` |
 | **Upstream** | [Seti UI](https://github.com/jesseweed/seti-ui) (Jesse Weed), packaged via VS Code `extensions/theme-seti` |
 | **License** | **MIT** (Copyright 2014 Jesse Weed) — full text in `src/renderer/assets/seti/THIRD_PARTY_NOTICES.txt` |
-| **K2 code** | Remains **MIT**. MIT assets do **not** relicense the product. |
+| **K2 code** | Is **MIT**. MIT assets do **not** relicense the product. |
 | **Not** | Not affiliated with Microsoft or Visual Studio Code. Do not use those trademarks for K2 branding. |
 
 When redistributing K2 builds that include the Seti font, ship the MIT
@@ -42,7 +42,7 @@ LiteLLM's `model_prices_and_context_window.json`.
 | **What** | `crates/k2-core/data/llm_prices.json` (a trimmed copy, bundled) and the daemon's daily refresh into `~/.k2/usage/prices.json` |
 | **Upstream** | [LiteLLM](https://github.com/BerriAI/litellm) (Berri AI) |
 | **License** | **MIT** (Copyright (c) 2023 Berri AI) — full text in `crates/k2-core/data/LLM_PRICES_NOTICE.txt` |
-| **K2 code** | Remains **MIT**. The MIT data does **not** relicense the product. |
+| **K2 code** | Is **MIT**. The MIT data does **not** relicense the product. |
 
 ## Third-party: Lucide icons (ISC)
 
@@ -62,7 +62,7 @@ is K2's own (`ZenIcon`), not Lucide.
 | **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `library`, `settings`, `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`, `pencil`, `trash-2`, `arrow-up`) |
 | **Upstream** | [Lucide](https://github.com/lucide-icons/lucide) |
 | **License** | **ISC** (Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.) — full text below |
-| **K2 code** | Remains **MIT**. The ISC icons do **not** relicense the product. |
+| **K2 code** | Is **MIT**. The ISC icons do **not** relicense the product. |
 | **Board widget** | Board's `crop` icon (`crates/k2-core/src/zen/builtin_widgets/board-1/icons.js`) is Lucide's; see the Board entry below. Board's other icons are its own drawing. |
 
 > ISC License
@@ -111,7 +111,7 @@ The vault (`crates/k2-vault`) embeds two data files:
 |--|--|
 | **Public Suffix List** | `crates/k2-vault/data/public_suffix_list.dat`, from [publicsuffix.org](https://publicsuffix.org/list/public_suffix_list.dat), Mozilla Public License 2.0 (header kept in the file). Used to refuse wildcard hosts over shared suffixes. Refreshed each release. |
 | **BIP-39 English word list** | `crates/k2-vault/data/bip39-english.txt`, from [bitcoin/bips](https://github.com/bitcoin/bips/blob/master/bip-0039/english.txt), MIT (per BIP-0039). Used for the 24-word vault recovery phrase. |
-| **K2 code** | Remains **MIT**. |
+| **K2 code** | Is **MIT**. |
 
 ## Third-party: wry (Apache-2.0 OR MIT)
 
@@ -124,7 +124,7 @@ the macOS app. crates.io 0.57.0 still unwraps those.
 | **What** | `third_party/wry` (crates.io wry 0.57.0 + nil-URL no-abort patch + macOS IPC from the main frame only + empty-URI-path guard until the Tauri 2.12.5 move) |
 | **Upstream** | [wry](https://github.com/tauri-apps/wry) |
 | **License** | **Apache-2.0 OR MIT** (Copyright (c) 2020-2023 Ngo Iok Ui & Tauri Programme within The Commons Conservancy) — full text in `third_party/wry/LICENSE-MIT`, `third_party/wry/LICENSE-APACHE`, and `third_party/wry/LICENSE.spdx` |
-| **K2 code** | Remains **MIT**. The vendored crate does **not** relicense the product. |
+| **K2 code** | Is **MIT**. The vendored crate does **not** relicense the product. |
 
 ## Third-party: Sew native voice crates (MIT OR Apache-2.0; Apache-2.0)
 
@@ -135,7 +135,7 @@ K2's desktop app can carry voice calls with Sew's client crates (the `native-voi
 | **What** | `tauri-plugin-sew-voice`, `sew-call-client`, `sew-mls-crypto`, `sew-e2ee`, `sew-proto` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto` (Apache-2.0) |
 | **Upstream** | Alakazam Labs, Sew |
 | **Notice** | `sew-lk-compat` and `sew-lkproto` hold code ported from or generated from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). `sew-mls-crypto` holds code derived from openmls_rust_crypto (MIT, Copyright OpenMLS Authors). Each crate's NOTICE ships in the app under `resources/notices/`. Not affiliated with or endorsed by LiveKit, Inc. |
-| **K2 code** | Remains **MIT**. These crates do **not** relicense the product. |
+| **K2 code** | Is **MIT**. These crates do **not** relicense the product. |
 
 ## Third-party: objc2 (MIT)
 
@@ -148,7 +148,7 @@ null return from `sel_registerName` cannot abort the macOS app. crates.io
 | **What** | `third_party/objc2` (crates.io objc2 0.6.5 + null-selector no-abort patch) |
 | **Upstream** | [objc2](https://github.com/madsmtm/objc2) |
 | **License** | **MIT** (Copyright (c) Mads Marquart) — full text in `third_party/objc2/LICENSE` |
-| **K2 code** | Remains **MIT**. The vendored crate does **not** relicense the product. |
+| **K2 code** | Is **MIT**. The vendored crate does **not** relicense the product. |
 
 ## Third-party: tao (Apache-2.0)
 
@@ -162,7 +162,7 @@ that pointer.
 | **What** | `third_party/tao` (crates.io tao 0.37.1 + null-superclass patch) |
 | **Upstream** | [tao](https://github.com/tauri-apps/tao) |
 | **License** | **Apache-2.0** (Copyright 2021-2023 Tauri Programme within The Commons Conservancy) — full text in `third_party/tao/LICENSE` and `third_party/tao/LICENSE.spdx` |
-| **K2 code** | Remains **MIT**. The vendored crate does **not** relicense the product. |
+| **K2 code** | Is **MIT**. The vendored crate does **not** relicense the product. |
 
 ## Third-party: vte (Apache-2.0 OR MIT)
 
@@ -176,7 +176,7 @@ across two PTY reads cannot drop the ASCII byte that follows it. crates.io
 | **What** | `third_party/vte` (crates.io vte 0.15.0 + split-UTF-8 byte-drop fix, `third_party/upstream/vte-0001-partial-utf8-ascii-drop.patch`) |
 | **Upstream** | [vte](https://github.com/alacritty/vte) |
 | **License** | **Apache-2.0 OR MIT** (Copyright (c) 2016 Joe Wilm) — full text in `third_party/vte/LICENSE-MIT` and `third_party/vte/LICENSE-APACHE` |
-| **K2 code** | Remains **MIT**. The vendored crate does **not** relicense the product. |
+| **K2 code** | Is **MIT**. The vendored crate does **not** relicense the product. |
 
 ## Third-party: Mermaid (MIT)
 
@@ -187,7 +187,7 @@ The file viewer draws Mermaid diagrams with a vendored build of **Mermaid**.
 | **What** | `src/renderer/public/vendor/mermaid.min.js` (Mermaid 11.16.1, upstream `dist/mermaid.min.js` byte for byte, loaded by `components/FileViewerPane/DiagramViewer.tsx`; its inlined DOMPurify is 3.4.0, as upstream built it) |
 | **Upstream** | [mermaid](https://github.com/mermaid-js/mermaid) |
 | **License** | **MIT** (Copyright (c) 2014 - 2022 Knut Sveidqvist) — full text in `src/renderer/public/vendor/mermaid.LICENSE.txt`. The prebuilt file also carries Mermaid's own dependencies (among them d3, dagre-d3-es, cytoscape, khroma, DOMPurify, KaTeX, marked), each under its own permissive licence. |
-| **K2 code** | Remains **MIT**. Mermaid does **not** relicense the product. |
+| **K2 code** | Is **MIT**. Mermaid does **not** relicense the product. |
 
 ## Third-party: CAD file previews (MIT)
 
@@ -200,7 +200,7 @@ when such a file opens.
 | **What** | `three` 0.186.0 (core, OrbitControls, STL/OBJ/3MF/PLY/GLTF loaders, and the **fflate** 0.8.2 copy three ships for 3MF) · `dxf-parser` 1.1.2 (with its dependency `loglevel` 1.9.2). Used by `src/renderer/components/FileViewerPane/` (`DxfViewer.tsx`, `dxfModel.ts`, `ModelViewer.tsx`, `modelParse.ts`, `modelScene.ts`) |
 | **Upstream** | [three.js](https://github.com/mrdoob/three.js) · [fflate](https://github.com/101arrowz/fflate) · [dxf-parser](https://github.com/gdsestimating/dxf-parser) · [loglevel](https://github.com/pimterry/loglevel) |
 | **License** | **MIT** (Copyright © 2010-2026 three.js authors; Copyright (c) 2023 Arjun Barrett; Copyright (c) 2015 GDS Storefront Estimating; Copyright (c) 2013 Tim Perry) — full texts in `src/renderer/components/FileViewerPane/THIRD_PARTY_NOTICES.txt` |
-| **K2 code** | Remains **MIT**. These packages do **not** relicense the product. |
+| **K2 code** | Is **MIT**. These packages do **not** relicense the product. |
 
 The same three.js version is also vendored for Garden widgets (the Zen
 widget library below). That copy is a pre-bundled classic script for sealed
@@ -218,7 +218,7 @@ Changes tab shows a diff.
 | **What** | `@codemirror/merge` 6.12.2, used by `src/renderer/components/Changes/viewer/` |
 | **Upstream** | [codemirror/merge](https://github.com/codemirror/merge) |
 | **License** | **MIT** (Copyright (C) 2018-2022 by Marijn Haverbeke and others) — full text in the package's `LICENSE` |
-| **K2 code** | Remains **MIT**. This package does **not** relicense the product. |
+| **K2 code** | Is **MIT**. This package does **not** relicense the product. |
 
 ## Third-party: T3 Code device-frame numbers (MIT)
 
@@ -233,7 +233,7 @@ not used at all.
 | **What** | Shape numbers from `packages/client-runtime/src/device/shapeProfile.ts` and `fitDeviceFrame` from `apps/web/src/components/device/deviceFrameLayout.ts`, adapted in `src/renderer/components/Mobile/device-frame.ts` |
 | **Upstream** | [pingdotgg/t3code](https://github.com/pingdotgg/t3code) |
 | **License** | **MIT** (Copyright (c) 2026 T3 Tools Inc.) — full text below |
-| **K2 code** | Remains **MIT**. This does **not** relicense the product. |
+| **K2 code** | Is **MIT**. This does **not** relicense the product. |
 
 > MIT License
 >
@@ -268,7 +268,7 @@ viewer above).
 | **What** | `react-force-graph-3d` 1.29.2 · `3d-force-graph` 1.80.1 · `three-forcegraph` 1.43.6 · `three-render-objects` 1.43.0 · `three-spritetext` 1.10.0 · `data-bind-mapper` 1.0.3 · `@tweenjs/tween.js` 25.0.0 · `polished` 4.3.1 (+ `@babel/runtime` helpers) · `ngraph.forcelayout` 3.3.1 · `ngraph.graph` 20.1.2 · `ngraph.events` 1.4.0 · `ngraph.random` 1.2.0 · `ngraph.merge` 1.0.0. Used by `src/renderer/components/Wiki/WikiGraph3D.tsx` and `wiki-3d-scene.ts` |
 | **Upstream** | [react-force-graph](https://github.com/vasturiano/react-force-graph) · [3d-force-graph](https://github.com/vasturiano/3d-force-graph) · [three-spritetext](https://github.com/vasturiano/three-spritetext) · [ngraph](https://github.com/anvaka/ngraph.forcelayout) · [polished](https://github.com/styled-components/polished) · [tween.js](https://github.com/tweenjs/tween.js) |
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
-| **K2 code** | Remains **MIT**. These packages do **not** relicense the product. |
+| **K2 code** | Is **MIT**. These packages do **not** relicense the product. |
 
 ## Multiplayer kit: k2-mpc-base v0.12.0 (vendored)
 
@@ -353,7 +353,7 @@ Hosted mail (Email Hosting) and Email Notifications on Linux run the
 | **License** | **AGPL-3.0-only** (the Community Edition). No Enterprise licence key is ever installed |
 | **Source** | The complete corresponding source is the `v0.16.25` tag: https://github.com/Alakazam-211/stalwart/tree/v0.16.25 (also printed by `k2 study email-notifications` and `k2 notifications email status`) |
 | **How K2 uses it** | As a separate process over its loopback HTTP/JMAP management API only. Stalwart's code is **never linked, vendored or patched** into K2 |
-| **K2 code** | Remains **MIT**. Running Stalwart beside K2 as a separate program does **not** put K2 under the AGPL or otherwise relicense the product |
+| **K2 code** | Is **MIT**. Running Stalwart beside K2 as a separate program does **not** put K2 under the AGPL or otherwise relicense the product |
 
 When redistributing K2 builds or boxes that install Stalwart, keep this
 notice and the source pointer with them.

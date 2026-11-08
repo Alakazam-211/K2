@@ -7,6 +7,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### When you update
 - **K2 is now MIT-licensed,** from 0.46.10 on. 0.46.9 and earlier stay FSL-1.1-Apache-2.0, each converting to Apache-2.0 on its two-year date.
+- **App authors: the widget kit files have new patch versions** (k2-help, k2-activity, k2-markdown, k2-png, k2-diff 1.0.1; k2-thread 1.1.1) with the MIT notice. Pages that ask for a line (`@1`) get them automatically. A page that pins `k2-activity-bar.js` (or another kit file) by hash needs the new hash.
 - **Update the root helper after updating** (`k2 root-helper update`): moving a server's voice to the tunnel needs root helper protocol 14. An older helper refuses the move with `helper_outdated` and changes nothing.
 - **`k2 db create` no longer prints the database password.** Its `dsn` (and the `--test` `migratorDsn`) come without the password, and `dsnHint` says how to get the full one: `k2 db dsn --db <name>`. Scripts that read the password from `create --json` need to call `k2 db dsn` instead.
 

@@ -13,8 +13,8 @@
 //! grows them.
 //!
 //! Design choices:
-//! - **Blocking reqwest** matches the existing K2SO HTTP story (llm::download
-//!   + push adapters both use `reqwest::blocking`). No tokio-runtime
+//! - **Blocking reqwest** matches the existing K2SO HTTP story (the push
+//!   adapters use `reqwest::blocking`). No tokio-runtime
 //!   ceremony for the handful of ops we make per command.
 //! - **Token loaded lazily** — we re-read the port/token files on every
 //!   construction because the daemon can be restarted (launchd KeepAlive)

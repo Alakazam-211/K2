@@ -21,7 +21,7 @@ path = "src/main.rs"
 # NOT k2-core (0.46.4): this app is connection points + OS integration
 # only, and everything that needs k2-core (DB, workspaces, heartbeats,
 # agents) is reached over the daemon's /cli/* routes. Linking k2-core here
-# compiled its whole tree (SQLite, llama.cpp, oxc, git2, ngrok, …) a
+# compiled its whole tree (SQLite, oxc, git2, ngrok, …) a
 # second time in every release build, with different features than the
 # daemon's build.
 k2-client = { path = "../crates/k2-client" }
@@ -80,12 +80,6 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg"] }
 url = "2"
 libc = "0.2"
-# Phase 2 Unit 2 — `llama-cpp-2` + `encoding_rs` direct deps removed.
-# LLM inference moved to k2so-daemon; src-tauri/src no longer imports
-# either crate. k2so-core still pulls in `llama-cpp-2` (with `metal`
-# + `sampler` features) for the LlmManager type, and `encoding_rs`
-# for token decoding — they're available transitively but Tauri's
-# own source tree doesn't need to compile them as direct deps.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 tauri-plugin-drag = "2.1.0"

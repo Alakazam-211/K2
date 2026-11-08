@@ -18,10 +18,6 @@ mod tray;
 // Editor discovery ("Open in …") lives in k2-client. Re-exported so
 // `crate::editors::*` call sites keep working.
 pub use k2_client::editors;
-// Phase 2 Unit 2 — `llm` re-export removed. LLM inference + model
-// management moved entirely to k2so-daemon; Tauri no longer touches
-// llama.cpp or the model lifecycle. The renderer calls /cli/llm/* on
-// the daemon directly.
 mod menu;
 // `perf` lives in k2-client. Re-exported so `crate::perf_timer!` /
 // `crate::perf_hist!` / `crate::perf::*` call sites keep working.
@@ -598,12 +594,6 @@ fn reload_daemon_launch_agent(plist_path: &std::path::Path) {
         Err(e) => log_debug!("[plist-heal] bootstrap spawn failed: {e}"),
     }
 }
-
-// Phase 2 Unit 2 — `llm_worker_main` moved to k2so-daemon's
-// `llm_host::worker_main`. The daemon now spawns itself with
-// `--llm-worker <payload_path>` for inference. Tauri is no longer
-// an LLM host; deleted alongside `commands/assistant.rs` and the
-// `--llm-worker` arm in `src-tauri/src/main.rs`.
 
 /// 0.39.0: `warm_http_pool_async` (Kessel-T0 reqwest-runtime warmup) was
 /// removed alongside the Kessel-T0 JSON-stream renderer. Kept as an empty
@@ -1413,13 +1403,6 @@ pub fn run() {
             // k2so-daemon). Tauri re-writing the file would fight the
             // daemon for ownership, so this loop is gone.
 
-            // Phase 2 Unit 2 — LLM stale-tmp cleanup, default-model
-            // auto-download, and model auto-load moved to k2so-daemon's
-            // first-boot pass (see `llm_host::maybe_first_boot_discover`).
-            // The renderer kicks off downloads via /cli/llm/download-default
-            // and polls /cli/llm/status for readiness. Tauri is no longer
-            // involved in the LLM lifecycle.
-
             // Linux and Windows keep the in-window tray. macOS does not
             // call tray::install — the status item is the k2-menubar
             // LaunchAgent, and a second icon would come from this window.
@@ -1581,9 +1564,6 @@ pub fn run() {
             commands::workspace_ops::workspace_new_tab,
             commands::workspace_ops::workspace_close_tab,
             commands::workspace_ops::workspace_arrange,
-            // Phase 2 Unit 2 — `assistant_*` commands deleted. LLM
-            // moved to k2so-daemon (/cli/llm/*); renderer calls the
-            // daemon directly.
             // Phase 2 Unit 6 — `commands::chat_history::*` shims
             // deleted. Renderer hits `/cli/chat/*` on the daemon.
             // Plan B cleanup — `timer_*` command surface deleted. Routed

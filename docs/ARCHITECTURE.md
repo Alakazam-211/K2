@@ -1,6 +1,6 @@
 # K2SO Architecture
 
-Technical architecture of K2SO, covering the system design, backend modules, frontend structure, IPC layer, database schema, and the AI assistant pipeline.
+Technical architecture of K2SO, covering the system design, backend modules, frontend structure, IPC layer and database schema.
 
 ## System Overview
 
@@ -11,9 +11,9 @@ Technical architecture of K2SO, covering the system design, backend modules, fro
 │  │                    React 19 Frontend                       │  │
 │  │                                                            │  │
 │  │  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌──────────┐  │  │
-│  │  │ Sidebar  │  │ TabBar   │  │ PaneLayout│  │ Assistant│  │  │
-│  │  │ Projects │  │ Workspace│  │ Terminals │  │ LLM Chat │  │  │
-│  │  │ FocusGrp │  │ Tabs     │  │ Viewers   │  │ Cmd+L    │  │  │
+│  │  │ Sidebar  │  │ TabBar   │  │ PaneLayout│  │ Command  │  │  │
+│  │  │ Projects │  │ Workspace│  │ Terminals │  │ Palette  │  │  │
+│  │  │ FocusGrp │  │ Tabs     │  │ Viewers   │  │ Cmd+K    │  │  │
 │  │  └──────────┘  └──────────┘  └───────────┘  └──────────┘  │  │
 │  │                                                            │  │
 │  │  Zustand Stores ──── xterm.js (WebGL) ──── react-mosaic   │  │
@@ -23,11 +23,11 @@ Technical architecture of K2SO, covering the system design, backend modules, fro
 │  ┌────────────────────────────┴───────────────────────────────┐  │
 │  │                      Rust Backend                          │  │
 │  │                                                            │  │
-│  │  ┌────────────┐  ┌──────────┐  ┌───────┐  ┌────────────┐  │  │
-│  │  │ Terminal   │  │ Database │  │ Git   │  │ LLM        │  │  │
-│  │  │ portable-  │  │ rusqlite │  │ git2  │  │ llama-cpp-2│  │  │
-│  │  │ pty        │  │ SQLite   │  │       │  │ Metal GPU  │  │  │
-│  │  └────────────┘  └──────────┘  └───────┘  └────────────┘  │  │
+│  │  ┌────────────┐  ┌──────────┐  ┌───────┐                  │  │
+│  │  │ Terminal   │  │ Database │  │ Git   │                  │  │
+│  │  │ portable-  │  │ rusqlite │  │ git2  │                  │  │
+│  │  │ pty        │  │ SQLite   │  │       │                  │  │
+│  │  └────────────┘  └──────────┘  └───────┘                  │  │
 │  │                                                            │  │
 │  │  ┌────────────┐  ┌──────────┐  ┌──────────────────────┐   │  │
 │  │  │ Filesystem │  │ Settings │  │ Workspace Ops        │   │  │
@@ -54,14 +54,6 @@ All Rust source lives under `src-tauri/src/`.
 - SIGPIPE is ignored at startup to prevent writes to dead PTYs from crashing the app.
 - All PTYs are killed on window close to prevent zombie processes.
 
-### `llm/` -- Local LLM Inference
-
-- **LlmManager** wraps `llama-cpp-2` for GGUF model loading and inference.
-- Models are loaded with full GPU layer offloading (Metal on macOS).
-- The system prompt (in `tools.rs`) defines 7 workspace tools the LLM can call: `split_panes`, `open_document`, `open_terminal`, `close_pane`, `arrange_layout`, `list_files`, `switch_workspace`.
-- Responses are parsed as JSON tool calls or plain messages.
-- `download.rs` handles downloading a default model from HuggingFace with progress events.
-
 ### `db/` -- SQLite Database
 
 - Database lives at `~/.k2/k2.db` (`~/.k2/k2so.db` is a compat link to it since 0.46.6).
@@ -84,7 +76,6 @@ All `#[tauri::command]` functions grouped by domain:
 | `git.rs` | Repo info, branches, worktrees, changes |
 | `filesystem.rs` | Read dir, read/write files, open in Finder |
 | `workspace_ops.rs` | Split pane, close pane, open doc/terminal, arrange |
-| `assistant.rs` | Chat, model status, load model, download |
 | `settings.rs` | Get/update/reset key-value settings |
 | `project_config.rs` | Per-project config, run commands |
 
@@ -96,7 +87,7 @@ All `#[tauri::command]` functions grouped by domain:
 
 ### Other Backend Files
 
-- `state.rs` -- `AppState` struct holding `Mutex<Connection>`, `Mutex<TerminalManager>`, `Mutex<LlmManager>`.
+- `state.rs` -- `AppState` struct holding `Mutex<Connection>`, `Mutex<TerminalManager>`.
 - `editors.rs` -- Detects installed editors (VS Code, Cursor, Zed, etc.) for "Open in Editor" functionality.
 - `menu.rs` -- Native macOS menu bar construction and event handling.
 - `window.rs` -- Saves/restores window position, size, and maximized state to `~/.k2so/window-state.json`.
@@ -118,7 +109,6 @@ State is managed through Zustand stores, each responsible for one domain:
 | `presets.ts` | Agent preset list and management |
 | `filetree.ts` | File tree expansion state, directory contents |
 | `focus-groups.ts` | Focus group tabs and project assignment |
-| `assistant.ts` | LLM chat messages, model status |
 | `settings.ts` | App settings (theme, font, etc.) |
 | `sidebar.ts` | Sidebar visibility and active section |
 | `command-palette.ts` | Command palette visibility and filtering |
@@ -132,7 +122,6 @@ State is managed through Zustand stores, each responsible for one domain:
 - **Terminal** -- Wraps xterm.js with the WebGL renderer and fit addon. Communicates with the Rust PTY via Tauri events.
 - **PaneLayout** -- Uses `react-mosaic-component` for tiled pane management. Each leaf is a terminal or document viewer.
 - **FileViewerPane** -- Dispatches on file extension to render Markdown (react-markdown + remark-gfm), PDF (pdfjs-dist), or DOCX (mammoth).
-- **WorkspaceAssistant** -- Chat interface that sends user messages to the local LLM and executes returned tool calls.
 - **PresetsBar** -- Row of buttons for launching agent CLI tools. Each button opens a new terminal with the preset's command.
 - **Sidebar** -- Project list with focus group tabs, drag-to-reorder, context menus.
 - **FocusWindow** -- Detachable window for a focused view of a single project.
@@ -165,10 +154,9 @@ invoke("terminal_create")  →  terminal::terminal_create()
 Backend emits events via `app.emit()` for streaming data:
 
 - `terminal:data:{id}` -- PTY output bytes
-- `workspace:split-pane` -- Layout manipulation from assistant
-- `workspace:open-document` -- Open a file from assistant
-- `workspace:open-terminal` -- Open a terminal from assistant
-- `assistant:download-progress` -- Model download progress
+- `workspace:split-pane` -- Layout manipulation
+- `workspace:open-document` -- Open a file
+- `workspace:open-terminal` -- Open a terminal
 
 Frontend listens with `listen("event_name", callback)` from `@tauri-apps/api/event`.
 
@@ -241,62 +229,3 @@ terminal_panes
 ├── pane_order      INTEGER NOT NULL DEFAULT 0
 └── created_at      INTEGER NOT NULL DEFAULT (unixepoch())
 ```
-
-## AI Assistant Pipeline
-
-The workspace assistant (Cmd+L) uses a local LLM for natural language workspace control:
-
-```
-User Input
-    │
-    ▼
-┌──────────────────┐
-│  Frontend        │
-│  assistant store  │  Sends user message via invoke("assistant_chat")
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  Rust Backend    │
-│  assistant.rs    │  Passes message to LlmManager
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  LlmManager     │
-│  llm/mod.rs      │  Runs inference with system prompt + chat history
-│                  │  Model: GGUF format, Metal GPU acceleration
-│                  │  Temperature: 0.1 (deterministic tool calling)
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  Response Parser │
-│  llm/tools.rs    │  Extracts JSON from LLM output
-│                  │  Parses into ToolCall[] or Message
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────────────────────────────┐
-│  Tool Execution (backend workspace_ops)  │
-│                                          │
-│  split_panes    → emit workspace:split   │
-│  open_document  → emit workspace:open-doc│
-│  open_terminal  → emit workspace:open-term│
-│  close_pane     → emit workspace:close   │
-│  arrange_layout → emit workspace:arrange │
-│  list_files     → returns file listing   │
-│  switch_workspace → emit workspace:switch│
-└────────┬─────────────────────────────────┘
-         │
-         ▼
-┌──────────────────┐
-│  Frontend        │
-│  Event listeners │  Receives events, updates Zustand stores,
-│  in tabs store   │  re-renders pane layout
-└──────────────────┘
-```
-
-The system prompt defines the available tools and expected JSON format. The LLM responds with either:
-- `{ "tool_calls": [{ "tool": "...", "args": {...} }] }` -- executed as workspace operations
-- `{ "message": "..." }` -- displayed as a chat response

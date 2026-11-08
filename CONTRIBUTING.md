@@ -8,7 +8,7 @@ Thanks for your interest in contributing. This guide covers development setup, p
 
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [Bun](https://bun.sh/) (or [Node.js](https://nodejs.org/) 18+)
-- cmake (required for llama.cpp compilation)
+- cmake (required to build vendored C dependencies such as aws-lc-sys)
 - Xcode Command Line Tools (macOS): `xcode-select --install`
 
 ### Running Locally
@@ -20,7 +20,7 @@ bun install
 cargo tauri dev
 ```
 
-This starts Vite's dev server (hot reload) and compiles the Rust backend. The first build takes a few minutes due to llama.cpp compilation.
+This starts Vite's dev server (hot reload) and compiles the Rust backend. The first build takes a few minutes.
 
 ### Useful Commands
 
@@ -41,7 +41,6 @@ K2SO/
 │       ├── components/        # UI components
 │       │   ├── Terminal/      # xterm.js terminal wrapper
 │       │   ├── FileViewerPane/  # .md / .pdf / .docx viewer
-│       │   ├── WorkspaceAssistant/  # LLM chat panel
 │       │   ├── PaneLayout/    # Mosaic-based pane tiling
 │       │   ├── Sidebar/       # Project list, focus groups
 │       │   ├── PresetsBar/    # Agent launch buttons
@@ -58,7 +57,6 @@ K2SO/
 │       │   ├── presets.ts     # Agent preset state
 │       │   ├── filetree.ts    # File tree state
 │       │   ├── focus-groups.ts  # Focus group management
-│       │   ├── assistant.ts   # LLM assistant state
 │       │   ├── settings.ts    # App settings
 │       │   └── ...
 │       ├── hooks/             # React hooks
@@ -67,7 +65,7 @@ K2SO/
 ├── src-tauri/
 │   └── src/
 │       ├── lib.rs             # App entry, plugin + command registration
-│       ├── state.rs           # AppState (db, terminal manager, LLM)
+│       ├── state.rs           # AppState (db, terminal manager)
 │       ├── commands/          # Tauri IPC command handlers
 │       │   ├── projects.rs    # Project CRUD, icon detection, editor launch
 │       │   ├── workspaces.rs  # Workspace CRUD
@@ -78,7 +76,6 @@ K2SO/
 │       │   ├── git.rs         # Branch, worktree, changes info
 │       │   ├── filesystem.rs  # File read/write/browse
 │       │   ├── workspace_ops.rs  # Layout manipulation (split, close, arrange)
-│       │   ├── assistant.rs   # LLM chat, model loading, download
 │       │   ├── settings.rs    # Key-value settings
 │       │   └── project_config.rs  # Per-project config (run commands, etc.)
 │       ├── db/                # SQLite database
@@ -86,10 +83,6 @@ K2SO/
 │       │   └── schema.rs      # Table structs + queries
 │       ├── terminal/          # PTY management
 │       │   └── mod.rs         # TerminalManager (portable-pty)
-│       ├── llm/               # Local LLM inference
-│       │   ├── mod.rs         # LlmManager (llama-cpp-2)
-│       │   ├── tools.rs       # System prompt, tool definitions, response parsing
-│       │   └── download.rs    # Model download from HuggingFace
 │       ├── git/               # Git operations (git2)
 │       │   └── mod.rs
 │       ├── editors.rs         # External editor detection

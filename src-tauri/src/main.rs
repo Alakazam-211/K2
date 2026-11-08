@@ -19,12 +19,6 @@ fn main() {
     #[cfg(unix)]
     k2_client::process::raise_nofile_limit();
 
-    // Phase 2 Unit 2 — `--llm-worker` arm moved to k2so-daemon. The
-    // daemon now spawns itself as `k2so-daemon --llm-worker <payload>`
-    // to run inference in an isolated child process. Tauri is no
-    // longer involved in the LLM lifecycle; the renderer calls
-    // `/cli/llm/*` on the daemon directly.
-
     // Fire the reqwest pool warmup IMMEDIATELY — before Tauri even
     // starts parsing the window config. reqwest::blocking's tokio
     // runtime takes ~500-800ms to materialize on first send(). By

@@ -1149,10 +1149,21 @@ fn ensure_session_dir(d: &Path) -> std::io::Result<()> {
 /// Periodic: drop dirs whose session is gone. `live` is
 /// [`crate::session_liveness`]'s answer (registered, waiting for adoption,
 /// or still being spawned).
+///
+/// GH#81: says which session's dir it removed, and the files K2 had
+/// delivered there, so a file that went from under an agent can be traced
+/// to this sweep (or ruled out) from the daemon log. Names only.
 pub fn sweep_dead(live: &dyn Fn(&str) -> bool) {
-    let dead: Vec<String> = DIRS.lock().iter().filter(|(s, _)| !live(s)).map(|(s, _)| s.clone()).collect();
-    for s in dead {
-        session_ended(&s);
+    let dead: Vec<(String, PathBuf)> = DIRS.lock().iter().filter(|(s, _)| !live(s)).cloned().collect();
+    for (s, d) in &dead {
+        let files: Vec<String> = LIVE.lock().get(s).map(|r| r.delivered.files.keys().cloned().collect()).unwrap_or_default();
+        k2_core::log_debug!("[vault] session {s} is not running: removing its secrets dir {} (delivered files {files:?})", d.display());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (s, _) in dead {
+        if seen.insert(s.clone()) {
+            session_ended(&s);
+        }
     }
 }
 

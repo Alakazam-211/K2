@@ -1332,3 +1332,134 @@ fn a_restart_upgrades_an_old_ptyd_in_place_or_keeps_one_that_cannot() {
     h.ptyd_pid = None;
     let _ = std::fs::remove_dir_all(&h.home);
 }
+
+/// One HTTP/1.1 request with a session passport as the Bearer (an agent's
+/// own `k2` call over TCP); (status, body).
+fn http_bearer(port: u16, method: &str, path: &str, bearer: &str, body: &str) -> (u16, String) {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {bearer}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut raw = Vec::new();
+    let _ = s.read_to_end(&mut raw);
+    let text = String::from_utf8_lossy(&raw).to_string();
+    let status = text.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+    (status, text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default())
+}
+
+/// GH#81: a `k2 thread secret --scope session --delivery file --ttl 2h`
+/// saved for an agent session that survived a daemon restart in k2-ptyd
+/// (adopted at boot) must stay: its file in `$K2_SECRETS_DIR` and the vault
+/// entry, across the vault's minute sweeps, for as long as the session
+/// runs. In the field both were gone about 45 s after delivery. A session
+/// that really ends still loses its secrets dir and the file.
+#[test]
+fn a_session_card_file_outlives_the_sweeps_after_adoption_and_goes_with_the_session() {
+    const NAME: &str = "card_oauth_code";
+    const VALUE: &str = "k2test-gh81-one-time-code";
+    let mut h = Harness::new("card");
+    let port = h.start();
+    let token = h.token();
+    let ws = h.home.join(WS);
+    std::fs::create_dir_all(&ws).unwrap();
+    let persona = k2_core::workspace::agent_identity::workspace_agent_md_path(&ws.to_string_lossy());
+    std::fs::create_dir_all(persona.parent().expect("persona dir")).unwrap();
+    std::fs::write(&persona, format!("---\nname: {WS}\n---\n# {WS}\n")).unwrap();
+    let (s, b) = http(port, "POST", &format!("/cli/projects/create?token={token}"), &serde_json::json!({"name": WS, "path": ws.to_string_lossy()}).to_string());
+    assert_eq!(s, 200, "projects/create: {b}");
+    let project_id = serde_json::from_str::<serde_json::Value>(&b).unwrap()["id"].as_str().unwrap_or_else(|| panic!("project id in {b}")).to_string();
+    let preset = uuid::Uuid::new_v4().to_string();
+    let (s, b) = http(port, "POST", &format!("/cli/presets/create?token={token}"), &serde_json::json!({"id": preset, "label": "card-agent", "command": "k2-ptyd-test-agent"}).to_string());
+    assert_eq!(s, 200, "presets/create: {b}");
+    let (s, b) = http(port, "POST", &format!("/cli/projects/update?token={token}"), &serde_json::json!({"id": project_id, "defaultAgent": preset}).to_string());
+    assert_eq!(s, 200, "projects/update: {b}");
+
+    // The agent: records its env (passport, secrets dir) and keeps running.
+    let probe = h.home.join("card-probe.json");
+    let body = serde_json::json!({
+        "agent_name": "tab-card",
+        "cwd": ws.to_string_lossy(),
+        "command": "k2-ptyd-test-agent",
+        "args": ["probe", probe.to_string_lossy()],
+        "cols": 100,
+        "rows": 30,
+    })
+    .to_string();
+    let (s, resp) = http(port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "v2 spawn: {resp}");
+    let sid = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string();
+    let env: serde_json::Value = wait_for("the agent's env probe", Duration::from_secs(15), || serde_json::from_str(&std::fs::read_to_string(&probe).ok()?).ok());
+    let pid = env["pid"].as_i64().expect("pid") as i32;
+    h.agent_pid = Some(pid);
+    let env_of = |k: &str| env["env"].as_array().expect("env").iter().find(|p| p[0] == k).and_then(|p| p[1].as_str()).unwrap_or_else(|| panic!("the agent has no {k}")).to_string();
+    let passport = env_of("K2_HOOK_TOKEN");
+    let secrets = PathBuf::from(env_of("K2_SECRETS_DIR"));
+    assert!(secrets.is_dir(), "the agent's secrets dir {} is there at spawn", secrets.display());
+    let ptyd = h.ptyd_pid.expect("ptyd launched (the switch is on)");
+    assert_eq!(parent_pid(pid), ptyd, "the agent runs under k2-ptyd");
+
+    // A restart that keeps the agent: the next daemon adopts it.
+    // SAFETY: the daemon this test started.
+    unsafe { libc::kill(h.daemon_pid(), libc::SIGTERM) };
+    h.wait_daemon_exit(Duration::from_secs(20));
+    let port = h.start();
+    let token = h.token();
+    assert!(alive(pid), "the agent died with the daemon");
+    let log = std::fs::read_to_string(h.home.join(format!("daemon-{}.log", h.boots))).unwrap_or_default();
+    assert!(log.contains(&format!("adopted session={sid} ")), "the session was not adopted");
+    assert!(secrets.is_dir(), "the adopted session's secrets dir survived the restart");
+
+    // The adopted agent asks for a session-scope file secret; a person saves it.
+    let ask = serde_json::json!({"addr": WS, "name": NAME, "scope": "session", "delivery": "file", "ttl": "2h", "kind": "generic", "from": "k2", "dest": "vault"});
+    let (s, b) = http_bearer(port, "POST", "/cli/thread/secret", &passport, &ask.to_string());
+    assert_eq!(s, 200, "the adopted session's secret card: {b}");
+    let card = serde_json::from_str::<serde_json::Value>(&b).unwrap()["id"].as_str().unwrap_or_else(|| panic!("card id in {b}")).to_string();
+    let save = serde_json::json!({"addr": WS, "id": card, "secret": VALUE, "disclosed": "1"});
+    let (s, b) = http(port, "POST", &format!("/cli/thread/answer?token={token}"), &save.to_string());
+    assert_eq!(s, 200, "Save on the card: {b}");
+    assert!(!b.contains(VALUE), "the value never rides a response");
+    let file = secrets.join(NAME);
+    assert_eq!(std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("the file is there at once: {e}: {b}")), VALUE);
+    let show = |port: u16| http_bearer(port, "GET", &format!("/cli/vault/show?name={NAME}&scope=session"), &passport, "");
+    let (s, b) = show(port);
+    assert_eq!(s, 200, "k2 vault show {NAME} --scope session right after Save: {b}");
+
+    // At least two of the vault's minute sweeps (sweep_dead, the live
+    // sweep, the expiry tick): the file and the entry stay.
+    let until = Instant::now() + Duration::from_secs(135);
+    while Instant::now() < until {
+        assert!(alive(pid), "the agent is still running");
+        let got = std::fs::read_to_string(&file).map_err(|e| e.kind());
+        assert!(
+            got.as_deref() == Ok(VALUE),
+            "GH#81: the session-scope file went while its adopted session still runs ({:?} left of the wait): {got:?}; secrets dir there: {}",
+            until.saturating_duration_since(Instant::now()),
+            secrets.is_dir()
+        );
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    let (s, b) = show(port);
+    assert_eq!(s, 200, "GH#81: k2 vault show {NAME} --scope session after the sweeps: {b}");
+    let (s, b) = http_bearer(port, "POST", "/cli/vault/sync", &passport, "{}");
+    assert_eq!(s, 200, "k2 vault sync: {b}");
+    assert_eq!(std::fs::read_to_string(&file).map_err(|e| e.kind()).as_deref(), Ok(VALUE), "the file is still there after k2 vault sync: {b}");
+
+    // The session really ends: its secrets dir and the file go.
+    let (s, b) = http(port, "POST", &format!("/cli/sessions/v2/close?token={token}"), &serde_json::json!({"agent_name": "tab-card", "force": true}).to_string());
+    assert_eq!(s, 200, "close tab-card: {b}");
+    wait_for("the agent to end after its close", Duration::from_secs(15), || (!alive(pid)).then_some(()));
+    h.agent_pid = None;
+    wait_for("the ended session's secrets dir to go", Duration::from_secs(90), || (!secrets.exists()).then_some(()));
+    assert!(!file.exists(), "the ended session's file is gone");
+
+    let (s, b) = http(port, "POST", &format!("/cli/daemon/stop?token={}", h.token()), "");
+    assert_eq!(s, 200, "stop: {b}");
+    h.wait_daemon_exit(Duration::from_secs(20));
+    wait_for("ptyd to exit after a stop", Duration::from_secs(10), || (!alive(ptyd)).then_some(()));
+    h.ptyd_pid = None;
+    let _ = std::fs::remove_dir_all(&h.home);
+}

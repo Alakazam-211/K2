@@ -3096,6 +3096,18 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         }
     };
     let m = &result.meta;
+    // GH#81: which session a session card's secret is kept for, next to the
+    // one that asked (they differ when the asker had ended). Ids only.
+    if m.scope.kind == k2_vault::ScopeKind::Session {
+        k2_core::log_debug!(
+            "[vault] card {card_id} ({}) saved for session {} (asked by {}, delivery {}, expires {})",
+            m.name,
+            m.scope.id,
+            req.session_id.as_deref().unwrap_or("-"),
+            m.default_delivery,
+            m.expires_at.as_deref().unwrap_or("-")
+        );
+    }
     let reference = crate::vault::display_ref(m).unwrap_or_else(|| result.reference.clone());
     let sites: Vec<String> = m
         .hosts

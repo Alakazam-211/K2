@@ -27,7 +27,6 @@ DAEMON LIFECYCLE
   daemon status [--json]                        PID, port, uptime
   daemon start|stop|restart                     launchctl bootstrap/bootout
   daemon log [--lines N]                        Tail daemon log
-  daemon companion start|stop|status            Companion (ngrok tunnel) server
   daemon hooks status [--limit N] [--json]      Hook pipeline state
   daemon reap                                   GC dead-PID sessions
   daemon uninstall                              Remove daemon plist
@@ -132,8 +131,6 @@ SETTINGS
   settings                                      Show current settings
   settings --mode <off|agent|manager>           Workspace mode
   settings --agentic <on|off>                   (always on — no-op; agentic is GA)
-  settings --companion <on|off>                 Enable/disable companion tunnel
-  settings --companion-password "<pw>"          Rotate companion password
 
 SKILLS (documentation profiles — NOT spawnable; harness handles spawn)
   skills list                                   Skill profiles in this workspace

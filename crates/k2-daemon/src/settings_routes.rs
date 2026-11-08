@@ -346,7 +346,23 @@ pub fn redact_settings_value(v: &mut serde_json::Value) {
     if let Some(serde_json::Value::String(url)) = obj.get_mut("pushGatewayUrl") {
         *url = strip_url_userinfo(url);
     }
+    // The legacy Companion server's ngrok token and argon2 password hash.
+    // They are plain `String`s, so the key is removed rather than nulled: a
+    // client that posts the settings back leaves them out, and the deep
+    // merge keeps the stored values.
+    if let Some(companion) = obj.get_mut("companion").and_then(|c| c.as_object_mut()) {
+        for key in COMPANION_SECRET_KEYS {
+            // An empty value holds nothing to hide; keep it so answers
+            // without a stored credential are unchanged.
+            if companion.get(*key).is_some_and(|v| v.as_str() != Some("")) {
+                companion.remove(*key);
+            }
+        }
+    }
 }
+
+/// Credential keys inside `companion` that only the owner daemon token sees.
+const COMPANION_SECRET_KEYS: &[&str] = &["ngrokAuthToken", "passwordHash"];
 
 /// `https://user:pass@host/x` → `https://host/x`. Anything without a
 /// `scheme://…@` authority is returned as is.
@@ -1168,6 +1184,46 @@ mod tests {
                 k2_core::app_settings::load().push_gateway_token.as_deref(),
                 Some("fleet-secret-123")
             );
+        });
+    }
+
+    /// The legacy Companion ngrok token and password hash are owner-only
+    /// too: a Member or an agent reading settings never sees them, and a
+    /// Member posting the redacted settings back keeps the stored values.
+    #[test]
+    fn companion_ngrok_token_and_password_hash_are_owner_only() {
+        with_temp_home(|| {
+            let r = handle_settings_update(
+                br#"{"companion":{"ngrokAuthToken":"ngrok-secret-456","passwordHash":"$argon2id$hash-789"}}"#,
+                SettingsActor::Owner,
+            );
+            assert_eq!(r.status, "200 OK", "owner write: {}", r.body);
+
+            let owner: serde_json::Value =
+                serde_json::from_str(&handle_settings_get_unredacted().body).expect("json");
+            assert_eq!(owner["companion"]["ngrokAuthToken"], "ngrok-secret-456");
+
+            for (label, resp) in [
+                ("settings/get handler", handle_settings_get()),
+                ("cli::dispatch GET chain", crate::cli::dispatch("/cli/settings/get", &Default::default())),
+            ] {
+                assert_eq!(resp.status, "200 OK", "{label}: {}", resp.body);
+                assert!(!resp.body.contains("ngrok-secret-456"), "{label} leaked the ngrok token: {}", resp.body);
+                assert!(!resp.body.contains("hash-789"), "{label} leaked the password hash: {}", resp.body);
+                let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+                assert!(v["companion"].is_object(), "{label}: companion stays: {v}");
+                assert!(v["companion"].get("ngrokAuthToken").is_none(), "{label}: {v}");
+            }
+
+            // A Member posts the redacted companion block back: the stored
+            // secrets survive.
+            let redacted: serde_json::Value = serde_json::from_str(&handle_settings_get().body).expect("json");
+            let body = serde_json::json!({ "companion": redacted["companion"] }).to_string();
+            let r = handle_settings_update(body.as_bytes(), SettingsActor::Member);
+            assert_eq!(r.status, "200 OK", "member round-trip: {}", r.body);
+            let stored = k2_core::app_settings::load();
+            assert_eq!(stored.companion.ngrok_auth_token, "ngrok-secret-456");
+            assert_eq!(stored.companion.password_hash, "$argon2id$hash-789");
         });
     }
 

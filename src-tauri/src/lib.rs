@@ -940,17 +940,9 @@ pub fn run() {
         Err(e) => eprintln!("[boot] home migration failed: {e} — continuing on legacy layout"),
     }
 
-    // Rustls 0.23 compiles both aws-lc-rs (via reqwest rustls-tls) and ring
-    // (via ngrok) into the binary; it refuses to auto-pick and panics on
-    // first TLS use unless a provider is explicitly installed.
+    // Rustls 0.23 refuses to auto-pick when more than one CryptoProvider
+    // is compiled in and panics on first TLS use unless one is installed.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-
-    // Phase 2 Unit 1 — companion settings bridge moved to
-    // k2so-daemon. The daemon now reads settings.json directly via
-    // its own `DaemonCompanionSettingsProvider`. Tauri no longer
-    // registers a provider; the renderer reaches the companion
-    // tunnel via `/cli/companion/*` on the daemon, so this process
-    // doesn't need one.
 
     // 0.46.4: this process no longer opens (or migrates) ~/.k2/k2.db.
     // The daemon is the only DB owner and runs the migrations on its own
@@ -1045,13 +1037,6 @@ pub fn run() {
                 }
             }
             let _setup_guard = SetupGuard(__setup_start);
-
-            // Phase 2 Unit 1 — companion terminal / event-sink /
-            // app-event-source bridges moved to k2so-daemon. The
-            // daemon registers daemon-owned impls
-            // (`crates/k2so-daemon/src/companion_host.rs`) since the
-            // tunnel + WS clients now live there. Tauri no longer
-            // wires these bridges.
 
             // 0.46.4: no in-process agent-hook sink. Hook events reach
             // the renderer from the daemon's /events bus (daemon_events).
@@ -1428,17 +1413,6 @@ pub fn run() {
             // k2so-daemon). Tauri re-writing the file would fight the
             // daemon for ownership, so this loop is gone.
 
-            // Phase 2 Unit 1 — companion ngrok tunnel autostart moved
-            // to k2so-daemon. The daemon now reads `companion.auto_start`
-            // from `~/.k2so/settings.json` on its own first boot and
-            // brings the tunnel up itself (see
-            // `crates/k2so-daemon/src/companion_host.rs::maybe_autostart`).
-            //
-            // Owning the tunnel daemon-side closes the K2SO Connect +
-            // Mobile Companion gap: with Tauri closed (or running on a
-            // different machine entirely), the daemon's tunnel stays
-            // reachable.
-
             // Phase 2 Unit 2 — LLM stale-tmp cleanup, default-model
             // auto-download, and model auto-load moved to k2so-daemon's
             // first-boot pass (see `llm_host::maybe_first_boot_discover`).
@@ -1713,10 +1687,6 @@ pub fn run() {
             // Phase 2 Unit 6 — `commands::skill_layers::*` shims
             // deleted. Renderer hits `/cli/skill-layers/*` on the
             // daemon.
-            // Phase 2 Unit 1 — companion API commands deleted; the
-            // renderer now calls `/cli/companion/{start,stop,status,
-            // set-password,disconnect-session}` on the daemon
-            // directly (see `CompanionSection.tsx`).
             // k2so-daemon lifecycle (Settings panel reads this to show
             // "daemon: running / not installed / unreachable") and
             // controls the launch agent install/uninstall/restart.

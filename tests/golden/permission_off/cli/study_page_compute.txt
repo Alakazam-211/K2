@@ -292,6 +292,16 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
     (compute:<you>/* = every node this server owns, never one it shares
     from another server). Agents can't: secret_not_granted (exit 3)
     prints the owner's exact command.
+  On another owner's nodes (0.46.10, lane secrets): one grant per lane,
+    k2 vault grant NAME --to compute:<you>/lane:<owner-host>/<lane> --as env
+    (<you> is your workspace, as above),
+    sealed only while a person here consents for that owner (the seat
+    request card gives it; later: k2 compute owners consent <owner> on;
+    else secret_owner_not_trusted, exit 3), the lane allows
+    secrets, the node is Linux with the job wall and a clean key in the
+    owner's node roster, and the job runs with its own uid or --exclusive
+    (else secret_needs_isolation / secret_env_linux_only, exit 3). How to
+    get a seat, step by step: k2 study compute-shared, SEATS AND LANES.
   What's stored: the names and the vault ids, never a value. Not in the
   plan, the job row, the node's ledger or files, the receipt, events or
   messages. The node asks for the value right before the command starts;
@@ -305,8 +315,9 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
   write it to a file or an artifact, or send it over the network. Child
   processes inherit it. Only give a job what it needs.
   The node must be Linux with the job wall, k2-node 0.46.4, and treat
-  this server as its own (trust own); with no node named, K2 skips nodes
-  that aren't or that no grant covers.
+  this server as its own (trust own), or (0.46.10) hold your seat on a
+  lane that allows secrets (lane secrets above); with no node named, K2
+  skips nodes that aren't or that no grant covers.
   Who can read it on the node: root and the k2-node user, always. On a
   node another K2 server owns (shared with you), that is someone else's
   machine: compute:<you>/* never covers it, and a grant naming it warns.
@@ -865,6 +876,7 @@ COMMON ERRORS
   verb_not_allowed       not an admin verb; a root script is the escape hatch
   node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup);
                          --secret: the node isn't Linux + job wall + 0.46.4 + trust own
+                         (or a seat on a lane with secrets, 0.46.10)
   secret_not_granted     no compute: grant for that secret on that node; only a person
                          grants it (the error prints the command); exit 3
   secret_unavailable     the node got no answer for its secret in 60 s (link dropped);

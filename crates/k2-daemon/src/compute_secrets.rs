@@ -16,11 +16,20 @@
 //! Values exist here only inside a release: resolved, sealed, put in the
 //! belt's redactor, then dropped (`SecretBytes` zeroes on drop). Nothing of
 //! a value is ever written to `k2.db`, the compute dir, an event or a log.
+//!
+//! Lane secrets (0.46.10, prd-ci-on-compute-for-clients-v1 §4.4, C3b): a
+//! grant may name a lane (`compute:<ws>/lane:<owner>/<lane>`, stored as
+//! `compute:<ws id>/@lane-<seat id>`, V26). A secret reaches a node of
+//! another owner that has this server on one of its lanes only through
+//! [`secret_gate`] (V25, `k2_core::compute::lane_secrets`): checked at
+//! submit, at `--any` placement and again at every release, before a value
+//! is resolved.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
-use k2_core::compute::proto::frames::{SecretEnv, SecretNeed};
+use k2_core::compute::lane_secrets::{self as lanes, SeatView};
+use k2_core::compute::proto::frames::{Offer, SecretEnv, SecretNeed};
 use k2_core::compute::proto::secret::{self as psecret, codes as scodes};
 use k2_core::compute::store::{self, JobRow, NodeRow, SecretPin};
 use k2_core::compute::{self as compute};
@@ -32,13 +41,24 @@ use crate::compute_routes::{no, R};
 // ── consumers (`k2 vault grant --to compute:…`) ──────────────────────
 
 /// `compute:[<ws>/]<node|*>` → the vault consumer
-/// `compute:<workspace id>/<node id or *>`. `caller_ws` is the caller's own
-/// workspace, used when no workspace is named.
+/// `compute:<workspace id>/<node id or *>`; `compute:[<ws>/]lane:<owner>/<lane>`
+/// → `compute:<workspace id>/@lane-<seat id>` (V26: this server's seat on
+/// that owner's lane). `caller_ws` is the caller's own workspace, used when
+/// no workspace is named.
 pub fn consumer(spec: &str, caller_ws: Option<&str>) -> Result<Consumer, VaultError> {
-    let bad = |m: &str| VaultError::bad_request("bad_consumer", format!("{m} (use compute:<workspace>/<node>, or compute:<workspace>/* for every node this server owns)"));
-    let (ws_tok, node_tok) = match spec.split_once('/') {
-        Some((w, n)) => (Some(w), n),
-        None => (None, spec),
+    let bad = |m: &str| {
+        VaultError::bad_request(
+            "bad_consumer",
+            format!("{m} (use compute:<workspace>/<node>, compute:<workspace>/* for every node this server owns, or compute:<workspace>/lane:<owner>/<lane> for your seat on another owner's lane)"),
+        )
+    };
+    let (ws_tok, node_tok) = if spec.starts_with(LANE_TOKEN) {
+        (None, spec)
+    } else {
+        match spec.split_once('/') {
+            Some((w, n)) => (Some(w), n),
+            None => (None, spec),
+        }
     };
     let ws_id = match ws_tok {
         Some(w) if !w.is_empty() => crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?,
@@ -47,6 +67,19 @@ pub fn consumer(spec: &str, caller_ws: Option<&str>) -> Result<Consumer, VaultEr
     };
     if node_tok.is_empty() {
         return Err(bad("name a node or *"));
+    }
+    if let Some(l) = node_tok.strip_prefix(LANE_TOKEN) {
+        let Some((owner, lane)) = l.split_once('/').filter(|(o, l)| !o.is_empty() && !l.is_empty() && !l.contains('/')) else {
+            return Err(bad("a lane is lane:<owner>/<lane>"));
+        };
+        let seat = lanes::seat_book()
+            .seat_named(owner, lane)
+            .ok_or_else(|| VaultError::not_found(format!("this server has no seat on {owner}'s lane {lane} (a seat is offered by the node owner and accepted here in person)")))?;
+        let c = Consumer::compute_lane(&ws_id, &seat.seat_id);
+        if c.compute_lane_parts().is_none() {
+            return Err(bad("that workspace or seat can't be named here"));
+        }
+        return Ok(c);
     }
     let node_id = if node_tok == "*" {
         "*".to_string()
@@ -65,8 +98,19 @@ pub fn consumer(spec: &str, caller_ws: Option<&str>) -> Result<Consumer, VaultEr
     Ok(c)
 }
 
-/// How people see a compute consumer: `compute:<ws handle>/<node name>`.
+/// The CLI's lane form: `compute:<ws>/lane:<owner>/<lane>`.
+pub const LANE_TOKEN: &str = "lane:";
+
+/// How people see a compute consumer: `compute:<ws handle>/<node name>`,
+/// or `compute:<ws handle>/lane:<owner>/<lane>` for a lane grant.
 pub fn label(c: &Consumer) -> String {
+    if let Some((ws, seat_id)) = c.compute_lane_parts() {
+        let lane = match lanes::seat_book().seat(seat_id) {
+            Some(s) => format!("{LANE_TOKEN}{}/{}", s.owner_id, s.lane),
+            None => format!("{LANE_TOKEN}? (seat {seat_id}, removed)"),
+        };
+        return format!("compute:{}/{lane}", crate::vault::workspace_label(ws));
+    }
     let Some((ws, node)) = c.compute_parts() else { return c.label() };
     let node_name = if node == "*" {
         "*".to_string()
@@ -144,7 +188,7 @@ fn may_name(vault: &k2_vault::LocalVault, ws_id: &str, admin: bool, m: &k2_vault
     }
     vault
         .grants(&Selector::Id(m.id.clone()), &Actor::System("compute".into()))
-        .is_ok_and(|gs| gs.iter().any(|g| g.consumer.compute_parts().is_some_and(|(w, _)| w == ws_id)))
+        .is_ok_and(|gs| gs.iter().any(|g| g.consumer.compute_workspace() == Some(ws_id)))
 }
 
 /// Each ask → its secret id: `NAME` in the job's workspace scope, or a
@@ -197,28 +241,118 @@ fn expired(g: &k2_vault::Grant) -> bool {
         .is_some_and(|t| t.timestamp() < compute::now())
 }
 
-/// The env grant that lets `ws_id`'s jobs on `node` have `secret_id`: one
-/// naming the node, or `*` on a node this server owns (Q2). No value is
-/// resolved (SV15).
-pub fn covering_grant(ws_id: &str, node: &NodeRow, secret_id: &str) -> Option<k2_vault::Grant> {
+/// What kind of grant covers a secret on a node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Via {
+    /// `compute:<ws>/<node>`.
+    Node,
+    /// `compute:<ws>/*` (nodes this server owns only).
+    Star,
+    /// `compute:<ws>/@lane-<seat>`: a seat that names this node.
+    Lane(String),
+}
+
+/// The env grant that lets `ws_id`'s jobs on `node` have `secret_id`, and
+/// how: one naming the node, `*` on a node this server owns (Q2), or a
+/// lane grant for a seat of this server that names the node (C3b). No
+/// value is resolved (SV15). Coverage only: [`secret_gate`] decides
+/// whether a covered secret may be sealed there.
+pub fn covering(ws_id: &str, node: &NodeRow, secret_id: &str) -> Option<(k2_vault::Grant, Via)> {
     let vault = crate::vault::get().ok()?;
-    let mut consumers = vec![Consumer::compute(ws_id, &node.id)];
+    let mut consumers = vec![(Consumer::compute(ws_id, &node.id), Via::Node)];
     if node.owned_for_secrets() {
-        consumers.push(Consumer::compute(ws_id, "*"));
+        consumers.push((Consumer::compute(ws_id, "*"), Via::Star));
     }
-    consumers.iter().find_map(|c| {
+    for s in lanes::seat_book().seats_with_node(&node.id) {
+        consumers.push((Consumer::compute_lane(ws_id, &s.seat_id), Via::Lane(s.seat_id)));
+    }
+    consumers.into_iter().find_map(|(c, via)| {
         vault
-            .grants_to(c)
+            .grants_to(&c)
             .ok()?
             .into_iter()
             .map(|(g, _)| g)
             .find(|g| g.secret_id == secret_id && g.delivery == k2_vault::Delivery::Env && !expired(g))
+            .map(|g| (g, via))
     })
 }
 
-/// Every one of `secret_ids` is covered on `node` (`--any` placement).
-pub fn covers_all(ws_id: &str, node: &NodeRow, secret_ids: &[String]) -> bool {
-    secret_ids.iter().all(|id| covering_grant(ws_id, node, id).is_some())
+/// [`covering`]'s grant only.
+pub fn covering_grant(ws_id: &str, node: &NodeRow, secret_id: &str) -> Option<k2_vault::Grant> {
+    covering(ws_id, node, secret_id).map(|(g, _)| g)
+}
+
+/// `--any` placement (SE6 + C3b): every secret is covered on `node` and
+/// may be sealed there for a job with this `exclusive`.
+pub fn placeable(ws_id: &str, node: &NodeRow, offer: Option<&Offer>, secret_ids: &[String], exclusive: bool) -> bool {
+    secret_ids.iter().all(|id| covering(ws_id, node, id).is_some_and(|(_, via)| secret_gate(node, offer, &via, exclusive).is_ok()))
+}
+
+/// V25: may this server seal a secret covered `via` to `node`, for a job
+/// with this `exclusive`, given the node's live `offer`? `Ok(Some(seat))`
+/// when it goes under a lane's rules, `Ok(None)` on today's path.
+///
+/// - A node this server owns: today's rules (`*` or a named grant).
+/// - A lane grant: always the lane's rules for that seat
+///   ([`lanes::lane_gate`]).
+/// - A named grant on another owner's node: the lane's rules when the
+///   node is on one of this server's seats or offers `lane-secrets` (it
+///   would take the secret because of a lane); otherwise today's path,
+///   where the node takes secrets only from a server it trusts `own`
+///   (and an older node never from anyone else).
+pub fn secret_gate(node: &NodeRow, offer: Option<&Offer>, via: &Via, exclusive: bool) -> Result<Option<String>, Refused> {
+    let book = lanes::seat_book();
+    let check = |seat: &SeatView| -> Result<(), Refused> {
+        let consent = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            lanes::consent_for(&conn, seat)
+        };
+        let standing = book.node_standing(seat, node);
+        lanes::lane_gate(&lanes::GateInput { node, offer, seat, standing, consent: consent.as_ref(), exclusive })
+    };
+    match via {
+        Via::Lane(seat_id) => {
+            let seat = book.seat(seat_id).ok_or_else(|| (scodes::UNTRUSTED_SERVER, format!("the seat {seat_id} this secret is granted to is gone")))?;
+            check(&seat).map(|()| Some(seat.seat_id))
+        }
+        Via::Node | Via::Star if node.owned_for_secrets() => Ok(None),
+        Via::Star => Err((scodes::NOT_GRANTED, "a * grant covers only nodes this server owns".into())),
+        Via::Node => {
+            let seats = book.seats_with_node(&node.id);
+            let lane_offer = offer.is_some_and(|o| o.features.iter().any(|f| f == k2_core::compute::proto::ci::FEATURE_LANE_SECRETS));
+            if seats.is_empty() && !lane_offer {
+                return Ok(None);
+            }
+            let mut first: Option<Refused> = None;
+            for s in &seats {
+                match check(s) {
+                    Ok(()) => return Ok(Some(s.seat_id.clone())),
+                    Err(e) => {
+                        first.get_or_insert(e);
+                    }
+                }
+            }
+            Err(first.unwrap_or_else(|| {
+                (scodes::UNTRUSTED_SERVER, format!("'{}' offers secrets under a lane, but this server holds no seat on it naming that node", node.name))
+            }))
+        }
+    }
+}
+
+/// [`secret_gate`] for every secret of a submit (`found` with coverage):
+/// the first refusal as an HTTP answer (403 for trust, 409 for the node).
+pub(crate) fn gate_all(ws_id: &str, node: &NodeRow, offer: Option<&Offer>, found: &[(Found, String, bool)], exclusive: bool) -> R<()> {
+    for (f, _, _) in found {
+        let Some((_, via)) = covering(ws_id, node, &f.secret_id) else { continue };
+        if let Err((code, msg)) = secret_gate(node, offer, &via, exclusive) {
+            use k2_core::compute::proto::ci::codes as ccodes;
+            let trust = [scodes::UNTRUSTED_SERVER, scodes::NOT_GRANTED, ccodes::SECRET_OWNER_NOT_TRUSTED, ccodes::NODE_KEY_TAINTED];
+            let status = if trust.contains(&code) { 403 } else { 409 };
+            return Err(no(code, status, format!("--secret {}: {msg}", f.ask.name)));
+        }
+    }
+    Ok(())
 }
 
 /// What `--plan` shows per secret (SE7): names and coverage, no value.
@@ -265,9 +399,14 @@ pub(crate) fn not_granted(found: &[(Found, String, bool)], ws_handle: &str, node
     if missing.is_empty() {
         return None;
     }
+    // On a seat: the lane form (one grant for every node of the seat).
+    let target = match lanes::seat_book().seats_with_node(&node.id).into_iter().find(|s| s.active) {
+        Some(s) => format!("{LANE_TOKEN}{}/{}", s.owner_id, s.lane),
+        None => node.name.clone(),
+    };
     let cmds: Vec<String> = missing
         .iter()
-        .map(|(f, env, _)| format!("k2 vault grant {} --scope {} --to compute:{ws_handle}/{} --as env --env-name {env}", f.secret_name, f.scope_arg, node.name))
+        .map(|(f, env, _)| format!("k2 vault grant {} --scope {} --to compute:{ws_handle}/{target} --as env --env-name {env}", f.secret_name, f.scope_arg))
         .collect();
     Some(no(
         scodes::NOT_GRANTED,
@@ -297,6 +436,16 @@ pub fn tenant_warning(node: &NodeRow) -> Option<String> {
 /// The warning a `compute:` grant answers with (`k2 vault grant`), when its
 /// node isn't this server's own.
 pub fn grant_warning(c: &Consumer) -> Option<String> {
+    if let Some((_, seat_id)) = c.compute_lane_parts() {
+        let s = lanes::seat_book().seat(seat_id)?;
+        return Some(format!(
+            "Warning: jobs on {}'s lane {} run on machines that server owns; their admin (root) can read the value. It is sealed only to a Linux node of your seat, \
+             in a job with its own uid or --exclusive, and only while a person here consents for that owner ({})",
+            s.owner_id,
+            s.lane,
+            lanes::consent_command(&s.owner_id)
+        ));
+    }
     let (_, node) = c.compute_parts()?;
     if node == "*" {
         return None;
@@ -398,20 +547,34 @@ pub fn release(node_id: &str, n: &SecretNeed) -> Result<(SecretEnv, Vec<String>,
     }
     let key = compute::controller_key().map_err(|e| Some((scodes::UNAVAILABLE, format!("controller key: {e}"))))?;
     let vault = crate::vault::get().map_err(|e| Some((scodes::VAULT_LOCKED, format!("the vault isn't open ({})", e.code))))?;
-    let who = Requester::Compute {
-        workspace_id: job.workspace_id.clone(),
-        node_id: node_id.to_string(),
-        job_id: job.id.clone(),
-        generation: n.generation,
-        owned_node: node.owned_for_secrets(),
-    };
+    // V25: every secret's grant, and the lane's rules where they apply,
+    // checked again now against the node's live offer, before any value
+    // is resolved. The seat checked goes to the vault, so a lane grant
+    // matches only that seat.
+    let offer = crate::compute_ws::live_view(node_id).2;
+    let mut seats: Vec<Option<String>> = Vec::new();
+    for p in &job.ctl.secrets {
+        let Some((_, via)) = covering(&job.workspace_id, &node, &p.secret_id) else {
+            return Err(Some((scodes::NOT_GRANTED, format!("{}: no grant covers this node now", p.name))));
+        };
+        let seat = secret_gate(&node, offer.as_ref(), &via, plan.exclusive).map_err(|(code, m)| Some((code, format!("{}: {m}", p.name))))?;
+        seats.push(seat);
+    }
     let mut values: Vec<(String, Vec<u8>)> = Vec::new();
     let wipe_all = |v: &mut Vec<(String, Vec<u8>)>| {
         for (_, x) in v.iter_mut() {
             psecret::wipe(x);
         }
     };
-    for p in &job.ctl.secrets {
+    for (p, seat) in job.ctl.secrets.iter().zip(seats) {
+        let who = Requester::Compute {
+            workspace_id: job.workspace_id.clone(),
+            node_id: node_id.to_string(),
+            job_id: job.id.clone(),
+            generation: n.generation,
+            owned_node: node.owned_for_secrets(),
+            lane_seat: seat,
+        };
         match vault.resolve(&Selector::Id(p.secret_id.clone()), Use::Env, &who) {
             Ok(r) => values.push((p.env.clone(), r.value.expose().to_vec())),
             Err(e) => {
@@ -527,15 +690,24 @@ pub fn belt(job_id: &str, generation: u32, data: &[u8]) -> Option<Vec<u8>> {
 /// Jobs still running that got `secret_id` under `consumer` (a compute
 /// consumer). Revoking never stops them; this says which got it.
 pub fn running_with(secret_id: &str, consumer: &Consumer) -> Vec<serde_json::Value> {
-    let Some((ws, node)) = consumer.compute_parts() else { return Vec::new() };
+    // A lane grant: the nodes of its seat.
+    let (ws, node, seat_nodes) = match (consumer.compute_parts(), consumer.compute_lane_parts()) {
+        (Some((ws, node)), _) => (ws, node, None),
+        (None, Some((ws, seat))) => (ws, "", Some(lanes::seat_book().seat(seat).map(|s| s.node_ids).unwrap_or_default())),
+        (None, None) => return Vec::new(),
+    };
     let db = k2_core::db::shared();
     let conn = db.lock();
     let mut out = Vec::new();
     for n in store::list_nodes(&conn, false) {
-        if node != "*" && n.id != node {
+        if let Some(on_seat) = &seat_nodes {
+            if !on_seat.contains(&n.id) {
+                continue;
+            }
+        } else if node != "*" && n.id != node {
             continue;
         }
-        if node == "*" && !n.owned_for_secrets() {
+        if seat_nodes.is_none() && node == "*" && !n.owned_for_secrets() {
             continue;
         }
         for j in store::jobs_in_states(&conn, &n.id, &["preparing", "running", "finishing"]) {

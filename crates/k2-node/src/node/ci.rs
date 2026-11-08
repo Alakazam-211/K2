@@ -176,10 +176,10 @@ impl Node {
             k2node_commit: crate::build_commit().map(str::to_string),
             key_epoch: self.key_meta.key_epoch,
             statement_digest: digest,
-            // C1: the owner's roster this node holds; C3a: the lane this
+            // C1: the owner's roster this node holds; C3a/C3b: the lane this
             // tenant's seat runs under on this node (root's lanes file).
             roster_seq_seen: self.roster_seq_seen(),
-            lane: self.lane_of(t),
+            lane: self.lane_of(t).map(|l| l.lane),
         };
         match f.check() {
             Ok(()) => Some(f),

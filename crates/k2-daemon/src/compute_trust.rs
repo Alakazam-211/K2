@@ -1044,11 +1044,15 @@ fn owners_consent(who: &Who, body: &[u8]) -> R<Value> {
         return Ok(json!({"ok": true, "owner": t.owner_id, "secretsConsent": false}));
     }
     person(who)?;
+    // `preview`: what the person agrees to, before the confirm.
+    if v.get("preview").and_then(Value::as_bool) == Some(true) {
+        return Ok(json!({"preview": true, "owner": t.owner_id, "keyFp": t.key_fp, "text": k2_core::compute::lane_secrets::consent_text(&t.owner_id),
+            "confirm": {"action": trust::CONFIRM_TRUST, "subject": format!("consent:{}", t.key_fp)}}));
+    }
     let via = take_confirm(who, &v, trust::CONFIRM_TRUST, &format!("consent:{}", t.key_fp))?;
-    let key = ApprovalKey::parse(&t.roster_key).ok_or_else(|| no("store", 500, "pinned key unreadable"))?;
     let db = k2_core::db::shared();
     let conn = db.lock();
-    trust::pin_owner(&conn, &key, &t.owner_id, &t.peer_fp, &who.label(), &via, true, now()).map_err(db_err)?;
+    trust::give_consent(&conn, &t.key_fp, &who.label(), now()).map_err(db_err)?;
     store::record_event(&conn, &who.label(), "secrets_consent_on", None, None, None, json!({"owner": t.owner_id, "key": t.key_fp, "via": via}));
     Ok(json!({"ok": true, "owner": t.owner_id, "secretsConsent": true}))
 }
@@ -1339,6 +1343,8 @@ fn approve_seat_offer(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         trust::put_seat(&conn, &row).map_err(db_err)?;
+        // The template this seat was approved under (0275), as sent.
+        trust::set_seat_lane(&conn, "owner", &row.id, &lane_t).map_err(db_err)?;
     }
     let vault = crate::compute_admin::trust_vault()?;
     let mut plans = Vec::new();
@@ -1509,11 +1515,23 @@ fn receive_seat_request(peer_fp: &str, peer_host: &str, p: &Value) -> R<Value> {
 }
 
 /// Client: the owner's signed seat and roster arrive (after this server's
-/// person asked for the seat).
+/// person asked for the seat), with the lane's template: kept on the seat
+/// (0275) for the controller's lane-secret check (C3b, V25). A template
+/// that doesn't parse or check is no template (no lane secrets).
 fn receive_seat_offer(peer_fp: &str, p: &Value) -> R<Value> {
     let seat: Signed = serde_json::from_value(p.get("seat").cloned().unwrap_or_default()).map_err(|e| no(tcodes::BAD_ARGS, 400, e.to_string()))?;
     let roster: Signed = serde_json::from_value(p.get("roster").cloned().unwrap_or_default()).map_err(|e| no(tcodes::BAD_ARGS, 400, e.to_string()))?;
+    let peek: SeatStatement = seat.peek(ci::DOMAIN_NODE_SEAT).map_err(|e| no(tcodes::BAD_ARGS, 400, e))?;
     let fx = client_take_roster(Some(peer_fp), &NodeRosterDoc { roster, seats: vec![seat] }, "peer")?;
+    let lane: Option<LaneTemplate> = p.get("lane").cloned().and_then(|l| serde_json::from_value(l).ok()).filter(|t: &LaneTemplate| t.check().is_ok());
+    if let Some(t) = lane {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        // Only a seat that took this statement (same owner key and lane).
+        if trust::seat(&conn, "client", &peek.seat_id).is_some_and(|row| row.lane == peek.lane && row.statement.is_some() && row.peer_fp == peer_fp) {
+            trust::set_seat_lane(&conn, "client", &peek.seat_id, &t).map_err(db_err)?;
+        }
+    }
     Ok(json!({"ok": true, "seq": fx.seq}))
 }
 

@@ -1630,9 +1630,74 @@ fn store_outputs(node_id: &str, job_id: &str, generation: u32, o: Outputs) {
     }
 }
 
+/// V27 (C3b): is this attempt a secret job's on a node this server doesn't
+/// own, ended with kept artifacts, on a node that takes `artifact_delete`?
+/// Then the controller fetches every artifact now and has the node delete
+/// its copy ([`secret_artifacts_fetch_then_delete`]): a secret a build
+/// baked in never sits on another owner's disk longer than the fetch.
+pub fn secret_artifacts_due(job: &store::JobRow, node: &store::NodeRow, offer: Option<&Offer>) -> Option<Vec<ArtifactInfo>> {
+    let secret = !job.ctl.secrets.is_empty() || job.plan().is_some_and(|p| !p.secret_env.is_empty());
+    if !secret || node.owned_for_secrets() || job.node_id != node.id {
+        return None;
+    }
+    if !offer.is_some_and(|o| o.features.iter().any(|f| f == k2_core::compute::proto::ci::FEATURE_ARTIFACT_DELETE)) {
+        return None;
+    }
+    let arts = compute::result::outputs(job).map(|o| o.artifacts).unwrap_or_default();
+    (!arts.is_empty()).then_some(arts)
+}
+
+/// How long one secret job's artifact may take to come in (V27).
+const SECRET_FETCH_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// V27: fetch each of `arts` (hash-checked into this server's artifact
+/// cache, through the relay too: the job's own files), then send the node
+/// `artifact_delete` for the attempt. Blocking. `Ok(n)`: n files held
+/// here, the delete sent. `Err`: the first fetch that failed; the node
+/// keeps its copy until its expiry (7 days), and a later fetch may still
+/// succeed.
+pub fn secret_artifacts_fetch_then_delete(job: &store::JobRow, arts: &[ArtifactInfo]) -> Result<usize, (String, String)> {
+    for info in arts {
+        fetch_artifact(job, info, true, SECRET_FETCH_TIMEOUT).map_err(|(c, h)| (c, format!("{}: {h}", info.name)))?;
+    }
+    if !send_to(&job.node_id, Frame::ArtifactDelete(frames::ArtifactDelete { job_id: job.id.clone(), generation: job.generation as u32 })) {
+        return Err(("node_offline".into(), "the node went offline before the delete".into()));
+    }
+    Ok(arts.len())
+}
+
+/// After a terminal state: V27 on its own thread (a fetch waits on the
+/// node's chunks, which this connection's loop delivers).
+fn secret_artifacts_after(node_id: &str, job_id: &str) {
+    let (job, node) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (store::job_by_id(&conn, job_id), store::node_by_id(&conn, node_id))
+    };
+    let (Some(job), Some(node)) = (job, node) else { return };
+    let Some(arts) = secret_artifacts_due(&job, &node, live_view(node_id).2.as_ref()) else { return };
+    let db = k2_core::db::shared();
+    let spawned = std::thread::Builder::new().name("k2-secret-artifacts".into()).spawn(move || {
+        let r = secret_artifacts_fetch_then_delete(&job, &arts);
+        let conn = db.lock();
+        let detail = match &r {
+            Ok(n) => serde_json::json!({"files": n, "deleted": true}),
+            Err((code, why)) => serde_json::json!({"deleted": false, "code": code, "why": why}),
+        };
+        store::record_event(&conn, "controller", "secret_artifacts", Some(&job.node_id), Some(&job.workspace_id), Some(&job.id), detail);
+    });
+    if let Err(e) = spawned {
+        log_debug!("[compute] secret artifacts thread: {e}");
+    }
+}
+
 fn on_state(node_id: &str, s: StateUpdate) {
+    let terminal_outputs = s.state.is_terminal() && s.outputs.as_ref().is_some_and(|o| !o.artifacts.is_empty());
     if let Some(o) = s.outputs.clone().filter(|_| s.state.is_terminal()) {
         store_outputs(node_id, &s.job_id, s.generation, o);
+    }
+    if terminal_outputs {
+        secret_artifacts_after(node_id, &s.job_id);
     }
     apply_observation(
         node_id,

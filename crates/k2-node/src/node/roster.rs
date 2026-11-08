@@ -39,6 +39,19 @@ struct Held {
     doc: NodeRosterDoc,
 }
 
+/// Root's lanes file for a node laid out at `layout`: the installed path
+/// beside `/etc/k2-node`, a test node's beside its config (as the executor
+/// writes it). The node reads it through `lane_secrets::FileLanes`
+/// (`Node::lane_of`: receipt v2's `lane` and the lane secret rules).
+pub fn lanes_file_for(layout: &crate::paths::Layout) -> std::path::PathBuf {
+    let cfg = &layout.config;
+    if cfg == std::path::Path::new("/etc/k2-node") {
+        std::path::PathBuf::from(k2_node_proto::lanes::LANES_FILE)
+    } else {
+        cfg.join("k2-node-lanes.toml")
+    }
+}
+
 impl Node {
     fn roster_path(&self) -> std::path::PathBuf {
         self.layout().state().join(ROSTER_FILE)
@@ -76,22 +89,7 @@ impl Node {
     /// Root's lanes file (`/etc/k2-node-lanes.toml` on an installed node; a
     /// test node's beside its config, as the executor writes it).
     pub fn lanes_file(&self) -> std::path::PathBuf {
-        let cfg = &self.layout().config;
-        if cfg == std::path::Path::new("/etc/k2-node") {
-            std::path::PathBuf::from(k2_node_proto::lanes::LANES_FILE)
-        } else {
-            cfg.join("k2-node-lanes.toml")
-        }
-    }
-
-    /// The lane `t`'s seat runs under on this node (receipt v2's `lane`):
-    /// its line in root's lanes file, matched by its pinned key. `None`
-    /// without a file, a line, or a pin (a damaged file is no lane).
-    pub fn lane_of(&self, t: &Tenant) -> Option<String> {
-        let fp = t.pin.lock().unwrap().as_ref().map(|p| p.controller_fp.clone())?;
-        let text = std::fs::read_to_string(self.lanes_file()).ok()?;
-        let f = k2_node_proto::lanes::LanesFile::parse(&text).ok()?;
-        f.lane_for(&fp).map(|(s, _)| s.lane.clone())
+        lanes_file_for(self.layout())
     }
 
     /// `node_roster.set`: verify, pin, keep, relay.

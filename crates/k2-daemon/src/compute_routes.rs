@@ -1852,6 +1852,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         if let Some(r) = crate::compute_secrets::not_granted(&secret_envs, &ws.handle, &node) {
             return Err(r);
         }
+        // C3b (V25): a lane's rules where they apply, before anything is
+        // queued; checked again at release.
+        if !secret_envs.is_empty() {
+            let offer = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone());
+            crate::compute_secrets::gate_all(&ws.id, &node, offer.as_ref(), &secret_envs, b(&v, "exclusive") == Some(true))?;
+        }
     }
     // CE-15: CARGO_BUILD_JOBS & co. = the job's CPUs (--cpus, else the
     // node's default reservation), unless the caller set one (or a secret

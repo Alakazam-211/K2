@@ -995,8 +995,9 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
             continue;
         }
         // Secret-env (SE6): only nodes a grant covers for every secret
-        // (`*` covers only nodes this server owns, Q2).
-        if !w.secret_ids.is_empty() && !crate::compute_secrets::covers_all(&w.ws_id, &n, &w.secret_ids) {
+        // (`*` covers only nodes this server owns, Q2), and where the lane's
+        // rules let it be sealed (C3b, V25).
+        if !w.secret_ids.is_empty() && !crate::compute_secrets::placeable(&w.ws_id, &n, Some(&offer), &w.secret_ids, w.exclusive) {
             skipped(&mut out, skip::SECRET_NOT_COVERED);
             continue;
         }
@@ -1390,7 +1391,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
             (None, Some(c)) => format!("too small for --cpus {}", c as f64 / 1000.0),
             (None, None) => format!("too small for the default {}", mem_words(w.mem_bytes.unwrap_or(compute::DEFAULT_MEM_BYTES))),
         },
-        skip::SECRET_NOT_COVERED => "not covered by the secret's grant".to_string(),
+        skip::SECRET_NOT_COVERED => "not covered by the secret's grant (or its lane's rules: consent, Linux, isolation)".to_string(),
         skip::CI_NOT_ALLOWED => "without CI for you".to_string(),
         skip::TIMEOUT_OVER_GRANT => {
             format!("with a grant shorter than --timeout {}", w.timeout_secs.map(compute::message::duration).unwrap_or_default())

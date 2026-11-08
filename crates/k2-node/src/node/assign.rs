@@ -121,6 +121,11 @@ impl Node {
                 t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(code), Some(detail)));
                 return None;
             }
+            // C3b (V24): a lane's isolation for a server that isn't `own`.
+            if let Some((code, detail)) = self.secret_plan_refusal(t, &a.plan, self.uid_share(t, &a.plan)) {
+                t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(code), Some(&detail)));
+                return None;
+            }
         }
         // Protocol 9: a receipt version this node doesn't make (a v2 plan
         // from a session below 9 can't be honest either).

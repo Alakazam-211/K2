@@ -657,9 +657,14 @@ pub fn put_seat(conn: &Connection, s: &SeatRow) -> Result<(), String> {
     if !matches!(s.side.as_str(), "owner" | "client") {
         return Err("seat side is owner or client".into());
     }
+    // An upsert, not INSERT OR REPLACE: the seat's lane template (0275,
+    // [`set_seat_lane`]) is kept across updates.
+    let set: Vec<String> = SEAT_COLS.split(", ").filter(|c| *c != "id").map(|c| format!("{c} = excluded.{c}")).collect();
     conn.execute(
         &format!(
-            "INSERT OR REPLACE INTO compute_seats ({SEAT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)"
+            "INSERT INTO compute_seats ({SEAT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21) \
+             ON CONFLICT(id) DO UPDATE SET {}",
+            set.join(", ")
         ),
         params![
             s.id,
@@ -687,6 +692,28 @@ pub fn put_seat(conn: &Connection, s: &SeatRow) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The lane template a seat carries (0275): on the client, the one the
+/// owner sent with its offer (what the controller checks before it seals
+/// a lane secret, V25); on the owner, the one the seat was approved under.
+pub fn seat_lane(conn: &Connection, side: &str, id: &str) -> Option<LaneTemplate> {
+    let t: String = conn
+        .query_row("SELECT lane_json FROM compute_seats WHERE side = ?1 AND id = ?2", params![side, id], |r| r.get::<_, Option<String>>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .flatten()?;
+    serde_json::from_str(&t).ok()
+}
+
+/// Keep a seat's lane template (checked). False when there's no such seat.
+pub fn set_seat_lane(conn: &Connection, side: &str, id: &str, t: &LaneTemplate) -> Result<bool, String> {
+    t.check()?;
+    let n = conn
+        .execute("UPDATE compute_seats SET lane_json = ?3 WHERE side = ?1 AND id = ?2", params![side, id, serde_json::to_string(t).map_err(|e| e.to_string())?])
+        .map_err(|e| e.to_string())?;
+    Ok(n == 1)
 }
 
 pub fn seat(conn: &Connection, side: &str, id: &str) -> Option<SeatRow> {
@@ -801,6 +828,16 @@ pub fn pin_owner(conn: &Connection, key: &ApprovalKey, owner_id: &str, peer_fp: 
     )
     .map_err(|e| e.to_string())?;
     owner_trust(conn, &key.fingerprint()).ok_or_else(|| "owner trust vanished".into())
+}
+
+/// Give the secrets consent for a pinned owner key (the caller took a
+/// person's fresh confirm bound to `consent:<key_fp>`, V17). The pin itself
+/// (who pinned, how) stays. False when no such key is pinned.
+pub fn give_consent(conn: &Connection, key_fp: &str, by: &str, at: i64) -> Result<bool, String> {
+    let n = conn
+        .execute("UPDATE compute_owner_trust SET secrets_consent = 1, consent_by = ?2, consent_at = ?3 WHERE key_fp = ?1", params![key_fp, by, at])
+        .map_err(|e| e.to_string())?;
+    Ok(n == 1)
 }
 
 /// Withdraw the secrets consent (a narrowing: at once, by anyone with
@@ -920,56 +957,13 @@ pub fn set_node_seat(conn: &Connection, node_id: &str, seat_id: Option<&str>) ->
     Ok(())
 }
 
-// ── V25: may the controller seal secrets to this node? ───────────────
-
-/// The seat facts a lane secret is sealed under.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LaneSeal {
-    pub seat: String,
-    pub lane: String,
-    pub owner_id: String,
-    pub owner_key_fp: String,
-    pub roster_seq: u64,
-}
-
-/// V25 (vs-live S4): the controller's own check before it seals a secret to
-/// a node **another server owns**. `Ok(None)`: not a seat node (the caller
-/// keeps today's rules: an owned node, or a per-node grant to a tenant node
-/// with its warning). `Ok(Some)`: a seat node that passes every check. Err:
-/// the code and why: the seat isn't active, the client never consented for
-/// this owner (`secret_owner_not_trusted`), the key isn't active in the
-/// owner's newest roster, is revoked, or has no taint basis
-/// (`node_key_tainted`).
-pub fn lane_seal_check(conn: &Connection, node: &NodeRow) -> Result<Option<LaneSeal>, (&'static str, String)> {
-    let (_, _, seat_id) = node_key_facts(conn, &node.id);
-    let Some(seat_id) = seat_id else { return Ok(None) };
-    let s = seat(conn, "client", &seat_id).ok_or_else(|| (codes::SEAT_NOT_FOUND, format!("{} came through seat {seat_id}, which is gone", node.name)))?;
-    if s.state != "active" {
-        return Err((codes::SEAT_NOT_ACTIVE, format!("seat {} is {}", s.id, s.state)));
-    }
-    let key_fp = s.owner_key_fp.clone().ok_or_else(|| (codes::OWNER_NOT_TRUSTED, "the seat has no pinned owner key".to_string()))?;
-    let t = owner_trust(conn, &key_fp).ok_or_else(|| (codes::OWNER_NOT_TRUSTED, format!("{}'s roster key isn't pinned here", s.owner_id)))?;
-    if !t.secrets_consent {
-        return Err((
-            codes::SECRET_OWNER_NOT_TRUSTED,
-            format!("no person here agreed to send vault secrets to {}'s nodes (that owner's root can read them): k2 compute owners consent {}", s.owner_id, s.owner_id),
-        ));
-    }
-    if let Some(r) = key_revoked(conn, &node.fingerprint) {
-        return Err((codes::KEY_REVOKED, format!("{}'s owner revoked its key ({})", node.name, enum_text(&r))));
-    }
-    let roster = latest_roster(conn, &key_fp).ok_or_else(|| (codes::NODE_NOT_ON_ROSTER, format!("no roster from {} yet", s.owner_id)))?;
-    let e = roster
-        .roster
-        .entry(&node.fingerprint)
-        .filter(|e| e.status == KeyStatus::Active)
-        .ok_or_else(|| (codes::NODE_NOT_ON_ROSTER, format!("{}'s key isn't active in {}'s roster (seq {})", node.name, s.owner_id, roster.roster.seq)))?;
-    if e.taint_basis.is_none() || !s.nodes.contains(&e.name) {
-        return Err((codes::NODE_KEY_TAINTED, format!("{}'s owner vouches for nothing on this key: it can't take lane secrets", node.name)));
-    }
-    Ok(Some(LaneSeal { seat: s.id, lane: s.lane, owner_id: s.owner_id, owner_key_fp: key_fp, roster_seq: roster.roster.seq }))
-}
+// ── V25 ──────────────────────────────────────────────────────────────
+//
+// The controller's seal check for a seat node (the seat active, the key's
+// roster standing, the consent, the lane's rules and the node's live
+// offer) is one function: `crate::compute::lane_secrets::lane_gate`, fed
+// from these tables by `lane_secrets::TrustSeats` and
+// `lane_secrets::consent_for`.
 
 // ── re-key: a pinned key hands over to a new one (V3) ────────────────
 

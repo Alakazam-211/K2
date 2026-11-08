@@ -252,17 +252,37 @@ fn client_receives_rosters_and_checks_lane_seals() {
     assert!(seat_code_match(&c, "bind-1", &SigningKey::generate().unwrap().fingerprint(), 20).is_none(), "a key not on the roster");
     assert!(seat_code_match(&c, "bind-1", &a.fingerprint(), 10 + SEAT_CODE_TTL_SECS).is_none(), "expired");
 
-    // V25: not a seat node → today's rules (None).
-    assert_eq!(lane_seal_check(&c, &node).unwrap(), None);
+    // V25, the gate's inputs from these tables (lane_secrets::TrustSeats):
+    // not a seat node → no seat (today's rules).
+    use crate::compute::lane_secrets::{self as ls, NodeStanding};
+    assert!(ls::seats_with_node_in(&c, "node-a").is_empty());
     set_node_seat(&c, "node-a", Some("seat-x")).unwrap();
-    assert_eq!(lane_seal_check(&c, &node).unwrap_err().0, codes::SECRET_OWNER_NOT_TRUSTED, "no consent");
-    pin_owner(&c, &o.public(), "owner.k2.dev", &"9".repeat(64), "owner", "local-auth", true, 6).unwrap();
-    let ok = lane_seal_check(&c, &node).unwrap().unwrap();
-    assert_eq!((ok.seat.as_str(), ok.lane.as_str(), ok.roster_seq), ("seat-x", "ci-standard", 2));
+    let v = ls::seats_with_node_in(&c, "node-a").pop().expect("the node's seat");
+    assert_eq!((v.seat_id.as_str(), v.lane.as_str(), v.active, v.node_ids.clone()), ("seat-x", "ci-standard", true, vec!["node-a".to_string()]));
+    assert_eq!(v.owner_key_fp, o.public().fingerprint());
+    assert!(!v.lane_secrets && v.isolation.is_empty(), "no lane template from the owner yet: no secrets");
+    assert!(set_seat_lane(&c, "client", "seat-x", &LaneTemplate::ci_standard()).unwrap());
+    assert!(!set_seat_lane(&c, "client", "seat-nope", &LaneTemplate::ci_standard()).unwrap());
+    let v = ls::seat_view(&c, "seat-x").unwrap();
+    assert!(v.lane_secrets && v.isolation == LaneTemplate::ci_standard().isolation);
+    assert_eq!(ls::seat_named_in(&c, "owner.k2.dev", "ci-standard").map(|s| s.seat_id), Some("seat-x".into()));
+    assert_eq!(ls::seat_named_in(&c, "owner.k2.dev", "other"), None);
+    assert_eq!(ls::node_standing_in(&c, &v, &node), NodeStanding::Clean);
+    assert!(ls::consent_for(&c, &v).is_none(), "no consent");
+    assert!(give_consent(&c, &o.public().fingerprint(), "owner", 6).unwrap());
+    assert_eq!(ls::consent_for(&c, &v).unwrap().owner_key_fp, o.public().fingerprint());
+    assert!(!give_consent(&c, &"f".repeat(64), "owner", 6).unwrap(), "only a pinned key");
+    // A seat update keeps the owner's lane template (an upsert).
     seat.state = "suspended".into();
     put_seat(&c, &seat).unwrap();
-    assert_eq!(lane_seal_check(&c, &node).unwrap_err().0, codes::SEAT_NOT_ACTIVE);
+    let v2 = ls::seat_view(&c, "seat-x").unwrap();
+    assert!(!v2.active && v2.lane_secrets);
     seat.state = "active".into();
+    put_seat(&c, &seat).unwrap();
+    // A seat that doesn't list the node's roster name: not this seat's key.
+    let other_seat = SeatRow { nodes: vec!["n2".into(), "n3".into()], ..seat.clone() };
+    put_seat(&c, &other_seat).unwrap();
+    assert_eq!(ls::node_standing_in(&c, &ls::seat_view(&c, "seat-x").unwrap(), &node), NodeStanding::Unlisted);
     put_seat(&c, &seat).unwrap();
 
     // The owner revokes n1's key as compromised: recorded, seals refused,
@@ -276,12 +296,13 @@ fn client_receives_rosters_and_checks_lane_seals() {
     let fx = receive_roster(&c, &s3, "peer", 7).unwrap();
     assert_eq!(fx.revoked, vec![a.fingerprint()]);
     assert_eq!(key_revoked(&c, &a.fingerprint()), Some(RevokeReason::Compromised));
-    assert_eq!(lane_seal_check(&c, &node).unwrap_err().0, codes::KEY_REVOKED);
+    assert_eq!(ls::node_standing_in(&c, &ls::seat_view(&c, "seat-x").unwrap(), &node), NodeStanding::Revoked);
     assert!(receipt_void(&c, &a.fingerprint(), Some(1)).unwrap().contains("compromised"), "past receipts too");
     assert!(receipt_void(&c, &b.fingerprint(), Some(1)).is_none());
     assert!(seat_code_match(&c, "bind-1", &a.fingerprint(), 20).is_none());
     assert!(withdraw_consent(&c, &o.public().fingerprint()).unwrap());
     assert!(!owner_trust(&c, &o.public().fingerprint()).unwrap().secrets_consent);
+    assert!(ls::consent_for(&c, &v).is_none(), "withdrawn at once");
 }
 
 #[test]

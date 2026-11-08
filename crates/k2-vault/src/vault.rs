@@ -1722,7 +1722,8 @@ impl LocalVault {
             ConsumerKind::Job if m.namespace == Namespace::User && g.consumer.job_workspace().is_some() => {}
             // Compute jobs on nodes (secret-env SE13/SE14): user secrets
             // only, `<ws>/<node or *>`, env delivery only in v1.
-            ConsumerKind::Compute if m.namespace == Namespace::User && g.consumer.compute_parts().is_some() => {
+            // Lane grants (V26) are the same: `<ws>/@lane-<seat>`.
+            ConsumerKind::Compute if m.namespace == Namespace::User && g.consumer.is_compute_target() => {
                 if g.delivery != Delivery::Env {
                     return Err(VaultError::bad_request("bad_delivery", "a compute job gets a secret as env only (--as env)"));
                 }
@@ -1928,10 +1929,15 @@ impl LocalVault {
                 }
                 // SE10/Q2: the named node, or `*` only on a node this
                 // server owns. Never an implicit workspace grant.
-                Requester::Compute { workspace_id, node_id, owned_node, .. } => match g.consumer.compute_parts() {
-                    Some((ws, node)) => ws == workspace_id && (node == node_id || (node == "*" && *owned_node)),
-                    None => false,
-                },
+                // A lane grant (V25/V26): only for the seat the controller
+                // checked this node against.
+                Requester::Compute { workspace_id, node_id, owned_node, lane_seat, .. } => {
+                    match (g.consumer.compute_parts(), g.consumer.compute_lane_parts()) {
+                        (Some((ws, node)), _) => ws == workspace_id && (node == node_id || (node == "*" && *owned_node)),
+                        (None, Some((ws, seat))) => ws == workspace_id && lane_seat.as_deref() == Some(seat),
+                        (None, None) => false,
+                    }
+                }
             };
             if matches {
                 out.push((g.delivery, g.env_name.clone(), g.file_name.clone(), g.hosts_narrowed.clone(), true));

@@ -1,0 +1,11 @@
+-- 0275: the lane template a seat's owner sent with its offer (0.46.10,
+-- prd-ci-on-compute-for-clients-v1 C3b, vs-live V25). On the client
+-- (side 'client') it is what the controller checks before it seals a lane
+-- secret: the lane's `secrets` and `isolation` (k2_core::compute::
+-- lane_secrets). NULL = no template known (a seat from before 0.46.10, or
+-- an owner that sent none): no lane secrets. On the owner (side 'owner')
+-- it is the template the seat was approved under. The secrets consent
+-- itself lives on the pinned owner (`compute_owner_trust`, 0274).
+-- Renumber freely on a slip (and edit the migration-order tests). The
+-- store is `crate::compute::trust`.
+ALTER TABLE compute_seats ADD COLUMN lane_json TEXT;

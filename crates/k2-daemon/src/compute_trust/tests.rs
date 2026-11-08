@@ -451,17 +451,25 @@ fn a_seat_end_to_end_between_two_servers() {
         seat_enrolled(id, &seat);
         let row = store::node_by_id(&h.lock(), id).unwrap();
         assert_eq!((row.state.as_str(), row.is_tenant()), ("active", true));
-        // V25: consent given, seat active, key active with a basis: sealable.
-        let seal = trust::lane_seal_check(&h.lock(), &row).unwrap().unwrap();
-        assert_eq!((seal.seat.as_str(), seal.lane.as_str()), ("client-ci-standard", "ci-standard"));
-        // Consent withdrawn (an agent may narrow): refused, with the code X uses.
+        // V25's inputs from this server's tables: the seat (active, the
+        // lane the owner sent, the node), the key's standing, the consent.
+        use k2_core::compute::lane_secrets::{self as ls, NodeStanding};
+        let v = ls::seats_with_node_in(&h.lock(), id).pop().expect("the node's seat");
+        assert_eq!((v.seat_id.as_str(), v.lane.as_str(), v.active, v.lane_secrets), ("client-ci-standard", "ci-standard", true, true));
+        assert_eq!(v.isolation, plane::LaneTemplate::ci_standard().isolation, "the owner's lane template came with the offer");
+        assert_eq!(ls::node_standing_in(&h.lock(), &v, &row), NodeStanding::Clean);
+        assert_eq!(ls::consent_for(&h.lock(), &v).map(|c| c.owner_key_fp), Some(key_fp.clone()), "the card's consent");
+        // Consent withdrawn (an agent may narrow): gone at once.
         call(OWNERS_CONSENT, &agent(&cws), json!({"owner": OWNER, "on": false})).unwrap();
-        assert_eq!(trust::lane_seal_check(&h.lock(), &row).unwrap_err().0, ci::codes::SECRET_OWNER_NOT_TRUSTED);
-        // Turning it back on is a person's, with a confirm.
+        assert!(ls::consent_for(&h.lock(), &v).is_none());
+        // Turning it back on is a person's, with a confirm bound to the key.
         assert_eq!(call(OWNERS_CONSENT, &agent(&cws), json!({"owner": OWNER, "on": true})).unwrap_err().1, tcodes::PERSON_ONLY);
+        assert_eq!(call(OWNERS_CONSENT, &Who::Owner, json!({"owner": OWNER, "on": true})).unwrap_err().1, "vault_confirm_required");
+        let wrong = token(trust::CONFIRM_TRUST, "consent:other", "owner");
+        assert_eq!(call(OWNERS_CONSENT, &Who::Owner, json!({"owner": OWNER, "on": true, "confirmToken": wrong})).unwrap_err().1, "vault_confirm_required");
         let tok = token(trust::CONFIRM_TRUST, &format!("consent:{key_fp}"), "owner");
         call(OWNERS_CONSENT, &Who::Owner, json!({"owner": OWNER, "on": true, "confirmToken": tok})).unwrap();
-        assert!(trust::lane_seal_check(&h.lock(), &row).unwrap().is_some());
+        assert!(ls::consent_for(&h.lock(), &v).is_some());
     });
     let _ = seat_row;
 
@@ -479,7 +487,8 @@ fn a_seat_end_to_end_between_two_servers() {
         let h = k2_core::db::shared();
         assert!(trust::key_revoked(&h.lock(), &keys[0].fingerprint()).is_some());
         let row = store::node_by_id(&h.lock(), "client-node-n1").unwrap();
-        assert_eq!(trust::lane_seal_check(&h.lock(), &row).unwrap_err().0, tcodes::KEY_REVOKED);
+        let v = k2_core::compute::lane_secrets::seat_view(&h.lock(), "client-ci-standard").unwrap();
+        assert_eq!(k2_core::compute::lane_secrets::node_standing_in(&h.lock(), &v, &row), k2_core::compute::lane_secrets::NodeStanding::Revoked);
         assert!(receipt_void(&keys[0].fingerprint(), Some(1)).unwrap().contains("compromised"));
         let e = client_take_roster(None, &old_doc, "node").unwrap_err();
         assert_eq!(e.code, ci::codes::ROSTER_REPLAYED);
@@ -609,4 +618,360 @@ fn signer_pairing_is_a_persons_and_the_sas_stays_here() {
     assert!(call(SIGNER_FINISH, &Who::Owner, json!({"pairing": pairing, "done": done})).is_err(), "once");
     call(SIGNER_REMOVE, &Who::Owner, json!({"signer": signer.fingerprint()})).unwrap();
     assert!(get(SIGNERS, &Who::Owner)["signers"].as_array().unwrap().is_empty());
+}
+
+// ── C3a + C3b end to end ─────────────────────────────────────────────
+
+/// A protocol-9 seat node's offer to the client: lane secrets, a per-job
+/// uid, the job wall, artifacts and their delete (V27), as a `trust team`
+/// tenant on a Linux node.
+fn seat_offer(protocol: u32, lane: bool) -> pframes::Offer {
+    use k2_core::compute::proto::frames::{Availability, Caps, Control, Free};
+    use k2_core::compute::proto::share::{Role, ServerStatus, ShareLimits, ShareView};
+    let mut features: Vec<String> = [
+        k2_core::compute::proto::secret::FEATURE_SECRET_ENV,
+        pframes::FEATURE_JOB_WALL,
+        k2_core::compute::proto::results::FEATURE_ARTIFACTS,
+        "stall",
+        pshare::FEATURE_QUEUE,
+        pshare::FEATURE_SERVERS,
+    ]
+    .iter()
+    .map(|f| f.to_string())
+    .collect();
+    if lane {
+        features.extend([ci::FEATURE_LANE_SECRETS, ci::FEATURE_JOB_UID, ci::FEATURE_ARTIFACT_DELETE].iter().map(|f| f.to_string()));
+    }
+    let mut limits = ShareLimits::new_server(pshare::Trust::Team, false);
+    limits.max_running = 8;
+    pframes::Offer {
+        share: Some(ShareView {
+            role: Role::Tenant,
+            slot: 1,
+            shared: true,
+            servers: 2,
+            owner_label: Some(OWNER.into()),
+            state: ServerStatus::Active,
+            limits,
+            running: 0,
+            queued: 0,
+            cpu_secs_today: 0,
+            expires_in_secs: None,
+            skew_secs: None,
+            quotes: vec![],
+            priority: None,
+        }),
+        revision: 1,
+        control: Control::Active,
+        control_by: None,
+        control_at: None,
+        availability: Availability { ok: true, reasons: vec![] },
+        caps: Caps { cpu_millis: 8000, mem_bytes: 32 << 30, disk_budget_bytes: 100 << 30, hard: true },
+        free: Free { cpu_millis: 8000, mem_bytes: 16 << 30, disk_free_bytes: 500 << 30 },
+        slots: vec![],
+        running: 0,
+        parallel_max: 4,
+        refusal: None,
+        labels: [("os".to_string(), "linux".to_string())].into(),
+        tools: Default::default(),
+        protocol,
+        boot_id: "b".into(),
+        ledger_id: "l".into(),
+        node_version: "0.46.10".into(),
+        features,
+        host: None,
+        pkg: None,
+    }
+}
+
+/// Wait (≤ 20 s) for a frame `f` picks out among what the client sent a
+/// fake node session.
+fn wait_frame<T>(conn: &mut crate::compute_ws::TestConn, mut f: impl FnMut(&Frame) -> Option<T>) -> T {
+    let t0 = std::time::Instant::now();
+    loop {
+        if let Some(x) = conn.frames().iter().find_map(&mut f) {
+            return x;
+        }
+        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the frame never came");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// C3a + C3b across both halves (V17, V20–V27): the client's agent asks
+/// for a seat and its person approves the card (the owner's roster key
+/// pinned, the secrets consent given); the owner approves a lane with
+/// secrets and a seat on two nodes; the seat nodes enrol on the client;
+/// the client grants a lane secret, submits a secret job, and the one
+/// controller check (`compute_secrets::secret_gate` over
+/// `lane_secrets::TrustSeats`) seals it to that seat node, where the node's
+/// one-time key opens it. The node's half reads the owner's lanes file
+/// (`k2-node` `FileLanes`): the seated client gets the lane, a protocol-8
+/// tenant on the same node never does. Revoking the consent stops the
+/// next release at once. A secret job's artifacts are fetched and deleted
+/// from the node (V27). Fakes only; the vault is a temp vault.
+#[test]
+fn lane_secrets_end_to_end_between_two_servers() {
+    use k2_core::compute::lane_secrets::{self as ls, TrustSeats};
+    use k2_core::compute::proto::secret::{self as psecret, codes as scodes, NodeKey};
+    use k2_vault::{Actor, Delivery, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes, SecretStore, Selector};
+
+    const ENV: &str = "BUILD_GMAIL_CLIENT_ID";
+    const VALUE: &str = "k2test-secret-E2E-7Hq2mV9xL4";
+    let owner_guard = k2_core::db::scoped_for_test();
+    let client_guard = k2_core::db::scoped_for_test();
+    let (odb, cdb) = (owner_guard.handle(), client_guard.handle());
+    let owner_peer = peer("owner", OWNER);
+    let client_peer = peer("client", CLIENT);
+    test_seams::add_peer(owner_peer.clone());
+    test_seams::add_peer(client_peer.clone());
+    {
+        let (odb2, cdb2, ofp, cfp) = (odb.clone(), cdb.clone(), owner_peer.fingerprint.clone(), client_peer.fingerprint.clone());
+        test_seams::set_fed(Some(Box::new(move |to: &str, kind: &str, p: &Value| {
+            if to == ofp {
+                on(&odb2, OWNER, || receive(&cfp, CLIENT, kind, p))
+            } else if to == cfp {
+                on(&cdb2, CLIENT, || receive(&ofp, OWNER, kind, p))
+            } else {
+                Err(no("peer_unreachable", 502, "no such peer"))
+            }
+        })));
+    }
+
+    // Owner: two walled Linux nodes on the roster; the lane, secrets on.
+    let (onodes, keys, ows) = on(&odb, OWNER, || {
+        let ows = operating_ws("e2e-own");
+        let mut nodes = Vec::new();
+        let mut keys = Vec::new();
+        for n in ["e1", "e2"] {
+            let (row, k) = owned_node(n, Taint::Clean, P9);
+            approve(&roster_set(n, json!({})));
+            nodes.push(row);
+            keys.push(k);
+        }
+        let r = call(LANES_SET, &agent(&ows), json!({"name": "ci-standard", "from": "ci-standard"})).unwrap();
+        approve(r["request"]["id"].as_str().unwrap());
+        let h = k2_core::db::shared();
+        assert!(trust::lane(&h.lock(), "ci-standard").unwrap().secrets, "the lane carries secrets");
+        (nodes, keys, ows)
+    });
+
+    // Client: an agent asks (secrets on by default); the card says what
+    // the person agrees to; a person approves with a fresh confirm.
+    let cws = on(&cdb, CLIENT, || operating_ws("e2e-cli"));
+    let req = on(&cdb, CLIENT, || call(SEATS_REQUEST, &agent(&cws), json!({"owner": OWNER, "lane": "ci-standard", "why": "release builds"})).unwrap());
+    let summary = req["request"]["summary"].as_str().unwrap().to_string();
+    assert!(summary.contains("vault secrets") && summary.contains("root"), "the card names the consent: {summary}");
+    let creq = req["request"]["id"].as_str().unwrap().to_string();
+    let e = on(&cdb, CLIENT, || call(TRUST_APPROVE, &agent(&cws), json!({"request": creq, "confirmToken": token(trust::CONFIRM_TRUST, &creq, "owner")})).unwrap_err());
+    assert_eq!(e.1, tcodes::PERSON_ONLY, "an agent never gives the consent");
+    let out = on(&cdb, CLIENT, || approve(&creq));
+    let oreq = out["result"]["ownerRequest"].as_str().unwrap().to_string();
+    let key_fp = on(&odb, OWNER, || roster_key().unwrap().fingerprint());
+
+    // Owner: the seat on both nodes, one approval.
+    let seat_out = on(&odb, OWNER, || {
+        call(SEATS_OFFER, &agent(&ows), json!({"request": oreq, "nodes": ["e1", "e2"]})).unwrap();
+        approve(&oreq)
+    });
+    assert!(seat_out["result"]["plans"].as_array().unwrap().iter().all(|p| p["queued"] == true), "{seat_out}");
+    // The lanes file each node gets (root's, through `lanes.write`).
+    let lanes_file: LanesFile = on(&odb, OWNER, || {
+        let n = &onodes[0];
+        let h = k2_core::db::shared();
+        let stored = k2_core::compute::admin::list_requests(&h.lock(), &k2_core::compute::admin::ReqFilter { node_id: Some(&n.id), state: None, limit: 50, ..Default::default() });
+        let plan = stored.iter().find(|r| r.commands.iter().any(|c| node_open(n, c).cmd.verb == plane::VERB_LANES_WRITE)).expect("the seat's plan");
+        let o = plan.commands.iter().map(|c| node_open(n, c)).find(|o| o.cmd.verb == plane::VERB_LANES_WRITE).unwrap();
+        plane::check_write_args(&o.cmd.args).unwrap()
+    });
+    let client_fp = on(&cdb, CLIENT, || my_fp().unwrap());
+
+    // Client: the seat is active with the owner's lane; both seat nodes
+    // enrol with the seat code (V20) and are tied to the seat.
+    let ids = on(&cdb, CLIENT, || {
+        let h = k2_core::db::shared();
+        let s = trust::seat(&h.lock(), "client", "client-ci-standard").unwrap();
+        assert_eq!(s.state, "active");
+        let binding = s.code_binding.clone().unwrap();
+        let mut ids = Vec::new();
+        for (k, rname) in keys.iter().zip(["e1", "e2"]) {
+            let (seat, name) = seat_enrol(&binding, &k.fingerprint()).unwrap();
+            assert_eq!(name, rname);
+            let id = format!("client-node-{rname}");
+            {
+                let c = h.lock();
+                let labels = BTreeMap::from([("os".to_string(), "linux".to_string())]);
+                store::insert_pending_node(&c, &id, &seat_node_local_name(&name, &seat.id), &k.fingerprint(), &k.spki_pem(), &labels, &format!("seat:{}", seat.id), "000000", 5).unwrap();
+                store::set_grant(&c, &id, &cws, &store::GrantLimits::default(), "owner", 6).unwrap();
+            }
+            seat_enrolled(&id, &seat);
+            ids.push(id);
+        }
+        ids
+    });
+
+    // The node's half (k2-node, V24): root's lanes file names the seated
+    // client's lane by its full key; a protocol-8 tenant on the same node,
+    // or a server with no seat line, never gets lane secrets.
+    #[cfg(unix)]
+    {
+        use k2_node::node::lane_secrets::{lane_refusal, FileLanes, LaneServer, LaneSource};
+        let dir = std::env::temp_dir().join(format!("k2-lane-e2e-{}", crypto::random_id().unwrap()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("k2-node-lanes.toml");
+        std::fs::write(&path, lanes_file.render().unwrap()).unwrap();
+        let src = FileLanes::new(path);
+        let rule = src.lane_for(&LaneServer { slot: 2, fp_prefix: &client_fp[..16], controller_fp: Some(&client_fp) }).expect("the seated client's lane");
+        assert!(rule.secrets && rule.lane == "ci-standard");
+        assert_eq!(lane_refusal(true, Some(&rule), true, Some(1)), None, "a protocol-9 seated client gets lane secrets");
+        assert_eq!(lane_refusal(false, Some(&rule), true, Some(1)).map(|r| r.0), Some(scodes::UNTRUSTED_SERVER), "a protocol-8 tenant never does");
+        let stranger = "d".repeat(64);
+        assert!(src.lane_for(&LaneServer { slot: 3, fp_prefix: &stranger[..16], controller_fp: Some(&stranger) }).is_none());
+        assert_eq!(lane_refusal(true, None, true, Some(1)).map(|r| r.0), Some(scodes::UNTRUSTED_SERVER), "no seat line, no lane secrets");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Client: the controller's book is this server's own tables.
+    ls::set_seat_book(Some(std::sync::Arc::new(TrustSeats)));
+    let vault = crate::vault::ensure_test_vault();
+    on(&cdb, CLIENT, || {
+        let mut n1 = crate::compute_ws::test_attach(&ids[0], seat_offer(9, true));
+        let mut n2 = crate::compute_ws::test_attach(&ids[1], seat_offer(8, false));
+        // A secret, granted to the lane (the CLI form, V26).
+        let mut put = PutRequest::new(Namespace::User, Scope::workspace(&cws), "GMAIL_CLIENT_ID", Kind::ApiKey);
+        put.default_delivery = Some(Delivery::Fetch);
+        put.delivery_ceiling = Some(Delivery::Env);
+        put.hosts = vec!["oauth2.googleapis.com".into()];
+        let secret_id = vault.put(put, SecretBytes::from_slice(VALUE.as_bytes()), &Actor::Owner).unwrap().meta.id;
+        let consumer = crate::compute_secrets::consumer(&format!("lane:{OWNER}/ci-standard"), Some(&cws)).expect("the lane consumer");
+        assert_eq!(consumer, k2_vault::Consumer::compute_lane(&cws, "client-ci-standard"));
+        vault
+            .grant(
+                GrantRequest {
+                    selector: Selector::Id(secret_id.clone()),
+                    consumer,
+                    delivery: Delivery::Env,
+                    env_name: Some(ENV.into()),
+                    file_name: None,
+                    hosts_narrowed: None,
+                    expires_at: None,
+                    version: None,
+                },
+                &Actor::Owner,
+            )
+            .unwrap();
+        let name = |id: &str| store::node_by_id(&k2_core::db::shared().lock(), id).unwrap().name;
+        let submit = |node: &str| {
+            crate::compute_routes::submit_for_ci(
+                &cws,
+                &format!("run{}", crypto::random_id().unwrap()),
+                &json!({"node": node, "argv": ["true"], "noSource": true, "clientJobId": uuid::Uuid::new_v4().simple().to_string(),
+                    "secrets": [{"name": "GMAIL_CLIENT_ID"}]}),
+            )
+        };
+        let job_of = |v: &Value| v["job"]["id"].as_str().unwrap().to_string();
+        let need = |job: &str, key: &NodeKey| {
+            let r = store::job_by_id(&k2_core::db::shared().lock(), job).unwrap();
+            let n = pframes::SecretNeed { job_id: job.into(), generation: r.generation as u32, attempt: r.attempt as u32, plan_digest: r.plan_digest.clone(), epk: key.public_b64() };
+            (r, n)
+        };
+
+        // Submit on the seat node: placed, names only in the plan.
+        let job = job_of(&submit(&name(&ids[0])).unwrap_or_else(|e| panic!("{} {}", e.code, e.hint)));
+        let plan = wait_frame(&mut n1, |f| match f {
+            Frame::Assign(a) if a.fence.job_id == job => Some(a.plan.clone()),
+            _ => None,
+        });
+        assert_eq!(plan.secret_env, vec![ENV.to_string()]);
+        // Release: sealed to the node's one-time key, opened there.
+        let key = NodeKey::generate().unwrap();
+        let (r1, n) = need(&job, &key);
+        let (env, names, _) = crate::compute_secrets::release(&ids[0], &n).unwrap_or_else(|e| panic!("refused: {e:?}"));
+        assert_eq!(names, vec![ENV.to_string()]);
+        let binding = psecret::Binding {
+            controller_fp: k2_core::compute::controller_key().unwrap().fingerprint(),
+            node_fp: keys[0].fingerprint(),
+            job_id: job.clone(),
+            generation: r1.generation as u32,
+            attempt: r1.attempt as u32,
+            plan_digest: r1.plan_digest.clone(),
+        };
+        let plain = key.open(&env.epk, &env.ct, &binding).expect("opens with the node's key");
+        assert_eq!(plain.0, vec![(ENV.to_string(), VALUE.to_string())]);
+
+        // V27: the job ends with a kept artifact; the controller fetches
+        // it, checks the hash, and has the node delete its copy.
+        let body = b"baked-in client id".to_vec();
+        let info = k2_core::compute::proto::results::ArtifactInfo { name: "dist/app.tar.gz".into(), sha256: crypto::sha256_hex(&body), bytes: body.len() as u64 };
+        crate::compute_ws::test_frame(
+            &ids[0],
+            Frame::State(pframes::StateUpdate {
+                job_id: job.clone(),
+                generation: r1.generation as u32,
+                state: pframes::JobState::Done,
+                reason: None,
+                detail: None,
+                at: compute::now(),
+                exit: None,
+                src: None,
+                log_seq: 0,
+                outputs: Some(k2_core::compute::proto::results::Outputs { artifacts: vec![info.clone()], ..Default::default() }),
+                queue: None,
+            }),
+        );
+        let get = wait_frame(&mut n1, |f| match f {
+            Frame::ArtifactGet(g) if g.job_id == job => Some(g.clone()),
+            _ => None,
+        });
+        crate::compute_ws::test_frame(
+            &ids[0],
+            Frame::ArtifactChunk(pframes::ArtifactChunk { request_id: get.request_id.clone(), seq: 0, data: b64(&body), last: true, total_bytes: body.len() as u64, sha256: info.sha256.clone() }),
+        );
+        let del = wait_frame(&mut n1, |f| match f {
+            Frame::ArtifactDelete(d) => Some(d.clone()),
+            _ => None,
+        });
+        assert_eq!((del.job_id.as_str(), del.generation), (job.as_str(), r1.generation as u32));
+        assert!(crate::compute_ws::artifact_cache_path(&job, r1.generation, &info.sha256).is_file(), "held here first");
+        #[cfg(unix)]
+        {
+            // The node's handler: its own copy of that attempt goes.
+            let root = std::env::temp_dir().join(format!("k2-lane-e2e-art-{}", crypto::random_id().unwrap()));
+            let keep = k2_node::artifacts::dir(&root, &del.job_id, del.generation);
+            std::fs::create_dir_all(keep.join("dist")).unwrap();
+            std::fs::write(keep.join("dist/app.tar.gz"), &body).unwrap();
+            assert!(k2_node::artifacts::delete(&root, &del.job_id, del.generation, true));
+            assert!(!keep.exists());
+            let _ = std::fs::remove_dir_all(&root);
+        }
+
+        // The protocol-8 seat node: the lane grant covers it, the gate says
+        // no (at submit, before anything is queued).
+        let e = submit(&name(&ids[1])).unwrap_err();
+        assert_eq!(e.code, scodes::NEEDS_UPDATE, "{}", e.hint);
+        assert!(n2.frames().iter().all(|f| !matches!(f, Frame::Assign(_))), "never assigned");
+
+        // Revoking the consent (an agent may narrow) stops the next
+        // release at once.
+        let job2 = job_of(&submit(&name(&ids[0])).unwrap_or_else(|e| panic!("{} {}", e.code, e.hint)));
+        wait_frame(&mut n1, |f| matches!(f, Frame::Assign(a) if a.fence.job_id == job2).then_some(()));
+        call(OWNERS_CONSENT, &agent(&cws), json!({"owner": OWNER, "on": false})).unwrap();
+        let (_, n) = need(&job2, &NodeKey::generate().unwrap());
+        let refused = crate::compute_secrets::release(&ids[0], &n).err().flatten().expect("refused");
+        assert_eq!(refused.0, ci::codes::SECRET_OWNER_NOT_TRUSTED, "{}", refused.1);
+        // And the next submit too, naming the person's command.
+        let e = submit(&name(&ids[0])).unwrap_err();
+        assert_eq!(e.code, ci::codes::SECRET_OWNER_NOT_TRUSTED);
+        assert!(e.hint.contains(&format!("k2 compute owners consent {OWNER} on")), "{}", e.hint);
+        // Given again by a person (a confirm bound to the pinned key): the
+        // seal works again.
+        let tok = token(trust::CONFIRM_TRUST, &format!("consent:{key_fp}"), "owner");
+        call(OWNERS_CONSENT, &Who::Owner, json!({"owner": OWNER, "on": true, "confirmToken": tok})).unwrap();
+        submit(&name(&ids[0])).unwrap_or_else(|e| panic!("{} {}", e.code, e.hint));
+        crate::compute_ws::test_detach(&ids[0]);
+        crate::compute_ws::test_detach(&ids[1]);
+    });
+    ls::set_seat_book(None);
+    test_seams::set_fed(None);
+    drop(client_guard);
+    drop(owner_guard);
 }

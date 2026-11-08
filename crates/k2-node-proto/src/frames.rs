@@ -422,6 +422,12 @@ pub enum Frame {
     /// key (only in answer to `git_cred_need`).
     GitCred(GitCred),
     GitCredRefused(GitCredRefused),
+    /// Protocol 9 (C3b, V27): the controller fetched every artifact of a
+    /// secret job's attempt and checked its hash; the node deletes that
+    /// attempt's kept artifacts now (only to nodes offering
+    /// [`crate::ci::FEATURE_ARTIFACT_DELETE`]; older parsers reject unknown
+    /// variants).
+    ArtifactDelete(ArtifactDelete),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -484,7 +490,8 @@ impl Frame {
             | Frame::PkgRequest(_)
             | Frame::PkgRequestDecide(_)
             | Frame::GitCred(_)
-            | Frame::GitCredRefused(_) => Direction::ControllerToNode,
+            | Frame::GitCredRefused(_)
+            | Frame::ArtifactDelete(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -550,6 +557,7 @@ impl Frame {
             Frame::GitCredRefused(_) => "git_cred_refused",
             Frame::NodeStatement(_) => "node_statement",
             Frame::NodeRoster(_) => "node_roster",
+            Frame::ArtifactDelete(_) => "artifact_delete",
         }
     }
 }
@@ -1364,6 +1372,18 @@ pub struct ArtifactGet {
     pub generation: u32,
     /// An [`crate::results::ArtifactInfo::name`] the node reported.
     pub name: String,
+}
+
+/// `artifact_delete` (protocol 9, V27): delete one attempt's kept
+/// artifacts. Sent by the controller of a secret job on a node it doesn't
+/// own, once it holds every artifact of that attempt, hash-checked. The
+/// node deletes only that server's own copy (its tenant's artifacts dir),
+/// and only for an attempt its ledger knows; anything else is ignored.
+/// Kept artifacts nobody fetched still go at the node's expiry (7 days).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactDelete {
+    pub job_id: String,
+    pub generation: u32,
 }
 
 /// `artifact_chunk`: ≤ [`TRANSFER_CHUNK`] raw bytes of the file.

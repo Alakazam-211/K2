@@ -19,6 +19,7 @@ pub mod allow;
 pub mod advertise;
 pub mod enroll;
 pub mod git;
+pub mod lane_secrets;
 pub mod local;
 pub mod logs;
 pub mod message;

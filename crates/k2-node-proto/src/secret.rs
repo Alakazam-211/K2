@@ -64,6 +64,10 @@ pub mod codes {
     pub const REDACTION_MISS: &str = "secret_redaction_miss";
     /// The node doesn't offer `secret-env` right now (placement).
     pub const FEATURE_MISSING: &str = "secret_env_unavailable";
+    /// Lane secrets (prd-ci-on-compute-for-clients-v1 §4.4, V24/V25): the
+    /// job wouldn't run with the isolation the lane requires (`job_uid`
+    /// or `exclusive`).
+    pub const NEEDS_ISOLATION: &str = "secret_needs_isolation";
 }
 
 /// Why a secret env name is refused on the node (SE20): the shared job

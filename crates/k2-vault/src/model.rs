@@ -271,12 +271,53 @@ impl Consumer {
         let plain = |x: &str| !x.is_empty() && x.len() <= 64 && x.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
         (plain(ws) && (node == "*" || plain(node))).then_some((ws, node))
     }
+    /// A compute job of `workspace_id` on any node of the lane seat
+    /// `seat_id` (prd-ci-on-compute-for-clients-v1 §4.4, vs-live V26):
+    /// id `<ws>/@lane-<seat id>`. The `@` fails [`Consumer::compute_parts`]
+    /// (and every older daemon's), so a lane grant is never read as a
+    /// node grant and older daemons fail closed on it.
+    pub fn compute_lane(workspace_id: &str, seat_id: &str) -> Consumer {
+        Consumer { kind: ConsumerKind::Compute, id: format!("{workspace_id}/{LANE_PREFIX}{seat_id}") }
+    }
+    /// `(workspace id, seat id)` of a well-formed lane consumer
+    /// ([`Consumer::compute_lane`]). Seat ids are lowercase names
+    /// (`[a-z0-9._-]`, 1–63, starting with a letter or digit).
+    pub fn compute_lane_parts(&self) -> Option<(&str, &str)> {
+        if self.kind != ConsumerKind::Compute {
+            return None;
+        }
+        let (ws, rest) = self.id.split_once('/')?;
+        let seat = rest.strip_prefix(LANE_PREFIX)?;
+        let plain = |x: &str| !x.is_empty() && x.len() <= 64 && x.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+        (plain(ws) && is_seat_id(seat)).then_some((ws, seat))
+    }
+    /// A node consumer ([`Consumer::compute_parts`]) or a lane consumer
+    /// ([`Consumer::compute_lane_parts`]).
+    pub fn is_compute_target(&self) -> bool {
+        self.compute_parts().is_some() || self.compute_lane_parts().is_some()
+    }
+    /// The workspace of a node or lane compute consumer.
+    pub fn compute_workspace(&self) -> Option<&str> {
+        self.compute_parts().map(|(w, _)| w).or_else(|| self.compute_lane_parts().map(|(w, _)| w))
+    }
     pub fn all_workspaces() -> Consumer {
         Consumer { kind: ConsumerKind::Workspace, id: "*".into() }
     }
     pub fn label(&self) -> String {
         format!("{}:{}", self.kind, self.id)
     }
+}
+
+/// The lane half of a lane consumer's id: `<ws>/@lane-<seat id>` (V26).
+pub const LANE_PREFIX: &str = "@lane-";
+
+/// A seat id: the frozen name rule of `docs/ci-formats-v1.md` §1
+/// (`[a-z0-9._-]`, 1–63 bytes, starting with a letter or digit).
+pub fn is_seat_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 63
+        && s.as_bytes()[0].is_ascii_alphanumeric()
+        && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// Names: `[A-Za-z0-9_.-]{1,128}` (KV1). User-facing names ≤ 64.
@@ -336,6 +377,25 @@ mod tests {
             assert_eq!(Consumer { kind: ConsumerKind::Compute, id: bad.into() }.compute_parts(), None, "{bad:?}");
         }
         assert_eq!(Consumer::workspace("ws-1").compute_parts(), None);
+    }
+
+    /// V26: a lane consumer is `<ws>/@lane-<seat>`; it is never a node
+    /// consumer (an older daemon's `compute_parts` refuses the `@`, so it
+    /// fails closed), and a node consumer is never a lane one.
+    #[test]
+    fn lane_consumers_are_their_own_shape() {
+        let c = Consumer::compute_lane("ws-1", "seat-1");
+        assert_eq!(c.label(), "compute:ws-1/@lane-seat-1");
+        assert_eq!(c.compute_lane_parts(), Some(("ws-1", "seat-1")));
+        assert_eq!(c.compute_parts(), None, "a lane grant must never read as a node grant");
+        assert_eq!(c.compute_workspace(), Some("ws-1"));
+        assert!(c.is_compute_target());
+        assert_eq!(Consumer::compute("ws-1", "node-9").compute_lane_parts(), None);
+        assert_eq!(Consumer::compute("ws-1", "*").compute_lane_parts(), None);
+        for bad in ["ws/@lane-", "ws/@lane-Seat", "ws/@lane--x", "ws/@lane-a/b", "/@lane-a", "ws/@lane-a b", "ws/lane-a", "ws/@lane-*"] {
+            assert_eq!(Consumer { kind: ConsumerKind::Compute, id: bad.into() }.compute_lane_parts(), None, "{bad:?}");
+        }
+        assert_eq!(Consumer { kind: ConsumerKind::Workspace, id: "ws/@lane-a".into() }.compute_lane_parts(), None);
     }
 
     #[test]

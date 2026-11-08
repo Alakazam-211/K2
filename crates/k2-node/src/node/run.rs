@@ -860,6 +860,14 @@ impl Node {
         let mut secrets: Option<k2_node_proto::secret::Plain> = None;
         let mut redactor: Option<Arc<k2_redact::Redactor>> = None;
         if !a.plan.secret_env.is_empty() {
+            // Every rule again right before the ask (a lane or a share may
+            // have changed since assign; C3b, V24).
+            let refused = self.secret_env_refusal(&t).map(|(c, d)| (c, d.to_string())).or_else(|| self.secret_plan_refusal(&t, &a.plan, uid_share));
+            if let Some((code, detail)) = refused {
+                sys(&mut journal, &format!("secret env: {code}: {detail}"));
+                self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some(code), Some(&detail), src_ran, None, Some(journal), lease, None).await;
+                return;
+            }
             match self.pull_secrets(&t, &a, unit_mode, &env, &mut stop).await {
                 Ok(p) => {
                     let (r, short) = job_redactor(&p);

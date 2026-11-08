@@ -217,8 +217,10 @@ impl Node {
         // C1/C3a: the node relays its owner's node roster, and takes the
         // lanes file verb (root's executor), protocol 9 only. A `--dev`
         // node has no executor, so no lanes.
+        // C3b (V27): this server may delete a secret job's kept artifacts
+        // once it fetched them (`artifact_delete`).
         if t.speaks_ci() {
-            let mut add = vec![k2_node_proto::ci::FEATURE_NODE_ROSTER];
+            let mut add = vec![k2_node_proto::ci::FEATURE_NODE_ROSTER, k2_node_proto::ci::FEATURE_ARTIFACT_DELETE];
             if !self.opts.dev {
                 add.push(k2_node_proto::ci::FEATURE_LANES);
             }
@@ -231,6 +233,12 @@ impl Node {
         // C2: secret jobs run as a per-job uid here (protocol 9 only).
         if t.speaks_ci() && self.job_uid_ready() && !f.iter().any(|x| x == k2_node_proto::ci::FEATURE_JOB_UID) {
             f.push(k2_node_proto::ci::FEATURE_JOB_UID.to_string());
+        }
+        // C3b (V24): this server's secret env here comes under a lane's
+        // rules (protocol 9 only, never the owner): the server then checks
+        // its seat, the roster and its consent before sealing (V25).
+        if self.offers_lane_secrets(t) && !f.iter().any(|x| x == k2_node_proto::ci::FEATURE_LANE_SECRETS) {
+            f.push(k2_node_proto::ci::FEATURE_LANE_SECRETS.to_string());
         }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.

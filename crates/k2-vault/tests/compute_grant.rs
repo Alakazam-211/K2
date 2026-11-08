@@ -24,7 +24,12 @@ fn agent(ws: &str, manage: bool) -> Actor {
 }
 
 fn compute(ws: &str, node: &str, gen: u32, owned: bool) -> Requester {
-    Requester::Compute { workspace_id: ws.into(), node_id: node.into(), job_id: "job-1".into(), generation: gen, owned_node: owned }
+    Requester::Compute { workspace_id: ws.into(), node_id: node.into(), job_id: "job-1".into(), generation: gen, owned_node: owned, lane_seat: None }
+}
+
+/// A release the controller checked against the lane seat `seat` (V25).
+fn compute_on_seat(ws: &str, node: &str, seat: Option<&str>) -> Requester {
+    Requester::Compute { workspace_id: ws.into(), node_id: node.into(), job_id: "job-1".into(), generation: 1, owned_node: false, lane_seat: seat.map(str::to_string) }
 }
 
 fn grant(v: &LocalVault, sel: Selector, consumer: Consumer, d: Delivery, env: Option<&str>, by: &Actor) -> Result<Grant> {
@@ -153,6 +158,54 @@ fn compute_grants_are_env_only_user_only_and_people_only() {
     let e = grant(&v, Selector::system(Scope::engine("stalwart"), "SYS_KEY"), Consumer::compute("ws-rel", "*"), Delivery::Env, None, &Actor::System("mail".into()))
         .expect_err("system secret");
     assert_eq!(e.code, "bad_consumer");
+}
+
+/// C3b (V25/V26): a lane grant `<ws>/@lane-<seat>` reaches a job only when
+/// the controller checked the node against that seat (`lane_seat`); never
+/// another seat, another workspace, or a release with no seat. It is env
+/// only and people only like a node grant, and it is never read as a node
+/// grant (an older daemon's `compute_parts` refuses the `@`).
+#[test]
+fn a_lane_grant_reaches_only_a_release_checked_against_its_seat() {
+    let t = TestDir::new("compute-grant-lane");
+    let v = open(&t);
+    let (sel, id) = put_ws_secret(&v);
+    let lane = Consumer::compute_lane("ws-rel", "seat-1");
+    assert_eq!(lane.compute_parts(), None, "older daemons fail closed on it");
+    // People only, env only.
+    let e = grant(&v, sel.clone(), lane.clone(), Delivery::Env, None, &agent("ws-rel", true)).expect_err("agents never grant to compute");
+    assert_eq!(e.code, "vault_owner_confirm_required");
+    assert!(grant(&v, sel.clone(), lane.clone(), Delivery::Fetch, None, &Actor::Owner).is_err(), "env only");
+    grant(&v, sel.clone(), lane.clone(), Delivery::Env, Some("BUILD_GMAIL_CLIENT_SECRET"), &Actor::Owner).expect("owner grants to the lane");
+
+    // No seat checked: nothing, on any node.
+    let e = v.resolve(&sel, Use::Env, &compute_on_seat("ws-rel", "node-a", None)).err().expect("no seat checked");
+    assert_eq!(e.code, "delivery_not_granted");
+    assert!(v.resolve(&sel, Use::Env, &compute("ws-rel", "node-a", 1, true)).is_err(), "an owned node isn't on a lane by itself");
+    // Another seat, another workspace: nothing.
+    assert!(v.resolve(&sel, Use::Env, &compute_on_seat("ws-rel", "node-a", Some("seat-2"))).is_err());
+    assert!(v.resolve(&sel, Use::Env, &compute_on_seat("ws-x", "node-a", Some("seat-1"))).is_err());
+    // The seat the controller checked: any node of it.
+    for node in ["node-a", "node-b"] {
+        let got = v.resolve(&sel, Use::Env, &compute_on_seat("ws-rel", node, Some("seat-1"))).expect("on the seat");
+        assert_eq!(got.value.expose(), VALUE.as_bytes());
+        assert_eq!(got.env_name.as_deref(), Some("BUILD_GMAIL_CLIENT_SECRET"));
+    }
+    // Audit rows name the node and the job, never the value.
+    let ok: Vec<_> = compute_rows(&v, &id).into_iter().filter(|r| r.outcome == "ok").collect();
+    assert_eq!(ok.len(), 2, "{ok:?}");
+    for r in compute_rows(&v, &id) {
+        assert!(!format!("{r:?}").contains(VALUE), "audit row carries the value");
+    }
+    // A node grant elsewhere doesn't make a lane grant match, nor the reverse.
+    let g = v.grants_to(&lane).expect("grants_to lane");
+    assert_eq!(g.len(), 1);
+    assert!(v.grants_to(&Consumer::compute("ws-rel", "*")).expect("star").is_empty());
+    v.revoke(&g[0].0.id, &Actor::Owner).expect("revoke");
+    assert!(v.resolve(&sel, Use::Env, &compute_on_seat("ws-rel", "node-a", Some("seat-1"))).is_err(), "revoked");
+    // A malformed lane id is refused as a consumer.
+    let bad = Consumer { kind: ConsumerKind::Compute, id: "ws-rel/@lane-Bad Seat".into() };
+    assert_eq!(grant(&v, sel, bad, Delivery::Env, None, &Actor::Owner).expect_err("bad lane id").code, "bad_consumer");
 }
 
 #[test]

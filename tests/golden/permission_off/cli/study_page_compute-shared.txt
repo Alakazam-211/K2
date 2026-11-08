@@ -106,12 +106,72 @@ SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
   "reboot pending" (k2 compute info <node>, and the [k2-node] host: line
   at the top of each job log). A job could read them anyway.
 
+SEATS AND LANES (0.46.10: your CI on another owner's nodes)
+  A seat is your server's place on a set of another owner's nodes, under
+  one of that owner's lanes (their standing rules: the CI tier, caps, and
+  whether vault secrets may go there). K2 ships one lane, ci-standard
+  (secrets on); the owner's `k2 compute lanes` lists theirs.
+  0 The two servers pair once (both owners, each on their own server; each
+    step prints a token to pass to the other):
+      A: k2 fed pair-start          B: k2 fed pair-join <token 1>
+      A: k2 fed pair-finish <token 2>  B: k2 fed pair-verify <token 3>
+      both compare the codes, then each: k2 fed confirm <fp> <code>
+  1 Ask (an agent may):
+      k2 compute seats request <owner-host> --lane ci-standard --why "…"
+    It is held for a person here. Its card shows the owner's node-roster
+    key (to compare with `k2 compute roster key` on their screen) and says
+    that approving lets this server's vault secrets go to that owner's
+    nodes for jobs on the seat: their root can read them. --no-secrets
+    asks without that.
+  2 A person here approves, from a terminal outside K2 (a fresh confirm):
+      k2 compute trust requests          (find the request id)
+      k2 compute trust approve <id>
+    That pins the owner's key, gives the secrets consent and sends the
+    request. An agent gets person_only (exit 3): ask your person.
+  3 On the owner's server (their side, not yours): k2 compute trust
+    requests shows your request; they (or their agent) name the nodes,
+    k2 compute seats offer <request> --nodes a,b, and their owner approves:
+    k2 compute trust approve <request>. The nodes then join this server
+    by themselves (no code, no SAS). k2 compute seats shows the seat
+    active; k2 compute nodes lists the nodes.
+  4 The secret is in your workspace's vault (a person: k2 vault set NAME
+    < value). A person grants it to the lane (the value leaves this box;
+    the answer warns that the owner's root can read it):
+      k2 vault grant NAME --scope ws:<ws> --to compute:<ws>/lane:<owner-host>/<lane> --as env
+    <ws> is your workspace's name, <owner-host> the owner's server (the
+    host you asked in step 1). One grant covers every node of the seat.
+    An agent can't grant: secret_not_granted prints the person's command.
+    Then run as usual, no node named:
+      k2 compute run --secret NAME -- make release
+    K2 places it only on a seat node that passes every rule below. A node
+    with a per-job uid lists job-uid in k2 compute info <node>; elsewhere
+    the job needs --exclusive.
+  Consent later, or again: k2 compute owners consent <owner-host> on (a
+  person, a fresh confirm); off works at once (an agent may). See it:
+  k2 compute owners. A new owner key (pinned again) needs a new consent.
+  A lane secret is sealed only to a Linux node of an active seat, behind
+  the job wall, whose key is active and clean in the owner's node roster,
+  in a job with its own uid (the node's job-uid) or --exclusive. Checked
+  at submit, at placement and again right before the value is sent.
+  When a secret job on another owner's node ends, this server fetches its
+  artifacts at once (hash-checked) and the node deletes its copy.
+  Codes (exit 3): secret_owner_not_trusted (no consent: the hint names
+  the person's command), secret_needs_isolation (no per-job uid there:
+  add --exclusive), secret_env_linux_only, secret_needs_update (k2-node
+  older than protocol 9, or the lane's secrets off on the node),
+  secret_untrusted_server (seat not active, node not on it, lane without
+  secrets, key not active in the roster), node_key_tainted.
+
 WHAT THE WALL DOES NOT STOP (say so before you share)
   Each server's jobs get their own folders (and on Linux their own user).
   They can't read each other's code, caches, results or logs. They still
   share the kernel, CPU and disk, can reach the internet and any service
   on the machine's loopback, and the node's owner (root) can read
-  everything. Don't send secrets to a node you don't own. On a Mac in
+  everything. Send secrets only to an owner you trust with them: on a
+  lane of theirs that allows secrets, after a person here consented
+  (k2 compute owners consent <owner> on: their root can read them), to a
+  Linux node behind the job wall, in a job with its own uid or
+  --exclusive. Without that consent: secret_owner_not_trusted. On a Mac in
   0.46.3 every server's jobs run as one user: share Macs only with your
   own servers.
 

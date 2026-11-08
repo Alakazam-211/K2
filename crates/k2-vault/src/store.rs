@@ -211,7 +211,13 @@ pub enum Requester {
     /// reach it: `<ws>/<node_id>`, or `<ws>/*` when `owned_node` (this
     /// server owns the node; never for a node where it is a tenant, Q2).
     /// No implicit workspace grant ever matches.
-    Compute { workspace_id: String, node_id: String, job_id: String, generation: u32, owned_node: bool },
+    ///
+    /// `lane_seat` (prd-ci-on-compute-for-clients-v1 §4.4, V25): the seat
+    /// the controller checked this node against (on the seat, the lane
+    /// allows secrets, Linux, isolation, roster standing, the client's
+    /// consent for that owner). Only then does a lane grant
+    /// `<ws>/@lane-<seat>` reach it. `None`: lane grants never match.
+    Compute { workspace_id: String, node_id: String, job_id: String, generation: u32, owned_node: bool, lane_seat: Option<String> },
 }
 
 impl Requester {

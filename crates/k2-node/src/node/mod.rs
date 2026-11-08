@@ -51,6 +51,7 @@ pub mod ci;
 mod disk;
 pub mod git_access;
 pub mod job_cache;
+pub mod lane_secrets;
 mod offer;
 pub mod owner_swap;
 pub mod pkgreq;
@@ -116,6 +117,14 @@ pub struct NodeOptions {
     /// be (both, or neither). A real node never sets them.
     pub pkg_backend: Option<Arc<dyn crate::pkgsys::Backend>>,
     pub pkg_host: Option<crate::pkgsys::HostCtx>,
+    /// The node's lanes (C3b asks them through [`lane_secrets::LaneSource`]).
+    /// `None`: [`Node::open`] reads root's lanes file
+    /// ([`lane_secrets::FileLanes`], `/etc/k2-node-lanes.toml`, C3a). Lane
+    /// secrets also need the job wall, so a `--dev` node stays `trust own`
+    /// only.
+    pub lanes: Option<Arc<dyn lane_secrets::LaneSource>>,
+    /// Tests only: Yama `ptrace_scope` as if read (`None` = read /proc).
+    pub ptrace_scope: Option<Option<u8>>,
 }
 
 /// The installed `k2-node` this process runs from, when it is one (a test
@@ -159,6 +168,8 @@ impl NodeOptions {
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
             pkg_backend: None,
+            lanes: None,
+            ptrace_scope: None,
             pkg_host: None,
         }
     }
@@ -466,6 +477,13 @@ pub fn node_features() -> Vec<String> {
 impl Node {
     /// Open the key, the owner's ledger and pin; mark jobs from another boot.
     pub async fn open(opts: NodeOptions) -> Result<Arc<Self>, String> {
+        let mut opts = opts;
+        // C3a/C3b: root's lanes file, unless a test set its own lanes. A
+        // `--dev` node takes no lanes verb (nothing writes the file) and has
+        // no job wall, so it never gives lane secrets either way.
+        if opts.lanes.is_none() {
+            opts.lanes = Some(Arc::new(lane_secrets::FileLanes::new(roster::lanes_file_for(&opts.layout))));
+        }
         let layout = opts.layout.clone();
         layout.ensure()?;
         let key_existed = layout.key().exists();
@@ -614,8 +632,11 @@ impl Node {
 
     /// Why this node won't take a secret-env job of `t` now (SE16, SE17),
     /// or `None`: Linux job-user wall, a server speaking protocol ≥ 4 whose
-    /// trust is `own` (the owner, or its `servers.toml` line), for a
-    /// tenant the per-tenant wall on, and an executor that relays stdin.
+    /// trust is `own` (the owner, or its `servers.toml` line) or, for a
+    /// protocol-9 server, whose lane here allows secrets (C3b, V24:
+    /// [`Node::lane_secret_refusal`]), for a tenant the per-tenant wall on,
+    /// and an executor that relays stdin. The plan's half (the lane's
+    /// isolation) is [`Node::secret_plan_refusal`].
     pub fn secret_env_refusal(&self, t: &Tenant) -> Option<(&'static str, &'static str)> {
         use k2_node_proto::secret::codes;
         if !cfg!(target_os = "linux") {
@@ -630,7 +651,9 @@ impl Node {
         if !t.is_owner() {
             let own = t.share().is_some_and(|s| s.entry.trust == k2_node_proto::share::Trust::Own);
             if !own {
-                return Some((codes::UNTRUSTED_SERVER, "secret env goes only to servers this node trusts as its own (trust own)"));
+                if let Some(r) = self.lane_secret_refusal(t) {
+                    return Some(r);
+                }
             }
             if !t.tenant_wall.load(std::sync::atomic::Ordering::SeqCst) {
                 return Some((codes::NEEDS_WALL, "secret env for another server needs the per-tenant wall"));

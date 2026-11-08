@@ -736,6 +736,20 @@ where
                     crate::artifacts::answer(&n.paths.artifacts(), &g, known.as_deref(), &mut |f| t.blocking_send(f).is_ok());
                 });
             }
+            // V27 (protocol 9): the controller holds every artifact of a
+            // secret job's attempt; that server's own copy goes now. Only
+            // its tenant's dir, only an attempt its ledger knows.
+            Frame::ArtifactDelete(d) => {
+                if tenant.speaks_ci() {
+                    let n = tenant.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let known = n.ledger.lock().unwrap().get(&d.job_id, d.generation).ok().flatten().is_some();
+                        if crate::artifacts::delete(&n.paths.artifacts(), &d.job_id, d.generation, known) {
+                            crate::nlog!("artifacts of {} g{} deleted after the controller's fetch (secret job)", d.job_id, d.generation);
+                        }
+                    });
+                }
+            }
             Frame::UpdateOffer(o) => crate::admin::courier::update_offer(&node, &tx, o),
             Frame::UpdateChunk(c) => crate::admin::courier::update_chunk(&node, &tx, c),
             Frame::QueueGet(g) => {

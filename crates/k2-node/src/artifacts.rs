@@ -247,6 +247,22 @@ pub fn sweep(root: &Path, now: i64) {
     }
 }
 
+/// `artifact_delete` (protocol 9, V27): remove one attempt's kept artifacts
+/// under `root` (the asking server's own tenant dir) when `known` (its
+/// ledger has the attempt) and `job` is one plain name. True when a dir was
+/// there and is gone now. Blocking.
+pub fn delete(root: &Path, job: &str, generation: u32, known: bool) -> bool {
+    let plain = !job.is_empty() && job.len() <= 128 && job.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !known || !plain {
+        return false;
+    }
+    let d = dir(root, job, generation);
+    match std::fs::symlink_metadata(&d) {
+        Ok(m) if m.file_type().is_dir() => std::fs::remove_dir_all(&d).is_ok(),
+        _ => false,
+    }
+}
+
 /// Answer one `artifact_get`: stream chunks (or one `artifact_failed`)
 /// through `send`, which returns false once the session is gone. The
 /// chunks carry the hash the node reported; the controller checks the
@@ -410,5 +426,31 @@ mod tests {
         let e = ArtifactInfo { name: "out/e".into(), sha256: crypto::sha256_hex(b""), bytes: 0 };
         let fs = run("out/e", Some(std::slice::from_ref(&e)));
         assert!(matches!(&fs[..], [Frame::ArtifactChunk(c)] if c.last && c.data.is_empty()), "{fs:?}");
+    }
+
+    /// V27: a fetched secret job's attempt is deleted, that attempt only,
+    /// only when the ledger knows it, never outside the tenant's dir.
+    #[test]
+    fn delete_removes_one_known_attempt_only() {
+        let d = crate::util::temp_dir("artifacts-delete");
+        let layout = Layout::new(d.join("home"), d.join("config"));
+        let root = layout.tenant(1).artifacts();
+        for (job, gen) in [("j1", 1), ("j1", 2), ("j2", 1)] {
+            let keep = dir(&root, job, gen);
+            std::fs::create_dir_all(keep.join("dist")).unwrap();
+            std::fs::write(keep.join("dist/app.tar.gz"), b"baked-in").unwrap();
+        }
+        let outside = d.join("home").join("precious");
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(!delete(&root, "j1", 1, false), "an attempt the ledger doesn't know");
+        assert!(dir(&root, "j1", 1).is_dir());
+        for bad in ["", "../precious", "j1/../../precious", "a b"] {
+            assert!(!delete(&root, bad, 1, true), "{bad:?}");
+        }
+        assert!(outside.is_dir());
+        assert!(delete(&root, "j1", 1, true));
+        assert!(!dir(&root, "j1", 1).exists());
+        assert!(dir(&root, "j1", 2).is_dir() && dir(&root, "j2", 1).is_dir(), "other attempts stay");
+        assert!(!delete(&root, "j1", 1, true), "already gone");
     }
 }

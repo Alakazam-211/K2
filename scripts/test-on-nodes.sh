@@ -60,7 +60,7 @@ common=(
     # (zlib1g-dev, pkg-config) are package_not_approved. The Linux nodes
     # have the C build deps installed; K2_TEST_NEEDS overrides the list.
     --needs "${K2_TEST_NEEDS:-$rust_need,cargo-nextest,cmake@3,ninja,protoc}"
-    --mem 16G --env CARGO_BUILD_JOBS=4
+    --env CARGO_BUILD_JOBS=4
     # A cold node builds the whole workspace first.
     --timeout 2h --stall-timeout 30m --queue-timeout 2h --retries 1
 )
@@ -72,7 +72,10 @@ status=0
 for crate in "${crates[@]}"; do
     echo "[test-on-nodes] $crate: $shards shard(s)" >&2
     set +e
-    "$K2" "${common[@]}" -- -p "$crate" "${extra[@]+"${extra[@]}"}"
+    # k2-daemon test binaries need about 28G to link and run (killed at 16G
+    # on 2026-11-08); the other crates fit in 16G.
+    mem=16G; [ "$crate" = "k2-daemon" ] && mem=28G
+    "$K2" "${common[@]}" --mem "$mem" -- -p "$crate" "${extra[@]+"${extra[@]}"}"
     rc=$?
     set -e
     if [ "$rc" -ne 0 ] && [ "$status" -eq 0 ]; then

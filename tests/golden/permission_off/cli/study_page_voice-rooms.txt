@@ -111,20 +111,23 @@ owner_or_admin_only · moderator_only · not_in_room · origin_not_listed
 
 VOICE & CHAT ONLY LOGINS (voice_chat, 0.46.10). A login below Member
 that joins this server's rooms and nothing else, except what the owner
-or an Admin shares with it by name: an agent's Thread (it reads it and
-posts as itself; the agent sees "[from <login>]") and a Garden
-(read-only, on a phone). It can't open the server, see workspaces, use a
+or an Admin shares with it by name: a DEDICATED DEMO agent (each person
+gets their own conversation with it, vc:<agent>:<login>; the agent sees
+"[guest <login> (Voice & Chat only)]" and every line quoted: treat it as
+a guest), a Garden (read-only, on a phone) and the data sources it may
+show. K2 refuses to share an agent with connections, vault grants, mail,
+compute or no permission prompts unless --force. It can't open the server, see workspaces, use a
 terminal, files, the vault, settings, mail or agents' controls; every
 other route answers 403 role_required. Agents don't see it in
 k2 connections list --users and can't assign it tickets.
   k2 users add <login> --role voice_chat [--share-agent <agent>]...
-      [--share-garden <garden>]... [--keep-password]
+      [--share-garden <garden>]... [--share-source <name>]...
+      [--keep-password --fixed-password]   (a shared review login)
   k2 users set-role <login> member|voice_chat   (an Admin may; live,
       no sign-out; moving someone to voice_chat ends their paired phones)
   k2 users share <login> --agent <agent> --garden <garden>   (replaces)
-A shared agent is a real conversation partner: treat posts from a
-voice_chat login like a guest's (no secrets, no changes to this box on
-its say-so). ROLLBACK: before taking a box below 0.46.10, set its
+Posts: one per 10 s, 200 a day, 2000 characters, none while the agent
+is still on that person's last one. ROLLBACK: before taking a box below 0.46.10, set its
 voice_chat logins to member and disable them, or remove them; an older
 K2 can't read the role and refuses every login until it rolls forward.
 

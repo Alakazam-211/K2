@@ -510,6 +510,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
     let mut auth = tokio::time::interval(Duration::from_secs(5));
     auth.tick().await;
     let mut pending = true; // send the newest frame as soon as we may
+    let mut incoming = crate::socket_access::IncomingCheck::new(&viewer.token, &owner_token);
     'serve: loop {
         let gap = Duration::from_millis(1000 / fps as u64);
         if window.expire(Instant::now(), ACK_EXPIRY) > 0 {
@@ -648,6 +649,13 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                 }
             }
             msg = read.next() => {
+                // Security review L7: a client frame from a login is acted on
+                // only while the login still clears this socket's floor (a
+                // downgrade to Voice & Chat only closes it here, not on the tick).
+                if !incoming.frame_ok(&msg) {
+                    let _ = write.send(crate::presence::access_lost_close_message()).await;
+                    break 'serve;
+                }
                 let Some(Ok(msg)) = msg else { break 'serve };
                 let Message::Text(t) = msg else {
                     if matches!(msg, Message::Close(_)) { break 'serve; }

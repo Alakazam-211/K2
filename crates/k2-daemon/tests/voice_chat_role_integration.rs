@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use k2_core::db::schema::WorkspaceSession;
+use k2_daemon::routes::route_policy;
 use k2_daemon::test_harness;
 use rusqlite::params;
 use serde_json::{json, Value as J};
@@ -256,10 +257,8 @@ async fn a_reviewer_login_reaches_voice_one_agent_and_one_garden_and_nothing_els
             ("GET", "/cli/compute/nodes"),
             ("GET", "/cli/app/list"),
         ] {
+            assert!(route_policy::lookup(path).is_some(), "{path} is a row (rename it here when the route moves)");
             let r = if m == "POST" { post(port, path, &tok, json!({})) } else { get(port, path, &tok) };
-            if r.status == 404 && r.body.contains("route_unclassified") {
-                continue;
-            }
             assert_role_required(&r, &format!("{m} {path}"));
         }
         assert_role_required(&get(port, "/events", &tok), "/events");

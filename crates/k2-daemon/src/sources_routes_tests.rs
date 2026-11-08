@@ -385,3 +385,33 @@ fn per_server_caps() {
     let (s, v) = call("/cli/sources/add", &Who::Owner, fleet("one-more"));
     assert_eq!((s, err(&v)), (409, "too_many_targets"), "500 targets per server");
 }
+
+/// Security review M5: a Voice & Chat only login reads only the sources
+/// shared with it by name, `member` viewers included.
+#[test]
+fn a_voice_chat_login_reads_only_sources_shared_with_it() {
+    let _e = env();
+    call("/cli/sources/add", &Who::Owner, fleet("fleetvc"));
+    let (s, v) = get("/cli/sources/read", &login("m", Role::Member), &[("name", "fleetvc")]);
+    assert_ne!(err(&v), "cap_not_granted", "a member source is a Member's: {s} {v}");
+    k2_core::connect_users::add_user_with_role(
+        "vcsrc",
+        "password1",
+        None,
+        None,
+        &k2_core::connect_users::NewLogin { role: Some(Role::VoiceChat), ..Default::default() },
+    )
+    .expect("voice_chat login");
+    let vc = login("vcsrc", Role::VoiceChat);
+    let (s, v) = get("/cli/sources/read", &vc, &[("name", "fleetvc")]);
+    assert_eq!((s, err(&v)), (403, "cap_not_granted"), "{v}");
+    let (s, v) = get("/cli/sources/history", &vc, &[("name", "fleetvc")]);
+    assert_eq!((s, err(&v)), (403, "cap_not_granted"), "history too: {v}");
+    k2_core::connect_users::set_shares(
+        "vcsrc",
+        k2_core::connect_users::Shares { agents: vec![], gardens: vec![], sources: vec!["fleetvc".into()] },
+    )
+    .expect("share the source");
+    let (s, v) = get("/cli/sources/read", &vc, &[("name", "fleetvc")]);
+    assert_ne!(err(&v), "cap_not_granted", "shared by name: {s} {v}");
+}

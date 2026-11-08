@@ -75,9 +75,11 @@ class H(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(n) or b"{}")
         u = self.log("POST", body)
         if u.path == "/cli/users/add":
-            out = {"success": True, "mustChangePassword": body.get("mustChangePassword", True), "role": body.get("role", "member")}
+            out = {"success": True, "mustChangePassword": body.get("mustChangePassword", True), "role": body.get("role", "member"),
+                   "fixedPassword": body.get("fixedPassword", False)}
             if body.get("role") == "voice_chat":
                 out["shares"] = SHARES
+                out["warnings"] = ["demo: connections to other agents"] if body.get("force") else []
             return self.reply(200, out)
         if u.path == "/cli/users/set-role":
             if body.get("username") == "boss":
@@ -87,7 +89,10 @@ class H(BaseHTTPRequestHandler):
             live = frm == "voice_chat" or body.get("role") == "voice_chat"
             return self.reply(200, {"success": True, "from": frm, "role": body.get("role"), "live": live})
         if u.path == "/cli/users/set-shares":
-            return self.reply(200, {"success": True, "shares": SHARES})
+            if body.get("username") == "risky" and not body.get("force"):
+                return self.reply(409, {"ok": False, "error": {"code": "agent_not_demo", "hint": "share only a dedicated demo agent",
+                                                               "risks": ["ops: vault grants (2)", "ops: a mailbox"]}})
+            return self.reply(200, {"success": True, "shares": SHARES, "warnings": ["ops: vault grants (2)"] if body.get("force") else []})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
 
 srv = HTTPServer(("127.0.0.1", 0), H)
@@ -179,11 +184,43 @@ expect_has "shares line" "$out" "rev (Voice & Chat only) shares: agents demo; ga
 js="$("$K2" users list --json)"
 expect_has "json shares" "$js" '"shares":{"agents":[{"id":"p-1","address":"demo","name":"Demo"}]'
 
+echo "== security review: fixed password, sources, force =="
+: > "$LOG"
+set +e
+out="$(printf 'review-pass-1\n' | "$K2" users add rev2 --role voice_chat --share-agent demo --share-source fleet --fixed-password --force --keep-password --password-stdin 2>"$SANDBOX/err")"; rc=$?
+set -e
+err="$(cat "$SANDBOX/err")"
+expect_eq "forced add exits 0" "$rc" "0"
+body="$(last body)"
+expect_has "fixedPassword in the body" "$body" '"fixedPassword": true'
+expect_has "sources in the body" "$body" '"shareSources": ["fleet"]'
+expect_has "force in the body" "$body" '"force": true'
+expect_has "never temporary" "$body" '"mustChangePassword": false'
+expect_has "fixed said" "$out" "The password is fixed"
+expect_has "the warning is printed" "$err" "WARNING: shared anyway (--force): demo: connections to other agents"
+"$K2" users set-role rev member --fixed-password >/dev/null
+expect_eq "set-role carries fixedPassword" "$(last body)" '{"fixedPassword": true, "role": "member", "username": "rev"}'
+"$K2" users share rev --agent demo --source fleet >/dev/null
+expect_eq "share sources" "$(last body)" '{"agents": ["demo"], "gardens": [], "sources": ["fleet"], "username": "rev"}'
+set +e
+err="$("$K2" users share risky --agent ops 2>&1 >/dev/null)"; rc=$?
+set -e
+expect_eq "a non-demo agent is refused" "$rc" "1"
+expect_has "the reason" "$err" "share only a dedicated demo agent"
+expect_has "each risk" "$err" "  - ops: a mailbox"
+set +e
+err="$("$K2" users share risky --agent ops --force 2>&1 >/dev/null)"; rc=$?
+set -e
+expect_eq "forced share exits 0" "$rc" "0"
+expect_has "forced share warns" "$err" "WARNING: shared anyway (--force): ops: vault grants (2)"
+
 echo "== help =="
 help="$("$K2" users --help 2>&1)"
 expect_has "help: role" "$help" "--role owner|admin|member|voice_chat"
 expect_has "help: set-role" "$help" "k2 users set-role <username> owner|admin|member|voice_chat"
 expect_has "help: share" "$help" "k2 users share <username>"
+expect_has "help: demo agent only" "$help" "Share ONLY a dedicated"
+expect_has "help: fixed password" "$help" "--keep-password --fixed-password"
 
 echo
 echo "users voice_chat CLI: $pass passed, $fail failed"

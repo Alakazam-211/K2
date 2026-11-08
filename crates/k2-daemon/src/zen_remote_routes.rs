@@ -237,6 +237,15 @@ pub const SHARED_READ_VERBS: &[&str] = &[
     "widget.self",
 ];
 
+/// Does any object in a call's `args` (at any depth) carry `from`?
+fn names_from(v: &J) -> bool {
+    match v {
+        J::Object(o) => o.contains_key("from") || o.values().any(names_from),
+        J::Array(a) => a.iter().any(names_from),
+        _ => false,
+    }
+}
+
 fn read_only(what: &str) -> CliResponse {
     refuse("403 Forbidden", "not_granted", format!("{what}: a Garden shared with you is read-only"))
 }
@@ -269,16 +278,29 @@ fn shared_check(p: &Person, path: &str, params: &HashMap<String, String>, body: 
                 Err(read_only("fetching a library by URL"))
             }
         }
-        PAGE | FRAME | SOURCES_CHANGES | BLOB_GET => shared(param(params, "garden").unwrap_or("")),
+        PAGE | FRAME | SOURCES_CHANGES => shared(param(params, "garden").unwrap_or("")),
+        BLOB_GET => {
+            shared(param(params, "garden").unwrap_or(""))?;
+            // M5: never another widget's space (`from`).
+            if params.contains_key("from") {
+                return Err(read_only("reading another widget's space (from)"));
+            }
+            Ok(())
+        }
         CALL => {
             let b: J = serde_json::from_slice(body).unwrap_or_default();
             shared(b["garden"].as_str().unwrap_or(""))?;
             let verb = b["verb"].as_str().unwrap_or("");
-            if SHARED_READ_VERBS.contains(&verb) {
-                Ok(())
-            } else {
-                Err(read_only(&format!("the verb {}", audit_id(verb))))
+            if !SHARED_READ_VERBS.contains(&verb) {
+                return Err(read_only(&format!("the verb {}", audit_id(verb))));
             }
+            // Security review M5: a read of a NEIGHBOUR's space (`from` in
+            // any argument object) is the widget's grant, not this
+            // person's: never for a shared viewer.
+            if names_from(&b["args"]) {
+                return Err(read_only("reading another widget's space (from)"));
+            }
+            Ok(())
         }
         // Writes, the run report, pause/resume and the Agents widget's order
         // (it names every agent): never for a shared viewer.

@@ -202,6 +202,11 @@ pub struct Shares {
     pub agents: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gardens: Vec<String>,
+    /// Data sources (by name) whose card view this login may read on a
+    /// shared Garden (security review M5): every other source, `member`
+    /// viewers included, is closed to Voice & Chat only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
 }
 
 /// The most agents (and, separately, Gardens) one login may be shared.
@@ -209,13 +214,13 @@ pub const MAX_SHARES: usize = 16;
 
 impl Shares {
     pub fn is_empty(&self) -> bool {
-        self.agents.is_empty() && self.gardens.is_empty()
+        self.agents.is_empty() && self.gardens.is_empty() && self.sources.is_empty()
     }
 
     /// Trimmed, sorted, deduplicated, blanks dropped; at most
     /// [`MAX_SHARES`] of each.
     pub fn normalized(mut self) -> Result<Shares, String> {
-        for (what, list) in [("agents", &mut self.agents), ("gardens", &mut self.gardens)] {
+        for (what, list) in [("agents", &mut self.agents), ("gardens", &mut self.gardens), ("sources", &mut self.sources)] {
             let mut v: Vec<String> = list.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
             v.sort();
             v.dedup();
@@ -273,6 +278,8 @@ struct StoredConnectUser {
     id: String,
     #[serde(default)]
     shares: Shares,
+    #[serde(default)]
+    fixed_password: bool,
 }
 
 /// Clone permissions (prd-clone-carries-threads-and-vault-v1 D2, Rosson
@@ -310,6 +317,7 @@ impl From<StoredConnectUser> for ConnectUser {
             first_name: s.first_name,
             last_name: s.last_name,
             shares: s.shares,
+            fixed_password: s.fixed_password,
         }
     }
 }
@@ -410,6 +418,12 @@ pub struct ConnectUser {
     /// only while the role is `voice_chat`).
     #[serde(default, skip_serializing_if = "Shares::is_empty")]
     pub shares: Shares,
+    /// A fixed password (security review M3): the person can't change it and
+    /// is never asked to (a shared review login, so one reviewer can't lock
+    /// the next out). Only the owner or an Admin resets it. Omitted when
+    /// false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fixed_password: bool,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -913,6 +927,9 @@ pub struct NewLogin {
     pub role: Option<Role>,
     pub must_change_password: bool,
     pub shares: Shares,
+    /// See [`ConnectUser::fixed_password`]; forces `must_change_password`
+    /// off.
+    pub fixed_password: bool,
 }
 
 /// [`add_user_with_names`] made at its role, temporary-password flag and
@@ -986,8 +1003,9 @@ fn add_user_inner(
             // revoke event bumps it to 1.
             token_epoch: 0,
             // K2 Cloud S1: `users/add` (temporary by default since
-            // 0.46.8) and the seed-users file pass it in `new`.
-            must_change_password: new.must_change_password,
+            // 0.46.8) and the seed-users file pass it in `new`. A fixed
+            // password is never temporary.
+            must_change_password: new.must_change_password && !new.fixed_password,
             was_viewer: false,
             legacy_viewer_unmigrated: false,
             // D2: "Can clone" starts ON; the Owner narrows per person.
@@ -996,6 +1014,7 @@ fn add_user_inner(
             first_name,
             last_name,
             shares,
+            fixed_password: new.fixed_password,
         });
         Ok(())
     })?;
@@ -1283,6 +1302,47 @@ pub fn set_role_from(username: &str, role: Role) -> Result<Role, String> {
     Ok(before)
 }
 
+/// [`set_role_from`] with the actor's permission ([`can_set_role`]) checked
+/// against the role read INSIDE the same store write (security review L9):
+/// a concurrent change can't slip a role past the rule. `Err` text starts
+/// `role_change_not_allowed` when the rule refuses.
+pub fn set_role_checked(actor: Role, username: &str, role: Role) -> Result<Role, String> {
+    let username = normalize_username(username)?;
+    let before = update_store(|store| {
+        let user = store
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or_else(|| format!("user '{username}' not found"))?;
+        let before = user.role;
+        if !can_set_role(actor, before, role) {
+            return Err("role_change_not_allowed: an Admin moves people only between Member and Voice & Chat only".to_string());
+        }
+        user.role = role;
+        if !role_change_is_live(before, role) {
+            user.token_epoch = user.token_epoch.wrapping_add(1);
+        }
+        Ok(before)
+    })?;
+    after_role_change(&username, before, role);
+    Ok(before)
+}
+
+fn after_role_change(username: &str, before: Role, role: Role) {
+    if !role_change_is_live(before, role) {
+        revoke_user_sessions(username);
+    } else if role == Role::VoiceChat && before != Role::VoiceChat {
+        let ended = revoke_user_device_sessions(username);
+        if ended > 0 {
+            crate::log_debug!("[connect_users] {username} is Voice & Chat only: {ended} paired phone(s) ended");
+        }
+    }
+    if crate::voice_preview::enabled() {
+        crate::tool_hook::kick_reconcile();
+    }
+    crate::workspace::context_layers::refresh_users_roster_after_people_change();
+}
+
 /// A role change that applies live, with no sign-out: into or out of
 /// Voice & Chat only (or no change at all).
 pub fn role_change_is_live(from: Role, to: Role) -> bool {
@@ -1414,7 +1474,8 @@ pub fn set_must_change_password(username: &str, must: bool) -> Result<(), String
             .iter_mut()
             .find(|u| u.username == username)
             .ok_or_else(|| format!("user '{username}' not found"))?;
-        user.must_change_password = must;
+        // A fixed password is never temporary (M3).
+        user.must_change_password = must && !user.fixed_password;
         Ok(())
     })
 }
@@ -1435,8 +1496,35 @@ pub fn must_change_password(username: &str) -> bool {
         .users
         .iter()
         .find(|u| u.username == normalized)
-        .map(|u| u.must_change_password)
+        .map(|u| u.must_change_password && !u.fixed_password)
         .unwrap_or(false)
+}
+
+/// Whether `username` has a fixed password ([`ConnectUser::fixed_password`]).
+/// `false` for an unknown user or an unreadable store.
+pub fn is_fixed_password(username: &str) -> bool {
+    let Ok(normalized) = normalize_username(username) else { return false };
+    let Ok(store) = load_store() else { return false };
+    store.users.iter().any(|u| u.username == normalized && u.fixed_password)
+}
+
+/// Set or clear a login's fixed password. Clearing the temporary-password
+/// flag with it (a fixed password is never temporary). Errors for an
+/// unknown user.
+pub fn set_fixed_password(username: &str, fixed: bool) -> Result<(), String> {
+    let username = normalize_username(username)?;
+    update_store(|store| {
+        let user = store
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or_else(|| format!("user '{username}' not found"))?;
+        user.fixed_password = fixed;
+        if fixed {
+            user.must_change_password = false;
+        }
+        Ok(())
+    })
 }
 
 /// The usernames that have a forced password rotation pending (a
@@ -1482,6 +1570,29 @@ pub fn is_active_owner_or_admin(username: &str) -> bool {
 /// EVERY validate (K2 Connect #4): `(disabled, token_epoch)`. `None` when
 /// the user doesn't exist (removed) or the store can't be read — both of
 /// which `validate_session` treats as "reject, fail closed".
+fn user_auth_state_role(username: &str) -> Option<(bool, u64, Role)> {
+    let normalized = normalize_username(username).ok()?;
+    let store = load_store().ok()?;
+    store
+        .users
+        .iter()
+        .find(|u| u.username == normalized)
+        .map(|u| (u.disabled, u.token_epoch, u.role))
+}
+
+/// A live login session's `(username, role)`, both from ONE read of the
+/// user store (security review L6). `None` for anything that isn't a live
+/// session, an account that is gone, and an unreadable store.
+pub fn validate_session_role(token: &str) -> Option<(String, Role)> {
+    validate_session_record(token).map(|v| (v.username, v.role))
+}
+
+/// The login store exists but can't be read or parsed: callers that gate
+/// on a role refuse (503) instead of passing the request on (L6).
+pub fn store_unreadable() -> bool {
+    store_path().exists() && load_store().is_err()
+}
+
 fn user_auth_state(username: &str) -> Option<(bool, u64)> {
     let normalized = normalize_username(username).ok()?;
     let store = load_store().ok()?;
@@ -1973,6 +2084,16 @@ fn lockout_key(username: &str) -> String {
     normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase())
 }
 
+/// [`lockout_key`], with `|<ip>` for a Voice & Chat only login when the
+/// address is known.
+fn lockout_key_from(username: &str, ip: Option<&str>) -> String {
+    let key = lockout_key(username);
+    match ip.map(str::trim).filter(|i| !i.is_empty() && *i != "-") {
+        Some(ip) if role_for_user(username) == Some(Role::VoiceChat) => format!("{key}|{ip}"),
+        _ => key,
+    }
+}
+
 /// Verify `password` for `username` THROUGH the brute-force lockout gate.
 /// This is the single entry point the login + change-password paths use
 /// so the policy can never be bypassed.
@@ -1992,7 +2113,15 @@ fn lockout_key(username: &str) -> String {
 /// stored account; it's keyed under its lossy lowercase form so repeated
 /// junk still gets rate-limited rather than silently uncounted.
 pub fn check_and_record(username: &str, password: &str) -> LoginOutcome {
-    let key = lockout_key(username);
+    check_and_record_from(username, password, None)
+}
+
+/// [`check_and_record`] with the client's address. For a Voice & Chat only
+/// login (a password many reviewers may share) the lockout is keyed on
+/// (username, address), so one person's wrong guesses can't lock the next
+/// out (security review M3); every other login keeps the per-username key.
+pub fn check_and_record_from(username: &str, password: &str, ip: Option<&str>) -> LoginOutcome {
+    let key = lockout_key_from(username, ip);
 
     // First: are we currently locked? Read the persisted lockout state and
     // clear an expired lock, but do it as a quick load-modify-save before
@@ -2059,6 +2188,9 @@ pub enum ChangePasswordOutcome {
     /// New password failed the policy. Carries the human-readable first
     /// unmet requirement (K2SO #620) so the portal can surface it.
     WeakNew(String),
+    /// The login's password is fixed (M3): only the owner or an Admin
+    /// resets it.
+    Fixed,
 }
 
 /// Self-service password change for an authenticated connect-user.
@@ -2068,6 +2200,9 @@ pub enum ChangePasswordOutcome {
 /// (which re-hashes AND revokes every live session for the user, forcing a
 /// re-login everywhere).
 pub fn change_password(username: &str, current: &str, new: &str) -> ChangePasswordOutcome {
+    if is_fixed_password(username) {
+        return ChangePasswordOutcome::Fixed;
+    }
     match check_and_record(username, current) {
         LoginOutcome::Ok => {}
         LoginOutcome::LockedOut | LoginOutcome::BadCreds => {
@@ -2098,7 +2233,13 @@ pub fn change_password(username: &str, current: &str, new: &str) -> ChangePasswo
 /// ignore the result.
 pub fn clear_lockout(username: &str) -> Result<(String, bool), String> {
     let key = lockout_key(username);
-    let cleared = update_sessions(|store| Ok(store.locks.remove(&key).is_some()))?;
+    // The per-address keys of a Voice & Chat only login go too.
+    let prefix = format!("{key}|");
+    let cleared = update_sessions(|store| {
+        let before = store.locks.len();
+        store.locks.retain(|k, _| k != &key && !k.starts_with(&prefix));
+        Ok(store.locks.len() != before)
+    })?;
     Ok((key, cleared))
 }
 
@@ -2203,6 +2344,9 @@ struct ValidSession {
     username: String,
     session_id: String,
     device: Option<DeviceBinding>,
+    /// The account's role, from the same user-store read that checked the
+    /// session (security review L6: never a second read).
+    role: Role,
 }
 
 /// [`validate_session`] that also returns the record's id and device
@@ -2295,8 +2439,8 @@ fn lookup_session(token: &str) -> Lookup {
         // (None), disabled, or whose epoch advanced (password/role/disable
         // change, or an explicit logout-everywhere) — EVEN while the daemon
         // was down — is rejected and the stale record deleted.
-        match user_auth_state(&username) {
-            Some((disabled, current_epoch)) if !disabled && current_epoch == record_epoch => {
+        match user_auth_state_role(&username) {
+            Some((disabled, current_epoch, role)) if !disabled && current_epoch == record_epoch => {
                 let rec = &mut store.sessions[idx];
                 if rec.device.is_some() {
                     let full = device_expiry(rec.created_at, now);
@@ -2308,6 +2452,7 @@ fn lookup_session(token: &str) -> Lookup {
                     username,
                     session_id: rec.session_id.clone(),
                     device: rec.device.clone(),
+                    role,
                 }))
             }
             _ => {
@@ -3242,7 +3387,8 @@ mod tests {
             let new = NewLogin {
                 role: Some(Role::VoiceChat),
                 must_change_password: false,
-                shares: Shares { agents: vec![" p-1 ".into(), "p-1".into()], gardens: vec!["g-1".into()] },
+                shares: Shares { agents: vec![" p-1 ".into(), "p-1".into()], gardens: vec!["g-1".into()], sources: vec![] },
+                fixed_password: false,
             };
             add_user_with_role("rev", "password", None, None, &new).expect("add");
             // Read the file itself: the one row on disk is already voice_chat.
@@ -3257,7 +3403,7 @@ mod tests {
             assert!(!can_clone("rev"), "V11: never canClone");
             assert_eq!(voice_chat_shares("rev").expect("shares").agents, vec!["p-1".to_string()]);
             // Shares on any other role are refused, nothing written.
-            let bad = NewLogin { role: None, must_change_password: false, shares: Shares { agents: vec!["p".into()], gardens: vec![] } };
+            let bad = NewLogin { role: None, must_change_password: false, fixed_password: false, shares: Shares { agents: vec!["p".into()], gardens: vec![], sources: vec![] } };
             assert!(add_user_with_role("mem", "password", None, None, &bad).is_err());
             assert_eq!(role_for_user("mem"), None);
         });
@@ -3307,14 +3453,84 @@ mod tests {
         });
     }
 
+    /// Security review M3: a fixed password can't be changed by the person
+    /// and is never temporary; an Admin/owner reset still works.
+    #[test]
+    fn a_fixed_password_is_never_changed_by_its_person_nor_temporary() {
+        with_temp_home(|| {
+            let new = NewLogin { role: Some(Role::VoiceChat), must_change_password: true, fixed_password: true, ..Default::default() };
+            add_user_with_role("fixedrev", "password1", None, None, &new).expect("add");
+            assert!(is_fixed_password("fixedrev"));
+            assert!(!must_change_password("fixedrev"), "never temporary");
+            set_must_change_password("fixedrev", true).expect("set");
+            assert!(!must_change_password("fixedrev"), "a set can't make it temporary");
+            assert_eq!(change_password("fixedrev", "password1", "password2"), ChangePasswordOutcome::Fixed);
+            assert!(verify("fixedrev", "password1"), "unchanged");
+            set_password("fixedrev", "password3").expect("an owner reset");
+            assert!(verify("fixedrev", "password3"));
+            set_fixed_password("fixedrev", false).expect("unfix");
+            assert_eq!(change_password("fixedrev", "password3", "password4"), ChangePasswordOutcome::Ok);
+        });
+    }
+
+    /// M3: a Voice & Chat only login's lockout is per (username, address); a
+    /// Member's stays per username.
+    #[test]
+    fn a_voice_chat_lockout_is_keyed_on_the_address_too() {
+        with_temp_home(|| {
+            add_user_with_role("lockrev", "password1", None, None, &NewLogin { role: Some(Role::VoiceChat), ..Default::default() }).expect("add");
+            for _ in 0..LOCKOUT_THRESHOLD {
+                assert_eq!(check_and_record_from("lockrev", "wrong", Some("198.51.100.7")), LoginOutcome::BadCreds);
+            }
+            assert_eq!(check_and_record_from("lockrev", "password1", Some("198.51.100.7")), LoginOutcome::LockedOut, "that address is locked");
+            assert_eq!(check_and_record_from("lockrev", "password1", Some("203.0.113.9")), LoginOutcome::Ok, "another address isn't");
+            clear_lockout("lockrev").expect("clear");
+            assert_eq!(check_and_record_from("lockrev", "password1", Some("198.51.100.7")), LoginOutcome::Ok, "the per-address lock clears too");
+            add_user("lockmem", "password1").expect("member");
+            for _ in 0..LOCKOUT_THRESHOLD {
+                assert_eq!(check_and_record_from("lockmem", "wrong", Some("198.51.100.7")), LoginOutcome::BadCreds);
+            }
+            assert_eq!(check_and_record_from("lockmem", "password1", Some("203.0.113.9")), LoginOutcome::LockedOut, "a Member's lock is per username");
+        });
+    }
+
+    /// L9: the role rule is checked against the role in the same write.
+    #[test]
+    fn set_role_checked_refuses_inside_the_write() {
+        with_temp_home(|| {
+            add_user("chkadm", "password1").expect("add");
+            set_role("chkadm", Role::Admin).expect("admin");
+            let e = set_role_checked(Role::Admin, "chkadm", Role::VoiceChat).expect_err("an Admin can't demote an Admin");
+            assert!(e.starts_with("role_change_not_allowed"), "{e}");
+            assert_eq!(role_for_user("chkadm"), Some(Role::Admin));
+            add_user("chkmem", "password1").expect("add");
+            assert_eq!(set_role_checked(Role::Admin, "chkmem", Role::VoiceChat), Ok(Role::Member));
+            assert_eq!(role_for_user("chkmem"), Some(Role::VoiceChat));
+        });
+    }
+
+    /// L6: one read gives the session's login and role.
+    #[test]
+    fn validate_session_role_reads_both_at_once() {
+        with_temp_home(|| {
+            add_user_with_role("sessrole", "password1", None, None, &NewLogin { role: Some(Role::VoiceChat), ..Default::default() }).expect("add");
+            let tok = create_session("sessrole");
+            assert_eq!(validate_session_role(&tok), Some(("sessrole".to_string(), Role::VoiceChat)));
+            assert!(!store_unreadable());
+            std::fs::write(store_path(), "{ not json").expect("corrupt");
+            assert!(store_unreadable());
+            assert_eq!(validate_session_role(&tok), None, "fails closed");
+        });
+    }
+
     #[test]
     fn shares_are_only_for_voice_chat_logins() {
         with_temp_home(|| {
             add_user("pat", "password").expect("add");
-            let e = set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec![] }).expect_err("member");
+            let e = set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec![], sources: vec![] }).expect_err("member");
             assert!(e.starts_with("not_voice_chat"), "{e}");
             set_role("pat", Role::VoiceChat).expect("down");
-            set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec!["g".into()] }).expect("set");
+            set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec!["g".into()], sources: vec![] }).expect("set");
             assert_eq!(voice_chat_shares("pat").expect("s").gardens, vec!["g".to_string()]);
             // A Member's stored shares never act.
             set_role("pat", Role::Member).expect("up");
@@ -3323,7 +3539,7 @@ mod tests {
             set_role("pat", Role::VoiceChat).expect("down");
             set_disabled("pat", true).expect("disable");
             assert_eq!(voice_chat_shares("pat"), None);
-            let too_many = Shares { agents: (0..=MAX_SHARES).map(|i| format!("p{i}")).collect(), gardens: vec![] };
+            let too_many = Shares { agents: (0..=MAX_SHARES).map(|i| format!("p{i}")).collect(), gardens: vec![], sources: vec![] };
             assert!(too_many.normalized().is_err());
         });
     }

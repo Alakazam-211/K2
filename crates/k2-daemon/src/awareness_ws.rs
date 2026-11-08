@@ -115,6 +115,7 @@ pub async fn serve_awareness_subscribe_connection(
     // after the dispatcher already authorized us.
     auth_recheck.tick().await;
 
+    let mut incoming = crate::socket_access::IncomingCheck::new(&token, &owner_token);
     loop {
         tokio::select! {
             // Re-auth heartbeat — see `auth_recheck` above. Closes the
@@ -163,6 +164,13 @@ pub async fn serve_awareness_subscribe_connection(
                 }
             }
             msg = read.next() => {
+                // Security review L7: a client frame from a login is acted on
+                // only while the login still clears this socket's floor (a
+                // downgrade to Voice & Chat only closes it here, not on the tick).
+                if !incoming.frame_ok(&msg) {
+                    let _ = write.send(crate::presence::access_lost_close_message()).await;
+                    break;
+                }
                 match msg {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(Message::Ping(p))) => {

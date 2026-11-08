@@ -291,7 +291,12 @@ pub(crate) fn person_or_manager(who: &Who) -> R<()> {
 /// & Chat only login reading a shared Garden) can't read an `admin` source.
 /// The owner token and passports skip it (passports are masked).
 pub(crate) fn can_read(who: &Who, row: &SourceRow) -> R<()> {
-    if let Who::Login { role, .. } = who {
+    if let Who::Login { username, role } = who {
+        // Security review M5: a Voice & Chat only login reads only the
+        // sources shared with it by name, whatever their `viewers`.
+        if *role == Role::VoiceChat && !crate::shared_routes::shared_source(username, &row.name) {
+            return Err(SourceErr::new("cap_not_granted", 403, "this source isn't shared with you").with("role", "member"));
+        }
         if *role < Role::Admin && row.viewers == Viewers::Admin {
             return Err(SourceErr::new("cap_not_granted", 403, "this source is for admins on this server").with("role", "admin"));
         }

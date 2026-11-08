@@ -1139,6 +1139,7 @@ pub async fn serve_session_grid_connection(
     // session.write() / session.resize(). No coalescing for v1 —
     // build_emit itself returns Skip when nothing changed, which
     // keeps the volume sane.
+    let mut incoming = crate::socket_access::IncomingCheck::new(&token, &owner_token);
     loop {
         // Fence deadline wake (recomputed each iteration so rearm moves it).
         let fence_deadline = settle_fence.deadline().map(|d| {
@@ -1645,6 +1646,13 @@ pub async fn serve_session_grid_connection(
                 }
             }
             msg = read.next() => {
+                // Security review L7: a client frame from a login is acted on
+                // only while the login still clears this socket's floor (a
+                // downgrade to Voice & Chat only closes it here, not on the tick).
+                if !incoming.frame_ok(&msg) {
+                    let _ = write.send(crate::presence::access_lost_close_message()).await;
+                    break;
+                }
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         let parsed: Result<Inbound, _> = serde_json::from_str(&text);

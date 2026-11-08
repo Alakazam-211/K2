@@ -710,6 +710,19 @@ pub fn sanitize_inject_text(text: &str) -> String {
     text.chars().filter(|&c| c != '\u{1b}').collect()
 }
 
+/// A line a Voice & Chat only login sent (security review M4): its stamp
+/// is `[guest <login> (Voice & Chat only)]` (`overlay_routes::post_voice_chat`).
+pub fn is_voice_chat_line(payload: &str) -> bool {
+    let first = payload.lines().next().unwrap_or("");
+    first.starts_with("[guest ") && first.contains(&format!("{}]", crate::overlay_routes::VC_LABEL_SUFFIX))
+}
+
+/// Hold a Voice & Chat only line when the terminal doesn't have bracketed
+/// paste on (M4): typed raw, each of its lines would submit by itself.
+pub fn voice_chat_paste_hold(payload: &str, bracketed_paste: bool) -> bool {
+    is_voice_chat_line(payload) && !bracketed_paste
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // "Your display name" — owner `from` resolution (D3)
 // ─────────────────────────────────────────────────────────────────────
@@ -1597,10 +1610,26 @@ fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> In
         );
         return InjectOutcome::GateHold;
     }
+    // Security review M4: a Voice & Chat only post (an untrusted person) is
+    // typed in only inside bracketed paste, so none of its lines can submit
+    // on its own; without it the line is held, never typed raw.
+    if voice_chat_paste_hold(payload, live.bracketed_paste_active()) {
+        log_debug!(
+            "[msg/inject] session={} Voice & Chat only post held: the terminal has bracketed paste off",
+            live.session_id()
+        );
+        return InjectOutcome::GateHold;
+    }
     // D5 — strip raw ESC BEFORE framing so an embedded `ESC[201~` can't
     // close the paste early and splice live keystrokes. Sanitize at the
     // paste payload, not at Return; grok_gate_open ran once before step 1.
-    let clean = sanitize_inject_text(payload);
+    // M4: a Voice & Chat only line also loses every other C0/C1 control
+    // (but `\n`) and the bidi overrides, here at the one chokepoint.
+    let clean = if is_voice_chat_line(payload) {
+        crate::overlay_routes::strip_untrusted_controls(&sanitize_inject_text(payload))
+    } else {
+        sanitize_inject_text(payload)
+    };
     let body: Vec<u8> = if live.bracketed_paste_active() {
         let mut b = Vec::with_capacity(clean.len() + 12);
         b.extend_from_slice(b"\x1b[200~");
@@ -4708,5 +4737,24 @@ mod tests {
             assert_eq!(resolve_owner_from(), "z3thon");
             assert_eq!(format_message_user(&resolve_owner_from(), "hi"), "[from z3thon] hi");
         });
+    }
+}
+
+#[cfg(test)]
+mod voice_chat_inject_tests {
+    use super::*;
+
+    /// Security review M4: a Voice & Chat only line is held without
+    /// bracketed paste; other lines (an App guest's, a person's) aren't.
+    #[test]
+    fn a_voice_chat_line_needs_bracketed_paste() {
+        let vc = format_sender(Sender::Guest(&guest_label("rev (Voice & Chat only)")), "[thread:vc:demo:rev]\n> hi", "");
+        assert!(is_voice_chat_line(&vc), "{vc}");
+        assert!(voice_chat_paste_hold(&vc, false));
+        assert!(!voice_chat_paste_hold(&vc, true));
+        let guest = format_sender(Sender::Guest(&guest_label("ana")), "[thread:sales] hi", "");
+        assert!(!voice_chat_paste_hold(&guest, false));
+        let person = format_message("mo", "[thread:sales] hi (Voice & Chat only)]", "");
+        assert!(!voice_chat_paste_hold(&person, false));
     }
 }

@@ -92,6 +92,88 @@ impl LoginCheck {
     }
 }
 
+/// The incoming-frame check for a socket that acts on client frames
+/// (security review L7): grid, bytes, sessions, session events, awareness,
+/// ops and the simulator stream. For a Connect login it is a [`LoginCheck`]
+/// at the socket's floor (Member: [`crate::routes::http::token_still_valid`]),
+/// asked before a Text or Binary frame is acted on, so a login moved to Voice
+/// & Chat only can't drive a socket it opened as a Member even for the
+/// seconds before the tick. Any other credential (the owner token, a stream
+/// token, a passport) keeps its socket's own tick rule: `frame_ok` is true.
+#[derive(Debug)]
+pub struct IncomingCheck(Option<LoginCheck>);
+
+impl IncomingCheck {
+    pub fn new(token: &str, owner: &str) -> Self {
+        let login = !token.is_empty()
+            && !crate::routes::http::ct_eq_token(token, owner)
+            && k2_core::connect_users::looks_like_session_token(token);
+        Self(login.then(|| LoginCheck::new(token, owner)))
+    }
+
+    /// May this frame from the client be acted on? Control frames (ping,
+    /// pong, close) always may.
+    pub fn frame_ok<E>(&mut self, msg: &Option<Result<Message, E>>) -> bool {
+        let acts = matches!(msg, Some(Ok(Message::Text(_))) | Some(Ok(Message::Binary(_))));
+        match (&mut self.0, acts) {
+            (Some(check), true) => check.frame_ok(),
+            _ => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod incoming_tests {
+    use super::*;
+
+    type Frame = Option<Result<Message, std::io::Error>>;
+
+    /// Security review L7: a login's frame is refused the moment the login
+    /// is moved to Voice & Chat only; the owner token, a passport and a
+    /// stream token are left to their socket's own rule; control frames
+    /// always pass.
+    #[test]
+    fn a_downgraded_login_s_frame_is_refused_at_once() {
+        crate::test_support::with_temp_home(|| {
+            k2_core::connect_users::add_user("inmem", "password123").expect("add");
+            let tok = k2_core::connect_users::create_session("inmem");
+            let mut check = IncomingCheck::new(&tok, "owner-tok");
+            let text: Frame = Some(Ok(Message::Text("{}".into())));
+            let ping: Frame = Some(Ok(Message::Ping(Vec::new().into())));
+            assert!(check.frame_ok(&text), "a Member drives it");
+            k2_core::connect_users::set_role("inmem", k2_core::connect_users::Role::VoiceChat).expect("down");
+            assert!(!check.frame_ok(&text), "the very next client frame is refused");
+            assert!(check.frame_ok(&ping), "control frames pass");
+            let mut owner = IncomingCheck::new("owner-tok", "owner-tok");
+            assert!(owner.frame_ok(&text));
+            let mut passport = IncomingCheck::new("sid-1.secret", "owner-tok");
+            assert!(passport.frame_ok(&text), "a passport keeps its socket's own rule");
+        });
+    }
+
+    /// L7: every client-driven socket asks [`IncomingCheck`] before acting
+    /// on a client frame (a new socket family must, too).
+    #[test]
+    fn every_client_driven_socket_checks_incoming_frames() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for f in [
+            "sessions_grid_ws.rs",
+            "sessions_bytes_ws.rs",
+            "sessions_ws.rs",
+            "session_events_ws.rs",
+            "awareness_ws.rs",
+            "ops_stream_ws.rs",
+            "sim_stream_ws.rs",
+        ] {
+            let s = std::fs::read_to_string(src.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+            assert!(s.contains("crate::socket_access::IncomingCheck::new("), "{f} builds the check");
+            let at = s.find("msg = read.next() => {").unwrap_or_else(|| panic!("{f}: its read branch"));
+            let next = &s[at..at + 600.min(s.len() - at)];
+            assert!(next.contains("if !incoming.frame_ok(&msg)"), "{f}: the check runs first in the read branch");
+        }
+    }
+}
+
 /// Has any access been written since this socket last checked its pass?
 #[derive(Debug, Default)]
 pub struct SkinGate {

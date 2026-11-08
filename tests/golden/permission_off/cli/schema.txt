@@ -2499,32 +2499,37 @@ exit: 0
     },
     {
       "name": "users add",
-      "usage": "k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--password-stdin] [--keep-password]",
+      "usage": "k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]... [--fixed-password] [--force] [--password-stdin] [--keep-password]",
       "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). member and voice_chat are made at that role in the add; owner/admin are set by set-role after it. voice_chat (Voice & Chat only) joins voice rooms and uses only what is shared with it: --share-agent (that agent's Thread, read and post as themselves) and --share-garden (a Garden, read-only on a phone).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--role", "arg": "role", "description": "owner | admin | member | voice_chat (there is no viewer role)"},
         {"name": "--share-agent", "arg": "agent", "description": "voice_chat only: an agent address whose Thread it may read and post in (repeat)."},
         {"name": "--share-garden", "arg": "garden", "description": "voice_chat only: a Garden id or name it may view read-only (repeat)."},
+        {"name": "--share-source", "arg": "name", "description": "voice_chat only: a data source a shared Garden may show (repeat)."},
+        {"name": "--fixed-password", "arg": null, "description": "The person can't change the password (a login many people share, e.g. a store reviewer: with --keep-password)."},
+        {"name": "--force", "arg": null, "description": "Share an agent that isn't a dedicated demo agent anyway (warnings printed)."},
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
         {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the first sign-in."}
       ]
     },
     {
       "name": "users set-role",
-      "usage": "k2 users set-role <username> owner|admin|member|voice_chat",
+      "usage": "k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]",
       "description": "Change a login's role (POST /cli/users/set-role). The owner changes any role; an Admin only member <-> voice_chat. Into or out of voice_chat applies at once with no sign-out (and moving someone to voice_chat ends their paired phones); other changes sign the person out. Exit 3 when refused.",
       "args": [{"name": "username", "required": true}, {"name": "role", "required": true}],
       "flags": []
     },
     {
       "name": "users share",
-      "usage": "k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--clear] [--json]",
-      "description": "What a Voice & Chat only (voice_chat) login may use besides voice rooms: agents by address (read and post in that agent's Thread as themselves) and Gardens by id or name (read-only on a phone). With flags it REPLACES the list (POST /cli/users/set-shares, Admin or owner); without, it shows it.",
+      "usage": "k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--source <name>]... [--force] [--clear] [--json]",
+      "description": "What a Voice & Chat only (voice_chat) login may use besides voice rooms: agents by address (a dedicated demo agent only; the person gets their own conversation with it, delivered as a guest), Gardens by id or name (read-only on a phone) and data sources by name. With flags it REPLACES the list (POST /cli/users/set-shares, Admin or owner); without, it shows it.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "agent", "description": "An agent address (repeat)."},
         {"name": "--garden", "arg": "garden", "description": "A Garden id or name (repeat)."},
+        {"name": "--source", "arg": "name", "description": "A data source name (repeat)."},
+        {"name": "--force", "arg": null, "description": "Share a non-demo agent anyway (warnings printed)."},
         {"name": "--clear", "arg": null, "description": "Share nothing."},
         {"name": "--json", "arg": null, "description": "{ok,username,shares:{agents,gardens}}."}
       ]

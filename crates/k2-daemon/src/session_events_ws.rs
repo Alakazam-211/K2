@@ -200,6 +200,7 @@ pub async fn serve_session_events_connection(
     // path, which clears its view), its one view and the turn receiver.
     let mut views = hub_viewing::ViewState::default();
 
+    let mut incoming = crate::socket_access::IncomingCheck::new(&token, &owner_token);
     loop {
         tokio::select! {
             frame = recv_inbox(&mut inbox_rx) => {
@@ -460,6 +461,13 @@ pub async fn serve_session_events_connection(
                 }
             }
             msg = read.next() => {
+                // Security review L7: a client frame from a login is acted on
+                // only while the login still clears this socket's floor (a
+                // downgrade to Voice & Chat only closes it here, not on the tick).
+                if !incoming.frame_ok(&msg) {
+                    let _ = write.send(crate::presence::access_lost_close_message()).await;
+                    break;
+                }
                 match msg {
                     Some(Ok(Message::Ping(p))) => {
                         if write.send(Message::Pong(p)).await.is_err() {

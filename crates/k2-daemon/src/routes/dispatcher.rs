@@ -4915,17 +4915,29 @@ async fn handle_one_request(
             };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let target_for_audit = crate::connect_users_routes::login_body_username(&body_bytes);
+            // L9: who changed the shares.
+            let actor_for_audit = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner-token".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|u| format!("user:{u}"))
+                    .unwrap_or_else(|| "-".to_string())
+            };
             let r = tokio::task::spawn_blocking(move || crate::connect_users_routes::handle_set_shares(actor_role, &body_bytes))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
-            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
-                "set-shares",
-                &target_for_audit,
-                if r.status.starts_with("200") { "ok".to_string() } else { format!("rejected:{}", r.status.split_whitespace().next().unwrap_or("?")) },
-                ingress.as_str(),
-                "-",
-                if web_client_header { "web" } else { "api" },
-            ));
+            k2_core::auth_audit::record(
+                &k2_core::auth_audit::AuditEvent::new(
+                    "set-shares",
+                    &target_for_audit,
+                    if r.status.starts_with("200") { "ok".to_string() } else { format!("rejected:{}", r.status.split_whitespace().next().unwrap_or("?")) },
+                    ingress.as_str(),
+                    "-",
+                    if web_client_header { "web" } else { "api" },
+                )
+                .with_actor(&actor_for_audit),
+            );
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // POST /cli/users/set-can-clone — Settings → Admin Access → "Can
@@ -5142,10 +5154,13 @@ async fn handle_one_request(
                 super::http::send_login_rate_limited(&mut *stream).await;
                 return DispatchOutcome::Done;
             }
+            // M3: a Voice & Chat only login's lockout is keyed on (username,
+            // the throttle's client address).
+            let lock_ip: Option<String> = throttle_key.connect_bucket().map(|(_, _, ip)| ip.to_string());
             // argon2 verify is slow + happens regardless of outcome
             // (anti-enumeration) — spawn_blocking off the accept loop.
             let reply = tokio::task::spawn_blocking(move || {
-                crate::connect_users_routes::handle_login_audited(&body_bytes)
+                crate::connect_users_routes::handle_login_from(&body_bytes, lock_ip.as_deref())
             })
             .await
             .unwrap_or_else(|e| crate::connect_users_routes::LoginReply {
@@ -5613,7 +5628,16 @@ async fn handle_one_request(
             let owner = !tok.is_empty() && super::http::ct_eq_token(tok, state.token.as_str());
             // agent-unread-tickets-v1: the caller's unread / tickets are
             // keyed by the login this credential is (never a param).
-            let username = if owner { None } else { k2_core::connect_users::validate_session(tok) };
+            // L6: the login and its role from one read; an unreadable store
+            // is a 503, never the full summary.
+            let session = if owner { None } else { k2_core::connect_users::validate_session_role(tok) };
+            if !owner && session.is_none() && super::route_policy::session_shaped_and_unreadable(tok) {
+                let r = super::route_policy::role_unreadable();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let voice_chat = session.as_ref().is_some_and(|(_, r)| *r == k2_core::connect_users::Role::VoiceChat);
+            let username = session.map(|(u, _)| u);
             if !owner && username.is_none() {
                 super::http::send_response(
                     &mut *stream,
@@ -5627,7 +5651,7 @@ async fn handle_one_request(
             // prd-voice-chat-only-members-v1 V3: a Voice & Chat only login
             // gets the empty summary and nothing is read (an older client's
             // Home pool treats a 403 here as a dead login and signs in again).
-            if username.as_deref().is_some_and(k2_core::connect_users::is_voice_chat_only) {
+            if voice_chat {
                 super::http::send_response(
                     &mut *stream,
                     "200 OK",
@@ -8652,6 +8676,24 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let token = super::http::extract_token(&query).unwrap_or_default().to_string();
+            // H2: at most MAX_PER_LOGIN of these sockets per login.
+            let _slot = match k2_core::connect_users::validate_session(&token) {
+                Some(login) => match crate::voice::events_ws::take_slot(&login) {
+                    Some(s) => Some(s),
+                    None => {
+                        let _ = stream.read(&mut buf).await;
+                        super::http::send_response(
+                            &mut *stream,
+                            "429 Too Many Requests",
+                            "application/json",
+                            r#"{"ok":false,"error":{"code":"too_many_sockets","hint":"at most 3 voice event sockets per login"}}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                },
+                None => None,
+            };
             crate::voice::events_ws::serve(stream, token, state.token.to_string()).await;
             return DispatchOutcome::Done;
         }

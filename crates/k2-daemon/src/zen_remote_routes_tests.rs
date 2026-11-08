@@ -740,7 +740,8 @@ fn reviewer(name: &str, gardens: &[&str]) -> String {
         &cu::NewLogin {
             role: Some(Role::VoiceChat),
             must_change_password: false,
-            shares: cu::Shares { agents: vec![], gardens: gardens.iter().map(|g| g.to_string()).collect() },
+            shares: cu::Shares { agents: vec![], gardens: gardens.iter().map(|g| g.to_string()).collect(), sources: vec![] },
+            fixed_password: false,
         },
     )
     .expect("add a voice_chat login");
@@ -803,7 +804,32 @@ fn a_voice_chat_login_without_a_shared_garden_is_turned_away() {
         assert_eq!(refused(path, &tok, &q, body), (403, "garden_person_only".into()), "{path}");
     }
     // Upgraded to Member, stored shares stop acting: still not the owner person.
-    cu::set_shares("reviewernog", cu::Shares { agents: vec![], gardens: vec![fx.d.garden.clone()] }).expect("share");
+    cu::set_shares("reviewernog", cu::Shares { agents: vec![], gardens: vec![fx.d.garden.clone()], sources: vec![] }).expect("share");
     cu::set_role("reviewernog", Role::Member).expect("up");
     assert_eq!(refused(GARDENS, &tok, &[], J::Null), (403, "garden_person_only".into()));
+}
+
+/// Security review M5: a shared viewer never reads another widget's space
+/// (`from`), whatever the widget was granted, on a call or a blob read.
+#[test]
+fn a_shared_viewer_never_reads_another_widgets_space() {
+    let fx = fx(&["store:read", "store:write"]);
+    let tok = reviewer("reviewerfrom", &[fx.d.garden.as_str()]);
+    for args in [json!(["k", {"from": "other-widget"}]), json!([{"prefix": "", "from": "other-widget"}])] {
+        for verb in ["store.get", "store.list", "store.changes"] {
+            assert_eq!(
+                refused(CALL, &tok, &[], call_body(&fx, verb, args.clone())),
+                (403, "not_granted".into()),
+                "{verb} {args}"
+            );
+        }
+    }
+    let (q, _) = any_request(&fx, BLOB_GET);
+    let mut q: Vec<(&str, &str)> = q.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    q.push(("from", "other-widget"));
+    assert_eq!(refused(BLOB_GET, &tok, &q, J::Null), (403, "not_granted".into()));
+    // Without `from` the shared rule lets the read through to the runner.
+    let p = gate(&who_of(&tok, OWNER_TOKEN)).unwrap_or_else(|r| panic!("admitted: {}", r.body));
+    let body = call_body(&fx, "store.get", json!(["k"]));
+    assert!(shared_check(&p, CALL, &HashMap::new(), body.to_string().as_bytes()).is_ok());
 }

@@ -627,6 +627,28 @@ async fn own_device(ctx: &KitCtx, p: &KitPerson, sew_addr: &str, id: &str) -> Re
 /// One kit request whose head is consumed. `sew_path` has the door prefix
 /// stripped; `bearer` is the request's bearer (never `sewcc_`).
 #[allow(clippy::too_many_arguments)]
+/// L8: the kit routes a Voice & Chat only login may never use.
+pub fn voice_chat_kit_refusal(route: KitRoute) -> Option<Refusal> {
+    matches!(route, KitRoute::RecordingStart | KitRoute::RecordingStop | KitRoute::MemberVoice | KitRoute::MemberMove)
+        .then(|| Refusal::new(403, "voice_chat_not_allowed", "a Voice & Chat only login can't record, mute or move people"))
+}
+
+/// The Sew member ids of everyone in the same room as `sub` (none when
+/// they're in no room).
+pub fn room_mates(occ: &std::collections::BTreeMap<String, Vec<super::occupancy::Occupant>>, sub: &str) -> Vec<String> {
+    occ.values()
+        .find(|people| people.iter().any(|o| o.external_id.as_deref() == Some(sub)))
+        .map(|people| people.iter().map(|o| o.member_id.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// R1's `ids=` narrowed to `allowed`; `None` when nothing is left.
+pub fn narrow_members_query(q: &str, allowed: &[String]) -> Option<String> {
+    let list = q.strip_prefix("ids=")?;
+    let kept: Vec<&str> = list.split(',').filter(|id| allowed.iter().any(|a| a == id)).collect();
+    (!kept.is_empty()).then(|| format!("ids={}", kept.join(",")))
+}
+
 pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     client: &mut S,
     method: &str,
@@ -651,6 +673,30 @@ pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     if !take_token(&person.sid, Instant::now()) {
         return refuse(client, &Refusal::new(429, "rate_limited", "too many requests from this login").retry(RETRY_SECS)).await;
     }
+    // Security review L8: a Voice & Chat only login joins, talks and
+    // shares its screen, but never starts or stops a recording or mutes or
+    // moves anyone (K2 refuses before Sew is asked), and `GET /members`
+    // names only the people in its own room.
+    let mut query = query.map(str::to_string);
+    if let Who::Login(p) = &person.who {
+        if p.role == k2_core::connect_users::Role::VoiceChat {
+            if let Some(r) = voice_chat_kit_refusal(route) {
+                return refuse(client, &r).await;
+            }
+            if route == KitRoute::Members {
+                let (_, occ) = super::occupancy::snapshot();
+                let allowed = room_mates(&occ, &p.ident.sub);
+                match narrow_members_query(query.as_deref().unwrap_or(""), &allowed) {
+                    Some(q) => query = Some(q),
+                    None => {
+                        let a = SewHttp { status: 200, headers: Vec::new(), body: br#"{"items":[],"has_more":false}"#.to_vec() };
+                        return relay_answer(client, &a, &a.body).await;
+                    }
+                }
+            }
+        }
+    }
+    let query = query.as_deref();
     if route == KitRoute::Feed {
         return super::kit_feed::serve(client, head, person, bearer, ctx, sew_addr).await;
     }
@@ -691,3 +737,49 @@ pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
 #[cfg(test)]
 #[path = "kit_door_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod voice_chat_door_tests {
+    use super::*;
+    use crate::voice::occupancy::Occupant;
+
+    fn occ(member: &str, ext: &str) -> Occupant {
+        Occupant {
+            member_id: member.into(),
+            external_id: Some(ext.into()),
+            person: member.into(),
+            connection: "connected".into(),
+            self_mute: false,
+            self_deaf: false,
+            server_mute: false,
+            server_deaf: false,
+            joined_at: String::new(),
+        }
+    }
+
+    /// Security review L8: recording and moderating are refused for this
+    /// role at K2; everything else the kit does stays Sew's to decide.
+    #[test]
+    fn voice_chat_never_records_mutes_or_moves() {
+        for r in [KitRoute::RecordingStart, KitRoute::RecordingStop, KitRoute::MemberVoice, KitRoute::MemberMove] {
+            let refusal = voice_chat_kit_refusal(r).unwrap_or_else(|| panic!("{r:?} refused"));
+            assert_eq!((refusal.status, refusal.code.as_str()), (403, "voice_chat_not_allowed"));
+        }
+        for r in [KitRoute::Members, KitRoute::CallDecline, KitRoute::Channel, KitRoute::MyDevices, KitRoute::DeviceRevoke, KitRoute::Feed] {
+            assert!(voice_chat_kit_refusal(r).is_none(), "{r:?}");
+        }
+    }
+
+    /// L8: `GET /members` names only the people in the login's own room.
+    #[test]
+    fn members_are_narrowed_to_the_logins_room() {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("10".to_string(), vec![occ("1", "k2:connect:me"), occ("2", "k2:connect:mate")]);
+        m.insert("11".to_string(), vec![occ("3", "k2:connect:other")]);
+        let mates = room_mates(&m, "k2:connect:me");
+        assert_eq!(mates, vec!["1".to_string(), "2".to_string()]);
+        assert_eq!(narrow_members_query("ids=1,2,3", &mates).as_deref(), Some("ids=1,2"));
+        assert_eq!(narrow_members_query("ids=3", &mates), None, "nobody left: answered empty, Sew not asked");
+        assert!(room_mates(&m, "k2:connect:nobody").is_empty(), "in no room: nobody");
+    }
+}

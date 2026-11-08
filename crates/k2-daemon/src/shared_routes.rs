@@ -227,8 +227,20 @@ pub fn resolve_garden(input: &str) -> Result<String, CliResponse> {
         .ok_or_else(|| refuse("404 Not Found", "unknown_garden", format!("no Garden '{input}' on this server")))
 }
 
-/// Requested shares (addresses, Garden ids or names) → stored ids.
-pub fn resolve_shares(agents: &[String], gardens: &[String]) -> Result<Shares, CliResponse> {
+/// A data source by name, for a share (M5). 404 `unknown_source`.
+pub fn resolve_source(input: &str) -> Result<String, CliResponse> {
+    let name = input.trim();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match k2_core::sources::store::get_by_name(&conn, name) {
+        Ok(Some(row)) => Ok(row.name),
+        _ => Err(refuse("404 Not Found", "unknown_source", format!("no data source '{name}' on this server"))),
+    }
+}
+
+/// Requested shares (addresses, Garden ids or names, source names) →
+/// stored ids.
+pub fn resolve_shares(agents: &[String], gardens: &[String], sources: &[String]) -> Result<Shares, CliResponse> {
     let mut out = Shares::default();
     for a in agents {
         out.agents.push(resolve_agent(a)?);
@@ -236,15 +248,212 @@ pub fn resolve_shares(agents: &[String], gardens: &[String]) -> Result<Shares, C
     for g in gardens {
         out.gardens.push(resolve_garden(g)?);
     }
+    for s in sources {
+        out.sources.push(resolve_source(s)?);
+    }
     out.normalized().map_err(|e| refuse("400 Bad Request", "too_many_shares", e))
 }
 
+/// What an agent holds that a public demo agent mustn't (security review
+/// H1): connections to other agents, vault grants, a mailbox, compute
+/// grants, or a harness that runs without permission prompts. A check that
+/// can't be made counts as a risk. Empty = a dedicated demo agent.
+pub fn agent_risks(project_id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let count = |sql: &str| -> Result<i64, String> {
+            conn.query_row(sql, rusqlite::params![project_id], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())
+        };
+        for (what, sql) in [
+            ("connections to other agents", "SELECT COUNT(*) FROM workspace_relations WHERE source_project_id = ?1 OR target_project_id = ?1"),
+            ("a mailbox", "SELECT COUNT(*) FROM mail_addresses WHERE owner_project_id = ?1 AND status = 'active'"),
+            ("compute node grants", "SELECT COUNT(*) FROM compute_node_grants WHERE workspace_id = ?1"),
+            ("no permission prompts (api_skip_permissions)", "SELECT COALESCE(api_skip_permissions, 0) FROM projects WHERE id = ?1"),
+        ] {
+            match count(sql) {
+                Ok(0) => {}
+                Ok(_) => out.push(what.to_string()),
+                Err(e) => out.push(format!("{what}: K2 couldn't check ({e})")),
+            }
+        }
+    }
+    match crate::vault::get() {
+        Ok(v) => match v.grants_to(&k2_vault::Consumer::workspace(project_id)) {
+            Ok(g) if g.is_empty() => {}
+            Ok(g) => out.push(format!("vault grants ({})", g.len())),
+            Err(e) => out.push(format!("vault grants: K2 couldn't check ({e})")),
+        },
+        // No vault on this server at all: no grant can exist. A vault that
+        // exists but isn't open can't be checked: a risk.
+        Err(_) if !crate::vault::vault_dir(&k2_core::paths::k2_home()).join("vault.db").exists() => {}
+        Err(e) => out.push(format!("vault grants: K2 couldn't check ({e})")),
+    }
+    out
+}
+
+/// H1: every shared agent must be a dedicated demo agent. Refuses (409
+/// `agent_not_demo`, naming each risk) unless `force`; with `force` the
+/// risks come back as warnings for the answer.
+pub fn demo_agent_check(shares: &Shares, force: bool) -> Result<Vec<String>, CliResponse> {
+    let mut warnings = Vec::new();
+    for id in &shares.agents {
+        let address = agent_view(id).and_then(|v| v["address"].as_str().map(str::to_string)).unwrap_or_else(|| id.clone());
+        for r in agent_risks(id) {
+            warnings.push(format!("{address}: {r}"));
+        }
+    }
+    if warnings.is_empty() || force {
+        return Ok(warnings);
+    }
+    Err(CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: json!({
+            "ok": false,
+            "error": {
+                "code": "agent_not_demo",
+                "hint": "share only a dedicated demo agent: anyone with this login can talk to it. Send force (k2 users … --force) to share it anyway.",
+                "risks": warnings,
+            },
+        })
+        .to_string(),
+    })
+}
+
 /// Stored shares as people see them (`GET /cli/users`, the CLI): a share
-/// whose agent or Garden is gone shows `{id, missing: true}`.
+/// whose agent, Garden or source is gone shows `{id|name, missing: true}`.
 pub fn shares_view(s: &Shares) -> J {
     let agents: Vec<J> = s.agents.iter().map(|id| agent_view(id).unwrap_or_else(|| json!({ "id": id, "missing": true }))).collect();
     let gardens: Vec<J> = s.gardens.iter().map(|id| garden_view(id).unwrap_or_else(|| json!({ "id": id, "missing": true }))).collect();
-    json!({ "agents": agents, "gardens": gardens })
+    let sources: Vec<J> = s
+        .sources
+        .iter()
+        .map(|n| match resolve_source(n) {
+            Ok(_) => json!({ "name": n }),
+            Err(_) => json!({ "name": n, "missing": true }),
+        })
+        .collect();
+    json!({ "agents": agents, "gardens": gardens, "sources": sources })
+}
+
+/// For the Garden door's sources (M5): may this live Voice & Chat only
+/// login read source `name`'s card view?
+pub fn shared_source(login: &str, name: &str) -> bool {
+    connect_users::voice_chat_shares(login).is_some_and(|s| s.sources.iter().any(|x| x == name))
+}
+
+// ── limits (security review H2) ────────────────────────────────────────
+
+/// One post per this long per login.
+pub const POST_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+/// Posts per login per UTC day.
+pub const POSTS_PER_DAY: u32 = 200;
+/// Reads (`/cli/shared`, `/cli/shared/thread`) a login may burst.
+pub const READ_BURST: f64 = 20.0;
+/// Reads per second it refills (a 2–3 s poll and the list fit easily).
+pub const READS_PER_SEC: f64 = 1.0;
+
+/// One login's post budget.
+#[derive(Debug, Clone, Default)]
+pub struct PostBudget {
+    last: Option<std::time::Instant>,
+    day: i64,
+    count: u32,
+}
+
+impl PostBudget {
+    /// May one more post go now? `Err((code, retry after s))`. Nothing is
+    /// spent: [`Self::spend`] does that once the post is accepted.
+    pub fn check(&self, now: std::time::Instant, day: i64) -> Result<(), (&'static str, u64)> {
+        if day == self.day && self.count >= POSTS_PER_DAY {
+            return Err(("daily_limit", 3600));
+        }
+        if let Some(last) = self.last {
+            let since = now.saturating_duration_since(last);
+            if since < POST_EVERY {
+                return Err(("rate_limited", (POST_EVERY - since).as_secs().max(1)));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn spend(&mut self, now: std::time::Instant, day: i64) {
+        if day != self.day {
+            self.day = day;
+            self.count = 0;
+        }
+        self.count += 1;
+        self.last = Some(now);
+    }
+}
+
+/// One login's read bucket.
+#[derive(Debug, Clone)]
+pub struct ReadBucket {
+    tokens: f64,
+    at: std::time::Instant,
+}
+
+impl ReadBucket {
+    pub fn new(now: std::time::Instant) -> Self {
+        Self { tokens: READ_BURST, at: now }
+    }
+
+    /// Take one read; `Err(ms to wait)` when empty.
+    pub fn take(&mut self, now: std::time::Instant) -> Result<(), u64> {
+        let dt = now.saturating_duration_since(self.at).as_secs_f64();
+        self.tokens = (self.tokens + dt * READS_PER_SEC).min(READ_BURST);
+        self.at = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            Ok(())
+        } else {
+            Err((((1.0 - self.tokens) / READS_PER_SEC) * 1000.0).ceil() as u64)
+        }
+    }
+}
+
+fn post_budgets() -> &'static std::sync::Mutex<HashMap<String, PostBudget>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<HashMap<String, PostBudget>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+fn read_buckets() -> &'static std::sync::Mutex<HashMap<String, ReadBucket>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<HashMap<String, ReadBucket>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+fn utc_day() -> i64 {
+    chrono::Utc::now().timestamp().div_euclid(86_400)
+}
+
+fn limited(code: &str, hint: &str, retry_ms: u64) -> CliResponse {
+    CliResponse {
+        status: "429 Too Many Requests",
+        content_type: "application/json",
+        body: json!({ "ok": false, "error": { "code": code, "hint": hint, "retryAfterMs": retry_ms } }).to_string(),
+    }
+}
+
+fn take_read(login: &str) -> Result<(), CliResponse> {
+    let now = std::time::Instant::now();
+    let mut m = read_buckets().lock().unwrap_or_else(|p| p.into_inner());
+    if m.len() > 10_000 {
+        m.clear();
+    }
+    m.entry(login.to_string())
+        .or_insert_with(|| ReadBucket::new(now))
+        .take(now)
+        .map_err(|ms| limited("rate_limited", "too many reads from this login; slow the poll down", ms))
+}
+
+/// Tests: forget every login's budgets.
+#[cfg(test)]
+pub(crate) fn forget_limits() {
+    post_budgets().lock().unwrap_or_else(|p| p.into_inner()).clear();
+    read_buckets().lock().unwrap_or_else(|p| p.into_inner()).clear();
 }
 
 /// For the remote Garden door: is `garden` (an id or a name) one of the
@@ -285,23 +494,32 @@ pub fn handle(path: &str, login: Option<&str>, params: &HashMap<String, String>,
         Ok(x) => x,
         Err(r) => return r,
     };
+    if path != THREAD_POST {
+        if let Err(r) = take_read(&login) {
+            return r;
+        }
+    }
     match path {
-        LIST => list(&shares),
-        THREAD => thread(&shares, params),
+        LIST => list(&login, &shares),
+        THREAD => thread(&login, &shares, params),
         THREAD_POST => post(&login, &shares, body),
         _ => refuse("404 Not Found", "not_found", format!("no route {path}")),
     }
 }
 
 /// `GET /cli/shared`.
-fn list(shares: &Shares) -> CliResponse {
+fn list(login: &str, shares: &Shares) -> CliResponse {
     let agents: Vec<J> = shares
         .agents
         .iter()
         .filter_map(|id| agent_view(id))
         .map(|mut a| {
-            let word = activity_of(a["address"].as_str().unwrap_or_default());
-            a["activity"] = json!(word);
+            let vc = crate::overlay_routes::vc_addr(a["address"].as_str().unwrap_or_default(), login);
+            a["activity"] = json!(activity_of(&vc));
+            // The login's own conversation with this agent: the phone keys
+            // its cache on (server, login, conversationId).
+            a["conversationId"] = json!(crate::overlay_routes::vc_conversation(a["id"].as_str().unwrap_or_default(), login));
+            a["conversationAddress"] = json!(vc);
             a
         })
         .collect();
@@ -312,9 +530,11 @@ fn list(shares: &Shares) -> CliResponse {
 /// The read params `GET /cli/thread` takes that a shared read passes on.
 const THREAD_READ_PARAMS: &[&str] = &["limit", "after_seq", "since_seq", "before_seq"];
 
-/// `GET /cli/shared/thread?agent=`: `GET /cli/thread`'s answer for the
-/// shared agent's canonical address, and nothing else the caller sent.
-fn thread(shares: &Shares, params: &HashMap<String, String>) -> CliResponse {
+/// `GET /cli/shared/thread?agent=`: `GET /cli/thread`'s answer for THIS
+/// login's own conversation with the shared agent (`vc:<agent>:<login>`,
+/// security review H1): its own posts and the agent's replies to it, never
+/// the agent's Thread or anyone else's conversation.
+fn thread(login: &str, shares: &Shares, params: &HashMap<String, String>) -> CliResponse {
     let agent = params.get("agent").map(String::as_str).unwrap_or("").trim().to_string();
     if agent.is_empty() {
         return refuse("400 Bad Request", "usage", "agent is required (an address from GET /cli/shared)");
@@ -322,15 +542,24 @@ fn thread(shares: &Shares, params: &HashMap<String, String>) -> CliResponse {
     let Some((_, address)) = shared_agent(shares, &agent) else {
         return not_shared(&agent);
     };
+    let vc = crate::overlay_routes::vc_addr(&address, login);
     let mut inner: HashMap<String, String> = HashMap::new();
-    inner.insert("addr".into(), address.clone());
+    inner.insert("addr".into(), vc.clone());
     for k in THREAD_READ_PARAMS {
         if let Some(v) = params.get(*k) {
             inner.insert((*k).to_string(), v.clone());
         }
     }
     let r = crate::overlay_routes::dispatch("/cli/thread", &inner).unwrap_or_else(|| refuse("404 Not Found", "not_found", "no Thread"));
-    reshape(r, &[("activity", json!(activity_of(&address)))])
+    let conversation = shared_agent(shares, &agent).map(|(id, _)| crate::overlay_routes::vc_conversation(&id, login)).unwrap_or_default();
+    reshape(
+        r,
+        &[
+            ("activity", json!(activity_of(&vc))),
+            ("conversationId", json!(conversation)),
+            ("conversationAddress", json!(vc)),
+        ],
+    )
 }
 
 /// The desktop's reply marker (`THREAD_REPLY_MARK`).
@@ -413,8 +642,8 @@ struct PostBody {
     reply_to: Option<i64>,
 }
 
-/// Longest post a shared Thread takes.
-pub const MAX_TEXT_CHARS: usize = 8000;
+/// Longest post a shared Thread takes (H2).
+pub const MAX_TEXT_CHARS: usize = 2000;
 
 /// `POST /cli/shared/thread/post {agent, text, clientMsgId?, via?}`.
 fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
@@ -429,7 +658,10 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
         audit("shared.thread.post", login, "refused not_shared".into());
         return not_shared(&b.agent);
     };
-    let text = b.text.trim();
+    let vc = crate::overlay_routes::vc_addr(&address, login);
+    // M4: no control characters (but `\n`) or bidi overrides, ever.
+    let cleaned = crate::overlay_routes::strip_untrusted_controls(&b.text);
+    let text = cleaned.trim();
     if text.is_empty() {
         return refuse("400 Bad Request", "usage", "text is required");
     }
@@ -440,24 +672,37 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
     if text.starts_with(REPLY_MARK) {
         return refuse("400 Bad Request", "reply_header_not_allowed", "send replyTo (the message's seq) instead of a reply header; K2 writes the header");
     }
+    // H2: one post per 10 s and 200 a day per login, and none while the
+    // agent is still on this person's last message (held at the source).
+    let (now, day) = (std::time::Instant::now(), utc_day());
+    {
+        let m = post_budgets().lock().unwrap_or_else(|p| p.into_inner());
+        if let Err((code, secs)) = m.get(login).map_or(Ok(()), |b| b.check(now, day)) {
+            return limited(code, "too many posts from this login", secs * 1000);
+        }
+    }
+    let busy = activity_of(&vc);
+    if busy != "idle" {
+        return limited("agent_busy", "the agent is still on your last message; send this when it answers", 5000);
+    }
+    // H1: a reply quotes only this person's own conversation.
     let text = match b.reply_to {
-        None => crate::workspace_msg::quote_guest_lines(text),
-        Some(seq) if seq > 0 => match message_at(&address, seq) {
+        None => text.to_string(),
+        Some(seq) if seq > 0 => match message_at(&vc, seq) {
             Some((from, body)) => reply_text(seq, &from, &body, text),
             None => return refuse("404 Not Found", "reply_not_found", format!("no message #{seq} in this Thread")),
         },
         Some(_) => return refuse("400 Bad Request", "usage", "replyTo is a message's seq (a whole number above 0)"),
     };
-    let mut inner = json!({
-        "addr": address,
-        "text": text,
-        "via": "compose",
-    });
-    if let Some(id) = b.client_msg_id {
-        inner[crate::client_msg_id::PARAM] = json!(id);
+    let r = crate::overlay_routes::post_voice_chat(login, &vc, &text, b.client_msg_id.as_deref());
+    if r.status.starts_with('2') {
+        let mut m = post_budgets().lock().unwrap_or_else(|p| p.into_inner());
+        if m.len() > 10_000 {
+            m.clear();
+        }
+        m.entry(login.to_string()).or_default().spend(now, day);
     }
-    let r = crate::overlay_routes::dispatch_post_as("/cli/thread/post", &HashMap::new(), inner.to_string().as_bytes(), login);
-    audit("shared.thread.post", login, format!("addr={address} status={}", r.status.split(' ').next().unwrap_or("")));
+    audit("shared.thread.post", login, format!("addr={vc} status={}", r.status.split(' ').next().unwrap_or("")));
     reshape(r, &[])
 }
 

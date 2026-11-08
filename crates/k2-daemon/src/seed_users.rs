@@ -146,6 +146,7 @@ fn apply_row(row: &SeedUser) -> SeedOutcome {
         role: Some(role),
         must_change_password: row.must_change_password,
         shares: Default::default(),
+        fixed_password: false,
     };
     if let Err(e) = connect_users::add_user_with_role(&row.username, &row.password, None, None, &new) {
         return SeedOutcome::Failed(format!("add_user: {e}"));

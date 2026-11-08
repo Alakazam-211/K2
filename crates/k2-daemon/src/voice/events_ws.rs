@@ -25,6 +25,41 @@ use crate::session_events::{self, SessionEvent};
 
 pub const PATH: &str = "/cli/voice/events";
 
+/// The most of these sockets one login may hold open (security review H2).
+pub const MAX_PER_LOGIN: usize = 3;
+
+fn open_counts() -> &'static std::sync::Mutex<std::collections::HashMap<String, usize>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// One open socket's place in its login's count; freed on drop.
+#[derive(Debug)]
+pub struct Slot(String);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut m = open_counts().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = m.get_mut(&self.0) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                m.remove(&self.0);
+            }
+        }
+    }
+}
+
+/// A place for one more socket of `login`, or `None` at [`MAX_PER_LOGIN`].
+pub fn take_slot(login: &str) -> Option<Slot> {
+    let mut m = open_counts().lock().unwrap_or_else(|p| p.into_inner());
+    let n = m.entry(login.to_string()).or_insert(0);
+    if *n >= MAX_PER_LOGIN {
+        return None;
+    }
+    *n += 1;
+    Some(Slot(login.to_string()))
+}
+
 /// The one frame this socket forwards, as JSON (None for every other event).
 pub fn frame_for(event: &SessionEvent) -> Option<String> {
     match event {
@@ -116,6 +151,19 @@ pub async fn serve(stream: &mut TcpStream, token: String, owner_token: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_login_holds_at_most_three_sockets_and_a_closed_one_frees_its_place() {
+        let a = take_slot("slotcap").expect("1");
+        let b = take_slot("slotcap").expect("2");
+        let c = take_slot("slotcap").expect("3");
+        assert!(take_slot("slotcap").is_none(), "a fourth is refused");
+        assert!(take_slot("slotother").is_some(), "another login is separate");
+        drop(b);
+        let d = take_slot("slotcap").expect("a place came free");
+        assert!(take_slot("slotcap").is_none());
+        drop((a, c, d));
+    }
 
     #[test]
     fn only_rooms_changed_frames_leave() {

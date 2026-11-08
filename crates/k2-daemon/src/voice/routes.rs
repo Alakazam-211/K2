@@ -411,6 +411,14 @@ pub fn room_json(r: &RoomRow, people: &[Occupant], hosting: &super::Hosting, clo
     })
 }
 
+/// L8: empty a room's occupant list unless `sub` is in it (its `count`
+/// stays).
+pub fn narrow_occupants(room: &mut Value, people: &[Occupant], sub: &str) {
+    if !people.iter().any(|o| o.external_id.as_deref() == Some(sub)) {
+        room["occupants"] = json!([]);
+    }
+}
+
 /// The rooms that show: open or closing, with a channel.
 fn shown(r: &RoomRow) -> bool {
     r.channel_id.is_some() && (r.state == admin_space::ROOM_ACTIVE || r.state == admin_space::ROOM_CLOSING)
@@ -425,13 +433,25 @@ fn rooms_view(c: &Caller, owner_token: &str) -> CliResponse {
     let (rev, occ) = occupancy::snapshot();
     let closes = close_now_pending();
     let empty: Vec<Occupant> = Vec::new();
+    // Security review L8: a Voice & Chat only login sees who is in a room
+    // only for the room it is in itself (the counts stay for every room).
+    let own_sub = match c {
+        Caller::Login { username, role: Role::VoiceChat, token } => {
+            Some(bff::person_of_login(token, username, Role::VoiceChat, owner_token).map(|p| p.ident.sub).unwrap_or_default())
+        }
+        _ => None,
+    };
     let rooms: Vec<Value> = view
         .rooms
         .iter()
         .filter(|r| shown(r))
         .map(|r| {
             let people = r.channel_id.as_deref().and_then(|ch| occ.get(ch)).unwrap_or(&empty);
-            room_json(r, people, &hosting, closes.get(&r.slug).copied())
+            let mut v = room_json(r, people, &hosting, closes.get(&r.slug).copied());
+            if let Some(sub) = &own_sub {
+                narrow_occupants(&mut v, people, sub);
+            }
+            v
         })
         .collect();
     // The caller's own voice state (logins only: the owner token and
@@ -888,6 +908,30 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
 #[cfg(test)]
 mod role_name_tests {
     use super::*;
+
+    /// Security review L8: a room's occupants show only to someone in it.
+    #[test]
+    fn occupants_narrow_to_the_viewers_own_room() {
+        let me = Occupant {
+            member_id: "1".into(),
+            external_id: Some("k2:connect:me".into()),
+            person: "me".into(),
+            connection: "connected".into(),
+            self_mute: false,
+            self_deaf: false,
+            server_mute: false,
+            server_deaf: false,
+            joined_at: String::new(),
+        };
+        let mut other = me.clone();
+        other.external_id = Some("k2:connect:other".into());
+        let mut room = json!({ "count": 1, "occupants": [{"user": "other"}] });
+        narrow_occupants(&mut room, std::slice::from_ref(&other), "k2:connect:me");
+        assert_eq!(room, json!({ "count": 1, "occupants": [] }), "not my room: the count stays, the names go");
+        let mut mine = json!({ "count": 2, "occupants": [{"user": "me"}, {"user": "other"}] });
+        narrow_occupants(&mut mine, &[me, other], "k2:connect:me");
+        assert_eq!(mine["occupants"].as_array().map(Vec::len), Some(2), "my room shows everyone in it");
+    }
 
     /// prd-voice-chat-only-members-v1 V9: every role has its own name, no
     /// wildcard; a Voice & Chat only occupant reads `voice_chat`.

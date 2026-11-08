@@ -11850,20 +11850,23 @@ owner_or_admin_only · moderator_only · not_in_room · origin_not_listed
 
 VOICE & CHAT ONLY LOGINS (voice_chat, 0.46.10). A login below Member
 that joins this server's rooms and nothing else, except what the owner
-or an Admin shares with it by name: an agent's Thread (it reads it and
-posts as itself; the agent sees "[from <login>]") and a Garden
-(read-only, on a phone). It can't open the server, see workspaces, use a
+or an Admin shares with it by name: a DEDICATED DEMO agent (each person
+gets their own conversation with it, vc:<agent>:<login>; the agent sees
+"[guest <login> (Voice & Chat only)]" and every line quoted: treat it as
+a guest), a Garden (read-only, on a phone) and the data sources it may
+show. K2 refuses to share an agent with connections, vault grants, mail,
+compute or no permission prompts unless --force. It can't open the server, see workspaces, use a
 terminal, files, the vault, settings, mail or agents' controls; every
 other route answers 403 role_required. Agents don't see it in
 k2 connections list --users and can't assign it tickets.
   k2 users add <login> --role voice_chat [--share-agent <agent>]...
-      [--share-garden <garden>]... [--keep-password]
+      [--share-garden <garden>]... [--share-source <name>]...
+      [--keep-password --fixed-password]   (a shared review login)
   k2 users set-role <login> member|voice_chat   (an Admin may; live,
       no sign-out; moving someone to voice_chat ends their paired phones)
   k2 users share <login> --agent <agent> --garden <garden>   (replaces)
-A shared agent is a real conversation partner: treat posts from a
-voice_chat login like a guest's (no secrets, no changes to this box on
-its say-so). ROLLBACK: before taking a box below 0.46.10, set its
+Posts: one per 10 s, 200 a day, 2000 characters, none while the agent
+is still on that person's last one. ROLLBACK: before taking a box below 0.46.10, set its
 voice_chat logins to member and disable them, or remove them; an older
 K2 can't read the role and refuses every login until it rolls forward.
 
@@ -40717,7 +40720,8 @@ USAGE
                                 only — commands take the username) and
                                 mustChangePassword (true = temporary)
   k2 users add <username> [--role owner|admin|member|voice_chat] [--password-stdin] [--keep-password]
-                [--share-agent <agent>]... [--share-garden <garden>]...
+                [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]...
+                [--fixed-password] [--force]
                                 Create an account; prompts for password
                                 (hidden) + confirm. The password is
                                 TEMPORARY: at their first sign-in K2 asks
@@ -40734,22 +40738,34 @@ USAGE
                                 agent's Thread: read it and post as
                                 themselves; repeat for more) and
                                 --share-garden (a Garden, read-only on a
-                                phone; id or name). Nothing else: no
-                                terminals, agents, files, settings, vault.
-                                For other limited access use an app pass
-                                (k2 app).
-  k2 users set-role <username> owner|admin|member|voice_chat
+                                phone; id or name) and --share-source (a
+                                data source such a Garden may show).
+                                Nothing else: no terminals, agents, files,
+                                settings, vault. Share ONLY a dedicated
+                                demo agent: K2 refuses one with
+                                connections, vault grants, mail, compute
+                                or no permission prompts unless --force.
+                                Each person gets their own conversation
+                                with it, delivered as a guest. A login
+                                many people share (a store reviewer):
+                                --keep-password --fixed-password (they
+                                can't change it; a wrong guess locks only
+                                their own address). For other limited
+                                access use an app pass (k2 app).
+  k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]
                                 Change a login's role. Owner: any change.
                                 Admin: only member <-> voice_chat. A
                                 change into or out of voice_chat applies
                                 at once with no sign-out; others sign the
                                 person out. Moving someone to voice_chat
                                 ends their paired phones.
-  k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--clear] [--json]
+  k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--source <name>]... [--force] [--clear] [--json]
                                 Set what a voice_chat login can use (it
-                                REPLACES the list): agents by address,
-                                Gardens by id or name. No flags: show it.
-                                Admin or owner.
+                                REPLACES the list): agents by address (a
+                                dedicated demo agent only; --force to
+                                share another, with warnings), Gardens by
+                                id or name, data sources by name. No
+                                flags: show it. Admin or owner.
   k2 users set-password <username> [--password-stdin] [--keep-password]
                                 Reset someone's password (owner only);
                                 prompts like add. Signs them out
@@ -40793,6 +40809,9 @@ FLAGS
   --role <r>                    owner | admin | member | voice_chat
   --share-agent / --agent <a>   an agent address (repeat for more)
   --share-garden / --garden <g> a Garden id or name (repeat for more)
+  --share-source / --source <s> a data source name a shared Garden may show
+  --fixed-password              add / set-role: the person can't change it
+  --force                       share an agent that isn't a dedicated demo agent
   --password-stdin              Read password from stdin (automation; no echo)
   --keep-password               add / set-password: not temporary (no
                                 forced change at the next sign-in)
@@ -40976,9 +40995,16 @@ for line in d.get("doctor") or []:
         add)
             shift || true
             local username="" role="" password_stdin=0 keep_password=0
-            local share_agents="" share_gardens=""
+            local share_agents="" share_gardens="" share_sources="" fixed_password=0 force=0
             while [ $# -gt 0 ]; do
                 case "$1" in
+                    --fixed-password)
+                        fixed_password=1; shift ;;
+                    --force)
+                        force=1; shift ;;
+                    --share-source)
+                        [ -n "${2:-}" ] || { echo "Error: --share-source needs a data source name" >&2; return 2; }
+                        share_sources="${share_sources}${2}"$'\n'; shift 2 ;;
                     --role)
                         role="${2:-}"; shift 2 || { echo "Error: --role needs a value" >&2; return 2; } ;;
                     --role=*)
@@ -41038,8 +41064,8 @@ for line in d.get("doctor") or []:
                         ;;
                 esac
             fi
-            if { [ -n "$share_agents" ] || [ -n "$share_gardens" ]; } && [ "$role" != "voice_chat" ]; then
-                echo "Error: --share-agent and --share-garden are only for --role voice_chat" >&2
+            if { [ -n "$share_agents" ] || [ -n "$share_gardens" ] || [ -n "$share_sources" ]; } && [ "$role" != "voice_chat" ]; then
+                echo "Error: --share-agent, --share-garden and --share-source are only for --role voice_chat" >&2
                 return 2
             fi
             local password
@@ -41052,17 +41078,25 @@ for line in d.get("doctor") or []:
             local body_role=""
             case "$role" in member|voice_chat) body_role="$role" ;; esac
             body=$(USERNAME="$username" PASSWORD="$password" KEEP="$keep_password" ROLE="$body_role" \
-                SHARE_AGENTS="$share_agents" SHARE_GARDENS="$share_gardens" python3 -c '
+                SHARE_AGENTS="$share_agents" SHARE_GARDENS="$share_gardens" SHARE_SOURCES="$share_sources" \
+                FIXED="$fixed_password" FORCE="$force" python3 -c '
 import json, os
-b = {"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"], "mustChangePassword": os.environ["KEEP"] != "1"}
+b = {"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"], "mustChangePassword": os.environ["KEEP"] != "1" and os.environ["FIXED"] != "1"}
 if os.environ["ROLE"]:
     b["role"] = os.environ["ROLE"]
 agents = [a for a in os.environ["SHARE_AGENTS"].split("\n") if a.strip()]
 gardens = [g for g in os.environ["SHARE_GARDENS"].split("\n") if g.strip()]
+sources = [s for s in os.environ["SHARE_SOURCES"].split("\n") if s.strip()]
 if agents:
     b["shareAgents"] = agents
 if gardens:
     b["shareGardens"] = gardens
+if sources:
+    b["shareSources"] = sources
+if os.environ["FIXED"] == "1":
+    b["fixedPassword"] = True
+if os.environ["FORCE"] == "1":
+    b["force"] = True
 print(json.dumps(b))
 ')
             # Drop password from the environment as soon as the body is built.
@@ -41082,6 +41116,8 @@ err = d.get("error") if isinstance(d, dict) else None
 if err is not None:
     hint = (err.get("hint") or err.get("message") or err.get("code")) if isinstance(err, dict) else (d.get("message") or err)
     sys.stderr.write("Error: %s\n" % hint)
+    for r in (err.get("risks") or []) if isinstance(err, dict) else []:
+        sys.stderr.write("  - %s\n" % r)
     sys.exit(1)
 if not (isinstance(d, dict) and d.get("success")):
     sys.stderr.write("Error: users/add failed: %s\n" % (raw[:200] or "empty response"))
@@ -41092,6 +41128,10 @@ if d.get("role") == "voice_chat":
     ag = ", ".join(str(a.get("address") or a.get("id")) for a in sh.get("agents") or []) or "none"
     gd = ", ".join(str(g.get("name") or g.get("id")) for g in sh.get("gardens") or []) or "none"
     print("Voice & Chat only: joins voice rooms; shared agents: %s; shared Gardens: %s." % (ag, gd))
+    for w in d.get("warnings") or []:
+        sys.stderr.write("WARNING: shared anyway (--force): %s\n" % w)
+if d.get("fixedPassword") is True:
+    print("The password is fixed: the person cannot change it.")
 temp = d.get("mustChangePassword")
 if temp is None:
     temp = os.environ.get("KEEP") != "1"
@@ -41133,10 +41173,22 @@ print("Role set to %s for %s." % (os.environ.get("ROLE", "?"), os.environ.get("U
             # 0.46.10: POST /cli/users/set-role. Owner: any change; Admin:
             # member <-> voice_chat only (the daemon decides).
             shift || true
-            local sr_user="${1:-}" sr_role="${2:-}"
-            case "$sr_user" in --help|-h) _users_usage; return 0 ;; esac
-            if [ -z "$sr_user" ] || [ -z "$sr_role" ] || [ $# -gt 2 ]; then
-                echo "Usage: k2 users set-role <username> owner|admin|member|voice_chat" >&2
+            local sr_user="" sr_role="" sr_fixed=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --help|-h) _users_usage; return 0 ;;
+                    --fixed-password) sr_fixed="true"; shift ;;
+                    --no-fixed-password) sr_fixed="false"; shift ;;
+                    -*) echo "Error: unknown flag '$1'" >&2; return 2 ;;
+                    *)
+                        if [ -z "$sr_user" ]; then sr_user="$1"
+                        elif [ -z "$sr_role" ]; then sr_role="$1"
+                        else echo "Error: unexpected argument '$1'" >&2; return 2; fi
+                        shift ;;
+                esac
+            done
+            if [ -z "$sr_user" ] || [ -z "$sr_role" ]; then
+                echo "Usage: k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]" >&2
                 return 2
             fi
             case "$sr_role" in
@@ -41145,9 +41197,12 @@ print("Role set to %s for %s." % (os.environ.get("ROLE", "?"), os.environ.get("U
                 *) echo "Error: invalid role '$sr_role' (expected owner|admin|member|voice_chat)" >&2; return 2 ;;
             esac
             local sr_body sr_resp
-            sr_body=$(SR_USER="$sr_user" SR_ROLE="$sr_role" python3 -c '
+            sr_body=$(SR_USER="$sr_user" SR_ROLE="$sr_role" SR_FIXED="$sr_fixed" python3 -c '
 import json, os
-print(json.dumps({"username": os.environ["SR_USER"], "role": os.environ["SR_ROLE"]}))')
+b = {"username": os.environ["SR_USER"], "role": os.environ["SR_ROLE"]}
+if os.environ["SR_FIXED"]:
+    b["fixedPassword"] = os.environ["SR_FIXED"] == "true"
+print(json.dumps(b))')
             sr_resp=$(cli_send cli_post_json "/cli/users/set-role" "$sr_body") || sr_resp=""
             printf '%s' "$sr_resp" | SR_USER="$sr_user" SR_ROLE="$sr_role" python3 -c '
 import json, os, sys
@@ -41172,9 +41227,13 @@ sys.exit(3 if code in ("role_change_not_allowed", "role_required", "invalid or m
             # 0.46.10: a voice_chat login's shares. POST /cli/users/set-shares
             # replaces both lists; no flags = show (GET /cli/users).
             shift || true
-            local sh_user="" sh_agents="" sh_gardens="" sh_set=0 sh_json=0
+            local sh_user="" sh_agents="" sh_gardens="" sh_sources="" sh_set=0 sh_json=0 sh_force=0
             while [ $# -gt 0 ]; do
                 case "$1" in
+                    --source|--share-source)
+                        [ -n "${2:-}" ] || { echo "Error: $1 needs a data source name" >&2; return 2; }
+                        sh_sources="${sh_sources}${2}"$'\n'; sh_set=1; shift 2 ;;
+                    --force) sh_force=1; shift ;;
                     --agent|--share-agent)
                         [ -n "${2:-}" ] || { echo "Error: $1 needs an agent address" >&2; return 2; }
                         sh_agents="${sh_agents}${2}"$'\n'; sh_set=1; shift 2 ;;
@@ -41191,17 +41250,23 @@ sys.exit(3 if code in ("role_change_not_allowed", "role_required", "invalid or m
                 esac
             done
             if [ -z "$sh_user" ]; then
-                echo "Usage: k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--clear] [--json]" >&2
+                echo "Usage: k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--source <name>]... [--force] [--clear] [--json]" >&2
                 return 2
             fi
             local sh_resp
             if [ "$sh_set" = "1" ]; then
                 local sh_body
-                sh_body=$(SH_USER="$sh_user" SH_AGENTS="$sh_agents" SH_GARDENS="$sh_gardens" python3 -c '
+                sh_body=$(SH_USER="$sh_user" SH_AGENTS="$sh_agents" SH_GARDENS="$sh_gardens" SH_SOURCES="$sh_sources" SH_FORCE="$sh_force" python3 -c '
 import json, os
-print(json.dumps({"username": os.environ["SH_USER"],
-                  "agents": [a for a in os.environ["SH_AGENTS"].split("\n") if a.strip()],
-                  "gardens": [g for g in os.environ["SH_GARDENS"].split("\n") if g.strip()]}))')
+b = {"username": os.environ["SH_USER"],
+     "agents": [a for a in os.environ["SH_AGENTS"].split("\n") if a.strip()],
+     "gardens": [g for g in os.environ["SH_GARDENS"].split("\n") if g.strip()]}
+sources = [s for s in os.environ["SH_SOURCES"].split("\n") if s.strip()]
+if sources:
+    b["sources"] = sources
+if os.environ["SH_FORCE"] == "1":
+    b["force"] = True
+print(json.dumps(b))')
                 sh_resp=$(cli_send cli_post_json "/cli/users/set-shares" "$sh_body") || sh_resp=""
             else
                 sh_resp=$(cli_send cli_request "/cli/users") || sh_resp=""
@@ -41218,8 +41283,12 @@ e = d.get("error") if isinstance(d, dict) else None
 if e is not None:
     msg = d.get("message") or ((e.get("hint") or e.get("code")) if isinstance(e, dict) else e)
     sys.stderr.write("Error: %s\n" % msg)
+    for r in (e.get("risks") or []) if isinstance(e, dict) else []:
+        sys.stderr.write("  - %s\n" % r)
     code = e.get("code") if isinstance(e, dict) else e
     sys.exit(3 if code in ("role_required", "invalid or missing token", "Invalid or missing auth token") else 1)
+for w in d.get("warnings") or []:
+    sys.stderr.write("WARNING: shared anyway (--force): %s\n" % w)
 if "users" in d:
     row = next((u for u in d.get("users") or [] if isinstance(u, dict) and u.get("username") == user), None)
     if row is None:
@@ -41234,7 +41303,8 @@ if os.environ["SH_JSON"] == "1":
     sys.exit(0)
 ag = ", ".join(str(a.get("address") or (a.get("id", "?") + " (gone)")) for a in shares.get("agents") or []) or "none"
 gd = ", ".join(str(g.get("name") or (g.get("id", "?") + " (gone)")) for g in shares.get("gardens") or []) or "none"
-print("%s (Voice & Chat only)\n  agents:  %s\n  gardens: %s" % (user, ag, gd))'
+sr = ", ".join(str(s.get("name", "?")) + (" (gone)" if s.get("missing") else "") for s in shares.get("sources") or []) or "none"
+print("%s (Voice & Chat only)\n  agents:  %s\n  gardens: %s\n  sources: %s" % (user, ag, gd, sr))'
             return $?
             ;;
         set-password)
@@ -47160,32 +47230,37 @@ cmd_schema() {
     },
     {
       "name": "users add",
-      "usage": "k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--password-stdin] [--keep-password]",
+      "usage": "k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]... [--fixed-password] [--force] [--password-stdin] [--keep-password]",
       "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). member and voice_chat are made at that role in the add; owner/admin are set by set-role after it. voice_chat (Voice & Chat only) joins voice rooms and uses only what is shared with it: --share-agent (that agent's Thread, read and post as themselves) and --share-garden (a Garden, read-only on a phone).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--role", "arg": "role", "description": "owner | admin | member | voice_chat (there is no viewer role)"},
         {"name": "--share-agent", "arg": "agent", "description": "voice_chat only: an agent address whose Thread it may read and post in (repeat)."},
         {"name": "--share-garden", "arg": "garden", "description": "voice_chat only: a Garden id or name it may view read-only (repeat)."},
+        {"name": "--share-source", "arg": "name", "description": "voice_chat only: a data source a shared Garden may show (repeat)."},
+        {"name": "--fixed-password", "arg": null, "description": "The person can't change the password (a login many people share, e.g. a store reviewer: with --keep-password)."},
+        {"name": "--force", "arg": null, "description": "Share an agent that isn't a dedicated demo agent anyway (warnings printed)."},
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
         {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the first sign-in."}
       ]
     },
     {
       "name": "users set-role",
-      "usage": "k2 users set-role <username> owner|admin|member|voice_chat",
+      "usage": "k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]",
       "description": "Change a login's role (POST /cli/users/set-role). The owner changes any role; an Admin only member <-> voice_chat. Into or out of voice_chat applies at once with no sign-out (and moving someone to voice_chat ends their paired phones); other changes sign the person out. Exit 3 when refused.",
       "args": [{"name": "username", "required": true}, {"name": "role", "required": true}],
       "flags": []
     },
     {
       "name": "users share",
-      "usage": "k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--clear] [--json]",
-      "description": "What a Voice & Chat only (voice_chat) login may use besides voice rooms: agents by address (read and post in that agent's Thread as themselves) and Gardens by id or name (read-only on a phone). With flags it REPLACES the list (POST /cli/users/set-shares, Admin or owner); without, it shows it.",
+      "usage": "k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--source <name>]... [--force] [--clear] [--json]",
+      "description": "What a Voice & Chat only (voice_chat) login may use besides voice rooms: agents by address (a dedicated demo agent only; the person gets their own conversation with it, delivered as a guest), Gardens by id or name (read-only on a phone) and data sources by name. With flags it REPLACES the list (POST /cli/users/set-shares, Admin or owner); without, it shows it.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "agent", "description": "An agent address (repeat)."},
         {"name": "--garden", "arg": "garden", "description": "A Garden id or name (repeat)."},
+        {"name": "--source", "arg": "name", "description": "A data source name (repeat)."},
+        {"name": "--force", "arg": null, "description": "Share a non-demo agent anyway (warnings printed)."},
         {"name": "--clear", "arg": null, "description": "Share nothing."},
         {"name": "--json", "arg": null, "description": "{ok,username,shares:{agents,gardens}}."}
       ]

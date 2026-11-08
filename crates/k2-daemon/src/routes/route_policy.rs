@@ -2821,8 +2821,28 @@ pub fn refuse_voice_chat_login(query: &str, owner_token: &str) -> Option<CliResp
     if tok.is_empty() || super::http::ct_eq_token(tok, owner_token) {
         return None;
     }
-    let role = k2_core::connect_users::role_for_session(tok)?;
+    // L6: the session and its role in ONE read; a login store that can't be
+    // read refuses (503) instead of passing the request on.
+    let Some((_, role)) = k2_core::connect_users::validate_session_role(tok) else {
+        return session_shaped_and_unreadable(tok).then(role_unreadable);
+    };
     (role == k2_core::connect_users::Role::VoiceChat).then(|| role_required(Floor::Member, role))
+}
+
+/// 503 `role_unreadable` (security review L6): a login's role couldn't be
+/// read, so nothing that depends on it runs.
+pub(crate) fn role_unreadable() -> CliResponse {
+    CliResponse {
+        status: "503 Service Unavailable",
+        content_type: "application/json",
+        body: r#"{"error":"role_unreadable","message":"K2 couldn't read this login's role just now; try again."}"#.to_string(),
+    }
+}
+
+/// A login-session-shaped token while the login store can't be read: the
+/// request may be a login whose role nobody can tell (L6).
+pub(crate) fn session_shaped_and_unreadable(tok: &str) -> bool {
+    k2_core::connect_users::looks_like_session_token(tok) && k2_core::connect_users::store_unreadable()
 }
 
 /// Refusal for a login on a `/cli/*` path that is not in [`ROUTES`].
@@ -2863,10 +2883,12 @@ pub fn role_gate(
     if tok.is_empty() || super::http::ct_eq_token(tok, owner_token) {
         return None;
     }
-    let username = k2_core::connect_users::validate_session(tok)?;
-    // A session whose account vanished between the two reads: let the
-    // per-route gates refuse it as they always have.
-    let role = k2_core::connect_users::role_for_user(&username)?;
+    // L6: the session and its role from ONE read of the login store. Not a
+    // live session: the per-route gates decide, unless it is shaped like a
+    // login session and the store can't be read (then 503, never through).
+    let Some((_username, role)) = k2_core::connect_users::validate_session_role(tok) else {
+        return session_shaped_and_unreadable(tok).then(role_unreadable);
+    };
     // The permission-cards rows are unclassified while that switch is off.
     let Some(route) = live_row(path) else {
         return Some(unclassified());
@@ -3878,9 +3900,7 @@ mod tests {
                 ("POST", "/cli/sew/pass"),
                 ("GET", "/cli/federation/roster"),
             ] {
-                if lookup(p).is_none() {
-                    continue;
-                }
+                assert!(lookup(p).is_some(), "{p} is a row (a renamed route must be renamed here too)");
                 assert!(role_gate(m, p, &q, OWNER).is_some(), "{m} {p} must refuse voice_chat");
             }
             assert!(role_gate("POST", "/cli/voice/join", &q, OWNER).is_none());
@@ -3904,6 +3924,29 @@ mod tests {
             connect_users::set_role("rp_vcmember", Role::Member).expect("up");
             assert!(role_gate("GET", "/cli/projects/list", &format!("token={member}"), OWNER).is_none());
             assert!(passed.len() >= VOICE_CHAT_ALLOWLIST.len(), "{passed:?}");
+        });
+    }
+
+    /// Security review L6: when the login store can't be read, a login's
+    /// request is refused (503 `role_unreadable`) at the gate and at the
+    /// doors outside `/cli`, never passed on.
+    #[test]
+    fn an_unreadable_role_refuses_instead_of_passing() {
+        crate::test_support::with_temp_home(|| {
+            let vc = session("rp_unread", Role::VoiceChat);
+            let q = format!("token={vc}");
+            assert_eq!(status(&role_gate("GET", "/cli/projects/list", &q, OWNER)), "403 Forbidden");
+            std::fs::write(connect_users::store_path(), "{ not json").expect("corrupt the login store");
+            for (m, p) in [("GET", "/cli/projects/list"), ("GET", "/cli/auth/whoami"), ("POST", "/cli/voice/join"), ("POST", "/cli/auth/login")] {
+                let r = role_gate(m, p, &q, OWNER).unwrap_or_else(|| panic!("{m} {p} must not pass with an unreadable role"));
+                assert_eq!(r.status, "503 Service Unavailable", "{m} {p}: {}", r.body);
+                assert!(r.body.contains("role_unreadable"), "{}", r.body);
+            }
+            let r = refuse_voice_chat_login(&q, OWNER).expect("the /events and /status doors refuse it too");
+            assert_eq!(r.status, "503 Service Unavailable");
+            // Non-login credentials are not affected.
+            assert!(role_gate("GET", "/cli/projects/list", &format!("token={OWNER}"), OWNER).is_none());
+            assert!(role_gate("GET", "/cli/projects/list", "token=sid-1.secret", OWNER).is_none());
         });
     }
 

@@ -117,6 +117,18 @@ struct AddReq {
     share_agents: Vec<String>,
     #[serde(default, rename = "shareGardens")]
     share_gardens: Vec<String>,
+    /// Data sources (by name) the login may read on a shared Garden (M5).
+    #[serde(default, rename = "shareSources")]
+    share_sources: Vec<String>,
+    /// Share an agent that holds more than a demo should (connections,
+    /// vault grants, mail, compute, no permission prompts) anyway: the
+    /// answer carries the warnings (security review H1).
+    #[serde(default)]
+    force: bool,
+    /// A fixed password (M3): the person can't change it and is never asked
+    /// to (a review login several people share).
+    #[serde(default, rename = "fixedPassword")]
+    fixed_password: bool,
     /// Optional first / last name (0.46.0, `k2_core::person_name`): plain
     /// text, at most 64 characters. A bad value is a 400 and no user is
     /// created; `null` / `""` = unset.
@@ -153,21 +165,26 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
             Err(e) => return CliResponse::bad_request(e),
         },
     };
-    let has_shares = !req.share_agents.is_empty() || !req.share_gardens.is_empty();
+    let has_shares = !req.share_agents.is_empty() || !req.share_gardens.is_empty() || !req.share_sources.is_empty();
     if has_shares && role != connect_users::Role::VoiceChat {
-        return CliResponse::bad_request("shareAgents and shareGardens are only for a voice_chat login".to_string());
+        return CliResponse::bad_request("shareAgents, shareGardens and shareSources are only for a voice_chat login".to_string());
     }
     // V12/§9: a login the owner linked is the owner in Sew; it can't be
     // made Voice & Chat only.
     if role == connect_users::Role::VoiceChat && is_owner_linked_login(&req.username) {
         return CliResponse::bad_request(format!("'{}' is one of the owner's own logins; it can't be Voice & Chat only", req.username));
     }
-    let shares = match crate::shared_routes::resolve_shares(&req.share_agents, &req.share_gardens) {
+    let shares = match crate::shared_routes::resolve_shares(&req.share_agents, &req.share_gardens, &req.share_sources) {
         Ok(s) => s,
         Err(r) => return r,
     };
-    let must = req.must_change_password.unwrap_or(true);
-    let new = connect_users::NewLogin { role: Some(role), must_change_password: must, shares: shares.clone() };
+    // H1: a shared agent must be a dedicated demo agent.
+    let warnings = match crate::shared_routes::demo_agent_check(&shares, req.force) {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
+    let must = req.must_change_password.unwrap_or(true) && !req.fixed_password;
+    let new = connect_users::NewLogin { role: Some(role), must_change_password: must, shares: shares.clone(), fixed_password: req.fixed_password };
     match connect_users::add_user_with_role(
         &req.username,
         &req.password,
@@ -178,9 +195,10 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
         Ok(()) => {}
         Err(e) => return CliResponse::bad_request(e),
     }
-    let mut body = serde_json::json!({ "success": true, "mustChangePassword": must, "role": role.as_wire() });
+    let mut body = serde_json::json!({ "success": true, "mustChangePassword": must, "role": role.as_wire(), "fixedPassword": req.fixed_password });
     if role == connect_users::Role::VoiceChat {
         body["shares"] = crate::shared_routes::shares_view(&shares);
+        body["warnings"] = serde_json::json!(warnings);
     }
     CliResponse::ok_json(body.to_string())
 }
@@ -411,6 +429,10 @@ pub fn handle_set_disabled(actor_role: connect_users::Role, body: &[u8]) -> CliR
 struct SetRoleReq {
     username: String,
     role: String,
+    /// Optional: set or clear the login's fixed password with the role
+    /// (M3, `k2 users set-role … --fixed-password`).
+    #[serde(default, rename = "fixedPassword")]
+    fixed_password: Option<bool>,
 }
 
 /// `POST /cli/users/set-role` `{username, role}` → `{"success":true}`.
@@ -471,13 +493,30 @@ pub fn handle_set_role_audited(
             None,
         );
     }
-    match connect_users::set_role_from(&req.username, role) {
-        Ok(before) => (
-            CliResponse::ok_json(
-                serde_json::json!({ "success": true, "from": before.as_wire(), "role": role.as_wire(), "live": connect_users::role_change_is_live(before, role) })
-                    .to_string(),
-            ),
-            Some((req.username.trim().to_ascii_lowercase(), before, role)),
+    // L9: the rule is checked again inside the store write, against the
+    // role as it is there (a concurrent change can't slip past it).
+    match connect_users::set_role_checked(actor_role, &req.username, role) {
+        Ok(before) => {
+            if let Some(fixed) = req.fixed_password {
+                if let Err(e) = connect_users::set_fixed_password(&req.username, fixed) {
+                    return (CliResponse::internal_error(format!("role set, but the fixed password could not be: {e}")), Some((req.username.trim().to_ascii_lowercase(), before, role)));
+                }
+            }
+            (
+                CliResponse::ok_json(
+                    serde_json::json!({ "success": true, "from": before.as_wire(), "role": role.as_wire(), "live": connect_users::role_change_is_live(before, role), "fixedPassword": connect_users::is_fixed_password(&req.username) })
+                        .to_string(),
+                ),
+                Some((req.username.trim().to_ascii_lowercase(), before, role)),
+            )
+        }
+        Err(e) if e.starts_with("role_change_not_allowed") => (
+            CliResponse {
+                status: "403 Forbidden",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": "role_change_not_allowed", "message": e }).to_string(),
+            },
+            None,
         ),
         Err(e) => (CliResponse::bad_request(e), None),
     }
@@ -491,6 +530,11 @@ struct SetSharesReq {
     agents: Vec<String>,
     #[serde(default)]
     gardens: Vec<String>,
+    #[serde(default)]
+    sources: Vec<String>,
+    /// Share a non-demo agent anyway (the answer lists the warnings).
+    #[serde(default)]
+    force: bool,
 }
 
 /// `POST /cli/users/set-shares {username, agents: [address…], gardens: [id
@@ -520,13 +564,17 @@ pub fn handle_set_shares(actor_role: connect_users::Role, body: &[u8]) -> CliRes
             .to_string(),
         };
     }
-    let shares = match crate::shared_routes::resolve_shares(&req.agents, &req.gardens) {
+    let shares = match crate::shared_routes::resolve_shares(&req.agents, &req.gardens, &req.sources) {
         Ok(s) => s,
+        Err(r) => return r,
+    };
+    let warnings = match crate::shared_routes::demo_agent_check(&shares, req.force) {
+        Ok(w) => w,
         Err(r) => return r,
     };
     match connect_users::set_shares(&req.username, shares) {
         Ok(s) => CliResponse::ok_json(
-            serde_json::json!({ "success": true, "shares": crate::shared_routes::shares_view(&s) }).to_string(),
+            serde_json::json!({ "success": true, "shares": crate::shared_routes::shares_view(&s), "warnings": warnings }).to_string(),
         ),
         Err(e) => CliResponse::bad_request(e),
     }
@@ -678,6 +726,12 @@ pub fn login_body_username(body: &[u8]) -> String {
 }
 
 pub fn handle_login_audited(body: &[u8]) -> LoginReply {
+    handle_login_from(body, None)
+}
+
+/// [`handle_login_audited`] with the client's address (the throttle's own
+/// key), which keys a Voice & Chat only login's lockout (M3).
+pub fn handle_login_from(body: &[u8], ip: Option<&str>) -> LoginReply {
     let req: LoginReq = match serde_json::from_slice(body) {
         // A malformed body is an auth failure, not a 400 — don't help an
         // attacker probe the parser separately from the credential check.
@@ -711,7 +765,7 @@ pub fn handle_login_audited(body: &[u8]) -> LoginReply {
             outcome: "reserved_name",
         };
     }
-    match connect_users::check_and_record(&req.username, &req.password) {
+    match connect_users::check_and_record_from(&req.username, &req.password, ip) {
         connect_users::LoginOutcome::Ok => {}
         connect_users::LoginOutcome::BadCreds => {
             return LoginReply {
@@ -1056,6 +1110,15 @@ pub fn handle_change_password(username: Option<String>, body: &[u8]) -> CliRespo
             status: "400 Bad Request",
             content_type: "application/json",
             body: serde_json::json!({ "error": msg }).to_string(),
+        },
+        connect_users::ChangePasswordOutcome::Fixed => CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": "password_fixed",
+                "message": "This login's password is fixed: only the server's owner or an Admin changes it.",
+            })
+            .to_string(),
         },
         connect_users::ChangePasswordOutcome::BadCurrent => CliResponse {
             // Generic 401 — same whether the current password was wrong or

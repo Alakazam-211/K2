@@ -112,6 +112,7 @@ pub async fn serve_ops_stream_connection(
     let mut auth_recheck = tokio::time::interval(std::time::Duration::from_secs(5));
     auth_recheck.tick().await; // burn the immediate first tick
 
+    let mut incoming = crate::socket_access::IncomingCheck::new(&token, &owner_token);
     loop {
         tokio::select! {
             _ = auth_recheck.tick() => {
@@ -179,6 +180,13 @@ pub async fn serve_ops_stream_connection(
                 }
             }
             msg = read.next() => {
+                // Security review L7: a client frame from a login is acted on
+                // only while the login still clears this socket's floor (a
+                // downgrade to Voice & Chat only closes it here, not on the tick).
+                if !incoming.frame_ok(&msg) {
+                    let _ = write.send(crate::presence::access_lost_close_message()).await;
+                    break;
+                }
                 match msg {
                     Some(Ok(Message::Ping(p))) => {
                         if write.send(Message::Pong(p)).await.is_err() {

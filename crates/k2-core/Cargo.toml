@@ -132,11 +132,12 @@ dirs = "5"
 # std::fs::canonicalize on Unix. Already in Cargo.lock.
 dunce = "1"
 
-# libgit2 bindings — worktree creation + branch management + diff/merge.
-# `vendored-openssl` matches the flag src-tauri had been using so the
-# build doesn't start linking against system libssl. Used by the
-# delegate path + the UI review queue.
-git2 = { version = "0.19", features = ["vendored-openssl"] }
+# libgit2 bindings: worktree creation, branch management, diff and merge
+# (the delegate path and the UI review queue). Local repositories only: no
+# fetch, clone, push or credentials go through git2, so its default ssh and
+# https features are off. That keeps libssh2 and a vendored OpenSSL build
+# out of the daemon.
+git2 = { version = "0.19", default-features = false }
 
 # Move-to-trash semantics used when removing worktrees — users can
 # recover a reject-then-reject-again worktree from the Finder trash.

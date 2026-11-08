@@ -3,9 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.10 — Adding workspaces on a remote server works again
+## 0.46.10 — K2 is MIT; Voice & Chat only logins
 
 ### When you update
+- **Update your servers as well as the app.** The add-workspace fix is in both halves: an updated app adding a workspace on a server still on 0.46.9 can fail and drop the connection. Update the server (`k2 update`) first.
 - **K2 is now MIT-licensed,** from 0.46.10 on. 0.46.9 and earlier stay FSL-1.1-Apache-2.0, each converting to Apache-2.0 on its two-year date.
 - **App authors: the widget kit files have new patch versions** (k2-help, k2-activity, k2-markdown, k2-png, k2-diff 1.0.1; k2-thread 1.1.1) with the MIT notice. Pages that ask for a line (`@1`) get them automatically. A page that pins `k2-activity-bar.js` (or another kit file) by hash needs the new hash.
 - **Update the root helper after updating** (`k2 root-helper update`): moving a server's voice to the tunnel needs root helper protocol 14. An older helper refuses the move with `helper_outdated` and changes nothing.

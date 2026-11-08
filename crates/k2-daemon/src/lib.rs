@@ -135,8 +135,6 @@ pub mod grokbots_watch;
 pub mod power;
 pub mod inbox_routes;
 pub mod wiki_routes;
-pub mod llm_host;
-pub mod llm_routes;
 // K2 Mail foundation (prd-email-server-v1) — Stalwart-sidecar mail
 // family: supervisor/jmap/doctor skeletons + per-concern `/cli/mail/*`
 // handlers, dispatched by the thin `mail_routes` shim. Linux-only at

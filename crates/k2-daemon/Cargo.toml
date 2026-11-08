@@ -188,23 +188,18 @@ x509-parser = { version = "0.18", default-features = false }
 arc-swap = "1"
 
 # reqwest blocking — Phase 2 Unit 5 Claude Auth OAuth refresh. Same
-# features the Tauri side used (and k2so-core's llm::download still
-# uses) so reqwest resolves to a single crate version.
+# features the Tauri side and k2-core use, so reqwest resolves to a
+# single crate version.
 # `http2` (prd-custom-app-push-v1 CP18): APNs is HTTP/2 only; Apple picks
 # h2 by ALPN. `h2` was already in Cargo.lock through hyper.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "http2"] }
 
-# Phase 2 Unit 2 — `libc::_exit` (LLM worker process exit that skips
-# C++ static destructors so ggml_metal's cleanup doesn't race macOS
-# Metal teardown) and `proc_pidinfo` (RSS watchdog on the worker
-# subprocess). Same crate version that k2so-core already pulls in
-# transitively; declaring it directly so daemon binary code can call
-# these without going through a wrapper.
+# Direct libc calls (forked helpers' `_exit`, process and socket calls).
+# Same crate version k2-core already pulls in transitively.
 libc = "0.2"
 
-# Phase 2 Unit 2 — parking_lot for the LLM host's Mutex. k2so-core
-# already pins this version; declaring directly so daemon code can
-# import it without a re-export hop.
+# parking_lot Mutex. k2-core already pins this version; declaring
+# directly so daemon code can import it without a re-export hop.
 parking_lot = "0.12"
 
 # k2-ptyd S3: boot adoption reads ptyd's session list (wire types only;

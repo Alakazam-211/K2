@@ -1,10 +1,9 @@
 //! K2SO core library.
 //!
 //! Home of the device-local runtime that was previously embedded inside
-//! `src-tauri/src/`: SQLite database, llama-cpp LLM integration, Alacritty
-//! terminal backend, heartbeat scheduler,
-//! agent-lifecycle HTTP hooks, and the pluggable `PushTarget` interface for
-//! notification delivery.
+//! `src-tauri/src/`: SQLite database, Alacritty terminal backend,
+//! heartbeat scheduler, agent-lifecycle HTTP hooks, and the pluggable
+//! `PushTarget` interface for notification delivery.
 //!
 //! Both the `k2so-daemon` binary and the `src-tauri` Tauri app link this
 //! crate so the core logic executes in exactly one place — the daemon —
@@ -314,7 +313,6 @@ pub mod inbox;
 pub mod wiki;
 // Phase 2.5c: historical migration helpers (one-shot, sentinel-gated).
 pub mod migrations;
-pub mod llm;
 /// LLM login wallet: one active login per tool, idle logins in
 /// `~/.k2/llm-accounts` (`k2 llm accounts`, Settings → LLMs).
 pub mod llm_accounts;

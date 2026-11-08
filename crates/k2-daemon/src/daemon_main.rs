@@ -60,15 +60,6 @@ mod early_cli_tests {
     fn bare_argv_continues_to_boot() {
         assert_eq!(early_cli_dispatch(&argv(&[])), None);
     }
-
-    #[test]
-    fn llm_worker_args_are_not_version_dispatch() {
-        // Worker path is handled separately after early_cli_dispatch.
-        assert_eq!(
-            early_cli_dispatch(&argv(&["--llm-worker", "/tmp/payload"])),
-            None
-        );
-    }
 }
 
 /// The daemon entry point (`src/main.rs` calls only this).
@@ -98,18 +89,6 @@ pub fn run() {
     #[cfg(windows)]
     if args.iter().skip(1).any(|a| a == crate::keep_alive::ARG) {
         std::process::exit(crate::keep_alive::run());
-    }
-
-    // Phase 2 Unit 2 — LLM worker subprocess fork. Daemon spawns
-    // itself as `k2so-daemon --llm-worker <payload_path>` to run one
-    // inference pass in an isolated child process. Worker exits via
-    // `libc::_exit(0)` so it never returns from here. Must run
-    // before tokio runtime init / rustls / GPU alloc. See
-    // `llm_host::worker_main` for the protocol contract.
-    if args.len() == 3 && args[1] == "--llm-worker" {
-        llm_host::worker_main(&args[2]);
-        // unreachable — worker_main calls libc::_exit. The `!`
-        // return type prevents fall-through.
     }
 
     // Runtime stage H: before any thread or child exists, keep systemd's
@@ -236,8 +215,6 @@ fn print_daemon_help() {
            k2-daemon --version | -V  Print version and exit (does NOT boot)\n\
            k2-daemon --help | -h     Show this help and exit\n\
            k2-daemon --keep-alive    Windows: run the daemon and start it again after a crash or restart\n\
-           k2-daemon --llm-worker <payload_path>\n\
-                                     Internal: one-shot LLM worker child\n\
            k2-daemon --skin-gateway --listen 127.0.0.1:N --upstream http://127.0.0.1:DAEMON [--root DIR]\n\
                                      Internal: official skin site helper (published kind=skin)\n\n\
          Do not run a second bare `k2-daemon` next to the supervised service —\n\
@@ -1396,15 +1373,6 @@ async fn async_main() {
         Ok(false) => {}
         Err(e) => log_debug!("[daemon] settings: removing the old Companion block failed: {e}"),
     }
-
-    // Phase 2 Unit 2 — LLM first-boot discovery. Cheap synchronous
-    // check that the default model file exists, then caches its
-    // path on `llm_host::shared()`. We do NOT load the model in the
-    // daemon process — Metal/ggml stays in the subprocess worker so
-    // a crash never takes the daemon down. If the model is missing
-    // the daemon still boots cleanly; clients call
-    // `/cli/llm/download-default` to fetch.
-    llm_host::maybe_first_boot_discover();
 
     // Phase 3.1 F3 — boot-time pending-live replay. Previous
     // 0.37.5 migration: legacy `<sanitized_pid>_<agent>/` queue dirs

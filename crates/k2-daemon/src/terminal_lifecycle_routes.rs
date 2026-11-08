@@ -36,7 +36,7 @@
 //!
 //! Each POST handler in `main.rs` must include the explicit
 //! method-gate `if !is_post { return 405 }` guard; see the
-//! `/cli/llm/chat` pattern for the canonical shape.
+//! `/cli/claude-auth/refresh-now` arm for the canonical shape.
 
 use serde::Deserialize;
 

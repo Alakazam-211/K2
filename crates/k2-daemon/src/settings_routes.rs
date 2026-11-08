@@ -347,8 +347,8 @@ pub fn redact_settings_value(v: &mut serde_json::Value) {
         *url = strip_url_userinfo(url);
     }
     // The legacy Companion server's ngrok token and argon2 password hash.
-    // They are plain `String`s, so the key is removed rather than nulled: a
-    // client that posts the settings back leaves them out, and the deep
+    // They are plain `String`s, so the key is removed rather than nulled: an
+    // owner login that posts the settings back leaves them out, and the deep
     // merge keeps the stored values.
     if let Some(companion) = obj.get_mut("companion").and_then(|c| c.as_object_mut()) {
         for key in COMPANION_SECRET_KEYS {
@@ -1188,8 +1188,8 @@ mod tests {
     }
 
     /// The legacy Companion ngrok token and password hash are owner-only
-    /// too: a Member or an agent reading settings never sees them, and a
-    /// Member posting the redacted settings back keeps the stored values.
+    /// too: a Member or an agent reading settings never sees them, and
+    /// posting the redacted settings back keeps the stored values.
     #[test]
     fn companion_ngrok_token_and_password_hash_are_owner_only() {
         with_temp_home(|| {
@@ -1215,12 +1215,13 @@ mod tests {
                 assert!(v["companion"].get("ngrokAuthToken").is_none(), "{label}: {v}");
             }
 
-            // A Member posts the redacted companion block back: the stored
-            // secrets survive.
+            // The owner signed in through a login (not the owner token) sees
+            // the redacted view; posting that companion block back keeps the
+            // stored secrets. (The companion block is Owner-only to write.)
             let redacted: serde_json::Value = serde_json::from_str(&handle_settings_get().body).expect("json");
             let body = serde_json::json!({ "companion": redacted["companion"] }).to_string();
-            let r = handle_settings_update(body.as_bytes(), SettingsActor::Member);
-            assert_eq!(r.status, "200 OK", "member round-trip: {}", r.body);
+            let r = handle_settings_update(body.as_bytes(), SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "owner round-trip of the redacted view: {}", r.body);
             let stored = k2_core::app_settings::load();
             assert_eq!(stored.companion.ngrok_auth_token, "ngrok-secret-456");
             assert_eq!(stored.companion.password_hash, "$argon2id$hash-789");

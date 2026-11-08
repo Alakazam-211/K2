@@ -5,7 +5,7 @@
 //! off, the remaining ~90 arms covered many small domains:
 //!   - per-project mode / settings / worktree / agentic toggles
 //!   - review queue (reviews / review/{approve,reject,feedback})
-//!   - companion tunnel + globals, K2 Connect tunnel status
+//!   - companion globals, K2 Connect tunnel status
 //!   - workspace connections / states
 //!   - agent channel (status / done / reserve / release)
 //!   - skills fan-out, activity feed, AI-commit emit
@@ -497,21 +497,6 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // GET only; update + reset are POST-allowlisted in main.rs
         // because they have bodies / are destructive.
         "/cli/settings/get" => crate::settings_routes::handle_settings_get(),
-
-        // ── Companion tunnel + globals ──────────────────────────────
-        "/cli/companion/start" => match k2_core::companion::start_companion() {
-            Ok(url) => CliResponse::ok_json(
-                serde_json::json!({"ok": true, "url": url}).to_string(),
-            ),
-            Err(e) => CliResponse::bad_request(e),
-        },
-        "/cli/companion/stop" => match k2_core::companion::stop_companion() {
-            Ok(()) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
-            Err(e) => CliResponse::bad_request(e),
-        },
-        "/cli/companion/status" => {
-            CliResponse::ok_json(k2_core::companion::companion_status().to_string())
-        }
 
         // ── K2 Connect tunnel status (read-only) ────────────────────
         // start/stop are POST-allowlisted in the dispatcher (mutating);

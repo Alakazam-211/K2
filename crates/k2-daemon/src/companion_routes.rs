@@ -25,7 +25,6 @@
 use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
-use crate::companion_host;
 use crate::session_lookup;
 
 /// Minimal projects row shape the companion routes need.
@@ -426,98 +425,6 @@ pub fn handle_companion_projects_summary(
     CliResponse::ok_json(
         serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".into()),
     )
-}
-
-/// Body shape accepted by `POST /cli/companion/set-password`. The
-/// renderer (and any other client) sends `{"password": "..."}`. We
-/// hash the raw password into argon2id, try to store the hash in the
-/// macOS Keychain (preferred), and fall back to settings.json when
-/// the Keychain is unavailable. Either way, every live companion
-/// session is invalidated so a rotated password can't be used with a
-/// stale token.
-#[derive(serde::Deserialize)]
-struct SetPasswordBody {
-    password: String,
-}
-
-/// Handler for `POST /cli/companion/set-password`.
-///
-/// Phase 2 Unit 1 — daemon equivalent of the Tauri-side
-/// `companion_set_password` command. Lives in the daemon so a
-/// remote client (K2SO Connect, Mobile Companion's "rotate password"
-/// flow) can drive it without going through a Tauri shim.
-pub fn handle_companion_set_password(body: &[u8]) -> CliResponse {
-    let parsed: SetPasswordBody = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
-    };
-    if parsed.password.is_empty() {
-        return CliResponse::bad_request("password must not be empty");
-    }
-    let hash = match k2_core::companion::auth::hash_password(&parsed.password) {
-        Ok(h) => h,
-        Err(e) => return CliResponse::bad_request(e),
-    };
-
-    // Prefer the macOS Keychain. On success the on-disk copy gets
-    // blanked so only the Keychain entry is authoritative.
-    let keychain_ok =
-        k2_core::companion::keychain::write_password_hash(&hash).is_ok();
-    let (persisted_hash, persisted_flag) = if keychain_ok {
-        ("", true)
-    } else {
-        (hash.as_str(), true)
-    };
-    if let Err(e) =
-        companion_host::persist_companion_password_fields(persisted_hash, persisted_flag)
-    {
-        return CliResponse::bad_request(format!("failed to persist password: {e}"));
-    }
-
-    // Tauri's settings_update path would invalidate sessions itself
-    // on password_hash change; we mirror that directly here so the
-    // Keychain branch (which writes an empty hash) still kicks live
-    // tokens.
-    k2_core::companion::invalidate_all_sessions("password changed");
-
-    CliResponse::ok_json(r#"{"success":true}"#.to_string())
-}
-
-/// Body shape accepted by `POST /cli/companion/disconnect-session`.
-/// Accepts `sessionToken` (camelCase, matches the renderer's existing
-/// payload shape) OR `session_token` (snake_case, for CLI clients).
-#[derive(serde::Deserialize)]
-struct DisconnectSessionBody {
-    #[serde(rename = "sessionToken", alias = "session_token")]
-    session_token: String,
-}
-
-/// Handler for `POST /cli/companion/disconnect-session`.
-///
-/// Phase 2 Unit 1 — removes a single live companion session row plus
-/// any WS clients still attached to that token. Idempotent: an
-/// unknown token returns success (the goal is "this token cannot
-/// authenticate any more", which is trivially true if it never
-/// could).
-pub fn handle_companion_disconnect_session(body: &[u8]) -> CliResponse {
-    let parsed: DisconnectSessionBody = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
-    };
-    if parsed.session_token.is_empty() {
-        return CliResponse::bad_request("sessionToken must not be empty");
-    }
-    let guard = k2_core::companion::STATE.lock();
-    let state = match guard.as_ref() {
-        Some(s) => s,
-        None => return CliResponse::bad_request("Companion is not running"),
-    };
-    state.sessions.lock().remove(&parsed.session_token);
-    state
-        .ws_clients
-        .lock()
-        .retain(|c| c.session_token != parsed.session_token);
-    CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
 /// Count items on the review queue for a given project.

@@ -3483,37 +3483,6 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
-        // POST /cli/companion/set-password — Phase 2 Unit 1.
-        // Body: `{"password": "..."}`. Hashes argon2id, stores in
-        // macOS Keychain (preferred) or settings.json (fallback),
-        // then invalidates every live companion session so the old
-        // token can't be replayed.
-        //
-        // Method gate: see the long-form note on /cli/claude-auth/
-        // refresh-now below — the top-level dispatch lets a GET
-        // through on POST-allowlisted routes. Mirror Unit 5's
-        // explicit `if !is_post` guard so a GET against this route
-        // can't trigger the password rotation. Especially important
-        // here because this is one of the routes Mobile Companion
-        // and K2SO Connect will hit over the ngrok tunnel.
-        "/cli/companion/set-password" => {
-            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
-            if !super::http::token_ok(&query, state.token.as_str()) {
-                let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = crate::companion_routes::handle_companion_set_password(&body_bytes);
-            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
-                .await;
-        }
         // ── Phase 2 Unit 2 — /cli/llm/* ────────────────────────────
         // GET routes are cheap; POST routes go through llm_routes
         // which owns the supervisor's subprocess machinery. All
@@ -3625,31 +3594,6 @@ async fn handle_one_request(
             let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
             let r = crate::llm_routes::handle_download_default(&state.event_tx);
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
-        }
-        // POST /cli/companion/disconnect-session — Phase 2 Unit 1.
-        // Body: `{"sessionToken": "..."}`. Removes the session row
-        // and any WS clients still attached to it.
-        //
-        // Method gate: same rationale as /cli/companion/set-password
-        // above. Don't let a GET disconnect a live session.
-        "/cli/companion/disconnect-session" => {
-            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
-            if !super::http::token_ok(&query, state.token.as_str()) {
-                let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result =
-                crate::companion_routes::handle_companion_disconnect_session(&body_bytes);
-            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
-                .await;
         }
         // POST /cli/tunnel/start — K2 Connect tunnel.
         //
@@ -6081,9 +6025,6 @@ async fn handle_one_request(
         }
         // POST /cli/settings/update — Phase 2 Unit 7a.
         // Body: arbitrary JSON object deep-merged into settings.json.
-        // F3 closure runs inside `app_settings::update()` — companion-
-        // credential changes invalidate live sessions server-side, in
-        // the same process that owns the live companion runtime.
         // Method gate per feedback_post_only_route_guards memory.
         // Remote-access keys (federationEnabled / allowRemoteInstruct /
         // apiEnabled / dnsManageEnabled / agentsCanCreateConnections)
@@ -6131,8 +6072,8 @@ async fn handle_one_request(
                 .await;
         }
         // POST /cli/settings/reset — Phase 2 Unit 7a.
-        // Restores `AppSettings::default()`, deletes Keychain hash,
-        // invalidates every live companion session. POST (not GET)
+        // Restores `AppSettings::default()` and deletes the old Companion
+        // password hash from the Keychain if one is left. POST (not GET)
         // so a browser refresh can't accidentally trigger it.
         // Method gate per feedback_post_only_route_guards memory.
         "/cli/settings/reset" => {

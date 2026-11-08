@@ -2,9 +2,9 @@
 //!
 //! Launched by launchd (`~/Library/LaunchAgents/dev.k2.daemon.plist`,
 //! `KeepAlive: true`), this process owns the persistent-agent runtime —
-//! SQLite, the heartbeat scheduler, the companion WebSocket + ngrok tunnel,
-//! the agent_hooks HTTP server — so that agents keep running while the
-//! Tauri app is quit and the laptop lid is closed.
+//! SQLite, the heartbeat scheduler, the agent_hooks HTTP server — so that
+//! agents keep running while the Tauri app is quit and the laptop lid is
+//! closed.
 //!
 //! On Windows release builds: `windows_subsystem = "windows"` so auto-start
 //! from the thin client does not open a bare console window on the desktop
@@ -18,7 +18,7 @@
 //!
 //! The binary is async-first: a multi-thread `#[tokio::main]` runtime hosts
 //! the HTTP accept loop and (as more modules migrate in) the scheduler
-//! ticks, companion WS, and the daemon→Tauri event channel. Each inbound
+//! ticks and the daemon→Tauri event channel. Each inbound
 //! connection is handled by its own `tokio::spawn` task so a slow or
 //! long-lived connection (future WS upgrades, streaming responses) never
 //! stalls the accept loop.

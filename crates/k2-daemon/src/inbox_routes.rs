@@ -736,13 +736,13 @@ const GLOSSARY: &[GlossaryEntry] = &[
     },
     GlossaryEntry {
         term: "companion",
-        summary: "Daemon's ngrok-tunneled server (Mobile + K2SO Connect)",
-        definition: "The local server K2SO exposes via ngrok for Mobile Companion + K2SO Connect remote access. Daemon-owned (post-Phase-2). Configure via `k2so daemon companion`.",
+        summary: "K2 Companion, the phone app (pairs through K2 Connect)",
+        definition: "K2 Companion is K2's phone app. It pairs with your daemon through K2 Connect (Settings → K2 Connect) and talks to the daemon's normal routes; there is no separate Companion server to start or stop.",
     },
     GlossaryEntry {
         term: "connections",
         summary: "Cross-workspace links: local peers for msg/read/inbox + roster",
-        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox-wake|--inbox-silent` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner enables Settings → K2 Connect → Allow agents to create connections (or the per-workspace toggle). `list` is always allowed.\n\nNOT the same as: skill profiles (`k2 skills`), live sessions (`k2 workspace list --running`), or ngrok tunnel state (`k2 tunnel` / `k2 daemon companion`).",
+        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox-wake|--inbox-silent` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner enables Settings → K2 Connect → Allow agents to create connections (or the per-workspace toggle). `list` is always allowed.\n\nNOT the same as: skill profiles (`k2 skills`), live sessions (`k2 workspace list --running`), or K2 Connect tunnel state (`k2 tunnel`).",
     },
     GlossaryEntry {
         term: "feedback",

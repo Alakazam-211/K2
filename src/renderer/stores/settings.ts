@@ -164,7 +164,7 @@ export interface TerminalSettings {
 
 /** Sub-tabs inside Settings → General. (The Workspaces tab moved to
  *  Workspaces / Agents → Workspace settings in 0.46.5.) */
-export type GeneralSubTab = 'general' | 'server' | 'local-llm'
+export type GeneralSubTab = 'general' | 'server'
 
 /** A page of Settings → Workspaces / Agents that is not one workspace. */
 export type ProjectsPage = 'workspace-settings'

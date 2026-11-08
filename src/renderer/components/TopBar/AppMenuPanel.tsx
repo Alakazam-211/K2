@@ -50,7 +50,6 @@ const MENU_SECTIONS: { title: string; items: MenuEntry[] }[] = [
       { kind: 'item', id: 'projects', label: 'Projects' },
       { kind: 'item', id: 'toggle-sidebar', label: 'Toggle Sidebar' },
       { kind: 'item', id: 'server-switcher', label: 'Switch Server' },
-      { kind: 'item', id: 'toggle-assistant', label: 'Toggle Assistant' },
       { kind: 'item', id: 'focus-window', label: 'Open in Focus Window' },
       // prd-zen-mode-v1 Z25/Z63: label follows this window's Zen state.
       { kind: 'item', id: 'zen-toggle', label: 'Enter Zen Mode' },

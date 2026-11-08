@@ -59,7 +59,6 @@ describe('Focus window overlay hygiene', () => {
       'Toast',
       'GitInitDialog',
       'TransferProgress',
-      'AssistantBar',
       'MemoDialog',
     ]
     for (const name of banned) {
@@ -77,7 +76,6 @@ describe('Focus window overlay hygiene', () => {
     expect(appRoot).toContain('{!settingsOpen && <WikiPage />}')
     expect(appRoot).toContain('<Toast />')
     expect(appRoot).toContain('<TransferProgress />')
-    expect(appRoot).toContain('<AssistantBar />')
     expect(appRoot).toContain('<MemoDialog />')
     expect(appRoot).toContain("mode={settingsOpen ? 'button-only' : undefined}")
     expect(appRoot).toContain('<AgentCloseDialog')

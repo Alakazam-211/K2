@@ -1,4 +1,5 @@
-// The Workspace Assistant (Cmd+Shift+L) and rooms on other servers.
+// `workspace:*` ops (from the retired Workspace Assistant) and rooms on
+// other servers.
 //
 // Rosson, answer Q4 (2026-09-30): the assistant follows the server
 // switcher. It acts only on Home agents that live on the window's connected
@@ -8,9 +9,9 @@
 // why. This is the rule, not an M4 stopgap (prd-home-multi-server-client
 // MS22).
 //
-// Pure: no stores. The callers (`lib/workspace-ops-router.ts` for the
-// `workspace:*` Tauri ops, `AssistantBar`'s tool-call dispatch) pass the
-// focused room's server and the window's server.
+// Pure: no stores. The caller (`lib/workspace-ops-router.ts` for the
+// `workspace:*` Tauri ops) passes the focused room's server and the
+// window's server.
 
 export interface AssistantServer {
   /** Host key (`local`, `dharma.k2.dev`, `ip:port`). */

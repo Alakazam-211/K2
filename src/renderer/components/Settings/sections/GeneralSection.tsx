@@ -64,7 +64,6 @@ import {
   autoUpdateChecksEnabled,
   setAutoUpdateChecksEnabled,
 } from '@/lib/auto-update-checks'
-import { LocalLLMSettings } from '../shared/LocalLLMSettings'
 import type { SettingEntry } from '../searchManifest'
 import { webFeatures } from '@/web/features'
 import type { GeneralSubTab } from '@/stores/settings'
@@ -95,16 +94,11 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: 'When off, Admins and Members cannot clone agents from this server to their own computers. Owner only.', keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
-  { id: 'general.ai-assistant', section: 'general', group: 'Local LLM', label: 'AI Workspace Assistant', description: 'Local LLM for natural-language workspace operations (⇧⌘L)', keywords: ['ai', 'assistant', 'llm', 'cmd+shift+l', 'qwen', 'model', 'local', 'gguf', 'beta'] },
-  { id: 'general.model-status', section: 'general', group: 'Local LLM', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
-  { id: 'general.download-model', section: 'general', group: 'Local LLM', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
-  { id: 'general.custom-model', section: 'general', group: 'Local LLM', label: 'Custom Model', description: 'Point at any GGUF model file', keywords: ['model', 'gguf', 'custom', 'load'] },
 ]
 
-const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string; beta?: boolean }> = [
+const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string }> = [
   { id: 'general', label: 'General' },
   { id: 'server', label: 'Server' },
-  { id: 'local-llm', label: 'Local LLM', beta: true },
   // The Experimental tab held only "Open other servers' agents in Home";
   // that row graduated to Workspaces in 0.46.3, so the tab is gone.
   // The Workspaces tab moved out in 0.46.5 (Rosson 2026-10-27): its rows and
@@ -205,11 +199,6 @@ export function GeneralSection(): React.JSX.Element {
                 }`}
               >
                 {t.label}
-                {t.beta && (
-                  <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
-                    beta
-                  </span>
-                )}
               </button>
             )
           })}
@@ -450,12 +439,6 @@ export function GeneralSection(): React.JSX.Element {
           <KeepDaemonOnQuitRow />
           <AgentsSurviveRestartsRow />
           <ClonePersonalComputersRow scope={primaryScope()} />
-        </div>
-      )}
-
-      {tab === 'local-llm' && (
-        <div>
-          <LocalLLMSettings />
         </div>
       )}
 

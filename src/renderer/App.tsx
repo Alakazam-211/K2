@@ -28,7 +28,6 @@ import MergeDialog from './components/MergeDialog/MergeDialog'
 import Toast from './components/Toast/Toast'
 import CallLayer from './components/Voice/CallLayer'
 import TransferProgress from './components/TransferProgress/TransferProgress'
-import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
 import GateChrome from './components/TopBar/GateChrome'
 import { installPageSelectionMemory } from './lib/page-selection'
@@ -67,7 +66,6 @@ import { startHomesSync } from './lib/homes-sync'
 import { startStashSync } from './lib/prompt-stash/sync'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
-import { useAssistantStore } from './stores/assistant'
 import { applyCmdL } from './stores/server-switcher'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs, initOpenChangesTabs, initOpenMobileTabs } from './stores/tabs'
 import { menuNewTab } from './lib/menu-new-tab'
@@ -392,7 +390,6 @@ function AppRoot(): React.JSX.Element {
 
   const toggleCommandPalette = useCommandPaletteStore((s) => s.toggle)
 
-  const toggleAssistant = useAssistantStore((s) => s.toggle)
   const toggleRunningAgents = useRunningAgentsStore((s) => s.toggle)
 
   // Prewarm the daemon_ws_url cache at app mount. The underlying
@@ -506,7 +503,7 @@ function AppRoot(): React.JSX.Element {
   useNewWindowShortcut()
 
   // Cmd+, settings, Cmd+K command palette, Cmd+L server switcher,
-  // Cmd+Shift+L assistant, Cmd+J running agents
+  // Cmd+J running agents
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === ',') {
@@ -518,17 +515,11 @@ function AppRoot(): React.JSX.Element {
         if (!useWindowFocusStore.getState().isFocused) return
         toggleCommandPalette()
       }
-      if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
+      if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
-        // Zen Z31/Z56: the switcher and assistant hang off the top bar Zen
-        // doesn't draw.
+        // Zen Z31/Z56: the switcher hangs off the top bar Zen doesn't draw.
         if (zenShownNow()) return
-        if (e.shiftKey && !useWindowFocusStore.getState().isFocused) return
-        applyCmdL({
-          shift: e.shiftKey,
-          focusAddress: focusVisibleBrowserAddress,
-          toggleAssistant,
-        })
+        applyCmdL({ focusAddress: focusVisibleBrowserAddress })
       }
       if (e.metaKey && e.key === 'j') {
         e.preventDefault()
@@ -592,7 +583,7 @@ function AppRoot(): React.JSX.Element {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [openSettings, toggleCommandPalette, toggleAssistant, toggleRunningAgents])
+  }, [openSettings, toggleCommandPalette, toggleRunningAgents])
 
   // Refocus last active terminal when clicking dead space (navbar, sidebar padding, etc.)
   // Interactive elements (inputs, textareas, buttons, contenteditable, select) keep their own focus.
@@ -699,7 +690,7 @@ function AppRoot(): React.JSX.Element {
       if (primaryPointerDown) return
       // Don't refocus if settings is open
       if (useSettingsStore.getState().settingsOpen) return
-      // Don't refocus if any overlay is open (command palette, running agents, assistant)
+      // Don't refocus if any overlay is open (command palette, running agents)
       if (useCommandPaletteStore.getState().isOpen) return
       if (useRunningAgentsStore.getState().isOpen) return
       // Full-page overlays (Tickets / Projects / Wiki) sit above terminals;
@@ -837,18 +828,9 @@ function AppRoot(): React.JSX.Element {
         if (zenShownNow()) return
         useSidebarStore.getState().toggle()
       }).then(track)
-      listen('menu:toggle-assistant', () => {
-        if (zenShownNow()) return
-        if (!useWindowFocusStore.getState().isFocused) return
-        toggleAssistant()
-      }).then(track)
       listen('menu:server-switcher', () => {
         if (zenShownNow()) return
-        applyCmdL({
-          shift: false,
-          focusAddress: focusVisibleBrowserAddress,
-          toggleAssistant,
-        })
+        applyCmdL({ focusAddress: focusVisibleBrowserAddress })
       }).then(track)
       listen('menu:focus-window', () => {
         if (zenShownNow()) return
@@ -892,7 +874,7 @@ function AppRoot(): React.JSX.Element {
       torndown = true
       unlisteners.forEach(safeUnlisten)
     }
-  }, [openSettings, toggleAssistant, toggleCommandPalette])
+  }, [openSettings, toggleCommandPalette])
 
   // In focus mode, set the active project to the focused project on mount
   useEffect(() => {
@@ -1161,7 +1143,6 @@ function AppRoot(): React.JSX.Element {
       <CallLayer />
       <Toast />
       <TransferProgress />
-      <AssistantBar />
       <MemoDialog />
       {showQuitDialog && (
         <AgentCloseDialog

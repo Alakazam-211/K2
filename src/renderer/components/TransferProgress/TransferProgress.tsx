@@ -1,8 +1,8 @@
 // 0.40.22 large-file transfers — the in-flight transfer overlay.
 //
 // Renders every active entry in the transfer-progress store as a compact
-// card: kind glyph + filename + determinate percent bar (the
-// LocalLLMSettings download-bar pattern) + Cancel. Anchored bottom-LEFT so
+// card: kind glyph + filename + determinate percent bar + Cancel.
+// Anchored bottom-LEFT so
 // it never fights the Toast stack (bottom-right); mounted alongside
 // <Toast /> at each app root.
 

@@ -1187,11 +1187,12 @@ mod tests {
         });
     }
 
-    /// The legacy Companion ngrok token and password hash are owner-only
-    /// too: a Member or an agent reading settings never sees them, and
-    /// posting the redacted settings back keeps the stored values.
+    /// The legacy Companion ngrok token and password hash: with the ngrok
+    /// server gone, `companion` is no longer a setting. An owner write of
+    /// the block is dropped, nothing stores it, and no read (owner token
+    /// or not) shows it.
     #[test]
-    fn companion_ngrok_token_and_password_hash_are_owner_only() {
+    fn companion_ngrok_token_and_password_hash_are_never_stored_or_served() {
         with_temp_home(|| {
             let r = handle_settings_update(
                 br#"{"companion":{"ngrokAuthToken":"ngrok-secret-456","passwordHash":"$argon2id$hash-789"}}"#,
@@ -1199,11 +1200,8 @@ mod tests {
             );
             assert_eq!(r.status, "200 OK", "owner write: {}", r.body);
 
-            let owner: serde_json::Value =
-                serde_json::from_str(&handle_settings_get_unredacted().body).expect("json");
-            assert_eq!(owner["companion"]["ngrokAuthToken"], "ngrok-secret-456");
-
             for (label, resp) in [
+                ("owner-token read", handle_settings_get_unredacted()),
                 ("settings/get handler", handle_settings_get()),
                 ("cli::dispatch GET chain", crate::cli::dispatch("/cli/settings/get", &Default::default())),
             ] {
@@ -1211,20 +1209,12 @@ mod tests {
                 assert!(!resp.body.contains("ngrok-secret-456"), "{label} leaked the ngrok token: {}", resp.body);
                 assert!(!resp.body.contains("hash-789"), "{label} leaked the password hash: {}", resp.body);
                 let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
-                assert!(v["companion"].is_object(), "{label}: companion stays: {v}");
-                assert!(v["companion"].get("ngrokAuthToken").is_none(), "{label}: {v}");
+                assert!(v.get("companion").is_none(), "{label}: no companion block: {v}");
             }
 
-            // The owner signed in through a login (not the owner token) sees
-            // the redacted view; posting that companion block back keeps the
-            // stored secrets. (The companion block is Owner-only to write.)
-            let redacted: serde_json::Value = serde_json::from_str(&handle_settings_get().body).expect("json");
-            let body = serde_json::json!({ "companion": redacted["companion"] }).to_string();
-            let r = handle_settings_update(body.as_bytes(), SettingsActor::Owner);
-            assert_eq!(r.status, "200 OK", "owner round-trip of the redacted view: {}", r.body);
-            let stored = k2_core::app_settings::load();
-            assert_eq!(stored.companion.ngrok_auth_token, "ngrok-secret-456");
-            assert_eq!(stored.companion.password_hash, "$argon2id$hash-789");
+            let file = k2_core::paths::home_dir().expect("temp home").join(".k2").join("settings.json");
+            let raw = std::fs::read_to_string(&file).expect("settings.json written by the update");
+            assert!(!raw.contains("ngrok-secret-456") && !raw.contains("hash-789"), "stored: {raw}");
         });
     }
 

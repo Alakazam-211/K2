@@ -21,19 +21,17 @@ import {
 } from './SelectableText'
 import { MarkdownSpan, rehypeFileLinks, useFileLinkPrefixes } from './file-links'
 import { ChatCodeBlock, ChatLink } from './chat-copy'
+import { BalancedTable } from './BalancedTable'
 
 const CHAT_REMARK = [remarkGfm]
 
 /** GFM tables scroll sideways in their own box instead of crushing a
  *  short column to one letter per line (`.chat-md-table-wrap` in
- *  globals.css). Code blocks get a Copy button and links a copy icon
- *  (./chat-copy). */
+ *  globals.css), and pick column widths that make the table as short as
+ *  possible (./BalancedTable). Code blocks get a Copy button and links a
+ *  copy icon (./chat-copy). */
 const CHAT_COMPONENTS: Components = {
-  table: ({ node: _node, ...props }) => (
-    <div className="chat-md-table-wrap">
-      <table {...props} />
-    </div>
-  ),
+  table: BalancedTable as Components['table'],
   pre: ChatCodeBlock as Components['pre'],
   a: ChatLink as Components['a'],
 }

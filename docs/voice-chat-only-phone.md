@@ -138,7 +138,9 @@ an owner or Admin turns it off or shares the agent again.
   `attachments`. It is delivered to the agent like any person's message,
   which wakes it. Only those fields are taken (anything else is
   `400 usage`); `"via"` other than `"compose"` is `403 compose_only`;
-  control characters (but newlines) and bidi overrides are removed; at most
+  control characters (but newlines), bidi overrides, zero-width characters
+  (U+200B–U+200D, U+2060, U+FEFF) and Unicode tag characters
+  (U+E0000–U+E007F) are removed; at most
   2000 characters. No files, cards, slash commands or context lines.
 - **Limits:** one post per 10 s and 200 a day per login (`429
   rate_limited` / `daily_limit`, `error.retryAfterMs`); no post while the

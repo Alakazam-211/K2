@@ -413,9 +413,12 @@ fn resolve_vc_addr(addr: &str) -> Option<Result<ResolvedOverlay, CliResponse>> {
     }))
 }
 
-/// Every C0 and C1 control except `\n`, and the bidi overrides and
-/// isolates, gone (security review M4): nothing in a Voice & Chat only post
-/// can move the terminal's cursor, ring it, or reorder what an agent sees.
+/// Every C0 and C1 control except `\n`, the bidi overrides and isolates,
+/// the zero-width characters (U+200B–U+200D, U+2060, U+FEFF) and the
+/// Unicode tag characters (U+E0000–U+E007F) gone (security review M4,
+/// re-review L8): nothing in a Voice & Chat only post can move the
+/// terminal's cursor, ring it, reorder what an agent sees, or carry text a
+/// person can't see.
 pub fn strip_untrusted_controls(s: &str) -> String {
     s.chars()
         .filter(|&c| {
@@ -425,7 +428,8 @@ pub fn strip_untrusted_controls(s: &str) -> String {
             let u = c as u32;
             let c0_c1 = u < 0x20 || (0x7f..=0x9f).contains(&u);
             let bidi = matches!(u, 0x061c | 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069);
-            !(c0_c1 || bidi)
+            let invisible = matches!(u, 0x200b..=0x200d | 0x2060 | 0xfeff | 0xe0000..=0xe007f);
+            !(c0_c1 || bidi || invisible)
         })
         .collect()
 }
@@ -453,6 +457,19 @@ mod vc_payload_tests {
     fn untrusted_controls_are_stripped() {
         let s = strip_untrusted_controls("a\u{7}b\tc\u{1b}[31m\u{9b}d\u{202e}e\u{2066}f\ng\r");
         assert_eq!(s, "abc[31mdef\ng");
+    }
+
+    /// Re-review L8: zero-width characters and Unicode tag characters (an
+    /// invisible instruction smuggled in tags) go too; other text stays.
+    #[test]
+    fn invisible_characters_and_tags_are_stripped() {
+        let tags: String = "ignore".chars().map(|c| char::from_u32(0xe0000 + c as u32).expect("tag")).collect();
+        let s = strip_untrusted_controls(&format!("a\u{200b}b\u{200c}c\u{200d}d\u{2060}e\u{feff}f\u{e0001}{tags}\u{e007f}g é 😀"));
+        assert_eq!(s, "abcdefg é 😀");
+        for c in [0x200bu32, 0x200c, 0x200d, 0x2060, 0xfeff, 0xe0000, 0xe0041, 0xe007f] {
+            let ch = char::from_u32(c).expect("char");
+            assert_eq!(strip_untrusted_controls(&format!("x{ch}y")), "xy", "U+{c:04X}");
+        }
     }
 
     /// M4: the stamp's line is K2's; every line of the person's words is

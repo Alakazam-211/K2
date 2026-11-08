@@ -55,9 +55,7 @@ export async function settingsGet(): Promise<AppSettingsResponse> {
 }
 
 /** POST `/cli/settings/update` — deep-merges `updates` into settings.
- *  Returns the full post-merge `AppSettings`. The daemon-side handler
- *  invalidates active companion sessions when `companion.username` or
- *  `companion.passwordHash` change (F3 closure). */
+ *  Returns the full post-merge `AppSettings`. */
 export async function settingsUpdate(
   updates: Record<string, unknown>,
 ): Promise<AppSettingsResponse> {

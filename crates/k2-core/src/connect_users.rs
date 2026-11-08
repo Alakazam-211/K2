@@ -76,23 +76,18 @@ const LOCKOUT_DURATION_MINUTES: i64 = 15;
 /// `VoiceChat` rows (voice rooms, its own account, and what the owner shares
 /// with this login by id: agents' Threads, Gardens). Every Member row
 /// refuses it (`route_policy::Floor::admits`).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Lowest tier — listed first so the derived `Ord` ranks
     /// `VoiceChat < Member < Admin < Owner`. VARIANT ORDER IS LOAD-BEARING
     /// for `derive(Ord)`; the `role_ordering_*` test pins it.
     VoiceChat,
+    /// The default: existing stored rows (pre-#629) and new users.
+    #[default]
     Member,
     Admin,
     Owner,
-}
-
-impl Default for Role {
-    fn default() -> Self {
-        // Existing stored rows (pre-#629) and new users default to Member.
-        Role::Member
-    }
 }
 
 /// The error every role parser gives for the retired `"viewer"` string
@@ -1638,10 +1633,7 @@ pub fn verify(username: &str, password: &str) -> bool {
     // dummy hash work below before returning.
     let normalized = normalize_username(username).ok();
 
-    let store = match load_store() {
-        Ok(s) => s,
-        Err(_) => None.unwrap_or_default(),
-    };
+    let store = load_store().unwrap_or_default();
 
     // A reserved name (a login made before 0.46.6) never signs in: it
     // takes the unknown-user branch, with the same argon2 cost.

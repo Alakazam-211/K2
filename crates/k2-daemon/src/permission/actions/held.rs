@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use k2_core::app_grace::requests as app_reqs;
 use k2_core::connect_users::Role;
 use k2_core::permission::catalog::{
-    ActionSpec, Area, ConfirmAction, Direction, Expiry, Floor, Grant, NotCardable, NotCardableSpec, ParamFrom, ParamKind,
+    ActionSpec, Area, ConfirmAction, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind,
     ParamSpec, Proof, SettingsRef, Undo, Wall, WallCoverage, WallMatch, WallMethod, Words,
 };
 use k2_core::sources::spec::SourceStatus;
@@ -676,17 +676,11 @@ pub(crate) fn actions() -> Vec<Registered> {
     ]
 }
 
-static VAULT_INCOMING: NotCardableSpec = NotCardableSpec {
-    id: "vault.incoming.accept",
-    area: Area::Held,
-    why: NotCardable::Dropped,
-    r#where: "the secret handoff card already on the Thread (a person answers it)",
-};
-
 /// This area's rows that aren't card-able in v1 (§5.4). `clone.approve` and
-/// the `sources.*` rows are E1's.
+/// the `sources.*` rows are E1's. `vault.incoming.accept` was one until
+/// 0.46.10; it is a card now (`vault_incoming.rs`).
 pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
-    vec![&VAULT_INCOMING]
+    Vec::new()
 }
 
 #[cfg(test)]

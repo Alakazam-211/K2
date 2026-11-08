@@ -400,6 +400,9 @@ fn decide_one(
         // A held compute node request's card: Deny denies that request
         // too, through Settings' own deny entry, as this person (0.46.9).
         super::actions::compute::on_denied(&denied.action, denied.held_ref.as_deref().unwrap_or(""), who, reason);
+        // A secret another agent sent (0.46.10): Deny declines the delivery,
+        // through the decide route's own entry, as this person.
+        super::actions::vault_incoming::on_denied(&denied, who);
         return Ok(denied);
     }
 

@@ -144,7 +144,7 @@ fn check(ctx: &Ctx) -> Check {
     }
 }
 
-fn caller_of(who: &Answerer) -> VaultCaller {
+pub(crate) fn caller_of(who: &Answerer) -> VaultCaller {
     match who {
         Answerer::OwnerToken => VaultCaller { actor: Actor::Owner, channel: Channel::Plain, session_id: None },
         Answerer::Login { user, role } => VaultCaller {

@@ -338,7 +338,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 51;
 /// v10 = 0.46.9: "System packages on compute nodes" (`compute.packages`,
 /// `compute.packages-policy`).
 /// v11 = 0.46.10: "GitHub access for compute jobs" (`compute.git-access-setup`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 11;
+/// v12 = 0.46.10: "A secret another agent sent you" (`vault.incoming.accept`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 12;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

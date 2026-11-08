@@ -109,17 +109,18 @@ GIVING A SECRET TO ANOTHER AGENT
   (or --to ops::larkspur.k2.dev on another server; or k2 msg ops "…" --secret
   STRIPE_KEY). You never handle the value; it moves vault to vault, sealed
   to the other server's vault across servers.
-  It arrives pending: a person there accepts it (k2 vault incoming), unless
-  that agent accepts from you (k2 vault accept-from, set by a person). A
-  same-named secret is never overwritten; re-sending yours makes a new
-  version. A secret a person gave you needs a person to send it to
-  another server. Server-wide secrets aren't sent (the owner shares them
-  with k2 vault grant). The sender picks how it arrives: --delivery file or
-  env for a code or token a tool reads (no sites), fetch for an HTTP key.
-  Your copy keeps that and --ttl (at most env; no sites: a file in
-  $K2_SECRETS_DIR, k2 vault sync). Once a person accepts it, you may take
-  it up to the ceiling the card showed, no owner needed: k2 vault grant
-  NAME --to ws:<you> --as env. Only a person goes past that.
+  It arrives pending: K2 puts a card on that agent's Thread for a person
+  there (Allow or Deny), unless it accepts from you (k2 vault accept-from).
+  No card for one sent to you? k2 permission request vault.incoming.accept
+  id=<hd_…>. A same-named secret is never overwritten; re-sending yours
+  makes a new version. A secret a person gave you needs a person to send
+  it to another server. Server-wide secrets aren't sent (the owner shares
+  them with k2 vault grant). The sender picks how it arrives: --delivery
+  file or env for a code or token a tool reads (no sites), fetch for an
+  HTTP key. Your copy keeps that and --ttl (at most env; no sites: a file
+  in $K2_SECRETS_DIR, k2 vault sync). Once a person accepts it, you may
+  take it up to the ceiling the card showed, no owner needed: k2 vault
+  grant NAME --to ws:<you> --as env. Only a person goes past that.
   Exit 3 = a person must act (don't retry); 2 = the other server can't
   (peer_too_old); 4 = no such secret or agent. Every step is logged.
 

@@ -1401,6 +1401,14 @@ You can't widen a secret a person gave you yourself, so `k2 publish secret add <
 
 Run it as printed. The owner or an admin allows it and confirms it's them, and that does the share: don't run the add again. It takes effect the next time the service starts, so when the `[permission:]` turn says approved, restart it yourself (`k2 publish stop` then `k2 publish start`; an App: `k2 app restart`). The service or App reads it from its own `$K2_SECRETS_DIR` (`as=file`) or as an environment variable (`as=env`). It works only for a secret in your own workspace and a service or App of that workspace; the secret's value never shows on the card.
 
+## A secret another agent sent you
+
+When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `k2 vault incoming accept` (it's a person's), and don't ask when the card is there (`k2 vault incoming` says where it is). No card for one (it couldn't go up)? `k2 vault incoming` puts it up, or ask:
+
+    k2 permission request vault.incoming.accept id=<hd_… id> --why "<what you need it for>"
+
+Add `as=<NEW_NAME>` when your workspace already has a secret of that name, or `replace=yes` for a new version of one it sent you before. Only your own deliveries can be asked for. When the `[permission:]` turn says approved, the secret is in your vault and the turn says how to use it. Denied: it was declined and the copy deleted; ask the sender to send it again if you still need it.
+
 ## Logins on your own App
 
 `k2 app grant add` and `k2 app grant rm` are the owner's. For a login on one of your own Apps (`--kind app`, a person who already exists, a role from `k2 app role list`), the refusal ends with the line to ask with:
@@ -2492,6 +2500,9 @@ mod tests {
             "App guests never see permission cards",
             "talk to the agent that manages the role",
             "k2 permission list",
+            // 0.46.10: a secret another agent sent waits on K2's card.
+            "k2 permission request vault.incoming.accept id=",
+            "K2 puts a card on your Thread itself",
         ] {
             assert!(body.contains(must), "the k2-permissions skill must teach: {must}");
         }

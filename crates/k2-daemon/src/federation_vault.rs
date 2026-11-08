@@ -304,9 +304,7 @@ fn receive_revoke(vault: &LocalVault, peer_fp: &str, host: &str, signal: &AgentS
     };
     match vault.handoff_unsend(id, Some(peer_fp), &format!("handoff:{peer_addr}")) {
         Ok((r, disabled)) => {
-            if let Some(card) = before.card.as_deref() {
-                crate::overlay_routes::close_handoff_card(card, "unsent", None, None);
-            }
+            routes::close_cards(&before, "unsent", None, None);
             routes::audit(
                 &format!("handoff:{peer_addr}"),
                 &format!("ok unsend {} from {peer_addr} {id}{}", r.name, if disabled { " (copy disabled)" } else { "" }),

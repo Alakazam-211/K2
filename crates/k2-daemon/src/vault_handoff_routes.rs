@@ -471,8 +471,13 @@ pub(crate) fn sender_for(c: &VaultCaller, sender_ws: &str) -> crate::hire_routes
 pub(crate) fn send_answer(rec: &HandoffRecord, to: &str, cross: bool, reference: Option<String>) -> Value {
     let who = match rec.status.as_str() {
         "landed" => None,
-        "pending" if cross => Some(format!("a person on {} must accept it (k2 vault incoming there)", to.split_once("::").map(|x| x.1).unwrap_or(to))),
-        "pending" => Some("a person on this server must accept it (k2 vault incoming, or the card on that agent's Thread)".to_string()),
+        "pending" if cross => Some(format!(
+            "a person on {} accepts it: K2 puts a card on that agent's Thread there (desktop and phone)",
+            to.split_once("::").map(|x| x.1).unwrap_or(to)
+        )),
+        "pending" => Some(format!(
+            "a person on this server accepts it on the card K2 put on {to}'s Thread (desktop and phone: Allow accepts, Deny declines)"
+        )),
         _ => Some(format!("it was {}", rec.status)),
     };
     json!({
@@ -519,7 +524,9 @@ pub(crate) fn stamp_text(rec: &HandoffRecord, from_label: &str, reference: Optio
                 handoff::use_hint_for(d, &name, sites)
             )
         }
-        _ => format!("[k2 vault] {from_label} sent {name}. It waits for your owner to accept (k2 vault incoming).{note}"),
+        _ => format!(
+            "[k2 vault] {from_label} sent {name}. It waits for a person here: K2 put a card on your Thread for your owner to accept or decline (desktop and phone). Nothing for you to run; you hear back when they answer.{note}"
+        ),
     }
 }
 
@@ -567,7 +574,19 @@ pub(crate) fn after_receive(
     sender: crate::hire_routes::Sender,
 ) {
     let name = rec.landed_name.clone().unwrap_or_else(|| rec.name.clone());
-    if rec.status == "pending" {
+    // 0.46.10: the person answers a permission card (desktop and phone),
+    // presented by K2 whatever the Beta switches say. The old `handoff`
+    // card is the fallback when it can't go up (no pinned Thread yet).
+    let presented = rec.status == "pending" && {
+        let p = crate::permission::actions::vault_incoming::present_for(rec);
+        if p["card"].is_null() {
+            k2_core::log_debug!("[vault-handoff] permission card for {}: {}", rec.delivery_id, p["why"]);
+            false
+        } else {
+            true
+        }
+    };
+    if rec.status == "pending" && !presented {
         let clash = rec.reason.as_deref() == Some("clash") || rec.reason.as_deref() == Some("resend");
         let card = k2_core::overlay::HandoffCardBody {
             delivery_id: rec.delivery_id.clone(),
@@ -596,7 +615,7 @@ pub(crate) fn after_receive(
             delivery: Some(rec.item.landing_delivery().0.as_str().to_string()),
             ceiling: Some(rec.item.landing_delivery().1.as_str().to_string()),
         };
-        let body = format!("{from_label} sent {name}. Accept it in Settings → Vault → Incoming.");
+        let body = format!("{from_label} sent {name}. Accept or decline it here, or in Settings → Vault → Incoming.");
         match crate::overlay_routes::post_handoff_card(target_path, from_label, &body, card) {
             Ok(card_ref) => {
                 if let Err(e) = vault.handoff_set_card(&rec.delivery_id, &card_ref) {
@@ -680,6 +699,13 @@ pub(crate) fn view(vault: &LocalVault, r: &HandoffRecord) -> Value {
         "ttlSecs": r.item.ttl(),
         "landsAs": lands_as,
         "secret": landed.as_ref().map(landed_json),
+        // 0.46.10: the permission card a person answers, while it waits.
+        "card": if r.direction == "in" && r.status == "pending" {
+            crate::permission::actions::vault_incoming::card_json(&r.local_workspace_id, &r.delivery_id)
+        } else {
+            Value::Null
+        },
+        "ask": (r.direction == "in" && r.status == "pending").then(|| crate::permission::actions::vault_incoming::ask_line(&r.delivery_id)),
     })
 }
 
@@ -689,6 +715,17 @@ fn list(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>, d
         return Err(VaultError::bad_request("workspace_required", "name the workspace (--workspace <name>)"));
     }
     let items = vault.handoffs(ws.as_deref(), Some(dir))?;
+    if dir == "in" && c.is_passport() {
+        // The receiving agent looks: every delivery still waiting has its
+        // card (one that couldn't go up when it arrived, or one from before
+        // 0.46.10 that only had the old card). An open one is left as it is.
+        for r in items.iter().filter(|r| r.status == "pending") {
+            let p = crate::permission::actions::vault_incoming::present_for(r);
+            if p["card"].is_null() {
+                k2_core::log_debug!("[vault-handoff] permission card for {}: {}", r.delivery_id, p["why"]);
+            }
+        }
+    }
     Ok(json!({ "items": items.iter().map(|r| view(vault, r)).collect::<Vec<_>>() }))
 }
 
@@ -716,6 +753,30 @@ pub(crate) fn person_author(a: &Actor) -> Option<k2_core::overlay::PostAuthor> {
     }
 }
 
+/// Close what shows a delivery to a person once it is decided, expired or
+/// taken back: the old `handoff` card (`rec.card`, before 0.46.10) and
+/// every open permission card for it (`vault.incoming.accept`). `by`: the
+/// person who decided.
+pub(crate) fn close_cards(rec: &HandoffRecord, status: &str, reference: Option<String>, by: Option<&Actor>) {
+    use crate::permission::actions::vault_incoming::{close_for_delivery, Closed};
+    if let Some(card) = rec.card.as_deref() {
+        crate::overlay_routes::close_handoff_card(card, status, reference, by.and_then(person_author));
+    }
+    let how = match status {
+        "landed" => Closed::Accepted,
+        "declined" => Closed::Declined,
+        "expired" => Closed::Expired,
+        "unsent" => Closed::Unsent,
+        _ => return,
+    };
+    let who = by.and_then(|a| match a {
+        Actor::Owner => Some("owner".to_string()),
+        Actor::Login { username, .. } => Some(username.clone()),
+        _ => None,
+    });
+    close_for_delivery(&rec.local_workspace_id, &rec.delivery_id, how, who.as_deref());
+}
+
 /// The accept-from key for a delivery's sender: `agent::host` cross
 /// server, else `ws:<sending workspace id>` from this server's out row.
 fn sender_key(vault: &LocalVault, r: &HandoffRecord) -> Option<String> {
@@ -732,7 +793,10 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
     if c.is_passport() {
         let e = VaultError::forbidden(
             "handoff_person_only",
-            "a person on this server accepts or declines secrets from other agents (Settings → Vault → Incoming); agents can't",
+            format!(
+                "a person on this server accepts or declines it on the card K2 put on the receiving agent's Thread (desktop and phone); agents can't. No card there? Ask for one: {}",
+                crate::permission::actions::vault_incoming::ask_line(id)
+            ),
         );
         audit(&stamp, &format!("deny {} {id}: {}", b.action, e.code), ingress);
         return Err(e);
@@ -744,11 +808,9 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
         Err(e) => {
             audit(&stamp, &format!("deny {} {} from {} {id}: {}", b.action, before.name, before.peer_addr, e.code), ingress);
             if e.code == "not_pending" {
-                // It may have expired just now: close its card.
-                if let (Ok(r), Some(card)) = (vault.handoff_get(id, "in"), before.card.as_deref()) {
-                    if r.status == "expired" {
-                        crate::overlay_routes::close_handoff_card(card, "expired", None, None);
-                    }
+                // It may have expired just now: close its cards.
+                if vault.handoff_get(id, "in").is_ok_and(|r| r.status == "expired") {
+                    close_cards(&before, "expired", None, None);
                 }
             }
             return Err(e);
@@ -760,9 +822,7 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
     let what = if r.status == "landed" { "accept" } else { "decline" };
     let as_part = if r.status == "landed" && landed != r.name { format!(" as {landed}") } else { String::new() };
     audit(&stamp, &format!("ok {what} {} from {} {id}{as_part}", r.name, r.peer_addr), ingress);
-    if let Some(card) = before.card.as_deref() {
-        crate::overlay_routes::close_handoff_card(card, &r.status, reference.clone(), person_author(&c.actor));
-    }
+    close_cards(&before, &r.status, reference.clone(), Some(&c.actor));
     // Same server: the sender's out row follows.
     if vault.handoff_get(id, "out").is_ok() {
         let _ = vault.handoff_update_out(id, &r.status, None);
@@ -775,7 +835,9 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
             always_added = Some(key);
         }
     }
-    if r.status == "landed" {
+    // From a permission card the agent's `[permission:]` turn says the
+    // same (approved, with how to use it): no second knock.
+    if r.status == "landed" && ingress != crate::permission::actions::vault_incoming::INGRESS {
         // Knock the receiving agent: its owner said yes. The "Use:" line
         // follows the copy's real delivery (bug 1).
         if let Some(path) = crate::vault::workspace_path(&r.local_workspace_id) {
@@ -1038,9 +1100,7 @@ fn unsend(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
     } else {
         let before = vault.handoff_get(id, "in")?;
         let (r, disabled) = vault.handoff_unsend(id, None, &stamp)?;
-        if let Some(card) = before.card.as_deref() {
-            crate::overlay_routes::close_handoff_card(card, "unsent", None, None);
-        }
+        close_cards(&before, "unsent", None, None);
         (disabled, r.reason.as_deref() == Some("unsent_kept_replaced"))
     };
     vault.handoff_update_out(id, "unsent", Some(if kept { "unsent_kept_replaced" } else { "unsent" }))?;
@@ -1062,9 +1122,7 @@ pub(crate) fn tick(vault: &LocalVault) {
     match vault.handoff_tick() {
         Ok(expired) => {
             for r in expired {
-                if let Some(card) = r.card.as_deref() {
-                    crate::overlay_routes::close_handoff_card(card, "expired", None, None);
-                }
+                close_cards(&r, "expired", None, None);
                 if vault.handoff_get(&r.delivery_id, "out").is_ok() {
                     let _ = vault.handoff_update_out(&r.delivery_id, "expired", None);
                 }
@@ -1072,6 +1130,19 @@ pub(crate) fn tick(vault: &LocalVault) {
             }
         }
         Err(e) => k2_core::log_debug!("[vault-handoff] tick: {}", e.code),
+    }
+    // 0.46.10: every delivery still waiting has its permission card: one
+    // from before 0.46.10 (only the old `handoff` card, which the phone
+    // never drew), one whose card couldn't go up (no pinned Thread yet), or
+    // one whose card failed at the click (it asks again, with fresh values).
+    // An open card is left as it is.
+    match vault.handoffs(None, Some("in")) {
+        Ok(rows) => {
+            for r in rows.iter().filter(|r| r.status == "pending") {
+                crate::permission::actions::vault_incoming::present_for(r);
+            }
+        }
+        Err(e) => k2_core::log_debug!("[vault-handoff] tick cards: {}", e.code),
     }
 }
 

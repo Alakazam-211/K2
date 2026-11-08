@@ -171,7 +171,10 @@ fn the_held_actions_are_registered_with_the_code_floors_and_proofs() {
 #[test]
 fn rows_outside_v1_say_they_cant_be_requested_or_name_their_cover() {
     let ws = seed("e2nc");
-    not_requestable(&ws, &["vault.incoming.accept"]);
+    not_requestable(&ws, &["vault.widen", "compute.admin-deny"]);
+    // 0.46.10: accepting a secret another agent sent is a card now.
+    assert!(present::find_not_cardable("vault.incoming.accept").is_none());
+    assert!(present::find_action("vault.incoming.accept").is_some());
 }
 
 /// Each id answers 403 `not_cardable`, ending "It can't be requested."

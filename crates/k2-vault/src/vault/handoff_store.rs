@@ -719,7 +719,7 @@ impl LocalVault {
         if !matches!(actor, Actor::Owner | Actor::Login { .. }) {
             return Err(VaultError::forbidden(
                 "handoff_person_only",
-                "a person on this server accepts or declines secrets from other agents (Settings → Vault → Incoming, or the Thread card)",
+                "a person on this server accepts or declines secrets from other agents (the card K2 puts on the receiving agent's Thread, or Settings → Vault → Incoming)",
             ));
         }
         let mut r = self.handoff_get(id, "in")?;

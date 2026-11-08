@@ -141,7 +141,15 @@ fn receiver_pends_without_opt_in_and_lands_only_with_accept_from_and_a_connectio
         let rec = v.handoff_get(&id1, "in").expect("row");
         assert_eq!(rec.peer_addr, peer_addr);
         assert_eq!(rec.peer_fp.as_deref(), Some(peer.fingerprint.as_str()));
-        assert!(rec.card.is_some(), "the owner still gets a card");
+        // 0.46.10: the owner still gets a card, the permission card (the
+        // phone draws it), and it names the other server.
+        assert!(rec.card.is_none(), "no old handoff card");
+        let req = crate::permission::store::get_by_display_id(&id1).expect("db").expect("the owner still gets a card");
+        assert_eq!((req.action.as_str(), req.state.as_str()), ("vault.incoming.accept", "pending"));
+        let ctx = crate::permission::present::ctx_of(&req);
+        let reg = crate::permission::present::find_action(&req.action).expect("registered");
+        let w = crate::permission::present::words(reg.spec, &ctx);
+        assert!(w.what_changes.contains("K_OFF") && w.what_changes.contains(" on "), "the sender and its server: {}", w.what_changes);
 
         // Opt-in on, not listed: pending.
         k2_core::workspace::settings::update_project_setting(&path, "allow_remote_instruct", "1").expect("opt in");
@@ -547,9 +555,10 @@ fn only_the_sending_peer_can_unsend_and_it_disables_the_copy() {
         assert!(!v.handoff_has_value(&id), "the pending value is gone");
         let rec = v.handoff_get(&id, "in").unwrap();
         assert_eq!(rec.status, "unsent");
-        let card = rec.card.expect("card");
-        let doc = k2_core::overlay::get_doc(card.rsplit_once('/').unwrap().1).unwrap().unwrap();
-        assert_eq!(doc.handoff.unwrap().status, "unsent", "the card closes");
+        let req = crate::permission::store::get_by_display_id(&id).expect("db").expect("card");
+        assert_eq!(req.state.as_str(), "cancelled", "the card closes");
+        let doc = k2_core::overlay::get_doc(req.card_id.as_deref().expect("posted")).unwrap().unwrap();
+        assert!(!doc.is_pending_choice(), "the card closes");
     });
 }
 

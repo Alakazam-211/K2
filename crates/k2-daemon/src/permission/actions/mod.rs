@@ -27,6 +27,7 @@
 //! | `mail_stop.rs` | 0.46.8 | `mail.stop-sending` (turn off a workspace's agent email sending) |
 //! | `box_login_grant.rs` | 0.46.8 | `apps.user-grant-box` (a box login's access to the agent's own App) |
 //! | `chat_refresh.rs` | 0.46.8 | `chat.refresh` (a new pinned chat on the same harness, once or from now on) |
+//! | `vault_incoming.rs` | 0.46.10 | `vault.incoming.accept` (accept or decline a secret another agent sent; K2 presents it) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -54,6 +55,7 @@ pub(crate) mod publish;
 pub(crate) mod sew;
 pub(crate) mod switches;
 pub(crate) mod vault;
+pub(crate) mod vault_incoming;
 pub(crate) mod workbench;
 
 /// The asking side, fixed at request time.
@@ -144,6 +146,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(mail_stop::actions());
     out.extend(box_login_grant::actions());
     out.extend(chat_refresh::actions());
+    out.extend(vault_incoming::actions());
     out
 }
 
@@ -169,6 +172,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(mail_stop::not_cardable());
     out.extend(box_login_grant::not_cardable());
     out.extend(chat_refresh::not_cardable());
+    out.extend(vault_incoming::not_cardable());
     out
 }
 

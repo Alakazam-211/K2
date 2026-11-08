@@ -33084,16 +33084,23 @@ k2 vault send — hand a vault secret to another agent by name (you never see th
   k2 vault unsend <delivery-id>                     take a delivery back (not a revoke: rotate the key)
   k2 msg <agent> "text" --secret NAME               the same send, the text is the note
 
-  People only (your own terminal, not a K2 terminal):
+  Sent to you and waiting (an agent):
+  K2 puts a permission card on your Thread: a person taps Allow (accept) or
+  Deny (decline) there, on the desktop or the phone. Nothing for you to run.
+  No card there (it couldn't go up, or it's from before 0.46.10)? k2 vault
+  incoming puts it up, or ask for one (permission cards on):
+  k2 permission request vault.incoming.accept id=<delivery-id> [as=NEW|replace=yes] --why "…"
+
+  People only (your own terminal, not a K2 terminal; the card does the same):
   k2 vault incoming accept <id> [--as NEW] [--replace] [--always]
   k2 vault incoming decline <id>
   k2 vault accept-from add|remove <ws:agent|agent|agent::host|team:id> --workspace <ws>
   printf '%s' "$KEY" | k2 vault send NAME --to <agent>::<host> --stdin [--kind api_key] [--for host]
                                     a value you type in, to another server only
 
-Secrets arrive pending: a person on the receiving server accepts them,
-unless the receiving agent accepts from you (k2 vault accept-from) or you
-answer its ask. A same-named secret is never overwritten; re-sending the
+Secrets arrive pending: a person on the receiving server accepts them on
+the card K2 puts on the receiving agent's Thread, unless that agent
+accepts from you (k2 vault accept-from) or you answer its ask. A same-named secret is never overwritten; re-sending the
 same secret makes a new version. A secret a person gave needs a person
 to send it to another server. Server-wide secrets aren't sent (the owner
 shares them with k2 vault grant).
@@ -33279,6 +33286,13 @@ if v.get("addressNote"): print("note: " + v["addressNote"], file=sys.stderr)'
             if [ "$sub" = "incoming" ] && { [ "$verb" = "accept" ] || [ "$verb" = "decline" ]; }; then
                 local id="${pos[1]:-}"
                 [ -n "$id" ] || { echo "usage: k2 vault incoming $verb <delivery-id>" >&2; exit 2; }
+                if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+                    # 0.46.10: an agent never runs this; the person answers
+                    # K2's permission card (desktop and phone).
+                    echo "owner_only: a person accepts or declines $id on the card K2 put on your Thread (Allow accepts, Deny declines; it shows on their phone too). Nothing for you to run." >&2
+                    echo "No card there? k2 vault incoming puts it up, or ask: k2 permission request vault.incoming.accept id=$id --why \"<what you need it for>\"" >&2
+                    exit 3
+                fi
                 _vault_person_guard
                 local body
                 body="$(python3 -c '
@@ -33319,7 +33333,11 @@ for d in items:
     who = ("from " if sub == "incoming" else "to ") + (d.get("peer") or "?")
     extra = ""
     if d.get("status") == "pending" and sub == "incoming":
-        extra = "  (k2 vault incoming accept %s — a person, from their own terminal)" % d.get("deliveryId")
+        c = d.get("card") or {}
+        if c.get("card"):
+            extra = "  (waiting for a person: the card on the Thread of %s)" % (c.get("addr") or d.get("workspace") or "the agent")
+        else:
+            extra = "  (no card yet: %s)" % (d.get("ask") or "k2 permission request vault.incoming.accept id=%s" % d.get("deliveryId"))
     if d.get("ref"): extra = "  " + d["ref"]
     print("%-22s %-10s %-28s %-24s %s%s" % (d.get("landedName") or d.get("name"), d.get("status"), who, d.get("createdAt") or "", d.get("deliveryId"), extra))
     if d.get("note"): print("    note: %s" % d["note"])
@@ -51009,17 +51027,18 @@ GIVING A SECRET TO ANOTHER AGENT
   (or --to ops::larkspur.k2.dev on another server; or k2 msg ops "…" --secret
   STRIPE_KEY). You never handle the value; it moves vault to vault, sealed
   to the other server's vault across servers.
-  It arrives pending: a person there accepts it (k2 vault incoming), unless
-  that agent accepts from you (k2 vault accept-from, set by a person). A
-  same-named secret is never overwritten; re-sending yours makes a new
-  version. A secret a person gave you needs a person to send it to
-  another server. Server-wide secrets aren't sent (the owner shares them
-  with k2 vault grant). The sender picks how it arrives: --delivery file or
-  env for a code or token a tool reads (no sites), fetch for an HTTP key.
-  Your copy keeps that and --ttl (at most env; no sites: a file in
-  $K2_SECRETS_DIR, k2 vault sync). Once a person accepts it, you may take
-  it up to the ceiling the card showed, no owner needed: k2 vault grant
-  NAME --to ws:<you> --as env. Only a person goes past that.
+  It arrives pending: K2 puts a card on that agent's Thread for a person
+  there (Allow or Deny), unless it accepts from you (k2 vault accept-from).
+  No card for one sent to you? k2 permission request vault.incoming.accept
+  id=<hd_…>. A same-named secret is never overwritten; re-sending yours
+  makes a new version. A secret a person gave you needs a person to send
+  it to another server. Server-wide secrets aren't sent (the owner shares
+  them with k2 vault grant). The sender picks how it arrives: --delivery
+  file or env for a code or token a tool reads (no sites), fetch for an
+  HTTP key. Your copy keeps that and --ttl (at most env; no sites: a file
+  in $K2_SECRETS_DIR, k2 vault sync). Once a person accepts it, you may
+  take it up to the ceiling the card showed, no owner needed: k2 vault
+  grant NAME --to ws:<you> --as env. Only a person goes past that.
   Exit 3 = a person must act (don't retry); 2 = the other server can't
   (peer_too_old); 4 = no such secret or agent. Every step is logged.
 
@@ -83229,6 +83248,14 @@ You can't widen a secret a person gave you yourself, so `k2 publish secret add <
     k2 permission request vault.share-service as=file secret=NAME service=<service> --why "<what you need it for>"
 
 Run it as printed. The owner or an admin allows it and confirms it's them, and that does the share: don't run the add again. It takes effect the next time the service starts, so when the `[permission:]` turn says approved, restart it yourself (`k2 publish stop` then `k2 publish start`; an App: `k2 app restart`). The service or App reads it from its own `$K2_SECRETS_DIR` (`as=file`) or as an environment variable (`as=env`). It works only for a secret in your own workspace and a service or App of that workspace; the secret's value never shows on the card.
+
+## A secret another agent sent you
+
+When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `k2 vault incoming accept` (it's a person's), and don't ask when the card is there (`k2 vault incoming` says where it is). No card for one (it couldn't go up)? `k2 vault incoming` puts it up, or ask:
+
+    k2 permission request vault.incoming.accept id=<hd_… id> --why "<what you need it for>"
+
+Add `as=<NEW_NAME>` when your workspace already has a secret of that name, or `replace=yes` for a new version of one it sent you before. Only your own deliveries can be asked for. When the `[permission:]` turn says approved, the secret is in your vault and the turn says how to use it. Denied: it was declined and the copy deleted; ask the sender to send it again if you still need it.
 
 ## Logins on your own App
 

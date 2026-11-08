@@ -173,23 +173,33 @@ fn same_server_send_pends_then_lands_with_accept_from_and_rotates_on_resend() {
         let (st, j, _) = call(&v, ACCEPT_FROM, &agent(&ops), json!({ "workspace": ops.id, "sender": sales.name, "action": "add" }));
         assert_eq!((st, code(&j)), (403, "handoff_person_only"));
 
-        // The receiving agent's Thread has a person-only handoff card (H18).
-        let card_ref = v.handoff_get(&id, "in").expect("row").card.expect("a pending copy posts a Thread card");
-        let card_id = card_ref.rsplit_once('/').expect("conv/card").1.to_string();
+        // The receiving agent's Thread has a person-only PERMISSION card
+        // (0.46.10, Beta or not): the standard card the phone draws, not the
+        // old `handoff` one.
+        assert!(v.handoff_get(&id, "in").expect("row").card.is_none(), "no old handoff card");
+        let req = crate::permission::store::get_by_display_id(&id).expect("db").expect("K2 presented a card");
+        assert_eq!((req.action.as_str(), req.held_ref.as_deref(), req.state.as_str()), ("vault.incoming.accept", Some(id.as_str()), "pending"));
+        let card_id = req.card_id.clone().expect("posted");
         let doc = k2_core::overlay::get_doc(&card_id).expect("doc").expect("card doc");
-        assert_eq!(doc.kind, "handoff");
-        let h = doc.handoff.as_ref().expect("handoff body");
-        assert_eq!((h.status.as_str(), h.name.as_str(), h.delivery_id.as_str()), ("pending", "STRIPE_KEY", id.as_str()));
-        assert!(doc.body.as_deref().expect("plain body").contains("Settings → Vault → Incoming"), "H18 body for old renderers");
+        let choice = doc.choice.as_ref().expect("a choice card");
+        assert_eq!(choice.action.as_ref().expect("action").id, "permission");
+        let view = choice.action.as_ref().expect("action").view.clone().expect("view");
+        let what = view["whatChanges"].as_str().expect("whatChanges");
+        assert!(what.contains("STRIPE_KEY") && what.contains(&sales.name.to_lowercase()), "{view}");
+        assert!(view["consequences"].as_str().expect("consequences").contains("for the refund job"), "the note: {view}");
+        // The agent's list names the card and the line to ask with.
+        let (_, inc, raw) = call_p(&v, INCOMING, &agent(&ops), Value::Null, HashMap::new());
+        assert_eq!(inc["items"][0]["card"]["card"], card_id.as_str(), "{raw}");
+        assert_eq!(inc["items"][0]["ask"], format!("k2 permission request vault.incoming.accept id={id} --why \"<what you need it for>\""), "{raw}");
 
-        // A person accepts, ticking "always accept from".
+        // A person accepts in Settings / the CLI, ticking "always accept
+        // from": the card closes as answered by them.
         let (st, j, raw) = call(&v, DECIDE, &owner(), json!({ "id": id, "action": "accept", "always": true }));
         assert_eq!(st, 200, "{raw}");
+        let req = crate::permission::store::get(req.id.as_str()).expect("db").expect("row");
+        assert_eq!((req.state.as_str(), req.answered_by.as_deref()), ("approved", Some("owner")));
         let doc = k2_core::overlay::get_doc(&card_id).expect("doc").expect("card doc");
-        let h = doc.handoff.as_ref().expect("handoff body");
-        assert_eq!(h.status, "landed");
-        assert_eq!(h.answered_by.as_ref().expect("who").kind, "owner");
-        assert!(h.reference.as_deref().expect("ref").starts_with("k2v://"));
+        assert!(!doc.is_pending_choice(), "the card closed");
         assert_eq!(j["delivery"]["status"], "landed");
         assert_eq!(j["alwaysAdded"], format!("ws:{}", sales.id));
         assert!(j["ref"].as_str().expect("ref").starts_with("k2v://"));
@@ -436,7 +446,10 @@ fn the_stamp_message_is_names_only() {
     );
     assert!(!t.contains("k2 vault fetch"), "{t}");
     rec.status = "pending".into();
-    assert!(stamp_text(&rec, "sales", None, None).contains("It waits for your owner to accept (k2 vault incoming)"));
+    // 0.46.10: it points at the card K2 put up, never a command to run.
+    let t = stamp_text(&rec, "sales", None, None);
+    assert!(t.contains("K2 put a card on your Thread for your owner to accept or decline"), "{t}");
+    assert!(!t.contains("k2 vault incoming"), "{t}");
 }
 
 #[test]
@@ -724,11 +737,13 @@ fn an_accepted_cli_code_is_usable_and_every_answer_says_how() {
         let id = j["deliveryId"].as_str().expect("id").to_string();
 
         // A: the accept card shows the delivery and the ceiling.
-        let card_ref = v.handoff_get(&id, "in").expect("row").card.expect("card");
-        let doc = k2_core::overlay::get_doc(card_ref.rsplit_once('/').expect("conv/card").1).expect("doc").expect("card doc");
-        let h = doc.handoff.as_ref().expect("handoff body");
-        assert_eq!((h.kind.as_str(), h.delivery.as_deref(), h.ceiling.as_deref()), ("generic", Some("file"), Some("env")));
-        assert!(h.hosts.is_empty());
+        let req = crate::permission::store::get_by_display_id(&id).expect("db").expect("K2 presented a card");
+        let doc = k2_core::overlay::get_doc(req.card_id.as_deref().expect("posted")).expect("doc").expect("card doc");
+        let view = doc.choice.and_then(|c| c.action).and_then(|a| a.view).expect("view");
+        assert!(view["whatChanges"].as_str().expect("what").contains("PAIR_CODE (generic)"), "{view}");
+        let effect = view["consequences"].as_str().expect("consequences");
+        assert!(effect.contains("delivered as file,") && effect.contains("up to env"), "no sites, file, ceiling env: {effect}");
+        assert!(effect.contains("valid 10 minutes"), "the note: {effect}");
 
         // A pending copy gives the agent nothing.
         let me = agent(&web);

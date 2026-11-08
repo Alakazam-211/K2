@@ -34,7 +34,7 @@
 //! - `LiveEverywhere` — every live session anywhere on this daemon,
 //!   regardless of which workspaces are wired up to each other
 //!
-//! No provider trait here (unlike `companion::settings_bridge`) —
+//! No provider trait here —
 //! the data sources are already singletons (`crate::db::shared`,
 //! `crate::session::registry`).
 

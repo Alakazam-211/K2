@@ -16,8 +16,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 /// The bus is a process-wide singleton. Parallel tests all subscribe
 /// to the same broadcast channel — a publish from test A can land in
 /// test B's receive buffer and cause cross-test false failures. This
-/// lock serializes the bus-touching tests. Mirrors the pattern flagged
-/// for `companion::settings_bridge::tests` in Phase 1.
+/// lock serializes the bus-touching tests.
 static BUS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn test_workspace() -> WorkspaceId {

@@ -19,7 +19,6 @@ path = "src/main.rs"
 k2-node-proto = { path = "../k2-node-proto" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
 # The approver's P-256 signature (the K2 Release Approve app).
 aws-lc-rs = "1"
 # minisign secret keys: BLAKE2b (prehash, key checksum) and scrypt (the

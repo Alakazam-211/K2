@@ -78,7 +78,6 @@ sew-test-pin-next = ["sew-test-pins", "k2-root-proto/sew-test-pin-next"]
 # tarballs) with a per-file sha256 manifest (third_party/SEW-VENDOR.txt).
 # mgmt + sync only: no gateway (no tungstenite/zstd/webpki pulled in).
 sew-client = { path = "../../third_party/sew-client", default-features = false, features = ["mgmt", "sync"] }
-sew-proto = { path = "../../third_party/sew-proto" }
 # Session Stream + Awareness Bus primitives are now always compiled
 # into k2so-core (the `session_stream` feature flag was retired in
 # 0.39.0e).

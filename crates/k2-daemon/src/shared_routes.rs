@@ -397,6 +397,17 @@ pub fn still_demo(shares: &Shares, agent_id: &str) -> Result<(), CliResponse> {
     Err(not_demo("this agent gained a power a shared demo agent mustn't have; an owner or Admin turns it off or shares the agent again", gained))
 }
 
+/// Re-review M1: what every answer that shares an agent says (users/add,
+/// users/set-shares; the CLI and Settings print it). Each login reads only
+/// its own conversation, but every post goes to the agent's ONE main
+/// session, so the agent's context is shared.
+pub const SHARED_CONTEXT_NOTICE: &str = "A shared agent's memory is shared: every Voice & Chat only login it is shared with, and its own Thread, talk to the same session. Each login sees only its own conversation, but the agent remembers them all and can repeat one person's words to another. Share only a dedicated demo agent, never use its own Thread for your own work, and give each reviewer their own login (one login shared by several people is one conversation and one message budget).";
+
+/// [`SHARED_CONTEXT_NOTICE`] when `shares` names an agent.
+pub fn shared_context_notice(shares: &Shares) -> Option<&'static str> {
+    (!shares.agents.is_empty()).then_some(SHARED_CONTEXT_NOTICE)
+}
+
 /// Stored shares as people see them (`GET /cli/users`, the CLI): a share
 /// whose agent, Garden or source is gone shows `{id|name, missing: true}`.
 pub fn shares_view(s: &Shares) -> J {

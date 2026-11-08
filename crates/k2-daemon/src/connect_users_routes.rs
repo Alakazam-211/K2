@@ -199,6 +199,10 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
     if role == connect_users::Role::VoiceChat {
         body["shares"] = crate::shared_routes::shares_view(&shares);
         body["warnings"] = serde_json::json!(warnings);
+        // M1: a shared agent's context is shared by every login.
+        if let Some(n) = crate::shared_routes::shared_context_notice(&shares) {
+            body["notice"] = serde_json::json!(n);
+        }
     }
     CliResponse::ok_json(body.to_string())
 }
@@ -573,9 +577,14 @@ pub fn handle_set_shares(actor_role: connect_users::Role, body: &[u8]) -> CliRes
         Err(r) => return r,
     };
     match connect_users::set_shares(&req.username, shares) {
-        Ok(s) => CliResponse::ok_json(
-            serde_json::json!({ "success": true, "shares": crate::shared_routes::shares_view(&s), "warnings": warnings }).to_string(),
-        ),
+        Ok(s) => {
+            let mut body = serde_json::json!({ "success": true, "shares": crate::shared_routes::shares_view(&s), "warnings": warnings });
+            // M1: a shared agent's context is shared by every login.
+            if let Some(n) = crate::shared_routes::shared_context_notice(&s) {
+                body["notice"] = serde_json::json!(n);
+            }
+            CliResponse::ok_json(body.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }

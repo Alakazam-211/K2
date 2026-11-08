@@ -11855,7 +11855,12 @@ gets their own conversation with it, vc:<agent>:<login>; the agent sees
 "[guest <login> (Voice & Chat only)]" and every line quoted: treat it as
 a guest), a Garden (read-only, on a phone) and the data sources it may
 show. K2 refuses to share an agent with connections, vault grants, mail,
-compute or no permission prompts unless --force. It can't open the server, see workspaces, use a
+compute, no permission prompts or a switch reaching past its Thread
+unless --force, and checks it again on every post. ITS MEMORY IS SHARED:
+every login and the agent's own Thread reach its one session, so never
+use that agent's Thread yourself, and give each reviewer their own login
+(one shared login = one conversation, one post budget).
+It can't open the server, see workspaces, use a
 terminal, files, the vault, settings, mail or agents' controls; every
 other route answers 403 role_required. Agents don't see it in
 k2 connections list --users and can't assign it tickets.
@@ -40743,10 +40748,15 @@ USAGE
                                 Nothing else: no terminals, agents, files,
                                 settings, vault. Share ONLY a dedicated
                                 demo agent: K2 refuses one with
-                                connections, vault grants, mail, compute
-                                or no permission prompts unless --force.
+                                connections, vault grants, mail, compute,
+                                no permission prompts or a switch that
+                                reaches past its Thread unless --force.
                                 Each person gets their own conversation
-                                with it, delivered as a guest. A login
+                                with it, delivered as a guest, but the
+                                agent's memory is shared by every login
+                                and its own Thread: never use that
+                                agent's Thread yourself, and give each
+                                reviewer their own login. A login
                                 many people share (a store reviewer):
                                 --keep-password --fixed-password (they
                                 can't change it; a wrong guess locks only
@@ -41130,6 +41140,8 @@ if d.get("role") == "voice_chat":
     print("Voice & Chat only: joins voice rooms; shared agents: %s; shared Gardens: %s." % (ag, gd))
     for w in d.get("warnings") or []:
         sys.stderr.write("WARNING: shared anyway (--force): %s\n" % w)
+    if d.get("notice"):
+        sys.stderr.write("WARNING: %s\n" % d["notice"])
 if d.get("fixedPassword") is True:
     print("The password is fixed: the person cannot change it.")
 temp = d.get("mustChangePassword")
@@ -41289,6 +41301,8 @@ if e is not None:
     sys.exit(3 if code in ("role_required", "invalid or missing token", "Invalid or missing auth token") else 1)
 for w in d.get("warnings") or []:
     sys.stderr.write("WARNING: shared anyway (--force): %s\n" % w)
+if d.get("notice"):
+    sys.stderr.write("WARNING: %s\n" % d["notice"])
 if "users" in d:
     row = next((u for u in d.get("users") or [] if isinstance(u, dict) and u.get("username") == user), None)
     if row is None:

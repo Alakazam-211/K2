@@ -172,6 +172,9 @@ async fn a_reviewer_login_reaches_voice_one_agent_and_one_garden_and_nothing_els
         assert_eq!(v["role"], "voice_chat", "{v}");
         assert_eq!(v["shares"]["agents"][0]["address"], a.as_str(), "{v}");
         assert_eq!(v["shares"]["gardens"][0]["id"], garden.as_str(), "{v}");
+        // Re-review M1: sharing an agent says its context is shared.
+        let notice = v["notice"].as_str().unwrap_or_else(|| panic!("a notice: {v}"));
+        assert!(notice.contains("memory is shared") && notice.contains("their own login"), "{notice}");
         // Unknown share: 404, no login made.
         let r = post(port, "/cli/users/add", OWNER_TOKEN, json!({"username": "rev2", "password": PW, "role": "voice_chat", "shareAgents": ["no-such-agent"]}));
         assert_eq!(r.status, 404, "{}", r.body);
@@ -294,6 +297,12 @@ async fn a_reviewer_login_reaches_voice_one_agent_and_one_garden_and_nothing_els
         let r = post(port, "/cli/users/set-shares", &adm, json!({"username": "reviewer", "agents": [a], "gardens": []}));
         assert_eq!(r.status, 200, "{}", r.body);
         assert_eq!(r.json()["shares"]["gardens"], json!([]));
+        assert!(r.json()["notice"].as_str().is_some_and(|n| n.contains("memory is shared")), "M1 notice: {}", r.body);
+        let r = post(port, "/cli/users/set-shares", &adm, json!({"username": "reviewer", "agents": [], "gardens": []}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(r.json().get("notice").is_none(), "no agent, no notice: {}", r.body);
+        let r = post(port, "/cli/users/set-shares", &adm, json!({"username": "reviewer", "agents": [a], "gardens": []}));
+        assert_eq!(r.status, 200, "{}", r.body);
         let r = post(port, "/cli/users/set-shares", &adm, json!({"username": "adm", "agents": [a]}));
         assert_eq!(r.status, 400, "an Admin's own row is not voice_chat: {}", r.body);
         // The list shows the shares.

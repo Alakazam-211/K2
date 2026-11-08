@@ -380,6 +380,18 @@ fn only_a_demo_agent_is_shared_without_force() {
     assert_eq!(shares.accepted_risks.get(&a), Some(&risks), "a forced share records what it accepted");
 }
 
+/// Re-review M1: an answer that shares an agent carries the shared-memory
+/// notice; one with no agent doesn't.
+#[test]
+fn sharing_an_agent_carries_the_shared_memory_notice() {
+    assert_eq!(shared_context_notice(&Shares::default()), None);
+    assert_eq!(shared_context_notice(&Shares { gardens: vec!["g".into()], ..Default::default() }), None);
+    let n = shared_context_notice(&Shares { agents: vec!["p".into()], ..Default::default() }).expect("notice");
+    for words in ["memory is shared", "same session", "dedicated demo agent", "never use its own Thread", "their own login", "one message budget"] {
+        assert!(n.contains(words), "{words}: {n}");
+    }
+}
+
 fn set_column(project_id: &str, column: &str, value: i64) {
     let db = k2_core::db::shared();
     let conn = db.lock();

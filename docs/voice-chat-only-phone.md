@@ -88,6 +88,17 @@ linked inbox, compute grants, mail sending, no permission prompts, or any
 of the switches that reach past its own Thread (manage secrets, agents,
 connections, Apps, App users, Gardens, compute, Postgres, DNS, hosted mail,
 federated instructions; `409 agent_not_demo`) unless the owner forces it.
+**The agent's memory is shared.** Every post from every Voice & Chat only
+login goes to the agent's one session, the same session its own Thread
+talks to. Each login reads only its own conversation, but the agent
+remembers them all and can repeat one person's words to another. So: share
+only a dedicated demo agent, the owner must never use that agent's own
+Thread for their own work, and each reviewer gets their own login. One
+login several people share is ONE conversation (they read each other's
+posts) and ONE post budget (10 s apart, 200 a day, together). `k2 users
+add`, `k2 users share` and Settings print this when an agent is shared
+(`notice` in the answer).
+
 The agent is checked again on **every post**: one that gained such a power
 since it was shared (anything the owner didn't accept with force) refuses
 the post with `409 agent_not_demo` (`error.risks` lists what changed) until

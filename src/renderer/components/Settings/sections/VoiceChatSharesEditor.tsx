@@ -1,12 +1,12 @@
 // Settings → Users and Access: what a Voice & Chat only login is shown
 // (prd-voice-chat-only-members-v1, shares extension). The owner (or an
-// Admin) names the agents whose Thread the person may read and post in,
+// Admin) names the agents the person gets their own conversation with,
 // and the Gardens they may view on a phone. `POST /cli/users/set-shares
 // {username, agents, gardens}` replaces both lists; the daemon resolves
 // each agent address and Garden id and refuses an unknown one.
 
 import { useEffect, useState } from 'react'
-import { splitShareList, type VoiceChatShares } from './connect-user-roles'
+import { SHARED_CONTEXT_NOTICE, splitShareList, type VoiceChatShares } from './connect-user-roles'
 
 const INPUT =
   'flex-1 min-w-0 px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
@@ -54,8 +54,14 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
   return (
     <div className="pl-7 space-y-1" data-testid={`voice-chat-shares-${username}`}>
       <div className="text-[10px] text-[var(--color-text-muted)]">
-        Shared with {username}: they can read and post in these agents&apos; Threads and view these Gardens. Nothing else.
+        Shared with {username}: they get their own conversation with each of these agents and can view these Gardens.
+        Nothing else.
       </div>
+      {agents.trim() ? (
+        <div className="text-[10px] text-[var(--color-status-warn-soft)]" data-testid={`voice-chat-shares-notice-${username}`}>
+          {SHARED_CONTEXT_NOTICE}
+        </div>
+      ) : null}
       <div className="flex items-center gap-2">
         <span className="w-16 flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Agents</span>
         <input

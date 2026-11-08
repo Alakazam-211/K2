@@ -44,6 +44,7 @@ from urllib.parse import urlparse
 
 LOG = sys.argv[1]
 SHARES = {"agents": [{"id": "p-1", "address": "demo", "name": "Demo"}], "gardens": [{"id": "g-1", "name": "Phone"}]}
+NOTICE = "A shared agent's memory is shared: every login talks to the same session."
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -80,6 +81,8 @@ class H(BaseHTTPRequestHandler):
             if body.get("role") == "voice_chat":
                 out["shares"] = SHARES
                 out["warnings"] = ["demo: connections to other agents"] if body.get("force") else []
+                if body.get("shareAgents"):
+                    out["notice"] = NOTICE
             return self.reply(200, out)
         if u.path == "/cli/users/set-role":
             if body.get("username") == "boss":
@@ -92,7 +95,10 @@ class H(BaseHTTPRequestHandler):
             if body.get("username") == "risky" and not body.get("force"):
                 return self.reply(409, {"ok": False, "error": {"code": "agent_not_demo", "hint": "share only a dedicated demo agent",
                                                                "risks": ["ops: vault grants (2)", "ops: a mailbox"]}})
-            return self.reply(200, {"success": True, "shares": SHARES, "warnings": ["ops: vault grants (2)"] if body.get("force") else []})
+            out = {"success": True, "shares": SHARES, "warnings": ["ops: vault grants (2)"] if body.get("force") else []}
+            if body.get("agents"):
+                out["notice"] = NOTICE
+            return self.reply(200, out)
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
 
 srv = HTTPServer(("127.0.0.1", 0), H)
@@ -117,8 +123,9 @@ last() { tail -1 "$LOG" | python3 -c "import json,sys; v=json.load(sys.stdin); x
 count() { wc -l < "$LOG" | tr -d ' '; }
 
 echo "== add a reviewer: role and shares ride the add body =="
-out="$(printf 'review-pass-1\n' | "$K2" users add rev --role voice-chat --share-agent demo --share-garden g-1 --password-stdin --keep-password)"
+out="$(printf 'review-pass-1\n' | "$K2" users add rev --role voice-chat --share-agent demo --share-garden g-1 --password-stdin --keep-password 2>"$SANDBOX/m1err")"
 expect_has "created" "$out" "Created user rev."
+expect_has "M1: add prints the shared-context warning" "$(cat "$SANDBOX/m1err")" "WARNING: A shared agent's memory is shared"
 expect_has "says what it can use" "$out" "Voice & Chat only: joins voice rooms; shared agents: demo; shared Gardens: Phone."
 expect_eq "one request (no set-role)" "$(count)" "1"
 expect_eq "add path" "$(last path)" "/cli/users/add"
@@ -163,7 +170,8 @@ set -e
 expect_eq "unknown role is usage" "$rc" "2"
 
 echo "== share =="
-out="$("$K2" users share rev --agent demo --garden Phone)"
+out="$("$K2" users share rev --agent demo --garden Phone 2>"$SANDBOX/m1err")"
+expect_has "M1: share prints the shared-context warning" "$(cat "$SANDBOX/m1err")" "WARNING: A shared agent's memory is shared"
 expect_eq "set-shares path" "$(last path)" "/cli/users/set-shares"
 expect_eq "set-shares body" "$(last body)" '{"agents": ["demo"], "gardens": ["Phone"], "username": "rev"}'
 expect_has "renders" "$out" "agents:  demo"

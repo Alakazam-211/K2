@@ -21,6 +21,12 @@ export type K2Role = 'owner' | 'admin' | 'member' | 'voice_chat'
 /** The role's label in pickers and lists. */
 export const VOICE_CHAT_LABEL = 'Voice & Chat only'
 
+/** Re-review M1: shown while a Voice & Chat only login has an agent shared
+ * (the daemon's `notice`). Each login reads only its own conversation, but
+ * they all reach the agent's one session. */
+export const SHARED_CONTEXT_NOTICE =
+  "Share only a dedicated demo agent. Its memory is shared: every Voice & Chat only login and the agent's own Thread talk to the same session, so don't use its Thread for your own work, and give each reviewer their own login."
+
 /** Role picker options — lowest first. No Viewer option. Voice & Chat only
  *  isn't here: {@link roleOptions} adds it for a server that knows it. */
 export const ROLE_OPTIONS: ReadonlyArray<{ value: K2Role; label: string }> = [

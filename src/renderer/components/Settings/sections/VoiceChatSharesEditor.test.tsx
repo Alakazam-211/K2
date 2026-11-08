@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { VoiceChatSharesEditor } from './VoiceChatSharesEditor'
+import { SHARED_CONTEXT_NOTICE } from './connect-user-roles'
 
 afterEach(cleanup)
 
@@ -29,6 +30,22 @@ describe('VoiceChatSharesEditor', () => {
     expect(save.disabled).toBe(false)
     fireEvent.click(save)
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(['demo', 'sales'], []))
+  })
+
+  it('says a shared agent\'s memory is shared, only while an agent is named', () => {
+    render(
+      <VoiceChatSharesEditor
+        username="reviewer"
+        shares={{ agents: [{ id: 'p1', address: 'demo', name: 'Demo' }], gardens: [] }}
+        onSave={async () => null}
+      />,
+    )
+    const notice = screen.getByTestId('voice-chat-shares-notice-reviewer')
+    expect(notice.textContent).toBe(SHARED_CONTEXT_NOTICE)
+    expect(notice.textContent).toContain('memory is shared')
+    expect(notice.textContent).toContain('their own login')
+    fireEvent.change(screen.getByLabelText('reviewer shared agents'), { target: { value: '' } })
+    expect(screen.queryByTestId('voice-chat-shares-notice-reviewer')).toBeNull()
   })
 
   it("shows the daemon's refusal", async () => {

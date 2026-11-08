@@ -116,7 +116,12 @@ gets their own conversation with it, vc:<agent>:<login>; the agent sees
 "[guest <login> (Voice & Chat only)]" and every line quoted: treat it as
 a guest), a Garden (read-only, on a phone) and the data sources it may
 show. K2 refuses to share an agent with connections, vault grants, mail,
-compute or no permission prompts unless --force. It can't open the server, see workspaces, use a
+compute, no permission prompts or a switch reaching past its Thread
+unless --force, and checks it again on every post. ITS MEMORY IS SHARED:
+every login and the agent's own Thread reach its one session, so never
+use that agent's Thread yourself, and give each reviewer their own login
+(one shared login = one conversation, one post budget).
+It can't open the server, see workspaces, use a
 terminal, files, the vault, settings, mail or agents' controls; every
 other route answers 403 role_required. Agents don't see it in
 k2 connections list --users and can't assign it tickets.

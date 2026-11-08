@@ -69,7 +69,6 @@ export const DEFAULT_SETTINGS = {
   leftPanelTabs: ['files'],
   rightPanelTabs: ['chat'],
   defaultAgent: 'claude',
-  aiAssistantEnabled: false,
   timer: { visible: true, skipMemo: false, timezone: '' },
   agenticSystemsEnabled: true,
   keepDaemonOnQuit: true,

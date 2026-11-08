@@ -376,8 +376,6 @@ pub struct AppSettings {
     #[serde(default = "default_agent")]
     pub default_agent: String,
     #[serde(default)]
-    pub ai_assistant_enabled: bool,
-    #[serde(default)]
     pub timer: TimerSettings,
     /// Always treated as on by product code; default true for new installs.
     /// Wire field retained so old settings.json still deserializes.
@@ -675,20 +673,6 @@ pub struct AppSettings {
     /// (`REMOTE_ACCESS_KEYS`). Wire name `bootStatusPublic`; `null` resets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_status_public: Option<String>,
-    /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
-    /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
-    /// detection step is allowed to run the bundled 1.5B model.
-    /// **Defaults OFF**: with the checkbox off, classify does the regex
-    /// fast-path ONLY (free, no inference) and returns `unavailable` when
-    /// no marker fires — so `talk` falls back to today's regex/manual
-    /// behavior; with it on, classify additionally runs the qwen model to
-    /// catch unmarked HITLs the regex misses (costs battery/CPU). A typed
-    /// `bool` is required: `AppSettings` round-trips through
-    /// `serde_json::from_value` on every `load`/`update`, which silently
-    /// drops keys with no matching field — an untyped key would never
-    /// persist.
-    #[serde(default)]
-    pub use_llm_hitl_detection: bool,
     /// F4 — play a soft chime when an agent finishes while its pane
     /// isn't being watched. **Defaults ON**. A typed `bool` is required:
     /// `AppSettings` round-trips through `serde_json::from_value` on
@@ -1234,7 +1218,6 @@ impl Default for AppSettings {
             right_panel_tabs: default_right_panel_tabs(),
             workspace_layouts: HashMap::new(),
             default_agent: "claude".to_string(),
-            ai_assistant_enabled: false,
             timer: TimerSettings::default(),
             agentic_systems_enabled: true,
             keep_daemon_on_quit: true,
@@ -1272,7 +1255,6 @@ impl Default for AppSettings {
             connect_login_ingress: default_connect_login_ingress(),
             connect_db_url: String::new(),
             boot_status_public: None,
-            use_llm_hitl_detection: false,
             completion_sound_enabled: true,
             completion_sound_volume: default_completion_sound_volume(),
             completion_sound: default_completion_sound(),
@@ -2539,39 +2521,24 @@ mod tests {
         assert_eq!(odd.mode(), KeepAwakeMode::Off);
     }
 
-    /// GH#8 — the "Use local LLM to detect HITL" opt-in must default OFF
-    /// on a fresh settings file, persist through save→load, ingest the
-    /// camelCase `useLlmHitlDetection` key via the generic `update()`
-    /// deep-merge (the /cli/settings/update path the toggle hits), and
-    /// return to OFF on reset. Default MUST be OFF: it is what keeps the
-    /// 1.5B model from ever running during `talk` HITL detection unless
-    /// the owner explicitly opts in.
+    /// The retired local LLM settings (`aiAssistantEnabled`,
+    /// `useLlmHitlDetection`) are no longer fields. A settings.json that
+    /// still carries them must load with every other value intact (no
+    /// fall back to defaults), and the next save drops them.
     #[test]
-    fn use_llm_hitl_detection_defaults_off_and_round_trips() {
+    fn retired_local_llm_keys_still_load() {
         let _g = TEST_LOCK.lock();
         let _home = HomeGuard::new();
-
-        // Fresh file: the cost/battery default is OFF.
-        assert!(!load().use_llm_hitl_detection);
-        assert!(!AppSettings::default().use_llm_hitl_detection);
-
-        // save → load preserves an explicit opt-in.
-        let mut s = AppSettings::default();
-        s.use_llm_hitl_detection = true;
+        ensure_dir();
+        let raw = r#"{"defaultAgent": "codex", "aiAssistantEnabled": true, "useLlmHitlDetection": true}"#;
+        fs::write(settings_file(), raw).expect("write old settings");
+        let s = load();
+        assert_eq!(s.default_agent, "codex");
         save(&s).expect("save");
-        assert!(load().use_llm_hitl_detection);
-
-        // update() deep-merge ingests the camelCase key like any other field.
-        let merged = update(serde_json::json!({
-            "useLlmHitlDetection": false
-        }))
-        .expect("update");
-        assert!(!merged.use_llm_hitl_detection);
-        assert!(!load().use_llm_hitl_detection);
-
-        // reset() returns to the OFF default.
-        let after = reset().expect("reset");
-        assert!(!after.use_llm_hitl_detection);
+        let stored = stored_json();
+        assert_eq!(stored["defaultAgent"], "codex");
+        assert!(stored.get("aiAssistantEnabled").is_none());
+        assert!(stored.get("useLlmHitlDetection").is_none());
     }
 
     #[test]

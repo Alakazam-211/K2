@@ -193,9 +193,6 @@ interface SettingsState {
   // Per-project settings
   projectSettings: Record<string, Record<string, any>>
 
-  // AI Assistant
-  aiAssistantEnabled: boolean
-
   // Legacy wire field — agentic systems are always on (out of beta).
   // Kept for settings.json / daemon API compat; never used to hide UI.
   agenticSystemsEnabled: boolean
@@ -274,13 +271,6 @@ interface SettingsState {
   // a Member touching apiEnabled). DEFAULTS OFF (surface dark by default).
   apiEnabled: boolean
 
-  // GH#8 — "Use local LLM to detect HITL" opt-in. Gates whether the
-  // `talk` CLI's /cli/terminal/classify detection step runs the bundled
-  // 1.5B model (ON) or stays regex-only (OFF). DEFAULTS OFF (inference
-  // costs battery/CPU). The daemon reads this same flag server-side to
-  // decide whether the model is ever consulted.
-  useLlmHitlDetection: boolean
-
   // F4 — completion chime for UNSEEN agent completions only (an agent
   // finished while its pane wasn't being watched). The amber ActiveBar
   // dot always shows; this gates only the sound. DEFAULTS ON.
@@ -351,7 +341,6 @@ interface SettingsState {
   resetKeybinding: (id: string) => void
   resetAllKeybindings: () => void
   updateProjectSetting: (projectId: string, key: string, value: string) => void
-  setAiAssistantEnabled: (enabled: boolean) => void
   setClaudeAuthAutoRefresh: (enabled: boolean) => void
   setActiveWindowHours: (hours: number) => void
   setOwnerDisplayName: (name: string) => void
@@ -364,7 +353,6 @@ interface SettingsState {
   setComputePreview: (enabled: boolean) => void
   setApps: (enabled: boolean) => void
   setApiEnabled: (enabled: boolean) => void
-  setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
   /** Optimistic now; the daemon write waits for the slider to rest
    *  ({@link COMPLETION_SOUND_VOLUME_SAVE_DELAY_MS}). */
@@ -572,7 +560,6 @@ async function persistAndApply(
       videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
-      useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       ...completionSoundChoice(result),
       // Caret target is per-install localStorage — never adopt the daemon echo.
@@ -608,7 +595,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   terminal: { ...DEFAULT_TERMINAL },
   keybindings: {},
   projectSettings: {},
-  aiAssistantEnabled: true,
   agenticSystemsEnabled: true,
   claudeAuthAutoRefresh: false,
   activeWindowHours: DEFAULT_ACTIVE_WINDOW_HOURS,
@@ -625,7 +611,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   videoRoomsPreview: true,
   apps: true,
   apiEnabled: false,
-  useLlmHitlDetection: false,
   completionSoundEnabled: true,
   completionSoundVolume: DEFAULT_COMPLETION_SOUND_VOLUME,
   completionSound: DEFAULT_COMPLETION_SOUND,
@@ -740,17 +725,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch (err) {
       console.error('[settings] Failed to persist project setting:', err)
       set({ projectSettings: prev })
-    }
-  },
-
-  setAiAssistantEnabled: async (enabled: boolean) => {
-    const prev = get().aiAssistantEnabled
-    set({ aiAssistantEnabled: enabled })
-    try {
-      await persistAndApply(set, { aiAssistantEnabled: enabled })
-    } catch (err) {
-      console.error('[settings] Failed to persist AI assistant setting:', err)
-      set({ aiAssistantEnabled: prev })
     }
   },
 
@@ -925,19 +899,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
-  setUseLlmHitlDetection: async (enabled: boolean) => {
-    const prev = get().useLlmHitlDetection
-    set({ useLlmHitlDetection: enabled }) // optimistic
-    try {
-      // Partial update — the daemon deep-merges `useLlmHitlDetection` and
-      // reads it server-side on the /cli/terminal/classify path.
-      await persistAndApply(set, { useLlmHitlDetection: enabled })
-    } catch (err) {
-      console.error('[settings] Failed to persist use-llm-hitl-detection:', err)
-      set({ useLlmHitlDetection: prev })
-    }
-  },
-
   setCompletionSoundVolume: (volume: number) => {
     const next = clampCompletionSoundVolume(volume)
     _pendingVolume = next
@@ -1050,7 +1011,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
-      useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       ...completionSoundChoice(result),
       editor: mergeEditorDefaults(result.editor),
@@ -1121,7 +1081,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
-      useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       ...completionSoundChoice(result),
       workspaceSwitchFocus: readWorkspaceSwitchFocus(),

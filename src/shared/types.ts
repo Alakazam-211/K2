@@ -86,7 +86,6 @@ export interface AppSettingsResponse {
   leftPanelTabs: string[]
   rightPanelTabs: string[]
   defaultAgent: string
-  aiAssistantEnabled: boolean
   timer: TimerSettingsBackend
   /** Always true — agentic systems are GA; kept for settings.json wire compat. */
   agenticSystemsEnabled: boolean
@@ -176,11 +175,6 @@ export interface AppSettingsResponse {
   // to write (the daemon 403s a Member touching it). Optional: older
   // snapshots omit it → readers treat absent as false (surface dark).
   apiEnabled?: boolean
-  // GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
-  // Gates whether the `talk` CLI's /cli/terminal/classify detection step
-  // runs the bundled 1.5B model (ON) or stays regex-only (OFF, default).
-  // Optional: older snapshots omit it → readers treat absent as false.
-  useLlmHitlDetection?: boolean
   // F4 — play a soft chime when an agent finishes while its pane isn't
   // being watched (the unseen-done fire; see completion-sound.ts).
   // Backed by typed `AppSettings.completion_sound_enabled`. Optional:

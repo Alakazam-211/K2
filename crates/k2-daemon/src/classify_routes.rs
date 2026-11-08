@@ -8,110 +8,56 @@
 //! menu, a yes/no permission gate, a multi-question form — and, when
 //! it is, extract the question(s) + option(s).
 //!
-//! This is the load-bearing detection primitive that `talk`
-//! auto-routing (Phase 2, gated on a validation pass) will consume.
-//! Phase 1 (this module) ships the endpoint + prompt + fast-path ONLY
-//! — it does NOT wire `talk` routing.
+//! This is the detection primitive `k2 talk` auto-routing consumes.
 //!
-//! # Two-stage detection
+//! # Detection: regex fast-path
 //!
-//! 1. **Regex fast-path** (≈0 ms, no model). If the screen carries an
-//!    obvious, stable HITL marker (Claude's `Enter to select` menu
-//!    footer, a numbered `❯ 1.` option cursor, the `☐ … ✔ Submit →`
-//!    tab-bar, a `Do you want to proceed?` permission gate) we
-//!    short-circuit to `is_hitl=true` and best-effort extract the
-//!    questions with a cheap parse. `source="fastpath"`. This path is
-//!    MODEL-INDEPENDENT, so obvious HITLs are caught even when the
-//!    bundled LLM isn't installed.
+//! If the screen carries an obvious, stable HITL marker (Claude's
+//! `Enter to select` menu footer, a numbered `❯ 1.` option cursor, the
+//! `☐ … ✔ Submit →` tab-bar, a `Do you want to proceed?` permission
+//! gate) we answer `is_hitl=true` and best-effort extract the questions
+//! with a cheap parse. `source="fastpath"`.
 //!
-//!    Slice 5: the marker tables now cover every Big-7 dialog captured
-//!    in the 2026-07 TUI signal studies
-//!    (`.k2/notes/tui-signal-study-grok-hermes-cursor.md`,
-//!    `.k2/notes/tui-signal-study-codex-gemini.md`) — grok's
-//!    always-approve permission gate, hermes' Dangerous Command box,
-//!    cursor-agent's command-approval bar, and the codex/gemini/cursor
-//!    trust dialogs. Two dialogs are PENDING RECAPTURE (both agents
-//!    were auth-broken during the study): codex's exec-approval UI and
-//!    gemini's shell-confirmation strings — their trust dialogs are
-//!    covered, the mid-turn approval wording is not yet verified.
+//! Slice 5: the marker tables cover every Big-7 dialog captured in the
+//! 2026-07 TUI signal studies
+//! (`.k2/notes/tui-signal-study-grok-hermes-cursor.md`,
+//! `.k2/notes/tui-signal-study-codex-gemini.md`): grok's always-approve
+//! permission gate, hermes' Dangerous Command box, cursor-agent's
+//! command-approval bar, and the codex/gemini/cursor trust dialogs. Two
+//! dialogs are PENDING RECAPTURE (both agents were auth-broken during
+//! the study): codex's exec-approval UI and gemini's shell-confirmation
+//! strings. Their trust dialogs are covered, the mid-turn approval
+//! wording is not yet verified.
 //!
-//! 2. **qwen classify + extract** (`source="model"`). If the fast-path
-//!    doesn't fire AND the bundled model is loaded, run a temp-0-ish,
-//!    greedy generation with [`CLASSIFY_SYSTEM_PROMPT`] and parse the
-//!    strict-JSON reply.
+//! # Degrade-gracefully contract
 //!
-//! # Degrade-gracefully contract (Rosson)
-//!
-//! "If the LLM is not installed, stick with how it currently works."
-//! So when the model is unavailable AND the fast-path didn't fire we
-//! return `is_hitl: null` (JSON null = "unknown / no detector") with
-//! `source="unavailable"`. The caller (`talk` auto-routing) keys on
-//! `source=="unavailable"` to fall back to today's MANUAL behavior —
-//! it must NOT auto-hold / auto-scout when there is simply no detector.
-//!
-//! # Safety bias (scoped)
-//!
-//! A held message is benign; an *eaten* message (sent into an open
-//! HITL) is the only dangerous failure. So when the model RAN but
-//! produced ambiguous / unparseable output we bias to
-//! `is_hitl=true` (hold, don't send). The safety bias applies ONLY to
-//! `source="model"`; it does NOT apply to `unavailable` (see above).
+//! When no marker fires we return `is_hitl: null` (JSON null =
+//! "unknown") with `source="unavailable"`. The caller (`talk`) keys on
+//! that to fall back to its MANUAL behavior: it must NOT auto-hold or
+//! auto-scout when nothing was detected.
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::cli_response::CliResponse;
-use crate::llm_host;
 
-/// How many lines of screen tail we feed the classifier. A Claude
-/// select menu + its surrounding context comfortably fits in 60 rows
-/// (a typical terminal is ~24-50 rows), and keeping the prompt tight
-/// helps the 1.5B model stay on-task.
+/// How many lines of screen tail we classify. A Claude select menu and
+/// its surrounding context comfortably fit in 60 rows (a typical
+/// terminal is ~24-50 rows).
 const CLASSIFY_SCREEN_LINES: usize = 60;
-
-/// The classify + extract prompt. Kept as a clearly-marked constant so
-/// "improve the detector over time" = "edit this prompt" (no code
-/// change, no retrain). The model is the bundled Qwen2.5-1.5B-Instruct.
-///
-/// Contract the parser depends on: the model must emit ONE JSON object
-/// with `is_hitl` / `kind` / `questions`. We still parse defensively
-/// (fences stripped, braces sliced, safety-bias on failure) because a
-/// 1.5B model will occasionally wrap it in prose.
-pub const CLASSIFY_SYSTEM_PROMPT: &str = r#"You are a strict detector of HUMAN-IN-THE-LOOP (HITL) prompts on a terminal screen.
-
-A HITL prompt is an interactive question that is WAITING for a human to choose or confirm before the program continues. Examples:
-- A numbered selection menu (e.g. "1. ... 2. ... 3. ...", often with "Enter to select" or arrow-key hints).
-- A yes/no permission gate (e.g. "Do you want to proceed?", "Allow this action?").
-- A multi-question form with selectable options and a Submit button.
-
-NOT a HITL:
-- Normal command output, logs, a progress bar, a diff.
-- A shell prompt waiting for the next command (e.g. "$", "%", "user@host:~$").
-- An AI assistant's prose answer that is NOT asking the human to pick an option.
-
-Read the TERMINAL SCREEN below and reply with ONE line of STRICT JSON and NOTHING else — no prose, no explanation, no markdown code fences:
-{"is_hitl": true|false, "kind": "select|permission|none", "questions": [{"header": "the question text", "options": ["option 1", "option 2"]}]}
-
-Rules:
-- "kind": "select" for a choose-an-option menu/form, "permission" for a yes/no confirmation gate, "none" when it is not a HITL.
-- "questions": one entry per distinct question visible on screen. "options" lists the selectable choices verbatim. Use an empty array when there are no questions or none is a HITL.
-- If you are UNSURE whether the screen is waiting for human input, answer "is_hitl": true — it is safer to flag a HITL than to miss one.
-- Output the JSON object ONLY."#;
 
 // ─── Response shape ──────────────────────────────────────────────────
 
-/// What stage produced the verdict. The caller routes on this:
-/// `fastpath`/`model` carry a real `is_hitl`; `unavailable` means "no
-/// detector — fall back to manual behavior".
+/// What produced the verdict. The caller routes on this: `fastpath`
+/// carries a real `is_hitl`; `unavailable` means "no marker matched,
+/// fall back to manual behavior".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassifySource {
-    /// A deterministic marker matched — works WITHOUT the model.
+    /// A deterministic marker matched.
     Fastpath,
-    /// The bundled qwen model classified the screen.
-    Model,
-    /// Model not installed/loaded AND the fast-path didn't fire.
+    /// No marker matched: the verdict is unknown.
     Unavailable,
 }
 
@@ -131,11 +77,11 @@ pub struct ClassifyResult {
     pub source: ClassifySource,
     /// "select" | "permission" | "none".
     pub kind: String,
-    /// Scout payload — the questions + options on screen (best-effort
-    /// on the fast-path, model-extracted otherwise). Empty when none.
+    /// Scout payload: the questions and options on screen (best-effort).
+    /// Empty when none.
     pub questions: Vec<ClassifyQuestion>,
-    /// Human-readable note on WHY (model-unavailable, parse-error,
-    /// which marker fired). Omitted when empty.
+    /// Human-readable note on WHY (which marker fired, or that none
+    /// did). Omitted when empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -145,8 +91,8 @@ impl ClassifyResult {
         CliResponse::ok_json(
             serde_json::to_string(&self).unwrap_or_else(|_| {
                 // Last-ditch: never fail the request. A serialize error
-                // is itself "uncertain" → safety-bias hold.
-                r#"{"is_hitl":true,"source":"model","kind":"none","questions":[],"detail":"serialize error"}"#
+                // is "uncertain", so hold rather than send into a prompt.
+                r#"{"is_hitl":true,"source":"fastpath","kind":"none","questions":[],"detail":"serialize error"}"#
                     .to_string()
             }),
         )
@@ -172,93 +118,30 @@ pub fn handle_classify(params: &HashMap<String, String>) -> CliResponse {
     };
     let screen = lines.join("\n");
 
-    // "Use local LLM to detect HITL" opt-in (Settings → General, default
-    // OFF). This is the literal enable/disable for the bundled 1.5B model
-    // on the HITL-detection path: OFF ⇒ the model NEVER runs, classify is
-    // the regex fast-path only.
-    let use_llm = k2_core::app_settings::load().use_llm_hitl_detection;
-
-    classify_screen(&screen, use_llm).into_response()
+    classify_screen(&screen).into_response()
 }
 
 /// Pure classification over already-rendered screen text. Split from
-/// the HTTP handler so unit tests can exercise the fast-path + parse
-/// robustness without a session or the network.
+/// the HTTP handler so unit tests can exercise it without a session or
+/// the network.
 ///
-/// `use_llm` is the "Use local LLM to detect HITL" setting. When `false`
-/// the bundled model is NEVER consulted: a no-marker screen returns
+/// The regex fast-path decides. A no-marker screen returns
 /// `source=Unavailable` / `is_hitl=null` so the caller (`talk`) falls
-/// back to today's regex/manual behavior. The regex fast-path runs
-/// regardless of the flag — it is free and model-independent.
-fn classify_screen(screen: &str, use_llm: bool) -> ClassifyResult {
-    // 1. Regex fast-path — model-independent, ≈0 ms. Always runs.
+/// back to its manual behavior.
+fn classify_screen(screen: &str) -> ClassifyResult {
     if let Some(result) = fast_path_detect(screen) {
         return result;
     }
-
-    // GATE: with the "Use local LLM to detect HITL" checkbox OFF, the
-    // 1.5B model MUST NOT run. The fast-path didn't fire, so we report
-    // `unavailable` (unknown — NOT "clear") and the caller uses today's
-    // regex/manual behavior. We return BEFORE touching `llm_host` so no
-    // inference is ever queued.
-    if !use_llm {
-        return ClassifyResult {
-            is_hitl: None,
-            source: ClassifySource::Unavailable,
-            kind: "none".to_string(),
-            questions: Vec::new(),
-            detail: Some(
-                "LLM HITL detection disabled (Settings → General → \
-                 \"Use local LLM to detect HITL\"); fast-path did not fire \
-                 — caller should use regex/manual behavior"
-                    .to_string(),
-            ),
-        };
+    // Unknown, NOT "clear": never claims is_hitl=false.
+    ClassifyResult {
+        is_hitl: None,
+        source: ClassifySource::Unavailable,
+        kind: "none".to_string(),
+        questions: Vec::new(),
+        detail: Some(
+            "no fast-path marker on screen; caller should use manual behavior".to_string(),
+        ),
     }
-
-    // 2. Model path — only if the bundled model is actually loaded
-    //    (path set AND file exists). Mirrors `llm_routes::handle_check`
-    //    / `LlmHost::status().loaded`. The worker loads the GGUF on
-    //    demand, so "ensure loaded" == "a model file is ready to spawn".
-    let host = llm_host::shared();
-    if !host.status().loaded {
-        // Degrade gracefully: no detector → is_hitl unknown (null).
-        // The caller falls back to today's manual behavior. NOT a
-        // safety-bias hold — that would break "no LLM → current
-        // behavior".
-        return ClassifyResult {
-            is_hitl: None,
-            source: ClassifySource::Unavailable,
-            kind: "none".to_string(),
-            questions: Vec::new(),
-            detail: Some(
-                "bundled classifier model not installed/loaded; \
-                 fast-path did not fire — caller should use manual behavior"
-                    .to_string(),
-            ),
-        };
-    }
-
-    // Run the model. Greedy-ish, deterministic generation (the bundled
-    // worker samples at temp 0.1 — effectively greedy for this short
-    // strict-JSON task).
-    let raw = match host.generate(CLASSIFY_SYSTEM_PROMPT, screen, llm_host::default_timeout()) {
-        Ok(s) => s,
-        Err(e) => {
-            // Model ran-path but errored (timeout/crash/queue-full). It
-            // is the `source="model"` branch, so the SAFETY BIAS
-            // applies → hold (is_hitl=true).
-            return ClassifyResult {
-                is_hitl: Some(true),
-                source: ClassifySource::Model,
-                kind: "none".to_string(),
-                questions: Vec::new(),
-                detail: Some(format!("model error (safety-bias hold): {}", e.message())),
-            };
-        }
-    };
-
-    parse_model_json(&raw)
 }
 
 // ─── Regex fast-path ─────────────────────────────────────────────────
@@ -327,8 +210,7 @@ const PERMISSION_MARKERS: &[&str] = &[
 ];
 
 /// Best-effort detector. Returns `Some(ClassifyResult)` (always
-/// `is_hitl=true`, `source=Fastpath`) when a marker fires, else `None`
-/// so the caller falls through to the model.
+/// `is_hitl=true`, `source=Fastpath`) when a marker fires, else `None`.
 fn fast_path_detect(screen: &str) -> Option<ClassifyResult> {
     let lower = screen.to_lowercase();
 
@@ -444,9 +326,8 @@ fn grok_radio_label(s: &str) -> Option<&str> {
 /// collect numbered option rows (`1. foo`, `❯ 2. bar`, codex `› 1. …`,
 /// gemini `● 1. …`, grok radio `2 (○) …`) into one question whose
 /// `header` is the nearest preceding non-empty, non-option line
-/// (typically the question text). This is intentionally simple — the
-/// model path does the richer extraction; the fast-path just needs a
-/// usable scout payload.
+/// (typically the question text). This is intentionally simple: the
+/// fast-path just needs a usable scout payload.
 fn extract_questions_cheap(screen: &str) -> Vec<ClassifyQuestion> {
     let lines: Vec<&str> = screen.lines().collect();
     let mut options: Vec<String> = Vec::new();
@@ -489,92 +370,6 @@ fn extract_questions_cheap(screen: &str) -> Vec<ClassifyQuestion> {
 fn looks_like_option(line: &str) -> bool {
     let body = strip_cursor_glyph(line).unwrap_or(line);
     starts_with_numbered_option(body)
-}
-
-// ─── Model-JSON parsing (robust) ─────────────────────────────────────
-
-/// Intermediate shape the model is asked to emit. Every field is
-/// `#[serde(default)]` so a partial object still deserializes.
-#[derive(Debug, Deserialize)]
-struct ModelClassify {
-    #[serde(default)]
-    is_hitl: bool,
-    #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
-    questions: Vec<ModelQuestion>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelQuestion {
-    #[serde(default)]
-    header: String,
-    #[serde(default)]
-    options: Vec<String>,
-}
-
-/// Parse the model's raw text into a `ClassifyResult`. Robust to prose
-/// and markdown fences: we strip ```json fences, slice the outermost
-/// `{ … }`, and deserialize. On ANY failure we apply the SAFETY BIAS —
-/// `is_hitl=true`, `source=Model` — and never panic.
-fn parse_model_json(raw: &str) -> ClassifyResult {
-    let candidate = extract_json_object(raw);
-
-    let parsed: Option<ModelClassify> =
-        candidate.and_then(|c| serde_json::from_str::<ModelClassify>(&c).ok());
-
-    match parsed {
-        Some(m) => {
-            let kind = m.kind.unwrap_or_else(|| {
-                if m.is_hitl { "select".to_string() } else { "none".to_string() }
-            });
-            let questions = m
-                .questions
-                .into_iter()
-                .map(|q| ClassifyQuestion {
-                    header: q.header,
-                    options: q.options,
-                })
-                .collect();
-            ClassifyResult {
-                is_hitl: Some(m.is_hitl),
-                source: ClassifySource::Model,
-                kind,
-                questions,
-                detail: None,
-            }
-        }
-        None => ClassifyResult {
-            // Model RAN but produced unparseable output → safety-bias hold.
-            is_hitl: Some(true),
-            source: ClassifySource::Model,
-            kind: "none".to_string(),
-            questions: Vec::new(),
-            detail: Some("model output unparseable (safety-bias hold)".to_string()),
-        },
-    }
-}
-
-/// Pull the outermost `{ … }` JSON object out of a possibly-noisy
-/// model reply: strips ```json / ``` fences, then slices from the first
-/// `{` to the last `}`. Returns `None` if no brace pair is present.
-fn extract_json_object(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    // Strip markdown code fences if present.
-    let no_fence = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```JSON"))
-        .or_else(|| trimmed.strip_prefix("```"))
-        .map(|s| s.trim_start())
-        .unwrap_or(trimmed);
-    let no_fence = no_fence.strip_suffix("```").unwrap_or(no_fence);
-
-    let start = no_fence.find('{')?;
-    let end = no_fence.rfind('}')?;
-    if end < start {
-        return None;
-    }
-    Some(no_fence[start..=end].to_string())
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────
@@ -846,133 +641,35 @@ Run Grok Build in a project directory?
         assert_eq!(r.kind, "select");
     }
 
-    // ── Model-JSON parsing / robustness ──────────────────────────────
+    // ── End-to-end classify_screen ───────────────────────────────────
 
     #[test]
-    fn parse_well_formed_model_json() {
-        let raw = r#"{"is_hitl": true, "kind": "select", "questions": [{"header": "Pick", "options": ["a", "b"]}]}"#;
-        let r = parse_model_json(raw);
-        assert_eq!(r.source, ClassifySource::Model);
-        assert_eq!(r.is_hitl, Some(true));
-        assert_eq!(r.kind, "select");
-        assert_eq!(r.questions.len(), 1);
-        assert_eq!(r.questions[0].header, "Pick");
-        assert_eq!(r.questions[0].options, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn parse_well_formed_negative() {
-        let raw = r#"{"is_hitl": false, "kind": "none", "questions": []}"#;
-        let r = parse_model_json(raw);
-        assert_eq!(r.is_hitl, Some(false));
-        assert_eq!(r.kind, "none");
-        assert!(r.questions.is_empty());
-    }
-
-    #[test]
-    fn parse_json_wrapped_in_markdown_fences() {
-        let raw = "```json\n{\"is_hitl\": true, \"kind\": \"permission\", \"questions\": []}\n```";
-        let r = parse_model_json(raw);
-        assert_eq!(r.is_hitl, Some(true));
-        assert_eq!(r.kind, "permission");
-    }
-
-    #[test]
-    fn parse_json_with_surrounding_prose() {
-        let raw = "Sure! Here is the classification:\n{\"is_hitl\": false, \"kind\": \"none\", \"questions\": []}\nHope that helps.";
-        let r = parse_model_json(raw);
-        assert_eq!(r.is_hitl, Some(false));
-    }
-
-    #[test]
-    fn parse_garbage_applies_safety_bias() {
-        let r = parse_model_json("I cannot tell, sorry — no JSON here.");
-        // model RAN, unparseable → safety bias HOLD
-        assert_eq!(r.source, ClassifySource::Model);
-        assert_eq!(r.is_hitl, Some(true), "garbage must safety-bias to hold");
-        assert!(r.detail.is_some());
-    }
-
-    #[test]
-    fn parse_empty_string_applies_safety_bias() {
-        let r = parse_model_json("");
-        assert_eq!(r.is_hitl, Some(true));
-        assert_eq!(r.source, ClassifySource::Model);
-    }
-
-    #[test]
-    fn parse_missing_kind_defaults_sensibly() {
-        // is_hitl true but no kind → defaults to "select"
-        let r = parse_model_json(r#"{"is_hitl": true, "questions": []}"#);
-        assert_eq!(r.is_hitl, Some(true));
-        assert_eq!(r.kind, "select");
-    }
-
-    // ── End-to-end classify_screen: fast-path short-circuits model ───
-
-    #[test]
-    fn classify_screen_uses_fastpath_without_model() {
-        // This screen has an obvious marker, so classify_screen must
-        // return a Fastpath verdict WITHOUT consulting the model — safe
-        // to run in CI where no model is installed. The fast-path fires
-        // regardless of the `use_llm` flag, so a marker hit is Fastpath
-        // even with the LLM detection checkbox OFF.
+    fn classify_screen_select_marker_is_fastpath() {
         let screen = "Choose:\n❯ 1. Yes\n  2. No\nEnter to select";
-        let r = classify_screen(screen, false);
+        let r = classify_screen(screen);
         assert_eq!(r.source, ClassifySource::Fastpath);
         assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "select");
     }
 
-    // ── "Use local LLM to detect HITL" gating (checkbox OFF) ─────────
-
     #[test]
-    fn checkbox_off_fastpath_marker_is_fastpath_no_model() {
-        // Checkbox OFF + a fast-path marker → Fastpath (model never
-        // consulted). This is the "regex still catches obvious HITLs even
-        // with the LLM off" guarantee.
+    fn classify_screen_permission_marker_is_fastpath() {
         let screen = "Edit src/main.rs?\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
-        let r = classify_screen(screen, false);
+        let r = classify_screen(screen);
         assert_eq!(r.source, ClassifySource::Fastpath);
         assert_eq!(r.is_hitl, Some(true));
         assert_eq!(r.kind, "permission");
     }
 
     #[test]
-    fn checkbox_off_no_marker_is_unavailable_and_never_invokes_model() {
-        // Checkbox OFF + NO fast-path marker → the model MUST NOT run.
-        // We assert the verdict is the model-independent `Unavailable`
-        // branch (is_hitl=null), which classify_screen returns BEFORE it
-        // ever touches `llm_host`. If the gate were missing this screen
-        // would fall through to the model/unavailable host-dependent path;
-        // pinning source=Unavailable + is_hitl=None proves the 1.5B is not
-        // invoked when the checkbox is off.
+    fn classify_screen_no_marker_is_unavailable_not_clear() {
+        // No marker: the verdict is unknown (is_hitl=null), which `talk`
+        // treats as "use manual behavior". It must never claim "clear".
         let screen = "rosson@host ~/proj % ls\nCargo.toml  src  target\nrosson@host ~/proj % ";
-        let r = classify_screen(screen, false);
+        let r = classify_screen(screen);
         assert_eq!(r.source, ClassifySource::Unavailable);
         assert_eq!(r.is_hitl, None);
-        // Unavailable is "unknown", NOT "clear" — never claims is_hitl=false.
-        assert_ne!(r.is_hitl, Some(false));
-    }
-
-    // The real qwen inference path (source=Model over ~20 live screens)
-    // is the validation-agent's job and requires the model file, which
-    // may be absent in CI — so it is gated behind `#[ignore]` (run with
-    // `cargo test -- --ignored` on a box with the GGUF loaded). With the
-    // checkbox ON and no fast-path marker, classify_screen MUST reach the
-    // model path: it returns either `Model` (model loaded) or
-    // `Unavailable` (model not loaded) — but it is the only configuration
-    // in which the model branch is reachable at all.
-    #[test]
-    #[ignore = "requires the bundled GGUF model; run with --ignored"]
-    fn checkbox_on_no_marker_reaches_model_path() {
-        let screen = "Tell me about your day. It was fine, thanks for asking.";
-        let r = classify_screen(screen, true);
-        // With a real model loaded this is Model; if absent it degrades to
-        // Unavailable. Either way it must NOT be Fastpath (no marker here).
-        assert_ne!(r.source, ClassifySource::Fastpath);
-        assert!(
-            matches!(r.source, ClassifySource::Model | ClassifySource::Unavailable),
-            "checkbox ON must route a non-marker screen to the model path"
-        );
+        assert_eq!(r.kind, "none");
+        assert!(r.questions.is_empty());
     }
 }

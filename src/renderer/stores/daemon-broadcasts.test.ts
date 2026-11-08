@@ -41,7 +41,6 @@ vi.mock('@/lib/server-capabilities', () => ({
 const ev = vi.hoisted(() => {
   type Fn = (...a: unknown[]) => void
   const reg = {
-    llm: [] as Fn[],
     projects: [] as Fn[],
     agent: [] as Fn[],
     tunnel: [] as Fn[],
@@ -59,11 +58,6 @@ vi.mock('@/stores/session-events', async () => {
   // mocks fail loudly unless it is the primary scope.
   const { expectPrimaryScope } = await import('@/test-utils/scope')
   return {
-    onLlmStatusChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
-      expectPrimaryScope(scope)
-      ev.reg.llm.push(fn)
-      return () => void (ev.reg.llm = ev.reg.llm.filter((f) => f !== fn))
-    }),
     onProjectsChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
       expectPrimaryScope(scope)
       ev.reg.projects.push(fn)
@@ -196,7 +190,6 @@ vi.stubGlobal('localStorage', {
 
 beforeEach(() => {
   supports.value = true
-  ev.reg.llm = []
   ev.reg.agent = []
   ev.reg.tunnel = []
   ev.reg.appHello = []

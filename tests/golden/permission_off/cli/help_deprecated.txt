@@ -10,7 +10,7 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
   mode off|agent|manager          → settings --mode <value>
   app-update                      → update --app
   commit-merge                    → commit --merge
-  companion                       → daemon companion
+  companion                       → users pair-phone
   whatsnew                        → whats-new
   roster                          → connections list  (0.39.0)
   who                             → connections list  (0.39.0)

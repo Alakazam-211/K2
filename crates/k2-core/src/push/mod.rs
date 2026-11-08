@@ -68,8 +68,7 @@ pub enum PushEvent {
         agent: String,
         summary: String,
         /// Deep link back into the Tauri app / mobile companion, e.g.
-        /// `k2so://agents/<id>` or the ngrok tunnel's `/agents/<id>`
-        /// path.
+        /// `k2so://agents/<id>`.
         action_url: String,
     },
     /// A scheduled heartbeat didn't complete successfully.

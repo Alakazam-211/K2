@@ -202,8 +202,8 @@ fn offer(rev: u64, free_gb: u64, caps_gb: u64, running: u32) -> Offer {
         control_by: None,
         control_at: None,
         availability: Availability { ok: true, reasons: vec![] },
-        caps: Caps { cpu_millis: 8000, mem_bytes: caps_gb * GB, disk_budget_bytes: 100 * GB, hard: true },
-        free: Free { cpu_millis: 8000, mem_bytes: free_gb * GB, disk_free_bytes: 500 * GB },
+        caps: Caps { cpu_millis: 8000, mem_bytes: caps_gb * GB, disk_budget_bytes: 100 * GB, hard: true, gpus: 0 },
+        free: Free { cpu_millis: 8000, mem_bytes: free_gb * GB, disk_free_bytes: 500 * GB, gpus: 0 },
         slots: vec![],
         running,
         parallel_max: 4,
@@ -216,6 +216,27 @@ fn offer(rev: u64, free_gb: u64, caps_gb: u64, running: u32) -> Offer {
         node_version: "0.46.6".into(),
         features: vec!["artifacts".into(), "stall".into(), k2_core::compute::proto::cache::FEATURE_JOB_CACHE.into()], host: None, pkg: None,
     }
+}
+
+/// GPU jobs (0.46.11): a node offering `gpu` to this server, its one AMD
+/// GPU open to it (`jobs`) or not.
+fn gpu_offer(rev: u64, jobs: bool) -> Offer {
+    let mut o = offer(rev, 30, 32, 0);
+    o.protocol = 9;
+    o.features.push(k2_core::compute::proto::gpu::FEATURE_GPU.into());
+    o.caps.gpus = 1;
+    o.free.gpus = 1;
+    o.host = Some(k2_core::compute::proto::host::HostFacts {
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        distro: "arch".into(),
+        distro_version: "rolling".into(),
+        distro_name: "Arch Linux".into(),
+        gpu: Some("amd".into()),
+        gpus: vec![k2_core::compute::proto::gpu::GpuFact { vendor: "amd".into(), pci: "0000:c4:00.0".into(), model: "AMD Test APU".into(), render: "renderD128".into(), jobs, ..Default::default() }],
+        ..Default::default()
+    });
+    o
 }
 
 /// This server as a tenant on a node another server owns (two servers).
@@ -456,6 +477,76 @@ async fn a_timeout_over_a_grant_skips_that_node() {
     assert_eq!((r.status, code(&r)), (400, "timeout_over_grant".to_string()), "{}", r.body);
     compute_ws::test_detach("t-short");
     compute_ws::test_detach("t-long");
+}
+
+/// GPU jobs (0.46.11): `--gpu` places only on a node that runs GPU jobs
+/// for this server with a grant that says `--gpu`; the agent can't set
+/// that grant itself (`gpu_needs_grant`, its card); no such node is
+/// `no_gpu_node` naming both steps; a pinned node without a GPU for us is
+/// refused, never run on the CPU; a job without `--gpu` places as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gpu_jobs_place_only_on_granted_gpu_nodes() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "gpus");
+    let agent = passport(&me);
+    let gpu = json!({"vendor": "any", "count": 1});
+    active_node("g-plain");
+    active_node("g-gpu");
+    grant("g-plain", &me, None, 2);
+    grant("g-gpu", &me, None, 2);
+    // g-plain is idle and bigger: without --gpu it wins on load.
+    let _a = compute_ws::test_attach("g-plain", offer(1, 60, 64, 0));
+    let _b = compute_ws::test_attach("g-gpu", gpu_offer(1, true));
+    // The grant lacks --gpu: refused, naming the node (the card's param).
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu})).await;
+    assert_eq!((r.status, code(&r)), (403, "gpu_needs_grant".to_string()), "{}", r.body);
+    assert_eq!(j(&r)["error"]["node"], "g-gpu", "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("k2 compute grant g-gpu --workspace gpus --gpu"), "{}", r.body);
+    // The agent can't give itself the right.
+    let r = post(d.port, "/cli/compute/grants/set", &agent, json!({"node": "g-gpu", "workspace": me.id, "allowGpu": true})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    // The owner grants it.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "g-gpu", "workspace": me.id, "allowGpu": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["grant"]["allowGpu"], true, "{}", r.body);
+    // Placed on the GPU node only, with the ask in its plan.
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "g-gpu", "{}", r.body);
+    assert_eq!(j(&r)["placement"]["skipped"]["no_gpu"], 1, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let plan = row(&job).plan().expect("a plan");
+    assert_eq!(plan.gpu, Some(k2_core::compute::proto::gpu::GpuAsk::one(k2_core::compute::proto::gpu::GpuVendor::Any)));
+    // --plan shows the GPU it would get.
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu, "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!((v["gpu"]["ask"]["vendor"].as_str(), v["gpu"]["gpus"][0]["pci"].as_str()), (Some("any"), Some("0000:c4:00.0")), "{v}");
+    // No --gpu: unchanged (the bigger idle node).
+    let r = run(d.port, &agent, &me, json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "g-plain", "{}", r.body);
+    assert!(row(&j(&r)["job"]["id"].as_str().unwrap().to_string()).plan().expect("a plan").gpu.is_none());
+    // A node named without a GPU for us: refused (never on the CPU).
+    let r = run(d.port, &agent, &me, json!({"node": "g-plain", "gpu": gpu})).await;
+    assert_eq!((r.status, code(&r)), (404, "no_gpu_node".to_string()), "{}", r.body);
+    // Another vendor than the node has: no node.
+    let r = run(d.port, &agent, &me, json!({"gpu": {"vendor": "intel", "count": 1}})).await;
+    assert_eq!((r.status, code(&r)), (404, "no_gpu_node".to_string()), "{}", r.body);
+    // The node's owner turned GPU jobs off for us: no node, both steps named.
+    compute_ws::test_frame("g-gpu", Frame::Offer(gpu_offer(2, false)));
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu})).await;
+    assert_eq!((r.status, code(&r)), (404, "no_gpu_node".to_string()), "{}", r.body);
+    let hint = j(&r)["error"]["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("sudo k2-node admin gpu on") && hint.contains("--workspace gpus --gpu"), "{hint}");
+    // NVIDIA and two GPUs are refused at the door (exit 2).
+    for bad in [json!({"vendor": "nvidia", "count": 1}), json!({"vendor": "any", "count": 2}), json!({"vendor": "AMD"})] {
+        let r = run(d.port, &agent, &me, json!({"gpu": bad})).await;
+        assert_eq!(r.status, 400, "{bad}: {}", r.body);
+    }
+    compute_ws::test_detach("g-plain");
+    compute_ws::test_detach("g-gpu");
 }
 
 /// D2 at the route (CP-A9: the commit is resolved at submit): a warm,

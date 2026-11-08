@@ -24,6 +24,9 @@ pub const TOOL_MISSING: &str = "tool_missing";
 pub const PARALLEL_FULL: &str = "parallel_full";
 pub const EXCLUSIVE_RUNNING: &str = "exclusive_running";
 pub const WAITING_FOR_IDLE: &str = "waiting_for_idle";
+/// GPU jobs (0.46.11): every GPU this server may use on the node is held
+/// by another job; a GPU job waits for one (never shares it).
+pub const GPU_BUSY: &str = crate::gpu::codes::GPU_BUSY;
 /// The node's policy says `network = "none"` but this node can't enforce
 /// it: no job wall (an older k2-node, or the wall isn't set up). Rather
 /// than run jobs with full network under a policy that says none, the
@@ -52,6 +55,7 @@ pub const ALL_CODES: &[&str] = &[
     EXCLUSIVE_RUNNING,
     WAITING_FOR_IDLE,
     NETWORK_NONE_NOT_ENFORCED,
+    GPU_BUSY,
 ];
 
 /// The node's live state, as the node sees it.
@@ -77,6 +81,8 @@ pub struct NodeView<'a> {
     /// This node walls jobs off the network (k2-node 0.46.3+ with the job
     /// wall). `network_none` without it takes no jobs.
     pub network_none_enforced: bool,
+    /// GPU jobs (0.46.11): GPUs this server may use that no job holds.
+    pub free_gpus: u32,
 }
 
 /// What a job asks for.
@@ -89,6 +95,8 @@ pub struct JobAsk<'a> {
     pub exclusive: bool,
     /// The job syncs code (needs `git`).
     pub needs_git: bool,
+    /// GPU jobs (0.46.11): GPUs it needs (0 = none, 1 with `--gpu`).
+    pub gpus: u32,
 }
 
 fn control_refusal(c: Control) -> Option<Refusal> {
@@ -154,6 +162,9 @@ pub fn refusal(v: &NodeView<'_>, ask: &JobAsk<'_>) -> Option<Refusal> {
     if v.running >= v.parallel_max {
         return Some(Refusal::new(PARALLEL_FULL, "the node is running as many jobs as it allows"));
     }
+    if ask.gpus > v.free_gpus {
+        return Some(Refusal::new(GPU_BUSY, "every GPU this server may use on the node is held by another job; it waits for one"));
+    }
     if ask.cpu_millis.is_some_and(|c| c > v.free_cpu_millis) || ask.mem_bytes.is_some_and(|m| m > v.free_mem_bytes) {
         return Some(Refusal::new(LOCAL_RESOURCE_LIMIT, "not enough free CPU or memory under the node's caps"));
     }
@@ -196,6 +207,7 @@ pub fn offer_refusal(o: &Offer, running: u32, exclusive_running: bool, ask: &Job
         // The node puts this in `o.refusal` (checked above).
         network_none: false,
         network_none_enforced: false,
+        free_gpus: o.free.gpus,
     };
     refusal(&v, ask)
 }
@@ -225,11 +237,28 @@ mod tests {
             free_mem_bytes: 16 << 30,
             network_none: false,
             network_none_enforced: false,
+            free_gpus: 0,
         }
     }
 
     fn ask() -> JobAsk<'static> {
-        JobAsk { workspace_id: "w", cpu_millis: None, mem_bytes: None, disk_bytes: 1 << 30, exclusive: false, needs_git: true }
+        JobAsk { workspace_id: "w", cpu_millis: None, mem_bytes: None, disk_bytes: 1 << 30, exclusive: false, needs_git: true, gpus: 0 }
+    }
+
+    /// GPU jobs (0.46.11): a GPU job waits `gpu_busy` while no GPU is
+    /// free; a job without `--gpu` never does (an owner who never turned
+    /// GPU jobs on sees no change).
+    #[test]
+    fn refusal_gpu_busy() {
+        let t = tools();
+        let mut v = view(&t, &[], &[]);
+        let mut a = ask();
+        assert_eq!(refusal(&v, &a), None, "no GPU asked, none free: starts");
+        a.gpus = 1;
+        assert_eq!(code(refusal(&v, &a)).as_deref(), Some(GPU_BUSY));
+        v.free_gpus = 1;
+        assert_eq!(refusal(&v, &a), None);
+        assert!(ALL_CODES.contains(&GPU_BUSY));
     }
 
     fn code(r: Option<Refusal>) -> Option<String> {
@@ -322,8 +351,8 @@ mod tests {
             control_by: None,
             control_at: None,
             availability: Availability { ok: true, reasons: vec![] },
-            caps: Caps { cpu_millis: 8000, mem_bytes: 16 << 30, disk_budget_bytes: 100 << 30, hard: true },
-            free: Free { cpu_millis: 8000, mem_bytes: 16 << 30, disk_free_bytes: 100 << 30 },
+            caps: Caps { cpu_millis: 8000, mem_bytes: 16 << 30, disk_budget_bytes: 100 << 30, hard: true, gpus: 0 },
+            free: Free { cpu_millis: 8000, mem_bytes: 16 << 30, disk_free_bytes: 100 << 30, gpus: 0 },
             slots: vec![],
             running: 0,
             parallel_max: 1,

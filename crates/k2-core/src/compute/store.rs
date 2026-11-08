@@ -474,10 +474,13 @@ pub struct GrantRow {
     /// per submitter of this workspace on this node; 0 = off (the default).
     /// CI never counts.
     pub submitter_max_running: i64,
+    /// 0276 (GPU jobs, 0.46.11): this workspace may send `--gpu` jobs to
+    /// this node (owner or Admin only, like `allow_ci`).
+    pub allow_gpu: bool,
 }
 
 const GRANT_COLS: &str = "node_id, workspace_id, scopes, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-    warm_at, expires_at, granted_by, granted_at, allow_ci, submitter_max_running";
+    warm_at, expires_at, granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu";
 
 fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
     Ok(GrantRow {
@@ -494,6 +497,7 @@ fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
         granted_at: r.get(10)?,
         allow_ci: r.get::<_, i64>(11)? != 0,
         submitter_max_running: r.get(12)?,
+        allow_gpu: r.get::<_, i64>(13)? != 0,
     })
 }
 
@@ -510,6 +514,9 @@ pub struct GrantLimits {
     /// `None` keeps what the grant has (a new grant: 0, off), like
     /// `allow_ci`: re-granting limits never clears it (T30).
     pub submitter_max_running: Option<i64>,
+    /// GPU jobs (0276): `None` keeps what the grant has (a new grant: off),
+    /// like `allow_ci`.
+    pub allow_gpu: Option<bool>,
 }
 
 pub fn set_grant(
@@ -522,12 +529,13 @@ pub fn set_grant(
 ) -> Result<GrantRow, String> {
     conn.execute(
         "INSERT INTO compute_node_grants (node_id, workspace_id, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-         granted_by, granted_at, allow_ci, submitter_max_running) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0), COALESCE(?10, 0)) \
+         granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0), COALESCE(?10, 0), COALESCE(?11, 0)) \
          ON CONFLICT(node_id, workspace_id) DO UPDATE SET max_job_secs = excluded.max_job_secs, \
          max_disk_gb = excluded.max_disk_gb, max_parallel = excluded.max_parallel, max_queued = excluded.max_queued, \
          granted_by = excluded.granted_by, granted_at = excluded.granted_at, \
          allow_ci = COALESCE(?9, compute_node_grants.allow_ci), \
-         submitter_max_running = COALESCE(?10, compute_node_grants.submitter_max_running)",
+         submitter_max_running = COALESCE(?10, compute_node_grants.submitter_max_running), \
+         allow_gpu = COALESCE(?11, compute_node_grants.allow_gpu)",
         params![
             node_id,
             workspace_id,
@@ -538,7 +546,8 @@ pub fn set_grant(
             by,
             at,
             limits.allow_ci.map(i64::from),
-            limits.submitter_max_running
+            limits.submitter_max_running,
+            limits.allow_gpu.map(i64::from)
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -1753,7 +1762,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None,
             with: Vec::new(),
         }
     }
@@ -1992,8 +2001,8 @@ mod tests {
             control_by: None,
             control_at: None,
             availability: Availability { ok: true, reasons: vec![] },
-            caps: Caps { cpu_millis: 1000, mem_bytes: 1 << 30, disk_budget_bytes: 1 << 30, hard: true },
-            free: Free { cpu_millis: 1000, mem_bytes: 1 << 30, disk_free_bytes: 1 << 30 },
+            caps: Caps { cpu_millis: 1000, mem_bytes: 1 << 30, disk_budget_bytes: 1 << 30, hard: true, gpus: 0 },
+            free: Free { cpu_millis: 1000, mem_bytes: 1 << 30, disk_free_bytes: 1 << 30, gpus: 0 },
             slots: vec![],
             running: 0,
             parallel_max: 1,
@@ -2191,6 +2200,23 @@ mod tests {
         let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_ci: Some(false), ..Default::default() }, "owner", 5).unwrap();
         assert!(!g.allow_ci);
         assert_eq!(serde_json::to_value(&g).unwrap()["allowCi"], serde_json::json!(false), "the routes show it as allowCi");
+    }
+
+    /// GPU jobs (0276): `allow_gpu` is off for a new grant, set only when
+    /// asked, kept when re-granting limits, and independent of CI.
+    #[test]
+    fn allow_gpu_is_off_by_default_and_kept_when_absent() {
+        let c = conn();
+        insert_pending_node(&c, "n1", "a", "fp", "pem", &labels(), "o", "1", 1).unwrap();
+        let g = set_grant(&c, "n1", "ws", &GrantLimits::default(), "owner", 2).unwrap();
+        assert!(!g.allow_gpu);
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_gpu: Some(true), ..Default::default() }, "owner", 3).unwrap();
+        assert!(g.allow_gpu && !g.allow_ci, "--gpu doesn't imply --ci (or --exclusive)");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { max_parallel: Some(2), ..Default::default() }, "owner", 4).unwrap();
+        assert!(g.allow_gpu, "re-granting limits never drops the GPU");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_gpu: Some(false), ..Default::default() }, "owner", 5).unwrap();
+        assert!(!g.allow_gpu);
+        assert_eq!(serde_json::to_value(&g).unwrap()["allowGpu"], serde_json::json!(false), "the routes show it as allowGpu");
     }
 
     fn tiered_job(c: &Connection, id: &str, ws: &str, tier: &str, submitter: &str, key: Option<&str>, at: i64) -> JobRow {

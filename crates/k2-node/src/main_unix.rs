@@ -98,6 +98,20 @@ Remote admin (prd-k2-node-admin-v1; root, at this machine):
   sudo k2-node admin lane-secrets on|off         CI on compute (preview, off by default): secret env for a
                                                  server on a lane in root's lanes file (not only trust own)
                                                  Both: restart k2-node-admin and k2-node afterwards
+  sudo k2-node admin gpu on [--device <pci>|all] [--server <server>]...
+                                                 GPU jobs (off by default; Linux, job wall): a job that asks
+                                                 --gpu gets one GPU's render node, alone. Every supported GPU
+                                                 unless --device. It is on for your own server at once; name
+                                                 each other server with --server (its label from k2-node
+                                                 servers list, e.g. acme.k2.dev; repeatable). On every server,
+                                                 agents also need a grant with --gpu (k2 compute grant <node>
+                                                 --workspace <ws> --gpu, by that server's owner or an Admin). Runs a self-test, and warns that a GPU fault can
+                                                 end the desktop session. Never a display (card) node or
+                                                 /dev/kfd; NVIDIA isn't supported yet
+  sudo k2-node admin gpu off [--device <pci>] [--server <server>]
+                                                 turn GPU jobs off (all, one GPU, or one server); new starts
+                                                 see it at once, a running GPU job keeps its device until it ends
+  k2-node admin gpu status [--json]              every GPU: on or off, for whom, its last lease
 
 The job wall (0.46.3): Linux jobs run as k2job in a sandboxed systemd unit; macOS
 jobs run under a Seatbelt profile. Neither can read the node's key or state or
@@ -1221,8 +1235,51 @@ fn cmd_admin(a: &Args) -> Result<(), String> {
             println!("{}", cli::ci_opt_in(&config_dir, if v == "job-uid" { "job_uid_pool" } else { "lane_secrets" }, on)?);
             Ok(())
         }
-        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets")),
-        None => Err("admin: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets".into()),
+        // GPU jobs (0.46.11): the machine owner's switch, gpu.toml.
+        Some("gpu") => cmd_admin_gpu(a, &config_dir, &state, &home),
+        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets, gpu")),
+        None => Err("admin: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets, gpu".into()),
+    }
+}
+
+/// `admin gpu on|off|status` (GPU jobs, 0.46.11): `on` and `off` write
+/// root's `gpu.toml` (root only); `on` then runs the GPU self-test as the
+/// executor would (a throwaway unit as the job user).
+fn cmd_admin_gpu(a: &Args, config_dir: &std::path::Path, state: &std::path::Path, home: &std::path::Path) -> Result<(), String> {
+    use k2_node::admin::gpu;
+    let sys = std::path::Path::new(k2_node::gpu::SYS);
+    let servers: Vec<String> = a.flags.get("server").cloned().unwrap_or_default();
+    match a.positional.get(2).map(String::as_str) {
+        Some("on") => {
+            if !is_root() {
+                return Err("admin gpu on writes /etc/k2-node/gpu.toml: run it with sudo".into());
+            }
+            if !cfg!(target_os = "linux") {
+                return Err("GPU jobs are Linux only (they need the job wall's systemd units)".into());
+            }
+            let exe = std::env::current_exe().map_err(|e| format!("this binary: {e}"))?;
+            let exec = k2_node::admin::exec::Executor::new(
+                k2_node::admin::exec::ExecPaths { config_dir: config_dir.to_path_buf(), state_dir: state.to_path_buf(), home: home.to_path_buf(), binary: exe },
+                std::sync::Arc::new(k2_node::admin::exec::SystemPlatform),
+            );
+            println!("{}", gpu::cli_on(config_dir, state, sys, a.get("device"), &servers, Some(&exec))?);
+            Ok(())
+        }
+        Some("off") => {
+            if !is_root() {
+                return Err("admin gpu off writes /etc/k2-node/gpu.toml: run it with sudo".into());
+            }
+            if servers.len() > 1 {
+                return Err("admin gpu off takes one --server at a time".into());
+            }
+            println!("{}", gpu::cli_off(config_dir, state, a.get("device"), servers.first().map(String::as_str))?);
+            Ok(())
+        }
+        Some("status") => {
+            println!("{}", gpu::cli_status(config_dir, sys, state, a.has("--json"))?);
+            Ok(())
+        }
+        _ => Err("admin gpu on [--device <pci>|all] [--server <server>]... | off [--device <pci>] [--server <server>] | status [--json]".into()),
     }
 }
 

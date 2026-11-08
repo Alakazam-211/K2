@@ -52,6 +52,8 @@ pub struct QueuedJob {
     /// Who sent it (`compute_jobs.submitter`): the turns inside a
     /// workspace and the per-submitter cap. `None` = an old row.
     pub submitter: Option<String>,
+    /// GPU jobs (0.46.11): GPUs it needs (`Plan.gpu`; 0 = none).
+    pub gpus: u32,
 }
 
 impl QueuedJob {
@@ -143,6 +145,14 @@ pub fn never_fits(offer: &Offer, job: &QueuedJob) -> Option<Refusal> {
             format!("the job asks for {:.2} CPUs; the node allows at most {:.2}", c as f64 / 1000.0, offer.caps.cpu_millis as f64 / 1000.0),
         ));
     }
+    // GPU jobs (0.46.11): a node with no GPU for this server never starts
+    // a GPU job (its owner turned GPU jobs off, or never on for it).
+    if job.gpus > offer.caps.gpus {
+        return Some(Refusal::new(
+            crate::compute::proto::gpu::codes::GPU_UNAVAILABLE,
+            "the job asks for a GPU; this node runs no GPU jobs for this server (its owner turns them on at the machine: sudo k2-node admin gpu on)",
+        ));
+    }
     None
 }
 
@@ -190,6 +200,7 @@ fn ask(j: &QueuedJob) -> JobAsk<'_> {
         disk_bytes: j.disk_bytes,
         exclusive: j.exclusive,
         needs_git: j.needs_git,
+        gpus: j.gpus,
     }
 }
 
@@ -491,8 +502,8 @@ mod tests {
             control_by: None,
             control_at: None,
             availability: Availability { ok: true, reasons: vec![] },
-            caps: Caps { cpu_millis: 8000, mem_bytes: 16 << 30, disk_budget_bytes: 100 << 30, hard: true },
-            free: Free { cpu_millis: 8000, mem_bytes: 16 << 30, disk_free_bytes: 500 << 30 },
+            caps: Caps { cpu_millis: 8000, mem_bytes: 16 << 30, disk_budget_bytes: 100 << 30, hard: true, gpus: 0 },
+            free: Free { cpu_millis: 8000, mem_bytes: 16 << 30, disk_free_bytes: 500 << 30, gpus: 0 },
             slots: vec![],
             running: 0,
             parallel_max: parallel,
@@ -511,7 +522,7 @@ mod tests {
     const T0: i64 = 0;
 
     fn job(id: &str, ws: &str, at: i64) -> QueuedJob {
-        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal, submitter: None }
+        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal, submitter: None, gpus: 0 }
     }
 
     fn tiered(id: &str, ws: &str, at: i64, tier: Tier) -> QueuedJob {
@@ -557,8 +568,8 @@ mod tests {
         big.mem_bytes = Some(6 << 30);
         big.cpu_millis = Some(4000);
         let mut o = offer(4);
-        o.caps = Caps { cpu_millis: 6000, mem_bytes: 12 << 30, disk_budget_bytes: 100 << 30, hard: true };
-        o.free = Free { cpu_millis: 3000, mem_bytes: (42 << 30) / 10, disk_free_bytes: 500 << 30 };
+        o.caps = Caps { cpu_millis: 6000, mem_bytes: 12 << 30, disk_budget_bytes: 100 << 30, hard: true, gpus: 0 };
+        o.free = Free { cpu_millis: 3000, mem_bytes: (42 << 30) / 10, disk_free_bytes: 500 << 30, gpus: 0 };
         let mut load = Load::default();
         load.running_by_workspace.insert("B".into(), 1);
         let d = decide(T0, &[big.clone()], None, &load, &|_| 4, Some(&o), None);

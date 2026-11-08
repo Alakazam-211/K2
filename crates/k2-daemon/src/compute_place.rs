@@ -129,6 +129,10 @@ pub struct Want {
     /// Protocol 9: the plan asks for receipt v2 (`Plan.receipt_v = 2`);
     /// the node must offer `receipt-v2`.
     pub receipt_v2: bool,
+    /// GPU jobs (0.46.11, `--gpu`): only a node offering `gpu` to this
+    /// server with a GPU of that vendor open to it, and a grant that says
+    /// `--gpu` (or an owner/Admin caller).
+    pub gpu: Option<k2_core::compute::proto::gpu::GpuAsk>,
 }
 
 impl Want {
@@ -152,6 +156,7 @@ impl Want {
             cache: plan.cache.clone(),
             multi_repo: !plan.with.is_empty(),
             receipt_v2: plan.receipt_v.is_some(),
+            gpu: plan.gpu,
         }
     }
 
@@ -166,6 +171,7 @@ impl Want {
             disk_bytes: 0,
             needs_git: self.needs_git,
             tier: self.tier, submitter: None,
+            gpus: self.gpu.map_or(0, |g| g.count),
         }
     }
 
@@ -181,6 +187,51 @@ impl Want {
 /// or an Admin (prd-compute-job-tiers-v1 §5.1, T12).
 pub fn ci_allowed(admin: bool, grant: Option<&GrantRow>, offer: Option<&Offer>) -> bool {
     share::share_allows_ci(offer) && (admin || grant.is_some_and(|g| g.allow_ci))
+}
+
+/// GPU jobs (0.46.11): why a node can't take `w`'s GPU ask, or `None`.
+/// [`skip::NO_GPU`]: it runs no GPU jobs for this server (no `gpu` feature
+/// in this session, or no GPU of that vendor open to it in `host.gpus`).
+/// [`skip::GPU_NEEDS_GRANT`]: it does, but this workspace's grant there
+/// doesn't say `--gpu` and the caller isn't the owner or an Admin.
+pub fn gpu_skip(w: &Want, grant: Option<&GrantRow>, offer: &Offer) -> Option<&'static str> {
+    use k2_core::compute::proto::gpu;
+    let ask = w.gpu.as_ref()?;
+    let has = offer.features.iter().any(|f| f == gpu::FEATURE_GPU) && offer.host.as_ref().is_some_and(|h| gpu::any_for(&h.gpus, ask));
+    if !has {
+        return Some(skip::NO_GPU);
+    }
+    if !(w.admin || grant.is_some_and(|g| g.allow_gpu)) {
+        return Some(skip::GPU_NEEDS_GRANT);
+    }
+    None
+}
+
+/// GPU jobs (0.46.11): the refusal when no node is left for a GPU ask.
+/// `gpu_needs_grant` (403, an agent's card) when a node has a GPU for this
+/// server but the grant lacks `--gpu`; `no_gpu_node` (404) when no node
+/// this workspace may see runs GPU jobs for it. Both exit 3. `None`: no
+/// GPU ask, or nodes are left.
+pub fn gpu_refusal(w: &Want, report: &CandReport, ws_handle: &str) -> Option<(&'static str, u16, String, Option<String>)> {
+    use k2_core::compute::proto::gpu::{codes, no_gpu_node_hint};
+    w.gpu.as_ref()?;
+    if !report.cands.is_empty() {
+        return None;
+    }
+    if let Some(node) = report.gpu_needs_grant.first() {
+        return Some((
+            codes::GPU_NEEDS_GRANT,
+            403,
+            format!(
+                "--gpu: {node} runs GPU jobs for this server, but workspace {ws_handle}'s grant there doesn't allow them. The owner or an Admin: k2 compute grant {node} --workspace {ws_handle} --gpu"
+            ),
+            Some(node.clone()),
+        ));
+    }
+    if report.skipped.get(skip::NO_GPU).copied().unwrap_or(0) > 0 || report.visible == 0 {
+        return Some((codes::NO_GPU_NODE, 404, no_gpu_node_hint(ws_handle), None));
+    }
+    None
 }
 
 /// F10 (CP-A4): an explicit `--timeout` within the grant's max per job.
@@ -361,8 +412,11 @@ impl Cand {
     /// node-wide free memory and CPU allow, CP-A6).
     pub fn starts_now(&self, w: &Want) -> bool {
         if let Some(v) = self.shared_view() {
+            // A10: a shared node's quote doesn't know its GPU is held, so
+            // a GPU job also needs a free GPU in the offer.
             return self.online
                 && share::starts_now(v, w.cpu_millis, w.mem_bytes)
+                && w.gpu.is_none_or(|g| self.offer.free.gpus >= g.count)
                 && self.fits_free(w)
                 && !(w.exclusive && self.running_now() > 0)
                 && self.ws_running(w) < self.grant_cap();
@@ -375,6 +429,7 @@ impl Cand {
             disk_bytes: 0,
             exclusive: probe.exclusive,
             needs_git: probe.needs_git,
+            gpus: probe.gpus,
         };
         self.online
             && self.queued == 0
@@ -393,7 +448,7 @@ impl Cand {
             // paused node or share is.
             return v.state == pshare::ServerStatus::Active && self.offer.control == frames::Control::Active;
         }
-        let probe = refusal::JobAsk { workspace_id: "", cpu_millis: None, mem_bytes: None, disk_bytes: 0, exclusive: false, needs_git: false };
+        let probe = refusal::JobAsk { workspace_id: "", cpu_millis: None, mem_bytes: None, disk_bytes: 0, exclusive: false, needs_git: false, gpus: 0 };
         // With nothing running, only a node-wide refusal is left.
         refusal::offer_refusal(&self.offer, 0, false, &probe).is_none()
     }
@@ -806,6 +861,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.receipt_v2 {
         f.push(k2_core::compute::proto::ci::FEATURE_RECEIPT_V2);
     }
+    if w.gpu.is_some() {
+        f.push(k2_core::compute::proto::gpu::FEATURE_GPU);
+    }
     f
 }
 
@@ -856,6 +914,12 @@ pub mod skip {
     pub const UNSUPPORTED_ON_OS: &str = "unsupported_on_os";
     /// Not on the job's `--only` list (0.46.9).
     pub const NOT_ONLY: &str = "not_only";
+    /// GPU jobs (0.46.11): `--gpu` where the node runs no GPU jobs for
+    /// this server (or none of the asked vendor).
+    pub const NO_GPU: &str = "no_gpu";
+    /// GPU jobs (0.46.11): the node has a GPU for this server, the grant
+    /// doesn't say `--gpu`.
+    pub const GPU_NEEDS_GRANT: &str = "gpu_needs_grant";
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -888,6 +952,9 @@ pub struct CandReport {
     /// Nodes this workspace may see at all (granted; or every node for a
     /// pinned owner/Admin caller).
     pub visible: u32,
+    /// GPU jobs: nodes skipped [`skip::GPU_NEEDS_GRANT`], by name (the
+    /// refusal names one for the owner's grant and the agent's card).
+    pub gpu_needs_grant: Vec<String>,
 }
 
 /// Every node that could take the job, except `exclude`.
@@ -969,6 +1036,15 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
             skipped(&mut out, skip::OFFLINE);
             continue;
         };
+        // GPU jobs (0.46.11): before the feature check, so a node without
+        // GPU jobs for this server says `no_gpu`, not `node_too_old`.
+        if let Some(code) = gpu_skip(w, grant.as_ref(), &offer) {
+            if code == skip::GPU_NEEDS_GRANT {
+                out.gpu_needs_grant.push(n.name.clone());
+            }
+            skipped(&mut out, code);
+            continue;
+        }
         if feats.iter().any(|f| !offer.features.iter().any(|x| x == f)) {
             skipped(&mut out, skip::NODE_TOO_OLD);
             continue;
@@ -1406,6 +1482,8 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::PACKAGE_ASK => "that need their owner's approval for a sys: package".to_string(),
         skip::UNSUPPORTED_ON_OS => "Macs (no system packages)".to_string(),
         skip::NOT_ONLY => "off your --only list".to_string(),
+        skip::NO_GPU => "with no GPU jobs for you (--gpu)".to_string(),
+        skip::GPU_NEEDS_GRANT => "with a GPU, but your grant there doesn't say --gpu".to_string(),
         other => other.to_string(),
     };
     format!("{n} {what}")
@@ -2257,6 +2335,7 @@ mod tests {
             granted_at: 1,
             allow_ci: false,
             submitter_max_running: 0,
+            allow_gpu: false,
         }
     }
 
@@ -2270,8 +2349,8 @@ mod tests {
             control_by: None,
             control_at: None,
             availability: frames::Availability { ok: true, reasons: vec![] },
-            caps: frames::Caps { cpu_millis: 8000, mem_bytes: caps_gb * GB, disk_budget_bytes: 100 * GB, hard: true },
-            free: frames::Free { cpu_millis: 8000 - u64::from(running) * 1000, mem_bytes: free_gb * GB, disk_free_bytes: 500 * GB },
+            caps: frames::Caps { cpu_millis: 8000, mem_bytes: caps_gb * GB, disk_budget_bytes: 100 * GB, hard: true, gpus: 0 },
+            free: frames::Free { cpu_millis: 8000 - u64::from(running) * 1000, mem_bytes: free_gb * GB, disk_free_bytes: 500 * GB, gpus: 0 },
             slots: vec![],
             running,
             parallel_max: parallel,
@@ -2341,7 +2420,94 @@ mod tests {
             cache: None,
             multi_repo: false,
             receipt_v2: false,
+            gpu: None,
         }
+    }
+
+    /// A node offering GPU jobs to this server: one AMD GPU open to it.
+    fn gpu_cand(id: &str) -> Cand {
+        let mut c = cand(id, 30, 32, 0, 2);
+        c.offer.features.push(k2_core::compute::proto::gpu::FEATURE_GPU.into());
+        c.offer.caps.gpus = 1;
+        c.offer.free.gpus = 1;
+        c.offer.host = Some(k2_node_proto::host::HostFacts {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            distro: "arch".into(),
+            gpus: vec![k2_core::compute::proto::gpu::GpuFact { vendor: "amd".into(), pci: "0000:c4:00.0".into(), jobs: true, ..Default::default() }],
+            ..Default::default()
+        });
+        c
+    }
+
+    fn gpu_want(admin: bool, vendor: k2_core::compute::proto::gpu::GpuVendor) -> Want {
+        Want { admin, gpu: Some(k2_core::compute::proto::gpu::GpuAsk::one(vendor)), ..want(2) }
+    }
+
+    /// GPU jobs (0.46.11): `--gpu` skips a node without the `gpu` feature
+    /// for this server, one whose GPU isn't open to it, one of another
+    /// vendor, and (for an agent) one whose grant lacks `--gpu`; a job
+    /// without `--gpu` sees every node as before.
+    #[test]
+    fn gpu_want_skips_nodes_without_the_feature() {
+        use k2_core::compute::proto::gpu::GpuVendor;
+        let plain = cand("plain", 30, 32, 0, 2);
+        let mut g = gpu_cand("gpu");
+        let agent = gpu_want(false, GpuVendor::Any);
+        assert_eq!(gpu_skip(&agent, plain.grant.as_ref(), &plain.offer), Some(skip::NO_GPU));
+        assert_eq!(gpu_skip(&agent, g.grant.as_ref(), &g.offer), Some(skip::GPU_NEEDS_GRANT), "the grant lacks --gpu");
+        g.grant.as_mut().unwrap().allow_gpu = true;
+        assert_eq!(gpu_skip(&agent, g.grant.as_ref(), &g.offer), None);
+        assert_eq!(gpu_skip(&gpu_want(false, GpuVendor::Intel), g.grant.as_ref(), &g.offer), Some(skip::NO_GPU), "another vendor");
+        // The GPU listed, but not open to this server (jobs: false).
+        let mut closed = gpu_cand("closed");
+        closed.grant.as_mut().unwrap().allow_gpu = true;
+        closed.offer.host.as_mut().unwrap().gpus[0].jobs = false;
+        assert_eq!(gpu_skip(&agent, closed.grant.as_ref(), &closed.offer), Some(skip::NO_GPU));
+        // The owner or an Admin needs no --gpu grant (like --ci).
+        let mut owner_g = gpu_cand("o");
+        owner_g.grant = None;
+        assert_eq!(gpu_skip(&gpu_want(true, GpuVendor::Amd), None, &owner_g.offer), None);
+        // No --gpu: nothing changes.
+        assert_eq!(gpu_skip(&want(4), plain.grant.as_ref(), &plain.offer), None);
+        assert!(required_features(&agent).contains(&k2_core::compute::proto::gpu::FEATURE_GPU));
+        assert!(!required_features(&want(4)).contains(&k2_core::compute::proto::gpu::FEATURE_GPU));
+    }
+
+    /// GPU jobs: with no node left, `no_gpu_node` (404, exit 3) names both
+    /// steps; a GPU node whose grant lacks `--gpu` is `gpu_needs_grant`
+    /// (403, the card) naming that node.
+    #[test]
+    fn no_gpu_node_when_no_visible_node_has_a_gpu() {
+        use k2_core::compute::proto::gpu::{codes, GpuVendor};
+        let w = gpu_want(false, GpuVendor::Any);
+        let mut r = CandReport { visible: 2, ..Default::default() };
+        r.skipped.insert(skip::NO_GPU, 2);
+        let (code, status, hint, node) = gpu_refusal(&w, &r, "builder").expect("refused");
+        assert_eq!((code, status, node), (codes::NO_GPU_NODE, 404, None));
+        assert!(hint.contains("sudo k2-node admin gpu on") && hint.contains("k2 compute grant <node> --workspace builder --gpu"), "{hint}");
+        r.skipped.insert(skip::GPU_NEEDS_GRANT, 1);
+        r.gpu_needs_grant = vec!["k2n-gpu".into()];
+        let (code, status, hint, node) = gpu_refusal(&w, &r, "builder").expect("refused");
+        assert_eq!((code, status, node.as_deref()), (codes::GPU_NEEDS_GRANT, 403, Some("k2n-gpu")));
+        assert!(hint.contains("k2 compute grant k2n-gpu --workspace builder --gpu"), "{hint}");
+        // Nodes left, or no GPU ask: no GPU refusal.
+        r.cands.push(gpu_cand("gpu"));
+        assert_eq!(gpu_refusal(&w, &r, "builder"), None);
+        assert_eq!(gpu_refusal(&want(4), &CandReport::default(), "builder"), None);
+    }
+
+    /// A10: on a shared node the quote says "now", but a GPU job also
+    /// needs a free GPU in the offer.
+    #[test]
+    fn a_shared_gpu_node_with_its_gpu_held_is_not_now() {
+        use k2_core::compute::proto::gpu::GpuVendor;
+        let w = gpu_want(true, GpuVendor::Any);
+        let mut c = shared(gpu_cand("s"), Some((true, None)));
+        assert!(c.starts_now(&w));
+        c.offer.free.gpus = 0;
+        assert!(!c.starts_now(&w), "its GPU is held");
+        assert!(c.starts_now(&Want { gpu: None, ..w }), "a job without --gpu still starts");
     }
 
     fn pick(policy: compute::PlacementPolicy, cands: &[Cand], w: &Want) -> (String, Tier) {

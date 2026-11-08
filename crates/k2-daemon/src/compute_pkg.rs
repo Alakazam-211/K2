@@ -151,13 +151,30 @@ fn status(who: &Who, params: &HashMap<String, String>) -> R<Value> {
     }))
 }
 
-/// The §4.3 `host` object, camelCase.
+/// The §4.3 `host` object, camelCase. GPU jobs (0.46.11): `gpus` (each
+/// GPU's facts, `jobs: true` where this server may run GPU jobs) only when
+/// the node reports any, so every other node's JSON is unchanged.
 pub fn host_json(h: &k2_core::compute::proto::host::HostFacts) -> Value {
-    json!({
+    let mut v = json!({
         "os": h.os, "arch": h.arch, "distro": h.distro, "distroLike": h.distro_like, "distroVersion": h.distro_version,
         "distroName": h.distro_name, "distroFlavor": h.distro_flavor, "pkgManager": h.pkg, "kernel": h.kernel, "libc": h.libc,
         "gpu": h.gpu, "rebootRequired": h.reboot_required, "short": h.short(), "line": h.line(),
-    })
+    });
+    if !h.gpus.is_empty() {
+        v["gpus"] = h
+            .gpus
+            .iter()
+            .map(|g| {
+                json!({
+                    "vendor": g.vendor, "pci": g.pci, "driver": g.driver, "ids": g.ids, "model": g.model, "render": g.render,
+                    "vramBytes": g.vram_bytes, "gttBytes": g.gtt_bytes, "unified": g.unified, "jobs": g.jobs, "line": g.line(),
+                })
+            })
+            .collect::<Vec<_>>()
+            .into();
+        v["gpuJobs"] = h.gpus.iter().any(|g| g.jobs).into();
+    }
+    v
 }
 
 // ── filing ───────────────────────────────────────────────────────────

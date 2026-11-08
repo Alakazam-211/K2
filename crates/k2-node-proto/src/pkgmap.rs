@@ -257,6 +257,9 @@ pub const ROWS: &[(&str, &str, &str, &str, &str)] = &[
     ("llvm-dev", "=", "llvm", "llvm-devel", "llvm-devel"),
     ("m4", "=", "m4", "m4", "m4"),
     ("make", "=", "make", "make", "make"),
+    // `eglinfo` / `glxinfo` (GPU jobs, 0.46.11): Arch splits the Mesa
+    // demos into `mesa-utils`; Fedora and openSUSE keep the old name.
+    ("mesa-utils", "=", "mesa-utils", "mesa-demos", "Mesa-demo-x"),
     ("mesa-vulkan-drivers", "=", "vulkan-swrast", "mesa-vulkan-drivers", "libvulkan_lvp"),
     ("mold", "=", "mold", "mold", "mold"),
     ("nasm", "=", "nasm", "nasm", "nasm"),
@@ -443,6 +446,14 @@ mod tests {
         assert_eq!(native("libasound2-dev", Mgr::Pacman, "arch", "rolling"), Some(vec!["alsa-lib".into()]));
         assert_eq!(native("build-essential", Mgr::Dnf, "fedora", "41"), Some(vec!["gcc".into(), "gcc-c++".into(), "make".into()]));
         assert_eq!(native("build-essential", Mgr::Apt, "ubuntu", "24.04"), Some(vec!["build-essential".into()]));
+    }
+
+    /// GPU jobs (0.46.11): `sys:mesa-utils` (`eglinfo`) installs on Arch,
+    /// so the GPU acceptance command runs there.
+    #[test]
+    fn mesa_utils_maps_on_arch() {
+        assert_eq!(native("mesa-utils", Mgr::Pacman, "arch", "rolling"), Some(vec!["mesa-utils".into()]));
+        assert_eq!(native("mesa-utils", Mgr::Apt, "ubuntu", "24.04"), Some(vec!["mesa-utils".into()]));
     }
 
     #[test]

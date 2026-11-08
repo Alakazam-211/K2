@@ -1134,6 +1134,25 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
             ),
         ));
     }
+    // GPU jobs (0.46.11): the same rule as CI. Only the owner or an Admin
+    // turns `--gpu` on or off for a grant; an agent asks with a
+    // `compute.gpu` card. The node's own owner decides separately, at the
+    // machine, whether the node runs GPU jobs for this server at all.
+    let allow_gpu = match v.get("allowGpu") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(x) => Some(x.as_bool().ok_or_else(|| no(codes::BAD_REQUEST, 400, "allowGpu is true or false"))?),
+    };
+    if allow_gpu.is_some() && (mgr.is_some() || !who.is_admin()) {
+        if let Some(m) = mgr {
+            crate::compute_manage::audit(m, "grant_gpu_refused", &n.name, &[("for", &ws.handle)]);
+        }
+        return Err(no(
+            k2_core::compute::proto::gpu::codes::GPU_NEEDS_GRANT,
+            403,
+            format!("only the owner or an Admin turns GPU jobs on or off for a grant: the owner runs k2 compute grant {} --workspace {} --gpu", n.name, ws.handle),
+        )
+        .with("node", n.name.clone()));
+    }
     let limits = store::GrantLimits {
         max_job_secs: n_pos(&v, "maxJobSecs", 60, 7 * 86_400)?,
         max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
@@ -1142,6 +1161,7 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         allow_ci,
         // L3 (prd-compute-job-tiers-v2): 0 = off; absent keeps the grant's.
         submitter_max_running: n_pos(&v, "submitterMaxRunning", 0, 64)?,
+        allow_gpu,
     };
     let (g, before) = {
         let db = k2_core::db::shared();
@@ -1307,10 +1327,11 @@ fn agents_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
         max_parallel: n_pos(&v, "maxParallel", 1, 64)?,
         max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
-        // The agents switch never touches CI (owner/Admin, per grant) or
-        // the per-submitter cap.
+        // The agents switch never touches CI (owner/Admin, per grant), the
+        // per-submitter cap or GPU jobs.
         allow_ci: None,
         submitter_max_running: None,
+        allow_gpu: None,
     };
     set_agent_compute(&ws.id, &ws.handle, on, &limits, &who.label()).map_err(|e| no("internal", 500, e))
 }
@@ -1531,6 +1552,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         cache: None,
         multi_repo: false,
         receipt_v2: false,
+        gpu: None,
     };
     // Every matching node: each one's package states are reported, and the
     // names their owners must approve go out as ONE batched request (§7.3).
@@ -1740,6 +1762,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // `--cache NAME` (protocol 6): a folder on the node that outlives the
     // job. Never with secret env: a secret job keeps nothing between runs.
     let cache = cache_from(v)?;
+    // GPU jobs (0.46.11, `--gpu`): one GPU of the node, to this job alone.
+    let gpu = gpu_from(v)?;
     if cache.is_some() && !secret_asks.is_empty() {
         return Err(no(pcache::codes::CACHE_WITH_SECRET, 400, "--cache and --secret don't mix: a job with secret env keeps nothing between runs on the node"));
     }
@@ -1846,6 +1870,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cache: cache.clone(),
         multi_repo: !with_asks(v)?.is_empty(),
         receipt_v2: receipt_v.is_some(),
+        gpu,
     };
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = Vec::new();
@@ -2076,6 +2101,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // grant with CI allowed (CE-13, D3: no new grant flag yet).
     if want.exclusive && !grant_ci {
         return Err(exclusive_needs_grant(&node.name, &ws.handle));
+    }
+    // GPU jobs (0.46.11): the node must run GPU jobs for this server (a GPU
+    // of that vendor open to it), and the grant must say `--gpu` unless the
+    // caller is the owner or an Admin. Auto-placement already kept only
+    // such nodes; a named one is checked here. Never a GPU job on the CPU.
+    if let Some(code) = tier_offer.as_ref().map_or(want.gpu.map(|_| crate::compute_place::skip::NO_GPU), |o| crate::compute_place::gpu_skip(&want, grant.as_ref(), o)) {
+        return Err(gpu_node_refusal(code, &node.name, &ws.handle));
     }
     // Limits first, before any source is read or bundled (A8): each
     // refusal names the whole grant and the owner's command.
@@ -2355,6 +2387,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         // Protocol 6, `--with`: only on nodes offering `multi-repo`.
         src_path,
         with,
+        // GPU jobs (0.46.11): only ever placed on nodes offering `gpu` for
+        // this server (placement's `no_gpu` skip, the pinned check above).
+        gpu: want.gpu,
     };
     let job = {
         let db = k2_core::db::shared();
@@ -2599,6 +2634,48 @@ fn cache_from(v: &serde_json::Value) -> R<Option<String>> {
             format!("--cache NAME: 1–{} of a-z 0-9 . _ -, starting with a letter or digit (e.g. fuzz-corpus)", pcache::NAME_MAX),
         )),
     }
+}
+
+/// `gpu` from a run request (`--gpu [any|amd|intel]`): `{"vendor": "any",
+/// "count": 1}`. NVIDIA is refused until tested on real hardware.
+fn gpu_from(v: &serde_json::Value) -> R<Option<k2_core::compute::proto::gpu::GpuAsk>> {
+    use k2_core::compute::proto::gpu::{GpuAsk, GpuVendor};
+    let g = match v.get("gpu") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(g) => g,
+    };
+    let bad = || no(codes::BAD_REQUEST, 400, "--gpu is any, amd or intel (one GPU per job): gpu = {\"vendor\": \"any\", \"count\": 1}");
+    let vendor = g.get("vendor").and_then(|x| x.as_str()).and_then(GpuVendor::parse).ok_or_else(bad)?;
+    if vendor == GpuVendor::Nvidia {
+        return Err(no(codes::BAD_REQUEST, 400, "--gpu nvidia: NVIDIA GPU jobs aren't supported yet (not tested on real hardware); use --gpu any, amd or intel"));
+    }
+    let count = match g.get("count") {
+        None | Some(serde_json::Value::Null) => 1,
+        Some(c) => c.as_u64().filter(|c| *c <= u64::from(u32::MAX)).ok_or_else(bad)? as u32,
+    };
+    let ask = GpuAsk { vendor, count };
+    ask.check().map_err(|e| no(codes::BAD_REQUEST, 400, format!("--gpu: {e}")))?;
+    Ok(Some(ask))
+}
+
+/// A named node that can't take a `--gpu` job (`gpu_skip`'s code): exit 3.
+fn gpu_node_refusal(code: &str, node: &str, ws: &str) -> Refusal {
+    use k2_core::compute::proto::gpu::codes as g;
+    if code == crate::compute_place::skip::GPU_NEEDS_GRANT {
+        return no(
+            g::GPU_NEEDS_GRANT,
+            403,
+            format!("--gpu: '{node}' runs GPU jobs for this server, but workspace {ws}'s grant there doesn't allow them. The owner or an Admin: k2 compute grant {node} --workspace {ws} --gpu"),
+        )
+        .with("node", node.to_string());
+    }
+    no(
+        g::NO_GPU_NODE,
+        404,
+        format!(
+            "--gpu: '{node}' runs no GPU jobs for this server (or none of that vendor). Its owner turns them on at the machine: sudo k2-node admin gpu on --server <this server>; then: k2 compute grant {node} --workspace {ws} --gpu. Or leave the node off and K2 picks one that has a GPU for you"
+        ),
+    )
 }
 
 /// `tier` from a run request (`gate: true` is the old spelling of CI).
@@ -2954,6 +3031,12 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     out["placement"] = serde_json::to_value(f.placement).unwrap_or_default();
     out["effective"] = f.effective.cloned().unwrap_or_default();
     out["tier"] = f.tier.as_str().into();
+    // GPU jobs (0.46.11): the ask, the GPUs there open to this server, and
+    // how many are free now (root picks the device at the start).
+    if let Some(g) = f.want.gpu {
+        let gpus: Vec<_> = offer.as_ref().and_then(|o| o.host.as_ref()).map(|h| h.gpus.iter().filter(|x| x.jobs && g.vendor.matches(&x.vendor)).cloned().collect()).unwrap_or_default();
+        out["gpu"] = serde_json::json!({"ask": g, "gpus": gpus, "free": offer.as_ref().map(|o| o.free.gpus)});
+    }
     if let Some(a) = f.tier_asked {
         out["tierAsked"] = a.as_str().into();
     }
@@ -3100,6 +3183,16 @@ fn pick_node(
                 ),
             ));
         }
+    }
+    // GPU jobs (0.46.11): no node left for `--gpu` is `no_gpu_node` (or
+    // `gpu_needs_grant` naming a GPU node whose grant lacks `--gpu`), never
+    // a job placed without its GPU.
+    if let Some((code, status, hint, node)) = place::gpu_refusal(want, &report, &ws.handle) {
+        let mut r = no(code, status, hint);
+        if let Some(n) = node {
+            r = r.with("node", n);
+        }
+        return Err(r);
     }
     // `--exclusive` (CE-13): only nodes whose grant allows CI; refused
     // with the fix when that rules out every one.
@@ -3339,6 +3432,7 @@ fn probe_job(ws: &Ws, v: &serde_json::Value, cpu_millis: Option<u64>, mem_bytes:
         disk_bytes: 0,
         needs_git: b(v, "noSource") != Some(true),
         tier: Tier::Normal, submitter: None,
+        gpus: u32::from(v.get("gpu").is_some_and(|g| !g.is_null())),
     }
 }
 
@@ -3602,7 +3696,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None,
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

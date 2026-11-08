@@ -220,6 +220,9 @@ pub fn host_facts(macos_version: Option<&str>) -> k2_node_proto::host::HostFacts
     h.distro_name = o.pretty_name.clone().unwrap_or_else(|| h.distro.clone());
     h.distro_flavor = crate::pkgsys::flavor();
     h.pkg = crate::pkgsys::detect().map(|m| m.name().to_string());
+    // GPU jobs (0.46.11): every GPU with a render node (`jobs` is set per
+    // session in the offer).
+    h.gpus = crate::gpu::facts(std::path::Path::new(crate::gpu::SYS));
     h
 }
 

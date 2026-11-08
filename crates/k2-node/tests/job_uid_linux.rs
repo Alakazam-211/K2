@@ -226,6 +226,7 @@ fn start_rw(r: &Rig, slot: Slot, name: &str, script: &str, env: &[(&str, &str)],
         stdin: false,
         max_secs: Some(300),
         job_uid,
+        gpu: None,
     };
     let a = server::job_request(&r.socket, &JobOp::Start(s), &raw, Duration::from_secs(60)).map_err(|e| format!("{}: {}", e.code, e.message))?;
     drop((w1, w2));
@@ -238,7 +239,7 @@ fn start_rw(r: &Rig, slot: Slot, name: &str, script: &str, env: &[(&str, &str)],
         });
     }
     match a {
-        JobAnswer::Started { unit, uid_index } => {
+        JobAnswer::Started { unit, uid_index, .. } => {
             assert_eq!(uid_index.is_some(), job_uid, "{unit}: a uid index exactly for a job_uid start");
             Ok(Job { unit, root, index: uid_index })
         }

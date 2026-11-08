@@ -319,6 +319,13 @@ pub struct JobStart {
     /// whose answer has no `uid_index` (never a silent shared uid).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub job_uid: bool,
+    /// GPU jobs (0.46.11): one GPU of the asked vendor. Root picks and
+    /// leases the device from root-owned `gpu.toml` ([`super::gpu`]); the
+    /// node never names one. Sent only when `Ready` listed a GPU for this
+    /// slot's server; an older executor ignores it, so the node fails a
+    /// start whose answer has no `gpu` (never a job without its GPU).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<k2_node_proto::gpu::GpuAsk>,
 }
 
 /// `RuntimeMaxSec` is the job's limit plus this: while a node runs, it
@@ -356,12 +363,21 @@ pub enum JobAnswer {
         /// ([`super::jobpool`]). An older executor omits it (false).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         job_uid: bool,
+        /// GPU jobs (0.46.11): the GPUs the machine's owner turned on
+        /// (`gpu.toml`) whose self-test passed, and who may use each. An
+        /// older executor omits it (none).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        gpus: Vec<super::gpu::ReadyGpu>,
     },
     Started {
         unit: String,
         /// The per-job uid's pool index, for a `job_uid` start.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uid_index: Option<u32>,
+        /// GPU jobs (0.46.11): the leased GPU's PCI address, for a `gpu`
+        /// start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gpu: Option<String>,
     },
     Status(UnitStatus),
     Done { detail: Value },
@@ -651,6 +667,9 @@ pub struct UnitPlan {
     pub restrict_userns: bool,
     /// `RuntimeMaxSec` (already clamped), or none.
     pub runtime_max_secs: Option<u64>,
+    /// GPU jobs (0.46.11): the leased device, or none (then the argv is
+    /// byte-identical to a unit without GPU jobs).
+    pub gpu: Option<super::gpu::GpuUnit>,
 }
 
 /// The unit's `RuntimeMaxSec` for a node's `max_secs` (C11): an integer,
@@ -678,6 +697,13 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         format!("--gid={}", p.group_gid),
         format!("--working-directory={}", p.root.display()),
     ];
+    // GPU jobs: which device, from root's lease (the `job-exec` shim keeps
+    // exactly these from its own env).
+    if let Some(g) = &p.gpu {
+        for (k, v) in super::gpu::gpu_env(g) {
+            a.push(format!("--setenv={k}={v}"));
+        }
+    }
     let mut prop = |s: String| {
         a.push("-p".into());
         a.push(s);
@@ -690,7 +716,7 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         "NoNewPrivileges=yes",
         "ProtectSystem=strict",
         "ProtectHome=yes",
-        "PrivateDevices=yes",
+        super::gpu::private_devices(p.gpu.as_ref().map(|g| g.mode)),
         "ProtectKernelTunables=yes",
         "ProtectKernelModules=yes",
         "ProtectKernelLogs=yes",
@@ -769,6 +795,12 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
             prop(format!("IPAddressDeny={}", deny.join(" ")));
         }
         Network::On => {}
+    }
+    // GPU jobs (0.46.11): the leased render node only ([`super::gpu`]).
+    if let Some(g) = &p.gpu {
+        for s in super::gpu::gpu_props(g) {
+            prop(s);
+        }
     }
     a.push("--".into());
     a.push(p.binary.display().to_string());
@@ -1190,12 +1222,14 @@ impl Executor {
     /// The job ops (the server checked the peer: root or the node user).
     pub fn handle_job(&self, op: &JobOp, fds: Vec<OwnedFd>) -> JobAnswer {
         let r = match op {
-            JobOp::Ready => self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u, stdin: true, job_uid: self.job_uid_ready().is_ok() }),
+            JobOp::Ready => {
+                self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u, stdin: true, job_uid: self.job_uid_ready().is_ok(), gpus: self.gpu_ready() })
+            }
             // No job starts while an owner change is unfinished (its trees
             // and users are moving), whatever the node's control says
             // (verification L3).
             JobOp::Start(_) if super::update::control_held(self) => Err(super::owner::in_progress_refusal("a job start")),
-            JobOp::Start(s) => self.start_job(s, fds).map(|(unit, uid_index)| JobAnswer::Started { unit, uid_index }),
+            JobOp::Start(s) => self.start_job(s, fds).map(|(unit, uid_index, gpu)| JobAnswer::Started { unit, uid_index, gpu }),
             JobOp::Status { unit } => self.with_unit(unit, |u| unit_status(u).map(JobAnswer::Status)),
             JobOp::Stop { unit } => self.with_unit(unit, |u| systemctl(&["stop", "--no-block", u]).map(|_| JobAnswer::Done { detail: json!({"stopping": u}) })),
             // Never blocks (V58): a job that ignores SIGTERM holds only its
@@ -1293,7 +1327,7 @@ impl Executor {
         gone
     }
 
-    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<(String, Option<u32>), AdminRefusal> {
+    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<(String, Option<u32>, Option<String>), AdminRefusal> {
         let ids = self.job_ids(s.tenant)?;
         if key_slot(&s.key) != s.tenant {
             return Err(refuse(code::BAD_ARGS, format!("job key {:?} isn't a slot-{} key", s.key, s.tenant)));
@@ -1361,6 +1395,7 @@ impl Executor {
             no_core: s.stdin,
             restrict_userns,
             runtime_max_secs: runtime_max(s.max_secs),
+            gpu: None,
         };
         {
             let mut g = starting().lock().unwrap_or_else(|e| e.into_inner());
@@ -1373,6 +1408,11 @@ impl Executor {
         // never falls back to the slot's shared uid.
         let mut uid_index = None;
         let r = (|| {
+            // GPU jobs: root's device, leased before the unit exists; never
+            // a start without it.
+            if let Some(ask) = &s.gpu {
+                plan.gpu = Some(self.gpu_for_start(s.tenant, ask, &unit)?);
+            }
             if s.job_uid {
                 let (index, uid) = self.job_uid_lease(s.tenant, &ids, &unit, &plan.root)?;
                 self.job_uid_take_tree(&plan.root, uid, ids.gid)?;
@@ -1381,18 +1421,24 @@ impl Executor {
             }
             self.spawn_unit(&plan, &unit, out, err, input)
         })();
+        let gpu = plan.gpu.as_ref().map(|g| g.pci.clone());
+        if r.is_err() {
+            if let Some(pci) = &gpu {
+                self.release_gpu_lease(pci, &unit);
+            }
+        }
         starting().lock().unwrap_or_else(|e| e.into_inner()).remove(&unit);
         let _ = self.audit().append(
             super::store::AuditEntry {
                 event: "job".into(),
                 // `stdin` only says a secret-env pipe was relayed; root never
                 // sees what is in it.
-                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns, "job_uid": uid_index}),
+                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns, "job_uid": uid_index, "gpu": gpu}),
                 ..Default::default()
             },
             self.now(),
         );
-        r.map(|_| (unit, uid_index))
+        r.map(|_| (unit, uid_index, gpu))
     }
 
     fn spawn_unit(&self, plan: &UnitPlan, unit: &str, out: OwnedFd, err: OwnedFd, input: Option<OwnedFd>) -> Result<(), AdminRefusal> {
@@ -1648,7 +1694,108 @@ mod tests {
             no_core: false,
             restrict_userns: false,
             runtime_max_secs: None,
+            gpu: None,
         }
+    }
+
+    /// GPU jobs (0.46.11): a unit with no GPU is today's template, byte
+    /// for byte (an owner who never turns GPU jobs on sees no change).
+    #[test]
+    fn a_unit_without_gpu_is_byte_identical() {
+        let want: Vec<String> = [
+            "systemd-run",
+            "--unit=k2job-j1-g1.service",
+            "--description=K2 compute job k2job-j1-g1",
+            "--quiet",
+            "--pipe",
+            "--wait",
+            "--slice=k2-jobs.slice",
+            "--uid=990",
+            "--gid=991",
+            "--working-directory=/var/lib/k2node/jobs/j1-g1",
+            "-p", "RemainAfterExit=yes",
+            "-p", "KillMode=control-group",
+            "-p", "OOMPolicy=stop",
+            "-p", "UMask=0002",
+            "-p", "NoNewPrivileges=yes",
+            "-p", "ProtectSystem=strict",
+            "-p", "ProtectHome=yes",
+            "-p", "PrivateDevices=yes",
+            "-p", "ProtectKernelTunables=yes",
+            "-p", "ProtectKernelModules=yes",
+            "-p", "ProtectKernelLogs=yes",
+            "-p", "ProtectControlGroups=yes",
+            "-p", "ProtectClock=yes",
+            "-p", "RestrictSUIDSGID=yes",
+            "-p", "RestrictRealtime=yes",
+            "-p", "LockPersonality=yes",
+            "-p", "TasksMax=8192",
+            "-p", "LimitNOFILE=65536",
+            "-p", "TemporaryFileSystem=/dev/shm:mode=1777",
+            "-p", "RemoveIPC=yes",
+            "-p", "TimeoutStopSec=10",
+            "-p", "BindPaths=/var/lib/k2node/jobs/j1-g1/tmp:/tmp /var/lib/k2node/jobs/j1-g1/var-tmp:/var/tmp",
+            "-p", "ReadWritePaths=/var/lib/k2node/jobs/j1-g1 /var/lib/k2node/cache/pk/target-1",
+            "-p", "InaccessiblePaths=-/var/lib/k2node/state -/etc/k2-node",
+            "-p", "MemoryMax=2147483648",
+            "-p", "MemorySwapMax=0",
+            "-p", "CPUQuota=400%",
+            "--",
+            "/usr/local/libexec/k2-node",
+            "job-exec",
+            "/var/lib/k2node/jobs/j1-g1/exec/exec.json",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(systemd_run_argv(&plan()), want);
+    }
+
+    fn gpu_unit(mode: super::super::gpu::DeviceMode) -> super::super::gpu::GpuUnit {
+        super::super::gpu::GpuUnit {
+            pci: "0000:c4:00.0".into(),
+            vendor: "amd".into(),
+            render: PathBuf::from("/dev/dri/renderD128"),
+            group: None,
+            mode,
+            hide: vec![PathBuf::from("/dev/dri/card1"), PathBuf::from("/dev/dri/renderD129"), PathBuf::from("/dev/kfd")],
+        }
+    }
+
+    /// GPU jobs (0.46.11): a GPU unit gets the leased render node only: in
+    /// its private /dev (primary) and its device cgroup, with root's
+    /// `K2_GPU_*`; no card node, no other render node, no `/dev/kfd`, and
+    /// nothing else of the template changes. The fallback swaps
+    /// `PrivateDevices=yes` for the explicit policy.
+    #[test]
+    fn a_gpu_unit_binds_only_its_leased_render_node() {
+        use super::super::gpu::DeviceMode;
+        let plain = systemd_run_argv(&plan());
+        let mut p = plan();
+        p.gpu = Some(gpu_unit(DeviceMode::BindPaths));
+        let a = systemd_run_argv(&p);
+        for want in ["BindPaths=/dev/dri/renderD128", "DeviceAllow=/dev/dri/renderD128 rw", "PrivateDevices=yes", "--setenv=K2_GPU_RENDER=/dev/dri/renderD128", "--setenv=K2_GPU_VENDOR=amd", "--setenv=K2_GPU_PCI=0000:c4:00.0"] {
+            assert!(a.iter().any(|x| x == want), "{want} missing: {a:?}");
+        }
+        let devs: Vec<&String> = a.iter().filter(|x| x.contains("/dev/")).filter(|x| !x.starts_with("TemporaryFileSystem=/dev/shm")).collect();
+        assert!(devs.iter().all(|x| x.contains("/dev/dri/renderD128") && !x.contains("card") && !x.contains("kfd")), "{devs:?}");
+        let i = a.iter().position(|x| x == "--").unwrap();
+        assert!(a.iter().position(|x| x.starts_with("--setenv=")).unwrap() < i, "systemd-run's own flags come before the command");
+        let mut b = a.clone();
+        b.retain(|x| !x.starts_with("--setenv=K2_GPU_") && !x.starts_with("BindPaths=/dev/") && !x.starts_with("DeviceAllow=") && x != "-p");
+        let mut c = plain.clone();
+        c.retain(|x| x != "-p");
+        assert_eq!(b, c, "only the GPU lines differ");
+        // The fallback (DevicePolicy).
+        p.gpu = Some(gpu_unit(DeviceMode::DevicePolicy));
+        let f = systemd_run_argv(&p);
+        assert!(f.iter().any(|x| x == "PrivateDevices=no") && !f.iter().any(|x| x == "PrivateDevices=yes"), "{f:?}");
+        assert!(f.iter().any(|x| x == "DevicePolicy=closed"));
+        assert!(f.iter().any(|x| x == "InaccessiblePaths=-/dev/dri/card1 -/dev/dri/renderD129 -/dev/kfd"));
+        assert!(!f.iter().any(|x| x.starts_with("BindPaths=/dev/")));
+        let allows: Vec<&String> = f.iter().filter(|x| x.starts_with("DeviceAllow=")).collect();
+        assert!(allows.iter().any(|x| *x == "DeviceAllow=/dev/dri/renderD128 rw"));
+        assert!(allows.iter().all(|x| !x.contains("card") && !x.contains("kfd") && !x.contains("renderD129")), "{allows:?}");
     }
 
     /// C11: a node's time limit becomes the unit's `RuntimeMaxSec` (+ the
@@ -2085,8 +2232,9 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false }),
-            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None }),
+            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)) }),
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: Some("--dev".into()) },
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: None },
             JobOp::Tenants,
@@ -2106,18 +2254,18 @@ mod tests {
         let JobOp::Start(s) = old else { panic!() };
         assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
         // A start without stdin is the 0.46.3 wire, byte for byte.
-        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false });
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None });
         let text = serde_json::to_string(&plain).unwrap();
-        assert!(!text.contains("stdin") && !text.contains("job_uid"), "{text}");
+        assert!(!text.contains("stdin") && !text.contains("job_uid") && !text.contains("gpu"), "{text}");
         // An older executor's Ready (no stdin) reads as "can't relay stdin",
         // and as "no per-job uids" (C2).
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false });
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![] });
         // An older executor's Started has no uid index: the node fails a
         // job_uid start on it.
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"started","unit":"k2job-k.service"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Started { unit: "k2job-k.service".into(), uid_index: None });
-        let s = serde_json::to_string(&JobAnswer::Started { unit: "u".into(), uid_index: None }).unwrap();
+        assert_eq!(a, JobAnswer::Started { unit: "k2job-k.service".into(), uid_index: None, gpu: None });
+        let s = serde_json::to_string(&JobAnswer::Started { unit: "u".into(), uid_index: None, gpu: None }).unwrap();
         assert_eq!(s, r#"{"answer":"started","unit":"u"}"#, "0.46.9's bytes");
         assert_eq!(serde_json::to_string(&JobAnswer::KeyTaint { tainted: true }).unwrap(), r#"{"answer":"key_taint","tainted":true}"#);
     }

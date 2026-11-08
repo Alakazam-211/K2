@@ -127,6 +127,12 @@ impl Node {
                 return None;
             }
         }
+        // GPU jobs (0.46.11): a GPU plan only where this server may run GPU
+        // jobs now (its owner may have turned them off since the offer).
+        if let Some(detail) = self.gpu_plan_refusal(t, &a.plan) {
+            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(k2_node_proto::gpu::codes::GPU_UNAVAILABLE), Some(&detail)));
+            return None;
+        }
         // Protocol 9: a receipt version this node doesn't make (a v2 plan
         // from a session below 9 can't be honest either).
         if let Some(detail) = self.receipt_v_refusal(t, &a.plan) {
@@ -198,6 +204,7 @@ impl Node {
                 port_block,
                 adoptable: false,
                 rust: Vec::new(),
+                gpus: a.plan.gpu.map_or(0, |g| g.count),
             },
         );
         drop(jobs);
@@ -229,6 +236,7 @@ impl Node {
             free_mem_bytes: cap_mem.saturating_sub(used_mem),
             network_none: l.policy.network == "none",
             network_none_enforced: self.wall.network_none(),
+            free_gpus: self.free_gpus_for(t),
         };
         let ask = JobAsk {
             workspace_id: &a.plan.workspace_id,
@@ -241,6 +249,7 @@ impl Node {
             disk_bytes: 0,
             exclusive: a.plan.exclusive,
             needs_git: a.plan.src.is_some(),
+            gpus: a.plan.gpu.map_or(0, |g| g.count),
         };
         refusal::refusal(&view, &ask)
     }
@@ -285,6 +294,7 @@ impl Node {
             free_mem_bytes: mem,
             network_none: l.policy.network == "none",
             network_none_enforced: self.wall.network_none(),
+            free_gpus: 0,
         };
         let mut blocked = refusal::node_refusal(&view).map(|r| r.code);
         if self.is_stopping() {
@@ -295,7 +305,7 @@ impl Node {
         }
         // No slot is reserved for any tier (prd-compute-job-tiers-v1 R2):
         // the policy's `gate_reserved_slots` is ignored since 0.46.5.
-        k2_node_proto::queue::Caps { cpu_millis: cpu, mem_bytes: mem, parallel_max: par, blocked }
+        k2_node_proto::queue::Caps { cpu_millis: cpu, mem_bytes: mem, parallel_max: par, blocked, gpus: self.gpus_on() }
     }
 
     /// Every running attempt (all tenants).
@@ -591,6 +601,7 @@ impl Node {
                     port_block: None,
                     adoptable: false,
                     rust: Vec::new(),
+                    gpus: 0,
                 },
             );
         }

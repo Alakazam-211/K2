@@ -264,7 +264,7 @@ pub fn effective(tier: Tier, may_ci: bool, may_priority: bool) -> Tier {
 /// `disk_low`, a node-wide stop) never holds: holding on those could stop
 /// the node for good.
 pub fn waits_for_room(code: &str) -> bool {
-    matches!(code, refusal::PARALLEL_FULL | refusal::LOCAL_RESOURCE_LIMIT | refusal::WAITING_FOR_IDLE | refusal::EXCLUSIVE_RUNNING)
+    matches!(code, refusal::PARALLEL_FULL | refusal::LOCAL_RESOURCE_LIMIT | refusal::WAITING_FOR_IDLE | refusal::EXCLUSIVE_RUNNING | refusal::GPU_BUSY)
 }
 
 /// `--supersede KEY`: 1–[`SUPERSEDE_MAX`] printable characters, no

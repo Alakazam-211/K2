@@ -948,7 +948,11 @@ impl Node {
             Some((o, e)) => (Some((o.writer, e.writer)), Some((o.reader, e.reader))),
             None => (None, None),
         };
-        let started = if unit_mode {
+        // GPU jobs (0.46.11): only a walled unit gets a GPU (root leases the
+        // device); never a GPU job run anywhere else without one.
+        let started = if a.plan.gpu.is_some() && !unit_mode {
+            Err(format!("{}: this node can't give a job a GPU here (GPU jobs need the Linux job wall)", k2_node_proto::gpu::codes::GPU_UNAVAILABLE))
+        } else if unit_mode {
             let mut rw = vec![target.clone(), sccache.clone(), cargo_home.clone()];
             // The slot's shared tmp (its sccache socket) only for other jobs.
             if slot_tmp.is_dir() && !secret_job {
@@ -1513,6 +1517,8 @@ impl Node {
             max_secs: Some(a.plan.limits.max_secs.max(1)),
             // C2: a uid of its own from the slot's pool.
             job_uid,
+            // GPU jobs (0.46.11): root picks and leases the device.
+            gpu: a.plan.gpu,
         };
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.
@@ -1521,11 +1527,18 @@ impl Node {
             // C2: asked for its own uid, the answer must say which; an
             // executor that ignored the ask started it as the slot's user:
             // stopped at once, never left running beside others.
-            Ok(JobAnswer::Started { unit, uid_index: None }) if job_uid => {
+            Ok(JobAnswer::Started { unit, uid_index: None, .. }) if job_uid => {
                 let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
                 return Err(format!("{}: the executor started {unit} without a uid of its own; stopped (update k2-node)", crate::admin::jobpool::JOB_UID_UNAVAILABLE));
             }
-            Ok(JobAnswer::Started { unit, uid_index }) => (unit, uid_index),
+            // GPU jobs: asked for a GPU, the answer must name the device; an
+            // executor that ignored the ask started it without one: stopped
+            // at once (never a GPU job quietly on the CPU).
+            Ok(JobAnswer::Started { unit, gpu: None, .. }) if a.plan.gpu.is_some() => {
+                let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
+                return Err(format!("{}: the executor started {unit} without its GPU; stopped (update k2-node)", k2_node_proto::gpu::codes::GPU_UNAVAILABLE));
+            }
+            Ok(JobAnswer::Started { unit, uid_index, .. }) => (unit, uid_index),
             Ok(JobAnswer::Refused(r)) => return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message)),
             Ok(other) => return Err(format!("unexpected executor answer: {other:?}")),
             Err(e) => return Err(format!("couldn't start the job unit: {e}")),

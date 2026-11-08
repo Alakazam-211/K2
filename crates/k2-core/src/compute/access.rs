@@ -57,6 +57,8 @@ pub fn limits_for(n: &NodeRow, asked: &GrantLimits) -> GrantLimits {
         allow_ci: asked.allow_ci,
         // The per-submitter cap is never a default either (L3: off).
         submitter_max_running: asked.submitter_max_running,
+        // Nor GPU jobs (0276): kept as asked.
+        allow_gpu: asked.allow_gpu,
     }
 }
 
@@ -277,8 +279,8 @@ mod tests {
             control_by: None,
             control_at: None,
             availability: Availability { ok: true, reasons: vec![] },
-            caps: Caps { cpu_millis: 8000, mem_bytes: 32 << 30, disk_budget_bytes: 100 << 30, hard: true },
-            free: Free { cpu_millis: 8000, mem_bytes: 16 << 30, disk_free_bytes: free_disk },
+            caps: Caps { cpu_millis: 8000, mem_bytes: 32 << 30, disk_budget_bytes: 100 << 30, hard: true, gpus: 0 },
+            free: Free { cpu_millis: 8000, mem_bytes: 16 << 30, disk_free_bytes: free_disk, gpus: 0 },
             slots: vec![],
             running: 0,
             parallel_max: 2,

@@ -75,6 +75,8 @@ struct RunMeta {
     secret: bool,
     /// How it shares its uid (C2).
     uid: k2_node_proto::queue::UidShare,
+    /// GPUs it holds (0.46.11).
+    gpus: u32,
 }
 
 type Key = (Slot, String, u32);
@@ -309,6 +311,7 @@ impl FairQ {
             est,
             secret: !a.plan.secret_env.is_empty(),
             uid,
+            gpus: a.plan.gpu.map_or(0, |g| g.count),
         };
         let key = (slot, a.fence.job_id.clone(), a.fence.generation);
         st.gates.remove(&key);
@@ -431,6 +434,7 @@ impl FairQ {
                     secret: m.secret,
                     uid: m.uid,
                     submitter: m.submitter.clone(),
+                    gpus: m.gpus,
                 }
             })
             .chain(st.lingering.iter().map(|(slot, unit)| Running {
@@ -449,6 +453,7 @@ impl FairQ {
                 secret: true,
                 uid: Default::default(),
                 submitter: None,
+                gpus: 0,
             }))
             .collect();
         let mut queued = Vec::new();
@@ -480,6 +485,7 @@ impl FairQ {
                     uid: node.uid_share(t, &r.plan),
                     submitter: r.plan.turn_key(),
                     submitter_max_running: r.plan.submitter_max_running,
+                    gpus: r.plan.gpu.map_or(0, |g| g.count),
                 });
                 rows.push((t.clone(), r));
             }

@@ -765,6 +765,12 @@ pub struct Plan {
     /// another digest and refuse).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt_v: Option<u32>,
+    /// GPU jobs (0.46.11, `--gpu`): one GPU of the node, to this job alone.
+    /// Absent unless asked, so every other plan and digest is unchanged;
+    /// sent only to nodes offering [`crate::gpu::FEATURE_GPU`] (an older
+    /// node would compute another digest and refuse the assign).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<crate::gpu::GpuAsk>,
 }
 
 impl Plan {
@@ -1135,6 +1141,15 @@ pub struct Caps {
     /// `false` when the node can't enforce caps (no cgroup delegation,
     /// macOS memory): the offer says `soft` (CN24).
     pub hard: bool,
+    /// GPU jobs (0.46.11): GPUs this session's server may use here. Absent
+    /// = 0 (a node without GPU jobs, or an older one), so every older
+    /// offer is unchanged and a new server parses an old node's (vs-live A8).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub gpus: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1142,6 +1157,9 @@ pub struct Free {
     pub cpu_millis: u64,
     pub mem_bytes: u64,
     pub disk_free_bytes: u64,
+    /// GPU jobs (0.46.11): of `caps.gpus`, how many no job holds now.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub gpus: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1667,6 +1685,7 @@ mod tests {
             src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(),
             with: Vec::new(),
             receipt_v: None,
+            gpu: None,
         }
     }
 
@@ -1701,6 +1720,32 @@ mod tests {
         assert_eq!((d.kind(), d.direction()), ("pkg_request_done", Direction::NodeToController));
         // The request frame refuses unknown keys (a node never guesses).
         assert!(serde_json::from_str::<crate::pkgpolicy::PkgRequest>(r#"{"id":"x","names":[],"asked_by":"a","shell":"x"}"#).is_err());
+    }
+
+    /// GPU jobs (0.46.11): a plan without `--gpu` has today's wire form and
+    /// digest; with it, the digest changes (an older node refuses it rather
+    /// than run without the GPU). An offer without GPUs has no new keys, and
+    /// a new server reads an older node's offer as 0 GPUs (vs-live A8).
+    #[test]
+    fn plan_digest_unchanged_without_gpu() {
+        let p = plan();
+        let text = serde_json::to_string(&p).unwrap();
+        assert!(!text.contains("gpu"), "{text}");
+        let before = p.digest().unwrap();
+        let mut g = plan();
+        g.gpu = Some(crate::gpu::GpuAsk::one(crate::gpu::GpuVendor::Any));
+        assert!(serde_json::to_string(&g).unwrap().contains(r#""gpu":{"vendor":"any","count":1}"#));
+        assert_ne!(g.digest().unwrap(), before, "a GPU plan has its own digest");
+        g.gpu = None;
+        assert_eq!(g.digest().unwrap(), before);
+        let old = r#"{"revision":1,"control":"active","control_by":null,"control_at":null,"availability":{"ok":true,"reasons":[]},
+            "caps":{"cpu_millis":1000,"mem_bytes":1,"disk_budget_bytes":1,"hard":true},"free":{"cpu_millis":1,"mem_bytes":1,"disk_free_bytes":1},
+            "slots":[],"running":0,"parallel_max":1,"refusal":null,"labels":{},"tools":{},"protocol":9,
+            "boot_id":"b","ledger_id":"l","node_version":"0.46.10"}"#;
+        let o: Offer = serde_json::from_str(old).unwrap();
+        assert_eq!((o.caps.gpus, o.free.gpus), (0, 0));
+        let back = serde_json::to_string(&o).unwrap();
+        assert!(!back.contains("gpus"), "no GPU keys without GPUs: {back}");
     }
 
     #[test]

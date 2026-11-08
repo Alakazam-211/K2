@@ -2384,6 +2384,7 @@ fn qjob_of(j: &store::JobRow) -> scheduler::QueuedJob {
         needs_git: plan.as_ref().is_some_and(|p| p.src.is_some()),
         tier: j.tier(),
         submitter: j.submitter.clone(),
+        gpus: plan.as_ref().and_then(|p| p.gpu).map_or(0, |g| g.count),
     }
 }
 
@@ -2466,6 +2467,7 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             disk_bytes: 0,
             needs_git: plan.src.is_some(),
             tier: j.tier(), submitter: j.submitter.clone(),
+            gpus: plan.gpu.map_or(0, |g| g.count),
         };
         if let Some(r) = scheduler::never_fits(offer, &probe) {
             pass.fail.push((j.id.clone(), r));
@@ -3020,7 +3022,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None,
             with: Vec::new(),
         };
         store::insert_job(

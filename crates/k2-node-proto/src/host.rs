@@ -26,7 +26,12 @@ pub const FEATURE_HOST_FACTS: &str = "host-facts";
 
 /// Labels the node sets itself. `os`, `arch`, `vm` and `name` are older;
 /// the rest come with protocol 7.
-pub const HOST_LABEL_KEYS: &[&str] = &["os", "arch", "vm", "name", "distro", "distro_version", "pkg", "libc", "gpu"];
+/// `gpu_jobs` (0.46.11): `yes` only where this session's server may run
+/// GPU jobs (the node sets it per session).
+pub const HOST_LABEL_KEYS: &[&str] = &["os", "arch", "vm", "name", "distro", "distro_version", "pkg", "libc", "gpu", "gpu_jobs"];
+
+/// The label a node sets per session where that server may run GPU jobs.
+pub const GPU_JOBS_LABEL: &str = "gpu_jobs";
 
 /// Is `key` a label the node sets itself (so an owner label may not use it)?
 pub fn shadows_host_label(key: &str) -> bool {
@@ -66,6 +71,11 @@ pub struct HostFacts {
     /// A kernel update waits for a reboot (§10).
     #[serde(default)]
     pub reboot_required: bool,
+    /// GPU jobs (0.46.11): every GPU's facts from sysfs, `jobs` set per
+    /// session. Absent when none, so a node without one (and every older
+    /// server's view) is unchanged; an older node sends none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpus: Vec<crate::gpu::GpuFact>,
 }
 
 impl HostFacts {
@@ -94,7 +104,13 @@ impl HostFacts {
             parts.push(self.libc.clone());
         }
         parts.push(self.arch.clone());
-        parts.push(self.gpu.as_ref().map(|g| format!("GPU {g}")).unwrap_or_else(|| "no GPU".into()));
+        // GPU jobs (0.46.11): the GPU this server may use, by model; a
+        // node without GPU facts keeps today's line.
+        if let Some(g) = self.gpus.iter().find(|g| g.jobs).or_else(|| self.gpus.first()) {
+            parts.push(format!("GPU {} · GPU jobs: {}", g.line(), if self.gpus.iter().any(|g| g.jobs) { "yes" } else { "no" }));
+        } else {
+            parts.push(self.gpu.as_ref().map(|g| format!("GPU {g}")).unwrap_or_else(|| "no GPU".into()));
+        }
         if self.reboot_required {
             parts.push("reboot pending".into());
         }
@@ -228,6 +244,7 @@ mod tests {
             libc: "glibc 2.39".into(),
             gpu: None,
             reboot_required: false,
+            gpus: Vec::new(),
         }
     }
 
@@ -256,6 +273,42 @@ mod tests {
         assert_eq!(a.short(), "arch-x86_64");
         let mac = HostFacts { os: "macos".into(), arch: "arm64".into(), distro: "macos".into(), distro_version: "15.5".into(), ..Default::default() };
         assert_eq!(mac.short(), "macos15.5-arm64");
+    }
+
+    /// GPU jobs (0.46.11): a node with no GPU facts sends exactly today's
+    /// JSON and line (goldens and older servers see no change).
+    #[test]
+    fn host_facts_json_unchanged_without_gpus() {
+        let u = ubuntu();
+        let j = serde_json::to_value(&u).unwrap();
+        assert!(j.get("gpus").is_none(), "no gpus key without a GPU: {j}");
+        let back: HostFacts = serde_json::from_str(&serde_json::to_string(&u).unwrap()).unwrap();
+        assert_eq!(back, u);
+        // An older node's JSON (no gpus) parses.
+        let old = r#"{"os":"linux","arch":"x86_64","distro":"arch","distro_version":"rolling","distro_name":"Arch Linux","kernel":"6.17","libc":"glibc 2.42","gpu":"amd"}"#;
+        let h: HostFacts = serde_json::from_str(old).unwrap();
+        assert!(h.gpus.is_empty());
+        assert!(h.line().ends_with("x86_64 · GPU amd"), "{}", h.line());
+    }
+
+    #[test]
+    fn the_line_names_the_gpu_and_whether_jobs_may_use_it() {
+        let mut u = ubuntu();
+        u.gpu = Some("amd".into());
+        u.gpus = vec![crate::gpu::GpuFact {
+            vendor: "amd".into(),
+            pci: "0000:c4:00.0".into(),
+            driver: "amdgpu".into(),
+            model: "AMD Radeon Test APU".into(),
+            gtt_bytes: Some(96 << 30),
+            unified: true,
+            render: "renderD128".into(),
+            ..Default::default()
+        }];
+        assert!(u.line().ends_with("x86_64 · GPU AMD Radeon Test APU (amdgpu, 96G unified) · GPU jobs: no"), "{}", u.line());
+        u.gpus[0].jobs = true;
+        assert!(u.line().ends_with("· GPU jobs: yes"), "{}", u.line());
+        assert!(shadows_host_label(GPU_JOBS_LABEL), "an owner label can't pretend GPU jobs are on");
     }
 
     #[test]

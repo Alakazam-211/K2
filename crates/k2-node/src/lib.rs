@@ -16,6 +16,7 @@ pub mod config;
 pub mod hold;
 pub mod enroll;
 pub mod fairq;
+pub mod gpu;
 pub mod identity;
 pub mod install;
 pub mod jobstat;

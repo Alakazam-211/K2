@@ -379,6 +379,129 @@ fn apply_ci_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     apply_ci_to(ctx, who, false)
 }
 
+// ── compute.gpu (GPU jobs, 0.46.11, prd-compute-gpu-jobs-v1 S1) ──────
+
+const GPU_SETTING: &str = "Allow GPU jobs (k2 compute grant <node> --workspace <ws> --gpu)";
+
+/// `compute.gpu node=`: let the asking workspace send `--gpu` jobs to one
+/// node (its grant's `allow_gpu`). Admin floor, like `compute.ci`: only the
+/// owner or an Admin login (never an agent, not even a compute manager).
+/// The node's own owner still decides at the machine whether the node runs
+/// GPU jobs for this server (`sudo k2-node admin gpu on`); the card can't
+/// change that.
+pub(crate) static GPU: ActionSpec = ActionSpec {
+    id: "compute.gpu",
+    area: Area::Compute,
+    params: CI_NODE,
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: GPU_SETTING,
+        what_changes: "Let {ws} send GPU jobs to {node}",
+        consequences: "A GPU job gets one GPU of {node}, alone, while it runs (other GPU jobs wait). GPU drivers are a large attack surface, and on a desktop machine a GPU fault can end its owner's session. Give it to workspaces whose tests need a real GPU.",
+        scope: "{ws} on {node}",
+        duration: "until someone turns it off",
+        retry: "run your command again",
+    },
+    undo: Undo::Twin { action: "compute.gpu-off" },
+    settings: CI_SETTINGS,
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: k2_core::compute::proto::gpu::codes::GPU_NEEDS_GRANT },
+        route_prefix: "/cli/compute/",
+        method: WallMethod::Any,
+        params: &[("node", ParamFrom::Response("/error/node"))],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// The twin: stop it again (asked only, no wall).
+pub(crate) static GPU_OFF: ActionSpec = ActionSpec {
+    id: "compute.gpu-off",
+    area: Area::Compute,
+    params: CI_NODE,
+    floor: Floor::Admin,
+    direction: Direction::Tighten,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: GPU_SETTING,
+        what_changes: "Stop {ws} sending GPU jobs to {node}",
+        consequences: "Its GPU jobs already queued there keep their place; new ones are refused (gpu_needs_grant).",
+        scope: "{ws} on {node}",
+        duration: "until someone turns it on",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: CI_SETTINGS,
+    walls: &[],
+    coverage: WallCoverage::None,
+    machine_hints: &[],
+};
+
+fn check_gpu_state(ctx: &Ctx, want_on: bool) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    match ci_grant(ctx) {
+        Ok((_, g)) if g.allow_gpu == want_on => Check::AlreadyDone,
+        Ok(_) => Check::Needed,
+        Err(m) => Check::Moved(m),
+    }
+}
+
+fn check_gpu(ctx: &Ctx) -> Check {
+    check_gpu_state(ctx, true)
+}
+
+fn check_gpu_off(ctx: &Ctx) -> Check {
+    check_gpu_state(ctx, false)
+}
+
+/// Through the Settings route's own entry (`POST /cli/compute/grants/set`,
+/// Admin), as the answerer: the grant's current limits plus `allowGpu`.
+fn apply_gpu_to(ctx: &Ctx, who: &Answerer, on: bool) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let (node, g) = match ci_grant(ctx) {
+        Ok(x) => x,
+        Err(m) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    let body = json!({
+        "node": node,
+        "workspace": ctx.workspace_handle,
+        "maxJobSecs": g.max_job_secs,
+        "maxDiskGb": g.max_disk_gb,
+        "maxParallel": g.max_parallel,
+        "maxQueued": g.max_queued,
+        "allowGpu": on,
+    });
+    let path = "/cli/compute/grants/set";
+    if let Err(r) = super::switches::route_floor(who, path) {
+        return super::switches::applied(&r, "");
+    }
+    let r = crate::compute_routes::handle(path, who_of(who), body.to_string().as_bytes(), &HashMap::new());
+    let message = if on {
+        format!("{} may send GPU jobs to {node} now (while that node's owner runs GPU jobs for this server).", ctx.workspace_handle)
+    } else {
+        format!("{} sends no more GPU jobs to {node}.", ctx.workspace_handle)
+    };
+    super::switches::applied(&r, message)
+}
+
+fn apply_gpu(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    apply_gpu_to(ctx, who, true)
+}
+
+fn apply_gpu_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    apply_gpu_to(ctx, who, false)
+}
+
 // ── compute.allow-nodes (0.46.8, `crate::compute_allow`) ────────────
 
 const ALLOW_SETTING: &str = "Compute node list";
@@ -1088,6 +1211,8 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &ADMIN_APPROVE, check, apply },
         Registered { spec: &CI, check: check_ci, apply: apply_ci },
         Registered { spec: &CI_OFF, check: check_ci_off, apply: apply_ci_off },
+        Registered { spec: &GPU, check: check_gpu, apply: apply_gpu },
+        Registered { spec: &GPU_OFF, check: check_gpu_off, apply: apply_gpu_off },
         Registered { spec: &ALLOW_NODES, check: check_allow_nodes, apply: apply_allow_nodes },
         Registered { spec: &ALLOW_NODES_CLEAR, check: check_allow_nodes_clear, apply: apply_allow_nodes_clear },
         Registered { spec: &PACKAGES, check: check_packages, apply: apply_packages },

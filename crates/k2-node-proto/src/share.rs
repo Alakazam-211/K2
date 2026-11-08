@@ -178,6 +178,8 @@ pub mod blocked {
     pub const SUBMITTER_RUNNING_FULL: &str = "submitter_running_full";
     /// No room yet: parallel slots, CPU or memory.
     pub const WAITING_FOR_ROOM: &str = "waiting_for_room";
+    /// GPU jobs (0.46.11): the node's GPUs are all held; a capacity wait.
+    pub const GPU_BUSY: &str = crate::gpu::codes::GPU_BUSY;
     /// An exclusive job waits for the node to empty, or one is running.
     pub const WAITING_FOR_IDLE: &str = crate::refusal::WAITING_FOR_IDLE;
     /// A CI or Priority job ahead takes the next free slot.

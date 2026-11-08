@@ -65,6 +65,7 @@ impl Node {
             free_mem_bytes: free_mem,
             network_none: l.policy.network == "none",
             network_none_enforced: self.wall.network_none(),
+            free_gpus: self.free_gpus_for(t),
         };
         let node_refusal = refusal::node_refusal(&view);
         let pin = t.pin.lock().unwrap().clone();
@@ -77,10 +78,15 @@ impl Node {
         if crate::sysinfo::is_vm() {
             labels.insert("vm".into(), "true".into());
         }
-        let host = t.speaks_host().then(|| self.host.lock().unwrap().clone()).filter(|h| !h.distro.is_empty());
-        if let Some(h) = &host {
+        let mut host = t.speaks_host().then(|| self.host.lock().unwrap().clone()).filter(|h| !h.distro.is_empty());
+        if let Some(h) = host.as_mut() {
+            // GPU jobs (0.46.11): which GPUs this server may use here.
+            self.mark_gpu_jobs(t, &mut h.gpus);
             // Host facts win over any owner label of the same name.
             labels.extend(h.labels());
+            if h.gpus.iter().any(|g| g.jobs) {
+                labels.insert(k2_node_proto::host::GPU_JOBS_LABEL.into(), "yes".into());
+            }
         }
         let ledger_id = t.ledger_id();
         let mut o = Offer {
@@ -90,8 +96,8 @@ impl Node {
             control_by: if t.is_owner() { l.control.by.clone() } else { None },
             control_at: l.control.at,
             availability: Availability { ok: l.unavailable.is_empty(), reasons: l.unavailable.clone() },
-            caps: Caps { cpu_millis: cap_cpu, mem_bytes: cap_mem, disk_budget_bytes: l.policy.disk_budget_bytes, hard: self.caps_hard() },
-            free: Free { cpu_millis: cap_cpu.saturating_sub(used_cpu), mem_bytes: free_mem, disk_free_bytes: disk_free },
+            caps: Caps { cpu_millis: cap_cpu, mem_bytes: cap_mem, disk_budget_bytes: l.policy.disk_budget_bytes, hard: self.caps_hard(), gpus: self.gpus_for(t) },
+            free: Free { cpu_millis: cap_cpu.saturating_sub(used_cpu), mem_bytes: free_mem, disk_free_bytes: disk_free, gpus: self.free_gpus_for(t) },
             slots: self.slots.lock().unwrap().list(&t.paths.cache()),
             running,
             parallel_max: par,
@@ -239,6 +245,12 @@ impl Node {
         // its seat, the roster and its consent before sealing (V25).
         if self.offers_lane_secrets(t) && !f.iter().any(|x| x == k2_node_proto::ci::FEATURE_LANE_SECRETS) {
             f.push(k2_node_proto::ci::FEATURE_LANE_SECRETS.to_string());
+        }
+        // GPU jobs (0.46.11): only to a server the machine's owner named in
+        // `gpu.toml` (the owner's always), behind the Linux job wall, whose
+        // self-test passed; protocol 7 (it reads `host.gpus`).
+        if self.gpus_for(t) > 0 && !f.iter().any(|x| x == k2_node_proto::gpu::FEATURE_GPU) {
+            f.push(k2_node_proto::gpu::FEATURE_GPU.to_string());
         }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.

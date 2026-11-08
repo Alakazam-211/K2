@@ -828,6 +828,37 @@ fn auto_update_off_refuses_auto_offers_only() {
     assert_eq!(r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &sig, &new).state, "done");
 }
 
+/// GPU jobs (0.46.11) are off until the machine's owner turns them on at
+/// the machine (`gpu.toml`): `Ready` lists no GPU, and a start asking for
+/// one is refused `gpu_unavailable` naming the owner's command. With the
+/// file, that check passes (the machine's own facts decide next: the
+/// device, its self-test). An unreadable file is off again.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_gpu_is_off_until_the_machine_owner_turns_it_on() {
+    use super::gpu::{write_gpu_file, GpuDevice, GpuFile, GPU_FILE};
+    use super::jobs::{JobAnswer, JobOp};
+    use k2_node_proto::gpu::{codes, GpuAsk, GpuVendor};
+    let r = Rig::new("full");
+    let ask = GpuAsk::one(GpuVendor::Any);
+    let e = r.exec.gpu_for_start(0, &ask, "k2job-g-g1.service").unwrap_err();
+    assert_eq!(e.code, codes::GPU_UNAVAILABLE);
+    assert!(e.message.contains("sudo k2-node admin gpu on"), "{}", e.message);
+    assert!(r.exec.gpu_ready().is_empty());
+    if let JobAnswer::Ready { gpus, .. } = r.exec.handle_job(&JobOp::Ready, vec![]) {
+        assert!(gpus.is_empty(), "Ready never lists a GPU while GPU jobs are off");
+    }
+    write_gpu_file(&r.exec.paths.config_dir, &GpuFile { version: 1, devices: vec![GpuDevice { pci: "0000:c4:00.0".into(), servers: vec!["owner".into()] }] }).unwrap();
+    let e = r.exec.gpu_for_start(0, &ask, "k2job-g-g1.service").unwrap_err();
+    assert!(!e.message.contains("off on this machine"), "the owner's file is read: {}", e.message);
+    std::fs::write(r.exec.paths.config_dir.join(GPU_FILE), "version = 1\n[[device]]\npci = \"0000:c4:00.0\"\nkfd = true\n").unwrap();
+    let e = r.exec.gpu_for_start(0, &ask, "k2job-g-g1.service").unwrap_err();
+    assert_eq!(e.code, codes::GPU_UNAVAILABLE, "a broken gpu.toml is off: {}", e.message);
+    // A wrong ask never reaches the file.
+    let e = r.exec.gpu_for_start(0, &GpuAsk { vendor: GpuVendor::Any, count: 2 }, "k2job-g-g1.service").unwrap_err();
+    assert_eq!(e.code, code::BAD_ARGS);
+}
+
 /// 0.46.10 ships the per-job uid pool (C2) off: the executor gives no uid
 /// of its own, says so in `Ready` (no `job_uid`, so the node offers no
 /// `job-uid` and a secret job runs as in 0.46.9), and refuses a start that

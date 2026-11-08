@@ -156,7 +156,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 58] = [
+pub(crate) const V1_ACTIONS: [&str; 59] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -255,6 +255,8 @@ pub(crate) const V1_ACTIONS: [&str; 58] = [
     // 0.46.10: this server's GitHub credential, which every grant needs (a
     // person types it into K2's own form on the card).
     "compute.git-access-setup",
+    // 0.46.11 (prd-compute-gpu-jobs-v1 S1): GPU jobs on one node.
+    "compute.gpu",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -373,6 +375,10 @@ pub(crate) const ROWS: &[Row] = &[
     Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "ci_not_allowed"), "/cli/compute/", ANY) },
     // `--exclusive` reuses the grant's CI right (0.46.7, CE-13, D3).
     Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "exclusive_needs_grant"), "/cli/compute/run", POST) },
+    // GPU jobs (0.46.11): `--gpu` where the node has a GPU for this server
+    // but the grant lacks `--gpu` (the refusal names the node), and an
+    // agent setting `allowGpu` on a grant.
+    Row { params: &[("node", &[ParamFrom::Response("/error/node"), ParamFrom::Body("/node")])], ..row(ask("compute.gpu", Floor::Admin), code(403, "gpu_needs_grant"), "/cli/compute/", ANY) },
     // The workspace's compute node list (0.46.8): a job aimed at a node
     // off it (run, retry, prewarm; the refusal names the node), and the
     // agent's own list change that adds a node (`error.nodes`) or clears
@@ -1300,6 +1306,8 @@ mod tests {
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
             // 0.46.7 (CE-13): --exclusive without the grant's CI right.
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","exclusive":true,"why":"bench"})), json!({"error":{"code":"exclusive_needs_grant","hint":"x"}}), "compute.ci"),
+            // 0.46.11: --gpu where the grant lacks --gpu (auto: the node is in the refusal).
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"gpu":{"vendor":"any","count":1}})), json!({"error":{"code":"gpu_needs_grant","hint":"x","node":"k2n11"}}), "compute.gpu"),
             // Mobile dev (0.46.6): `k2 sim boot` with "Allow mobile devices" off.
             (403, "POST", "/cli/sim/boot", vec![], Some(json!({})), json!({"error":{"code":"sim_switch_off","hint":"x"},"code":"sim_switch_off"}), "sim.use"),
             // 0.46.6: an agent moving its own pinned chat (both doors).
@@ -1857,7 +1865,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 58);
+        assert_eq!(V1_ACTIONS.len(), 59);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

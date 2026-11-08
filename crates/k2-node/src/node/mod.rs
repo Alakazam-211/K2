@@ -50,6 +50,7 @@ mod assign;
 pub mod ci;
 mod disk;
 pub mod git_access;
+mod gpu;
 pub mod job_cache;
 pub mod lane_secrets;
 mod offer;
@@ -104,6 +105,9 @@ pub struct NodeOptions {
     /// Does the executor give secret jobs a per-job uid (`Ready.job_uid`,
     /// C2)? `None` = ask it with `exec_stdin` (tests set it).
     pub exec_job_uid: Option<bool>,
+    /// The GPUs the executor says jobs may use (`Ready.gpus`, GPU jobs
+    /// 0.46.11). `None` = ask it with `exec_stdin` (tests set it).
+    pub exec_gpus: Option<Vec<crate::admin::gpu::ReadyGpu>>,
     /// How long a job waits for its secret env (SE18; tests shorten it).
     pub secret_wait: Duration,
     /// The `k2-node` binary that runs `job-hold` (§5.2): set, jobs not
@@ -174,6 +178,7 @@ impl NodeOptions {
             disk_free: None,
             exec_stdin: None,
             exec_job_uid: None,
+            exec_gpus: None,
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
@@ -194,16 +199,17 @@ pub async fn probe_exec_stdin(admin_socket: &Path) -> bool {
 }
 
 /// What the executor's `Ready` says it can do: (relay a secret-env stdin
-/// pipe, give secret jobs a per-job uid). An older one says neither.
-pub async fn probe_exec_caps(admin_socket: &Path) -> (bool, bool) {
+/// pipe, give secret jobs a per-job uid, the GPUs jobs may use). An older
+/// one says none of them.
+pub async fn probe_exec_caps(admin_socket: &Path) -> (bool, bool, Vec<crate::admin::gpu::ReadyGpu>) {
     let sock = admin_socket.to_path_buf();
     let r = tokio::task::spawn_blocking(move || {
         crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Ready, &[], Duration::from_secs(10))
     })
     .await;
     match r {
-        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, .. })) => (stdin, job_uid),
-        _ => (false, false),
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, .. })) => (stdin, job_uid, gpus),
+        _ => (false, false, Vec::new()),
     }
 }
 
@@ -337,6 +343,8 @@ struct RunningJob {
     /// The Rust channels it resolved (a moving one is never updated under
     /// it, `Toolchains::busy_channels`).
     rust: Vec<String>,
+    /// GPU jobs (0.46.11): GPUs it holds (`Plan.gpu`).
+    gpus: u32,
 }
 
 /// The lowest port block no running job holds (`None`: all taken).
@@ -411,6 +419,9 @@ pub struct Node {
     /// The executor gives secret jobs a per-job uid (`Ready.job_uid`, C2;
     /// asked with `exec_stdin`).
     pub exec_job_uid: std::sync::atomic::AtomicBool,
+    /// GPU jobs (0.46.11): the GPUs the executor says jobs may use, and
+    /// who may (`Ready.gpus`; asked with `exec_stdin`).
+    pub exec_gpus: Mutex<Vec<crate::admin::gpu::ReadyGpu>>,
     /// Job caches running jobs hold (module `job_cache`).
     job_caches_busy: Mutex<job_cache::Busy>,
     /// Which running attempt holds which job cache, by (slot, job, gen):
@@ -531,10 +542,11 @@ impl Node {
         // Tests set `exec_stdin` (and then never probe a real executor).
         let probed = match (&opts.exec_stdin, &wall) {
             (None, Wall::JobUser { .. }) => probe_exec_caps(&opts.admin_socket).await,
-            _ => (false, false),
+            _ => (false, false, Vec::new()),
         };
         let exec_stdin = opts.exec_stdin.unwrap_or(probed.0);
         let exec_job_uid = opts.exec_job_uid.unwrap_or(probed.1);
+        let exec_gpus = opts.exec_gpus.clone().unwrap_or(probed.2);
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -574,6 +586,7 @@ impl Node {
             slot_use: Mutex::new(HashMap::new()),
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
             exec_job_uid: std::sync::atomic::AtomicBool::new(exec_job_uid),
+            exec_gpus: Mutex::new(exec_gpus),
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
             git_helpers: Mutex::new(HashMap::new()),
@@ -641,10 +654,19 @@ impl Node {
         if self.opts.exec_stdin.is_some() || !matches!(self.wall, Wall::JobUser { .. }) {
             return false;
         }
-        let (stdin, job_uid) = probe_exec_caps(&self.opts.admin_socket).await;
+        let (stdin, job_uid, gpus) = probe_exec_caps(&self.opts.admin_socket).await;
         let mut changed = self.exec_stdin.swap(stdin, std::sync::atomic::Ordering::SeqCst) != stdin;
         if self.opts.exec_job_uid.is_none() {
             changed |= self.exec_job_uid.swap(job_uid, std::sync::atomic::Ordering::SeqCst) != job_uid;
+        }
+        // GPU jobs: an owner's `gpu on|off` (and a self-test that passed
+        // since) reaches the offers here, within a probe.
+        if self.opts.exec_gpus.is_none() {
+            let mut g = self.exec_gpus.lock().unwrap();
+            if *g != gpus {
+                *g = gpus;
+                changed = true;
+            }
         }
         changed
     }
@@ -716,6 +738,7 @@ impl Node {
                         port_block: None,
                         adoptable: false,
                         rust: Vec::new(),
+                        gpus: 0,
                     },
                 );
                 self.fairq.set_lingering(slot, &it.key, true);
@@ -1395,7 +1418,7 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None,
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

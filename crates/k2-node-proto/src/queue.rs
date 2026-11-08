@@ -140,6 +140,9 @@ pub struct Caps {
     /// A node-wide reason nothing starts (`paused`, `foreign_lock`,
     /// `disk_low`, `installing_tools`, a refusal code).
     pub blocked: Option<String>,
+    /// GPU jobs (0.46.11): GPUs the node's owner turned GPU jobs on for
+    /// (`gpu.toml`). Each GPU job holds one; a job never shares one.
+    pub gpus: u32,
 }
 
 impl Caps {
@@ -207,6 +210,8 @@ pub struct Running {
     /// The plan's turn key ([`crate::frames::Plan::turn_key`]): the
     /// per-submitter cap counts by it (L3).
     pub submitter: Option<String>,
+    /// GPU jobs (0.46.11): GPUs it holds.
+    pub gpus: u32,
 }
 
 /// A job waiting in the node queue.
@@ -248,6 +253,8 @@ pub struct Queued {
     /// `Plan.submitter_max_running` (L3): at most this many running jobs
     /// of this (server, workspace, submitter) here; CI never counts.
     pub submitter_max_running: Option<u32>,
+    /// GPU jobs (0.46.11): GPUs it needs (`Plan.gpu`; 0 = none).
+    pub gpus: u32,
 }
 
 impl Queued {
@@ -493,6 +500,8 @@ struct SimRun {
     /// (CI never does).
     submitter: Option<String>,
     counts_for_submitter: bool,
+    /// GPUs it holds (0.46.11).
+    gpus: u32,
 }
 
 /// Why a job can't start in this state, with its wait code
@@ -512,7 +521,8 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     let caps = input.caps;
     let cpu = e.cpu_millis.unwrap_or_else(|| caps.default_cpu());
     let mem = e.mem_bytes.unwrap_or_else(|| caps.default_mem());
-    if cpu > caps.cpu_millis || mem > caps.mem_bytes {
+    // GPU jobs (0.46.11): more GPUs than the node has for jobs never fit.
+    if cpu > caps.cpu_millis || mem > caps.mem_bytes || e.gpus > caps.gpus {
         return Fit::Never;
     }
     // The tenant's and the workspace's own limits: `Wait`, never a hold on
@@ -572,6 +582,11 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     if used_cpu.saturating_add(cpu) > caps.cpu_millis || used_mem.saturating_add(mem) > caps.mem_bytes {
         return Fit::Capacity(blocked::WAITING_FOR_ROOM);
     }
+    // GPU jobs (0.46.11): one job per GPU. A capacity wait, so a CI or
+    // Priority GPU job holds the next GPU like any room it waits for.
+    if e.gpus > 0 && run.iter().map(|r| r.gpus).sum::<u32>().saturating_add(e.gpus) > caps.gpus {
+        return Fit::Capacity(blocked::GPU_BUSY);
+    }
     Fit::Now
 }
 
@@ -604,6 +619,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
             lingering: r.job_id.starts_with(LINGER_JOB_PREFIX),
             submitter: r.submitter.clone().or_else(|| r.session_id.clone()),
             counts_for_submitter: r.tier != Tier::Ci,
+            gpus: r.gpus,
         })
         .collect();
     // Round 0: submitters already waiting ahead in each (server, workspace,
@@ -676,6 +692,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
                         lingering: false,
                         submitter: Some(e.turn_key().to_string()),
                         counts_for_submitter: line_of(e, t) != Line::Ci,
+                        gpus: e.gpus,
                     });
                     start_at[*i] = Some(now);
                     started.push(*i);
@@ -779,6 +796,7 @@ pub fn quote(input: &Input<'_>, slot: Slot, cpu_millis: u64, mem_bytes: u64) -> 
         ws_max_running: None,
         eligible: true,
         secret: false, uid: UidShare::Slot, submitter: None, submitter_max_running: None,
+        gpus: 0,
     });
     let probe = Input { queued: &queued, ..input.clone() };
     let d = decide(&probe);
@@ -933,7 +951,7 @@ mod tests {
     }
 
     fn caps(par: u32) -> Caps {
-        Caps { cpu_millis: 8000, mem_bytes: 32 << 30, parallel_max: par, blocked: None }
+        Caps { cpu_millis: 8000, mem_bytes: 32 << 30, parallel_max: par, blocked: None, gpus: 0 }
     }
 
     fn q(slot: Slot, job: &str, ws: &str, at: i64) -> Queued {
@@ -955,6 +973,7 @@ mod tests {
             ws_max_running: None,
             eligible: true,
             secret: false, uid: UidShare::Slot, submitter: None, submitter_max_running: None,
+            gpus: 0,
         }
     }
 
@@ -973,7 +992,44 @@ mod tests {
             left_p50: left,
             left_p90: left.map(|l| l * 2),
             secret: false, uid: UidShare::Slot, submitter: None,
+            gpus: 0,
         }
+    }
+
+    /// GPU jobs (0.46.11): a second GPU job waits `gpu_busy` while the
+    /// node's only GPU is held, and a job without `--gpu` starts beside
+    /// it; it starts once the GPU is free.
+    #[test]
+    fn a_second_gpu_job_waits_for_the_gpu() {
+        let mut w = World::new(4, vec![tenant(0, 4), tenant(1, 4)]);
+        w.caps.gpus = 1;
+        let mut r = running(1, "gpu-a", 1000, Some(60));
+        r.gpus = 1;
+        w.running = vec![r];
+        let mut g = q(0, "gpu-b", "w", 1);
+        g.gpus = 1;
+        let plain = q(0, "plain", "w", 2);
+        w.queued = vec![g.clone(), plain];
+        let d = w.decide();
+        assert_eq!(d.start, vec![1], "the plain job starts, the GPU job waits");
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::GPU_BUSY));
+        assert!(crate::tiers::waits_for_room(blocked::GPU_BUSY), "a capacity wait: a CI head holds for it");
+        w.running.clear();
+        w.queued = vec![g];
+        assert_eq!(w.decide().start, vec![0], "the GPU is free: it starts");
+    }
+
+    /// GPU jobs (0.46.11): a GPU ask on a node with no GPU for jobs can
+    /// never start there (`exceeds_node_caps`, never a silent CPU run).
+    #[test]
+    fn a_gpu_ask_over_the_node_never_fits() {
+        let mut w = World::new(4, vec![tenant(0, 4)]);
+        let mut g = q(0, "gpu", "w", 1);
+        g.gpus = 1;
+        w.queued = vec![g];
+        let d = w.decide();
+        assert!(d.start.is_empty());
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::EXCEEDS_NODE_CAPS));
     }
 
     /// SE26: a secret job never starts beside another workspace's job of

@@ -23,6 +23,7 @@ pub mod config;
 pub mod courier;
 pub mod exec;
 pub mod fdpass;
+pub mod gpu;
 pub mod health;
 pub mod housekeeping;
 pub mod jobpool;

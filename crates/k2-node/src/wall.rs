@@ -290,6 +290,11 @@ pub fn write_exec_spec(root: &Path, spec: &ExecSpec) -> Result<PathBuf, String> 
     Ok(p)
 }
 
+/// The `K2_GPU_*` pairs `get` has (the shim's own env, set by root).
+pub fn gpu_env_from(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
+    k2_node_proto::gpu::ENV_KEYS.iter().filter_map(|k| get(k).map(|v| (*k, v))).collect()
+}
+
 /// The shim: read + delete the spec, then exec the job with exactly its
 /// env and cwd (`PATH` from that env finds the program). Returns only on
 /// failure (the message for stderr).
@@ -310,6 +315,12 @@ pub fn job_exec(spec_path: &Path) -> String {
     let mut cmd = std::process::Command::new(program);
     cmd.args(&spec.argv[1..]).env_clear().current_dir(&spec.cwd);
     for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
+    // GPU jobs (0.46.11): root sets `K2_GPU_*` on the unit (`systemd-run
+    // --setenv`, from its lease); they win over anything in the spec. A
+    // job's own `--env` can never name a `K2_` variable.
+    for (k, v) in gpu_env_from(|k| std::env::var(k).ok()) {
         cmd.env(k, v);
     }
     if spec.stdin_env {

@@ -45,6 +45,7 @@
 //! - [`evidence`]: the evidence bundle v2 the signer checks.
 //! - [`signer_policy`]: the signer's per-project policy file (TOML).
 //! - [`ci_config`]: `.k2/ci.toml`, the `k2 ci` config (TOML).
+//! - [`gpu`]: GPU jobs (0.46.11): the ask, the facts, the codes.
 
 pub mod admin;
 pub mod cache;
@@ -56,6 +57,7 @@ pub mod env;
 pub mod evidence;
 pub mod frames;
 pub mod gitcred;
+pub mod gpu;
 pub mod health;
 pub mod host;
 pub mod lanes;

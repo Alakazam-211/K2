@@ -25285,7 +25285,10 @@ Agents:
   k2 compute info <node> [--json]
                  adds a host: line (Ubuntu 24.04.1 LTS · apt · kernel … · glibc
                  2.39 · x86_64 · no GPU) and a packages: line (manager · the
-                 policy for this server · open requests)
+                 policy for this server · open requests). A node with a GPU says
+                 which and whether you may use it (GPU <model> (amdgpu, 96G
+                 unified) · GPU jobs: yes); --json: host.gpus[] (jobs: true =
+                 open to this server)
   k2 compute allow-nodes [--workspace WS] [--json]
                  this workspace's node list. With one, its jobs go ONLY to those
                  nodes: a node named off it is refused (node_not_allowed, exit 3),
@@ -25401,6 +25404,13 @@ Agents:
                  [--exclusive --why "<one line>"]  the whole node to itself; needs
                                 a reason (else exit 2) and a grant with --ci, or the
                                 owner or an Admin (else exit 3 exclusive_needs_grant)
+                 [--gpu [any|amd|intel]]  one GPU of the node, to this job alone
+                                ($K2_GPU_RENDER is its /dev/dri/renderD* node; no
+                                display). Only nodes whose owner turned GPU jobs on
+                                for this server, with a grant that says --gpu (else
+                                no_gpu_node or gpu_needs_grant, exit 3; a busy GPU:
+                                it waits, gpu_busy). Bare --gpu = any. k2 study
+                                compute: GPU JOBS
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it
@@ -25678,13 +25688,18 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    narrow). Then: k2 vault grant NAME --to
                    compute:<ws>/lane:<owner>/<lane> --as env
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
-                   [--max-parallel 1] [--max-queued 10] [--ci|--no-ci]
+                   [--max-parallel 1] [--max-queued 10] [--ci|--no-ci] [--gpu|--no-gpu]
                    [--submitter-max-running N]   at most N running jobs per
                    submitter on that node (0 = off, the default; CI exempt).
                    Changing --max-parallel or this re-sends the workspace's
                    jobs already waiting in a shared node's queue
                    --ci: this workspace may send --tier ci (it jumps every queue;
                    owner or an Admin login only; absent keeps what it was)
+                   --gpu: this workspace may send --gpu jobs (owner or an Admin
+                   login only; an agent asks: k2 permission request compute.gpu
+                   node=<node> --why "…"). The node's own owner must also turn
+                   GPU jobs on for this server at that machine
+                   (sudo k2-node admin gpu on). It doesn't give --exclusive
   k2 compute revoke <node> --workspace WS
   k2 compute grants [--node N] [--workspace WS] [--json]
                    --workspace WS: that workspace's grants. The owner, an
@@ -26614,7 +26629,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node="" distro="" receipt_v=""
+    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -26705,6 +26720,15 @@ sys.exit(0 if ok else 1)'; then
             --mem) mem="$(_compute_bytes "${2:-}")"; shift 2 ;;
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
             --exclusive) exclusive=1; shift ;;
+            # --gpu [any|amd|intel] (0.46.11): one GPU of the node, to this
+            # job alone. Bare --gpu = any.
+            --gpu=*) gpu="${1#--gpu=}"; shift
+                _compute_gpu_arg "$gpu" || exit 2 ;;
+            --gpu)
+                case "${2:-}" in
+                    ''|-*) gpu="any"; shift ;;
+                    *) gpu="$2"; shift 2; _compute_gpu_arg "$gpu" || exit 2 ;;
+                esac ;;
             --receipt-v2) receipt_v=2; shift ;;
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; retries=0; shift ;;
@@ -26863,6 +26887,9 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
     fi
     local ws_name
     ws_name="$(_compute_ws "$workspace")"
+    # --gpu (0.46.11): one GPU of the vendor asked (count 1 in v1).
+    local gpu_json=""
+    [ -n "$gpu" ] && gpu_json="{\"vendor\": \"$gpu\", \"count\": 1}"
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
@@ -26873,7 +26900,8 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
-        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v")"
+        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
+        K2_CJ_gpu_j="$gpu_json")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -26933,6 +26961,13 @@ if lim.get("queueTimeoutSecs"):
     ends.append("fails if not started within %s (--queue-timeout)" % dur(lim["queueTimeoutSecs"]))
 if lim.get("timeoutSecs"):
     ends.append("stops after %s running (--timeout)" % dur(lim["timeoutSecs"]))
+g = v.get("gpu")
+if isinstance(g, dict):
+    gs = g.get("gpus") or []
+    if gs:
+        sys.stderr.write("[k2 compute] gpu: %s, %s free now (one GPU, this job alone)\n" % (" · ".join(x.get("model") or x.get("pci") for x in gs), g.get("free")))
+    else:
+        sys.stderr.write("[k2 compute] gpu: none on %s for this server (it would fail there)\n" % v["node"])
 if ends:
     sys.stderr.write("[k2 compute] limits: %s\n" % " · ".join(ends))
 eff = v.get("effective") or {}
@@ -27211,6 +27246,12 @@ cmd_compute_test() {
             --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
+            --gpu=*) pass+=("$1"); shift ;;
+            --gpu)
+                case "${2:-}" in
+                    ''|-*) pass+=("$1"); shift ;;
+                    *) pass+=("$1" "$2"); shift 2 ;;
+                esac ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
             *) if [ -z "$node" ]; then node="$1"; shift; else echo "usage: put nextest's own arguments after --" >&2; exit 2; fi ;;
         esac
@@ -28837,7 +28878,7 @@ for r in rows:
 }
 
 cmd_compute_grant() {
-    local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci="" maxsub=""
+    local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci="" maxsub="" allow_gpu=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) workspace="${2:-}"; shift 2 ;;
@@ -28849,6 +28890,10 @@ cmd_compute_grant() {
             # keeps what the grant had.
             --ci) allow_ci=1; shift ;;
             --no-ci) allow_ci=0; shift ;;
+            # GPU jobs (0.46.11): owner or an Admin login only; absent keeps
+            # what the grant had.
+            --gpu) allow_gpu=1; shift ;;
+            --no-gpu) allow_gpu=0; shift ;;
             --max-time) maxt="$(_compute_secs "${2:-}")"; shift 2 ;;
             --max-disk) maxd="${2:-}"; maxd="${maxd%[Gg]}"; shift 2 ;;
             --max-parallel) maxp="${2:-}"; shift 2 ;;
@@ -28857,12 +28902,15 @@ cmd_compute_grant() {
             *) node="$1"; shift ;;
         esac
     done
-    [ -n "$node" ] && [ -n "$workspace" ] || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci]" >&2; exit 2; }
+    [ -n "$node" ] && [ -n "$workspace" ] || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu]" >&2; exit 2; }
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_workspace="$workspace" K2_CJ_maxJobSecs_n="$maxt" \
         K2_CJ_maxDiskGb_n="$maxd" K2_CJ_maxParallel_n="$maxp" K2_CJ_maxQueued_n="$maxq" K2_CJ_submitterMaxRunning_n="$maxsub")"
     if [ -n "$allow_ci" ]; then
         body="$(printf '%s' "$body" | K2_CG_CI="$allow_ci" python3 -c 'import json,os,sys; v=json.load(sys.stdin); v["allowCi"] = os.environ["K2_CG_CI"] == "1"; print(json.dumps(v))')"
+    fi
+    if [ -n "$allow_gpu" ]; then
+        body="$(printf '%s' "$body" | K2_CG_GPU="$allow_gpu" python3 -c 'import json,os,sys; v=json.load(sys.stdin); v["allowGpu"] = os.environ["K2_CG_GPU"] == "1"; print(json.dumps(v))')"
     fi
     _compute_call POST /cli/compute/grants/set "$body" tcp
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -28870,7 +28918,7 @@ import json, sys
 v = json.load(sys.stdin)
 g = v["grant"]
 sub = (", %s running per submitter" % g["submitterMaxRunning"]) if g.get("submitterMaxRunning") else ""
-print("granted %s to %s (max %ss/job, %s parallel%s, %s queued, %s GB disk%s). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], sub, g["maxQueued"], g["maxDiskGb"], ", CI allowed" if g.get("allowCi") else "", v["note"]))
+print("granted %s to %s (max %ss/job, %s parallel%s, %s queued, %s GB disk%s%s). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], sub, g["maxQueued"], g["maxDiskGb"], ", CI allowed" if g.get("allowCi") else "", ", GPU jobs allowed" if g.get("allowGpu") else "", v["note"]))
 if v.get("resent"):
     print("re-sent %d queued job(s) of %s on %s with the new caps (they keep their order)" % (v["resent"], v["workspace"], v["node"]))'
 }
@@ -29412,6 +29460,15 @@ if v.get("command"):
             echo "usage: k2 compute local status|pause [--now]|drain|resume|policy|enable|remote-admin|disable" >&2
             exit 2
             ;;
+    esac
+}
+
+# --gpu VALUE (0.46.11): any, amd or intel. NVIDIA isn't supported yet.
+_compute_gpu_arg() {
+    case "${1:-}" in
+        any|amd|intel) return 0 ;;
+        nvidia) echo "usage: --gpu nvidia: NVIDIA GPU jobs aren't supported yet; use --gpu any, amd or intel" >&2; return 2 ;;
+        *) echo "usage: --gpu [any|amd|intel] (one GPU of the node, to this job alone; bare --gpu = any)" >&2; return 2 ;;
     esac
 }
 
@@ -55352,6 +55409,51 @@ TIERS (queue lines, like an airport; 0.46.6)
                    workspace/session/worktree). Not security.
   k2 compute jobs shows a TIER column (CI, P, B); --tier T filters.
 
+GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
+  k2 compute run --gpu --mem 8G -- <command>    (--gpu = --gpu any; or amd, intel)
+  The job gets one GPU of the node, to itself: its render node
+  (/dev/dri/renderD*), so EGL (surfaceless or GBM), Vulkan, VA-API and
+  OpenCL run on the real GPU instead of llvmpipe. In the job,
+  $K2_GPU_RENDER is that node, $K2_GPU_VENDOR (amd, intel) and $K2_GPU_PCI
+  say which GPU. A second --gpu job takes another free GPU there, else it
+  waits (gpu_busy, a queue wait like waiting_for_room; its --queue-timeout
+  still applies) until one is free; jobs without --gpu run beside it as
+  usual. --gpu places only on Linux nodes (no --os needed).
+  The tools: vulkaninfo is in sys:vulkan-tools, eglinfo in sys:mesa-utils
+  (both map on Arch too; ENVIRONMENT says when a node's owner must approve):
+    k2 compute run --gpu --mem 8G --needs sys:vulkan-tools,sys:mesa-utils \
+        -- sh -ec 'vulkaninfo --summary | grep deviceName && eglinfo -B -p surfaceless | grep renderer'
+  (in a pipe, sh -ec sees only the last command's status: add
+  set -o pipefail with bash, or check each tool on its own line)
+  Not given: a display (no /dev/dri/card*, no X or Wayland server; run a
+  headless compositor yourself), ROCm compute (/dev/kfd), another job's
+  GPU, NVIDIA GPUs (not supported yet). Xvfb is CPU-only (llvmpipe): it
+  never tests a GPU path.
+  Where: K2 places a --gpu job only on a node that runs GPU jobs for this
+  server (k2 compute nodes --json: host.gpus[] with jobs: true; the node
+  sets the labels gpu=<vendor> and gpu_jobs=yes itself). Use --gpu, not
+  --label gpu=amd or --label gpu_jobs=yes: a label only picks the node,
+  it never gives your job the GPU or checks your grant.
+  It is off until both of these are done:
+    1. the node's owner, at that machine (once per node):
+       sudo k2-node admin gpu on                       (the owner's own K2 server)
+       sudo k2-node admin gpu on --server acme.k2.dev  (another server on that
+                                                        node, by its label)
+    2. this server's owner or an Admin, for your workspace's grant:
+       k2 compute grant <node> --workspace <ws> --gpu  (--no-gpu takes it back;
+                                                        without either, a grant keeps it)
+       (an agent asks: k2 permission request compute.gpu node=<node> --why "…")
+  --gpu doesn't give --exclusive (that still needs a grant with --ci).
+  --mem caps the job's RAM. On an APU (an iGPU sharing system memory) the
+  GPU's buffers also come from system RAM and aren't counted in --mem
+  yet: leave headroom.
+  Codes: no_gpu_node (exit 3): no node granted to your workspace runs GPU
+  jobs for this server (or none of that vendor); the hint names both steps. gpu_needs_grant (exit 3): a node has a GPU for
+  you but your grant lacks --gpu (the error names the node; agents get the
+  card line). gpu_busy: it waits for the GPU. gpu_unavailable: the node
+  stopped running GPU jobs for you since it was placed; the job fails,
+  run it again.
+
 MEMORY (--mem, required; 0.46.6)
   Always pass --mem with what the job needs. Rough guide: any cargo
   build, check or test inside a big workspace like K2 (even -p one crate,
@@ -55853,10 +55955,12 @@ IN THE JOB
                            server on $K2_JOB_PORT_BASE, not a fixed port)
     K2_NODE_OS, K2_NODE_DISTRO, K2_NODE_DISTRO_VERSION, K2_NODE_PKG
                            what the machine is (ENVIRONMENT)
+    K2_GPU_RENDER, K2_GPU_VENDOR, K2_GPU_PCI
+                           --gpu jobs only: the GPU it got (GPU JOBS)
   None of them reaches a daemon, no K2 token or socket ever does, and
   K2's own test guard ignores them. If your command refuses any K2_*
   variable, exclude them: env | grep -E '^K2(SO)?_' | grep -vE
-  '^K2_(COMPUTE_JOB|JOB_|NODE_)'
+  '^K2_(COMPUTE_JOB|JOB_|NODE_|GPU_)'
   Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
   so a failing a looks green).
   --exclusive waits for an idle node and holds other K2 jobs while it
@@ -56013,6 +56117,16 @@ COMMON ERRORS
                          (or ask for "Allow managing compute nodes")
   node_not_allowed       that node is off this workspace's node list (the error
                          names the list): name one on it, or no node; exit 3
+  no_gpu_node            --gpu, but no node you can use runs GPU jobs for this server
+                         (or none of that vendor): the node's owner runs sudo k2-node
+                         admin gpu on --server <this server>, then k2 compute grant
+                         <node> --workspace <ws> --gpu; exit 3 (GPU JOBS above)
+  gpu_needs_grant        --gpu where the node has a GPU for you but your grant lacks
+                         --gpu (owner or Admin; an agent asks: k2 permission request
+                         compute.gpu node=<node> --why "…"); exit 3
+  gpu_busy               the node's GPU is held by another job: it waits
+  gpu_unavailable        the node stopped running GPU jobs for you after it was
+                         placed (its owner turned them off): the job fails
   allow_nodes_needs_person  adding a node to the list or --clear: a person's
                          (the owner or an Admin); exit 3, ask on a card
 

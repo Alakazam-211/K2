@@ -265,6 +265,51 @@ TIERS (queue lines, like an airport; 0.46.6)
                    workspace/session/worktree). Not security.
   k2 compute jobs shows a TIER column (CI, P, B); --tier T filters.
 
+GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
+  k2 compute run --gpu --mem 8G -- <command>    (--gpu = --gpu any; or amd, intel)
+  The job gets one GPU of the node, to itself: its render node
+  (/dev/dri/renderD*), so EGL (surfaceless or GBM), Vulkan, VA-API and
+  OpenCL run on the real GPU instead of llvmpipe. In the job,
+  $K2_GPU_RENDER is that node, $K2_GPU_VENDOR (amd, intel) and $K2_GPU_PCI
+  say which GPU. A second --gpu job takes another free GPU there, else it
+  waits (gpu_busy, a queue wait like waiting_for_room; its --queue-timeout
+  still applies) until one is free; jobs without --gpu run beside it as
+  usual. --gpu places only on Linux nodes (no --os needed).
+  The tools: vulkaninfo is in sys:vulkan-tools, eglinfo in sys:mesa-utils
+  (both map on Arch too; ENVIRONMENT says when a node's owner must approve):
+    k2 compute run --gpu --mem 8G --needs sys:vulkan-tools,sys:mesa-utils \
+        -- sh -ec 'vulkaninfo --summary | grep deviceName && eglinfo -B -p surfaceless | grep renderer'
+  (in a pipe, sh -ec sees only the last command's status: add
+  set -o pipefail with bash, or check each tool on its own line)
+  Not given: a display (no /dev/dri/card*, no X or Wayland server; run a
+  headless compositor yourself), ROCm compute (/dev/kfd), another job's
+  GPU, NVIDIA GPUs (not supported yet). Xvfb is CPU-only (llvmpipe): it
+  never tests a GPU path.
+  Where: K2 places a --gpu job only on a node that runs GPU jobs for this
+  server (k2 compute nodes --json: host.gpus[] with jobs: true; the node
+  sets the labels gpu=<vendor> and gpu_jobs=yes itself). Use --gpu, not
+  --label gpu=amd or --label gpu_jobs=yes: a label only picks the node,
+  it never gives your job the GPU or checks your grant.
+  It is off until both of these are done:
+    1. the node's owner, at that machine (once per node):
+       sudo k2-node admin gpu on                       (the owner's own K2 server)
+       sudo k2-node admin gpu on --server acme.k2.dev  (another server on that
+                                                        node, by its label)
+    2. this server's owner or an Admin, for your workspace's grant:
+       k2 compute grant <node> --workspace <ws> --gpu  (--no-gpu takes it back;
+                                                        without either, a grant keeps it)
+       (an agent asks: k2 permission request compute.gpu node=<node> --why "…")
+  --gpu doesn't give --exclusive (that still needs a grant with --ci).
+  --mem caps the job's RAM. On an APU (an iGPU sharing system memory) the
+  GPU's buffers also come from system RAM and aren't counted in --mem
+  yet: leave headroom.
+  Codes: no_gpu_node (exit 3): no node granted to your workspace runs GPU
+  jobs for this server (or none of that vendor); the hint names both steps. gpu_needs_grant (exit 3): a node has a GPU for
+  you but your grant lacks --gpu (the error names the node; agents get the
+  card line). gpu_busy: it waits for the GPU. gpu_unavailable: the node
+  stopped running GPU jobs for you since it was placed; the job fails,
+  run it again.
+
 MEMORY (--mem, required; 0.46.6)
   Always pass --mem with what the job needs. Rough guide: any cargo
   build, check or test inside a big workspace like K2 (even -p one crate,
@@ -766,10 +811,12 @@ IN THE JOB
                            server on $K2_JOB_PORT_BASE, not a fixed port)
     K2_NODE_OS, K2_NODE_DISTRO, K2_NODE_DISTRO_VERSION, K2_NODE_PKG
                            what the machine is (ENVIRONMENT)
+    K2_GPU_RENDER, K2_GPU_VENDOR, K2_GPU_PCI
+                           --gpu jobs only: the GPU it got (GPU JOBS)
   None of them reaches a daemon, no K2 token or socket ever does, and
   K2's own test guard ignores them. If your command refuses any K2_*
   variable, exclude them: env | grep -E '^K2(SO)?_' | grep -vE
-  '^K2_(COMPUTE_JOB|JOB_|NODE_)'
+  '^K2_(COMPUTE_JOB|JOB_|NODE_|GPU_)'
   Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
   so a failing a looks green).
   --exclusive waits for an idle node and holds other K2 jobs while it
@@ -926,6 +973,16 @@ COMMON ERRORS
                          (or ask for "Allow managing compute nodes")
   node_not_allowed       that node is off this workspace's node list (the error
                          names the list): name one on it, or no node; exit 3
+  no_gpu_node            --gpu, but no node you can use runs GPU jobs for this server
+                         (or none of that vendor): the node's owner runs sudo k2-node
+                         admin gpu on --server <this server>, then k2 compute grant
+                         <node> --workspace <ws> --gpu; exit 3 (GPU JOBS above)
+  gpu_needs_grant        --gpu where the node has a GPU for you but your grant lacks
+                         --gpu (owner or Admin; an agent asks: k2 permission request
+                         compute.gpu node=<node> --why "…"); exit 3
+  gpu_busy               the node's GPU is held by another job: it waits
+  gpu_unavailable        the node stopped running GPU jobs for you after it was
+                         placed (its owner turned them off): the job fails
   allow_nodes_needs_person  adding a node to the list or --clear: a person's
                          (the owner or an Admin); exit 3, ask on a card
 

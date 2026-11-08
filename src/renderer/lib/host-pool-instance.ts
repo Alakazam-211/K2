@@ -14,8 +14,13 @@ import { emit, listen } from '@tauri-apps/api/event'
 import { daemonHttpBase, getLocalDaemonWs } from '@/kessel/daemon-ws'
 import { noteServerVersion, scopeForHost } from '@/kessel/server-scope'
 import { daemonCliPost, withHostCliSlot } from '@/lib/daemon-cli'
-import { setPinnedAuthRecovery, setPoolSocketCloseSink, setPoolStatusSource } from '@/lib/pool-hooks'
-import { homeHostKey } from '@/lib/host-key'
+import {
+  setPinnedAuthRecovery,
+  setPoolRoleRefusalSink,
+  setPoolSocketCloseSink,
+  setPoolStatusSource,
+} from '@/lib/pool-hooks'
+import { homeHostKey, savedHostForKey } from '@/lib/host-key'
 import { createHostPool, type BootBody, type HostPool } from '@/lib/host-pool'
 import { loginCoordinator, WINDOW_INSTANCE_ID } from '@/lib/host-login-coord'
 import { createHostSessionSync, type HostSessionEvent } from '@/lib/host-session-sync'
@@ -114,6 +119,13 @@ export const hostPool: HostPool = createHostPool({
     await daemonCliPost(scopeForHost(hostKey), 'projects/activate', { projectId })
   },
   now: () => Date.now(),
+  // Voice & Chat only (§8.1): keep the saved host's non-secret hint in step
+  // with every whoami, so the switcher hides it before the next check.
+  noteRole: (hostKey, role) => {
+    const state = useConnectHostStore.getState()
+    const saved = savedHostForKey(state.hosts, hostKey)
+    if (saved) state.setHostAccess(saved.id, role)
+  },
 })
 
 // MS10 / MS77: a pinned scope's refused request revives through the pool.
@@ -160,6 +172,11 @@ export function installHostSessionSync(): Promise<() => void> {
   }
   return installed
 }
+
+// Voice & Chat only (§7): a 403 `role_required` re-reads the role.
+setPoolRoleRefusalSink((hostKey) => {
+  void hostPool.refreshRole(hostKey)
+})
 
 // MS71: every daemon socket close reaches the pool.
 setPoolSocketCloseSink((hostKey, code) => hostPool.noteSocketClose(hostKey, code))

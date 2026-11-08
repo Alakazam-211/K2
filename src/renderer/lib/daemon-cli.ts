@@ -33,7 +33,8 @@ import {
   reviveRemoteSession,
 } from '@/lib/remote-session'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
-import { getPinnedAuthRecovery } from '@/lib/pool-hooks'
+import { getPinnedAuthRecovery, notePoolRoleRefused } from '@/lib/pool-hooks'
+import { isRoleRequired } from '@/lib/voice-chat-only'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { recordCliTiming, type CliLane } from '@/lib/cli-timing'
 
@@ -325,6 +326,11 @@ async function cliFetch(
             result = await attempt()
           }
         }
+      } else if (scope.isRemote && isRoleRequired(result.res.status, result.text)) {
+        // Voice & Chat only (§7): a role refusal is never a dead login. The
+        // pool re-reads whoami for that server so the switcher, Home, the
+        // headset and the gate follow a live role change. No replay.
+        notePoolRoleRefused(scope.hostKey)
       } else if (isPasswordChangeRequired(result.res.status, result.text)) {
         // W2: a restricted (temporary-password) session — the token is
         // valid, so revival would only say 'still-valid'. Route the user to

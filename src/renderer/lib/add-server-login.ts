@@ -8,8 +8,10 @@
 // successful add — the caller must run the shared PasswordRotationStep and
 // only then treat the host as signed in.
 
+import { isVoiceChatOnly } from '@/lib/voice-chat-only'
 import {
   duplicateSavedHost,
+  fetchHostWhoamiRole,
   duplicateSavedHostMessage,
   forgetToken as storeForgetToken,
   loginToHost as storeLoginToHost,
@@ -21,6 +23,10 @@ import {
 export type AddServerLoginOutcome =
   /** Credentials accepted; the fresh session token is committed to the store. */
   | { kind: 'signed-in'; token: string }
+  /** Credentials accepted, and the server gives this login Voice & Chat only
+   *  (prd-voice-chat-only-members-v1 §8.4): saved with the hint, never
+   *  switched to; its rooms are in the headset. */
+  | { kind: 'voice-chat-only'; token: string }
   /** Credentials accepted but the daemon requires a new password first.
    *  `host` carries the RESTRICTED session token for the rotation step. A
    *  NEW host's provisional tile is left in the address book so the step can
@@ -34,11 +40,25 @@ export interface AddServerLoginDeps {
   addHost: (host: ConnectHost) => boolean
   removeHost: (id: string) => void
   loginToHost: (host: ConnectHost, password: string) => Promise<LoginResult>
+  /** whoami's `role` for the fresh token, or null when it didn't answer one. */
+  whoamiRole: (host: ConnectHost, token: string) => Promise<string | null>
+  /** Keep the saved host's Voice & Chat only hint (`setHostAccess`). */
+  setHostAccess: (id: string, role: string | null) => void
 }
+
+/** `GET /cli/auth/whoami` with `token`: its `role`, or null. The raw call
+ *  lives with the saved host's login (MS79 allowlist). */
+export const fetchWhoamiRole = fetchHostWhoamiRole
 
 function storeDeps(): AddServerLoginDeps {
   const s = useConnectHostStore.getState()
-  return { addHost: s.addHost, removeHost: s.removeHost, loginToHost: storeLoginToHost }
+  return {
+    addHost: s.addHost,
+    removeHost: s.removeHost,
+    loginToHost: storeLoginToHost,
+    whoamiRole: fetchWhoamiRole,
+    setHostAccess: s.setHostAccess,
+  }
 }
 
 /**
@@ -68,6 +88,12 @@ export async function verifyHostCredentials(
   if (result.mustChangePassword) {
     return { kind: 'rotate', host: { ...host, token: result.token } }
   }
+  // §8.4: read the role BEFORE anything treats the host as open. whoami's
+  // answer is the truth (D4): the hint is set either way, so an old
+  // Voice & Chat only hint on an edited host clears too.
+  const role = await deps.whoamiRole(host, result.token)
+  deps.setHostAccess(host.id, role)
+  if (isVoiceChatOnly(role)) return { kind: 'voice-chat-only', token: result.token }
   return { kind: 'signed-in', token: result.token }
 }
 

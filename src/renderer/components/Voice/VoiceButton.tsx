@@ -23,6 +23,7 @@ import CallControls from './CallControls'
 import { useCallTileShown } from './CallLayer'
 import VideoDemo from './VideoDemo'
 import { retainVideo, video } from '@/stores/video'
+import { useVoiceOpenRequest } from '@/stores/voice-open-request'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -60,6 +61,11 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   const [, setTick] = useState(0)
 
   const close = useCallback(() => voice.setPopoverOpen(false), [])
+  // §8.3: the Voice & Chat only gate screen's "Open voice rooms".
+  const openAsked = useVoiceOpenRequest((s) => s.pending)
+  useEffect(() => {
+    if (openAsked && useVoiceOpenRequest.getState().take()) voice.setPopoverOpen(true)
+  }, [openAsked])
   useEffect(() => {
     if (!open) return
     const onPointer = (ev: MouseEvent): void => {

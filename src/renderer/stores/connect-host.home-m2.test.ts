@@ -108,6 +108,8 @@ describe('MS61 — one saved entry per server', () => {
       addHost: (x) => useConnectHostStore.getState().addHost(x),
       removeHost: (id) => useConnectHostStore.getState().removeHost(id),
       loginToHost: login,
+      whoamiRole: async () => null,
+      setHostAccess: () => {},
     })
     expect(out).toEqual({ kind: 'error', reason: 'Already saved as Box B.' })
     expect(login).not.toHaveBeenCalled()

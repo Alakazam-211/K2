@@ -70,3 +70,17 @@ export function setPoolStatusSource(src: PoolStatusSource | null): () => void {
 export function getPoolStatusSource(): PoolStatusSource | null {
   return poolStatusSource
 }
+
+type RoleRefusalSink = (hostKey: string) => void
+let roleRefusalSink: RoleRefusalSink | null = null
+
+/** Voice & Chat only (prd-voice-chat-only-members-v1 §7): a `/cli` request
+ *  to `hostKey` answered 403 `role_required`, so the login's role there
+ *  may have changed. The pool re-reads whoami (never a revive). */
+export function setPoolRoleRefusalSink(fn: RoleRefusalSink | null): void {
+  roleRefusalSink = fn
+}
+
+export function notePoolRoleRefused(hostKey: string): void {
+  if (roleRefusalSink) roleRefusalSink(hostKey)
+}

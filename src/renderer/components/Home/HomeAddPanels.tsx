@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { repairHomeRowsFromList, useHomesStore, type Home } from '@/stores/homes'
@@ -384,6 +385,8 @@ function FromServerList({
     for (const h of sorted) {
       const key = homeHostKey(h)
       if (key === connectedKey || seen.has(key)) continue
+      // §8.2: a Voice & Chat only server has no agents to add.
+      if (hostIsVoiceChatOnly(h)) continue
       seen.add(key)
       out.push({ key, label: h.label, sub: hostDisplayAddress(h) })
     }

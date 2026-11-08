@@ -17,6 +17,8 @@ import { MIC_DENIED_LINE, hostingStateText, isLaneReconnecting, micBlockedText, 
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
 import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
+import { VOICE_CHAT_LINE } from '@/lib/voice-chat-only'
+import { VoiceChatOnlyChip } from './VoiceChatOnlyChip'
 
 /** While a join runs, another Join (and "Leave and join") would leave it
  *  half way, so they wait. */
@@ -271,7 +273,15 @@ function ServerSection({
   const reconnecting = list ? isLaneReconnecting(list.hosting) : false
   return (
     <section data-testid="voice-server" data-kind="live" data-host={server.hostKey} className="py-1">
-      <header className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">{title}</header>
+      <header className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">
+        <span className="truncate">{title}</span>
+        {server.voiceChatOnly ? <VoiceChatOnlyChip /> : null}
+      </header>
+      {server.voiceChatOnly ? (
+        <p data-testid="voice-chat-only-line" className="text-[11px] text-[var(--color-text-muted)]">
+          {VOICE_CHAT_LINE}
+        </p>
+      ) : null}
       {rooms?.error && !list ? (
         <p data-testid="voice-server-error" className="text-[11px] text-[var(--color-status-error-soft)]">
           Couldn't read {server.label}'s rooms. {rooms.error}

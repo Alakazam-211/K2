@@ -22,6 +22,7 @@
 import { displayUnderRoot, type ActivityDisplay, type ScopeActivity } from '@/stores/activity'
 import type { HostEntry } from '@/lib/host-pool'
 import { roleAllowsRoom } from '@/lib/host-pool'
+import { isVoiceChatOnly } from '@/lib/voice-chat-only'
 import { usersForWorkspace, type RosterUser } from '@/stores/presence'
 import { parseHomeAddress, workspaceHandle, type HomeRowRef } from '@/lib/home-address'
 
@@ -228,8 +229,13 @@ export function resolveRowStatus(input: RowStatusInput): RowStatus {
   // MS83: a login below Member — or a role this app does not know — opens
   // nothing there.
   if (!roleAllowsRoom(e.role)) {
+    const server = input.serverLabel ?? 'this server'
     return status('no-access', [], {
-      detail: `Your login on ${input.serverLabel ?? 'this server'} is ${e.role ?? 'unknown'}. Ask its owner for Member access.`,
+      // prd-voice-chat-only-members-v1 §8.2: a row added before a downgrade
+      // stays (so it can be removed) and says why it no longer opens.
+      detail: isVoiceChatOnly(e.role)
+        ? `${server} gives you Voice & Chat only: join its rooms from the headset. You can't open its agents.`
+        : `Your login on ${server} is ${e.role ?? 'unknown'}. Ask its owner for Member access.`,
       note,
     })
   }

@@ -8,6 +8,7 @@
 
 import type { HostEntry } from '@/lib/host-pool'
 import { roleAllowsRoom } from '@/lib/host-pool'
+import { isVoiceChatOnly } from '@/lib/voice-chat-only'
 import { canonicalHostKey } from '@/lib/host-key'
 import { VOICE_ROOMS_FEATURE } from './voice-wire'
 
@@ -31,6 +32,9 @@ export interface VoiceServer {
   role: string | null
   /** The pool's sign-in note (kicked, refused password…), for signed-out rows. */
   authNote: string | null
+  /** This login is Voice & Chat only there (prd-voice-chat-only-members-v1
+   *  §8.2): listed and joinable, with the chip; the server never opens. */
+  voiceChatOnly: boolean
 }
 
 export interface VoiceServerInputs {
@@ -51,10 +55,11 @@ export function reportsVoice(entry: HostEntry | undefined): boolean {
 
 /** Signed in with a usable role. The window's own server (and this
  *  computer's daemon) is signed in by the window itself: the pool only
- *  reads its boot status there (`bootOnly`). */
+ *  reads its boot status there (`bootOnly`). Voice & Chat only counts: the
+ *  headset is the one place such a server shows (§8.2). */
 function signedIn(entry: HostEntry | undefined, isWindow: boolean, isLocal: boolean): boolean {
   if (isWindow || isLocal) return true
-  return entry?.auth === 'ok' && roleAllowsRoom(entry.role)
+  return entry?.auth === 'ok' && (roleAllowsRoom(entry.role) || isVoiceChatOnly(entry.role))
 }
 
 /** The sections, "This server" first, then the rest A to Z by name. */
@@ -76,6 +81,7 @@ export function voiceServers(input: VoiceServerInputs): VoiceServer[] {
       lastSeenAt: entry?.boot?.at ?? null,
       role: entry?.role ?? null,
       authNote: entry?.authNote ?? null,
+      voiceChatOnly: isVoiceChatOnly(entry?.role),
     }
     const before = input.reportedBefore.has(key)
     if (entry?.reach === 'offline') {

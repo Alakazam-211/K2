@@ -33,12 +33,19 @@ import { withRemoteRetry } from '@/lib/remote-retry'
 import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
 import {
-  ROLE_OPTIONS,
+  addUserBody,
+  canSetRole,
   needsEnableAsMember,
   parseK2Role,
+  parseShares,
+  roleOptions,
+  splitShareList,
+  VOICE_CHAT_LABEL,
   type K2Role,
   type K2User,
 } from './connect-user-roles'
+import { VoiceChatSharesEditor } from './VoiceChatSharesEditor'
+import { VOICE_CHAT_ROLE_HELP } from '@/lib/voice-chat-only'
 import { WasViewerBadge, WasViewerNotice } from './WasViewerNotice'
 import { MUST_CHANGE_NOTE } from './AppUserDialogs'
 import { PERSON_NAME_MAX, realName } from '@/lib/person-name'
@@ -229,6 +236,27 @@ function canManageUsers(role: K2Role | null): boolean {
 // Whether a viewer of `role` may change other users' roles. Owner only.
 function canChangeRoles(role: K2Role | null): boolean {
   return role === 'owner'
+}
+
+/** The role picker's options for `actor` on this server (§5.3, Q1): the
+ *  Owner every role (Voice & Chat only when the server knows it); an Admin
+ *  only Member and Voice & Chat only, and only on a server that knows it. */
+function pickerOptions(actor: K2Role | null, voiceChatRole: boolean): Array<{ value: K2Role; label: string }> {
+  const all = roleOptions(voiceChatRole)
+  if (actor === 'owner') return [...all]
+  if (actor === 'admin' && voiceChatRole) return all.filter((o) => o.value === 'member' || o.value === 'voice_chat')
+  return []
+}
+
+/** The presence chip's role: Voice & Chat only draws as a member. */
+function chipRole(raw: string | undefined): 'owner' | 'admin' | 'member' {
+  const r = parseK2Role(raw)
+  return r === 'owner' || r === 'admin' ? r : 'member'
+}
+
+/** A users row's role as shown read-only. */
+function roleLabel(raw: string | undefined): string {
+  return raw === 'voice_chat' ? VOICE_CHAT_LABEL : raw ?? 'member'
 }
 
 interface PasswordPolicyView {
@@ -608,6 +636,11 @@ export function K2ConnectSection({
   const [nameDraft, setNameDraft] = useState<{ firstName: string; lastName: string }>({ firstName: '', lastName: '' })
   const [nameBusy, setNameBusy] = useState(false)
   const [newRole, setNewRole] = useState<K2Role>('member')
+  // prd-voice-chat-only-members-v1: shares typed with a new Voice & Chat
+  // only login (comma separated agent addresses and Garden ids).
+  const [newShareAgents, setNewShareAgents] = useState('')
+  const [newShareGardens, setNewShareGardens] = useState('')
+  const voiceChatRole = primaryScope().serverSupports('voice-chat-role-v1')
   // 0.46.8: the password you type for someone else is temporary (they
   // choose their own at their first sign-in). On by default.
   const [newTemporary, setNewTemporary] = useState(true)
@@ -870,21 +903,30 @@ export function K2ConnectSection({
     try {
       const firstName = newFirstName.trim()
       const lastName = newLastName.trim()
-      const res = await userPost('/add', {
-        username,
-        password: pw,
-        mustChangePassword: newTemporary,
-        ...(firstName ? { firstName } : {}),
-        ...(lastName ? { lastName } : {}),
-      })
+      // §5.3 / V5: a Voice & Chat only login is made at its role in the
+      // add itself (never a Member first), with its shares.
+      const res = await userPost(
+        '/add',
+        addUserBody({
+          username,
+          password: pw,
+          mustChangePassword: newTemporary,
+          role: newRole,
+          firstName,
+          lastName,
+          shareAgents: splitShareList(newShareAgents),
+          shareGardens: splitShareList(newShareGardens),
+        }),
+      )
       if (!res.ok) {
         setAddError(await errText(res))
         return
       }
       const temporary = await answeredTemporary(res, newTemporary)
-      // add_user always creates Member. Owner can pick a starting role
-      // here; apply it with the same set-role path as the per-row selector.
-      if (canChangeRoles(myRole) && newRole !== 'member') {
+      // add makes a Member or a Voice & Chat only login. An Owner can pick
+      // Admin or Owner as the starting role; it's applied with the same
+      // set-role path as the per-row selector.
+      if (canChangeRoles(myRole) && (newRole === 'admin' || newRole === 'owner')) {
         const roleRes = await userPost('/set-role', { username, role: newRole })
         if (!roleRes.ok) {
           setAddError(`Added as member, but role could not be set: ${await errText(roleRes)}`)
@@ -897,6 +939,8 @@ export function K2ConnectSection({
       setNewFirstName('')
       setNewLastName('')
       setNewRole('member')
+      setNewShareAgents('')
+      setNewShareGardens('')
       setNewTemporary(true)
       setAddedMsg(
         temporary
@@ -1022,6 +1066,19 @@ export function K2ConnectSection({
       onError: (msg) => setUsersError(msg),
       refresh: refreshUsers,
     })
+
+  // Voice & Chat only shares: POST /cli/users/set-shares replaces both
+  // lists. Resolves to the error to show, or null.
+  const saveShares = async (username: string, agents: string[], gardens: string[]): Promise<string | null> => {
+    try {
+      const res = await userPost('/set-shares', { username, agents, gardens })
+      if (!res.ok) return await errText(res)
+      await refreshUsers()
+      return null
+    } catch (e) {
+      return e instanceof Error ? e.message : 'Failed to save shares'
+    }
+  }
 
   // K2 #629: change a user's role (Owner-only; POST /cli/users/set-role).
   // Optimistic with revert-on-failure, mirroring toggleDisabled.
@@ -2004,10 +2061,10 @@ export function K2ConnectSection({
                     )}
                   </button>
                 </div>
-                {canChangeRoles(myRole) && (
+                {pickerOptions(myRole, voiceChatRole).length > 0 && (
                   <SettingDropdown
                     value={newRole}
-                    options={[...ROLE_OPTIONS]}
+                    options={pickerOptions(myRole, voiceChatRole)}
                     ariaLabel="New user role"
                     onChange={(value) => {
                       const r = parseK2Role(value)
@@ -2024,6 +2081,35 @@ export function K2ConnectSection({
                   {addBusy ? 'Adding…' : 'Add user'}
                 </button>
               </div>
+              {voiceChatRole && pickerOptions(myRole, voiceChatRole).length > 0 && (
+                <div className="text-[10px] text-[var(--color-text-muted)]" data-testid="voice-chat-role-help">
+                  {VOICE_CHAT_ROLE_HELP}
+                </div>
+              )}
+              {newRole === 'voice_chat' && (
+                <div className="space-y-1" data-testid="new-user-shares">
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Agents</span>
+                    <input
+                      className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
+                      placeholder="Shared agents (addresses, comma separated)"
+                      aria-label="New user shared agents"
+                      value={newShareAgents}
+                      onChange={(e) => setNewShareAgents(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Gardens</span>
+                    <input
+                      className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
+                      placeholder="Shared Gardens (ids, comma separated)"
+                      aria-label="New user shared Gardens"
+                      value={newShareGardens}
+                      onChange={(e) => setNewShareGardens(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
               <label className="flex items-start gap-1.5 cursor-pointer select-none no-drag" data-testid="new-user-temporary">
                 {/* Square peer-checked checkbox (matches "Enabled" below). */}
                 <input
@@ -2092,7 +2178,7 @@ export function K2ConnectSection({
                         <span data-testid={`user-chip-${u.username}`} className="flex flex-none">
                           <PresenceChip
                             name={u.username}
-                            role={parseK2Role(u.role) ?? 'member'}
+                            role={chipRole(u.role)}
                             size={20}
                             color={u.color ?? null}
                             names={u}
@@ -2129,14 +2215,15 @@ export function K2ConnectSection({
                       <div className="flex items-center gap-3 flex-shrink-0">
                         {/* K2 #629 — role selector. Editable only for an
                             Owner viewer; Admins see the role read-only. */}
-                        {canChangeRoles(myRole) ? (
+                        {canChangeRoles(myRole) ||
+                        (myRole === 'admin' && voiceChatRole && canSetRole(myRole, parseK2Role(u.role), 'voice_chat')) ? (
                           <SettingDropdown
                             value={u.role ?? 'member'}
                             // No Viewer option. An older server can still
                             // report "viewer"; it shows as the placeholder
                             // and can be changed to a real role.
-                            placeholder={u.role ?? 'member'}
-                            options={[...ROLE_OPTIONS]}
+                            placeholder={roleLabel(u.role)}
+                            options={pickerOptions(myRole, voiceChatRole)}
                             ariaLabel={`${u.username} role`}
                             onChange={(value) => {
                               const r = parseK2Role(value)
@@ -2145,7 +2232,7 @@ export function K2ConnectSection({
                           />
                         ) : (
                           <span className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]">
-                            {u.role ?? 'member'}
+                            {roleLabel(u.role)}
                           </span>
                         )}
                         <CanCloneToggle
@@ -2236,6 +2323,13 @@ export function K2ConnectSection({
                         General → Your account; the row only shows the tag. */}
                     {ownerLink !== 'hidden' && ownerAccounts.loaded && (
                       <OwnerAccountTag username={u.username} linked={ownerAccounts.isLinked(u.username)} />
+                    )}
+                    {u.role === 'voice_chat' && canManageUsers(myRole) && (
+                      <VoiceChatSharesEditor
+                        username={u.username}
+                        shares={parseShares(u.shares)}
+                        onSave={(agents, gardens) => saveShares(u.username, agents, gardens)}
+                      />
                     )}
                     {needsEnableAsMember(u) && (
                       <WasViewerNotice

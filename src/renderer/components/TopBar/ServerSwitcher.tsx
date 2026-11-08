@@ -41,6 +41,7 @@ import { useTopBarScope } from './top-bar-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { K2_ICON_PX, ServerIcon } from '@/components/icons/K2Icons'
 import { statusColor } from './server-status'
+import { openableHosts } from '@/lib/voice-chat-only'
 
 /** Address shown under a saved host in the dropdown. Omit default
  *  https port 443 (`rosson.k2.dev`, not `rosson.k2.dev:443`). LAN /
@@ -277,9 +278,11 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
   const roomServer = followed.room ? followed.label : null
 
   // Saved remotes only — This computer is pinned above the scroller. Sort by display
-  // label so a long address book is scannable; hostname breaks ties.
+  // label so a long address book is scannable; hostname breaks ties. A Voice
+  // & Chat only server is never offered (prd-voice-chat-only-members-v1
+  // §8.2): its rooms are in the headset.
   const hostsSorted = useMemo(() => {
-    const sorted = [...hosts].sort((a, b) => {
+    const sorted = openableHosts(hosts).sort((a, b) => {
       const byLabel = a.label.localeCompare(b.label, undefined, {
         sensitivity: 'base',
         numeric: true,

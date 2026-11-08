@@ -22,6 +22,8 @@ import { makeVoiceEngine } from '@/lib/voice/voice-engine'
 import { NativeVoiceEngine, type NativeStatus, type NativeVoiceBridge } from '@/lib/voice/native-voice-engine'
 import { setUpdateInstallGuard } from '@/stores/update'
 import { createVoiceController, type VoicePrefs, type VoiceState } from './voice-core'
+import { subscribeVoiceEvents } from '@/lib/voice/voice-events-socket'
+import { hostIsVoiceChatOnly, isVoiceChatOnly } from '@/lib/voice-chat-only'
 
 const REPORTED_KEY = 'k2.voice.reportedServers.v1'
 const PREFS_KEY = 'k2.voice.prefs.v1'
@@ -80,6 +82,13 @@ function targetFor(hostKey: string): string | null {
   return savedHostForKey(useConnectHostStore.getState().hosts, hostKey)?.id ?? null
 }
 
+/** Whether this client's login on `hostKey` is Voice & Chat only (the
+ *  pool's whoami, else the saved host's hint). */
+function voiceChatOnlyHost(hostKey: string): boolean {
+  if (isVoiceChatOnly(hostPool.entry(hostKey)?.role)) return true
+  return hostIsVoiceChatOnly(savedHostForKey(useConnectHostStore.getState().hosts, hostKey))
+}
+
 function hostKeyForTarget(target: string): string | null {
   const host = useConnectHostStore.getState().hosts.find((h) => h.id === target)
   return host ? homeHostKey(host) : null
@@ -106,7 +115,11 @@ export const voice = createVoiceController({
   // survives a server switch. Any other server's bus has frames only while a
   // Home room's socket carries them; the 60 s sweep covers the rest.
   onWindowRoomsChanged: (fn) => onVoiceRoomsChanged(primaryScope(), fn),
-  onRoomsChanged: (key, fn) => onVoiceRoomsChanged(scopeForHost(key), fn),
+  // A Voice & Chat only login never gets that server's app socket: its
+  // rooms changes come on `/cli/voice/events` (prd-voice-chat-only-members-v1
+  // §6.3), with the 60 s sweep still behind it.
+  onRoomsChanged: (key, fn) =>
+    voiceChatOnlyHost(key) ? subscribeVoiceEvents(scopeForHost(key), fn) : onVoiceRoomsChanged(scopeForHost(key), fn),
   selfNames: (key) => {
     const saved = savedHostForKey(useConnectHostStore.getState().hosts, key)
     const role = hostPool.entry(key)?.role ?? null

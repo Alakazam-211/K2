@@ -23,6 +23,7 @@ import { addWorkspaceWithIngest } from '@/lib/add-workspace'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { openableHosts } from '@/lib/voice-chat-only'
 import { ADD_TO_HOME_MENU_ID } from '@/stores/add-to-home-dialog'
 import { addAgentToHomeFromMenu } from '@/lib/add-to-home'
 import { activeHomeHostKey } from '@/lib/home-address'
@@ -908,7 +909,8 @@ export default function Sidebar(): React.JSX.Element {
       const clonePerms = await fetchClonePerms(primaryScope(), activeHost === 'local' ? 'local' : activeHost.id)
       if (activeHost === 'local' && hosts.length > 0 && pushAllowed(clonePerms)) {
         menuItems.push({ id: 'separator-clone', label: '', type: 'separator' })
-        for (const host of hosts) {
+        // §8.2: never a Voice & Chat only server.
+        for (const host of openableHosts(hosts)) {
           menuItems.push({ id: `clone-to:${host.id}`, label: `Clone to ${host.label}` })
         }
       } else if (activeHost !== 'local' && pullAllowed(clonePerms)) {

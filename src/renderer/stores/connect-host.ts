@@ -42,6 +42,7 @@ import { devRoomFrameHost } from '@/dev/room-frame-shim'
 import { LOGIN_404_K2DEV_MESSAGE, k2DevApexLabel, loginUrlFor } from '@/lib/login-url'
 import { emitSoftResync, shouldEmitSoftResync } from '@/lib/soft-resync'
 import { homeHostKey } from '@/lib/host-key'
+import { VOICE_CHAT_ROLE, accessForRole, type HostAccess } from '@/lib/voice-chat-only'
 import { fireLoginLanded, fireSavedHostRekey, type LoginLanded } from '@/lib/connect-host-hooks'
 import {
   CONNECT_HOSTS_STORAGE_KEY,
@@ -136,6 +137,14 @@ export interface ConnectHost {
   remember: boolean
   /** Epoch ms of the last successful connect, or null if never. */
   lastConnectedAt: number | null
+  /**
+   * Voice & Chat only hint (prd-voice-chat-only-members-v1 §8.1, D4):
+   * `'voice_chat'` when this login's role on that server was Voice & Chat
+   * only at the last whoami. NON-SECRET; persisted with the host list so
+   * the switcher hides the server before the first check (vs-live V18).
+   * Only a hint: every whoami overwrites it, and the gate screen holds.
+   */
+  access?: HostAccess
 }
 
 /** The non-secret shape we persist to localStorage (everything except
@@ -365,6 +374,10 @@ export interface ConnectHostState {
    *  host-prefixed keys and pool entries; an edit of the active entry
    *  refreshes `activeHost`. */
   addHost: (host: ConnectHost) => boolean
+  /** Voice & Chat only (§8.1): write the whoami role's hint onto a saved
+   *  host (and the active one), persisting only when it changed. A role of
+   *  anything but `voice_chat` clears it. Unknown id: no-op. */
+  setHostAccess: (id: string, role: string | null) => void
   /** MS62: another window rewrote the saved list (`storage` event). Merge
    *  it in, keeping this window's in-memory tokens. Never writes back. */
   applyExternalHosts: (raw: string | null) => void
@@ -477,7 +490,7 @@ function parsePersistedHosts(raw: string | null): ConnectHost[] | null {
     // `secure` may be absent in entries persisted before step #4 —
     // default to false (plain http/ws) so old saved hosts keep their
     // prior behaviour. Token is never persisted; starts empty.
-    .map((h) => ({ ...h, secure: h.secure ?? false, token: '' }))
+    .map((h) => withKnownAccess({ ...h, secure: h.secure ?? false, token: '' }))
 }
 
 function isPersistedHost(h: unknown): h is PersistedHost {
@@ -497,6 +510,13 @@ function isPersistedHost(h: unknown): h is PersistedHost {
     (o.secure === undefined || typeof o.secure === 'boolean') &&
     (o.lastConnectedAt === null || typeof o.lastConnectedAt === 'number')
   )
+}
+
+/** Keep `access` only when it is the one hint this client knows. */
+function withKnownAccess<T extends { access?: unknown }>(h: T): T {
+  if (h.access === undefined || h.access === VOICE_CHAT_ROLE) return h
+  const { access: _drop, ...rest } = h
+  return rest as T
 }
 
 /** Persist the host list MINUS the token. This is the security
@@ -718,6 +738,24 @@ export async function forgetPassword(hostId: string): Promise<void> {
  *  secure+443 omits the port; everything else carries it. Exported for the
  *  session-authed helpers that must stay on the host's OWN origin (policy
  *  read, change-password — lib/password-rotation.ts). */
+/** `GET /cli/auth/whoami` on one saved host with `token` (the fresh login
+ *  the add-server flow holds): its `role`, or null when it didn't answer
+ *  one (prd-voice-chat-only-members-v1 §8.4). */
+export async function fetchHostWhoamiRole(host: ConnectHost, token: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${hostBaseUrl(host)}/cli/auth/whoami?token=${encodeURIComponent(token)}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!res.ok) return null
+    const body = (await res.json()) as { role?: unknown }
+    return typeof body?.role === 'string' && body.role.length > 0 ? body.role : null
+  } catch (err) {
+    console.warn('[add-server] whoami after sign-in failed:', err)
+    return null
+  }
+}
+
 export function hostBaseUrl(host: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>): string {
   const scheme = host.secure ? 'https' : 'http'
   const authority = host.secure && host.port === 443 ? host.hostname : `${host.hostname}:${host.port}`
@@ -1176,6 +1214,33 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     }
     if (prevKey !== null && prevKey !== newKey) fireSavedHostRekey(prevKey, newKey, host)
     return true
+  },
+
+  setHostAccess: (id, role) => {
+    const { hosts, activeHost } = get()
+    const access = accessForRole(role)
+    const patch = (h: ConnectHost): ConnectHost => {
+      if (access) return { ...h, access }
+      const { access: _drop, ...rest } = h
+      return rest
+    }
+    const prev = hosts.find((h) => h.id === id)
+    if (!prev) {
+      // The hosted web client's one same-origin host may be active without
+      // a saved entry: the hint still rides the active host.
+      if (activeHost !== 'local' && activeHost.id === id && activeHost.access !== access) {
+        set({ activeHost: patch(activeHost) })
+      }
+      return
+    }
+    if (prev.access === access) return
+    const next = hosts.map((h) => (h.id === id ? patch(h) : h))
+    persistHosts(next)
+    if (activeHost !== 'local' && activeHost.id === id) {
+      set({ hosts: next, activeHost: patch(activeHost) })
+    } else {
+      set({ hosts: next })
+    }
   },
 
   applyExternalHosts: (raw) => {

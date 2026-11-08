@@ -37,8 +37,10 @@ import {
   type ConnectHost,
   type ConnectionStatus,
 } from '@/stores/connect-host'
+import { VOICE_CHAT_LINE, hostIsVoiceChatOnly, isVoiceChatOnly, voiceChatAddedText } from '@/lib/voice-chat-only'
+import { VoiceChatOnlyChip } from '@/components/Voice/VoiceChatOnlyChip'
 import { homeHostKey } from '@/lib/host-key'
-import { abandonRotation, verifyHostCredentials } from '@/lib/add-server-login'
+import { abandonRotation, fetchWhoamiRole, verifyHostCredentials } from '@/lib/add-server-login'
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
 import { IconLock } from '@/components/icons/IconLock'
@@ -169,6 +171,8 @@ export function ConnectionsSection(): React.JSX.Element {
 
   const [draft, setDraft] = useState<DraftHost | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** §8.4: "Added <server>. It gives you Voice & Chat only…" after a save. */
+  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // W4: the add/edit form's credentials were accepted but the daemon
   // requires a new password first. The shared PasswordRotationStep replaces
@@ -305,6 +309,10 @@ export function ConnectionsSection(): React.JSX.Element {
         setError(outcome.reason)
         return
       }
+      if (outcome.kind === 'voice-chat-only') {
+        // §8.4: saved, never switched to; say where its rooms are.
+        setNotice(voiceChatAddedText(host.label || host.hostname))
+      }
       if (outcome.kind === 'rotate') {
         // Not signed in yet: hand over to the rotation step (inline). The
         // save completes from its onDone with the NEW password.
@@ -346,6 +354,13 @@ export function ConnectionsSection(): React.JSX.Element {
   // side with the NEW password — and close the form.
   const finishRotation = async (newPassword: string): Promise<void> => {
     if (!rotation) return
+    // §8.4: the role decides whether the new server is Voice & Chat only.
+    const fresh = useConnectHostStore.getState().hosts.find((h) => h.id === rotation.host.id)
+    if (fresh && fresh.token.length > 0) {
+      const role = await fetchWhoamiRole(fresh, fresh.token)
+      useConnectHostStore.getState().setHostAccess(fresh.id, role)
+      if (isVoiceChatOnly(role)) setNotice(voiceChatAddedText(fresh.label || fresh.hostname))
+    }
     if (rotation.remember) {
       const failure = await saveRememberedPassword(rotation.host.id, newPassword)
       if (failure) {
@@ -396,6 +411,17 @@ export function ConnectionsSection(): React.JSX.Element {
           )}
       </p>
 
+      {notice && (
+        <div
+          data-testid="connections-voice-chat-notice"
+          className="mb-3 px-3 py-2 border border-[var(--color-border)] text-[11px] text-[var(--color-text-secondary)] flex items-center justify-between gap-2"
+        >
+          <span>{notice}</span>
+          <button type="button" className={BTN_SECONDARY} onClick={() => setNotice(null)}>
+            OK
+          </button>
+        </div>
+      )}
       {isLocalActive ? (
       <>
       {draft ? (
@@ -794,6 +820,7 @@ function HostTile({
   onFederationPeersChanged?: () => void
 }): React.JSX.Element {
   const label = host.label || host.hostname
+  const voiceOnly = hostIsVoiceChatOnly(host)
   const creds = remoteCreds(host)
   const signedOut = creds.token.length === 0
   const signInForManagement = useConnectHostStore((s) => s.signInForManagement)
@@ -1226,7 +1253,10 @@ function HostTile({
           style={{ backgroundColor: isActive ? statusColor(connectionStatus) : 'var(--color-neutral)' }}
         />
         <div className="flex flex-col min-w-0">
-          <span className="text-xs text-[var(--color-text-primary)] truncate">{host.label}</span>
+          <span className="text-xs text-[var(--color-text-primary)] truncate flex items-center gap-1.5">
+            <span className="truncate">{host.label}</span>
+            {voiceOnly && <VoiceChatOnlyChip />}
+          </span>
           <span className="text-[10px] text-[var(--color-text-muted)] truncate flex items-center gap-1">
             {host.secure && <IconLock className="w-2.5 h-2.5 flex-shrink-0" />}
             {host.secure && host.port === 443 ? host.hostname : `${host.hostname}:${host.port}`}
@@ -1272,6 +1302,21 @@ function HostTile({
           <span className="text-[10px] text-[var(--color-text-muted)]">Sign in to manage this server</span>
           <button onClick={() => signInForManagement(host)} className={BTN_ACCENT}>
             Sign in
+          </button>
+        </div>
+      ) : voiceOnly ? (
+        // prd-voice-chat-only-members-v1 §8.2: the server never opens, and
+        // this login can't restart, update or pair it. Its rooms are in the
+        // headset; Sign out and Remove are all there is to do here.
+        <div className="flex items-center justify-between gap-2" data-testid="connections-voice-chat-only">
+          <span className="text-[10px] text-[var(--color-text-muted)]">{VOICE_CHAT_LINE}</span>
+          <button
+            type="button"
+            onClick={() => void signOutOfHost(host)}
+            className={BTN_SECONDARY}
+            title={`Sign out of ${label} on this computer. The saved password is kept.`}
+          >
+            Sign out
           </button>
         </div>
       ) : (

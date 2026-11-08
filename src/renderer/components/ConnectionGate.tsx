@@ -54,8 +54,11 @@ import {
   tokenNotAccepted,
   webBundleReloadUrl,
 } from '@/lib/boot-status-view'
-import { useConnectHostStore, activeHostKey, type ConnectHost } from '@/stores/connect-host'
-import { installHostSessionSync } from '@/lib/host-pool-instance'
+import { useConnectHostStore, activeHostKey, hostBaseUrl, type ConnectHost } from '@/stores/connect-host'
+import { hostPool, installHostSessionSync } from '@/lib/host-pool-instance'
+import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
+import { VoiceChatOnlyGate } from './VoiceChatOnlyGate'
+import { useVoiceOpenRequest } from '@/stores/voice-open-request'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { isWebClient } from '@/lib/is-web'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
@@ -819,7 +822,7 @@ export function classifyWhoamiStatus(httpStatus: number | null): SessionProbe {
  * Time-bounded by REMOTE_WHOAMI_TIMEOUT_MS so a network hiccup can never
  * hang the gate. Caller only acts on 'dead'.
  */
-async function probeRemoteSession(): Promise<SessionProbe> {
+async function probeRemoteSession(): Promise<{ probe: SessionProbe; role: string | null }> {
   try {
     const creds = await getDaemonWs(primaryScope())
     // Desktop: ?token=. Hosted web: cookie (credentials include) — omit query
@@ -835,11 +838,23 @@ async function probeRemoteSession(): Promise<SessionProbe> {
         signal: AbortSignal.timeout(REMOTE_WHOAMI_TIMEOUT_MS),
       }),
     )
-    return classifyWhoamiStatus(resp.status)
+    const probe = classifyWhoamiStatus(resp.status)
+    // vs-live V17: the body's `role` matters too (Voice & Chat only, §8.3).
+    return { probe, role: probe === 'alive' ? await whoamiRole(resp) : null }
   } catch {
     // Network error / timeout / abort — a blip, not an authoritative
     // "dead token". Do NOT expire the session on this.
-    return 'unknown'
+    return { probe: 'unknown', role: null }
+  }
+}
+
+/** whoami's `role`, or null when the body has none. */
+export async function whoamiRole(resp: Pick<Response, 'json'>): Promise<string | null> {
+  try {
+    const body = (await resp.json()) as { role?: unknown }
+    return typeof body?.role === 'string' && body.role.length > 0 ? body.role : null
+  } catch {
+    return null
   }
 }
 
@@ -1214,7 +1229,8 @@ export function ConnectionGate(): React.ReactElement {
         if (hasToken) {
           // Retry on 'unknown' so a real network blip resolves to 'alive'; a
           // token confirmed dead ('dead') short-circuits the loop immediately.
-          let probe = await probeRemoteSession()
+          let read = await probeRemoteSession()
+          let probe = read.probe
           for (
             let i = 0;
             probe === 'unknown' && i < FIRST_CONNECT_PROBE_RETRIES;
@@ -1224,7 +1240,8 @@ export function ConnectionGate(): React.ReactElement {
               setTimeout(r, FIRST_CONNECT_PROBE_RETRY_DELAY_MS),
             )
             if (cancelled) return
-            probe = await probeRemoteSession()
+            read = await probeRemoteSession()
+            probe = read.probe
           }
           if (cancelled) return
           if (probe !== 'alive') {
@@ -1242,6 +1259,10 @@ export function ConnectionGate(): React.ReactElement {
           } else {
             // 'alive' → keep the accept and mount as normal; the recovery
             // surface starts (or returns to) the healthy baseline.
+            // §8.3: whoami's role is the truth; a `voice_chat` answer sets
+            // the host's hint, and the render shows the gate screen
+            // instead of the app (anything else clears a stale hint).
+            useConnectHostStore.getState().setHostAccess(active.id, read.role)
             useConnectHostStore.getState().setRecovery({ kind: 'connected' })
           }
         }
@@ -1588,6 +1609,44 @@ export function ConnectionGate(): React.ReactElement {
       {ZenLayer && <ZenLayer key="zen-host" />}
     </>
   ) : null
+
+  // prd-voice-chat-only-members-v1 §8.3: a Voice & Chat only login never
+  // mounts the app on its server, in any window. The hint is written from
+  // whoami (first connect above, the pool on any `role_required`), and the
+  // screen re-reads it, so an upgrade back to Member opens the server.
+  if (activeHost !== 'local' && hostIsVoiceChatOnly(activeHost)) {
+    const host = activeHost
+    const web = isWebClient()
+    return (
+      <>
+        {roomsHost}
+        <VoiceChatOnlyGate
+          server={host.label || host.hostname}
+          web={web}
+          recheck={() => {
+            void hostPool.refreshRole(homeHostKey(host))
+          }}
+          onOpenVoiceRooms={() => {
+            useVoiceOpenRequest.getState().request()
+            useConnectHostStore.getState().pickHost('local')
+          }}
+          onSwitchToThisComputer={() => useConnectHostStore.getState().pickHost('local')}
+          onSignOut={async () => {
+            try {
+              await fetch(
+                withCliTokenQuery(`${hostBaseUrl(host)}/cli/auth/logout`, host.token),
+                withDaemonFetch({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+              )
+            } catch (err) {
+              console.warn('[connection-gate] logout failed:', err)
+            }
+            useConnectHostStore.getState().expireSession(host.id)
+          }}
+        />
+        {signInOverlay}
+      </>
+    )
+  }
 
   if (keepRemoteMounted) {
     const App = AppModule.default

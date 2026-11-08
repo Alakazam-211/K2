@@ -41,6 +41,9 @@ import { bootViewOf, isPartialBootView } from '@/lib/boot-status-view'
 import type { LoginCoordinator, LoginBlock } from '@/lib/host-login-coord'
 import type { PresenceActivity, PresenceWorkspace } from '@/lib/home-status'
 import type { ActivityDisplay } from '@/stores/session-events'
+import { isRoleRequired, isVoiceChatOnly } from '@/lib/voice-chat-only'
+
+export { isVoiceChatOnly }
 
 const DISPLAYS: ReadonlySet<string> = new Set(['working', 'monitoring', 'waiting', 'unverifiable', 'idle'])
 
@@ -210,6 +213,9 @@ export interface HostPoolDeps {
    *  scope and login (MS39). Throws on failure. */
   activate: (hostKey: string, projectId: string) => Promise<void>
   now: () => number
+  /** Voice & Chat only (§8.1): every role a whoami read for a saved server,
+   *  so the app can keep the host's non-secret hint. Omitted: nothing kept. */
+  noteRole?: (hostKey: string, role: string | null) => void
 }
 
 /** MS39: at most one `projects/activate` per (server, project) per 10 min. */
@@ -239,7 +245,8 @@ export function authNoteFor(block: LoginBlock | null, serverLabel: string, now: 
 }
 
 /** Roles that may open an agent on another server (MS83). Anything else —
- *  Viewer, or a role this app does not know — is "No access". */
+ *  Viewer, Voice & Chat only, or a role this app does not know — is "No
+ *  access". */
 export function roleAllowsRoom(role: string | null): boolean {
   if (role === null) return true
   return role === 'owner' || role === 'admin' || role === 'member'
@@ -294,6 +301,12 @@ export interface HostPool {
   check(hostKey: string, opts?: { bootOnly?: boolean }): Promise<HostEntry>
   /** One revive for a server whose login was refused (MS10). */
   revive(hostKey: string): Promise<ReviveResult>
+  /** Voice & Chat only (§7): a route answered 403 `role_required`, so this
+   *  login's role there changed. Re-read whoami with the saved token and
+   *  keep the role; never a revive, never a sign-in (the login is alive).
+   *  Single-flight per server. Works for the window's own server too.
+   *  Resolves to the role read, or null when whoami didn't answer one. */
+  refreshRole(hostKey: string): Promise<string | null>
   /** A daemon socket for this server closed with `code` (MS71). */
   noteSocketClose(hostKey: string, code: number): void
   /** Another window's login landed and this window re-read the token. */
@@ -460,7 +473,9 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
     } catch {
       return { kind: 'alive', role: null, mustChange: false }
     }
-    return { kind: 'alive', role: str(body.role), mustChange: body.mustChangePassword === true }
+    const role = str(body.role)
+    if (hostKey !== LOCAL_HOME_HOST && deps.noteRole) deps.noteRole(hostKey, role)
+    return { kind: 'alive', role, mustChange: body.mustChangePassword === true }
   }
 
   /** The automatic-login half of a revive (also used when no token is held
@@ -568,6 +583,24 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
     return p
   }
 
+  const refreshing = new Map<string, Promise<string | null>>()
+  const refreshRole = (hostKey: string): Promise<string | null> => {
+    const existing = refreshing.get(hostKey)
+    if (existing) return existing
+    const p = (async (): Promise<string | null> => {
+      const saved = hostKey === LOCAL_HOME_HOST ? null : savedHostForKey(deps.hosts(), hostKey)
+      if (!saved || saved.token.length === 0) return null
+      const who = await whoami(hostKey, baseOf(saved), saved.token)
+      if (who.kind !== 'alive') return null
+      write(hostKey, { role: who.role, ...(isVoiceChatOnly(who.role) ? { presence: null } : {}) })
+      return who.role
+    })().finally(() => {
+      refreshing.delete(hostKey)
+    })
+    refreshing.set(hostKey, p)
+    return p
+  }
+
   const loginHalf = async (hostKey: string, base: string, token: string, isLocal: boolean): Promise<void> => {
     const onDead = async (): Promise<void> => {
       if (isLocal) {
@@ -594,6 +627,12 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
       return
     }
     const role = who.kind === 'alive' ? who.role : read(hostKey).role
+    // §8.1: a Voice & Chat only login reads no presence (the daemon answers
+    // an empty compat body for older clients; a new client skips the call).
+    if (isVoiceChatOnly(role)) {
+      write(hostKey, { auth: 'ok', authNote: null, role, presence: null })
+      return
+    }
     let res: Response
     try {
       res = await deps.http(hostKey, withToken(base, '/cli/presence/summary', token), { method: 'GET' })
@@ -602,7 +641,23 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
       write(hostKey, who.kind === 'alive' ? { auth: 'ok', authNote: null, role, presence: null } : { presence: null })
       return
     }
-    if (res.status === 401 || res.status === 403) return onDead()
+    if (res.status === 403) {
+      // A role refusal is not a dead login (vs-live V3): re-read the role,
+      // never revive.
+      let text = ''
+      try {
+        text = await res.text()
+      } catch {
+        text = ''
+      }
+      if (isRoleRequired(res.status, text)) {
+        const fresh = await refreshRole(hostKey)
+        write(hostKey, { auth: 'ok', authNote: null, role: fresh ?? role, presence: null })
+        return
+      }
+      return onDead()
+    }
+    if (res.status === 401) return onDead()
     write(hostKey, { auth: 'ok', authNote: null, role })
     if (!res.ok) {
       // 404 = a server older than the summary route: live, no presence.
@@ -742,6 +797,7 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
       return p
     },
     revive,
+    refreshRole,
     noteSocketClose(hostKey, code) {
       const list = (closes.get(hostKey) ?? []).filter((c) => deps.now() - c.at <= KICK_EVIDENCE_WINDOW_MS)
       list.push({ code, at: deps.now() })

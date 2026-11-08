@@ -153,6 +153,12 @@ export const REPORTED_FEATURES = {
    *  `client_msg_id_reused`. The id is sent only to a server with it (an
    *  older one drops it); the pending bubble then matches by text. */
   'post-idempotency-v1': 'post-idempotency-v1',
+  /** prd-voice-chat-only-members-v1 (0.46.10): the server knows the
+   *  `voice_chat` login role ("Voice & Chat only"): `users/add` takes it,
+   *  `users/set-role` and `users/set-shares` accept it, and `GET /cli/users`
+   *  rows carry `shares`. Settings → Users and Access offers the role only
+   *  for a server with it. */
+  'voice-chat-role-v1': 'voice-chat-role-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

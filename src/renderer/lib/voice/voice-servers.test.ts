@@ -89,6 +89,26 @@ describe('voiceServers', () => {
     expect(lastSeenText(1000, 1000 + 3 * 60_000)).toBe('Offline · last seen 3 min ago')
   })
 
+  // prd-voice-chat-only-members-v1 §8.2: the headset is the one place a
+  // Voice & Chat only server shows: live, joinable, marked.
+  it('a Voice & Chat only login is listed live and marked; members are not', () => {
+    const out = voiceServers({
+      keys: ['sewlab.k2.dev', 'alpha.k2.dev'],
+      windowKey: 'local',
+      entries: {
+        'sewlab.k2.dev': entry('sewlab.k2.dev', { role: 'voice_chat' }),
+        'alpha.k2.dev': entry('alpha.k2.dev'),
+      },
+      labelOf,
+      reportedBefore: new Set(),
+    })
+    expect(out.map((s) => [s.label, s.kind, s.voiceChatOnly])).toEqual([
+      ['Alpha', 'live', false],
+      ['sewlab', 'live', true],
+    ])
+    expect(anyVoiceServer(out)).toBe(true)
+  })
+
   it('one server reached by two spellings is listed once', () => {
     const out = voiceServers({
       keys: ['sewlab.k2.dev', 'https://SEWLAB.k2.dev/'],

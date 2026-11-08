@@ -18,6 +18,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { EMPTY_NAV_TAGS, navTagsTooltip } from '@/lib/nav-project-tags'
 import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to'
 import { fetchClonePerms, pullAllowed, pushAllowed } from '@/lib/clone-permissions'
+import { openableHosts } from '@/lib/voice-chat-only'
 import ProjectAvatar from './ProjectAvatar'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { primaryScope } from '@/kessel/server-scope'
@@ -197,7 +198,8 @@ export default function IconRail(): React.JSX.Element {
       const clonePerms = await fetchClonePerms(primaryScope(), activeHost === 'local' ? 'local' : activeHost.id)
       if (activeHost === 'local' && hosts.length > 0 && pushAllowed(clonePerms)) {
         menuItems.push({ id: 'separator-clone', label: '', type: 'separator' })
-        for (const host of hosts) {
+        // §8.2: never a Voice & Chat only server.
+        for (const host of openableHosts(hosts)) {
           menuItems.push({ id: `clone-to:${host.id}`, label: `Clone to ${host.label}` })
         }
       } else if (activeHost !== 'local' && pullAllowed(clonePerms)) {

@@ -31,15 +31,19 @@ const HOST: ConnectHost = {
   lastConnectedAt: null,
 }
 
-function deps(login: LoginResult): AddServerLoginDeps & {
+function deps(login: LoginResult, role: string | null = 'member'): AddServerLoginDeps & {
   addHost: ReturnType<typeof vi.fn>
   removeHost: ReturnType<typeof vi.fn>
   loginToHost: ReturnType<typeof vi.fn>
+  whoamiRole: ReturnType<typeof vi.fn>
+  setHostAccess: ReturnType<typeof vi.fn>
 } {
   return {
     addHost: vi.fn(() => true),
     removeHost: vi.fn(),
     loginToHost: vi.fn(async () => login),
+    whoamiRole: vi.fn(async () => role),
+    setHostAccess: vi.fn(),
   }
 }
 
@@ -66,6 +70,25 @@ describe('verifyHostCredentials (add-server path)', () => {
     const out = await verifyHostCredentials(HOST, 'bad', true, d)
     expect(out).toEqual({ kind: 'error', reason: 'Invalid username or password.' })
     expect(d.removeHost).toHaveBeenCalledWith('new-1')
+  })
+
+  // prd-voice-chat-only-members-v1 §8.4: the role is read before the host
+  // counts as open; a Voice & Chat only answer is saved with the hint and
+  // never reported as signed in (the caller never switches to it).
+  it('a voice_chat whoami → voice-chat-only with the hint, never signed-in', async () => {
+    const d = deps({ ok: true, token: 'tok', mustChangePassword: false }, 'voice_chat')
+    const out = await verifyHostCredentials(HOST, 'pw', true, d)
+    expect(out).toEqual({ kind: 'voice-chat-only', token: 'tok' })
+    expect(d.whoamiRole).toHaveBeenCalledWith(HOST, 'tok')
+    expect(d.setHostAccess).toHaveBeenCalledWith('new-1', 'voice_chat')
+    expect(d.removeHost).not.toHaveBeenCalled()
+  })
+
+  it('a member whoami clears any old hint and is signed-in', async () => {
+    const d = deps({ ok: true, token: 'tok', mustChangePassword: false }, 'member')
+    const out = await verifyHostCredentials(HOST, 'pw', false, d)
+    expect(out).toEqual({ kind: 'signed-in', token: 'tok' })
+    expect(d.setHostAccess).toHaveBeenCalledWith('new-1', 'member')
   })
 
   it('failed login on an EDIT keeps the existing tile', async () => {

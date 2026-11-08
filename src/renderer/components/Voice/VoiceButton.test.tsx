@@ -275,6 +275,53 @@ describe('VoiceButton', () => {
     expect(overlayClaims()).toEqual([])
   })
 
+  // prd-voice-chat-only-members-v1 §8.2: the headset is the one place a
+  // Voice & Chat only server shows. Live, joinable, with the chip and the line.
+  it('a Voice & Chat only server is listed with its chip and line; the others are not marked', async () => {
+    h.entries = {
+      'zed.k2.dev': entry('zed.k2.dev'),
+      'sewlab.k2.dev': entry('sewlab.k2.dev', { role: 'voice_chat' }),
+    }
+    h.lists = {
+      'zed.k2.dev': { hosting: { state: 'ok', line: 'Voice rooms are on.', detail: null }, canManage: false, rev: 1, rooms: [] },
+      'sewlab.k2.dev': sewList,
+    }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getAllByTestId('voice-room')).toHaveLength(2))
+    const live = screen.getAllByTestId('voice-server').filter((s) => s.getAttribute('data-kind') === 'live')
+    const sections = [
+      live.find((s) => s.getAttribute('data-host') === 'zed.k2.dev'),
+      live.find((s) => s.getAttribute('data-host') === 'sewlab.k2.dev'),
+    ].map((s) => {
+      if (!s) throw new Error('missing a live section')
+      return s
+    })
+    const chips = screen.getAllByTestId('voice-chat-only-chip')
+    expect(chips).toHaveLength(1)
+    expect(sections[1].contains(chips[0])).toBe(true)
+    expect(chips[0].textContent).toBe('Voice & Chat only')
+    expect(chips[0].getAttribute('title')).toBe(
+      "Voice & Chat only. You can join this server's voice rooms. You can't open the server or talk to its agents.",
+    )
+    expect(sections[1].querySelector('[data-testid="voice-chat-only-line"]')?.textContent).toBe(chips[0].getAttribute('title'))
+    expect(sections[0].querySelector('[data-testid="voice-chat-only-chip"]')).toBeNull()
+    // Joinable like any room.
+    expect(sections[1].querySelectorAll('[data-testid="voice-join"]').length).toBeGreaterThan(0)
+  })
+
+  it("the gate screen's Open voice rooms opens the headset's list once it mounts", async () => {
+    const { useVoiceOpenRequest } = await import('@/stores/voice-open-request')
+    h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev', { role: 'voice_chat' }) }
+    h.lists = { 'sewlab.k2.dev': sewList }
+    act(() => voice.recompute())
+    act(() => useVoiceOpenRequest.getState().request())
+    render(<VoiceButton />)
+    await waitFor(() => expect(voice.store.getState().popoverOpen).toBe(true))
+    expect(useVoiceOpenRequest.getState().pending).toBe(false)
+  })
+
   it('lists This server first, then A to Z; occupied tooltip; join, the call on top, then leave', async () => {
     h.entries = {
       'zed.k2.dev': entry('zed.k2.dev', { auth: 'signin-required' }),

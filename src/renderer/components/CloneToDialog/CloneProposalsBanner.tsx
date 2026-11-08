@@ -17,6 +17,7 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { loadWhoami } from '@/lib/shared-whoami'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { openableHosts } from '@/lib/voice-chat-only'
 import { denyProposal, fetchOpenProposals, proposerName, type CloneProposal } from '@/lib/clone-proposals'
 
 /** The workspace part of a Thread address, or null for a non-workspace one. */
@@ -32,7 +33,8 @@ export function hostForTarget(hosts: readonly ConnectHost[], target: string): Co
   const t = target.trim().toLowerCase()
   if (!t || t === 'here') return null
   return (
-    hosts.find((h) => {
+    // A Voice & Chat only server is never a clone destination (§8.2).
+    openableHosts(hosts).find((h) => {
       const name = h.hostname.toLowerCase()
       return name === t || `${name}:${h.port}` === t
     }) ?? null

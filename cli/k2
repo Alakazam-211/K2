@@ -5413,14 +5413,12 @@ except Exception:
 # GH#8 — `talk`'s HITL DETECTION step. Calls the daemon's
 # /cli/terminal/classify over the peer's live screen and echoes the
 # verdict as "<is_hitl>|<source>" where <is_hitl> is `true`/`false`/`null`
-# and <source> is `fastpath`/`model`/`unavailable`. Empty on request
-# failure (caller treats empty as "not detected" → deliver).
+# and <source> is `fastpath`/`unavailable`. Empty on request failure
+# (caller treats empty as "not detected" → deliver).
 #
-# The "Use local LLM to detect HITL" setting (Settings → General, default
-# OFF) is read SERVER-SIDE by the endpoint: OFF ⇒ regex fast-path only
-# (a no-marker screen comes back `null|unavailable`); ON ⇒ regex + the
-# 1.5B model. `talk` keys ONLY on is_hitl==true to auto-scout; `false`
-# and `unavailable` both deliver (the agent already saw the screen).
+# The endpoint matches known prompt patterns only: a no-marker screen comes
+# back `null|unavailable`. `talk` keys ONLY on is_hitl==true to auto-scout;
+# `false` and `unavailable` both deliver (the agent already saw the screen).
 # Read-only; addresses the session by workspace[+agent], same as `read`.
 _talk_classify() {
     local target="$1" agent="$2" lines="$3"
@@ -5846,10 +5844,8 @@ EOF
 
     # ── 2b. AUTO-DETECT HITL (GH#8) ── before delivering, ask the daemon's
     # /cli/terminal/classify whether $target is sitting on a human-in-the-
-    # loop prompt. The "Use local LLM to detect HITL" setting (Settings →
-    # General, default OFF) is enforced SERVER-SIDE: OFF ⇒ regex fast-path
-    # only (no model ever runs; a no-marker screen returns `unavailable`),
-    # ON ⇒ regex + the bundled 1.5B model (catches unmarked HITLs).
+    # loop prompt. Detection matches known prompt patterns only; a
+    # no-marker screen returns `unavailable`.
     #
     #   • is_hitl == true  → AUTO-START the scout (surface the whole form,
     #     arrow-only / non-destructive) and HOLD the message — don't let it
@@ -44556,12 +44552,11 @@ HOW IT WORKS (pure ergonomics over read + msg)
      /cli/terminal/classify whether the peer is on a human-in-the-loop
      prompt. If so it AUTO-STARTS --scout (surfaces the whole form, non-
      destructive) and HOLDS your message instead of letting it get eaten;
-     answer with `--answers`/`--answer`, then re-run to deliver. The "Use
-     local LLM to detect HITL" setting (Settings → General, default OFF)
-     gates this: OFF = regex-only detection (no model runs), ON = regex +
-     the bundled 1.5B model (catches unmarked prompts). When nothing is
-     detected (or detection is unavailable) it delivers as normal — you
-     already saw the screen from step 1.
+     answer with `--answers`/`--answer`, then re-run to deliver. Detection
+     matches known prompt patterns (select menus, permission gates, trust
+     dialogs); a prompt with no known marker is not detected. When nothing
+     is detected it delivers as normal: you already saw the screen from
+     step 1.
   4. SENDS via the `k2 msg` path — unless --read-only. `talk` AUTO-WAKES
      a dormant canonical session by default (it's the explicit "interact
      now" verb): if the peer is asleep it resumes it, waits until READY,

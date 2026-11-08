@@ -1381,9 +1381,11 @@ fn drop_turn_tls(ctx: &Ctx) {
 }
 
 /// `sew media install --config-json <staged>` (install: the staged pin
-/// tarball; reconfigure: `--reconfigure`, no tarball). The TURN key never
-/// outlives the call on the helper's side.
-fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: bool, restart_now: bool) -> HResult<J> {
+/// tarball; reconfigure: `--reconfigure`, no tarball), plus `--node-ip ''`
+/// when the request clears the node IP (protocol 14,
+/// [`MediaRequest::sew_argv`]). The TURN key never outlives the call on the
+/// helper's side.
+pub(crate) fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: bool, restart_now: bool) -> HResult<J> {
     let turn = match (&req.turn_cert_pem, &req.turn_key_pem) {
         (Some(c), Some(k)) => Some(put_turn_tls(ctx, c, k)?),
         _ => None,
@@ -1396,14 +1398,8 @@ fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: 
             return Err(e);
         }
     };
-    let mut args = vec!["media", "install"];
-    if reconfigure {
-        args.push("--reconfigure");
-        if restart_now {
-            args.extend(["--restart", "--now"]);
-        }
-    }
-    args.extend(["--config-json", path.as_str()]);
+    let argv = req.sew_argv(reconfigure, restart_now, &path);
+    let args: Vec<&str> = argv.iter().map(String::as_str).collect();
     let res = run_sew(ctx, &args, None);
     let _ = remove_file(ctx, SEW_STAGE_MEDIA_JSON);
     drop_turn_tls(ctx);

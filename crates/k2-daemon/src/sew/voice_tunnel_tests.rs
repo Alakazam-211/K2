@@ -31,8 +31,9 @@ struct T {
     _db: k2_core::db::TestDbGuard,
 }
 
-/// A box with chat running, root helper protocol 12 (sewtunnel), Sew
-/// listing `turn_relay_only` and `voice_media_path`, the preview on.
+/// A box with chat running, root helper protocol 14 (sewtunnel and
+/// sewtunnelclear), Sew listing `turn_relay_only` and `voice_media_path`, the
+/// preview on.
 fn t() -> T {
     let ops = FakeOps::new();
     ops.files.lock().unwrap().insert(TARBALL.into(), fixture("sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz"));
@@ -47,7 +48,7 @@ fn t() -> T {
     };
     enable_machine(&env, &req).expect("enable");
     drop(latch);
-    t.helper(12, true);
+    t.helper(14, true);
     t.features(&[FEATURE_TURN_RELAY_ONLY, media_path::FEATURE_VOICE_MEDIA_PATH]);
     t.ops.set_tier(Some("pro"));
     *t.ops.tunnel_preview.lock().unwrap() = true;
@@ -60,9 +61,11 @@ impl T {
     fn env(&self) -> Env<'_> {
         Env { ops: &self.ops, secrets: &self.secrets, latch: &self.latch, token: &self.token }
     }
+    /// `sewtunnelclear` comes with `sewtunnel` from protocol 14 on.
     fn helper(&self, protocol: u32, sewtunnel: bool) {
         let mut h = helper_ok(protocol, true, k2_root_proto::sew::pinned().version);
         h.version_json.as_mut().unwrap()["namespaces"]["sewtunnel"] = json!(sewtunnel);
+        h.version_json.as_mut().unwrap()["namespaces"]["sewtunnelclear"] = json!(sewtunnel && protocol >= 14);
         *self.ops.helper.lock().unwrap() = h;
     }
     fn features(&self, f: &[&str]) {
@@ -187,8 +190,9 @@ fn a_helper_on_another_sew_pin_stops_the_tunnel_tier_cleanly() {
     t.install().expect("direct install");
     *t.ops.tunnel_preview.lock().unwrap() = true;
     t.ops.clear();
-    let mut h = helper_ok(12, true, "0.6.1");
+    let mut h = helper_ok(14, true, "0.6.1");
     h.version_json.as_mut().unwrap()["namespaces"]["sewtunnel"] = json!(true);
+    h.version_json.as_mut().unwrap()["namespaces"]["sewtunnelclear"] = json!(true);
     *t.ops.helper.lock().unwrap() = h;
     let e = set_tier_named(&t.env(), "tunnel").expect_err("another pin");
     assert_eq!(e.code, "helper_outdated", "{}", e.hint);
@@ -223,16 +227,34 @@ fn a_tunnel_install_publishes_no_ip_and_hands_sew_relay_only_passthrough() {
     assert_eq!(m["turn_domain"], "turn.lumon.k2.dev");
     assert_eq!(m["relay_only"], true);
     assert_eq!(m["bind_v4"], "127.0.0.1", "media sockets off the network");
-    assert!(m.get("node_ip").is_none(), "no node IP: Sew writes 127.0.0.1 itself: {m}");
-    assert!(m.get("turn_advertise_port").is_none(), "Sew's passthrough default (443): {m}");
+    assert!(m.get("node_ip").is_none(), "no node IP key: the helper clears it on argv: {m}");
+    // The three clears of direct mode's leftovers (Sew 0.8.2), on a first
+    // install too: the listener's own port, IPv6 off, no node IP.
+    assert_eq!((m["turn_advertise_port"].as_u64(), m["bind_v6"].as_str(), m["clear_node_ip"].as_bool()), (Some(0), Some(""), Some(true)), "{m}");
     // Sew's `MediaInstallInputs` refuses anything else (exit 2): the exact keys.
     assert_eq!(
         keys_of(&m),
-        ["bind_v4", "public_url", "relay_only", "sysctl", "tcp_port", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls", "udp_port"],
+        [
+            "bind_v4",
+            "bind_v6",
+            "clear_node_ip",
+            "public_url",
+            "relay_only",
+            "sysctl",
+            "tcp_port",
+            "turn_advertise_port",
+            "turn_cert_pem",
+            "turn_domain",
+            "turn_key_pem",
+            "turn_tls",
+            "udp_port"
+        ],
         "{m}"
     );
     let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(m).expect("the helper's MediaRequest parses it");
-    req.validate().expect("valid for protocol 12");
+    req.validate().expect("valid for protocol 14");
+    let argv = t.ops.media_argv.lock().unwrap().last().cloned().expect("Sew ran");
+    assert_eq!(argv, ["media", "install", "--config-json", "/stage/media.json", "--node-ip", ""], "Sew gets --node-ip ''");
 
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true], "the voice lane is armed");
     assert_eq!(t.ops.served_connects.lock().unwrap().last().map(String::as_str), Some("turn.lumon.k2.dev"));
@@ -323,7 +345,13 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     let r = t.stdin_of(RECONF);
     assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("passthrough"), Some("turn.lumon.k2.dev"), Some(true)));
     assert_eq!(r["bind_v4"], "127.0.0.1");
-    assert_eq!(keys_of(&r), ["bind_v4", "relay_only", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"], "{r}");
+    // Exactly the tunnel keys plus the three clears (Sew 0.8.2).
+    assert_eq!(
+        keys_of(&r),
+        ["bind_v4", "bind_v6", "clear_node_ip", "relay_only", "turn_advertise_port", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"],
+        "{r}"
+    );
+    assert_eq!((r["turn_advertise_port"].as_u64(), r["bind_v6"].as_str(), r["clear_node_ip"].as_bool()), (Some(0), Some(""), Some(true)), "{r}");
     assert!(t.ops.cp_log().contains(&"DELETE /turn/dns/lumon".to_string()), "the box IP leaves DNS: {:?}", t.ops.cp_log());
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true]);
 
@@ -340,6 +368,7 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("direct"), Some("turn-lumon.k2.dev"), Some(false)));
     assert_eq!(r["node_ip"], "203.0.113.7");
     assert_eq!(r["bind_v4"], "0.0.0.0", "media sockets back on the network");
+    assert_eq!(r["turn_advertise_port"], 5349, "the direct tier's TURN port");
     assert_eq!(
         keys_of(&r),
         ["bind_v4", "node_ip", "relay_only", "turn_advertise_port", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"],
@@ -493,7 +522,7 @@ fn a_tunnel_upgrade_closes_the_ipv6_bind_after_the_engine_upgrade() {
     assert!(up < media && media < reconf && reconf < doctor, "{fx:?}");
     let body = t.stdin_of(RECONF);
     assert_eq!((body["relay_only"].as_bool(), body["bind_v4"].as_str(), body["turn_tls"].as_str()), (Some(true), Some("127.0.0.1"), Some("passthrough")), "{body}");
-    assert!(body.get("bind_v6").is_none(), "Sew rewrites the bind itself: {body}");
+    assert_eq!((body["bind_v6"].as_str(), body["clear_node_ip"].as_bool()), (Some(""), Some(true)), "the clears go with every tunnel reconfigure: {body}");
 }
 
 /// A direct box skips the step (Sew: it listens publicly on purpose).
@@ -524,14 +553,181 @@ fn a_hand_set_ipv6_bind_is_named_and_the_upgrade_stands() {
     assert_eq!(crate::sew::store::load().unwrap().installed_version.as_deref(), Some(k2_root_proto::sew::pinned().version));
 }
 
+/// Sew's exit 78 is "config refused" (Sew 0.8.2 gives no machine-readable
+/// reason): its last stderr line goes into the hint verbatim. Only a line
+/// naming `bind_v6` is the bind refusal, only one about relay-only and
+/// passthrough the relay-only one.
 #[test]
-fn exit_78_is_told_apart_by_what_sew_names() {
-    let bind = rebind_refusal("sew media reconfigure restart-now: exit 78: voice.ops.bind_v6 must be \"\" or \"::1\" in tunnel mode".into());
+fn exit_78_is_told_apart_by_what_sews_last_line_names() {
+    const TAIL: &[&str] = &["media", "reconfigure", "restart-now"];
+    let ans = |stderr: &str| json!({"sewExit": 78, "sew": null, "stderrTail": stderr, "reason": stderr});
+    let node = "sew-media: config: media.net.node_ip: 135.148.103.182 is a local address but the socket is bound to 127.0.0.1";
+    let f = exit_refusal(TAIL, 78, &ans(&format!("sew: checking the new media settings\n{node}\n")), "media_reconfigure_failed");
+    assert_eq!((f.code, f.status), ("sew_config_refused", 409), "{}", f.hint);
+    assert!(f.hint.ends_with(&format!("Sew said: {node}")), "the line, verbatim: {}", f.hint);
+    assert!(f.hint.contains("Nothing changed"), "{}", f.hint);
+    assert!(!f.hint.contains("relay-only needs"), "not the relay-only story: {}", f.hint);
+    assert_eq!(f.extra.as_ref().unwrap()["sewSaid"], node);
+    // The bind refusal: the line names bind_v6.
+    let bind = exit_refusal(TAIL, 78, &ans("sew-media: config: voice.ops.bind_v6: \"2001:db8::1\" is not allowed in tunnel mode"), "x");
     assert_eq!((bind.code, bind.status), ("sew_tunnel_bind_refused", 409));
-    assert!(bind.hint.contains("voice.ops.bind_v6") && bind.hint.contains("k2 hostchat media rebind"), "{}", bind.hint);
-    let relay = rebind_refusal("sew media reconfigure restart-now: exit 78: relay_only requires turn tier passthrough".into());
-    assert_eq!(relay.code, "sew_relay_only_refused");
-    assert_eq!(rebind_refusal("sew media reconfigure restart-now: exit 2: bad key".into()).code, "media_reconfigure_failed");
+    assert!(
+        bind.hint.contains("voice.ops.bind_v6") && bind.hint.contains("k2 hostchat media rebind") && bind.hint.contains("2001:db8::1"),
+        "{}",
+        bind.hint
+    );
+    // The relay-only refusal: the line says relay-only and passthrough.
+    for line in ["sew: config: relay_only requires turn tier passthrough", "sew-media: config: voice.ops.ice_relay_only: relay-only needs turn_tls passthrough"] {
+        assert_eq!(exit_refusal(TAIL, 78, &ans(line), "x").code, "sew_relay_only_refused", "{line}");
+    }
+    // Relay-only without passthrough in the line is just a config refusal.
+    assert_eq!(config_refusal("sew-media: config: voice.ops.ice_relay_only: must be a boolean").code, "sew_config_refused");
+    // No stderr: the helper's reason, last line.
+    let r = exit_refusal(TAIL, 78, &json!({"sewExit": 78, "reason": "first\nsew: config: turn_domain: not a hostname"}), "x");
+    assert!(r.hint.ends_with("Sew said: sew: config: turn_domain: not a hostname"), "{}", r.hint);
+    // Any other exit keeps the caller's code.
+    let two = exit_refusal(TAIL, 2, &json!({"sewExit": 2, "reason": "bad key"}), "media_reconfigure_failed");
+    assert_eq!((two.code, two.status), ("media_reconfigure_failed", 500));
+    assert!(two.hint.contains("exit 2: bad key"), "{}", two.hint);
+}
+
+/// What a Sew 0.6.0 direct install leaves in Sew's media settings.
+fn leftovers() -> serde_json::Map<String, Value> {
+    json!({
+        "turn_tls": "direct", "turn_domain": "turn-lumon.k2.dev", "relay_only": false, "bind_v4": "0.0.0.0",
+        "node_ip": "135.148.103.182", "turn_advertise_port": 5349, "bind_v6": "::",
+    })
+    .as_object()
+    .cloned()
+    .unwrap()
+}
+
+/// A direct install, then the preview on and Sew's media settings modelled
+/// as direct mode left them.
+fn direct_with_leftovers() -> T {
+    let t = t();
+    *t.ops.tunnel_preview.lock().unwrap() = false;
+    t.install().expect("direct install");
+    *t.ops.tunnel_preview.lock().unwrap() = true;
+    *t.ops.media_conf.lock().unwrap() = Some(leftovers());
+    t.ops.clear();
+    t.ops.cp_calls.lock().unwrap().clear();
+    t.ops.media_argv.lock().unwrap().clear();
+    t
+}
+
+/// A box that ran voice direct (Sew 0.6.0) and was upgraded keeps direct
+/// mode's settings: Sew's reconfigure merges. The move to the tunnel clears
+/// them: Sew gets `--node-ip ''` on argv, `turn_advertise_port: 0` and
+/// `bind_v6: ""` in the JSON, and the move goes through. The way back to
+/// direct is as it was.
+#[test]
+fn a_box_with_direct_modes_leftovers_moves_to_the_tunnel() {
+    let t = direct_with_leftovers();
+    let v = set_tier_named(&t.env(), "tunnel").unwrap_or_else(|e| panic!("{}: {}", e.code, e.hint));
+    assert_eq!((v["turnTier"].as_str(), v["changed"].as_bool()), (Some("tunnel"), Some(true)), "{v}");
+    let argv = t.ops.media_argv.lock().unwrap().last().cloned().expect("Sew ran");
+    assert_eq!(
+        argv,
+        ["media", "install", "--reconfigure", "--restart", "--now", "--config-json", "/stage/media.json", "--node-ip", ""],
+        "--node-ip '' beside the JSON"
+    );
+    let r = t.stdin_of(RECONF);
+    assert_eq!((r["turn_advertise_port"].as_u64(), r["bind_v6"].as_str()), (Some(0), Some("")), "{r}");
+    assert!(r.get("node_ip").is_none(), "never the key with the flag: {r}");
+    let conf = t.ops.media_conf.lock().unwrap().clone().unwrap();
+    assert!(conf.get("node_ip").is_none(), "the node IP is gone: {conf:?}");
+    assert_eq!(
+        (conf["turn_advertise_port"].as_u64(), conf["bind_v6"].as_str(), conf["relay_only"].as_bool(), conf["bind_v4"].as_str()),
+        (Some(0), Some(""), Some(true), Some("127.0.0.1")),
+        "{conf:?}"
+    );
+    assert_eq!(voice::tier(&load(&t.env())), "tunnel");
+
+    // The way back to direct: node IP, relay-only off, every interface,
+    // 5349; no clears.
+    t.ops.clear();
+    t.ops.media_argv.lock().unwrap().clear();
+    set_tier_named(&t.env(), TIER_DIRECT).expect("to direct");
+    let back = t.stdin_of(RECONF);
+    assert_eq!(
+        (back["node_ip"].as_str(), back["relay_only"].as_bool(), back["bind_v4"].as_str(), back["turn_advertise_port"].as_u64()),
+        (Some("203.0.113.7"), Some(false), Some("0.0.0.0"), Some(5349)),
+        "{back}"
+    );
+    assert!(back.get("bind_v6").is_none() && back.get("clear_node_ip").is_none(), "{back}");
+    assert!(!t.ops.media_argv.lock().unwrap()[0].iter().any(|a| a == "--node-ip"), "no --node-ip on the way back");
+    let conf = t.ops.media_conf.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        (conf["node_ip"].as_str(), conf["turn_advertise_port"].as_u64(), conf["relay_only"].as_bool()),
+        (Some("203.0.113.7"), Some(5349), Some(false)),
+        "{conf:?}"
+    );
+}
+
+/// A Sew that predates the clears gets today's tunnel keys, so a box with
+/// direct mode's node IP is refused: `sew_config_refused`, Sew's line
+/// verbatim, nothing changed, and how to get past it.
+#[test]
+fn a_node_ip_refusal_is_a_config_refusal_with_sews_line() {
+    let t = direct_with_leftovers();
+    *t.ops.mgmt_version.lock().unwrap() = Some("0.0.1".into());
+    let e = set_tier_named(&t.env(), "tunnel").expect_err("refused");
+    assert_eq!((e.code, e.status), ("sew_config_refused", 409), "{}", e.hint);
+    let line = "sew-media: config: media.net.node_ip: 135.148.103.182 is a local address but the socket is bound to 127.0.0.1";
+    assert!(e.hint.contains(&format!("Sew said: {line}")) && e.hint.contains("Nothing changed"), "{}", e.hint);
+    assert!(!e.hint.contains("relay-only needs"), "{}", e.hint);
+    assert!(e.hint.contains("k2 hostchat upgrade"), "{}", e.hint);
+    assert!(t.stdin_of(RECONF).get("clear_node_ip").is_none(), "this Sew got no clears");
+    assert_eq!(*t.ops.media_conf.lock().unwrap(), Some(leftovers()), "Sew kept nothing");
+    assert_eq!(voice::tier(&load(&t.env())), "direct");
+}
+
+/// A new daemon on a root helper older than protocol 14 (no
+/// `sewtunnelclear`): every move to the tunnel stops before anything runs,
+/// and says to update the helper. Nothing is half-applied.
+#[test]
+fn a_helper_without_the_clears_refuses_every_tunnel_move_cleanly() {
+    let ran = |t: &T| t.ops.calls.lock().unwrap().iter().any(|c| c.argv.contains("engine sew media"));
+
+    // Direct → tunnel.
+    let t = direct_with_leftovers();
+    t.helper(13, true);
+    let e = set_tier_named(&t.env(), "tunnel").expect_err("old helper");
+    assert_eq!((e.code, e.status), ("helper_outdated", 409), "{}", e.hint);
+    assert!(e.hint.contains("protocol 14") && e.hint.contains("Nothing changed"), "{}", e.hint);
+    assert!(!ran(&t), "nothing reached Sew");
+    assert!(t.ops.cp_log().is_empty(), "no cert, no DNS change: {:?}", t.ops.cp_log());
+    assert_eq!(*t.ops.media_conf.lock().unwrap(), Some(leftovers()));
+    assert_eq!(voice::tier(&load(&t.env())), "direct");
+
+    // A fresh tunnel install: the preflight names it.
+    let t2 = self::t();
+    t2.helper(13, true);
+    let e = t2.install().expect_err("old helper");
+    assert_eq!(e.code, "preflight_failed", "{}", e.hint);
+    let report = e.extra.unwrap()["report"].clone();
+    let tt = report.as_array().unwrap().iter().find(|c| c["id"] == "tunnel_tier").cloned().unwrap();
+    assert_eq!(tt["detail"], "helper_outdated", "{report}");
+    assert!(!ran(&t2), "nothing reached Sew");
+
+    // The rebind of a tunnel box.
+    let t3 = self::t();
+    t3.install().expect("tunnel install");
+    t3.helper(13, true);
+    t3.ops.clear();
+    let e = rebind(&t3.env()).expect_err("old helper");
+    assert_eq!(e.code, "helper_outdated", "{}", e.hint);
+    assert!(!ran(&t3), "nothing reached Sew");
+
+    // Below the clears' Sew a 13 helper still moves voice, with today's keys.
+    let t4 = direct_with_leftovers();
+    *t4.ops.media_conf.lock().unwrap() = None;
+    t4.helper(13, true);
+    *t4.ops.mgmt_version.lock().unwrap() = Some("0.0.1".into());
+    set_tier_named(&t4.env(), "tunnel").unwrap_or_else(|e| panic!("{}: {}", e.code, e.hint));
+    let r = t4.stdin_of(RECONF);
+    assert_eq!(keys_of(&r), ["bind_v4", "relay_only", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"], "{r}");
 }
 
 /// `sew doctor`'s `media.tunnel_bind`: ok passes; anything else, or no row
@@ -581,7 +777,11 @@ fn the_owner_command_rebinds_a_tunnel_box_only() {
 }
 
 #[test]
-fn the_real_gate_is_sew_0_7_4() {
+fn the_real_gates_are_sew_0_7_4_and_0_8_2() {
+    assert_eq!(TUNNEL_CLEARS_MIN_SEW, "0.8.2", "Sew confirmed the clears on 0.8.2");
+    for (v, yes) in [("0.8.2", true), ("0.8.2+g1", true), ("0.9.0", true), ("0.8.1", false), ("0.7.4", false), ("", false)] {
+        assert_eq!(at_least(v, TUNNEL_CLEARS_MIN_SEW), yes, "{v}");
+    }
     assert_eq!(TUNNEL_BIND_MIN_SEW, "0.7.4");
     for (v, yes) in [("0.7.4", true), ("0.8.0", true), ("0.8.0+g0507cb9", true), ("0.7.3", false), ("0.6.1", false), ("", false)] {
         assert_eq!(at_least(v, TUNNEL_BIND_MIN_SEW), yes, "{v}");

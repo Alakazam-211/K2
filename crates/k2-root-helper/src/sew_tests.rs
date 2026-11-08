@@ -92,7 +92,8 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     let v = json(&o);
     // 7 brought `engine sew`; 8 is 0.46.1's helper changes (protocols are
     // additive, so the Sew namespace is still here).
-    assert_eq!(v["protocol"], 13, "12 was 0.46.8's one bump; 13 is 0.46.9's (additive)");
+    assert_eq!(v["protocol"], 14, "13 was 0.46.9's one bump; 14 is 0.46.10's (additive)");
+    assert_eq!(v["namespaces"]["sewtunnelclear"], true, "the tunnel move's clears (0.46.10)");
     assert_eq!(v["namespaces"]["sewboxbackup"], true, "box-backup (0.46.9)");
     assert_eq!(v["namespaces"]["sewreconf"], true, "install reconfigure (0.46.6)");
     assert_eq!(v["namespaces"]["sewtunnel"], true, "the voice tunnel's media keys (0.46.8)");
@@ -1950,6 +1951,55 @@ fn media_reconfigure_carries_the_tunnel_keys() {
             "profile": "shared",
         })
     );
+}
+
+/// Protocol 14 (0.46.10, Sew 0.8.2): a move to the tunnel tier clears direct
+/// mode's leftovers. Sew gets `--node-ip ''` on argv beside the staged JSON,
+/// and `bind_v6: ""` and `turn_advertise_port: 0` in it, never a `node_ip`
+/// key. The clears are refused before Sew runs anywhere but on a relay-only
+/// passthrough request.
+#[test]
+fn media_reconfigure_clears_direct_modes_leftovers_on_a_tunnel_move() {
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"changed":["/etc/sew/media.toml"],"warnings":[]}"#);
+    let seen = capture_turn_files(&t);
+    for bad in [
+        &br#"{"turn_tls":"passthrough","relay_only":true,"bind_v6":"::"}"#[..],
+        br#"{"turn_tls":"direct","relay_only":false,"bind_v6":""}"#,
+        br#"{"turn_tls":"passthrough","relay_only":true,"clear_node_ip":false}"#,
+        br#"{"turn_tls":"passthrough","relay_only":true,"clear_node_ip":true,"node_ip":"203.0.113.7"}"#,
+        br#"{"turn_tls":"direct","relay_only":false,"clear_node_ip":true}"#,
+        br#"{"clear_node_ip":true}"#,
+    ] {
+        assert_eq!(t.call_in(&["engine", "sew", "media", "reconfigure", "restart-now"], bad).code, exit::ARGV, "{}", String::from_utf8_lossy(bad));
+    }
+    let body = serde_json::json!({
+        "turn_tls": "passthrough", "turn_domain": "turn.box.k2.dev", "relay_only": true, "bind_v4": "127.0.0.1",
+        "turn_advertise_port": 0, "bind_v6": "", "clear_node_ip": true,
+        "turn_cert_pem": TEST_CERT, "turn_key_pem": TEST_KEY,
+    });
+    // Through the door the request passes validation and stops only at the
+    // passthrough gate (this fixture Sew, 0.0.2, predates the tier).
+    let o = t.call_in(&["engine", "sew", "media", "reconfigure", "restart-now"], body.to_string().as_bytes());
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("sew_passthrough_unsupported"), "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty());
+    // What a Sew that knows the tier is handed.
+    let req: MediaRequest = serde_json::from_value(body).unwrap();
+    req.validate_reconfigure().unwrap();
+    let v = crate::sew::media_run(&t.ctx, &req, None, true, true).expect("ran");
+    assert_eq!(v["sewExit"], 0, "{v}");
+    let path = t.p(SEW_STAGE_MEDIA_JSON).display().to_string();
+    assert_eq!(
+        sew_calls(&t)[0].0,
+        vec!["media", "install", "--reconfigure", "--restart", "--now", "--config-json", path.as_str(), "--node-ip", "", "--json"]
+    );
+    let j: serde_json::Value = serde_json::from_str(&seen.borrow()[0].2).unwrap();
+    assert_eq!(j["bind_v6"], "", "{j}");
+    assert_eq!(j["turn_advertise_port"], 0, "{j}");
+    assert!(j.get("node_ip").is_none() && j.get("clear_node_ip").is_none(), "Sew refuses the flag with the key: {j}");
+    assert!(!t.p(SEW_STAGE_MEDIA_JSON).exists() && !t.p(SEW_STAGE_TURN_KEY).exists(), "nothing left staged");
 }
 
 /// Protocol 12 (SW-8): `engine sew mirror-dir` makes the keyring mirror

@@ -185,14 +185,14 @@ pub fn sew_warnings(v: &Value) -> Vec<String> {
 }
 
 /// Sew's exit code from an `engine sew` answer (`None` = not a Sew run).
-fn sew_exit(v: &Value) -> Option<i64> {
+pub(crate) fn sew_exit(v: &Value) -> Option<i64> {
     v.get("sewExit").and_then(Value::as_i64)
 }
 
 /// Why Sew said no, never empty: the helper's `reason` (protocol 8: Sew's
 /// `--json` error message, else its stderr, else its stdout), else the
 /// same fields read here (an older helper), else the bare exit code.
-fn sew_message(v: &Value) -> String {
+pub(crate) fn sew_message(v: &Value) -> String {
     let field = |p: &str| v.pointer(p).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let m = field("/reason")
         .or_else(|| field("/sew/error/message"))

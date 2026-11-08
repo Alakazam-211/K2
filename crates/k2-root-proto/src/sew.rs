@@ -2344,6 +2344,23 @@ pub struct MediaRequest {
     /// (exit 2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_trusted_cidrs: Option<Vec<String>>,
+    /// Protocol 14 (0.46.10, `namespaces.sewtunnelclear`; a 13 helper refuses
+    /// the key): Sew's `--bind-v6`, sent on a move to the tunnel tier to clear
+    /// direct mode's `"::"`. Only ever `""` (IPv6 off), and only with
+    /// `relay_only: true` and `turn_tls: passthrough` in the same request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_v6: Option<String>,
+    /// Protocol 14: clear the node IP a direct-mode install left in Sew's
+    /// media settings. Sew 0.8.2 refuses `"node_ip": ""` in the JSON (and
+    /// `null` keeps the old value), so the helper says it on argv instead,
+    /// next to the JSON: `--node-ip ''` (an empty list: no node IP). Never in
+    /// Sew's JSON ([`MediaRequest::sew_inputs`] drops it). Only `true`, never
+    /// with `node_ip`, and only with `relay_only: true` and `turn_tls:
+    /// passthrough` (the tunnel tier, where a node IP other than loopback is
+    /// a config error: `media.net.node_ip: … is a local address but the
+    /// socket is bound to 127.0.0.1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_node_ip: Option<bool>,
 }
 
 /// The tunnel tier's PROXY sources: frpc-voice dials sew-media from loopback.
@@ -2363,8 +2380,14 @@ pub fn sew_takes_trusted_cidrs(version: &str) -> bool {
 pub const MEDIA_BIND_LOOPBACK: &str = "127.0.0.1";
 /// sew-media's media sockets on every interface (Sew's default; direct).
 pub const MEDIA_BIND_ANY: &str = "0.0.0.0";
-/// Sew's exit code when relay-only meets TURN tier `plain` or `off`.
-pub const SEW_EXIT_RELAY_ONLY_REFUSED: i64 = 78;
+/// Sew's exit code when `sew-media --check-config` refuses the media
+/// settings (EX_CONFIG): relay-only with TURN tier `plain` or `off`, a node
+/// IP the loopback-bound tunnel tier can't use, a hand-set IPv6 bind… Sew
+/// 0.8.2 gives no machine-readable reason: its last stderr line
+/// (`sew-media: config: <key>: <why>` or `sew: config: …`) says which.
+pub const SEW_EXIT_CONFIG_REFUSED: i64 = 78;
+/// The old name of [`SEW_EXIT_CONFIG_REFUSED`] (it is not only relay-only).
+pub const SEW_EXIT_RELAY_ONLY_REFUSED: i64 = SEW_EXIT_CONFIG_REFUSED;
 
 /// What `sew media install --config-json` accepts: Sew's own
 /// `MediaInstallInputs` as K2 knows it (sew-proto at v0.7.1),
@@ -2490,12 +2513,60 @@ impl MediaRequest {
                 return Err("media refused: turn_trusted_cidrs needs turn_tls passthrough");
             }
         }
+        // Protocol 14: direct mode's leftovers are cleared only on a move to
+        // the tunnel tier (relay-only passthrough), and only to "none".
+        let tunnel = self.relay_only == Some(true) && self.turn_tls.as_deref() == Some("passthrough");
+        if let Some(b) = &self.bind_v6 {
+            if !b.is_empty() {
+                return Err("media refused: bind_v6");
+            }
+            if !tunnel {
+                return Err("media refused: bind_v6 needs relay_only with turn_tls passthrough");
+            }
+        }
+        if let Some(c) = self.clear_node_ip {
+            if !c {
+                return Err("media refused: clear_node_ip");
+            }
+            if self.node_ip.is_some() {
+                return Err("media refused: clear_node_ip with node_ip");
+            }
+            if !tunnel {
+                return Err("media refused: clear_node_ip needs relay_only with turn_tls passthrough");
+            }
+        }
         Ok(())
     }
 
     /// The request carries a protocol-12 key (the voice tunnel's).
     pub fn needs_tunnel_keys(&self) -> bool {
         self.relay_only.is_some() || self.bind_v4.is_some() || self.turn_trusted_cidrs.is_some()
+    }
+
+    /// The request carries a protocol-14 key (a tunnel move's clears of
+    /// direct mode's leftovers).
+    pub fn needs_tunnel_clears(&self) -> bool {
+        self.bind_v6.is_some() || self.clear_node_ip.is_some()
+    }
+
+    /// `sew media install …` for this request, around the staged
+    /// `--config-json` path (the helper appends its own `--json`): install,
+    /// or `--reconfigure` (with `--restart --now` when asked), then
+    /// `--node-ip ''` when the request clears the node IP (Sew 0.8.2: the
+    /// flag beside the JSON, never the key in it).
+    pub fn sew_argv(&self, reconfigure: bool, restart_now: bool, config_json: &str) -> Vec<String> {
+        let mut a: Vec<String> = vec!["media".into(), "install".into()];
+        if reconfigure {
+            a.push("--reconfigure".into());
+            if restart_now {
+                a.extend(["--restart".into(), "--now".into()]);
+            }
+        }
+        a.extend(["--config-json".into(), config_json.into()]);
+        if self.clear_node_ip == Some(true) {
+            a.extend(["--node-ip".into(), String::new()]);
+        }
+        a
     }
 
     /// True when this request carries TURN TLS material.
@@ -2512,6 +2583,9 @@ impl MediaRequest {
         if let Some(m) = v.as_object_mut() {
             m.remove("turn_cert_pem");
             m.remove("turn_key_pem");
+            // Said on argv ([`MediaRequest::sew_argv`]): Sew 0.8.2 refuses
+            // the flag together with a `node_ip` key.
+            m.remove("clear_node_ip");
         }
         if let Some(t) = tarball {
             v["tarball"] = serde_json::json!(t);
@@ -3505,6 +3579,68 @@ mod tests {
         assert!(TurnCertRequest { cert_pem: "x".into(), key_pem: t.key_pem.clone() }.validate().is_err());
         assert!(serde_json::from_str::<TurnCertRequest>(r#"{"cert_pem":"a","key_pem":"b","cert":"/etc/x"}"#).is_err());
         assert!(probe_result_ok("ok") && probe_result_ok("fail") && !probe_result_ok("OK") && !probe_result_ok(""));
+    }
+
+    /// Protocol 14 (0.46.10, Sew 0.8.2): a move to the tunnel tier clears
+    /// direct mode's leftovers. `bind_v6: ""` and `turn_advertise_port: 0`
+    /// reach Sew's JSON; the node IP is cleared on argv (`--node-ip ''`),
+    /// never as a JSON key (Sew refuses `"node_ip": ""`, and the flag with
+    /// the key).
+    #[test]
+    fn a_tunnel_move_clears_direct_modes_leftovers_on_argv_and_in_the_json() {
+        let r: MediaRequest = serde_json::from_str(
+            r#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","relay_only":true,"bind_v4":"127.0.0.1",
+                "turn_advertise_port":0,"bind_v6":"","clear_node_ip":true}"#,
+        )
+        .unwrap();
+        r.validate_reconfigure().unwrap();
+        assert!(r.needs_tunnel_keys() && r.needs_tunnel_clears());
+        let inputs = r.sew_inputs(None, None);
+        assert_eq!(
+            inputs,
+            serde_json::json!({
+                "relay_only": true,
+                "turn_tls": "passthrough",
+                "turn_domain": "turn.box.k2.dev",
+                "bind_v4": "127.0.0.1",
+                "bind_v6": "",
+                "turn_advertise_port": 0,
+                "profile": "shared",
+            }),
+            "no node_ip and no clear_node_ip in Sew's JSON"
+        );
+        serde_json::from_value::<SewMediaInstallInputs>(inputs).expect("real Sew's inputs take it");
+        assert_eq!(
+            r.sew_argv(true, true, "/s/media.json"),
+            ["media", "install", "--reconfigure", "--restart", "--now", "--config-json", "/s/media.json", "--node-ip", ""]
+        );
+        assert_eq!(r.sew_argv(false, false, "/s/media.json"), ["media", "install", "--config-json", "/s/media.json", "--node-ip", ""]);
+        // Without the clear: the argv protocols 7–13 always sent.
+        let plain = MediaRequest { clear_node_ip: None, ..r.clone() };
+        assert_eq!(plain.sew_argv(true, false, "/s/m.json"), ["media", "install", "--reconfigure", "--config-json", "/s/m.json"]);
+        // Only "none", only on the tunnel tier, never beside a node IP.
+        for bad in [
+            r#"{"turn_tls":"passthrough","relay_only":true,"bind_v6":"::"}"#,
+            r#"{"turn_tls":"passthrough","relay_only":true,"bind_v6":"::1"}"#,
+            r#"{"turn_tls":"passthrough","bind_v6":""}"#,
+            r#"{"turn_tls":"direct","relay_only":false,"bind_v6":""}"#,
+            r#"{"turn_tls":"passthrough","relay_only":true,"clear_node_ip":false}"#,
+            r#"{"turn_tls":"passthrough","relay_only":true,"clear_node_ip":true,"node_ip":"203.0.113.7"}"#,
+            r#"{"turn_tls":"passthrough","clear_node_ip":true}"#,
+            r#"{"turn_tls":"direct","relay_only":false,"clear_node_ip":true}"#,
+            r#"{"clear_node_ip":true}"#,
+        ] {
+            let m: MediaRequest = serde_json::from_str(bad).unwrap();
+            assert!(m.validate_reconfigure().is_err(), "{bad}");
+        }
+        assert!(serde_json::from_str::<MediaRequest>(r#"{"clear_node_ip":"yes"}"#).is_err());
+        // The way back to direct carries none of them.
+        let back: MediaRequest =
+            serde_json::from_str(r#"{"turn_tls":"direct","relay_only":false,"bind_v4":"0.0.0.0","node_ip":"203.0.113.7","turn_advertise_port":5349}"#)
+                .unwrap();
+        back.validate_reconfigure().unwrap();
+        assert!(!back.needs_tunnel_clears());
+        assert_eq!(SEW_EXIT_CONFIG_REFUSED, 78);
     }
 
     /// Protocol 12 (voice rooms §6.6 M5/M7/M9): the tunnel tier's request.

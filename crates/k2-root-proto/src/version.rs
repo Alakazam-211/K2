@@ -94,6 +94,16 @@
 //!   [`SEW_BOX_BACKUP_MIN_PROTOCOL`]. Another 0.46.9 lane that needs a
 //!   helper change joins 13 here with its own namespace flag; never 14
 //!   before 13 ships.
+//! - 14 = every root-helper change 0.46.10 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it; 13 shipped in 0.46.9): the
+//!   voice tunnel move's clears of direct mode's leftovers, two new
+//!   `MediaRequest` keys, `bind_v6` (only `""`) and `clear_node_ip` (the
+//!   helper adds `--node-ip ''` to `sew media install`'s argv; Sew 0.8.2
+//!   takes no empty `node_ip` in its JSON), both only on a relay-only
+//!   passthrough request (a 13 helper refuses either key as unknown), under
+//!   `namespaces.sewtunnelclear`, [`SEW_TUNNEL_CLEAR_MIN_PROTOCOL`]. Another
+//!   0.46.10 lane that needs a helper change joins 14 here with its own
+//!   namespace flag; never 15 before 14 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -102,7 +112,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 13;
+pub const PROTOCOL: u32 = 14;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -136,6 +146,11 @@ pub const SEW_RECONFIGURE_MIN_PROTOCOL: u32 = 11;
 /// §6.6 M9). Gated on this AND
 /// `namespaces.sewtunnel == true`: an older helper refuses the request.
 pub const SEW_TUNNEL_MIN_PROTOCOL: u32 = 12;
+/// The voice tunnel move's clears of direct mode's leftovers (`bind_v6`,
+/// `clear_node_ip` → `--node-ip ''`; 0.46.10, Sew 0.8.2). Gated on this AND
+/// `namespaces.sewtunnelclear == true`: a 13 helper refuses either key, so
+/// the daemon asks for the update before it sends anything.
+pub const SEW_TUNNEL_CLEAR_MIN_PROTOCOL: u32 = 14;
 /// `engine sew mirror-dir` (0.46.8, SW-8 keyring mirror folder). Gated on
 /// this AND `namespaces.sewmirror == true`.
 pub const SEW_MIRROR_DIR_MIN_PROTOCOL: u32 = 12;
@@ -322,7 +337,8 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 13, "protocol 13 = 0.46.9's one bump (Sew box-backup facts); 12 = 0.46.8's (the :80 front)");
+        assert_eq!(PROTOCOL, 14, "protocol 14 = 0.46.10's one bump (the tunnel move's clears); 13 = 0.46.9's (Sew box-backup facts)");
+        assert_eq!(SEW_TUNNEL_CLEAR_MIN_PROTOCOL, 14, "the tunnel move's clears join 0.46.10's one bump");
         assert_eq!(SEW_BOX_BACKUP_MIN_PROTOCOL, 13, "box-backup joins 0.46.9's one bump");
         assert!(
             crate::verbs::catalog().iter().any(|v| v.argv() == ["engine", "sew", "box-backup"]),

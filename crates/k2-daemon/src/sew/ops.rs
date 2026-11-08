@@ -826,6 +826,15 @@ pub mod fake {
         pub mgmt_status: Mutex<Value>,
         /// The version `GET /mgmt/v1/status` reports, over the one on disk.
         pub mgmt_version: Mutex<Option<String>>,
+        /// Sew's stored media settings, when a test models them: `sew media
+        /// install` merges the JSON keys into them (as real Sew's reconfigure
+        /// does), `--node-ip ''` clears the node IP, and a relay-only,
+        /// loopback-bound engine with a node IP is refused (exit 78, Sew 0.8.2's
+        /// `--check-config`) and nothing is kept. `None`: not modelled.
+        pub media_conf: Mutex<Option<serde_json::Map<String, Value>>>,
+        /// The argv each `sew media install` got (after the helper's
+        /// `MediaRequest::sew_argv`; the config path is a placeholder).
+        pub media_argv: Mutex<Vec<Vec<String>>>,
         pub mgmt_calls: Mutex<Vec<String>>,
         /// "METHOD path" → queued mgmt answers (before the canned ones).
         pub mgmt_answers: Mutex<HashMap<String, VecDeque<Result<Value, MgmtError>>>>,
@@ -993,6 +1002,8 @@ pub mod fake {
                 api_health_q: Mutex::new(VecDeque::new()),
                 api_health_n: Mutex::new(0),
                 mgmt_version: Mutex::new(None),
+                media_conf: Mutex::new(None),
+                media_argv: Mutex::new(Vec::new()),
                 mgmt_status: Mutex::new(json!({
                     "provider": "k2",
                     "version": format!("{pin}+g1234567"),
@@ -1163,6 +1174,51 @@ pub mod fake {
 
         fn sew_exit(code: i64, sew: Value) -> Value {
             json!({"sewExit": code, "sew": sew, "stderrTail": ""})
+        }
+
+        /// `sew media install [--reconfigure]` against [`Self::media_conf`]
+        /// (when a test models it): the argv the helper builds is recorded;
+        /// `Some(answer)` is Sew's refusal, `None` lets the call go on.
+        fn sew_media_conf(&self, joined: &str, stdin: Option<&[u8]>) -> Option<Value> {
+            let req: k2_root_proto::sew::MediaRequest = serde_json::from_slice(stdin.unwrap_or(b"{}")).ok()?;
+            let reconfigure = joined.starts_with("engine sew media reconfigure");
+            let argv = req.sew_argv(reconfigure, joined.ends_with("restart-now"), "/stage/media.json");
+            self.media_argv.lock().unwrap().push(argv.clone());
+            let mut guard = self.media_conf.lock().unwrap();
+            let conf = guard.as_mut()?;
+            let inputs = req.sew_inputs(None, None);
+            let flag = argv.iter().position(|a| a == "--node-ip").map(|i| argv.get(i + 1).cloned().unwrap_or_default());
+            if flag.is_some() && inputs.get("node_ip").is_some() {
+                return Some(json!({"sewExit": 2, "reason": "sew: --node-ip and config-json node_ip together", "stderrTail": "sew: --node-ip and config-json node_ip together"}));
+            }
+            if inputs.get("node_ip").and_then(Value::as_str) == Some("") {
+                return Some(json!({"sewExit": 2, "reason": "sew: config: node_ip must not be empty", "stderrTail": "sew: config: node_ip must not be empty"}));
+            }
+            let mut next = conf.clone();
+            for (k, v) in inputs.as_object().into_iter().flatten() {
+                if !matches!(k.as_str(), "profile" | "tarball" | "turn_cert" | "turn_key") {
+                    next.insert(k.clone(), v.clone());
+                }
+            }
+            match flag.as_deref() {
+                Some("") => {
+                    next.remove("node_ip");
+                }
+                Some(ip) => {
+                    next.insert("node_ip".into(), json!(ip));
+                }
+                None => {}
+            }
+            let loopback = next.get("bind_v4").and_then(Value::as_str) == Some(k2_root_proto::sew::MEDIA_BIND_LOOPBACK);
+            if next.get("relay_only") == Some(&json!(true)) && loopback {
+                if let Some(ip) = next.get("node_ip").and_then(Value::as_str).filter(|ip| *ip != "127.0.0.1") {
+                    let line = format!("sew-media: config: media.net.node_ip: {ip} is a local address but the socket is bound to 127.0.0.1");
+                    let tail = format!("sew: checking the new media settings (sew-media --check-config)\n{line}");
+                    return Some(json!({"sewExit": 78, "sew": null, "stderrTail": tail, "reason": tail}));
+                }
+            }
+            *conf = next;
+            None
         }
 
         /// What a real box answers, and the systemd state it leaves.
@@ -1480,6 +1536,9 @@ pub mod fake {
                 let version = self.mgmt_version.lock().unwrap().clone().unwrap_or_else(|| k2_root_proto::sew::pinned().version.to_string());
                 if let Some(reason) = sew_refuses_media_input(stdin, &version) {
                     return Ok(json!({"sewExit": 2, "reason": reason}));
+                }
+                if let Some(answer) = self.sew_media_conf(&joined, stdin) {
+                    return Ok(answer);
                 }
             }
             let queued = self.answers.lock().unwrap().get_mut(&joined).and_then(VecDeque::pop_front);

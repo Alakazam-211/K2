@@ -28,17 +28,27 @@
 //!   later also `turn_trusted_cidrs` ([`TUNNEL_TRUSTED_CIDRS`], M7: the PROXY
 //!   sources, where frpc-voice dials from). Not on an older Sew: an unknown key
 //!   fails the install with exit 2, and its default is loopback anyway. A
-//!   reconfigure keeps the list, so the way back to direct leaves it. Back in
-//!   direct mode:
-//!   `relay_only = false`, `bind_v4 = 0.0.0.0`, the node IP. Sew refuses
-//!   relay-only with tier plain/off (exit 78, [`sew_media`] names it); K2
-//!   never sends it.
+//!   reconfigure keeps the list, so the way back to direct leaves it.
+//! - **Direct mode's leftovers** ([`TunnelSew::clears`], 0.46.10, Sew 0.8.2):
+//!   Sew's reconfigure merges, so a box that ran direct keeps its `node_ip`
+//!   (refused on the loopback-bound tunnel tier: exit 78), its
+//!   `turn_advertise_port = 5349` (clients would get 5349) and its `bind_v6 =
+//!   "::"`. Every move to the tunnel tier (install, move in, rebind) sends
+//!   `turn_advertise_port: 0` (the listener's port), `bind_v6: ""` and
+//!   `clear_node_ip: true`, which the root helper (protocol 14,
+//!   `namespaces.sewtunnelclear`) turns into `--node-ip ''` on Sew's argv:
+//!   0.8.2 refuses `"node_ip": ""` in the JSON. A helper older than 14 is
+//!   asked to update first; nothing is sent.
+//! - Back in direct mode: `relay_only = false`, `bind_v4 = 0.0.0.0`,
+//!   `turn_advertise_port = 5349`, the node IP. Sew's exit 78 is "config
+//!   refused" ([`config_refusal`]): its last stderr line says why, and K2
+//!   passes it on verbatim.
 //! - **Served check** ([`served`]): through the relay, `turn.<label>.k2.dev:443`
 //!   with that SNI, compared with the leaf K2 issued.
 
 use serde_json::{json, Value};
 
-use k2_root_proto::sew::{sew_takes_trusted_cidrs, MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_RELAY_ONLY_REFUSED, TUNNEL_TRUSTED_CIDRS, UNIT_MEDIA};
+use k2_root_proto::sew::{sew_takes_trusted_cidrs, MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_CONFIG_REFUSED, TUNNEL_TRUSTED_CIDRS, UNIT_MEDIA};
 
 use super::supervisor::{self as sup, no, Env, Fail, R};
 use super::voice::{self, VoiceState, TIER_TUNNEL};
@@ -77,30 +87,79 @@ pub fn label(env: &Env) -> R<String> {
     })
 }
 
-/// Sew's FEATURES list (live `GET /mgmt/v1/status`).
-pub fn sew_features(env: &Env) -> Result<Vec<String>, String> {
-    let st = sup::mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| e.to_string())?;
-    Ok(st
-        .get("features")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-        .unwrap_or_default())
-}
-
-/// Does the Sew running here take `turn_trusted_cidrs` (0.7.1 on)? From its
+/// What the Sew running here takes on a move to the tunnel tier. From its
 /// live `GET /mgmt/v1/status`, never the pin: a box mid-way between two pins
 /// answers for what it actually runs.
-pub fn takes_trusted_cidrs(env: &Env) -> R<bool> {
-    let st = sup::mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| no("mgmt_unreachable", 503, format!("Sew's version: {e}")))?;
-    Ok(st.get("version").and_then(Value::as_str).is_some_and(sew_takes_trusted_cidrs))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunnelSew {
+    /// Its version, as `GET /mgmt/v1/status` reports it.
+    pub version: String,
+    /// `turn_trusted_cidrs` (Sew 0.7.1 on; an older Sew refuses the key).
+    pub trusted: bool,
+    /// The clears of direct mode's leftovers ([`TUNNEL_CLEARS_MIN_SEW`] on):
+    /// `--node-ip ''`, `turn_advertise_port: 0`, `bind_v6: ""`.
+    pub clears: bool,
+}
+
+/// The first Sew confirmed to clear direct mode's leftovers the way K2 asks
+/// (Sew 0.8.2: an empty `--node-ip` beside the JSON is "no node IP"; `"bind_v6":
+/// ""` and `"turn_advertise_port": 0` in it). An older Sew gets today's
+/// tunnel keys only.
+pub const TUNNEL_CLEARS_MIN_SEW: &str = "0.8.2";
+/// The minimum this build checks against: the unit tests run K2's fixture
+/// releases (0.0.x), which stand in for a Sew that clears.
+#[cfg(not(test))]
+const TUNNEL_CLEARS_GATE: &str = TUNNEL_CLEARS_MIN_SEW;
+#[cfg(test)]
+const TUNNEL_CLEARS_GATE: &str = "0.0.2";
+
+/// Sew's live `GET /mgmt/v1/status`.
+fn sew_status(env: &Env) -> R<Value> {
+    sup::mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| no("mgmt_unreachable", 503, format!("Sew's status: {e}")))
+}
+
+/// [`TunnelSew`] from Sew's status. Refused (`helper_outdated`, nothing sent)
+/// when this Sew takes the clears but the root helper predates them
+/// (protocol 14): a 13 helper refuses the keys, and a move without them
+/// fails on a box that ran direct.
+pub fn tunnel_sew_from(env: &Env, status: &Value) -> R<TunnelSew> {
+    let version = status.get("version").and_then(Value::as_str).unwrap_or("").to_string();
+    let clears = at_least(&version, TUNNEL_CLEARS_GATE);
+    if clears && !helper_clears_ok(env) {
+        let hs = env.ops.helper_state();
+        return Err(no(
+            "helper_outdated",
+            409,
+            format!(
+                "{} Moving voice onto the tunnel clears the settings direct mode left in Sew (node IP, TURN port, IPv6 \
+                 bind), which this root helper can't pass on yet. Nothing changed.",
+                crate::root_helper::helper_needed("Voice through the tunnel", k2_root_proto::version::SEW_TUNNEL_CLEAR_MIN_PROTOCOL, &hs)
+            ),
+        ));
+    }
+    Ok(TunnelSew { trusted: sew_takes_trusted_cidrs(&version), clears, version })
+}
+
+/// [`tunnel_sew_from`] with a fresh status read.
+pub fn tunnel_sew(env: &Env) -> R<TunnelSew> {
+    tunnel_sew_from(env, &sew_status(env)?)
 }
 
 /// Root helper protocol 12 with `namespaces.sewtunnel` (an older helper
 /// refuses the new media keys).
 pub fn helper_ok(env: &Env) -> bool {
+    helper_has(env, k2_root_proto::version::SEW_TUNNEL_MIN_PROTOCOL, "sewtunnel")
+}
+
+/// Root helper protocol 14 with `namespaces.sewtunnelclear` (`bind_v6`,
+/// `clear_node_ip`; a 13 helper refuses both keys).
+pub fn helper_clears_ok(env: &Env) -> bool {
+    helper_has(env, k2_root_proto::version::SEW_TUNNEL_CLEAR_MIN_PROTOCOL, "sewtunnelclear")
+}
+
+fn helper_has(env: &Env, min: u32, ns: &str) -> bool {
     let st = env.ops.helper_state();
-    st.usable(k2_root_proto::version::SEW_TUNNEL_MIN_PROTOCOL)
-        && st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/sewtunnel")).and_then(Value::as_bool) == Some(true)
+    st.usable(min) && st.version_json.as_ref().and_then(|v| v.get("namespaces")).and_then(|n| n.get(ns)).and_then(Value::as_bool) == Some(true)
 }
 
 /// Everything the tunnel tier needs that K2 can't fix itself.
@@ -125,21 +184,25 @@ pub fn ready(env: &Env) -> R<()> {
             crate::root_helper::helper_needed("Voice through the tunnel", k2_root_proto::version::SEW_TUNNEL_MIN_PROTOCOL, &st),
         ));
     }
-    let features = sew_features(env).map_err(|e| no("mgmt_unreachable", 503, format!("Sew's features: {e}")))?;
-    if !features.iter().any(|f| f == FEATURE_TURN_RELAY_ONLY) {
+    let status = sew_status(env)?;
+    let features: Vec<&str> = status.get("features").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    if !features.contains(&FEATURE_TURN_RELAY_ONLY) {
         return Err(no(
             "sew_too_old",
             409,
             format!("this Sew has no relay-only TURN tier (feature {FEATURE_TURN_RELAY_ONLY}, Sew 0.7.0): voice stays where it is"),
         ));
     }
+    tunnel_sew_from(env, &status)?;
     Ok(())
 }
 
-/// The Sew keys the tunnel tier sets (§6.6 M5/M7/M9), plus the cert pair. Sew
-/// refuses any other key: `voice_tunnel_tests` pin this list. `trusted`:
-/// [`takes_trusted_cidrs`].
-pub fn media_keys(host: &str, chain: &str, key_pem: &str, trusted: bool) -> Value {
+/// The Sew keys the tunnel tier sets (§6.6 M5/M7/M9), plus the cert pair,
+/// plus (Sew 0.8.2 on) the three clears of direct mode's leftovers:
+/// `turn_advertise_port: 0`, `bind_v6: ""` and `clear_node_ip` (the helper's
+/// `--node-ip ''`). Sew refuses any other key: `voice_tunnel_tests` pin
+/// this list.
+pub fn media_keys(host: &str, chain: &str, key_pem: &str, sew: &TunnelSew) -> Value {
     let mut v = json!({
         "turn_tls": voice::TIER_PASSTHROUGH,
         "turn_domain": host,
@@ -152,31 +215,90 @@ pub fn media_keys(host: &str, chain: &str, key_pem: &str, trusted: bool) -> Valu
     if let Some(ip) = node_ip() {
         v["node_ip"] = json!(ip);
     }
-    if trusted {
+    if sew.trusted {
         v["turn_trusted_cidrs"] = json!(TUNNEL_TRUSTED_CIDRS);
+    }
+    if sew.clears && node_ip().is_none() {
+        // The listener's own port: a leftover 5349 would reach clients'
+        // TURN URLs (Sew 0.8.2).
+        v["turn_advertise_port"] = json!(0);
+        // IPv6 off (Sew would rewrite "::" itself once node_ip is empty).
+        v["bind_v6"] = json!("");
+        // The helper says it on argv: `--node-ip ''`.
+        v["clear_node_ip"] = json!(true);
     }
     v
 }
 
-/// `sew media install [--reconfigure …]` through the helper, with Sew's
-/// relay-only refusal (exit 78: relay-only with TURN tier plain or off)
-/// named. K2 never sends that combination (the helper's MediaRequest
-/// refuses it first), so seeing it means Sew and K2 disagree about the tier.
+/// `sew media install [--reconfigure …]` through the helper. Sew's exit 78
+/// (config refused) comes back as [`config_refusal`], with Sew's last
+/// stderr line; any other non-zero exit as `code`.
 pub fn sew_media(env: &Env, tail: &[&str], body: &Value, code: &'static str) -> R<Value> {
-    sup::sew_run(env, tail, Some(body.to_string().as_bytes())).map_err(|e| {
-        if e.contains(&format!(": exit {SEW_EXIT_RELAY_ONLY_REFUSED}:")) {
-            no(
-                "sew_relay_only_refused",
-                409,
-                format!(
-                    "Sew refused relay-only TURN for this TURN tier (exit {SEW_EXIT_RELAY_ONLY_REFUSED}: relay-only needs the \
-                     passthrough tier, never plain or off); nothing changed: {e}"
-                ),
-            )
-        } else {
-            no(code, 500, e)
-        }
-    })
+    let v = sup::helper_stdin(env, tail, body.to_string().as_bytes()).map_err(|e| no(code, 500, e))?;
+    match sup::sew_exit(&v) {
+        Some(0) | None => Ok(v),
+        Some(n) => Err(exit_refusal(tail, n, &v, code)),
+    }
+}
+
+/// A non-zero `sew media install` exit, from the helper's answer.
+pub fn exit_refusal(tail: &[&str], exit: i64, v: &Value, code: &'static str) -> Fail {
+    let message = sup::sew_message(v);
+    if exit != SEW_EXIT_CONFIG_REFUSED {
+        return no(code, 500, format!("sew {}: exit {exit}: {message}", tail.join(" ")));
+    }
+    let line = last_line(v["stderrTail"].as_str().unwrap_or("")).or_else(|| last_line(&message)).unwrap_or_else(|| message.clone());
+    config_refusal(&line)
+}
+
+/// The last non-empty line of `text`, trimmed.
+fn last_line(text: &str) -> Option<String> {
+    text.lines().rev().map(str::trim).find(|l| !l.is_empty()).map(str::to_string)
+}
+
+/// Sew's exit 78 (`sew-media --check-config` refused the settings; Sew
+/// 0.8.2 gives no machine-readable reason) from its last stderr line, which
+/// goes into the hint verbatim. Named only when the line says so:
+/// `sew_tunnel_bind_refused` when it names `bind_v6`,
+/// `sew_relay_only_refused` when it is about relay-only and passthrough;
+/// anything else is `sew_config_refused`. Nothing changed in each case.
+pub fn config_refusal(line: &str) -> Fail {
+    let x = SEW_EXIT_CONFIG_REFUSED;
+    let (code, hint) = if line.contains("bind_v6") {
+        (
+            "sew_tunnel_bind_refused",
+            format!(
+                "Sew refused the tunnel tier's settings (exit {x}): voice.ops.bind_v6 in Sew's media settings is set by \
+                 hand to an address that isn't loopback. Voice through the tunnel allows only \"\" (IPv6 off) or \"::1\". \
+                 Set it back to \"\" or remove it, then run k2 hostchat media rebind. Nothing changed. Sew said: {line}"
+            ),
+        )
+    } else if (line.contains("relay_only") || line.contains("relay-only")) && line.contains("passthrough") {
+        (
+            "sew_relay_only_refused",
+            format!(
+                "Sew refused relay-only TURN for this TURN tier (exit {x}: relay-only needs the passthrough tier, never \
+                 plain or off). Nothing changed. Sew said: {line}"
+            ),
+        )
+    } else {
+        ("sew_config_refused", format!("Sew refused the voice settings (exit {x}, config refused). Nothing changed. Sew said: {line}"))
+    };
+    let mut f = no(code, 409, hint);
+    f.extra = Some(json!({"sewExit": x, "sewSaid": line}));
+    f
+}
+
+/// On a Sew below [`TUNNEL_CLEARS_MIN_SEW`] (no clears sent), a refusal that
+/// names the node IP also says how to get past it.
+fn note_old_sew(mut f: Fail, sew: &TunnelSew) -> Fail {
+    if f.code == "sew_config_refused" && !sew.clears && f.hint.contains("node_ip") {
+        f.hint.push_str(&format!(
+            " Sew {} can't clear the node IP direct mode left: run k2 hostchat upgrade (Sew {TUNNEL_CLEARS_MIN_SEW} or later), then try again.",
+            if sew.version.is_empty() { "?" } else { &sew.version }
+        ));
+    }
+    f
 }
 
 /// A cert for `turn.<label>.k2.dev` from broker mode `turn-tunnel`, for the
@@ -262,7 +384,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     let check = |id: &str, status: &str, detail: String, hint: &str| json!({"id": id, "status": status, "detail": detail, "hint": hint});
     let mut c = Vec::new();
     match ready(env) {
-        Ok(()) => c.push(check("tunnel_tier", "ok", "voice through the tunnel: preview on, helper protocol 12, Sew relay-only".into(), "")),
+        Ok(()) => c.push(check("tunnel_tier", "ok", "voice through the tunnel: preview on, root helper ready, Sew relay-only".into(), "")),
         Err(f) => c.push(check("tunnel_tier", "fail", f.code.to_string(), &f.hint)),
     }
     match env.ops.confirmed_label() {
@@ -312,12 +434,13 @@ pub fn install_steps(env: &Env, label: &str, url: &str, mut st: VoiceState) -> R
     voice::save(env, &mut st);
 
     voice::step(env, "install");
-    let mut body = media_keys(&h, &chain, &key_pem, takes_trusted_cidrs(env)?);
+    let sew = tunnel_sew(env)?;
+    let mut body = media_keys(&h, &chain, &key_pem, &sew);
     body["public_url"] = json!(url);
     body["udp_port"] = json!(k2_root_proto::sew::SEW_MEDIA_UDP_PORT);
     body["tcp_port"] = json!(k2_root_proto::sew::SEW_MEDIA_TCP_PORT);
     body["sysctl"] = json!("apply");
-    let out = sew_media(env, &["media", "install"], &body, "media_install_failed")?;
+    let out = sew_media(env, &["media", "install"], &body, "media_install_failed").map_err(|f| note_old_sew(f, &sew))?;
     let mut warnings: Vec<String> = out
         .pointer("/sew/warnings")
         .and_then(Value::as_array)
@@ -392,8 +515,9 @@ pub fn move_in(env: &Env, st: VoiceState) -> R<Value> {
     let dns_label = st.label.clone().unwrap_or_else(|| label.clone());
     let (chain, key_pem) = issue_or_reuse(env, &label, &mut st)?;
     voice::save(env, &mut st);
-    let body = media_keys(&h, &chain, &key_pem, takes_trusted_cidrs(env)?);
-    sew_media(env, &["media", "reconfigure", "restart-now"], &body, "media_reconfigure_failed")?;
+    let sew = tunnel_sew(env)?;
+    let body = media_keys(&h, &chain, &key_pem, &sew);
+    sew_media(env, &["media", "reconfigure", "restart-now"], &body, "media_reconfigure_failed").map_err(|f| note_old_sew(f, &sew))?;
     voice::update(env, |s| {
         s.turn_tier = Some(TIER_TUNNEL.to_string());
         s.node_ip = node_ip();
@@ -501,45 +625,20 @@ pub fn tunnel_bind_check(doctor: &Value) -> Value {
         .unwrap_or_else(|| json!({"id": DOCTOR_TUNNEL_BIND, "status": "missing", "detail": "sew doctor did not report it"}))
 }
 
-/// A failed `sew media install --reconfigure` on the tunnel tier. Sew's exit 78
-/// naming `voice.ops.bind_v6` is someone's hand-set, non-loopback IPv6 bind,
-/// which the tunnel tier refuses; any other exit 78 is the relay-only refusal.
-pub fn rebind_refusal(e: String) -> Fail {
-    if e.contains(&format!(": exit {SEW_EXIT_RELAY_ONLY_REFUSED}:")) && e.contains("bind_v6") {
-        return no(
-            "sew_tunnel_bind_refused",
-            409,
-            format!(
-                "Sew refused the tunnel tier's settings (exit {SEW_EXIT_RELAY_ONLY_REFUSED}): voice.ops.bind_v6 in Sew's media \
-                 settings is set by hand to an address that isn't loopback. Voice through the tunnel allows only \"\" (IPv6 \
-                 off) or \"::1\". Set it back to \"\" or remove it, then run k2 hostchat media rebind. Nothing changed. Sew \
-                 said: {e}"
-            ),
-        );
-    }
-    if e.contains(&format!(": exit {SEW_EXIT_RELAY_ONLY_REFUSED}:")) {
-        return no(
-            "sew_relay_only_refused",
-            409,
-            format!(
-                "Sew refused relay-only TURN for this TURN tier (exit {SEW_EXIT_RELAY_ONLY_REFUSED}: relay-only needs the \
-                 passthrough tier, never plain or off); nothing changed: {e}"
-            ),
-        );
-    }
-    no("media_reconfigure_failed", 500, e)
-}
-
 /// Sew's steps 3 and 4 on a tunnel box (Sew 11-05): `sew media install
 /// --reconfigure --restart` with the tunnel tier's own keys, which rewrites
 /// a stored `bind_v6 = "::"` to `""` (an upgrade never rewrites Sew's media
 /// settings, so a box installed before Sew 0.7.4 keeps listening on every IPv6
-/// address), then `sew doctor`'s `media.tunnel_bind` must be ok. The caller
-/// holds the latch. Restarts sew-media: calls in progress drop.
+/// address; from Sew 0.8.2 K2 also sends `""` itself, with the other clears),
+/// then `sew doctor`'s `media.tunnel_bind` must be ok. The caller holds the
+/// latch. Restarts sew-media: calls in progress drop. Sew's exit 78 is
+/// [`config_refusal`] (a hand-set, non-loopback `bind_v6` on an older Sew is
+/// `sew_tunnel_bind_refused`).
 pub fn rebind_steps(env: &Env, st: &VoiceState) -> R<Value> {
+    let sew = tunnel_sew(env)?;
     let (h, chain, key_pem) = voice::held_material(env, st)?;
-    let body = media_keys(&h, &chain, &key_pem, takes_trusted_cidrs(env)?);
-    let v = sup::sew_run(env, &["media", "reconfigure", "restart-now"], Some(body.to_string().as_bytes())).map_err(rebind_refusal)?;
+    let body = media_keys(&h, &chain, &key_pem, &sew);
+    let v = sew_media(env, &["media", "reconfigure", "restart-now"], &body, "media_reconfigure_failed").map_err(|f| note_old_sew(f, &sew))?;
     let rewritten = v.pointer("/sew/warnings").is_some_and(|w| w.to_string().contains(WARNING_BIND_V6_REWRITTEN));
     let doctor = sup::helper_json(env, &["doctor"]).map_err(|e| no("doctor_failed", 500, format!("sew-media was reconfigured, but sew doctor didn't answer: {e}")))?;
     let check = tunnel_bind_check(&doctor);

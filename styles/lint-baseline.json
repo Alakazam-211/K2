@@ -92,7 +92,6 @@
     "src/renderer/components/Settings/shared/AgentAccountsColumn.tsx": 14,
     "src/renderer/components/Settings/shared/LlmLoginPicker.tsx": 2,
     "src/renderer/components/Settings/shared/LlmLoginSheet.tsx": 5,
-    "src/renderer/components/Settings/shared/LocalLLMSettings.tsx": 3,
     "src/renderer/components/Settings/shared/PhonePairing.tsx": 3,
     "src/renderer/components/Sidebar/ActiveBar.tsx": 2,
     "src/renderer/components/Sidebar/FocusGroupDropdown.tsx": 1,

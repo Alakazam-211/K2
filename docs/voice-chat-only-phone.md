@@ -83,9 +83,15 @@ or another login's conversation. The agent gets each post as a guest:
 `[guest <login> (Voice & Chat only)] [thread:vc:<agent>:<login>]` and every
 line of the person's words quoted (`> `); it answers with
 `k2 thread vc:<agent>:<login> "…"`. Share only a **dedicated demo agent**:
-K2 refuses to share one with connections, vault grants, a mailbox, compute
-grants or no permission prompts (`409 agent_not_demo`) unless the owner
-forces it.
+K2 refuses to share one with connections, vault grants, a mailbox or a
+linked inbox, compute grants, mail sending, no permission prompts, or any
+of the switches that reach past its own Thread (manage secrets, agents,
+connections, Apps, App users, Gardens, compute, Postgres, DNS, hosted mail,
+federated instructions; `409 agent_not_demo`) unless the owner forces it.
+The agent is checked again on **every post**: one that gained such a power
+since it was shared (anything the owner didn't accept with force) refuses
+the post with `409 agent_not_demo` (`error.risks` lists what changed) until
+an owner or Admin turns it off or shares the agent again.
 
 - **Each item's sender.** The person's own posts are stored the way an App
   guest's are, in the existing `doc.author` field:
@@ -140,7 +146,9 @@ forces it.
   agent), `403 voice_chat_only` (not a live Voice & Chat only login),
   `400 usage`, `403 compose_only`, `404 reply_not_found` (no message with
   that seq in this conversation), `400 reply_header_not_allowed`,
-  `400 too_large`, `429 rate_limited | daily_limit | agent_busy`.
+  `400 too_large`, `409 agent_not_demo` (the agent gained a power; show
+  "this agent isn't available right now"), `429 rate_limited | daily_limit |
+  agent_busy`.
 
 ## A shared Garden
 

@@ -39,7 +39,7 @@ fn reviewer(name: &str, agents: &[&str]) -> String {
     let new = NewLogin {
         role: Some(Role::VoiceChat),
         must_change_password: false,
-        shares: Shares { agents: agents.iter().map(|a| a.to_string()).collect(), gardens: vec![], sources: vec![] },
+        shares: Shares { agents: agents.iter().map(|a| a.to_string()).collect(), gardens: vec![], sources: vec![], ..Default::default() },
         fixed_password: false,
     };
     cu::add_user_with_role(name, PW, None, None, &new).expect("voice_chat login");
@@ -369,13 +369,88 @@ fn only_a_demo_agent_is_shared_without_force() {
     }
     let risks = agent_risks(&a);
     assert!(risks.iter().any(|r| r.contains("connections")), "{risks:?}");
-    let shares = Shares { agents: vec![a.clone()], gardens: vec![], sources: vec![] };
-    let r = demo_agent_check(&shares, false).expect_err("refused");
+    let mut shares = Shares { agents: vec![a.clone()], gardens: vec![], sources: vec![], ..Default::default() };
+    let r = demo_agent_check(&mut shares, false).expect_err("refused");
     assert_eq!(r.status, "409 Conflict");
     let v: J = serde_json::from_str(&r.body).expect("json");
     assert_eq!(v["error"]["code"], "agent_not_demo", "{v}");
-    let warnings = demo_agent_check(&shares, true).unwrap_or_else(|r| panic!("forced: {}", r.body));
+    assert!(shares.accepted_risks.is_empty(), "nothing accepted on a refusal");
+    let warnings = demo_agent_check(&mut shares, true).unwrap_or_else(|r| panic!("forced: {}", r.body));
     assert!(warnings.iter().any(|w| w.contains("connections")), "{warnings:?}");
+    assert_eq!(shares.accepted_risks.get(&a), Some(&risks), "a forced share records what it accepted");
+}
+
+fn set_column(project_id: &str, column: &str, value: i64) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let n = conn.execute(&format!("UPDATE projects SET {column} = ?1 WHERE id = ?2"), params![value, project_id]).unwrap_or_else(|e| panic!("{column}: {e}"));
+    assert_eq!(n, 1, "{column}");
+}
+
+/// Re-review M2: every risky switch (and a linked inbox grant) makes an
+/// agent not a demo agent.
+#[test]
+fn every_risky_switch_makes_an_agent_not_a_demo_agent() {
+    let _home = crate::test_support::TempHome::new();
+    assert_eq!(RISKY_SWITCHES.len(), 14);
+    for (column, label) in RISKY_SWITCHES {
+        let (a, _) = agent("shrw");
+        assert_eq!(agent_risks(&a), Vec::<String>::new(), "fresh");
+        set_column(&a, column, 1);
+        let risks = agent_risks(&a);
+        assert!(risks.iter().any(|r| r.contains(column) && r.contains(label)), "{column}: {risks:?}");
+        let mut shares = Shares { agents: vec![a.clone()], ..Default::default() };
+        let r = demo_agent_check(&mut shares, false).err().unwrap_or_else(|| panic!("{column}: refused without force"));
+        assert!(r.body.contains("agent_not_demo"), "{column}: {}", r.body);
+    }
+    let (a, _) = agent("shrx");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_inbox_grants (source, inbox_id, project_id, level, created_at) VALUES ('linked', ?1, ?2, 'read', 0)",
+            params![uuid::Uuid::new_v4().to_string(), a],
+        )
+        .expect("grant");
+    }
+    let risks = agent_risks(&a);
+    assert!(risks.iter().any(|r| r == "inbox grants"), "{risks:?}");
+    let (b, _) = agent("shry");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE projects SET mail_agent_send = 'on' WHERE id = ?1", params![b]).expect("send");
+    }
+    assert!(agent_risks(&b).iter().any(|r| r.contains("mail_agent_send")), "{:?}", agent_risks(&b));
+}
+
+/// Re-review M2: the agent is checked again on every shared post. A demo
+/// agent that gains a switch refuses the next post (409 agent_not_demo);
+/// a risk accepted with force doesn't, a NEW one does.
+#[test]
+fn a_shared_agent_that_gains_a_risky_switch_refuses_the_next_post() {
+    let _home = crate::test_support::TempHome::new();
+    let (a, ha) = agent("shrg");
+    reviewer("revgain", &[a.as_str()]);
+    let (s, v) = post_now("revgain", json!({ "agent": ha, "text": "before" }));
+    assert_eq!(s, 200, "{v}");
+    set_column(&a, "agents_can_manage_vault", 1);
+    let (s, v) = post_now("revgain", json!({ "agent": ha, "text": "after" }));
+    assert_eq!((s, code(&v)), (409, "agent_not_demo"), "{v}");
+    assert!(v["error"]["risks"].to_string().contains("agents_can_manage_vault"), "{v}");
+
+    // Shared again with force: the accepted risk no longer refuses...
+    let mut shares = Shares { agents: vec![a.clone()], ..Default::default() };
+    demo_agent_check(&mut shares, true).unwrap_or_else(|r| panic!("forced: {}", r.body));
+    cu::set_shares("revgain", shares).expect("set");
+    let (s, v) = post_now("revgain", json!({ "agent": ha, "text": "accepted" }));
+    assert_eq!(s, 200, "{v}");
+    // ...but one it gains after that does.
+    set_column(&a, "agents_can_use_compute", 1);
+    let (s, v) = post_now("revgain", json!({ "agent": ha, "text": "gained" }));
+    assert_eq!((s, code(&v)), (409, "agent_not_demo"), "{v}");
+    let risks = v["error"]["risks"].to_string();
+    assert!(risks.contains("agents_can_use_compute") && !risks.contains("agents_can_manage_vault"), "only the new one: {v}");
 }
 
 /// The agent's replies in a login's conversation live ONLY there: never in

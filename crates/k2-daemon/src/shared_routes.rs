@@ -254,12 +254,36 @@ pub fn resolve_shares(agents: &[String], gardens: &[String], sources: &[String])
     out.normalized().map_err(|e| refuse("400 Bad Request", "too_many_shares", e))
 }
 
+/// The per-agent switches a public demo agent must have off (re-review
+/// M2): each one lets the agent act beyond its own Thread, so anyone with
+/// a shared login could steer that power. `(column, what people call it)`.
+pub const RISKY_SWITCHES: &[(&str, &str)] = &[
+    ("agents_can_manage_vault", "manage server-wide secrets"),
+    ("agents_can_manage_agents", "hire and manage agents"),
+    ("agents_can_create_connections", "create connections"),
+    ("agents_can_manage_skin", "build and run Apps"),
+    ("agents_can_manage_apps_full", "manage Apps end to end"),
+    ("agents_can_manage_app_users", "manage its Apps' users"),
+    ("agents_can_manage_gardens", "manage Gardens and data sources"),
+    ("agents_can_use_compute", "use compute"),
+    ("agents_can_operate_compute", "operate compute"),
+    ("agents_can_manage_compute", "manage compute nodes"),
+    ("agents_can_upgrade_postgres", "manage Postgres versions"),
+    ("dns_manage_enabled", "manage DNS"),
+    ("mail_manage_enabled", "manage hosted mail"),
+    ("allow_remote_instruct", "take instructions from federated agents"),
+];
+
 /// What an agent holds that a public demo agent mustn't (security review
-/// H1): connections to other agents, vault grants, a mailbox, compute
-/// grants, or a harness that runs without permission prompts. A check that
-/// can't be made counts as a risk. Empty = a dedicated demo agent.
+/// H1, re-review M2): connections to other agents, vault grants, a
+/// mailbox or linked inbox, compute grants, a harness that runs without
+/// permission prompts, any of [`RISKY_SWITCHES`] (or its server-wide
+/// master), or mail sending. A check that can't be made counts as a risk.
+/// Each risk is a stable phrase (no counts) so a forced share's accepted
+/// list compares on every post. Empty = a dedicated demo agent.
 pub fn agent_risks(project_id: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let path: Option<String>;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -269,6 +293,8 @@ pub fn agent_risks(project_id: &str) -> Vec<String> {
         for (what, sql) in [
             ("connections to other agents", "SELECT COUNT(*) FROM workspace_relations WHERE source_project_id = ?1 OR target_project_id = ?1"),
             ("a mailbox", "SELECT COUNT(*) FROM mail_addresses WHERE owner_project_id = ?1 AND status = 'active'"),
+            ("a linked inbox", "SELECT COUNT(*) FROM mail_external_inboxes WHERE owner_project_id = ?1"),
+            ("inbox grants", "SELECT COUNT(*) FROM mail_inbox_grants WHERE project_id = ?1"),
             ("compute node grants", "SELECT COUNT(*) FROM compute_node_grants WHERE workspace_id = ?1"),
             ("no permission prompts (api_skip_permissions)", "SELECT COALESCE(api_skip_permissions, 0) FROM projects WHERE id = ?1"),
         ] {
@@ -278,11 +304,41 @@ pub fn agent_risks(project_id: &str) -> Vec<String> {
                 Err(e) => out.push(format!("{what}: K2 couldn't check ({e})")),
             }
         }
+        for (column, label) in RISKY_SWITCHES {
+            match count(&format!("SELECT COALESCE({column}, 0) FROM projects WHERE id = ?1")) {
+                Ok(0) => {}
+                Ok(_) => out.push(format!("switch on: {label} ({column})")),
+                Err(e) => out.push(format!("switch {column}: K2 couldn't check ({e})")),
+            }
+        }
+        path = match conn.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get::<_, String>(0)) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                out.push(format!("its folder: K2 couldn't check ({e})"));
+                None
+            }
+        };
+    }
+    // Server-wide masters turn a switch on for every agent.
+    let app = k2_core::app_settings::load();
+    for (on, label) in [
+        (app.agents_can_create_connections, "create connections (server-wide)"),
+        (app.dns_manage_enabled, "manage DNS (server-wide)"),
+        (app.allow_remote_instruct, "take instructions from federated agents (server-wide)"),
+    ] {
+        if on {
+            out.push(format!("switch on: {label}"));
+        }
+    }
+    if let Some(path) = path {
+        if k2_core::workspace::settings::mail_agent_send_for_path(&path) != "off" {
+            out.push("sends mail (mail_agent_send)".to_string());
+        }
     }
     match crate::vault::get() {
         Ok(v) => match v.grants_to(&k2_vault::Consumer::workspace(project_id)) {
             Ok(g) if g.is_empty() => {}
-            Ok(g) => out.push(format!("vault grants ({})", g.len())),
+            Ok(_) => out.push("vault grants".to_string()),
             Err(e) => out.push(format!("vault grants: K2 couldn't check ({e})")),
         },
         // No vault on this server at all: no grant can exist. A vault that
@@ -293,33 +349,52 @@ pub fn agent_risks(project_id: &str) -> Vec<String> {
     out
 }
 
-/// H1: every shared agent must be a dedicated demo agent. Refuses (409
-/// `agent_not_demo`, naming each risk) unless `force`; with `force` the
-/// risks come back as warnings for the answer.
-pub fn demo_agent_check(shares: &Shares, force: bool) -> Result<Vec<String>, CliResponse> {
-    let mut warnings = Vec::new();
-    for id in &shares.agents {
-        let address = agent_view(id).and_then(|v| v["address"].as_str().map(str::to_string)).unwrap_or_else(|| id.clone());
-        for r in agent_risks(id) {
-            warnings.push(format!("{address}: {r}"));
-        }
-    }
-    if warnings.is_empty() || force {
-        return Ok(warnings);
-    }
-    Err(CliResponse {
+fn not_demo(hint: &str, risks: Vec<String>) -> CliResponse {
+    CliResponse {
         status: "409 Conflict",
         content_type: "application/json",
-        body: json!({
-            "ok": false,
-            "error": {
-                "code": "agent_not_demo",
-                "hint": "share only a dedicated demo agent: anyone with this login can talk to it. Send force (k2 users … --force) to share it anyway.",
-                "risks": warnings,
-            },
-        })
-        .to_string(),
-    })
+        body: json!({ "ok": false, "error": { "code": "agent_not_demo", "hint": hint, "risks": risks } }).to_string(),
+    }
+}
+
+/// H1 / M2: every shared agent must be a dedicated demo agent. Refuses (409
+/// `agent_not_demo`, naming each risk) unless `force`; with `force` the
+/// risks come back as warnings for the answer and are recorded on the
+/// shares as accepted (`accepted_risks`), so a post later refuses only a
+/// risk the agent GAINED since.
+pub fn demo_agent_check(shares: &mut Shares, force: bool) -> Result<Vec<String>, CliResponse> {
+    let mut warnings = Vec::new();
+    let mut accepted = std::collections::BTreeMap::new();
+    for id in &shares.agents {
+        let address = agent_view(id).and_then(|v| v["address"].as_str().map(str::to_string)).unwrap_or_else(|| id.clone());
+        let risks = agent_risks(id);
+        for r in &risks {
+            warnings.push(format!("{address}: {r}"));
+        }
+        if !risks.is_empty() {
+            accepted.insert(id.clone(), risks);
+        }
+    }
+    if !warnings.is_empty() && !force {
+        return Err(not_demo(
+            "share only a dedicated demo agent: anyone with this login can talk to it. Send force (k2 users … --force) to share it anyway.",
+            warnings,
+        ));
+    }
+    shares.accepted_risks = accepted;
+    Ok(warnings)
+}
+
+/// M2, on every shared post: the agent's risks now, less those accepted
+/// when it was shared. Any left (the agent gained a switch, a grant, a
+/// mailbox…) refuses the post with 409 `agent_not_demo`.
+pub fn still_demo(shares: &Shares, agent_id: &str) -> Result<(), CliResponse> {
+    let accepted = shares.accepted_risks.get(agent_id);
+    let gained: Vec<String> = agent_risks(agent_id).into_iter().filter(|r| !accepted.is_some_and(|a| a.contains(r))).collect();
+    if gained.is_empty() {
+        return Ok(());
+    }
+    Err(not_demo("this agent gained a power a shared demo agent mustn't have; an owner or Admin turns it off or shares the agent again", gained))
 }
 
 /// Stored shares as people see them (`GET /cli/users`, the CLI): a share
@@ -728,6 +803,11 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
         audit("shared.thread.post", login, "refused not_shared".into());
         return not_shared(&b.agent);
     };
+    // M2: the agent is checked again on every post.
+    if let Err(r) = still_demo(shares, &agent_id) {
+        audit("shared.thread.post", login, "refused agent_not_demo".into());
+        return r;
+    }
     let vc = crate::overlay_routes::vc_addr(&address, login);
     let conversation = crate::overlay_routes::vc_conversation(&agent_id, login);
     // M4: no control characters (but `\n`) or bidi overrides, ever.

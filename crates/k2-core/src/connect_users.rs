@@ -207,6 +207,11 @@ pub struct Shares {
     /// viewers included, is closed to Voice & Chat only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
+    /// Shared agent id → the risks an owner or Admin accepted when they
+    /// shared it anyway (`force`, re-review M2). Every shared post checks
+    /// the agent again; a risk not on this list refuses the post.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub accepted_risks: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// The most agents (and, separately, Gardens) one login may be shared.
@@ -228,6 +233,12 @@ impl Shares {
                 return Err(format!("at most {MAX_SHARES} shared {what} per login"));
             }
             *list = v;
+        }
+        let agents = self.agents.clone();
+        self.accepted_risks.retain(|id, risks| agents.contains(id) && !risks.is_empty());
+        for risks in self.accepted_risks.values_mut() {
+            risks.sort();
+            risks.dedup();
         }
         Ok(self)
     }
@@ -3381,13 +3392,31 @@ mod tests {
         assert!(can_act_on(Admin, VoiceChat));
     }
 
+    /// Re-review M2: accepted risks are kept only for agents still shared,
+    /// sorted, and survive a store round trip.
+    #[test]
+    fn accepted_risks_follow_the_shared_agents() {
+        let mut accepted = std::collections::BTreeMap::new();
+        accepted.insert("p-1".to_string(), vec!["vault grants".to_string(), "a mailbox".to_string(), "a mailbox".to_string()]);
+        accepted.insert("gone".to_string(), vec!["a mailbox".to_string()]);
+        accepted.insert("p-2".to_string(), vec![]);
+        let s = Shares { agents: vec!["p-1".into(), "p-2".into()], accepted_risks: accepted, ..Default::default() }.normalized().expect("ok");
+        assert_eq!(s.accepted_risks.len(), 1, "{:?}", s.accepted_risks);
+        assert_eq!(s.accepted_risks["p-1"], vec!["a mailbox".to_string(), "vault grants".to_string()]);
+        let back: Shares = serde_json::from_str(&serde_json::to_string(&s).expect("ser")).expect("de");
+        assert_eq!(back, s);
+        let plain: Shares = serde_json::from_str(r#"{"agents":["p-1"]}"#).expect("an old row");
+        assert!(plain.accepted_risks.is_empty());
+        assert!(!serde_json::to_string(&plain).expect("ser").contains("accepted_risks"), "not written when empty");
+    }
+
     #[test]
     fn add_user_with_role_writes_the_role_and_shares_in_one_write() {
         with_temp_home(|| {
             let new = NewLogin {
                 role: Some(Role::VoiceChat),
                 must_change_password: false,
-                shares: Shares { agents: vec![" p-1 ".into(), "p-1".into()], gardens: vec!["g-1".into()], sources: vec![] },
+                shares: Shares { agents: vec![" p-1 ".into(), "p-1".into()], gardens: vec!["g-1".into()], sources: vec![], ..Default::default() },
                 fixed_password: false,
             };
             add_user_with_role("rev", "password", None, None, &new).expect("add");
@@ -3403,7 +3432,7 @@ mod tests {
             assert!(!can_clone("rev"), "V11: never canClone");
             assert_eq!(voice_chat_shares("rev").expect("shares").agents, vec!["p-1".to_string()]);
             // Shares on any other role are refused, nothing written.
-            let bad = NewLogin { role: None, must_change_password: false, fixed_password: false, shares: Shares { agents: vec!["p".into()], gardens: vec![], sources: vec![] } };
+            let bad = NewLogin { role: None, must_change_password: false, fixed_password: false, shares: Shares { agents: vec!["p".into()], gardens: vec![], sources: vec![], ..Default::default() } };
             assert!(add_user_with_role("mem", "password", None, None, &bad).is_err());
             assert_eq!(role_for_user("mem"), None);
         });
@@ -3527,10 +3556,10 @@ mod tests {
     fn shares_are_only_for_voice_chat_logins() {
         with_temp_home(|| {
             add_user("pat", "password").expect("add");
-            let e = set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec![], sources: vec![] }).expect_err("member");
+            let e = set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec![], sources: vec![], ..Default::default() }).expect_err("member");
             assert!(e.starts_with("not_voice_chat"), "{e}");
             set_role("pat", Role::VoiceChat).expect("down");
-            set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec!["g".into()], sources: vec![] }).expect("set");
+            set_shares("pat", Shares { agents: vec!["p".into()], gardens: vec!["g".into()], sources: vec![], ..Default::default() }).expect("set");
             assert_eq!(voice_chat_shares("pat").expect("s").gardens, vec!["g".to_string()]);
             // A Member's stored shares never act.
             set_role("pat", Role::Member).expect("up");
@@ -3539,7 +3568,7 @@ mod tests {
             set_role("pat", Role::VoiceChat).expect("down");
             set_disabled("pat", true).expect("disable");
             assert_eq!(voice_chat_shares("pat"), None);
-            let too_many = Shares { agents: (0..=MAX_SHARES).map(|i| format!("p{i}")).collect(), gardens: vec![], sources: vec![] };
+            let too_many = Shares { agents: (0..=MAX_SHARES).map(|i| format!("p{i}")).collect(), gardens: vec![], sources: vec![], ..Default::default() };
             assert!(too_many.normalized().is_err());
         });
     }

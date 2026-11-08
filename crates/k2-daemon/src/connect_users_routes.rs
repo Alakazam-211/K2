@@ -174,12 +174,12 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
     if role == connect_users::Role::VoiceChat && is_owner_linked_login(&req.username) {
         return CliResponse::bad_request(format!("'{}' is one of the owner's own logins; it can't be Voice & Chat only", req.username));
     }
-    let shares = match crate::shared_routes::resolve_shares(&req.share_agents, &req.share_gardens, &req.share_sources) {
+    let mut shares = match crate::shared_routes::resolve_shares(&req.share_agents, &req.share_gardens, &req.share_sources) {
         Ok(s) => s,
         Err(r) => return r,
     };
     // H1: a shared agent must be a dedicated demo agent.
-    let warnings = match crate::shared_routes::demo_agent_check(&shares, req.force) {
+    let warnings = match crate::shared_routes::demo_agent_check(&mut shares, req.force) {
         Ok(w) => w,
         Err(r) => return r,
     };
@@ -564,11 +564,11 @@ pub fn handle_set_shares(actor_role: connect_users::Role, body: &[u8]) -> CliRes
             .to_string(),
         };
     }
-    let shares = match crate::shared_routes::resolve_shares(&req.agents, &req.gardens, &req.sources) {
+    let mut shares = match crate::shared_routes::resolve_shares(&req.agents, &req.gardens, &req.sources) {
         Ok(s) => s,
         Err(r) => return r,
     };
-    let warnings = match crate::shared_routes::demo_agent_check(&shares, req.force) {
+    let warnings = match crate::shared_routes::demo_agent_check(&mut shares, req.force) {
         Ok(w) => w,
         Err(r) => return r,
     };

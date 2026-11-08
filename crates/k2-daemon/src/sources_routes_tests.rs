@@ -409,7 +409,7 @@ fn a_voice_chat_login_reads_only_sources_shared_with_it() {
     assert_eq!((s, err(&v)), (403, "cap_not_granted"), "history too: {v}");
     k2_core::connect_users::set_shares(
         "vcsrc",
-        k2_core::connect_users::Shares { agents: vec![], gardens: vec![], sources: vec!["fleetvc".into()] },
+        k2_core::connect_users::Shares { agents: vec![], gardens: vec![], sources: vec!["fleetvc".into()], ..Default::default() },
     )
     .expect("share the source");
     let (s, v) = get("/cli/sources/read", &vc, &[("name", "fleetvc")]);

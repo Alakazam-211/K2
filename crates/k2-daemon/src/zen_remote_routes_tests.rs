@@ -740,7 +740,7 @@ fn reviewer(name: &str, gardens: &[&str]) -> String {
         &cu::NewLogin {
             role: Some(Role::VoiceChat),
             must_change_password: false,
-            shares: cu::Shares { agents: vec![], gardens: gardens.iter().map(|g| g.to_string()).collect(), sources: vec![] },
+            shares: cu::Shares { agents: vec![], gardens: gardens.iter().map(|g| g.to_string()).collect(), sources: vec![], ..Default::default() },
             fixed_password: false,
         },
     )
@@ -804,7 +804,7 @@ fn a_voice_chat_login_without_a_shared_garden_is_turned_away() {
         assert_eq!(refused(path, &tok, &q, body), (403, "garden_person_only".into()), "{path}");
     }
     // Upgraded to Member, stored shares stop acting: still not the owner person.
-    cu::set_shares("reviewernog", cu::Shares { agents: vec![], gardens: vec![fx.d.garden.clone()], sources: vec![] }).expect("share");
+    cu::set_shares("reviewernog", cu::Shares { agents: vec![], gardens: vec![fx.d.garden.clone()], sources: vec![], ..Default::default() }).expect("share");
     cu::set_role("reviewernog", Role::Member).expect("up");
     assert_eq!(refused(GARDENS, &tok, &[], J::Null), (403, "garden_person_only".into()));
 }

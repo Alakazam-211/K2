@@ -1,6 +1,6 @@
 import React from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Toggle, Slider } from '@/components/ui'
+import { Button, Toggle, Slider } from '@/components/ui'
 import { useSettingsStore, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
 import { SettingDropdown } from '../controls/SettingControls'
 import { previewCompletionSound } from '@/lib/completion-sound'
@@ -12,6 +12,13 @@ import {
   type SessionViewTab,
   type SplitPaneView,
 } from '@/components/SessionView/sessionViewTab'
+import {
+  THREAD_TEXT_WIDTH_DEFAULT,
+  THREAD_TEXT_WIDTH_MAX_PX,
+  THREAD_TEXT_WIDTH_MIN_PX,
+  THREAD_TEXT_WIDTH_STEP_PX,
+  isThreadTextWidthDefault,
+} from '@/components/SessionView/threadTextWidth'
 import type { SettingEntry } from '../searchManifest'
 import { AgentSkillsSection } from './AgentSkillsSection'
 import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
@@ -36,6 +43,7 @@ export const WORKSPACE_SETTINGS_MANIFEST: SettingEntry[] = [
   { id: 'general.completion-sound-volume', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Completion sound volume', description: 'How loud the sound is when an agent finishes', keywords: ['sound', 'volume', 'loud', 'quiet', 'level', 'ping', 'chime', 'audio'] },
   { id: 'general.workspace-switch-focus', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
   { id: 'general.new-agent-view', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'New agents open in', description: 'The view a new agent opens in: Terminal, Thread, Chatter, or Split view with the two sides you choose. Agents you already set a view for keep it.', keywords: ['new', 'agent', 'default', 'view', 'open', 'terminal', 'thread', 'chatter', 'split', 'split view', 'left', 'right', 'side', 'layout', 'workspace'] },
+  { id: 'general.thread-text-width', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Thread text width', description: 'How wide the text gets in Thread view, centred in the pane, or Full width. On this client only.', keywords: ['thread', 'text', 'width', 'column', 'readable', 'narrow', 'wide', 'full width', 'center', 'centre', 'limit', 'chat'] },
   // Graduated out of Experimental in 0.46.3 (Rosson 2026-10-21). Desktop
   // only: the hosted web client is single-server (MS56).
   ...(webFeatures.multiHost
@@ -83,6 +91,7 @@ export function WorkspaceBehaviorRows(): React.JSX.Element {
       <CompletionSoundRow />
       <WorkspaceSwitchFocusRow />
       <NewAgentViewRow />
+      <ThreadTextWidthRow />
       {/* Graduated from Experimental in 0.46.3. Desktop only (MS56). */}
       {webFeatures.multiHost && <RemoteRoomsPreviewRow />}
     </>
@@ -277,6 +286,65 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
         ]}
         onChange={(v) => setWorkspaceSwitchFocus(normalizeWorkspaceSwitchFocus(v))}
       />
+    </div>
+  )
+}
+
+// ── Thread text width ──────────────────────────────────────────────────
+// How wide the text column may get in Thread view (Split and the Design tab
+// keep theirs). Thin-client only (`k2.threadTextWidth`): a reading width is
+// about one person's screen, not the server.
+function ThreadTextWidthRow(): React.JSX.Element {
+  const pref = useSettingsStore((s) => s.threadTextWidth)
+  const setThreadTextWidth = useSettingsStore((s) => s.setThreadTextWidth)
+
+  return (
+    <div className="py-2 border-b border-[var(--color-border)]" data-settings-id="general.thread-text-width">
+      <div className="flex items-center justify-between">
+        <div className="flex-1 min-w-0 mr-3">
+          <span className="text-xs text-[var(--color-text-secondary)]">Thread text width</span>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            How wide messages get in Thread view, centred in the pane. On this client only.
+          </p>
+        </div>
+        {isThreadTextWidthDefault(pref) ? null : (
+          <Button
+            variant="quiet"
+            data-testid="thread-text-width-reset"
+            onClick={() => setThreadTextWidth(THREAD_TEXT_WIDTH_DEFAULT)}
+          >
+            Reset
+          </Button>
+        )}
+      </div>
+      <div className="pl-3 pt-1 space-y-1">
+        <div className="flex items-center justify-between py-1">
+          <span className="text-[11px] text-[var(--color-text-muted)]">Full width</span>
+          <Toggle
+            checked={!pref.limited}
+            aria-label="Full width"
+            onChange={(full) => setThreadTextWidth({ limited: !full, px: pref.px })}
+          />
+        </div>
+        <div className="flex items-center justify-between py-1">
+          <span className="text-[11px] text-[var(--color-text-muted)]">Width</span>
+          <div className="flex items-center gap-3">
+            <Slider
+              min={THREAD_TEXT_WIDTH_MIN_PX}
+              max={THREAD_TEXT_WIDTH_MAX_PX}
+              step={THREAD_TEXT_WIDTH_STEP_PX}
+              value={pref.px}
+              disabled={!pref.limited}
+              aria-label="Thread text width"
+              onChange={(e) => setThreadTextWidth({ limited: pref.limited, px: parseInt(e.target.value, 10) })}
+              className="w-40 disabled:opacity-50"
+            />
+            <span className="w-11 text-right text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+              {pref.px}px
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

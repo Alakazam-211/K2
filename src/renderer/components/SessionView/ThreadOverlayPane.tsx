@@ -106,6 +106,9 @@ interface ThreadOverlayPaneProps {
    *  list pads by it, so messages scroll under the box (Companion's footer
    *  fade) and the newest still rests right above it. */
   bottomInset?: number
+  /** Thread view's text limit (px): the column caps and centres, the list
+   *  and its scrollbar stay full width. Omitted or null: full width. */
+  textCapPx?: number | null
 }
 
 /** Overlay log only — Message-the-agent compose stays on TerminalPane. */
@@ -117,6 +120,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   onStop,
   onTurn,
   bottomInset = 0,
+  textCapPx = null,
 }: ThreadOverlayPaneProps): JSX.Element {
   const room = useRoom()
   const roomScope = room.scope
@@ -401,7 +405,12 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         <ThreadFileActionsProvider value={fileActions}>
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
-          <ThreadMessageColumn ref={contentRef} gap={THREAD_LIST_GAP} testId="thread-overlay-column">
+          <ThreadMessageColumn
+            ref={contentRef}
+            gap={THREAD_LIST_GAP}
+            testId="thread-overlay-column"
+            style={textCapPx != null ? { width: '100%', maxWidth: textCapPx, marginInline: 'auto' } : undefined}
+          >
             {/* "Earlier messages" fetches; it shows once the window reaches
                 the first message in memory (memory first). */}
             {hasMore && win.drawsOldest && (

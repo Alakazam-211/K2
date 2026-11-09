@@ -96,6 +96,7 @@ import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalComp
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
+import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import {
   DEFAULT_SPLIT_LEFT,
@@ -611,6 +612,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const { thread: showThreadOverlay, chatter: showChatterOverlay, hidePty } =
     overlayViewer(viewTab, { left: splitLeft, right: splitRight })
   const showThreadOnly = viewTab === 'thread'
+  // Thread view only: the `single` path below passes it; Split doesn't.
+  const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
   const showChatterOnly = viewTab === 'chatter'
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
@@ -5814,6 +5817,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               composeBar={composeThread()}
               agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
               onStop={stopThreadTurn}
+              textCapPx={threadTextCap}
             />
           )}
           {sessionChrome && showChatterOverlay && (

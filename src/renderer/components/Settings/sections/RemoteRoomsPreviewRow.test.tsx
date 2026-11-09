@@ -34,11 +34,11 @@ function settingsIds(): Array<string | null> {
 }
 
 describe('graduated out of Experimental (0.46.3)', () => {
-  it('the row renders in Workspace settings, after New agents open in', () => {
+  it('the row renders in Workspace settings, last, after Thread text width', () => {
     render(<WorkspaceBehaviorRows />)
     const ids = settingsIds()
     expect(ids.filter((id) => id === 'general.remote-rooms-preview')).toHaveLength(1)
-    expect(ids.indexOf('general.remote-rooms-preview')).toBe(ids.indexOf('general.new-agent-view') + 1)
+    expect(ids.indexOf('general.remote-rooms-preview')).toBe(ids.indexOf('general.thread-text-width') + 1)
     expect(ids[ids.length - 1]).toBe('general.remote-rooms-preview')
     expect(ids).toContain('general.workspace-switch-focus')
     const row = document.querySelector<HTMLElement>('[data-settings-id="general.remote-rooms-preview"]')
@@ -74,7 +74,7 @@ describe('graduated out of Experimental (0.46.3)', () => {
     expect(entry.keywords).not.toContain('experimental')
     expect(GENERAL_MANIFEST.find((e) => e.id === 'general.remote-rooms-preview')).toBeUndefined()
     const order = WORKSPACE_SETTINGS_MANIFEST.map((e) => e.id)
-    expect(order.indexOf('general.remote-rooms-preview')).toBe(order.indexOf('general.new-agent-view') + 1)
+    expect(order.indexOf('general.remote-rooms-preview')).toBe(order.indexOf('general.thread-text-width') + 1)
     expect(GENERAL_MANIFEST.filter((e) => e.group === 'Experimental')).toEqual([])
   })
 

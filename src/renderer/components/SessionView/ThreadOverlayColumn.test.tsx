@@ -107,6 +107,52 @@ describe('ThreadOverlayColumn', () => {
     expect(root.getAttribute('data-compose-drop-surface')).toBe('thread')
   })
 
+  it('caps and centres the messages and the bar when given a limit', () => {
+    renderInRoom(overlayRoom,
+      <ThreadOverlayColumn
+        addr="sales"
+        conversationId="c"
+        active
+        composeBar={<div data-testid="fake-compose">compose</div>}
+        textCapPx={640}
+      />,
+    )
+    const column = screen.getByTestId('thread-overlay-column')
+    expect(column.style.maxWidth).toBe('640px')
+    expect(column.style.marginInline).toBe('auto')
+    // The list (and its scrollbar) stays full width.
+    expect(screen.getByTestId('thread-overlay-list').style.maxWidth).toBe('')
+    const box = screen.getByTestId('agent-session-thread-compose-box')
+    expect(box.style.maxWidth).toContain('640px')
+    expect(box.style.marginInline).toBe('auto')
+    // The footer fade is outside the capped box: it stays full width.
+    const slot = screen.getByTestId('agent-session-thread-compose-slot')
+    expect(box.contains(slot.querySelector('[data-thread-footer-fade]'))).toBe(false)
+  })
+
+  it('has no limit unless given one (Split and Design)', () => {
+    renderInRoom(overlayRoom,
+      <ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={<div>bar</div>} />,
+    )
+    expect(screen.getByTestId('thread-overlay-column').style.maxWidth).toBe('')
+    expect(screen.getByTestId('agent-session-thread-compose-box').style.maxWidth).toBe('')
+  })
+
+  it('the column still goes narrow inside a limit (it measures itself)', () => {
+    const orig = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      return new DOMRect(0, 0, 300, 400)
+    }
+    try {
+      renderInRoom(overlayRoom,
+        <ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={null} textCapPx={720} />,
+      )
+      expect(screen.getByTestId('thread-overlay-column').hasAttribute('data-thread-narrow')).toBe(true)
+    } finally {
+      Element.prototype.getBoundingClientRect = orig
+    }
+  })
+
   it('clicking empty compose-slot padding focuses the textarea', () => {
     renderInRoom(overlayRoom, 
       <ThreadOverlayColumn

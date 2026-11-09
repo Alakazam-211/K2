@@ -100,6 +100,12 @@ async function flush(): Promise<void> {
 }
 
 describe('DesignThreadColumn', () => {
+  it("keeps the Thread at full width (the text limit is Thread view's)", async () => {
+    renderInRoom(room, <DesignThreadColumn projectPath="/w/docs" agentName="docs" visible />)
+    await flush()
+    expect(screen.getByTestId('thread-overlay-column').style.maxWidth).toBe('')
+  })
+
   it('renders a Thread view (list + Thread message box) for the workspace address', async () => {
     renderInRoom(room, <DesignThreadColumn projectPath="/w/docs" agentName="docs" visible />)
     await flush()

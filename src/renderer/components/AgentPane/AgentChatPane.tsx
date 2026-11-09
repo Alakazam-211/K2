@@ -33,6 +33,8 @@ import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumn
 import { prefetchThread } from '@/components/SessionView/threadRead'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
+import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
+import { useSettingsStore } from '@/stores/settings'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import {
   initialBreakerState,
@@ -1282,8 +1284,16 @@ function EnsuringThreadBody({
       Loading session…
     </div>
   )
-  const thread = (
-    <ThreadOverlayColumn addr={addr} conversationId={conversationId} active composeBar={null} agentName={displayName || addr} />
+  const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
+  const threadColumn = (textCapPx: number | null): React.JSX.Element => (
+    <ThreadOverlayColumn
+      addr={addr}
+      conversationId={conversationId}
+      active
+      composeBar={null}
+      agentName={displayName || addr}
+      textCapPx={textCapPx}
+    />
   )
   return (
     <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-ensuring">
@@ -1295,9 +1305,9 @@ function EnsuringThreadBody({
         terminal={loading}
         sharedTerminal={loading}
         renderView={(view) =>
-          view === 'thread' ? thread : <ChatterOverlayPane addr={addr} conversationId={conversationId} active />
+          view === 'thread' ? threadColumn(null) : <ChatterOverlayPane addr={addr} conversationId={conversationId} active />
         }
-        single={thread}
+        single={threadColumn(threadTextCap)}
       />
     </div>
   )
@@ -1316,6 +1326,7 @@ function OverlayTabBody({
   displayName?: string
   children: React.ReactNode
 }): React.JSX.Element {
+  const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
   if (viewTab === 'thread') {
     return (
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
@@ -1323,6 +1334,7 @@ function OverlayTabBody({
           addr={overlayAddr}
           conversationId={overlayConv}
           agentName={displayName || overlayAddr}
+          textCapPx={threadTextCap}
         />
       </div>
     )

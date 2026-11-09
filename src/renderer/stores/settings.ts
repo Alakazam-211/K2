@@ -32,6 +32,12 @@ import {
   writeNewAgentView,
   type NewAgentViewPref,
 } from '@/components/SessionView/sessionViewTab'
+import {
+  normalizeThreadTextWidth,
+  readThreadTextWidth,
+  writeThreadTextWidth,
+  type ThreadTextWidthPref,
+} from '@/components/SessionView/threadTextWidth'
 // Phase 2 Unit 7a — settings live in the daemon; renderer hits
 // `/cli/settings/{get,update,reset}` directly. The Tauri `settings_*`
 // proxy commands still exist (back-compat for any caller not yet
@@ -291,6 +297,11 @@ interface SettingsState {
   // state — localStorage `k2.newAgentView` on THIS install, not the daemon.
   newAgentView: NewAgentViewPref
 
+  // "Thread text width" — how wide Thread view's text column may get.
+  // Thin-client view state — localStorage `k2.threadTextWidth` on THIS
+  // install, not the daemon.
+  threadTextWidth: ThreadTextWidthPref
+
   // Editor settings
   editor: EditorSettingsBackend
 
@@ -360,6 +371,7 @@ interface SettingsState {
   setCompletionSound: (sound: CompletionSoundId) => void
   setWorkspaceSwitchFocus: (value: WorkspaceSwitchFocus) => void
   setNewAgentView: (pref: NewAgentViewPref) => void
+  setThreadTextWidth: (pref: ThreadTextWidthPref) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   updateStyleSettings: (partial: Partial<StyleSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
@@ -565,6 +577,7 @@ async function persistAndApply(
       // Caret target is per-install localStorage — never adopt the daemon echo.
       workspaceSwitchFocus: readWorkspaceSwitchFocus(),
       newAgentView: readNewAgentView(),
+      threadTextWidth: readThreadTextWidth(),
       editor: mergeEditorDefaults(result.editor),
       // Style is client-local SSOT — never adopt the daemon echo here.
       style: styleFromLocalStore(),
@@ -616,6 +629,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   completionSound: DEFAULT_COMPLETION_SOUND,
   workspaceSwitchFocus: readWorkspaceSwitchFocus(),
   newAgentView: readNewAgentView(),
+  threadTextWidth: readThreadTextWidth(),
   editor: { ...DEFAULT_EDITOR },
   style: { ...DEFAULT_STYLE },
   defaultAgent: 'claude',
@@ -950,6 +964,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ newAgentView: next })
   },
 
+  setThreadTextWidth: (pref: ThreadTextWidthPref) => {
+    const next = normalizeThreadTextWidth(pref)
+    writeThreadTextWidth(next)
+    set({ threadTextWidth: next })
+  },
+
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
     const prev = get().editor
     const merged = { ...prev, ...partial }
@@ -1085,6 +1105,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       ...completionSoundChoice(result),
       workspaceSwitchFocus: readWorkspaceSwitchFocus(),
       newAgentView: readNewAgentView(),
+      threadTextWidth: readThreadTextWidth(),
       editor: mergeEditorDefaults(result.editor),
       // Always reflect the live local selection — never the daemon echo.
       style: styleFromLocalStore(),

@@ -31,6 +31,7 @@ export function ThreadOverlayColumn({
   split,
   agentName,
   onStop,
+  textCapPx = null,
 }: {
   addr: string
   conversationId: string | null
@@ -41,6 +42,9 @@ export function ThreadOverlayColumn({
   agentName?: string
   /** The working strip's Stop: Esc to this session's PTY. */
   onStop?: () => void
+  /** Thread view's text limit (px); Split and Design leave it off. Caps the
+   *  messages and the bar, centred. The fade stays full width. */
+  textCapPx?: number | null
 }): React.JSX.Element {
   const composeRef = useRef<HTMLDivElement>(null)
   const [bottom, setBottom] = useState(0)
@@ -105,6 +109,7 @@ export function ThreadOverlayColumn({
             onStop={onStop}
             onTurn={composeShown ? setTurn : undefined}
             bottomInset={composeShown ? bottom : 0}
+            textCapPx={textCapPx}
           />
         </SelectableRegion>
       </div>
@@ -118,7 +123,22 @@ export function ThreadOverlayColumn({
           }}
         >
           {composeShown ? <ThreadFooterFade top={fadeTop} /> : null}
-          <div className="relative" style={{ zIndex: 1 }}>
+          <div
+            className="relative"
+            data-testid="agent-session-thread-compose-box"
+            style={
+              textCapPx != null
+                ? {
+                    zIndex: 1,
+                    width: '100%',
+                    // The bar pads by --zen-gap, as the list does: its field
+                    // lines up with the messages at the same limit.
+                    maxWidth: `calc(${textCapPx}px + 2 * var(--zen-gap, 12px))`,
+                    marginInline: 'auto',
+                  }
+                : { zIndex: 1 }
+            }
+          >
             <ThreadComposeDrawerContext.Provider value={drawer}>{composeBar}</ThreadComposeDrawerContext.Provider>
           </div>
         </div>

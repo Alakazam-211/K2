@@ -2215,6 +2215,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/vault/placements", Member),
     post("/cli/vault/policy", Member),
     get("/cli/vault/presets", Member),
+    post("/cli/vault/proxy-url", Member),
     get("/cli/vault/public-key", Member),
     get("/cli/vault/recipient", Admin),
     post("/cli/vault/recovery/confirm", Owner),

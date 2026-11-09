@@ -406,6 +406,7 @@ fn status_json(st: &VaultStatus) -> Value {
                 .collect::<Vec<_>>()),
         );
         o.insert("agentsCanRead".into(), json!(agents_can_read(&st.key_home)));
+        o.insert("proxy".into(), crate::vault::proxy::status_json());
         if let Some(line) = newer_rows_line(&st.counts) {
             o.insert("newerRows".into(), json!(line));
         }
@@ -1390,18 +1391,11 @@ fn delivery_opt(s: Option<&str>) -> Result<Option<Delivery>, VaultError> {
     s.map(request_delivery).transpose()
 }
 
-/// A delivery named in a request. `proxy` (the loopback LLM proxy,
-/// prd-k2-vault-v1 §9.3 / V5) is held back from this release: nothing
-/// would deliver it, so it is refused rather than silently doing nothing.
+/// A delivery named in a request. `proxy` means "put the placeholder and
+/// base URL in every new session's env" (prd-vault-for-agents-v1 A3); the
+/// on-demand form, `k2 vault proxy-url`, needs only fetch.
 pub fn request_delivery(s: &str) -> Result<Delivery, VaultError> {
-    match Delivery::parse(s)? {
-        Delivery::Proxy => Err(err(
-            "delivery_not_available",
-            400,
-            "proxy delivery isn't in this release; use fetch (K2 makes the call) or file/env",
-        )),
-        d => Ok(d),
-    }
+    Delivery::parse(s)
 }
 
 /// Preset hosts + inject for a named provider (VS3: people confirm).
@@ -1485,6 +1479,9 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
 /// One line telling an agent how to use what it just got.
 pub fn use_hint(m: &SecretMeta) -> String {
     match m.default_delivery {
+        Delivery::Proxy if !m.hosts.is_empty() => {
+            format!("k2 vault proxy-url {} prints a placeholder key and base URL for this session; new sessions get them in their env", m.name)
+        }
         Delivery::Fetch | Delivery::Proxy if !m.hosts.is_empty() => {
             format!("k2 vault fetch --secret {} https://{}/…", m.name, m.hosts[0].split("://").nth(1).and_then(|h| h.rsplit_once(':')).map(|h| h.0).unwrap_or(""))
         }

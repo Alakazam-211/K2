@@ -22345,7 +22345,7 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
-      [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|file|env|agent]
+      [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|proxy|file|env|agent]
       [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]
       [--inject-dst basic|header:Name|query:param] [--inject-format 'user:{}']
       The value goes into the K2 vault; you get a k2v:// reference and use it with
@@ -22408,10 +22408,12 @@ says them in one plain sentence, and the person can change them under Advanced.
 WHERE IT GOES
   --for HOST[,HOST]          the exact sites K2 may send it to: host names only,
                              no https:// or path (api.example.com)
-  --delivery fetch|file|env|agent  fetch (default): K2 makes the HTTPS call and adds the
+  --delivery fetch|proxy|file|env|agent  fetch (default): K2 makes the HTTPS call and adds the
                              secret; you never see it. Use it with
                              k2 vault fetch --secret NAME https://HOST/path
                              (GET by default; k2 vault fetch --help)
+                             proxy: as fetch, and new sessions also get a
+                             placeholder key and a local base URL in their env.
                              file: $K2_SECRETS_DIR/NAME. env: $NAME (upper case,
                              - and . become _) in new sessions. You can read both.
                              agent (an ssh key, with --kind ssh_key, workspace
@@ -32999,6 +33001,8 @@ print("key:            %s (%s)" % (v.get("keyHomeLabel"), v.get("keyHome")))
 print("rollback guard: %s" % v.get("rollbackGuard"))
 print("recovery key:   %s" % v.get("recovery"))
 print("vault password: %s" % ("set" if v.get("confirmPassword") else "not set"))
+px = v.get("proxy") or {}
+print("proxy:          %s" % (("127.0.0.1:%s%s" % (px["port"], "  (%s)" % px["hint"] if px.get("moved") else "")) if px.get("port") else (px.get("hint") or "not listening")))
 names = {"box": "box key (this machine)", "recovery": "recovery key", "backup": "backup key"}
 hs = v.get("holders") or []
 if hs:
@@ -33689,10 +33693,12 @@ Examples:
 EOF
             ;;
         delivery) cat <<'EOF'
-k2 vault delivery NAME fetch|agent|file|env|api [--ceiling <d>] [--scope <s>]
+k2 vault delivery NAME fetch|agent|proxy|file|env|api [--ceiling <d>] [--scope <s>]
 
 NAME's default delivery (what its own workspace gets without a grant) and,
 with --ceiling, the loosest delivery allowed. fetch: K2 makes the call;
+proxy: fetch, plus a placeholder key and local base URL in new sessions'
+env (k2 vault proxy-url NAME gets them now);
 agent (ssh keys): $SSH_AUTH_SOCK, ssh and git sign, nobody sees the key;
 file: $K2_SECRETS_DIR/NAME; env: $NAME; api: k2 vault get NAME. Agent,
 file, env and api arrive in new sessions. No --env-name or --file-name
@@ -33725,7 +33731,7 @@ delivery; a new one replaces the old).
                      the seat request card gives it;
                      (preview: k2 settings set ciPreview true)). People
                      only (the value leaves this machine), --as env only.
-  --as fetch|agent|file|env|api   default: the secret's delivery; --env-name alone
+  --as fetch|agent|proxy|file|env|api   default: the secret's delivery; --env-name alone
                      means env, --file-name alone means file. Never above
                      the secret's ceiling.
   --env-name X       the variable for env delivery (default: NAME in capitals,
@@ -33900,6 +33906,31 @@ secret.
 
 Example: k2 vault run --secret DATABASE_URL -- npm run migrate
 Example: k2 vault run --secret STRIPE_KEY=STRIPE_API_KEY --env-file .env.k2 -- node app.js
+EOF
+            ;;
+        proxy-url) cat <<'EOF'
+k2 vault proxy-url NAME [--scope session] [--ttl 2h] [--json]
+
+From a K2 terminal: a placeholder key and a loopback base URL for one
+secret, so an SDK or script can use it and never hold the real key. Prints
+two lines, ready for the environment:
+
+  ANTHROPIC_API_KEY=k2v_ph_…
+  ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/p/k2v_ph_…/anthropic
+
+K2 takes the placeholder out of each request, adds the real key the way the
+secret says, and calls the secret's one site. Responses stream back; an echo
+of the key comes back as [k2v:NAME]. Works for any secret you may fetch that
+has exactly one site (several sites: use k2 vault fetch).
+
+The placeholder is yours and ends with this session, or at --ttl (90s, 10m,
+2h, 7d). Put it only where an API key goes: in a request body or query K2
+refuses with 400 placeholder_misplaced rather than send it.
+
+New sessions get these two variables by themselves when a secret's delivery
+is proxy (k2 vault delivery NAME proxy, or grant --as proxy).
+
+Example: set -a; eval "$(k2 vault proxy-url ANTHROPIC_KEY)"; set +a; python3 ask.py
 EOF
             ;;
         file) cat <<'EOF'
@@ -35482,7 +35513,7 @@ cmd_migrate() {
 # new verb goes here too: a word not listed is an unknown verb, with or
 # without --help (prd-vault-for-agents-v1 X9: `k2 vault exec --help` used to
 # print the top help and exit 0, so an agent took the guess as real).
-_VAULT_VERBS=" status list ls show set rotate hosts sign public-key agent-limit delivery grant revoke open disable enable destroy get audit requests presets doctor env-file file sync import service reveal recovery confirm-password kek rekey rollback recipient carry backup restore systemd-cred placement placements fetch send incoming sent accept-from ask asks unsend run "
+_VAULT_VERBS=" status list ls show set rotate hosts sign public-key agent-limit delivery grant revoke open disable enable destroy get audit requests presets doctor env-file file proxy-url sync import service reveal recovery confirm-password kek rekey rollback recipient carry backup restore systemd-cred placement placements fetch send incoming sent accept-from ask asks unsend run "
 
 # k2 vault run (prd-vault-for-agents-v1 A1): parse the flags before `--`, ask
 # the daemon where its binary is, and exec that as the helper. Policy, audit
@@ -35823,7 +35854,7 @@ print(json.dumps(o))' "$agent_burst" "$agent_per_minute" "$allow_fwd" "$no_fwd")
 print("%s: at most %s signatures a second, %s a minute per session; forwarded agents (ssh -A) %s" % (m.get("name"), p.get("burst"), p.get("perMinute"), "allowed" if p.get("allowForwarded") else "refused"))'
             ;;
         delivery)
-            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault delivery NAME fetch|agent|file|env|api [--ceiling <d>]" >&2; exit 2; }
+            [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault delivery NAME fetch|agent|proxy|file|env|api [--ceiling <d>]" >&2; exit 2; }
             # A secret has no env/file name of its own; only a grant does.
             # Refuse rather than drop the flag and print success.
             if [ -n "$env_name" ] || [ -n "$file_name" ]; then
@@ -35997,6 +36028,23 @@ print(json.dumps(o))' "$done_path" "$ttl" "$wait_for" "${efs[@]+"${efs[@]}"}")"
             _vault_wait_call env-file "$(_vault_merge "$ej" "$sj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
+            ;;
+        proxy-url)
+            # A3: a placeholder and base URL for this session; the daemon
+            # picks the names and the session (from the passport).
+            local psecret="${use_secrets[0]:-$name}"
+            [ "${#use_secrets[@]}" -le 1 ] && [ -n "$psecret" ] || { echo "usage: k2 vault proxy-url NAME [--ttl 2h]  (one secret)" >&2; exit 2; }
+            local pj
+            pj="$(python3 -c 'import json,sys
+o={"secret":sys.argv[1]}
+if sys.argv[2]: o["ttl"]=sys.argv[2]
+print(json.dumps(o))' "$psecret" "$ttl")"
+            _vault_call POST proxy-url "$(_vault_merge "$pj" "$sj")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+print("%s=%s" % (v["envName"], v["placeholder"]))
+print("%s=%s" % (v["baseUrlEnv"], v["baseUrl"]))'
             ;;
         file)
             # 2026-10-28: one secret delivered as file (or env), as a 0600 file.

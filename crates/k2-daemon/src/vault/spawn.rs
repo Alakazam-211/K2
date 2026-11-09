@@ -4,7 +4,9 @@
 //! Every agent spawn path (`spawn.rs`, `v2_spawn.rs`, the legacy
 //! terminal create) calls [`materialize`] right after the passport is
 //! minted. Only secrets whose delivery is `file` or `env` for this
-//! session arrive; fetch/proxy secrets never touch the environment.
+//! session arrive; a fetch secret never touches the environment, and a
+//! `proxy` one arrives as a placeholder and base URL, never its value
+//! ([`super::proxy`]).
 //! `agent` secrets (ssh keys) never arrive either: the session gets
 //! `SSH_AUTH_SOCK`, a socket in its secrets dir that lists and signs with
 //! them ([`super::ssh_agent`]).
@@ -418,6 +420,8 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
         }
     }
     deliver_items(&vault, env, &who, session_id, sandboxed, &mut out);
+    // A3: a placeholder and a loopback base URL for `proxy` deliveries.
+    super::proxy::deliver_at_spawn(&vault, env, &who, ws, session_id, sandboxed, &mut out.skipped);
     if let (Some(via), false) = (refs_from.via.as_deref(), out.delivered.is_empty()) {
         vault.audit_carry("v1_cell_delivery", &k2_vault::Actor::System(via.to_string()), &who.label(), &out.delivered);
     }

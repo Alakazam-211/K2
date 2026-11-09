@@ -345,7 +345,7 @@ pub fn execute(
         let status = resp.status();
 
         if status.is_redirection() && hops < MAX_REDIRECTS {
-            if let Some(next) = follow_target(&url, &resp, &origin).filter(|n| {
+            if let Some(next) = follow_target(&url, resp.headers(), &origin).filter(|n| {
                 Origin::from_url(n).is_ok_and(|o| allow.check(&o).is_ok())
             }) {
                 drop(resp);
@@ -388,7 +388,7 @@ fn ovh_clocks() -> &'static parking_lot::Mutex<HashMap<String, (Instant, Option<
 /// (unauthenticated, no secret sent) on the same origin, through the same
 /// allowlist and egress vetting, cached per origin for 15 minutes as an
 /// offset from the local clock. On any failure: the local clock, `local`.
-fn ovh_time(url: &url::Url, origin: &Origin, allow: &Allowlist, exact_ip: bool, purpose: Purpose, deadline: Instant) -> (i64, &'static str) {
+pub(crate) fn ovh_time(url: &url::Url, origin: &Origin, allow: &Allowlist, exact_ip: bool, purpose: Purpose, deadline: Instant) -> (i64, &'static str) {
     let key = origin.render();
     let local = chrono::Utc::now().timestamp();
     if let Some((at, off)) = ovh_clocks().lock().get(&key).copied() {
@@ -432,15 +432,15 @@ fn ovh_time(url: &url::Url, origin: &Origin, allow: &Allowlist, exact_ip: bool, 
 }
 
 /// A same-origin `Location` to follow, or `None` (return the 3xx as-is).
-fn follow_target(current: &url::Url, resp: &reqwest::blocking::Response, origin: &Origin) -> Option<url::Url> {
-    let loc = resp.headers().get(reqwest::header::LOCATION)?.to_str().ok()?;
+pub(crate) fn follow_target(current: &url::Url, headers: &HeaderMap, origin: &Origin) -> Option<url::Url> {
+    let loc = headers.get(reqwest::header::LOCATION)?.to_str().ok()?;
     let next = current.join(loc).ok()?;
     let to = Origin::from_url(&next).ok()?;
     redirect_allowed(origin, &to).then_some(next)
 }
 
 /// Set `param` to `value`, replacing any agent-supplied value.
-fn set_query_param(url: &mut url::Url, param: &str, value: &str) {
+pub(crate) fn set_query_param(url: &mut url::Url, param: &str, value: &str) {
     if url.query_pairs().any(|(k, _)| k == param) {
         let kept: Vec<(String, String)> =
             url.query_pairs().filter(|(k, _)| k != param).map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
@@ -455,7 +455,7 @@ fn set_query_param(url: &mut url::Url, param: &str, value: &str) {
     }
 }
 
-fn send_kind(e: &reqwest::Error) -> &'static str {
+pub(crate) fn send_kind(e: &reqwest::Error) -> &'static str {
     if e.is_timeout() {
         "timed out"
     } else if is_tls(e) {

@@ -40,15 +40,18 @@ pub const CARRY_IMPORT: &str = "/cli/vault/carry/import";
 /// Papercut 8 (0.46.5): write the file secrets the caller's own running
 /// session is now granted into its `$K2_SECRETS_DIR` (`k2 vault sync`).
 pub const SYNC: &str = "/cli/vault/sync";
+/// `k2 vault proxy-url NAME` (prd-vault-for-agents-v1 A3): a placeholder and
+/// loopback base URL for the caller's own session.
+pub const PROXY_URL: &str = "/cli/vault/proxy-url";
 /// A ciphertext snapshot of vault.db for a backup (§13.1).
 pub const BACKUP: &str = "/cli/vault/backup";
 /// Wrap the data key to a backup's age recipient.
 pub const BACKUP_RECIPIENT: &str = "/cli/vault/backup/recipient";
 
 /// Routes this module serves.
-pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, FILE, IMPORT, SERVICE, RECIPIENT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
+pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, FILE, IMPORT, SERVICE, RECIPIENT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC, PROXY_URL];
 /// POST-only routes among them (`service` serves both).
-pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, FILE, IMPORT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
+pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, FILE, IMPORT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC, PROXY_URL];
 
 pub fn is_route(path: &str) -> bool {
     ROUTES.contains(&path)
@@ -72,6 +75,7 @@ pub fn handle(
         ENV_FILE => env_file(vault, c, body),
         FILE => use_file(vault, c, body),
         SYNC => sync(vault, c),
+        PROXY_URL => proxy_url(vault, c, body),
         IMPORT => import(vault, c, body),
         SERVICE if body.is_empty() => service_get(vault, c, params),
         SERVICE => service_set(c, body),
@@ -122,7 +126,7 @@ struct FetchBody {
     out: Option<String>,
 }
 
-fn rate() -> &'static crate::vault_fetch::RateLimiter {
+pub(crate) fn rate() -> &'static crate::vault_fetch::RateLimiter {
     static R: OnceLock<crate::vault_fetch::RateLimiter> = OnceLock::new();
     R.get_or_init(crate::vault_fetch::RateLimiter::for_fetch)
 }
@@ -194,6 +198,30 @@ pub(crate) fn use_selector(vault: &LocalVault, c: &VaultCaller, s: &Sel) -> Resu
         }
     }
     Ok(sel)
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxyUrlBody {
+    #[serde(flatten)]
+    sel: Sel,
+    /// Shorthand for the secret's name.
+    secret: Option<String>,
+    /// `2h`, `10m`, or seconds. Absent: until the session ends.
+    ttl: Option<Value>,
+    ttl_secs: Option<i64>,
+}
+
+/// `k2 vault proxy-url NAME`: see [`crate::vault::proxy::mint_for_caller`].
+fn proxy_url(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    let b: ProxyUrlBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let mut sel = b.sel;
+    if let Some(n) = b.secret.filter(|n| !n.is_empty()) {
+        sel.name = Some(n);
+    }
+    let ttl = k2_vault::duration::body_ttl(b.ttl.as_ref(), b.ttl_secs)?;
+    let selector = use_selector(vault, c, &sel)?;
+    crate::vault::proxy::mint_for_caller(vault, c, &selector, ttl, &|s: &str| crate::session_liveness::live_session_ids().contains(s))
 }
 
 fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

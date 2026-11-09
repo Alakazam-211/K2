@@ -2637,8 +2637,9 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
     let delivery = opt_param(params, "delivery").map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
     if let Some(d) = &delivery {
         // X13: `agent` (an ssh key K2 signs with on $SSH_AUTH_SOCK) too.
-        if !matches!(d.as_str(), "fetch" | "file" | "env" | "agent") {
-            return Err(k2_vault::VaultError::bad_request("bad_delivery", "--delivery is fetch, file, env or agent (ssh keys)"));
+        // A3: `proxy` (a placeholder and base URL in every new session).
+        if !matches!(d.as_str(), "fetch" | "file" | "env" | "agent" | "proxy") {
+            return Err(k2_vault::VaultError::bad_request("bad_delivery", "--delivery is fetch, proxy, file, env or agent (ssh keys)"));
         }
     }
     let kind = opt_param(params, "kind").map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
@@ -2654,7 +2655,7 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
     let inject = card_inject_param(params)?;
     let delivery = match (&inject, delivery) {
         (Some(_), None) => Some("fetch".to_string()),
-        (Some(_), Some(d)) if d != "fetch" => {
+        (Some(_), Some(d)) if d != "fetch" && d != "proxy" => {
             return Err(k2_vault::VaultError::bad_request(
                 "inject_needs_fetch",
                 "--inject-* says how K2 sends the secret in its own calls, so it needs --delivery fetch (the default)",

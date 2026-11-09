@@ -20,6 +20,7 @@ pub mod keeper_client;
 #[cfg(target_os = "macos")]
 pub mod local_auth;
 pub mod mainrefs;
+pub mod proxy;
 pub mod publish_env;
 pub mod refstore;
 pub mod run;
@@ -197,6 +198,7 @@ pub fn boot(home: &Path) {
             // added without a person's confirm. Never removed automatically.
             crate::vault_use_routes::notice_unconfirmed_holders(v);
             start_ticker(v.clone());
+            proxy::start_once(dir.clone());
             k2_core::log_debug!(
                 "[vault] open: key={} recovery={} non_dumpable={nd}",
                 v.key_store().kind().as_str(),
@@ -450,6 +452,9 @@ fn on_late_open(v: &Arc<LocalVault>) {
     let nd = k2_vault::secret::set_non_dumpable();
     let _ = NON_DUMPABLE.set(nd);
     start_ticker(v.clone());
+    if let Some(home) = boot_home() {
+        proxy::start_once(vault_dir(&home));
+    }
     // Saved LLM logins: what the closed vault couldn't take is sealed now.
     k2_core::llm_accounts::slots::forget_known();
     let _ = std::thread::Builder::new()

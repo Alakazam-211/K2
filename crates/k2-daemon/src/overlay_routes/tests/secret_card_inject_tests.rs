@@ -1017,8 +1017,11 @@ fn a_card_takes_ws_scope_and_asks_for_an_ssh_key_by_agent_delivery() {
     assert_error_code(&other, "400 Bad Request", "bad_scope");
     let not_a_key = post_card(&handle, "K3", serde_json::json!({ "for": "", "delivery": "agent" }));
     assert_error_code(&not_a_key, "400 Bad Request", "delivery_not_for_kind");
-    let bad = post_card(&handle, "K4", serde_json::json!({ "delivery": "proxy" }));
+    let bad = post_card(&handle, "K4", serde_json::json!({ "delivery": "carrier-pigeon" }));
     assert_error_code(&bad, "400 Bad Request", "bad_delivery");
+    // A3 (V2): a card may propose `proxy`, and the agent's card keeps it.
+    let proxied = post_card(&handle, "K5", serde_json::json!({ "delivery": "proxy" }));
+    assert_eq!(proxied.status, "200 OK", "{}", proxied.body);
 }
 
 /// X13: an ssh key by agent delivery can't be kept for one session (it

@@ -43,7 +43,7 @@ printf '%s' "$top" | grep -Fq -- "--inject-dst header:<Name>|query:<param>|basic
 ok "k2 vault --help: no daemon needed, names --inject-dst and per-verb help"
 
 for verb in status list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
-    doctor env-file run import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign \
+    doctor env-file run proxy-url import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign \
     systemd-cred placement placements public-key agent-limit; do
     out="$(k2n vault "$verb" --help 2>&1)" || fail "vault $verb --help exited non-zero: $out"
     case "$verb" in
@@ -109,7 +109,7 @@ ok "set --help: inject options, the four dst forms, delivery per kind"
 
 # prd-vault-gaps-v1 item 3: agent delivery.
 printf '%s' "$(k2n vault delivery --help)" | grep -Fq 'agent (ssh keys): $SSH_AUTH_SOCK' || fail "delivery --help lacks agent"
-printf '%s' "$(k2n vault grant --help)" | grep -Fq -- "--as fetch|agent|file|env|api" || fail "grant --help lacks --as agent"
+printf '%s' "$(k2n vault grant --help)" | grep -Fq -- "--as fetch|agent|proxy|file|env|api" || fail "grant --help lacks --as agent"
 al_help="$(k2n vault agent-limit --help)"
 for needle in "--burst N" "--per-minute M" "--allow-forwarded" "default 60" "default 240" "rate_limited" \
     "Advisory, not a security control" "can still sign with it" "come from what the ssh client" "can't be told apart."; do

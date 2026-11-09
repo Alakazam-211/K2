@@ -2558,6 +2558,38 @@ impl LocalVault {
         Ok(out)
     }
 
+    /// One secret's sites for `who` through the proxy: the grants' narrowed
+    /// sites, or the secret's own. `not_granted` when nothing at fetch
+    /// level or looser reaches it (a fetch grant is enough, §9.3 V1).
+    /// Several candidates give the union, so a caller can't count on the
+    /// narrowest one. Says nothing about status or the value: `resolve`
+    /// checks those on each use.
+    pub fn proxy_target(&self, sel: &Selector, who: &Requester) -> Result<ProxyItem> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let m = self.find_row(&conn, &keys, sel)?.meta;
+        let rollback = *self.rollback.lock();
+        let mut hosts: Vec<String> = vec![];
+        let mut env_name = None;
+        let mut any = false;
+        for (d, env, _, narrowed, explicit) in self.effective(&conn, &keys, &m, who)? {
+            if (explicit && rollback) || d.level() < Delivery::Proxy.level() {
+                continue;
+            }
+            any = true;
+            env_name = env_name.or(env);
+            for h in narrowed.unwrap_or_else(|| m.hosts.clone()) {
+                if !hosts.contains(&h) {
+                    hosts.push(h);
+                }
+            }
+        }
+        if !any {
+            return Err(VaultError::forbidden("not_granted", "this workspace can't use that secret"));
+        }
+        Ok(ProxyItem { secret_id: m.id.clone(), name: m.name.clone(), hosts, env_name })
+    }
+
     // ── list / meta / audit ─────────────────────────────────────────
 
     fn list_inner(&self, filter: &ListFilter, actor: &Actor) -> Result<Vec<SecretMeta>> {
@@ -3291,7 +3323,7 @@ impl LocalVault {
         if let Some(i) = &r.inject {
             i.card_ok()?;
             // A sealed injection is sent by K2 (SC-A5).
-            if r.proposed_delivery != Delivery::Fetch {
+            if !matches!(r.proposed_delivery, Delivery::Fetch | Delivery::Proxy) {
                 return Err(VaultError::bad_request("inject_needs_fetch", "how a secret is sent applies when K2 makes the call (delivery fetch)"));
             }
         }
@@ -3658,7 +3690,7 @@ impl LocalVault {
         let _ = member;
         // People may type wildcards (VS4); agent proposals were exact.
         let hosts = hosts::normalise_list(&ans.hosts.clone().unwrap_or_else(|| req.proposed_hosts.clone()), !guest)?;
-        let mut delivery = ans.delivery.unwrap_or(req.proposed_delivery);
+        let delivery = ans.delivery.unwrap_or(req.proposed_delivery);
         if guest {
             if delivery != Delivery::Fetch {
                 return Err(VaultError::forbidden("guest_fetch_only", "a guest's secret is only added to calls by K2"));
@@ -3675,10 +3707,7 @@ impl LocalVault {
                 "an environment variable reaches new sessions only, so one kept for this session alone would never arrive; use a file, or keep it for this workspace",
             ));
         }
-        if delivery == Delivery::Proxy {
-            delivery = Delivery::Fetch;
-        }
-        if delivery == Delivery::Fetch && hosts.is_empty() {
+        if matches!(delivery, Delivery::Fetch | Delivery::Proxy) && hosts.is_empty() {
             return Err(VaultError::bad_request("hosts_required", "add a site, or let the agent read it"));
         }
         // How it is sent (prd-secret-card-injection-v1 §2, §3.1). The
@@ -4015,6 +4044,17 @@ impl LocalVault {
             return Err(VaultError::new("placeholder_unknown", 401, "placeholder expired"));
         }
         Ok(p)
+    }
+
+    /// How many unexpired placeholders a session holds.
+    pub fn placeholders_live_count(&self, session_id: &str) -> Result<u32> {
+        let conn = self.conn.lock();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM placeholder WHERE session_id = ?1 AND (expires_at IS NULL OR expires_at > ?2)",
+            params![session_id, now_ts()],
+            |r| r.get(0),
+        )?;
+        Ok(n.max(0) as u32)
     }
 
     /// Session ended: its placeholders die, and so do the session grants

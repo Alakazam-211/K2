@@ -913,3 +913,27 @@ fn a_card_change_wakes_a_waiter() {
     v.tick().expect("tick");
     assert!(v.card_generation() > g, "an expired card counts");
 }
+
+/// A3 (V2): a card answered with `proxy` stores `proxy`; it used to be
+/// rewritten to `fetch` silently. A proxy card still needs a site, like fetch.
+#[test]
+fn a_card_answered_with_proxy_stores_proxy() {
+    let t = TestDir::new("ci-proxy");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let mut c = card("card-proxy-0123456789a", "PROXIED", None);
+    c.proposed_delivery = Delivery::Proxy;
+    v.request_create(c).expect("card");
+    let out = v.request_answer("card-proxy-0123456789a", SecretBytes::from_string(format!("u:{PW}")), &CardAnswer::default(), &Actor::Owner).expect("saved");
+    assert_eq!(out.meta.default_delivery, Delivery::Proxy);
+
+    let mut no_site = card("card-proxy-nosite-012345", "PROXIED_NO_SITE", None);
+    no_site.proposed_delivery = Delivery::Proxy;
+    no_site.proposed_hosts = vec![];
+    v.request_create(no_site).expect("card");
+    let e = v
+        .request_answer("card-proxy-nosite-012345", SecretBytes::from_string(PW.into()), &CardAnswer::default(), &Actor::Owner)
+        .err()
+        .expect("a proxy secret with no site can't be used");
+    assert_eq!(e.code, "hosts_required");
+}

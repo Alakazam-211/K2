@@ -194,6 +194,13 @@ arc-swap = "1"
 # h2 by ALPN. `h2` was already in Cargo.lock through hyper.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "http2"] }
 
+# prd-vault-for-agents-v1 A3: the vault's loopback proxy (`vault/proxy.rs`) is
+# one hyper listener with streamed responses. All three were already in
+# Cargo.lock through reqwest.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+
 # Direct libc calls (forked helpers' `_exit`, process and socket calls).
 # Same crate version k2-core already pulls in transitively.
 libc = "0.2"

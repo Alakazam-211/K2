@@ -637,6 +637,9 @@ function AppRoot(): React.JSX.Element {
       if (target.tabIndex >= 0 && target.dataset.terminalContainer === undefined) return
       // Opt-in selectable surfaces (Tickets / Project chat / list cards).
       if (target.closest('.selectable-copy, .chat-thread-selectable')) return
+      // A focusable viewer whose content (an <img>) isn't: the click target is
+      // the child, and focus has to stay on the viewer for its hotkeys.
+      if (target.closest('[data-k2-keeps-focus]')) return
       // Drag-select just finished: selection exists on mouseup/click.
       if (hasLiveTextSelection()) return
 

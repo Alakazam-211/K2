@@ -6,6 +6,7 @@ import {
 import { isHostSwitchedError } from '@/lib/daemon-cli'
 import { isMacTmpPath, isRemoteMacTmpError } from '@/lib/remote-mac-tmp'
 import { useRoom } from '@/components/Room/RoomContext'
+import { ZoomableImage } from './ZoomableImage'
 
 interface ImageViewerProps {
   filePath: string
@@ -149,19 +150,17 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
   }
 
   return (
-    <div className="flex flex-col items-center justify-center p-4 min-h-full bg-[var(--color-bg)] gap-2">
-      <img
-        src={url}
-        alt={alt ?? filePath.split('/').pop() ?? 'image'}
-        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-        onError={() => {
-          setError(
-            /\.heic$/i.test(filePath)
-              ? 'HEIC preview not supported in this client'
-              : `Browser could not decode this image${meta ? ` (${meta})` : ''}`,
-          )
-        }}
-      />
-    </div>
+    <ZoomableImage
+      key={url}
+      src={url}
+      alt={alt ?? filePath.split('/').pop() ?? 'image'}
+      onError={() => {
+        setError(
+          /\.heic$/i.test(filePath)
+            ? 'HEIC preview not supported in this client'
+            : `Browser could not decode this image${meta ? ` (${meta})` : ''}`,
+        )
+      }}
+    />
   )
 }

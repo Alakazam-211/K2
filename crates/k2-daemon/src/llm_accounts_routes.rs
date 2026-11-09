@@ -1560,4 +1560,252 @@ mod tests {
             panic!("no refresh expected");
         }
     }
+
+    // ── Subscription switch froze the daemon (0.46.10, 2026-11-09) ───
+    //
+    // A vendor call (refresh, usage check) ran while holding the Claude
+    // tool lock, and the switch / reconcile waited 20 s for that lock
+    // while holding the database: every route stalled. These hang a fake
+    // vendor call and check that the database and a switch don't wait on
+    // it. Every waiting thread is released and joined before any assert,
+    // so a failure never leaves a thread running past the temp HOME.
+
+    /// A vendor call that hangs until the test releases it (or drops the
+    /// release side, as a failing test does).
+    struct Gate {
+        entered: Mutex<mpsc::Sender<()>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl Gate {
+        fn hold(&self) {
+            let _ = self.entered.lock().unwrap().send(());
+            let _ = self.release.lock().unwrap().recv_timeout(Duration::from_secs(90));
+        }
+    }
+
+    fn gate() -> (Gate, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (etx, erx) = mpsc::channel();
+        let (rtx, rrx) = mpsc::channel();
+        (Gate { entered: Mutex::new(etx), release: Mutex::new(rrx) }, erx, rtx)
+    }
+
+    /// Work on another thread, timed; the answer is read with a deadline.
+    struct Timed<T> {
+        rx: mpsc::Receiver<(T, Duration)>,
+        handle: std::thread::JoinHandle<()>,
+    }
+
+    fn timed<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Timed<T> {
+        let (tx, rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let t0 = Instant::now();
+            let out = f();
+            let _ = tx.send((out, t0.elapsed()));
+        });
+        Timed { rx, handle }
+    }
+
+    impl<T> Timed<T> {
+        /// The answer if it came within `limit`; `None` while it still waits.
+        fn within(&self, limit: Duration) -> Option<(T, Duration)> {
+            self.rx.recv_timeout(limit).ok()
+        }
+    }
+
+    /// An unrelated database read (any `/cli/*` route does one).
+    fn db_read() -> Timed<i64> {
+        timed(|| with_conn(|conn| conn.query_row("SELECT COUNT(*) FROM llm_accounts", [], |r| r.get(0))).unwrap())
+    }
+
+    fn switch_to(id: &str) -> Timed<SwitchResult> {
+        let body = Body { id: Some(id.to_string()), ..Default::default() };
+        timed(move || switch_two_phase(false, &body, "owner-token", &NoVendor))
+    }
+
+    /// An idle Claude token signed in to its slot with its own profile.
+    fn add_idle(tag: &str) -> String {
+        let e = with_conn(|conn| wallet_core::create(conn, Tool::Claude, tag, None)).unwrap();
+        let dir = store::slot_dir(Tool::Claude, &e.id);
+        store::ensure_private_dir(&dir).unwrap();
+        std::fs::write(dir.join(".credentials.json"), cred(tag)).unwrap();
+        std::fs::write(
+            dir.join(".claude.json"),
+            format!(r#"{{"oauthAccount":{{"accountUuid":"uuid-{tag}","emailAddress":"{tag}@example.test"}}}}"#),
+        )
+        .unwrap();
+        with_conn(|conn| {
+            wallet_core::update_meta(conn, &e.id, &wallet_core::MetaUpdate { state: Some(state::SIGNED_IN.into()), ..Default::default() })
+        })
+        .unwrap();
+        e.id
+    }
+
+    /// Keep-warm's vendor: B's refresh hangs; any other token's fails.
+    struct HangingRefresher {
+        gate: Gate,
+        id: String,
+    }
+
+    impl wallet::Refresher for HangingRefresher {
+        fn refresh(&self, _tool: Tool, id: &str) -> Result<(), String> {
+            if id != self.id {
+                return Err("not this test's token".into());
+            }
+            self.gate.hold();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_hanging_keep_warm_refresh_blocks_neither_the_database_nor_a_switch() {
+        let home = crate::test_support::TempHome::new();
+        let (_a, b) = setup(home.path());
+        let c = add_idle("c");
+        // B is due: its access token expires within the hour.
+        let soon = (chrono::Utc::now().timestamp() + 1800) * 1000;
+        std::fs::write(
+            store::slot_cred_path(Tool::Claude, &b),
+            format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-b","refreshToken":"{MARKER}-rt-b","expiresAt":{soon}}}}}"#),
+        )
+        .unwrap();
+        let (g, entered, release) = gate();
+        let refresher = HangingRefresher { gate: g, id: b.clone() };
+        let warming = timed(move || rt::keep_warm_pass(&refresher));
+        let reached = entered.recv_timeout(Duration::from_secs(10));
+        let read = db_read();
+        let read_answer = read.within(Duration::from_secs(2));
+        let to_c = switch_to(&c);
+        let to_c_answer = to_c.within(Duration::from_secs(8));
+        let to_b = switch_to(&b);
+        let to_b_answer = to_b.within(Duration::from_secs(8));
+        drop(release);
+        let warmed = warming.within(Duration::from_secs(90));
+        for t in [read.handle, to_c.handle, to_b.handle, warming.handle] {
+            t.join().expect("thread");
+        }
+
+        reached.expect("keep-warm reached B's refresh");
+        let (_, waited) = read_answer.expect("a database read finished while keep-warm's refresh hung");
+        assert!(waited < Duration::from_secs(1), "a database read waited {waited:?} on keep-warm's refresh");
+        let (res, took) = to_c_answer.expect("a switch to another token finished while keep-warm's refresh hung");
+        let out = res.expect("switch to C");
+        assert_eq!(out.0.to, c);
+        assert!(took < Duration::from_secs(6), "the switch took {took:?}");
+        let (res, took) = to_b_answer.expect("a switch to the token being refreshed answered while its refresh hung");
+        let err = res.expect_err("B is being refreshed: busy");
+        assert_eq!(err.code(), "busy", "{err}");
+        assert!(took < Duration::from_secs(7), "busy took {took:?}");
+        let (res, _) = warmed.expect("keep-warm finished once released");
+        let results = res.expect("keep-warm pass");
+        let r = results.iter().find(|r| r.id == b).expect("B was warmed");
+        assert!(r.refreshed, "{r:?}");
+        assert_eq!(std::fs::read_to_string(home.path().join(".claude/.credentials.json")).unwrap(), cred("c"));
+        clear_claude_rows();
+    }
+
+    #[test]
+    fn a_hanging_usage_check_of_an_idle_token_does_not_hold_up_a_switch() {
+        let home = crate::test_support::TempHome::new();
+        let (_a, b) = setup(home.path());
+        let c = add_idle("c");
+        let entry_b = with_conn(|conn| wallet_core::get(conn, &b)).unwrap().unwrap();
+        let (g, entered, release) = gate();
+        let probing = timed(move || {
+            rt::probe_idle_usage_with(&entry_b, &|_token| {
+                g.hold();
+                Err("usage endpoint status 503".into())
+            })
+        });
+        let reached = entered.recv_timeout(Duration::from_secs(10));
+        let to_c = switch_to(&c);
+        std::thread::sleep(Duration::from_millis(300));
+        let read = db_read();
+        let read_answer = read.within(Duration::from_secs(2));
+        let to_c_answer = to_c.within(Duration::from_secs(8));
+        drop(release);
+        let probed = probing.within(Duration::from_secs(90));
+        for t in [read.handle, to_c.handle, probing.handle] {
+            t.join().expect("thread");
+        }
+
+        reached.expect("the usage check reached the vendor");
+        let (_, waited) = read_answer.expect("a database read finished while a usage check hung");
+        assert!(waited < Duration::from_secs(1), "a database read waited {waited:?}");
+        let (res, took) = to_c_answer.expect("the switch finished while a usage check hung");
+        assert_eq!(res.expect("switch to C").0.to, c);
+        assert!(took < Duration::from_secs(6), "the switch took {took:?}");
+        probed.expect("the usage check finished once released").0.expect("probe");
+        clear_claude_rows();
+    }
+
+    #[test]
+    fn a_switch_while_another_task_holds_the_claude_lock_answers_busy_fast() {
+        let home = crate::test_support::TempHome::new();
+        let (a, b) = setup(home.path());
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _l = store::lock_tool(Tool::Claude, Duration::from_secs(1)).expect("the Claude lock is free");
+            held_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(90));
+        });
+        let held = held_rx.recv_timeout(Duration::from_secs(5));
+        let switching = switch_to(&b);
+        std::thread::sleep(Duration::from_millis(300));
+        let read = db_read();
+        let read_answer = read.within(Duration::from_secs(2));
+        let answer = switching.within(Duration::from_secs(8));
+        drop(release);
+        holder.join().expect("holder");
+        for t in [read.handle, switching.handle] {
+            t.join().expect("thread");
+        }
+
+        held.expect("the holder took the Claude lock");
+        let (_, waited) = read_answer.expect("a database read finished while a switch waited for the Claude lock");
+        assert!(waited < Duration::from_secs(1), "a database read waited {waited:?}");
+        let (res, took) = answer.expect("the switch answered while the lock was held");
+        let err = res.expect_err("busy");
+        assert_eq!(err.code(), "busy", "{err}");
+        assert!(err.to_string().contains("try again in a moment"), "{err}");
+        assert!(took < Duration::from_secs(6), "busy took {took:?}");
+        let active = with_conn(|conn| wallet_core::active_id(conn, Tool::Claude)).unwrap();
+        assert_eq!(active.as_deref(), Some(a.as_str()), "nothing switched");
+        assert_eq!(std::fs::read_to_string(home.path().join(".claude/.credentials.json")).unwrap(), cred("a"));
+        clear_claude_rows();
+    }
+
+    #[test]
+    fn the_claude_lock_is_never_waited_for_while_the_database_is_held() {
+        let _home = crate::test_support::TempHome::new();
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _l = store::lock_tool(Tool::Claude, Duration::from_secs(1)).expect("the Claude lock is free");
+            held_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(90));
+        });
+        let held = held_rx.recv_timeout(Duration::from_secs(5));
+        let t0 = Instant::now();
+        let res = with_conn(|_conn| store::lock_tool(Tool::Claude, Duration::from_secs(20)).map(|_| ()));
+        let took = t0.elapsed();
+        drop(release);
+        holder.join().expect("holder");
+
+        held.expect("the holder took the Claude lock");
+        let err = res.expect_err("busy while another task holds it");
+        assert_eq!(err.code(), "busy");
+        assert!(took < Duration::from_millis(250), "waited {took:?} for the Claude lock while holding the database");
+    }
+
+    #[test]
+    fn a_busy_answer_is_409_with_a_retry_hint() {
+        let r = wallet_err(WalletError::LockBusy("Claude".into()));
+        assert_eq!(r.status, "409 Conflict");
+        let v: Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["error"]["code"], "busy", "{v}");
+        assert_eq!(v["error"]["retryAfterSecs"], json!(3), "{v}");
+        assert_eq!(v["error"]["hint"], json!("Another Claude account task is running; try again in a moment."), "{v}");
+    }
 }

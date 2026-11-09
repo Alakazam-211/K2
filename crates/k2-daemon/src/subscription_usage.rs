@@ -2357,6 +2357,22 @@ pub fn probe_wallet_slot(
     claude_token: Option<(String, Option<i64>, String)>,
     prev: Option<&HarnessUsage>,
 ) -> HarnessUsage {
+    probe_wallet_slot_with(tool, slot, claude_token, prev, &|t| LiveIo.claude_get(t))
+}
+
+/// The Claude usage GET with an access token (the shared probe's own).
+pub fn claude_usage_get(access_token: &str) -> Result<String, String> {
+    LiveIo.claude_get(access_token)
+}
+
+/// [`probe_wallet_slot`] with a given Claude usage GET (tests pass a fake).
+pub fn probe_wallet_slot_with(
+    tool: &str,
+    slot: &Path,
+    claude_token: Option<(String, Option<i64>, String)>,
+    prev: Option<&HarnessUsage>,
+    claude_get: &dyn Fn(&str) -> Result<String, String>,
+) -> HarnessUsage {
     let now = Utc::now();
     if airgap_on() {
         return HarnessUsage {
@@ -2377,7 +2393,7 @@ pub fn probe_wallet_slot(
                 Some((access_token, expires_at, plan)) => ClaudeLogin::Token { access_token, expires_at, plan },
                 None => ClaudeLogin::Missing,
             };
-            probe_claude(login, |t| LiveIo.claude_get(t), prev, SystemTime::now(), now)
+            probe_claude(login, claude_get, prev, SystemTime::now(), now)
         }
         HARNESS_CODEX => {
             let outcome = match guarded_program("codex") {

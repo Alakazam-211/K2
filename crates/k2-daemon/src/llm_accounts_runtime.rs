@@ -1470,6 +1470,11 @@ impl wallet::Refresher for DaemonRefresher {
 /// lock; never runs for the active login (its row is the shared cache)
 /// and never under air-gap.
 pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
+    probe_idle_usage_with(entry, &|t| crate::subscription_usage::claude_usage_get(t))
+}
+
+/// [`probe_idle_usage`] with a given Claude usage GET (tests pass a fake).
+pub(crate) fn probe_idle_usage_with(entry: &Entry, claude_get: &dyn Fn(&str) -> Result<String, String>) -> Result<(), String> {
     if k2_core::airgap::enabled() {
         return Ok(());
     }
@@ -1511,7 +1516,7 @@ pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
             .and_then(|e| e.usage_json)
             .and_then(|s| serde_json::from_str(&s).ok())
     };
-    let mut row = crate::subscription_usage::probe_wallet_slot(tool.as_str(), &slot, claude_token, prev.as_ref());
+    let mut row = crate::subscription_usage::probe_wallet_slot_with(tool.as_str(), &slot, claude_token, prev.as_ref(), claude_get);
     row.source = "probe".into();
     crate::subscription_usage::note_outcome(&format!("acct:{}", entry.id), &row, chrono::Utc::now());
     let text = serde_json::to_string(&row).map_err(|e| e.to_string())?;
@@ -1689,12 +1694,7 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
         reconcile_tool(tool, true);
         resolve_checking(tool);
     }
-    let res = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        wallet::keep_warm(&conn, &DaemonRefresher, chrono::Utc::now().timestamp(), &|id| slot_in_use(id))
-    };
-    let res = match res {
+    let res = match keep_warm_pass(&DaemonRefresher) {
         Ok(r) => r,
         Err(e) => {
             k2_core::log_debug!("[llm-accounts] keep-warm: {e}");
@@ -1719,6 +1719,13 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
         emit(None);
     }
     res
+}
+
+/// The keep-warm refreshes of one pass (idle slots that are due).
+pub(crate) fn keep_warm_pass(refresher: &dyn wallet::Refresher) -> Result<Vec<wallet::WarmResult>, WalletError> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    wallet::keep_warm(&conn, refresher, chrono::Utc::now().timestamp(), &|id| slot_in_use(id))
 }
 
 /// Boot import, then the keep-warm loop (first pass after two minutes,

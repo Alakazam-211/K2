@@ -1,6 +1,7 @@
 import { useRef, type CSSProperties, type ReactNode } from 'react'
 import type { SplitPaneView } from './sessionViewTab'
 import { useTerminalRevealLayout, type TerminalReveal } from './threadReveal'
+import { useThreadFloatsClearOfTerminal } from './threadFloats'
 
 /**
  * Split columns around one terminal node. That node stays the first child
@@ -8,7 +9,7 @@ import { useTerminalRevealLayout, type TerminalReveal } from './threadReveal'
  * side cannot host another canvas, so it renders `sharedTerminal`.
  *
  * `reveal` is Thread view's terminal reveal (`threadReveal.ts`): the same
- * node, hidden until asked for, then beside or below the Thread. The Thread
+ * node, hidden until asked for, then beside or above the Thread. The Thread
  * stays in `single`, so neither side remounts on a toggle.
  */
 export function SplitSessionColumns({
@@ -42,6 +43,10 @@ export function SplitSessionColumns({
     thread: singleRef,
   })
   const revealShown = !!reveal?.shown
+  useThreadFloatsClearOfTerminal(containerRef, !!reveal, {
+    left: reveal?.open && revealLayout.placement === 'left' ? revealLayout.sizePx : 0,
+    top: reveal?.open && revealLayout.placement === 'top' ? revealLayout.sizePx : 0,
+  })
   const terminalSide: 'left' | 'right' | null = !showSplit
     ? null
     : left === 'terminal'
@@ -72,7 +77,7 @@ export function SplitSessionColumns({
             background: 'var(--color-bg)',
             ...(revealLayout.placement === 'left'
               ? { width: revealLayout.sizePx, borderRight: '1px solid var(--color-border)' }
-              : { height: revealLayout.sizePx, borderTop: '1px solid var(--color-border)' }),
+              : { height: revealLayout.sizePx, borderBottom: '1px solid var(--color-border)' }),
           }
         : { flex: hidePty ? undefined : 1 }),
   }
@@ -90,13 +95,11 @@ export function SplitSessionColumns({
         display: showSplit ? 'grid' : 'flex',
         gridTemplateColumns: showSplit ? '1fr 1fr' : undefined,
         gridTemplateRows: showSplit ? 'minmax(0, 1fr)' : undefined,
-        // The terminal stays the first child; column-reverse puts it below.
+        // The terminal stays the first child, which puts it on top or at the left.
         flexDirection: showSplit
           ? undefined
-          : revealShown
-            ? revealLayout.placement === 'left'
-              ? 'row'
-              : 'column-reverse'
+          : revealShown && revealLayout.placement === 'left'
+            ? 'row'
             : 'column',
         overflow: reveal ? 'hidden' : undefined,
       }}

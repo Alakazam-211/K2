@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
+import { ProgressiveHeaderBlur } from '@/components/ui'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { terminalExists } from '@/lib/terminal-daemon'
@@ -36,6 +37,8 @@ import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
+import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
+import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from '@/components/SessionView/threadFloats'
 import { ThreadTerminalToggle } from '@/components/SessionView/ThreadTerminalToggle'
 import { useSettingsStore } from '@/stores/settings'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
@@ -348,14 +351,20 @@ function ChatHeader({
     }
   }
 
+  const floating = viewTab === 'thread'
+  const floatsRef = useThreadFloats(floating)
+
   return (
     <div
-      className="border-b border-[var(--color-border)] flex-shrink-0 relative"
+      ref={floatsRef}
+      className={floating ? undefined : 'border-b border-[var(--color-border)] flex-shrink-0 relative'}
       data-testid="pinned-chat-header"
       data-session-header=""
+      data-thread-floats={floating ? '' : undefined}
     >
-    <div className="px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch">
-      <div className="flex min-w-0 items-stretch">
+    {floating ? <ThreadFloatScrim /> : null}
+    <div className={floating ? `relative z-[1] ${THREAD_FLOATS_GRID}` : 'px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch'}>
+      <div className={floating ? 'flex min-w-0 items-center gap-1.5 thread-float-group' : 'flex min-w-0 items-stretch'}>
       <SessionViewMenu
         value={viewTab}
         splitLeft={splitLeft}
@@ -365,6 +374,7 @@ function ChatHeader({
         onSplitRight={onSplitRight}
         threadConversationId={currentSessionId}
         threadScope={room.scope}
+        floating={floating}
       />
       {viewTab === 'thread' ? (
         <ThreadTerminalToggle
@@ -373,6 +383,7 @@ function ChatHeader({
           onToggle={onToggleTerminal}
         />
       ) : null}
+      {floating && projectId ? <ThreadFloatBell projectId={projectId} /> : null}
       </div>
       {viewTab === 'thread' ? (
         <ThreadViewIdentity name={displayName} addr={overlayAddr} />
@@ -381,13 +392,14 @@ function ChatHeader({
           {displayName}
         </span>
       )}
-      <div className="flex min-w-0 items-center justify-end gap-1">
+      <div className={floating ? 'flex min-w-0 items-center justify-end gap-1.5 thread-float-group' : 'flex min-w-0 items-center justify-end gap-1'}>
       {projectId && (
         <SessionTokenPicker
           scope={room.scope}
           projectId={projectId}
           conversationId={currentSessionId}
           provider={currentSession?.provider || pinnedProvider}
+          floating={floating}
         />
       )}
       {/* 0.37.12 — chat-history dropdown. Lets the user switch the
@@ -400,18 +412,19 @@ function ChatHeader({
         aria-label="Switch pinned chat session"
         aria-haspopup="listbox"
         aria-expanded={historyOpen}
+        {...floatProps(floating, 'pill')}
         className="self-center inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-field)] text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer min-w-0"
       >
         {currentSession && (
           <ProviderIcon provider={currentSession.provider} size={12} />
         )}
-        <span className="truncate max-w-[28ch]">{currentChatTitle}</span>
+        <span className="truncate max-w-[28ch]" data-k2-float-label="">{currentChatTitle}</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
           <path d={historyOpen ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
         </svg>
       </button>
       {historyOpen && (
-        <div ref={historyMenuRef} {...floatMaterial('menu')} className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
+        <div ref={historyMenuRef} {...floatMaterial('menu')} data-k2-float-menu="" className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
           <button
             type="button"
             data-testid="pinned-continue-new-chat"
@@ -505,6 +518,7 @@ function ChatHeader({
       )}
       <button
         type="button"
+        {...floatProps(floating, 'round')}
         onClick={onRefresh}
         disabled={refreshing}
         title="Restart chat session — kills the current agent process and spawns a fresh resume. Use after typing `exit` or when the session is unresponsive."
@@ -539,6 +553,7 @@ function ChatHeader({
         data-testid="pinned-move-note"
         onClick={() => setMoveNote('')}
         title="Dismiss"
+        {...floatProps(floating, 'note')}
         className="w-full text-left px-3 pb-1 text-[10px] text-[var(--color-text-muted)] no-drag cursor-pointer"
       >
         {moving ? 'Moving the pinned chat…' : moveNote}
@@ -1165,7 +1180,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return (
       <>
       {continueDialog}
-      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+      <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
         <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
@@ -1189,7 +1204,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return (
       <>
       {continueDialog}
-      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+      <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
         <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
@@ -1228,7 +1243,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return (
       <>
       {continueDialog}
-      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+      <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
         <EnsuringThreadBody
           viewTab={viewTab}
@@ -1247,7 +1262,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   return (
     <>
     {continueDialog}
-    <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+    <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
         viewTab={viewTab}
@@ -1364,7 +1379,8 @@ function OverlayTabBody({
   const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
   if (viewTab === 'thread') {
     return (
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+        <ProgressiveHeaderBlur />
         <ThreadOverlayPane
           addr={overlayAddr}
           conversationId={overlayConv}
@@ -1805,7 +1821,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     return (
       <>
       {continueDialog}
-      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+      <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
         <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
@@ -1838,7 +1854,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   return (
     <>
     {continueDialog}
-    <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+    <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
         viewTab={viewTab}

@@ -13,6 +13,8 @@ import {
 import { SessionViewMenu } from './SessionViewMenu'
 import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { ThreadTerminalToggle } from './ThreadTerminalToggle'
+import { ThreadFloatBell } from './ThreadFloatBell'
+import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from './threadFloats'
 import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
@@ -145,7 +147,7 @@ export function AgentSessionChrome({
         reportTerminalLive: setTerminalLive,
       }}
     >
-      <div className="h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
+      <div className="relative h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
         <SidecarSessionHeader
           title={title}
           addr={addr}
@@ -162,6 +164,7 @@ export function AgentSessionChrome({
           threadScope={room.scope}
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
+          bell={viewTab === 'thread' && cwd ? <ThreadFloatBell cwd={cwd} /> : null}
           tokenPicker={
             tokenProvider && !room.readOnly ? (
               <SessionTokenPicker
@@ -170,6 +173,7 @@ export function AgentSessionChrome({
                 sessionKey={agentName}
                 conversationId={conversationId}
                 resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
+                floating={viewTab === 'thread'}
               />
             ) : null
           }
@@ -178,9 +182,11 @@ export function AgentSessionChrome({
           <p
             role="alert"
             data-testid="sidecar-refresh-error"
-            className="px-3 py-1 text-xs text-[var(--color-status-error,var(--color-text-muted))]"
+            className={`px-3 py-1 text-xs text-[var(--color-status-error,var(--color-text-muted))] ${
+              viewTab === 'thread' ? 'thread-float-note' : ''
+            }`}
           >
-            {refreshError}
+            {viewTab === 'thread' ? <span {...floatProps(true, 'note')}>{refreshError}</span> : refreshError}
           </p>
         ) : null}
         <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
@@ -209,6 +215,7 @@ export function SidecarSessionHeader({
   onSplitRight,
   onRefresh,
   refreshing,
+  bell,
   tokenPicker,
   threadConversationId,
   threadScope,
@@ -227,19 +234,30 @@ export function SidecarSessionHeader({
   onSplitRight: (view: SplitPaneView) => void
   onRefresh: () => void
   refreshing: boolean
+  /** Thread view: the workspace's completion bell, as a floating object. */
+  bell?: ReactNode
   /** The chat's Token control, left of refresh (agent chat tabs). */
   tokenPicker?: ReactNode
   /** thread-read-v1: this chat's Thread, for the view menu's unread + mute. */
   threadConversationId?: string | null
   threadScope?: ServerScope
 }): JSX.Element {
+  const floating = viewTab === 'thread'
+  const floatsRef = useThreadFloats(floating)
   return (
     <div
-      className="border-b border-[var(--color-border)] flex-shrink-0 px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch"
+      ref={floatsRef}
+      className={
+        floating
+          ? THREAD_FLOATS_GRID
+          : 'border-b border-[var(--color-border)] flex-shrink-0 px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch'
+      }
       data-testid="sidecar-session-header"
       data-session-header=""
+      data-thread-floats={floating ? '' : undefined}
     >
-        <div className="flex min-w-0 items-stretch">
+        {floating ? <ThreadFloatScrim /> : null}
+        <div className={floating ? 'relative z-[1] flex min-w-0 items-center gap-1.5 thread-float-group' : 'flex min-w-0 items-stretch'}>
         <SessionViewMenu
           value={viewTab}
           splitLeft={splitLeft}
@@ -249,6 +267,7 @@ export function SidecarSessionHeader({
           onSplitRight={onSplitRight}
           threadConversationId={threadConversationId}
           threadScope={threadScope}
+          floating={floating}
         />
         {viewTab === 'thread' ? (
           <ThreadTerminalToggle
@@ -257,9 +276,12 @@ export function SidecarSessionHeader({
             onToggle={onToggleTerminal}
           />
         ) : null}
+        {bell}
         </div>
         {viewTab === 'thread' ? (
-          <ThreadViewIdentity name={title} addr={addr} />
+          <div className="relative z-[1] min-w-0">
+            <ThreadViewIdentity name={title} addr={addr} />
+          </div>
         ) : (
           <span
             className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center"
@@ -268,10 +290,11 @@ export function SidecarSessionHeader({
             {title}
           </span>
         )}
-        <div className="flex min-w-0 items-center justify-end gap-1">
+        <div className={floating ? 'relative z-[1] flex min-w-0 items-center justify-end gap-1.5 thread-float-group' : 'flex min-w-0 items-center justify-end gap-1'}>
         {tokenPicker}
         <button
           type="button"
+          {...floatProps(floating, 'round')}
           onClick={onRefresh}
           disabled={refreshing}
           title="Restart this session — respawns this PTY, does not switch Chat."

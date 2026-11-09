@@ -20,6 +20,13 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: () => 'ws://127.0.0.1:1',
 }))
 
+// Thread view's header picture is a lazy import of this module, which loads the
+// Home avatar store and the host pool: more of connect-host than this suite
+// mocks, and when it resolves depends on timing. No test here is about the picture.
+vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({
+  AgentAvatar: () => null,
+}))
+
 vi.mock('@/stores/connect-host', () => ({
   // `getState` backs primaryScope()'s call-time getters (Home M1).
   useConnectHostStore: Object.assign(

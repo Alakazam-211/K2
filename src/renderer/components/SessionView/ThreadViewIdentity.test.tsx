@@ -89,8 +89,8 @@ describe('ThreadViewIdentity', () => {
     expect(root.className).toContain('flex-col')
     expect(root.firstElementChild).toBe(screen.getByTestId('thread-view-picture'))
     expect(screen.getByTestId('thread-view-name').textContent).toBe('Sales')
-    expect(screen.getByTestId('thread-view-picture').style.width).toBe('32px')
-    expect(avatar.calls.at(-1)).toMatchObject({ addr: 'sales/reviewer', label: 'Sales', host: null, size: 32 })
+    expect(screen.getByTestId('thread-view-picture').style.width).toBe('36px')
+    expect(avatar.calls.at(-1)).toMatchObject({ addr: 'sales/reviewer', label: 'Sales', host: null, size: 36 })
   })
 
   it('paints only from theme tokens, and the picture takes the pill radius', () => {
@@ -128,7 +128,7 @@ describe('ThreadViewIdentity', () => {
       for (const fire of observed) fire()
     })
     expect(screen.getByTestId('thread-view-identity').hasAttribute('data-compact')).toBe(false)
-    expect(screen.getByTestId('thread-view-picture').style.width).toBe('32px')
+    expect(screen.getByTestId('thread-view-picture').style.width).toBe('36px')
   })
 
   it('in a narrow pane, keeps the server on hover rather than a second line', () => {

@@ -7,6 +7,7 @@ import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
 import { BellIcon, BellOffIcon } from '@/components/common/BellIcons'
 import { Toggle } from '@/components/ui'
+import { floatProps } from '@/components/SessionView/threadFloats'
 
 type SoundProject = { id: string; path: string; completionSoundEnabled?: number }
 
@@ -88,11 +89,14 @@ export function WorkspaceCompletionSoundToggle({
   )
 }
 
-/** Drawer header bell: accent = workspace on, muted grey + slash = off. */
+/** Drawer header bell: accent = workspace on, muted grey + slash = off.
+ *  Thread view shows the same bell as one of its floating objects. */
 export function WorkspaceCompletionSoundBell({
   project,
+  floating = false,
 }: {
   project: SoundProject
+  floating?: boolean
 }): React.JSX.Element {
   // Home M4: the drawer's room's server; a view-only room writes nothing.
   const room = useRoom()
@@ -119,6 +123,8 @@ export function WorkspaceCompletionSoundBell({
       role="switch"
       aria-checked={enabled}
       disabled={busy}
+      data-testid="workspace-completion-bell"
+      {...floatProps(floating, 'round')}
       className={`flex-shrink-0 p-0.5 no-drag cursor-pointer disabled:opacity-50 ${
         enabled
           ? 'text-[var(--color-accent)]'

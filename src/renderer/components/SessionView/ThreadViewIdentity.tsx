@@ -1,5 +1,6 @@
 import { lazy, Suspense, useLayoutEffect, useRef, useState, type JSX } from 'react'
 import { useRoom } from '@/components/Room/RoomContext'
+import { floatProps } from './threadFloats'
 
 // As ThreadOverlayPane: the avatar pulls in the projects and Home avatar stores.
 const AgentAvatar = lazy(() =>
@@ -12,7 +13,7 @@ const AgentAvatar = lazy(() =>
 // the working strip carries it. A room on another server adds that server's
 // name under the agent's.
 
-export const IDENTITY_PICTURE_PX = 32
+export const IDENTITY_PICTURE_PX = 36
 export const IDENTITY_PICTURE_COMPACT_PX = 20
 /** Below either, the header drops to one line. */
 export const IDENTITY_COMPACT_BELOW_H = 420
@@ -48,41 +49,57 @@ export function ThreadViewIdentity({ name, addr }: { name: string; addr: string 
   const size = compact ? IDENTITY_PICTURE_COMPACT_PX : IDENTITY_PICTURE_PX
   const server = room.scope.isPrimary ? null : room.scope.label
 
+  const picture = (
+    <span
+      data-testid="thread-view-picture"
+      data-k2-float-picture=""
+      data-k2-chamfer="control"
+      className="flex-shrink-0 block"
+      style={{ width: size, height: size, overflow: 'hidden', borderRadius: 'var(--radius-pill)' }}
+    >
+      <Suspense fallback={null}>
+        <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={size} />
+      </Suspense>
+    </span>
+  )
+  const nameLine = (
+    <span
+      data-testid="thread-view-name"
+      className="min-w-0 max-w-full truncate font-semibold text-[var(--color-text-primary)]"
+      style={{ fontSize: 'var(--type-lg)', lineHeight: 1.2 }}
+      title={name}
+    >
+      {name}
+    </span>
+  )
+
+  // The picture sits on the name's object and overlaps its top edge, as on
+  // the phone. In one line it goes inside.
   return (
     <div
       ref={rootRef}
       data-testid="thread-view-identity"
       data-compact={compact ? '' : undefined}
       title={compact && server ? server : undefined}
-      className={`min-w-0 flex items-center justify-center text-center ${
-        compact ? 'flex-row gap-1.5 py-1' : 'flex-col gap-0.5 py-1.5'
-      }`}
+      className={`min-w-0 max-w-full flex items-center justify-center text-center ${compact ? 'flex-row' : 'flex-col'}`}
     >
-      <span
-        data-testid="thread-view-picture"
-        className="flex-shrink-0 block"
-        style={{ width: size, height: size, overflow: 'hidden', borderRadius: 'var(--radius-pill)' }}
+      {compact ? null : picture}
+      <div
+        {...floatProps(true, 'name')}
+        className={`min-w-0 max-w-full flex items-center ${compact ? 'flex-row gap-1.5' : 'flex-col'}`}
       >
-        <Suspense fallback={null}>
-          <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={size} />
-        </Suspense>
-      </span>
-      <span
-        data-testid="thread-view-name"
-        className="min-w-0 max-w-full truncate font-semibold text-[var(--color-text-primary)]"
-        style={{ fontSize: 'var(--type-lg)', lineHeight: 1.2 }}
-      >
-        {name}
-      </span>
-      {server && !compact ? (
-        <span
-          data-testid="thread-view-server"
-          className="min-w-0 max-w-full truncate text-[var(--color-text-muted)]"
-          style={{ fontSize: 'var(--type-xs)', lineHeight: 1.2 }}
-        >
-          {server}
-        </span>
-      ) : null}
+        {compact ? picture : null}
+        {nameLine}
+        {server && !compact ? (
+          <span
+            data-testid="thread-view-server"
+            className="min-w-0 max-w-full truncate text-[var(--color-text-muted)]"
+            style={{ fontSize: 'var(--type-xs)', lineHeight: 1.2 }}
+          >
+            {server}
+          </span>
+        ) : null}
+      </div>
     </div>
   )
 }

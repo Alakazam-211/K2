@@ -21,6 +21,7 @@
 
 import React from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
+import { floatProps } from '@/components/SessionView/threadFloats'
 import { useEffect, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -419,6 +420,7 @@ export function SessionTokenPicker({
   sessionKey,
   conversationId,
   resolveProjectId,
+  floating = false,
 }: {
   scope: ServerScope
   projectId?: string | null
@@ -427,6 +429,8 @@ export function SessionTokenPicker({
   conversationId?: string | null
   /** A tab's workspace, looked up only once the control shows. */
   resolveProjectId?: () => string | null
+  /** Thread view: the button is its own floating object. */
+  floating?: boolean
 }): React.JSX.Element | null {
   const doc = useDoc(scope)
   const [open, setOpen] = useState(false)
@@ -446,6 +450,7 @@ export function SessionTokenPicker({
         onClick={() => setOpen((v) => !v)}
         aria-label={`${tool.display} token for this chat: ${inUseName(tool, value, workspaceDefaultId)}`}
         aria-expanded={open}
+        {...floatProps(floating, 'pill')}
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-field)] text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer"
       >
         <span>{TOKEN_LABEL}</span>
@@ -454,7 +459,7 @@ export function SessionTokenPicker({
         </svg>
       </button>
       {open && (
-        <div {...floatMaterial('menu')} className="absolute right-0 top-full mt-1 z-30 w-[40ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-2">
+        <div {...floatMaterial('menu')} data-k2-float-menu="" className="absolute right-0 top-full mt-1 z-30 w-[40ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-2">
           <SessionTokenMenu scope={scope} doc={doc} tool={tool} target={target} />
         </div>
       )}

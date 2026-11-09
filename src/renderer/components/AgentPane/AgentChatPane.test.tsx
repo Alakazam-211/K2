@@ -664,6 +664,30 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     localStorage.clear()
   })
 
+  it('floats its controls in Thread view, and keeps the bar in Terminal view', async () => {
+    localStorage.clear()
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'thread', left: 'terminal', right: 'thread' }))
+    const { unmount } = renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    const floating = screen.getByTestId('pinned-chat-header')
+    expect(floating.hasAttribute('data-thread-floats')).toBe(true)
+    expect(floating.className).not.toContain('border-b')
+    expect(screen.getByTestId('session-view-button').getAttribute('data-k2-float')).toBe('pill')
+    expect(screen.getByLabelText('Switch pinned chat session').getAttribute('data-k2-float')).toBe('pill')
+    expect(screen.getByLabelText('Refresh chat session').getAttribute('data-k2-float')).toBe('round')
+    unmount()
+
+    localStorage.clear()
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'terminal', left: 'terminal', right: 'thread' }))
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    const bar = screen.getByTestId('pinned-chat-header')
+    expect(bar.hasAttribute('data-thread-floats')).toBe(false)
+    expect(bar.className).toContain('border-b')
+    expect(screen.getByLabelText('Refresh chat session').hasAttribute('data-k2-float')).toBe(false)
+    localStorage.clear()
+  })
+
   it('from Terminal, keeps ChatHeader dropdown on Thread without unmounting PTY', async () => {
     // A saved "New agents open in: Terminal" keeps winning over the default.
     localStorage.clear()

@@ -4,6 +4,7 @@ import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 import type { ServerScope } from '@/kessel/server-scope'
 import { unreadSupported, useUnreadEntry } from '@/stores/unread'
 import { muteMenuState, toggleMute } from '@/components/common/UnreadBadge'
+import { floatProps } from './threadFloats'
 
 // No Chat view: it was retired in 0.46.4 and its code deleted in 0.46.5
 // (Rosson 2026-10-23/27: Threads instead).
@@ -79,6 +80,7 @@ export function SessionViewMenu({
   onSplitRight,
   threadConversationId,
   threadScope,
+  floating = false,
 }: {
   value: SessionViewTab
   splitLeft: SplitPaneView
@@ -91,6 +93,8 @@ export function SessionViewMenu({
   threadConversationId?: string | null
   /** The room's server; the unread store reads only the window's. */
   threadScope?: ServerScope
+  /** Thread view: the button is its own floating object. */
+  floating?: boolean
 }): JSX.Element {
   const [openKind, setOpenKind] = useState<'view' | 'left' | 'right' | null>(null)
   const threadEntry = useUnreadEntry('thread', threadConversationId, threadScope)
@@ -127,6 +131,7 @@ export function SessionViewMenu({
         aria-haspopup="menu"
         aria-expanded={openKind === 'view'}
         className={BUTTON_CLASS}
+        {...floatProps(floating, 'pill')}
         onClick={(event) => {
           void openAt(event, 'view', viewMenuItems({ muted: threadEntry?.muted === true, canMute })).then((picked) => {
             if (picked === MUTE_THREAD_ID && threadConversationId) {

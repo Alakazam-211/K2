@@ -366,7 +366,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         data-zen-conversation-body=""
         className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
         // The browser's own scroll anchoring would fight the pin.
-        style={{ padding: THREAD_LIST_PADDING, paddingBottom: 8 + bottomInset, overflowAnchor: 'none' }}
+        // In Thread view the floating objects sit over this; their height is on the pane.
+        style={{ padding: THREAD_LIST_PADDING, paddingTop: 'calc(14px + var(--thread-float-inset, 0px))', paddingBottom: 8 + bottomInset, overflowAnchor: 'none', scrollPaddingTop: 'var(--thread-float-inset, 0px)' }}
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return

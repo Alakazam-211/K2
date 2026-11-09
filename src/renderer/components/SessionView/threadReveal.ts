@@ -2,7 +2,7 @@
 //
 // The terminal stays display:none until revealed (a hidden but measurable
 // box would send the daemon resizes: the old "zoom on workspace switch"
-// bug). It then slides out from the left, or up from the bottom when the
+// bug). It then slides out from the left, or down from the top when the
 // pane is narrow, at its final size: the layout is set once and only
 // `transform` moves, so TerminalPane's ResizeObserver fires once and the PTY
 // gets one resize through the existing debounce. Measured on the pane, not
@@ -11,8 +11,9 @@
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { drawerMotionOn } from '@/components/Layout/drawer-motion'
 import { focusThreadComposeSlotTextarea } from '@/lib/workspace-switch-focus'
+import { threadFloatsIn } from './threadFloats'
 
-export type RevealPlacement = 'left' | 'bottom'
+export type RevealPlacement = 'left' | 'top'
 
 /** The terminal's 420px minimum plus 480px of text (where the Thread already
  *  treats itself as narrow). */
@@ -24,30 +25,30 @@ export const REVEAL_LEFT_FRACTION = 0.45
 export const REVEAL_LEFT_MIN_SIZE_PX = 420
 export const REVEAL_LEFT_MAX_SIZE_PX = 640
 
-export const REVEAL_BOTTOM_FRACTION = 0.45
-export const REVEAL_BOTTOM_MIN_SIZE_PX = 180
+export const REVEAL_TOP_FRACTION = 0.45
+export const REVEAL_TOP_MIN_SIZE_PX = 180
 /** Left for the Thread and its message box, where the pane allows. */
-export const REVEAL_BOTTOM_THREAD_PX = 240
+export const REVEAL_TOP_THREAD_PX = 240
 
 /** The placement is re-checked this long after the pane's size stops changing. */
 export const REVEAL_PLACEMENT_SETTLE_MS = 150
 
-/** Left or bottom for a pane this wide. `was` is the current placement
+/** Left or top for a pane this wide. `was` is the current placement
  *  (null when opening); a 0 width (not laid out) keeps it. */
 export function revealPlacementNext(width: number, was: RevealPlacement | null): RevealPlacement {
   if (!(width > 0)) return was ?? 'left'
-  if (was === 'bottom') return width >= REVEAL_LEFT_RETURN_PX ? 'left' : 'bottom'
-  return width >= REVEAL_LEFT_MIN_PX ? 'left' : 'bottom'
+  if (was === 'top') return width >= REVEAL_LEFT_RETURN_PX ? 'left' : 'top'
+  return width >= REVEAL_LEFT_MIN_PX ? 'left' : 'top'
 }
 
-/** The terminal's width (left) or height (bottom) for this pane, in px. */
+/** The terminal's width (left) or height (top) for this pane, in px. */
 export function revealTerminalSizePx(placement: RevealPlacement, paneW: number, paneH: number): number {
   if (placement === 'left') {
     const raw = paneW * REVEAL_LEFT_FRACTION
     return Math.round(Math.min(REVEAL_LEFT_MAX_SIZE_PX, Math.max(REVEAL_LEFT_MIN_SIZE_PX, raw)))
   }
-  const raw = Math.min(paneH * REVEAL_BOTTOM_FRACTION, paneH - REVEAL_BOTTOM_THREAD_PX)
-  return Math.round(Math.max(REVEAL_BOTTOM_MIN_SIZE_PX, raw))
+  const raw = Math.min(paneH * REVEAL_TOP_FRACTION, paneH - REVEAL_TOP_THREAD_PX)
+  return Math.round(Math.max(REVEAL_TOP_MIN_SIZE_PX, raw))
 }
 
 // ── Slide timing: the Style's own tokens ───────────────────────────────
@@ -109,19 +110,40 @@ export interface TerminalRevealLayout {
 function slide(
   terminal: HTMLElement,
   thread: HTMLElement,
+  floats: HTMLElement | null,
   placement: RevealPlacement,
   sizePx: number,
 ): Animation[] {
   const { durationMs, easing } = slideTiming(terminal)
   const options: KeyframeAnimationOptions = { duration: durationMs, easing, fill: 'both' }
-  const terminalOff = placement === 'left' ? 'translateX(-100%)' : 'translateY(100%)'
-  // The Thread starts where it was: on the left its centred column glides
-  // over; at the bottom the message box rises with the terminal.
-  const threadOff = placement === 'left' ? `translateX(${-sizePx / 2}px)` : `translateY(${sizePx}px)`
-  return [
-    terminal.animate([{ transform: terminalOff }, { transform: 'none' }], options),
-    thread.animate([{ transform: threadOff }, { transform: 'none' }], options),
-  ]
+  const terminalOff = placement === 'left' ? 'translateX(-100%)' : 'translateY(-100%)'
+  const anims = [terminal.animate([{ transform: terminalOff }, { transform: 'none' }], options)]
+  if (placement === 'left') {
+    // The Thread starts where it was: its centred column glides over.
+    anims.push(thread.animate([{ transform: `translateX(${-sizePx / 2}px)` }, { transform: 'none' }], options))
+  } else {
+    // From the top the Thread doesn't move at all: it stays full height, under
+    // the terminal, for the whole slide (constant keyframes, so no layout per
+    // frame). Its box changes once, where the terminal hides the change, and
+    // the message box and newest messages never move.
+    const held = { marginTop: `${-sizePx}px` }
+    anims.push(thread.animate([held, held], options))
+  }
+  // The floating objects ride the terminal's edge on the same clock, so they
+  // are never over it, at any point in the slide.
+  if (floats) {
+    const edge = placement === 'left' ? 'left' : 'top'
+    anims.push(floats.animate([{ [edge]: '0px' }, { [edge]: `${sizePx}px` }], options))
+  }
+  return anims
+}
+
+/** The Thread's box is about to change or just has, by `deltaPx` at its top:
+ *  keep what's being read where it is. At the bottom of the list this does
+ *  nothing (the list's pin wins). */
+function keepReadingPlace(thread: HTMLElement, deltaPx: number): void {
+  const list = thread.querySelector('[data-testid="thread-overlay-list"]')
+  if (list) list.scrollTop += deltaPx
 }
 
 /** Hiding while focus is in the terminal moves it to the Thread's message box. */
@@ -238,12 +260,18 @@ export function useTerminalRevealLayout(
     }
     const rect = container.getBoundingClientRect()
     const place = open ? revealPlacementNext(rect.width, null) : placementRef.current
-    const anims = slide(terminal, thread, place, revealTerminalSizePx(place, rect.width, rect.height))
+    const sizePx = revealTerminalSizePx(place, rect.width, rect.height)
+    const anims = slide(terminal, thread, threadFloatsIn(container), place, sizePx)
     m.anims = anims
     if (!open) for (const a of anims) a.reverse()
+    if (!open && place === 'top') keepReadingPlace(thread, -sizePx)
     anims[0].onfinish = () => {
-      if (motion.current.open) clearSlides()
-      else latest.current?.onClosed()
+      if (motion.current.open) {
+        clearSlides()
+        if (place === 'top') keepReadingPlace(thread, sizePx)
+      } else {
+        latest.current?.onClosed()
+      }
     }
   }, [available, open, motionKey, terminalRef, threadRef, containerRef, clearSlides])
 

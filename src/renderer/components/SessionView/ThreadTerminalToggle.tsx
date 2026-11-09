@@ -1,10 +1,10 @@
 import { useEffect, useRef, type JSX } from 'react'
-import { Button } from '@/components/ui'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useSettingsStore } from '@/stores/settings'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { effectiveKeybinding, formatKeyCombo } from '@shared/hotkeys'
 import { registerRevealTarget } from './threadReveal'
+import { floatProps } from './threadFloats'
 
 /** Beside the view button, in Thread view only (prd-thread-view-focus-v1 §6).
  *  Mounted, it is also the target the Ctrl+` chord finds (`threadReveal.ts`). */
@@ -39,10 +39,11 @@ export function ThreadTerminalToggle({
   const key = combo ? ` (${formatKeyCombo(combo, isMacPlatform())})` : ''
 
   return (
-    <Button
+    <button
       ref={ref}
-      variant="quiet"
+      type="button"
       data-testid="thread-terminal-toggle"
+      {...floatProps(true, 'round')}
       aria-pressed={revealed}
       aria-label={action}
       title={disabled ? 'No terminal is running yet' : `${action}${key}`}
@@ -51,9 +52,7 @@ export function ThreadTerminalToggle({
       // before the hide decides where focus goes.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onToggle}
-      className={`self-center inline-flex items-center justify-center !h-5 !w-5 !p-0 !border-transparent flex-shrink-0 ml-1 ${
-        revealed ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]' : ''
-      }`}
+      className="no-drag cursor-pointer inline-flex items-center justify-center flex-shrink-0 disabled:cursor-not-allowed"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -70,6 +69,6 @@ export function ThreadTerminalToggle({
         <path d="M5 8l5 4-5 4" />
         <path d="M12 18h7" />
       </svg>
-    </Button>
+    </button>
   )
 }

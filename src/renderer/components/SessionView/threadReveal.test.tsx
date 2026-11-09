@@ -18,21 +18,21 @@ import {
 } from './threadReveal'
 
 describe('revealPlacementNext', () => {
-  it('opens on the left from 900px wide, at the bottom below it', () => {
+  it('opens on the left from 900px wide, from the top below it', () => {
     expect(revealPlacementNext(900, null)).toBe('left')
-    expect(revealPlacementNext(899, null)).toBe('bottom')
+    expect(revealPlacementNext(899, null)).toBe('top')
     expect(revealPlacementNext(1400, null)).toBe('left')
   })
-  it('going narrow flips to the bottom under 900', () => {
-    expect(revealPlacementNext(899, 'left')).toBe('bottom')
+  it('going narrow flips to the top under 900', () => {
+    expect(revealPlacementNext(899, 'left')).toBe('top')
     expect(revealPlacementNext(900, 'left')).toBe('left')
   })
   it('going wide returns to the left only at 924', () => {
-    expect(revealPlacementNext(923, 'bottom')).toBe('bottom')
-    expect(revealPlacementNext(924, 'bottom')).toBe('left')
+    expect(revealPlacementNext(923, 'top')).toBe('top')
+    expect(revealPlacementNext(924, 'top')).toBe('left')
   })
   it('a 0 width keeps the placement', () => {
-    expect(revealPlacementNext(0, 'bottom')).toBe('bottom')
+    expect(revealPlacementNext(0, 'top')).toBe('top')
     expect(revealPlacementNext(0, null)).toBe('left')
   })
 })
@@ -43,12 +43,12 @@ describe('revealTerminalSizePx', () => {
     expect(revealTerminalSizePx('left', 1200, 800)).toBe(540)
     expect(revealTerminalSizePx('left', 2000, 800)).toBe(640)
   })
-  it('bottom: 45%, at least 180, leaving 240 for the Thread where the pane allows', () => {
-    expect(revealTerminalSizePx('bottom', 800, 1000)).toBe(450)
-    expect(revealTerminalSizePx('bottom', 800, 500)).toBe(225)
+  it('top: 45%, at least 180, leaving 240 for the Thread where the pane allows', () => {
+    expect(revealTerminalSizePx('top', 800, 1000)).toBe(450)
+    expect(revealTerminalSizePx('top', 800, 500)).toBe(225)
     // 45% of 420 = 189, but 420 - 240 = 180 is what leaves the Thread room.
-    expect(revealTerminalSizePx('bottom', 800, 420)).toBe(180)
-    expect(revealTerminalSizePx('bottom', 800, 300)).toBe(180)
+    expect(revealTerminalSizePx('top', 800, 420)).toBe(180)
+    expect(revealTerminalSizePx('top', 800, 300)).toBe(180)
   })
 })
 
@@ -208,14 +208,13 @@ describe('revealing the terminal', () => {
     expect(columns().style.flexDirection).toBe('row')
   })
 
-  it('reveals from the bottom below 900, the Thread above it', () => {
+  it('reveals from the top below 900, the Thread below it', () => {
     pane = { width: 899, height: 800 }
     render(<Frame />)
     act(() => setOpen(true))
-    expect(columns().getAttribute('data-reveal-placement')).toBe('bottom')
+    expect(columns().getAttribute('data-reveal-placement')).toBe('top')
     expect(terminalColumn().style.height).toBe('360px')
-    // The terminal stays the first child; column-reverse draws it below.
-    expect(columns().style.flexDirection).toBe('column-reverse')
+    expect(columns().style.flexDirection).toBe('column')
     expect(columns().firstElementChild).toBe(terminalColumn())
   })
 
@@ -251,12 +250,54 @@ describe('revealing the terminal', () => {
     }
   })
 
-  it('bottom: the Thread starts offset by the terminal height', () => {
+  it('top: the terminal comes down over the Thread, which holds its full height for the slide', () => {
     pane = { width: 800, height: 800 }
     render(<Frame />)
     act(() => setOpen(true))
-    expect(animations[0].keyframes[0].transform).toBe('translateY(100%)')
-    expect(animations[1].keyframes[0].transform).toBe('translateY(360px)')
+    expect(animations[0].keyframes[0].transform).toBe('translateY(-100%)')
+    // Constant keyframes: no layout per frame, and the Thread doesn't move.
+    expect(animations[1].keyframes).toEqual([{ marginTop: '-360px' }, { marginTop: '-360px' }])
+  })
+
+  it('top: keeps the reading place when the Thread box changes', () => {
+    pane = { width: 800, height: 800 }
+    render(<Frame />)
+    const list = document.createElement('div')
+    list.dataset.testid = 'thread-overlay-list'
+    screen.getByTestId('thread').appendChild(list)
+    list.scrollTop = 500
+    act(() => setOpen(true))
+    expect(list.scrollTop).toBe(500)
+    act(() => animations[0].finish())
+    expect(list.scrollTop).toBe(860)
+    animations = []
+    act(() => setOpen(false))
+    expect(list.scrollTop).toBe(500)
+  })
+
+  it('moves the floating objects on the same clock, top or left', () => {
+    pane = { width: 800, height: 800 }
+    const { unmount } = render(
+      <div data-thread-floats-host="">
+        <div data-thread-floats="" data-testid="floats" />
+        <Frame />
+      </div>,
+    )
+    act(() => setOpen(true))
+    expect(animations).toHaveLength(3)
+    expect(animations[2].keyframes).toEqual([{ top: '0px' }, { top: '360px' }])
+    expect(animations[2].options).toEqual(animations[0].options)
+    unmount()
+    animations = []
+    pane = { width: 1200, height: 800 }
+    render(
+      <div data-thread-floats-host="">
+        <div data-thread-floats="" />
+        <Frame />
+      </div>,
+    )
+    act(() => setOpen(true))
+    expect(animations[2].keyframes).toEqual([{ left: '0px' }, { left: '540px' }])
   })
 
   it('closing keeps the column up until the slide finishes, then hides it', () => {
@@ -329,13 +370,13 @@ describe('revealing the terminal', () => {
     // The width still follows the pane while it waits.
     expect(terminalColumn().style.width).toBe('420px')
     act(() => vi.advanceTimersByTime(1))
-    expect(columns().getAttribute('data-reveal-placement')).toBe('bottom')
+    expect(columns().getAttribute('data-reveal-placement')).toBe('top')
     expect(animations).toHaveLength(0)
-    // Back to 923: stays below. 924: returns.
+    // Back to 923: stays on top. 924: returns to the left.
     pane = { width: 923, height: 800 }
     fireResize()
     act(() => vi.advanceTimersByTime(REVEAL_PLACEMENT_SETTLE_MS))
-    expect(columns().getAttribute('data-reveal-placement')).toBe('bottom')
+    expect(columns().getAttribute('data-reveal-placement')).toBe('top')
     pane = { width: 924, height: 800 }
     fireResize()
     act(() => vi.advanceTimersByTime(REVEAL_PLACEMENT_SETTLE_MS))

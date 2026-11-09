@@ -1857,3 +1857,133 @@ html[data-style="glass-next"] [data-k2-thread-zen] [data-zen-send]:not([data-zen
   animation: settings-search-pulse 1.5s ease-out;
   border-radius: 2px;
 }
+
+/* Thread view's floating objects. No top bar: each control is its own small
+   object over the conversation, as on the phone. Terminal: solid, cut by the
+   One Chamfer rule above through `data-k2-chamfer` and `--chamfer-*`. */
+:root {
+  --k2-float-h: 28px;
+  --k2-float-radius: var(--radius-field);
+  --k2-float-fill-hover: var(--color-bg-hover);
+  --k2-float-fill-lit: var(--color-bg-elevated);
+  --k2-float-text-shadow: none;
+  --k2-float-picture-lift: none;
+}
+html[data-style="terminal"] { --k2-float-radius: 0px; }
+
+/* Glass: the objects are Frost (`data-material="frost"`, shape and fallback in
+   styles/glass-next/overrides.css), over the header band. Only their states
+   live here. Veil follows the light glass technique: a dark wash where dark
+   Glass lightens, and a pale accent tint on an on or active round button. */
+html[data-style="glass-next"] {
+  --k2-float-fill-hover: rgba(255, 255, 255, 0.18);
+  --k2-float-fill-lit: rgba(255, 255, 255, 0.24);
+  --k2-float-text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  --k2-float-picture-lift: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.55));
+}
+html[data-style="glass-next"][data-palette="veil"] {
+  --k2-float-fill-hover: rgba(0, 0, 0, 0.05);
+  --k2-float-fill-lit: rgba(0, 0, 0, 0.07);
+  --k2-float-text-shadow: none;
+  --k2-float-picture-lift: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.18));
+}
+html[data-style="glass-next"] button[data-k2-float][data-k2-float][aria-pressed="true"],
+html[data-style="glass-next"] button[data-k2-float][data-k2-float][aria-expanded="true"] { background: var(--k2-float-fill-lit); }
+html[data-style="glass-next"][data-palette="veil"] button[data-k2-float="round"][aria-pressed="true"],
+html[data-style="glass-next"][data-palette="veil"] button[data-k2-float="round"][role="switch"][aria-checked="true"] {
+  background: color-mix(in srgb, var(--color-accent) 12%, #ffffff);
+  color: var(--color-accent);
+}
+/* The band over the Thread reaches a little past the objects. */
+html[data-style="glass-next"] [data-thread-floats-host] .k2-header-blur:not([data-zen-root] *) { height: calc(var(--thread-float-inset, 0px) + 18px); }
+
+[data-thread-floats] {
+  position: absolute;
+  top: var(--thread-float-top, 0px);
+  right: 0;
+  left: var(--thread-float-left, 0px);
+  z-index: 20;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  pointer-events: none;
+  container: thread-floats / inline-size;
+  --k2-float-group-top: 4px; /* centres the buttons on the 36px picture */
+}
+[data-thread-floats]:has([data-compact]) { --k2-float-group-top: 0px; }
+.thread-float-group { margin-top: var(--k2-float-group-top); }
+
+[data-k2-float] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: var(--k2-float-h);
+  padding: 0 10px;
+  font-size: var(--type-sm, 11px);
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--k2-float-radius);
+  pointer-events: auto;
+  text-shadow: var(--k2-float-text-shadow);
+}
+[data-k2-float="round"] { width: var(--k2-float-h); padding: 0; }
+button[data-k2-float]:hover:not(:disabled) { background: var(--k2-float-fill-hover); }
+button[data-k2-float][aria-pressed="true"],
+button[data-k2-float][aria-expanded="true"] { background: var(--k2-float-fill-lit); }
+/* The bell: on is an accent glyph with an accent edge; off is a muted, slashed glyph on a plain edge. */
+button[data-k2-float][role="switch"][aria-checked="true"] { color: var(--color-accent); border-color: color-mix(in srgb, var(--color-accent) 60%, transparent); }
+button[data-k2-float][role="switch"][aria-checked="false"] { color: var(--color-text-muted); }
+button[data-k2-float]:disabled { opacity: 0.5; }
+html:is([data-style="glass"], [data-style="glass-next"]) button[data-k2-float]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+/* The name's object: the picture overlaps its top edge. */
+[data-k2-float="name"] { flex-shrink: 1; height: auto; padding: 11px 14px 6px; margin-top: -8px; max-width: 100%; }
+[data-compact] > [data-k2-float="name"] { height: var(--k2-float-h); padding: 0 12px 0 4px; margin-top: 0; }
+[data-k2-float-picture] { position: relative; z-index: 2; filter: var(--k2-float-picture-lift); }
+html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--color-border); }
+
+[data-k2-float="note"] { height: auto; min-height: var(--k2-float-h); padding: 4px 10px; text-align: center; }
+[data-thread-floats] > button[data-k2-float="note"] { display: flex; width: max-content; max-width: calc(100% - 24px); margin: 6px auto 0; position: relative; z-index: 1; }
+.thread-float-note {
+  position: absolute;
+  top: calc(var(--thread-float-top, 0px) + var(--thread-float-inset, 0px));
+  left: var(--thread-float-left, 0px);
+  right: 0;
+  z-index: 21;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+[data-k2-float-menu] { pointer-events: auto; }
+/* The sides hold their full width, so long pills give way first: the session
+   title goes where it would squeeze the name; narrower still, the pills and
+   gaps tighten. */
+@container thread-floats (max-width: 840px) { [data-k2-float-label] { display: none; } }
+@container thread-floats (max-width: 520px) {
+  [data-k2-float="pill"] { padding: 0 8px; }
+  [data-k2-float="name"] { padding-inline: 10px; }
+  .thread-float-group { gap: 4px; }
+}
+@container thread-floats (max-width: 380px) {
+  [data-thread-floats] { --k2-float-h: 26px; }
+  [data-thread-floats] > div:not(.thread-float-scrim) { padding-inline: 8px; column-gap: 4px; }
+  [data-k2-float="pill"] { padding: 0 5px; }
+  .thread-float-group { gap: 2px; }
+  [data-testid="thread-view-identity"] { overflow: hidden; }
+}
+
+/* Outside Glass, content fades as it passes under, with no blur. Reaches a
+   little past the objects. Glass has the header band instead. */
+.thread-float-scrim {
+  position: absolute;
+  inset: 0 0 -18px 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--color-bg) 97%, transparent) 0%, color-mix(in srgb, var(--color-bg) 88%, transparent) 55%, transparent 100%);
+}
+html[data-style="glass-next"] .thread-float-scrim { display: none; }
+
+/* A banner at the top of the Thread stays below the objects. */
+[data-thread-floats-host] [data-testid="clone-proposals-banner"] { margin-top: var(--thread-float-inset, 0px); }

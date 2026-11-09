@@ -140,7 +140,7 @@ beforeEach(() => {
   }))
   // Reset live style to defaults for isolation.
   useStyleStore.getState().applyStyle({
-    styleId: 'square',
+    styleId: 'terminal',
     paletteId: 'charcoal',
     schemeMode: 'dark',
     gapsPreset: '',
@@ -149,7 +149,7 @@ beforeEach(() => {
   mem.delete(LS_STYLE_MIGRATED)
   __setPreBootMirrorCompleteForTests(false)
   useSettingsStore.setState({
-    style: { id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' },
+    style: { id: 'terminal', palette: 'charcoal', scheme: 'dark', gaps: '' },
     loaded: false,
   })
 })
@@ -181,10 +181,10 @@ describe('migrateStyleFromDaemon (one-shot)', () => {
   })
 
   it('existing pre-boot mirror + different daemon keeps mirror and sets flag', () => {
-    seedLocal('bezel', 'porcelain', 'light', '')
+    seedLocal('glass', 'veil', 'light', '')
     useStyleStore.getState().applyStyle({
-      styleId: 'bezel',
-      paletteId: 'porcelain',
+      styleId: 'glass',
+      paletteId: 'veil',
       schemeMode: 'light',
       gapsPreset: '',
     })
@@ -194,15 +194,15 @@ describe('migrateStyleFromDaemon (one-shot)', () => {
     migrateStyleFromDaemon(DAEMON_GLASS)
 
     expect(isStyleMigrated()).toBe(true)
-    expect(useStyleStore.getState().styleId).toBe('bezel')
-    expect(useStyleStore.getState().paletteId).toBe('porcelain')
+    expect(useStyleStore.getState().styleId).toBe('glass')
+    expect(useStyleStore.getState().paletteId).toBe('veil')
     expect(useStyleStore.getState().schemeMode).toBe('light')
   })
 
   it('already migrated never re-applies daemon style', () => {
     markStyleMigrated()
     useStyleStore.getState().applyStyle({
-      styleId: 'square',
+      styleId: 'terminal',
       paletteId: 'charcoal',
       schemeMode: 'dark',
       gapsPreset: '',
@@ -210,14 +210,14 @@ describe('migrateStyleFromDaemon (one-shot)', () => {
     __setPreBootMirrorCompleteForTests(false)
 
     migrateStyleFromDaemon(DAEMON_GLASS)
-    expect(useStyleStore.getState().styleId).toBe('square')
+    expect(useStyleStore.getState().styleId).toBe('terminal')
     expect(useStyleStore.getState().paletteId).toBe('charcoal')
   })
 
   it('empty mirror + no daemon style marks migrated with defaults', () => {
     clearStyleKeys()
     useStyleStore.getState().applyStyle({
-      styleId: 'square',
+      styleId: 'terminal',
       paletteId: 'charcoal',
       schemeMode: 'dark',
       gapsPreset: '',
@@ -227,7 +227,7 @@ describe('migrateStyleFromDaemon (one-shot)', () => {
 
     migrateStyleFromDaemon(undefined)
     expect(isStyleMigrated()).toBe(true)
-    expect(useStyleStore.getState().styleId).toBe('square')
+    expect(useStyleStore.getState().styleId).toBe('terminal')
   })
 })
 
@@ -268,7 +268,7 @@ describe('fetchSettings — local wins when migrated', () => {
   it('first fetch with empty pre-boot mirror seeds once from daemon', async () => {
     clearStyleKeys()
     useStyleStore.getState().applyStyle({
-      styleId: 'square',
+      styleId: 'terminal',
       paletteId: 'charcoal',
       schemeMode: 'dark',
       gapsPreset: '',
@@ -364,7 +364,7 @@ describe('updateStyleSettings — no daemon POST', () => {
 describe('multi-window restampFromLocalMirror (storage path)', () => {
   it('re-reads mirror and applies after peer-style localStorage write', () => {
     useStyleStore.getState().applyStyle({
-      styleId: 'square',
+      styleId: 'terminal',
       paletteId: 'charcoal',
       schemeMode: 'dark',
       gapsPreset: '',
@@ -382,5 +382,65 @@ describe('multi-window restampFromLocalMirror (storage path)', () => {
 
     expect(useStyleStore.getState().styleId).toBe('glass')
     expect(useStyleStore.getState().paletteId).toBe('obsidian')
+  })
+})
+
+describe('retired style ids at every way in', () => {
+  it('readMirror maps a saved square and keeps its palette and gaps', () => {
+    seedLocal('square', 'paper', 'light', 'spacious')
+    expect(readMirror()).toEqual({
+      styleId: 'terminal',
+      paletteId: 'paper',
+      schemeMode: 'light',
+      gapsPreset: 'spacious',
+    })
+  })
+
+  it('readMirror maps a saved bezel to the scheme default, keeps auto, drops gaps', () => {
+    seedLocal('bezel', 'graphite', 'auto', 'spacious')
+    expect(readMirror()).toEqual({
+      styleId: 'terminal',
+      paletteId: 'charcoal',
+      schemeMode: 'auto',
+      gapsPreset: '',
+    })
+  })
+
+  it('a peer window writing a retired id cannot put it in the store', () => {
+    mem.set(LS_STYLE, 'bezel')
+    mem.set(LS_PALETTE, 'porcelain')
+    mem.set(LS_SCHEME, 'light')
+    restampFromLocalMirror()
+    expect(useStyleStore.getState().styleId).toBe('terminal')
+    expect(useStyleStore.getState().resolvedPaletteId).toBe('paper')
+    expect(useStyleStore.getState().schemeMode).toBe('light')
+    expect(mem.get(LS_STYLE)).toBe('terminal')
+  })
+
+  it('a daemon that still echoes bezel seeds Terminal, without its gaps', () => {
+    clearStyleKeys()
+    __setPreBootMirrorCompleteForTests(false)
+    migrateStyleFromDaemon(DAEMON_BEZEL)
+    expect(useStyleStore.getState().styleId).toBe('terminal')
+    expect(useStyleStore.getState().resolvedPaletteId).toBe('charcoal')
+    expect(useStyleStore.getState().gapsPreset).toBe('')
+    expect(mem.get(LS_STYLE)).toBe('terminal')
+  })
+
+  it('a daemon that still echoes square seeds Terminal', () => {
+    clearStyleKeys()
+    __setPreBootMirrorCompleteForTests(false)
+    migrateStyleFromDaemon({ id: 'square', palette: 'paper', scheme: 'light', gaps: 'regular' })
+    expect(useStyleStore.getState().styleId).toBe('terminal')
+    expect(useStyleStore.getState().resolvedPaletteId).toBe('paper')
+    expect(useStyleStore.getState().gapsPreset).toBe('regular')
+  })
+
+  it('applyStyle with a retired id never stores it, so per-style keys stay current', () => {
+    useStyleStore.getState().applyStyle({ styleId: 'square' })
+    expect(useStyleStore.getState().styleId).toBe('terminal')
+    useStyleStore.getState().setTextGamma(1.5)
+    expect(mem.get('k2.textGamma.terminal.dark')).toBe('1.5')
+    expect(mem.has('k2.textGamma.square.dark')).toBe(false)
   })
 })

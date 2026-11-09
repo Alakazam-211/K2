@@ -33,13 +33,16 @@ import type { SettingEntry } from '../searchManifest'
 const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
 
 export const STYLES_MANIFEST: SettingEntry[] = [
-  { id: 'styles.style-picker', section: 'styles', label: 'Style', description: 'App-wide visual style (Square, community styles)', keywords: ['style', 'skin', 'theme', 'appearance', 'look', 'square', 'glass', 'bezel'] },
+  { id: 'styles.style-picker', section: 'styles', label: 'Style', description: 'App-wide visual style (Terminal, Glass, community styles)', keywords: ['style', 'skin', 'theme', 'appearance', 'look', 'terminal', 'square', 'glass'] },
   { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'Color palette within the selected style', keywords: ['palette', 'color', 'colors', 'theme', 'charcoal', 'paper', 'dark mode', 'light mode'] },
   { id: 'styles.scheme', section: 'styles', label: 'Scheme', description: 'Light / Dark / Auto — Auto follows the OS appearance', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os'] },
   { id: 'styles.density', section: 'styles', label: 'Density', description: 'Compact / Regular / Spacious gaps between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
   { id: 'styles.dials', section: 'styles', label: 'Dials', description: 'Style-specific adjustments the active style advertises (e.g. Glass frost)', keywords: ['dials', 'dial', 'knobs', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass'] },
   { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight (WebGL)', description: 'Per-style WebGL glyph weight. Lower = thicker. Saved per style and scheme.', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
 ]
+
+/** Retired looks stay compiled but never reach the picker. */
+const PICKER_STYLES = STYLES.filter((s) => !s.hidden)
 
 const SCHEME_OPTIONS: { id: 'light' | 'dark' | 'auto'; label: string }[] = [
   { id: 'light', label: 'Light' },
@@ -98,7 +101,7 @@ export function StylesSection(): React.JSX.Element {
   // Which style's DETAIL is showing. Defaults to the active style; kept
   // as local state so browsing a style's palettes doesn't commit it.
   const [selectedStyleId, setSelectedStyleId] = useState(styleId)
-  const selectedStyle = STYLES.find((s) => s.id === selectedStyleId) ?? STYLES[0]
+  const selectedStyle = PICKER_STYLES.find((s) => s.id === selectedStyleId) ?? PICKER_STYLES[0]
   const selectedIsActive = selectedStyle.id === styleId
 
   const commit = useCallback(
@@ -205,7 +208,7 @@ export function StylesSection(): React.JSX.Element {
           </span>
         </div>
         <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2" data-settings-id="styles.style-picker">
-          {STYLES.map((style) => {
+          {PICKER_STYLES.map((style) => {
             const isActive = style.id === styleId
             const isSelected = style.id === selectedStyleId
             const swatchPalette =

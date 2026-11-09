@@ -490,11 +490,11 @@ function mergeEditorDefaults(result: Partial<EditorSettingsBackend> | undefined)
   return { ...DEFAULT_EDITOR, ...result }
 }
 
-/** Defaults matching Square / charcoal / dark / base density (same as
+/** Defaults matching Terminal / charcoal / dark / base density (same as
  *  style-resolve DEFAULT_SELECTION). Used only as the settings-store
  *  initial value before the style store is consulted. */
 const DEFAULT_STYLE: StyleSettingsBackend = {
-  id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '',
+  id: 'terminal', palette: 'charcoal', scheme: 'dark', gaps: '',
 }
 
 /** Snapshot the live per-client style selection into the settings-store

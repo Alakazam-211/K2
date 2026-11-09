@@ -493,7 +493,7 @@ describe('the drawer (Rosson 2026-10-30)', () => {
     const rowEl = drawer.querySelector('[data-stash-row]') as HTMLElement
     expect(rowEl.style.getPropertyValue('--ch-tl')).toBe('3px')
     const css = drawer.querySelector('style[data-stash-styles]')?.textContent ?? ''
-    expect(css).toContain('html[data-style="square"] [data-k2-thread-zen] [data-stash-row] { border-radius: 0 !important; clip-path: polygon(')
+    expect(css).toContain('html[data-style="terminal"] [data-k2-thread-zen] [data-stash-row] { border-radius: 0 !important; clip-path: polygon(')
     const check = screen.getByTestId('stash-remove-after-use')
     expect(check.className).toContain('k2-square-check')
   })

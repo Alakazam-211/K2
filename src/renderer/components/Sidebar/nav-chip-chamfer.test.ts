@@ -28,17 +28,17 @@ describe('chamfered line-2 chips (square Style only)', () => {
     expect(px).toBeLessThanOrEqual(3)
   })
 
-  it('clips the chip to the chamfer and hides its square border, only under html[data-style="square"]', () => {
-    const r = rule('html[data-style="square"] [data-nav-chip]')
+  it('clips the chip to the chamfer and hides its square border, only under html[data-style="terminal"]', () => {
+    const r = rule('html[data-style="terminal"] [data-nav-chip]')
     expect(r).toContain(`clip-path: polygon(${cut} 0, calc(100% - ${cut}) 0, 100% ${cut}`)
     expect(r).toMatch(/border-color:\s*transparent !important/)
     expect(r).toMatch(/border-radius:\s*0 !important/)
-    // No unscoped [data-nav-chip] rule: Bezel and Glass are untouched.
+    // No unscoped [data-nav-chip] rule: Glass is untouched.
     expect(globals).not.toMatch(/(^|\n)\s*\[data-nav-chip\]/)
   })
 
   it('draws the 1px edge as an even-odd ring in the chip edge colour (accent for tags)', () => {
-    const r = rule('html[data-style="square"] [data-nav-chip]::before')
+    const r = rule('html[data-style="terminal"] [data-nav-chip]::before')
     expect(r).toContain('clip-path: polygon(evenodd,')
     expect(r).toContain('background: var(--nav-chip-edge, var(--color-accent))')
     // Inner contour: 1px in, cut less (√2 − 1)px.

@@ -40,7 +40,7 @@ import { __resetActivityForTests, __seedActivityForTests, type ActivityRow } fro
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const SQUARE_CHAMFER = 'html[data-style="square"] [data-k2-thread-zen] [data-chamfer]'
+const TERMINAL_CHAMFER = 'html[data-style="terminal"] [data-k2-thread-zen] [data-chamfer]'
 const NOW = 1_759_241_200
 const TICKET = 'aaaaaaaa-0000-4000-8000-000000000001'
 
@@ -145,10 +145,10 @@ afterEach(() => {
 
 describe('a ticket’s discussion in the Thread look', () => {
   for (const [style, scheme] of [
-    ['square', 'light'],
-    ['square', 'dark'],
+    ['terminal', 'light'],
+    ['terminal', 'dark'],
     ['glass', 'light'],
-    ['bezel', 'dark'],
+    ['glass', 'dark'],
   ] as const) {
     it(`draws the Thread's bubbles, pills and box (${style} / ${scheme})`, () => {
       document.documentElement.setAttribute('data-style', style)
@@ -173,7 +173,7 @@ describe('a ticket’s discussion in the Thread look', () => {
       const field = screen.getByTestId('ticket-compose').querySelector('[data-zen-compose-box]') as HTMLElement
       expect(pills[0].compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       // The Style's shape.
-      for (const el of [body, field, pills[0]]) expect([style, el.matches(SQUARE_CHAMFER)]).toEqual([style, style === 'square'])
+      for (const el of [body, field, pills[0]]) expect([style, el.matches(TERMINAL_CHAMFER)]).toEqual([style, style === 'terminal'])
     })
   }
 

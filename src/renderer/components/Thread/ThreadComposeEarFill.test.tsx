@@ -151,10 +151,10 @@ function earOwn(tile: Element): Record<string, string> {
   return own
 }
 
-/** The square Style's chamfer clears the element's own background (its
+/** The Terminal Style's chamfer clears the element's own background (its
  *  `::after` paints `--ch-fill`); no other rule may touch the ear's fill. */
 function allowedRules(style: string): string[] {
-  if (style !== 'square') return []
+  if (style !== 'terminal') return []
   // The CSSOM reports the shorthand and its longhand.
   return [
     `${CHAMFER_SCOPE} [data-chamfer] { background-color: transparent !important }`,
@@ -162,14 +162,14 @@ function allowedRules(style: string): string[] {
   ].sort()
 }
 
-/** What the ear paints: `--ch-fill` under the square Style's chamfer, its
+/** What the ear paints: `--ch-fill` under the Terminal Style's chamfer, its
  *  own background otherwise. Both are the darker surface. */
 function expectDarkerShade(tile: Element, style: string): void {
   const own = (tile as HTMLElement).style
   expect(ZEN_DRAWER_EAR_FILL).toBe('var(--zen-surface)')
   expect(own.getPropertyValue('--ch-fill')).toBe('var(--zen-surface)')
   expect(own.background).toBe('var(--zen-surface)')
-  const painted = style === 'square' ? own.getPropertyValue('--ch-fill') : own.background
+  const painted = style === 'terminal' ? own.getPropertyValue('--ch-fill') : own.background
   expect(painted).toBe('var(--zen-surface)')
 }
 
@@ -187,9 +187,9 @@ afterEach(() => {
 
 describe('the activity ear keeps its fill while the message box changes', () => {
   for (const [style, scheme] of [
-    ['square', 'dark'],
-    ['square', 'light'],
-    ['bezel', 'dark'],
+    ['terminal', 'dark'],
+    ['terminal', 'light'],
+    ['glass', 'dark'],
     ['glass', 'light'],
   ] as const) {
     it(`${style} / ${scheme}: 1 line → 2 lines → stacked → 1 line, pointer on or off the ear`, () => {
@@ -218,7 +218,7 @@ describe('the activity ear keeps its fill while the message box changes', () => 
   }
 
   it('a free tile (no message box under it) is the darker shade too, no hover change', () => {
-    document.documentElement.setAttribute('data-style', 'square')
+    document.documentElement.setAttribute('data-style', 'terminal')
     const { container } = render(
       <div data-k2-thread-zen="" style={THREAD_ZEN_DESKTOP_TOKENS}>
         <ThreadZenStyles />
@@ -226,9 +226,9 @@ describe('the activity ear keeps its fill while the message box changes', () => 
       </div>,
     )
     const tile = earTile(container)
-    expect(fillRules(tile, true)).toEqual(allowedRules('square'))
-    expect(fillRules(tile, false)).toEqual(allowedRules('square'))
-    expectDarkerShade(tile, 'square')
+    expect(fillRules(tile, true)).toEqual(allowedRules('terminal'))
+    expect(fillRules(tile, false)).toEqual(allowedRules('terminal'))
+    expectDarkerShade(tile, 'terminal')
   })
 
   it('Stop keeps the raised fill, so it still reads as a button on the ear', () => {

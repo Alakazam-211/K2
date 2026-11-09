@@ -28,14 +28,14 @@ const ELEVATION_SHADOW: Record<number, string> = {
 export interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Which background slot to paint. Default 'surface'. */
   role2?: 'canvas' | 'solid' | 'surface' | 'elevated' | 'inset' | 'stripe'
-  /** 1px border on all sides (Square's panel treatment). Default true. */
+  /** 1px border on all sides (Terminal's panel treatment). Default true. */
   bordered?: boolean
   /** Elevation 0-5 → composes ring + shadow slots into one box-shadow. Default 0. */
   elevation?: 0 | 1 | 2 | 3 | 4 | 5
 }
 
 /** The panel/card primitive: background role + radius.box + ring/shadow
- *  composition. In Square this renders exactly the historical
+ *  composition. In Terminal this renders exactly the historical
  *  `bg-[var(--color-bg-surface)] border border-[var(--color-border)]`
  *  panel (radius 0, no-op ring/shadows). Other Styles restyle it through
  *  the contract without component changes. */

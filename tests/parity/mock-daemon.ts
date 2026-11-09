@@ -103,6 +103,7 @@ export const DEFAULT_SETTINGS = {
   // Style System P3 — mirrors Rust `StyleSettings::default()`. Present in
   // every real daemon response (typed struct), so the mock carries it too;
   // the renderer's read-back applies it to <html> data-* attributes.
+  // Still 'square': this is what the daemon's Rust default echoes today.
   style: { id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' },
   // F4 — typed AppSettings.completion_sound_enabled (default ON).
   completionSoundEnabled: true,

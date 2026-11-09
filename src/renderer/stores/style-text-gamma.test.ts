@@ -31,7 +31,7 @@ import {
 beforeEach(() => {
   mem.clear()
   useStyleStore.getState().applyStyle({
-    styleId: 'square',
+    styleId: 'terminal',
     paletteId: 'charcoal',
     schemeMode: 'dark',
     gapsPreset: '',
@@ -46,7 +46,7 @@ describe('per-style textGamma', () => {
   it('setTextGamma persists under k2.textGamma.<style>.<scheme> and is live', () => {
     useStyleStore.getState().setTextGamma(1.75)
     expect(useStyleStore.getState().textGamma).toBe(1.75)
-    expect(mem.get(textGammaStorageKey('square', 'dark'))).toBe('1.75')
+    expect(mem.get(textGammaStorageKey('terminal', 'dark'))).toBe('1.75')
   })
 
   it('boot / no-op re-apply does not clobber a live slider value', () => {
@@ -57,17 +57,17 @@ describe('per-style textGamma', () => {
 
   it('switching style loads the other style preset; switching back restores saved value', () => {
     useStyleStore.getState().setTextGamma(1.75)
-    // bezel graphite dark → dark preset (no stored override)
+    // glass obsidian dark → dark preset (no stored override)
     useStyleStore.getState().applyStyle({
-      styleId: 'bezel',
-      paletteId: 'graphite',
+      styleId: 'glass',
+      paletteId: 'obsidian',
       schemeMode: 'dark',
     })
     expect(useStyleStore.getState().textGamma).toBe(TEXT_GAMMA_DARK)
 
-    // back to square dark → restores the 1.75 override
+    // back to terminal dark → restores the 1.75 override
     useStyleStore.getState().applyStyle({
-      styleId: 'square',
+      styleId: 'terminal',
       paletteId: 'charcoal',
       schemeMode: 'dark',
     })
@@ -75,14 +75,14 @@ describe('per-style textGamma', () => {
   })
 
   it('light scheme loads light preset; dark and light keep independent overrides', () => {
-    useStyleStore.getState().setTextGamma(0.9) // square dark
+    useStyleStore.getState().setTextGamma(0.9) // terminal dark
     useStyleStore.getState().applyStyle({ schemeMode: 'light' })
-    // square light → paper palette → light preset (no override yet)
+    // terminal light → paper palette → light preset (no override yet)
     expect(useStyleStore.getState().textGamma).toBe(TEXT_GAMMA_LIGHT)
 
-    useStyleStore.getState().setTextGamma(1.4) // square light override
-    expect(mem.get(textGammaStorageKey('square', 'light'))).toBe('1.4')
-    expect(mem.get(textGammaStorageKey('square', 'dark'))).toBe('0.9')
+    useStyleStore.getState().setTextGamma(1.4) // terminal light override
+    expect(mem.get(textGammaStorageKey('terminal', 'light'))).toBe('1.4')
+    expect(mem.get(textGammaStorageKey('terminal', 'dark'))).toBe('0.9')
 
     useStyleStore.getState().applyStyle({ schemeMode: 'dark' })
     expect(useStyleStore.getState().textGamma).toBe(0.9)
@@ -92,6 +92,6 @@ describe('per-style textGamma', () => {
     useStyleStore.getState().setTextGamma(1.75)
     useStyleStore.getState().resetTextGamma()
     expect(useStyleStore.getState().textGamma).toBe(TEXT_GAMMA_DARK)
-    expect(mem.get(textGammaStorageKey('square', 'dark'))).toBeUndefined()
+    expect(mem.get(textGammaStorageKey('terminal', 'dark'))).toBeUndefined()
   })
 })

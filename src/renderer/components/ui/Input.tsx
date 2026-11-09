@@ -3,7 +3,7 @@ import { cx } from './cx'
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
 
-/** Square's text-field idiom: app-bg well, 1px border, accent focus border. */
+/** Terminal's text-field idiom: app-bg well, 1px border, accent focus border. */
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { className, ...rest },
   ref

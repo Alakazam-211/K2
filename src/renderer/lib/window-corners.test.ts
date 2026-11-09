@@ -38,12 +38,12 @@ describe('window corner radius', () => {
     { scheme: 'light', palette: 'charcoal', gaps: 'spacious', density: 'spacious', inset: 12 },
   ] as const
 
-  it('returns 0.5 for square in both schemes and every density, else 0', () => {
+  it('returns 0.5 for terminal in both schemes and every density, else 0', () => {
     for (const row of squareCases) {
-      expect(windowCornerRadius({ styleId: 'square', ...row })).toBe(0.5)
+      expect(windowCornerRadius({ styleId: 'terminal', ...row })).toBe(0.5)
     }
 
-    for (const styleId of ['glass', 'bezel', 'unknown', 'classic', '', null, undefined]) {
+    for (const styleId of ['glass', 'square', 'bezel', 'unknown', 'classic', '', null, undefined]) {
       for (const row of squareCases) {
         expect(windowCornerRadius({ styleId, ...row })).toBe(0)
       }
@@ -52,10 +52,10 @@ describe('window corner radius', () => {
 })
 
 describe('window corner re-apply', () => {
-  it('schedules Square compact (inset 0) on resize and fullscreen enter/exit', () => {
+  it('schedules Terminal compact (inset 0) on resize and fullscreen enter/exit', () => {
     const applied: number[] = []
     const scheduled: Array<() => void> = []
-    let styleId: string | null = 'square'
+    let styleId: string | null = 'terminal'
     let inset = 0
     const corners = createWindowCornerController({
       isMac: () => true,
@@ -105,7 +105,7 @@ describe('window corner re-apply', () => {
     const linuxScheduled: Array<() => void> = []
     const off = createWindowCornerController({
       isMac: () => false,
-      read: () => ({ styleId: 'square', inset: 0 }),
+      read: () => ({ styleId: 'terminal', inset: 0 }),
       apply: (radius) => {
         linux.push(radius)
       },

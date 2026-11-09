@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import type { StyleMeta } from '@/styles.generated'
+import { STYLES, getStyle, type StyleMeta } from '@/styles.generated'
 import {
   DEFAULT_SELECTION,
+  STYLE_ID_ALIASES,
+  canonicalStyleSelection,
   parseSchemeMode,
   resolvePalette,
   resolveScheme,
   resolveStyleSelection,
   toKesselColors,
+  type StyleSelection,
 } from './style-resolve'
 
 // A synthetic style exercising every fallback edge independently of
@@ -102,13 +105,13 @@ describe('resolvePalette fallback matrix', () => {
 describe('resolveStyleSelection', () => {
   it('resolves the registry default selection to itself (dark)', () => {
     const r = resolveStyleSelection(DEFAULT_SELECTION, false)
-    expect(r.style.id).toBe('square')
+    expect(r.style.id).toBe('terminal')
     expect(r.resolvedScheme).toBe('dark')
     expect(r.resolvedPalette.id).toBe('charcoal')
     expect(r.gapsPreset).toBe('')
   })
 
-  it('auto + OS-light flips square to its light default palette', () => {
+  it('auto + OS-light flips terminal to its light default palette', () => {
     const r = resolveStyleSelection({ ...DEFAULT_SELECTION, schemeMode: 'auto' }, true)
     expect(r.resolvedScheme).toBe('light')
     expect(r.resolvedPalette.id).toBe('paper')
@@ -116,7 +119,7 @@ describe('resolveStyleSelection', () => {
 
   it('unknown style ids fall back to the default style', () => {
     const r = resolveStyleSelection({ ...DEFAULT_SELECTION, styleId: 'ghost' }, false)
-    expect(r.style.id).toBe('square')
+    expect(r.style.id).toBe('terminal')
   })
 
   it('validates gap presets against the style and drops unknown ones', () => {
@@ -143,5 +146,61 @@ describe('toKesselColors', () => {
     expect(c.palette).toHaveLength(16)
     expect(c.palette[2]).toBe(3)
     expect(c.palette[3]).toBe(0)
+  })
+})
+
+describe('retired style ids (the alias table)', () => {
+  const sel = (over: Partial<StyleSelection>): StyleSelection => ({ ...DEFAULT_SELECTION, ...over })
+
+  it('every alias points at a style that ships and is not hidden', () => {
+    expect(STYLE_ID_ALIASES.size).toBeGreaterThan(0)
+    for (const { to } of STYLE_ID_ALIASES.values()) {
+      expect(getStyle(to)?.hidden, to).toBeUndefined()
+      expect(getStyle(to), to).toBeDefined()
+    }
+  })
+
+  it('square becomes terminal and keeps palette, scheme and gaps', () => {
+    const r = resolveStyleSelection(
+      sel({ styleId: 'square', paletteId: 'paper', schemeMode: 'light', gapsPreset: 'spacious' }),
+      false,
+    )
+    expect([r.style.id, r.resolvedPalette.id, r.resolvedScheme, r.gapsPreset]).toEqual([
+      'terminal',
+      'paper',
+      'light',
+      'spacious',
+    ])
+  })
+
+  it('bezel dark falls to charcoal, bezel light to paper', () => {
+    const dark = resolveStyleSelection(sel({ styleId: 'bezel', paletteId: 'graphite', schemeMode: 'dark' }), false)
+    expect([dark.style.id, dark.resolvedPalette.id, dark.resolvedScheme]).toEqual(['terminal', 'charcoal', 'dark'])
+    const light = resolveStyleSelection(sel({ styleId: 'bezel', paletteId: 'porcelain', schemeMode: 'light' }), false)
+    expect([light.style.id, light.resolvedPalette.id, light.resolvedScheme]).toEqual(['terminal', 'paper', 'light'])
+  })
+
+  it('bezel on auto stays auto and follows the OS', () => {
+    const c = canonicalStyleSelection(sel({ styleId: 'bezel', paletteId: 'graphite', schemeMode: 'auto' }))
+    expect(c.schemeMode).toBe('auto')
+    expect(resolveStyleSelection(c, true).resolvedPalette.id).toBe('paper')
+    expect(resolveStyleSelection(c, false).resolvedPalette.id).toBe('charcoal')
+  })
+
+  it('bezel drops gaps, even a preset Terminal would accept', () => {
+    const c = canonicalStyleSelection(sel({ styleId: 'bezel', paletteId: 'graphite', gapsPreset: 'spacious' }))
+    expect(c.gapsPreset).toBe('')
+    expect(resolveStyleSelection(sel({ styleId: 'bezel', gapsPreset: 'spacious' }), false).gapsPreset).toBe('')
+  })
+
+  it('a current id comes back as the same object', () => {
+    const s = sel({ styleId: 'glass', paletteId: 'obsidian' })
+    expect(canonicalStyleSelection(s)).toBe(s)
+  })
+
+  it('Bezel still compiles, hidden, but a selection can never resolve to it', () => {
+    expect(getStyle('bezel')?.hidden).toBe(true)
+    expect(STYLES.filter((s) => s.hidden).map((s) => s.id)).toEqual(['bezel'])
+    expect(resolveStyleSelection(sel({ styleId: 'bezel' }), false).style.id).toBe('terminal')
   })
 })

@@ -37,16 +37,18 @@ interface QaConfig {
   scheme: 'dark' | 'light'
   /** '' = the style's base density (attribute absent). */
   gaps: string
+  /** What <html> must carry when it isn't the seed (a retired id's alias). */
+  stamped?: { style: string; palette: string }
 }
 
 const CONFIGS: QaConfig[] = [
-  { name: 'paper-light', style: 'square', palette: 'paper', scheme: 'light', gaps: '' },
-  { name: 'charcoal-spacious', style: 'square', palette: 'charcoal', scheme: 'dark', gaps: 'spacious' },
-  { name: 'paper-spacious', style: 'square', palette: 'paper', scheme: 'light', gaps: 'spacious' },
+  { name: 'paper-light', style: 'terminal', palette: 'paper', scheme: 'light', gaps: '' },
+  { name: 'charcoal-spacious', style: 'terminal', palette: 'charcoal', scheme: 'dark', gaps: 'spacious' },
+  { name: 'paper-spacious', style: 'terminal', palette: 'paper', scheme: 'light', gaps: 'spacious' },
   { name: 'glass-obsidian', style: 'glass', palette: 'obsidian', scheme: 'dark', gaps: '' },
-  { name: 'bezel-graphite', style: 'bezel', palette: 'graphite', scheme: 'dark', gaps: '' },
+  { name: 'bezel-graphite-alias', style: 'bezel', palette: 'graphite', scheme: 'dark', gaps: '', stamped: { style: 'terminal', palette: 'charcoal' } },
   { name: 'glass-veil', style: 'glass', palette: 'veil', scheme: 'light', gaps: '' },
-  { name: 'bezel-porcelain', style: 'bezel', palette: 'porcelain', scheme: 'light', gaps: '' },
+  { name: 'bezel-porcelain-alias', style: 'bezel', palette: 'porcelain', scheme: 'light', gaps: '', stamped: { style: 'terminal', palette: 'paper' } },
 ]
 
 /** Settle + capture into the config's qa shots dir, then verify the
@@ -72,8 +74,8 @@ async function capture(page: Page, cfg: QaConfig, name: string): Promise<void> {
     }
   })
   expect(attrs, `style attributes drifted on '${name}' (${cfg.name})`).toEqual({
-    style: cfg.style,
-    palette: cfg.palette,
+    style: cfg.stamped?.style ?? cfg.style,
+    palette: cfg.stamped?.palette ?? cfg.palette,
     scheme: cfg.scheme,
     gaps: cfg.gaps || null,
   })

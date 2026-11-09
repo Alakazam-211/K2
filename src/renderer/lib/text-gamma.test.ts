@@ -124,16 +124,16 @@ describe('resolveTextGammaPreset', () => {
 
 describe('per-style storage keys', () => {
   it('keys include style id and scheme', () => {
-    expect(textGammaStorageKey('square', 'dark')).toBe('k2.textGamma.square.dark')
+    expect(textGammaStorageKey('terminal', 'dark')).toBe('k2.textGamma.terminal.dark')
     expect(textGammaStorageKey('glass', 'light')).toBe('k2.textGamma.glass.light')
   })
 
   it('write / read / clear round-trip', () => {
     mem.clear()
-    writeStoredTextGamma('square', 'dark', 1.75)
-    expect(readStoredTextGamma('square', 'dark')).toBe(1.75)
-    clearStoredTextGamma('square', 'dark')
-    expect(readStoredTextGamma('square', 'dark')).toBeNull()
+    writeStoredTextGamma('terminal', 'dark', 1.75)
+    expect(readStoredTextGamma('terminal', 'dark')).toBe(1.75)
+    clearStoredTextGamma('terminal', 'dark')
+    expect(readStoredTextGamma('terminal', 'dark')).toBeNull()
   })
 
   it('resolveEffectiveTextGamma prefers stored override over preset', () => {

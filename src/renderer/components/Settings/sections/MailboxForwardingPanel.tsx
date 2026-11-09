@@ -15,7 +15,7 @@
 //
 // STYLES: built from the ui primitives (Surface, Button, Input,
 // SquareCheckbox, Callout) and theme tokens only, so Square (chamfered),
-// Glass and Bezel restyle it through the style contract.
+// Glass restyles it through the style contract.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Callout, Input, SquareCheckbox, Surface } from '@/components/ui'

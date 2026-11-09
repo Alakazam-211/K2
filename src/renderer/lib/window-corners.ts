@@ -1,9 +1,9 @@
-// macOS window clip for style id `square`. Pure: no AppKit, no DOM.
+// macOS window clip for style id `terminal`. Pure: no AppKit, no DOM.
 //
 // 0.5 is the measured radius whose corner pixel is opaque at 2×.
 // 0 tells AppKit to restore the system squircle — it does not square
 // the window. Scheme, palette, gaps, and the traffic-light inset do
-// not change the number. Square compact (inset 0) is still 0.5.
+// not change the number. Terminal compact (inset 0) is still 0.5.
 
 export type WindowCornerInput = {
   styleId: string | null | undefined
@@ -20,17 +20,17 @@ export type WindowCornerInput = {
   zenCorners?: 'system' | 'square' | null
 }
 
-/** `square` is 0.5. Any other id, including unknown, is 0. Zen's corners
+/** `terminal` is 0.5. Any other id, including unknown, is 0. Zen's corners
  *  win while set. */
 export function windowCornerRadius(input: WindowCornerInput): number {
   if (input.zenCorners) return input.zenCorners === 'square' ? 0.5 : 0
-  return input.styleId === 'square' ? 0.5 : 0
+  return input.styleId === 'terminal' ? 0.5 : 0
 }
 
 export type WindowCornerController = {
   /** Push the current style's radius now. */
   reapply: () => void
-  /** Resize. Square compact (inset 0) still schedules a re-apply. */
+  /** Resize. Terminal compact (inset 0) still schedules a re-apply. */
   onResize: () => void
   /** Fullscreen enter and exit share this. Both schedule a re-apply. */
   onFullscreen: () => void
@@ -61,7 +61,7 @@ export function createWindowCornerController(opts: {
 
   return {
     reapply,
-    // Inset is not an input. Square compact still schedules.
+    // Inset is not an input. Terminal compact still schedules.
     onResize: scheduleReapply,
     onFullscreen: scheduleReapply,
   }

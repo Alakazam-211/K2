@@ -45,7 +45,7 @@
     "wash-1": { "$value": "rgba(255, 255, 255, 0.05)", "$type": "color" },
     "wash-2": { "$value": "rgba(255, 255, 255, 0.10)", "$type": "color" },
     "wash-3": { "$value": "rgba(255, 255, 255, 0.20)", "$type": "color" },
-    "scrim": { "$value": "rgba(3, 5, 10, 0.40)", "$type": "color", "$description": "Lighter than Square — the frost itself does half the separation." },
+    "scrim": { "$value": "rgba(3, 5, 10, 0.40)", "$type": "color", "$description": "Lighter than Terminal — the frost itself does half the separation." },
     "diff-add-text": { "$value": "#a5e075", "$type": "color" },
     "diff-remove-text": { "$value": "#ffb3b3", "$type": "color" },
     "diff-modified-border": { "$value": "#6ee7a0", "$type": "color" },

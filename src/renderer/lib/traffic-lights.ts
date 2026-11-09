@@ -1,6 +1,6 @@
 // macOS stoplight shape + inset. Pure: no AppKit, no DOM.
 //
-// Only style id `square` paints squares. Scheme, palette, and density
+// Only style id `terminal` paints squares. Scheme, palette, and density
 // do not turn that off. The y nudge is the title-bar grow the native
 // command already applies; it is not added to the button origin again.
 
@@ -63,9 +63,9 @@ export function stoplightSpacerPx(zoom: number | null | undefined, inset: number
   return Math.max(0, nativeWidth / z)
 }
 
-/** `square` only. A missing or unknown id is round. */
+/** `terminal` only. A missing or unknown id is round. */
 export function trafficLightShape(styleId: string | null | undefined): TrafficLightShape {
-  return styleId === 'square' ? 'square' : 'round'
+  return styleId === 'terminal' ? 'square' : 'round'
 }
 
 /** x is the window inset. y is inset + the 3px title-bar nudge. */
@@ -82,7 +82,7 @@ export function trafficLightOffsets(inset: number): { x: number; y: number } {
 export type ZenTrafficLights = { square: boolean; x: number; y: number; hidden?: boolean }
 
 /**
- * Shape ignores scheme, palette, and density (Square compact / regular /
+ * Shape ignores scheme, palette, and density (Terminal compact / regular /
  * spacious, Paper and Charcoal). Inset math does not change with shape.
  * When `zen` is set (a window showing Zen), Zen's shape and offset win over
  * the Style's: the style id and inset are ignored.
@@ -124,7 +124,7 @@ export type TrafficLightController = {
   reapply: () => void
   /** Forget the last invoke so the next sync sends again. */
   resetBaseline: () => void
-  /** Resize. Square compact (inset 0) still schedules a re-apply. */
+  /** Resize. Terminal compact (inset 0) still schedules a re-apply. */
   onResize: () => void
   /** Fullscreen enter and exit share this. Both schedule a re-apply. */
   onFullscreen: () => void

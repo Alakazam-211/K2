@@ -1,14 +1,14 @@
-// Chamfered corners in K2's square Style.
+// Chamfered corners in K2's Terminal Style.
 //
-// Rosson 2026-10-16: in K2's square Style the Thread doesn't go round. Its
+// Rosson 2026-10-16: in K2's Terminal Style the Thread doesn't go round. Its
 // bubbles, message field, Send, activity drawer (tab, Stop, tags and pulse
 // dot), file chips, cards and the "Earlier messages" pill get the chamfered
 // corners of the presence chips (mockup-activity-status-v1 §Presence: small
-// 45° corner cuts). Bezel and Glass (rounded Styles) and Zen's own themes
+// 45° corner cuts). Glass (a rounded Style) and Zen's own themes
 // keep the rounded look.
 //
 // An element opts in with `data-chamfer` and `chamferVars(...)`. Under
-// `html[data-style="square"]` inside the desktop Thread box, its own fill,
+// `html[data-style="terminal"]` inside the desktop Thread box, its own fill,
 // border and radius go transparent/0 and two pseudo layers draw it instead:
 // `::before` the edge (border colour) and `::after` the fill, each clipped
 // to the cut polygon. The element itself is never clipped, so focus rings
@@ -71,7 +71,7 @@ export function chamferPolygon(less: string): string {
 }
 
 /** Where chamfers apply: the desktop Thread box under K2's square Style. */
-export const CHAMFER_SCOPE = `html[data-style="square"] [${THREAD_ZEN_SCOPE_ATTR}]`
+export const CHAMFER_SCOPE = `html[data-style="terminal"] [${THREAD_ZEN_SCOPE_ATTR}]`
 
 const allCorners = (px: number): string => `--ch-tl: ${px}px; --ch-tr: ${px}px; --ch-br: ${px}px; --ch-bl: ${px}px;`
 

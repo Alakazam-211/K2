@@ -5,6 +5,7 @@
   "author": "Alakazam Labs",
   "version": "0.1.0",
   "schemaVersion": 1,
+  "hidden": true,
   "description": "Experimental preview — layered-ring cards on warm graphite: hairline, bright gap, outer line. Tactile keycap controls, zite-gold accent.",
   "defaultPalette": "graphite",
   "defaultPalettes": {

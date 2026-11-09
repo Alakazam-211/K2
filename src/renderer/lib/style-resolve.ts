@@ -40,10 +40,45 @@ export interface ResolvedStyle {
 }
 
 export const DEFAULT_SELECTION: StyleSelection = {
-  styleId: 'square',
+  styleId: 'terminal',
   paletteId: 'charcoal',
   schemeMode: 'dark',
   gapsPreset: '',
+}
+
+/**
+ * Retired style ids and where they went. The ONE alias table: every
+ * incoming id goes through canonicalStyleSelection. `keepsTuning` says the
+ * old style's density, dials and text weight mean the same thing on the
+ * new one, so they carry over.
+ *
+ * On the retirement ledger (prd-themes-terminal-glass-v1 §7): remove once
+ * Terminal is proven, together with lib/style-id-migration.ts and the copy
+ * of this table in index.html's pre-paint bootstrap.
+ */
+export const STYLE_ID_ALIASES: ReadonlyMap<string, { to: string; keepsTuning: boolean }> = new Map([
+  ['square', { to: 'terminal', keepsTuning: true }],
+  ['bezel', { to: 'terminal', keepsTuning: false }],
+])
+
+/** A selection with any retired style id replaced. A palette the new style
+ *  doesn't have falls to that style's default for the scheme, the scheme
+ *  mode always carries over, and gaps carry over only under `keepsTuning`.
+ *  A selection on a current id comes back untouched. */
+export function canonicalStyleSelection(sel: StyleSelection): StyleSelection {
+  const alias = STYLE_ID_ALIASES.get(sel.styleId)
+  if (!alias) return sel
+  const target = getStyle(alias.to)
+  const paletteExists = target?.palettes.some((p) => p.id === sel.paletteId) ?? false
+  const schemeHint: StyleScheme = sel.schemeMode === 'light' ? 'light' : 'dark'
+  return {
+    styleId: alias.to,
+    paletteId: paletteExists
+      ? sel.paletteId
+      : (target?.defaultPalettes[schemeHint] ?? target?.defaultPalette ?? sel.paletteId),
+    schemeMode: sel.schemeMode,
+    gapsPreset: alias.keepsTuning ? sel.gapsPreset : '',
+  }
 }
 
 /** Parse an untrusted string (daemon settings / localStorage) into a
@@ -78,13 +113,15 @@ export function resolvePalette(
   return find(style.defaultPalette) ?? style.palettes[0]
 }
 
-/** Resolve a full selection. Unknown style ids fall back to the default
- *  style; unknown/unsupported palettes and gap presets fall back per the
- *  chains above. `osPrefersLight` is injected so this stays pure. */
+/** Resolve a full selection. Retired style ids map through the alias
+ *  table; unknown style ids fall back to the default style;
+ *  unknown/unsupported palettes and gap presets fall back per the chains
+ *  above. `osPrefersLight` is injected so this stays pure. */
 export function resolveStyleSelection(
-  sel: StyleSelection,
+  selection: StyleSelection,
   osPrefersLight: boolean,
 ): ResolvedStyle {
+  const sel = canonicalStyleSelection(selection)
   const style = getStyle(sel.styleId) ?? getStyle(DEFAULT_STYLE_ID)!
   const resolvedScheme = resolveScheme(sel.schemeMode, osPrefersLight)
   const resolvedPalette = resolvePalette(style, sel.paletteId, resolvedScheme)

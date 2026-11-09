@@ -39,7 +39,7 @@ export function limitBarTitle(w: UsageWindow, nowMs: number): string | undefined
 export const LIMIT_BAR_HEIGHT_CLASS = 'h-1.5'
 /** The palette's control track (a toggle's off state): visible in light and
  *  dark, so the empty part reads as a track. Its ends follow the Style:
- *  rounded by `--radius-selector` in Bezel and Glass, a 1px chamfer
+ *  rounded by `--radius-selector` in Glass, a 1px chamfer
  *  (`chamferCutFor(6)`) in square (globals.css, `[data-limit-track]`). The
  *  pace mark sits outside the track so the rounding never clips it. */
 export const LIMIT_BAR_TRACK_CLASS = 'bg-[var(--color-control-track-off)]'

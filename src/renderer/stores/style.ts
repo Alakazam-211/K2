@@ -21,6 +21,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { STYLES, type StyleMeta, type StyleScheme } from '@/styles.generated'
 import {
   DEFAULT_SELECTION,
+  canonicalStyleSelection,
   parseSchemeMode,
   resolvePalette,
   resolveStyleSelection,
@@ -28,6 +29,7 @@ import {
   type StyleSelection,
 } from '@/lib/style-resolve'
 import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
+import { migrateRetiredStyleKeys } from '@/lib/style-id-migration'
 import {
   clampTextGamma,
   clearStoredTextGamma,
@@ -139,12 +141,12 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 }
 
 // ── macOS traffic lights follow the window inset ─────────────────────
-// Floating-chrome styles (Glass/Bezel/spacious presets) inset the whole
+// Floating-chrome styles (Glass/spacious presets) inset the whole
 // UI from the window edge, so the close/minimize/zoom buttons must move
-// down-right with it. Square paints those buttons as squares; every
+// down-right with it. Terminal paints those buttons as squares; every
 // other style id keeps Apple's circles. AppKit resets standard-button
 // frames on resize, fullscreen, and title changes, so re-apply on all
-// three — including Square compact, whose inset is 0. Rust owns the
+// three — including Terminal compact, whose inset is 0. Rust owns the
 // re-apply (commands/traffic_lights.rs observes resize, screen, backing
 // scale, wake, appearance, key/main); these hooks are the backup. The app
 // zoom rides along so the buttons stay centered on the zoomed top bar, and
@@ -267,9 +269,9 @@ export function reapplyTrafficLights(): void {
   trafficLights.reapply()
 }
 
-// Square's window clip. Not the traffic-light inset: compact still
+// Terminal's window clip. Not the traffic-light inset: compact still
 // reapplies. Hover stamps this window only (no localStorage write).
-// 0.5 for `square`, 0 for every other id.
+// 0.5 for `terminal`, 0 for every other id.
 const windowCorners = createWindowCornerController({
   isMac: () =>
     typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac'),
@@ -354,12 +356,12 @@ function writeMirror(sel: StyleSelection): void {
 export function readMirror(): StyleSelection {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_SELECTION }
   try {
-    return {
+    return canonicalStyleSelection({
       styleId: localStorage.getItem(LS_STYLE) ?? DEFAULT_SELECTION.styleId,
       paletteId: localStorage.getItem(LS_PALETTE) ?? DEFAULT_SELECTION.paletteId,
       schemeMode: parseSchemeMode(localStorage.getItem(LS_SCHEME)),
       gapsPreset: localStorage.getItem(LS_GAPS) ?? DEFAULT_SELECTION.gapsPreset,
-    }
+    })
   } catch {
     return { ...DEFAULT_SELECTION }
   }
@@ -446,12 +448,12 @@ export function migrateStyleFromDaemon(daemonStyle: DaemonStyleSeed | undefined 
   }
 
   if (daemonStyle && hasDaemonStylePayload(daemonStyle)) {
-    const sel: StyleSelection = {
+    const sel = canonicalStyleSelection({
       styleId: daemonStyle.id ?? DEFAULT_SELECTION.styleId,
       paletteId: daemonStyle.palette ?? DEFAULT_SELECTION.paletteId,
       schemeMode: parseSchemeMode(daemonStyle.scheme),
       gapsPreset: daemonStyle.gaps ?? DEFAULT_SELECTION.gapsPreset,
-    }
+    })
     useStyleStore.getState().applyStyle(sel)
     markStyleMigrated()
     return
@@ -479,6 +481,10 @@ export function styleSelectionToBackend(sel: {
   }
 }
 
+// Before the first read of the mirror, so the store and every per-style
+// key lookup after it only ever see current ids.
+migrateRetiredStyleKeys()
+
 const bootSelection = readMirror()
 const bootResolved = resolveStyleSelection(bootSelection, osPrefersLight())
 const bootTextGamma = resolveEffectiveTextGamma(
@@ -501,12 +507,12 @@ export const useStyleStore = create<StyleState>((set, get) => ({
     // change) leaves the live textGamma alone so a mid-session slider
     // value isn't clobbered before it's written — setTextGamma owns writes.
     const prevResolvedKey = `${cur.styleId}\0${cur.resolvedPaletteId}\0${cur.resolvedScheme}`
-    const sel: StyleSelection = {
+    const sel = canonicalStyleSelection({
       styleId: partial.styleId ?? cur.styleId,
       paletteId: partial.paletteId ?? cur.paletteId,
       schemeMode: partial.schemeMode ?? cur.schemeMode,
       gapsPreset: partial.gapsPreset ?? cur.gapsPreset,
-    }
+    })
     const resolved = resolveStyleSelection(sel, osPrefersLight())
     const nextResolvedKey = `${sel.styleId}\0${resolved.resolvedPalette.id}\0${resolved.resolvedScheme}`
     const next: Partial<StyleState> = {

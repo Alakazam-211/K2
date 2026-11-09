@@ -185,7 +185,7 @@ function TabGroupColumn({
 
   return (
     <div
-      // ST3: tab strip ↔ pane content breathing room (0 in Square)
+      // ST3: tab strip ↔ pane content breathing room (0 in Terminal)
       className="relative flex h-full flex-col overflow-hidden gap-[var(--gap-section)]"
       style={style}
       onMouseDown={onFocus}
@@ -369,7 +369,7 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
           launches agents from the + menu and Ctrl+1–9, which spawn on the
           room's server (Home M5). */}
       {room.isPrimary && <PresetsBar cwd={cwd} />}
-      {/* ST3: inter-column pane gap (0 in Square; resize handles keep their own width) */}
+      {/* ST3: inter-column pane gap (0 in Terminal; resize handles keep their own width) */}
       <div ref={containerRef} className="flex flex-1 overflow-hidden gap-[var(--gap-pane)]">
         {Array.from({ length: splitCount }, (_, i) => (
           <React.Fragment key={i}>

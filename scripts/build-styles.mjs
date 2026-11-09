@@ -23,7 +23,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const STYLES_DIR = join(ROOT, 'styles')
 const OUT_FILE = join(ROOT, 'src', 'renderer', 'styles.generated.css')
 const OUT_TS_FILE = join(ROOT, 'src', 'renderer', 'styles.generated.ts')
-const DEFAULT_STYLE = 'square'
+const DEFAULT_STYLE = 'terminal'
 
 const REQUIRED_TOKEN_SLOTS = {
   radius: ['box', 'field', 'selector', 'pill'],
@@ -200,6 +200,9 @@ function loadStyle(id) {
   }
   if (manifest.id !== id) fail(`${manifestFile}: id "${manifest.id}" must match folder name "${id}"`)
   if (manifest.schemaVersion !== 1) fail(`${manifestFile}: unsupported schemaVersion ${manifest.schemaVersion}`)
+  if (manifest.hidden !== undefined && typeof manifest.hidden !== 'boolean')
+    fail(`${manifestFile}: "hidden" must be a boolean`)
+  if (manifest.hidden === true && id === DEFAULT_STYLE) fail(`${manifestFile}: the default style cannot be hidden`)
   const dials = buildDials(manifestFile, manifest)
 
   const tokensFile = relative(ROOT, join(dir, 'tokens.json'))
@@ -363,6 +366,8 @@ const registry = styles.map((s) => {
   if (typeof s.manifest.terminalTextGamma === 'number' && Number.isFinite(s.manifest.terminalTextGamma)) {
     entry.terminalTextGamma = s.manifest.terminalTextGamma
   }
+  // Retired look: still compiled, left out of the Settings picker.
+  if (s.manifest.hidden === true) entry.hidden = true
   return entry
 })
 
@@ -421,6 +426,8 @@ export interface StyleMeta {
    *  from the resolved palette's terminal background luminance
    *  (dark → 0.7, light → 1.05). See src/renderer/lib/text-gamma.ts. */
   terminalTextGamma?: number
+  /** Compiled but left out of the Settings picker (a retired look). */
+  hidden?: boolean
 }
 
 export const DEFAULT_STYLE_ID = ${JSON.stringify(DEFAULT_STYLE)}

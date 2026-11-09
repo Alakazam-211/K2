@@ -489,9 +489,9 @@ describe('the activity drawer on the Thread\'s message box', () => {
 // Rosson 2026-10-16: in K2's square Style the bubbles, the message field,
 // Send and the activity drawer (tab, Stop, tags, pulse dot), then the file
 // chips, cards and "Earlier messages", get chamfered corners (the presence
-// chips' 45° cuts); Bezel and Glass keep them round. "+" and "/" have no
+// chips' 45° cuts); Glass keeps them round. "+" and "/" have no
 // fill and are left as they are.
-describe('chamfered corners in K2\'s square Style', () => {
+describe('chamfered corners in K2\'s Terminal Style', () => {
   const NOW = Date.now()
   const turn = (): ThreadTurn => {
     const t = coerceThreadTurn(
@@ -605,16 +605,16 @@ describe('chamfered corners in K2\'s square Style', () => {
 
   // Rosson 2026-10-30: the stash is a bookmark left of Send (only while the
   // box is empty) that opens the drawer (one ✕); native in each K2 Style.
-  it.each(['square', 'glass', 'bezel'])('%s Style: the stash button shows on an empty box, hides on typing, opens the drawer', async (style) => {
+  it.each(['terminal', 'glass'])('%s Style: the stash button shows on an empty box, hides on typing, opens the drawer', async (style) => {
     document.documentElement.setAttribute('data-style', style)
     renderThread()
     const send = el('[data-zen-send]')
     const btn = screen.getByTestId('stash-button')
     expect(btn.nextElementSibling).toBe(send)
     // A soft button like "+" and "/": a square backdrop on hover, chamfered
-    // in the square Style, a rounded square (never a pill) in the others.
+    // in the Terminal Style, a rounded square (never a pill) in the others.
     expect(btn.hasAttribute('data-zen-soft-button')).toBe(true)
-    expect(cut(btn)).toBe(style === 'square')
+    expect(cut(btn)).toBe(style === 'terminal')
     expect(btn.style.borderRadius).toBe('calc(var(--zen-radius) / 2)')
     expect(document.querySelector('[data-stash-tab]')).toBeNull()
     fireEvent.change(box(), { target: { value: 'x' } })
@@ -623,8 +623,8 @@ describe('chamfered corners in K2\'s square Style', () => {
     fireEvent.click(screen.getByTestId('stash-button'))
     const drawer = await screen.findByTestId('stash-drawer')
     expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
-    // Square: chamfered; Glass and Bezel: the Thread's round top corners.
-    expect(cut(drawer)).toBe(style === 'square')
+    // Terminal: chamfered; Glass: the Thread's round top corners.
+    expect(cut(drawer)).toBe(style === 'terminal')
     expect(drawer.style.borderRadius).toBe('calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0')
     // It takes the activity bar's place on the box's top edge.
     expect(el('[data-zen-stash-row]').contains(drawer)).toBe(true)
@@ -678,9 +678,9 @@ describe('chamfered corners in K2\'s square Style', () => {
   })
 
   it('square Style: the four lose their round corners (pseudo layers draw the cut shape)', () => {
-    document.documentElement.setAttribute('data-style', 'square')
+    document.documentElement.setAttribute('data-style', 'terminal')
     renderThread()
-    expect(THREAD_CHAMFER_CSS).toContain('html[data-style="square"] [data-k2-thread-zen] [data-chamfer]')
+    expect(THREAD_CHAMFER_CSS).toContain('html[data-style="terminal"] [data-k2-thread-zen] [data-chamfer]')
     expect(THREAD_CHAMFER_CSS).toContain('clip-path: polygon(')
     for (const sel of ['[data-zen-bubble="me"]', '[data-zen-bubble="agent"]', '[data-zen-compose-box]', '[data-zen-send]', '[data-zen-drawer-tile]', '[data-zen-drawer-stop]', '[data-zen-load-older]']) {
       expect(cut(el(sel)), sel).toBe(true)
@@ -701,7 +701,7 @@ describe('chamfered corners in K2\'s square Style', () => {
   })
 
   it('square Style: the cards, their options, the file chips, the drawer\'s tags and its pulse dot', () => {
-    document.documentElement.setAttribute('data-style', 'square')
+    document.documentElement.setAttribute('data-style', 'terminal')
     renderThread([choice, secret])
     const choiceCard = el('[data-testid="thread-choice-card"]')
     expect(cut(choiceCard)).toBe(true)
@@ -725,7 +725,7 @@ describe('chamfered corners in K2\'s square Style', () => {
   })
 
   it('square Style: a file chip is chamfered', () => {
-    document.documentElement.setAttribute('data-style', 'square')
+    document.documentElement.setAttribute('data-style', 'terminal')
     render(
       <div data-k2-thread-zen="">
         <ThreadAttachmentChip name="shot.png" onRemove={() => {}} />
@@ -737,8 +737,8 @@ describe('chamfered corners in K2\'s square Style', () => {
     expect(chip.style.getPropertyValue('--ch-edge')).toBe('var(--zen-border)')
   })
 
-  it('Bezel and Glass keep the round look', () => {
-    for (const style of ['bezel', 'glass']) {
+  it('Glass keeps the round look', () => {
+    for (const style of ['glass']) {
       document.documentElement.setAttribute('data-style', style)
       renderThread()
       for (const sel of ['[data-zen-bubble="me"]', '[data-zen-bubble="agent"]', '[data-zen-compose-box]', '[data-zen-send]', '[data-zen-drawer-tile]', '[data-zen-drawer-stop]', '[data-zen-load-older]']) {

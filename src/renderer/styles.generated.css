@@ -2,7 +2,7 @@
  * Source of truth: styles/<id>/{style.json,tokens.json,palettes/*.json}.
  * Rebuild with: bun run styles:build (and commit the result). */
 
-/* Fallback: Square / Charcoal */
+/* Fallback: Terminal / Charcoal */
 :root {
   --radius-box: 0px;
   --radius-field: 0px;
@@ -607,8 +607,8 @@
   }
 }
 
-/* ── Style: Square (square) v1.0.0 ── */
-[data-style="square"] {
+/* ── Style: Terminal (terminal) v1.0.0 ── */
+[data-style="terminal"] {
   --radius-box: 0px;
   --radius-field: 0px;
   --radius-selector: 0px;
@@ -659,7 +659,7 @@
   --type-lg: 13px;
   --type-xl: 15px;
 }
-[data-style="square"][data-gaps="regular"] {
+[data-style="terminal"][data-gaps="regular"] {
   --gap-pane: 4px;
   --gap-tile: 3px;
   --gap-section: 4px;
@@ -667,7 +667,7 @@
   --divider-width: 6px;
   --divider-color: transparent;
 }
-[data-style="square"][data-gaps="spacious"] {
+[data-style="terminal"][data-gaps="spacious"] {
   --gap-pane: 10px;
   --gap-tile: 6px;
   --gap-section: 10px;
@@ -675,7 +675,7 @@
   --divider-width: 12px;
   --divider-color: transparent;
 }
-[data-style="square"][data-palette="charcoal"] {
+[data-style="terminal"][data-palette="charcoal"] {
   --color-bg: #0a0a0a;
   --color-bg-surface: #141414;
   --color-bg-elevated: #1e1e1e;
@@ -749,7 +749,7 @@
   --term-ansi-14: #34e2e2;
   --term-ansi-15: #eeeeec;
 }
-[data-style="square"][data-palette="paper"] {
+[data-style="terminal"][data-palette="paper"] {
   --color-bg: #faf8f3;
   --color-bg-surface: #f2efe8;
   --color-bg-elevated: #e7e2d7;

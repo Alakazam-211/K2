@@ -43,7 +43,7 @@ export default function Layout({
   const leftPanelOpen = usePanelsStore((s) => s.leftPanelOpen)
   const rightPanelOpen = usePanelsStore((s) => s.rightPanelOpen)
 
-  // App shell — ST3: window inset + canvas layer (both flush/0 in Square)
+  // App shell — ST3: window inset + canvas layer (both flush/0 in Terminal)
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
       {/* TopBar */}
@@ -53,7 +53,7 @@ export default function Layout({
         remoteServer={remoteServer}
       />
 
-      {/* Content area — ST3: sidebar | panes gap (0 in Square) */}
+      {/* Content area — ST3: sidebar | panes gap (0 in Terminal) */}
       <div className="flex flex-1 overflow-hidden gap-[var(--gap-pane)]">
         {/* Primary sidebar: icon rail (always) + expanded panel (when not collapsed) */}
         {isCollapsed ? (

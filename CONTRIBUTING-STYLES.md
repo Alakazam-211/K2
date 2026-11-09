@@ -2,8 +2,8 @@
 
 K2's entire visual language — colors, corner radii, borders/rings, shadows, glass
 materials, spacing, motion, and terminal colors — is driven by **Style packages**:
-schema-validated data folders under [`styles/`](styles/). The app ships Square
-(the original look), Liquid Glass, and Bezel; community Styles arrive as pull
+schema-validated data folders under [`styles/`](styles/). The app ships Terminal
+(the original look) and Liquid Glass; community Styles arrive as pull
 requests adding a folder here. No component code required, and none accepted —
 if a look can't be expressed through the contract, open an issue about extending
 the contract instead.
@@ -52,7 +52,7 @@ live palette hover-previews, while you edit its JSON.
    configuration and attaches it to the PR as an artifact.
 4. One Style or palette per PR.
 
-Squares stays pixel-frozen — PRs that alter Square/Charcoal values will be
+Terminal stays pixel-frozen — PRs that alter Terminal/Charcoal values will be
 declined (that's the app's reference rendering, verified by a zero-threshold
 screenshot diff).
 

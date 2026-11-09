@@ -53,9 +53,11 @@ export interface StyleMeta {
    *  from the resolved palette's terminal background luminance
    *  (dark → 0.7, light → 1.05). See src/renderer/lib/text-gamma.ts. */
   terminalTextGamma?: number
+  /** Compiled but left out of the Settings picker (a retired look). */
+  hidden?: boolean
 }
 
-export const DEFAULT_STYLE_ID = "square"
+export const DEFAULT_STYLE_ID = "terminal"
 
 export const STYLES: readonly StyleMeta[] = [
   {
@@ -169,7 +171,8 @@ export const STYLES: readonly StyleMeta[] = [
           }
         }
       }
-    ]
+    ],
+    "hidden": true
   },
   {
     "id": "glass",
@@ -296,10 +299,10 @@ export const STYLES: readonly StyleMeta[] = [
     ]
   },
   {
-    "id": "square",
-    "name": "Square",
+    "id": "terminal",
+    "name": "Terminal",
     "author": "Alakazam Labs",
-    "description": "K2's original look: flat, flush, zero-radius, 1px hairline dividers, everything touching. The reference implementation of the Style contract — bound to the app's historical values exactly.",
+    "description": "K2's square look: compact, flush, zero-radius, 1px hairline dividers, monospace everywhere. The reference implementation of the Style contract.",
     "defaultPalette": "charcoal",
     "defaultPalettes": {
       "dark": "charcoal",

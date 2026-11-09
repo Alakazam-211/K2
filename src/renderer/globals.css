@@ -101,7 +101,7 @@ textarea.selectable-copy,
 
 /* All --color-* / --gap-* / --radius-* / --ring-* / --term-* custom
    properties are defined by styles.generated.css (imported above):
-   :root carries the Square/Charcoal fallback, and [data-style]/[data-palette]
+   :root carries the Terminal/Charcoal fallback, and [data-style]/[data-palette]
    blocks bind whichever Style is stamped on <html>. Edit styles/, not here. */
 
 html {
@@ -1125,14 +1125,14 @@ html[data-os]:not([data-os="mac"]) select optgroup {
    control (`chamferCutFor(14)` = 2px). The element is clipped to the cut
    (so a hover fill is chamfered too) and `::before` draws the 1px edge as
    an even-odd ring (outer cut 2px; inner contour 1px in, cut 2 − 0.414).
-   Rounded Styles (Bezel, Glass) keep their look. */
-html[data-style="square"] [data-nav-chip] {
+   Rounded Styles (Glass) keep their look. */
+html[data-style="terminal"] [data-nav-chip] {
   position: relative;
   border-color: transparent !important;
   border-radius: 0 !important;
   clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
 }
-html[data-style="square"] [data-nav-chip]::before {
+html[data-style="terminal"] [data-nav-chip]::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -1147,13 +1147,13 @@ html[data-style="square"] [data-nav-chip]::before {
    chamfered like the Thread's surfaces (CHAMFER_CUT.surface = 4px), the
    1px edge drawn by `::before` as an even-odd ring (inner cut 4 − 0.414).
    Rounded Styles keep `--radius-field`. */
-html[data-style="square"] [data-design-tile] {
+html[data-style="terminal"] [data-design-tile] {
   position: relative;
   border-color: transparent !important;
   border-radius: 0 !important;
   clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px), 0 4px);
 }
-html[data-style="square"] [data-design-tile]::before {
+html[data-style="terminal"] [data-design-tile]::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -1167,7 +1167,7 @@ html[data-style="square"] [data-design-tile]::before {
 /* Usage limit bars (LimitBar) in K2's square Style: a 1px chamfer on the
    6px track (`chamferCutFor(6)` = 1px), clipping the fill with it. Rounded
    Styles round the track by --radius-selector instead. */
-html[data-style="square"] [data-limit-track] {
+html[data-style="terminal"] [data-limit-track] {
   border-radius: 0;
   clip-path: polygon(1px 0, calc(100% - 1px) 0, 100% 1px, 100% calc(100% - 1px), calc(100% - 1px) 100%, 1px 100%, 0 calc(100% - 1px), 0 1px);
 }

@@ -543,7 +543,7 @@ export const ThreadBubble = memo(function ThreadBubble({
           // Markdown inside reads Styles variables; here they are this bubble's text.
           ...zenBubbleShield(mine ? 'me' : 'agent'),
           ...THREAD_CARD_TOKENS,
-          // Square Style: cut corners; the tail corner stays sharp.
+          // Terminal Style: cut corners; the tail corner stays sharp.
           ...chamferVars({
             cut: mine ? [4, 4, 0, 4] : [4, 4, 4, 0],
             fill: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
@@ -750,7 +750,7 @@ export function ThreadLoadOlder({
         borderRadius: 999,
         fontSize: '0.8em',
         color: 'var(--zen-text-muted)',
-        // Square Style: no fill at rest (a hover fills it), cut like a 22px control.
+        // Terminal Style: no fill at rest (a hover fills it), cut like a 22px control.
         ...chamferVars({ cut: chamferCutFor(22), fill: 'transparent' }),
       }}
     >

@@ -2573,8 +2573,8 @@ describe('Zen text follows Zen tokens, never the app Style', () => {
   })
 
   function setSchemes(zen: 'light' | 'dark', app: 'light' | 'dark'): void {
-    // The app Style: Square on Paper (light) or Charcoal (dark), the real tokens.
-    document.documentElement.setAttribute('data-style', 'square')
+    // The app Style: Terminal on Paper (light) or Charcoal (dark), the real tokens.
+    document.documentElement.setAttribute('data-style', 'terminal')
     document.documentElement.setAttribute('data-palette', app === 'light' ? 'paper' : 'charcoal')
     // Zen's `basic` theme is `scheme = "auto"`: this computer's setting.
     Object.defineProperty(window, 'matchMedia', {

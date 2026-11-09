@@ -1,7 +1,7 @@
 import { forwardRef } from 'react'
 import { cx } from './cx'
 
-/** Variants bound to Square's dominant button idioms — converting a call
+/** Variants bound to Terminal's dominant button idioms — converting a call
  *  site to a variant must be rendering-identical under Charcoal. */
 const VARIANTS: Record<string, string> = {
   /** Settings-style default: elevated chip, brightens on hover. */

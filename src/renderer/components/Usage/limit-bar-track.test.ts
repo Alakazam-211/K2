@@ -38,10 +38,10 @@ describe('limit bar track', () => {
     }
   })
 
-  it('chamfers the track by chamferCutFor(6) only under html[data-style="square"]', () => {
+  it('chamfers the track by chamferCutFor(6) only under html[data-style="terminal"]', () => {
     const cut = `${chamferCutFor(6)}px`
     expect(cut).toBe('1px')
-    const r = rule(globals, 'html[data-style="square"] [data-limit-track]')
+    const r = rule(globals, 'html[data-style="terminal"] [data-limit-track]')
     expect(r).toContain(`clip-path: polygon(${cut} 0, calc(100% - ${cut}) 0, 100% ${cut}`)
     expect(r).toMatch(/border-radius:\s*0/)
     expect(globals).not.toMatch(/(^|\n)\s*\[data-limit-track\]/)

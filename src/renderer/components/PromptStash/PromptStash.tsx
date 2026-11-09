@@ -430,7 +430,7 @@ export function StashDrawer({
                 onMouseEnter={() => setActive(i)}
                 onClick={() => onPick(rec)}
                 className="flex min-w-0 cursor-pointer items-start"
-                // Square Style: chamfered like the Thread's chips (STASH_CSS).
+                // Terminal Style: chamfered like the Thread's chips (STASH_CSS).
                 style={{ gap: 8, padding: '6px 8px', borderRadius: zen ? 8 : 0, ...chamferVars({ cut: CHAMFER_CUT.button, fill: 'transparent' }) }}
               >
                 <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 1 }}>

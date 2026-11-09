@@ -8,8 +8,8 @@
 //
 //   - `ThreadChatScope`: the Thread box. In the app it is a desktop Thread
 //     box (`data-k2-thread-zen` + `THREAD_ZEN_DESKTOP_TOKENS`), so every
-//     K2 Style paints it the way it paints the Thread (Square's chamfers,
-//     Glass and Bezel round, light and dark from the palette). Inside Zen
+//     K2 Style paints it the way it paints the Thread (Terminal's chamfers,
+//     Glass round, light and dark from the palette). Inside Zen
 //     (`ThreadChatZenContext`) the Zen root already sets the `--zen-*`
 //     tokens and the kit's rules, so the box adds neither.
 //   - `ThreadChatBubble`: one message as the Thread's bubble.

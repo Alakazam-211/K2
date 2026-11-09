@@ -197,7 +197,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
 
   return (
     <>
-      {/* ST3: pane tab bar ↔ pane content breathing room (0 in Square) */}
+      {/* ST3: pane tab bar ↔ pane content breathing room (0 in Terminal) */}
       <div className="flex h-full w-full flex-col gap-[var(--gap-section)]" data-pane-group-id={paneGroupId} data-tab-id={tabId}>
         {showPaneTabBar && (
           <PaneTabBar

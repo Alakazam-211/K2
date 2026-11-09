@@ -35,13 +35,13 @@ describe('traffic light shape', () => {
 
   it('paints squares only for style id square', () => {
     for (const row of squareCases) {
-      expect(trafficLightShape('square')).toBe('square')
+      expect(trafficLightShape('terminal')).toBe('square')
       expect(
-        trafficLightCommand({ styleId: 'square', inset: 0, ...row }).square,
+        trafficLightCommand({ styleId: 'terminal', inset: 0, ...row }).square,
       ).toBe(true)
     }
 
-    for (const styleId of ['glass', 'bezel', 'unknown', 'classic', '', null, undefined]) {
+    for (const styleId of ['glass', 'square', 'bezel', 'unknown', 'classic', '', null, undefined]) {
       expect(trafficLightShape(styleId)).toBe('round')
       expect(
         trafficLightCommand({
@@ -58,11 +58,11 @@ describe('traffic light shape', () => {
   it('keeps the inset and the 3px nudge for 0, 6, 10, and 12', () => {
     expect(TRAFFIC_LIGHT_Y_NUDGE_PX).toBe(3)
     const rows = [
-      { styleId: 'square', scheme: 'dark', palette: 'charcoal', density: 'compact', inset: 0 },
-      { styleId: 'square', scheme: 'light', palette: 'paper', density: 'regular', inset: 6 },
+      { styleId: 'terminal', scheme: 'dark', palette: 'charcoal', density: 'compact', inset: 0 },
+      { styleId: 'terminal', scheme: 'light', palette: 'paper', density: 'regular', inset: 6 },
       { styleId: 'glass', scheme: 'dark', palette: 'obsidian', density: 'regular', inset: 10 },
-      { styleId: 'bezel', scheme: 'light', palette: 'porcelain', density: 'regular', inset: 10 },
-      { styleId: 'square', scheme: 'dark', palette: 'charcoal', density: 'spacious', inset: 12 },
+      { styleId: 'glass', scheme: 'light', palette: 'veil', density: 'regular', inset: 10 },
+      { styleId: 'terminal', scheme: 'dark', palette: 'charcoal', density: 'spacious', inset: 12 },
       { styleId: 'nope', scheme: 'light', palette: null, density: 'compact', inset: 0 },
     ]
     for (const row of rows) {
@@ -74,10 +74,10 @@ describe('traffic light shape', () => {
 })
 
 describe('traffic light re-apply', () => {
-  it('schedules Square compact on resize and fullscreen, and Glass is not square', () => {
+  it('schedules Terminal compact on resize and fullscreen, and Glass is not square', () => {
     const applied: TrafficLightCommand[] = []
     const scheduled: Array<() => void> = []
-    let styleId: string | null = 'square'
+    let styleId: string | null = 'terminal'
     let inset = 0
     const lights = createTrafficLightController({
       isMac: () => true,
@@ -126,7 +126,7 @@ describe('traffic light re-apply', () => {
     let zoom: number | undefined = undefined
     const lights = createTrafficLightController({
       isMac: () => true,
-      read: () => ({ styleId: 'square', inset: 0, zoom }),
+      read: () => ({ styleId: 'terminal', inset: 0, zoom }),
       apply: (cmd) => {
         applied.push(cmd)
       },
@@ -175,8 +175,8 @@ describe('Zen hidden stoplights (Rosson 2026-10-08, the Diary)', () => {
     expect(trafficLightCommand({ styleId: 'glass', inset: 10, zoom: 1, zen: { square: false, x: 0, y: 0, hidden: true } })).toMatchObject({
       hidden: true,
     })
-    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1, zen: { square: true, x: 0, y: 0 } }).hidden).toBe(false)
-    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1 }).hidden).toBe(false)
+    expect(trafficLightCommand({ styleId: 'terminal', inset: 0, zoom: 1, zen: { square: true, x: 0, y: 0 } }).hidden).toBe(false)
+    expect(trafficLightCommand({ styleId: 'terminal', inset: 0, zoom: 1 }).hidden).toBe(false)
   })
 
   it('the native command takes hidden and keeps it on every re-apply', () => {
@@ -283,7 +283,7 @@ describe('stoplight spacer under app zoom', () => {
     let zoom = 1
     const lights = createTrafficLightController({
       isMac: () => true,
-      read: () => ({ styleId: 'square', inset: 0, zoom }),
+      read: () => ({ styleId: 'terminal', inset: 0, zoom }),
       apply: (cmd) => {
         applied.push(cmd)
       },
@@ -322,7 +322,7 @@ describe('stoplight spacer under app zoom', () => {
     const scheduled: Array<() => void> = []
     const lights = createTrafficLightController({
       isMac: () => false,
-      read: () => ({ styleId: 'square', inset: 0, zoom: 1.5 }),
+      read: () => ({ styleId: 'terminal', inset: 0, zoom: 1.5 }),
       apply: (cmd) => {
         applied.push(cmd)
       },
@@ -393,11 +393,11 @@ describe('stoplight spacer under app zoom', () => {
 describe('Zen stoplights (Rosson 2026-10-04: down and right in Zen)', () => {
   it('Zen adds its own 8px inset right and down on top of the theme offset; the Style never does', () => {
     expect(ZEN_STOPLIGHT_INSET_PX).toBe(8)
-    const zen = trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1.25, zen: { square: false, x: 0, y: 0 } })
+    const zen = trafficLightCommand({ styleId: 'terminal', inset: 0, zoom: 1.25, zen: { square: false, x: 0, y: 0 } })
     expect(zen).toEqual({ x: 8, y: 8 + TRAFFIC_LIGHT_Y_NUDGE_PX, square: false, zoom: 1.25, hidden: false })
     const nudged = trafficLightCommand({ styleId: null, inset: 0, zen: { square: true, x: 6, y: 4 } })
     expect(nudged).toEqual({ x: 14, y: 15, square: true, zoom: 1, hidden: false })
     // Leaving Zen (no `zen`): the Style's own command, no Zen inset.
-    expect(trafficLightCommand({ styleId: 'square', inset: 0, zoom: 1.25 })).toEqual({ x: 0, y: 3, square: true, zoom: 1.25, hidden: false })
+    expect(trafficLightCommand({ styleId: 'terminal', inset: 0, zoom: 1.25 })).toEqual({ x: 0, y: 3, square: true, zoom: 1.25, hidden: false })
   })
 })

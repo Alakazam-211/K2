@@ -32,7 +32,7 @@
     "bg-canvas": {
       "$value": "#0a0a0a",
       "$type": "color",
-      "$description": "The layer visible BEHIND tiles when gap.* > 0 (ST3). Square: same as bg, so seams read as hairlines."
+      "$description": "The layer visible BEHIND tiles when gap.* > 0 (ST3). Terminal: same as bg, so seams read as hairlines."
     },
     "bg-hover": {
       "$value": "#1e1e1e",

@@ -5,8 +5,8 @@
 //   1. Parity: a chat message is the Thread's bubble, markup for markup
 //      (only the overlay item's own ids differ).
 //   2. Every K2 Style: the box carries the Thread's desktop tokens, so the
-//      Style's palette paints it; under Square the bubbles and the field
-//      take the Thread's chamfers, under Glass and Bezel they stay round;
+//      Style's palette paints it; under Terminal the bubbles and the field
+//      take the Thread's chamfers, under Glass they stay round;
 //      the light scheme gets the field's light wash.
 //   3. Markdown renders inside the bubble.
 //   4. The message box: Enter sends, Shift+Enter does not, ⌘/Ctrl+Enter
@@ -48,11 +48,11 @@ import { COMPOSE_TOOL } from '@/components/Terminal/TerminalComposeBar'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const STYLES = ['square', 'glass', 'bezel'] as const
+const STYLES = ['terminal', 'glass'] as const
 const SCHEMES = ['light', 'dark'] as const
 
-/** The Square chamfer rule's selector (from the kit's own CSS). */
-const SQUARE_CHAMFER = 'html[data-style="square"] [data-k2-thread-zen] [data-chamfer]'
+/** The Terminal chamfer rule's selector (from the kit's own CSS). */
+const TERMINAL_CHAMFER = 'html[data-style="terminal"] [data-k2-thread-zen] [data-chamfer]'
 /** The light-scheme wash on the message field (from the kit's own CSS). */
 const LIGHT_FIELD = 'html[data-scheme="light"] [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]'
 
@@ -174,8 +174,8 @@ describe('a chat message is the Thread bubble', () => {
 describe('every K2 Style paints the chat as it paints the Thread', () => {
   it('the kit CSS still carries the selectors this checks', () => {
     expect(THREAD_CHAMFER_CSS).toContain(CHAMFER_SCOPE)
-    expect(SQUARE_CHAMFER).toBe(`${CHAMFER_SCOPE} [data-chamfer]`)
-    expect(THREAD_CHAMFER_CSS).toContain(SQUARE_CHAMFER)
+    expect(TERMINAL_CHAMFER).toBe(`${CHAMFER_SCOPE} [data-chamfer]`)
+    expect(THREAD_CHAMFER_CSS).toContain(TERMINAL_CHAMFER)
     expect(THREAD_FOOTER_FADE_CSS).toContain(LIGHT_FIELD)
   })
 
@@ -202,9 +202,9 @@ describe('every K2 Style paints the chat as it paints the Thread', () => {
         expect(bubbles).toHaveLength(2)
         const box = must(scope.querySelector('[data-zen-compose-box]') as HTMLElement | null, 'field')
         const send = must(scope.querySelector('[data-testid="send"]') as HTMLElement | null, 'send')
-        // Square: chamfered; Glass / Bezel: round (the rule does not reach).
+        // Terminal: chamfered; Glass: round (the rule does not reach).
         for (const el of [...bubbles, box, send]) {
-          expect([style, el.matches(SQUARE_CHAMFER)]).toEqual([style, style === 'square'])
+          expect([style, el.matches(TERMINAL_CHAMFER)]).toEqual([style, style === 'terminal'])
         }
         expect(bubbles[0].style.borderRadius).toBe('var(--zen-bubble-radius)')
         // The light scheme's wash on the field, as on the Thread's field.

@@ -3,7 +3,7 @@
 // data and behaviour kept:
 //   - the stream is the Thread's bubbles ("You" on the right for the owner,
 //     others on the left), markdown inside, in light, dark and a named
-//     Style (Square's chamfers, Glass round);
+//     Style (Terminal's chamfers, Glass round);
 //   - the message box is the Thread's; Enter sends over the project chat
 //     route (`project-group/msg`), the delivered line rides under the sent
 //     message;
@@ -48,7 +48,7 @@ import { usePromptStashStore } from '@/stores/prompt-stash'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const SQUARE_CHAMFER = 'html[data-style="square"] [data-k2-thread-zen] [data-chamfer]'
+const TERMINAL_CHAMFER = 'html[data-style="terminal"] [data-k2-thread-zen] [data-chamfer]'
 
 function show(over: Partial<ProjectGroupShow> = {}): ProjectGroupShow {
   return {
@@ -157,10 +157,10 @@ afterEach(() => {
 
 describe('project chat in the Thread look', () => {
   for (const [style, scheme] of [
-    ['square', 'light'],
-    ['square', 'dark'],
+    ['terminal', 'light'],
+    ['terminal', 'dark'],
     ['glass', 'dark'],
-    ['bezel', 'light'],
+    ['glass', 'light'],
   ] as const) {
     it(`draws the Thread's bubbles and box (${style} / ${scheme})`, async () => {
       document.documentElement.setAttribute('data-style', style)
@@ -178,9 +178,9 @@ describe('project chat in the Thread look', () => {
       const body = agent.querySelector('[data-zen-bubble]') as HTMLElement
       expect(body.querySelector('strong')?.textContent).toBe('ship')
       expect(Array.from(body.querySelectorAll('li')).map((li) => li.textContent)).toEqual(['one', 'two'])
-      // The Style's shape: Square chamfers the bubble and the field.
+      // The Style's shape: Terminal chamfers the bubble and the field.
       const field = screen.getByTestId('project-chat-compose').querySelector('[data-zen-compose-box]') as HTMLElement
-      for (const el of [body, field]) expect([style, el.matches(SQUARE_CHAMFER)]).toEqual([style, style === 'square'])
+      for (const el of [body, field]) expect([style, el.matches(TERMINAL_CHAMFER)]).toEqual([style, style === 'terminal'])
       // The old chat-row look is gone.
       expect(root.querySelector('.chat-message')).toBeNull()
     })

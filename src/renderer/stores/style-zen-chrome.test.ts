@@ -146,10 +146,10 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     expect(lastInset()).toMatchObject({ x: 12, y: 13, square: true })
     expect(lastRadius()).toBe(0.5)
 
-    // A Style stamp (Settings hover preview of Square, or another window's
+    // A Style stamp (Settings hover preview of Terminal, or another window's
     // storage sync) while in Zen: Zen still wins.
     invoke.mockClear()
-    style.stampStyleAttributes({ styleId: 'bezel', paletteId: 'default', schemeMode: 'dark', gapsPreset: '' })
+    style.stampStyleAttributes({ styleId: 'terminal', paletteId: 'default', schemeMode: 'dark', gapsPreset: '' })
     for (const c of insetCalls()) expect(c).toMatchObject({ x: 12, y: 13, square: true })
     for (const r of radiusCalls()) expect(r).toBe(0.5)
     stampGlass()
@@ -171,8 +171,8 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     expect(style.getChromeSource()).toBe('style')
   })
 
-  it('Style Square + Zen round/system: Zen turns Square’s square lights and corners off, leaving restores them', async () => {
-    applyStyle(() => document.documentElement.setAttribute('data-style', 'square'))
+  it('Style Terminal + Zen round/system: Zen turns Terminal’s square lights and corners off, leaving restores them', async () => {
+    applyStyle(() => document.documentElement.setAttribute('data-style', 'terminal'))
     expect(lastInset()).toMatchObject({ x: 0, y: 3, square: true })
     expect(lastRadius()).toBe(0.5)
     invoke.mockClear()
@@ -192,13 +192,13 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
     expect(lastRadius()).toBe(0.5)
   })
 
-  it('Square at 125% + Zen round: one shape per state through fullscreen, zoom and resize; leaving restores Square exactly', async () => {
+  it('Terminal at 125% + Zen round: one shape per state through fullscreen, zoom and resize; leaving restores Square exactly', async () => {
     // Rosson 2026-10-04: square lights showed under Zen's round ones. The
     // renderer must never send both: while Zen holds the window every apply
     // is round (Rust then drops the square bitmap, traffic_lights.rs
-    // `clear_square_bitmap`), and leaving sends Square's exact command.
+    // `clear_square_bitmap`), and leaving sends Terminal's exact command.
     ;(window as ZoomWindow).__k2soZoom = 1.25
-    applyStyle(() => document.documentElement.setAttribute('data-style', 'square'))
+    applyStyle(() => document.documentElement.setAttribute('data-style', 'terminal'))
     const squareCmd = lastInset()
     expect(squareCmd).toEqual({ x: 0, y: 3, square: true, zoom: 1.25, hidden: false })
     const squareSpacer = spacer()
@@ -236,7 +236,7 @@ describe('macOS: Zen holds the native chrome, the Style comes back on leave', ()
       const calls = insetCalls()
       expect(calls.length, what).toBeGreaterThan(0)
       for (const c of calls) expect(c.square, what).toBe(false)
-      // The Styles spacer keeps describing Square (Z49) at every zoom.
+      // The Styles spacer keeps describing Terminal (Z49) at every zoom.
       expect(spacer(), what).toBe(squareSpacer)
     }
 

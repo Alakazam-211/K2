@@ -192,6 +192,62 @@ describe('openFileAsTab in the open workspace', () => {
   })
 })
 
+describe('openFileAsTab with split columns: the pinned Chat stays on the left', () => {
+  // Rosson 2026-11-09 (K2 Cores' play/together.md): Chat pinned in column 0,
+  // files in column 1. A file opened from the Thread or the Files drawer
+  // used to land in column 0 and cover the Chat.
+  function chatTab(): Tab {
+    return { ...fileTab('sys-chat', '/k2/.chat'), isSystemAgent: true } as Tab
+  }
+  beforeEach(() => {
+    useTabsStore.setState({
+      tabs: [chatTab()],
+      activeTabId: 'sys-chat',
+      extraGroups: [{ tabs: [fileTab('c', '/k2/c.ts')], activeTabId: 'c' }],
+      splitCount: 2,
+    })
+  })
+
+  it('opens in the focused column, not column 0', () => {
+    useTabsStore.setState({ activeGroupIndex: 1 })
+    expect(useTabsStore.getState().openFileAsTab('/k2/play/together.md')).toBe('opened')
+    const st = useTabsStore.getState()
+    expect(st.activeTabId).toBe('sys-chat')
+    expect(filesOf(st.tabs)).toEqual(['/k2/.chat'])
+    expect(filesOf(st.extraGroups[0].tabs)).toEqual(['/k2/c.ts', '/k2/play/together.md'])
+    expect(st.extraGroups[0].activeTabId).toBe(st.extraGroups[0].tabs[1].id)
+    expect(st.activeGroupIndex).toBe(1)
+  })
+
+  it('with the Chat column focused (a Thread link was clicked), opens in the other column', () => {
+    useTabsStore.setState({ activeGroupIndex: 0 })
+    useTabsStore.getState().openFileAsTab('/k2/play/scores.csv')
+    const st = useTabsStore.getState()
+    expect(st.activeTabId).toBe('sys-chat')
+    expect(filesOf(st.tabs)).toEqual(['/k2/.chat'])
+    expect(filesOf(st.extraGroups[0].tabs)).toEqual(['/k2/c.ts', '/k2/play/scores.csv'])
+    expect(st.activeGroupIndex).toBe(1)
+  })
+
+  it('in the background, appends to that column unselected', () => {
+    useTabsStore.setState({ activeGroupIndex: 0 })
+    useTabsStore.getState().openFileAsTab('/k2/play/scores.csv', { activate: false })
+    const st = useTabsStore.getState()
+    expect(filesOf(st.extraGroups[0].tabs)).toEqual(['/k2/c.ts', '/k2/play/scores.csv'])
+    expect(st.extraGroups[0].activeTabId).toBe('c')
+    expect(st.activeTabId).toBe('sys-chat')
+    expect(st.activeGroupIndex).toBe(0)
+  })
+
+  it('column 0 showing a file (not the Chat) still takes it when focused', () => {
+    useTabsStore.setState({ tabs: [chatTab(), fileTab('b', '/k2/b.ts')], activeTabId: 'b', activeGroupIndex: 0 })
+    useTabsStore.getState().openFileAsTab('/k2/play/together.md')
+    const st = useTabsStore.getState()
+    expect(filesOf(st.tabs)).toEqual(['/k2/.chat', '/k2/b.ts', '/k2/play/together.md'])
+    expect(filesOf(st.extraGroups[0].tabs)).toEqual(['/k2/c.ts'])
+  })
+})
+
 describe('parkFileTab: another workspace, no switch', () => {
   it('adds the tab to the stored layout with its revision, and to the cached copy', async () => {
     daemon.layouts.set('p-sew:w-sew', { json: JSON.stringify(SEW_LAYOUT), revision: 7 })

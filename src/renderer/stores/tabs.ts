@@ -1779,6 +1779,33 @@ function makeFileTab(filePath: string): Tab {
   }
 }
 
+/** The column a NEW file tab opens in (`openFileAsTab`): the focused column
+ *  (`activeGroupIndex`, where new tabs go), unless that column is showing the
+ *  workspace's pinned Chat/Inbox tab and another column isn't. Then the first
+ *  such column: the Chat pinned on the left stays on screen (Rosson
+ *  2026-11-09: a file opened from the Thread or the Files drawer covered it).
+ *  One column: column 0. */
+export function fileTabColumn(
+  s: Pick<TabsState, 'tabs' | 'activeTabId' | 'extraGroups' | 'splitCount' | 'activeGroupIndex'>,
+): number {
+  const columns: Array<{ tabs: Tab[]; activeTabId: string | null }> = [
+    { tabs: s.tabs, activeTabId: s.activeTabId },
+    ...s.extraGroups,
+  ].slice(0, Math.max(1, s.splitCount))
+  if (columns.length <= 1) return 0
+  const showsPinnedChat = (i: number): boolean => {
+    const c = columns[i]
+    const active = c.tabs.find((t) => t.id === c.activeTabId)
+    return active?.isSystemAgent === true
+  }
+  const focused = Math.min(Math.max(0, s.activeGroupIndex), columns.length - 1)
+  if (!showsPinnedChat(focused)) return focused
+  for (let i = 0; i < columns.length; i++) {
+    if (i !== focused && !showsPinnedChat(i)) return i
+  }
+  return focused
+}
+
 /** Does a stored layout already hold a file viewer for `filePath`? */
 function serializedLayoutHasFile(layout: SerializedLayout, filePath: string): boolean {
   const cols = [layout.tabs ?? [], ...(layout.extraGroups ?? []).map((g) => g.tabs ?? [])]
@@ -4780,15 +4807,30 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
         }
       }
 
-      // No existing tab — create a new one in the main group.
+      // No existing tab: a new one, in the column new tabs go to (the
+      // focused one, like `addTab`), never over a column showing the pinned
+      // Chat while another column can take it.
       tabCounter++
       const tab = makeFileTab(filePath)
+      const target = fileTabColumn(state)
+      if (target > 0) {
+        const gi = target - 1
+        set((s) => {
+          const groups = [...s.extraGroups]
+          const g = groups[gi]
+          if (!g) return {}
+          // Background: appended unselected, the view stays put.
+          groups[gi] = { ...g, tabs: [...g.tabs, tab], activeTabId: activate ? tab.id : g.activeTabId }
+          return activate ? { extraGroups: groups, activeGroupIndex: target } : { extraGroups: groups }
+        })
+        return 'opened'
+      }
       if (!activate) {
         // Appended unselected: the strip grows, the view stays put.
         set((s) => ({ tabs: [...s.tabs, tab] }))
         return 'opened'
       }
-      set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
+      set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, activeGroupIndex: 0 }))
       return 'opened'
     },
 

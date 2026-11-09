@@ -325,8 +325,97 @@ impl ResWatch {
             Some(_) if self.cgroup => cpu_source::CPU_STAT,
             Some(_) => cpu_source::PS_SAMPLED,
         };
-        JobResources { peak_mem_bytes: peak, mem_source: msrc.into(), cpu_ms: cpu, cpu_source: csrc.into(), mem_limit_bytes: mem_limit }
+        JobResources { peak_mem_bytes: peak, mem_source: msrc.into(), cpu_ms: cpu, cpu_source: csrc.into(), mem_limit_bytes: mem_limit, gpu: None }
     }
+}
+
+// ── GPU use (GPU jobs S4) ─────────────────────────────────────────────
+
+/// One reading of a GPU's sysfs counters (each `None` where the driver
+/// has no such file).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuReading {
+    pub busy_pct: Option<u32>,
+    pub vram_used: Option<u64>,
+    pub gtt_used: Option<u64>,
+}
+
+/// The GPU at `pci` under `sys` now.
+pub fn read_gpu(sys: &Path, pci: &str) -> GpuReading {
+    if !crate::gpu::valid_pci(pci) {
+        return GpuReading::default();
+    }
+    let dev = sys.join("bus/pci/devices").join(pci);
+    let n = |f: &str| std::fs::read_to_string(dev.join(f)).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    GpuReading { busy_pct: n("gpu_busy_percent").map(|b| b.min(100) as u32), vram_used: n("mem_info_vram_used"), gtt_used: n("mem_info_gtt_used") }
+}
+
+/// Folds a GPU job's readings: busy average and max, memory peaks over
+/// the start (the whole device).
+#[derive(Debug, Clone)]
+pub struct GpuWatch {
+    pub pci: String,
+    start: GpuReading,
+    busy_sum: u64,
+    busy_n: u32,
+    busy_max: Option<u32>,
+    vram_max: Option<u64>,
+    gtt_max: Option<u64>,
+    samples: u32,
+}
+
+impl GpuWatch {
+    /// `start`: the reading just before the job's command ran.
+    pub fn new(pci: &str, start: GpuReading) -> Self {
+        Self { pci: pci.to_string(), start, busy_sum: 0, busy_n: 0, busy_max: None, vram_max: None, gtt_max: None, samples: 0 }
+    }
+
+    pub fn fold(&mut self, r: &GpuReading) {
+        self.samples += 1;
+        if let Some(b) = r.busy_pct {
+            self.busy_sum += u64::from(b);
+            self.busy_n += 1;
+            self.busy_max = Some(self.busy_max.map_or(b, |m| m.max(b)));
+        }
+        if let Some(v) = r.vram_used {
+            self.vram_max = Some(self.vram_max.map_or(v, |m| m.max(v)));
+        }
+        if let Some(g) = r.gtt_used {
+            self.gtt_max = Some(self.gtt_max.map_or(g, |m| m.max(g)));
+        }
+    }
+
+    /// What the job's GPU did (`model` from the node's facts).
+    pub fn usage(&self, model: &str) -> k2_node_proto::results::GpuUse {
+        let over = |max: Option<u64>, start: Option<u64>| max.map(|m| m.saturating_sub(start.unwrap_or(0)));
+        k2_node_proto::results::GpuUse {
+            model: if model.is_empty() { self.pci.clone() } else { model.to_string() },
+            pci: self.pci.clone(),
+            busy_avg_pct: (self.busy_n > 0).then(|| ((self.busy_sum + u64::from(self.busy_n) / 2) / u64::from(self.busy_n)) as u32),
+            busy_max_pct: self.busy_max,
+            vram_peak_bytes: over(self.vram_max, self.start.vram_used),
+            gtt_peak_bytes: over(self.gtt_max, self.start.gtt_used),
+            samples: self.samples,
+            source: k2_node_proto::results::gpu_source::SYSFS_DEVICE.into(),
+        }
+    }
+}
+
+/// The footer line: `GPU AMD Radeon Test APU: busy avg 37% (max 98%), VRAM
+/// +0.5G, GTT +3.2G (the whole device, the host's own use included)`.
+pub fn gpu_line(g: &k2_node_proto::results::GpuUse) -> String {
+    let mut parts = Vec::new();
+    match (g.busy_avg_pct, g.busy_max_pct) {
+        (Some(a), Some(m)) => parts.push(format!("busy avg {a}% (max {m}%)")),
+        _ => parts.push("busy % not reported by this driver".into()),
+    }
+    if let Some(v) = g.vram_peak_bytes {
+        parts.push(format!("VRAM +{}", gib(v)));
+    }
+    if let Some(t) = g.gtt_peak_bytes {
+        parts.push(format!("GTT +{}", gib(t)));
+    }
+    format!("GPU {}: {} (the whole device over {} sample(s), the host's own use included)", g.model, parts.join(", "), g.samples)
 }
 
 // ── host stamp (CE-19) ────────────────────────────────────────────────
@@ -593,6 +682,40 @@ mod tests {
         );
         let j = serde_json::to_string(&HostSample { at: 1, load1_milli: 1, cpus: 1, steal_permille: None, other_jobs: 0, ..Default::default() }).unwrap();
         assert!(!j.contains("quiet") && !j.contains("gpu") && !j.contains("foreign"), "an older reader's JSON: {j}");
+    }
+
+    /// GPU jobs S4: busy average and max, and memory peaks over the value
+    /// at the start (the whole device), folded from sysfs readings.
+    #[test]
+    fn gpu_watch_folds_busy_and_memory_over_the_start() {
+        let d = crate::util::temp_dir("gpu-use");
+        let dev = d.join("bus/pci/devices/0000:c4:00.0");
+        std::fs::create_dir_all(&dev).unwrap();
+        let write = |busy: u64, vram: u64, gtt: u64| {
+            std::fs::write(dev.join("gpu_busy_percent"), format!("{busy}\n")).unwrap();
+            std::fs::write(dev.join("mem_info_vram_used"), format!("{vram}\n")).unwrap();
+            std::fs::write(dev.join("mem_info_gtt_used"), format!("{gtt}\n")).unwrap();
+        };
+        write(3, 100 << 20, 1 << 30);
+        let mut w = GpuWatch::new("0000:c4:00.0", read_gpu(&d, "0000:c4:00.0"));
+        for (b, v, g) in [(40, 300 << 20, 3 << 30), (98, 612 << 20, 4 << 30), (10, 200 << 20, 2 << 30)] {
+            write(b, v, g);
+            w.fold(&read_gpu(&d, "0000:c4:00.0"));
+        }
+        let u = w.usage("AMD Radeon Test APU");
+        assert_eq!((u.busy_avg_pct, u.busy_max_pct, u.samples), (Some(49), Some(98), 3));
+        assert_eq!((u.vram_peak_bytes, u.gtt_peak_bytes), (Some(512 << 20), Some(3 << 30)), "peak minus the start");
+        assert_eq!(u.source, "sysfs-device");
+        assert_eq!(gpu_line(&u), "GPU AMD Radeon Test APU: busy avg 49% (max 98%), VRAM +0.5G, GTT +3.0G (the whole device over 3 sample(s), the host's own use included)");
+        // Intel: no counters, still a line that says so.
+        let mut i = GpuWatch::new("0000:00:02.0", read_gpu(&d, "0000:00:02.0"));
+        i.fold(&read_gpu(&d, "0000:00:02.0"));
+        let u = i.usage("");
+        assert_eq!((u.model.as_str(), u.busy_avg_pct, u.vram_peak_bytes), ("0000:00:02.0", None, None));
+        assert!(gpu_line(&u).contains("busy % not reported by this driver"), "{}", gpu_line(&u));
+        // An older reader's JSON: no gpu key without a GPU.
+        let r = ResWatch::new(Source::None).resources(Some(1));
+        assert!(!serde_json::to_string(&r).unwrap().contains("gpu"));
     }
 
     #[test]

@@ -68,13 +68,28 @@ pub fn tools(j: &JobRow) -> Value {
 pub fn resources(j: &JobRow) -> Value {
     let Some(r) = outputs_raw(j).and_then(|o| o.get("resources").filter(|r| r.is_object()).cloned()) else { return Value::Null };
     let cpu_secs = r.get("cpu_ms").and_then(Value::as_u64).map(|ms| (ms as f64 / 1000.0 * 1000.0).round() / 1000.0);
-    json!({
+    let mut v = json!({
         "peakMemBytes": r.get("peak_mem_bytes").and_then(Value::as_u64),
         "memSource": r.get("mem_source"),
         "cpuSecs": cpu_secs,
         "cpuSource": r.get("cpu_source"),
         "memLimitBytes": r.get("mem_limit_bytes").and_then(Value::as_u64),
-    })
+    });
+    // GPU jobs S4: the job's GPU (the whole device). Only for a --gpu job,
+    // so every other job's object is as before.
+    if let Some(g) = r.get("gpu").filter(|g| g.is_object()) {
+        v["gpu"] = json!({
+            "model": g.get("model"),
+            "pci": g.get("pci"),
+            "busyAvgPct": g.get("busy_avg_pct"),
+            "busyMaxPct": g.get("busy_max_pct"),
+            "vramPeakBytes": g.get("vram_peak_bytes"),
+            "gttPeakBytes": g.get("gtt_peak_bytes"),
+            "samples": g.get("samples"),
+            "source": g.get("source"),
+        });
+    }
+    v
 }
 
 /// One `HostSample` (`at`, `load1_milli`, `cpus`, `steal_permille`,
@@ -414,6 +429,17 @@ mod tests {
         let h = host(&j);
         assert_eq!((h["start"]["quiet"].as_bool(), h["start"]["gpuBusy"].as_u64()), (Some(true), Some(2)));
         assert_eq!((h["end"]["quiet"].as_bool(), h["end"].get("gpuBusy")), (Some(false), None));
+        // GPU jobs S4: a --gpu job's GPU, camelCase.
+        j.summary_json = Some(
+            json!({"artifacts": [], "notes": [],
+                   "resources": {"mem_source": "memory.peak", "cpu_source": "cpu.stat",
+                                 "gpu": {"model": "AMD Radeon Test APU", "pci": "0000:c4:00.0", "busy_avg_pct": 37, "busy_max_pct": 98,
+                                         "gtt_peak_bytes": 3u64 << 30, "samples": 12, "source": "sysfs-device"}}})
+            .to_string(),
+        );
+        let g = &resources(&j)["gpu"];
+        assert_eq!((g["model"].as_str(), g["busyAvgPct"].as_u64(), g["gttPeakBytes"].as_u64(), g["vramPeakBytes"].as_u64()), (Some("AMD Radeon Test APU"), Some(37), Some(3 << 30), None));
+        assert_eq!(g["source"], "sysfs-device");
         j.requested_by = "owner".into();
         j.ctl.tag = Some("fuzz:p3".into());
         let v = envelope(&j, None);

@@ -1084,6 +1084,10 @@ impl Node {
         }
         let mut usage = crate::jobstat::ResWatch::new(proc.usage_source());
         let watch_usage = usage.source != crate::jobstat::Source::None;
+        // GPU jobs S4: the job's GPU, read with the usage tick (the whole
+        // device: memory counts from what it held as the job started).
+        let gpu_sys = std::path::Path::new(crate::gpu::SYS);
+        let mut gpu_watch = gpu.as_deref().map(|pci| crate::jobstat::GpuWatch::new(pci, crate::jobstat::read_gpu(gpu_sys, pci)));
 
         // Output into the journal: pipes are pumped, spool files tailed.
         // `last_out` = ms after `t0` of the last stdout/stderr bytes (the
@@ -1216,7 +1220,13 @@ impl Node {
                         next_busy_note_ms = now_ms.saturating_add(k2_node_proto::frames::QUIET_BUSY_NOTE_SECS * 1000);
                     }
                 }
-                _ = usage_tick.tick(), if watch_usage || mem_cap.is_some() => {
+                _ = usage_tick.tick(), if watch_usage || mem_cap.is_some() || gpu_watch.is_some() => {
+                    if let Some(g) = gpu_watch.as_mut() {
+                        let pci = g.pci.clone();
+                        if let Ok(r) = tokio::task::spawn_blocking(move || crate::jobstat::read_gpu(std::path::Path::new(crate::gpu::SYS), &pci)).await {
+                            g.fold(&r);
+                        }
+                    }
                     let (src, sampler) = (usage.source.clone(), self.opts.rss.clone());
                     let r = tokio::task::spawn_blocking(move || crate::jobstat::read_usage(&src, sampler.as_ref())).await.ok();
                     let now = r.and_then(|r| usage.fold(t0.elapsed().as_millis() as u64, &r));
@@ -1279,7 +1289,13 @@ impl Node {
                 usage.fold(t0.elapsed().as_millis() as u64, &r);
             }
         }
-        let used = usage.resources(Some(mem_limit));
+        let mut used = usage.resources(Some(mem_limit));
+        // GPU jobs S4: one last GPU reading, then what it did.
+        if let Some(mut g) = gpu_watch.take() {
+            g.fold(&crate::jobstat::read_gpu(gpu_sys, &g.pci));
+            let model = self.host.lock().unwrap().gpus.iter().find(|f| f.pci == g.pci).map(|f| f.model.clone()).unwrap_or_default();
+            used.gpu = Some(g.usage(&model));
+        }
         // CE-19: the host at the end (the steal window runs beside the
         // reap and the artifacts).
         let host_end = easy.then(|| {
@@ -1377,6 +1393,9 @@ impl Node {
             let mem = used.peak_mem_bytes.map(|p| format!("peak memory {} ({})", crate::jobstat::gib(p), used.mem_source)).unwrap_or_else(|| "peak memory unknown".into());
             let cpu = used.cpu_ms.map(|c| format!("CPU {}.{} s ({})", c / 1000, (c % 1000) / 100, used.cpu_source)).unwrap_or_else(|| "CPU unknown".into());
             line(format!("used: {mem}, {cpu}"));
+            if let Some(g) = &used.gpu {
+                line(crate::jobstat::gpu_line(g));
+            }
         }
         let outputs = if easy {
             let mut o = collected.unwrap_or_default();

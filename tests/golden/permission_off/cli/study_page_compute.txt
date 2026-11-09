@@ -321,11 +321,22 @@ GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
   A quiet host (a benchmark, a timing test): add --exclusive --why "…".
   No other K2 job runs beside it, and before it starts the node waits up to
   5 min for the load to drop under 0.25 × its CPUs and the GPU under 5%
-  busy, then starts anyway with a "host not quiet … starting anyway" line
-  (it never hangs). On a node another server owns, its share must allow
-  exclusive too. Load outside K2 (the owner's desktop) can't be stopped.
-  Every job's host lines say "quiet host: yes", or "no (why)"; a GPU job's
-  also say how busy its GPU was (the whole device, the host's own use too).
+  busy (only those two: an Intel GPU reports no busy %, so only the load),
+  then starts anyway with a "host not quiet … starting anyway" line (it
+  never hangs). --exclusive needs a grant with --ci (or the owner or an
+  Admin) as well as --gpu; on a node another server owns, its share must
+  allow exclusive too. Load outside K2 (the owner's desktop) can't be
+  stopped.
+  Every job's "[k2-node] host at start:" and "host at end:" log lines end
+  with "quiet host: yes", or "no (why)": other K2 jobs, a foreign lock (a CI
+  runner's), the load, the GPU. A GPU job's also say how busy its GPU was
+  (the whole device, the host's own use too).
+  At the end, a GPU job's log has one more line, and k2 compute get a gpu:
+  line (--json: result.resources.gpu):
+    GPU <model>: busy avg 37% (max 98%), VRAM +0.5G, GTT +3.0G (the whole
+    device …, the host's own use included)
+  VRAM and GTT are the peak over what the GPU held when the job started
+  (on an APU, GTT is system RAM). Intel GPUs don't report busy %.
   --mem caps the job's RAM. On an APU (an iGPU sharing system memory) the
   GPU's buffers also come from system RAM and aren't counted in --mem
   yet: leave headroom.
@@ -636,6 +647,9 @@ ENVIRONMENT (0.46.9: what each machine is, and its system packages)
                      set, xvfb, and the tools rust@stable+clippy+rustfmt
                      and cargo-nextest (don't name those again)
       k2-workspace   what K2's own cargo --workspace build needs
+      gpu-headless   GPU tests without a display (with --gpu): EGL, GBM, the
+                     Vulkan loader and Mesa's GPU drivers, eglinfo,
+                     vulkaninfo, Weston with Xwayland, Xvfb (GPU JOBS)
   A job names at most 32 needs; a profile counts as one, however many
   packages it holds. A Tauri build on Ubuntu:
     k2 compute run --distro ubuntu@24.04 --mem 16G \
@@ -708,12 +722,19 @@ RESULTS (one object, artifacts, test lists)
   Newer fields are null from an older node or when unknown:
     tools      {basis: "job" (what the job's PATH ran) | "node-probe" (an
                older node: what the node had), versions{rustc, cargo, …}}
-    resources  {peakMemBytes, memSource, cpuSecs, cpuSource, memLimitBytes};
-               a mem_cap end's hint says "used 25.3G of --mem 24G"
+    resources  {peakMemBytes, memSource, cpuSecs, cpuSource, memLimitBytes,
+               gpu}; a mem_cap end's hint says "used 25.3G of --mem 24G".
+               gpu (--gpu jobs): {model, pci, busyAvgPct, busyMaxPct,
+               vramPeakBytes, gttPeakBytes, samples, source: "sysfs-device"}:
+               the whole device once a second, the host's own use included;
+               memory = the peak over what it held at the job's start
     host       the node's load at the job's start and end:
-               {start: {at, load1: 0.8, cpus: 12, steal: 0.3, jobs: 2}, end: …}
+               {start: {at, load1: 0.8, cpus: 12, steal: 0.3, jobs: 2,
+               quiet: false, gpuBusy: 41}, end: …}
                (steal: CPU steal in percent, null on macOS; jobs = other K2
-               jobs running there, every server's)
+               jobs running there, every server's; quiet: no other K2 job,
+               no foreign lock, load under 0.25 × CPUs and the GPU under 5%
+               busy; gpuBusy: --gpu jobs only, null where not reported)
     effective  the settings the job ran with and where each came from, e.g.
                {mem: {value: "24G", from: "flag"}, needs: {…, from: "preset"}}
     stall      a running job's stall watch: {stallSecs (the limit), warned,

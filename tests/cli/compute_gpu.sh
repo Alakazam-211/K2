@@ -59,6 +59,15 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
     def do_GET(self):
+        u = urlparse(self.path)
+        if u.path == "/cli/compute/jobs/get":
+            res = {"peakMemBytes": 1 << 30, "memSource": "memory.peak", "cpuSecs": 4.2, "cpuSource": "cpu.stat", "memLimitBytes": 8 << 30,
+                   "gpu": {"model": "AMD Radeon Test APU", "pci": "0000:c4:00.0", "busyAvgPct": 37, "busyMaxPct": 98,
+                           "vramPeakBytes": 512 << 20, "gttPeakBytes": 3 << 30, "samples": 12, "source": "sysfs-device"}}
+            host = {"start": {"at": 1, "load1": 0.4, "cpus": 16, "steal": 0.0, "jobs": 0, "quiet": True, "gpuBusy": 2},
+                    "end": {"at": 2, "load1": 5.1, "cpus": 16, "steal": 0.0, "jobs": 1, "quiet": False, "gpuBusy": 41}}
+            return self.reply(200, {"id": "abcd1234" * 4, "short": "abcd1234", "node": "k2n-gpu", "state": "done", "exitCode": 0, "argv": ["true"],
+                                    "result": {"resources": res, "host": host}})
         return self.reply(404, {"error": {"code": "not_found", "hint": self.path}})
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -149,6 +158,12 @@ expect_not "no GPU in the answer" "$out" "GPU jobs allowed"
 "$K2" compute grant k2n-gpu --workspace builder --max-parallel 2 >/dev/null
 expect_eq "re-granting limits sends no allowGpu (keeps it)" "$(last_key allowGpu)" "null"
 
+echo "== get shows the GPU and the quiet stamps (S2, S4) =="
+out="$("$K2" compute get abcd1234 2>&1)"
+expect_has "get: gpu line" "$out" "gpu: AMD Radeon Test APU: busy avg 37% (max 98%), VRAM +0.5G, GTT +3.0G (whole device, sysfs-device)"
+expect_has "get: start stamp quiet" "$out" "GPU 2% busy, quiet"
+expect_has "get: end stamp not quiet" "$out" "GPU 41% busy, not quiet"
+
 echo "== help and study =="
 help="$("$K2" compute --help)"
 expect_has "help: run --gpu" "$help" "[--gpu [any|amd|intel]]"
@@ -156,7 +171,8 @@ expect_has "help: grant --gpu" "$help" "--gpu: this workspace may send --gpu job
 expect_has "help: the card" "$help" "k2 permission request compute.gpu"
 study="$("$K2" study compute)"
 expect_has "study: section" "$study" "GPU JOBS (0.46.11, Linux nodes with the job wall"
-for c in no_gpu_node gpu_needs_grant gpu_busy gpu_unavailable K2_GPU_RENDER "sudo k2-node admin gpu on" "--label gpu=amd"; do
+for c in no_gpu_node gpu_needs_grant gpu_busy gpu_unavailable K2_GPU_RENDER "sudo k2-node admin gpu on" "--label gpu=amd" \
+    "quiet host: yes" "starting anyway" "profile:gpu-headless" "weston --backend=headless" XDG_RUNTIME_DIR MESA_SHADER_CACHE_DIR "busy avg" "the host's own use included"; do
     expect_has "study: $c" "$study" "$c"
 done
 

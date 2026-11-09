@@ -177,6 +177,44 @@ pub struct JobResources {
     /// share), so `mem_cap` ends can say "used 25.3G of 24G".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mem_limit_bytes: Option<u64>,
+    /// GPU jobs S4 (0.46.11): what the job's GPU did while it ran. Absent
+    /// without `--gpu` (and from an older node).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<GpuUse>,
+}
+
+/// GPU jobs S4: a GPU job's GPU, sampled once a second from the device's
+/// sysfs. **The whole device**: the host's own use (a desktop on an iGPU)
+/// is in it too; per-job numbers come later (DRM fdinfo).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GpuUse {
+    /// The model (`HostFacts.gpus[].model`), else its PCI ids.
+    pub model: String,
+    pub pci: String,
+    /// The mean `gpu_busy_percent` over the samples (`None`: the driver
+    /// doesn't report it, Intel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busy_avg_pct: Option<u32>,
+    /// The most `gpu_busy_percent` seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busy_max_pct: Option<u32>,
+    /// The highest `mem_info_vram_used` over its value at the start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vram_peak_bytes: Option<u64>,
+    /// The highest `mem_info_gtt_used` over its value at the start (an
+    /// APU's GPU memory comes from system RAM: this is that).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gtt_peak_bytes: Option<u64>,
+    pub samples: u32,
+    /// [`gpu_source`] codes.
+    pub source: String,
+}
+
+/// How [`GpuUse`] was measured.
+pub mod gpu_source {
+    /// The device's sysfs counters (`gpu_busy_percent`,
+    /// `mem_info_vram_used`, `mem_info_gtt_used`): the whole device.
+    pub const SYSFS_DEVICE: &str = "sysfs-device";
 }
 
 /// How [`JobResources::peak_mem_bytes`] was measured.

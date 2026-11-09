@@ -33923,9 +33923,11 @@ secret says, and calls the secret's one site. Responses stream back; an echo
 of the key comes back as [k2v:NAME]. Works for any secret you may fetch that
 has exactly one site (several sites: use k2 vault fetch).
 
-The placeholder is yours and ends with this session, or at --ttl (90s, 10m,
-2h, 7d). Put it only where an API key goes: in a request body or query K2
-refuses with 400 placeholder_misplaced rather than send it.
+The placeholder ends with this session (a daemon restart doesn't end it) or
+at --ttl (90s, 10m, 1h, 7d). A process on this machine that gets hold of it
+can call that one site through K2 until then, but never sees the key. Put it
+only where an API key goes: in a request body or query K2 refuses with 400
+placeholder_misplaced rather than send it.
 
 New sessions get these two variables by themselves when a secret's delivery
 is proxy (k2 vault delivery NAME proxy, or grant --as proxy).

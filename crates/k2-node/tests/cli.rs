@@ -67,7 +67,7 @@ fn spike_scripts_parse_and_refuse_without_arguments() {
         assert_eq!(o.status.code(), Some(2), "{}: {}", p.display(), String::from_utf8_lossy(&o.stderr));
     }
     names.sort();
-    assert_eq!(names, ["s0a-tests-as-hidden-user.sh", "s0b-linux-vm-on-mac.sh", "s0c-launchdaemon-probe.sh"]);
+    assert_eq!(names, ["s0a-tests-as-hidden-user.sh", "s0b-linux-vm-on-mac.sh", "s0c-launchdaemon-probe.sh", "s1-0-gpu-probe.sh"]);
 }
 
 #[test]

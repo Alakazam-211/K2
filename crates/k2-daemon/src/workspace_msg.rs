@@ -75,6 +75,10 @@ pub enum MsgReason {
     /// Spawn attempt failed (claude binary missing, FS write failure,
     /// etc.). Transient — eligible for retry.
     SpawnFailed,
+    /// The workspace's pinned main chat has no conversation on disk. K2
+    /// keeps the pin and does not start another chat (a person picks one:
+    /// `k2 sessions main set <id>`). Permanent for this call.
+    MainChatMissing,
     /// PTY existed but the child process exited during the write
     /// (race we used to mask as `injected_to_pty: true`). Transient.
     PtyDied,
@@ -114,6 +118,7 @@ impl MsgReason {
             Self::WorkspaceNotFound => "workspace_not_found",
             Self::NoAgentMode => "no_agent_mode",
             Self::SpawnFailed => "spawn_failed",
+            Self::MainChatMissing => "main_chat_missing",
             Self::PtyDied => "pty_died",
             Self::PtyStalled => "pty_stalled",
             Self::DormantNoWake => "dormant_no_wake",
@@ -133,6 +138,9 @@ impl MsgReason {
             }
             Self::SpawnFailed => {
                 "Spawn failed. Verify the workspace's agent CLI (e.g. `claude`) is on PATH for the daemon."
+            }
+            Self::MainChatMissing => {
+                "This workspace's main chat can't be found on disk, so K2 started nothing. A person chooses a chat with `k2 sessions main set <id>` (list them with `k2 sessions --past`) or from the chat's menu."
             }
             Self::PtyDied => {
                 "Target session crashed during delivery. Check `~/.k2/daemon.stderr.log`."
@@ -165,6 +173,7 @@ impl MsgReason {
             self,
             Self::WorkspaceNotFound
                 | Self::NoAgentMode
+                | Self::MainChatMissing
                 | Self::DormantNoWake
                 | Self::FolderTrustPending
                 | Self::FolderTrustDenied
@@ -2635,7 +2644,11 @@ fn wake_and_fire(
         Ok(r) => r,
         Err(e) => {
             log_debug!("[msg/wake] resume resolve failed for {project_path}: {e}");
-            return MsgResponse::fail(MsgReason::SpawnFailed);
+            return MsgResponse::fail(if k2_core::workspace::resume_chat::is_main_chat_missing(&e) {
+                MsgReason::MainChatMissing
+            } else {
+                MsgReason::SpawnFailed
+            });
         }
     };
     let branch = if resolved.resumed_existing {

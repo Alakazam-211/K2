@@ -212,6 +212,7 @@ pub mod win_fs;
 pub mod win_proc;
 pub mod private_home;
 pub mod session_archive;
+pub mod session_homes;
 pub use k2_client::migration_launchd;
 pub mod workspace_dir;
 pub use workspace_dir::workspace_dot_dir;

@@ -484,6 +484,8 @@ pub mod daemon_main;
 mod test_support;
 #[cfg(test)]
 mod codex_no_daemon_tests;
+#[cfg(test)]
+mod sessions_main_tests;
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -959,7 +959,7 @@ pub fn record_spawn(
 /// `sessions/<cwd>/<id>/`. Codex shadow homes share `sessions/` with the
 /// normal home and Gemini tokens are API keys run in the live home, so
 /// they have nothing to carry.
-fn conversation_root(tool: Tool) -> Option<&'static str> {
+pub fn conversation_root(tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Claude => Some("projects"),
         Tool::Grok => Some("sessions"),

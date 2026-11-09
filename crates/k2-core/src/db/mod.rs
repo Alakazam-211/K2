@@ -1846,6 +1846,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // default). Renumber freely on a slip (and edit the migration-order
         // tests). The store is `crate::compute::store`.
         ("0276_compute_gpu_grant", include_str!("../../drizzle_sql/0276_compute_gpu_grant.sql")),
+        // 0277 — the pre-allocated id of a main chat that has not started
+        // (`workspace::resume_chat`): only that id may ever be replaced when
+        // its conversation is absent. Renumber freely on a slip (and edit the
+        // migration-order tests).
+        ("0277_workspace_sessions_unstarted_id", include_str!("../../drizzle_sql/0277_workspace_sessions_unstarted_id.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2525,7 +2530,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0276_compute_gpu_grant",
+            last_name, "0277_workspace_sessions_unstarted_id",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2670,6 +2675,8 @@ mod tests {
                 "0275_compute_seat_lane",
                 // 0.46.11: GPU jobs (the grant's allow_gpu).
                 "0276_compute_gpu_grant",
+                // 0.46.11: a main chat's pre-allocated, not-yet-started id.
+                "0277_workspace_sessions_unstarted_id",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2822,6 +2829,8 @@ mod tests {
                 "0275_compute_seat_lane",
                 // 0.46.11: GPU jobs (the grant's allow_gpu).
                 "0276_compute_gpu_grant",
+                // 0.46.11: a main chat's pre-allocated, not-yet-started id.
+                "0277_workspace_sessions_unstarted_id",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3094,7 +3103,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0276_compute_gpu_grant", "0276 (0.46.11) runs last");
+        assert_eq!(top, "0277_workspace_sessions_unstarted_id", "0277 (0.46.11) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3155,7 +3164,8 @@ mod tests {
                 "0273_ci",
                 "0274_compute_node_roster",
                 "0275_compute_seat_lane",
-                "0276_compute_gpu_grant"
+                "0276_compute_gpu_grant",
+                "0277_workspace_sessions_unstarted_id"
             ],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276)"
         );
@@ -3999,7 +4009,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0276 (GPU jobs, 0.46.11) is the newest: its record goes (its
+            // 0277 (a main chat's pre-allocated id, 0.46.11) is the newest:
+            // its record goes (its column re-add is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0277_workspace_sessions_unstarted_id'", []).unwrap();
+            // 0276 (GPU jobs, 0.46.11) came before it: its record goes (its
             // column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0276_compute_gpu_grant'", []).unwrap();
             // 0275 (the seat's lane template, 0.46.10) came before it: its

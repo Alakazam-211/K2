@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { harnessMissingMessage, missingHarnessProgram } from './harness-missing'
+import { harnessMissingMessage, isMainChatMissing, missingHarnessProgram } from './harness-missing'
 
 const PTYD = 'spawn failed: v2 spawn failed: ptyd spawn: enoent: codex: not found on the child PATH'
 const PORTABLE =
@@ -24,5 +24,15 @@ describe('harness not installed copy (0.46.10)', () => {
   it('leaves every other spawn error alone', () => {
     expect(harnessMissingMessage('spawn failed: permission denied', 'LZTEK')).toBe(null)
     expect(harnessMissingMessage('', 'LZTEK')).toBe(null)
+  })
+})
+
+describe('main chat missing', () => {
+  it('recognizes the daemon refusal, however it is wrapped', () => {
+    expect(isMainChatMissing("main_chat_missing: this workspace's main chat x (claude) has no conversation")).toBe(true)
+    expect(isMainChatMissing('ensure failed: main_chat_missing: gone')).toBe(true)
+  })
+  it('leaves other errors alone', () => {
+    expect(isMainChatMissing('spawn failed: permission denied')).toBe(false)
   })
 })

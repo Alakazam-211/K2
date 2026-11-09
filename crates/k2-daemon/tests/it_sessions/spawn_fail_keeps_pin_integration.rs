@@ -38,6 +38,7 @@ fn pin_chat(ws: &Ws) -> String {
     let conn = db.lock();
     WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &ws.id, None, Some(&conv), "claude", "system", "running")
         .expect("pin");
+    k2_core::workspace::resume_chat::note_unstarted_pin(&ws.id, &conv);
     conn.execute("UPDATE projects SET agent_enabled = 1 WHERE id = ?1", [&ws.id]).expect("agent on");
     conv
 }

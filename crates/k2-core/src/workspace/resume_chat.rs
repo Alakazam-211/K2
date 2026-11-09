@@ -13,16 +13,16 @@
 //!    adapter's resume grammar (`claude --resume <id>`,
 //!    `pi --session <id>`, `codex resume <id>`, …) so the same
 //!    conversation continues. The user's chat history is intact.
-//! 2. **The saved id's on-disk conversation is gone, BUT the workspace
-//!    has another real session on disk** (workspace remove+readd,
-//!    manual SQL clear, a never-run pre-allocation left over from an
-//!    earlier mint, OR a reused pinned-chat PTY that's actively running
-//!    a bare-spawned session) — resume the **most-recently-active**
-//!    on-disk session and persist its id, instead of minting a fresh
-//!    one. This is the GH#24 convergence fix: minting + overwriting an
-//!    unconfirmed `--session-id` that a *reused* PTY never runs left
-//!    its JSONL absent forever, so every resolve re-minted — an endless
-//!    loop on remote/companion clients (they re-ask on each reconnect).
+//! 2. **The saved id's conversation is gone.** If K2 only pre-allocated
+//!    that id and has never seen it on disk (a never-run premint: GH#24, a
+//!    chat nobody typed in yet), the workspace may still converge on its
+//!    **most-recently-active** on-disk session, so a reused PTY's real
+//!    conversation is adopted instead of re-minting forever. A saved id
+//!    that was ever a real conversation is never replaced: the resolver
+//!    returns [`MAIN_CHAT_MISSING`] and the pin stays as it is. A row from
+//!    before K2 kept that record counts as never started only when the
+//!    workspace has no transcript at all in any home
+//!    ([`pin_counts_as_unstarted`]).
 //! 3. **No saved session AND no on-disk session at all** (a genuinely
 //!    brand-new workspace):
 //!    - Providers with a PREMINT style (claude `--session-id <uuid>`;
@@ -97,6 +97,23 @@ use crate::workspace::agent_resolve::{resolve_agent_command, ResolvedAgentComman
 use crate::workspace::provider_resume::{
     provider_resume_for_command, provider_resume_for_provider, ProviderResume,
 };
+
+/// Every refusal of a main chat whose conversation can't be found starts
+/// with this code, so callers stop instead of spawning something else.
+pub const MAIN_CHAT_MISSING: &str = "main_chat_missing";
+
+pub fn is_main_chat_missing(error: &str) -> bool {
+    error.starts_with(MAIN_CHAT_MISSING)
+}
+
+fn main_chat_missing_error(session_id: &str, provider: &str) -> String {
+    format!(
+        "{MAIN_CHAT_MISSING}: this workspace's main chat {session_id} ({provider}) has no conversation on \
+         disk in any {provider} folder. K2 kept it pinned and did not start or switch to another chat. \
+         List chats with `k2 sessions --past`, then choose one with `k2 sessions main set <id>` \
+         or from this chat's menu."
+    )
+}
 
 /// Resolved launch config for a thin client to spawn the workspace's
 /// agent and attach to its canonical session.
@@ -212,6 +229,9 @@ pub fn resolve_resume_chat_args_ex(
         match provider_resume_for_provider(harness) {
             Some(adapter) => {
                 if adapter.session_file_exists(sid, project_path) {
+                    if let Some(pid) = project_id.as_deref() {
+                        note_pin_seen_on_disk(pid);
+                    }
                     let (command, base_args, env, readiness) =
                         spawn_command_for(adapter, &default_cmd);
                     let args = adapter.resume_args(&base_args, sid);
@@ -226,6 +246,13 @@ pub fn resolve_resume_chat_args_ex(
                         env,
                         readiness,
                     });
+                }
+
+                // A pin that was a real conversation is never swapped for
+                // another one: say so and stop. Only an id K2 pre-allocated
+                // and never saw on disk may converge or be re-used below.
+                if !project_id.as_deref().is_some_and(|pid| pin_counts_as_unstarted(pid, sid, adapter, project_path)) {
+                    return Err(main_chat_missing_error(sid, adapter.provider));
                 }
 
                 // Issue B (daemon-multi-client-arbitration §6): EXPLICIT
@@ -607,6 +634,9 @@ fn converge_or_mint(
                 None => uuid::Uuid::new_v4().to_string(),
             };
             persist_session_identity(project_id, Some(&new_sid), adapter.provider);
+            if let Some(pid) = project_id {
+                note_unstarted_pin(pid, &new_sid);
+            }
             let args = adapter
                 .premint_args(&base_args, &new_sid)
                 .expect("premint style checked above");
@@ -641,6 +671,143 @@ fn converge_or_mint(
             })
         }
     }
+}
+
+/// Mark `sid` as an id K2 pre-allocated for a chat that has not started
+/// (the premint flag makes the provider write its transcript only once a
+/// first turn lands). Until a resolve sees it on disk, its absence is not
+/// a lost conversation.
+pub fn note_unstarted_pin(project_id: &str, sid: &str) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let _ = conn.execute(
+        "UPDATE workspace_sessions SET unstarted_session_id = ?1 WHERE project_id = ?2",
+        params![sid, project_id],
+    );
+}
+
+/// Is `sid` the pre-allocated, not-yet-seen-on-disk id of this workspace?
+pub fn is_unstarted_pin(project_id: &str, sid: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT unstarted_session_id = ?1 FROM workspace_sessions WHERE project_id = ?2",
+        params![sid, project_id],
+        |r| r.get::<_, Option<bool>>(0),
+    )
+    .ok()
+    .flatten()
+    .unwrap_or(false)
+}
+
+/// What this row records about its pin: `None` = nothing (a row from
+/// before the column), `Some("")` = its conversation has been seen on
+/// disk, `Some(id)` = `id` was pre-allocated and has not started.
+fn pin_record(project_id: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT unstarted_session_id FROM workspace_sessions WHERE project_id = ?1",
+        params![project_id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// The pin's conversation is on disk: from now on its absence is a loss.
+fn note_pin_seen_on_disk(project_id: &str) {
+    if pin_record(project_id).as_deref() == Some("") {
+        return;
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let _ = conn.execute(
+        "UPDATE workspace_sessions SET unstarted_session_id = '' WHERE project_id = ?1",
+        params![project_id],
+    );
+}
+
+/// A row with no record (from before the column) whose workspace has no
+/// transcript in any home: most likely an id allocated for a chat that
+/// never ran, such as a hired agent nobody opened.
+fn pre_record_pin_never_started(project_id: &str, adapter: &ProviderResume, project_path: &str) -> bool {
+    pin_record(project_id).is_none() && adapter.newest_on_disk(project_path).is_none()
+}
+
+/// May this saved pin, whose conversation is not on disk, converge or be
+/// re-used? Yes for an id K2 pre-allocated, and for a row with no record
+/// whose workspace has no transcript anywhere (that row is then recorded
+/// as not started, so adoption can stamp the id its first run gets). Any
+/// other pin was a conversation, and its absence is reported.
+pub fn pin_counts_as_unstarted(
+    project_id: &str,
+    sid: &str,
+    adapter: &ProviderResume,
+    project_path: &str,
+) -> bool {
+    if is_unstarted_pin(project_id, sid) {
+        return true;
+    }
+    if pre_record_pin_never_started(project_id, adapter, project_path) {
+        note_unstarted_pin(project_id, sid);
+        return true;
+    }
+    false
+}
+
+/// What `k2 sessions main` reports about a workspace's pinned chat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainChatStatus {
+    pub conversation_id: Option<String>,
+    pub provider: Option<String>,
+    /// `none` (nothing pinned), `found`, `unstarted` (pre-allocated, no
+    /// first turn yet), `missing`, or `custom` (a custom preset's chat
+    /// K2 cannot verify on disk).
+    pub state: &'static str,
+}
+
+pub fn main_chat_status(project_path: &str) -> MainChatStatus {
+    let (project_id, saved, harness, _) = identity_snapshot(project_path);
+    let provider = harness.filter(|h| !h.trim().is_empty());
+    let Some(sid) = saved else {
+        return MainChatStatus { conversation_id: None, provider, state: "none" };
+    };
+    let state = match provider.as_deref().and_then(provider_resume_for_provider) {
+        None => "custom",
+        Some(adapter) if adapter.session_file_exists(&sid, project_path) => "found",
+        Some(adapter)
+            if project_id.as_deref().is_some_and(|pid| {
+                is_unstarted_pin(pid, &sid) || pre_record_pin_never_started(pid, adapter, project_path)
+            }) =>
+        {
+            "unstarted"
+        }
+        Some(_) => "missing",
+    };
+    MainChatStatus { conversation_id: Some(sid), provider, state }
+}
+
+/// Pin `session_id` (a `provider` conversation on disk) as this workspace's
+/// main chat. A conversation K2 can't find is refused rather than pinned.
+/// It takes effect the next time the main chat starts.
+pub fn set_main_chat(
+    project_id: &str,
+    project_path: &str,
+    session_id: &str,
+    provider: &str,
+) -> Result<(), String> {
+    let Some(adapter) = provider_resume_for_provider(provider) else {
+        return Err(format!("this conversation's CLI ({provider:?}) can't be resumed as a main chat"));
+    };
+    if !adapter.session_file_exists(session_id, project_path) {
+        return Err(format!(
+            "{session_id} ({provider}) has no conversation on disk for this workspace, so it can't be the main chat"
+        ));
+    }
+    persist_session_identity(Some(project_id), Some(session_id), adapter.provider);
+    note_pin_seen_on_disk(project_id);
+    Ok(())
 }
 
 /// May a saved pin whose conversation is not on disk be handed to the
@@ -930,6 +1097,9 @@ pub fn resolve_never_chatted_chat_args(
         Some(_) => {
             let new_sid = uuid::Uuid::new_v4().to_string();
             persist_session_identity(project_id.as_deref(), Some(&new_sid), adapter.provider);
+            if let Some(pid) = project_id.as_deref() {
+                note_unstarted_pin(pid, &new_sid);
+            }
             let args = adapter
                 .premint_args(&base_args, &new_sid)
                 .expect("premint style checked above");
@@ -1173,6 +1343,205 @@ mod tests {
         .unwrap();
     }
 
+    // ── A real main chat is never swapped for another one ────────────
+
+    fn write_slot_claude_session(tool_home: &std::path::Path, project_path: &str, session_id: &str) {
+        let hash = crate::chat_history::claude_project_hash(
+            crate::chat_history::resolve_root_project_path(project_path),
+        );
+        let dir = tool_home.join("projects").join(&hash);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{session_id}.jsonl")), b"{\"cwd\":\"/x\"}\n").unwrap();
+    }
+
+    #[test]
+    fn missing_main_chat_stops_keeps_the_pin_and_says_so() {
+        let guard = HomeGuard::new("missing-main");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/missing-main-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        // A newer, unrelated chat is on disk: exactly the old repin trap.
+        write_claude_session(&guard.home, &path, "aaaaaaaa-1111-1111-1111-111111111111");
+        let main = "bbbbbbbb-2222-2222-2222-222222222222";
+        set_saved_session(&project_id, main, "claude");
+
+        for explicit in [false, true] {
+            let err = resolve_resume_chat_args_ex(&path, explicit).expect_err("must stop");
+            assert!(is_main_chat_missing(&err), "{err}");
+            assert!(err.contains(main) && err.contains("no conversation on disk"), "{err}");
+        }
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(main.to_string()), "claude".to_string())),
+            "the record of the main chat is kept"
+        );
+    }
+
+    #[test]
+    fn missing_self_minted_main_also_stops() {
+        let guard = HomeGuard::new("missing-codex");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/missing-codex-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        set_saved_session(&project_id, "019a0000-0000-7000-8000-000000000042", "codex");
+        // Another Codex chat for this workspace is on disk.
+        let day = guard.home.join(".codex/sessions/2026/11/05");
+        std::fs::create_dir_all(&day).unwrap();
+        let header = serde_json::json!({"type":"session_meta","payload":{"id":"019a0000-0000-7000-8000-000000000043","cwd":path,"timestamp":"2026-11-05T00:00:00Z"}});
+        std::fs::write(day.join("rollout-other.jsonl"), format!("{header}\n")).unwrap();
+        let err = resolve_resume_chat_args_ex(&path, false).expect_err("must stop");
+        assert!(is_main_chat_missing(&err), "{err}");
+        assert_eq!(saved_row(&project_id).unwrap().0.as_deref(), Some("019a0000-0000-7000-8000-000000000042"));
+    }
+
+    /// A row from before the record, for a workspace with no transcript in
+    /// any home: an id that never ran (a hired agent nobody opened) starts
+    /// as it did, on the same pin.
+    #[test]
+    fn pre_record_pin_with_no_transcript_anywhere_starts_as_before() {
+        let _guard = HomeGuard::new("pre-record-none");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/pre-record-none-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let pin = uuid::Uuid::new_v4().to_string();
+        set_saved_session(&project_id, &pin, "claude");
+
+        assert_eq!(main_chat_status(&path).state, "unstarted");
+        let out = resolve_resume_chat_args_ex(&path, false).expect("starts");
+        assert_eq!(out.resume_session, pin, "the same pin, not a new id");
+        assert!(!out.resumed_existing);
+        assert_eq!(saved_row(&project_id).unwrap().0.as_deref(), Some(pin.as_str()));
+        assert!(is_unstarted_pin(&project_id, &pin), "recorded for adoption and later resolves");
+
+        // A self-minting CLI spawns bare, and its first run may be adopted.
+        let codex_path = format!("/fixture/pre-record-codex-{}", uuid::Uuid::new_v4());
+        let codex_id = insert_project(&codex_path, None);
+        set_saved_session(&codex_id, "019a0000-0000-7000-8000-000000000050", "codex");
+        let out = resolve_resume_chat_args_ex(&codex_path, false).expect("starts");
+        assert!(out.pending_session_discovery, "{:?}", out.args);
+        assert!(is_unstarted_pin(&codex_id, "019a0000-0000-7000-8000-000000000050"));
+    }
+
+    /// The same row with any transcript for the workspace, in any home, and
+    /// the pinned id not among them: the loud stop.
+    #[test]
+    fn pre_record_pin_stops_when_any_home_has_a_transcript() {
+        let guard = HomeGuard::new("pre-record-some");
+        crate::db::init_for_tests();
+        let preset_home = guard.home.join("preset-claude");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in, env) \
+                 VALUES (?1, 'preset home', 'claude', '', 0, 970, 0, ?2)",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    serde_json::json!({"CLAUDE_CONFIG_DIR": preset_home.to_string_lossy()}).to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let slot = crate::llm_accounts::store::slot_dir(crate::llm_accounts::Tool::Claude, "acct-b");
+        for (label, home) in [("live", guard.home.join(".claude")), ("slot", slot), ("preset", preset_home)] {
+            let path = format!("/fixture/pre-record-{label}-{}", uuid::Uuid::new_v4());
+            let project_id = insert_project(&path, None);
+            let pin = uuid::Uuid::new_v4().to_string();
+            set_saved_session(&project_id, &pin, "claude");
+            write_slot_claude_session(&home, &path, "aaaaaaaa-8888-4888-8888-888888888888");
+
+            assert_eq!(main_chat_status(&path).state, "missing", "{label}");
+            let err = resolve_resume_chat_args_ex(&path, false).expect_err("must stop");
+            assert!(is_main_chat_missing(&err), "{label}: {err}");
+            assert_eq!(saved_row(&project_id).unwrap().0.as_deref(), Some(pin.as_str()), "{label}");
+        }
+    }
+
+    /// Softening is for rows K2 knows nothing about. A chat K2 has seen on
+    /// disk still stops when every transcript is gone.
+    #[test]
+    fn a_main_chat_seen_on_disk_stops_even_with_no_transcript_left() {
+        let guard = HomeGuard::new("seen-then-gone");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/seen-then-gone-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let main = "bbbbbbbb-9999-4999-8999-999999999999";
+        set_saved_session(&project_id, main, "claude");
+        write_claude_session(&guard.home, &path, main);
+        resolve_resume_chat_args_ex(&path, false).expect("resumes");
+
+        std::fs::remove_dir_all(guard.home.join(".claude/projects")).unwrap();
+        assert_eq!(main_chat_status(&path).state, "missing");
+        assert!(is_main_chat_missing(&resolve_resume_chat_args_ex(&path, false).unwrap_err()));
+    }
+
+    #[test]
+    fn main_chat_only_in_an_account_folder_resumes_and_is_not_repinned() {
+        let guard = HomeGuard::new("account-main");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/account-main-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let main = "cccccccc-3333-3333-3333-333333333333";
+        set_saved_session(&project_id, main, "claude");
+        // The main chat exists only in a wallet account's folder; a newer
+        // chat sits in the live home.
+        write_slot_claude_session(
+            &crate::llm_accounts::store::slot_dir(crate::llm_accounts::Tool::Claude, "acct-a"),
+            &path,
+            main,
+        );
+        write_claude_session(&guard.home, &path, "dddddddd-4444-4444-4444-444444444444");
+
+        let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+        assert_eq!(out.resume_session, main);
+        assert!(out.resumed_existing);
+        assert_eq!(saved_row(&project_id).unwrap().0.as_deref(), Some(main));
+    }
+
+    #[test]
+    fn a_pre_allocated_chat_stops_being_replaceable_once_it_is_on_disk() {
+        let guard = HomeGuard::new("unstarted");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/unstarted-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        // First resolve mints the id; it may be replaced until it runs.
+        let first = resolve_resume_chat_args_ex(&path, false).expect("mint");
+        assert!(is_unstarted_pin(&project_id, &first.resume_session));
+        // It runs: the marker clears on the next resolve …
+        write_claude_session(&guard.home, &path, &first.resume_session);
+        let again = resolve_resume_chat_args_ex(&path, false).expect("resume");
+        assert!(again.resumed_existing);
+        assert!(!is_unstarted_pin(&project_id, &first.resume_session));
+        // … so now that it is real, losing it stops.
+        let hash = crate::chat_history::claude_project_hash(&path);
+        std::fs::remove_file(
+            guard.home.join(".claude/projects").join(hash).join(format!("{}.jsonl", first.resume_session)),
+        )
+        .unwrap();
+        write_claude_session(&guard.home, &path, "eeeeeeee-5555-5555-5555-555555555555");
+        assert!(is_main_chat_missing(&resolve_resume_chat_args_ex(&path, false).unwrap_err()));
+    }
+
+    #[test]
+    fn set_main_chat_needs_a_conversation_on_disk() {
+        let guard = HomeGuard::new("set-main");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/set-main-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let gone = "ffffffff-6666-6666-6666-666666666666";
+        assert!(set_main_chat(&project_id, &path, gone, "claude").is_err());
+        assert_eq!(main_chat_status(&path).state, "none");
+
+        let real = "aaaaaaaa-7777-7777-7777-777777777777";
+        write_claude_session(&guard.home, &path, real);
+        set_main_chat(&project_id, &path, real, "claude").expect("set");
+        let status = main_chat_status(&path);
+        assert_eq!(status.conversation_id.as_deref(), Some(real));
+        assert_eq!(status.state, "found");
+        set_saved_session(&project_id, gone, "claude");
+        assert_eq!(main_chat_status(&path).state, "missing");
+    }
+
     // ── CLAUDE REGRESSION GUARD: byte-identical argv, all 3 cases ────
     //
     // Pre-Slice-3, this resolver hardcoded `claude` and produced:
@@ -1222,6 +1591,7 @@ mod tests {
             "bbbbbbbb-0000-0000-0000-000000000000",
             "claude",
         );
+        note_unstarted_pin(&project_id, "bbbbbbbb-0000-0000-0000-000000000000");
 
         let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
         assert_eq!(out.command, "claude");
@@ -1286,6 +1656,7 @@ mod tests {
         let project_id = insert_project(&path, None);
         let pin = uuid::Uuid::new_v4().to_string();
         set_saved_session(&project_id, &pin, "claude");
+        note_unstarted_pin(&project_id, &pin);
 
         for attempt in 0..3 {
             let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
@@ -1318,6 +1689,7 @@ mod tests {
         let project_id = insert_project(&path, None);
         let pin = uuid::Uuid::new_v4().to_string();
         set_saved_session(&project_id, &pin, "grok");
+        note_unstarted_pin(&project_id, &pin);
 
         let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
         assert_eq!(out.provider, "grok");
@@ -1340,6 +1712,7 @@ mod tests {
         let path = format!("/fixture/claude-not-uuid-{}", uuid::Uuid::new_v4());
         let project_id = insert_project(&path, None);
         set_saved_session(&project_id, "not-a-uuid-pin", "claude");
+        note_unstarted_pin(&project_id, "not-a-uuid-pin");
         let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
         assert_ne!(out.resume_session, "not-a-uuid-pin");
         assert!(uuid::Uuid::parse_str(&out.resume_session).is_ok(), "{}", out.resume_session);
@@ -1352,6 +1725,7 @@ mod tests {
         let b_id = insert_project(&b, None);
         set_saved_session(&a_id, &shared, "claude");
         set_saved_session(&b_id, &shared, "claude");
+        note_unstarted_pin(&b_id, &shared);
         let out = resolve_resume_chat_args_ex(&b, false).expect("resolve");
         assert_ne!(out.resume_session, shared, "a pin another workspace holds is not this one's");
 
@@ -1360,6 +1734,7 @@ mod tests {
         let c = format!("/fixture/claude-foreign-{}", uuid::Uuid::new_v4());
         let c_id = insert_project(&c, None);
         set_saved_session(&c_id, &foreign, "claude");
+        note_unstarted_pin(&c_id, &foreign);
         {
             let db = crate::db::shared();
             let conn = db.lock();
@@ -1463,12 +1838,14 @@ mod tests {
         insert_preset("grok --always-approve", 952);
         let path = format!("/fixture/grok-converge-{}", uuid::Uuid::new_v4());
         let project_id = insert_project(&path, None);
+        // A pre-allocated grok pin that never ran (a real one would stop).
         // A CLAUDE session exists on disk (newest overall) — but the
         // saved harness is grok, so convergence must stay grok-scoped.
         write_claude_session(&guard.home, &path, "dddddddd-0000-0000-0000-000000000000");
         let grok_real = "01920000-ffff-7000-8000-000000000001";
         write_grok_session(&guard.home, &path, grok_real);
         set_saved_session(&project_id, "01920000-ffff-7000-8000-00000000dead", "grok");
+        note_unstarted_pin(&project_id, "01920000-ffff-7000-8000-00000000dead");
 
         let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
         assert_eq!(out.command, "grok");

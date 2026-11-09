@@ -1221,7 +1221,7 @@ pub fn apply_spawn_login(
             }
         }
     }
-    let login = {
+    let mut login = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         // A chat pick made on this key follows the conversation the argv
@@ -1251,6 +1251,17 @@ pub fn apply_spawn_login(
         }
         login
     };
+    // The session index finds a conversation in any account's folder; the
+    // record can be missing or out of date, so a resume that would start
+    // in a home without the history brings it along (outside the DB lock).
+    if resume && login.carry.is_none() {
+        if let Some(cid) = conversation.as_deref().filter(|c| k2_core::llm_accounts::pins::valid_conversation_id(c)) {
+            let to = login.home.clone().unwrap_or_else(|| store::live_home(tool).0);
+            if let Some(from) = k2_core::session_homes::conversation_home_elsewhere(tool, cid, &to) {
+                login.carry = Some(k2_core::llm_accounts::pins::Carry { conversation_id: cid.to_string(), from, to });
+            }
+        }
+    }
     let slot_lock = match login.pinned_slot() {
         Some((t, id)) => {
             let l = store::lock_slot(t, id, Duration::from_secs(30))?;

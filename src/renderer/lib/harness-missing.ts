@@ -21,6 +21,16 @@ export function missingHarnessProgram(raw: string): string | null {
   return prog === '' ? null : prog
 }
 
+/** The daemon refused to start a pinned chat it can't find on disk. */
+export function isMainChatMissing(raw: string): boolean {
+  return raw.includes('main_chat_missing')
+}
+
+/** What to tell the person when the pinned chat's history is gone. */
+export const MAIN_CHAT_MISSING_MESSAGE =
+  "K2 kept this chat pinned and started nothing, rather than open a different one. " +
+  'Choose a chat from the menu above, or run k2 sessions main set <id> (k2 sessions --past lists them).'
+
 /** "codex isn't installed on LZTEK. Pick another harness …", or null. */
 export function harnessMissingMessage(raw: string, serverLabel: string): string | null {
   const prog = missingHarnessProgram(raw)

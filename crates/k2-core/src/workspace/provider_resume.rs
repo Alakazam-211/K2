@@ -651,6 +651,21 @@ pub fn adopt_discovered_session(provider: &str, project_path: &str) -> Option<St
                 );
                 return Some(saved.clone());
             }
+            // The saved pin of THIS provider was a real conversation and
+            // can't be found: keep it, never stamp a different one over
+            // it. The resolver reports it (`main_chat_missing`).
+            if !saved.is_empty()
+                && row.harness == adapter.provider
+                && !crate::workspace::resume_chat::is_unstarted_pin(&project_id, saved)
+            {
+                crate::log_debug!(
+                    "[core/provider-resume] adopt refused: saved {} chat {} is missing on disk for {}; keeping the pin",
+                    adapter.provider,
+                    saved,
+                    project_path
+                );
+                return None;
+            }
         }
     }
 
@@ -1475,6 +1490,45 @@ mod tests {
             "SSOT must remain B after adopt"
         );
         assert_eq!(row.harness, "grok");
+    }
+
+    #[test]
+    fn adopt_discovered_session_keeps_a_real_pin_that_is_missing() {
+        let temp = crate::test_env::TempHome::new();
+        let home = temp.path().to_path_buf();
+        crate::db::init_for_tests();
+        let project_path = format!("/fixture/adopt-keep-{}", uuid::Uuid::new_v4());
+        let project_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'test', ?2)",
+                rusqlite::params![project_id, project_path],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, '00000000-aaaa-4000-8000-00000000000a', 'claude', 'user', 'running', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), project_id],
+            )
+            .unwrap();
+        }
+        let dir = home
+            .join(".claude/projects")
+            .join(crate::chat_history::claude_project_hash(&project_path));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("11111111-bbbb-4000-8000-00000000000b.jsonl"), b"{}\n").unwrap();
+
+        assert_eq!(adopt_discovered_session("claude", &project_path), None);
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let row = crate::db::schema::WorkspaceSession::get(&conn, &project_id).unwrap().unwrap();
+        assert_eq!(
+            row.session_id.as_deref(),
+            Some("00000000-aaaa-4000-8000-00000000000a"),
+            "a real main chat that is missing is never replaced"
+        );
     }
 
     #[test]

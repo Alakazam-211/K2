@@ -292,6 +292,7 @@ fn seed_workspace(handle: &str) -> (String, String, String) {
         "running",
     )
     .expect("pin");
+    k2_core::workspace::resume_chat::note_unstarted_pin(&id, &conv);
     (id, conv, path)
 }
 

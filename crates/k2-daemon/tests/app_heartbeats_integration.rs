@@ -188,6 +188,7 @@ fn seed_room(tag: &str) -> Room {
         "running",
     )
     .expect("pin");
+    k2_core::workspace::resume_chat::note_unstarted_pin(&id, &conv);
     Room { id, handle, path }
 }
 

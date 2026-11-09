@@ -81,7 +81,9 @@ async fn a_missing_target_harness_is_refused_and_the_old_chat_keeps_running() {
     k2_core::db::init_for_tests();
     let _shims = shims_for(&home, &["grok"]); // claude is not installed
     let (id, path, handle) = workspace(&home, "nocli");
-    pin(&id, "grok", &uuid::Uuid::new_v4().to_string());
+    let old = uuid::Uuid::new_v4().to_string();
+    pin(&id, "grok", &old);
+    k2_core::workspace::resume_chat::note_unstarted_pin(&id, &old);
     let started = crate::pinned_chat::ensure_pinned_chat(&path, false, false).expect("grok pinned chat starts");
     let before = live(&id).expect("live grok chat");
     assert!(before.is_child_alive());

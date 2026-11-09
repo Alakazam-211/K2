@@ -175,6 +175,7 @@ pub fn k2so_agents_build_launch(
     // stored id when that happens so the next wake starts fresh
     // instead of fighting the stale pointer indefinitely.
     let agent_cwd = agent_dir(&project_path, &agent_name);
+    let mut missing_main: Option<String> = None;
     let resume_session = (|| -> Option<String> {
         let db = crate::db::shared();
         let conn = db.lock();
@@ -209,12 +210,26 @@ pub fn k2so_agents_build_launch(
                     if chat_history::claude_session_file_exists(&sid, &project_path) {
                         return Some(sid);
                     }
-                    // Only a Claude id is Claude's to clear. Another
+                    // Only a Claude id is Claude's to touch. Another
                     // harness's pin (a custom preset's K2-minted Thread id,
                     // GL44; a grok/codex conversation) has no Claude JSONL
-                    // by design and must survive this launch.
+                    // by design and must survive this launch. And only a
+                    // pre-allocated id that never started may be cleared:
+                    // a real main chat that can't be found stays pinned.
                     if session.harness == "claude" {
-                        let _ = WorkspaceSession::clear_session_id(&conn, &project_id);
+                        let unstarted = crate::workspace::provider_resume::provider_resume_for_provider("claude")
+                            .is_some_and(|adapter| {
+                                crate::workspace::resume_chat::pin_counts_as_unstarted(&project_id, &sid, adapter, &project_path)
+                            });
+                        if unstarted {
+                            let _ = WorkspaceSession::clear_session_id(&conn, &project_id);
+                        } else if heartbeat_name.is_none() {
+                            missing_main = Some(format!(
+                                "{}: this workspace's main chat {sid} (claude) has no conversation on disk \
+                                 in any claude folder. K2 kept it pinned and did not start another chat.",
+                                crate::workspace::resume_chat::MAIN_CHAT_MISSING
+                            ));
+                        }
                     }
                 }
             }
@@ -232,6 +247,10 @@ pub fn k2so_agents_build_launch(
             .ok()
             .flatten()
     });
+
+    if let Some(refused) = missing_main {
+        return Err(refused);
+    }
 
     let system_prompt = claude_md;
     // Heartbeats pass wakeup_override so each heartbeat row fires its

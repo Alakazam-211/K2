@@ -391,18 +391,18 @@ pub fn locate_continue_transcript(
 /// Newest `{id}.jsonl` under any Claude project dir. Used only when the
 /// caller has a conversation id and no workspace cwd.
 fn find_claude_by_id(session_id: &str) -> Option<PathBuf> {
-    let home = crate::paths::home_dir()?;
-    let projects = home.join(".claude").join("projects");
     let name = format!("{session_id}.jsonl");
     let mut best: Option<(i64, PathBuf)> = None;
-    let entries = fs::read_dir(&projects).ok()?;
-    for entry in entries.flatten() {
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let candidate = entry.path().join(&name);
-        if candidate.is_file() {
-            consider(&mut best, file_mtime_ms(&candidate), candidate);
+    for projects in crate::session_homes::roots(crate::llm_accounts::Tool::Claude, "projects") {
+        let Ok(entries) = fs::read_dir(&projects) else { continue };
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let candidate = entry.path().join(&name);
+            if candidate.is_file() {
+                consider(&mut best, file_mtime_ms(&candidate), candidate);
+            }
         }
     }
     best.map(|(_, path)| path)
@@ -520,9 +520,13 @@ fn find_pi(session_id: &str, project_path: &str) -> Option<PathBuf> {
 }
 
 fn find_grok(session_id: &str, project_path: &str) -> Option<PathBuf> {
-    let home = crate::paths::home_dir()?;
-    let root = home.join(".grok").join("sessions");
-    let cwd_dirs = fs::read_dir(&root).ok()?;
+    crate::session_homes::roots(crate::llm_accounts::Tool::Grok, "sessions")
+        .iter()
+        .find_map(|root| find_grok_in(root, session_id, project_path))
+}
+
+fn find_grok_in(root: &Path, session_id: &str, project_path: &str) -> Option<PathBuf> {
+    let cwd_dirs = fs::read_dir(root).ok()?;
     for cwd_dir in cwd_dirs.flatten() {
         if !cwd_dir.path().is_dir() {
             continue;
@@ -565,46 +569,14 @@ fn find_grok(session_id: &str, project_path: &str) -> Option<PathBuf> {
 }
 
 fn find_codex_rollout(session_id: &str, project_path: &str) -> Option<PathBuf> {
-    let home = crate::paths::home_dir()?;
-    let root = home.join(".codex").join("sessions");
     let mut best: Option<(i64, PathBuf)> = None;
-    let years = fs::read_dir(&root).ok()?;
-    for year in years.flatten() {
-        if !year.path().is_dir() {
-            continue;
-        }
-        let months = match fs::read_dir(year.path()) {
-            Ok(months) => months,
-            Err(_) => continue,
-        };
-        for month in months.flatten() {
-            if !month.path().is_dir() {
-                continue;
+    for root in crate::session_homes::roots(crate::llm_accounts::Tool::Codex, "sessions") {
+        crate::chat_history::for_each_codex_rollout(&root, &mut |file: &fs::DirEntry| {
+            let path = file.path();
+            if codex_header_matches(&path, session_id, project_path) {
+                consider(&mut best, file_mtime_ms(&path), path);
             }
-            let days = match fs::read_dir(month.path()) {
-                Ok(days) => days,
-                Err(_) => continue,
-            };
-            for day in days.flatten() {
-                if !day.path().is_dir() {
-                    continue;
-                }
-                let files = match fs::read_dir(day.path()) {
-                    Ok(files) => files,
-                    Err(_) => continue,
-                };
-                for file in files.flatten() {
-                    let path = file.path();
-                    if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-                        continue;
-                    }
-                    if !codex_header_matches(&path, session_id, project_path) {
-                        continue;
-                    }
-                    consider(&mut best, file_mtime_ms(&path), path);
-                }
-            }
-        }
+        });
     }
     best.map(|(_, path)| path)
 }
@@ -668,9 +640,13 @@ pub fn adoptable_transcripts(provider: &str, cwd: &str, since_ms: i64) -> Vec<Ad
     if cwd.is_empty() {
         return Vec::new();
     }
-    let mut out = match provider.trim() {
+    let mut out: Vec<AdoptCandidate> = match provider.trim() {
         "claude" => adopt_claude(&home, cwd, since_ms),
-        "codex" => adopt_codex(&home, cwd, since_ms),
+        // Every Codex home: a preset's `CODEX_HOME` keeps its rollouts there.
+        "codex" => crate::session_homes::roots(crate::llm_accounts::Tool::Codex, "sessions")
+            .iter()
+            .flat_map(|root| adopt_codex(root, cwd, since_ms))
+            .collect(),
         "gemini" => adopt_gemini(&home, cwd, since_ms),
         _ => Vec::new(),
     };
@@ -740,10 +716,9 @@ fn codex_day_dirs(root: &Path, since_ms: i64) -> Vec<PathBuf> {
         .collect()
 }
 
-fn adopt_codex(home: &Path, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
-    let root = home.join(".codex").join("sessions");
+fn adopt_codex(root: &Path, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
     let mut out = Vec::new();
-    for day in codex_day_dirs(&root, since_ms) {
+    for day in codex_day_dirs(root, since_ms) {
         let Ok(files) = fs::read_dir(&day) else {
             continue;
         };
@@ -1059,8 +1034,16 @@ fn codex_role_text(value: &Value) -> Option<(String, String)> {
 }
 
 fn latest_codex_history_text(session_id: &str) -> Option<String> {
-    let home = crate::paths::home_dir()?;
-    let file = File::open(home.join(".codex").join("history.jsonl")).ok()?;
+    crate::session_homes::files(crate::llm_accounts::Tool::Codex, "history.jsonl")
+        .iter()
+        .filter_map(|path| latest_codex_history_entry(path, session_id))
+        .max_by_key(|(ts, idx, _)| (*ts, *idx))
+        .map(|(_, _, text)| text)
+}
+
+/// The newest `history.jsonl` entry for this session in one file.
+fn latest_codex_history_entry(path: &Path, session_id: &str) -> Option<(i64, usize, String)> {
+    let file = File::open(path).ok()?;
     let mut best: Option<(i64, usize, String)> = None;
     for (idx, line) in BufReader::new(file).lines().flatten().enumerate() {
         let Ok(parsed) = serde_json::from_str::<Value>(&line) else {
@@ -1085,7 +1068,7 @@ fn latest_codex_history_text(session_id: &str) -> Option<String> {
             best = Some((ts, idx, text.to_string()));
         }
     }
-    best.map(|(_, _, text)| text)
+    best
 }
 
 fn hermes_rows(session_id: &str, project_path: &str) -> Result<Vec<(String, String)>, String> {

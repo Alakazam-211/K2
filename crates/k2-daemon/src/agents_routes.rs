@@ -285,12 +285,17 @@ pub fn handle_agents_launch(
     // own command+args bare (no invented flags). The kickoff prompt
     // stays claude-only (per-agent prompt delivery is Slice 5).
     if let Some(r) = resolved.as_ref().filter(|r| !r.is_claude()) {
-        let routed = k2_core::workspace::provider_resume::provider_resume_for_command(
-            &r.command,
-        )
-        .and_then(|_| {
-            k2_core::workspace::resume_chat::resolve_resume_chat_args(project_path).ok()
-        });
+        let routed = if k2_core::workspace::provider_resume::provider_resume_for_command(&r.command).is_some() {
+            match k2_core::workspace::resume_chat::resolve_resume_chat_args(project_path) {
+                Ok(rr) => Some(rr),
+                Err(e) if k2_core::workspace::resume_chat::is_main_chat_missing(&e) => {
+                    return CliResponse::bad_request(e);
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
         match routed {
             Some(rr) => {
                 command = rr.command.clone();

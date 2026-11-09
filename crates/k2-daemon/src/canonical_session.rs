@@ -252,6 +252,12 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
                     );
                 }
             }
+            // The pinned chat can't be found: stop, never a bare spawn
+            // that would look like the main chat with its memory gone.
+            Err(e) if k2_core::workspace::resume_chat::is_main_chat_missing(&e) => {
+                log_debug!("[daemon/canonical] {project_path}: {e}");
+                return Err(e);
+            }
             Err(e) => log_debug!(
                 "[daemon/canonical] resume resolve failed for {project_path}, \
                  using profile args as-is: {e}"

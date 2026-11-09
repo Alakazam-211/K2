@@ -140,6 +140,7 @@ fn seed_room(home: &Path, handle: &str) -> Room {
     let conv = uuid::Uuid::new_v4().to_string();
     WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &id, None, Some(&conv), "claude", "system", "running")
         .expect("pin");
+    k2_core::workspace::resume_chat::note_unstarted_pin(&id, &conv);
     Room { handle: handle.to_string(), project_id: id, path, conv }
 }
 

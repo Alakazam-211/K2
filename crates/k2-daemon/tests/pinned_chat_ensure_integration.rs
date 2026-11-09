@@ -849,6 +849,8 @@ async fn auto_path_still_converges_when_saved_id_missing() {
     let real_a = "aaaaaaaa-1111-1111-1111-111111111111";
     write_on_disk_session(&project_path, real_a);
     set_saved_session_id(workspace_id, stale_b);
+    // A pre-allocated id that never ran: only such a pin may converge.
+    k2_core::workspace::resume_chat::note_unstarted_pin(workspace_id, stale_b);
 
     // AUTO path: explicit_selection=false (a cold mount / refresh).
     let out = ensure_pinned_chat(&project_path, false, false).expect("auto ensure");
@@ -879,6 +881,35 @@ async fn auto_path_still_converges_when_saved_id_missing() {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Read `workspace_sessions.harness` for a workspace.
+// A saved id that was a real conversation is never swapped for the
+// newest one: ensure refuses loudly and the record stays (the old
+// repin to a stale fork).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_path_refuses_a_missing_main_chat_and_keeps_the_pin() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("auto-missing-main");
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-auto-missing-ws";
+    let project = setup_project(workspace_id, "auto-missing-main");
+    let project_path = project.to_string_lossy().into_owned();
+
+    let main = "cccccccc-0000-0000-0000-000000000000";
+    write_on_disk_session(&project_path, "aaaaaaaa-1111-1111-1111-111111111111");
+    set_saved_session_id(workspace_id, main);
+
+    let err = ensure_pinned_chat(&project_path, false, false).expect_err("must stop");
+    assert!(err.starts_with("main_chat_missing"), "{err}");
+    assert!(err.contains(main), "{err}");
+    assert_eq!(saved_session_id(workspace_id).as_deref(), Some(main), "the pin is kept");
+    assert!(
+        v2_session_map::lookup_by_agent_name(workspace_id).is_none(),
+        "nothing was spawned under the main chat's key"
+    );
+}
+
 fn saved_harness(workspace_id: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();

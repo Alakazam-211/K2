@@ -8,6 +8,12 @@
 //! - `POST /cli/sessions/open`   — reopen a past conversation as a sidecar
 //!   (same history); a conversation something already holds answers its
 //!   address instead (one runner, WS-O4).
+//! - `GET  /cli/sessions/main`   — the workspace's pinned main chat and
+//!   whether its conversation can be found.
+//! - `POST /cli/sessions/main/set` — choose the pinned main chat. A person's
+//!   move (owner, Connect login, a shell tab), never an agent's: its own
+//!   main chat is the thing that would change, and when it is missing the
+//!   agent isn't running to ask.
 //! - [`msg_session`]: `POST /cli/workspace/msg` with `session=` (`k2 msg
 //!   --session <id>`): deliver to whoever holds it, or reopen a past-only
 //!   one with the message as its first turn (WS-M2).
@@ -36,17 +42,19 @@ pub const ROSTER: &str = "/cli/sessions/roster";
 pub const PAST: &str = "/cli/sessions/past";
 pub const SHOW: &str = "/cli/sessions/show";
 pub const OPEN: &str = "/cli/sessions/open";
+pub const MAIN: &str = "/cli/sessions/main";
+pub const MAIN_SET: &str = "/cli/sessions/main/set";
 
 /// The outside-K2 guard (Q5): a transcript written this recently may be
 /// open in a terminal outside K2.
 pub const RECENT_SECS: i64 = 120;
 
 pub fn is_route(path: &str) -> bool {
-    matches!(path, ROSTER | PAST | SHOW | OPEN)
+    matches!(path, ROSTER | PAST | SHOW | OPEN | MAIN | MAIN_SET)
 }
 
 pub fn is_post_route(path: &str) -> bool {
-    path == OPEN
+    matches!(path, OPEN | MAIN_SET)
 }
 
 pub fn body_cap(path: &str) -> usize {
@@ -90,6 +98,16 @@ pub fn handle(
                 Err(e) => format!("refused:{}", e.code),
             };
             sc::audit("sessions-open", &caller, &outcome, ingress);
+            out
+        }
+        MAIN => handle_main(&caller, params),
+        MAIN_SET => {
+            let out = sc::json_body(body).and_then(|v| handle_main_set(&caller, &v));
+            let outcome = match &out {
+                Ok(v) => format!("ok {}", v.pointer("/main/conversationId").and_then(Value::as_str).unwrap_or("-")),
+                Err(e) => format!("refused:{}", e.code),
+            };
+            sc::audit("sessions-main-set", &caller, &outcome, ingress);
             out
         }
         _ => return CliResponse::not_found(),
@@ -416,6 +434,69 @@ fn resolve(ws: &Workspace, token: &str) -> Result<Resolved, SidecarError> {
         }
     }
     Err(last_err.unwrap_or_else(|| not_found(token)))
+}
+
+// ── main ──────────────────────────────────────────────────────────────
+
+fn main_json(ws: &Workspace) -> Value {
+    let status = k2_core::workspace::resume_chat::main_chat_status(&ws.path);
+    let path = status.conversation_id.as_deref().and_then(|id| {
+        let provider = status.provider.as_deref().unwrap_or_default();
+        k2_core::chat_history::resolve_session_storage_path(provider, id, &ws.path)
+    });
+    json!({
+        "conversationId": status.conversation_id,
+        "cli": status.provider,
+        "state": status.state,
+        "path": path,
+    })
+}
+
+fn handle_main(caller: &Caller, params: &HashMap<String, String>) -> Result<Value, SidecarError> {
+    sc::require_credential(caller)?;
+    let ws = sc::target_workspace(caller, param(params, "workspace"))?;
+    deny_sandboxed(caller)?;
+    Ok(json!({ "ok": true, "workspace": ws.handle, "main": main_json(&ws) }))
+}
+
+fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError> {
+    sc::require_credential(caller)?;
+    let ws = sc::target_workspace(caller, body.get("workspace").and_then(Value::as_str))?;
+    if matches!(caller, Caller::Agent(_)) {
+        return Err(err(
+            "main_chat_needs_person",
+            403,
+            format!(
+                "only a person chooses the pinned main chat. Ask your human to run k2 sessions main set <id> in a K2 terminal (or choose it from this chat's menu); {} can run k2 sessions main to see what is pinned",
+                ws.handle
+            ),
+        ));
+    }
+    let id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| err("bad_request", 400, "name a conversation: an id from k2 sessions --past"))?;
+    let previous = k2_core::workspace::resume_chat::main_chat_status(&ws.path).conversation_id;
+    let row = resolve(&ws, id)?.row;
+    if let Some(tree) = row.worktree.as_deref() {
+        return Err(err(
+            "conversation_in_worktree",
+            409,
+            format!("{} ran in the worktree {tree}, but the main chat runs in the workspace folder; reopen it with k2 sessions open {id} instead", row.conversation_id),
+        ));
+    }
+    k2_core::workspace::resume_chat::set_main_chat(&ws.id, &ws.path, &row.conversation_id, &row.cli)
+        .map_err(|e| err("conversation_not_on_disk", 409, e))?;
+    Ok(json!({
+        "ok": true,
+        "workspace": ws.handle,
+        "previous": previous,
+        "main": main_json(&ws),
+        "title": row.custom_name.clone().unwrap_or(row.title),
+        "restartWith": format!("k2 agent restart {}", ws.handle),
+    }))
 }
 
 // ── show ──────────────────────────────────────────────────────────────

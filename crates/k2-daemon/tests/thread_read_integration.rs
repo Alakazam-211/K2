@@ -233,6 +233,7 @@ fn seed_thread(prefix: &str) -> (String, String, String) {
     .expect("seed project");
     let conv = uuid::Uuid::new_v4().to_string();
     WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &id, None, Some(&conv), "claude", "system", "running").expect("pin");
+    k2_core::workspace::resume_chat::note_unstarted_pin(&id, &conv);
     (id, handle, conv)
 }
 

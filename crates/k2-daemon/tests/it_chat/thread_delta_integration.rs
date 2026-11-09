@@ -31,6 +31,7 @@ fn pinned_ws(env: &Env, handle: &str) -> (Ws, String) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &ws.id, None, Some(&conv), "claude", "system", "running").expect("pin");
+    k2_core::workspace::resume_chat::note_unstarted_pin(&ws.id, &conv);
     (ws, conv)
 }
 

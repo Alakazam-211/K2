@@ -22950,13 +22950,14 @@ cmd_sessions() {
     esac
     shift
     case "$sub" in
-        list|ls|past|show|open|new|stop)
+        list|ls|past|show|open|new|stop|main)
             if _wants_help "$@"; then
                 _sessions_usage
                 return 0
             fi ;;
     esac
     case "$sub" in
+        main)      cmd_sessions_main "$@" ;;
         list|ls)   cmd_sessions_roster "$@" ;;
         past)      cmd_sessions_roster --past "$@" ;;
         show)      cmd_sessions_show "$@" ;;
@@ -22996,6 +22997,8 @@ k2 sessions — who is working in this workspace, and past conversations to reop
   k2 sessions new <name> [--cli <cli>] [--brief <file>|-] [--brief-text "…"] [--json]
                                                start a helper (a sidecar); prints its address <ws>/<name>
   k2 sessions stop <name|address> [--force]    stop is sleep: its history stays (open or msg wakes it)
+  k2 sessions main [--json]                    which chat is pinned as this workspace's main chat, and whether K2 can find it
+  k2 sessions main set <id> [--json]           choose the main chat, an <id> from --past (people only); takes effect the next time it starts
 
 Talk to any of them: k2 msg <address> "…"      (a sleeping one wakes)
                      k2 msg --session <id> "…" (delivers to whoever holds it; a past one is reopened first)
@@ -23136,8 +23139,31 @@ elif verb == "open":
         sys.stderr.write("already running as %s. Message it: k2 msg %s \"…\"\n" % (v["address"], v["address"]))
     else:
         sys.stderr.write("%s is the main session (asleep). Wake it: %s\n" % (v["address"], v.get("wakeWith") or ("k2 msg %s \"…\"" % v["address"])))
+elif verb == "main":
+    m = v.get("main") or {}
+    ws = v.get("workspace") or "?"
+    state = m.get("state")
+    if state == "none":
+        print("%s has no main chat pinned yet (it starts on the next message)." % ws)
+    elif state == "missing":
+        sys.stderr.write("%s main chat %s (%s) CANNOT BE FOUND: no conversation on disk in any of its folders.\n" % (ws, m.get("conversationId"), m.get("cli")))
+        sys.stderr.write("K2 kept it pinned and did not start or switch to another chat.\n")
+        sys.stderr.write("Choose one: k2 sessions --past, then k2 sessions main set <id>\n")
+        sys.exit(1)
+    elif state == "unstarted":
+        print("%s main chat %s (%s): pre-allocated, no first turn yet." % (ws, m.get("conversationId"), m.get("cli")))
+    elif state == "custom":
+        print("%s main chat %s (%s): a custom preset; K2 cannot check it on disk." % (ws, m.get("conversationId"), m.get("cli")))
+    else:
+        print("%s main chat %s (%s)%s" % (ws, m.get("conversationId"), m.get("cli"), "\n  " + m["path"] if m.get("path") else ""))
+elif verb == "main_set":
+    m = v.get("main") or {}
+    print("%s main chat is now %s (%s) \"%s\"" % (v.get("workspace"), m.get("conversationId"), m.get("cli"), cut(v.get("title"), 60)))
+    if v.get("previous") and v.get("previous") != m.get("conversationId"):
+        print("Was: %s (its history stays; k2 sessions open %s)" % (v["previous"], v["previous"][:8]))
+    print("It takes effect the next time the chat starts. Restart it now: %s" % v.get("restartWith"))
 '
-    exit 0
+    exit $?
 }
 
 cmd_sessions_roster() {
@@ -23173,6 +23199,38 @@ cmd_sessions_roster() {
     [ "$all" = "1" ] && q="${q}&all=1"
     raw="$(_sidecar_send GET /cli/sessions/roster "$q")" || true
     _sessions_render roster "$as_json" "$raw"
+}
+
+# Which chat is the workspace's pinned main chat, and choosing it.
+cmd_sessions_main() {
+    local action="" id="" workspace="" as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            set)
+                if [ -z "$action" ]; then action="set"; shift; continue; fi
+                id="$1"; shift ;;
+            -*) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
+            *)
+                if [ "$action" = "set" ] && [ -z "$id" ]; then id="$1"; shift; else
+                    echo "usage: k2 sessions main [--json]  |  k2 sessions main set <id> [--json]" >&2; exit 2
+                fi ;;
+        esac
+    done
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local raw
+    if [ "$action" = "set" ]; then
+        if [ -z "$id" ]; then
+            echo "usage: k2 sessions main set <id>  (ids: k2 sessions --past)" >&2; exit 2
+        fi
+        local body
+        body="$(K2_SS_ID="$id" K2_SS_WS="$workspace" python3 -c 'import json, os; print(json.dumps({"workspace": os.environ["K2_SS_WS"], "id": os.environ["K2_SS_ID"]}))')"
+        raw="$(_sidecar_send POST /cli/sessions/main/set "$body")" || true
+        _sessions_render main_set "$as_json" "$raw"
+    fi
+    raw="$(_sidecar_send GET /cli/sessions/main "workspace=$(urlencode "$workspace")")" || true
+    _sessions_render main "$as_json" "$raw"
 }
 
 cmd_sessions_show() {
@@ -44534,6 +44592,8 @@ RESPONSE (JSON)
     dormant_no_wake      — canonical session is asleep + you didn't pass
                            --wake (re-run with --wake, or use `k2 talk`)
     spawn_failed         — couldn't start the recipient's agent
+    main_chat_missing    — their pinned main chat can't be found on disk;
+                           a person picks one (k2 sessions main set)
     pty_died             — target session crashed during delivery
 
   Exit code 0 on success, 2 on any failure.
@@ -55101,6 +55161,23 @@ START AND STOP HELPERS
   stops it and its next fire starts fresh (any session here may; no switch).
   In the brief, say "when done, k2 msg <ws> with a summary". A helper works in
   your checkout: for a separate branch, tell it to make its own git worktree.
+
+THE MAIN CHAT
+  k2 sessions main               which chat is pinned as this workspace's main
+                                 chat, and whether K2 can find its conversation
+                                 (--json: state found, missing, unstarted, none
+                                 or custom; missing exits 1 without --json)
+  k2 sessions main set <id>      choose it: an <id> from k2 sessions --past (past
+                                 chats are read from every LLM account's folder,
+                                 so a chat run on a pinned token is listed too).
+                                 A person runs it, in a K2 terminal or from the
+                                 chat's menu; agents only read it (refused:
+                                 main_chat_needs_person; ask your human with
+                                 k2 thread). Takes effect the next time the chat
+                                 starts: k2 agent restart <ws>, or the next k2 msg.
+  If the pinned chat cannot be found anywhere, K2 keeps the pin, starts nothing
+  and says so (main_chat_missing) instead of picking another chat. Fix it with
+  main set. To give up on it and start over: k2 agent refresh <ws>.
 
 WHO MAY
   Reading (list, past, show): any session, its own workspace only. A

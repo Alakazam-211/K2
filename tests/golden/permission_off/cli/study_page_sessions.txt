@@ -47,6 +47,23 @@ START AND STOP HELPERS
   In the brief, say "when done, k2 msg <ws> with a summary". A helper works in
   your checkout: for a separate branch, tell it to make its own git worktree.
 
+THE MAIN CHAT
+  k2 sessions main               which chat is pinned as this workspace's main
+                                 chat, and whether K2 can find its conversation
+                                 (--json: state found, missing, unstarted, none
+                                 or custom; missing exits 1 without --json)
+  k2 sessions main set <id>      choose it: an <id> from k2 sessions --past (past
+                                 chats are read from every LLM account's folder,
+                                 so a chat run on a pinned token is listed too).
+                                 A person runs it, in a K2 terminal or from the
+                                 chat's menu; agents only read it (refused:
+                                 main_chat_needs_person; ask your human with
+                                 k2 thread). Takes effect the next time the chat
+                                 starts: k2 agent restart <ws>, or the next k2 msg.
+  If the pinned chat cannot be found anywhere, K2 keeps the pin, starts nothing
+  and says so (main_chat_missing) instead of picking another chat. Fix it with
+  main set. To give up on it and start over: k2 agent refresh <ws>.
+
 WHO MAY
   Reading (list, past, show): any session, its own workspace only. A
   sandboxed session sees the list only.

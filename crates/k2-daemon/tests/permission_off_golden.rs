@@ -1089,6 +1089,7 @@ async fn permission_cards_off_is_today_byte_for_byte() {
         let conn = db.lock();
         WorkspaceSession::upsert(&conn, &format!("ws-{seeded_conv}"), &tws.id, None, Some(&seeded_conv), "claude", "system", "running")
             .expect("pin the Chat");
+        k2_core::workspace::resume_chat::note_unstarted_pin(&tws.id, &seeded_conv);
     }
     let tsid = SessionId::new();
     let tpass = k2_daemon::session_token::mint_session_token(

@@ -1658,6 +1658,8 @@ pub const ROUTES: &[Route] = &[
     // k2 sessions (prd-workspace-sessions-cli-v1 §5): open is Admin for
     // logins, like sidecar/new (agents: the sidecar gate in the handler);
     // reads are Member (the handler keeps agents to their own workspace).
+    get("/cli/sessions/main", Member),
+    post("/cli/sessions/main/set", Admin),
     post("/cli/sessions/open", Admin),
     get("/cli/sessions/past", Member),
     post("/cli/sessions/resize", Member),

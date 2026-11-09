@@ -154,6 +154,7 @@ async fn the_outcome_turn_wakes_a_dormant_agent_without_a_panic() {
         )
         .unwrap();
         WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &ws_id, None, Some(&conv), "claude", "system", "running").unwrap();
+        k2_core::workspace::resume_chat::note_unstarted_pin(&ws_id, &conv);
     }
     assert!(k2_daemon::v2_session_map::snapshot().is_empty(), "the agent must start dormant");
 

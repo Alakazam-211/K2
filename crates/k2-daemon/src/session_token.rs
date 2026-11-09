@@ -1247,6 +1247,11 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sessions/past",
         "/cli/sessions/show",
         "/cli/sessions/open",
+        // `k2 sessions main`: an agent reads its own workspace's pinned
+        // main chat; choosing one is a person's (the handler refuses a
+        // harness passport `main_chat_needs_person`, a shell tab is a person).
+        "/cli/sessions/main",
+        "/cli/sessions/main/set",
         // Root helper status (read-only): agents see whether the helper is
         // there and what to ask their human for. update/rollback are NOT
         // here (owner/admin steps).

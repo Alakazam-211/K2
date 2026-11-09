@@ -20,6 +20,8 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::llm_accounts::Tool;
+
 /// Strip a `/.worktrees/<branch>` suffix to get the root project path.
 /// `/repo/.worktrees/feature-x` -> `/repo`. Used so every worktree of
 /// the same project participates in session discovery.
@@ -145,8 +147,17 @@ pub fn cursor_project_hash(project_path: &str) -> String {
 /// session but never typed, `--resume <id>` would fail with "No
 /// conversation found".
 pub fn detect_claude_session(project_path: &str) -> Option<String> {
-    let path = claude_history_path()?;
-    let file = File::open(&path).ok()?;
+    let best = crate::session_homes::files(Tool::Claude, "history.jsonl")
+        .iter()
+        .filter_map(|path| newest_in_claude_history_tail(path, project_path))
+        .max_by_key(|(ts, _)| *ts);
+    best.and_then(|(_, id)| resolve_claude_session_file(&id, project_path).map(|_| id))
+}
+
+/// The newest entry for this project in the last 64 KiB of one
+/// `history.jsonl`.
+fn newest_in_claude_history_tail(path: &Path, project_path: &str) -> Option<(i64, String)> {
+    let file = File::open(path).ok()?;
 
     let metadata = file.metadata().ok()?;
     let file_size = metadata.len();
@@ -202,41 +213,7 @@ pub fn detect_claude_session(project_path: &str) -> Option<String> {
         }
     }
 
-    best_session.and_then(|(_, id)| {
-        let home = crate::paths::home_dir()?;
-        let project_hash = claude_project_hash(resolve_root_project_path(project_path));
-        let projects_dir = home.join(".claude").join("projects");
-
-        // Fast path: most workspaces store their session under exactly
-        // `<projects>/<hash>/<id>.jsonl`. Hit that first with a single
-        // stat. Avoids walking the entire `.claude/projects/` directory
-        // on every call — that walk costs O(N) stats per project the
-        // user has ever opened, and `AgentChatPane`'s 5s detection
-        // poll multiplies it across every chat tab. Worktree-suffixed
-        // dirs (`<hash>-<branch>`) still need the read_dir fallback.
-        let direct = projects_dir
-            .join(&project_hash)
-            .join(format!("{}.jsonl", id));
-        if direct.exists() {
-            return Some(id);
-        }
-
-        // Fallback: scan for `<hash>-<branch>` worktree variants. Same
-        // O(N) cost as before, but only paid when the direct path
-        // misses — which is the worktree case, not the common case.
-        if let Ok(entries) = fs::read_dir(&projects_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(&format!("{}-", project_hash)) {
-                    let session_file = entry.path().join(format!("{}.jsonl", id));
-                    if session_file.exists() {
-                        return Some(id);
-                    }
-                }
-            }
-        }
-        None
-    })
+    best_session
 }
 
 /// Return the Claude session ID for a project path whose history
@@ -260,8 +237,17 @@ pub fn detect_claude_session_near(
     project_path: &str,
     target_ms: i64,
 ) -> Option<String> {
-    let path = claude_history_path()?;
-    let file = File::open(&path).ok()?;
+    let best = crate::session_homes::files(Tool::Claude, "history.jsonl")
+        .iter()
+        .filter_map(|path| nearest_in_claude_history_tail(path, project_path, target_ms))
+        .min_by_key(|(distance, _)| *distance);
+    best.and_then(|(_, id)| resolve_claude_session_file(&id, project_path).map(|_| id))
+}
+
+/// The entry closest to `target_ms` for this project in the last 64 KiB
+/// of one `history.jsonl`.
+fn nearest_in_claude_history_tail(path: &Path, project_path: &str, target_ms: i64) -> Option<(i64, String)> {
+    let file = File::open(path).ok()?;
 
     let metadata = file.metadata().ok()?;
     let file_size = metadata.len();
@@ -327,24 +313,7 @@ pub fn detect_claude_session_near(
         }
     }
 
-    best.and_then(|(_, id)| {
-        let home = crate::paths::home_dir()?;
-        let project_hash = claude_project_hash(resolve_root_project_path(project_path));
-        let projects_dir = home.join(".claude").join("projects");
-        if let Ok(entries) = fs::read_dir(&projects_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name == project_hash
-                    || name.starts_with(&format!("{}-", project_hash))
-                {
-                    if entry.path().join(format!("{}.jsonl", id)).exists() {
-                        return Some(id);
-                    }
-                }
-            }
-        }
-        None
-    })
+    best
 }
 
 /// Does a Claude session `.jsonl` file exist on disk for this
@@ -357,25 +326,38 @@ pub fn claude_session_file_exists(session_id: &str, project_path: &str) -> bool 
 }
 
 /// On-disk path of a Claude session `.jsonl` for this id + project family,
-/// if present under `~/.claude/projects/<hash>` (or worktree sibling dirs).
+/// searched in every Claude home ([`crate::session_homes`]): the live one
+/// and each account's. With copies in several homes, the most recently
+/// written wins. A stat per home on the common path; the folder scan
+/// (`<hash>-<branch>` worktree folders) runs only when that misses.
 pub fn resolve_claude_session_file(session_id: &str, project_path: &str) -> Option<PathBuf> {
     if session_id.is_empty() {
         return None;
     }
-    let home = crate::paths::home_dir()?;
     let project_hash = claude_project_hash(resolve_root_project_path(project_path));
-    let projects_dir = home.join(".claude").join("projects");
-    let entries = fs::read_dir(&projects_dir).ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name == project_hash || name.starts_with(&format!("{}-", project_hash)) {
-            let candidate = entry.path().join(format!("{session_id}.jsonl"));
-            if candidate.exists() {
-                return Some(candidate);
+    let file = format!("{session_id}.jsonl");
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut consider = |candidate: PathBuf| -> bool {
+        let Ok(meta) = fs::metadata(&candidate) else { return false };
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        if best.as_ref().map_or(true, |(t, _)| mtime > *t) {
+            best = Some((mtime, candidate));
+        }
+        true
+    };
+    for projects_dir in crate::session_homes::roots(Tool::Claude, "projects") {
+        if consider(projects_dir.join(&project_hash).join(&file)) {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&projects_dir) else { continue };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(&format!("{project_hash}-")) {
+                consider(entry.path().join(&file));
             }
         }
     }
-    None
+    best.map(|(_, path)| path)
 }
 
 /// Best-effort on-disk path for a chat session row (the file/dir the agent
@@ -461,23 +443,23 @@ pub fn resolve_session_storage_path(
             let root_dir = home.join(".pi").join("agent").join("sessions");
             find_named_jsonl_under(&root_dir, session_id)?
         }
-        "codex" => {
-            let root_dir = home.join(".codex").join("sessions");
-            find_named_jsonl_under(&root_dir, session_id)?
-        }
+        "codex" => crate::session_homes::roots(Tool::Codex, "sessions")
+            .iter()
+            .find_map(|root_dir| find_named_jsonl_under(root_dir, session_id))?,
         "grok" => {
-            let sessions_root = grok_sessions_root()?;
-            // ~/.grok/.../cwd-dir/<session_id>/
-            let Ok(cwd_dirs) = fs::read_dir(&sessions_root) else {
-                return None;
-            };
-            for cwd_entry in cwd_dirs.flatten() {
-                if !cwd_entry.path().is_dir() {
+            // <home>/sessions/<cwd-dir>/<session_id>/
+            for sessions_root in grok_sessions_roots() {
+                let Ok(cwd_dirs) = fs::read_dir(&sessions_root) else {
                     continue;
-                }
-                let session_dir = cwd_entry.path().join(session_id);
-                if session_dir.is_dir() {
-                    return Some(session_dir.to_string_lossy().to_string());
+                };
+                for cwd_entry in cwd_dirs.flatten() {
+                    if !cwd_entry.path().is_dir() {
+                        continue;
+                    }
+                    let session_dir = cwd_entry.path().join(session_id);
+                    if session_dir.is_dir() {
+                        return Some(session_dir.to_string_lossy().to_string());
+                    }
                 }
             }
             return None;
@@ -547,16 +529,21 @@ fn find_named_jsonl_under(root: &Path, session_id: &str) -> Option<PathBuf> {
 /// pre-allocated but never run leaves an empty file that `--resume`
 /// would reject with "No conversation found".
 pub fn newest_claude_session_on_disk(project_path: &str) -> Option<String> {
-    let home = crate::paths::home_dir()?;
     let project_hash = claude_project_hash(resolve_root_project_path(project_path));
-    let projects_dir = home.join(".claude").join("projects");
-    newest_session_in_projects_dir(&projects_dir, &project_hash)
+    crate::session_homes::roots(Tool::Claude, "projects")
+        .iter()
+        .filter_map(|projects_dir| newest_session_in_projects_dir(projects_dir, &project_hash))
+        .max_by_key(|(mtime, _)| *mtime)
+        .map(|(_, id)| id)
 }
 
 /// Inner, dependency-free core of [`newest_claude_session_on_disk`] —
 /// takes the `~/.claude/projects` dir explicitly so it's testable
 /// without mutating the process `$HOME`.
-fn newest_session_in_projects_dir(projects_dir: &Path, project_hash: &str) -> Option<String> {
+fn newest_session_in_projects_dir(
+    projects_dir: &Path,
+    project_hash: &str,
+) -> Option<(std::time::SystemTime, String)> {
     let entries = fs::read_dir(projects_dir).ok()?;
     let mut best: Option<(std::time::SystemTime, String)> = None;
 
@@ -592,7 +579,7 @@ fn newest_session_in_projects_dir(projects_dir: &Path, project_hash: &str) -> Op
         }
     }
 
-    best.map(|(_, id)| id)
+    best
 }
 
 /// Return the most recent Cursor chat ID for a project path (by
@@ -836,86 +823,51 @@ pub fn detect_pi_session(project_path: &str) -> Option<String> {
 /// cwd (project family), picks the file with newest mtime, returns its
 /// `payload.id` for `codex resume <uuid>`.
 pub fn detect_codex_session(project_path: &str) -> Option<String> {
-    let home = crate::paths::home_dir()?;
-    let sessions_root = home.join(".codex").join("sessions");
-    if !sessions_root.exists() {
-        return None;
-    }
-
     let root = resolve_root_project_path(project_path);
     let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
 
-    let years = fs::read_dir(&sessions_root).ok()?;
-    for year_entry in years.flatten() {
-        if !year_entry.path().is_dir() {
-            continue;
-        }
-        let months = match fs::read_dir(year_entry.path()) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for month_entry in months.flatten() {
-            if !month_entry.path().is_dir() {
-                continue;
-            }
-            let days = match fs::read_dir(month_entry.path()) {
-                Ok(e) => e,
-                Err(_) => continue,
+    for sessions_root in crate::session_homes::roots(Tool::Codex, "sessions") {
+        for_each_codex_rollout(&sessions_root, &mut |f_entry: &fs::DirEntry| {
+            let path = f_entry.path();
+            let file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(_) => return,
             };
-            for day_entry in days.flatten() {
-                if !day_entry.path().is_dir() {
-                    continue;
-                }
-                let files = match fs::read_dir(day_entry.path()) {
-                    Ok(e) => e,
-                    Err(_) => continue,
-                };
-                for f_entry in files.flatten() {
-                    let path = f_entry.path();
-                    if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-                        continue;
-                    }
-                    let file = match std::fs::File::open(&path) {
-                        Ok(f) => f,
-                        Err(_) => continue,
-                    };
-                    let mut reader = std::io::BufReader::new(file);
-                    let mut first_line = String::new();
-                    use std::io::BufRead;
-                    if reader.read_line(&mut first_line).is_err() {
-                        continue;
-                    }
-                    let header: serde_json::Value = match serde_json::from_str(first_line.trim()) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    let cwd = match header
-                        .get("payload")
-                        .and_then(|p| p.get("cwd"))
-                        .and_then(|v| v.as_str())
-                    {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    if !matches_project_family(cwd, root) {
-                        continue;
-                    }
-                    let modified = match fs::metadata(&path).and_then(|m| m.modified()) {
-                        Ok(t) => t,
-                        Err(_) => continue,
-                    };
-                    match &best {
-                        Some((best_time, _)) if modified > *best_time => {
-                            best = Some((modified, path));
-                        }
-                        None => {
-                            best = Some((modified, path));
-                        }
-                        _ => {}
-                    }
-                }
+            let mut reader = std::io::BufReader::new(file);
+            let mut first_line = String::new();
+            use std::io::BufRead;
+            if reader.read_line(&mut first_line).is_err() {
+                return;
             }
-        }
+            let header: serde_json::Value = match serde_json::from_str(first_line.trim()) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            let cwd = match header
+                .get("payload")
+                .and_then(|p| p.get("cwd"))
+                .and_then(|v| v.as_str())
+            {
+                Some(s) => s,
+                None => return,
+            };
+            if !matches_project_family(cwd, root) {
+                return;
+            }
+            let modified = match fs::metadata(&path).and_then(|m| m.modified()) {
+                Ok(t) => t,
+                Err(_) => return,
+            };
+            match &best {
+                Some((best_time, _)) if modified > *best_time => {
+                    best = Some((modified, path));
+                }
+                None => {
+                    best = Some((modified, path));
+                }
+                _ => {}
+            }
+        });
     }
 
     let path = best.map(|(_, p)| p)?;
@@ -956,9 +908,9 @@ pub fn detect_codex_session(project_path: &str) -> Option<String> {
 // `detect_grok_session` / `parse_grok_sessions` (Slice 6) reuse the
 // same walk + summary readers for the ChatHistory list surface.
 
-/// `~/.grok/sessions` — grok's per-cwd session tree.
-fn grok_sessions_root() -> Option<PathBuf> {
-    crate::paths::home_dir().map(|h| h.join(".grok").join("sessions"))
+/// Grok's per-cwd session trees, one per home ([`crate::session_homes`]).
+fn grok_sessions_roots() -> Vec<PathBuf> {
+    crate::session_homes::roots(Tool::Grok, "sessions")
 }
 
 /// Read + parse one grok session dir's `summary.json`. Returns `None`
@@ -1053,10 +1005,9 @@ fn looks_like_uuid(name: &str) -> bool {
 /// `session_id` + `project_path`? Subagent sessions never match (they
 /// aren't resumable user conversations).
 pub fn grok_session_file_exists(session_id: &str, project_path: &str) -> bool {
-    match grok_sessions_root() {
-        Some(root) => grok_session_exists_in_root(&root, session_id, project_path),
-        None => false,
-    }
+    grok_sessions_roots()
+        .iter()
+        .any(|root| grok_session_exists_in_root(root, session_id, project_path))
 }
 
 /// Inner, HOME-free core of [`grok_session_file_exists`] — takes the
@@ -1096,12 +1047,15 @@ fn grok_session_exists_in_root(
 /// no user session for the workspace. Newest by `last_active_at`
 /// (fallback `updated_at`, fallback mtime) per the storage study.
 pub fn newest_grok_session_on_disk(project_path: &str) -> Option<String> {
-    let root = grok_sessions_root()?;
-    newest_grok_session_in_root(&root, project_path)
+    grok_sessions_roots()
+        .iter()
+        .filter_map(|root| newest_grok_session_in_root(root, project_path))
+        .max_by_key(|(ts, _)| *ts)
+        .map(|(_, id)| id)
 }
 
 /// Inner, HOME-free core of [`newest_grok_session_on_disk`].
-fn newest_grok_session_in_root(sessions_root: &Path, project_path: &str) -> Option<String> {
+fn newest_grok_session_in_root(sessions_root: &Path, project_path: &str) -> Option<(i64, String)> {
     let root = resolve_root_project_path(project_path);
     let cwd_dirs = fs::read_dir(sessions_root).ok()?;
     let mut best: Option<(i64, String)> = None;
@@ -1130,7 +1084,7 @@ fn newest_grok_session_in_root(sessions_root: &Path, project_path: &str) -> Opti
         }
     }
 
-    best.map(|(_, id)| id)
+    best
 }
 
 /// Return the most recent grok user session id for a project path —
@@ -1492,13 +1446,24 @@ pub fn claude_transcript_cwd(path: &Path) -> Option<String> {
 }
 
 fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, project_filter: &str) {
-    let Some(home) = crate::paths::home_dir() else {
-        return;
-    };
     let root = resolve_root_project_path(project_filter);
     let project_hash = claude_project_hash(root);
-    let projects_dir = home.join(".claude").join("projects");
-    let Ok(entries) = fs::read_dir(&projects_dir) else {
+    for projects_dir in crate::session_homes::roots(Tool::Claude, "projects") {
+        union_claude_disk_sessions_in(sessions, project_filter, &projects_dir, root, &project_hash);
+    }
+}
+
+/// [`union_claude_disk_sessions`] for one home. A chat already listed keeps
+/// its row; only its last-active time moves forward when this copy was
+/// written later (the row can come from a stale copy in another home).
+fn union_claude_disk_sessions_in(
+    sessions: &mut HashMap<String, ChatSession>,
+    project_filter: &str,
+    projects_dir: &Path,
+    root: &str,
+    project_hash: &str,
+) {
+    let Ok(entries) = fs::read_dir(projects_dir) else {
         return;
     };
 
@@ -1511,7 +1476,7 @@ fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, proje
         if !(name == project_hash || name.starts_with(&format!("{project_hash}-"))) {
             continue;
         }
-        let dir_branch = branch_from_claude_slug_dir(&name, &project_hash);
+        let dir_branch = branch_from_claude_slug_dir(&name, project_hash);
         let origin_branch = filter_branch.clone().or(dir_branch);
 
         let Ok(session_files) = fs::read_dir(entry.path()) else {
@@ -1531,7 +1496,14 @@ fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, proje
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if sessions.contains_key(stem) {
+            if let Some(known) = sessions.get_mut(stem) {
+                let written = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                known.timestamp = known.timestamp.max(written);
                 continue;
             }
             // The `<slug>-*` prefix also matches a sibling folder
@@ -1584,8 +1556,12 @@ pub fn parse_claude_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
     let mut sessions: HashMap<String, SessionAccumulator> = HashMap::new();
 
     // history.jsonl is optional after Clone-to: sessions may exist only as
-    // `~/.claude/projects/<slug>/*.jsonl` with no dest-path lines in history.
-    if let Some(path) = claude_history_path() {
+    // `<home>/projects/<slug>/*.jsonl` with no dest-path lines in history.
+    // Each home keeps its own (every account's slot too); a chat's rows
+    // from several homes add up, the newest time winning.
+    let live_history = claude_history_path();
+    for path in crate::session_homes::files(Tool::Claude, "history.jsonl") {
+        let is_live = live_history.as_deref() == Some(path.as_path());
         match File::open(&path) {
             Ok(file) => {
                 let reader = BufReader::new(file);
@@ -1646,6 +1622,10 @@ pub fn parse_claude_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // A login's history that can't be read must not hide the rest.
+            Err(e) if !is_live => {
+                crate::log_debug!("[chat-history] skipping {}: {e}", path.display());
+            }
             Err(e) => return Err(format!("Failed to open history file: {}", e)),
         }
     }
@@ -2322,40 +2302,59 @@ pub fn parse_pi_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
 
 fn codex_history_index() -> HashMap<String, (i64, String)> {
     let mut map: HashMap<String, (i64, String)> = HashMap::new();
-    let home = match crate::paths::home_dir() {
-        Some(h) => h,
-        None => return map,
-    };
-    let path = home.join(".codex").join("history.jsonl");
-    let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(_) => return map,
-    };
-    for line in BufReader::new(file).lines().flatten() {
-        let parsed: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
+    for path in crate::session_homes::files(Tool::Codex, "history.jsonl") {
+        let file = match File::open(&path) {
+            Ok(f) => f,
             Err(_) => continue,
         };
-        let sid = match parsed.get("session_id").and_then(|v| v.as_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let ts = parsed.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
-        let text = parsed
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        map.entry(sid)
-            .and_modify(|(existing_ts, existing_text)| {
-                if ts < *existing_ts || existing_text.is_empty() {
-                    *existing_ts = ts;
-                    *existing_text = text.clone();
-                }
-            })
-            .or_insert((ts, text));
+        for line in BufReader::new(file).lines().flatten() {
+            let parsed: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let sid = match parsed.get("session_id").and_then(|v| v.as_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let ts = parsed.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
+            let text = parsed
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            map.entry(sid)
+                .and_modify(|(existing_ts, existing_text)| {
+                    if ts < *existing_ts || existing_text.is_empty() {
+                        *existing_ts = ts;
+                        *existing_text = text.clone();
+                    }
+                })
+                .or_insert((ts, text));
+        }
     }
     map
+}
+
+/// Walk one `sessions/YYYY/MM/DD` tree and call `f` for each `*.jsonl`
+/// rollout. Codex layout (0.125+); see [`detect_codex_session`].
+pub(crate) fn for_each_codex_rollout(sessions_root: &Path, f: &mut dyn FnMut(&fs::DirEntry)) {
+    let subdirs = |p: &Path| -> Vec<PathBuf> {
+        fs::read_dir(p)
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default()
+    };
+    for year in subdirs(sessions_root) {
+        for month in subdirs(&year) {
+            for day in subdirs(&month) {
+                let Ok(files) = fs::read_dir(&day) else { continue };
+                for file in files.flatten() {
+                    if file.path().extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                        f(&file);
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn parse_codex_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
@@ -2373,50 +2372,12 @@ pub fn parse_codex_sessions_since(
     since_ms: Option<i64>,
     unreadable: &mut usize,
 ) -> Result<Vec<ChatSession>, String> {
-    let home = match crate::paths::home_dir() {
-        Some(h) => h,
-        None => return Ok(vec![]),
-    };
-    let sessions_root = home.join(".codex").join("sessions");
-    if !sessions_root.exists() {
-        return Ok(vec![]);
-    }
     let filter_root = project_filter.map(resolve_root_project_path);
     let title_index = codex_history_index();
     let mut results = Vec::new();
-    let years = match fs::read_dir(&sessions_root) {
-        Ok(e) => e,
-        Err(_) => return Ok(vec![]),
-    };
-    for year_entry in years.flatten() {
-        if !year_entry.path().is_dir() {
-            continue;
-        }
-        let months = match fs::read_dir(year_entry.path()) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for month_entry in months.flatten() {
-            if !month_entry.path().is_dir() {
-                continue;
-            }
-            let days = match fs::read_dir(month_entry.path()) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            for day_entry in days.flatten() {
-                if !day_entry.path().is_dir() {
-                    continue;
-                }
-                let files = match fs::read_dir(day_entry.path()) {
-                    Ok(e) => e,
-                    Err(_) => continue,
-                };
-                for f_entry in files.flatten() {
+    for sessions_root in crate::session_homes::roots(Tool::Codex, "sessions") {
+        for_each_codex_rollout(&sessions_root, &mut |f_entry: &fs::DirEntry| {
                     let path = f_entry.path();
-                    if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-                        continue;
-                    }
                     if let Some(floor) = since_ms {
                         let written = f_entry
                             .metadata()
@@ -2426,40 +2387,40 @@ pub fn parse_codex_sessions_since(
                             .map(|d| d.as_millis() as i64)
                             .unwrap_or(0);
                         if written < floor {
-                            continue;
+                            return;
                         }
                     }
                     let file = match File::open(&path) {
                         Ok(f) => f,
                         Err(_) => {
                             *unreadable += 1;
-                            continue;
+                            return;
                         }
                     };
                     let mut reader = BufReader::new(file);
                     let mut first_line = String::new();
                     if reader.read_line(&mut first_line).is_err() {
                         *unreadable += 1;
-                        continue;
+                        return;
                     }
                     let header: serde_json::Value = match serde_json::from_str(first_line.trim()) {
                         Ok(v) => v,
                         Err(_) => {
                             *unreadable += 1;
-                            continue;
+                            return;
                         }
                     };
                     if header.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
                         *unreadable += 1;
-                        continue;
+                        return;
                     }
                     let payload = match header.get("payload") {
                         Some(p) => p,
-                        None => continue,
+                        None => return,
                     };
                     let session_id = match payload.get("id").and_then(|v| v.as_str()) {
                         Some(s) => s.to_string(),
-                        None => continue,
+                        None => return,
                     };
                     let cwd = payload
                         .get("cwd")
@@ -2468,7 +2429,7 @@ pub fn parse_codex_sessions_since(
                         .to_string();
                     if let Some(ref root) = filter_root {
                         if !matches_project_family(&cwd, root) {
-                            continue;
+                            return;
                         }
                     }
                     let mtime_ms = fs::metadata(&path)
@@ -2512,9 +2473,7 @@ pub fn parse_codex_sessions_since(
                         archived_at: None,
                         custom_name: None,
                     });
-                }
-            }
-        }
+        });
     }
     // Dedupe by session_id: Codex writes one .jsonl per resumed slice
     // of the same logical session, each with a fresh
@@ -2617,14 +2576,19 @@ fn grok_message_count(session_dir: &Path) -> usize {
 /// `session_summary` → first prompt for the id in the sibling
 /// `prompt_history.jsonl` → "Untitled".
 pub fn parse_grok_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
-    let sessions_root = match grok_sessions_root() {
-        Some(r) => r,
-        None => return Ok(vec![]),
-    };
-    if !sessions_root.exists() {
-        return Ok(vec![]);
+    // A session with a copy in several homes lists once, its newest.
+    let mut by_id: HashMap<String, ChatSession> = HashMap::new();
+    for sessions_root in grok_sessions_roots() {
+        for s in parse_grok_sessions_in_root(&sessions_root, project_filter) {
+            match by_id.get(&s.session_id) {
+                Some(existing) if existing.timestamp >= s.timestamp => {}
+                _ => {
+                    by_id.insert(s.session_id.clone(), s);
+                }
+            }
+        }
     }
-    Ok(parse_grok_sessions_in_root(&sessions_root, project_filter))
+    Ok(by_id.into_values().collect())
 }
 
 /// Inner, HOME-free core of [`parse_grok_sessions`].
@@ -4068,15 +4032,10 @@ pub fn codex_conversations_started_since(
     since_secs: i64,
     marker: Option<&str>,
 ) -> Vec<StartedConversation> {
-    let Some(home) = crate::paths::home_dir() else {
-        return Vec::new();
-    };
-    codex_conversations_started_since_in(
-        &home.join(".codex").join("sessions"),
-        project_path,
-        since_secs,
-        marker,
-    )
+    crate::session_homes::roots(Tool::Codex, "sessions")
+        .iter()
+        .flat_map(|root| codex_conversations_started_since_in(root, project_path, since_secs, marker))
+        .collect()
 }
 
 fn codex_conversations_started_since_in(
@@ -4490,7 +4449,7 @@ mod tests {
         set_mtime(&empty, base + std::time::Duration::from_secs(20));
 
         assert_eq!(
-            newest_session_in_projects_dir(&projects, hash).as_deref(),
+            newest_session_in_projects_dir(&projects, hash).map(|(_, id)| id).as_deref(),
             Some("new-bbbb")
         );
     }
@@ -4516,7 +4475,7 @@ mod tests {
         set_mtime(&other, base + std::time::Duration::from_secs(99));
 
         assert_eq!(
-            newest_session_in_projects_dir(&projects, hash).as_deref(),
+            newest_session_in_projects_dir(&projects, hash).map(|(_, id)| id).as_deref(),
             Some("wt-1111")
         );
     }
@@ -4634,7 +4593,7 @@ mod tests {
             "2026-07-03T12:00:00Z", None);
 
         assert_eq!(
-            newest_grok_session_in_root(&root, project).as_deref(),
+            newest_grok_session_in_root(&root, project).map(|(_, id)| id).as_deref(),
             Some(newest),
             "newest must be picked by last_active_at across the project family, \
              skipping subagents + foreign projects"
@@ -4673,7 +4632,7 @@ mod tests {
                 std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
             );
         }
-        assert_eq!(newest_grok_session_in_root(&root, project).as_deref(), Some(b));
+        assert_eq!(newest_grok_session_in_root(&root, project).map(|(_, id)| id).as_deref(), Some(b));
     }
 
     // ── Slice 6: grok/hermes full discovery (chat/list + detect) ────

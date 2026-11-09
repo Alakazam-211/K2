@@ -34,7 +34,8 @@ use super::simctl::{Runner, SimError, SimResult};
 /// The helper's Swift source, compiled on first use.
 pub const SOURCE: &str = include_str!("helper/k2-simhelper.swift");
 /// Bumps with the wire protocol; the helper reports it in `ready`/`hello`.
-pub const PROTOCOL_VERSION: u64 = 1;
+/// 2: frames carry the helper's capture and emit times (M0).
+pub const PROTOCOL_VERSION: u64 = 2;
 /// No message is larger than this (a 4K-ish JPEG is far below).
 pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
@@ -44,7 +45,36 @@ pub struct HelperFrame {
     pub seq: u64,
     pub width: u32,
     pub height: u32,
+    /// The IOSurface callback the frame answers, on the helper's clock
+    /// (ns of uptime; [`HelperClock`] maps it to the daemon's).
+    pub captured_ns: u64,
+    /// The helper finished encoding it (same clock).
+    pub emitted_ns: u64,
+    /// The daemon read it off the pipe.
+    pub received_at: Instant,
     pub jpeg: Vec<u8>,
+}
+
+/// The helper's clock (`hello.clock_ns`, ns of uptime) against the
+/// daemon's, taken once when the hello reply arrives. Off by at most the
+/// reply's trip through the pipe (well under a millisecond).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelperClock {
+    pub helper_ns: u64,
+    pub at: Instant,
+}
+
+impl HelperClock {
+    /// A helper time on the daemon's clock. Never after `limit` (a frame
+    /// can't have been captured after the daemon read it).
+    pub fn to_instant(&self, ns: u64, limit: Instant) -> Instant {
+        let t = if ns >= self.helper_ns {
+            self.at.checked_add(Duration::from_nanos(ns - self.helper_ns))
+        } else {
+            self.at.checked_sub(Duration::from_nanos(self.helper_ns - ns))
+        };
+        t.unwrap_or(limit).min(limit)
+    }
 }
 
 pub fn sha256_hex(b: &[u8]) -> String {
@@ -113,6 +143,9 @@ pub enum Message {
     Frame(HelperFrame),
 }
 
+/// An `F` message's header: width, height, seq, capture ns, emit ns.
+const FRAME_HEADER: usize = 32;
+
 /// Reads one framed message; `Ok(None)` at a clean end of stream.
 pub fn read_message(r: &mut impl Read) -> std::io::Result<Option<Message>> {
     let mut len = [0u8; 4];
@@ -132,11 +165,14 @@ pub fn read_message(r: &mut impl Read) -> std::io::Result<Option<Message>> {
         b'J' => serde_json::from_slice(payload)
             .map(|v| Some(Message::Json(v)))
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("helper JSON: {e}"))),
-        b'F' if payload.len() >= 16 => Ok(Some(Message::Frame(HelperFrame {
+        b'F' if payload.len() >= FRAME_HEADER => Ok(Some(Message::Frame(HelperFrame {
             width: u32::from_be_bytes(payload[0..4].try_into().unwrap()),
             height: u32::from_be_bytes(payload[4..8].try_into().unwrap()),
             seq: u64::from_be_bytes(payload[8..16].try_into().unwrap()),
-            jpeg: payload[16..].to_vec(),
+            captured_ns: u64::from_be_bytes(payload[16..24].try_into().unwrap()),
+            emitted_ns: u64::from_be_bytes(payload[24..32].try_into().unwrap()),
+            received_at: Instant::now(),
+            jpeg: payload[FRAME_HEADER..].to_vec(),
         }))),
         k => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("helper message kind {k:#x}"))),
     }
@@ -434,7 +470,7 @@ mod tests {
     }
 
     fn hf(seq: u64) -> HelperFrame {
-        HelperFrame { seq, width: 1, height: 1, jpeg: vec![] }
+        HelperFrame { seq, width: 1, height: 1, captured_ns: 0, emitted_ns: 0, received_at: Instant::now(), jpeg: vec![] }
     }
 
     #[test]
@@ -443,12 +479,18 @@ mod tests {
         frame.extend_from_slice(&402u32.to_be_bytes());
         frame.extend_from_slice(&874u32.to_be_bytes());
         frame.extend_from_slice(&7u64.to_be_bytes());
+        frame.extend_from_slice(&1_000u64.to_be_bytes());
+        frame.extend_from_slice(&9_000u64.to_be_bytes());
         frame.extend_from_slice(b"\xff\xd8jpeg");
         let mut bytes = msg(b'J', br#"{"id":3,"ok":true}"#);
         bytes.extend(msg(b'F', &frame));
         let mut c = Cursor::new(bytes);
         assert_eq!(read_message(&mut c).unwrap(), Some(Message::Json(json!({"id":3,"ok":true}))));
-        assert_eq!(read_message(&mut c).unwrap(), Some(Message::Frame(HelperFrame { seq: 7, width: 402, height: 874, jpeg: b"\xff\xd8jpeg".to_vec() })));
+        let before = Instant::now();
+        let Some(Message::Frame(f)) = read_message(&mut c).unwrap() else { panic!("a frame") };
+        assert_eq!((f.seq, f.width, f.height, f.captured_ns, f.emitted_ns), (7, 402, 874, 1_000, 9_000));
+        assert_eq!(f.jpeg, b"\xff\xd8jpeg".to_vec());
+        assert!(f.received_at >= before, "stamped when read");
         assert_eq!(read_message(&mut c).unwrap(), None);
     }
 
@@ -457,6 +499,7 @@ mod tests {
         assert!(read_message(&mut Cursor::new(vec![0xff, 0xff, 0xff, 0xff, b'J'])).is_err());
         assert!(read_message(&mut Cursor::new(msg(b'Z', b"x"))).is_err());
         assert!(read_message(&mut Cursor::new(msg(b'F', b"short"))).is_err());
+        assert!(read_message(&mut Cursor::new(msg(b'F', &[0u8; 16]))).is_err(), "a protocol 1 frame header is too short");
         assert!(read_message(&mut Cursor::new(vec![0, 0, 0, 0])).is_err());
     }
 
@@ -518,6 +561,19 @@ mod tests {
         assert!(!ib.alive.load(Ordering::SeqCst));
         assert!(ib.gone_reason.lock().unwrap().as_deref().unwrap().contains("Shutdown"));
         assert!(slot.take(Duration::ZERO).is_err());
+    }
+
+    #[test]
+    fn the_helper_clock_maps_onto_the_daemons_and_never_past_the_read() {
+        let at = Instant::now();
+        let c = HelperClock { helper_ns: 5_000_000_000, at };
+        let limit = at + Duration::from_secs(1);
+        assert_eq!(c.to_instant(5_000_000_000, limit), at);
+        assert_eq!(c.to_instant(5_020_000_000, limit), at + Duration::from_millis(20));
+        if let Some(earlier) = at.checked_sub(Duration::from_millis(7)) {
+            assert_eq!(c.to_instant(4_993_000_000, limit), earlier);
+        }
+        assert_eq!(c.to_instant(9_000_000_000, limit), limit, "clamped to the read time");
     }
 
     fn swiftc_fake(ok: bool) -> FakeRunner {

@@ -59,6 +59,7 @@ pub fn start(g: EmuGrpc, width_pt: u32, height_pt: u32, orientation: Orientation
                         orientation,
                         seq,
                         captured_at: Instant::now(),
+                        stamps: Default::default(),
                         data: FrameData::Rgb888(img.image),
                     };
                     let (m, cv) = &*s3;

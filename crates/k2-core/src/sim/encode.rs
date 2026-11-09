@@ -112,6 +112,7 @@ mod tests {
             orientation: Orientation::Portrait,
             seq: 1,
             captured_at: Instant::now(),
+            stamps: Default::default(),
             data: FrameData::Rgb888(vec![200u8; (w * h * 3) as usize]),
         }
     }

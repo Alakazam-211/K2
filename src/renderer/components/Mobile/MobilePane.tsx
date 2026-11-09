@@ -104,7 +104,16 @@ import {
   wheelMove,
   withVelocity,
 } from './sim-gestures'
-import { LatencyMeter, type LatencyReadout, latencyText } from './sim-latency'
+import {
+  detailText,
+  FrameStageClock,
+  LatencyMeter,
+  type LatencyReadout,
+  latencyText,
+  PhotonProbe,
+  type Rgb,
+  type SimStreamStats,
+} from './sim-latency'
 import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
@@ -119,6 +128,16 @@ function canvasThumb(canvas: HTMLCanvasElement | null): string | null {
   } catch {
     return null
   }
+}
+
+/** The canvas's centre pixel (M0's photon probe; only while the latency
+ *  readout is on), or null when the canvas has no 2d context (jsdom). */
+function centrePixel(canvas: HTMLCanvasElement | null): Rgb | null {
+  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return null
+  const d = ctx.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data
+  return [d[0], d[1], d[2]]
 }
 
 /** Below this pane width the Thread and the device switch instead of split. */
@@ -578,7 +597,32 @@ function MobileDevice({
   // The latency readout (⋯ → Show input latency): input → first frame.
   const meterRef = useRef<LatencyMeter | null>(null)
   if (meterRef.current === null) meterRef.current = new LatencyMeter()
-  const onFrameDrawn = useCallback((seq: number) => meterRef.current?.frame(seq, performance.now()), [])
+  // M0 (measurement, with the readout only): tap → photon, the client's
+  // frame stages, the daemon's `stats`.
+  const photonRef = useRef<PhotonProbe | null>(null)
+  if (photonRef.current === null) photonRef.current = new PhotonProbe()
+  const stageClockRef = useRef<FrameStageClock | null>(null)
+  if (stageClockRef.current === null) stageClockRef.current = new FrameStageClock()
+  const daemonStatsRef = useRef<SimStreamStats | null>(null)
+  const [latencyHud, setLatencyHudState] = useState(readMobileLatencyHud)
+  const setLatencyHud = useCallback((on: boolean) => {
+    setLatencyHudState(on)
+    writeMobileLatencyHud(on)
+    meterRef.current?.reset()
+    photonRef.current?.reset()
+    stageClockRef.current?.reset()
+    daemonStatsRef.current = null
+  }, [])
+  const onFrameDrawn = useCallback((seq: number) => {
+    const now = performance.now()
+    meterRef.current?.frame(seq, now)
+    const p = photonRef.current
+    if (p?.waiting) p.frame(now, centrePixel(canvasRef.current))
+  }, [])
+  const onStats = useCallback((st: SimStreamStats) => {
+    daemonStatsRef.current = st
+  }, [])
+  const onFrameStage = useCallback((seq: number, stage: 'recv' | 'decoded' | 'drawn', at: number) => stageClockRef.current?.mark(seq, stage, at), [])
   const stream = useSimStream({
     scope,
     // The daemon's own name for the workspace, once it reported the device.
@@ -589,6 +633,8 @@ function MobileDevice({
     canvasRef,
     hold: holdFrame,
     onFrameDrawn,
+    stats: latencyHud,
+    ...(latencyHud ? { onStats, onFrameStage } : {}),
   })
   const live = stream.conn === 'open'
   const screen: ScreenPt | null =
@@ -645,27 +691,38 @@ function MobileDevice({
     setLiveTouchState(on)
     writeMobileLiveTouch(on)
   }, [])
-  const [latencyHud, setLatencyHudState] = useState(readMobileLatencyHud)
-  const setLatencyHud = useCallback((on: boolean) => {
-    setLatencyHudState(on)
-    writeMobileLatencyHud(on)
-    meterRef.current?.reset()
-  }, [])
   const [latency, setLatency] = useState<LatencyReadout | null>(null)
+  const [latencyDetail, setLatencyDetail] = useState<string | null>(null)
   useEffect(() => {
     if (!latencyHud) {
       setLatency(null)
+      setLatencyDetail(null)
       return
     }
-    const tick = (): void => setLatency(meterRef.current?.readout(performance.now()) ?? null)
+    const tick = (): void => {
+      setLatency(meterRef.current?.readout(performance.now()) ?? null)
+      const p = photonRef.current
+      const c = stageClockRef.current
+      setLatencyDetail(p && c ? detailText(p.readout(), c.readout(), daemonStatsRef.current) : null)
+    }
     tick()
     const id = window.setInterval(tick, 500)
     return () => window.clearInterval(id)
   }, [latencyHud])
   // Every pointer input goes through here, so the readout sees it; `at`
   // is the pointer event's time when the send waited for a frame.
+  const probeIdRef = useRef(0)
   const sendPointer = (m: SimInput, at: number = performance.now()): void => {
     if (m.t === 'touch' || m.t === 'tap' || m.t === 'swipe') meterRef.current?.input(at)
+    if (latencyHud) {
+      // M0: arm tap → photon on a finger landing; probe every touch's time.
+      if ((m.t === 'touch' && m.phase === 'down') || m.t === 'tap') photonRef.current?.arm(at, centrePixel(canvasRef.current))
+      if (m.t === 'touch') {
+        probeIdRef.current += 1
+        stream.send({ ...m, id: probeIdRef.current })
+        return
+      }
+    }
     stream.send(m)
   }
   const touchRef = useRef<LiveTouch | null>(null)
@@ -1145,6 +1202,14 @@ function MobileDevice({
             data-mobile-latency=""
           >
             {latencyText(latency)}
+          </span>
+        ) : null}
+        {latency && running && latencyDetail ? (
+          <span
+            className="pointer-events-none absolute left-3 top-8 z-10 rounded bg-black/70 px-2 py-0.5 font-mono text-[10px] text-white/85"
+            data-mobile-latency-detail=""
+          >
+            {latencyDetail}
           </span>
         ) : null}
         {running ? (

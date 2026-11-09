@@ -266,6 +266,7 @@ impl SimLane for FakeLane {
             orientation: Orientation::Portrait,
             seq: 1,
             captured_at: Instant::now(),
+            stamps: Default::default(),
             data: FrameData::Rgb888(vec![128u8; 800 * 1600 * 3]),
         })
     }
@@ -301,6 +302,7 @@ impl FrameSource for FakeFrames {
             orientation: Orientation::Portrait,
             seq: self.seq,
             captured_at: Instant::now(),
+            stamps: Default::default(),
             data: FrameData::Rgb888(vec![(self.seq % 255) as u8; 4 * 8 * 3]),
         }))
     }

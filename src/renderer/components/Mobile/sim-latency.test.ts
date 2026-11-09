@@ -2,7 +2,7 @@
 // frame past the one in flight, the median of the last N, fps.
 
 import { describe, expect, it } from 'vitest'
-import { LatencyMeter, latencyText, median } from './sim-latency'
+import { detailText, FrameStageClock, LatencyMeter, latencyText, median, percentile, PhotonProbe, pixelChanged } from './sim-latency'
 
 describe('latency readout', () => {
   it('median of odd and even counts; none before a sample', () => {
@@ -65,5 +65,66 @@ describe('latency readout', () => {
   it('the HUD line', () => {
     expect(latencyText({ medianMs: null, samples: 0, fps: 30 })).toBe('input → frame — · 30 fps')
     expect(latencyText({ medianMs: 48, samples: 12, fps: 29 })).toBe('input → frame 48 ms (median of 12) · 29 fps')
+  })
+})
+
+describe('M0: photon probe, client stages, the HUD detail line', () => {
+  it('tap → photon: the first frame whose centre pixel changed; a still frame is not it', () => {
+    const p = new PhotonProbe()
+    p.frame(10, [0, 0, 0])
+    expect(p.readout().samples).toBe(0)
+    p.arm(100, [20, 20, 20])
+    p.frame(130, [30, 25, 20]) // JPEG noise, not the change
+    expect(p.waiting).toBe(true)
+    p.frame(162, [250, 20, 20])
+    expect(p.waiting).toBe(false)
+    expect(p.readout()).toEqual({ p50: 62, p95: 62, samples: 1 })
+  })
+
+  it('no frame on screen at the tap: nothing to compare, no probe; an input that changes nothing times out', () => {
+    const p = new PhotonProbe()
+    p.arm(0, null)
+    expect(p.waiting).toBe(false)
+    p.arm(0, [0, 0, 0])
+    p.frame(2500, [255, 255, 255])
+    expect(p.readout().samples).toBe(0)
+    expect(p.waiting).toBe(false)
+  })
+
+  it('p50 / p95 are nearest-rank', () => {
+    const xs = Array.from({ length: 100 }, (_, i) => i + 1)
+    expect(percentile(xs, 0.5)).toBe(50)
+    expect(percentile(xs, 0.95)).toBe(95)
+    expect(percentile([], 0.5)).toBeNull()
+    expect(pixelChanged([0, 0, 0], [0, 0, 49])).toBe(true)
+    expect(pixelChanged([0, 0, 0], [48, 48, 48])).toBe(false)
+  })
+
+  it('client stages: socket → decoded → drawn per seq; undrawn frames are dropped', () => {
+    const c = new FrameStageClock()
+    expect(c.readout()).toEqual({ decodeMs: null, drawMs: null })
+    c.mark(1, 'recv', 0)
+    c.mark(1, 'decoded', 4)
+    c.mark(1, 'drawn', 5)
+    c.mark(2, 'recv', 10) // stale: never drawn
+    for (let s = 3; s < 60; s++) c.mark(s, 'recv', s)
+    expect(c.readout()).toEqual({ decodeMs: 4, drawMs: 1 })
+  })
+
+  it('the detail line shows only what has data', () => {
+    const none = { p50: null, p95: null, samples: 0 }
+    expect(detailText(none, { decodeMs: null, drawMs: null }, null)).toBeNull()
+    const line = detailText(
+      { p50: 61, p95: 97, samples: 20 },
+      { decodeMs: 3.2, drawMs: 0.4 },
+      {
+        frames: 60,
+        stages: [{ stage: 'total', n: 60, p50: 12.5, p95: 20, max: 31 }],
+        inputs: [{ id: 1, recvMs: 5, laneMs: 2 }],
+        hubCpuMs: 41.2,
+        encoderCpuMs: 120,
+      },
+    )
+    expect(line).toBe('tap → photon 61 / 97 ms (p50 / p95 of 20) · daemon capture → sent 12.5 ms · input 2.0 ms · hub 41 · enc 120 ms CPU/s · decode 3.2 · draw 0.4 ms')
   })
 })

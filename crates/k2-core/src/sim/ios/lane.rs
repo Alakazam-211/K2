@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value as J};
 
-use super::helper::{self, FrameSlot, HelperIo, HelperProc};
+use super::helper::{self, FrameSlot, HelperClock, HelperIo, HelperProc};
 use super::simctl::{self, device_name, workspace_of, DeviceState, ProcessRunner, Runner, SimDevice, SimError, SimResult, Simctl, DEVICE_PREFIX};
 use super::tree;
 use crate::sim::lane::*;
@@ -51,6 +51,8 @@ struct Live {
     helper: Option<Arc<dyn HelperIo>>,
     /// Screen in points and pixels per point, from the helper's hello.
     screen: (f32, f32, f32),
+    /// The helper's clock against ours (frame times), from the hello.
+    clock: Option<HelperClock>,
     app_id: Option<String>,
     /// Where the last tap landed: what `Type` types into when nothing reports focus.
     last_tap: Option<Point>,
@@ -163,16 +165,22 @@ impl IosLane {
         let xcode = self.xcode_version()?;
         let h = (self.factory)(self.simctl.set_path(), udid, &xcode)?;
         let hello = h.call("hello", json!({}), Duration::from_secs(20))?;
+        let replied = Instant::now();
         let f = |p: &str| hello.pointer(p).and_then(J::as_f64).unwrap_or(0.0) as f32;
         let mut live = self.live.lock().unwrap();
         let l = live.entry(udid.to_string()).or_default();
         l.helper = Some(h.clone());
         l.screen = (f("/screen/width"), f("/screen/height"), f("/screen/scale"));
+        l.clock = hello.get("clock_ns").and_then(J::as_u64).map(|helper_ns| HelperClock { helper_ns, at: replied });
         Ok(h)
     }
 
     fn screen(&self, udid: &str) -> (f32, f32, f32) {
         self.live.lock().unwrap().get(udid).map(|l| l.screen).unwrap_or_default()
+    }
+
+    fn clock(&self, udid: &str) -> Option<HelperClock> {
+        self.live.lock().unwrap().get(udid).and_then(|l| l.clock)
     }
 
     /// The newest runtime with the profile (a device-type id or name), or the default.
@@ -420,6 +428,7 @@ struct IosFrames {
     slot: Arc<FrameSlot>,
     width_pt: f32,
     native_px: f32,
+    clock: Option<HelperClock>,
 }
 
 impl IosFrames {
@@ -435,15 +444,24 @@ impl IosFrames {
 impl FrameSource for IosFrames {
     fn next_frame(&mut self, wait: Duration) -> Result<Option<Frame>, LaneError> {
         match self.slot.take(wait) {
-            Ok(Some(f)) => Ok(Some(Frame {
-                width_px: f.width,
-                height_px: f.height,
-                scale: if self.width_pt > 0.0 { f.width as f32 / self.width_pt } else { 1.0 },
-                orientation: Orientation::Portrait,
-                seq: f.seq,
-                captured_at: Instant::now(),
-                data: FrameData::Jpeg(f.jpeg),
-            })),
+            Ok(Some(f)) => {
+                // Capture time on the helper's clock (M-11): `age_ms` then
+                // counts the helper's copy, encode and pipe too.
+                let (captured_at, emitted_at) = match self.clock {
+                    Some(c) => (c.to_instant(f.captured_ns, f.received_at), Some(c.to_instant(f.emitted_ns, f.received_at))),
+                    None => (f.received_at, None),
+                };
+                Ok(Some(Frame {
+                    width_px: f.width,
+                    height_px: f.height,
+                    scale: if self.width_pt > 0.0 { f.width as f32 / self.width_pt } else { 1.0 },
+                    orientation: Orientation::Portrait,
+                    seq: f.seq,
+                    captured_at,
+                    stamps: FrameStamps { emitted_at, received_at: Some(f.received_at) },
+                    data: FrameData::Jpeg(f.jpeg),
+                }))
+            }
             Ok(None) => Ok(None),
             Err(()) => Err(LaneError::not_running("The Simulator helper stopped; the device may have shut down.")),
         }
@@ -730,6 +748,7 @@ impl SimLane for IosLane {
             orientation: Orientation::Portrait,
             seq: 0,
             captured_at: Instant::now(),
+            stamps: Default::default(),
             data: FrameData::Png(bytes),
         })
     }
@@ -739,7 +758,7 @@ impl SimLane for IosLane {
         let (w, _, scale) = self.screen(&dev.device_id);
         let slot = Arc::new(FrameSlot::default());
         h.frame_slot(Some(slot.clone()));
-        let src = IosFrames { helper: h.clone(), slot, width_pt: w, native_px: w * scale };
+        let src = IosFrames { helper: h.clone(), slot, width_pt: w, native_px: w * scale, clock: self.clock(&dev.device_id) };
         src.configure(opts).lane()?;
         Ok(Box::new(src))
     }

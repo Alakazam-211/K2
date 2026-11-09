@@ -111,6 +111,28 @@ describe('stream adapter (sim::stream)', () => {
     expect(defaultFps(true)).toBe(8)
   })
 
+  it('M0: stats=1 rides the query only when asked; the stats message parses (stream::StreamStats)', () => {
+    expect(simStreamUrl('ws://h', 'w', 'tok', 30, { codecs: ['jpeg'], window: 3 }, { stats: true })).toBe(
+      'ws://h/cli/sim/stream?workspace=w&fps=30&codecs=jpeg&win=3&stats=1&token=tok',
+    )
+    expect(simStreamUrl('ws://h', 'w', null, 30, undefined, { stats: false })).toBe('ws://h/cli/sim/stream?workspace=w&fps=30')
+    expect(
+      parseServerMsg(
+        '{"t":"stats","stats":{"frames":3,"stages":[{"stage":"total","n":3,"p50":9.5,"p95":12,"max":12}],"inputs":[{"id":4,"recvMs":120.5,"laneMs":1.5}],"hubCpuMs":7,"encoderCpuMs":0}}',
+      ),
+    ).toEqual({
+      t: 'stats',
+      stats: {
+        frames: 3,
+        stages: [{ stage: 'total', n: 3, p50: 9.5, p95: 12, max: 12 }],
+        inputs: [{ id: 4, recvMs: 120.5, laneMs: 1.5 }],
+        hubCpuMs: 7,
+        encoderCpuMs: 0,
+      },
+    })
+    expect(parseServerMsg('{"t":"stats","stats":{"frames":1}}')).toBeNull()
+  })
+
   it('decodes the 16-byte K2SF header (LE) and refuses anything else', () => {
     const buf = encodeFrame({ seq: 77, widthPx: 1081, heightPx: 2401, widthPt: 412, heightPt: 915 }, new Uint8Array([0xff, 0xd8, 0xff]))
     expect(buf.byteLength).toBe(19)

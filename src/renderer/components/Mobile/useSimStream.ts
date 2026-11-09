@@ -16,6 +16,9 @@
 //  - The screen size in points comes from each frame's header (it changes
 //    when the device rotates); `hello` / `hold` / `state` / `fps` text
 //    messages keep the rest current.
+//  - M0 (the latency readout only): `stats` asks the daemon for its stage
+//    times (`onStats`), and `onFrameStage` gets each frame's socket,
+//    decoded and drawn times on this side.
 //  - `hold` keeps the last drawn frame (M-A3: "freeze" is a client-side
 //    hold; the device keeps running and frames are still acked, and video
 //    keeps decoding so it can resume without a keyframe). The S5 pick
@@ -38,6 +41,7 @@ import {
   type SimStreamConnector,
 } from './sim-stream'
 import { browserWebCodecs, H264Sink, type VideoFrameLike } from './sim-video'
+import type { FrameStage, SimStreamStats } from './sim-latency'
 
 export interface UseSimStreamArgs {
   scope: ServerScope
@@ -52,6 +56,11 @@ export interface UseSimStreamArgs {
   hold: boolean
   /** Each frame once it is on the canvas (the latency readout). */
   onFrameDrawn?: (seq: number) => void
+  /** M0: ask the daemon for `stats` (reconnects when it changes). */
+  stats?: boolean
+  onStats?: (s: SimStreamStats) => void
+  /** M0: a frame reached the socket, the decoder's output, the canvas. */
+  onFrameStage?: (seq: number, stage: FrameStage, at: number) => void
 }
 
 export interface SimStreamView {
@@ -83,7 +92,7 @@ export interface SimStreamView {
 /** Painted size for a stub frame: 2× points so text stays crisp. */
 const PAINT_SCALE = 2
 
-async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame): Promise<boolean> {
+async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame, onDecoded?: () => void): Promise<boolean> {
   const ctx = canvas.getContext('2d')
   if (!ctx) return false
   if (frame.source.kind === 'paint') {
@@ -96,6 +105,7 @@ async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame): Promise<bo
   }
   if (frame.source.kind !== 'jpeg') return false
   const bmp = await createImageBitmap(frame.source.data)
+  onDecoded?.()
   try {
     if (canvas.width !== bmp.width) canvas.width = bmp.width
     if (canvas.height !== bmp.height) canvas.height = bmp.height
@@ -119,7 +129,7 @@ function drawVideoFrame(canvas: HTMLCanvasElement, frame: VideoFrameLike, widthP
   return true
 }
 
-export function useSimStream({ scope, workspace, visible, fps, connector, canvasRef, hold, onFrameDrawn }: UseSimStreamArgs): SimStreamView {
+export function useSimStream({ scope, workspace, visible, fps, connector, canvasRef, hold, onFrameDrawn, stats = false, onStats, onFrameStage }: UseSimStreamArgs): SimStreamView {
   const [conn, setConn] = useState<SimConnState | 'idle'>('idle')
   const [reason, setReason] = useState<string | null>(null)
   const [screen, setScreen] = useState<ScreenPt | null>(null)
@@ -132,6 +142,10 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
   const [inputCaps, setInputCaps] = useState<SimInputCaps | null>(null)
   const drawnRef = useRef(onFrameDrawn)
   drawnRef.current = onFrameDrawn
+  const statsRef = useRef(onStats)
+  statsRef.current = onStats
+  const stageRef = useRef(onFrameStage)
+  stageRef.current = onFrameStage
   const [codec, setCodec] = useState<SimCodec | null>(null)
   // Video failed in this webview: reconnect offering JPEG only.
   const [jpegOnly, setJpegOnly] = useState(false)
@@ -185,9 +199,11 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
         draw: (frame, widthPx, heightPx) => {
           const canvas = canvasRef.current
           if (!live || !canvas) return
+          // The decoder's timestamp is the frame's seq (H264Sink).
+          stageRef.current?.(frame.timestamp, 'decoded', performance.now())
           if (drawVideoFrame(canvas, frame, widthPx, heightPx)) {
             setHasFrame(true)
-            // The decoder's timestamp is the frame's seq (H264Sink).
+            stageRef.current?.(frame.timestamp, 'drawn', performance.now())
             drawnRef.current?.(frame.timestamp)
           } else if (!warnedRef.current) {
             warnedRef.current = true
@@ -202,6 +218,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
       workspace,
       fps: fpsRef.current,
       offer: { video: !jpegOnly, window: STREAM_WINDOW },
+      ...(stats ? { stats: true } : {}),
       handlers: {
         onConn(s, why) {
           if (!live) return
@@ -242,10 +259,14 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
               console.warn('[mobile] input refused:', m.code, m.message)
               setInputError(m.message)
               return
+            case 'stats':
+              statsRef.current?.(m.stats)
+              return
           }
         },
         onFrame(frame) {
           if (!live) return
+          stageRef.current?.(frame.seq, 'recv', performance.now())
           setScreen((prev) =>
             prev && prev.widthPt === frame.widthPt && prev.heightPt === frame.heightPt
               ? prev
@@ -269,9 +290,10 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
               // A newer frame is already here: this one is stale.
               const stale = frame.seq !== newestJpeg
               if (canvas && !holdRef.current && !stale) {
-                const drawn = await drawFrame(canvas, frame)
+                const drawn = await drawFrame(canvas, frame, () => stageRef.current?.(frame.seq, 'decoded', performance.now()))
                 if (drawn) {
                   if (live) setHasFrame(true)
+                  stageRef.current?.(frame.seq, 'drawn', performance.now())
                   drawnRef.current?.(frame.seq)
                 } else if (!warnedRef.current) {
                   warnedRef.current = true
@@ -296,7 +318,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
       mine.close()
       if (connRef.current === mine) connRef.current = null
     }
-  }, [scope, workspace, visible, connector, canvasRef, jpegOnly])
+  }, [scope, workspace, visible, connector, canvasRef, jpegOnly, stats])
 
   const send = useCallback((input: SimInput) => {
     const c = connRef.current

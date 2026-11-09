@@ -41,12 +41,13 @@ fn frame(w: u32, h: u32, shade: u8) -> Frame {
         orientation: Orientation::Portrait,
         seq: 1,
         captured_at: Instant::now(),
+        stamps: Default::default(),
         data: FrameData::Rgb888(vec![shade; (w * h * 3) as usize]),
     }
 }
 
 fn job(seq: u32, f: Frame, force_key: bool) -> VideoJob {
-    VideoJob { shared: Arc::new(Shared::new(seq, f)), force_key, fps: 30, bitrate: 500_000, ts_ms: seq * 33 }
+    VideoJob { shared: Arc::new(Shared::new(seq, f)), force_key, fps: 30, bitrate: 500_000, ts_ms: seq * 33, stats: false }
 }
 
 /// The pipe opens an encoder on the first frame (a keyframe), sends deltas,
@@ -260,6 +261,62 @@ fn an_old_viewer_gets_jpeg_with_one_frame_in_flight() {
     shut_down(b);
 }
 
+/// M0: a viewer that asks with `stats=1` gets a `stats` message about once
+/// a second with its frames' stage times and the daemon-side time of each
+/// touch that carried an id. Nothing else on the wire changes.
+#[test]
+fn a_stats_viewer_gets_stage_times_and_its_probed_touches() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let b = boot_fake("stats");
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut c, server) = open(&b, &[("stats", "1")]).await;
+        let hello = next_text(&mut c).await;
+        assert_eq!(hello["t"], "hello");
+        c.send(Message::Text(r#"{"t":"touch","phase":"down","x":10,"y":20,"id":41}"#.into())).await.expect("down");
+        c.send(Message::Text(r#"{"t":"touch","phase":"up","x":10,"y":20,"id":42}"#.into())).await.expect("up");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        let (mut frames, mut ids, mut stages) = (0u64, Vec::new(), std::collections::BTreeSet::new());
+        while tokio::time::Instant::now() < deadline && (frames == 0 || ids.len() < 2 || !stages.contains("total")) {
+            let m = tokio::time::timeout_at(deadline, c.next()).await.expect("messages keep coming").expect("open").expect("ok");
+            match m {
+                Message::Binary(bin) => {
+                    let (h, _) = FrameHeader::decode(&bin).expect("K2SF");
+                    ack(&mut c, h.seq).await;
+                }
+                Message::Text(t) => {
+                    let v: serde_json::Value = serde_json::from_str(&t).expect("JSON");
+                    if v["t"] != "stats" {
+                        continue;
+                    }
+                    let st = &v["stats"];
+                    frames += st["frames"].as_u64().expect("frames");
+                    assert!(st["hubCpuMs"].is_number() && st["encoderCpuMs"].is_number(), "{st}");
+                    for s in st["stages"].as_array().expect("stages") {
+                        let (p50, p95, max) = (s["p50"].as_f64().expect("p50"), s["p95"].as_f64().expect("p95"), s["max"].as_f64().expect("max"));
+                        assert!(p50 <= p95 && p95 <= max, "{s}");
+                        stages.insert(s["stage"].as_str().expect("name").to_string());
+                    }
+                    for i in st["inputs"].as_array().expect("inputs") {
+                        assert!(i["laneMs"].as_f64().expect("laneMs") >= 0.0);
+                        ids.push(i["id"].as_u64().expect("id"));
+                    }
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert!(frames > 0, "stats count the frames sent");
+        assert_eq!(ids, vec![41, 42], "each probed touch, in order");
+        for want in ["receiveHub", "hubGate", "encode", "send", "total"] {
+            assert!(stages.contains(want), "{want} in {stages:?}");
+        }
+        assert!(!stages.contains("captureEmit"), "the fake lane has no helper times: {stages:?}");
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+    });
+    shut_down(b);
+}
+
 /// A viewer that offers H.264 on a host that has it: hello says h264 and the
 /// window; frames are K2SV, the first a keyframe with SPS + PPS; up to 3 go
 /// out before an ack; a keyframe ask brings one.
@@ -426,7 +483,7 @@ fn keyboard_input_reaches_the_lane_through_person_input() {
 }
 
 fn touch(phase: TouchPhase, x2: Option<f32>, y2: Option<f32>) -> ViewerMsg {
-    ViewerMsg::Touch { phase, x: 10.0, y: 20.0, x2, y2, vx: None, vy: None }
+    ViewerMsg::Touch { phase, x: 10.0, y: 20.0, x2, y2, vx: None, vy: None, id: None }
 }
 
 #[test]
@@ -467,7 +524,7 @@ fn fling_tail_and_pinch_reach_the_fake_lane() {
     assert_eq!(m.input_caps(k2_core::sim::LaneKind::Android), InputCaps { multi_touch: true, fling: true });
     fake.actions.lock().clear();
 
-    let fling = ViewerMsg::Touch { phase: TouchPhase::Up, x: 200.0, y: 600.0, x2: None, y2: None, vx: Some(0.0), vy: Some(-2000.0) };
+    let fling = ViewerMsg::Touch { phase: TouchPhase::Up, x: 200.0, y: 600.0, x2: None, y2: None, vx: Some(0.0), vy: Some(-2000.0), id: None };
     person_input(&ws, "owner", &Caller::Owner, fling).expect("fling");
     let got = fake.actions.lock().clone();
     assert_eq!(got.len(), 5, "{got:?}");
@@ -475,12 +532,12 @@ fn fling_tail_and_pinch_reach_the_fake_lane() {
     assert!(got[4].starts_with("touch Up 200,53"), "lifts at the tail's end: {got:?}");
 
     fake.actions.lock().clear();
-    let slow = ViewerMsg::Touch { phase: TouchPhase::Up, x: 200.0, y: 600.0, x2: None, y2: None, vx: Some(0.0), vy: Some(-5.0) };
+    let slow = ViewerMsg::Touch { phase: TouchPhase::Up, x: 200.0, y: 600.0, x2: None, y2: None, vx: Some(0.0), vy: Some(-5.0), id: None };
     person_input(&ws, "owner", &Caller::Owner, slow).expect("slow");
     assert_eq!(fake.actions.lock().clone(), vec!["touch Up 200,600".to_string()]);
 
     fake.actions.lock().clear();
-    let pinch = ViewerMsg::Touch { phase: TouchPhase::Down, x: 150.0, y: 400.0, x2: Some(250.0), y2: Some(400.0), vx: None, vy: None };
+    let pinch = ViewerMsg::Touch { phase: TouchPhase::Down, x: 150.0, y: 400.0, x2: Some(250.0), y2: Some(400.0), vx: None, vy: None, id: None };
     person_input(&ws, "owner", &Caller::Owner, pinch).expect("pinch");
     assert_eq!(fake.actions.lock().clone(), vec!["two-touch Down 150,400 250,400".to_string()]);
 
@@ -494,7 +551,7 @@ fn fling_tail_and_pinch_reach_the_fake_lane() {
     m.boot(&ws, &owner, &k2_core::sim::api::BootReq { platform: Some("ios".into()), no_tab: true, ..Default::default() }).expect("boot ios");
     assert!(!m.input_caps(k2_core::sim::LaneKind::Ios).multi_touch);
     ios.actions.lock().clear();
-    let pinch = ViewerMsg::Touch { phase: TouchPhase::Down, x: 150.0, y: 400.0, x2: Some(250.0), y2: Some(400.0), vx: None, vy: None };
+    let pinch = ViewerMsg::Touch { phase: TouchPhase::Down, x: 150.0, y: 400.0, x2: Some(250.0), y2: Some(400.0), vx: None, vy: None, id: None };
     let err = person_input(&ws, "owner", &Caller::Owner, pinch).expect_err("iOS refuses a pinch");
     assert!(err.message.contains("Pinch isn't available"), "{}", err.message);
     assert!(ios.actions.lock().is_empty(), "nothing reached the device");

@@ -762,6 +762,7 @@ impl SimLane for AndroidLane {
             orientation: if w > h { Orientation::LandscapeLeft } else { Orientation::Portrait },
             seq: img.seq as u64,
             captured_at: Instant::now(),
+            stamps: Default::default(),
             data: FrameData::Rgb888(img.image),
         })
     }

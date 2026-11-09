@@ -10,7 +10,10 @@
 // stdin : one JSON request per line  {"id":1,"op":"tree"}
 // stdout: framed messages  [u32 BE length][u8 kind][payload]   (length counts kind + payload)
 //         kind 'J' = UTF-8 JSON (replies carry the request id; events carry "event")
-//         kind 'F' = frame: [u32 BE width][u32 BE height][u64 BE seq] + JPEG bytes
+//         kind 'F' = frame: [u32 BE width][u32 BE height][u64 BE seq]
+//                    [u64 BE capture ns][u64 BE emit ns] + JPEG bytes   (protocol 2)
+//                    capture = the IOSurface callback the frame answers, emit = the
+//                    encode finished; both ns of uptime, the clock `hello.clock_ns` reads
 // stderr: diagnostics only.
 //
 // It drives the Simulator through CoreSimulator + SimulatorKit + the private
@@ -34,7 +37,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import ObjectiveC
 
-let HELPER_VERSION = 1
+let HELPER_VERSION = 2
 
 // MARK: - Output
 
@@ -58,6 +61,7 @@ enum Out {
 }
 
 func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
+func nowNs() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
 
 struct HelperError: Error { let code: String; let message: String }
 
@@ -217,10 +221,12 @@ final class Frames {
     }
 
     private var lastArrival = 0.0
+    private var lastArrivalNs: UInt64 = 0
 
     private func frameArrived() {
         guard streaming else { return }
-        lastArrival = now()
+        lastArrivalNs = nowNs()
+        lastArrival = Double(lastArrivalNs) / 1e9
         let interval = 1.0 / fps
         let dt = lastArrival - lastEmit
         if dt >= interval {
@@ -245,14 +251,21 @@ final class Frames {
     }
 
     private func emit() {
+        // The screen this frame shows appeared at the last callback (a
+        // (re)joining viewer's first frame may be older than that).
+        let captured = lastArrivalNs != 0 ? lastArrivalNs : nowNs()
         guard let s = surface(), let img = Image.cgImage(s) else { return }
         guard let jpeg = Image.encode(img, scale: scale, type: UTType.jpeg, quality: quality, crop: nil) else { return }
-        lastEmit = now()
+        let emitted = nowNs()
+        lastEmit = Double(emitted) / 1e9
         seq += 1
         var w = UInt32(jpeg.width).bigEndian, h = UInt32(jpeg.height).bigEndian, sq = seq.bigEndian
+        var cap = captured.bigEndian, emt = emitted.bigEndian
         var payload = Data(bytes: &w, count: 4)
         payload.append(Data(bytes: &h, count: 4))
         payload.append(Data(bytes: &sq, count: 8))
+        payload.append(Data(bytes: &cap, count: 8))
+        payload.append(Data(bytes: &emt, count: 8))
         payload.append(jpeg.data)
         Out.send(UInt8(ascii: "F"), payload)
     }
@@ -723,7 +736,9 @@ func handle(_ r: [String: Any]) throws -> [String: Any] {
                 "state": device.value(forKey: "stateString") as? String ?? "",
                 "runtime": (device.value(forKey: "runtime") as? NSObject)?.value(forKey: "name") as? String ?? "",
                 "screen": ["width": screen.widthPt, "height": screen.heightPt, "scale": screen.scale],
-                "developer_dir": devDir, "xcode": xcode]
+                "developer_dir": devDir, "xcode": xcode,
+                // The frame times' clock (ns of uptime): the daemon maps it onto its own.
+                "clock_ns": nowNs()]
     case "focus":
         // What typed text goes into: the focused element, else the element at the hint.
         let hint: (Double, Double)? = (r["x"] as? NSNumber).flatMap { x in (r["y"] as? NSNumber).map { (x.doubleValue, $0.doubleValue) } }

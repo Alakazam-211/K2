@@ -2,7 +2,7 @@
 // Builder A's frozen wire, `k2-core::sim::stream`:
 //
 //   GET /cli/sim/stream?workspace=<id|handle|path>&token=…[&fps=<n>]
-//       [&codecs=h264,jpeg&win=<n>]  (WebSocket)
+//       [&codecs=h264,jpeg&win=<n>][&stats=1]  (WebSocket)
 //
 //  - daemon → viewer, BINARY: a 16-byte header then a baseline JPEG:
 //      0..4 b"K2SF" · 4..8 seq u32 · 8..10 width px u16 · 10..12 height px
@@ -23,6 +23,9 @@
 //  - negotiation: the viewer offers `codecs=h264,jpeg` (only when WebCodecs
 //    here can decode H.264) and `win=3`; the daemon answers in `hello`. An
 //    older daemon ignores both and sends K2SF frames one at a time.
+//  - `stats=1` (M0, measurement; only while the latency readout is on): a
+//    `stats` text message about once a second with the daemon's stage
+//    times, and the daemon-side time of each `touch` that carries an `id`.
 //  - close codes: 4401 login revoked, 4403 forbidden, 4410 device stopped.
 //
 // The pane talks to a `SimStreamConnection`; `createStubSimStream` stands in
@@ -34,6 +37,7 @@ import { daemonWsBase } from '@/kessel/daemon-ws'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { parseDeviceProfile, parseSimHold, type SimDeviceProfile, type SimHold, type SimLaneId, type SimState } from './simApi'
 import { videoDecodeSupport } from './sim-video'
+import type { SimStreamStats } from './sim-latency'
 
 export const FRAME_MAGIC = 'K2SF'
 export const FRAME_HEADER_LEN = 16
@@ -97,6 +101,8 @@ export type SimInput =
       /** On `up`: the release velocity in points per second (a flick). */
       vx?: number
       vy?: number
+      /** A probe id (M0, `stats=1` only): the daemon reports this touch's time. */
+      id?: number
     }
   | { t: 'text'; text: string }
   | { t: 'key'; key: SimKey; shift?: boolean; alt?: boolean }
@@ -162,6 +168,7 @@ export type SimServerMsg =
   | { t: 'error'; code: string; message: string }
   | { t: 'fps'; fps: number }
   | { t: 'codec'; codec: SimCodec; message?: string }
+  | { t: 'stats'; stats: SimStreamStats }
 
 export type SimConnState = 'connecting' | 'open' | 'closed' | 'error'
 
@@ -198,6 +205,8 @@ export interface SimStreamOptions {
   handlers: SimStreamHandlers
   /** Absent: the pre-0.46.7 query (JPEG, one frame in flight). */
   offer?: SimStreamOffer
+  /** Ask for the daemon's `stats` (M0; the latency readout). */
+  stats?: boolean
 }
 
 export type SimStreamConnector = (opts: SimStreamOptions) => SimStreamConnection
@@ -210,12 +219,14 @@ export function simStreamUrl(
   token: string | null | undefined,
   fps: number,
   offer?: { codecs: readonly SimCodec[]; window: number },
+  extra?: { stats?: boolean },
 ): string {
   const q = new URLSearchParams({ workspace, fps: String(Math.round(fps)) })
   if (offer) {
     q.set('codecs', offer.codecs.join(','))
     q.set('win', String(Math.max(1, Math.round(offer.window))))
   }
+  if (extra?.stats) q.set('stats', '1')
   if (token) q.set('token', token)
   return `${wsBase}/cli/sim/stream?${q.toString()}`
 }
@@ -358,6 +369,21 @@ export function parseServerMsg(raw: string): SimServerMsg | null {
       case 'codec':
         if (typeof o.codec !== 'string' || !CODECS.has(o.codec)) break
         return { t: 'codec', codec: o.codec as SimCodec, ...(typeof o.message === 'string' ? { message: o.message } : {}) }
+      case 'stats': {
+        const st = o.stats as Record<string, unknown> | undefined
+        if (!st || typeof st !== 'object' || !Array.isArray(st.stages) || !Array.isArray(st.inputs)) break
+        const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
+        return {
+          t: 'stats',
+          stats: {
+            frames: num(st.frames),
+            stages: (st.stages as Record<string, unknown>[]).map((x) => ({ stage: String(x.stage), n: num(x.n), p50: num(x.p50), p95: num(x.p95), max: num(x.max) })),
+            inputs: (st.inputs as Record<string, unknown>[]).map((x) => ({ id: num(x.id), recvMs: num(x.recvMs), laneMs: num(x.laneMs) })),
+            hubCpuMs: num(st.hubCpuMs),
+            encoderCpuMs: num(st.encoderCpuMs),
+          },
+        }
+      }
     }
   } catch (err) {
     console.warn('[mobile] stream: bad text frame:', err)
@@ -376,7 +402,7 @@ export function closeReason(code: number, reason: string): string {
 }
 
 /** The real socket. */
-export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handlers, offer }) => {
+export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handlers, offer, stats }) => {
   let ws: WebSocket | null = null
   let closed = false
   const pending: string[] = []
@@ -392,7 +418,7 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
       const video = offer?.video ? await videoDecodeSupport() : false
       if (closed) return
       const codecs: SimCodec[] = video ? ['h264', 'jpeg'] : ['jpeg']
-      const url = simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps, offer ? { codecs, window: offer.window } : undefined)
+      const url = simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps, offer ? { codecs, window: offer.window } : undefined, { stats })
       // MS70: every daemon socket dials through the per-server queue.
       const sock = await openQueuedWebSocket(scope, url)
       if (closed) {

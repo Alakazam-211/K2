@@ -56,6 +56,13 @@
 //!
 //! **Daemon → viewer, text:** JSON [`ServerMsg`] (`{"t": "hello", …}`).
 //!
+//! **Stats (M0, off by default).** A viewer that adds `&stats=1` gets a
+//! [`ServerMsg::Stats`] once a second: where its frames' time went (helper
+//! capture → emit → daemon receive → hub → encode → send), the daemon-side
+//! time of each `touch` that carried an `id`, and the CPU time of the hub's
+//! capture thread and this viewer's encoder. Measurement only; no viewer
+//! asks for it unless its latency readout is on.
+//!
 //! **Viewer → daemon, text:** JSON [`ViewerMsg`]. Input is in points.
 //! Agents (passports) and App passes are refused before the upgrade; the
 //! token is re-checked every 5 s and the socket closes (code 4401) when it
@@ -337,6 +344,135 @@ pub enum ServerMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// Once a second to a viewer that asked with `stats=1` (M0).
+    Stats { stats: StreamStats },
+}
+
+/// One frame stage the stats readout times ([`StatsWindow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// The helper's IOSurface callback → its encode done (iOS only).
+    CaptureEmit,
+    /// Encode done → the daemon read it off the helper's pipe (iOS only).
+    EmitReceive,
+    /// The daemon read it → the hub pulled it.
+    ReceiveHub,
+    /// The hub pulled it → this viewer's gate let it go (pacing, window).
+    HubGate,
+    /// JPEG or H.264 encode.
+    Encode,
+    /// Encode done → the socket write started.
+    Queue,
+    /// The socket write.
+    Send,
+    /// Capture → the write finished.
+    Total,
+}
+
+impl Stage {
+    pub const ALL: [Stage; 8] = [Stage::CaptureEmit, Stage::EmitReceive, Stage::ReceiveHub, Stage::HubGate, Stage::Encode, Stage::Queue, Stage::Send, Stage::Total];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::CaptureEmit => "captureEmit",
+            Stage::EmitReceive => "emitReceive",
+            Stage::ReceiveHub => "receiveHub",
+            Stage::HubGate => "hubGate",
+            Stage::Encode => "encode",
+            Stage::Queue => "queue",
+            Stage::Send => "send",
+            Stage::Total => "total",
+        }
+    }
+}
+
+/// One stage over a window, in ms.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageSummary {
+    pub stage: String,
+    pub n: u32,
+    pub p50: f32,
+    pub p95: f32,
+    pub max: f32,
+}
+
+/// A `touch` that carried an `id`, on the daemon's side.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputTiming {
+    pub id: u32,
+    /// Read off the socket, ms since this viewer's stream began.
+    pub recv_ms: f32,
+    /// Read → the lane returned (queue + manager + device).
+    pub lane_ms: f32,
+}
+
+/// [`ServerMsg::Stats`]: one viewer's last window (about a second).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamStats {
+    /// Frames sent to this viewer in the window.
+    pub frames: u32,
+    /// Stages with at least one sample, in [`Stage::ALL`] order.
+    pub stages: Vec<StageSummary>,
+    pub inputs: Vec<InputTiming>,
+    /// CPU time in the window: the hub's capture thread, and this viewer's
+    /// H.264 encoder thread (0 for JPEG).
+    pub hub_cpu_ms: f32,
+    pub encoder_cpu_ms: f32,
+}
+
+/// Collects one viewer's stage samples between two [`ServerMsg::Stats`].
+#[derive(Debug, Default)]
+pub struct StatsWindow {
+    samples: [Vec<f32>; 8],
+    frames: u32,
+    inputs: Vec<InputTiming>,
+}
+
+/// Nearest-rank percentile of sorted samples (`p` in 0..=1).
+fn percentile(sorted: &[f32], p: f32) -> f32 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let rank = ((p * sorted.len() as f32).ceil() as usize).clamp(1, sorted.len());
+    sorted[rank - 1]
+}
+
+impl StatsWindow {
+    /// Most inputs kept per window (a drag sends ~60 a second).
+    pub const MAX_INPUTS: usize = 240;
+
+    pub fn stage(&mut self, s: Stage, ms: f32) {
+        let i = Stage::ALL.iter().position(|x| *x == s).unwrap_or(0);
+        self.samples[i].push(ms.max(0.0));
+    }
+
+    pub fn frame_sent(&mut self) {
+        self.frames += 1;
+    }
+
+    pub fn input(&mut self, t: InputTiming) {
+        if self.inputs.len() < Self::MAX_INPUTS {
+            self.inputs.push(t);
+        }
+    }
+
+    /// The window so far; starts the next one.
+    pub fn take(&mut self, hub_cpu_ms: f32, encoder_cpu_ms: f32) -> StreamStats {
+        let mut stages = Vec::new();
+        for (i, s) in Stage::ALL.iter().enumerate() {
+            let v = &mut self.samples[i];
+            if v.is_empty() {
+                continue;
+            }
+            v.sort_by(f32::total_cmp);
+            stages.push(StageSummary { stage: s.as_str().to_string(), n: v.len() as u32, p50: percentile(v, 0.5), p95: percentile(v, 0.95), max: v[v.len() - 1] });
+            v.clear();
+        }
+        let out = StreamStats { frames: self.frames, stages, inputs: std::mem::take(&mut self.inputs), hub_cpu_ms, encoder_cpu_ms };
+        self.frames = 0;
+        out
+    }
 }
 
 fn one() -> u32 {
@@ -386,6 +522,10 @@ pub enum ViewerMsg {
         vx: Option<f32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vy: Option<f32>,
+        /// A probe id (M0): a viewer with `stats=1` gets this touch's
+        /// daemon-side time back in [`StreamStats::inputs`]. Ignored otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
     },
     Tap { x: f32, y: f32 },
     #[serde(rename_all = "camelCase")]
@@ -633,7 +773,7 @@ mod tests {
         let m: ViewerMsg = serde_json::from_str(r#"{"t":"button","button":"home"}"#).expect("button");
         assert_eq!(m, ViewerMsg::Button { button: Button::Home });
         let m: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"down","x":1,"y":2}"#).expect("touch");
-        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Down, x: 1.0, y: 2.0, x2: None, y2: None, vx: None, vy: None });
+        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Down, x: 1.0, y: 2.0, x2: None, y2: None, vx: None, vy: None, id: None });
         let s = serde_json::to_value(ServerMsg::Hold { hold: HoldView::Person { by: "rosson".into(), ms: 2000 } }).expect("json");
         assert_eq!(s, serde_json::json!({"t":"hold","hold":{"kind":"person","by":"rosson","ms":2000}}));
         let s = serde_json::to_value(ServerMsg::Hold { hold: HoldView::Takeover { by: "rosson".into(), idle_ms: 5 } }).expect("json");
@@ -712,11 +852,40 @@ mod tests {
     #[test]
     fn touch_takes_a_second_finger_and_a_velocity() {
         let m: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"move","x":100,"y":200,"x2":300,"y2":400}"#).expect("two fingers");
-        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Move, x: 100.0, y: 200.0, x2: Some(300.0), y2: Some(400.0), vx: None, vy: None });
+        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Move, x: 100.0, y: 200.0, x2: Some(300.0), y2: Some(400.0), vx: None, vy: None, id: None });
         let m: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"up","x":5,"y":6,"vx":-120.5,"vy":2400}"#).expect("fling");
-        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Up, x: 5.0, y: 6.0, x2: None, y2: None, vx: Some(-120.5), vy: Some(2400.0) });
-        let plain = serde_json::to_value(ViewerMsg::Touch { phase: TouchPhase::Up, x: 1.0, y: 2.0, x2: None, y2: None, vx: None, vy: None }).expect("json");
+        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Up, x: 5.0, y: 6.0, x2: None, y2: None, vx: Some(-120.5), vy: Some(2400.0), id: None });
+        let plain = serde_json::to_value(ViewerMsg::Touch { phase: TouchPhase::Up, x: 1.0, y: 2.0, x2: None, y2: None, vx: None, vy: None, id: None }).expect("json");
         assert_eq!(plain, serde_json::json!({"t":"touch","phase":"up","x":1.0,"y":2.0}));
+    }
+
+    #[test]
+    fn stats_windows_summarise_each_stage_and_start_over() {
+        let mut w = StatsWindow::default();
+        for ms in 1..=100 {
+            w.stage(Stage::Encode, ms as f32);
+        }
+        w.stage(Stage::Send, 0.5);
+        w.stage(Stage::Send, -1.0); // a clock step never goes negative
+        w.frame_sent();
+        w.frame_sent();
+        w.input(InputTiming { id: 7, recv_ms: 1000.0, lane_ms: 2.5 });
+        let s = w.take(3.0, 4.0);
+        assert_eq!(s.frames, 2);
+        let names: Vec<&str> = s.stages.iter().map(|x| x.stage.as_str()).collect();
+        assert_eq!(names, vec!["encode", "send"], "only stages with samples, in order");
+        assert_eq!((s.stages[0].n, s.stages[0].p50, s.stages[0].p95, s.stages[0].max), (100, 50.0, 95.0, 100.0));
+        assert_eq!((s.stages[1].p50, s.stages[1].max), (0.0, 0.5));
+        assert_eq!(s.inputs, vec![InputTiming { id: 7, recv_ms: 1000.0, lane_ms: 2.5 }]);
+        assert_eq!((s.hub_cpu_ms, s.encoder_cpu_ms), (3.0, 4.0));
+        let next = w.take(0.0, 0.0);
+        assert_eq!((next.frames, next.stages.len(), next.inputs.len()), (0, 0, 0), "the next window starts empty");
+        let v = serde_json::to_value(ServerMsg::Stats { stats: s }).expect("json");
+        assert_eq!(v["t"], "stats");
+        assert_eq!(v["stats"]["hubCpuMs"], 3.0);
+        assert_eq!(v["stats"]["inputs"][0], serde_json::json!({"id": 7, "recvMs": 1000.0, "laneMs": 2.5}));
+        let t: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"down","x":1,"y":2,"id":9}"#).expect("touch with an id");
+        assert!(matches!(t, ViewerMsg::Touch { id: Some(9), .. }));
     }
 
     #[test]

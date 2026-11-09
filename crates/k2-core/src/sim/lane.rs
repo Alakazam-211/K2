@@ -523,8 +523,24 @@ pub struct Frame {
     pub orientation: Orientation,
     /// Monotonic per source; a gap means the lane skipped frames.
     pub seq: u64,
+    /// When the device showed it, on the daemon's clock: the iOS helper's
+    /// IOSurface callback (mapped from the helper's clock), else when the
+    /// lane got the frame.
     pub captured_at: Instant,
+    /// Where the frame's time went before the daemon had it (M0, the
+    /// stream's `stats=1` readout). Empty for lanes that don't report it.
+    pub stamps: FrameStamps,
     pub data: FrameData,
+}
+
+/// A frame's stage times before the hub pulled it, on the daemon's clock
+/// (`None` = the lane doesn't know).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameStamps {
+    /// The helper finished encoding it and wrote it to its pipe.
+    pub emitted_at: Option<Instant>,
+    /// The daemon read it off the helper's pipe.
+    pub received_at: Option<Instant>,
 }
 
 /// What a frame source should aim for. A lane may ignore what it can't

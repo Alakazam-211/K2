@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type CSSProperties } from 'react'
 // Plan B — project-icon lookup is host-aware daemon data: route through
 // the `/cli/projects/get-icon` HTTP layer (local OR remote) instead of
 // the localhost-pinned Tauri `projects_get_icon` invoke proxy.
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { chamferCutFor } from '@/components/Thread/chamfer'
 
 // Cache icon results across component instances
 type IconResult = { found: boolean; dataUrl: string | null }
@@ -111,16 +112,20 @@ export default function ProjectAvatar({
   }, [projectPath, iconUrlProp, projectId, fetchIcon])
 
   const firstLetter = projectName.charAt(0).toUpperCase()
+  // Terminal's cut, sized like every other control. `--k2-ch-bw` tells the
+  // shared edge how thick this border is, so the diagonal matches it.
+  const cutVars = { '--k2-ch-cut': `${chamferCutFor(size)}px`, '--k2-ch-bw': '2px' } as CSSProperties
 
   if (iconUrl) {
     return (
       <span
         className="flex-shrink-0"
+        data-k2-chamfer="surface"
         style={{
+          ...cutVars,
           width: size,
           height: size,
           border: `2px solid ${projectColor}`,
-          overflow: 'hidden',
           display: 'block',
         }}
       >
@@ -143,7 +148,10 @@ export default function ProjectAvatar({
     <span className="flex-shrink-0" style={{ width: size, height: size }}>
       <span
         className="flex items-center justify-center"
+        data-k2-chamfer="surface"
         style={{
+          ...cutVars,
+          '--k2-ch-bw': '0px',
           width: size,
           height: size,
           backgroundColor: loaded ? projectColor : 'var(--color-bg-elevated)',
@@ -153,7 +161,7 @@ export default function ProjectAvatar({
           lineHeight: 1,
           fontFamily: 'inherit',
           display: 'flex'
-        }}
+        } as CSSProperties}
       >
         {firstLetter}
       </span>

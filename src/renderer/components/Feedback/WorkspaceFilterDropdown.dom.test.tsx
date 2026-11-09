@@ -295,14 +295,14 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     `)
     expect(classTree(rowFor('w-alpha'))).toMatchInlineSnapshot(`
       "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]
-        span .flex-shrink-0 {width: 20px; height: 20px; border: 2px solid rgb(224, 108, 117); overflow: hidden; display: block;}
+        span .flex-shrink-0 {--k2-ch-cut: 4px; --k2-ch-bw: 2px; width: 20px; height: 20px; border: 2px solid rgb(224, 108, 117); display: block;}
           img . {width: 100%; height: 100%; object-fit: cover; object-position: center; display: block;}
         span .text-xs truncate flex-1"
     `)
     expect(classTree(rowFor('w-beta'))).toMatchInlineSnapshot(`
       "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]
         span .flex-shrink-0 {width: 20px; height: 20px;}
-          span .flex items-center justify-center {width: 20px; height: 20px; background-color: rgb(97, 175, 239); color: var(--color-on-accent); font-size: 10px; font-weight: 700; line-height: 1; font-family: inherit; display: flex;}
+          span .flex items-center justify-center {--k2-ch-cut: 4px; --k2-ch-bw: 0px; width: 20px; height: 20px; background-color: rgb(97, 175, 239); color: var(--color-on-accent); font-size: 10px; font-weight: 700; line-height: 1; font-family: inherit; display: flex;}
         span .text-xs truncate flex-1"
     `)
     // The Projects header.

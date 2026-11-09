@@ -11,6 +11,11 @@
 //!
 //! The token is sent only in the `authorization` header to 127.0.0.1; it
 //! never appears in argv or logs.
+//!
+//! **Connections (fix 3).** Unary calls (touch, keys, status…) share one
+//! warm HTTP/2 connection per [`EmuGrpc`] (and its clones), re-dialled once
+//! when it went away before a request left. A server stream (frames) dials
+//! its own, so megabyte frames never share flow-control windows with input.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -226,6 +231,8 @@ impl std::fmt::Display for GrpcError {
 pub struct EmuGrpc {
     port: u16,
     token: Arc<str>,
+    /// The warm connection for unary calls, shared by clones.
+    unary: Arc<tokio::sync::Mutex<Option<SendReq>>>,
 }
 
 impl std::fmt::Debug for EmuGrpc {
@@ -238,7 +245,7 @@ type SendReq = h2::client::SendRequest<Bytes>;
 
 impl EmuGrpc {
     pub fn new(port: u16, token: impl Into<Arc<str>>) -> EmuGrpc {
-        EmuGrpc { port, token: token.into() }
+        EmuGrpc { port, token: token.into(), unary: Arc::new(tokio::sync::Mutex::new(None)) }
     }
 
     pub fn port(&self) -> u16 {
@@ -274,12 +281,58 @@ impl EmuGrpc {
             .expect("static request parts")
     }
 
-    /// Open a call; returns the response body stream.
+    /// Send a request on `send`. An error here means it never left (the
+    /// connection is gone), so it is safe to send again.
+    async fn send_on<M: prost::Message>(send: SendReq, req: http::Request<()>, msg: &M) -> Result<h2::client::ResponseFuture, GrpcError> {
+        let mut send = send.ready().await.map_err(|e| GrpcError::Http(e.to_string()))?;
+        let (resp, mut stream) = send.send_request(req, false).map_err(|e| GrpcError::Http(e.to_string()))?;
+        stream.send_data(encode_frame(msg), true).map_err(|e| GrpcError::Http(e.to_string()))?;
+        Ok(resp)
+    }
+
+    /// Open a call on its own connection (server streams); returns the
+    /// response body stream.
     async fn open<M: prost::Message>(&self, method: &str, msg: &M) -> Result<h2::RecvStream, GrpcError> {
         let send = self.connect().await?;
-        let mut send = send.ready().await.map_err(|e| GrpcError::Http(e.to_string()))?;
-        let (resp, mut stream) = send.send_request(self.request(method), false).map_err(|e| GrpcError::Http(e.to_string()))?;
-        stream.send_data(encode_frame(msg), true).map_err(|e| GrpcError::Http(e.to_string()))?;
+        Self::response(Self::send_on(send, self.request(method), msg).await?).await
+    }
+
+    /// Open a unary call on the warm connection: dial it the first time,
+    /// and once more if it went away before the request left. A connection
+    /// that breaks after that is dropped, and the next call dials.
+    async fn open_unary<M: prost::Message>(&self, method: &str, msg: &M) -> Result<h2::RecvStream, GrpcError> {
+        let resp = {
+            let mut slot = self.unary.lock().await;
+            let first = match slot.clone() {
+                Some(send) => Self::send_on(send, self.request(method), msg).await,
+                None => Err(GrpcError::Connect("not dialled yet".into())),
+            };
+            match first {
+                Ok(r) => r,
+                Err(_) => {
+                    *slot = None;
+                    let send = self.connect().await?;
+                    *slot = Some(send.clone());
+                    match Self::send_on(send, self.request(method), msg).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            *slot = None;
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        };
+        match Self::response(resp).await {
+            Err(e @ GrpcError::Http(_)) => {
+                *self.unary.lock().await = None;
+                Err(e)
+            }
+            r => r,
+        }
+    }
+
+    async fn response(resp: h2::client::ResponseFuture) -> Result<h2::RecvStream, GrpcError> {
         let resp = resp.await.map_err(|e| GrpcError::Http(e.to_string()))?;
         if resp.status() != http::StatusCode::OK {
             return Err(GrpcError::Http(format!("HTTP {}", resp.status())));
@@ -293,9 +346,9 @@ impl EmuGrpc {
         Ok(resp.into_body())
     }
 
-    /// A unary call.
+    /// A unary call (on the warm connection).
     pub async fn unary<M: prost::Message, R: prost::Message + Default>(&self, method: &str, msg: &M) -> Result<R, GrpcError> {
-        let mut body = self.open(method, msg).await?;
+        let mut body = self.open_unary(method, msg).await?;
         let mut de = Deframer::default();
         let mut out: Option<R> = None;
         while let Some(chunk) = body.data().await {
@@ -414,6 +467,69 @@ mod tests {
         let mut de = Deframer::default();
         de.push(&[0, 0xff, 0xff, 0xff, 0xff]);
         assert!(de.next().is_err());
+    }
+
+    /// A loopback gRPC server that answers every call with an empty
+    /// message; counts the TCP connections it accepted and closes the
+    /// first one after one call when `drop_first`.
+    async fn tiny_server(drop_first: bool) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let c2 = conns.clone();
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = l.accept().await {
+                let n = c2.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let Ok(mut h) = h2::server::handshake(tcp).await else { return };
+                    while let Some(Ok((req, mut respond))) = h.accept().await {
+                        let mut body = req.into_body();
+                        while let Some(Ok(chunk)) = body.data().await {
+                            let _ = body.flow_control().release_capacity(chunk.len());
+                        }
+                        let resp = http::Response::builder().status(200).header("content-type", "application/grpc").body(()).expect("response");
+                        let Ok(mut send) = respond.send_response(resp, false) else { return };
+                        let _ = send.send_data(encode_frame(&Empty {}), false);
+                        let mut t = http::HeaderMap::new();
+                        t.insert("grpc-status", http::HeaderValue::from_static("0"));
+                        let _ = send.send_trailers(t);
+                        if drop_first && n == 0 {
+                            // Flush the reply, then close this connection.
+                            h.graceful_shutdown();
+                            while h.accept().await.is_some() {}
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (port, conns)
+    }
+
+    /// Fix 3: unary calls reuse one warm connection; one that went away is
+    /// re-dialled once.
+    #[test]
+    fn unary_calls_share_a_warm_connection_and_redial_once_it_drops() {
+        use std::sync::atomic::Ordering;
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+        rt.block_on(async {
+            let (port, conns) = tiny_server(false).await;
+            let g = EmuGrpc::new(port, "t");
+            let ev = TouchEvent::default();
+            g.send_touch(&ev).await.expect("first");
+            g.clone().send_touch(&ev).await.expect("second, through a clone");
+            g.send_touch(&ev).await.expect("third");
+            assert_eq!(conns.load(Ordering::SeqCst), 1, "one TCP connection for every unary call");
+
+            let (port, conns) = tiny_server(true).await;
+            let g = EmuGrpc::new(port, "t");
+            g.send_touch(&ev).await.expect("first");
+            tokio::time::sleep(Duration::from_millis(150)).await; // the client sees the close
+            g.send_touch(&ev).await.expect("re-dialled");
+            g.send_touch(&ev).await.expect("on the new connection");
+            assert_eq!(conns.load(Ordering::SeqCst), 2, "dialled once more, not per call");
+        });
     }
 
     #[test]

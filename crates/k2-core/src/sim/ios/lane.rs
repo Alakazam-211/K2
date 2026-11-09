@@ -706,7 +706,22 @@ impl SimLane for IosLane {
             Action::Touch { phase, at } => {
                 let h = self.helper(id).lane()?;
                 let down = !matches!(phase, TouchPhase::Up);
-                h.call("touch", json!({"down": down, "x": at.x, "y": at.y}), INPUT_TIMEOUT).lane()?;
+                let args = json!({"down": down, "x": at.x, "y": at.y});
+                // Fix 3: a gesture's down and moves don't wait for the
+                // helper's reply; its up does, and reports any move the
+                // helper refused since the down.
+                let fast = crate::sim::manager::input_fast();
+                match phase {
+                    TouchPhase::Down if fast => {
+                        let _ = h.take_input_error(); // a new gesture starts clean
+                        h.notify("touch", args).lane()?;
+                    }
+                    TouchPhase::Move if fast => h.notify("touch", args).lane()?,
+                    _ => {
+                        h.call("touch", args, INPUT_TIMEOUT).lane()?;
+                    }
+                }
+                let refused = if matches!(phase, TouchPhase::Up) { h.take_input_error() } else { None };
                 let mut live = self.live.lock().unwrap();
                 let l = live.entry(id.to_string()).or_default();
                 match phase {
@@ -721,7 +736,10 @@ impl SimLane for IosLane {
                         }
                     }
                 }
-                Ok(())
+                match refused {
+                    Some(e) => Err(lane_err(e)),
+                    None => Ok(()),
+                }
             }
             // The helper sends one finger; pinch waits until two-finger
             // Indigo messages are proven on a real Simulator.
@@ -1237,6 +1255,7 @@ mod tests {
     struct FakeStream {
         calls: M<Vec<(String, J)>>,
         slot: M<Option<Arc<FrameSlot>>>,
+        refused: M<Option<SimError>>,
     }
     const HELLO_CLOCK_NS: u64 = 7_000_000_000;
     impl HelperIo for FakeStream {
@@ -1247,6 +1266,13 @@ mod tests {
                 _ => Ok(json!({"ok": true})),
             }
         }
+        fn notify(&self, op: &str, args: J) -> SimResult<()> {
+            self.calls.lock().unwrap().push((format!("notify:{op}"), args));
+            Ok(())
+        }
+        fn take_input_error(&self) -> Option<SimError> {
+            self.refused.lock().unwrap().take()
+        }
         fn frame_slot(&self, s: Option<Arc<FrameSlot>>) {
             *self.slot.lock().unwrap() = s;
         }
@@ -1256,7 +1282,7 @@ mod tests {
     }
 
     fn streaming_lane() -> (IosLane, Arc<FakeStream>, DeviceRef) {
-        let h = Arc::new(FakeStream { calls: M::new(vec![]), slot: M::new(None) });
+        let h = Arc::new(FakeStream { calls: M::new(vec![]), slot: M::new(None), refused: M::new(None) });
         let h2 = h.clone();
         let (lane, _) = lane_with_factory(world(), "26.5", Box::new(move |_, _, _| Ok(h2.clone() as Arc<dyn HelperIo>)));
         let b = lane.boot(&req("pts", None)).unwrap();
@@ -1322,5 +1348,30 @@ mod tests {
         assert_eq!(f.stamps.received_at, Some(received_at));
         assert!(f.captured_at <= received_at);
         assert!((f.scale - 1.0).abs() < 1e-6, "points-sized: one pixel per point");
+    }
+
+    /// Fix 3: a touch's down and moves go fire-and-forget; its up waits for
+    /// the helper and reports a move the helper refused since the down.
+    #[test]
+    fn touch_down_and_moves_are_fire_and_forget_and_up_reports_a_refused_move() {
+        let (lane, h, r) = streaming_lane();
+        let t = |phase: TouchPhase, x: f32| Action::Touch { phase, at: Point { x, y: 100.0 } };
+        lane.act(&r, &t(TouchPhase::Down, 10.0)).unwrap();
+        lane.act(&r, &t(TouchPhase::Move, 20.0)).unwrap();
+        lane.act(&r, &t(TouchPhase::Move, 30.0)).unwrap();
+        lane.act(&r, &t(TouchPhase::Up, 30.0)).unwrap();
+        let ops: Vec<String> = h.calls.lock().unwrap().iter().filter(|(op, _)| op.ends_with("touch")).map(|(op, a)| format!("{op} {}", a["x"])).collect();
+        assert_eq!(ops, vec!["notify:touch 10.0", "notify:touch 20.0", "notify:touch 30.0", "touch 30.0"]);
+        // A move the helper refused surfaces at the gesture's up.
+        lane.act(&r, &t(TouchPhase::Down, 10.0)).unwrap();
+        *h.refused.lock().unwrap() = Some(SimError::new("no_device", "touch: the device went away"));
+        lane.act(&r, &t(TouchPhase::Move, 20.0)).expect("a move doesn't wait to hear");
+        let e = lane.act(&r, &t(TouchPhase::Up, 20.0)).expect_err("the up reports it");
+        assert_eq!(e.code(), "sim_not_running");
+        assert!(e.message().contains("went away"), "{}", e.message());
+        // A stale refusal from an earlier gesture is dropped at the next down.
+        *h.refused.lock().unwrap() = Some(SimError::new("helper_error", "old"));
+        lane.act(&r, &t(TouchPhase::Down, 10.0)).unwrap();
+        lane.act(&r, &t(TouchPhase::Up, 10.0)).expect("a clean gesture");
     }
 }

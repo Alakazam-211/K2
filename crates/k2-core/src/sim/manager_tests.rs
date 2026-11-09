@@ -25,10 +25,18 @@ fn save_id(t: &TreeResp) -> String {
     t.snapshot.elements.iter().find(|e| e.label.as_deref() == Some("Save")).expect("a Save button").id.clone()
 }
 
+/// The lane registry and the sim home are process-wide: tests that use
+/// them run one at a time.
+fn sim_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// One sequential scenario: the lane registry and the sim home are
 /// process-wide.
 #[test]
 fn manager_scenario_with_a_fake_lane() {
+    let _serial = sim_lock();
     let tmp = std::env::temp_dir().join(format!("k2-sim-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("a")).expect("ws a");
@@ -201,6 +209,125 @@ fn manager_scenario_with_a_fake_lane() {
             assert!(actions.iter().any(|a| a == want), "no {want} audit row in {actions:?}");
         }
     }
+    crate::sim::clear_lanes();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+fn boot_one(tag: &str) -> (Manager, Arc<FakeLane>, Ws, PathBuf, i64) {
+    let tmp = std::env::temp_dir().join(format!("k2-sim-input-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("w")).expect("ws");
+    crate::sim::set_base_for_tests(tmp.join("home"));
+    limits::save_settings(&limits::SimSettings { max_devices: Some(2), min_free_ram_bytes: Some(0), ..Default::default() }).expect("limits");
+    let fake = Arc::new(FakeLane::new(LaneKind::Android));
+    crate::sim::register_lane(fake.clone());
+    let id = format!("p-sim-input-{tag}");
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT OR REPLACE INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![id, tag, tmp.join("w").display().to_string()]).expect("project");
+    }
+    let w = ws(&id, &tmp.join("w"));
+    let m = Manager::new();
+    m.refresh_probes();
+    m.boot(&w, &person(), &BootReq { no_tab: true, ..Default::default() }).expect("boot");
+    let sim_id = m.row(&w).expect("row").expect("a row").id;
+    (m, fake, w, tmp, sim_id)
+}
+
+fn touch_at(phase: TouchPhase, x: f32) -> Action {
+    Action::Touch { phase, at: Point { x, y: 100.0 } }
+}
+
+/// Fix 3 (M-7, M-8): inside a gesture, moves touch no database. The down
+/// reads the row and fills the input context; 50 moves read nothing and
+/// write nothing; the up reads the row and writes `last_used_at` once. The
+/// hold is the person's after the first move and still rolling after the
+/// last, so an agent inside it is refused (exit 2) as before.
+#[test]
+fn a_gestures_moves_skip_the_database_and_keep_the_hold() {
+    let _serial = sim_lock();
+    let (m, fake, w, tmp, sim) = boot_one("moves");
+    m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Down, 0.0)).expect("down");
+    let before = m.db_statements();
+    for i in 1..=50 {
+        m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Move, i as f32)).expect("move");
+        if i == 1 {
+            assert!(matches!(m.hold_view(sim), HoldView::Person { .. }), "the person holds it after the first move");
+        }
+    }
+    assert_eq!(m.db_statements(), before, "50 moves: no row read, no last_used_at write");
+    assert!(matches!(m.hold_view(sim), HoldView::Person { .. }), "still held after the last move");
+    let t0 = Instant::now();
+    let e = m.act(&w, &agent(), &tap("e1"), None).expect_err("an agent inside the person's hold");
+    assert_eq!((e.code, e.exit), ("sim_held", 2));
+    assert!(t0.elapsed() < Duration::from_millis(500));
+    let before_up = m.db_statements();
+    m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Up, 50.0)).expect("up");
+    let after_up = m.db_statements();
+    assert_eq!(after_up.1 - before_up.1, 1, "one last_used_at write at the up");
+    let acts = fake.actions.lock().clone();
+    let touches: Vec<&String> = acts.iter().filter(|a| a.starts_with("touch")).collect();
+    assert_eq!(touches.len(), 52, "every move reached the device: {acts:?}");
+    assert_eq!(touches[0], "touch Down 0,100");
+    assert_eq!(touches[51], "touch Up 50,100");
+    m.stop(&w, &person(), "test").expect("stop");
+    crate::sim::clear_lanes();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Fix 3: a stop in the middle of a gesture clears the input context; the
+/// next move reads the row again and fails with no device; a re-boot
+/// starts clean. A lane error clears it too.
+#[test]
+fn a_stop_mid_gesture_clears_the_input_context() {
+    let _serial = sim_lock();
+    let (m, fake, w, tmp, sim) = boot_one("stop");
+    m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Down, 0.0)).expect("down");
+    m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Move, 1.0)).expect("move");
+    m.stop(&w, &person(), "stopped by owner").expect("stop");
+    let reads = m.db_statements().0;
+    let e = m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Move, 2.0)).expect_err("no device");
+    assert_eq!(e.code, "sim_no_device");
+    assert_eq!(m.db_statements().0, reads + 1, "the move read the row again");
+    m.boot(&w, &person(), &BootReq { no_tab: true, ..Default::default() }).expect("re-boot");
+    let reads = m.db_statements().0;
+    m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Move, 3.0)).expect("a move after the re-boot");
+    assert_eq!(m.db_statements().0, reads + 1, "a fresh boot has no context: the first move reads the row");
+    // A lane error clears the context: the next move reads the row again.
+    fake.running.lock().clear();
+    let e = m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Move, 4.0)).expect_err("the device is gone");
+    assert_eq!(e.code, "sim_not_running");
+    let reads = m.db_statements().0;
+    let _ = m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Move, 5.0));
+    assert_eq!(m.db_statements().0, reads + 1, "after a lane error the next move reads the row");
+    m.stop(&w, &person(), "test").expect("stop");
+    crate::sim::clear_lanes();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Fix 3 keeps the audit as it was: take-over and hand-back write a row
+/// each; a person's moves and taps write none.
+#[test]
+fn take_over_and_hand_back_are_audited_and_moves_are_not() {
+    let _serial = sim_lock();
+    let (m, _fake, w, tmp, sim) = boot_one("audit");
+    let count = || {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        store::recent_audit(&conn, None, 1000).expect("audit").into_iter().filter(|r| r.project_id.as_deref() == Some(w.id.as_str())).count()
+    };
+    let start = count();
+    m.hold(&w, &person(), HoldAction::TakeOver).expect("take over");
+    m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Down, 0.0)).expect("down");
+    for i in 1..=10 {
+        m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Move, i as f32)).expect("move");
+    }
+    m.person_action_sim(sim, &w, "owner", &touch_at(TouchPhase::Up, 10.0)).expect("up");
+    m.person_action_sim(sim, &w, "owner", &Action::Tap { at: Point { x: 1.0, y: 1.0 } }).expect("tap");
+    m.hold(&w, &person(), HoldAction::HandBack).expect("hand back");
+    assert_eq!(count() - start, 2, "take_over + hand_back, nothing for the input");
+    m.stop(&w, &person(), "test").expect("stop");
     crate::sim::clear_lanes();
     let _ = std::fs::remove_dir_all(&tmp);
 }

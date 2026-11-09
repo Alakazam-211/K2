@@ -42,6 +42,9 @@ pub struct FakeLane {
     /// The fake screen's refresh rate: its frame sources make a new frame
     /// every 1/source_hz s and wait for it, as a real source does (M-2).
     pub source_hz: AtomicU32,
+    /// `act` waits here until this goes false (a test fills a viewer's
+    /// input queue).
+    pub hold_act: AtomicBool,
 }
 
 impl FakeLane {
@@ -62,6 +65,7 @@ impl FakeLane {
             installs: AtomicU64::new(0),
             frame_opts: Arc::new(Mutex::new(Vec::new())),
             source_hz: AtomicU32::new(60),
+            hold_act: AtomicBool::new(false),
         }
     }
 
@@ -223,6 +227,9 @@ impl SimLane for FakeLane {
     }
 
     fn act(&self, dev: &DeviceRef, action: &Action) -> Result<(), LaneError> {
+        while self.hold_act.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
         self.check_running(dev)?;
         match action {
             Action::Tap { at } => {

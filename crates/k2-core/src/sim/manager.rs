@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -153,7 +154,45 @@ struct Live {
     snap_seq: u64,
     viewers: u32,
     orientation: Option<Orientation>,
+    /// The device a person's gesture is going to (fix 3): filled by any
+    /// input that read the row, used by the gesture's moves so they skip
+    /// the database, cleared by every change of the device's state and by
+    /// any lane error.
+    input: Option<InputCtx>,
+    /// The last `last_used_at` write for a person's input (at most one a
+    /// second while input flows).
+    last_db_touch: Option<Instant>,
 }
+
+/// What a move needs to reach the device without the database.
+#[derive(Clone)]
+struct InputCtx {
+    dev: DeviceRef,
+    lane: LaneKind,
+    wire_id: String,
+}
+
+/// `K2_SIM_INPUT_FAST=0` (read once) sends every person input through the
+/// row read and the lanes' waited calls, as before fix 3.
+pub fn input_fast() -> bool {
+    static FAST: OnceLock<bool> = OnceLock::new();
+    *FAST.get_or_init(|| std::env::var("K2_SIM_INPUT_FAST").map_or(true, |v| v.trim() != "0"))
+}
+
+/// A person's move: `last_used_at` is written at most once a second for
+/// these (the idle reaper needs no viewers as well as an old stamp, and a
+/// person dragging is a viewer, M-8).
+fn is_move(a: &Action) -> bool {
+    matches!(a, Action::Touch { phase: TouchPhase::Move, .. } | Action::TwoTouch { phase: TouchPhase::Move, .. })
+}
+
+/// The start of a gesture: throttled like a move; its `up` always writes.
+fn is_down(a: &Action) -> bool {
+    matches!(a, Action::Touch { phase: TouchPhase::Down, .. } | Action::TwoTouch { phase: TouchPhase::Down, .. })
+}
+
+/// `last_used_at` on a person's input at most this often.
+const INPUT_TOUCH_EVERY: Duration = Duration::from_secs(1);
 
 /// A lane's first-use install in progress (or its last result).
 #[derive(Debug, Clone, Default)]
@@ -175,6 +214,10 @@ pub struct Manager {
     /// One operation at a time per workspace (boot / stop / erase / act).
     op_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     probes: Mutex<HashMap<LaneKind, LaneProbe>>,
+    /// Session-row reads and `last_used_at` writes (tests: a move does
+    /// neither).
+    db_reads: AtomicU64,
+    db_writes: AtomicU64,
 }
 
 static MANAGER: OnceLock<Manager> = OnceLock::new();
@@ -207,7 +250,20 @@ pub const WAIT_MAX: Duration = Duration::from_secs(120);
 
 impl Manager {
     pub fn new() -> Manager {
-        Manager { disk: Mutex::new(None), setup: Mutex::new(HashMap::new()), live: Mutex::new(HashMap::new()), op_locks: Mutex::new(HashMap::new()), probes: Mutex::new(HashMap::new()) }
+        Manager {
+            disk: Mutex::new(None),
+            setup: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
+            op_locks: Mutex::new(HashMap::new()),
+            probes: Mutex::new(HashMap::new()),
+            db_reads: AtomicU64::new(0),
+            db_writes: AtomicU64::new(0),
+        }
+    }
+
+    /// `(row reads, last_used_at writes)` so far.
+    pub fn db_statements(&self) -> (u64, u64) {
+        (self.db_reads.load(Ordering::SeqCst), self.db_writes.load(Ordering::SeqCst))
     }
 
     fn op_lock(&self, project_id: &str) -> Arc<Mutex<()>> {
@@ -320,6 +376,7 @@ impl Manager {
     }
 
     fn row(&self, ws: &Ws) -> R<Option<SimRow>> {
+        self.db_reads.fetch_add(1, Ordering::SeqCst);
         let db = crate::db::shared();
         let conn = db.lock();
         Ok(store::by_project(&conn, &ws.id)?)
@@ -348,9 +405,36 @@ impl Manager {
     }
 
     fn touch(&self, row: &SimRow) {
+        self.touch_id(row.id);
+    }
+
+    fn touch_id(&self, id: i64) {
+        self.db_writes.fetch_add(1, Ordering::SeqCst);
         let db = crate::db::shared();
         let conn = db.lock();
-        let _ = store::touch(&conn, row.id, now());
+        let _ = store::touch(&conn, id, now());
+    }
+
+    /// `last_used_at` for a person's input: always when `force`, else at
+    /// most once per [`INPUT_TOUCH_EVERY`].
+    fn touch_input(&self, id: i64, force: bool) {
+        let t = Instant::now();
+        let due = self.with_live(id, |l| {
+            let due = force || l.last_db_touch.is_none_or(|last| t.saturating_duration_since(last) >= INPUT_TOUCH_EVERY);
+            if due {
+                l.last_db_touch = Some(t);
+            }
+            due
+        });
+        if due {
+            self.touch_id(id);
+        }
+    }
+
+    /// Forget the gesture's device (a state change or a lane error): the
+    /// next input reads the row again.
+    fn clear_input(&self, id: i64) {
+        self.with_live(id, |l| l.input = None);
     }
 
     pub fn status(&self, ws: &Ws, refresh: bool) -> R<StatusResp> {
@@ -389,6 +473,9 @@ impl Manager {
         let lock = self.op_lock(&ws.id);
         let _g = lock.lock();
         if let Some(r) = self.row(ws)? {
+            if !matches!(r.state, SimState::Running | SimState::Booting) {
+                self.clear_input(r.id);
+            }
             if matches!(r.state, SimState::Running | SimState::Booting) {
                 if let Some(p) = req.platform.as_deref().and_then(LaneKind::parse) {
                     if p.platform() != r.lane.platform() {
@@ -445,6 +532,7 @@ impl Manager {
             let conn = db.lock();
             store::begin_boot(&conn, &ws.id, lane.kind(), now(), &actor.audit())?
         };
+        self.clear_input(row.id);
         self.emit_state(&row, ws);
         let breq = BootRequest {
             workspace_id: ws.id.clone(),
@@ -540,6 +628,7 @@ impl Manager {
         self.with_live(row.id, |l| {
             l.snapshot = None;
             l.hold = ControlHold::new();
+            l.input = None;
         });
         self.emit_state(&r, ws);
         Ok(self.view(&r, ws))
@@ -555,6 +644,7 @@ impl Manager {
         if row.state.occupies_slot() {
             self.stop_row(&row, ws, actor, "erased", "stop")?;
         }
+        self.clear_input(row.id);
         let lane = Self::lane_of(&row)?;
         let key = super::workspace_key(&ws.id);
         let dir = super::device_dir(row.lane, &key);
@@ -956,23 +1046,71 @@ impl Manager {
         Ok(v)
     }
 
-    /// A person's input from the stream (S3): hold, touch the idle clock,
-    /// send to the lane.
+    /// A person's input (S3; `k2 sim` verbs from a person, the fling tail):
+    /// read the row, hold, send to the lane, touch the idle clock.
     pub fn person_action(&self, ws: &Ws, who: &str, action: &Action) -> R<()> {
         let row = self.running_row(ws)?;
-        let (was, now_v) = self.with_live(row.id, |l| {
+        self.person_act_on(&row, ws, who, action)
+    }
+
+    /// A person's input from the stream of device `sim_id` (fix 3). A move
+    /// inside a gesture skips the database: the device comes from the
+    /// gesture's in-memory context, the hold is updated as always (the
+    /// rolling 3 s hold and a take-over's idle clock see every move), and
+    /// `last_used_at` is written at most once a second. Anything else, or a
+    /// move with no context, reads the row as [`Self::person_action`] does
+    /// and fills the context. Any lane error clears it.
+    pub fn person_action_sim(&self, sim_id: i64, ws: &Ws, who: &str, action: &Action) -> R<()> {
+        if input_fast() && is_move(action) {
+            if let Some(ctx) = self.with_live(sim_id, |l| l.input.clone()) {
+                let was = self.person_hold(sim_id, who);
+                let lane = super::lane(ctx.lane).ok_or_else(|| SimError::new(503, "sim_unavailable", format!("the {} lane is not available on this server", ctx.lane)))?;
+                if let Err(e) = lane.act(&ctx.dev, action) {
+                    self.clear_input(sim_id);
+                    return Err(e.into());
+                }
+                self.touch_input(sim_id, false);
+                self.emit_hold_started(was, sim_id, ws, &ctx.wire_id);
+                return Ok(());
+            }
+        }
+        self.person_action(ws, who, action)
+    }
+
+    /// Hold the device for a person's input; the hold before it.
+    fn person_hold(&self, id: i64, who: &str) -> HoldView {
+        self.with_live(id, |l| {
             let was = l.hold.view(Instant::now());
             l.hold.person_input(who, Instant::now());
-            (was, l.hold.view(Instant::now()))
-        });
-        Self::lane_of(&row)?.act(&Self::dev(&row), action)?;
+            was
+        })
+    }
+
+    /// `sim_hold` when a person's input took a free device.
+    fn emit_hold_started(&self, was: HoldView, id: i64, ws: &Ws, wire_id: &str) {
+        if matches!(was, HoldView::Free) {
+            emit("sim_hold", json!({ "workspace": ws.id, "sim": wire_id, "hold": self.hold_view(id) }));
+        }
+    }
+
+    fn person_act_on(&self, row: &SimRow, ws: &Ws, who: &str, action: &Action) -> R<()> {
+        let was = self.person_hold(row.id, who);
+        let dev = Self::dev(row);
+        if let Err(e) = Self::lane_of(row)?.act(&dev, action) {
+            self.clear_input(row.id);
+            return Err(e.into());
+        }
         if let Action::Rotate { orientation } = action {
             self.with_live(row.id, |l| l.orientation = Some(*orientation));
         }
-        self.touch(&row);
-        if matches!(was, HoldView::Free) {
-            emit("sim_hold", json!({ "workspace": ws.id, "sim": row.wire_id(), "hold": now_v }));
+        if input_fast() {
+            let ctx = InputCtx { dev, lane: row.lane, wire_id: row.wire_id() };
+            self.with_live(row.id, |l| l.input = Some(ctx));
         }
+        // Moves and a gesture's down are throttled; its up and every other
+        // input write at once (all of them, with the fast path off).
+        self.touch_input(row.id, !input_fast() || !(is_move(action) || is_down(action)));
+        self.emit_hold_started(was, row.id, ws, &row.wire_id());
         Ok(())
     }
 
@@ -1306,6 +1444,7 @@ impl Manager {
     }
 
     fn mark(&self, row: &SimRow, state: SimState, reason: &str, action: &str) {
+        self.clear_input(row.id);
         let db = crate::db::shared();
         let conn = db.lock();
         let _ = store::set_state(&conn, row.id, state, Some(reason), now());

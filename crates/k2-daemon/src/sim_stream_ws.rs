@@ -617,36 +617,17 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
         m.viewer_left(sim_id);
         return;
     }
-    // People's input runs in order on its own task, so a long swipe never
-    // stalls this viewer's frames; refusals come back on `err_rx`. A probed
-    // touch (stats) carries its id and read time, and its timing comes back
-    // on `timing_rx`.
-    let (in_tx, mut in_rx) = tokio::sync::mpsc::channel::<(ViewerMsg, Option<(u32, Instant)>)>(64);
+    // People's input runs in order on this viewer's own thread (fix 3), so
+    // a long swipe never stalls its frames and no move waits for a thread
+    // pool; refusals come back on `err_rx`. A probed touch (stats) carries
+    // its id and read time, and its timing comes back on `timing_rx`.
+    let (in_tx, in_rx) = std::sync::mpsc::sync_channel::<QueuedInput>(INPUT_QUEUE);
     let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<(String, String)>(16);
     let (timing_tx, mut timing_rx) = tokio::sync::mpsc::channel::<InputTiming>(64);
-    let input_task = {
-        let ws = ws.clone();
-        let who = who.clone();
-        let caller = viewer.caller.clone();
-        tokio::spawn(async move {
-            while let Some((vm, probe)) = in_rx.recv().await {
-                let (ws2, who2, caller2) = (ws.clone(), who.clone(), caller.clone());
-                let r = tokio::task::spawn_blocking(move || person_input(&ws2, &who2, &caller2, vm)).await;
-                if let Some((id, recv)) = probe {
-                    let since = |t: Instant| t.saturating_duration_since(started).as_secs_f32() * 1000.0;
-                    let _ = timing_tx.try_send(InputTiming { id, recv_ms: since(recv), lane_ms: recv.elapsed().as_secs_f32() * 1000.0 });
-                }
-                let err = match r {
-                    Ok(Ok(())) => None,
-                    Ok(Err(e)) => Some((e.code.to_string(), e.message)),
-                    Err(e) => Some(("sim_io".to_string(), e.to_string())),
-                };
-                if let Some(e) = err {
-                    let _ = err_tx.send(e).await;
-                }
-            }
-        })
-    };
+    let input = InputThread { sim_id, ws: ws.clone(), who: who.clone(), caller: viewer.caller.clone(), err_tx, timing_tx, started };
+    if let Err(e) = std::thread::Builder::new().name(format!("k2-sim-input-{me}")).spawn(move || input.run(in_rx)) {
+        log_debug!("[sim] input thread for viewer {me}: {e}");
+    }
     let mut budget = InputBudget::new(Instant::now());
     let mut auth = tokio::time::interval(Duration::from_secs(5));
     auth.tick().await;
@@ -877,8 +858,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
             }
         }
     }
-    drop(in_tx);
-    input_task.abort();
+    drop(in_tx); // the input thread ends after what it is doing
     drop(vpipe);
     if stats.is_some() {
         hub.stats_viewers.fetch_sub(1, Ordering::SeqCst);
@@ -900,8 +880,59 @@ fn fall_back_to_jpeg(codec: &mut Codec, vpipe: &mut Option<VideoPipe>, hub: &Hub
     }
 }
 
-/// One person input from the stream (blocking).
+/// Inputs a viewer may have queued; one more is refused with `sim_busy`.
+const INPUT_QUEUE: usize = 64;
+
+/// One queued input and its stats probe (id, read time).
+type QueuedInput = (ViewerMsg, Option<(u32, Instant)>);
+
+/// A viewer's input thread (`k2-sim-input-<n>`, fix 3; K2 Q3: one per
+/// viewer). It takes what is queued, collapses backed-up moves to the
+/// newest (`coalesce_keep`), and sends each in order. Per viewer, not per
+/// device, so today's ordering and lifetime rules hold; a per-device input
+/// thread belongs to the shared engine.
+struct InputThread {
+    sim_id: i64,
+    ws: Ws,
+    who: String,
+    caller: Caller,
+    err_tx: tokio::sync::mpsc::Sender<(String, String)>,
+    timing_tx: tokio::sync::mpsc::Sender<InputTiming>,
+    started: Instant,
+}
+
+impl InputThread {
+    fn run(self, rx: std::sync::mpsc::Receiver<QueuedInput>) {
+        while let Ok(first) = rx.recv() {
+            let mut batch = vec![first];
+            batch.extend(rx.try_iter());
+            let keep = coalesce_keep(&batch.iter().map(|(m, _)| m.clone()).collect::<Vec<_>>());
+            for ((vm, probe), _) in batch.into_iter().zip(keep).filter(|(_, k)| *k) {
+                let r = person_input_on(Some(self.sim_id), &self.ws, &self.who, &self.caller, vm);
+                if let Some((id, recv)) = probe {
+                    let recv_ms = recv.saturating_duration_since(self.started).as_secs_f32() * 1000.0;
+                    let _ = self.timing_tx.try_send(InputTiming { id, recv_ms, lane_ms: recv.elapsed().as_secs_f32() * 1000.0 });
+                }
+                if let Err(e) = r {
+                    if self.err_tx.blocking_send((e.code.to_string(), e.message)).is_err() {
+                        return; // the viewer left
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One person input from the stream (blocking), the way `k2 sim` would
+/// send it: every input reads the row (tests).
+#[cfg(test)]
 fn person_input(ws: &Ws, who: &str, caller: &Caller, vm: ViewerMsg) -> Result<(), manager::SimError> {
+    person_input_on(None, ws, who, caller, vm)
+}
+
+/// One person input; with the stream's device id, a gesture's moves take
+/// the manager's in-memory fast path (fix 3).
+fn person_input_on(sim_id: Option<i64>, ws: &Ws, who: &str, caller: &Caller, vm: ViewerMsg) -> Result<(), manager::SimError> {
     let m = manager::manager();
     let actor = manager::Actor::Person {
         name: match caller {
@@ -917,9 +948,10 @@ fn person_input(ws: &Ws, who: &str, caller: &Caller, vm: ViewerMsg) -> Result<()
         ViewerMsg::Touch { phase: TouchPhase::Up, x, y, x2: None, y2: None, vx: Some(vx), vy: Some(vy), .. } => {
             m.person_fling(ws, who, Point { x, y }, (vx, vy))
         }
-        o => match to_action(&o) {
-            Some(a) => m.person_action(ws, who, &a),
-            None => Err(manager::SimError::new(400, "sim_invalid", "bad input")),
+        o => match (to_action(&o), sim_id) {
+            (Some(a), Some(id)) => m.person_action_sim(id, ws, who, &a),
+            (Some(a), None) => m.person_action(ws, who, &a),
+            (None, _) => Err(manager::SimError::new(400, "sim_invalid", "bad input")),
         },
     }
 }

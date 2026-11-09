@@ -26,7 +26,7 @@ pub mod xml;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -110,12 +110,18 @@ struct State {
 pub struct AndroidLane {
     root: PathBuf,
     sdk: sdk::Sdk,
+    /// One controller client per running emulator, keyed by device id and
+    /// console port, from one discovery read (fix 3): its unary calls share
+    /// a warm connection instead of a discovery read, a TCP and an HTTP/2
+    /// handshake per touch. Dropped on stop and boot, and on a connect
+    /// error (then discovery is read again once).
+    grpcs: Mutex<HashMap<(String, u16), grpc::EmuGrpc>>,
 }
 
 impl AndroidLane {
     /// `root` = `~/.k2/sim/android`.
     pub fn new(root: PathBuf) -> AndroidLane {
-        AndroidLane { sdk: sdk::Sdk::new(root.join("sdk")), root }
+        AndroidLane { sdk: sdk::Sdk::new(root.join("sdk")), root, grpcs: Mutex::new(HashMap::new()) }
     }
 
     pub fn root(&self) -> &Path {
@@ -187,9 +193,39 @@ impl AndroidLane {
     }
 
     fn grpc(&self, dev: &DeviceRef, st: &State) -> Result<grpc::EmuGrpc, LaneError> {
+        let key = (dev.device_id.clone(), st.console_port);
+        if let Some(g) = self.grpcs.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            return Ok(g.clone());
+        }
         let (_, port, tok) = Self::discovery(&dev.data_dir.join("run"), st.console_port)
             .ok_or_else(|| LaneError::not_running("the emulator's control file is gone; is it still running?"))?;
-        Ok(grpc::EmuGrpc::new(port, tok))
+        let g = grpc::EmuGrpc::new(port, tok);
+        self.grpcs.lock().unwrap_or_else(|e| e.into_inner()).insert(key, g.clone());
+        Ok(g)
+    }
+
+    /// Forget a device's controller client (it stopped, rebooted, or its
+    /// port no longer answers).
+    fn forget_grpc(&self, device_id: &str) {
+        self.grpcs.lock().unwrap_or_else(|e| e.into_inner()).retain(|(id, _), _| id != device_id);
+    }
+
+    /// A person's touch (one finger, or two for a pinch) on the warm
+    /// connection. A connect error means the controller moved (its port or
+    /// token changed): read discovery again and try once more.
+    fn person_touch(&self, dev: &DeviceRef, st: &State, at: &[Point], down: bool) -> Result<(), LaneError> {
+        let ev = touch_event(st.scale, at, down);
+        let g = self.grpc(dev, st)?;
+        let first = rt().block_on(async { tokio::time::timeout(GRPC_TIMEOUT, g.send_touch(&ev)).await });
+        match first {
+            Ok(Err(grpc::GrpcError::Connect(_))) => {
+                self.forget_grpc(&dev.device_id);
+                let g = self.grpc(dev, st)?;
+                Self::block(async move { g.send_touch(&ev).await })
+            }
+            Ok(r) => r.map_err(|e| LaneError::tool(e.to_string())),
+            Err(_) => Err(LaneError::timeout("the emulator did not answer in time")),
+        }
     }
 
     fn block<T>(fut: impl std::future::Future<Output = Result<T, grpc::GrpcError>>) -> Result<T, LaneError> {
@@ -536,6 +572,7 @@ impl SimLane for AndroidLane {
             std::thread::sleep(Duration::from_millis(500));
         }
         let st = st.ok_or_else(|| LaneError::tool("booted without state"))?;
+        self.forget_grpc(&format!("{name}@{console}"));
         Ok(BootedDevice {
             device_id: format!("{name}@{console}"),
             profile: phone_profile(phone, phone.id == PHONES[0].id),
@@ -570,6 +607,7 @@ impl SimLane for AndroidLane {
     }
 
     fn stop(&self, dev: &DeviceRef) -> Result<(), LaneError> {
+        self.forget_grpc(&dev.device_id);
         let st = Self::state(dev)?;
         if !self.alive(dev) {
             return Ok(());
@@ -690,14 +728,8 @@ impl SimLane for AndroidLane {
                 }
                 self.touch(&g, &st, *to, false)
             }
-            Action::Touch { phase, at } => {
-                let g = self.grpc(dev, &st)?;
-                self.touch(&g, &st, *at, !matches!(phase, TouchPhase::Up))
-            }
-            Action::TwoTouch { phase, a, b } => {
-                let g = self.grpc(dev, &st)?;
-                self.touches(&g, &st, &[*a, *b], !matches!(phase, TouchPhase::Up))
-            }
+            Action::Touch { phase, at } => self.person_touch(dev, &st, &[*at], !matches!(phase, TouchPhase::Up)),
+            Action::TwoTouch { phase, a, b } => self.person_touch(dev, &st, &[*a, *b], !matches!(phase, TouchPhase::Up)),
             Action::Type { text } => {
                 let g = self.grpc(dev, &st)?;
                 // Over gRPC only: never argv, never a log line.

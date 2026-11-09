@@ -468,6 +468,89 @@ fn local_and_lan_video_get_60_fps_and_jpeg_gets_30() {
     shut_down(b);
 }
 
+/// Fix 3: a viewer's input runs on its own thread, in order. A drag's
+/// moves reach the lane after its down and before its up, ending at the
+/// last point (moves that backed up may collapse to the newest, never
+/// reorder).
+#[test]
+fn a_viewers_moves_reach_the_lane_in_order_on_its_input_thread() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let b = boot_fake("order");
+    b.fake.actions.lock().clear();
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut c, server) = open(&b, &[]).await;
+        let _hello = next_text(&mut c).await;
+        let send = |m: String| Message::Text(m);
+        c.send(send(r#"{"t":"touch","phase":"down","x":0,"y":20}"#.into())).await.expect("down");
+        for x in 1..=40 {
+            c.send(send(format!(r#"{{"t":"touch","phase":"move","x":{x},"y":20}}"#))).await.expect("move");
+        }
+        c.send(send(r#"{"t":"touch","phase":"up","x":40,"y":20}"#.into())).await.expect("up");
+        let t0 = Instant::now();
+        while !b.fake.actions.lock().iter().any(|a| a.starts_with("touch Up")) {
+            assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", b.fake.actions.lock());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+    });
+    let acts: Vec<String> = b.fake.actions.lock().iter().filter(|a| a.starts_with("touch")).cloned().collect();
+    assert_eq!(acts.first().map(String::as_str), Some("touch Down 0,20"), "{acts:?}");
+    assert_eq!(acts.last().map(String::as_str), Some("touch Up 40,20"), "{acts:?}");
+    let xs: Vec<u32> = acts[1..acts.len() - 1]
+        .iter()
+        .map(|a| a.strip_prefix("touch Move ").and_then(|r| r.split(',').next()).and_then(|x| x.parse().ok()).expect("a move"))
+        .collect();
+    assert!(!xs.is_empty() && xs.windows(2).all(|w| w[1] > w[0]), "in order: {xs:?}");
+    assert_eq!(xs.last(), Some(&40), "the drag ends at its last point");
+    shut_down(b);
+}
+
+/// Fix 3 keeps the queue rule: with the device busy on one input, 64 more
+/// queue, and the next is refused with `sim_busy`. Taps never merge, so
+/// every queued one reaches the lane once the device is free.
+#[test]
+fn a_full_input_queue_still_answers_sim_busy() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let b = boot_fake("busy");
+    b.fake.actions.lock().clear();
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut c, server) = open(&b, &[]).await;
+        let _hello = next_text(&mut c).await;
+        b.fake.hold_act.store(true, std::sync::atomic::Ordering::SeqCst);
+        c.send(Message::Text(r#"{"t":"tap","x":1,"y":1}"#.into())).await.expect("first");
+        tokio::time::sleep(Duration::from_millis(300)).await; // the input thread takes it and waits in the lane
+        for i in 2..=66 {
+            c.send(Message::Text(format!(r#"{{"t":"tap","x":{i},"y":1}}"#))).await.expect("tap");
+        }
+        let mut busy = 0;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+        while let Ok(Some(Ok(m))) = tokio::time::timeout_at(deadline, c.next()).await {
+            if let Message::Text(t) = m {
+                let v: serde_json::Value = serde_json::from_str(&t).expect("JSON");
+                if v["t"] == "error" {
+                    assert_eq!(v["code"], "sim_busy", "{v}");
+                    busy += 1;
+                }
+            }
+        }
+        assert_eq!(busy, 1, "only the 66th (one past the queue of 64) is refused");
+        b.fake.hold_act.store(false, std::sync::atomic::Ordering::SeqCst);
+        let t0 = Instant::now();
+        while b.fake.actions.lock().iter().filter(|a| a.starts_with("tap")).count() < 65 {
+            assert!(t0.elapsed() < Duration::from_secs(5), "{} taps", b.fake.actions.lock().len());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+    });
+    let taps = b.fake.actions.lock().iter().filter(|a| a.starts_with("tap")).count();
+    assert_eq!(taps, 65, "the first and the 64 queued");
+    shut_down(b);
+}
+
 /// When the encoder fails the same socket says `codec: jpeg` and carries on
 /// with K2SF frames.
 #[test]

@@ -582,6 +582,36 @@ pub enum ViewerMsg {
     HandBack,
 }
 
+// ── input coalescing (fix 3) ─────────────────────────────────────────
+
+/// A plain one- or two-finger move (no release velocity): what may merge.
+fn mergeable_move(m: &ViewerMsg) -> Option<bool> {
+    match m {
+        ViewerMsg::Touch { phase: TouchPhase::Move, x2, y2, vx: None, vy: None, .. } => Some(x2.is_some() || y2.is_some()),
+        _ => None,
+    }
+}
+
+/// Which of a drained input batch to keep: in a run of consecutive moves
+/// with the same number of fingers, only the last. Never across a `down` or
+/// `up`, another kind of message, or a change of finger count; keys are
+/// never merged, and a touch with a velocity (a flick's `up`) never is.
+pub fn coalesce_keep(batch: &[ViewerMsg]) -> Vec<bool> {
+    (0..batch.len())
+        .map(|i| match (mergeable_move(&batch[i]), batch.get(i + 1).and_then(mergeable_move)) {
+            (Some(a), Some(b)) => a != b,
+            _ => true,
+        })
+        .collect()
+}
+
+/// [`coalesce_keep`] applied: backed-up moves collapse to the newest point
+/// instead of replaying stale ones.
+pub fn coalesce_moves(batch: Vec<ViewerMsg>) -> Vec<ViewerMsg> {
+    let keep = coalesce_keep(&batch);
+    batch.into_iter().zip(keep).filter_map(|(m, k)| k.then_some(m)).collect()
+}
+
 // ── keyboard input: caps and rate ────────────────────────────────────
 
 /// One `text` message: a keystroke or an IME commit. Longer text is a paste.
@@ -924,6 +954,42 @@ mod tests {
         assert_eq!(v["stats"]["inputs"][0], serde_json::json!({"id": 7, "recvMs": 1000.0, "laneMs": 2.5}));
         let t: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"down","x":1,"y":2,"id":9}"#).expect("touch with an id");
         assert!(matches!(t, ViewerMsg::Touch { id: Some(9), .. }));
+    }
+
+    #[test]
+    fn queued_moves_collapse_to_the_last_and_nothing_else_merges() {
+        let t = |phase: TouchPhase, x: f32| ViewerMsg::Touch { phase, x, y: 1.0, x2: None, y2: None, vx: None, vy: None, id: None };
+        let two = |x: f32| ViewerMsg::Touch { phase: TouchPhase::Move, x, y: 1.0, x2: Some(9.0), y2: Some(9.0), vx: None, vy: None, id: None };
+        let key = ViewerMsg::Key { key: Key::ArrowLeft, shift: false, alt: false };
+        let batch = vec![
+            t(TouchPhase::Down, 0.0),
+            t(TouchPhase::Move, 1.0),
+            t(TouchPhase::Move, 2.0),
+            t(TouchPhase::Move, 3.0),
+            key.clone(),
+            key.clone(),
+            t(TouchPhase::Move, 4.0),
+            two(5.0),
+            two(6.0),
+            t(TouchPhase::Move, 7.0),
+            t(TouchPhase::Up, 7.0),
+            t(TouchPhase::Move, 8.0),
+        ];
+        let out = coalesce_moves(batch);
+        let xs: Vec<String> = out
+            .iter()
+            .map(|m| match m {
+                ViewerMsg::Touch { phase, x, x2, .. } => format!("{phase:?}{}{x}", if x2.is_some() { "2:" } else { ":" }),
+                ViewerMsg::Key { .. } => "key".into(),
+                o => panic!("{o:?}"),
+            })
+            .collect();
+        assert_eq!(xs, vec!["Down:0", "Move:3", "key", "key", "Move:4", "Move2:6", "Move:7", "Up:7", "Move:8"]);
+        // A move carrying a velocity is a release, never merged.
+        let fling = ViewerMsg::Touch { phase: TouchPhase::Move, x: 1.0, y: 1.0, x2: None, y2: None, vx: Some(5.0), vy: Some(5.0), id: None };
+        assert_eq!(coalesce_keep(&[fling.clone(), t(TouchPhase::Move, 2.0)]), vec![true, true]);
+        assert_eq!(coalesce_keep(&[t(TouchPhase::Move, 2.0), fling]), vec![true, true]);
+        assert!(coalesce_moves(vec![]).is_empty());
     }
 
     #[test]

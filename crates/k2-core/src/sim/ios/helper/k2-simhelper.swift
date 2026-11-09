@@ -5,11 +5,17 @@
 // so nothing else on the machine can reach it (stricter than M-A16's
 // loopback + random token).
 //
-//   k2-simhelper --set <device-set-path> --udid <UDID>
+//   k2-simhelper --set <device-set-path> --udid <UDID> [--frames-fd <n>]
 //
 // stdin : one JSON request per line  {"id":1,"op":"tree"}
+//         "nr": true (protocol 3) = no reply on success; a failure is sent as an
+//         event instead: {"event":"input_error","op":…,"code":…,"error":…}
+//         (the daemon sends a touch's down and moves this way)
 // stdout: framed messages  [u32 BE length][u8 kind][payload]   (length counts kind + payload)
 //         kind 'J' = UTF-8 JSON (replies carry the request id; events carry "event")
+// fd <n>: with --frames-fd (protocol 3), the 'F' messages go there, framed the
+//         same way and under their own lock, so a reply never queues behind a
+//         frame; without it they share stdout
 //         kind 'F' = frame: [u32 BE width][u32 BE height][u64 BE seq]
 //                    [u64 BE capture ns][u64 BE emit ns] + JPEG bytes   (protocol 2)
 //                    capture = the IOSurface callback the frame answers, emit = the
@@ -37,17 +43,29 @@ import ImageIO
 import UniformTypeIdentifiers
 import ObjectiveC
 
-let HELPER_VERSION = 2
+let HELPER_VERSION = 3
 
 // MARK: - Output
 
 enum Out {
     static let lock = NSLock()
+    static let frameLock = NSLock()
+    /// The frames pipe (--frames-fd), if the daemon gave one.
+    static let frames: FileHandle? = {
+        let a = CommandLine.arguments
+        guard let i = a.firstIndex(of: "--frames-fd"), i + 1 < a.count, let fd = Int32(a[i + 1]), fd > 2 else { return nil }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+    }()
     static func send(_ kind: UInt8, _ payload: Data) {
         var len = UInt32(payload.count + 1).bigEndian
         var d = Data(bytes: &len, count: 4)
         d.append(kind)
         d.append(payload)
+        if kind == UInt8(ascii: "F"), let fh = frames {
+            frameLock.lock(); defer { frameLock.unlock() }
+            try? fh.write(contentsOf: d)   // the daemon gone: its stdin closing ends us
+            return
+        }
         lock.lock(); defer { lock.unlock() }
         FileHandle.standardOutput.write(d)
     }
@@ -671,7 +689,7 @@ func arg(_ name: String) -> String? {
 
 signal(SIGPIPE, SIG_IGN)
 guard let setPath = arg("--set"), let udid = arg("--udid") else {
-    Out.log("usage: k2-simhelper --set <device-set-path> --udid <UDID>")
+    Out.log("usage: k2-simhelper --set <device-set-path> --udid <UDID> [--frames-fd <n>]")
     exit(64)
 }
 
@@ -808,14 +826,20 @@ while let line = readLine(strippingNewline: true) {
     }
     let id = r["id"] ?? NSNull()
     let t0 = now()
+    // Fire-and-forget (protocol 3): no reply unless it failed.
+    let noReply = (r["nr"] as? Bool) ?? false
+    let op = r["op"] as? String ?? ""
     do {
         var reply = try handle(r)
+        if noReply { continue }
         reply["id"] = id; reply["ok"] = true; reply["ms"] = Int(((now() - t0) * 1000).rounded())
         Out.json(reply)
     } catch let e as HelperError {
-        Out.json(["id": id, "ok": false, "code": e.code, "error": e.message])
+        if noReply { Out.json(["event": "input_error", "op": op, "code": e.code, "error": e.message]) }
+        else { Out.json(["id": id, "ok": false, "code": e.code, "error": e.message]) }
     } catch {
-        Out.json(["id": id, "ok": false, "code": "error", "error": "\(error)"])
+        if noReply { Out.json(["event": "input_error", "op": op, "code": "error", "error": "\(error)"]) }
+        else { Out.json(["id": id, "ok": false, "code": "error", "error": "\(error)"]) }
     }
 }
 exit(0)   // stdin closed: the daemon went away

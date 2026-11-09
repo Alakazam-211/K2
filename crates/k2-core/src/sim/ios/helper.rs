@@ -11,14 +11,19 @@
 //! limit, M-A16).
 //!
 //! **Run.** A plain child process (M-A15): stdin takes one JSON request per
-//! line; stdout carries framed replies, events and JPEG frames (see the
-//! Swift file's header). No socket, so nothing else on the machine can
+//! line; stdout carries framed replies and events, and JPEG frames come on
+//! their own pipe, mapped to the child's fd 3 (`--frames-fd 3`, protocol 3,
+//! fix 3), so a reply never waits behind a 300–600 KB frame. A request with
+//! `"nr": true` (a touch's down and moves) gets no reply; a failure comes
+//! back as an `input_error` event instead (see the Swift file's header). No socket, so nothing else on the machine can
 //! reach it, and no token to leak. It exits when its stdin closes or its
 //! device stops. At start it checks every private class and symbol it uses
 //! and refuses with `unsupported_xcode` (naming the Xcode) if one is gone.
 
 use std::collections::HashMap;
 use std::io::{BufWriter, Read, Write};
+use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -35,7 +40,9 @@ use super::simctl::{Runner, SimError, SimResult};
 pub const SOURCE: &str = include_str!("helper/k2-simhelper.swift");
 /// Bumps with the wire protocol; the helper reports it in `ready`/`hello`.
 /// 2: frames carry the helper's capture and emit times (M0).
-pub const PROTOCOL_VERSION: u64 = 2;
+/// 3: frames on fd 3 (`--frames-fd`), and `nr` requests answered only by
+/// an `input_error` event when they fail (fix 3).
+pub const PROTOCOL_VERSION: u64 = 3;
 /// No message is larger than this (a 4K-ish JPEG is far below).
 pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
@@ -227,6 +234,9 @@ struct Inbox {
     ready: Mutex<Option<mpsc::Sender<SimResult<J>>>>,
     alive: AtomicBool,
     gone_reason: Mutex<Option<String>>,
+    /// The newest `input_error` (a fire-and-forget input the helper
+    /// refused), until a gesture's `up` takes it.
+    input_error: Mutex<Option<SimError>>,
 }
 
 impl Inbox {
@@ -264,6 +274,12 @@ impl Inbox {
                             let _ = tx.send(Err(e));
                         }
                     }
+                    Some("input_error") => {
+                        let code = helper_code(v.get("code").and_then(J::as_str).unwrap_or("helper_error"));
+                        let op = v.get("op").and_then(J::as_str).unwrap_or("input");
+                        let msg = v.get("error").and_then(J::as_str).unwrap_or("the helper refused");
+                        *self.input_error.lock().unwrap() = Some(SimError::new(code, format!("{op}: {msg}")));
+                    }
                     Some("device_gone") => {
                         self.alive.store(false, Ordering::SeqCst);
                         *self.gone_reason.lock().unwrap() = Some(format!("the device is {}", v.get("state").and_then(J::as_str).unwrap_or("stopped")));
@@ -293,6 +309,16 @@ impl Inbox {
 /// What the lane needs from a helper; the seam unit tests fake.
 pub trait HelperIo: Send + Sync {
     fn call(&self, op: &str, args: J, timeout: Duration) -> SimResult<J>;
+    /// Send without waiting for a reply (fix 3: a touch's down and moves).
+    /// A failure surfaces later through [`HelperIo::take_input_error`].
+    /// Default: a waited `call` with the reply dropped.
+    fn notify(&self, op: &str, args: J) -> SimResult<()> {
+        self.call(op, args, Duration::from_secs(20)).map(|_| ())
+    }
+    /// The newest fire-and-forget failure since the last take.
+    fn take_input_error(&self) -> Option<SimError> {
+        None
+    }
     /// Where frames go; `None` stops forwarding.
     fn frame_slot(&self, slot: Option<Arc<FrameSlot>>);
     fn alive(&self) -> bool;
@@ -307,18 +333,56 @@ pub struct HelperProc {
     stderr_tail: Arc<Mutex<Vec<String>>>,
 }
 
+/// The child's end of the frames pipe goes to fd 3 (runs between fork and
+/// exec: only async-signal-safe calls). `dup2` clears close-on-exec on the
+/// new fd; when the pipe already is fd 3, clear it by hand.
+fn frames_to_fd3(fd: RawFd) -> std::io::Result<()> {
+    // SAFETY: plain fcntl / dup2 on fds this process owns, in the child.
+    unsafe {
+        if fd == 3 {
+            let flags = libc::fcntl(3, libc::F_GETFD);
+            if flags < 0 || libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        } else if libc::dup2(fd, 3) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Give `cmd`'s child the write end of a new pipe as fd 3; returns the
+/// read end (the caller drops its copy of the write end after spawning).
+pub fn frames_pipe(cmd: &mut std::process::Command) -> std::io::Result<(std::io::PipeReader, std::io::PipeWriter)> {
+    let (rx, tx) = std::io::pipe()?;
+    let fd = tx.as_raw_fd();
+    // SAFETY: the hook only calls `frames_to_fd3` (fcntl / dup2).
+    unsafe {
+        cmd.pre_exec(move || frames_to_fd3(fd));
+    }
+    Ok((rx, tx))
+}
+
+/// Read frames off the frames pipe into the inbox until it closes. The
+/// helper's life is judged by stdout; this just stops.
+fn read_frames(mut r: impl Read, ib: &Inbox) {
+    loop {
+        match read_message(&mut r) {
+            Ok(Some(m @ Message::Frame(_))) => ib.dispatch(m),
+            Ok(Some(Message::Json(_))) => {} // never sent there
+            Ok(None) | Err(_) => return,
+        }
+    }
+}
+
 impl HelperProc {
     pub fn spawn(bin: &Path, set: &Path, udid: &str) -> SimResult<Self> {
-        let mut child = crate::bg_proc::command(bin)
-            .arg("--set")
-            .arg(set)
-            .arg("--udid")
-            .arg(udid)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| SimError::new("helper_spawn_failed", format!("cannot start {}: {e}", bin.display())))?;
+        let mut cmd = crate::bg_proc::command(bin);
+        cmd.arg("--set").arg(set).arg("--udid").arg(udid).arg("--frames-fd").arg("3").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let (frames_rx, frames_tx) = frames_pipe(&mut cmd).map_err(|e| SimError::new("helper_spawn_failed", format!("frames pipe: {e}")))?;
+        let spawned = cmd.spawn();
+        drop(frames_tx); // the child holds the only write end now
+        let mut child = spawned.map_err(|e| SimError::new("helper_spawn_failed", format!("cannot start {}: {e}", bin.display())))?;
         let inbox = Arc::new(Inbox::default());
         inbox.alive.store(true, Ordering::SeqCst);
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -342,6 +406,12 @@ impl HelperProc {
                 ib.closed();
             })
             .map_err(|e| SimError::new("helper_spawn_failed", format!("reader thread: {e}")))?;
+
+        let ib = inbox.clone();
+        std::thread::Builder::new()
+            .name(format!("k2-simframes-{}", &udid[..8.min(udid.len())]))
+            .spawn(move || read_frames(frames_rx, &ib))
+            .map_err(|e| SimError::new("helper_spawn_failed", format!("frames thread: {e}")))?;
 
         let stderr_tail = Arc::new(Mutex::new(Vec::new()));
         let mut stderr = child.stderr.take().expect("piped stderr");
@@ -406,11 +476,34 @@ impl HelperProc {
             Err(SimError::new(code, reply.get("error").and_then(J::as_str).unwrap_or("the helper refused").to_string()))
         }
     }
+
+    /// Writes one `nr` request and returns once it is written: no id, no
+    /// reply (fix 3). A refusal arrives as an `input_error` event.
+    pub fn notify(&self, op: &str, mut args: J) -> SimResult<()> {
+        if !self.alive() {
+            let why = self.inbox.gone_reason.lock().unwrap().clone().unwrap_or_else(|| "it exited".into());
+            return Err(SimError::new("helper_gone", format!("the Simulator helper stopped ({why}); run k2 sim boot")));
+        }
+        if !args.is_object() {
+            args = json!({});
+        }
+        args["op"] = json!(op);
+        args["nr"] = json!(true);
+        let line = format!("{args}\n");
+        let mut w = self.stdin.lock().unwrap();
+        w.write_all(line.as_bytes()).and_then(|_| w.flush()).map_err(|e| SimError::new("helper_gone", format!("cannot reach the Simulator helper: {e}")))
+    }
 }
 
 impl HelperIo for HelperProc {
     fn call(&self, op: &str, args: J, timeout: Duration) -> SimResult<J> {
         HelperProc::call(self, op, args, timeout)
+    }
+    fn notify(&self, op: &str, args: J) -> SimResult<()> {
+        HelperProc::notify(self, op, args)
+    }
+    fn take_input_error(&self) -> Option<SimError> {
+        self.inbox.input_error.lock().unwrap().take()
     }
     fn frame_slot(&self, slot: Option<Arc<FrameSlot>>) {
         let mut g = self.inbox.frames.lock().unwrap();
@@ -574,6 +667,96 @@ mod tests {
             assert_eq!(c.to_instant(4_993_000_000, limit), earlier);
         }
         assert_eq!(c.to_instant(9_000_000_000, limit), limit, "clamped to the read time");
+    }
+
+    #[test]
+    fn an_input_error_is_kept_until_taken_and_frames_on_their_own_pipe_skip_json() {
+        let ib = Inbox::default();
+        ib.dispatch(Message::Json(json!({"event": "input_error", "op": "touch", "code": "no_hid_client", "error": "no HID client"})));
+        let e = ib.input_error.lock().unwrap().take().expect("kept");
+        assert_eq!(e.code, "unsupported_xcode");
+        assert!(e.message.contains("touch") && e.message.contains("no HID client"), "{}", e.message);
+        assert!(ib.input_error.lock().unwrap().is_none(), "taken once");
+        // The frames pipe: frames land in the slot; JSON there is ignored
+        // (replies only ever come on stdout).
+        let slot = Arc::new(FrameSlot::default());
+        *ib.frames.lock().unwrap() = Some(slot.clone());
+        let (tx, rx) = mpsc::channel();
+        ib.pending.lock().unwrap().insert(1, tx);
+        let mut bytes = msg(b'J', br#"{"id":1,"ok":true}"#);
+        bytes.extend(f_msg(4, 2, 1, b"\xff\xd8"));
+        read_frames(Cursor::new(bytes), &ib);
+        assert_eq!(slot.take(Duration::ZERO).unwrap().unwrap().seq, 4);
+        assert!(rx.try_recv().is_err(), "a reply on the frames pipe is not a reply");
+    }
+
+    fn f_msg(seq: u64, w: u32, h: u32, jpeg: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&w.to_be_bytes());
+        p.extend_from_slice(&h.to_be_bytes());
+        p.extend_from_slice(&seq.to_be_bytes());
+        p.extend_from_slice(&11u64.to_be_bytes());
+        p.extend_from_slice(&22u64.to_be_bytes());
+        p.extend_from_slice(jpeg);
+        msg(b'F', &p)
+    }
+
+    fn sh_bytes(b: &[u8]) -> String {
+        b.iter().map(|x| format!("\\{x:03o}")).collect()
+    }
+
+    /// Fix 3 end to end, with a shell script standing in for the helper:
+    /// spawn passes `--frames-fd 3` and maps the frames pipe there; a frame
+    /// written to fd 3 lands in the slot while JSON (ready, input_error)
+    /// comes on stdout; `notify` writes `nr: true` with no id, waits for
+    /// nothing, and leaves no pending reply.
+    #[test]
+    fn frames_come_on_fd_3_and_notify_is_fire_and_forget() {
+        let dir = std::env::temp_dir().join(format!("k2-simhelper-fd3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("stdin.log");
+        let ready = msg(b'J', format!(r#"{{"event":"ready","version":{PROTOCOL_VERSION}}}"#).as_bytes());
+        let refused = msg(b'J', br#"{"event":"input_error","op":"touch","code":"no_hid_client","error":"no HID client"}"#);
+        let script = format!(
+            "#!/bin/sh\ncase \" $* \" in *\" --frames-fd 3 \"*) ;; *) echo no-frames-fd >&2; exit 9 ;; esac\nprintf '{}'\nIFS= read -r line\nprintf '%s\\n' \"$line\" >> '{}'\nprintf '{}' >&3\nprintf '{}'\ncat >> '{}'\n",
+            sh_bytes(&ready),
+            log.display(),
+            sh_bytes(&f_msg(5, 2, 1, b"\xff\xd8jp")),
+            sh_bytes(&refused),
+            log.display()
+        );
+        let bin = dir.join("fake-helper.sh");
+        std::fs::write(&bin, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let h = HelperProc::spawn(&bin, Path::new("/no/set"), "UDID-TEST-0001").expect("spawn the stand-in");
+        let slot = Arc::new(FrameSlot::default());
+        h.frame_slot(Some(slot.clone()));
+        let t0 = Instant::now();
+        h.notify("touch", json!({"down": true, "x": 1.5, "y": 2.0})).expect("notify");
+        assert!(t0.elapsed() < Duration::from_secs(1), "notify waits for nothing");
+        assert!(h.inbox.pending.lock().unwrap().is_empty(), "no pending id");
+        let f = slot.take(Duration::from_secs(5)).expect("helper alive").expect("a frame off fd 3");
+        assert_eq!((f.seq, f.width, f.height, f.captured_ns, f.emitted_ns), (5, 2, 1, 11, 22));
+        assert_eq!(f.jpeg, b"\xff\xd8jp".to_vec());
+        let mut refused = None;
+        for _ in 0..250 {
+            refused = h.take_input_error();
+            if refused.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(refused.expect("the input_error event").code, "unsupported_xcode");
+        assert!(h.take_input_error().is_none());
+        let first = std::fs::read_to_string(&log).unwrap();
+        let line: J = serde_json::from_str(first.lines().next().expect("a line")).expect("JSON");
+        assert_eq!((line["op"].as_str(), line["nr"].as_bool(), line["x"].as_f64()), (Some("touch"), Some(true), Some(1.5)));
+        assert!(line.get("id").is_none(), "{line}");
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn swiftc_fake(ok: bool) -> FakeRunner {

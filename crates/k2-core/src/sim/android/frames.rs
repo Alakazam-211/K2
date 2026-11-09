@@ -91,9 +91,11 @@ impl FrameSource for GrpcFrames {
         let deadline = Instant::now() + wait;
         let mut s = m.lock().unwrap_or_else(|e| e.into_inner());
         loop {
-            if let Some(f) = s.frame.as_ref().filter(|f| f.seq > self.last_seq) {
+            // Moved out, not copied (M-15): the hub now pulls at the
+            // emulator's ~59 fps and a frame is 1.1 MB. One puller per source.
+            if let Some(f) = s.frame.take_if(|f| f.seq > self.last_seq) {
                 self.last_seq = f.seq;
-                return Ok(Some(f.clone()));
+                return Ok(Some(f));
             }
             if let Some(e) = s.error.take() {
                 return Err(e);

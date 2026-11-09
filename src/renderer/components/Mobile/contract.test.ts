@@ -107,7 +107,8 @@ describe('stream adapter (sim::stream)', () => {
       'ws://127.0.0.1:9/cli/sim/stream?workspace=p-docs&fps=8&codecs=h264%2Cjpeg&win=3&token=tok',
     )
     expect(simStreamUrl('ws://h', 'w', null, 30, { codecs: ['jpeg'], window: 0 })).toBe('ws://h/cli/sim/stream?workspace=w&fps=30&codecs=jpeg&win=1')
-    expect(defaultFps(false)).toBe(30)
+    // Fix 2: a local tab asks 60 (H.264 gets it; the daemon clamps JPEG to 30).
+    expect(defaultFps(false)).toBe(60)
     expect(defaultFps(true)).toBe(8)
   })
 
@@ -190,6 +191,14 @@ describe('stream adapter (sim::stream)', () => {
       message: 'The video encoder stopped.',
     })
     expect(parseServerMsg('{"t":"codec","codec":"vp9"}')).toBeNull()
+    // Fix 2: hello.path (stream::ViewerPath); absent from an older daemon = unknown.
+    const withPath = (p: string): string =>
+      `{"t":"hello","sim":"s1","lane":"ios","state":"running","fps":60,"remote":true,"path":"${p}","hold":{"kind":"free"},"isolation":"x","codec":"h264","window":3}`
+    expect(parseServerMsg(withPath('lan'))).toMatchObject({ t: 'hello', path: 'lan', remote: true, fps: 60 })
+    expect(parseServerMsg(withPath('local'))).toMatchObject({ path: 'local' })
+    expect(parseServerMsg(withPath('tunnel'))).toMatchObject({ path: 'tunnel' })
+    expect(parseServerMsg(withPath('moon'))).not.toHaveProperty('path')
+    expect(parseServerMsg('{"t":"hello","sim":"s1","lane":"ios","state":"running","fps":24,"remote":true,"hold":{"kind":"free"},"isolation":"x"}')).not.toHaveProperty('path')
     // 0.46.7: hello.input (stream::InputCaps); an older daemon sends none.
     expect(
       parseServerMsg(

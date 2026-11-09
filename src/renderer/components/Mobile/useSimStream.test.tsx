@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 
-import type { SimFrame, SimServerMsg, SimStreamConnector, SimStreamHandlers, SimStreamOffer } from './sim-stream'
+import type { SimFrame, SimServerMsg, SimStreamConnector, SimStreamHandlers, SimStreamOffer, SimViewerPath } from './sim-stream'
 import { useSimStream } from './useSimStream'
 
 /** One scope for every render (a new one would reconnect, as in the pane). */
@@ -51,13 +51,14 @@ function fakeCanvas() {
   return { canvasRef: { current: canvas as unknown as HTMLCanvasElement }, drawImage, canvas }
 }
 
-const hello = (codec: 'jpeg' | 'h264', remote: boolean): SimServerMsg => ({
+const hello = (codec: 'jpeg' | 'h264', remote: boolean, path?: SimViewerPath): SimServerMsg => ({
   t: 'hello',
   sim: 's1',
   lane: 'ios',
   state: 'running',
   fps: 8,
   remote,
+  ...(path ? { path } : {}),
   hold: { kind: 'free' },
   isolation: 'x',
   codec,
@@ -181,6 +182,29 @@ describe('useSimStream', () => {
     act(() => decoders[0].init.error(new Error('glitch')))
     expect(c.keyframes).toBe(1)
     warn.mockRestore()
+  })
+
+  it('raises a LAN video stream left at the remote default to 60 (fix 2), and keeps a picked rate', () => {
+    stubWebCodecs()
+    const { connector, conns } = fakeConnector()
+    const { canvasRef } = fakeCanvas()
+    const { result } = renderHook(() =>
+      useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false }),
+    )
+    act(() => conns[0].handlers.onServer(hello('h264', true, 'lan')))
+    expect(conns[0].fps).toEqual([60])
+    expect(result.current.path).toBe('lan')
+    // A JPEG stream on the LAN stays where it is (the daemon caps it at 15).
+    const j = fakeConnector()
+    renderHook(() => useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector: j.connector, canvasRef, hold: false }))
+    act(() => j.conns[0].handlers.onServer(hello('jpeg', true, 'lan')))
+    expect(j.conns[0].fps).toEqual([])
+    // A rate the person picked is kept.
+    const p = fakeConnector()
+    const picked = renderHook(() => useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector: p.connector, canvasRef, hold: false }))
+    act(() => picked.result.current.setFps(8))
+    act(() => p.conns[0].handlers.onServer(hello('h264', true, 'lan')))
+    expect(p.conns[0].fps).toEqual([8])
   })
 
   it('keeps the rate the person picked', () => {

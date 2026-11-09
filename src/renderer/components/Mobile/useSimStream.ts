@@ -12,7 +12,8 @@
 //    video fails here the tab reconnects JPEG-only; the canvas keeps the
 //    last frame meanwhile.
 //  - A remote H.264 stream left at the JPEG default rate (8) is raised to
-//    24 fps; a rate the person picked is kept.
+//    24 fps over Connect and to 60 on the LAN (`hello.path`); a rate the
+//    person picked is kept.
 //  - The screen size in points comes from each frame's header (it changes
 //    when the device rotates); `hello` / `hold` / `state` / `fps` text
 //    messages keep the rest current.
@@ -29,6 +30,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import type { SimHold, SimState } from './simApi'
 import type { ScreenPt } from './sim-input'
 import {
+  LAN_VIDEO_DEFAULT_FPS,
   REMOTE_DEFAULT_FPS,
   REMOTE_VIDEO_DEFAULT_FPS,
   STREAM_WINDOW,
@@ -39,6 +41,7 @@ import {
   type SimInputCaps,
   type SimStreamConnection,
   type SimStreamConnector,
+  type SimViewerPath,
 } from './sim-stream'
 import { browserWebCodecs, H264Sink, type VideoFrameLike } from './sim-video'
 import type { FrameStage, SimStreamStats } from './sim-latency'
@@ -85,6 +88,8 @@ export interface SimStreamView {
   inputCaps: SimInputCaps | null
   /** What the socket streams (from `hello` / `codec`); null before hello. */
   codec: SimCodec | null
+  /** From `hello` (fix 2); null before hello or from an older daemon. */
+  path: SimViewerPath | null
   send(input: SimInput): void
   setFps(fps: number): void
 }
@@ -147,6 +152,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
   const stageRef = useRef(onFrameStage)
   stageRef.current = onFrameStage
   const [codec, setCodec] = useState<SimCodec | null>(null)
+  const [path, setPath] = useState<SimViewerPath | null>(null)
   // Video failed in this webview: reconnect offering JPEG only.
   const [jpegOnly, setJpegOnly] = useState(false)
   const connRef = useRef<SimStreamConnection | null>(null)
@@ -236,8 +242,9 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
               setIsolation(m.isolation || null)
               setInputCaps(m.input ?? null)
               setCodec(m.codec)
+              setPath(m.path ?? null)
               if (m.codec === 'h264' && m.remote && !pickedRef.current && fpsRef.current === REMOTE_DEFAULT_FPS) {
-                c?.setFps(REMOTE_VIDEO_DEFAULT_FPS)
+                c?.setFps(m.path === 'lan' ? LAN_VIDEO_DEFAULT_FPS : REMOTE_VIDEO_DEFAULT_FPS)
               }
               return
             case 'state':
@@ -336,5 +343,5 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
     connRef.current?.setFps(n)
   }, [])
 
-  return { conn, reason, screen, deviceHold, state, fps: fpsGiven, isolation, inputError, hasFrame, inputCaps, codec, send, setFps }
+  return { conn, reason, screen, deviceHold, state, fps: fpsGiven, isolation, inputError, hasFrame, inputCaps, codec, path, send, setFps }
 }

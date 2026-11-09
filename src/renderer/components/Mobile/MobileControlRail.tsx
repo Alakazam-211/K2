@@ -45,6 +45,11 @@ export interface MobileControlRailProps {
   screenOnly: boolean
   /** Remote viewers pick their frame rate; null = local. */
   fps: number | null
+  /** The rates offered (default: Connect's JPEG rates). A LAN H.264 stream
+   *  offers up to 60 (fix 2). */
+  fpsChoices?: readonly number[]
+  /** The menu's heading for them. */
+  fpsLabel?: string
   deviceName: string
   deviceOs?: string
   isolation: string | null
@@ -275,8 +280,8 @@ export function MobileControlRail(props: MobileControlRailProps): React.JSX.Elem
               ) : null}
               {props.fps !== null ? (
                 <div className="border-t border-[var(--color-border)] pt-1 mt-1" data-mobile-fps="">
-                  <div className="px-3 pb-0.5 pt-1 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">Frame rate over Connect</div>
-                  {REMOTE_FPS_CHOICES.map((n) => (
+                  <div className="px-3 pb-0.5 pt-1 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">{props.fpsLabel ?? 'Frame rate over Connect'}</div>
+                  {(props.fpsChoices ?? REMOTE_FPS_CHOICES).map((n) => (
                     <button
                       key={n}
                       type="button"

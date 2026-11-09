@@ -9,17 +9,33 @@ use k2_core::sim::video::annexb::{codec_string, is_keyframe};
 use k2_core::sim::video::fake;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+/// The rate table, by codec and path (fix 2, M-4): JPEG ≤ 30 here and
+/// 2–15 elsewhere; H.264 ≤ 60 here, 2–60 on the LAN (default 60), 2–30
+/// over Connect (default 24). `K2_SIM_VIDEO_MAX_FPS=30` puts local and LAN
+/// H.264 back to 30.
 #[test]
 fn fps_caps_follow_codec_and_local_or_remote() {
-    assert_eq!(clamp_fps(Codec::Jpeg, false, None), 30);
-    assert_eq!(clamp_fps(Codec::Jpeg, false, Some(60)), 30);
-    assert_eq!(clamp_fps(Codec::Jpeg, true, None), 8);
-    assert_eq!(clamp_fps(Codec::Jpeg, true, Some(1)), 2);
-    assert_eq!(clamp_fps(Codec::Jpeg, true, Some(30)), 15);
-    assert_eq!(clamp_fps(Codec::H264, true, None), 24);
-    assert_eq!(clamp_fps(Codec::H264, true, Some(30)), 30, "video may go faster remotely");
-    assert_eq!(clamp_fps(Codec::H264, true, Some(99)), 30);
-    assert_eq!(clamp_fps(Codec::H264, false, Some(60)), 30);
+    use ViewerPath::{Lan, Local, Tunnel};
+    assert_eq!(clamp_fps(Codec::Jpeg, Local, None), 30);
+    assert_eq!(clamp_fps(Codec::Jpeg, Local, Some(60)), 30, "the tab asks 60; JPEG gets 30");
+    for p in [Lan, Tunnel] {
+        assert_eq!(clamp_fps(Codec::Jpeg, p, None), 8);
+        assert_eq!(clamp_fps(Codec::Jpeg, p, Some(1)), 2);
+        assert_eq!(clamp_fps(Codec::Jpeg, p, Some(30)), 15);
+    }
+    assert_eq!(clamp_fps(Codec::H264, Local, Some(60)), 60, "local video at 60");
+    assert_eq!(clamp_fps(Codec::H264, Local, None), 60);
+    assert_eq!(clamp_fps(Codec::H264, Local, Some(99)), 60);
+    assert_eq!(clamp_fps(Codec::H264, Lan, None), 60, "LAN video defaults to 60");
+    assert_eq!(clamp_fps(Codec::H264, Lan, Some(60)), 60);
+    assert_eq!(clamp_fps(Codec::H264, Lan, Some(1)), 2);
+    assert_eq!(clamp_fps(Codec::H264, Tunnel, None), 24);
+    assert_eq!(clamp_fps(Codec::H264, Tunnel, Some(30)), 30, "video may go faster remotely");
+    assert_eq!(clamp_fps(Codec::H264, Tunnel, Some(60)), 30, "Connect stays at 30");
+    // The rollback cap.
+    assert_eq!(clamp_fps_with(Codec::H264, Local, Some(60), 30), 30);
+    assert_eq!(clamp_fps_with(Codec::H264, Lan, None, 30), 30);
+    assert_eq!(clamp_fps_with(Codec::H264, Tunnel, None, 30), 24);
 }
 
 #[test]
@@ -138,9 +154,12 @@ fn shut_down(b: Booted) {
     let _ = std::fs::remove_dir_all(&b.tmp);
 }
 
-/// Two viewers share one hub; a JPEG viewer makes the capture thread encode
-/// each frame once, however many viewers; a viewer that never reads holds
-/// nobody back (the channel keeps only the newest).
+/// Two viewers share one hub. JPEG is encoded lazily (fix 2, M-3): the hub
+/// encodes nothing; the first viewer that sends a frame encodes it, and a
+/// second viewer sending the same frame reuses it (one encode per frame
+/// however many viewers); a frame no viewer sends is never encoded. A
+/// viewer that never reads holds nobody back (the channel keeps only the
+/// newest).
 #[test]
 fn one_encoder_serves_every_viewer() {
     let _serial = crate::sim_routes::sim_test_lock();
@@ -150,7 +169,6 @@ fn one_encoder_serves_every_viewer() {
     assert_eq!(sim_a, sim_b);
     assert!(Arc::ptr_eq(&hub_a, &hub_b), "one hub per device");
     hub_a.want_fps.lock().expect("fps").insert(1, 30);
-    hub_a.jpeg_viewers.fetch_add(1, Ordering::SeqCst);
     let mut fast = hub_a.rx.clone();
     let _slow = hub_b.rx.clone(); // never reads
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
@@ -165,17 +183,19 @@ fn one_encoder_serves_every_viewer() {
     });
     let seqs: Vec<u32> = got.iter().map(|f| f.seq).collect();
     assert!(seqs.windows(2).all(|w| w[1] > w[0]), "{seqs:?}");
-    let ready = got[1].jpeg_ready().expect("the capture thread encoded it").expect("a JPEG");
-    let (h, jpeg) = FrameHeader::decode(&ready).expect("header");
+    assert!(got.iter().all(|f| f.jpeg_ready().is_none()), "the hub encodes nothing itself");
+    assert_eq!(encodes(sim_a), Some(0));
+    // Two viewers send the same frame: one encode, the same bytes.
+    let first = got[2].jpeg_message(&hub_a.encodes).expect("encode").to_vec();
+    let second = got[2].jpeg_message(&hub_b.encodes).expect("reuse").to_vec();
+    assert_eq!(first, second);
+    let (h, jpeg) = FrameHeader::decode(&first).expect("header");
     assert_eq!((h.width_px, h.height_px, h.width_pt, h.height_pt), (4, 8, 4, 8));
     assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
-    // Every frame after the JPEG viewer joined came encoded (the very first
-    // may have been captured before), and the slow viewer's receiver sees
-    // the same Arc as the fast one: no second encode.
-    assert!(got[1..].iter().all(|f| f.jpeg_ready().is_some_and(|r| r.is_ok())), "encoded once, on the capture thread");
-    let n = encodes(sim_a).expect("hub");
-    assert!((4..5 + 40).contains(&n), "{n} encodes for 5+ frames");
-    hub_a.jpeg_viewers.fetch_sub(1, Ordering::SeqCst);
+    assert_eq!(encodes(sim_a), Some(1), "one encode for two viewers");
+    // The frames nobody sent were never encoded.
+    assert!(got.iter().enumerate().all(|(i, f)| i == 2 || f.jpeg_ready().is_none()), "a frame no viewer sends is never encoded");
+    assert_eq!(encodes(sim_a), Some(1));
     drop(fast);
     drop(_slow);
     drop(hub_a);
@@ -226,6 +246,11 @@ type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// Serve one viewer on a real loopback socket (as the dispatcher would,
 /// with the owner token) and connect a client to it.
 async fn open(b: &Booted, extra: &[(&str, &str)]) -> (Client, tokio::task::JoinHandle<()>) {
+    open_as(b, ViewerPath::Local, extra).await
+}
+
+/// [`open`] as a viewer on `path` (the dispatcher's ingress).
+async fn open_as(b: &Booted, path: ViewerPath, extra: &[(&str, &str)]) -> (Client, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let mut params: HashMap<String, String> = HashMap::new();
@@ -236,7 +261,7 @@ async fn open(b: &Booted, extra: &[(&str, &str)]) -> (Client, tokio::task::JoinH
     }
     let server = tokio::spawn(async move {
         let (mut s, _) = listener.accept().await.expect("accept");
-        serve(&mut s, params, Viewer { caller: Caller::Owner, token: "owner-tok".into(), remote: false }, "owner-tok".into()).await;
+        serve(&mut s, params, Viewer { caller: Caller::Owner, token: "owner-tok".into(), path }, "owner-tok".into()).await;
     });
     let (client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/cli/sim/stream")).await.expect("connect");
     (client, server)
@@ -406,6 +431,40 @@ fn a_video_viewer_gets_keyframe_first_a_window_and_keyframes_on_request() {
     let l = log.lock().expect("log").clone();
     assert_eq!(l.opened, vec![(4, 8)], "one encoder for this viewer");
     assert_eq!(l.frames.iter().filter(|(_, k)| *k).count(), 2, "join + ask: {:?}", l.frames);
+    shut_down(b);
+}
+
+/// Fix 2: the tab asks 60. A local H.264 viewer gets 60; a JPEG one gets 30
+/// and is told so in `hello.fps`; a LAN H.264 viewer that asks nothing gets
+/// 60 and `path: lan` (still `remote`, so the tab keeps its remote UI).
+#[test]
+fn local_and_lan_video_get_60_fps_and_jpeg_gets_30() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _log = fake::install();
+    let b = boot_fake("rates");
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut c, server) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "60")]).await;
+        let hello = next_text(&mut c).await;
+        assert_eq!((hello["codec"].as_str(), hello["fps"].as_u64(), hello["path"].as_str()), (Some("h264"), Some(60), Some("local")));
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+
+        let (mut c, server) = open(&b, &[("fps", "60")]).await;
+        let hello = next_text(&mut c).await;
+        assert_eq!((hello["codec"].as_str(), hello["fps"].as_u64()), (Some("jpeg"), Some(30)));
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+
+        // `open` sends fps=30 unless told otherwise; an unreadable fps is no ask.
+        let (mut c, server) = open_as(&b, ViewerPath::Lan, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "")]).await;
+        let hello = next_text(&mut c).await;
+        assert_eq!((hello["fps"].as_u64(), hello["path"].as_str(), hello["remote"].as_bool()), (Some(60), Some("lan"), Some(true)));
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+    });
+    fake::uninstall();
     shut_down(b);
 }
 

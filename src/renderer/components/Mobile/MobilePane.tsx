@@ -82,7 +82,16 @@ import {
   type ScreenPt,
   TAP_MAX_MS,
 } from './sim-input'
-import { defaultFps, type SimAppearance, type SimInput, type SimStreamConnector, wsSimStream } from './sim-stream'
+import {
+  defaultFps,
+  LAN_VIDEO_FPS_CHOICES,
+  REMOTE_FPS_CHOICES,
+  REMOTE_VIDEO_FPS_CHOICES,
+  type SimAppearance,
+  type SimInput,
+  type SimStreamConnector,
+  wsSimStream,
+} from './sim-stream'
 import { SimKeyboardHelp, useSimKeyboard } from './useSimKeyboard'
 import {
   altDragFingers,
@@ -1287,6 +1296,8 @@ function MobileDevice({
               appearance={appearance}
               screenOnly={screenOnly}
               fps={scope.isRemote ? stream.fps ?? fps : null}
+              fpsChoices={stream.codec !== 'h264' ? REMOTE_FPS_CHOICES : stream.path === 'lan' ? LAN_VIDEO_FPS_CHOICES : REMOTE_VIDEO_FPS_CHOICES}
+              fpsLabel={stream.path === 'lan' ? 'Frame rate on this network' : 'Frame rate over Connect'}
               deviceName={session?.profile?.name ?? 'Device'}
               deviceOs={session?.profile?.os}
               isolation={stream.isolation}

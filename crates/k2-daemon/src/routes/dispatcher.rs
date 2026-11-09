@@ -2694,7 +2694,14 @@ async fn handle_one_request(
                 .or_else(|| bearer_token.clone())
                 .unwrap_or_default();
             let params = super::http::parse_params(&path, &query);
-            let viewer = crate::sim_stream_ws::Viewer { caller, token, remote: ingress != Ingress::Loopback };
+            // The rate table's key (fix 2): LAN may go to 60 fps for H.264,
+            // Connect and App links keep the remote rates.
+            let path = match ingress {
+                Ingress::Loopback => k2_core::sim::stream::ViewerPath::Local,
+                Ingress::Lan => k2_core::sim::stream::ViewerPath::Lan,
+                Ingress::Tunnel | Ingress::App => k2_core::sim::stream::ViewerPath::Tunnel,
+            };
+            let viewer = crate::sim_stream_ws::Viewer { caller, token, path };
             crate::sim_stream_ws::serve(stream, params, viewer, state.token.to_string()).await;
             return DispatchOutcome::Done;
         }

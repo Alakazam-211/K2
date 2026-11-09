@@ -8,7 +8,7 @@
 //! owner was never asked for). The install needs every one of both.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,9 @@ pub struct FakeLane {
     /// Every `FrameOpts` a frame source was opened (`"open"`) or retuned
     /// (`"retune"`) with, in order.
     pub frame_opts: Arc<Mutex<Vec<(&'static str, FrameOpts)>>>,
+    /// The fake screen's refresh rate: its frame sources make a new frame
+    /// every 1/source_hz s and wait for it, as a real source does (M-2).
+    pub source_hz: AtomicU32,
 }
 
 impl FakeLane {
@@ -58,6 +61,7 @@ impl FakeLane {
             hold_install: AtomicBool::new(false),
             installs: AtomicU64::new(0),
             frame_opts: Arc::new(Mutex::new(Vec::new())),
+            source_hz: AtomicU32::new(60),
         }
     }
 
@@ -279,7 +283,8 @@ impl SimLane for FakeLane {
     fn frames(&self, dev: &DeviceRef, opts: FrameOpts) -> Result<Box<dyn FrameSource>, LaneError> {
         self.check_running(dev)?;
         self.frame_opts.lock().push(("open", opts));
-        Ok(Box::new(FakeFrames { seq: 0, opts: self.frame_opts.clone() }))
+        let period = Duration::from_secs_f64(1.0 / self.source_hz.load(Ordering::SeqCst).max(1) as f64);
+        Ok(Box::new(FakeFrames { seq: 0, opts: self.frame_opts.clone(), period, next_due: None }))
     }
 
     fn logs(&self, dev: &DeviceRef, q: &LogQuery) -> Result<Vec<String>, LaneError> {
@@ -293,14 +298,30 @@ impl SimLane for FakeLane {
     }
 }
 
-/// A 4x8 px gray frame, a new one on every pull.
+/// A 4x8 px gray frame, a new one every `period` (the fake screen's own
+/// clock): `next_frame` waits for it, or returns `Ok(None)` when none is
+/// due within `wait`. A puller that fell behind gets the next frame a
+/// period on, never a burst.
 pub struct FakeFrames {
     seq: u64,
     opts: Arc<Mutex<Vec<(&'static str, FrameOpts)>>>,
+    period: Duration,
+    next_due: Option<Instant>,
 }
 
 impl FrameSource for FakeFrames {
-    fn next_frame(&mut self, _wait: Duration) -> Result<Option<Frame>, LaneError> {
+    fn next_frame(&mut self, wait: Duration) -> Result<Option<Frame>, LaneError> {
+        let now = Instant::now();
+        let due = *self.next_due.get_or_insert(now);
+        if due > now {
+            if due - now > wait {
+                std::thread::sleep(wait);
+                return Ok(None);
+            }
+            std::thread::sleep(due - now);
+        }
+        let at = Instant::now();
+        self.next_due = Some(if at.saturating_duration_since(due) > self.period { at + self.period } else { due + self.period });
         self.seq += 1;
         Ok(Some(Frame {
             width_px: 4,

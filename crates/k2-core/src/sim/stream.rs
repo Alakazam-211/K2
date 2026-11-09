@@ -82,10 +82,33 @@ pub const REMOTE_DEFAULT_FPS: u32 = 8;
 pub const REMOTE_MIN_FPS: u32 = 2;
 pub const REMOTE_MAX_FPS: u32 = 15;
 
-/// H.264 viewers: 2–30 fps remote (default 24), up to 30 local. A P frame
-/// is a few KB where a JPEG is tens, so remote viewers may go faster.
+/// H.264 viewers over Connect: 2–30 fps (default 24). A P frame is a few
+/// KB where a JPEG is tens, so remote viewers may go faster than JPEG.
 pub const REMOTE_VIDEO_DEFAULT_FPS: u32 = 24;
 pub const REMOTE_VIDEO_MAX_FPS: u32 = 30;
+/// H.264 viewers on this machine and on the LAN: up to 60 fps (fix 2;
+/// LAN 2–60, default 60). JPEG stays at [`LOCAL_MAX_FPS`] locally.
+pub const LOCAL_VIDEO_MAX_FPS: u32 = 60;
+pub const LAN_VIDEO_MAX_FPS: u32 = 60;
+
+/// How a viewer reaches the daemon (`hello.path`): the rate table's key.
+/// From the dispatcher's ingress: loopback → Local, LAN → Lan, Connect and
+/// App links → Tunnel. "LAN" can still be far (a tailnet peer, M-6), so it
+/// keeps the remote bitrate cap and rate control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ViewerPath {
+    Local,
+    Lan,
+    Tunnel,
+}
+
+impl ViewerPath {
+    /// Not on this machine (`hello.remote`, the remote bitrate cap).
+    pub fn remote(self) -> bool {
+        self != ViewerPath::Local
+    }
+}
 
 /// The most frames a viewer may have in flight (`win=`).
 pub use k2_simvideo::flow::MAX_WINDOW;
@@ -311,7 +334,12 @@ pub enum ServerMsg {
         profile: Option<DeviceProfile>,
         /// The cap this socket got (after the daemon's local/remote clamp).
         fps: u32,
+        /// Not on this machine (LAN and Connect both say true).
         remote: bool,
+        /// Which rate table this viewer got (fix 2; absent from older
+        /// daemons, which a tab reads as unknown).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<ViewerPath>,
         hold: HoldView,
         /// "separate, not sealed" text for the tab (PRD §8).
         isolation: String,
@@ -495,8 +523,8 @@ pub struct InputCaps {
 pub enum ViewerMsg {
     /// The viewer finished drawing frame `seq`; send the next.
     Ack { seq: u32 },
-    /// Ask for a different rate (clamped; remote 2–15, local ≤ 30; H.264
-    /// remote 2–30).
+    /// Ask for a different rate (clamped by codec and path: JPEG local ≤ 30,
+    /// LAN / Connect 2–15; H.264 local ≤ 60, LAN 2–60, Connect 2–30).
     Fps { fps: u32 },
     /// Send a keyframe next (the viewer's decoder lost its place). Ignored
     /// on a JPEG stream.
@@ -740,6 +768,7 @@ mod tests {
             profile: None,
             fps: 30,
             remote: false,
+            path: None,
             hold: HoldView::Free,
             isolation: "x".into(),
             input: None,
@@ -749,13 +778,22 @@ mod tests {
         let v = serde_json::to_value(&hello).expect("json");
         assert_eq!(v["codec"], "h264");
         assert_eq!(v["window"], 3);
+        assert!(v.get("path").is_none(), "no path, no key");
+        let lan = match hello.clone() {
+            ServerMsg::Hello { sim, lane, state, profile, fps, remote, hold, isolation, input, codec, window, .. } => {
+                ServerMsg::Hello { sim, lane, state, profile, fps, remote, path: Some(ViewerPath::Lan), hold, isolation, input, codec, window }
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(serde_json::to_value(&lan).expect("json")["path"], "lan");
+        assert!(ViewerPath::Lan.remote() && ViewerPath::Tunnel.remote() && !ViewerPath::Local.remote());
         // A hello from an older daemon (no codec, no window) = JPEG, 1.
         let old: ServerMsg = serde_json::from_str(
             r#"{"t":"hello","sim":"s1","lane":"android","state":"running","fps":8,"remote":true,"hold":{"kind":"free"},"isolation":"x"}"#,
         )
         .expect("old hello");
         match old {
-            ServerMsg::Hello { codec, window, .. } => assert_eq!((codec, window), (Codec::Jpeg, 1)),
+            ServerMsg::Hello { codec, window, path, .. } => assert_eq!((codec, window, path), (Codec::Jpeg, 1, None)),
             other => panic!("not a hello: {other:?}"),
         }
         let s = serde_json::to_value(ServerMsg::Codec { codec: Codec::Jpeg, message: None }).expect("json");
@@ -897,6 +935,7 @@ mod tests {
             profile: None,
             fps: 30,
             remote: false,
+            path: None,
             hold: HoldView::Free,
             isolation: "x".into(),
             input: Some(InputCaps { multi_touch: true, fling: true }),

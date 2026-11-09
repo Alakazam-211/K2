@@ -118,6 +118,15 @@ describe('MobileControlRail', () => {
     expect(p.onFps).toHaveBeenCalledWith(12)
   })
 
+  it('⋯: a LAN video stream offers up to 60 fps under its own heading (fix 2)', () => {
+    const p = props({ fps: 60, fpsChoices: [2, 4, 8, 12, 15, 24, 30, 60], fpsLabel: 'Frame rate on this network' })
+    render(<MobileControlRail {...p} />)
+    const m = more()
+    expect(Array.from(m.querySelectorAll('[data-mobile-fps-choice]')).map((b) => b.getAttribute('data-mobile-fps-choice'))).toEqual(['2', '4', '8', '12', '15', '24', '30', '60'])
+    expect(m.querySelector('[data-mobile-fps-choice="60"]')?.getAttribute('aria-checked')).toBe('true')
+    expect(m.querySelector('[data-mobile-fps]')?.textContent).toContain('Frame rate on this network')
+  })
+
   it('⋯: Live touch (no longer beta) switches off and on when the pane offers it', () => {
     const p = props({ liveTouch: true, onLiveTouch: vi.fn() })
     const view = render(<MobileControlRail {...p} />)

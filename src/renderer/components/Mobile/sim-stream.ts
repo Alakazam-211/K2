@@ -51,13 +51,21 @@ export const STREAM_WINDOW = 3
 
 export type SimCodec = 'jpeg' | 'h264'
 
-/** fps caps (stream::LOCAL_MAX_FPS, REMOTE_*). */
-export const LOCAL_FPS = 30
+/** What a local tab asks for (fix 2): H.264 here goes to 60
+ *  (stream::LOCAL_VIDEO_MAX_FPS); the daemon clamps JPEG to 30
+ *  (stream::LOCAL_MAX_FPS) and says so in `hello.fps`. */
+export const LOCAL_FPS = 60
 export const REMOTE_DEFAULT_FPS = 8
 export const REMOTE_FPS_CHOICES: readonly number[] = [2, 4, 8, 12, 15]
 /** H.264 streams (stream::REMOTE_VIDEO_*): a remote tab may go to 30. */
 export const REMOTE_VIDEO_DEFAULT_FPS = 24
 export const REMOTE_VIDEO_FPS_CHOICES: readonly number[] = [2, 4, 8, 12, 15, 24, 30]
+/** H.264 on the LAN (stream::LAN_VIDEO_MAX_FPS): 2–60, default 60. */
+export const LAN_VIDEO_DEFAULT_FPS = 60
+export const LAN_VIDEO_FPS_CHOICES: readonly number[] = [2, 4, 8, 12, 15, 24, 30, 60]
+
+/** How the viewer reaches the daemon (`hello.path`, stream::ViewerPath). */
+export type SimViewerPath = 'local' | 'lan' | 'tunnel'
 
 export const CLOSE_AUTH_REVOKED = 4401
 export const CLOSE_FORBIDDEN = 4403
@@ -155,6 +163,8 @@ export type SimServerMsg =
       profile?: SimDeviceProfile
       fps: number
       remote: boolean
+      /** Absent from an older daemon: unknown (the tab treats it as before). */
+      path?: SimViewerPath
       hold: SimHold
       isolation: string
       input?: SimInputCaps
@@ -323,6 +333,7 @@ function parseInputCaps(o: Record<string, unknown>): SimInputCaps {
   return { multiTouch: o.multiTouch === true, fling: o.fling === true }
 }
 const CODECS: ReadonlySet<string> = new Set(['jpeg', 'h264'])
+const PATHS: ReadonlySet<string> = new Set(['local', 'lan', 'tunnel'])
 
 const STATES: ReadonlySet<string> = new Set(['installing', 'booting', 'running', 'stopping', 'stopped', 'failed'])
 
@@ -350,6 +361,7 @@ export function parseServerMsg(raw: string): SimServerMsg | null {
           ...(o.profile ? { profile: parseDeviceProfile(o.profile) } : {}),
           fps: typeof o.fps === 'number' ? o.fps : 0,
           remote: o.remote === true,
+          ...(typeof o.path === 'string' && PATHS.has(o.path) ? { path: o.path as SimViewerPath } : {}),
           hold: parseSimHold(o.hold),
           isolation: typeof o.isolation === 'string' ? o.isolation : '',
           ...(o.input && typeof o.input === 'object' ? { input: parseInputCaps(o.input as Record<string, unknown>) } : {}),

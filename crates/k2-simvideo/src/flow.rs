@@ -12,6 +12,15 @@
 //! daemon always sends the newest frame when a slot frees (stale frames are
 //! skipped, never queued).
 //!
+//! **[`Pacer`]**: the viewer's frame schedule, the only pacing point
+//! between the device and the viewer (fix 2). Sends are due every `gap`;
+//! each send moves the schedule on by one gap from when it was due (not
+//! from when it went), so a 60 Hz source and a 24 fps viewer don't beat.
+//! A frame that arrives up to a quarter of a gap before it is due goes at
+//! once; an older one waits until a quarter gap after the due time for a
+//! fresher frame, then goes. More than a gap behind (a still screen, a
+//! stall), the schedule restarts from now instead of bursting to catch up.
+//!
 //! **[`RateCtl`]**: the H.264 bitrate. Target = [`crate::bitrate_for`];
 //! when acks come back much slower than the best round trip seen (a queue
 //! is building on the link) it steps down 25%, then climbs back 10% a
@@ -208,12 +217,170 @@ impl RateCtl {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Pacer {
+    gap: Duration,
+    next_due: Option<Instant>,
+    last_sent: Option<Instant>,
+}
+
+impl Pacer {
+    pub fn new(fps: u32) -> Self {
+        Pacer { gap: Self::gap_for(fps), next_due: None, last_sent: None }
+    }
+
+    fn gap_for(fps: u32) -> Duration {
+        Duration::from_secs_f64(1.0 / fps.max(1) as f64)
+    }
+
+    pub fn gap(&self) -> Duration {
+        self.gap
+    }
+
+    fn slack(&self) -> Duration {
+        self.gap / 4
+    }
+
+    /// A new rate: the next frame is due one new gap after the last send.
+    pub fn set_fps(&mut self, fps: u32) {
+        self.gap = Self::gap_for(fps);
+        self.next_due = self.last_sent.map(|t| t + self.gap);
+    }
+
+    /// May the newest frame, which arrived at `arrived`, go at `now`?
+    pub fn ready(&self, arrived: Instant, now: Instant) -> bool {
+        match self.next_due {
+            None => true,
+            Some(due) => arrived + self.slack() >= due || now >= due + self.slack(),
+        }
+    }
+
+    /// How long until that frame may go (zero when it may now).
+    pub fn wait(&self, arrived: Instant, now: Instant) -> Duration {
+        match self.next_due {
+            Some(due) if !self.ready(arrived, now) => (due + self.slack()).saturating_duration_since(now),
+            _ => Duration::ZERO,
+        }
+    }
+
+    /// A frame went at `now`.
+    pub fn sent(&mut self, now: Instant) {
+        let base = match self.next_due {
+            Some(due) if now <= due + self.gap => due,
+            _ => now,
+        };
+        self.next_due = Some(base + self.gap);
+        self.last_sent = Some(now);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
+    }
+
+    /// Drive a pacer as a viewer does: frames arrive at `arrivals`; the
+    /// newest pending one goes when the pacer allows, at an arrival or when
+    /// its wait ends (an arrival at the same instant comes first). Ends at
+    /// the last arrival. Returns (frame index, send time).
+    fn drive(p: &mut Pacer, arrivals: &[Instant]) -> Vec<(usize, Instant)> {
+        let mut out = Vec::new();
+        let mut pending: Option<(usize, Instant)> = None;
+        let mut now = arrivals[0];
+        let mut i = 0;
+        loop {
+            let wake = pending.map(|(_, a)| now + p.wait(a, now));
+            match (arrivals.get(i), wake) {
+                (None, _) => return out,
+                (Some(&t), Some(w)) if w < t => now = w,
+                (Some(&t), _) => {
+                    now = t;
+                    pending = Some((i, t));
+                    i += 1;
+                }
+            }
+            if let Some((j, a)) = pending {
+                if p.ready(a, now) {
+                    p.sent(now);
+                    out.push((j, now));
+                    pending = None;
+                }
+            }
+        }
+    }
+
+    fn source(start: Instant, hz_period: Duration, n: usize, jitter_ms: &[i64]) -> Vec<Instant> {
+        (0..n)
+            .map(|k| {
+                let t = start + ms(100) + hz_period * k as u32;
+                let j = jitter_ms.get(k % jitter_ms.len().max(1)).copied().unwrap_or(0);
+                if j >= 0 { t + ms(j as u64) } else { t - ms((-j) as u64) }
+            })
+            .collect()
+    }
+
+    const HZ60: Duration = Duration::from_micros(16_667);
+
+    #[test]
+    fn pacer_at_30_on_a_60_hz_source_sends_every_second_frame() {
+        let t0 = Instant::now();
+        let mut p = Pacer::new(30);
+        let sent = drive(&mut p, &source(t0, HZ60, 60, &[]));
+        let idx: Vec<usize> = sent.iter().map(|(j, _)| *j).collect();
+        assert_eq!(idx, (0..60).step_by(2).collect::<Vec<_>>(), "every second frame, each the fresh one");
+    }
+
+    #[test]
+    fn pacer_at_24_on_60_hz_averages_24_over_ten_seconds() {
+        let t0 = Instant::now();
+        let mut p = Pacer::new(24);
+        let sent = drive(&mut p, &source(t0, HZ60, 600, &[]));
+        assert!((239..=241).contains(&sent.len()), "{} frames in 10 s", sent.len());
+        // Never two frames closer than three quarters of a gap.
+        assert!(sent.windows(2).all(|w| w[1].1 - w[0].1 >= p.gap() * 3 / 4), "no bunching");
+    }
+
+    #[test]
+    fn pacer_at_60_on_60_hz_sends_every_frame_through_2_ms_of_jitter() {
+        let t0 = Instant::now();
+        let mut p = Pacer::new(60);
+        let arrivals = source(t0, HZ60, 300, &[0, 2, -2, 1, -1, 2, 0, -2]);
+        let sent = drive(&mut p, &arrivals);
+        assert_eq!(sent.len(), 300, "every frame");
+        assert!(sent.iter().zip(&arrivals).all(|((_, at), a)| at == a), "each the moment it arrived");
+    }
+
+    #[test]
+    fn pacer_restarts_after_a_stall_instead_of_bursting() {
+        let t0 = Instant::now();
+        let mut p = Pacer::new(30);
+        let mut arrivals = source(t0, HZ60, 30, &[]);
+        let back = *arrivals.last().unwrap() + Duration::from_secs(1);
+        arrivals.extend((0..30).map(|k| back + HZ60 * k));
+        let sent = drive(&mut p, &arrivals);
+        assert!(sent.windows(2).all(|w| w[1].1 - w[0].1 >= p.gap() * 3 / 4), "no burst after the stall: {sent:?}");
+        let after: Vec<&(usize, Instant)> = sent.iter().filter(|(_, t)| *t >= back).collect();
+        assert_eq!(after[0].1, back, "the first frame after the stall goes at once");
+        assert!((14..=16).contains(&after.len()), "then 30 fps again: {}", after.len());
+    }
+
+    #[test]
+    fn pacer_holds_an_early_frame_for_a_fresher_one_then_sends_it() {
+        let t0 = Instant::now();
+        let mut p = Pacer::new(30);
+        p.sent(t0);
+        let early = t0 + ms(10);
+        assert!(!p.ready(early, early), "well before it is due");
+        assert_eq!(p.wait(early, early), (t0 + p.gap() + p.gap() / 4) - early);
+        assert!(p.ready(early, t0 + p.gap() + p.gap() / 4), "still goes, a quarter gap late at most");
+        assert!(p.ready(t0 + ms(26), t0 + ms(26)), "a quarter gap early goes at once");
+        p.set_fps(2);
+        assert!(!p.ready(t0 + ms(100), t0 + ms(100)));
+        p.set_fps(60);
+        assert!(p.ready(t0 + ms(17), t0 + ms(17)), "a faster rate is due one new gap after the last send");
     }
 
     #[test]

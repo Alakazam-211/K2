@@ -13,8 +13,6 @@ const h = vi.hoisted(() => ({
   daemonCliPost: vi.fn(),
 }))
 
-// The header's picture reads the Home avatar cache; these suites don't load it.
-vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {

@@ -95,7 +95,7 @@ const h = vi.hoisted(() => {
   }
 })
 
-// The header's picture reads the Home avatar cache; these suites don't load it.
+// Thread view's header lazy-loads the picture (the presence + Home avatar stores).
 vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
 vi.mock('@/lib/server-capabilities', () => ({
   useServerSupports: () => h.supported.value,

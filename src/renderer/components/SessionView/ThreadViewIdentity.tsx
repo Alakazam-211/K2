@@ -1,6 +1,10 @@
-import { useLayoutEffect, useRef, useState, type JSX } from 'react'
+import { lazy, Suspense, useLayoutEffect, useRef, useState, type JSX } from 'react'
 import { useRoom } from '@/components/Room/RoomContext'
-import { AgentAvatar } from '@/components/Thread/ThreadSenderAvatars'
+
+// As ThreadOverlayPane: the avatar pulls in the projects and Home avatar stores.
+const AgentAvatar = lazy(() =>
+  import('@/components/Thread/ThreadSenderAvatars').then((m) => ({ default: m.AgentAvatar })),
+)
 
 // Thread view's header centre (prd-thread-view-focus-v1 §4): the agent's
 // picture above its name, lifted from the phone's chat header. Thread view
@@ -59,7 +63,9 @@ export function ThreadViewIdentity({ name, addr }: { name: string; addr: string 
         className="flex-shrink-0 block"
         style={{ width: size, height: size, overflow: 'hidden', borderRadius: 'var(--radius-pill)' }}
       >
-        <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={size} />
+        <Suspense fallback={null}>
+          <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={size} />
+        </Suspense>
       </span>
       <span
         data-testid="thread-view-name"

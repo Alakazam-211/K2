@@ -5,8 +5,6 @@ import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-libra
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useContextMenuStore } from '@/stores/context-menu'
 
-// The header's picture reads the Home avatar cache; these suites don't load it.
-vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {

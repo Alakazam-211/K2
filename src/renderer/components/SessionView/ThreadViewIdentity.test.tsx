@@ -17,7 +17,7 @@ vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({
 }))
 
 import { ThreadViewIdentity, identityCompact } from './ThreadViewIdentity'
-import { inRoom, renderInRoom, testRoom } from '@/test-utils/room'
+import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -82,8 +82,9 @@ describe('identityCompact', () => {
 })
 
 describe('ThreadViewIdentity', () => {
-  it('stacks a 32px picture above the name', () => {
+  it('stacks a 32px picture above the name', async () => {
     renderInRoom(primary, framed('Sales', 'sales/reviewer'))
+    await screen.findByTestId('avatar')
     const root = screen.getByTestId('thread-view-identity')
     expect(root.className).toContain('flex-col')
     expect(root.firstElementChild).toBe(screen.getByTestId('thread-view-picture'))
@@ -98,12 +99,13 @@ describe('ThreadViewIdentity', () => {
     expect(screen.getByTestId('thread-view-name').style.fontSize).toBe('var(--type-lg)')
   })
 
-  it('names the server only in a room on another server', () => {
+  it('names the server only in a room on another server', async () => {
     renderInRoom(primary, framed('Sales', 'sales'))
     expect(screen.queryByTestId('thread-view-server')).toBeNull()
     cleanup()
     renderInRoom(remote, framed('Sales', 'sales'))
     expect(screen.getByTestId('thread-view-server').textContent).toBe('Office box')
+    await screen.findByTestId('avatar')
     expect(avatar.calls.at(-1)?.host).toBe('box.k2.dev')
   })
 
@@ -136,10 +138,11 @@ describe('ThreadViewIdentity', () => {
     expect(screen.getByTestId('thread-view-identity').title).toBe('Office box')
   })
 
-  it('follows a renamed agent', () => {
+  it('follows a renamed agent', async () => {
     const { rerender } = renderInRoom(primary, framed('Sales', 'sales'))
+    await screen.findByTestId('avatar')
     expect(screen.getByTestId('thread-view-name').textContent).toBe('Sales')
-    rerender(inRoom(primary, framed('Sales Desk', 'sales')))
+    rerender(framed('Sales Desk', 'sales'))
     expect(screen.getByTestId('thread-view-name').textContent).toBe('Sales Desk')
     expect(avatar.calls.at(-1)?.label).toBe('Sales Desk')
   })

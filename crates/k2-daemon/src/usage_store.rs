@@ -611,6 +611,13 @@ fn blank_record(e: &Entry, now: DateTime<Utc>) -> Value {
     record_value(row, Some(&e.id), now)
 }
 
+/// Each tool's live token (the tokens the top bar shows).
+pub fn live_token_ids() -> Vec<String> {
+    let Some(db) = k2_core::db::try_shared() else { return Vec::new() };
+    let conn = db.lock();
+    Tool::SUBSCRIPTION.iter().filter_map(|t| k2_core::llm_accounts::live_owner(&conn, *t).ok().flatten()).collect()
+}
+
 /// `GET /cli/usage/subscriptions`, the single-record answer: the record of
 /// each tool's live token, in the tools' order. A tool with no live token
 /// answers `Not signed in`. Air-gap stays the route's own check.

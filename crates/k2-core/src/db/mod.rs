@@ -190,6 +190,13 @@ pub fn scoped_for_test() -> TestDbGuard {
     TestDbGuard { handle, prev, _not_send: std::marker::PhantomData }
 }
 
+/// Test-only: the scoped DB of THIS thread, if any. For code under test
+/// that hands work to its own thread and must carry the test's DB with it.
+#[cfg(any(test, feature = "test-util"))]
+pub fn scoped_handle_for_test() -> Option<Arc<ReentrantMutex<Connection>>> {
+    scoped_handle()
+}
+
 /// Test-only: run `f` on THIS thread with `handle` (another thread's
 /// [`TestDbGuard::handle`]) as its scoped DB, then restore what was there.
 /// For code under test that hands work to a long-lived thread (the App push

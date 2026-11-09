@@ -1564,6 +1564,105 @@ pub(crate) fn probe_idle_usage_with(entry: &Entry, claude_get: &dyn Fn(&str) -> 
     Ok(())
 }
 
+/// One slot check for the single-record refresher: the same vendor path
+/// as `probe_idle_usage_with`, measured at the start of this token's own
+/// call, with the token decided by the caller. No lock held across the
+/// vendor call except the Codex / Grok slot lock for the CLI's own run,
+/// as today. `None` = the slot is busy or has no credential.
+pub(crate) fn slot_usage_check(entry: &Entry, claude_get: &dyn Fn(&str) -> Result<String, String>) -> Option<crate::subscription_usage::HarnessUsage> {
+    let tool = entry.tool()?;
+    if !slots::has_cred(tool, &entry.id) {
+        return None;
+    }
+    let slot = store::slot_dir(tool, &entry.id);
+    let slot_lock = if tool == Tool::Claude {
+        None
+    } else {
+        match store::lock_slot(tool, &entry.id, Duration::from_secs(5)) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                k2_core::log_debug!("[usage] {}/{}: slot busy ({})", tool.as_str(), entry.id, e.code());
+                return None;
+            }
+        }
+    };
+    let claude_token = if tool == Tool::Claude {
+        let meta = slots::slot_meta(tool, &entry.id);
+        let expired = meta.expires_at.map(|x| x <= chrono::Utc::now().timestamp() + 60).unwrap_or(false);
+        // Never refresh a slot a running CLI owns or a copy of the live
+        // sign-in (LT-A16, LT-A10): the reading uses the token as it is.
+        let may_refresh = || !slot_in_use(&entry.id) && !k2_core::llm_accounts::identity::shares_live_grant(tool, &entry.id);
+        if expired && meta.has_refresh && may_refresh() {
+            match store::lock_slot(tool, &entry.id, Duration::from_secs(5)) {
+                Ok(_slot) if !live_or_default(tool, &entry.id) && may_refresh() => {
+                    if let Err(err) = wallet::claude_refresh_slot(&entry.id, &post_json) {
+                        let err = if wallet_core::looks_like_secret(&err) { "refresh failed".to_string() } else { err };
+                        k2_core::log_debug!("[usage] claude/{}: not refreshed ({err})", entry.id);
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => k2_core::log_debug!("[usage] claude/{}: refresh skipped ({})", entry.id, e.code()),
+            }
+        }
+        let meta = slots::slot_meta(tool, &entry.id);
+        let plan = crate::usage_store::plan_name("claude", meta.rate_limit_tier.as_deref().unwrap_or(""), meta.plan.as_deref().unwrap_or(""));
+        slots::claude_access_token(&entry.id).map(|t| (t, meta.expires_at.map(|s| s * 1000), plan))
+    } else {
+        None
+    };
+    let mut row = crate::subscription_usage::probe_wallet_slot_with(tool.as_str(), &slot, claude_token, None, claude_get);
+    drop(slot_lock);
+    row.source = "probe".into();
+    Some(row)
+}
+
+/// Adopt a live sign-in with no wallet entry as its own token, off the
+/// request and one pass at a time (§4.1, U15). Under the database alone
+/// when something is already active, which is most passes; the keychain
+/// read runs with no lock held and only the commit takes the locks.
+pub fn spawn_adopt_live_logins() {
+    if !crate::usage_store::single_record_on() {
+        return;
+    }
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("usage-adopt".into()).spawn(|| {
+        adopt_live_logins();
+        RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+    if spawned.is_err() {
+        RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The body of [`spawn_adopt_live_logins`] (tests call it directly).
+pub(crate) fn adopt_live_logins() {
+    for tool in Tool::SUBSCRIPTION {
+        let has_active = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            matches!(wallet_core::active_id(&conn, tool), Ok(Some(_)))
+        };
+        if has_active {
+            continue;
+        }
+        let Ok(Some(bytes)) = store::read_live(tool) else { continue };
+        if store::validate_cred(tool, &bytes).is_err() {
+            continue;
+        }
+        match with_tool_db(tool, BG_TOOL_WAIT, |conn| wallet::import_live_bytes(conn, tool, Some("usage"), bytes)) {
+            Ok(Some(e)) => {
+                k2_core::log_debug!("[llm-accounts] {}: adopted the live sign-in as {}", tool.as_str(), e.id);
+                emit(Some(tool));
+            }
+            Ok(None) => {}
+            Err(e) => k2_core::log_debug!("[llm-accounts] adopt {}: {}", tool.as_str(), e.code()),
+        }
+    }
+}
+
 /// Usage v2 (P9, Q5): probe idle signed-in logins whose reading is older
 /// than `max_age`, skipping a login a running session reported on lately
 /// (live feed) and one that is backing off after failures / a 429. Runs
@@ -1781,17 +1880,32 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
         let conn = db.lock();
         wallet_core::list(&conn).unwrap_or_default()
     };
-    for e in &entries {
-        if e.state == state::SIGNED_IN {
-            if let Err(err) = probe_idle_usage(e) {
-                k2_core::log_debug!("[llm-accounts] usage {}: {err}", e.id);
-            }
+    for e in keep_warm_usage_entries(&entries) {
+        if let Err(err) = probe_idle_usage(e) {
+            k2_core::log_debug!("[llm-accounts] usage {}: {err}", e.id);
         }
     }
-    if !res.is_empty() || !entries.is_empty() {
+    // With the switch on, keep-warm only refreshes credentials: the list
+    // of entries no longer means usage was probed.
+    let single = crate::usage_store::single_record_on();
+    if !res.is_empty() || (!single && !entries.is_empty()) {
         emit(None);
     }
     res
+}
+
+/// The idle tokens keep-warm also probes for usage. None with the switch on
+/// (§4.4: the tick owns usage, keep-warm only refreshes credentials).
+#[cfg(test)]
+pub(crate) fn keep_warm_usage_entries_for_tests(entries: &[Entry]) -> Vec<&Entry> {
+    keep_warm_usage_entries(entries)
+}
+
+fn keep_warm_usage_entries(entries: &[Entry]) -> Vec<&Entry> {
+    if crate::usage_store::single_record_on() {
+        return Vec::new();
+    }
+    entries.iter().filter(|e| e.state == state::SIGNED_IN).collect()
 }
 
 /// The keep-warm refreshes of one pass (idle slots that are due). Each

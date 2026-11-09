@@ -583,9 +583,36 @@ pub fn handle_refresh(body: &[u8]) -> CliResponse {
     CliResponse::ok_json(v.to_string())
 }
 
+/// `/for/refresh` with the switch on: one request to the refresher, in
+/// today's words (U12).
+fn refresh_one_single(r: &Resolved) -> (bool, Option<&'static str>, Option<u64>) {
+    use crate::usage_refresh::{request, Check, Outcome, Why, Wait, PERSON_WAIT};
+    if crate::subscription_usage::airgap_on() {
+        return (false, Some("airgap"), None);
+    }
+    if r.unavailable.is_some() {
+        return (false, Some("unavailable"), None);
+    }
+    let Some(id) = r.account_id.as_deref().filter(|id| !k2_core::person_wallet::is_item_id(id)) else {
+        return (false, Some("no_usage"), None);
+    };
+    match request(id, Why::Person, Wait::For(PERSON_WAIT)) {
+        Outcome::Ran(Check::Ok) | Outcome::Joined(Check::Ok) => (true, None, None),
+        Outcome::Ran(Check::Failed) | Outcome::Joined(Check::Failed) => (false, Some("probe_failed"), None),
+        // Still running: the phone gets the number by the event.
+        Outcome::Ran(Check::Pending) | Outcome::Joined(Check::Pending) => (false, Some("in_progress"), None),
+        Outcome::TooSoon(secs) => (false, Some("rate_limited"), Some(secs)),
+        Outcome::BackingOff(until) => (false, Some("rate_limited"), Some(until.signed_duration_since(Utc::now()).num_seconds().max(1) as u64)),
+        Outcome::Off(reason) => (false, Some(reason), None),
+    }
+}
+
 /// Probe the one token, rate-limited per token. `(refreshed, reason,
 /// retryAfterSecs)`.
 fn refresh_one(r: &Resolved) -> (bool, Option<&'static str>, Option<u64>) {
+    if crate::usage_store::single_record_on() {
+        return refresh_one_single(r);
+    }
     if k2_core::airgap::enabled() {
         return (false, Some("airgap"), None);
     }

@@ -1000,3 +1000,32 @@ fn switch_off_subscriptions_reads_the_file_not_the_row() {
         assert_eq!(body["harnesses"].as_array().map(Vec::len), Some(0), "no file, no rows, as today: {body}");
     });
 }
+
+#[test]
+fn switch_off_for_an_api_default_still_reads_the_shared_row_as_today() {
+    su::tests::with_isolated(|| {
+        let _off = pin(false);
+        let n = Utc::now();
+        let doc = su::SubscriptionFile {
+            harnesses: vec![HarnessUsage {
+                harness: "claude".into(),
+                plan: "Max".into(),
+                windows: vec![su::window("five_hour", "Session", "session", 0.5, (n + Duration::hours(1)).to_rfc3339(), Some(18_000))],
+                checked_at: n.to_rfc3339(),
+                ..Default::default()
+            }],
+        };
+        su::tests::write_cache_for_tests(&doc);
+        let api = seed_token(Tool::Claude, "api-off");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE llm_accounts SET kind = 'api_key' WHERE id = ?1", rusqlite::params![api]).expect("kind");
+        }
+        let (t, mut r) = for_fixture(&api);
+        r.shared = true;
+        let v = crate::llm_account_for::answer_json(&t, Some(&r), n);
+        assert_eq!(v["maxPercent"], 50, "today's bug: the live subscription's number under the API token (fixed behind the switch): {v}");
+        assert!(v.get("usage").is_none());
+    });
+}

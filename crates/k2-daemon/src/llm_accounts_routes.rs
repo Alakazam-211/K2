@@ -262,6 +262,10 @@ fn exhausted_warnings(e: &Entry) -> Vec<String> {
 /// After a switch: read the new default's usage now (its own row) and
 /// the outgoing token's (now idle), off the request. Never from tests.
 fn recheck_after_switch(tool: Tool, from: Option<String>) {
+    if crate::usage_store::single_record_on() {
+        recheck_after_switch_single(tool, from);
+        return;
+    }
     if !rt::vendor_calls_allowed() {
         return;
     }
@@ -278,6 +282,24 @@ fn recheck_after_switch(tool: Tool, from: Option<String>) {
                     k2_core::log_debug!("[llm-accounts] usage {}: {err}", e.id);
                 }
             }
+        }
+        crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
+    });
+}
+
+/// After a switch, with the switch on: ask the refresher for the new live
+/// token and the outgoing one, as a person's request (U11: a failure
+/// back-off must not hide the new number) and detached (U10).
+fn recheck_after_switch_single(tool: Tool, from: Option<String>) {
+    use crate::usage_refresh::{request, Wait, Why};
+    let _ = std::thread::Builder::new().name("llm-switch-usage".into()).spawn(move || {
+        rt::resolve_checking(tool);
+        let live = with_conn(|conn| wallet_core::live_owner(conn, tool).ok().flatten());
+        if let Some(id) = live {
+            let _ = request(&id, Why::Person, Wait::None);
+        }
+        if let Some(f) = from {
+            let _ = request(&f, Why::Person, Wait::None);
         }
         crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
     });
@@ -1116,7 +1138,8 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
             // Every token's usage at most once a minute (the page asks on
             // open); one named token always.
             let all = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none();
-            let want_usage = b.usage.unwrap_or(false) && (!all || usage_refresh_allowed());
+            let single = crate::usage_store::single_record_on();
+            let want_usage = b.usage.unwrap_or(false) && (single || !all || usage_refresh_allowed());
             for id in &ids {
                 if rt::running_for(id).is_some() {
                     continue;
@@ -1125,13 +1148,18 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     Ok(e) => e,
                     Err(e) => return wallet_err(e),
                 };
-                if want_usage && e.state == state::SIGNED_IN {
+                if !single && want_usage && e.state == state::SIGNED_IN {
                     if let Err(err) = rt::probe_idle_usage(&e) {
                         k2_core::log_debug!("[llm-accounts] usage {}: {err}", e.id);
                     }
                 }
             }
-            if want_usage && !k2_core::airgap::enabled() {
+            if single && want_usage {
+                // One request per token, in parallel, 12 s overall (U10).
+                use crate::usage_refresh::{request_many, Why, PERSON_WAIT};
+                request_many(&ids, Why::Person, PERSON_WAIT);
+            }
+            if !single && want_usage && !k2_core::airgap::enabled() {
                 // The live tokens: the shared probe (top-bar chip), which
                 // also records each reading on the token it belongs to.
                 let _ = crate::subscription_usage::handle_refresh();

@@ -281,7 +281,13 @@ pub fn handle_get() -> CliResponse {
         return airgap_response();
     }
     if crate::usage_store::single_record_on() {
-        return ok_value(&crate::usage_store::subscriptions_doc(Utc::now()));
+        let doc = crate::usage_store::subscriptions_doc(Utc::now());
+        for rec in doc["harnesses"].as_array().map(Vec::as_slice).unwrap_or_default() {
+            if let Some(id) = rec["accountId"].as_str() {
+                crate::usage_refresh::kick_if_reset_passed(id, rec);
+            }
+        }
+        return ok_value(&doc);
     }
     let path = cache_path();
     if !path.is_file() {
@@ -311,6 +317,12 @@ pub fn handle_refresh() -> CliResponse {
     if airgap_on() {
         return airgap_response();
     }
+    if crate::usage_store::single_record_on() {
+        crate::llm_accounts_runtime::spawn_adopt_live_logins();
+        use crate::usage_refresh::{request_many, Why, PERSON_WAIT};
+        request_many(&crate::usage_store::live_token_ids(), Why::Person, PERSON_WAIT);
+        return ok_value(&crate::usage_store::subscriptions_doc(Utc::now()));
+    }
     match refresh_shared(None) {
         Ok(doc) => ok_doc(&decorate_file(doc, Utc::now())),
         Err(e) => CliResponse::internal_error(e),
@@ -337,7 +349,9 @@ const BOOT_PROBE_DELAY: Duration = Duration::from_secs(20);
 pub fn spawn() -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(BOOT_PROBE_DELAY).await;
-        if cache_stale(Utc::now()) {
+        // Single-record path: the tick checks each token's own vendor time
+        // (U9), and the file is only a view.
+        if crate::usage_store::single_record_on() || cache_stale(Utc::now()) {
             let _ = tokio::task::spawn_blocking(background_tick).await;
         }
         let mut interval = tokio::time::interval(PROBE_INTERVAL);
@@ -370,6 +384,10 @@ fn background_tick() -> bool {
     if airgap_on() {
         return false;
     }
+    if crate::usage_store::single_record_on() {
+        crate::usage_refresh::tick();
+        return true;
+    }
     if let Err(e) = probe_singleflight(io_for_probe().as_ref(), None, Mode::Background) {
         k2_core::log_debug!("[usage] subscription probe failed: {e}");
     }
@@ -399,6 +417,21 @@ fn flight_gate() -> &'static Mutex<()> {
 fn flight_last() -> &'static Mutex<Option<FlightResult>> {
     static LAST: Mutex<Option<FlightResult>> = Mutex::new(None);
     &LAST
+}
+
+/// One live-store check for the single-record refresher: this tool's
+/// probe, with no prior reading and no lock held. The caller decides who
+/// the reading belongs to.
+pub(crate) fn probe_live_row(name: &str) -> HarnessUsage {
+    let io = io_for_probe();
+    let (now, wall) = (Utc::now(), SystemTime::now());
+    let mut row = match name {
+        HARNESS_CLAUDE => probe_claude(io.claude_login(), |token| io.claude_get(token), None, wall, now),
+        HARNESS_CODEX => probe_codex(io.codex(), None, now),
+        _ => probe_grok(io.grok(), None, now),
+    };
+    row.source = "probe".into();
+    row
 }
 
 /// One probe at a time. A caller that waited on a probe which finished
@@ -579,6 +612,12 @@ pub(crate) fn update_cache_row(harness: &str, f: impl FnOnce(Option<&HarnessUsag
             false
         }
     }
+}
+
+/// Forget every back-off (tests of the refresher: the map is process-wide).
+#[cfg(test)]
+pub(crate) fn tests_clear_backoffs() {
+    backoffs().lock().unwrap_or_else(|p| p.into_inner()).clear();
 }
 
 // ── Serving ─────────────────────────────────────────────────────────
@@ -2571,6 +2610,10 @@ pub(crate) mod tests {
 
     fn install(io: Arc<dyn UsageIo>) {
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(io);
+    }
+
+    pub(crate) fn write_cache_for_tests(doc: &SubscriptionFile) {
+        write_cache(doc).expect("seed the cache");
     }
 
     pub(crate) fn set_airgap(on: bool) {

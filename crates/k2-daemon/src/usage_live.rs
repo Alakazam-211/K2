@@ -630,7 +630,9 @@ fn limits_doc_single(now: DateTime<Utc>, kick: bool) -> Value {
             let pinned: Vec<Value> = pins.iter().filter(|(id, _)| id == &e.id).map(|(_, v)| v.clone()).collect();
             let is_default = active.as_deref() == Some(e.id.as_str());
             let is_live = live.as_deref() == Some(e.id.as_str());
-            let _ = kick;
+            if kick && !airgap {
+                crate::usage_refresh::kick_if_reset_passed(&e.id, &rec);
+            }
             let o = rec.as_object_mut().expect("record is an object");
             o.insert("label".into(), json!(e.label));
             o.insert("email".into(), json!(e.email));
@@ -689,6 +691,9 @@ fn kick_idle_recheck(ids: Vec<String>) {
 /// The default login goes through the shared single-flight probe; an idle
 /// login through its own slot probe. Answers the limits document.
 pub fn refresh(tool: Option<&str>, account_id: Option<&str>) -> Result<Value, (u16, String)> {
+    if crate::usage_store::single_record_on() {
+        return refresh_single(tool, account_id);
+    }
     if k2_core::airgap::enabled() {
         return Ok(limits_doc(Utc::now(), false));
     }
@@ -714,6 +719,64 @@ pub fn refresh(tool: Option<&str>, account_id: Option<&str>) -> Result<Value, (u
     }
     su::refresh_shared(None).map_err(|e| (500, e))?;
     Ok(limits_doc(Utc::now(), false))
+}
+
+/// `POST /cli/usage/limits/refresh` with the switch on. Answers the limits
+/// document plus `refresh: {outcome, retryAfterSecs}` (U14). 200 unless the
+/// named token doesn't exist.
+fn refresh_single(tool: Option<&str>, account_id: Option<&str>) -> Result<Value, (u16, String)> {
+    use crate::usage_refresh::{request, request_many, Why, Wait, PERSON_WAIT};
+    if su::airgap_on() {
+        return Ok(limits_doc(Utc::now(), false));
+    }
+    let outcomes: Vec<crate::usage_refresh::Outcome> = if let Some(id) = account_id.filter(|s| !s.is_empty()) {
+        let known = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            wallet::get(&conn, id).ok().flatten().filter(|e| e.removed_at.is_none())
+        };
+        if known.is_none() {
+            return Err((404, format!("no login {id} (k2 llm tokens list)")));
+        }
+        vec![request(id, Why::Person, Wait::For(PERSON_WAIT))]
+    } else {
+        let ids = if let Some(t) = tool.filter(|s| !s.is_empty()) {
+            let parsed = Tool::parse(t).filter(|t| t.subscription_supported()).ok_or((400, "tool must be claude, codex, or grok".to_string()))?;
+            live_owner(parsed).into_iter().collect::<Vec<_>>()
+        } else {
+            crate::usage_store::live_token_ids()
+        };
+        request_many(&ids, Why::Person, PERSON_WAIT).into_iter().map(|(_, o)| o).collect()
+    };
+    let mut doc = limits_doc(Utc::now(), false);
+    doc.as_object_mut().expect("the document is an object").insert("refresh".into(), summarize_refresh(&outcomes));
+    Ok(doc)
+}
+
+/// `{outcome, retryAfterSecs}` for one or more tokens: a failure, else a
+/// wait (too soon / backing off), else what ran.
+fn summarize_refresh(outcomes: &[crate::usage_refresh::Outcome]) -> Value {
+    use crate::usage_refresh::{Check, Outcome};
+    let mut retry: Option<u64> = None;
+    let mut outcome = "ran";
+    for o in outcomes {
+        match o {
+            Outcome::Ran(Check::Failed) | Outcome::Joined(Check::Failed) => outcome = "failed",
+            Outcome::Ran(Check::Pending) | Outcome::Joined(Check::Pending) if outcome != "failed" => outcome = "in_progress",
+            Outcome::TooSoon(secs) if outcome == "ran" => {
+                outcome = "too_soon";
+                retry = Some(retry.map_or(*secs, |r| r.max(*secs)));
+            }
+            Outcome::BackingOff(until) if outcome == "ran" => {
+                outcome = "backing_off";
+                let secs = until.signed_duration_since(Utc::now()).num_seconds().max(1) as u64;
+                retry = Some(retry.map_or(secs, |r| r.max(secs)));
+            }
+            Outcome::Off(_) if outcomes.len() == 1 && outcome == "ran" => outcome = "off",
+            _ => {}
+        }
+    }
+    json!({"outcome": outcome, "retryAfterSecs": retry})
 }
 
 #[cfg(test)]

@@ -469,7 +469,7 @@ pub(crate) fn set_aside_slot_cred(tool: Tool, id: &str, bytes: &[u8], why: &str)
 // ── Live store ──────────────────────────────────────────────────────
 
 /// Read the tool's live login. `Ok(None)` = signed out.
-pub(crate) fn read_live(tool: Tool) -> Result<Option<Vec<u8>>, WalletError> {
+pub fn read_live(tool: Tool) -> Result<Option<Vec<u8>>, WalletError> {
     if !tool.subscription_supported() {
         return Ok(None);
     }

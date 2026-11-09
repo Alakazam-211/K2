@@ -2,7 +2,8 @@
 //
 // A file opens live when its multiplayer core is on (Settings → Cores →
 // Multiplayer) and that core has a live editor for people (Markdown, Text
-// and code; not any-file). The daemon decides both by the file's name:
+// and code). Any other file gets the any-file panel instead, beside its usual
+// view (`AnyFileDocPanel`). The daemon decides both by the file's name:
 // `GET /cli/docs/cores?path=P` answers `file: {core, on, liveView}`, so no
 // file-name rule lives here. It follows `doc_cores_changed` on the same
 // server, so a switch flipped anywhere (another window, the CLI, an Admin)
@@ -52,10 +53,20 @@ export type LiveDocCoreState =
   | { status: 'off' } // today's view: the core is off, has no live editor, or the server can't
   | { status: 'checking' }
   | { status: 'live'; core: string }
+  | { status: 'any-file' } // today's view, with the any-file panel beside it
+
+function stateFor(c: LiveDocCore): LiveDocCoreState {
+  if (!c.on) return { status: 'off' }
+  if (c.liveView) return { status: 'live', core: c.core }
+  // Any other file has no live editor but does have the panel. The Board
+  // (also no live editor) opens as its own thing.
+  return c.core === 'any-file' ? { status: 'any-file' } : { status: 'off' }
+}
 
 /**
  * The Live view's switch for one open file: `live` while its core is on,
- * `off` otherwise (and on any error: the file then opens as today). Re-asks
+ * `any-file` while the "Any other file" core is on for a file with no live
+ * editor, `off` otherwise (and on any error: the file then opens as today). Re-asks
  * on `doc_cores_changed` and when `epoch` changes (the tab asks again after
  * the socket said the core went off).
  */
@@ -70,7 +81,7 @@ export function useLiveDocCore(scope: ServerScope, path: string, epoch = 0): Liv
       }
       try {
         const c = await fetchLiveDocCore(scope, path)
-        if (isCurrent()) setState(c.on && c.liveView ? { status: 'live', core: c.core } : { status: 'off' })
+        if (isCurrent()) setState(stateFor(c))
       } catch {
         if (isCurrent()) setState({ status: 'off' })
       }

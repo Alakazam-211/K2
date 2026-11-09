@@ -72,13 +72,25 @@ describe('useLiveDocCore', () => {
     await waitFor(() => expect(result.current).toEqual({ status: 'off' }))
   })
 
+  it('gives the any-file panel while its core is on, and follows the switch off', async () => {
+    h.file = { core: 'any-file', on: true, liveView: false }
+    const scope = scopeWith(['docs-cores-v1'])
+    const { result } = renderHook(() => useLiveDocCore(scope, '/w/poster.psd'))
+    await waitFor(() => expect(result.current).toEqual({ status: 'any-file' }))
+    h.file = { core: 'any-file', on: false, liveView: false }
+    await act(async () => {
+      for (const fn of events.handlers) fn({ kind: 'doc_cores_changed', core: 'any-file', on: false })
+    })
+    await waitFor(() => expect(result.current).toEqual({ status: 'off' }))
+  })
+
   it('keeps today’s view for a core with no live editor, an error, or an older server', async () => {
     // A scope is one object for a server's life (a new one every render
     // would be a new server every render).
     const current = scopeWith(['docs-cores-v1'])
     const older = scopeWith([])
-    h.file = { core: 'any-file', on: true, liveView: false }
-    const a = renderHook(() => useLiveDocCore(current, '/w/photo.png'))
+    h.file = { core: 'board', on: true, liveView: false }
+    const a = renderHook(() => useLiveDocCore(current, '/w/plan.k5board'))
     await waitFor(() => expect(h.gets.length).toBe(1))
     await waitFor(() => expect(a.result.current).toEqual({ status: 'off' }))
 

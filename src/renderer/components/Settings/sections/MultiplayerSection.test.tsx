@@ -298,7 +298,13 @@ describe('Settings → Cores → Multiplayer', () => {
   it('search finds "Multiplayer" by name and keywords', () => {
     expect(SECTION_LABELS.multiplayer).toBe('Multiplayer')
     expect(MULTIPLAYER_MANIFEST.map((e) => [e.id, e.section, e.label])).toEqual([['multiplayer.cores', 'multiplayer', 'Multiplayer']])
-    expect(MULTIPLAYER_MANIFEST[0].keywords).toEqual(['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard'])
+    expect(MULTIPLAYER_MANIFEST[0].keywords).toEqual(['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard', 'PSD', 'CAD', '3D', 'blend', 'DWG', 'STEP', 'STL', 'any other file', 'file lock', 'versions'])
+    // Search finds the any-file core by file type, and names no product.
+    for (const kind of ['PSD', 'CAD', '3D', 'blend', 'DWG']) {
+      expect(searchManifest(MULTIPLAYER_MANIFEST, kind).map((e) => e.id)).toEqual(['multiplayer.cores'])
+    }
+    expect(MULTIPLAYER_MANIFEST[0].description).toContain('PSD, CAD, 3D and .blend files')
+    expect(JSON.stringify(MULTIPLAYER_MANIFEST)).not.toMatch(/photoshop|adobe|blender/i)
     for (const q of ['Multiplayer', 'live docs', 'live editing', 'markdown', 'co-editing', 'board', 'k5board']) {
       expect(searchManifest(MULTIPLAYER_MANIFEST, q).map((e) => e.id)).toEqual(['multiplayer.cores'])
     }

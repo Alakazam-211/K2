@@ -60,6 +60,8 @@ import { isPinnedTab } from '@/lib/pinned-tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { useLiveDocCore } from '@/lib/live-doc-core'
+import { Button } from '@/components/ui'
+import { AnyFileDocPanel } from './AnyFileDocPanel'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -329,6 +331,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [liveEnded, setLiveEnded] = useState(false)
   const liveCore = useLiveDocCore(room.scope, filePath, liveEpoch)
   const liveOn = liveCore.status === 'live' && textLock === null && !isDirty
+  // The "Any other file" core: the usual view, with the panel beside it.
+  const anyFile = liveCore.status === 'any-file'
+  const [anyFilePanelOpen, setAnyFilePanelOpen] = useState(true)
   // Opening a live file shows the Live editor (not a Markdown preview).
   useEffect(() => {
     if (liveCore.status === 'live') {
@@ -838,6 +843,19 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           </span>
         )}
 
+        {anyFile && (
+          <Button
+            variant={anyFilePanelOpen ? 'default' : 'quiet'}
+            className="flex-shrink-0"
+            aria-pressed={anyFilePanelOpen}
+            data-testid="any-file-toggle"
+            title="Who's here, the lock, versions, conflict copies and approvals"
+            onClick={() => setAnyFilePanelOpen((v) => !v)}
+          >
+            Multiplayer
+          </Button>
+        )}
+
         {/* Dirty / saving indicator */}
         {isDirty && (
           <span className="text-[10px] text-[var(--color-accent)] flex-shrink-0">
@@ -1030,7 +1048,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       )}
 
-      {/* Content */}
+      {/* Content, with the any-file panel beside it */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
       {category === 'pdf' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading PDF…</div>}>
@@ -1210,6 +1230,17 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           </div>
         </>
       )}
+      </div>
+      {anyFile && (
+        <AnyFileDocPanel
+          key={`${room.scope.id}|${filePath}`}
+          scope={room.scope}
+          filePath={filePath}
+          hidden={!anyFilePanelOpen}
+          onCoreOff={() => setLiveEpoch((e) => e + 1)}
+        />
+      )}
+      </div>
 
       {/* Filepath bar (always shown — the legacy 'edit' mode guard was
           provably dead: ViewMode is 'rendered' | 'raw') */}

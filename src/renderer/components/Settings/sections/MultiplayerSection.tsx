@@ -49,8 +49,8 @@ export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
     id: 'multiplayer.cores',
     section: 'multiplayer',
     label: 'Multiplayer',
-    description: 'Turn each multiplayer core on or off for this server: Markdown, Text and code, Any other file, Board. And open .k5board files in a Board tab.',
-    keywords: ['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard'],
+    description: 'Turn each multiplayer core on or off for this server: Markdown, Text and code, Any other file (PSD, CAD, 3D and .blend files), Board. And open .k5board files in a Board tab.',
+    keywords: ['live docs', 'live editing', 'multiplayer', 'Markdown', 'cores', 'co-editing', 'Board', 'k5board', 'whiteboard', 'PSD', 'CAD', '3D', 'blend', 'DWG', 'STEP', 'STL', 'any other file', 'file lock', 'versions'],
   },
 ]
 

@@ -20,7 +20,17 @@ const fold = (s: string): string => s.trim().toLowerCase()
 
 /** An agent's picture: this server's workspace (the projects store), or
  *  another server's from the Home avatar cache. */
-function AgentAvatar({ addr, label, host }: { addr: string; label: string; host: string | null }): JSX.Element {
+export function AgentAvatar({
+  addr,
+  label,
+  host,
+  size = SENDER_AVATAR_PX,
+}: {
+  addr: string
+  label: string
+  host: string | null
+  size?: number
+}): JSX.Element {
   const federated = addr.includes('::')
   const handle = fold(addr.split('::')[0].split('/')[0])
   const project = useProjectsStore((s) =>
@@ -39,7 +49,7 @@ function AgentAvatar({ addr, label, host }: { addr: string; label: string; host:
         projectColor={project.color || 'var(--color-neutral)'}
         projectId={project.id}
         iconUrl={project.iconUrl}
-        size={SENDER_AVATAR_PX}
+        size={size}
       />
     )
   }
@@ -53,7 +63,7 @@ function AgentAvatar({ addr, label, host }: { addr: string; label: string; host:
       projectName={label}
       projectColor={color ?? 'var(--color-text-muted)'}
       iconUrl={url}
-      size={SENDER_AVATAR_PX}
+      size={size}
       fetchIcon={false}
     />
   )

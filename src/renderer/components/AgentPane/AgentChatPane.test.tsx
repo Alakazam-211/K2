@@ -95,6 +95,8 @@ const h = vi.hoisted(() => {
   }
 })
 
+// The header's picture reads the Home avatar cache; these suites don't load it.
+vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
 vi.mock('@/lib/server-capabilities', () => ({
   useServerSupports: () => h.supported.value,
   serverSupports: () => h.supported.value,

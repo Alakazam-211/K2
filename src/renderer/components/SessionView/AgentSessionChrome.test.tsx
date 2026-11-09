@@ -5,6 +5,8 @@ import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-libra
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useContextMenuStore } from '@/stores/context-menu'
 
+// The header's picture reads the Home avatar cache; these suites don't load it.
+vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {
@@ -119,6 +121,33 @@ function ProbeTerminal() {
     </div>
   )
 }
+
+describe('Thread view header (S2)', () => {
+  afterEach(() => cleanup())
+
+  function renderIn(view: string) {
+    localStorage.clear()
+    localStorage.setItem(sessionViewTabStorageKey('local', 'conv-r'), view)
+    return renderChrome('claude')
+  }
+
+  it('Thread view shows the agent\'s picture and name instead of the title', async () => {
+    renderIn('thread')
+    await waitFor(() => expect(screen.queryByTestId('thread-view-identity')).not.toBeNull())
+    expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
+    expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
+    expect(screen.getByTestId('thread-view-picture')).toBeTruthy()
+  })
+
+  for (const view of ['terminal', 'chatter', 'split']) {
+    it(`${view} view keeps the plain title`, async () => {
+      renderIn(view)
+      await waitFor(() => expect(screen.queryByTestId('sidecar-session-title')).not.toBeNull())
+      expect(screen.queryByTestId('thread-view-identity')).toBeNull()
+      expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer')
+    })
+  }
+})
 
 describe('sidecar chrome (C4/C6/C10)', () => {
   beforeEach(() => {

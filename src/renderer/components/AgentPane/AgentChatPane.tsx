@@ -34,6 +34,7 @@ import { prefetchThread } from '@/components/SessionView/threadRead'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
+import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
 import { useSettingsStore } from '@/stores/settings'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import {
@@ -186,6 +187,8 @@ interface AgentChatTerminalProps {
 
 interface ChatHeaderProps {
   displayName: string
+  /** The Thread's address: Thread view's header reads the picture by it. */
+  overlayAddr: string
   projectPath: string
   currentSessionId: string | null
   onRefresh: () => void
@@ -220,6 +223,7 @@ interface HistorySession {
 
 function ChatHeader({
   displayName,
+  overlayAddr,
   projectPath,
   currentSessionId,
   onRefresh,
@@ -338,6 +342,7 @@ function ChatHeader({
     <div
       className="border-b border-[var(--color-border)] flex-shrink-0 relative"
       data-testid="pinned-chat-header"
+      data-session-header=""
     >
     <div className="px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch">
       <div className="flex min-w-0 items-stretch">
@@ -352,9 +357,13 @@ function ChatHeader({
         threadScope={room.scope}
       />
       </div>
-      <span className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center">
-        {displayName}
-      </span>
+      {viewTab === 'thread' ? (
+        <ThreadViewIdentity name={displayName} addr={overlayAddr} />
+      ) : (
+        <span className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center">
+          {displayName}
+        </span>
+      )}
       <div className="flex min-w-0 items-center justify-end gap-1">
       {projectId && (
         <SessionTokenPicker
@@ -1102,6 +1111,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const header = (
     <ChatHeader
       displayName={displayName}
+      overlayAddr={overlayAddr}
       projectPath={projectPath}
       currentSessionId={canonicalSessionId}
       onRefresh={() => void handleRefresh()}
@@ -1734,6 +1744,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   const header = (
     <ChatHeader
       displayName={displayName}
+      overlayAddr={overlayAddr}
       projectPath={projectPath}
       currentSessionId={currentSessionId}
       onRefresh={() => void handleRefresh()}

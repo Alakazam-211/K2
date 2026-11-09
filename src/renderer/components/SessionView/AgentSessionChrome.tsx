@@ -11,6 +11,7 @@ import {
   type DaemonHandleRow,
 } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from './SessionViewMenu'
+import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
@@ -138,6 +139,7 @@ export function AgentSessionChrome({
       <div className="h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
         <SidecarSessionHeader
           title={title}
+          addr={addr}
           viewTab={viewTab}
           splitLeft={splitLeft}
           splitRight={splitRight}
@@ -183,6 +185,7 @@ function Remount({ children }: { children: ReactNode }): JSX.Element {
 
 export function SidecarSessionHeader({
   title,
+  addr,
   viewTab,
   splitLeft,
   splitRight,
@@ -196,6 +199,8 @@ export function SidecarSessionHeader({
   threadScope,
 }: {
   title: string
+  /** The Thread's address: Thread view's header reads the picture by it. */
+  addr: string
   viewTab: SessionViewTab
   splitLeft: SplitPaneView
   splitRight: SplitPaneView
@@ -214,6 +219,7 @@ export function SidecarSessionHeader({
     <div
       className="border-b border-[var(--color-border)] flex-shrink-0 px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch"
       data-testid="sidecar-session-header"
+      data-session-header=""
     >
         <div className="flex min-w-0 items-stretch">
         <SessionViewMenu
@@ -227,12 +233,16 @@ export function SidecarSessionHeader({
           threadScope={threadScope}
         />
         </div>
-        <span
-          className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center"
-          data-testid="sidecar-session-title"
-        >
-          {title}
-        </span>
+        {viewTab === 'thread' ? (
+          <ThreadViewIdentity name={title} addr={addr} />
+        ) : (
+          <span
+            className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center"
+            data-testid="sidecar-session-title"
+          >
+            {title}
+          </span>
+        )}
         <div className="flex min-w-0 items-center justify-end gap-1">
         {tokenPicker}
         <button

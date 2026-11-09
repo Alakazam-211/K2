@@ -18,7 +18,9 @@
 #     agent-limit help carries the limits and the honest line, `k2 study
 #     vault` has the agent row and no "ssh-agent" can't-do line, and
 #     `agent-limit` / `public-key` call their routes.
-set -euo pipefail
+# No pipefail: `printf … | grep -q` would fail at random when grep exits
+# first and printf hits a broken pipe. grep's own status is the assertion.
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 K2_CLI="$(cd "$SCRIPT_DIR/../.." && pwd)/cli/k2"

@@ -1829,7 +1829,9 @@ mod tests {
         held.expect("the holder took the Claude lock");
         let err = res.expect_err("busy while another task holds it");
         assert_eq!(err.code(), "busy");
-        assert!(took < Duration::from_millis(250), "waited {took:?} for the Claude lock while holding the database");
+        // The bug waited out the whole 20 s. `took` also covers opening a new
+        // test database, which alone can take most of a second on a busy node.
+        assert!(took < Duration::from_secs(5), "waited {took:?} for the Claude lock while holding the database");
     }
 
     #[test]

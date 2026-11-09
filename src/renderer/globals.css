@@ -1435,6 +1435,8 @@ html:not([data-style="terminal"]) .k2-radio:checked {
   --k2-sw-w: var(--control-switch-width);
   --k2-sw-h: var(--control-switch-height);
   --k2-sw-k: var(--control-switch-knob);
+  --k2-sw-cut: 4px;
+  --k2-ch-cut: var(--k2-sw-cut);
   width: var(--k2-sw-w);
   height: var(--k2-sw-h);
   padding: 0;
@@ -1450,8 +1452,7 @@ html:not([data-style="terminal"]) .k2-radio:checked {
   --k2-sw-w: var(--control-switch-sm-width);
   --k2-sw-h: var(--control-switch-sm-height);
   --k2-sw-k: var(--control-switch-sm-knob);
-  --k2-ch-cut: 2px;
-  --k2-ch-fr: 1.5px;
+  --k2-sw-cut: 3px;
 }
 .k2-switch[aria-checked="true"] {
   background-color: var(--color-accent);
@@ -1470,12 +1471,11 @@ html:not([data-style="terminal"]) .k2-radio:checked {
   border-radius: var(--radius-pill);
   background-color: var(--color-text-secondary);
   transition: transform var(--motion-duration-medium), background-color var(--motion-duration-medium);
-  /* The knob's cut runs parallel to the track's, so the gap around it is even
-     on the diagonals too: inset 2px takes 0.414 x 2 off the cut. */
-  --k2-ch-cut: calc(var(--chamfer-chip) - 0.828px);
+  /* The knob's cut runs parallel to the track's, so the gap is the same 2px on
+     the diagonals as on the sides: inset d takes 0.586d off the cut. */
+  --k2-ch-cut: calc(var(--k2-sw-cut) - 1.172px);
   --k2-ch-bw: 0px;
 }
-.k2-switch[data-size="sm"] .k2-switch-knob { --k2-ch-cut: 1.172px; }
 .k2-switch[aria-checked="true"] .k2-switch-knob {
   background-color: var(--color-on-accent);
   transform: translateX(calc(var(--k2-sw-w) - var(--k2-sw-h)));
@@ -1485,10 +1485,10 @@ html:not([data-style="terminal"]) .k2-radio:checked {
    follows the cut, the same on every state. A spread shadow and the corner
    background paint the area and the clip trims it to three nested outlines of
    the cut (ring outer, ring inner, the box), even-odd, so the 1px gap between
-   ring and box stays clear. An outward offset d grows the cut by 0.414d. */
+   ring and box stays clear. An outward offset d grows the cut by 0.586d. */
 html[data-style="terminal"] :is(.k2-checkbox, .k2-radio, .k2-switch):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
-  --k2-fr-m: calc(var(--k2-ch-cut) + 0.414px);
-  --k2-fr-o: calc(var(--k2-ch-cut) + 1.243px);
+  --k2-fr-m: calc(var(--k2-ch-cut) + 0.586px);
+  --k2-fr-o: calc(var(--k2-ch-cut) + 1.757px);
   outline: none;
   box-shadow: 0 0 0 3px var(--color-accent);
   clip-path: polygon(evenodd,
@@ -1572,7 +1572,7 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
   border-radius: var(--radius-pill);
   background: var(--color-accent);
   pointer-events: none;
-  --k2-ch-cut: calc(var(--chamfer-control) - 1.243px);
+  --k2-ch-cut: calc(var(--chamfer-control) - 1.757px);
   --k2-ch-bw: 0px;
 }
 .k2-segment-thumb[data-ready] {

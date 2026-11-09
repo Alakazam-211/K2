@@ -355,6 +355,7 @@ pub mod vault;
 pub mod vault_handoff_routes;
 pub mod vault_routes;
 pub mod vault_use_routes;
+pub mod vault_run_routes;
 pub mod vault_systemd_routes;
 // Box moves carry the vault (prd-box-move-carry-v1): `/cli/migrate/secrets/*`.
 pub mod migrate_secrets_routes;

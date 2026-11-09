@@ -131,6 +131,7 @@ pub fn is_route(path: &str) -> bool {
         || crate::migrate_secrets_routes::is_route(path)
         || POST_ROUTES.contains(&path)
         || crate::vault_use_routes::is_route(path)
+        || crate::vault_run_routes::is_route(path)
         || crate::vault_handoff_routes::is_route(path)
         || crate::vault_systemd_routes::is_route(path)
 }
@@ -139,6 +140,7 @@ pub fn is_post_route(path: &str) -> bool {
     POST_ROUTES.contains(&path)
         || crate::migrate_secrets_routes::is_post_route(path)
         || crate::vault_use_routes::is_post_route(path)
+        || crate::vault_run_routes::is_post_route(path)
         || crate::vault_handoff_routes::is_post_route(path)
         || crate::vault_systemd_routes::is_post_route(path)
 }
@@ -586,6 +588,9 @@ pub fn handle_on(
     }
     if crate::vault_use_routes::is_route(path) {
         return crate::vault_use_routes::handle(vault, path, &c, body, params, ingress, not_person);
+    }
+    if crate::vault_run_routes::is_route(path) {
+        return crate::vault_run_routes::handle(vault, path, &c, body);
     }
     if crate::vault_handoff_routes::is_route(path) {
         return crate::vault_handoff_routes::handle(vault, path, &c, body, params, ingress);

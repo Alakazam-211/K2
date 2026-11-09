@@ -33870,6 +33870,38 @@ that asks for it (see k2 vault file --help).
 Example: docker run --env-file "$(k2 vault env-file DATABASE_URL)" myapp
 EOF
             ;;
+        run) cat <<'EOF'
+k2 vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]
+
+From a K2 terminal: run one command with its secrets, now, with no session
+restart. What the child gets is what you already have, never more:
+  env delivery    ENV_NAME=<value>, default the name the share set, else
+                  NAME in capitals (--secret NAME=ENV_NAME picks another)
+  file delivery   ENV_NAME_FILE=<path>, a private 0600 file for this run,
+                  removed when the command exits. Never put in env
+  fetch only      refused; no person needed, K2 can make the call for you:
+                  k2 vault fetch --secret NAME <url>
+  ssh keys        refused; ssh and git already sign with $SSH_AUTH_SOCK
+--secret repeats; NAME alone works too. --env-file resolves each KEY=k2v://…
+line through the vault and passes other lines through as they are; the file
+must be inside your workspace.
+
+The values are replaced by [k2v:NAME] (the vault's name for the secret) in
+the command's output. That is hygiene, not a wall: the command has the value
+and can write it anywhere. Without --no-mask the command's output goes
+through pipes, so it doesn't see a terminal. --no-mask lets the command use
+your terminal (TTY), for interactive tools. Output is then not masked, and
+the run is logged as no-mask.
+
+Exit code: the command's own (128 + the signal if a signal killed it).
+K2's own refusals come before the command starts, on stderr as "code: hint":
+2 usage, 3 refused (the hint or the last line says what to run), 4 no such
+secret.
+
+Example: k2 vault run --secret DATABASE_URL -- npm run migrate
+Example: k2 vault run --secret STRIPE_KEY=STRIPE_API_KEY --env-file .env.k2 -- node app.js
+EOF
+            ;;
         file) cat <<'EOF'
 k2 vault file NAME [--scope session] [--ttl 90s] [--wait 10m] [--json]
 k2 vault file --done <path>
@@ -35450,15 +35482,57 @@ cmd_migrate() {
 # new verb goes here too: a word not listed is an unknown verb, with or
 # without --help (prd-vault-for-agents-v1 X9: `k2 vault exec --help` used to
 # print the top help and exit 0, so an agent took the guess as real).
-_VAULT_VERBS=" status list ls show set rotate hosts sign public-key agent-limit delivery grant revoke open disable enable destroy get audit requests presets doctor env-file file sync import service reveal recovery confirm-password kek rekey rollback recipient carry backup restore systemd-cred placement placements fetch send incoming sent accept-from ask asks unsend "
+_VAULT_VERBS=" status list ls show set rotate hosts sign public-key agent-limit delivery grant revoke open disable enable destroy get audit requests presets doctor env-file file sync import service reveal recovery confirm-password kek rekey rollback recipient carry backup restore systemd-cred placement placements fetch send incoming sent accept-from ask asks unsend run "
+
+# k2 vault run (prd-vault-for-agents-v1 A1): parse the flags before `--`, ask
+# the daemon where its binary is, and exec that as the helper. Policy, audit
+# and per-run files are the daemon's; the masking is the helper's. Only names
+# go on the helper's argv.
+_vault_run() {
+    local usage="usage: k2 vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]"
+    local helper_args=() named=0 dashes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h) _vault_sub_usage run; return 0 ;;
+            --) dashes=1; shift; break ;;
+            --secret)
+                [ -n "${2:-}" ] || { echo "usage: --secret NAME[=ENV_NAME]" >&2; exit 2; }
+                helper_args+=(--secret "$2"); named=1; shift 2 ;;
+            --env-file)
+                [ -n "${2:-}" ] || { echo "usage: --env-file <file>" >&2; exit 2; }
+                helper_args+=(--env-file "$2"); named=1; shift 2 ;;
+            --scope)
+                [ -n "${2:-}" ] || { echo "usage: --scope workspace|server|session" >&2; exit 2; }
+                helper_args+=(--scope "$2"); shift 2 ;;
+            --no-mask) helper_args+=(--no-mask); shift ;;
+            --value|--value=*|--secret-value*)
+                echo "value_on_argv: run takes names, never values (k2 vault run --help)" >&2
+                exit 2 ;;
+            --*) echo "usage: unknown flag '$1' (k2 vault run --help)" >&2; exit 2 ;;
+            # NAME like `k2 vault file NAME`; --secret NAME works too.
+            *) helper_args+=(--secret "$1"); named=1; shift ;;
+        esac
+    done
+    if [ "$dashes" != 1 ] || [ $# -eq 0 ] || [ "$named" != 1 ]; then
+        echo "$usage" >&2
+        echo "Put -- before the command: k2 vault run --secret API_KEY -- node app.js" >&2
+        exit 2
+    fi
+    _vault_call GET run-helper ''
+    local helper
+    helper="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("helper") or "")')"
+    if [ -z "$helper" ] || [ ! -x "$helper" ]; then
+        echo "run_helper_missing: the K2 daemon named no usable helper; restart the K2 daemon and try again" >&2
+        exit 1
+    fi
+    K2_HOOK_SOCK="$(_hook_sock)" K2_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" exec "$helper" --vault-run "${helper_args[@]}" -- "$@"
+}
 
 _vault_unknown_verb() {
     local sub="$1" try=""
     case "$sub" in
-        # A command that needs its secrets: `run` once it exists (S2),
-        # else the env file a container reads.
-        exec|env|inject)
-            case "$_VAULT_VERBS" in *" run "*) try="run" ;; *) try="env-file" ;; esac ;;
+        # A command that needs its secrets.
+        exec|env|inject) try="run" ;;
     esac
     echo "usage: unknown vault verb '$sub' (k2 vault --help)" >&2
     [ -z "$try" ] || echo "did you mean $try? (k2 vault $try --help)" >&2
@@ -35477,6 +35551,11 @@ cmd_vault() {
     esac
     if [ "$sub" = "fetch" ]; then
         _vault_fetch "$@"
+        return
+    fi
+    # Before the --help scan: the words after `--` are the child's own.
+    if [ "$sub" = "run" ]; then
+        _vault_run "$@"
         return
     fi
     case "$sub" in

@@ -606,6 +606,13 @@ pub struct LocalVault {
     once_gate: Mutex<()>,
 }
 
+/// How a `k2 vault run` use is audited (consumer `run:<session id>`,
+/// outcome `ok:run <cmd basename>`).
+struct RunLabel<'a> {
+    consumer: &'a str,
+    outcome: &'a str,
+}
+
 impl LocalVault {
     // ── open / create ───────────────────────────────────────────────
 
@@ -1986,11 +1993,21 @@ impl LocalVault {
     }
 
     fn resolve_inner(&self, sel: &Selector, use_: Use<'_>, who: &Requester) -> Result<Resolved> {
-        self.resolve_checked(sel, use_, who, false)
+        self.resolve_checked(sel, use_, who, false, None)
+    }
+
+    /// One secret for `k2 vault run` (prd-vault-for-agents-v1 A1, V22): as
+    /// env when `who` has env, else as a file when `who` has file, under
+    /// the same check as `Use::Env` / `Use::File` and never wider. Read
+    /// [`Resolved::delivery`] for which it was. One audit row, allowed or
+    /// refused, under `consumer` and (when allowed) `outcome`.
+    pub fn resolve_for_run(&self, sel: &Selector, who: &Requester, consumer: &str, outcome: &str) -> Result<Resolved> {
+        self.resolve_checked(sel, Use::Env, who, false, Some(RunLabel { consumer, outcome }))
     }
 
     /// `taking_once`: this is [`Self::take_once`] reading a one-time secret.
-    fn resolve_checked(&self, sel: &Selector, use_: Use<'_>, who: &Requester, taking_once: bool) -> Result<Resolved> {
+    /// `run`: this is `k2 vault run`, audited under its own label.
+    fn resolve_checked(&self, sel: &Selector, use_: Use<'_>, who: &Requester, taking_once: bool, run: Option<RunLabel<'_>>) -> Result<Resolved> {
         self.flush_rollups_if_due();
         let actor_label = who.label();
         let keys = self.keys.read();
@@ -2000,11 +2017,16 @@ impl LocalVault {
             Err(e) => {
                 drop(conn);
                 drop(keys);
-                return Err(self.deny(Entry::new(use_.action(), &actor_label, "deny"), e));
+                let mut entry = Entry::new(use_.action(), &actor_label, "deny");
+                if let Some(r) = &run {
+                    entry = entry.consumer(r.consumer.to_string());
+                }
+                return Err(self.deny(entry, e));
             }
         };
         let m = row.meta.clone();
-        let deny_entry = Entry::new(use_.action(), &actor_label, "deny").secret(&m.id, None).consumer(actor_label.clone());
+        let deny_consumer = run.as_ref().map_or_else(|| actor_label.clone(), |r| r.consumer.to_string());
+        let deny_entry = Entry::new(use_.action(), &actor_label, "deny").secret(&m.id, None).consumer(deny_consumer);
         let fail = |e: VaultError| -> Result<Resolved> { Err(e) };
         // A one-time secret goes out once, through `k2 vault file` only
         // (§3.5): every other way to read it is refused here, so it can't
@@ -2084,8 +2106,12 @@ impl LocalVault {
             });
         }
         let rollback = *self.rollback.lock();
-        let need = use_.needs();
         let candidates = self.effective(&conn, &keys, &m, who)?;
+        // `run` takes env when this caller has it and a file when file is
+        // all it has (V22). Decided here so the refused half of "try env,
+        // then file" isn't a deny row in the audit.
+        let reaches = |d: Delivery| candidates.iter().any(|(c, _, _, _, explicit)| c.level() >= d.level() && !(*explicit && rollback));
+        let need = if run.is_some() && !reaches(Delivery::Env) && reaches(Delivery::File) { Delivery::File } else { use_.needs() };
         // A workspace's own secret gets an implicit, unnamed candidate
         // first; an eligible explicit grant that names an env or file must
         // still win, or its name is never used.
@@ -2147,11 +2173,13 @@ impl LocalVault {
         drop(keys);
         // Item 2: a signed fetch says which scheme signed it.
         let outcome = match (&use_, m.inject.as_ref().and_then(|i| i.sign.as_ref())) {
+            _ if run.is_some() => run.as_ref().map_or_else(String::new, |r| r.outcome.to_string()),
             (Use::Fetch(_), Some(s)) => format!("ok:sign={}", s.scheme()),
             _ => "ok".to_string(),
         };
         // A compute release names the job and attempt (SE10).
         let consumer_label = match who {
+            _ if run.is_some() => run.as_ref().map_or_else(String::new, |r| r.consumer.to_string()),
             Requester::Compute { job_id, generation, .. } => format!("{actor_label} job {job_id} gen {generation}"),
             _ => actor_label.clone(),
         };
@@ -3394,7 +3422,7 @@ impl LocalVault {
     /// wrote.
     pub fn take_once<T>(&self, sel: &Selector, who: &Requester, write: impl FnOnce(&Resolved) -> Result<T>) -> Result<T> {
         let _one_reader = self.once_gate.lock();
-        let r = self.resolve_checked(sel, Use::File, who, true)?;
+        let r = self.resolve_checked(sel, Use::File, who, true, None)?;
         {
             let keys = self.keys.read();
             let conn = self.conn.lock();

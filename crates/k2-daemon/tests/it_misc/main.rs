@@ -19,3 +19,4 @@ mod folder_trust_integration;
 mod git_tools_integration;
 mod grokbots_routes_integration;
 mod macos_daemon_helper_app_layout;
+mod vault_run_helper_integration;

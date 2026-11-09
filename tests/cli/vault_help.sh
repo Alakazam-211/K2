@@ -43,7 +43,7 @@ printf '%s' "$top" | grep -Fq -- "--inject-dst header:<Name>|query:<param>|basic
 ok "k2 vault --help: no daemon needed, names --inject-dst and per-verb help"
 
 for verb in status list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
-    doctor env-file import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign \
+    doctor env-file run import service reveal recovery confirm-password kek rekey rollback backup restore recipient carry fetch send sign \
     systemd-cred placement placements public-key agent-limit; do
     out="$(k2n vault "$verb" --help 2>&1)" || fail "vault $verb --help exited non-zero: $out"
     case "$verb" in
@@ -60,8 +60,8 @@ done
 ok "every k2 vault verb has its own --help with an example"
 
 # prd-vault-for-agents-v1 X9: a guessed verb with --help is an unknown verb
-# (exit 2), not the top help with exit 0. `run` is unknown until S2 adds it.
-for guess in exec env inject run frobnicate; do
+# (exit 2), not the top help with exit 0.
+for guess in exec env inject frobnicate; do
     set +e
     err="$(k2n vault "$guess" --help 2>&1)"; rc=$?
     set -e
@@ -69,11 +69,11 @@ for guess in exec env inject run frobnicate; do
     printf '%s\n' "$err" | head -1 | grep -Fqx "usage: unknown vault verb '$guess' (k2 vault --help)" || fail "vault $guess --help: $err"
     if printf '%s' "$err" | grep -Fq "k2 vault — secrets for agents"; then fail "vault $guess --help printed the top help: $err"; fi
     case "$guess" in
-        exec|env|inject) printf '%s' "$err" | grep -Fq "did you mean env-file? (k2 vault env-file --help)" || fail "vault $guess: no did-you-mean: $err" ;;
+        exec|env|inject) printf '%s' "$err" | grep -Fq "did you mean run? (k2 vault run --help)" || fail "vault $guess: no did-you-mean: $err" ;;
         *) if printf '%s' "$err" | grep -Fq "did you mean"; then fail "vault $guess: a did-you-mean for no reason: $err"; fi ;;
     esac
 done
-ok "an unknown vault verb with --help exits 2, no daemon needed; exec/env/inject say did you mean"
+ok "an unknown vault verb with --help exits 2, no daemon needed; exec/env/inject say did you mean run"
 
 # K2 Cores field report (2026-10-28): `k2 publish secret --help` is its own
 # page with the flags and an example (it used to be a usage error).
@@ -447,7 +447,7 @@ set -e
 printf '%s' "$err" | grep -Fq "grant_ttl_ignored: this K2 server made the share WITHOUT an end time" || fail "grant --ttl dropped: $err"
 printf '%s' "$err" | grep -Fq "k2 vault revoke --grant g-OLD_SERVER" || fail "grant --ttl dropped, no revoke line: $err"
 if printf '%s' "$err" | grep -Fq "shared OLD_SERVER"; then fail "grant --ttl dropped but said shared: $err"; fi
-printf '%s' "$(k2n vault grant --help)" | grep -Fq -- "--ttl 2h           the share ends by itself" || fail "grant --help lacks --ttl"
+grep -Fq -- "--ttl 2h           the share ends by itself" <<<"$(k2n vault grant --help)" || fail "grant --help lacks --ttl"
 ok "grant --ttl is sent, the end is printed, and a server that drops it fails loudly"
 
 # K2 Cores field report (2026-10-28): a vault refusal ends with the

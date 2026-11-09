@@ -166,7 +166,7 @@ pub(crate) fn session_secret_may_shadow(m: &k2_vault::SecretMeta) -> bool {
 /// finds. A session-scope card tells the agent `k2 vault fetch --secret NAME`,
 /// so a bare name has to reach it, unless that would quietly replace a
 /// workspace secret ([`session_secret_may_shadow`]): then `--scope session`.
-fn use_selector(vault: &LocalVault, c: &VaultCaller, s: &Sel) -> Result<Selector, VaultError> {
+pub(crate) fn use_selector(vault: &LocalVault, c: &VaultCaller, s: &Sel) -> Result<Selector, VaultError> {
     let sel = selector(c, s)?;
     let bare = s.scope.as_deref().is_none_or(str::is_empty) && s.workspace.is_none();
     if let (true, Selector::Name { namespace: Namespace::User, name, scope }, Some(sid)) = (bare, &sel, c.session_id.as_deref()) {

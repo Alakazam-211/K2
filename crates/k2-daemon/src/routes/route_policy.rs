@@ -2227,6 +2227,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/revoke", Member),
     post("/cli/vault/rollback", Owner),
     post("/cli/vault/rotate", Member),
+    // `k2 vault run`: the handler serves agent passports only.
+    post("/cli/vault/run", Member),
+    get("/cli/vault/run-helper", Member),
     post("/cli/vault/send", Member),
     get("/cli/vault/sent", Member),
     both("/cli/vault/service", Member),
@@ -3376,6 +3379,7 @@ mod tests {
     /// GET-serving rows whose path holds a [`MUTATING_WORDS`] word but
     /// whose GET is a read (verified handler by handler for 0.44.4).
     const GET_VERB_NAMED_READS: &[(&str, &str)] = &[
+        ("/cli/vault/run-helper", "returns the path of this daemon's own binary; nothing changes (the run itself is POST /cli/vault/run)"),
         ("/cli/agents/work/create", "410 Gone, no state"),
         ("/cli/folder-trust/status", "reads the scan and the stored decision; grants, cards and decisions are POST routes"),
         ("/cli/agents/work/move", "410 Gone, no state"),

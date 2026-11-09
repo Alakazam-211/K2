@@ -75,6 +75,14 @@ pub fn run() {
     // safe. See wiki Ops - Tunnel Port-Desync and Resilience.
     //
     // Also short-circuit --help. Real boot never sees these args.
+    //
+    // `k2 vault run`'s helper goes first, on the raw argv: everything after
+    // its `--` is another program's arguments, which may be "--skin-gateway"
+    // or "--version", or not UTF-8 (`std::env::args` panics on that).
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if raw_args.get(1).is_some_and(|a| a == crate::vault::run::ARG) {
+        std::process::exit(crate::vault::run::run_from_args(&raw_args));
+    }
     let args: Vec<String> = std::env::args().collect();
     if args.iter().skip(1).any(|a| a == "--skin-gateway") {
         std::process::exit(skin_gateway::run_from_args(&args));

@@ -31,7 +31,7 @@ vi.mock('@/stores/connect-host', () => ({
   onActiveHostChange: () => () => {},
 }))
 
-import UsageButton from './UsageButton'
+import UsageButton, { chipTitle } from './UsageButton'
 
 function claudeDoc(checkedAt: string, extra: Partial<SubscriptionDoc['harnesses'][number]> = {}): SubscriptionDoc {
   return {
@@ -76,6 +76,9 @@ beforeEach(() => {
   h.remote = false
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
+  // The menu always asks the daemon; unless a test says otherwise, its
+  // answer is the same document GET just served.
+  h.daemonCliPost.mockImplementation((...args: unknown[]) => h.daemonCliGet(...args))
   h.openSettings.mockReset()
   resetSubscriptionUsageForTests()
 })
@@ -106,7 +109,7 @@ describe('UsageButton', () => {
     expect(menu.textContent).not.toContain('Codex')
     expect(menu.textContent).not.toContain('Grok')
     expect(menu.textContent).not.toContain('0%')
-    expect(h.daemonCliPost).not.toHaveBeenCalled()
+    expect(h.daemonCliPost).toHaveBeenCalledWith('usage/subscriptions/refresh', {})
     expect(screen.getByTestId('subscription-usage-refresh').textContent).toBe('Refresh')
   })
 
@@ -257,10 +260,9 @@ describe('UsageButton', () => {
     expect(menu.textContent).not.toContain('% left')
   })
 
-  it('POSTs refresh when checkedAt is older than 15 seconds', async () => {
-    const stale = new Date(Date.now() - 16_000).toISOString()
+  it('the menu asks the daemon whenever it opens, even with a just-read cache', async () => {
     const fresh = new Date().toISOString()
-    h.daemonCliGet.mockResolvedValue(claudeDoc(stale))
+    h.daemonCliGet.mockResolvedValue(claudeDoc(fresh))
     h.daemonCliPost.mockResolvedValue(claudeDoc(fresh))
     render(<UsageButton />)
     await waitFor(() => {
@@ -271,6 +273,27 @@ describe('UsageButton', () => {
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('usage/subscriptions/refresh', {})
     })
+  })
+
+  it('the tooltip names the driving window and its age', () => {
+    const now = Date.parse('2026-11-09T12:00:00Z')
+    const row = {
+      harness: 'claude',
+      plan: 'Max',
+      windows: [],
+      checkedAt: '2026-11-09T11:59:00Z',
+      status: '',
+      maxPercent: 9,
+      chipWindow: { id: 'seven_day', label: 'Weekly', percent: 9, observedAt: '2026-11-09T11:58:00Z' },
+      asOf: '2026-11-09T11:58:00Z',
+    }
+    expect(chipTitle([row], now, null, null)).toBe('Claude: Weekly 9%, as of 2 min ago')
+  })
+
+  it('the tooltip keeps today\'s text for a daemon that sends no chipWindow', () => {
+    const now = Date.parse('2026-11-09T12:00:00Z')
+    const row = { harness: 'claude', plan: 'Max', windows: [], checkedAt: '2026-11-09T11:30:00Z', status: '' }
+    expect(chipTitle([row], now, null, null)).toBe('Claude updated 30m ago')
   })
 
   it('names the window’s remote server as the owner of the numbers (Z16)', async () => {

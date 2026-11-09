@@ -49,6 +49,7 @@ export function LimitBar({
   nowMs,
   labelTestId,
   dense = false,
+  drivesChip = false,
 }: {
   window: UsageWindow
   nowMs: number
@@ -56,6 +57,9 @@ export function LimitBar({
   labelTestId?: string
   /** Settings rows: smaller type (same bar height). */
   dense?: boolean
+  /** This window sets the top-bar number: marked so the chip can be
+   *  matched to a bar. */
+  drivesChip?: boolean
 }): React.JSX.Element {
   const reset = windowReset(w, nowMs)
   const pct = windowPercent(w, nowMs)
@@ -64,13 +68,19 @@ export function LimitBar({
   const label = limitBarLabel(w, nowMs)
   const title = limitBarTitle(w, nowMs)
   return (
-    <div className="min-w-0" data-limit-tone={tone} data-limit-pace={pace?.status}>
+    <div className="min-w-0" data-limit-tone={tone} data-limit-pace={pace?.status} data-drives-chip={drivesChip || undefined}>
       <div
         className={`${dense ? 'text-[9px]' : 'text-[11px]'} text-[var(--color-text-secondary)] truncate`}
         data-testid={labelTestId}
         title={title}
       >
         {label}
+        {drivesChip ? (
+          <span className="text-[var(--color-text-muted)]" title="This window sets the top-bar number" data-testid="limit-bar-chip-mark">
+            {' '}
+            · top bar
+          </span>
+        ) : null}
         {pace && pace.status !== 'on' ? (
           <span className="text-[var(--color-text-muted)]"> · {paceText(pace)}</span>
         ) : null}

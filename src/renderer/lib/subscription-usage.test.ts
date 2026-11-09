@@ -4,12 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   buttonChips,
+  isChipWindow,
   buttonLabel,
   formatResetsIn,
   harnessName,
   isAirgapped,
   isSignedIn,
-  isStale,
   parseSubscriptionDoc,
   percentUsed,
   PROBED_HARNESSES,
@@ -189,46 +189,40 @@ describe('subscription window math', () => {
     ).toBe(true)
   })
 
-  it('treats a cache older than 15 seconds as stale', () => {
-    const now = Date.parse('2026-09-26T15:00:15Z')
-    const fresh = '2026-09-26T15:00:01Z'
-    const stale = '2026-09-26T14:59:00Z'
-    expect(
-      isStale(
-        doc({
-          harnesses: [
-            { harness: 'claude', plan: '', windows: [], checkedAt: fresh, status: '' },
-            { harness: 'codex', plan: '', windows: [], checkedAt: fresh, status: '' },
-            { harness: 'grok', plan: '', windows: [], checkedAt: fresh, status: '' },
-          ],
-        }),
-        now,
-      ),
-    ).toBe(false)
-    expect(
-      isStale(
-        doc({
-          harnesses: [
-            { harness: 'claude', plan: '', windows: [], checkedAt: stale, status: '' },
-            { harness: 'codex', plan: '', windows: [], checkedAt: fresh, status: '' },
-            { harness: 'grok', plan: '', windows: [], checkedAt: fresh, status: '' },
-          ],
-        }),
-        now,
-      ),
-    ).toBe(true)
-    expect(
-      isStale(
-        doc({
-          harnesses: [
-            { harness: 'claude', plan: '', windows: [], checkedAt: fresh, status: '' },
-            { harness: 'codex', plan: '', windows: [], checkedAt: fresh, status: '' },
-          ],
-        }),
-        now,
-      ),
-    ).toBe(true)
-    expect(isStale(null, now)).toBe(true)
+  it('parses the single-record fields and leaves them absent on an older daemon', () => {
+    const doc = parseSubscriptionDoc({
+      harnesses: [
+        {
+          harness: 'claude',
+          plan: 'Max',
+          windows: [{ label: 'Weekly', used: 0.09, resetsAt: '', id: 'seven_day', observedAt: '2026-11-09T11:58:00Z', source: 'probe' }],
+          checkedAt: '2026-11-09T11:58:00Z',
+          status: '',
+          maxPercent: 9,
+          chipWindow: { id: 'seven_day', label: 'Weekly', percent: 9, observedAt: '2026-11-09T11:58:00Z' },
+          asOf: '2026-11-09T11:58:00Z',
+          accountId: 'acct-1',
+        },
+        { harness: 'codex', plan: '', windows: [], checkedAt: '', status: '' },
+      ],
+    })
+    const [claude, codex] = doc.harnesses
+    expect(claude.chipWindow).toEqual({ id: 'seven_day', label: 'Weekly', percent: 9, observedAt: '2026-11-09T11:58:00Z' })
+    expect(claude.asOf).toBe('2026-11-09T11:58:00Z')
+    expect(claude.accountId).toBe('acct-1')
+    expect(claude.windows[0].observedAt).toBe('2026-11-09T11:58:00Z')
+    expect(claude.windows[0].source).toBe('probe')
+    expect(codex.chipWindow).toBeUndefined()
+    expect(codex.asOf).toBeUndefined()
+  })
+
+  it('names the chip window for one bar only', () => {
+    const w = { label: 'Weekly', used: 0.1, resetsAt: '', id: 'seven_day' }
+    expect(isChipWindow({ id: 'seven_day', label: 'Weekly', percent: 10, observedAt: null }, w)).toBe(true)
+    expect(isChipWindow({ id: 'five_hour', label: 'Session', percent: 10, observedAt: null }, w)).toBe(false)
+    expect(isChipWindow(null, w)).toBe(false)
+    expect(isChipWindow(undefined, w)).toBe(false)
+    expect(isChipWindow({ id: '', label: 'Weekly', percent: 10, observedAt: null }, { ...w, id: undefined })).toBe(true)
   })
 
   it('formats time until reset', () => {
@@ -360,6 +354,5 @@ describe('parseSubscriptionDoc', () => {
     expect(visibleHarnesses(null)).toEqual([])
     expect(buttonChips(broken)).toEqual([])
     expect(buttonLabel(broken)).toBe('Usage')
-    expect(isStale(broken, Date.now())).toBe(true)
   })
 })

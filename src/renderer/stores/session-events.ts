@@ -627,6 +627,8 @@ export interface SubscriptionUsageChangedEvent {
   tool?: string | null
   account_id?: string | null
   source: string
+  /** When the reading was measured (single-record daemons). */
+  observed_at?: string | null
 }
 
 /** APP-LEVEL — the LLM login wallet changed (add, sign-in state, switch,

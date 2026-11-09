@@ -24,6 +24,18 @@ export interface UsageWindow {
   /** This window drives the top-bar chip (the daemon's rule; served with
    *  `maxPercent` by daemons that own the chip number). */
   chip?: boolean
+  /** When this window was measured (single-record daemons). */
+  observedAt?: string
+  /** Which reading set this window (`probe` · `live_statusline` · `live_rollout`). */
+  source?: string
+}
+
+/** The window that drives the chip, as the daemon served it. */
+export interface ChipWindow {
+  id: string
+  label: string
+  percent: number
+  observedAt: string | null
 }
 
 /** Why a login has (no) numbers (Usage v2 §3.2). */
@@ -58,6 +70,11 @@ export interface HarnessUsage {
    *  same number `GET /cli/llm/accounts/for` gives the phone). `null` = no
    *  chip. Absent = an older daemon: the renderer computes it itself. */
   maxPercent?: number | null
+  /** Single-record daemons: the window driving the chip, and when it was
+   *  measured. Absent on older daemons (today's hover text). */
+  chipWindow?: ChipWindow | null
+  asOf?: string | null
+  accountId?: string | null
 }
 
 export interface SubscriptionDoc {
@@ -74,7 +91,6 @@ export function isAirgapped(doc: SubscriptionDoc | null | undefined): boolean {
 /** Clock-menu probes. Anything else is absent — do not invent a row. */
 export const PROBED_HARNESSES = ['claude', 'codex', 'grok'] as const
 
-const STALE_MS = 15_000
 const PROBED = new Set<string>(PROBED_HARNESSES)
 
 function isRecord(raw: unknown): raw is Record<string, unknown> {
@@ -110,7 +126,19 @@ export function parseWindow(raw: unknown): UsageWindow | null {
   if (start) w.windowStart = start
   if (raw.resetPassed === true) w.resetPassed = true
   if (typeof raw.chip === 'boolean') w.chip = raw.chip
+  const observedAt = nonEmpty(raw.observedAt)
+  if (observedAt) w.observedAt = observedAt
+  const source = nonEmpty(raw.source)
+  if (source) w.source = source
   return w
+}
+
+function parseChipWindow(raw: unknown): ChipWindow | null {
+  if (!isRecord(raw)) return null
+  const label = str(raw.label)
+  const percent = finite(raw.percent)
+  if (label === '' || percent === undefined) return null
+  return { id: str(raw.id), label, percent, observedAt: nonEmpty(raw.observedAt) ?? null }
 }
 
 /** The v2 row fields (`state`, `source`, `nextProbeAt`, `attemptedAt`). */
@@ -124,6 +152,11 @@ export function parseRowExtras(raw: Record<string, unknown>): Partial<HarnessUsa
   if (next) out.nextProbeAt = next
   const attempted = nonEmpty(raw.attemptedAt)
   if (attempted) out.attemptedAt = attempted
+  if ('chipWindow' in raw) out.chipWindow = parseChipWindow(raw.chipWindow)
+  const asOf = nonEmpty(raw.asOf)
+  if (asOf) out.asOf = asOf
+  const accountId = nonEmpty(raw.accountId)
+  if (accountId) out.accountId = accountId
   return out
 }
 
@@ -277,20 +310,6 @@ export function buttonLabel(doc: SubscriptionDoc | null): string {
   const chips = buttonChips(doc)
   if (chips.length === 0) return 'Usage'
   return chips.map((chip) => `${harnessName(chip.harness)} ${chip.used}%`).join(' ')
-}
-
-/** True when the menu should POST a refresh instead of only reading. */
-export function isStale(doc: SubscriptionDoc | null, now: number): boolean {
-  const rows = visibleHarnesses(doc)
-  if (rows.length === 0) return true
-  for (const name of PROBED_HARNESSES) {
-    const row = rows.find((h) => h.harness === name)
-    if (!row) return true
-    const checked = Date.parse(row.checkedAt)
-    if (Number.isNaN(checked)) return true
-    if (now - checked > STALE_MS) return true
-  }
-  return false
 }
 
 /** Time until `resetsAt`: `3h`, `4d`, `45m`. */
@@ -449,6 +468,25 @@ export function updatedAgo(checkedAt: string | null | undefined, nowMs: number):
   const h = Math.floor(m / 60)
   if (h < 48) return `updated ${h}h ago`
   return `updated ${Math.floor(h / 24)}d ago`
+}
+
+/** "2 min ago" / "just now" / "1h ago" for the chip's hover text. */
+export function asOfAgo(iso: string | null | undefined, nowMs: number): string | null {
+  const t = iso ? Date.parse(iso) : NaN
+  if (Number.isNaN(t)) return null
+  const s = Math.max(0, Math.floor((nowMs - t) / 1000))
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} min ago`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+/** Does `w` drive the chip? Exactly one bar answers yes for a record. */
+export function isChipWindow(chip: ChipWindow | null | undefined, w: UsageWindow): boolean {
+  if (!chip) return false
+  return chip.id ? chip.id === w.id : chip.label === w.label
 }
 
 /** Where a reading came from, for the freshness line; null for a probe. */

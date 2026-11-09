@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
-  isStale,
   parseSubscriptionDoc,
   type SubscriptionDoc,
 } from '@/lib/subscription-usage'
@@ -34,9 +33,9 @@ const REFRESH_ROUTE = 'usage/subscriptions/refresh'
 interface SubscriptionUsageStore {
   entries: Record<string, UsageEntry>
   load: (target: UsageTarget) => Promise<void>
-  /** Menu open: POST when the cache is older than 15 seconds, else GET. A
+  /** Menu open: asks the daemon (it decides freshness). A
    *  scope that may not send the refresh (a view-only room) only GETs. */
-  refreshIfStale: (target: UsageTarget) => Promise<void>
+  refreshOnOpen: (target: UsageTarget) => Promise<void>
   /** User asked. Always POST a fresh probe. */
   refresh: (target: UsageTarget) => Promise<void>
 }
@@ -103,13 +102,12 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
       return p
     },
 
-    refreshIfStale: async (target) => {
+    refreshOnOpen: async (target) => {
       const epoch = epochOf(target.key)
-      const current = get().entries[target.key]?.doc ?? null
       try {
-        // Z41: the 15 s gate holds for a room too, so a room never makes its
-        // server probe vendor APIs more often than that server's own window.
-        const post = isStale(current, Date.now()) && scopeMayWrite(target.scope, REFRESH_ROUTE)
+        // The daemon decides freshness (its once-a-minute gate holds for a
+        // room too); the menu only asks.
+        const post = scopeMayWrite(target.scope, REFRESH_ROUTE)
         const raw = post
           ? await daemonCliPost<unknown>(target.scope, REFRESH_ROUTE, {})
           : await daemonCliGet<unknown>(target.scope, 'usage/subscriptions')

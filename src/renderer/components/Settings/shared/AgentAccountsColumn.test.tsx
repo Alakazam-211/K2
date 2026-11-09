@@ -368,6 +368,22 @@ describe('time until each token refreshes', () => {
     return d
   }
 
+  it('marks exactly the bar that drives the top-bar number', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => {
+      if (route !== 'llm/accounts/list') return routeGet(route, params)
+      const d = docWithResets() as { tools: Array<{ tool: string; accounts: Array<Record<string, unknown>> }> }
+      const claude = d.tools.find((t) => t.tool === 'claude')!
+      const work = claude.accounts.find((a) => a.id === WORK.id) as { usage: Record<string, unknown> }
+      work.usage = { ...work.usage, chipWindow: { id: '', label: 'Session', percent: 42, observedAt: null } }
+      return d
+    })
+    await renderColumn()
+    const marks = await screen.findAllByTestId('limit-bar-chip-mark')
+    expect(marks).toHaveLength(1)
+    expect(marks[0].closest('[data-drives-chip]')?.textContent).toContain('Session')
+    expect(screen.getByTestId('llm-usage-window-acc_work-Weekly').querySelector('[data-testid="limit-bar-chip-mark"]')).toBeNull()
+  })
+
   it('shows each token its own reset time in the top bar format, nothing when unknown, "now" when past, and ticks', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.setSystemTime(T0)

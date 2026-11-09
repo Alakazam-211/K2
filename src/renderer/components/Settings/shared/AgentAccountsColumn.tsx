@@ -19,7 +19,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
-import { formatResetsIn, limitState, limitStateText, sourceText } from '@/lib/subscription-usage'
+import { formatResetsIn, isChipWindow, limitState, limitStateText, sourceText } from '@/lib/subscription-usage'
 import { USAGE_CACHE_POLL_MS } from '@/stores/subscription-usage'
 import { findLimitsLogin, type LimitsLogin } from '@/lib/usage-limits'
 import { useUsageLimitsStore, watchUsageLimits } from '@/stores/usage-limits'
@@ -162,7 +162,7 @@ function UsageMeter({
         <div className="flex flex-wrap gap-x-3 gap-y-1">
           {windows.map((w) => (
             <div key={w.id ?? w.label} className="w-32">
-              <LimitBar window={w} nowMs={now} dense labelTestId={`llm-usage-window-${account.id}-${w.label}`} />
+              <LimitBar window={w} nowMs={now} dense drivesChip={isChipWindow(usage.chipWindow, w)} labelTestId={`llm-usage-window-${account.id}-${w.label}`} />
             </div>
           ))}
         </div>

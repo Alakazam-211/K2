@@ -125,6 +125,7 @@ vi.mock('@/stores/session-events', async () => {
     onAgentIdentityChanged: () => () => {},
     // The chat header's Token picker refetches on this event.
     onLlmAccountsChanged: () => () => {},
+    onSubscriptionUsageChanged: () => () => {},
     // The Thread shown while the pinned Chat is ensured (remote Thread
     // load Fix 1) asks who is viewing.
     onNotifyPrefsChanged: () => () => {},

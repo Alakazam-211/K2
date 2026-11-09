@@ -6,6 +6,7 @@ import { scopeMayWrite } from '@/kessel/server-scope'
 import { roomServerState, usePoolHostStatus, useTopBarScope } from '@/components/TopBar/top-bar-scope'
 import {
   buttonChips,
+  asOfAgo,
   harnessName,
   isAirgapped,
   limitState,
@@ -29,7 +30,13 @@ export function chipTitle(rows: HarnessUsage[], nowMs: number, whose: string | n
   if (whose) lines.push(`${whose}'s subscription usage`)
   for (const row of rows) {
     const why = needsAttention(row) ? ` · ${limitStateText(row) ?? 'check failed'}` : ''
-    lines.push(`${harnessName(row.harness)} ${updatedAgo(row.checkedAt, nowMs)}${why}`)
+    const chip = row.chipWindow
+    const ago = chip ? asOfAgo(row.asOf ?? chip.observedAt, nowMs) : null
+    if (chip && ago) {
+      lines.push(`${harnessName(row.harness)}: ${chip.label} ${chip.percent}%, as of ${ago}${why}`)
+    } else {
+      lines.push(`${harnessName(row.harness)} ${updatedAgo(row.checkedAt, nowMs)}${why}`)
+    }
   }
   if (failed) lines.push(`Couldn't read usage: ${failed}`)
   return lines.length > 0 ? lines.join('\n') : undefined
@@ -52,7 +59,7 @@ export default function UsageButton(): React.JSX.Element {
   const doc = entry?.doc ?? null
   const hasEntry = entry !== undefined
   const load = useSubscriptionUsageStore((s) => s.load)
-  const refreshIfStale = useSubscriptionUsageStore((s) => s.refreshIfStale)
+  const refreshOnOpen = useSubscriptionUsageStore((s) => s.refreshOnOpen)
   const refresh = useSubscriptionUsageStore((s) => s.refresh)
   const windowRemoteName = useConnectHostStore((s) =>
     s.activeHost === 'local' ? null : (s.activeHost.label || s.activeHost.hostname || 'this server'),
@@ -137,7 +144,7 @@ export default function UsageButton(): React.JSX.Element {
         style={noDrag}
         onClick={() => {
           setOpen((was) => {
-            if (!was && serverState === 'ok') void refreshIfStale(target)
+            if (!was && serverState === 'ok') void refreshOnOpen(target)
             return !was
           })
         }}

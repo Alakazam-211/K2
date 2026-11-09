@@ -14,7 +14,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { onActiveHostChange } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
-import { onLlmAccountsChanged } from '@/stores/session-events'
+import { onLlmAccountsChanged, onSubscriptionUsageChanged } from '@/stores/session-events'
 import type { HarnessUsage } from '@/lib/subscription-usage'
 
 export type AccountState = 'not_set_up' | 'signing_in' | 'signed_in' | 'needs_login' | 'unknown'
@@ -344,9 +344,19 @@ export function resetLlmAccountsForTests(): void {
   useLlmAccountsStore.setState({ entries: {} })
 }
 
+/** Re-read at most this often on usage events: a usage event re-reads the
+ *  whole account list (U28). */
+export const USAGE_EVENT_DEBOUNCE_MS = 2_000
+
+function pageHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+}
+
 /** Load now and on every `llm_accounts_changed` from that server (and,
- *  for the window's server, on every server switch). Returns the
- *  unsubscribe fn. */
+ *  for the window's server, on every server switch), and when a usage
+ *  reading changed (Members read usage from `account.usage`, so the list
+ *  has to follow; debounced, skipped while the page is hidden). Returns
+ *  the unsubscribe fn. */
 export function watchLlmAccounts(scope: ServerScope): () => void {
   const primary = scope.isPrimary
   if (primary) primaryWatchers += 1
@@ -354,12 +364,23 @@ export function watchLlmAccounts(scope: ServerScope): () => void {
   const off = onLlmAccountsChanged(scope, () => {
     void useLlmAccountsStore.getState().load(scope)
   })
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const offUsage = onSubscriptionUsageChanged(scope, () => {
+    if (timer !== null || pageHidden()) return
+    timer = setTimeout(() => {
+      timer = null
+      if (!pageHidden()) void useLlmAccountsStore.getState().load(scope)
+    }, USAGE_EVENT_DEBOUNCE_MS)
+  })
   let done = false
   return () => {
     if (done) return
     done = true
     if (primary) primaryWatchers = Math.max(0, primaryWatchers - 1)
     off()
+    offUsage()
+    if (timer !== null) clearTimeout(timer)
+    timer = null
   }
 }
 

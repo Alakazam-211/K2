@@ -1553,27 +1553,47 @@ html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
 .k2-slider:disabled::-webkit-slider-thumb { cursor: default; }
 
 .k2-segmented {
+  position: relative;
   display: inline-flex;
   flex-shrink: 0;
+  padding: 2px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-pill);
 }
 html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
+/* The selected indicator. It sits behind the labels and slides between them;
+   Segmented.tsx sets its width and offset. Terminal's cut runs parallel to the
+   group's, 3px in (border and padding). */
+.k2-segment-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  pointer-events: none;
+  --k2-ch-cut: calc(var(--chamfer-control) - 1.243px);
+  --k2-ch-bw: 0px;
+}
+.k2-segment-thumb[data-ready] {
+  transition: transform var(--motion-duration-medium) var(--motion-ease-out-soft), width var(--motion-duration-medium) var(--motion-ease-out-soft);
+}
+@media (prefers-reduced-motion: reduce) {
+  .k2-segment-thumb[data-ready] { transition: none; }
+}
+.k2-segmented[data-disabled] .k2-segment-thumb { opacity: 0.45; }
 .k2-segment {
-  padding: 4px 12px;
+  position: relative;
+  padding: 2px 10px;
   font-size: var(--type-sm);
   color: var(--color-text-secondary);
   background: transparent;
   cursor: pointer;
-  transition: background-color var(--motion-duration-medium), color var(--motion-duration-medium);
+  transition: color var(--motion-duration-medium);
 }
-.k2-segment:hover:not(:disabled):not([aria-checked="true"]) {
-  color: var(--color-text-primary);
-  background: var(--color-bg-elevated);
-}
+.k2-segment:hover:not(:disabled):not([aria-checked="true"]) { color: var(--color-text-primary); }
 .k2-segment[aria-checked="true"] {
   color: var(--color-on-accent);
-  background: var(--color-accent);
   cursor: default;
 }
 .k2-segment:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }

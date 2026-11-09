@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import { cx } from './cx'
 
 export interface SegmentedOption<T extends string> {
@@ -21,7 +21,8 @@ export interface SegmentedProps<T extends string> {
 }
 
 /** The shared segmented picker: one choice from a few short options, shown
- *  side by side. A radio group, with arrow keys to move between segments. */
+ *  side by side. A radio group, with arrow keys to move between segments. One
+ *  selected indicator slides to the chosen option; each style draws it. */
 export function Segmented<T extends string>({
   value,
   onChange,
@@ -32,7 +33,35 @@ export function Segmented<T extends string>({
   'data-testid': testId,
 }: SegmentedProps<T>): React.JSX.Element {
   const group = useRef<HTMLDivElement>(null)
+  const thumb = useRef<HTMLSpanElement>(null)
   const usable = options.filter((o) => !o.disabled && !disabled)
+
+  // Measured, because segment widths follow their labels. Sliding only starts
+  // after the first placement, so the indicator doesn't animate in on mount.
+  useLayoutEffect(() => {
+    const root = group.current
+    const indicator = thumb.current
+    if (!root || !indicator) return
+    const place = (): void => {
+      const on = root.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')
+      indicator.hidden = !on
+      if (!on) return
+      // Rects, not offsetLeft: labels land on fractions of a pixel.
+      const box = on.getBoundingClientRect()
+      indicator.style.width = `${box.width}px`
+      indicator.style.transform = `translateX(${box.left - root.getBoundingClientRect().left - root.clientLeft}px)`
+    }
+    place()
+    const frame = requestAnimationFrame(() => {
+      indicator.dataset.ready = ''
+    })
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place)
+    observer?.observe(root)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer?.disconnect()
+    }
+  }, [value, options])
 
   function move(from: T, step: 1 | -1): void {
     const at = usable.findIndex((o) => o.value === from)
@@ -51,8 +80,10 @@ export function Segmented<T extends string>({
       aria-label={ariaLabel}
       data-k2-chamfer="control"
       data-testid={testId}
+      data-disabled={disabled ? '' : undefined}
       className={cx('k2-segmented', className)}
     >
+      <span ref={thumb} aria-hidden="true" data-k2-chamfer="chip" className="k2-segment-thumb" />
       {options.map((o) => {
         const on = o.value === value
         const off = disabled || o.disabled

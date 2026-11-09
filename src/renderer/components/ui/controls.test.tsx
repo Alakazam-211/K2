@@ -51,6 +51,19 @@ describe('Segmented', () => {
     expect(screen.getByRole('radio', { name: 'A' }).getAttribute('tabindex')).toBe('-1')
   })
 
+  it('moves one hidden-from-readers indicator onto the selected option', () => {
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return { left: this.getAttribute('role') === 'radio' ? 40 : 10, width: 30 } as DOMRect
+    })
+    const { container } = render(<Segmented aria-label="Pick" value="c" onChange={() => {}} options={options} />)
+    const thumb = container.querySelector<HTMLElement>('.k2-segment-thumb')!
+    expect(thumb.getAttribute('aria-hidden')).toBe('true')
+    expect(thumb.style.transform).toBe('translateX(30px)')
+    expect(thumb.style.width).toBe('30px')
+    expect(screen.getAllByRole('radio')).toHaveLength(3)
+    rect.mockRestore()
+  })
+
   it('arrow keys skip disabled segments and wrap', () => {
     const onChange = vi.fn()
     render(<Segmented aria-label="Pick" value="a" onChange={onChange} options={options} />)

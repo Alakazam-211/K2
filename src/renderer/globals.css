@@ -20,6 +20,11 @@
 /* Style contract tokens — generated from styles/ by scripts/build-styles.mjs */
 @import "./styles.generated.css";
 
+/* density.scale drives Tailwind's spacing scale. At 1 nothing moves. Zen pins --spacing in its shield. */
+@theme {
+  --spacing: calc(0.25rem * var(--density-scale, 1));
+}
+
 /* ── Bundled coding fonts ─────────────────────────────────────────── */
 @font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
 @font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }

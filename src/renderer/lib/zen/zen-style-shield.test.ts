@@ -25,9 +25,19 @@ function walk(dir: string, out: string[]): string[] {
   return out
 }
 
-/** Styles variables Zen must cover: colours, the UI fonts, radii, terminal palette, dividers. */
-const isStylesVar = (name: string): boolean =>
-  /^--(color-|radius-|term-)/.test(name) || name === '--font-ui' || name === '--font-display' || name === '--divider-color'
+/** Styles variables Zen must cover: colours, fonts, radii, chamfers, tiles, the type scale, terminal palette, dividers, density and the newer material and motion slots. */
+const SHIELDED_NAMES = new Set([
+  '--font-ui',
+  '--font-display',
+  '--font-code',
+  '--divider-color',
+  '--density-scale',
+  '--material-edge',
+  '--material-sheen',
+  '--motion-ease-out-soft',
+  '--motion-press-scale',
+])
+const isStylesVar = (name: string): boolean => /^--(color-|radius-|term-|chamfer-|tile-|type-)/.test(name) || SHIELDED_NAMES.has(name)
 
 describe('Styles shield coverage', () => {
   it('covers every Styles variable a Style declares', () => {
@@ -36,6 +46,28 @@ describe('Styles shield coverage', () => {
     expect(declared.size).toBeGreaterThan(80)
     const missing = [...declared].filter((n) => !(n in ZEN_STYLE_SHIELD)).sort()
     expect(missing).toEqual([])
+  })
+
+  it('covers each group the token system added, so the filter cannot skip them', () => {
+    const css = readFileSync(join(RENDERER, 'styles.generated.css'), 'utf8')
+    const declared = new Set(Array.from(css.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm), (m) => m[1]).filter(isStylesVar))
+    for (const name of [
+      '--radius-pill',
+      '--chamfer-surface',
+      '--tile-fill',
+      '--type-xs',
+      '--font-code',
+      '--material-sheen',
+      '--motion-press-scale',
+      '--density-scale',
+    ]) {
+      expect([name, declared.has(name), name in ZEN_STYLE_SHIELD]).toEqual([name, true, true])
+    }
+  })
+
+  it('pins density inside Zen: --spacing must be reset too, because it computes on :root and is inherited', () => {
+    expect(ZEN_STYLE_SHIELD['--density-scale']).toBe('1')
+    expect(ZEN_STYLE_SHIELD['--spacing']).toBe('0.25rem')
   })
 
   it('covers every Styles colour variable any renderer code reads', () => {

@@ -115,6 +115,33 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--radius-box': 'calc(var(--zen-radius) / 2)',
   '--radius-field': 'calc(var(--zen-radius) / 2)',
   '--radius-selector': 'calc(var(--zen-radius) / 2)',
+  '--radius-pill': 'calc(var(--zen-radius) / 2)',
+  '--font-code': zen('terminal-font-family'),
+  '--chamfer-surface': '0px',
+  '--chamfer-control': '0px',
+  '--chamfer-chip': '0px',
+  '--chamfer-send': '0px',
+  '--type-micro': '9px',
+  '--type-xs': '10px',
+  '--type-sm': '11px',
+  '--type-md': '12px',
+  '--type-lg': '13px',
+  '--type-xl': '15px',
+  // Tiles and material edges
+  '--tile-fill': zen('surface'),
+  '--tile-raised': zen('surface-raised'),
+  '--tile-edge': zen('border'),
+  '--tile-sheen': '0 0 #0000',
+  '--tile-shadow': '0 0 #0000',
+  '--material-edge': 'transparent',
+  '--material-sheen': '0 0 #0000',
+  // Motion
+  '--motion-ease-out-soft': 'ease-out',
+  '--motion-press-scale': '1',
+  // Density. Both rows are needed: --spacing computes on :root and children
+  // inherit the result, so re-pointing --density-scale here can't reach it.
+  '--density-scale': '1',
+  '--spacing': '0.25rem',
   // Terminals
   ...TERM_VARS,
 }

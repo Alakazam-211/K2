@@ -70,18 +70,21 @@
     "tokens": {
       "type": "object",
       "description": "Non-color slots. Every group listed in required must be present with every slot the generator's REQUIRED_TOKEN_SLOTS lists — missing slots fail the build loudly.",
-      "required": ["radius", "gap", "inset", "divider", "ring", "shadow", "material", "density", "motion", "font"],
+      "required": ["radius", "chamfer", "gap", "inset", "divider", "ring", "shadow", "material", "tile", "density", "motion", "font", "type"],
       "properties": {
         "radius": { "$ref": "#/$defs/tokenGroup" },
+        "chamfer": { "$ref": "#/$defs/tokenGroup", "description": "45-degree corner cuts: surface, control, chip, send. 0px is a plain corner." },
         "gap": { "$ref": "#/$defs/tokenGroup" },
         "inset": { "$ref": "#/$defs/tokenGroup" },
         "divider": { "$ref": "#/$defs/tokenGroup" },
         "ring": { "$ref": "#/$defs/tokenGroup" },
         "shadow": { "$ref": "#/$defs/tokenGroup" },
         "material": { "$ref": "#/$defs/tokenGroup" },
+        "tile": { "$ref": "#/$defs/tokenGroup", "description": "Opaque tile surface: fill, raised, edge, sheen, shadow. Shadow slots use 0 0 #0000 when off, never the keyword none." },
         "density": { "$ref": "#/$defs/tokenGroup" },
         "motion": { "$ref": "#/$defs/tokenGroup" },
-        "font": { "$ref": "#/$defs/tokenGroup" },
+        "font": { "$ref": "#/$defs/tokenGroup", "description": "ui, display, code. The code slot emits --font-code because Tailwind v4 owns --font-mono." },
+        "type": { "$ref": "#/$defs/tokenGroup", "description": "Type scale: micro, xs, sm, md, lg, xl. Named type because Tailwind v4 owns --text-*." },
         "gapPresets": {
           "type": "object",
           "description": "Named spacing variants (surfaced as the density control when capabilities.gaps is true). Each preset overrides layout-domain slots only: gap.pane/tile/section, inset.window, divider.width/color. The base tokens are the implicit 'compact' preset.",

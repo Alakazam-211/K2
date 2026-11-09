@@ -29,6 +29,21 @@ in `src/renderer/index.html`.
 Every slot in the contract is **required** — the build fails loudly on a missing slot
 so a Style can never silently inherit half of another Style's look.
 
+### Token names
+
+A slot `group.key` emits `--group-key`. Tailwind v4 owns `--text-*` and `--font-mono`, so a
+slot must never emit those: the type scale is `type.*` (`--type-xs`), and the code font is
+`font.code` (`--font-code`). `density.scale` multiplies Tailwind's `--spacing`, so every
+spacing utility follows it. Inside a Garden, `ZEN_STYLE_SHIELD` must map every new slot
+(`zen-style-shield.test.ts` fails otherwise).
+
+## Lint ratchet
+
+`bun run styles:lint` counts colors and shapes (raw `rounded-*`, `shadow-*`, `backdrop-blur*`,
+inline shape literals) that bypass the tokens, per file, against the two maps in
+`lint-baseline.json`. Comments and `components/Zen/` aren't counted. A file may only go down;
+after a cleanup, run `node scripts/check-style-lint.mjs --update-baseline`.
+
 ## Contributing a Style or palette
 
 Community contributions arrive as PRs adding a folder here (or a single palette file

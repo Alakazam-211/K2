@@ -26,16 +26,21 @@ const OUT_TS_FILE = join(ROOT, 'src', 'renderer', 'styles.generated.ts')
 const DEFAULT_STYLE = 'square'
 
 const REQUIRED_TOKEN_SLOTS = {
-  radius: ['box', 'field', 'selector'],
+  radius: ['box', 'field', 'selector', 'pill'],
+  chamfer: ['surface', 'control', 'chip', 'send'],
   gap: ['pane', 'tile', 'section'],
   inset: ['window'],
   divider: ['width', 'color'],
   ring: ['surface', 'field', 'focus'],
   shadow: ['1', '2', '3', '4', '5'],
-  material: ['blur', 'saturate', 'tint', 'tint-opacity'],
+  material: ['blur', 'saturate', 'tint', 'tint-opacity', 'edge', 'sheen'],
+  tile: ['fill', 'raised', 'edge', 'sheen', 'shadow'],
   density: ['scale'],
-  motion: ['duration-fast', 'duration-medium', 'duration-slow', 'ease-standard'],
-  font: ['ui', 'display'],
+  motion: ['duration-fast', 'duration-medium', 'duration-slow', 'ease-standard', 'ease-out-soft', 'press-scale'],
+  // `code`, not `mono`: Tailwind v4 owns --font-mono (every font-mono utility reads it).
+  font: ['ui', 'display', 'code'],
+  // `type`, not `text`: Tailwind v4 owns --text-* (--text-xs would resize every text-xs utility).
+  type: ['micro', 'xs', 'sm', 'md', 'lg', 'xl'],
 }
 
 const REQUIRED_COLOR_SLOTS = [

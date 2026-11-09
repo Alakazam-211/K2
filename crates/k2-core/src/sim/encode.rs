@@ -130,6 +130,39 @@ mod tests {
         assert_eq!(rgb.dimensions(), (21, 42), "the video encoder gets points too");
     }
 
+    fn jpeg_frame(w: u32, h: u32, scale: f32) -> Frame {
+        let img = RgbImage::from_pixel(w, h, image::Rgb([30, 120, 200]));
+        let mut f = frame(1, 1, scale);
+        f.width_px = w;
+        f.height_px = h;
+        f.data = FrameData::Jpeg(jpeg(&img, JPEG_QUALITY).expect("jpeg"));
+        f
+    }
+
+    /// Fix 1a: the helper's points-sized JPEG streams byte for byte (no
+    /// decode, resize or re-encode), even one pixel wide from rounding; a
+    /// native 3x one is still scaled to points.
+    #[test]
+    fn a_points_sized_jpeg_passes_through_and_a_native_one_is_resized() {
+        let f = jpeg_frame(402, 874, 1.0);
+        let FrameData::Jpeg(src) = &f.data else { unreachable!() };
+        let (out, w, h) = frame_jpeg(&f, JPEG_QUALITY).expect("pass through");
+        assert_eq!(&out, src, "byte for byte");
+        assert_eq!((w, h), (402, 874));
+
+        let wide = jpeg_frame(403, 874, 403.0 / 402.0);
+        let FrameData::Jpeg(src) = &wide.data else { unreachable!() };
+        let (out, w, _) = frame_jpeg(&wide, JPEG_QUALITY).expect("pass through");
+        assert_eq!(&out, src, "one pixel over from rounding still passes");
+        assert_eq!(w, 403);
+
+        let native = jpeg_frame(1206, 2622, 3.0);
+        let FrameData::Jpeg(src) = &native.data else { unreachable!() };
+        let (out, w, h) = frame_jpeg(&native, JPEG_QUALITY).expect("resize");
+        assert_ne!(&out, src, "re-encoded");
+        assert_eq!((w, h), (402, 874), "scaled to points");
+    }
+
     #[test]
     fn bad_sizes_fail_loudly_and_crops_clamp() {
         let mut f = frame(4, 4, 1.0);

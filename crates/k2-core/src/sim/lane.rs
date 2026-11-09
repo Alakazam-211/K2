@@ -549,14 +549,34 @@ pub struct FrameStamps {
 pub struct FrameOpts {
     /// Highest rate any current viewer wants.
     pub max_fps: u32,
-    /// Ask the lane to scale down to at most this width in pixels (the
-    /// encoder streams at points resolution, PRD §7). `None` = native.
+    /// The size the lane should capture at (`Native` by default).
+    pub size: FrameSize,
+    /// A further cap: scale down to at most this width in pixels. `None`
+    /// = no cap beyond `size`.
     pub max_width_px: Option<u32>,
+}
+
+/// The size a frame source captures at.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FrameSize {
+    /// The device's own pixels.
+    #[default]
+    Native,
+    /// One pixel per point: the size the stream sends (fix 1a). A lane
+    /// that already captures at points (Android) treats both alike.
+    Points,
+}
+
+impl FrameOpts {
+    /// Points-sized frames at up to `max_fps` (the stream hub's request).
+    pub fn points(max_fps: u32) -> Self {
+        FrameOpts { max_fps, size: FrameSize::Points, max_width_px: None }
+    }
 }
 
 impl Default for FrameOpts {
     fn default() -> Self {
-        FrameOpts { max_fps: 30, max_width_px: None }
+        FrameOpts { max_fps: 30, size: FrameSize::Native, max_width_px: None }
     }
 }
 

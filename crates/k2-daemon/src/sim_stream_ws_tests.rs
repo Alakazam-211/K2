@@ -107,6 +107,7 @@ fn the_video_worker_reports_failure_once_and_stops() {
 struct Booted {
     ws: Ws,
     tmp: std::path::PathBuf,
+    fake: Arc<k2_core::sim::fake::FakeLane>,
 }
 
 fn boot_fake(tag: &str) -> Booted {
@@ -116,7 +117,7 @@ fn boot_fake(tag: &str) -> Booted {
     k2_core::sim::set_base_for_tests(tmp.join("home"));
     k2_core::sim::limits::save_settings(&k2_core::sim::limits::SimSettings { min_free_ram_bytes: Some(0), ..Default::default() }).expect("limits");
     let fake_lane = Arc::new(k2_core::sim::fake::FakeLane::new(k2_core::sim::LaneKind::Android));
-    k2_core::sim::register_lane(fake_lane);
+    k2_core::sim::register_lane(fake_lane.clone());
     let m = manager::manager();
     m.refresh_probes();
     let id = uuid::Uuid::new_v4().to_string();
@@ -128,7 +129,7 @@ fn boot_fake(tag: &str) -> Booted {
     }
     let ws = Ws { id: id.clone(), handle: format!("stream-{tag}"), path: tmp.join("ws") };
     m.boot(&ws, &manager::Actor::Person { name: "owner".into() }, &k2_core::sim::api::BootReq { no_tab: true, ..Default::default() }).expect("boot");
-    Booted { ws, tmp }
+    Booted { ws, tmp, fake: fake_lane }
 }
 
 fn shut_down(b: Booted) {
@@ -179,6 +180,44 @@ fn one_encoder_serves_every_viewer() {
     drop(_slow);
     drop(hub_a);
     drop(hub_b);
+    shut_down(b);
+}
+
+/// Fix 1a: the hub asks the lane for points-sized frames, and retunes the
+/// source once each time the fastest viewer's rate changes: up when a
+/// faster viewer joins, back down when it leaves.
+#[test]
+fn the_hub_asks_for_points_and_retunes_to_the_fastest_viewer() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let b = boot_fake("retune");
+    let (_, hub) = join(&b.ws).expect("join");
+    let opts = b.fake.frame_opts.clone();
+    let rx = hub.rx.clone(); // a viewer, so the hub keeps running
+    let wait_for = |n: usize| {
+        let t0 = Instant::now();
+        while opts.lock().len() < n {
+            assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", opts.lock());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    wait_for(1);
+    assert_eq!(opts.lock()[0], ("open", FrameOpts::points(LOCAL_MAX_FPS)), "opened at points");
+    hub.want_fps.lock().expect("fps").insert(1, 15);
+    wait_for(2);
+    hub.want_fps.lock().expect("fps").insert(2, 30);
+    wait_for(3);
+    std::thread::sleep(Duration::from_millis(200));
+    hub.want_fps.lock().expect("fps").remove(&2);
+    wait_for(4);
+    std::thread::sleep(Duration::from_millis(200));
+    let got: Vec<(&str, u32, FrameSize)> = opts.lock().iter().map(|(k, o)| (*k, o.max_fps, o.size)).collect();
+    assert_eq!(
+        got,
+        vec![("open", 30, FrameSize::Points), ("retune", 15, FrameSize::Points), ("retune", 30, FrameSize::Points), ("retune", 15, FrameSize::Points)],
+        "one retune per change of the fastest viewer"
+    );
+    drop(rx);
+    drop(hub);
     shut_down(b);
 }
 

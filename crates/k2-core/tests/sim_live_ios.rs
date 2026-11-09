@@ -151,7 +151,8 @@ fn an_agent_drives_the_ios_simulator_end_to_end() {
     lane.act(&dev, &Action::Key { key: Key::Enter, mods: KeyMods::default() }).expect("enter");
 
     // Frames: start the animation, pull for 2 s at 15 fps.
-    let mut src = lane.frames(&dev, FrameOpts { max_fps: 15, max_width_px: Some(t.width_pt as u32) }).expect("frames");
+    // Fix 1a: points-sized frames, as the stream hub asks for them.
+    let mut src = lane.frames(&dev, FrameOpts::points(15)).expect("frames");
     let anim = find(root(&t), "animate").expect("animate button").frame.unwrap().center();
     lane.act(&dev, &Action::Tap { at: anim }).unwrap();
     let start = Instant::now();
@@ -167,6 +168,7 @@ fn an_agent_drives_the_ios_simulator_end_to_end() {
     let f = &got[0];
     assert!(matches!(&f.data, FrameData::Jpeg(b) if b.starts_with(&[0xff, 0xd8])), "frames are JPEG");
     assert!((f.width_px as f32 - t.width_pt).abs() < 2.0, "frames at points width: {} vs {}", f.width_px, t.width_pt);
+    assert!((f.width_px as f32 - t.width_pt).abs() <= 1.0, "FrameOpts::points is within 1 px of the screen in points: {} vs {}", f.width_px, t.width_pt);
     assert!((f.scale - 1.0).abs() < 0.02, "scale is pixels per point: {}", f.scale);
     assert!(got.windows(2).all(|w| w[1].seq > w[0].seq));
     // A still screen costs nothing: after the animation stops, frames stop

@@ -5,7 +5,11 @@
 //! **One capture per device, many viewers.** A [`Hub`] per sim session
 //! runs one capture thread: it pulls the lane's [`FrameSource`] at the
 //! fastest viewer's rate and publishes a [`Shared`] frame into a `watch`
-//! channel, which keeps only the newest. JPEG viewers share one JPEG
+//! channel, which keeps only the newest. It asks the lane for points-sized
+//! frames (fix 1a: the iOS helper then sends a JPEG that streams as it is)
+//! and retunes the source to the fastest viewer's rate whenever that
+//! changes. `K2_SIM_FRAME_SIZE=native` (read once) asks for native frames,
+//! as before. JPEG viewers share one JPEG
 //! encode per frame (done on the capture thread while any JPEG viewer
 //! watches). An H.264 viewer (0.46.7, negotiated in `hello`) has its own
 //! encoder thread ([`video_worker`]): VideoToolbox on a Mac, nothing
@@ -51,7 +55,7 @@ use tokio_tungstenite::tungstenite::Message;
 use k2_core::log_debug;
 use k2_core::sim::encode;
 use k2_core::sim::hold::HoldView;
-use k2_core::sim::lane::{Action, Frame, FrameOpts, KeyMods, Point, TouchPhase};
+use k2_core::sim::lane::{Action, Frame, FrameOpts, FrameSize, KeyMods, Point, TouchPhase};
 use k2_core::sim::manager::{self, Ws};
 use k2_core::sim::stream::*;
 use k2_core::sim::video::flow::{AckWindow, RateCtl, ACK_EXPIRY};
@@ -156,6 +160,21 @@ pub fn encodes(sim_id: i64) -> Option<u64> {
     hubs().lock().ok()?.get(&sim_id).map(|h| h.encodes.load(Ordering::SeqCst))
 }
 
+/// The size the hub asks lanes for: points, unless `K2_SIM_FRAME_SIZE=native`
+/// (read once at the first stream; the fix 1a rollback).
+fn hub_frame_size() -> FrameSize {
+    static SIZE: OnceLock<FrameSize> = OnceLock::new();
+    *SIZE.get_or_init(|| match std::env::var("K2_SIM_FRAME_SIZE") {
+        Ok(v) if v.trim().eq_ignore_ascii_case("native") => FrameSize::Native,
+        _ => FrameSize::Points,
+    })
+}
+
+/// What the hub asks its source for at `fps`.
+fn hub_opts(fps: u32) -> FrameOpts {
+    FrameOpts { max_fps: fps, size: hub_frame_size(), max_width_px: None }
+}
+
 /// Join (or start) the hub for a running device.
 pub fn join(ws: &Ws) -> Result<(i64, Arc<Hub>), manager::SimError> {
     let m = manager::manager();
@@ -166,7 +185,7 @@ pub fn join(ws: &Ws) -> Result<(i64, Arc<Hub>), manager::SimError> {
             return Ok((row.id, h.clone()));
         }
     }
-    let source = m.frames(&row, FrameOpts { max_fps: LOCAL_MAX_FPS, max_width_px: None })?;
+    let source = m.frames(&row, hub_opts(LOCAL_MAX_FPS))?;
     let (tx, rx) = watch::channel(Pub::Starting);
     let want_fps = Arc::new(Mutex::new(HashMap::new()));
     let encodes = Arc::new(AtomicU64::new(0));
@@ -222,13 +241,22 @@ fn capture(
     let mut seq: u32 = 0;
     let born = Instant::now();
     let mut last = Instant::now() - Duration::from_secs(1);
+    // The rate the source was opened with (`join`), then retuned to.
+    let mut tuned = LOCAL_MAX_FPS;
     loop {
         // Only the hub's own receiver is left: nobody watches (after a
         // grace for the first viewer to attach).
         if tx.receiver_count() <= 1 && born.elapsed() > Duration::from_secs(5) {
             break;
         }
-        let fps = want_fps.lock().map(|m| m.values().copied().max().unwrap_or(REMOTE_DEFAULT_FPS)).unwrap_or(REMOTE_DEFAULT_FPS).clamp(1, LOCAL_MAX_FPS);
+        let wanted = want_fps.lock().ok().and_then(|m| m.values().copied().max()).map(|f| f.clamp(1, LOCAL_MAX_FPS));
+        // The source follows the fastest viewer (a viewer joined, left or
+        // asked another rate): one retune per change.
+        if let Some(w) = wanted.filter(|w| *w != tuned) {
+            source.retune(hub_opts(w));
+            tuned = w;
+        }
+        let fps = wanted.unwrap_or(REMOTE_DEFAULT_FPS);
         let gap = Duration::from_millis(1000 / fps as u64);
         let since = last.elapsed();
         if since < gap {

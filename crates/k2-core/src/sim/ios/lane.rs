@@ -431,12 +431,27 @@ struct IosFrames {
     clock: Option<HelperClock>,
 }
 
+/// The helper's `scale` for `opts`: 1 / pixels-per-point for points
+/// (fix 1a: a 402 pt, 3x iPhone streams 402 px), 1 for native, lowered
+/// further by `max_width_px`. Clamped to the helper's own floor of 0.1
+/// (M-12), so the two sides agree.
+pub fn frame_scale(opts: FrameOpts, width_pt: f32, native_px: f32) -> f32 {
+    if native_px <= 0.0 {
+        return 1.0;
+    }
+    let mut s = match opts.size {
+        FrameSize::Points if width_pt > 0.0 => width_pt / native_px,
+        _ => 1.0,
+    };
+    if let Some(w) = opts.max_width_px {
+        s = s.min(w as f32 / native_px);
+    }
+    s.clamp(0.1, 1.0)
+}
+
 impl IosFrames {
     fn configure(&self, opts: FrameOpts) -> SimResult<()> {
-        let scale = match opts.max_width_px {
-            Some(w) if self.native_px > 0.0 => (w as f32 / self.native_px).clamp(0.05, 1.0),
-            _ => 1.0,
-        };
+        let scale = frame_scale(opts, self.width_pt, self.native_px);
         self.helper.call("frames", json!({"on": true, "fps": opts.max_fps.clamp(1, 60), "scale": scale, "quality": 0.7}), INPUT_TIMEOUT).map(|_| ())
     }
 }
@@ -823,6 +838,10 @@ mod tests {
     }
 
     fn lane_with(world: Arc<World>, xcode: &'static str) -> (IosLane, Arc<FakeRunner>) {
+        lane_with_factory(world, xcode, Box::new(|_, _, _| Err(SimError::new("no_helper_in_this_test", ""))))
+    }
+
+    fn lane_with_factory(world: Arc<World>, xcode: &'static str, factory: HelperFactory) -> (IosLane, Arc<FakeRunner>) {
         let w = world.clone();
         let fake = Arc::new(FakeRunner {
             calls: M::new(vec![]),
@@ -889,7 +908,6 @@ mod tests {
             }),
         });
         let cfg = IosLaneConfig { set_path: std::env::temp_dir().join(format!("k2-ios-lane-set-{}", std::process::id())), helper_dir: PathBuf::from("/k2/sim/ios/bin") };
-        let factory: HelperFactory = Box::new(|_, _, _| Err(SimError::new("no_helper_in_this_test", "")));
         (IosLane::with(cfg, fake.clone(), factory), fake)
     }
 
@@ -1212,5 +1230,97 @@ mod tests {
         assert_eq!(edit_args(EditOp::Cut), json!({"usage": 0x1B, "shift": false, "cmd": true}));
         assert_eq!(edit_args(EditOp::Copy), json!({"usage": 0x06, "shift": false, "cmd": true}));
         assert_eq!(paste_args(), json!({"usage": 0x19, "cmd": true}));
+    }
+
+    /// A helper that records each call and keeps the frame slot (a 402 pt,
+    /// 3x iPhone; `clock_ns` as the real hello reports it).
+    struct FakeStream {
+        calls: M<Vec<(String, J)>>,
+        slot: M<Option<Arc<FrameSlot>>>,
+    }
+    const HELLO_CLOCK_NS: u64 = 7_000_000_000;
+    impl HelperIo for FakeStream {
+        fn call(&self, op: &str, args: J, _t: Duration) -> SimResult<J> {
+            self.calls.lock().unwrap().push((op.to_string(), args));
+            match op {
+                "hello" => Ok(json!({"ok": true, "screen": {"width": 402.0, "height": 874.0, "scale": 3.0}, "clock_ns": HELLO_CLOCK_NS})),
+                _ => Ok(json!({"ok": true})),
+            }
+        }
+        fn frame_slot(&self, s: Option<Arc<FrameSlot>>) {
+            *self.slot.lock().unwrap() = s;
+        }
+        fn alive(&self) -> bool {
+            true
+        }
+    }
+
+    fn streaming_lane() -> (IosLane, Arc<FakeStream>, DeviceRef) {
+        let h = Arc::new(FakeStream { calls: M::new(vec![]), slot: M::new(None) });
+        let h2 = h.clone();
+        let (lane, _) = lane_with_factory(world(), "26.5", Box::new(move |_, _, _| Ok(h2.clone() as Arc<dyn HelperIo>)));
+        let b = lane.boot(&req("pts", None)).unwrap();
+        let r = dref(&b, "pts");
+        (lane, h, r)
+    }
+
+    fn frames_calls(h: &FakeStream) -> Vec<J> {
+        h.calls.lock().unwrap().iter().filter(|(op, a)| op == "frames" && a["on"] == true).map(|(_, a)| a.clone()).collect()
+    }
+
+    /// Fix 1a: the hub's points request becomes the helper's 1/3 scale on
+    /// a 3x screen, and a retune passes the viewers' new rate through.
+    #[test]
+    fn points_frames_ask_the_helper_for_one_pixel_per_point_and_retune_passes_the_rate() {
+        let (lane, h, r) = streaming_lane();
+        let mut src = lane.frames(&r, FrameOpts::points(30)).unwrap();
+        let first = frames_calls(&h);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!((first[0]["scale"].as_f64().unwrap() - 1.0 / 3.0).abs() < 1e-6, "{first:?}");
+        assert_eq!(first[0]["fps"], 30);
+        src.retune(FrameOpts::points(60));
+        let all = frames_calls(&h);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[1]["fps"], 60);
+        assert!((all[1]["scale"].as_f64().unwrap() - 1.0 / 3.0).abs() < 1e-6);
+        drop(src);
+        assert!(h.calls.lock().unwrap().iter().any(|(op, a)| op == "frames" && a["on"] == false), "dropping the source stops the helper's frames");
+    }
+
+    #[test]
+    fn the_frame_scale_follows_size_then_the_width_cap_and_the_helpers_floor() {
+        let pts = FrameOpts::points(30);
+        assert!((frame_scale(pts, 402.0, 1206.0) - 1.0 / 3.0).abs() < 1e-6);
+        assert_eq!(frame_scale(FrameOpts::default(), 402.0, 1206.0), 1.0, "native");
+        let capped = FrameOpts { max_width_px: Some(201), ..pts };
+        assert!((frame_scale(capped, 402.0, 1206.0) - 201.0 / 1206.0).abs() < 1e-6, "the width cap lowers it further");
+        let tiny = FrameOpts { max_width_px: Some(10), ..pts };
+        assert_eq!(frame_scale(tiny, 402.0, 1206.0), 0.1, "never below the helper's floor (M-12)");
+        assert_eq!(frame_scale(pts, 402.0, 0.0), 1.0, "no screen size yet: native");
+    }
+
+    /// M0: a frame's capture time is the helper's callback on the daemon's
+    /// clock (never after the daemon read it), with the emit and read times.
+    #[test]
+    fn frames_carry_the_helpers_capture_and_emit_times() {
+        let (lane, h, r) = streaming_lane();
+        let mut src = lane.frames(&r, FrameOpts::points(30)).unwrap();
+        let slot = h.slot.lock().unwrap().clone().expect("the lane gave the helper a slot");
+        let received_at = Instant::now() + Duration::from_secs(1);
+        slot.put(helper::HelperFrame {
+            seq: 1,
+            width: 402,
+            height: 874,
+            captured_ns: HELLO_CLOCK_NS + 10_000_000,
+            emitted_ns: HELLO_CLOCK_NS + 25_000_000,
+            received_at,
+            jpeg: vec![0xff, 0xd8],
+        });
+        let f = src.next_frame(Duration::from_secs(1)).unwrap().expect("a frame");
+        let emitted = f.stamps.emitted_at.expect("emit time");
+        assert_eq!(emitted.duration_since(f.captured_at), Duration::from_millis(15), "the helper's own gap is kept");
+        assert_eq!(f.stamps.received_at, Some(received_at));
+        assert!(f.captured_at <= received_at);
+        assert!((f.scale - 1.0).abs() < 1e-6, "points-sized: one pixel per point");
     }
 }

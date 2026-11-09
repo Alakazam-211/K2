@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -35,6 +36,9 @@ pub struct FakeLane {
     /// reads what status says mid-install).
     pub hold_install: AtomicBool,
     pub installs: AtomicU64,
+    /// Every `FrameOpts` a frame source was opened (`"open"`) or retuned
+    /// (`"retune"`) with, in order.
+    pub frame_opts: Arc<Mutex<Vec<(&'static str, FrameOpts)>>>,
 }
 
 impl FakeLane {
@@ -53,6 +57,7 @@ impl FakeLane {
             fail_install: AtomicBool::new(false),
             hold_install: AtomicBool::new(false),
             installs: AtomicU64::new(0),
+            frame_opts: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -271,9 +276,10 @@ impl SimLane for FakeLane {
         })
     }
 
-    fn frames(&self, dev: &DeviceRef, _opts: FrameOpts) -> Result<Box<dyn FrameSource>, LaneError> {
+    fn frames(&self, dev: &DeviceRef, opts: FrameOpts) -> Result<Box<dyn FrameSource>, LaneError> {
         self.check_running(dev)?;
-        Ok(Box::new(FakeFrames { seq: 0 }))
+        self.frame_opts.lock().push(("open", opts));
+        Ok(Box::new(FakeFrames { seq: 0, opts: self.frame_opts.clone() }))
     }
 
     fn logs(&self, dev: &DeviceRef, q: &LogQuery) -> Result<Vec<String>, LaneError> {
@@ -290,6 +296,7 @@ impl SimLane for FakeLane {
 /// A 4x8 px gray frame, a new one on every pull.
 pub struct FakeFrames {
     seq: u64,
+    opts: Arc<Mutex<Vec<(&'static str, FrameOpts)>>>,
 }
 
 impl FrameSource for FakeFrames {
@@ -305,5 +312,9 @@ impl FrameSource for FakeFrames {
             stamps: Default::default(),
             data: FrameData::Rgb888(vec![(self.seq % 255) as u8; 4 * 8 * 3]),
         }))
+    }
+
+    fn retune(&mut self, opts: FrameOpts) {
+        self.opts.lock().push(("retune", opts));
     }
 }

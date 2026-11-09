@@ -279,6 +279,8 @@ fn sidecar_ordinal(project_id: &str, conversation: &str) -> i64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn for_reports_the_token_each_chat_runs_on_with_the_chip_number() {
     let env = setup();
+    // The old path; keep it there after any default flip (U19).
+    k2_daemon::usage_store::set_single_record(false);
     let d = futures_block(test_harness::start(OWNER));
     reset_wallet_tables();
     let port = d.port;
@@ -495,4 +497,115 @@ fn boot_status_lists_llm_account_for() {
         "{:?}",
         k2_daemon::boot_status::features()
     );
+}
+
+/// The switch on (prd-usage-single-source-v1 §5, §11, U21): `/for` nests the
+/// one record and every top-level field keeps its old meaning; the refresh
+/// answers keep today's words; the four refresh routes are POST-only. The
+/// record is seeded directly: a temp HOME never calls a vendor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_the_switch_on_for_reads_the_one_record_and_older_fields_keep_their_meaning() {
+    let env = setup();
+    k2_daemon::usage_store::set_single_record(true);
+    let d = futures_block(test_harness::start(OWNER));
+    reset_wallet_tables();
+    let port = d.port;
+    let (pid, ws) = seed_project(&env, "forsr");
+    std::fs::create_dir_all(env.home.join(".claude")).expect("claude dir");
+    std::fs::write(env.home.join(".claude/.credentials.json"), format!(r#"{{"claudeAiOauth":{{"refreshToken":"{MARKER}-live"}}}}"#)).expect("live cred");
+    k2_daemon::llm_accounts_runtime::boot_import();
+
+    let now = chrono::Utc::now();
+    let observed = (now - chrono::Duration::minutes(2)).to_rfc3339();
+    let default_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let default_id = k2_core::llm_accounts::active_id(&conn, k2_core::llm_accounts::Tool::Claude).expect("active").expect("the default");
+        let reading = json!({"harness": "claude", "plan": "max", "checkedAt": observed, "status": "", "source": "probe", "vendorCheckedAt": observed,
+            "windows": [
+                {"label": "Session", "used": 0.415, "resetsAt": "2099-01-01T05:00:00Z", "id": "five_hour", "kind": "session", "observedAt": observed, "source": "probe"},
+                {"label": "Weekly", "used": 0.2, "resetsAt": "2099-01-07T00:00:00Z", "id": "seven_day", "kind": "weekly", "observedAt": observed, "source": "probe"},
+                {"label": "Fable Weekly", "used": 0.99, "resetsAt": "2099-01-07T00:00:00Z", "id": "model:fable:weekly", "kind": "weekly", "observedAt": observed, "source": "probe"}
+            ]});
+        k2_core::llm_accounts::update_meta(&conn, &default_id, &k2_core::llm_accounts::MetaUpdate { usage_json: Some(reading.to_string()), ..Default::default() }).expect("seed");
+        default_id
+    };
+
+    // Every route, the same number, from the one record.
+    let subs = js(&get(port, "/cli/usage/subscriptions", OWNER));
+    let row = subs["harnesses"].as_array().expect("harnesses").iter().find(|h| h["harness"] == "claude").expect("claude").clone();
+    assert_eq!(row["maxPercent"], 42, "the seeded number comes back, not null: {row}");
+    assert_eq!(row["chipWindow"]["id"], "five_hour");
+    assert_eq!(row["plan"], "Max", "normalised when served");
+
+    let limits = js(&get(port, "/cli/usage/limits", OWNER));
+    let login = limits["tools"].as_array().expect("tools").iter().find(|t| t["tool"] == "claude").expect("claude")["logins"][0].clone();
+    assert_eq!((login["maxPercent"].as_i64(), login["accountId"].as_str()), (Some(42), Some(default_id.as_str())), "{login}");
+
+    let accounts = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    let listed = accounts["tools"].as_array().expect("tools").iter().find(|t| t["tool"] == "claude").expect("claude")["accounts"][0].clone();
+    assert_eq!(listed["usage"]["maxPercent"], 42, "{listed}");
+
+    // The chat: `/for` nests the record; the flat fields stay.
+    spawn_b(&pid, &ws, &pid, &["--session-id", "conv-sr"]);
+    let v = for_addr(port, "forsr");
+    assert_eq!(v["source"], "default", "the pin source at the top: {v}");
+    assert_eq!(v["usage"]["source"], "probe", "the chip window's source is nested");
+    assert_eq!(v["maxPercent"], 42);
+    assert_eq!(v["usage"]["maxPercent"], 42);
+    assert_eq!(v["updatedAt"], v["usage"]["asOf"]);
+    assert_eq!(v["usage"]["accountId"], default_id.as_str());
+    assert_eq!(v["usageFrom"], "server_default");
+    assert_eq!(v["windows"].as_array().map(Vec::len), Some(3));
+
+    // Section 5: every field an older client reads, by name, on its route.
+    let has = |v: &Value, keys: &[&str], what: &str| {
+        for k in keys {
+            assert!(v.get(*k).is_some(), "{what} lost {k}: {v}");
+        }
+    };
+    has(&v, &["tool", "accountId", "label", "source", "maxPercent", "updatedAt", "windows", "state", "usageFrom"], "/for");
+    let list_acct = &listed;
+    has(list_acct, &["usage", "usageCheckedAt"], "list");
+    has(&list_acct["usage"], &["harness", "plan", "windows", "checkedAt", "status", "error"], "list usage");
+    for w in list_acct["usage"]["windows"].as_array().expect("windows") {
+        has(w, &["label", "used", "resetsAt"], "list usage window");
+    }
+    has(&row, &["harness", "plan", "windows", "checkedAt", "status", "maxPercent"], "subscriptions");
+    has(&login, &["checkedAt", "attemptedAt", "state", "source", "nextProbeAt", "windows", "label", "email", "kind", "isDefault", "isLive", "pinned"], "limits");
+
+    // GET on each refresh route is refused; POST is the only way in.
+    for route in ["/cli/llm/accounts/for/refresh", "/cli/usage/subscriptions/refresh", "/cli/usage/limits/refresh", "/cli/llm/accounts/refresh"] {
+        assert_eq!(get(port, route, OWNER).status, 405, "GET {route}");
+    }
+
+    // U12/U13: a temp HOME: admitted, then probes_off; then the gate.
+    let r = post(port, "/cli/llm/accounts/for/refresh", OWNER, json!({"addr": "forsr"}));
+    let v = js(&r);
+    assert_eq!((v["refreshed"].as_bool(), v["reason"].as_str()), (Some(false), Some("probes_off")), "{v}");
+    let v = js(&post(port, "/cli/llm/accounts/for/refresh", OWNER, json!({"addr": "forsr"})));
+    assert_eq!((v["refreshed"].as_bool(), v["reason"].as_str()), (Some(false), Some("rate_limited")), "{v}");
+    let wait = v["retryAfterSecs"].as_u64().unwrap_or_else(|| panic!("retryAfterSecs: {v}"));
+    assert!((1..=60).contains(&wait), "{v}");
+    assert_eq!(v["maxPercent"], 42, "the record still comes back");
+
+    // U14: the limits refresh answers the doc plus `refresh`, 200.
+    let r = post(port, "/cli/usage/limits/refresh", OWNER, json!({"accountId": default_id}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = js(&r);
+    assert_eq!(v["refresh"]["outcome"], "too_soon", "{v}");
+    assert!(v["refresh"]["retryAfterSecs"].as_u64().is_some(), "{v}");
+    assert!(v["tools"].is_array());
+    let r = post(port, "/cli/usage/limits/refresh", OWNER, json!({"accountId": "no-such-token"}));
+    assert_eq!(r.status, 404, "{}", r.body);
+
+    // The event, seen on the bus, names its token and measured time.
+    // (`accept` is covered by the unit tests; here: no secret in any answer.)
+    for body in [row.to_string(), limits.to_string(), accounts.to_string()] {
+        assert!(!body.contains(MARKER), "no secret in a usage answer");
+    }
+
+    k2_daemon::usage_store::set_single_record(false);
+    kill_sessions_under(&env.home);
+    drop(d);
 }

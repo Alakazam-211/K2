@@ -3964,7 +3964,7 @@ exit: 0
     {
       "name": "settings",
       "usage": "k2 settings [--mode <off|custom|manager|k2>] | k2 settings set <key> <true|false>",
-      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview or videoRoomsPreview (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
+      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. set: the owner turns one server preview switch on or off: voiceRoomsPreview, voiceTunnelPreview, computePreview, ciPreview, boardFilePreview, videoRoomsPreview or usageSingleRecord (any other key exits 2 with that list; agents, Admins and Members are refused, exit 3). A daemon refusal exits 3.",
       "args": [],
       "flags": []
     },

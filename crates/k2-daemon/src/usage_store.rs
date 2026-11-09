@@ -511,6 +511,11 @@ fn live_record(tool: k2_core::llm_accounts::Tool) -> Option<HarnessUsage> {
 }
 
 // ── The one served shape (§4.5) ─────────────────────────────────────
+//
+// `asOf` is when the driving window was measured. Clients decide what to
+// show from it; the phone shows the age from 20 minutes (U31, decided; the
+// PRD's C1 said 10, and idle tokens are read every 14-15 minutes, so 10
+// would show an age about a third of the time).
 
 fn chip_window(row: &HarnessUsage, now: DateTime<Utc>) -> Option<&UsageWindow> {
     su::chip_percent(row, now)?;

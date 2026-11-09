@@ -123,7 +123,7 @@ export function AgentSkillsSection(): React.JSX.Element {
             className={`px-3 py-2.5 ${i < OPT_IN_SKILLS.length - 1 ? 'border-b border-[var(--color-border)]' : ''}`}
           >
             <div className="flex items-center gap-2">
-              <span className="w-1 h-4 bg-[var(--color-accent)] rounded-sm flex-shrink-0" />
+              <span className="w-1 h-4 bg-[var(--color-accent)] rounded-[var(--radius-pill)] flex-shrink-0" />
               <span className="text-xs font-medium text-[var(--color-text-primary)]">{skill.label}</span>
               <span className="text-[9px] font-mono text-[var(--color-text-muted)]">.k2/skills/{skill.dir}/</span>
             </div>

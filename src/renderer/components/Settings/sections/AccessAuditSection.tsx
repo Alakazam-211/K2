@@ -58,7 +58,7 @@ type ViewState =
 
 function outcomeClass(outcome: string): string {
   return outcome === 'ok'
-    ? 'text-[var(--color-success, #3d9a5f)]'
+    ? 'text-[var(--color-status-ok)]'
     : 'text-[var(--color-text-muted)]'
 }
 

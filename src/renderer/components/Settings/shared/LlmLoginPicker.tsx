@@ -445,7 +445,7 @@ export function SessionTokenPicker({
         onClick={() => setOpen((v) => !v)}
         aria-label={`${tool.display} token for this chat: ${inUseName(tool, value, workspaceDefaultId)}`}
         aria-expanded={open}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-field)] text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer"
       >
         <span>{TOKEN_LABEL}</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">

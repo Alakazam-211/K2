@@ -62,7 +62,7 @@ function isSplitPaneView(id: string): id is SplitPaneView {
 }
 
 const BUTTON_CLASS =
-  'self-center inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded flex-shrink-0 cursor-pointer text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
+  'self-center inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-[var(--radius-field)] flex-shrink-0 cursor-pointer text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
 
 /**
  * One view button. Its label is the active mode, not the word View.

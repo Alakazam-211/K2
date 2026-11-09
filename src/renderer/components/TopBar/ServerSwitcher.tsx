@@ -465,7 +465,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
       {open && (
         <div
           ref={popoverRef}
-          className="absolute left-0 top-7 z-50 w-[260px] rounded border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
+          className="absolute left-0 top-7 z-50 w-[260px] rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
         >
           {roomServer !== null && (
             <div

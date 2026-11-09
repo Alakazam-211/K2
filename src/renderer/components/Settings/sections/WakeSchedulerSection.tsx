@@ -100,7 +100,7 @@ interface SystemFireRow {
  *  the `skipped_*` decisions are routine non-events; `error` is the only
  *  one that should pop on visual scan. */
 function decisionStyle(decision: string): { label: string; color: string } {
-  if (decision === 'fired') return { label: '●', color: 'text-[var(--color-good,#57c98a)]' }
+  if (decision === 'fired') return { label: '●', color: 'text-[var(--color-status-ok)]' }
   // Catch-up fires are successes for a previously-missed occurrence —
   // amber dot so a recovered miss is scannable.
   if (decision === 'fired_catchup') return { label: '●', color: 'text-[var(--color-status-warn-amber)]' }
@@ -112,7 +112,7 @@ function decisionStyle(decision: string): { label: string; color: string } {
     decision === 'auto_disabled_failing' ||
     decision === 'tick_gap'
   )
-    return { label: '!', color: 'text-[var(--color-bad,#ef6f6f)]' }
+    return { label: '!', color: 'text-[var(--color-status-error-soft)]' }
   if (decision === 'not_due') return { label: '·', color: 'text-[var(--color-text-muted)]' }
   return { label: '○', color: 'text-[var(--color-text-muted)]' }
 }
@@ -521,7 +521,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
       {/* Heartbeat S2 — the daemon's own 60 s check has stopped. Above
           both columns: nothing below fires while it is down. */}
       {tickerDownMessage(schedulerStatus) && (
-        <div className="border border-[var(--color-bad,#ef6f6f)]/60 bg-[var(--color-bad,#ef6f6f)]/10 px-3 py-2 text-[11px] text-[var(--color-bad,#ef6f6f)] leading-relaxed">
+        <div className="border border-[var(--color-status-error-soft)]/60 bg-[var(--color-status-error-soft)]/10 px-3 py-2 text-[11px] text-[var(--color-status-error-soft)] leading-relaxed">
           {tickerDownMessage(schedulerStatus)}
         </div>
       )}
@@ -724,7 +724,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                       : 'Open this heartbeat’s chat session'
                   }
                   aria-label="Open this heartbeat's wakeup destination"
-                  className="inline-flex items-center justify-center h-4 w-4 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer flex-shrink-0"
+                  className="inline-flex items-center justify-center h-4 w-4 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer flex-shrink-0"
                 >
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M15 3h6v6" />

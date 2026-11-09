@@ -1272,7 +1272,7 @@ export function SewSection(): React.JSX.Element {
             className={`text-left px-3 py-2.5 border-b border-[var(--color-border)] no-drag cursor-pointer ${selection === 'server' ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-bg-hover)]'}`}
           >
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: chip.color }} />
+              <span className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0" style={{ backgroundColor: chip.color }} />
               <span className="text-xs font-medium text-[var(--color-text-primary)]">Chat / Voice Hosting</span>
               <span className="flex-1" />
               <span className={`text-[9px] ${muted}`}>{view.installedVersion ? `Sew v${view.installedVersion}` : ''}</span>

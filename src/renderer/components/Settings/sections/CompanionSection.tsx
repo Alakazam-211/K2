@@ -153,7 +153,7 @@ export function CompanionSection(): React.JSX.Element {
         {connected ? (
           <div className="px-3 py-3 border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-ok)_5%,transparent)]">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 flex-shrink-0 rounded-full" style={{ backgroundColor: 'var(--color-status-ok)' }} />
+              <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]" style={{ backgroundColor: 'var(--color-status-ok)' }} />
               <span className="text-xs text-[var(--color-text-secondary)]">Connected</span>
             </div>
             <p className="text-[10px] text-[var(--color-text-muted)] mt-2 leading-relaxed">
@@ -172,7 +172,7 @@ export function CompanionSection(): React.JSX.Element {
         ) : (
           <div className="px-3 py-3 border border-[var(--color-border)]">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 flex-shrink-0 rounded-full" style={{ backgroundColor: 'var(--color-neutral)' }} />
+              <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]" style={{ backgroundColor: 'var(--color-neutral)' }} />
               <span className="text-xs text-[var(--color-text-secondary)]">K2 Connect isn&apos;t running</span>
             </div>
             <p className="text-[10px] text-[var(--color-text-muted)] mt-2 leading-relaxed">

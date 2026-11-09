@@ -21,6 +21,7 @@ export interface CalloutProps extends React.HTMLAttributes<HTMLDivElement> {
 export function Callout({ tone = 'error', className, ...rest }: CalloutProps): React.JSX.Element {
   return (
     <div
+      data-k2-chamfer="surface"
       className={cx('border rounded-[var(--radius-box)] px-3 py-2 text-[11px]', TONES[tone], className)}
       {...rest}
     />

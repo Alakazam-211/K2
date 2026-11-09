@@ -87,12 +87,15 @@ function Sheet({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className="w-[min(30rem,calc(100vw-2.5rem))] max-h-[calc(100vh-3rem)] overflow-y-auto p-4 space-y-3"
+        className="w-[min(30rem,calc(100vw-2.5rem))] max-h-[calc(100vh-3rem)] flex flex-col"
       >
-        <h3 id={titleId} className="text-sm font-medium text-[var(--color-text-primary)]">
-          {title}
-        </h3>
-        {children}
+        {/* The frame stays still (its chamfer); the content scrolls inside. */}
+        <div className="min-h-0 overflow-y-auto p-4 space-y-3">
+          <h3 id={titleId} className="text-sm font-medium text-[var(--color-text-primary)]">
+            {title}
+          </h3>
+          {children}
+        </div>
       </DialogFrame>
     </>
   )

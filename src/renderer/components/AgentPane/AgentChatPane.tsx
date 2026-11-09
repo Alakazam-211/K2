@@ -372,7 +372,7 @@ function ChatHeader({
         aria-label="Switch pinned chat session"
         aria-haspopup="listbox"
         aria-expanded={historyOpen}
-        className="self-center inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer min-w-0"
+        className="self-center inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-field)] text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer min-w-0"
       >
         {currentSession && (
           <ProviderIcon provider={currentSession.provider} size={12} />
@@ -481,7 +481,7 @@ function ChatHeader({
         disabled={refreshing}
         title="Restart chat session — kills the current agent process and spawns a fresh resume. Use after typing `exit` or when the session is unresponsive."
         aria-label="Refresh chat session"
-        className="self-center inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+        className="self-center inline-flex items-center justify-center h-5 w-5 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
       >
         {/* Inline SVG keeps this self-contained (no icon-lib dep). */}
         <svg
@@ -1344,7 +1344,7 @@ function RetryButton({ onClick, refreshing }: { onClick: () => void; refreshing:
       type="button"
       onClick={onClick}
       disabled={refreshing}
-      className="inline-flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-medium bg-transparent text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors no-drag cursor-pointer"
+      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-[var(--radius-field)] text-[11px] font-medium bg-transparent text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors no-drag cursor-pointer"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

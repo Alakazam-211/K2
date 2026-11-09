@@ -975,7 +975,7 @@ export default function ProjectDashboard({
           NEVER auto-applies — apply-on-open, or explicitly here. */}
       {stale && (
         <div className="absolute top-1.5 right-1.5 z-30 flex items-center gap-2 px-2 py-1 bg-[var(--color-bg-elevated)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] shadow-lg">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-status-warn-amber)] flex-shrink-0" />
+          <span className="w-1.5 h-1.5 rounded-[var(--radius-pill)] bg-[var(--color-status-warn-amber)] flex-shrink-0" />
           <span className="text-[10px] text-[var(--color-text-secondary)]">
             Layout updated elsewhere
           </span>

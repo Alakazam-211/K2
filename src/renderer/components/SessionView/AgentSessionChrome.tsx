@@ -241,7 +241,7 @@ export function SidecarSessionHeader({
           disabled={refreshing}
           title="Restart this session — respawns this PTY, does not switch Chat."
           aria-label="Refresh session"
-          className="self-center inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+          className="self-center inline-flex items-center justify-center h-5 w-5 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

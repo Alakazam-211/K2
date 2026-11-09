@@ -186,7 +186,7 @@ function RowButton({
             textTransform: 'uppercase',
             lineHeight: 1.2,
             padding: '2px 5px',
-            borderRadius: 3,
+            borderRadius: 'var(--radius-pill)',
             color: 'var(--color-on-accent, #ffffff)',
             background: 'var(--color-accent, #3b82f6)',
             border: '1px solid var(--color-accent, #3b82f6)',

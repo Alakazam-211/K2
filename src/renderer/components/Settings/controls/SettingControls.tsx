@@ -193,6 +193,9 @@ export function SettingDropdown({
     right?: number
     minWidth: number
     zIndex: number
+    /** Off when the trigger lives in a Garden or the Thread box: the menu is
+     *  portaled out of their scope, so the chamfer rule can't see it. */
+    chamfer: boolean
   } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -226,6 +229,7 @@ export function SettingDropdown({
       setMenuBox({
         minWidth: rect.width,
         zIndex: menuLayerForTrigger(trigger),
+        chamfer: trigger.closest('[data-zen-root], [data-k2-thread-zen]') === null,
         ...(up
           ? { bottom: window.innerHeight - rect.top + 2 }
           : { top: rect.bottom + 2 }),
@@ -283,6 +287,7 @@ export function SettingDropdown({
         disabled={disabled}
         aria-label={ariaLabel}
         title={title}
+        data-k2-chamfer="control"
         {...triggerData}
         className={`flex items-center text-xs ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] transition-colors ${
           disabled
@@ -318,8 +323,14 @@ export function SettingDropdown({
           }}
           data-testid="setting-dropdown-menu"
           data-setting-dropdown-menu=""
-          className="w-max bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto"
+          data-k2-chamfer-float={menuBox.chamfer ? 'menu' : undefined}
+          className="w-max"
         >
+          <div
+            data-k2-chamfer={menuBox.chamfer ? 'surface' : undefined}
+            className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+          >
+          <div className="max-h-60 overflow-y-auto">
           {options.map((option, i) => {
             const isActive = option.value === value
             const isDisabled = option.disabled === true
@@ -369,6 +380,8 @@ export function SettingDropdown({
               </React.Fragment>
             )
           })}
+          </div>
+          </div>
         </div>,
         document.body,
       )}

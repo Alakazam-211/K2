@@ -74,7 +74,7 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
       ) : !running ? (
         <div className="flex items-center gap-2">
           <span
-            className="w-2 h-2 flex-shrink-0 rounded-full"
+            className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
             style={{ backgroundColor: 'var(--color-neutral)' }}
           />
           <span className="text-[11px] text-[var(--color-text-muted)]">

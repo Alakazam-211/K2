@@ -164,7 +164,7 @@ const theme = EditorView.baseTheme({
     padding: "0 3px",
     color: "white",
     whiteSpace: "nowrap",
-    borderRadius: "2px",
+    borderRadius: "var(--radius-pill)",
     pointerEvents: "none",
   },
   ".cm-mpc-rejected": { textDecoration: "underline wavy #d33" },

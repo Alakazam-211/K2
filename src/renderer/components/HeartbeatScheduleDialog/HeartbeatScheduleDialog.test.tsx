@@ -42,12 +42,13 @@ function expectLifted(menu: HTMLElement, trigger: HTMLElement, clip: HTMLElement
   expect(menu.style.zIndex).toBe(String(layer))
   const styleText = `${menu.getAttribute('style') ?? ''} ${menu.style.cssText}`
   expect(styleText).not.toContain('z-index: 9999')
+  const box = menu.firstElementChild as HTMLElement
   const opaque =
-    menu.classList.contains('bg-[var(--color-bg)]') ||
+    box.classList.contains('bg-[var(--color-bg)]') ||
     menu.style.backgroundColor === 'var(--color-bg)' ||
     /background-color:\s*var\(--color-bg\)(?:\s|;|$)/.test(styleText)
   expect(opaque).toBe(true)
-  const paint = `${menu.className} ${styleText}`
+  const paint = `${box.className} ${styleText}`
   expect(paint).not.toContain('--color-bg-surface')
   expect(paint).not.toContain('--color-bg-elevated')
   expect(paint).not.toContain('--color-bg-stripe')

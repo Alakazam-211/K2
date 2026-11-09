@@ -16,6 +16,7 @@ export const SquareCheckbox = forwardRef<HTMLInputElement, SquareCheckboxProps>(
       ref={ref}
       {...rest}
       type="checkbox"
+      data-k2-chamfer="chip"
       className={cx(SQUARE_CHECK_CLASS, className)}
       style={{
         ...style,

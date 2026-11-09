@@ -1709,7 +1709,7 @@ export function K2ConnectSection({
             / Released (this device unpaired) / plain stopped. ────────── */}
         <div className="flex items-center gap-2 px-3 py-2 border border-[var(--color-border)]">
           <span
-            className="w-2 h-2 flex-shrink-0 rounded-full"
+            className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
             style={{
               backgroundColor: running
                 ? 'var(--color-status-ok)'

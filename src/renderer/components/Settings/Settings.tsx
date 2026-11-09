@@ -889,7 +889,7 @@ function SettingsNavButton({
         <span
           data-settings-badge={id}
           aria-label={`${count} waiting`}
-          className="ml-auto min-w-[16px] text-center text-[9px] font-semibold px-1 py-0.5 rounded-full bg-[var(--color-accent)] text-white"
+          className="ml-auto min-w-[16px] text-center text-[9px] font-semibold px-1 py-0.5 rounded-[var(--radius-pill)] bg-[var(--color-accent)] text-white"
         >
           {count > 99 ? '99+' : count}
         </span>

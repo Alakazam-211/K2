@@ -79,7 +79,7 @@ import {
   type ThreadImageRef,
 } from '@/lib/thread-image-thumbs'
 import { downloadThreadAttachment, threadFileDownloadable } from '@/lib/thread-attachment-download'
-import { chamferCutFor, chamferVars } from './chamfer'
+import { CHAMFER_CUT, chamferCutFor, chamferVars } from './chamfer'
 import { useThreadColumnNarrow } from './ThreadColumn'
 import {
   ThreadImageLightbox,
@@ -388,7 +388,7 @@ export function ThreadFileListCard({
         border: '1px solid var(--zen-border)',
         background: 'var(--zen-surface-raised)',
         color: 'var(--zen-text)',
-        ...chamferVars({ cut: chamferCutFor(40), fill: 'var(--zen-surface-raised)', edge: 'var(--zen-border)', border: 1 }),
+        ...chamferVars({ cut: CHAMFER_CUT.surface, fill: 'var(--zen-surface-raised)', edge: 'var(--zen-border)', border: 1 }),
       }}
     >
       <div style={{ padding: '5px 10px', fontSize: '0.72em', color: 'var(--zen-text-muted)', borderBottom: '1px solid var(--zen-border)' }}>

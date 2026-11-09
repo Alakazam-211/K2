@@ -15,13 +15,13 @@ const VARIANTS: Record<string, string> = {
     'bg-transparent border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
   /** Primary action. */
   accent:
-    'bg-[var(--color-accent)] border border-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90',
+    'bg-[var(--color-accent)] border border-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 [--k2-ch-focus:var(--color-on-accent)]',
   /** Destructive action (red-600/700 idiom). */
   danger:
-    'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)]',
+    'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus:var(--color-on-accent)]',
   /** Muted destructive (ConfirmDialog confirm / kick). */
   'danger-muted':
-    'bg-[var(--color-danger-muted)] border border-[var(--color-danger-muted)] text-[var(--color-on-accent)]',
+    'bg-[var(--color-danger-muted)] border border-[var(--color-danger-muted)] text-[var(--color-on-accent)] [--k2-ch-focus:var(--color-on-accent)]',
 }
 
 const SIZES: Record<string, string> = {
@@ -44,6 +44,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <button
       ref={ref}
       type={type}
+      data-k2-chamfer="control"
       className={cx(
         'no-drag cursor-pointer transition-colors rounded-[var(--radius-field)] [box-shadow:var(--ring-field)]',
         'disabled:opacity-50 disabled:cursor-not-allowed',

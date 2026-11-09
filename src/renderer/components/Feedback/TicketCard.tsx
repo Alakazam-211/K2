@@ -377,7 +377,7 @@ export function TicketRailItem({
         />
       ) : (
         <span
-          className="flex items-center justify-center rounded-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[10px] font-bold text-[var(--color-text-secondary)]"
+          className="flex items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[10px] font-bold text-[var(--color-text-secondary)]"
           style={{ width: 24, height: 24 }}
         >
           {assigneeInitials(row.agentName || '?')}
@@ -386,7 +386,7 @@ export function TicketRailItem({
       <span
         data-testid="ticket-rail-dot"
         data-status={row.status}
-        className="absolute rounded-full border border-[var(--color-bg)]"
+        className="absolute rounded-[var(--radius-pill)] border border-[var(--color-bg)]"
         style={{ right: 4, bottom: 4, width: 8, height: 8, background: statusDotColor(row.status) }}
       />
     </button>

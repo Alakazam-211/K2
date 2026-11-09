@@ -32,6 +32,9 @@ export interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
   bordered?: boolean
   /** Elevation 0-5 → composes ring + shadow slots into one box-shadow. Default 0. */
   elevation?: 0 | 1 | 2 | 3 | 4 | 5
+  /** A card, tile or popover: cut corners in Terminal (and nothing elsewhere).
+   *  Panes and other structure keep the default: square. */
+  chamfer?: boolean
 }
 
 /** The panel/card primitive: background role + radius.box + ring/shadow
@@ -40,18 +43,20 @@ export interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
  *  panel (radius 0, no-op ring/shadows). Other Styles restyle it through
  *  the contract without component changes. */
 export const Surface = forwardRef<HTMLDivElement, SurfaceProps>(function Surface(
-  { role2 = 'surface', bordered = true, elevation = 0, className, ...rest },
+  { role2 = 'surface', bordered = true, elevation = 0, chamfer = false, className, ...rest },
   ref
 ) {
   return (
     <div
       ref={ref}
       data-surface={role2}
+      data-k2-chamfer={chamfer ? 'surface' : undefined}
       className={cx(
         ROLE_BG[role2],
         bordered && 'border border-[var(--color-border)]',
         'rounded-[var(--radius-box)]',
         ELEVATION_SHADOW[elevation],
+        !bordered && '[--k2-ch-bw:0px]',
         className
       )}
       {...rest}

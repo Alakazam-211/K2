@@ -11,6 +11,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   return (
     <input
       ref={ref}
+      data-k2-chamfer="control"
       className={cx(
         'no-drag bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]',
         'placeholder:text-[var(--color-text-muted)]',

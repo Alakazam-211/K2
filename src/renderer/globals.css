@@ -2,7 +2,7 @@
 /* Tailwind preflight in @layer tw can't override anything above it.         */
 /* Our CM layout overrides in @layer cm-overrides beat Tailwind but lose to  */
 /* CodeMirror's unlayered runtime style-mod styles (syntax highlighting etc) */
-@layer tw, cm-overrides;
+@layer k2-chamfer-base, tw, cm-overrides;
 @import "tailwindcss" layer(tw);
 
 /*
@@ -1119,18 +1119,113 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   --num-gap: 2px;
 }
 
+/* One chamfer for K2's Terminal Style: controls and cards are cut, structure
+   stays square. An element opts in with `data-k2-chamfer="control|surface|chip"`
+   and the cut size comes from the `--chamfer-*` tokens (0 draws a plain corner).
+   Glass, Bezel, Gardens (`[data-zen-root]`) and the desktop Thread box (which
+   keeps its own chamfer in Thread/chamfer.ts) never match.
+
+   The element keeps its own background, border, hover and disabled classes;
+   nothing here needs to know its fill. `clip-path` removes only the four
+   corner triangles, reaching 1px past the box so a fractional width's snapped
+   edge is cut too (the polygon runs far outside the box and punches each
+   triangle out through a zero-width slit, so outlines, shadows and overflowing
+   children outside the box still paint). `::before` adds the missing 1px
+   diagonal: a thick transparent-sided box whose `border-color: inherit` follows
+   the element's border through every state, clipped to the four corner bands.
+   `<input>` has no pseudo-elements, so it paints the same bands as gradients
+   coloured by `--k2-ch-edge`. Keyboard focus draws an inset ring that follows
+   the cut, because a square outline around a chamfer looks accidental.
+   Don't put `overflow: auto` on a chamfered box: the band would scroll with
+   the content. Scroll a child instead (see SettingDropdown's menu). */
+@layer k2-chamfer-base {
+  html[data-style="terminal"] :where([data-k2-chamfer]:not([data-zen-root] *, [data-k2-thread-zen] *)) { position: relative; }
+}
+html[data-style="terminal"] :where([data-k2-chamfer]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  --k2-ch-cut: var(--chamfer-control);
+  --k2-ch-w: var(--k2-ch-bw, 1px);
+  --k2-ch-i: calc(var(--k2-ch-cut) + 0.4142 * min(var(--k2-ch-w), var(--k2-ch-cut)));
+  --k2-ch-o: min(var(--k2-ch-i), max(var(--k2-ch-w), calc(var(--k2-ch-cut) - 2 * var(--k2-ch-w))));
+  border-radius: 0;
+  clip-path: polygon(
+    -9999px -9999px,
+    -1px -1px, -1px calc(var(--k2-ch-cut) + 1px), calc(var(--k2-ch-cut) + 1px) -1px, -1px -1px, -9999px -9999px,
+    calc(100% + 9999px) -9999px,
+    calc(100% + 1px) -1px, calc(100% - calc(var(--k2-ch-cut) + 1px)) -1px, calc(100% + 1px) calc(var(--k2-ch-cut) + 1px), calc(100% + 1px) -1px, calc(100% + 9999px) -9999px,
+    calc(100% + 9999px) calc(100% + 9999px),
+    calc(100% + 1px) calc(100% + 1px), calc(100% + 1px) calc(100% - calc(var(--k2-ch-cut) + 1px)), calc(100% - calc(var(--k2-ch-cut) + 1px)) calc(100% + 1px), calc(100% + 1px) calc(100% + 1px), calc(100% + 9999px) calc(100% + 9999px),
+    -9999px calc(100% + 9999px),
+    -1px calc(100% + 1px), calc(var(--k2-ch-cut) + 1px) calc(100% + 1px), -1px calc(100% - calc(var(--k2-ch-cut) + 1px)), -1px calc(100% + 1px), -9999px calc(100% + 9999px));
+}
+html[data-style="terminal"] :where([data-k2-chamfer="surface"]:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-cut: var(--chamfer-surface); }
+html[data-style="terminal"] :where([data-k2-chamfer="chip"]:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-cut: var(--chamfer-chip); }
+html[data-style="terminal"] :where([data-k2-chamfer]:not(input):not([data-zen-root] *, [data-k2-thread-zen] *))::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--k2-ch-w));
+  z-index: 1;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: calc(var(--k2-ch-i) + 1px) solid;
+  border-color: inherit;
+  clip-path: polygon(evenodd,
+    50% 50%, var(--k2-ch-o) var(--k2-ch-w), var(--k2-ch-i) var(--k2-ch-w), var(--k2-ch-w) var(--k2-ch-i), var(--k2-ch-w) var(--k2-ch-o), var(--k2-ch-o) var(--k2-ch-w),
+    50% 50%, calc(100% - var(--k2-ch-o)) var(--k2-ch-w), calc(100% - var(--k2-ch-i)) var(--k2-ch-w), calc(100% - var(--k2-ch-w)) var(--k2-ch-i), calc(100% - var(--k2-ch-w)) var(--k2-ch-o), calc(100% - var(--k2-ch-o)) var(--k2-ch-w),
+    50% 50%, calc(100% - var(--k2-ch-o)) calc(100% - var(--k2-ch-w)), calc(100% - var(--k2-ch-i)) calc(100% - var(--k2-ch-w)), calc(100% - var(--k2-ch-w)) calc(100% - var(--k2-ch-i)), calc(100% - var(--k2-ch-w)) calc(100% - var(--k2-ch-o)), calc(100% - var(--k2-ch-o)) calc(100% - var(--k2-ch-w)),
+    50% 50%, var(--k2-ch-o) calc(100% - var(--k2-ch-w)), var(--k2-ch-i) calc(100% - var(--k2-ch-w)), var(--k2-ch-w) calc(100% - var(--k2-ch-i)), var(--k2-ch-w) calc(100% - var(--k2-ch-o)), var(--k2-ch-o) calc(100% - var(--k2-ch-w)),
+    50% 50%);
+}
+html[data-style="terminal"] :where(input[data-k2-chamfer]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  --k2-ch-edge: var(--color-border);
+  --k2-ch-s: calc(var(--k2-ch-cut) + 2 * var(--k2-ch-w));
+  --k2-ch-stop: calc(0.7071 * var(--k2-ch-cut) + min(var(--k2-ch-w), var(--k2-ch-cut)));
+  background-image:
+    linear-gradient(135deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)),
+    linear-gradient(225deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)),
+    linear-gradient(315deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop)),
+    linear-gradient(45deg, var(--k2-ch-edge) var(--k2-ch-stop), transparent var(--k2-ch-stop));
+  background-size: var(--k2-ch-s) var(--k2-ch-s);
+  background-position: left top, right top, right bottom, left bottom;
+  background-repeat: no-repeat;
+  background-origin: border-box;
+}
+html[data-style="terminal"] :where(input[data-k2-chamfer]:focus:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-edge: var(--color-accent); }
+/* A box-shadow can't follow a cut (it never paints under the box, leaving a
+   light notch at each corner), so floating surfaces carry a drop-shadow on a
+   wrapper and the chamfered box inside drops its box-shadow. */
+html[data-style="terminal"] :where([data-k2-chamfer-float]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.6)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+}
+html[data-style="terminal"] :where([data-k2-chamfer-float="menu"]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.25));
+}
+html[data-style="terminal"] :where([data-k2-chamfer-float] > [data-k2-chamfer]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
+  box-shadow: none;
+}
+html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-fr: 2px; outline: none; }
+html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *))::before { border-color: transparent; }
+html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *))::after {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--k2-ch-w));
+  z-index: 1;
+  pointer-events: none;
+  background: var(--k2-ch-focus, var(--color-accent));
+  clip-path: polygon(evenodd, var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut), var(--k2-ch-cut) 0, calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr)) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr)) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), var(--k2-ch-fr) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), var(--k2-ch-fr) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr));
+}
+
 /* Line-2 chips on agent rows (project tags, the Home machine chip) in K2's
    square Style: chamfered rectangles, like the presence chips and the
    Thread (Rosson 2026-10-16). The cut follows the Thread's rule for a 14px
-   control (`chamferCutFor(14)` = 2px). The element is clipped to the cut
+   control (`chamferCutFor(14)` = 3px). The element is clipped to the cut
    (so a hover fill is chamfered too) and `::before` draws the 1px edge as
-   an even-odd ring (outer cut 2px; inner contour 1px in, cut 2 − 0.414).
+   an even-odd ring (outer cut 3px; inner contour 1px in, cut 3 − 0.414).
    Rounded Styles (Glass) keep their look. */
 html[data-style="terminal"] [data-nav-chip] {
   position: relative;
   border-color: transparent !important;
   border-radius: 0 !important;
-  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+  clip-path: polygon(3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px), 0 3px);
 }
 html[data-style="terminal"] [data-nav-chip]::before {
   content: '';
@@ -1139,19 +1234,19 @@ html[data-style="terminal"] [data-nav-chip]::before {
   pointer-events: none;
   background: var(--nav-chip-edge, var(--color-accent));
   clip-path: polygon(evenodd,
-    2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px, 2px 0,
-    2.586px 1px, calc(100% - 2.586px) 1px, calc(100% - 1px) 2.586px, calc(100% - 1px) calc(100% - 2.586px), calc(100% - 2.586px) calc(100% - 1px), 2.586px calc(100% - 1px), 1px calc(100% - 2.586px), 1px 2.586px, 2.586px 1px);
+    3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px), 0 3px, 3px 0,
+    3.586px 1px, calc(100% - 3.586px) 1px, calc(100% - 1px) 3.586px, calc(100% - 1px) calc(100% - 3.586px), calc(100% - 3.586px) calc(100% - 1px), 3.586px calc(100% - 1px), 1px calc(100% - 3.586px), 1px 3.586px, 3.586px 1px);
 }
 
 /* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:
-   chamfered like the Thread's surfaces (CHAMFER_CUT.surface = 4px), the
-   1px edge drawn by `::before` as an even-odd ring (inner cut 4 − 0.414).
+   chamfered like the Thread's surfaces (CHAMFER_CUT.surface = 7px), the
+   1px edge drawn by `::before` as an even-odd ring (inner cut 7 − 0.414).
    Rounded Styles keep `--radius-field`. */
 html[data-style="terminal"] [data-design-tile] {
   position: relative;
   border-color: transparent !important;
   border-radius: 0 !important;
-  clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px), 0 4px);
+  clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 7px, 100% calc(100% - 7px), calc(100% - 7px) 100%, 7px 100%, 0 calc(100% - 7px), 0 7px);
 }
 html[data-style="terminal"] [data-design-tile]::before {
   content: '';
@@ -1160,16 +1255,16 @@ html[data-style="terminal"] [data-design-tile]::before {
   pointer-events: none;
   background: var(--color-border);
   clip-path: polygon(evenodd,
-    4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px), 0 4px, 4px 0,
-    4.586px 1px, calc(100% - 4.586px) 1px, calc(100% - 1px) 4.586px, calc(100% - 1px) calc(100% - 4.586px), calc(100% - 4.586px) calc(100% - 1px), 4.586px calc(100% - 1px), 1px calc(100% - 4.586px), 1px 4.586px, 4.586px 1px);
+    7px 0, calc(100% - 7px) 0, 100% 7px, 100% calc(100% - 7px), calc(100% - 7px) 100%, 7px 100%, 0 calc(100% - 7px), 0 7px, 7px 0,
+    7.586px 1px, calc(100% - 7.586px) 1px, calc(100% - 1px) 7.586px, calc(100% - 1px) calc(100% - 7.586px), calc(100% - 7.586px) calc(100% - 1px), 7.586px calc(100% - 1px), 1px calc(100% - 7.586px), 1px 7.586px, 7.586px 1px);
 }
 
-/* Usage limit bars (LimitBar) in K2's square Style: a 1px chamfer on the
-   6px track (`chamferCutFor(6)` = 1px), clipping the fill with it. Rounded
+/* Usage limit bars (LimitBar) in K2's square Style: a 1.5px chamfer on the
+   6px track (`chamferCutFor(6)` = 1.5px), clipping the fill with it. Rounded
    Styles round the track by --radius-selector instead. */
 html[data-style="terminal"] [data-limit-track] {
   border-radius: 0;
-  clip-path: polygon(1px 0, calc(100% - 1px) 0, 100% 1px, 100% calc(100% - 1px), calc(100% - 1px) 100%, 1px 100%, 0 calc(100% - 1px), 0 1px);
+  clip-path: polygon(1.5px 0, calc(100% - 1.5px) 0, 100% 1.5px, 100% calc(100% - 1.5px), calc(100% - 1.5px) 100%, 1.5px 100%, 0 calc(100% - 1.5px), 0 1.5px);
 }
 
 /* Working: a 3×3 cell grid; a lit head runs clockwise round the 8 edge
@@ -1272,11 +1367,12 @@ html[data-style="terminal"] [data-limit-track] {
   padding: 0;
   flex-shrink: 0;
   vertical-align: middle;
-  background: transparent;
+  background-color: transparent;
   border: 1px solid var(--color-border-strong);
   border-radius: 0;
   cursor: pointer;
   transition: background-color 150ms, border-color 150ms;
+  --k2-ch-edge: var(--color-border-strong);
 }
 .k2-square-radio:checked {
   background-color: var(--color-accent);
@@ -1307,6 +1403,7 @@ html[data-style="terminal"] [data-limit-track] {
 .k2-square-check:focus {
   outline: none;
   border-color: var(--color-accent);
+  --k2-ch-edge: var(--color-accent);
 }
 .k2-square-radio:disabled,
 .k2-square-check:disabled {

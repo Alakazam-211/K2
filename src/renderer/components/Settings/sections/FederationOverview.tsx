@@ -105,7 +105,7 @@ export function FederationOverview({
                   key={key}
                   className="flex items-center gap-2 px-3 py-2 border border-[var(--color-border)]"
                 >
-                  <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
+                  <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)] bg-[var(--color-accent)]" />
                   <div className="flex flex-col min-w-0 flex-1">
                     <span className="text-xs text-[var(--color-text-primary)] truncate" title={c.address}>
                       External agent{' '}

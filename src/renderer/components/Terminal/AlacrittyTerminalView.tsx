@@ -1041,7 +1041,7 @@ export function AlacrittyTerminalView({
           position: 'absolute', top: 2, right: 2, padding: '2px 6px',
           background: 'rgba(0,0,0,0.8)', color: '#0f0', fontSize: '10px',
           fontFamily: 'monospace', zIndex: 2, pointerEvents: 'none',
-          borderRadius: '3px',
+          borderRadius: 'var(--radius-box)',
         }}>
           <strong style={{ color: '#ff0' }}>Alacritty (Legacy)</strong> · frames:{debugInfo.frames} offset:{debugInfo.offset} wheel:{debugInfo.wheel} cells:{gridState.cols}x{gridState.rows} cursor:{gridState.cursorCol},{gridState.cursorRow} vis:{gridState.cursorVisible?'Y':'N'} cell:{cellW.toFixed(1)}x{cellH}
         </div>

@@ -520,7 +520,7 @@ export function ConnectionsSection(): React.JSX.Element {
       {/* Local — always present, never editable. */}
       <div className="flex items-center gap-2 mb-2 px-3 py-2 border border-[var(--color-border)]">
         <span
-          className="w-2 h-2 flex-shrink-0 rounded-full"
+          className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
           style={{ backgroundColor: statusColor(connectionStatus) }}
         />
         <div className="flex flex-col min-w-0">
@@ -669,7 +669,7 @@ function ActiveHostPeersPanel({
     <div data-settings-id="connections.active-host-peers">
       <div className="flex items-center gap-2 mb-3 px-3 py-2 border border-[var(--color-border)]">
         <span
-          className="w-2 h-2 flex-shrink-0 rounded-full"
+          className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
           style={{ backgroundColor: '#3fb950' }}
         />
         <div className="flex flex-col min-w-0">
@@ -1249,7 +1249,7 @@ function HostTile({
     <div className="px-3 py-2 border border-[var(--color-border)] space-y-2">
       <div className="flex items-center gap-2">
         <span
-          className="w-2 h-2 flex-shrink-0 rounded-full"
+          className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
           style={{ backgroundColor: isActive ? statusColor(connectionStatus) : 'var(--color-neutral)' }}
         />
         <div className="flex flex-col min-w-0">

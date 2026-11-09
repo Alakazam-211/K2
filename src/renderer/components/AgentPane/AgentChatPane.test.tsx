@@ -920,7 +920,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
     await openSwitcher()
     fireEvent.click(continueRow())
     const frame = await screen.findByTestId('continue-new-chat')
-    const scrim = frame.previousElementSibling
+    const scrim = frame.parentElement?.previousElementSibling
     expect(scrim).toBeTruthy()
     fireEvent.mouseDown(scrim as Element)
     await waitFor(() => expect(screen.queryByTestId('continue-new-chat')).toBeNull())

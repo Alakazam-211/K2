@@ -583,21 +583,21 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
     // Rosson 2026-10-31: their backdrop (hover, held, on) is a square, never a
     // circle or an oval: a 3px cut, transparent until hovered.
     for (const small of [screen.getByTestId('compose-plus'), screen.getByTestId('compose-slash-button'), screen.getByTestId('stash-button')]) {
-      expect(['tl', 'tr', 'br', 'bl'].map((k) => small.style.getPropertyValue(`--ch-${k}`))).toEqual(['3px', '3px', '3px', '3px'])
+      expect(['tl', 'tr', 'br', 'bl'].map((k) => small.style.getPropertyValue(`--ch-${k}`))).toEqual(['5px', '5px', '5px', '5px'])
       expect(small.style.getPropertyValue('--ch-fill')).toBe('transparent')
       expect(small.style.borderRadius).toBe('calc(var(--zen-radius) / 2)')
     }
     // Scaled like Send (5px at 32px): Stop 20px → 3px, "Earlier messages" 22px → 3.5px.
-    expect(screen.getByTestId('thread-strip-stop').style.getPropertyValue('--ch-tl')).toBe('3px')
-    expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-tl')).toBe('3.5px')
+    expect(screen.getByTestId('thread-strip-stop').style.getPropertyValue('--ch-tl')).toBe('4px')
+    expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-tl')).toBe('4.5px')
     expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-fill')).toBe('transparent')
     // The cuts: 4px on surfaces (a bubble tail corner stays sharp), Send 4px (5px at 32px, scaled to its 26px), the drawer 5px (its 32px tab, like Send at 32px).
     const mine = el('[data-zen-bubble="me"]')
-    expect(['tl', 'tr', 'br', 'bl'].map((k) => mine.style.getPropertyValue(`--ch-${k}`))).toEqual(['4px', '4px', '0px', '4px'])
+    expect(['tl', 'tr', 'br', 'bl'].map((k) => mine.style.getPropertyValue(`--ch-${k}`))).toEqual(['7px', '7px', '0px', '7px'])
     expect(el('[data-zen-bubble="agent"]').style.getPropertyValue('--ch-bl')).toBe('0px')
-    expect(el('[data-zen-compose-box]').style.getPropertyValue('--ch-tl')).toBe('4px')
+    expect(el('[data-zen-compose-box]').style.getPropertyValue('--ch-tl')).toBe('7px')
     expect(el('[data-zen-compose-box]').style.getPropertyValue('--ch-bw')).toBe('1px')
-    expect(el('[data-zen-send]').style.getPropertyValue('--ch-tl')).toBe('4px')
+    expect(el('[data-zen-send]').style.getPropertyValue('--ch-tl')).toBe('5px')
     // On the box's top edge: top corners cut, the bottom runs into the field.
     const tile = el('[data-zen-drawer-tile]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => tile.style.getPropertyValue(`--ch-${k}`))).toEqual(['5px', '5px', '0px', '0px'])
@@ -705,10 +705,10 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
     renderThread([choice, secret])
     const choiceCard = el('[data-testid="thread-choice-card"]')
     expect(cut(choiceCard)).toBe(true)
-    expect(choiceCard.style.getPropertyValue('--ch-tl')).toBe('4px')
+    expect(choiceCard.style.getPropertyValue('--ch-tl')).toBe('7px')
     for (const opt of screen.getAllByTestId('thread-choice-chip')) {
       expect(cut(opt)).toBe(true)
-      expect(opt.style.getPropertyValue('--ch-tl')).toBe('4px')
+      expect(opt.style.getPropertyValue('--ch-tl')).toBe('5px')
     }
     const secretCard = el('[data-testid="thread-secret-card"]')
     expect(cut(secretCard)).toBe(true)
@@ -718,8 +718,8 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
     expect(dot.matches(`${CHAMFER_SCOPE} [data-zen-drawer-dot]`)).toBe(true)
     expect(dot.hasAttribute('data-zen-pulse')).toBe(true)
     expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} [data-zen-drawer-dot] { border-radius: 0 !important; }`)
-    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; --ch-tl: 3px;`)
-    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { --ch-tl: 2.5px;`)
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; --ch-tl: 4px;`)
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { --ch-tl: 3.5px;`)
     const code = el('[data-zen-drawer-code]')
     expect(code.matches(`${CHAMFER_SCOPE} .zen-drawer-tag`)).toBe(true)
   })
@@ -733,7 +733,7 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
     )
     const chip = el('[data-zen-attachment="shot.png"]')
     expect(cut(chip)).toBe(true)
-    expect(chip.style.getPropertyValue('--ch-tl')).toBe('4px')
+    expect(chip.style.getPropertyValue('--ch-tl')).toBe('5px')
     expect(chip.style.getPropertyValue('--ch-edge')).toBe('var(--zen-border)')
   })
 

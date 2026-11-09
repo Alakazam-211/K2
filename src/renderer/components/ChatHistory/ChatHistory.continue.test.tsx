@@ -271,7 +271,7 @@ describe('Continue in a new chat', () => {
     await openMenu('Finish the editor refactor')
     fireEvent.click(screen.getByText('Continue in a new chat…'))
     const frame = await screen.findByTestId('continue-new-chat')
-    const scrim = frame.previousElementSibling
+    const scrim = frame.parentElement?.previousElementSibling
     expect(scrim).toBeTruthy()
     fireEvent.mouseDown(scrim as Element)
     await waitFor(() => {
@@ -460,15 +460,15 @@ describe('Continue in a new chat', () => {
     expect(menu.tagName).toBe('DIV')
     expect(menu.parentElement).toBe(document.body)
     expect(dialog.contains(menu)).toBe(false)
-    const frameZ = Number((dialog as HTMLElement).style.zIndex)
+    const frameZ = Number((dialog.parentElement as HTMLElement).style.zIndex)
     const menuZ = Number((menu as HTMLElement).style.zIndex)
     expect(Number.isInteger(frameZ)).toBe(true)
     expect(frameZ).toBeGreaterThan(400)
     expect(menuZ).toBeGreaterThan(frameZ)
     expect(`${menu.getAttribute('style') ?? ''} ${menu.style.cssText}`).not.toContain('z-index: 9999')
     expect(menuRoot()).not.toBe(menu)
-    expect(menu.className).toContain('bg-[var(--color-bg)]')
-    expect(menu.className).toContain('border-[var(--color-border)]')
+    expect((menu.firstElementChild as HTMLElement).className).toContain('bg-[var(--color-bg)]')
+    expect((menu.firstElementChild as HTMLElement).className).toContain('border-[var(--color-border)]')
     expect(menu!.querySelector('select')).toBeNull()
     expect(menu!.querySelector('option')).toBeNull()
     const choices = Array.from(menu!.querySelectorAll('button'))

@@ -36,7 +36,7 @@ export function changesHeadline(c: ThreadChangesDoc): string {
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  A: 'var(--color-success, #30a46c)',
+  A: 'var(--color-status-ok)',
   D: 'var(--color-danger, #e5484d)',
   R: 'var(--thread-card-muted, var(--color-text-muted))',
   M: 'var(--color-status-warn, #f5a524)',

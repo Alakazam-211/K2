@@ -93,9 +93,10 @@ describe('SettingDropdown menu layer', () => {
     const menu = screen.getByTestId('setting-dropdown-menu')
     expect(menu.parentElement).toBe(document.body)
     expect(menu.style.zIndex).toBe('400')
-    expect(menu.className).toContain('bg-[var(--color-bg)]')
-    expect(menu.className).not.toContain('--color-bg-surface')
-    expect(menu.className).not.toContain('--color-bg-elevated')
+    const box = menu.firstElementChild as HTMLElement
+    expect(box.className).toContain('bg-[var(--color-bg)]')
+    expect(box.className).not.toContain('--color-bg-surface')
+    expect(box.className).not.toContain('--color-bg-elevated')
     expect(menu.getAttribute('style') ?? '').not.toContain('z-index: 9999')
   })
 })

@@ -901,7 +901,7 @@ function GardenPane({
             >
               <span
                 aria-hidden="true"
-                className="w-2 h-2 rounded-full flex-shrink-0"
+                className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
                 style={{ background: e.color ?? 'var(--color-text-muted)' }}
               />
               <span className="text-xs text-[var(--color-text-primary)]">{e.name}</span>

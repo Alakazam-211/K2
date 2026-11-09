@@ -545,7 +545,7 @@ export const ThreadBubble = memo(function ThreadBubble({
           ...THREAD_CARD_TOKENS,
           // Terminal Style: cut corners; the tail corner stays sharp.
           ...chamferVars({
-            cut: mine ? [4, 4, 0, 4] : [4, 4, 4, 0],
+            cut: mine ? [CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0, CHAMFER_CUT.surface] : [CHAMFER_CUT.surface, CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0],
             fill: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
           }),
         }}
@@ -990,7 +990,7 @@ export function ThreadSendButton({
   size?: number
   testId?: string
 }): JSX.Element {
-  // The square Style cut keeps the proportion of 5px at 32px (to 0.5px).
+  // The square Style cut for a control this size.
   const cut = chamferCutFor(size)
   // Pressed: brighter, only while it can send. Tracked in JS like the
   // phone's (a press that keeps the caret in the box skips `:active`).

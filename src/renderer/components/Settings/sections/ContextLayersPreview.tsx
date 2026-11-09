@@ -261,7 +261,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
                 }`}
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className={`w-1 h-4 rounded-sm flex-shrink-0 ${
+                  <span className={`w-1 h-4 rounded-[var(--radius-pill)] flex-shrink-0 ${
                     entry.kind === 'auto' ? 'bg-[var(--color-text-muted)]/30' :
                     entry.kind === 'global' ? 'bg-[var(--color-accent)]' :
                     entry.kind === 'ws' ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_60%,transparent)]' :

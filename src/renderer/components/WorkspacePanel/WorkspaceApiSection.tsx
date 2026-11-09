@@ -138,7 +138,7 @@ export function WorkspaceApiSection({
               return (
                 <div key={k.id} className="flex items-center gap-2 min-w-0">
                   <span
-                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                    className={`w-1.5 h-1.5 rounded-[var(--radius-pill)] flex-shrink-0 ${
                       state === 'active'
                         ? 'bg-[var(--color-status-ok)]'
                         : state === 'disabled'

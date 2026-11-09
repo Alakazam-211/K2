@@ -26,14 +26,16 @@ export const THREAD_ZEN_SCOPE_ATTR = 'data-k2-thread-zen'
 /** Corner cuts (px): top-left, top-right, bottom-right, bottom-left. */
 export type ChamferCorners = readonly [number, number, number, number]
 
-/** Fixed cuts: big surfaces (bubbles, the field, cards) 4px, Send 5px at
- *  32px (Rosson: 3px was too subtle), the drawer's 32px tab 5px. Smaller
- *  controls scale with `chamferCutFor`. */
-export const CHAMFER_CUT = { surface: 4, button: 3, send: 5, drawer: 5 } as const
+/** Fixed cuts, matching the Terminal tokens (`chamfer.surface` and
+ *  `chamfer.control`): cards, bubbles and the field 7px, controls 5px. Rosson
+ *  chose 5/7 on 2026-11-09; 3/4 read as rounded. Controls under 24px scale
+ *  down with `chamferCutFor`. */
+export const CHAMFER_CUT = { surface: 7, button: 5, send: 5, drawer: 5 } as const
 
-/** A control's cut by its height: Send's 5px at 32px, to the nearest 0.5px. */
+/** A control's cut by its height: 5px from 24px up, scaled below that (to the
+ *  nearest 0.5px) so a small chip doesn't turn into an octagon. */
 export function chamferCutFor(sizePx: number): number {
-  return Math.round(((sizePx * CHAMFER_CUT.send) / 32) * 2) / 2
+  return Math.min(CHAMFER_CUT.button, Math.round(((sizePx * CHAMFER_CUT.button) / 24) * 2) / 2)
 }
 
 export function chamferVars(o: {

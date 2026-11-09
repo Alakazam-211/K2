@@ -54,7 +54,7 @@ export const editorTheme = EditorView.baseTheme({
     backgroundColor: "var(--mpc-user, currentColor)",
     color: "var(--mpc-label-fg, var(--mpc-user-fg, #fff))",
     whiteSpace: "nowrap",
-    borderRadius: "3px",
+    borderRadius: "var(--radius-pill)",
     pointerEvents: "none",
     userSelect: "none",
     opacity: "0",

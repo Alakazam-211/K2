@@ -16,6 +16,7 @@ export const SquareRadio = forwardRef<HTMLInputElement, SquareRadioProps>(functi
       ref={ref}
       {...rest}
       type="radio"
+      data-k2-chamfer="chip"
       className={cx(SQUARE_RADIO_CLASS, className)}
       style={{
         ...style,

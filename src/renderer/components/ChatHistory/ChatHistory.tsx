@@ -1149,7 +1149,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           <input
             ref={searchInputRef}
             type="text"
-            className="no-drag w-full bg-white/[0.06] border border-[var(--color-border)] rounded px-2 py-1 text-[11px] font-mono text-[var(--color-text-secondary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-white/20"
+            className="no-drag w-full bg-white/[0.06] border border-[var(--color-border)] rounded-[var(--radius-field)] px-2 py-1 text-[11px] font-mono text-[var(--color-text-secondary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-white/20"
             placeholder="Search chats..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -1157,7 +1157,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           />
           {searchQuery.trim() && (
             <button
-              className="no-drag flex items-center justify-between w-full px-2 py-1 rounded text-[11px] font-mono text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
+              className="no-drag flex items-center justify-between w-full px-2 py-1 rounded-[var(--radius-field)] text-[11px] font-mono text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
               onClick={handleAgenticSearch}
               title="Search agentically with your default agent (⌘↵)"
             >
@@ -1339,7 +1339,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                             className="no-drag w-full flex items-center gap-2 px-3 h-8 hover:bg-white/[0.04] active:bg-white/[0.06] text-left group transition-colors"
                           >
                             <span
-                              className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                              className={`w-1.5 h-1.5 rounded-[var(--radius-pill)] flex-shrink-0 ${
                                 s.live
                                   ? 'bg-[var(--color-status-ok)]'
                                   : 'bg-[var(--color-text-muted)]'
@@ -1402,7 +1402,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                 title="Re-launch this chat inside its sandbox"
                 className="no-drag w-full flex items-center gap-2 px-3 h-8 hover:bg-white/[0.04] active:bg-white/[0.06] text-left group disabled:opacity-50 transition-colors"
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-[#e8843c] flex-shrink-0" />
+                <span className="w-1.5 h-1.5 rounded-[var(--radius-pill)] bg-[#e8843c] flex-shrink-0" />
                 <div className="flex-1 min-w-0 flex flex-col justify-center">
                   <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">{s.title}</span>
                   <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight truncate">
@@ -1436,7 +1436,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       )}
 
       {toast && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[11px] font-mono text-[var(--color-text-primary)] shadow-lg pointer-events-none">
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-[var(--radius-box)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[11px] font-mono text-[var(--color-text-primary)] shadow-lg pointer-events-none">
           {toast}
         </div>
       )}

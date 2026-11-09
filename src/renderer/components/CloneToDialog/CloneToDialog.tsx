@@ -185,9 +185,9 @@ export default function CloneToDialog(): React.JSX.Element | null {
                           <polyline points="20 6 9 17 4 12" />
                         </svg>
                       ) : isCurrent ? (
-                        <span className="w-2 h-2 rounded-full bg-[var(--color-text-primary)] animate-pulse" />
+                        <span className="w-2 h-2 rounded-[var(--radius-pill)] bg-[var(--color-text-primary)] animate-pulse" />
                       ) : (
-                        <span className="w-2 h-2 rounded-full border border-[var(--color-border)]" />
+                        <span className="w-2 h-2 rounded-[var(--radius-pill)] border border-[var(--color-border)]" />
                       )}
                     </span>
                     <span

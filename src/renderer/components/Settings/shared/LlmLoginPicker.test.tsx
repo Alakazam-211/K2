@@ -153,7 +153,7 @@ describe('Workspace LLM tokens', () => {
     await screen.findByTestId('llm-pin-workspace-claude')
     const menu = openMenu()
     const text = menu.textContent ?? ''
-    expect(Array.from(menu.children).map((c) => c.textContent)).toEqual([
+    expect(Array.from(menu.querySelector('.max-h-60')!.children).map((c) => c.textContent)).toEqual([
       `${DEFAULT_NAME}${IN_USE}`,
       'Subscriptions',
       'Claude · Max · main — This is the server default; pick Server default',

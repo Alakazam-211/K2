@@ -491,7 +491,7 @@ describe('the drawer (Rosson 2026-10-30)', () => {
     expect(drawer.hasAttribute('data-chamfer')).toBe(true)
     await waitFor(() => expect(drawer.querySelectorAll('[data-stash-row]')).toHaveLength(1))
     const rowEl = drawer.querySelector('[data-stash-row]') as HTMLElement
-    expect(rowEl.style.getPropertyValue('--ch-tl')).toBe('3px')
+    expect(rowEl.style.getPropertyValue('--ch-tl')).toBe('5px')
     const css = drawer.querySelector('style[data-stash-styles]')?.textContent ?? ''
     expect(css).toContain('html[data-style="terminal"] [data-k2-thread-zen] [data-stash-row] { border-radius: 0 !important; clip-path: polygon(')
     const check = screen.getByTestId('stash-remove-after-use')

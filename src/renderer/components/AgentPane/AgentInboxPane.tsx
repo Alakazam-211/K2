@@ -516,7 +516,7 @@ function MessageColumn({
                 >
                   <div className="flex items-start gap-1.5">
                     {item.unread && (
-                      <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
+                      <span className="mt-1.5 w-1.5 h-1.5 rounded-[var(--radius-pill)] bg-[var(--color-accent)] flex-shrink-0" />
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="text-xs font-medium text-[var(--color-text-primary)] leading-snug truncate">

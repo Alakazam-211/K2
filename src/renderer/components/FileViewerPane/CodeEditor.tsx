@@ -677,11 +677,11 @@ function buildEditorTheme(colors: ThemeColors, isLight = false): Extension {
     '.cm-foldGutter .cm-gutterElement:hover': { color: colors.fg },
     '.cm-foldPlaceholder': {
       backgroundColor: colors.panelBg, border: `1px solid ${colors.panelBorder}`, color: '#888',
-      padding: '0 6px', margin: '0 4px', borderRadius: '3px', cursor: 'pointer',
+      padding: '0 6px', margin: '0 4px', borderRadius: 'var(--radius-selector)', cursor: 'pointer',
     },
     '.cm-tooltip': {
       backgroundColor: colors.tooltipBg, border: `1px solid ${colors.tooltipBorder}`,
-      borderRadius: '4px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+      borderRadius: 'var(--radius-box)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
     },
     '.cm-tooltip.cm-tooltip-autocomplete': {
       backgroundColor: colors.tooltipBg, border: `1px solid ${colors.tooltipBorder}`,
@@ -702,12 +702,12 @@ function buildEditorTheme(colors: ThemeColors, isLight = false): Extension {
     },
     '.cm-panel.cm-search input': {
       backgroundColor: colors.bg, border: `1px solid ${colors.panelBorder}`, color: colors.fg,
-      padding: '2px 6px', borderRadius: '3px', fontSize: '11px', outline: 'none',
+      padding: '2px 6px', borderRadius: 'var(--radius-field)', fontSize: '11px', outline: 'none',
     },
     '.cm-panel.cm-search input:focus': { borderColor: colors.accent },
     '.cm-panel.cm-search button': {
       backgroundColor: colors.panelBg, border: `1px solid ${colors.panelBorder}`,
-      color: colors.fg, padding: '2px 8px', borderRadius: '3px', fontSize: '11px', cursor: 'pointer',
+      color: colors.fg, padding: '2px 8px', borderRadius: 'var(--radius-field)', fontSize: '11px', cursor: 'pointer',
     },
     '.cm-panel.cm-search button:hover': { backgroundColor: colors.panelBorder, color: colors.fg },
     '.cm-panel.cm-search label': { color: colors.gutterFg, fontSize: '11px' },

@@ -46,7 +46,7 @@ export function HomesSyncBadge(): React.JSX.Element | null {
       data-tone={view.tone}
       title={view.title}
       aria-label={view.title}
-      className={`absolute bottom-0 right-0.5 flex h-[10px] w-[10px] items-center justify-center rounded-full text-[7px] font-bold leading-none text-[var(--color-on-accent)] ring-1 ring-[var(--color-bg)] ${TONE_CLASS[view.tone]}`}
+      className={`absolute bottom-0 right-0.5 flex h-[10px] w-[10px] items-center justify-center rounded-[var(--radius-pill)] text-[7px] font-bold leading-none text-[var(--color-on-accent)] ring-1 ring-[var(--color-bg)] ${TONE_CLASS[view.tone]}`}
     >
       {view.glyph === 'computer' ? (
         <svg width="7" height="7" viewBox="0 0 8 8" fill="none" aria-hidden="true">

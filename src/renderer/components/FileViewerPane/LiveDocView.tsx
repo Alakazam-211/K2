@@ -256,7 +256,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
         aria-live="polite"
       >
         <span
-          className={`inline-block h-2 w-2 rounded-full ${
+          className={`inline-block h-2 w-2 rounded-[var(--radius-pill)] ${
             closed ? 'bg-[var(--color-text-muted)]' : state === 'live' ? 'bg-green-500' : 'bg-yellow-500'
           }`}
           aria-hidden
@@ -265,7 +265,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
         {closed && closed.code !== 'core_off' && (
           <button
             type="button"
-            className="ml-auto rounded border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
+            className="ml-auto rounded-[var(--radius-field)] border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
             onClick={() => setMountKey((k) => k + 1)}
           >
             Reopen
@@ -277,13 +277,13 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
           {notes.map((n) => {
             const key = `${n.change}:${n.row ?? ''}`
             return (
-              <div key={key} className="rounded border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-[var(--color-text-primary)]" role="alert">
+              <div key={key} className="rounded-[var(--radius-box)] border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-[var(--color-text-primary)]" role="alert">
                 <div className="whitespace-pre-wrap break-words">{n.message}</div>
                 <div className="mt-1 flex gap-2">
                   {noteText(n) && (
                     <button
                       type="button"
-                      className="rounded border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-bg-hover)]"
+                      className="rounded-[var(--radius-field)] border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-bg-hover)]"
                       onClick={() => void copy(n)}
                     >
                       {copied === key ? 'Copied' : 'Copy my text'}
@@ -291,7 +291,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
                   )}
                   <button
                     type="button"
-                    className="rounded border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-bg-hover)]"
+                    className="rounded-[var(--radius-field)] border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-bg-hover)]"
                     onClick={() => setNotes((prev) => prev.filter((x) => `${x.change}:${x.row ?? ''}` !== key))}
                   >
                     Dismiss

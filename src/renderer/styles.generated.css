@@ -8,9 +8,9 @@
   --radius-field: 0px;
   --radius-selector: 0px;
   --radius-pill: 0px;
-  --chamfer-surface: 4px;
-  --chamfer-control: 3px;
-  --chamfer-chip: 2px;
+  --chamfer-surface: 7px;
+  --chamfer-control: 5px;
+  --chamfer-chip: 3px;
   --chamfer-send: 5px;
   --gap-pane: 0px;
   --gap-tile: 1px;
@@ -613,9 +613,9 @@
   --radius-field: 0px;
   --radius-selector: 0px;
   --radius-pill: 0px;
-  --chamfer-surface: 4px;
-  --chamfer-control: 3px;
-  --chamfer-chip: 2px;
+  --chamfer-surface: 7px;
+  --chamfer-control: 5px;
+  --chamfer-chip: 3px;
   --chamfer-send: 5px;
   --gap-pane: 0px;
   --gap-tile: 1px;

@@ -91,7 +91,7 @@ export function hhmm(t: number): string {
 export function dotColor(display: Display | 'proposed'): string {
   switch (display) {
     case 'ok':
-      return 'var(--color-success,#30a46c)'
+      return 'var(--color-status-ok)'
     case 'warn':
       return 'var(--color-status-warn)'
     case 'crit':

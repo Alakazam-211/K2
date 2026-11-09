@@ -18,6 +18,7 @@ export function Toggle({ checked, onChange, disabled, className, ...rest }: Togg
     <button
       type="button"
       role="switch"
+      data-k2-chamfer="chip"
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
@@ -32,11 +33,15 @@ export function Toggle({ checked, onChange, disabled, className, ...rest }: Togg
         backgroundColor: checked ? 'var(--color-accent)' : 'var(--color-control-track-off)',
         border: 'none',
         transition: 'background-color 150ms',
+        ['--k2-ch-bw' as string]: '0px',
       }}
       {...rest}
     >
       <span
+        data-k2-chamfer="chip"
         style={{
+          ['--k2-ch-cut' as string]: '2px',
+          ['--k2-ch-bw' as string]: '0px',
           position: 'absolute',
           top: 2,
           left: checked ? 18 : 2,

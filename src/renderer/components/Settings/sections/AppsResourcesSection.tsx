@@ -66,7 +66,7 @@ function DiskBar({ disk, lines }: { disk: Disk; lines: Lines }): React.JSX.Eleme
       <div className="flex items-baseline gap-2 text-[11px]">
         <span className="font-mono text-[var(--color-text-primary)]">{disk.mount}</span>
         <span
-          className="px-1.5 rounded text-[10px] text-[var(--color-on-accent)]"
+          className="px-1.5 rounded-[var(--radius-pill)] text-[10px] text-[var(--color-on-accent)]"
           style={{ background: LEVEL_COLOR[disk.level] }}
           data-testid={`box-disk-level-${disk.mount}`}
         >
@@ -77,14 +77,14 @@ function DiskBar({ disk, lines }: { disk: Disk; lines: Lines }): React.JSX.Eleme
         </span>
       </div>
       <div
-        className="relative h-2.5 rounded-full bg-[var(--color-border)] overflow-hidden"
+        className="relative h-2.5 rounded-[var(--radius-pill)] bg-[var(--color-border)] overflow-hidden"
         role="meter"
         aria-label={`${disk.mount} used`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(pct)}
       >
-        <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${pct}%`, background: LEVEL_COLOR[disk.level] }} />
+        <div className="absolute inset-y-0 left-0 rounded-[var(--radius-pill)]" style={{ width: `${pct}%`, background: LEVEL_COLOR[disk.level] }} />
         {[lines.warnPct, lines.refusePct, lines.criticalPct].map((line, i) => (
           <div
             key={i}
@@ -113,7 +113,7 @@ function UsageList({ title, rows }: { title: string; rows: { key: string; name: 
               <span className={`${muted} truncate`}>{r.detail}</span>
               <span className={`ml-auto tabular-nums ${secondary}`}>{sizeLabel(r.bytes)}</span>
             </div>
-            <div className="h-1 rounded-full bg-[var(--color-border)] overflow-hidden">
+            <div className="h-1 rounded-[var(--radius-pill)] bg-[var(--color-border)] overflow-hidden">
               <div className="h-full bg-[var(--color-text-muted)] opacity-60" style={{ width: `${Math.max(1, (r.bytes / top) * 100)}%` }} />
             </div>
           </li>

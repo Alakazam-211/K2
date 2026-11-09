@@ -2296,7 +2296,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
             return (
               <div
                 key={dirPath}
-                className="flex items-start gap-2 px-2.5 py-2 rounded border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,var(--color-border))] bg-[var(--color-bg-elevated)] shadow-lg text-[11px] font-mono"
+                className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-box)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,var(--color-border))] bg-[var(--color-bg-elevated)] shadow-lg text-[11px] font-mono"
               >
                 <div className="min-w-0 flex-1">
                   <div className="text-[var(--color-status-error-soft)] truncate" title={dirPath}>

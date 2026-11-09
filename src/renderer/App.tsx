@@ -315,7 +315,7 @@ function BootSplash(): React.JSX.Element {
             style={{
               fontSize: '0.85rem',
               padding: '0.4rem 0.9rem',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-field, 0px)',
               border: '1px solid var(--color-border, #333)',
               background: 'transparent',
               color: 'inherit',

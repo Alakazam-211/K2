@@ -393,7 +393,7 @@ export function AIFileEditor({
               dirty-state plumbing render unchanged. */}
           {isDirty && (
             <span
-              className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--color-status-warn-amber)]"
+              className="inline-block w-1.5 h-1.5 rounded-[var(--radius-pill)] bg-[var(--color-status-warn-amber)]"
               title="Unsaved changes"
             />
           )}

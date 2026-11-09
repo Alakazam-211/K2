@@ -3279,7 +3279,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
               type="button"
               disabled={moving}
               onClick={() => { void handleMove(offerMove) }}
-              className="px-2 py-0.5 text-[10px] rounded bg-[var(--color-accent)] text-white disabled:opacity-50 cursor-pointer no-drag"
+              className="px-2 py-0.5 text-[10px] rounded-[var(--radius-field)] bg-[var(--color-accent)] text-white disabled:opacity-50 cursor-pointer no-drag"
             >
               {moving ? 'Moving…' : 'Move'}
             </button>
@@ -3287,7 +3287,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
               type="button"
               disabled={moving}
               onClick={() => setOfferMove(null)}
-              className="px-2 py-0.5 text-[10px] rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer no-drag"
+              className="px-2 py-0.5 text-[10px] rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer no-drag"
             >
               Not now
             </button>
@@ -4142,7 +4142,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
                   className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
                 >
                   <span
-                    className="w-2 h-2 flex-shrink-0 rounded-full"
+                    className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
                     style={{ backgroundColor: target?.color || 'var(--color-neutral)' }}
                   />
                   <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
@@ -4184,7 +4184,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
                     className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
                   >
                     <span
-                      className="w-2 h-2 flex-shrink-0 rounded-full"
+                      className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
                       style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
                     />
                     <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">

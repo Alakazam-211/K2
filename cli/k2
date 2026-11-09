@@ -55444,6 +55444,14 @@ GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
                                                         without either, a grant keeps it)
        (an agent asks: k2 permission request compute.gpu node=<node> --why "…")
   --gpu doesn't give --exclusive (that still needs a grant with --ci).
+  A quiet host (a benchmark, a timing test): add --exclusive --why "…".
+  No other K2 job runs beside it, and before it starts the node waits up to
+  5 min for the load to drop under 0.25 × its CPUs and the GPU under 5%
+  busy, then starts anyway with a "host not quiet … starting anyway" line
+  (it never hangs). On a node another server owns, its share must allow
+  exclusive too. Load outside K2 (the owner's desktop) can't be stopped.
+  Every job's host lines say "quiet host: yes", or "no (why)"; a GPU job's
+  also say how busy its GPU was (the whole device, the host's own use too).
   --mem caps the job's RAM. On an APU (an iGPU sharing system memory) the
   GPU's buffers also come from system RAM and aren't counted in --mem
   yet: leave headroom.

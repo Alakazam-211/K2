@@ -84,6 +84,10 @@ pub struct NodeOptions {
     pub use_cgroups: bool,
     pub rss: Arc<dyn RssSampler>,
     pub rss_every: Duration,
+    /// GPU jobs S2: how long `--exclusive --gpu` waits for a quiet host,
+    /// and how often it looks (tests shorten both).
+    pub quiet_wait: Duration,
+    pub quiet_poll: Duration,
     pub clock: Arc<dyn Clock>,
     /// Override machine facts (tests).
     pub facts: Option<MachineFacts>,
@@ -168,6 +172,8 @@ impl NodeOptions {
             use_cgroups: true,
             rss: runner::default_sampler(),
             rss_every: Duration::from_secs(1),
+            quiet_wait: crate::jobstat::QUIET_WAIT,
+            quiet_poll: crate::jobstat::QUIET_POLL,
             clock: Arc::new(crate::ledger::SystemClock::new()),
             facts: None,
             admin_socket: crate::admin::config::default_socket(),

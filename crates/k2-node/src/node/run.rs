@@ -158,6 +158,9 @@ pub(super) struct Live {
     pub preset: Option<StopReason>,
     pub preset_detail: Option<String>,
     pub adopted: bool,
+    /// GPU jobs: the leased GPU's PCI address (the host stamps read its
+    /// busy %). An adopted job: none.
+    pub gpu: Option<String>,
 }
 
 /// One spool tailer's inputs.
@@ -948,6 +951,27 @@ impl Node {
             Some((o, e)) => (Some((o.writer, e.writer)), Some((o.reader, e.reader))),
             None => (None, None),
         };
+        // GPU jobs S2: `--exclusive --gpu` (a benchmark, a timing test) waits
+        // up to 5 min for a quiet host first: load under 0.25 × CPUs and its
+        // GPU under 5% busy. Then it starts anyway, saying why (never a hang).
+        if a.plan.exclusive && a.plan.gpu.is_some() && unit_mode {
+            let pcis: Vec<String> = self.ready_gpus_for(&t).into_iter().map(|g| g.pci).collect();
+            sys(&mut journal, &format!("--exclusive --gpu: waiting up to {} for a quiet host (load under 0.25 × CPUs, the GPU under 5% busy)", human_secs(self.opts.quiet_wait.as_secs())));
+            let w = crate::jobstat::wait_quiet(
+                move || {
+                    let sysfs = std::path::Path::new(crate::gpu::SYS);
+                    (crate::jobstat::load1_milli(), pcis.iter().filter_map(|p| crate::jobstat::gpu_busy_pct(sysfs, p)).collect())
+                },
+                self.facts.cores as u32,
+                self.opts.quiet_wait,
+                self.opts.quiet_poll,
+            )
+            .await;
+            match w.not_quiet {
+                None => sys(&mut journal, &format!("host quiet after {}", human_secs(w.waited.as_secs()))),
+                Some(why) => sys(&mut journal, &format!("host not quiet after {} ({why}); starting anyway", human_secs(w.waited.as_secs()))),
+            }
+        }
         // GPU jobs (0.46.11): only a walled unit gets a GPU (root leases the
         // device); never a GPU job run anywhere else without one.
         let started = if a.plan.gpu.is_some() && !unit_mode {
@@ -965,14 +989,14 @@ impl Node {
             }
             self.start_unit(&t, &a, &dirs, &cwd, &env, rw, network, mem_limit, secrets.as_ref(), writers, uid_share == UidShare::Own).await
         } else if let (Some(bin), Some((out_w, err_w))) = (holder_bin.as_ref(), writers) {
-            self.start_held(&t, &a, &cwd, &env, network, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None, None))
+            self.start_held(&t, &a, &cwd, &env, network, bin, &hold_dir, out_w, err_w, deadline_unix).await.map(|p| (p, None, None, None, None))
         } else {
-            self.start_local(&t, &a, &cwd, &env, network).map(|(p, o, e)| (p, o, e, None))
+            self.start_local(&t, &a, &cwd, &env, network).map(|(p, o, e)| (p, o, e, None, None))
         };
         // SE19: the plaintext goes as soon as the unit has it (the
         // redactor's copy stays until the job ends).
         drop(secrets.take());
-        let (proc, out_pipe, err_pipe, uid_index) = match started {
+        let (proc, out_pipe, err_pipe, uid_index, gpu) = match started {
             Ok(s) => s,
             Err(e) => {
                 sys(&mut journal, &e);
@@ -980,6 +1004,10 @@ impl Node {
                 return;
             }
         };
+        // GPU jobs: which GPU root leased to it.
+        if let Some(pci) = &gpu {
+            sys(&mut journal, &format!("GPU: {pci} ($K2_GPU_RENDER is its render node; no other job holds it)"));
+        }
         // C2: its own uid, from the slot's pool: the receipt says so.
         if let Some(i) = uid_index {
             sys(&mut journal, &format!("runs as a uid of its own ({}, pool index {i}); no other job shares it", crate::admin::jobpool::pool_user_name(t.slot, i)));
@@ -1037,6 +1065,7 @@ impl Node {
             preset: None,
             preset_detail: None,
             adopted: false,
+            gpu,
         };
         self.supervise(t, a, live, stop).await;
     }
@@ -1045,7 +1074,9 @@ impl Node {
     /// k2-node process, §5.6): the output, the wait (exit, stop, timeout,
     /// stall, memory), a detach for an update, the artifacts and the end.
     pub(super) async fn supervise(self: Arc<Self>, t: Arc<Tenant>, a: Assign, live: Live, mut stop: watch::Receiver<Option<StopReason>>) {
-        let Live { dirs, cwd, target, src_ran, lease, mut proc, outs, journal, redactor, mem_limit, easy, tools_used, deadline, facts, preset, preset_detail, adopted } = live;
+        let Live { dirs, cwd, target, src_ran, lease, mut proc, outs, journal, redactor, mem_limit, easy, tools_used, deadline, facts, preset, preset_detail, adopted, gpu } = live;
+        // GPU jobs S2: what the host stamps look at beyond load and jobs.
+        let host_extra = || crate::jobstat::HostExtra { foreign_lock: self.local.lock().unwrap().locks.holding.is_some(), gpu_pci: gpu.clone() };
         let job = a.fence.job_id.clone();
         let gen = a.fence.generation;
         if let Proc::Unit { unit, cg, .. } = &mut proc {
@@ -1087,9 +1118,9 @@ impl Node {
         // window); its line lands in the log when it's read. An adopted job
         // started long ago: no start stamp.
         let host_start = (easy && !adopted).then(|| {
-            let (j, at, cpus, others) = (journal.clone(), self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32);
+            let (j, at, cpus, others, extra) = (journal.clone(), self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32, host_extra());
             tokio::spawn(async move {
-                let h = tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, Duration::from_secs(1))).await.ok()?;
+                let h = tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, &extra, Duration::from_secs(1))).await.ok()?;
                 let _ = j.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {}\n", crate::jobstat::host_line("start", &h)).as_bytes());
                 Some(h)
             })
@@ -1252,8 +1283,8 @@ impl Node {
         // CE-19: the host at the end (the steal window runs beside the
         // reap and the artifacts).
         let host_end = easy.then(|| {
-            let (at, cpus, others) = (self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32);
-            tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, Duration::from_secs(1)))
+            let (at, cpus, others, extra) = (self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32, host_extra());
+            tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, &extra, Duration::from_secs(1)))
         });
         let peak_shown = if easy { used.peak_mem_bytes } else { None };
         let _ = t.ledger.lock().unwrap().set_state(&job, gen, JobState::Finishing, None, None);
@@ -1475,7 +1506,7 @@ impl Node {
         secrets: Option<&k2_node_proto::secret::Plain>,
         spool: Option<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)>,
         job_uid: bool,
-    ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>, Option<u32>), String> {
+    ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>, Option<u32>, Option<String>), String> {
         use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
         crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf(), stdin_env: secrets.is_some() })?;
@@ -1523,7 +1554,7 @@ impl Node {
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.
         let ans = self.job_op(JobOp::Start(start), fds, Duration::from_secs(60)).await;
-        let (unit, uid_index) = match ans {
+        let (unit, uid_index, gpu) = match ans {
             // C2: asked for its own uid, the answer must say which; an
             // executor that ignored the ask started it as the slot's user:
             // stopped at once, never left running beside others.
@@ -1538,7 +1569,7 @@ impl Node {
                 let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
                 return Err(format!("{}: the executor started {unit} without its GPU; stopped (update k2-node)", k2_node_proto::gpu::codes::GPU_UNAVAILABLE));
             }
-            Ok(JobAnswer::Started { unit, uid_index, .. }) => (unit, uid_index),
+            Ok(JobAnswer::Started { unit, uid_index, gpu }) => (unit, uid_index, gpu),
             Ok(JobAnswer::Refused(r)) => return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message)),
             Ok(other) => return Err(format!("unexpected executor answer: {other:?}")),
             Err(e) => return Err(format!("couldn't start the job unit: {e}")),
@@ -1547,8 +1578,8 @@ impl Node {
             tokio::net::unix::pipe::Receiver::from_owned_fd(std::os::fd::OwnedFd::from(r)).ok().map(|p| Box::new(p) as OutPipe)
         };
         Ok(match readers {
-            Some((out_r, err_r)) => (Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r), uid_index),
-            None => (Proc::Unit { unit, last: None, cg: None }, None, None, uid_index),
+            Some((out_r, err_r)) => (Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r), uid_index, gpu),
+            None => (Proc::Unit { unit, last: None, cg: None }, None, None, uid_index, gpu),
         })
     }
 

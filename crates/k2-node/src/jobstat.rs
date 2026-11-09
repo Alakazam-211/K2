@@ -377,13 +377,26 @@ pub fn steal_between(a: (u64, u64), b: (u64, u64)) -> Option<u32> {
     Some(((steal * 1000) / total).min(1000) as u32)
 }
 
-/// One host stamp (blocking: the steal window).
-pub fn host_sample(at: i64, cpus: u32, other_jobs: u32, window: Duration) -> HostSample {
-    let steal = steal_permille(window);
-    HostSample { at, load1_milli: load1_milli(), cpus, steal_permille: steal, other_jobs }
+/// What else a host stamp looks at (GPU jobs S2): a foreign lock held,
+/// and the job's GPU (its PCI address) for `gpu_busy_percent`.
+#[derive(Debug, Clone, Default)]
+pub struct HostExtra {
+    pub foreign_lock: bool,
+    pub gpu_pci: Option<String>,
 }
 
-/// The log line: `host at start: load 2.31 on 16 CPUs, steal 0.4%, 2 other K2 jobs`.
+/// One host stamp (blocking: the steal window).
+pub fn host_sample(at: i64, cpus: u32, other_jobs: u32, extra: &HostExtra, window: Duration) -> HostSample {
+    let steal = steal_permille(window);
+    let gpu = extra.gpu_pci.as_deref().and_then(|p| gpu_busy_pct(Path::new(crate::gpu::SYS), p));
+    let load = load1_milli();
+    let quiet = k2_node_proto::results::quiet_why(load, cpus, other_jobs, extra.foreign_lock, gpu).is_none();
+    HostSample { at, load1_milli: load, cpus, steal_permille: steal, other_jobs, foreign_lock: extra.foreign_lock, gpu_busy_pct: gpu, quiet: Some(quiet) }
+}
+
+/// The log line: `host at start: load 2.31 on 16 CPUs, steal 0.4%, 2 other
+/// K2 jobs, quiet host: no (2 other K2 jobs)`. A GPU job's line also says
+/// how busy its GPU was (the whole device).
 pub fn host_line(when: &str, h: &HostSample) -> String {
     let steal = h.steal_permille.map(|s| format!(", steal {}.{}%", s / 10, s % 10)).unwrap_or_default();
     let others = match h.other_jobs {
@@ -391,7 +404,58 @@ pub fn host_line(when: &str, h: &HostSample) -> String {
         1 => "1 other K2 job".to_string(),
         n => format!("{n} other K2 jobs"),
     };
-    format!("host at {when}: load {}.{:02} on {} CPUs{steal}, {others}", h.load1_milli / 1000, (h.load1_milli % 1000) / 10, h.cpus)
+    let gpu = h.gpu_busy_pct.map(|b| format!(", GPU {b}% busy")).unwrap_or_default();
+    let quiet = match h.quiet {
+        None => String::new(),
+        Some(_) => match k2_node_proto::results::quiet_why(h.load1_milli, h.cpus, h.other_jobs, h.foreign_lock, h.gpu_busy_pct) {
+            None => ", quiet host: yes".into(),
+            Some(w) => format!(", quiet host: no ({w})"),
+        },
+    };
+    format!("host at {when}: load {}.{:02} on {} CPUs{steal}, {others}{gpu}{quiet}", h.load1_milli / 1000, (h.load1_milli % 1000) / 10, h.cpus)
+}
+
+/// `gpu_busy_percent` of the GPU at `pci` under `sys` (amdgpu reports it;
+/// Intel's i915/xe don't: `None`).
+pub fn gpu_busy_pct(sys: &Path, pci: &str) -> Option<u32> {
+    if !crate::gpu::valid_pci(pci) {
+        return None;
+    }
+    std::fs::read_to_string(sys.join("bus/pci/devices").join(pci).join("gpu_busy_percent")).ok()?.trim().parse().ok()
+}
+
+/// How long `--exclusive --gpu` waits for a quiet host before it starts
+/// anyway (GPU jobs S2).
+pub const QUIET_WAIT: Duration = Duration::from_secs(300);
+/// How often it looks.
+pub const QUIET_POLL: Duration = Duration::from_secs(5);
+
+/// The outcome of [`wait_quiet`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuietWait {
+    /// Why it still wasn't quiet at the end (`None`: it was).
+    pub not_quiet: Option<String>,
+    /// How long it waited.
+    pub waited: Duration,
+}
+
+/// `--exclusive --gpu` (GPU jobs S2): wait up to `max` for the load under
+/// 0.25 × `cpus` and every GPU under 5% busy, looking every `poll`. Never
+/// a hang: at `max` it returns why the host still isn't quiet. `read`
+/// gives (load1 × 1000, the GPUs' busy percents); other K2 jobs and locks
+/// aren't asked here (an exclusive job already has the node to itself).
+pub async fn wait_quiet(mut read: impl FnMut() -> (u64, Vec<u32>), cpus: u32, max: Duration, poll: Duration) -> QuietWait {
+    let t0 = tokio::time::Instant::now();
+    loop {
+        let (load, gpus) = read();
+        let busiest = gpus.iter().copied().max();
+        let why = k2_node_proto::results::quiet_why(load, cpus, 0, false, busiest);
+        let waited = t0.elapsed();
+        if why.is_none() || waited >= max {
+            return QuietWait { not_quiet: why, waited };
+        }
+        tokio::time::sleep(poll.min(max.saturating_sub(waited)).max(Duration::from_millis(1))).await;
+    }
 }
 
 /// `25.3G` for the mem_cap and log lines.
@@ -504,13 +568,63 @@ mod tests {
         assert_eq!(steal_between(a, a), Some(0));
         assert_eq!(steal_between((5, 10), (1, 20)), None);
         assert_eq!(parse_proc_stat("cpu 1 2\n"), None);
-        let h = HostSample { at: 1, load1_milli: 2_314, cpus: 16, steal_permille: Some(4), other_jobs: 2 };
-        assert_eq!(host_line("start", &h), "host at start: load 2.31 on 16 CPUs, steal 0.4%, 2 other K2 jobs");
-        let mac = HostSample { steal_permille: None, other_jobs: 0, ..h };
+        let h = HostSample { at: 1, load1_milli: 2_314, cpus: 16, steal_permille: Some(4), other_jobs: 2, ..Default::default() };
+        assert_eq!(host_line("start", &h), "host at start: load 2.31 on 16 CPUs, steal 0.4%, 2 other K2 jobs", "an older node's stamp (no quiet field)");
+        let mac = HostSample { steal_permille: None, other_jobs: 0, ..h.clone() };
         assert_eq!(host_line("end", &mac), "host at end: load 2.31 on 16 CPUs, no other K2 job");
-        let s = host_sample(7, 4, 1, Duration::from_millis(20));
-        assert_eq!((s.at, s.cpus, s.other_jobs), (7, 4, 1));
+        let s = host_sample(7, 4, 1, &HostExtra::default(), Duration::from_millis(20));
+        assert_eq!((s.at, s.cpus, s.other_jobs, s.quiet), (7, 4, 1, Some(false)), "another K2 job: never quiet");
         assert_eq!(s.steal_permille.is_some(), cfg!(target_os = "linux"), "Linux reports steal, macOS null");
         assert_eq!(gib(25 * (1 << 30) + (3 << 30) / 10), "25.3G");
+    }
+
+    /// GPU jobs S2: the stamp says whether the host was quiet and why not
+    /// (K2 jobs, a foreign lock, load ≥ 0.25 × CPUs, the GPU ≥ 5% busy).
+    #[test]
+    fn host_line_says_quiet_host() {
+        let quiet = HostSample { at: 1, load1_milli: 1_000, cpus: 16, steal_permille: Some(0), other_jobs: 0, quiet: Some(true), ..Default::default() };
+        assert_eq!(host_line("start", &quiet), "host at start: load 1.00 on 16 CPUs, steal 0.0%, no other K2 job, quiet host: yes");
+        let gpu = HostSample { gpu_busy_pct: Some(2), ..quiet.clone() };
+        assert_eq!(host_line("start", &gpu), "host at start: load 1.00 on 16 CPUs, steal 0.0%, no other K2 job, GPU 2% busy, quiet host: yes");
+        let loud = HostSample { load1_milli: 4_000, other_jobs: 1, foreign_lock: true, gpu_busy_pct: Some(41), quiet: Some(false), ..quiet };
+        assert_eq!(
+            host_line("end", &loud),
+            "host at end: load 4.00 on 16 CPUs, steal 0.0%, 1 other K2 job, GPU 41% busy, quiet host: no (1 other K2 job, a foreign lock is held, load 4.00 ≥ 4.00, GPU 41% busy)"
+        );
+        let j = serde_json::to_string(&HostSample { at: 1, load1_milli: 1, cpus: 1, steal_permille: None, other_jobs: 0, ..Default::default() }).unwrap();
+        assert!(!j.contains("quiet") && !j.contains("gpu") && !j.contains("foreign"), "an older reader's JSON: {j}");
+    }
+
+    #[test]
+    fn gpu_busy_reads_sysfs() {
+        let d = crate::util::temp_dir("gpu-busy");
+        let dev = d.join("bus/pci/devices/0000:c4:00.0");
+        std::fs::create_dir_all(&dev).unwrap();
+        std::fs::write(dev.join("gpu_busy_percent"), "37\n").unwrap();
+        assert_eq!(gpu_busy_pct(&d, "0000:c4:00.0"), Some(37));
+        assert_eq!(gpu_busy_pct(&d, "0000:c5:00.0"), None, "Intel: no file");
+        assert_eq!(gpu_busy_pct(&d, "../../etc"), None);
+    }
+
+    /// GPU jobs S2: `--exclusive --gpu` waits for a quiet host, and at the
+    /// limit starts anyway with the reason (never a hang).
+    #[tokio::test]
+    async fn wait_quiet_waits_then_gives_up_with_why() {
+        let mut n = 0;
+        let w = wait_quiet(
+            || {
+                n += 1;
+                if n < 3 { (8_000, vec![60]) } else { (500, vec![1]) }
+            },
+            16,
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+        )
+        .await;
+        assert_eq!(w.not_quiet, None, "quiet on the third look");
+        assert_eq!(n, 3);
+        let w = wait_quiet(|| (8_000, vec![60]), 16, Duration::from_millis(40), Duration::from_millis(5)).await;
+        assert_eq!(w.not_quiet.as_deref(), Some("load 8.00 ≥ 4.00, GPU 60% busy"));
+        assert!(w.waited >= Duration::from_millis(40) && w.waited < Duration::from_secs(5), "{:?}", w.waited);
     }
 }

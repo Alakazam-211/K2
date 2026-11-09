@@ -82,13 +82,22 @@ pub fn resources(j: &JobRow) -> Value {
 /// jobs}`.
 fn host_sample(s: Option<&Value>) -> Value {
     let Some(s) = s.filter(|s| s.is_object()) else { return Value::Null };
-    json!({
+    let mut v = json!({
         "at": s.get("at"),
         "load1": s.get("load1_milli").and_then(Value::as_u64).map(|l| l as f64 / 1000.0),
         "cpus": s.get("cpus"),
         "steal": s.get("steal_permille").and_then(Value::as_u64).map(|p| p as f64 / 10.0),
         "jobs": s.get("other_jobs"),
-    })
+    });
+    // GPU jobs S2: only from a node that says (an older node's stamp keeps
+    // its shape): was the host quiet, and how busy was the job's GPU.
+    if let Some(q) = s.get("quiet").filter(|q| q.is_boolean()) {
+        v["quiet"] = q.clone();
+    }
+    if let Some(g) = s.get("gpu_busy_pct").filter(|g| g.is_u64()) {
+        v["gpuBusy"] = g.clone();
+    }
+    v
 }
 
 /// `result.host` (CE-19): the node's load stamp at job start and end
@@ -395,6 +404,16 @@ mod tests {
         );
         assert_eq!(peak_mem_bytes(&j), Some(1 << 30));
         assert_eq!(host(&j), json!({"start": {"at": 100, "load1": 0.5, "cpus": 12, "steal": 0.3, "jobs": 2}, "end": {"at": 160, "load1": 1.25, "cpus": 12, "steal": null, "jobs": 0}}));
+        // GPU jobs S2: a newer node's stamps say quiet and the GPU's busy %.
+        j.summary_json = Some(
+            json!({"artifacts": [], "notes": [],
+                   "host": {"start": {"at": 1, "load1_milli": 500, "cpus": 16, "other_jobs": 0, "quiet": true, "gpu_busy_pct": 2},
+                            "end": {"at": 2, "load1_milli": 5100, "cpus": 16, "other_jobs": 1, "quiet": false}}})
+            .to_string(),
+        );
+        let h = host(&j);
+        assert_eq!((h["start"]["quiet"].as_bool(), h["start"]["gpuBusy"].as_u64()), (Some(true), Some(2)));
+        assert_eq!((h["end"]["quiet"].as_bool(), h["end"].get("gpuBusy")), (Some(false), None));
         j.requested_by = "owner".into();
         j.ctl.tag = Some("fuzz:p3".into());
         let v = envelope(&j, None);

@@ -371,6 +371,7 @@ impl Node {
             preset,
             preset_detail,
             adopted: true,
+            gpu: None,
         };
         self.jobs_changed();
         let (node, tenant) = (self.clone(), t.clone());

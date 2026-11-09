@@ -216,6 +216,47 @@ pub struct HostSample {
     pub steal_permille: Option<u32>,
     /// Other K2 jobs running on the node then (every server's; count only).
     pub other_jobs: u32,
+    /// GPU jobs S2 (0.46.11): another tool held one of the node's foreign
+    /// locks (a CI runner's job lock). Absent = no.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub foreign_lock: bool,
+    /// GPU jobs S2: the job's GPU's `gpu_busy_percent` then (the whole
+    /// device: the host's own use counts). Absent without a GPU, or where
+    /// the driver doesn't report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_busy_pct: Option<u32>,
+    /// GPU jobs S2: was the host quiet ([`quiet_why`])? Absent from an older
+    /// node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet: Option<bool>,
+}
+
+/// A quiet host's 1-minute load: under this fraction of its CPUs
+/// (thousandths: 250 = 0.25 × CPUs).
+pub const QUIET_LOAD_PER_CPU_MILLI: u64 = 250;
+/// A quiet GPU: under this `gpu_busy_percent`.
+pub const QUIET_GPU_BUSY_PCT: u32 = 5;
+
+/// Why a host isn't quiet (GPU jobs S2), or `None` when it is: no other
+/// K2 job, no foreign lock held, the 1-minute load under 0.25 × its CPUs,
+/// and its GPU (when known) under 5% busy. Load outside K2 counts too,
+/// which is the point: a benchmark wants to know.
+pub fn quiet_why(load1_milli: u64, cpus: u32, other_jobs: u32, foreign_lock: bool, gpu_busy_pct: Option<u32>) -> Option<String> {
+    let mut why = Vec::new();
+    if other_jobs > 0 {
+        why.push(if other_jobs == 1 { "1 other K2 job".to_string() } else { format!("{other_jobs} other K2 jobs") });
+    }
+    if foreign_lock {
+        why.push("a foreign lock is held".into());
+    }
+    let limit = u64::from(cpus.max(1)) * QUIET_LOAD_PER_CPU_MILLI;
+    if load1_milli >= limit {
+        why.push(format!("load {}.{:02} ≥ {}.{:02}", load1_milli / 1000, (load1_milli % 1000) / 10, limit / 1000, (limit % 1000) / 10));
+    }
+    if let Some(b) = gpu_busy_pct.filter(|b| *b >= QUIET_GPU_BUSY_PCT) {
+        why.push(format!("GPU {b}% busy"));
+    }
+    (!why.is_empty()).then(|| why.join(", "))
 }
 
 /// CE-19: [`HostSample`]s at the job's start and end.

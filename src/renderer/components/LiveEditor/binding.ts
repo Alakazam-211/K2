@@ -251,9 +251,9 @@ export class Binding {
       // undo and redo are the server's, ahead of anything a host adds (a history keymap)
       Prec.highest(
         keymap.of([
-          { key: "Mod-z", run: () => (this.hooks.undo(), true), preventDefault: true },
-          { key: "Mod-Shift-z", run: () => (this.hooks.redo(), true), preventDefault: true },
-          { key: "Mod-y", run: () => (this.hooks.redo(), true), preventDefault: true },
+          { key: "Mod-z", run: () => consumed(() => this.hooks.undo()), preventDefault: true },
+          { key: "Mod-Shift-z", run: () => consumed(() => this.hooks.redo()), preventDefault: true },
+          { key: "Mod-y", run: () => consumed(() => this.hooks.redo()), preventDefault: true },
         ]),
       ),
       Prec.highest(
@@ -533,6 +533,18 @@ export class Binding {
       if (!this.dead && this.view) this.view.dispatch({ effects: setReveal.of(Decoration.none) });
     }, ms);
   }
+}
+
+/** Run an undo or redo key's action; the key is the editor's either way. CodeMirror swallows a
+ * command's throw and reports the key as unhandled, and an unhandled Cmd+Z reaches the app
+ * menu's native undo, which lands in some other text box on the page. */
+function consumed(action: () => void): true {
+  try {
+    action();
+  } catch (e) {
+    console.error("[live-editor] undo/redo failed:", e);
+  }
+  return true;
 }
 
 /** A UTF-16 offset of `live.text` that is a position in `doc` (always, unless a repair of the

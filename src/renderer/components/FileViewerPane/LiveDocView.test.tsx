@@ -16,7 +16,7 @@
 
 import '../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
 import React from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 
@@ -26,7 +26,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-import { LiveDocView, closedText, liveStatusText, noteText } from './LiveDocView'
+import { LiveDocView, closedText, liveStatusText, noteText, undoChord } from './LiveDocView'
 import type { LiveClientFrame, LiveClose, LiveServerFrame, LiveTransport, LiveWelcome } from '@/lib/docs-live-transport'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -185,6 +185,195 @@ describe('LiveDocView', () => {
     fireEvent.click(screen.getByText('Reopen'))
     await waitFor(() => expect(t.connects).toBe(2))
     await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('live'))
+  })
+})
+
+/** A socket that answers undo the way the daemon does: the change first (as
+ *  a `change` frame, never filtered: it isn't an edit of this socket's), then
+ *  `undone`. `steps: 0` is nothing to undo. */
+class UndoTransport extends ScriptedTransport {
+  version = 1
+  steps = 1
+  throwOnUndo = false
+  onUndoChange: (() => void) | null = null
+  undos(): number {
+    return this.sent.filter((f) => 'type' in f && f.type === 'undo').length
+  }
+  send(f: LiveClientFrame): void {
+    if ('type' in f && f.type === 'undo' && this.throwOnUndo) throw new Error('socket went away')
+    super.send(f)
+    if (!('type' in f) || f.type !== 'undo') return
+    const op = f.op
+    const steps = this.steps
+    queueMicrotask(() => {
+      if (steps > 0) {
+        this.version += 1
+        this.push({
+          type: 'change',
+          event: { version: this.version, pid: SELF, client: 101, via: 'undo', root: 'source', hunks: [{ start: 0, end: 1, insert: '' }], at_ms: 1 },
+        })
+      }
+      this.push({ type: 'undone', op, steps, version: this.version })
+      this.onUndoChange?.()
+    })
+  }
+}
+
+describe('LiveDocView: the undo keys stay in the editor', () => {
+  const content = (): HTMLElement => document.querySelector('.cm-content') as HTMLElement
+  /** The key lands where the browser would send it: the focused element. */
+  async function cmdZ(shift = false): Promise<KeyboardEvent> {
+    const ev = new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', keyCode: 90, ctrlKey: true, shiftKey: shift, bubbles: true, cancelable: true })
+    await act(async () => {
+      ;(document.activeElement ?? document.body).dispatchEvent(ev)
+      await new Promise((r) => setTimeout(r, 5))
+    })
+    return ev
+  }
+  async function open(t: ScriptedTransport): Promise<EditorView> {
+    render(<LiveDocView scope={scope} filePath="/w/notes.md" markdown createTransport={() => t} />)
+    await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('live'))
+    const view = editorView()
+    view.focus()
+    expect(document.activeElement).toBe(content())
+    return view
+  }
+  // Anything outside the editor listening for the key (the page's own
+  // handlers, and through them the app menu's native undo).
+  let leaked: KeyboardEvent[] = []
+  const onWindowKey = (e: KeyboardEvent): void => void leaked.push(e)
+  beforeEach(() => {
+    leaked = []
+    window.addEventListener('keydown', onWindowKey)
+  })
+  afterEach(() => {
+    window.removeEventListener('keydown', onWindowKey)
+    vi.restoreAllMocks()
+  })
+
+  it('one undo, the change from that undo, then a second Cmd+Z: both reach the daemon on one editor', async () => {
+    const t = new UndoTransport('hello\n')
+    const view = await open(t)
+    const first = await cmdZ()
+    expect(first.defaultPrevented).toBe(true)
+    expect(t.undos()).toBe(1)
+    await waitFor(() => expect(editorText()).toBe('ello\n'))
+    expect(document.activeElement).toBe(content())
+
+    const second = await cmdZ()
+    expect(second.defaultPrevented).toBe(true)
+    expect(t.undos()).toBe(2)
+    await waitFor(() => expect(editorText()).toBe('llo\n'))
+    expect(document.activeElement).toBe(content())
+    expect(editorView()).toBe(view)
+    expect(t.connects).toBe(1)
+    expect(leaked).toHaveLength(0)
+  })
+
+  it('nothing to undo: the key is still the editor’s and never reaches the page', async () => {
+    const t = new UndoTransport('hello\n')
+    t.steps = 0
+    await open(t)
+    const ev = await cmdZ()
+    expect(ev.defaultPrevented).toBe(true)
+    expect(leaked).toHaveLength(0)
+    expect(document.activeElement).toBe(content())
+    expect(editorText()).toBe('hello\n')
+    const redo = await cmdZ(true)
+    expect(redo.defaultPrevented).toBe(true)
+    expect(leaked).toHaveLength(0)
+  })
+
+  it('an undo that throws is consumed and logged, and the next press still works', async () => {
+    const t = new UndoTransport('hello\n')
+    await open(t)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    t.throwOnUndo = true
+    const ev = await cmdZ()
+    expect(ev.defaultPrevented).toBe(true)
+    expect(leaked).toHaveLength(0)
+    expect(errors.mock.calls.some((c) => String(c[0]).includes('undo failed'))).toBe(true)
+    errors.mockRestore()
+    expect(document.activeElement).toBe(content())
+
+    t.throwOnUndo = false
+    await cmdZ()
+    expect(t.undos()).toBe(1)
+  })
+
+  it('a focus that falls to nothing after the undo’s change comes back to the editor', async () => {
+    const t = new UndoTransport('hello\n')
+    await open(t)
+    // jsdom says a document with nothing focused has no focus; a real window
+    // still does.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    // What Rosson sees: the caret drops out right after the undo's change.
+    t.onUndoChange = () => content().blur()
+    await cmdZ()
+    await waitFor(() => expect(document.activeElement).toBe(content()))
+    t.onUndoChange = null
+    await cmdZ()
+    expect(t.undos()).toBe(2)
+    expect(leaked).toHaveLength(0)
+  })
+
+  it('a click elsewhere keeps its focus; clicking back, the first Cmd+Z is the editor’s', async () => {
+    const t = new UndoTransport('hello\n')
+    const view = await open(t)
+    const box = document.body.appendChild(document.createElement('div'))
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    box.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    content().blur()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(document.activeElement).toBe(document.body)
+    box.remove()
+
+    content().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    view.focus()
+    const ev = await cmdZ()
+    expect(ev.defaultPrevented).toBe(true)
+    expect(t.undos()).toBe(1)
+    expect(document.activeElement).toBe(content())
+    expect(leaked).toHaveLength(0)
+  })
+
+  it('an editor replaced while it holds the caret: the new one has it, and Cmd+Z goes to the new one', async () => {
+    const a = new UndoTransport('hello\n')
+    const b = new UndoTransport('hello\n')
+    const { rerender } = render(<LiveDocView scope={scope} filePath="/w/notes.md" markdown createTransport={() => a} />)
+    await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('live'))
+    editorView().focus()
+    const old = editorView()
+
+    rerender(<LiveDocView scope={scope} filePath="/w/notes.md" markdown createTransport={() => b} />)
+    await waitFor(() => expect(b.connects).toBe(1))
+    await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('live'))
+    expect(a.closedByEditor).toBe(true)
+    expect(editorView()).not.toBe(old)
+    await waitFor(() => expect(document.activeElement).toBe(content()))
+
+    const ev = await cmdZ()
+    expect(ev.defaultPrevented).toBe(true)
+    expect(b.undos()).toBe(1)
+    expect(a.undos()).toBe(0)
+    expect(leaked).toHaveLength(0)
+  })
+})
+
+describe('undoChord', () => {
+  const key = (over: Partial<KeyboardEvent>) => ({ key: 'z', code: 'KeyZ', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...over }) as KeyboardEvent
+  it('is Cmd on a Mac and Ctrl elsewhere', () => {
+    expect(undoChord(key({ metaKey: true }), true)).toBe('undo')
+    expect(undoChord(key({ metaKey: true, shiftKey: true }), true)).toBe('redo')
+    expect(undoChord(key({ ctrlKey: true }), true)).toBeNull()
+    expect(undoChord(key({ ctrlKey: true }), false)).toBe('undo')
+    expect(undoChord(key({ metaKey: true }), false)).toBeNull()
+    expect(undoChord(key({ key: 'y', code: 'KeyY', ctrlKey: true }), false)).toBe('redo')
+  })
+  it('leaves everything else alone', () => {
+    expect(undoChord(key({}), true)).toBeNull()
+    expect(undoChord(key({ metaKey: true, altKey: true }), true)).toBeNull()
+    expect(undoChord(key({ key: 'a', code: 'KeyA', metaKey: true }), true)).toBeNull()
   })
 })
 

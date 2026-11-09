@@ -11,6 +11,9 @@
 //! percent-encoding, and JSON string escaping.
 //! Matches become `[k2v:NAME]`.
 
+use std::collections::BTreeSet;
+use std::sync::OnceLock;
+
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 
 /// Values shorter than this aren't matched in K2's own surfaces (too many
@@ -47,6 +50,10 @@ pub struct Redactor {
     pats: Vec<Vec<u8>>,
     /// Bytes some pattern starts with.
     first: [bool; 256],
+    /// Built the first time a caller asks which names hit: only an
+    /// every-match automaton sees both of two names that share a value,
+    /// and most redactors never need one.
+    every_match: OnceLock<AhoCorasick>,
 }
 
 const B64_STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -188,11 +195,11 @@ impl Redactor {
         for p in &pats {
             first[p[0] as usize] = true;
         }
-        Redactor { ac, replacements: reps, max_len, pats, first }
+        Redactor { ac, replacements: reps, max_len, pats, first, every_match: OnceLock::new() }
     }
 
     pub fn empty() -> Redactor {
-        Redactor { ac: None, replacements: vec![], max_len: 0, pats: vec![], first: [false; 256] }
+        Redactor { ac: None, replacements: vec![], max_len: 0, pats: vec![], first: [false; 256], every_match: OnceLock::new() }
     }
 
     /// This redactor plus one more value (a value learned mid-stream, such
@@ -221,7 +228,7 @@ impl Redactor {
         for p in &pats {
             first[p[0] as usize] = true;
         }
-        Redactor { ac, replacements: reps, max_len, pats, first }
+        Redactor { ac, replacements: reps, max_len, pats, first, every_match: OnceLock::new() }
     }
 
     /// Length of the longest tail of `buf` that is the start of some
@@ -275,6 +282,34 @@ impl Redactor {
     pub fn stream(&self) -> StreamRedactor<'_> {
         StreamRedactor { r: self, carry: Vec::new() }
     }
+
+    /// The names whose values appear in `input`, sorted, each once. Names
+    /// only: nothing about where or what matched leaves this call.
+    pub fn hits_names(&self, input: &[u8]) -> Vec<&str> {
+        let mut scan = self.name_scan();
+        scan.push(input);
+        scan.finish()
+    }
+
+    /// [`Self::hits_names`] for input that arrives in pieces.
+    pub fn name_scan(&self) -> NameScan<'_> {
+        NameScan { r: self, carry: Vec::new(), found: BTreeSet::new() }
+    }
+
+    fn every_match(&self) -> Option<&AhoCorasick> {
+        if self.pats.is_empty() {
+            return None;
+        }
+        Some(self.every_match.get_or_init(|| {
+            AhoCorasickBuilder::new().match_kind(MatchKind::Standard).build(&self.pats).expect("redactor patterns build")
+        }))
+    }
+
+    /// The name inside pattern `i`'s `[k2v:NAME]` replacement.
+    fn name_of(&self, i: usize) -> &str {
+        let r = &self.replacements[i];
+        std::str::from_utf8(&r[b"[k2v:".len()..r.len() - 1]).expect("the name came in as &str")
+    }
 }
 
 impl Drop for Redactor {
@@ -285,6 +320,41 @@ impl Drop for Redactor {
         for p in &mut self.pats {
             wipe(p);
         }
+    }
+}
+
+/// Which names hit, over input split into arbitrary chunks: a value split
+/// across two chunks still counts. Holds the last `max_pattern_len - 1`
+/// bytes between chunks, wiped as they are replaced and on drop.
+pub struct NameScan<'a> {
+    r: &'a Redactor,
+    carry: Vec<u8>,
+    found: BTreeSet<&'a str>,
+}
+
+impl<'a> NameScan<'a> {
+    pub fn push(&mut self, chunk: &[u8]) {
+        let r: &'a Redactor = self.r;
+        let Some(ac) = r.every_match() else { return };
+        let mut buf = std::mem::take(&mut self.carry);
+        buf.extend_from_slice(chunk);
+        for m in ac.find_overlapping_iter(&buf) {
+            self.found.insert(r.name_of(m.pattern().as_usize()));
+        }
+        let keep = r.max_len.saturating_sub(1).min(buf.len());
+        self.carry = buf[buf.len() - keep..].to_vec();
+        wipe(&mut buf);
+    }
+
+    pub fn finish(mut self) -> Vec<&'a str> {
+        std::mem::take(&mut self.found).into_iter().collect()
+    }
+}
+
+impl Drop for NameScan<'_> {
+    /// The held tail may be the start of a value.
+    fn drop(&mut self) {
+        wipe(&mut self.carry);
     }
 }
 
@@ -465,6 +535,48 @@ mod tests {
         assert_eq!(s.push(b"k2t"), b"");
         assert_eq!(s.push(b"other!"), b"k2tother!");
         assert!(s.finish().is_empty());
+    }
+
+    /// Every name that hit, once each and sorted, in every encoding the
+    /// redactor knows; a name that didn't hit isn't there.
+    #[test]
+    fn hits_names_says_which_names_matched() {
+        let other = b"k2test_other_value_ZZ9988";
+        let r = Redactor::new([("STRIPE_KEY", KEY), ("OTHER", &other[..]), ("ABSENT", &b"k2test_never_appears_123"[..])]);
+        let text = format!("a {} b {} c {}", std::str::from_utf8(KEY).unwrap(), STANDARD.encode(other), hex(KEY));
+        assert_eq!(r.hits_names(text.as_bytes()), vec!["OTHER", "STRIPE_KEY"]);
+        assert!(r.hits_names(b"nothing to see").is_empty());
+        assert!(Redactor::empty().hits_names(KEY).is_empty());
+    }
+
+    /// Two names holding one value, and a value inside a longer one: the
+    /// leftmost-longest automaton `redact` uses would only report one.
+    #[test]
+    fn hits_names_reports_shared_and_nested_values() {
+        let r = Redactor::new([("A", KEY), ("B", KEY)]);
+        assert_eq!(r.hits_names(KEY), vec!["A", "B"]);
+        let long = [KEY, b"_and_more"].concat();
+        let r = Redactor::new([("SHORT", KEY), ("LONG", long.as_slice())]);
+        assert_eq!(r.hits_names(&long), vec!["LONG", "SHORT"]);
+    }
+
+    /// A value cut at any point between two chunks is still found, and so
+    /// is one spread a byte at a time.
+    #[test]
+    fn name_scan_finds_a_value_split_across_chunks() {
+        let r = r();
+        let msg = [b"hello ".as_slice(), KEY, b" world"].concat();
+        for split in 1..msg.len() {
+            let mut s = r.name_scan();
+            s.push(&msg[..split]);
+            s.push(&msg[split..]);
+            assert_eq!(s.finish(), vec!["STRIPE_KEY"], "split at {split}");
+        }
+        let mut s = r.name_scan();
+        for b in &msg {
+            s.push(std::slice::from_ref(b));
+        }
+        assert_eq!(s.finish(), vec!["STRIPE_KEY"]);
     }
 
     #[test]

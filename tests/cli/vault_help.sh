@@ -208,6 +208,11 @@ class H(http.server.BaseHTTPRequestHandler):
             if "system=1" in self.path:
                 out["systemHidden"] = {"count": 44, "why": WHY}
             self.reply(out)
+        elif self.path.startswith("/cli/vault/doctor?") and "transcripts=1" in self.path:
+            self.reply({"ok": False, "complete": True, "scope": "all", "summary": "transcripts: read 7 of 7 file(s), 1 MB, for 2 secret(s); scope: all",
+                        "findings": [{"level": "error", "code": "transcript_leak", "secret": "STRIPE_KEY", "fileCount": 7,
+                                      "files": ["/f%d.jsonl" % i for i in range(7)],
+                                      "message": "STRIPE_KEY appears in 7 files of ops's Claude transcripts (newest 2026-11-08)."}]})
         elif self.path.startswith("/cli/vault/doctor"):
             self.reply({"ok": True, "findings": [], "checkedNames": CHECKED})
         elif self.path.startswith("/cli/vault/public-key"):
@@ -303,6 +308,26 @@ ok "list --system prints the hidden count and why; plain list doesn't"
 out="$(k2s vault doctor)" || fail "doctor: $out"
 printf '%s\n' "$out" | tail -1 | grep -Fq ".env checked names: *SECRET*, *TOKEN*, *PASSWORD*, *_KEY, DATABASE_URL, *_DSN (not NEXT_PUBLIC_*" || fail "doctor: $out"
 ok "doctor prints the names it checks"
+
+rc=0; out="$(k2s vault doctor --transcripts 2>&1)" || rc=$?
+[ "$rc" = "1" ] || fail "doctor --transcripts on a leak exits 1, got $rc: $out"
+printf '%s' "$out" | grep -Fq "STRIPE_KEY appears in 7 files" || fail "doctor --transcripts: $out"
+printf '%s' "$out" | grep -Fq "/f4.jsonl" || fail "doctor --transcripts lists files: $out"
+if printf '%s' "$out" | grep -Fq "/f5.jsonl"; then fail "doctor --transcripts lists at most 5 files: $out"; fi
+printf '%s' "$out" | grep -Fq "and 2 more (--json lists up to 7)" || fail "doctor --transcripts says how many more: $out"
+printf '%s\n' "$out" | tail -1 | grep -Fq "transcripts: read 7 of 7 file(s)" || fail "doctor --transcripts ends with what it read: $out"
+ok "doctor --transcripts names files, caps the list, and exits 1 on a leak"
+
+out="$(k2s vault doctor --transcripts --json)" || fail "doctor --transcripts --json: $out"
+printf '%s' "$out" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["findings"][0]["secret"]=="STRIPE_KEY"' || fail "doctor --transcripts --json: $out"
+ok "doctor --transcripts --json is the daemon's answer"
+
+rc=0; out="$(k2s vault list --transcripts 2>&1)" || rc=$?
+[ "$rc" = "2" ] || fail "--transcripts on another verb exits 2, got $rc: $out"
+printf '%s' "$out" | grep -Fq "goes with k2 vault doctor" || fail "--transcripts on another verb: $out"
+out="$(k2s vault doctor --help)" || fail "doctor --help: $out"
+printf '%s' "$out" | grep -Fq "k2 vault doctor --transcripts [--json]" || fail "doctor --help: $out"
+ok "--transcripts belongs to doctor and is in its help"
 
 : >"$WORK/posts.log"
 printf 'k2test-value' | k2s vault set W --for api.example.com --inject-dst query:appid >/dev/null || fail "set --inject-dst query"

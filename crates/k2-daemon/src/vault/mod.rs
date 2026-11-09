@@ -28,6 +28,7 @@ pub mod run;
 pub mod sealer;
 pub mod server_refs;
 pub mod spawn;
+pub mod transcripts;
 #[cfg(unix)]
 pub mod ssh_agent;
 /// The vault ssh-agent is a Unix socket server; on Windows a stand-in that

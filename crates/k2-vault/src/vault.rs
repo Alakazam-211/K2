@@ -569,6 +569,24 @@ pub struct RecoveryChallenge {
     pub recipient: String,
 }
 
+/// What [`LocalVault::transcript_scan_set`] found to look for.
+pub struct TranscriptScanSet {
+    pub redactor: Redactor,
+    /// Secrets the set covers.
+    pub secrets: usize,
+    /// Values under the surface floor: too short to match, not looked for.
+    pub below_floor: usize,
+    /// Rows or versions that failed their integrity check or wouldn't
+    /// decrypt: not looked for, so the scan can't say it covered them.
+    pub unreadable: usize,
+}
+
+impl Default for TranscriptScanSet {
+    fn default() -> Self {
+        Self { redactor: Redactor::empty(), secrets: 0, below_floor: 0, unreadable: 0 }
+    }
+}
+
 pub struct LocalVault {
     dir: PathBuf,
     conn: Mutex<Connection>,
@@ -3264,6 +3282,72 @@ impl LocalVault {
         let r = Arc::new(Redactor::new(vals.iter().map(|(n, v)| (n.as_str(), v.expose()))));
         *self.redactor.lock() = Some(r.clone());
         r
+    }
+
+    /// The values a transcript scan looks for (A7, V19), built and returned
+    /// before any file is read, so no vault lock is held during the scan.
+    ///
+    /// - `None` (a person): every user secret, latest and retained older
+    ///   versions, so a rotated-out key that leaked is still found.
+    /// - `Some(who)` (an agent): only the latest value of secrets `who` can
+    ///   already read (file, env or api). It can't read an older version or
+    ///   a fetch-only value, so a planted guess must not be checked against
+    ///   either: that would make the scan an oracle.
+    pub fn transcript_scan_set(&self, who: Option<&Requester>) -> Result<TranscriptScanSet> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let rows: Vec<(SecretRow, Vec<u8>)> = {
+            let mut st = conn.prepare("SELECT * FROM secret WHERE namespace = 'user' AND status != 'destroyed'")?;
+            let it = st.query_map([], |r| Ok(read_secret_raw(r)))?;
+            let mut v = vec![];
+            for r in it {
+                v.extend(tolerate(r)?);
+            }
+            v
+        };
+        let rollback = *self.rollback.lock();
+        let t = now();
+        let mut set = TranscriptScanSet::default();
+        let mut vals: Vec<(String, SecretBytes)> = vec![];
+        for (row, mac) in rows {
+            if !row_mac_ok(&keys.row, &row, &mac) {
+                set.unreadable += 1;
+                continue;
+            }
+            if !row.external_ref.is_empty() {
+                continue; // K2 doesn't hold this value.
+            }
+            let m = &row.meta;
+            let versions: Vec<u32> = match who {
+                Some(r) => {
+                    if m.status != SecretStatus::Active || m.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < t) {
+                        continue;
+                    }
+                    let readable = self.effective(&conn, &keys, m, r)?.iter().any(|(d, _, _, _, explicit)| d.readable() && !(*explicit && rollback));
+                    if !readable {
+                        continue;
+                    }
+                    vec![m.latest_version]
+                }
+                None => {
+                    let mut st = conn.prepare("SELECT version FROM secret_version WHERE secret_id = ?1 AND state != 'destroyed'")?;
+                    let v = st.query_map(params![m.id], |r| r.get::<_, u32>(0))?.collect::<rusqlite::Result<Vec<u32>>>()?;
+                    v
+                }
+            };
+            set.secrets += 1;
+            for version in versions {
+                match self.decrypt_version(&conn, &keys, m, version) {
+                    Ok(v) if v.len() >= SURFACE_MIN_LEN => vals.push((m.name.clone(), v)),
+                    Ok(_) => set.below_floor += 1,
+                    Err(_) => set.unreadable += 1,
+                }
+            }
+        }
+        drop(conn);
+        drop(keys);
+        set.redactor = Redactor::new(vals.iter().map(|(n, v)| (n.as_str(), v.expose())));
+        Ok(set)
     }
 
     // ── maintenance ─────────────────────────────────────────────────

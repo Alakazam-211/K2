@@ -639,7 +639,11 @@ pub fn handle_on(
         LIST => list(vault, &c, params),
         SHOW => show(vault, &c, params),
         REQUESTS => requests(vault, &c),
-        DOCTOR => doctor(vault, &c),
+        DOCTOR => match params.get("transcripts").map(String::as_str) {
+            None => doctor(vault, &c),
+            Some("1") => crate::vault::transcripts::doctor(vault, &c),
+            Some(_) => Err(err("bad_transcripts_flag", 400, "the only value of transcripts is 1 (k2 vault doctor --transcripts)")),
+        },
         AUDIT => audit(vault, &c, params),
         PRESETS => Ok(json!({ "presets": inject::PRESETS })),
         PUBLIC_KEY => public_key(vault, &c, params),

@@ -33871,6 +33871,7 @@ EOF
             ;;
         doctor) cat <<'EOF'
 k2 vault doctor [--json]
+k2 vault doctor --transcripts [--json]
 
 Problems: no confirmed recovery key, tamper, rotations due, secrets a
 newer K2 wrote (this one skips them), published services on the old
@@ -33886,7 +33887,20 @@ literal _authToken, ovh.conf, ~/.ssh/id_* keys, each with the vault
 recipe. The last line says which .env names it checks; other
 names aren't flagged. Exit 1 on an error.
 
+--transcripts: only the transcript scan, instead of the checks above.
+Looks for vault values in what your LLM CLIs saved (Claude, Codex, Grok,
+Gemini, Cursor, Pi, Hermes, and K2's per-login config folders). Reports
+which secret names appear in which files, never a value or a line of the
+file. Run by a person (owner, Admin): every transcript against every
+value, older versions too. Run by an agent: this workspace's transcripts
+against the latest value of secrets it can already read (file, env or
+api); for the rest, ask your owner to run it. Reads newest files first,
+at most 2 GB a run. It only reports: K2 doesn't edit other tools' files.
+Exit 0 when the scan finished and found nothing; exit 1 on a leak or a
+scan that couldn't cover everything (the last line says what it read).
+
 Example: k2 vault doctor
+Example: k2 vault doctor --transcripts
 EOF
             ;;
         env-file) cat <<'EOF'
@@ -35637,7 +35651,7 @@ cmd_vault() {
     local sign_prefix_set=0 sign_template_set=0 sign_value_set=0
     local oauth_token_url="" oauth_client_auth=""
     local agent_burst="" agent_per_minute="" allow_fwd=0 no_fwd=0
-    local remove_original=0 env_file_opt="" done_path="" ttl_secs="" wait_for=""
+    local remove_original=0 env_file_opt="" done_path="" ttl_secs="" wait_for="" transcripts=0
     local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0 accept_agent=0
     local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=()
     while [ $# -gt 0 ]; do
@@ -35647,6 +35661,9 @@ cmd_vault() {
             --yes) yes=1; shift ;;
             --remove-original) remove_original=1; shift ;;
             --own-box-move) own_box_move=1; shift ;;
+            --transcripts)
+                [ "$sub" = "doctor" ] || { echo "usage: --transcripts goes with k2 vault doctor" >&2; exit 2; }
+                transcripts=1; shift ;;
             --dry-run) dry_run=1; shift ;;
             --replace) replace=1; shift ;;
             --apply) apply=1; shift ;;
@@ -36037,15 +36054,21 @@ for p in json.load(sys.stdin).get("presets") or []:
     print("%-10s %-16s %-48s %s" % (p["id"], p["label"], ",".join(p["hosts"]) or "(your project host)", how))'
             ;;
         doctor)
-            _vault_call GET doctor
+            if [ "$transcripts" = "1" ]; then _vault_call GET doctor "transcripts=1"; else _vault_call GET doctor; fi
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
 f = v.get("findings") or []
 if not f: print("vault: nothing to fix")
-for x in f: print("%-7s %s" % (x.get("level"), x.get("message")))
+for x in f:
+    print("%-7s %s" % (x.get("level"), x.get("message")))
+    paths = x.get("files") or []
+    for p in paths[:5]: print("        %s" % p)
+    more = (x.get("fileCount") or len(paths)) - min(len(paths), 5)
+    if more > 0: print("        ... and %d more (--json lists up to %d)" % (more, len(paths) or 5))
 if v.get("checkedNames"): print(".env %s" % v["checkedNames"])
+if v.get("summary"): print(v["summary"])
 sys.exit(0 if v.get("ok") else 1)'
             ;;
         env-file)

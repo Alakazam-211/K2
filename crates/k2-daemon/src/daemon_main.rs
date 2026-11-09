@@ -456,6 +456,7 @@ async fn async_main() {
     // wins in federation::enabled()).
     k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
     k2_core::compute::set_enabled(k2_core::app_settings::load().compute_preview);
+    crate::usage_store::set_single_record(k2_core::app_settings::load().usage_single_record);
     // CI on compute (0.46.10, dark): its own preview on top of compute's.
     k2_core::compute::set_ci_enabled(k2_core::app_settings::load().ci_preview);
     // Voice rooms previews (dark by default; K2_VOICE_ROOMS / K2_VOICE_TUNNEL

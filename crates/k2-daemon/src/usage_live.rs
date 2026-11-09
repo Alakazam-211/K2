@@ -168,7 +168,7 @@ pub fn apply_live(
         let prev = su::wallet_row(id);
         if !newer_than(prev.as_ref(), observed) {
             let row = merged(tool, prev.as_ref(), &windows, plan, observed, source, Some(id));
-            su::record_on_wallet(id, &row);
+            su::record_on_wallet(id, &row, observed);
             wrote = true;
         }
     }

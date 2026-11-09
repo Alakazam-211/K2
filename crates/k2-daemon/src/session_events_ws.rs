@@ -1146,7 +1146,7 @@ mod tests {
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },
-            SessionEvent::SubscriptionUsageChanged { tool: Some("claude".into()), account_id: None, source: "probe".into() },
+            SessionEvent::SubscriptionUsageChanged { tool: Some("claude".into()), account_id: None, source: "probe".into(), observed_at: None },
             SessionEvent::ZenChanged {},
             SessionEvent::ZenAgentsOrderChanged {},
             SessionEvent::SourcesChanged { rev: 1 },

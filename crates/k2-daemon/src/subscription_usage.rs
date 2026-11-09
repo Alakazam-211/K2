@@ -74,6 +74,14 @@ pub struct UsageWindow {
     /// `resetsAt` is past: a re-check is under way (filled when served).
     #[serde(default)]
     pub reset_passed: bool,
+    /// When this window was measured (single-record path; an old row has
+    /// none and reads as the row's `checkedAt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<String>,
+    /// Which reading last set this window: `probe` · `live_statusline` ·
+    /// `live_rollout` (single-record path; old rows read as the row's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -110,6 +118,10 @@ pub struct HarnessUsage {
     /// The daemon is backing off this check until then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_probe_at: Option<String>,
+    /// When the vendor last answered for this token (single-record path).
+    /// A feed moves `checkedAt`; only an accepted vendor reading moves this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor_checked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -818,7 +830,14 @@ pub(crate) fn wallet_row(account_id: &str) -> Option<HarnessUsage> {
 /// Store a reading on the wallet token it belongs to (Settings → LLMs
 /// shows each token's own numbers and their age). A failed check keeps the
 /// token's `usage_checked_at`.
-pub(crate) fn record_on_wallet(account_id: &str, row: &HarnessUsage) {
+pub(crate) fn record_on_wallet(account_id: &str, row: &HarnessUsage, measured: DateTime<Utc>) {
+    if crate::usage_store::single_record_on() {
+        let reading = crate::usage_store::Reading::from_vendor_row(row, measured);
+        if let crate::usage_store::Outcome::Dropped(why) = crate::usage_store::accept(account_id, reading) {
+            k2_core::log_debug!("[usage] {account_id}: reading dropped ({why})");
+        }
+        return;
+    }
     let Some(db) = k2_core::db::try_shared() else { return };
     let Ok(text) = serde_json::to_string(row) else { return };
     let conn = db.lock();
@@ -902,6 +921,8 @@ fn probe_and_write_mode(io: &dyn UsageIo, only: Option<&str>, mode: Mode) -> Res
             }
             continue;
         }
+        // This token's own call starts here, not at the top of the loop.
+        let measured = Utc::now();
         let gen_before = wallet_generation(name);
         let owner = gen_before.as_ref().map(|g| g.0.as_str());
         if let Some(why) = skip_reason(cached(name).as_ref(), owner, name, mode, now) {
@@ -933,7 +954,7 @@ fn probe_and_write_mode(io: &dyn UsageIo, only: Option<&str>, mode: Mode) -> Res
                 // to be another account (LT-A6).
                 let other = k2_core::llm_accounts::Tool::parse(name).is_some_and(k2_core::llm_accounts::wallet::live_is_other_account);
                 if !other {
-                    record_on_wallet(&b.0, &row);
+                    record_on_wallet(&b.0, &row, measured);
                 }
             }
             (Some(_), _) => {
@@ -1189,7 +1210,7 @@ fn access_token_usable(expires_at: Option<i64>, now: SystemTime) -> bool {
     }
 }
 
-fn plan_label(tier: &str, subscription: &str) -> String {
+pub(crate) fn plan_label(tier: &str, subscription: &str) -> String {
     let lower = tier.to_ascii_lowercase();
     // Anthropic renamed Max 20x to Ultra (10-31); older logins still report
     // `max_20x`, newer ones may report `ultra` as the tier.

@@ -471,6 +471,12 @@ pub struct AppSettings {
     /// set. Owner-only to change. Default MUST stay OFF.
     #[serde(default)]
     pub compute_preview: bool,
+    /// One record per token for the usage percent
+    /// (prd-usage-single-source-v1). Owner-only. Off = today's behaviour
+    /// (the shared file plus the per-token row). Default MUST stay OFF until
+    /// Rosson's smoke test says otherwise.
+    #[serde(default)]
+    pub usage_single_record: bool,
     /// CI on K2 Compute preview (prd-ci-on-compute-for-clients-v1; 0.46.10
     /// ships it dark): `k2 ci` and its loop, node rosters, lanes, seats,
     /// owner trust, signer pairing, lane secrets, receipt v2 on submit.
@@ -1231,6 +1237,7 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             compute_preview: false,
+            usage_single_record: false,
             ci_preview: false,
             voice_rooms_preview: false,
             board_file_preview: false,

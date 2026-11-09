@@ -549,6 +549,10 @@ pub enum SessionEvent {
         tool: Option<String>,
         account_id: Option<String>,
         source: String,
+        /// When the reading was measured (single-record path only; the old
+        /// path leaves it off the wire).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        observed_at: Option<String>,
     },
 
     /// prd-daemon-activity-and-thread-working-v1 A11 — the daemon's hook
@@ -1299,10 +1303,17 @@ pub fn emit_llm_accounts_changed(tool: Option<&str>) {
 
 /// Best-effort: subscription limits were written (Usage v2, B20).
 pub fn emit_subscription_usage_changed(tool: Option<&str>, account_id: Option<&str>, source: &str) {
+    emit_subscription_usage_changed_at(tool, account_id, source, None);
+}
+
+/// As [`emit_subscription_usage_changed`], naming when the reading was
+/// measured (single-record path; the old path sends none).
+pub fn emit_subscription_usage_changed_at(tool: Option<&str>, account_id: Option<&str>, source: &str, observed_at: Option<&str>) {
     let _ = emit(SessionEvent::SubscriptionUsageChanged {
         tool: tool.map(str::to_string),
         account_id: account_id.map(str::to_string),
         source: source.to_string(),
+        observed_at: observed_at.map(str::to_string),
     });
 }
 

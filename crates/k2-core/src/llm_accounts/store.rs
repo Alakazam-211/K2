@@ -933,6 +933,10 @@ pub struct CredMeta {
     /// Access-token expiry, unix seconds.
     pub expires_at: Option<i64>,
     pub plan: Option<String>,
+    /// Claude's `rateLimitTier` (`max_20x`, …). Idle slots need it for the
+    /// plan name: `subscriptionType` alone says "max" where the live login
+    /// says "Ultra" (prd-usage-single-source-v1 §4.2).
+    pub rate_limit_tier: Option<String>,
     pub email: Option<String>,
     pub org: Option<String>,
     /// Codex `last_refresh` (unix seconds).
@@ -969,6 +973,7 @@ pub fn parse_meta(tool: Tool, bytes: &[u8]) -> CredMeta {
             m.has_refresh = o["refreshToken"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
             m.expires_at = o["expiresAt"].as_i64().map(|x| if x > 1_000_000_000_000 { x / 1000 } else { x });
             m.plan = safe_label(o["subscriptionType"].as_str());
+            m.rate_limit_tier = safe_label(o["rateLimitTier"].as_str());
         }
         Tool::Codex => {
             let t = &v["tokens"];

@@ -110,6 +110,8 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // K2 compute nodes preview (CN30): lets agents run programs on paired
     // machines once grants exist, so only the Owner turns it on.
     "computePreview",
+    // One usage record per token (prd-usage-single-source-v1): off = today.
+    "usageSingleRecord",
     // CI on K2 Compute preview (0.46.10 ships it dark): rosters, lanes,
     // seats, signer pairing, lane secrets, `k2 ci`. Owner only.
     "ciPreview",
@@ -507,6 +509,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             // Connect toggle changes it. Env-var force-on still wins in enabled().
             k2_core::federation::set_enabled(merged.federation_enabled);
             k2_core::compute::set_enabled(merged.compute_preview);
+            crate::usage_store::set_single_record(merged.usage_single_record);
             k2_core::compute::set_ci_enabled(merged.ci_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&merged.compute_placement));
             // Voice rooms: the previews' mirrors; a preview or count change
@@ -590,6 +593,7 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
+            crate::usage_store::set_single_record(defaults.usage_single_record);
             k2_core::compute::set_ci_enabled(defaults.ci_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
             k2_core::voice_preview::set_enabled(defaults.voice_rooms_preview);

@@ -1521,9 +1521,15 @@ pub(crate) fn probe_idle_usage_with(entry: &Entry, claude_get: &dyn Fn(&str) -> 
             .and_then(|e| e.usage_json)
             .and_then(|s| serde_json::from_str(&s).ok())
     };
+    let measured = chrono::Utc::now();
     let mut row = crate::subscription_usage::probe_wallet_slot_with(tool.as_str(), &slot, claude_token, prev.as_ref(), claude_get);
     drop(slot_lock);
     row.source = "probe".into();
+    if crate::usage_store::single_record_on() {
+        crate::subscription_usage::note_outcome(&format!("acct:{}", entry.id), &row, chrono::Utc::now());
+        crate::subscription_usage::record_on_wallet(&entry.id, &row, measured);
+        return Ok(());
+    }
     crate::subscription_usage::note_outcome(&format!("acct:{}", entry.id), &row, chrono::Utc::now());
     let text = serde_json::to_string(&row).map_err(|e| e.to_string())?;
     let ok = row.error.is_none();

@@ -82,6 +82,10 @@ struct Delivered {
     /// the update): K2 can't tell what it wrote there earlier.
     complete: bool,
     files: HashMap<String, String>,
+    /// GH#81: the process this dir was made for, once it is known (it starts
+    /// right after the dir does). The dir lives while it lives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    process: Option<crate::session_liveness::ProcessKey>,
 }
 
 const DELIVERED_SUFFIX: &str = ".delivered";
@@ -436,7 +440,7 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
         // k2-ptyd launches); the 60 s sweep must not take the dir first.
         crate::session_liveness::note_spawning(session_id);
         DIRS.lock().push((session_id.to_string(), d.clone()));
-        let delivered = Delivered { complete: true, files: out.file_secrets.iter().cloned().collect() };
+        let delivered = Delivered { complete: true, files: out.file_secrets.iter().cloned().collect(), process: None };
         save_delivered(d, &delivered);
         LIVE.lock().insert(
             session_id.to_string(),
@@ -755,6 +759,35 @@ pub fn kept_dir(session_id: &str) -> Option<PathBuf> {
     DIRS.lock().iter().find(|(s, _)| s == session_id).map(|(_, d)| d.clone())
 }
 
+/// GH#81: the process that got this session's secrets dir just started
+/// (or was adopted): record it, so the dir lives while it lives. `None` or
+/// a process the OS can't key: left unrecorded, and the dir goes with its
+/// session id, as before.
+pub fn note_process(session_id: &str, pid: Option<i32>) {
+    let Some(key) = pid.filter(|p| *p > 0).and_then(|p| crate::session_liveness::process_key(i64::from(p))) else { return };
+    let Some(dir) = DIRS.lock().iter().find(|(s, _)| s == session_id).map(|(_, d)| d.clone()) else { return };
+    let mut live = LIVE.lock();
+    match live.get_mut(session_id) {
+        Some(r) => {
+            r.delivered.process = Some(key);
+            save_delivered(&dir, &r.delivered);
+        }
+        None => {
+            let mut d = load_delivered(&dir);
+            d.process = Some(key);
+            save_delivered(&dir, &d);
+        }
+    }
+}
+
+/// The process recorded for this session's dir (see [`note_process`]).
+fn recorded_process(session_id: &str, dir: &Path) -> Option<crate::session_liveness::ProcessKey> {
+    match LIVE.lock().get(session_id) {
+        Some(r) => r.delivered.process,
+        None => load_delivered(dir).process,
+    }
+}
+
 /// Boot: remove every secrets dir except those of agent sessions that
 /// survived the restart in k2-ptyd (PRD prd-k2-ptyd-v1 P36: B0's running
 /// set, each with the `secrets_dir` its spawn recorded). Those are kept
@@ -1022,6 +1055,7 @@ fn top_up_one(
     let mut record_changed = false;
     let now = Instant::now();
     failed.retain(|_, t| now.duration_since(*t) < RETRY_AFTER);
+    let process_lives = delivered.process.is_some_and(|p| crate::session_liveness::process_alive(p.pid, p.start));
     // A file K2 delivered whose secret this session no longer gets (destroyed,
     // disabled, unshared, expired) goes first, so a secret of the same name it
     // does get can take its place below. Only files on K2's record: a file
@@ -1032,6 +1066,11 @@ fn top_up_one(
         let safe = dir_is_safe_to_empty(d);
         delivered.files.retain(|fname, id| {
             if items.iter().any(|it| it.secret_id == *id) {
+                return true;
+            }
+            // GH#81: a session card's file stays until its time is up while
+            // the process that got it runs, unless a person took it back.
+            if process_lives && held_until_expiry(vault, id, session_id) {
                 return true;
             }
             if !safe {
@@ -1116,6 +1155,25 @@ fn top_up_one(
     out
 }
 
+/// PRD §3.2 rule 2 (GH#81): a session-scope card secret whose file is in a
+/// running process's dir is not taken back while the secret is still
+/// active and unexpired, unless a person revoked this session's share. Fails
+/// toward removal: any read that can't say keeps today's behaviour, and a
+/// one-time secret (never delivered) is never held.
+fn held_until_expiry(vault: &k2_vault::LocalVault, secret_id: &str, session_id: &str) -> bool {
+    use k2_vault::{Actor, AuditQuery, Consumer, ScopeKind, SecretStatus};
+    let system = Actor::System("secrets-dir".into());
+    let Ok(m) = vault.meta(&Selector::Id(secret_id.to_string()), &system) else { return false };
+    let unexpired = m.expires_at.as_deref().and_then(|x| chrono::DateTime::parse_from_rfc3339(x).ok()).is_some_and(|x| x > chrono::Utc::now());
+    if m.scope.kind != ScopeKind::Session || m.status != SecretStatus::Active || !unexpired || !m.origin.starts_with("thread:") || vault.is_once(&m.id) {
+        return false;
+    }
+    let Ok(rows) = vault.audit(&AuditQuery { secret_id: Some(m.id.clone()), limit: Some(5000), ..Default::default() }, &system) else { return false };
+    let label = Consumer::session(session_id).label();
+    let by_a_person = |actor: &str| actor == "owner" || actor.starts_with("connect:") || actor.starts_with("guest:");
+    !rows.iter().any(|r| r.action == "revoke" && r.consumer.as_deref() == Some(label.as_str()) && by_a_person(&r.actor))
+}
+
 /// A live session's dir is there, private and ours. A dir that went
 /// missing under a live session (field report 10-24) is made again at the
 /// same path, which its `$K2_SECRETS_DIR` still names, but only directly
@@ -1154,7 +1212,19 @@ fn ensure_session_dir(d: &Path) -> std::io::Result<()> {
 /// delivered there, so a file that went from under an agent can be traced
 /// to this sweep (or ruled out) from the daemon log. Names only.
 pub fn sweep_dead(live: &dyn Fn(&str) -> bool) {
-    let dead: Vec<(String, PathBuf)> = DIRS.lock().iter().filter(|(s, _)| !live(s)).cloned().collect();
+    let candidates: Vec<(String, PathBuf)> = DIRS.lock().iter().filter(|(s, _)| !live(s)).cloned().collect();
+    // GH#81: a dir lives while the process that got it lives, whatever the
+    // session's id does in the map.
+    let dead: Vec<(String, PathBuf)> = candidates
+        .into_iter()
+        .filter(|(s, d)| match recorded_process(s, d) {
+            Some(p) if crate::session_liveness::process_alive(p.pid, p.start) => {
+                k2_core::log_debug!("[vault] session {s} isn't listed as running but its process {} is: keeping its secrets dir {}", p.pid, d.display());
+                false
+            }
+            _ => true,
+        })
+        .collect();
     for (s, d) in &dead {
         let files: Vec<String> = LIVE.lock().get(s).map(|r| r.delivered.files.keys().cloned().collect()).unwrap_or_default();
         k2_core::log_debug!("[vault] session {s} is not running: removing its secrets dir {} (delivered files {files:?})", d.display());
@@ -1184,6 +1254,152 @@ mod tests {
             let m = std::fs::metadata(p).expect("m");
             assert!(private_fs::is_private(p, &m), "{} is not owner-only", p.display());
         }
+    }
+
+    /// GH#81 regression (PRD §3.2): the id a running process's
+    /// `$K2_SECRETS_DIR` was keyed by stops being listed as live (a
+    /// re-registration under a new id). Two ticks later the dir and its file
+    /// are still there and the original passport still reads the secret; once
+    /// the process is gone the next sweep takes the dir.
+    #[cfg(unix)]
+    #[test]
+    fn a_secrets_dir_lives_while_its_process_lives() {
+        use k2_vault::vault::CardAnswer;
+        let _home = crate::test_support::TempHome::short();
+        let v = crate::vault::ensure_test_vault();
+        let (ws, sid) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("a dir");
+        let card = format!("card-{}", uuid::Uuid::new_v4());
+        v.request_create(k2_vault::vault::SecretRequest {
+            card_id: card.clone(),
+            conversation: "c-81".into(),
+            session_id: Some(sid.clone()),
+            workspace_id: ws.clone(),
+            requested_by: "agent".into(),
+            name: "GH81_LIVE".into(),
+            kind: k2_vault::Kind::Generic,
+            proposed_scope: "session".into(),
+            proposed_hosts: vec![],
+            proposed_delivery: Delivery::File,
+            prompt: String::new(),
+            ttl_secs: Some(3600),
+            status: String::new(),
+            answered_by: None,
+            secret_id: None,
+            created_at: String::new(),
+            answered_at: None,
+            inject: None,
+            once: false,
+        })
+        .expect("card");
+        let ans = CardAnswer { readable_disclosed: true, session_id: Some(sid.clone()), ..Default::default() };
+        v.request_answer(&card, k2_vault::SecretBytes::from_string("gh81-value".into()), &ans, &k2_vault::Actor::Owner).expect("saved");
+        top_up(&v, &sid, &ws);
+        let file = dir.join("GH81_LIVE");
+        assert_eq!(std::fs::read(&file).expect("delivered"), b"gh81-value");
+
+        let mut child = std::process::Command::new("sleep").arg("60").spawn().expect("child");
+        note_process(&sid, Some(child.id() as i32));
+        let who = Requester::Session { workspace_id: ws.clone(), session_id: Some(sid.clone()) };
+
+        // Off the live list, process alive: two minute passes.
+        for _ in 0..2 {
+            sweep_dead(&|s| s != sid);
+            follow_and_top_up(&v);
+        }
+        assert!(file.is_file(), "GH#81: the file stays while the process that got it runs");
+        v.resolve(&Selector::Id(k2_vault_id_of(&v, &sid)), Use::File, &who).expect("the original passport still reads it");
+
+        // The process exits: the next sweep takes the dir.
+        child.kill().expect("kill");
+        child.wait().expect("reap");
+        sweep_dead(&|s| s != sid);
+        assert!(!dir.exists(), "with the process gone the dir goes");
+    }
+
+    /// The vault id of the only secret in session `sid`.
+    fn k2_vault_id_of(v: &k2_vault::LocalVault, sid: &str) -> String {
+        let m = v
+            .list(&k2_vault::ListFilter::default(), &k2_vault::Actor::Owner)
+            .expect("list")
+            .into_iter()
+            .find(|m| m.scope.id == sid)
+            .expect("a session secret");
+        m.id
+    }
+
+    /// GH#81 rule 2: while the process that got it runs, a session card's
+    /// file isn't taken back because a share ran out; a person's revoke
+    /// takes it back at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_cards_file_stays_until_a_person_revokes_it() {
+        use k2_vault::{Actor, Consumer, GrantRequest, Kind};
+        let _home = crate::test_support::TempHome::short();
+        let v = crate::vault::ensure_test_vault();
+        let (ws, asker, follower) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        let dir = materialize(&mut HashMap::new(), &ws, &follower, false, &SpawnRefs::default()).dir.expect("a dir");
+        let card = format!("card-{}", uuid::Uuid::new_v4());
+        v.request_create(k2_vault::vault::SecretRequest {
+            card_id: card.clone(),
+            conversation: "c-rule2".into(),
+            session_id: Some(asker.clone()),
+            workspace_id: ws.clone(),
+            requested_by: "agent".into(),
+            name: "GH81_HOLD".into(),
+            kind: Kind::Generic,
+            proposed_scope: "session".into(),
+            proposed_hosts: vec![],
+            proposed_delivery: Delivery::File,
+            prompt: String::new(),
+            ttl_secs: Some(7200),
+            status: String::new(),
+            answered_by: None,
+            secret_id: None,
+            created_at: String::new(),
+            answered_at: None,
+            inject: None,
+            once: false,
+        })
+        .expect("card");
+        let ans = k2_vault::vault::CardAnswer { readable_disclosed: true, session_id: Some(asker.clone()), ..Default::default() };
+        let out = v.request_answer(&card, k2_vault::SecretBytes::from_string("hold-value".into()), &ans, &Actor::Owner).expect("saved");
+        let system = Actor::System("card-follows-chat".into());
+        let share = |expires: chrono::DateTime<chrono::Utc>| {
+            v.grant(
+                GrantRequest {
+                    selector: Selector::Id(out.meta.id.clone()),
+                    consumer: Consumer::session(&follower),
+                    delivery: Delivery::File,
+                    env_name: None,
+                    file_name: None,
+                    hosts_narrowed: None,
+                    expires_at: Some(expires.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+                    version: None,
+                },
+                &system,
+            )
+            .expect("share")
+        };
+        share(chrono::Utc::now() + chrono::Duration::hours(1));
+        top_up(&v, &follower, &ws);
+        let file = dir.join("GH81_HOLD");
+        assert!(file.is_file(), "the share delivered it");
+
+        let mut child = std::process::Command::new("sleep").arg("60").spawn().expect("child");
+        note_process(&follower, Some(child.id() as i32));
+
+        // The share ran out; the secret and the process are still there.
+        let expired = share(chrono::Utc::now() - chrono::Duration::hours(1));
+        top_up(&v, &follower, &ws);
+        assert!(file.is_file(), "GH#81: not taken back before the secret's time while its process runs");
+
+        // A person's revoke of this session's share takes it back.
+        v.revoke(&expired.id, &Actor::Owner).expect("revoke");
+        top_up(&v, &follower, &ws);
+        assert!(!file.exists(), "a person's revoke takes the file back");
+        child.kill().expect("kill");
+        child.wait().expect("reap");
     }
 
     /// A re-minted passport reaches only the session's own private dir, as a
@@ -2216,7 +2432,7 @@ mod tests {
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
         let record = delivered_path(&dir).expect("path");
-        assert_eq!(load_delivered(&dir), Delivered { complete: true, files: HashMap::new() });
+        assert_eq!(load_delivered(&dir), Delivered { complete: true, files: HashMap::new(), process: None });
         assert_private(&record, 0o600);
         // A same-user process can write it; a path in it never loads.
         let forged = serde_json::json!({ "complete": true, "files": { "../../outside": "id-1", "OK_NAME": "id-2" } });

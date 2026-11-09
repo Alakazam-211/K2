@@ -22100,7 +22100,7 @@ print("%s  %s" % (d.get("id",""), d.get("status","")))
 
 cmd_thread_secret() {
     local target="" json="false" explicit_from="" name="" prompt="" dest=""
-    local v_scope="" v_for="" v_delivery="" v_kind="" v_ttl=""
+    local v_scope="" v_for="" v_delivery="" v_kind="" v_ttl="" v_once=""
     local v_inject_dst="" v_inject_header="" v_inject_format=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -22139,6 +22139,7 @@ cmd_thread_secret() {
             --wait|--timeout)
                 echo "Error: thread cards are fire-and-forget; no --wait / --timeout" >&2
                 exit 1 ;;
+            --once) v_once="1"; shift ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;
@@ -22165,7 +22166,7 @@ cmd_thread_secret() {
     local from
     from="$(_thread_sender_from "$explicit_from")"
     local body
-    body=$(ADDR="$target" NAME="$name" FROM="$from" PROMPT="$prompt" V_SCOPE="$v_scope" V_FOR="$v_for" V_DELIVERY="$v_delivery" V_KIND="$v_kind" V_TTL="$v_ttl" V_IDST="$v_inject_dst" V_IFMT="$v_inject_format" python3 -c 'import json,os
+    body=$(ADDR="$target" NAME="$name" FROM="$from" PROMPT="$prompt" V_SCOPE="$v_scope" V_FOR="$v_for" V_DELIVERY="$v_delivery" V_KIND="$v_kind" V_TTL="$v_ttl" V_ONCE="$v_once" V_IDST="$v_inject_dst" V_IFMT="$v_inject_format" python3 -c 'import json,os
 obj={"addr":os.environ["ADDR"],"name":os.environ["NAME"],"from":os.environ.get("FROM","k2"),"dest":"vault"}
 p=os.environ.get("PROMPT") or ""
 if p:
@@ -22174,6 +22175,8 @@ for k, env in (("scope","V_SCOPE"),("for","V_FOR"),("delivery","V_DELIVERY"),("k
     v=os.environ.get(env) or ""
     if v:
         obj[k]=v
+if os.environ.get("V_ONCE"):
+    obj["once"]=True
 inj={}
 if os.environ.get("V_IDST"):
     inj["dst"]=os.environ["V_IDST"]
@@ -22432,6 +22435,13 @@ WHERE IT GOES
                              7d or seconds). Default 24h;
                              longer than 7d is cut to 7d, and to 24h when a guest
                              answers. Other scopes ignore it.
+  --once                     a one-time code a tool reads once (needs --scope
+                             session --delivery file). The card says "used
+                             once, then deleted"; it is never put in
+                             $K2_SECRETS_DIR (unlike other file secrets), and
+                             k2 vault file NAME is the only way to read it. A
+                             tool can block until it is saved:
+                             k2 vault file NAME --wait 10m
   --prompt "…"               your note, shown on the card beside its sentence
                              (at most 200 characters)
 
@@ -22462,6 +22472,7 @@ EXAMPLES
       --inject-header X-Hook-Token --inject-format 'Token {}'
   k2 thread secret ops --name WEATHER_KEY --for api.weather.example --inject-dst query:appid
   k2 thread secret ops --name GITHUB_CLI --delivery env
+  k2 thread secret ops --name LOGIN_CODE --scope session --delivery file --once
 
 It prints the card id, and on stderr what the card says. Don't wait: you get a
 Thread turn when it is saved. Wrong? k2 thread void <addr> <card-id> and ask
@@ -32780,6 +32791,30 @@ _vault_call() {
     fi
 }
 
+# k2 vault file|env-file --wait: one blocking call, then keep calling
+# until the file is there, a person answered, or this CLI's own deadline.
+_vault_wait_call() {
+    local route="$1" body="$2" start=$SECONDS deadline="" card="" told=""
+    while :; do
+        _vault_call POST "$route" "$body"
+        local waiting wsecs
+        IFS=$'\t' read -r waiting card wsecs < <(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+print("%d\t%s\t%d" % (1 if v.get("waiting") else 0, v.get("card") or "", v.get("waitSecs") or 0))')
+        [ "$waiting" = "1" ] || return 0
+        if [ -z "$deadline" ]; then
+            deadline=$((start + wsecs))
+            echo "k2 vault: waiting for a person to save the card ($card)…" >&2
+        fi
+        local left=$((deadline - SECONDS))
+        if [ "$left" -le 0 ]; then
+            echo "no_answer: no answer yet; the card is still open (card $card)" >&2
+            exit 3
+        fi
+        body="$(_vault_merge "$body" "$(python3 -c 'import json,sys; print(json.dumps({"wait": int(sys.argv[1]), "waitCard": sys.argv[2]}))' "$left" "$card")")"
+    done
+}
+
 _vault_sock() { echo "${K2_HOME}/vault.sock"; }
 
 # k2 vault sync [--json] (0.46.5, papercut 8): this running session's
@@ -33600,7 +33635,7 @@ apply when NAME is created.
 
   --describe <text>  --rotate-every <days>
   --ttl 2h                 session scope: how long it lasts (90s, 10m, 2h, 7d
-                           or seconds; default 24h, 60s to 30d)
+                           or seconds; default 24h, 60s to 7d; longer is cut to 7d)
 
 Examples:
   k2 vault set STRIPE_KEY --preset stripe < key.txt
@@ -33821,7 +33856,7 @@ Example: k2 vault doctor
 EOF
             ;;
         env-file) cat <<'EOF'
-k2 vault env-file NAME [NAME2 …] [--scope session] [--ttl 90s]
+k2 vault env-file NAME [NAME2 …] [--scope session] [--ttl 90s] [--wait 10m]
 k2 vault env-file --done <path>
 
 From a K2 terminal: a short-lived 0600 file of NAME=value lines for
@@ -33829,13 +33864,14 @@ docker/podman --env-file, in a memory-backed folder. Removed after --ttl
 (90s, 10m or seconds; default 60s, 5s to 1h) or with --done. Each secret
 needs env delivery for you; a value with a line break is refused (use file
 delivery). --secret NAME works too. One value for a tool's stdin or a file
-flag: k2 vault file NAME.
+flag: k2 vault file NAME. --wait 10m blocks until a person saves the card
+that asks for it (see k2 vault file --help).
 
 Example: docker run --env-file "$(k2 vault env-file DATABASE_URL)" myapp
 EOF
             ;;
         file) cat <<'EOF'
-k2 vault file NAME [--scope session] [--ttl 90s] [--json]
+k2 vault file NAME [--scope session] [--ttl 90s] [--wait 10m] [--json]
 k2 vault file --done <path>
 
 From a K2 terminal: the value of NAME, as is, in a short-lived 0600 file
@@ -33847,6 +33883,16 @@ Removed after --ttl (90s, 10m or seconds; default 60s, 5s to 1h) or with
 --done; a `< file` redirect opens it at once, so a sudo prompt after that
 is fine. --secret NAME works too. Fetch-only secrets are refused (use k2
 vault fetch); the refusal says who can widen it.
+
+--wait 10m (90s, 2h, at most 24h): if the secret isn't there yet and an
+open Thread card for NAME was asked by this session or is in the chat it
+runs, block until a person saves it and print the path. --ttl starts when
+the file is written. Exit 4 at once if no open card asks for NAME (ask with
+k2 thread secret). Exit 3, and the error line says which: card_declined (a
+person dismissed it), card_expired, or no_answer (your time ran out; the
+card stays open and the line names it). Example:
+some-cli login --code-stdin < "$(k2 vault file CODE --wait 10m)"
+A one-time code (k2 thread secret --once) is read here once, then deleted.
 
 Example: sudo k2-node servers add --url URL --code - < "$(k2 vault file ENROLL_CODE)"
 Example: some-cli login --token-stdin < "$(k2 vault file API_TOKEN)"
@@ -35450,7 +35496,7 @@ cmd_vault() {
     local sign_scheme="" sign_header="" sign_encoding="" sign_prefix="" sign_ts_header="" sign_template="" sign_value=""
     local sign_prefix_set=0 sign_template_set=0 sign_value_set=0
     local agent_burst="" agent_per_minute="" allow_fwd=0 no_fwd=0
-    local remove_original=0 env_file_opt="" done_path="" ttl_secs=""
+    local remove_original=0 env_file_opt="" done_path="" ttl_secs="" wait_for=""
     local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0 accept_agent=0
     local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=()
     while [ $# -gt 0 ]; do
@@ -35497,6 +35543,7 @@ cmd_vault() {
                 esac
                 shift 2 ;;
             --env-file) [ -n "${2:-}" ] || { echo "usage: --env-file <file>" >&2; exit 2; }; env_file_opt="$2"; shift 2 ;;
+            --wait) [ -n "${2:-}" ] || { echo "usage: --wait <duration> (10m, 2h)" >&2; exit 2; }; wait_for="$2"; shift 2 ;;
             --done) [ -n "${2:-}" ] || { echo "usage: --done <path>" >&2; exit 2; }; done_path="$2"; shift 2 ;;
             --scope|--kind|--for|--preset|--delivery|--ceiling|--describe|--rotate-every|--ttl|--inject-header|--inject-format|--inject-dst|--to|--from|--as|--env-name|--file-name|--grant|--add|--remove|--since)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
@@ -35625,7 +35672,8 @@ print("%s %s → %s (v%s)" % ("saved" if v.get("created") else "new version of",
 sg = (m.get("inject") or {}).get("sign")
 if sg: print("signs requests: %s (k2 vault show %s)" % (sg.get("scheme"), m.get("name")))
 if v.get("trimmed"): print("(trimmed spaces/newlines around the value)")
-print("use: " + (v.get("use") or ""))'
+print("use: " + (v.get("use") or ""))
+if v.get("ttlCut"): print(v.get("ttlNote") or "kept for 7 d (the most for one session)")'
             ;;
         rotate)
             [ -n "$name" ] || { echo "usage: k2 vault rotate NAME < value" >&2; exit 2; }
@@ -35856,6 +35904,7 @@ sys.exit(0 if v.get("ok") else 1)'
             ;;
         env-file)
             local ej
+            [ -z "$wait_for" ] || [ -z "$done_path" ] || { echo "usage: --wait doesn't go with --done" >&2; exit 2; }
             # X5: env-file NAME [NAME2 …] like file NAME; --secret stays.
             local efs=("${pos[@]+"${pos[@]}"}" "${use_secrets[@]+"${use_secrets[@]}"}")
             [ "${#efs[@]}" -gt 0 ] || [ -n "$done_path" ] || { echo "usage: k2 vault env-file NAME [NAME2 …] [--ttl 90s] | --done <path>" >&2; exit 2; }
@@ -35863,9 +35912,10 @@ sys.exit(0 if v.get("ok") else 1)'
 o={}
 if sys.argv[1]: o["done"]=sys.argv[1]
 if sys.argv[2]: o["ttl"]=sys.argv[2]
-o["secrets"]=[x for x in sys.argv[3:] if x]
-print(json.dumps(o))' "$done_path" "$ttl" "${efs[@]+"${efs[@]}"}")"
-            _vault_call POST env-file "$(_vault_merge "$ej" "$sj")"
+if sys.argv[3]: o["wait"]=sys.argv[3]
+o["secrets"]=[x for x in sys.argv[4:] if x]
+print(json.dumps(o))' "$done_path" "$ttl" "$wait_for" "${efs[@]+"${efs[@]}"}")"
+            _vault_wait_call env-file "$(_vault_merge "$ej" "$sj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
             ;;
@@ -35875,14 +35925,16 @@ print(json.dumps(o))' "$done_path" "$ttl" "${efs[@]+"${efs[@]}"}")"
             [ "${#use_secrets[@]}" -le 1 ] || { echo "usage: k2 vault file NAME [--ttl 90s]  (one secret per file)" >&2; exit 2; }
             [ -n "$fsecret" ] || [ -n "$done_path" ] || { echo "usage: k2 vault file NAME [--ttl 90s] | --done <path>" >&2; exit 2; }
             local fj
-            # --ttl goes as typed (90s, 10m, 2h or seconds); the daemon parses it.
+            [ -z "$wait_for" ] || [ -z "$done_path" ] || { echo "usage: --wait doesn't go with --done" >&2; exit 2; }
+            # --ttl and --wait go as typed (90s, 10m, 2h or seconds); the daemon parses them.
             fj="$(python3 -c 'import json,sys
 o={}
 if sys.argv[1]: o["done"]=sys.argv[1]
 if sys.argv[2]: o["ttl"]=sys.argv[2]
 if sys.argv[3] and not sys.argv[1]: o["secret"]=sys.argv[3]
-print(json.dumps(o))' "$done_path" "$ttl" "$fsecret")"
-            _vault_call POST file "$(_vault_merge "$fj" "$sj")"
+if sys.argv[4]: o["wait"]=sys.argv[4]
+print(json.dumps(o))' "$done_path" "$ttl" "$fsecret" "$wait_for")"
+            _vault_wait_call file "$(_vault_merge "$fj" "$sj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
             ;;

@@ -1050,3 +1050,253 @@ fn a_card_ttl_uses_the_shared_grammar() {
     assert_error_code(&posted, "400 Bad Request", "bad_ttl");
     assert!(json_body(&posted)["error"]["hint"].as_str().expect("hint").starts_with("--ttl: a duration is like 90s, 10m, 2h or 7d"), "{}", posted.body);
 }
+
+/// The S1 amendment: a share that followed the chat keeps the secret's own
+/// time. A later card that moved the secret's time moves the share's too; a
+/// share that ran out doesn't block a new one.
+#[cfg(unix)]
+#[test]
+fn a_follow_share_takes_the_secrets_time() {
+    use k2_vault::{Actor, Consumer, Delivery, GrantRequest, Kind, SecretBytes, Selector};
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlft");
+    let t = k2_vault::fsutil::TestDir::new("sess-follow-ttl");
+    let _run = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, t.path().join("run"));
+    let spawn = |sid: &str| {
+        crate::vault::spawn::materialize(&mut HashMap::new(), &project_id, sid, false, &crate::vault::spawn::SpawnRefs::default()).dir.expect("dir")
+    };
+    let first = RunningChat::start(&project_id);
+    spawn(&first.sid());
+    let posted = post_as(&first.sid(), &handle, "FOLLOW_TTL", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    let secret = vault.request_get(&id).expect("request").secret_id.expect("saved");
+    let sel = Selector::Id(secret.clone());
+    let first_sid = first.sid();
+    crate::vault::spawn::session_ended(&first_sid);
+    drop(first);
+    let second = RunningChat::start(&project_id);
+    spawn(&second.sid());
+    vault_tick(&vault);
+    let second_sid = second.sid();
+    let share = |vault: &k2_vault::LocalVault| -> Vec<k2_vault::Grant> {
+        vault.grants(&sel, &Actor::Owner).expect("grants").into_iter().filter(|g| g.consumer.id == second_sid).collect()
+    };
+    let before = vault.meta(&sel, &Actor::Owner).expect("meta").expires_at;
+    assert_eq!(share(&vault)[0].expires_at, before, "the share ends when the secret does");
+
+    // A later card for that session moves the secret's time.
+    let card2 = format!("card-{}", uuid::Uuid::new_v4());
+    vault
+        .request_create(k2_vault::vault::SecretRequest {
+            card_id: card2.clone(),
+            conversation: "conv-later".into(),
+            session_id: Some(first_sid.clone()),
+            workspace_id: project_id.clone(),
+            requested_by: "k2".into(),
+            name: "FOLLOW_TTL".into(),
+            kind: Kind::ApiKey,
+            proposed_scope: "session".into(),
+            proposed_hosts: vec![],
+            proposed_delivery: Delivery::File,
+            prompt: String::new(),
+            ttl_secs: Some(90_000),
+            status: String::new(),
+            answered_by: None,
+            secret_id: None,
+            created_at: String::new(),
+            answered_at: None,
+            inject: None,
+            once: false,
+        })
+        .expect("card");
+    let ans = k2_vault::vault::CardAnswer { session_id: Some(first_sid.clone()), readable_disclosed: true, ..Default::default() };
+    vault.request_answer(&card2, SecretBytes::from_string(SESSION_PW.to_string()), &ans, &Actor::Owner).expect("saved");
+    let after = vault.meta(&sel, &Actor::Owner).expect("meta").expires_at;
+    assert_ne!(after, before, "the second card moved the secret's time");
+    vault_tick(&vault);
+    let shares = share(&vault);
+    assert_eq!(shares.len(), 1, "the one share moved, not a second one");
+    assert_eq!(shares[0].expires_at, after, "the share moved with the secret");
+
+    // A share that ran out doesn't block a new one.
+    let expired = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    vault
+        .grant(
+            GrantRequest {
+                selector: sel.clone(),
+                consumer: Consumer::session(&second_sid),
+                delivery: Delivery::File,
+                env_name: None,
+                file_name: None,
+                hosts_narrowed: None,
+                expires_at: Some(expired),
+                version: None,
+            },
+            &Actor::System("card-follows-chat".into()),
+        )
+        .expect("an expired share");
+    vault_tick(&vault);
+    let shares = share(&vault);
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].expires_at, after, "an expired follow share is replaced");
+    crate::vault::spawn::session_ended(&second.sid());
+}
+
+fn agent_of(project_id: &str, sid: &str) -> crate::vault::actor::VaultCaller {
+    crate::vault::actor::VaultCaller {
+        actor: k2_vault::Actor::Agent(k2_vault::AgentActor { workspace_id: project_id.to_string(), session_id: Some(sid.to_string()), shell: false, vault_manage: false }),
+        channel: crate::vault::actor::Channel::Plain,
+        session_id: Some(sid.to_string()),
+    }
+}
+
+fn use_file(vault: &std::sync::Arc<k2_vault::LocalVault>, me: &crate::vault::actor::VaultCaller, body: serde_json::Value) -> CliResponse {
+    crate::vault_routes::handle_on(vault, crate::vault_use_routes::FILE, Ok(me.clone()), body.to_string().as_bytes(), &HashMap::new(), "test", None)
+}
+
+/// §3.5: `--once`, end to end through the routes. Not in the session's
+/// folder after Save; the first `k2 vault file` works, the second is
+/// not_found; the Save line and the card both say so.
+#[test]
+fn a_once_card_reads_once_through_the_routes() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlon");
+    let s = live_session("sess-once", &project_id);
+    let posted = post_json(
+        "/cli/thread/secret",
+        &params_of(&[("cell_session_id", s.sid.as_str())]),
+        serde_json::json!({ "addr": handle, "name": "ONCE_CODE", "scope": "session", "delivery": "file", "once": true, "from": "k2" }),
+    );
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let body = json_body(&posted);
+    assert_eq!(body["sends"], "ONCE_CODE goes to you once: read it with k2 vault file ONCE_CODE (used once, then deleted)", "{body}");
+    let id = body["id"].as_str().expect("id").to_string();
+    assert_eq!(card_doc(&handle, &id)["once"], true);
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    assert!(!set.body.contains(SESSION_PW), "the value isn't in the answer");
+    assert!(json_body(&set)["line"].as_str().is_none_or(|l| !l.contains(SESSION_PW)));
+    let injects = recorded_injects();
+    assert!(injects.iter().any(|l| l.contains("Use: k2 vault file ONCE_CODE (once; then it is deleted)")), "{injects:?}");
+    assert!(!injects.iter().any(|l| l.contains(SESSION_PW)), "the value never reaches the agent's line");
+    assert!(!s.dir.join("ONCE_CODE").exists(), "never in $K2_SECRETS_DIR, not even at Save");
+
+    let me = agent_of(&project_id, &s.sid);
+    let first = use_file(&vault, &me, serde_json::json!({ "secret": "ONCE_CODE" }));
+    assert_eq!(first.status, "200 OK", "{}", first.body);
+    let path = json_body(&first)["path"].as_str().expect("path").to_string();
+    assert_eq!(std::fs::read(&path).expect("use file"), SESSION_PW.as_bytes());
+    let second = use_file(&vault, &me, serde_json::json!({ "secret": "ONCE_CODE" }));
+    assert!(second.status.starts_with("404"), "the second read is gone: {}", second.body);
+    let scoped = use_file(&vault, &me, serde_json::json!({ "secret": "ONCE_CODE", "scope": "session" }));
+    assert!(scoped.status.starts_with("404"), "gone with --scope session too: {}", scoped.body);
+    crate::vault::spawn::session_ended(&s.sid);
+}
+
+/// §3.5: `--once` is refused at ask time unless it is session + file.
+#[test]
+fn a_once_card_is_refused_unless_session_and_file() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlof");
+    let s = live_session("sess-once-f", &project_id);
+    for (scope, delivery) in [("session", "fetch"), ("workspace", "file")] {
+        let r = post_json(
+            "/cli/thread/secret",
+            &params_of(&[("cell_session_id", s.sid.as_str())]),
+            serde_json::json!({ "addr": handle, "name": "ONCE_BAD", "scope": scope, "delivery": delivery, "once": true, "for": "api.example.com", "from": "k2" }),
+        );
+        assert_error_code(&r, "400 Bad Request", "once_needs_session_file");
+        assert!(r.body.contains("--scope session --delivery file"), "{}", r.body);
+    }
+    crate::vault::spawn::session_ended(&s.sid);
+}
+
+/// §3.4: `--wait` returns the path when a person saves mid-wait.
+#[test]
+fn wait_returns_the_path_when_the_card_is_saved() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlw1");
+    let s = live_session("sess-wait", &project_id);
+    let posted = post_as(&s.sid, &handle, "WAIT_CODE", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let me = agent_of(&project_id, &s.sid);
+    let (v2, me2) = (vault.clone(), me.clone());
+    let started = std::time::Instant::now();
+    let waiter = std::thread::spawn(move || use_file(&v2, &me2, serde_json::json!({ "secret": "WAIT_CODE", "wait": "8s" })));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(!waiter.is_finished(), "still waiting for the person");
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    let r = waiter.join().expect("join");
+    assert!(started.elapsed() < std::time::Duration::from_secs(6), "the save wakes the waiter; it doesn't run out its time");
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let path = json_body(&r)["path"].as_str().expect("path").to_string();
+    assert_eq!(std::fs::read(&path).expect("the file"), SESSION_PW.as_bytes());
+    crate::vault::spawn::session_ended(&s.sid);
+}
+
+/// §3.4: with no card asking, `--wait` refuses at once (exit 4); no card
+/// is found for another session's name either.
+#[test]
+fn wait_with_no_card_is_not_found_at_once() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (_handle, project_id) = ws("ovlw2");
+    let s = live_session("sess-wait-nc", &project_id);
+    let me = agent_of(&project_id, &s.sid);
+    let r = use_file(&vault, &me, serde_json::json!({ "secret": "NOTHING_ASKS", "wait": "5s" }));
+    assert_error_code(&r, "404 Not Found", "no_card");
+    assert!(r.body.contains("no card asks for NOTHING_ASKS"), "{}", r.body);
+    assert!(r.body.contains("k2 thread secret"), "{}", r.body);
+    crate::vault::spawn::session_ended(&s.sid);
+}
+
+/// §3.4: a person dismisses the card (exit 3); a call that follows a card
+/// the person already dismissed hears that too; the time-out answer names
+/// the card; a ninth waiter is refused.
+#[test]
+fn wait_ends_on_a_declined_card_and_limits_waiters() {
+    use k2_vault::Actor;
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlw3");
+    let s = live_session("sess-wait-d", &project_id);
+    let posted = post_as(&s.sid, &handle, "WAIT_NO", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let me = agent_of(&project_id, &s.sid);
+
+    // The time-out answer: still waiting, on this card, with the whole budget.
+    let r = use_file(&vault, &me, serde_json::json!({ "secret": "WAIT_NO", "wait": "1s" }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let v = json_body(&r);
+    assert_eq!(v["waiting"], true, "{v}");
+    assert_eq!(v["card"], id, "{v}");
+    assert_eq!(v["waitSecs"], 1, "{v}");
+
+    // A ninth waiter gets a 409, not a blocked thread.
+    let held = crate::vault_use_routes::hold_wait_slots_for_tests(&s.sid, 8);
+    let r = use_file(&vault, &me, serde_json::json!({ "secret": "WAIT_NO", "wait": "1s" }));
+    assert_error_code(&r, "409 Conflict", "too_many_waits");
+    drop(held);
+
+    let (v2, me2) = (vault.clone(), me.clone());
+    let waiter = std::thread::spawn(move || use_file(&v2, &me2, serde_json::json!({ "secret": "WAIT_NO", "wait": "5s" })));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    vault.request_void(&id, &Actor::System("thread".into())).expect("dismissed");
+    let r = waiter.join().expect("join");
+    assert_error_code(&r, "403 Forbidden", "card_declined");
+
+    // The next CLI call in the loop names the card.
+    let r = use_file(&vault, &me, serde_json::json!({ "secret": "WAIT_NO", "wait": "1s", "waitCard": id }));
+    assert_error_code(&r, "403 Forbidden", "card_declined");
+    crate::vault::spawn::session_ended(&s.sid);
+}

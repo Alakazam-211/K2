@@ -116,6 +116,11 @@ pub struct SecretBody {
     /// another scope, and the answer checks again).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replaces: bool,
+    /// `--once` (prd-vault-for-agents-v1 §3.5): a one-time code, read once
+    /// with `k2 vault file`, then deleted. The card says so and offers no
+    /// other way to keep it. Display only: the vault request is what binds.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub once: bool,
 }
 
 /// How a secret card says K2 sends the secret: the vault's injection
@@ -141,6 +146,9 @@ pub struct SecretProposal {
     pub env_name: Option<String>,
     /// Save replaces an existing secret of this name (SC-A16).
     pub replaces: bool,
+    /// `--once`: a one-time code, read once with `k2 vault file`, then
+    /// deleted (prd-vault-for-agents-v1 §3.5).
+    pub once: bool,
 }
 
 /// A Thread post a Garden widget sent for the person (prd-zen-user-widgets-v2
@@ -792,6 +800,7 @@ impl OverlayDoc {
                 inject: proposal.inject,
                 env_name: proposal.env_name,
                 replaces: proposal.replaces,
+                once: proposal.once,
             }),
             widget: None,
             design: None,

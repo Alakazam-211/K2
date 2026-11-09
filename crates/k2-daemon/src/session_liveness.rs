@@ -50,6 +50,42 @@ pub fn forget_spawning(session_id: &str) {
     }
 }
 
+/// Which process a per-session resource belongs to: its pid and the
+/// kernel's exact start key for it, so a reused pid doesn't count
+/// (the ssh-agent socket record's pattern). GH#81: a secrets dir lives
+/// while the process that got it lives, even if its session id stops being
+/// listed as live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProcessKey {
+    pub pid: i64,
+    pub start: i64,
+}
+
+/// The key of the running process `pid`. `None`: it isn't running, is a
+/// zombie, or this OS has no start key for it (Windows, for now: there a
+/// dir goes when its session id stops being live, as before).
+pub fn process_key(pid: i64) -> Option<ProcessKey> {
+    start_key(pid).map(|start| ProcessKey { pid, start })
+}
+
+/// Is that very process still running? False for a reused pid, a zombie,
+/// or a dead process.
+pub fn process_alive(pid: i64, start: i64) -> bool {
+    start_key(pid) == Some(start)
+}
+
+fn start_key(pid: i64) -> Option<i64> {
+    #[cfg(unix)]
+    {
+        crate::vault::ssh_agent::process_start_key(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 fn spawning_ids() -> Vec<String> {
     let mut g = SPAWNING.lock();
     let Some(m) = g.as_mut() else { return Vec::new() };
@@ -160,6 +196,26 @@ mod tests {
         }
         kill();
         assert!(!is_live(&parsed) && !is_live(&raw), "a killed legacy terminal is not live");
+    }
+
+    /// GH#81: the key follows the process, and a reused pid is not the
+    /// process it was bound to.
+    #[cfg(unix)]
+    #[test]
+    fn process_alive_follows_the_process_not_the_pid() {
+        let me = i64::from(std::process::id());
+        let key = process_key(me).expect("this process has a start key");
+        assert!(process_alive(key.pid, key.start), "this process is running");
+        assert!(!process_alive(key.pid, key.start + 1), "the same pid with another start is a reused pid, not this process");
+
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn");
+        let cpid = i64::from(child.id());
+        let ckey = process_key(cpid).expect("a running child has a start key");
+        assert!(process_alive(cpid, ckey.start));
+        child.kill().expect("kill");
+        child.wait().expect("reap");
+        assert!(!process_alive(cpid, ckey.start), "a dead process is not alive");
+        assert!(process_key(cpid).is_none(), "a dead process has no key");
     }
 
     #[cfg(unix)]

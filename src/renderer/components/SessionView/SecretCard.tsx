@@ -517,6 +517,7 @@ export function SecretCard({
         inject={delivery === 'fetch' ? inject : null}
         envName={secret.envName ?? null}
       />
+      {secret.once && <div data-testid="thread-secret-once">Used once, then deleted.</div>}
       {secret.replaces && (
         <div data-testid="thread-secret-replaces">
           This replaces the <span className="font-mono">{secret.name}</span> already saved, with what this card says.
@@ -556,7 +557,7 @@ export function SecretCard({
             More options
           </button>
         )
-      ) : (
+      ) : secret.once ? null : (
         <>
           <button
             type="button"

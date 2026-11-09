@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, RwLock};
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -50,10 +50,19 @@ const TAMPER_NOTES_MAX: usize = 256;
 pub const VERSION_RETENTION_DAYS: i64 = 30;
 pub const REQUEST_EXPIRY_DAYS: i64 = 7;
 pub const GUEST_TTL_MAX_SECS: i64 = 24 * 3600;
-/// The longest a person's session-scope card secret lasts (`--ttl`; default
-/// 24 h, as for a guest).
-pub const SESSION_CARD_TTL_MAX_SECS: i64 = 7 * 24 * 3600;
+/// The longest any session-scope secret lasts: `k2 vault set --scope
+/// session --ttl` and a person's session card (`--ttl`; default 24 h, as for
+/// a guest). Longer is cut to this, and the answer says so
+/// (prd-vault-for-agents-v1 §3.3, V6).
+pub const SESSION_TTL_MAX_SECS: i64 = 7 * 24 * 3600;
+pub const SESSION_CARD_TTL_MAX_SECS: i64 = SESSION_TTL_MAX_SECS;
 pub const GUEST_PENDING_MAX: usize = 3;
+/// How long `k2 vault file --wait` / `env-file --wait` block in one call.
+pub const CARD_WAIT_MAX_PER_CALL_SECS: u64 = 50;
+/// The longest `--wait` a CLI may ask for.
+pub const CARD_WAIT_MAX_SECS: i64 = 24 * 3600;
+/// The ask-time refusal for a `--once` card.
+pub const ONCE_USAGE: &str = "--once is for a one-time code a tool reads once: --scope session --delivery file";
 
 fn now() -> DateTime<Utc> {
     Utc::now()
@@ -446,6 +455,25 @@ pub struct SecretRequest {
     /// it is not part of [`request_mac_input`]. None: the card names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inject: Option<Inject>,
+    /// Asked with `--once` (prd-vault-for-agents-v1 §3.5): sealed in
+    /// `secret_request_once`, not part of [`request_mac_input`], gone once
+    /// the card closes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub once: bool,
+}
+
+/// The MAC over a `--once` card's mark.
+fn request_once_mac_input(card_id: &str) -> Vec<u8> {
+    let mut e = Enc::new("request_once");
+    e.str(card_id);
+    e.finish().to_vec()
+}
+
+/// The MAC over a one-time secret's mark.
+fn secret_once_mac_input(secret_id: &str, card_id: &str) -> Vec<u8> {
+    let mut e = Enc::new("secret_once");
+    e.str(secret_id).str(card_id);
+    e.finish().to_vec()
 }
 
 /// The MAC over a card's sealed injection: (card id, inject JSON) (SC-A2).
@@ -568,6 +596,14 @@ pub struct LocalVault {
     /// refused with `vault_moved_out` (423) except audit rows, roll-ups
     /// and session placeholders, which never move `gen` while frozen.
     frozen: std::sync::atomic::AtomicBool,
+    /// Wakes `k2 vault file --wait` when a card's state changes
+    /// (prd-vault-for-agents-v1 §3.4). A counter and a condvar, never the
+    /// vault's own locks: a waiter holds nothing while it waits.
+    card_changes: Mutex<u64>,
+    card_changed: Condvar,
+    /// One `k2 vault file` at a time reads a one-time secret, so a second
+    /// caller racing the first can't get it too.
+    once_gate: Mutex<()>,
 }
 
 impl LocalVault {
@@ -691,6 +727,9 @@ impl LocalVault {
             redactor: Mutex::new(None),
             recovery_pending: Mutex::new(HashMap::new()),
             frozen: std::sync::atomic::AtomicBool::new(false),
+            card_changes: Mutex::new(0),
+            card_changed: Condvar::new(),
+            once_gate: Mutex::new(()),
         };
         if v.dir.join(crate::boxmove::FROZEN_MARKER).exists() {
             v.frozen.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1947,6 +1986,11 @@ impl LocalVault {
     }
 
     fn resolve_inner(&self, sel: &Selector, use_: Use<'_>, who: &Requester) -> Result<Resolved> {
+        self.resolve_checked(sel, use_, who, false)
+    }
+
+    /// `taking_once`: this is [`Self::take_once`] reading a one-time secret.
+    fn resolve_checked(&self, sel: &Selector, use_: Use<'_>, who: &Requester, taking_once: bool) -> Result<Resolved> {
         self.flush_rollups_if_due();
         let actor_label = who.label();
         let keys = self.keys.read();
@@ -1962,6 +2006,14 @@ impl LocalVault {
         let m = row.meta.clone();
         let deny_entry = Entry::new(use_.action(), &actor_label, "deny").secret(&m.id, None).consumer(actor_label.clone());
         let fail = |e: VaultError| -> Result<Resolved> { Err(e) };
+        // A one-time secret goes out once, through `k2 vault file` only
+        // (§3.5): every other way to read it is refused here, so it can't
+        // be read by a route that wouldn't destroy it.
+        if !taking_once && m.scope.kind == ScopeKind::Session && Self::once_row(&conn, &m.id) {
+            drop(conn);
+            drop(keys);
+            return Err(self.deny(deny_entry, VaultError::forbidden("once_only", "a one-time secret is read once, with k2 vault file NAME")));
+        }
         if m.status != SecretStatus::Active {
             drop(conn);
             drop(keys);
@@ -2383,6 +2435,10 @@ impl LocalVault {
             }
             let m = &row.meta;
             if m.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < t) {
+                continue;
+            }
+            // A one-time secret never reaches `$K2_SECRETS_DIR` (§3.5).
+            if m.scope.kind == ScopeKind::Session && Self::once_row(&conn, &m.id) {
                 continue;
             }
             let mut best: Option<(Delivery, Option<String>, Option<String>, bool)> = None;
@@ -3021,6 +3077,7 @@ impl LocalVault {
         // pending handoff values are re-sealed under the new data key.
         self.rekey_placements(&tx, &keys, &new_keys)?;
         self.rekey_request_inject(&tx, &keys, &new_keys)?;
+        self.rekey_once(&tx, &keys, &new_keys)?;
         self.rekey_handoff_tables(&tx, &keys, &new_keys)?;
         self.rekey_agent_tables(&tx, &keys, &new_keys)?;
         // Placeholders hash under the old key: drop them (sessions re-mint).
@@ -3214,9 +3271,16 @@ impl LocalVault {
         r.proposed_hosts = hosts;
         r.status = "pending".into();
         r.created_at = ts(now());
+        if r.once && (r.proposed_scope != "session" || r.proposed_delivery != Delivery::File) {
+            return Err(VaultError::bad_request("once_needs_session_file", ONCE_USAGE));
+        }
         let r2 = r.clone();
         self.mutate(false, |tx, keys| {
             let mac = hmac(&keys.row, &request_mac_input(&r2));
+            if r2.once {
+                let omac = hmac(&keys.row, &request_once_mac_input(&r2.card_id));
+                tx.execute("INSERT INTO secret_request_once (card_id, row_mac) VALUES (?1, ?2)", params![r2.card_id, omac.to_vec()])?;
+            }
             tx.execute(
                 "INSERT INTO secret_request (card_id, conversation, session_id, workspace_id, requested_by, name, kind, proposed_scope,
                     proposed_hosts, proposed_delivery, prompt, ttl_secs, status, answered_by, secret_id, created_at, answered_at, row_mac)
@@ -3245,6 +3309,7 @@ impl LocalVault {
         let conn = self.conn.lock();
         let mut req = Self::request_row(&conn, &keys, card_id)?;
         req.inject = Self::request_inject(&conn, &keys, card_id)?;
+        req.once = Self::request_once(&conn, card_id);
         Ok(req)
     }
 
@@ -3294,6 +3359,94 @@ impl LocalVault {
         Ok(Some(i))
     }
 
+    /// Was this card asked with `--once`? Any mark counts, one that fails
+    /// its MAC too: the stricter reading ([`Self::rekey_once`] checks them).
+    fn request_once(conn: &Connection, card_id: &str) -> bool {
+        conn.query_row("SELECT 1 FROM secret_request_once WHERE card_id = ?1", params![card_id], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// Does this secret carry a one-time mark? Any mark counts, one that
+    /// fails its MAC too: the secret stays held back from every delivery,
+    /// and [`Self::take_once`] refuses it.
+    fn once_row(conn: &Connection, secret_id: &str) -> bool {
+        conn.query_row("SELECT 1 FROM secret_once WHERE secret_id = ?1", params![secret_id], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// Is this secret one-time (§3.5)? Never delivered; read once through
+    /// [`Self::take_once`].
+    pub fn is_once(&self, secret_id: &str) -> bool {
+        Self::once_row(&self.conn.lock(), secret_id)
+    }
+
+    /// Read a one-time secret for `who` (the same check as `Use::File`),
+    /// hand it to `write`, then destroy it (audit actor `system:once`) and
+    /// free its name. One reader at a time: a second caller finds it gone.
+    /// A failed `write` leaves the secret, so the value isn't lost; a
+    /// destroy that fails is an error and the caller must not keep what it
+    /// wrote.
+    pub fn take_once<T>(&self, sel: &Selector, who: &Requester, write: impl FnOnce(&Resolved) -> Result<T>) -> Result<T> {
+        let _one_reader = self.once_gate.lock();
+        let r = self.resolve_checked(sel, Use::File, who, true)?;
+        {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            let (card, mac): (String, Vec<u8>) = conn
+                .query_row("SELECT card_id, row_mac FROM secret_once WHERE secret_id = ?1", params![r.meta.id], |x| Ok((x.get(0)?, x.get(1)?)))
+                .optional()?
+                .ok_or_else(|| VaultError::conflict("not_once", "that secret isn't a one-time secret"))?;
+            if !hmac_verify(&keys.row, &secret_once_mac_input(&r.meta.id, &card), &mac) {
+                return Err(VaultError::tamper("the one-time mark on that secret failed its integrity check"));
+            }
+        }
+        let out = write(&r)?;
+        let id = r.meta.id.clone();
+        self.set_status(&Selector::Id(id.clone()), &Actor::System("once".into()), SecretStatus::Destroyed)?;
+        let row = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            self.find_row(&conn, &keys, &Selector::Id(id.clone()))?
+        };
+        self.retire_session_row(row)?;
+        Ok(out)
+    }
+
+    /// Rekey: every one-time mark, verify old, re-MAC new.
+    fn rekey_once(&self, tx: &Transaction<'_>, old: &Keys, new: &Keys) -> Result<()> {
+        let requests: Vec<(String, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT card_id, row_mac FROM secret_request_once")?;
+            let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (card, mac) in requests {
+            if !hmac_verify(&old.row, &request_once_mac_input(&card), &mac) {
+                return Err(VaultError::tamper(format!("secret card {card}'s one-time mark failed its integrity check; rekey stopped")));
+            }
+            let m2 = hmac(&new.row, &request_once_mac_input(&card));
+            tx.execute("UPDATE secret_request_once SET row_mac = ?2 WHERE card_id = ?1", params![card, m2.to_vec()])?;
+        }
+        let secrets: Vec<(String, String, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT secret_id, card_id, row_mac FROM secret_once")?;
+            let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (id, card, mac) in secrets {
+            if !hmac_verify(&old.row, &secret_once_mac_input(&id, &card), &mac) {
+                return Err(VaultError::tamper(format!("secret {id}'s one-time mark failed its integrity check; rekey stopped")));
+            }
+            let m2 = hmac(&new.row, &secret_once_mac_input(&id, &card));
+            tx.execute("UPDATE secret_once SET row_mac = ?2 WHERE secret_id = ?1", params![id, m2.to_vec()])?;
+        }
+        Ok(())
+    }
+
     /// Rekey (SC-A18): verify every sealed card injection under the old row
     /// key, then re-MAC it under the new one, in the rekey's transaction.
     fn rekey_request_inject(&self, tx: &Transaction<'_>, old: &Keys, new: &Keys) -> Result<()> {
@@ -3333,6 +3486,7 @@ impl LocalVault {
                 Ok(i) => req.inject = i,
                 Err(_) => continue,
             }
+            req.once = Self::request_once(&conn, &req.card_id);
             out.push(req);
         }
         Ok(out)
@@ -3367,10 +3521,40 @@ impl LocalVault {
             // the card stays open.
             if r2.status != "pending" {
                 tx.execute("DELETE FROM secret_request_inject WHERE card_id = ?1", params![r2.card_id])?;
+                tx.execute("DELETE FROM secret_request_once WHERE card_id = ?1", params![r2.card_id])?;
             }
             Ok(((), vec![Entry::new("request", &st, &format!("ok:{}", r2.status)).consumer(format!("card:{}", r2.card_id))]))
         })?;
+        self.notify_cards();
         Ok(r)
+    }
+
+    /// A card changed (answered, closed, expired) or its secret just became
+    /// reachable: every `k2 vault file --wait` looks again. Daemon code that
+    /// moves a secret to a session calls it too.
+    pub fn notify_cards(&self) {
+        *self.card_changes.lock() += 1;
+        self.card_changed.notify_all();
+    }
+
+    /// The count [`Self::wait_card_change`] compares against. Read it
+    /// BEFORE looking at the state, so a change right after the look isn't
+    /// missed.
+    pub fn card_generation(&self) -> u64 {
+        *self.card_changes.lock()
+    }
+
+    /// Block until a card changes after `seen` or `timeout` passes. Holds
+    /// none of the vault's own locks.
+    pub fn wait_card_change(&self, seen: u64, timeout: std::time::Duration) -> u64 {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut g = self.card_changes.lock();
+        while *g == seen {
+            if self.card_changed.wait_until(&mut g, deadline).timed_out() {
+                break;
+            }
+        }
+        *g
     }
 
     /// Tests: move a request's `created_at` back `days` (re-MACed), so the
@@ -3518,6 +3702,15 @@ impl LocalVault {
         } else {
             None
         };
+        // A `--once` card's whole promise is "one read, then gone": it can
+        // only be saved as a one-time secret, kept for one session as a
+        // file. The card shows no other choice; this is the backstop.
+        if req.once && (scope.kind != ScopeKind::Session || delivery != Delivery::File) {
+            return Err(VaultError::bad_request(
+                "card_once_terms",
+                "this card asks for a one-time code, kept for this session as a file and deleted after one use; save it as offered, or dismiss it and ask the agent for a normal card",
+            ));
+        }
         // SC-A1: a card for a name that already exists. Its terms (sites,
         // delivery, how it is sent) are applied as the answering person's
         // own policy change, then the value is replaced. Before 0.46.6 only
@@ -3565,6 +3758,20 @@ impl LocalVault {
                 (self.put_inner(put, value, actor)?, false, None, 0)
             }
         };
+        // §3.5: mark a `--once` card's secret; a later normal card for that
+        // name clears the mark.
+        if scope.kind == ScopeKind::Session {
+            let id = out.meta.id.clone();
+            let once = req.once.then(|| card_id.to_string());
+            self.mutate(true, |tx, keys| {
+                tx.execute("DELETE FROM secret_once WHERE secret_id = ?1", params![id])?;
+                if let Some(card) = &once {
+                    let mac = hmac(&keys.row, &secret_once_mac_input(&id, card));
+                    tx.execute("INSERT INTO secret_once (secret_id, card_id, row_mac) VALUES (?1, ?2, ?3)", params![id, card, mac.to_vec()])?;
+                }
+                Ok(((), Vec::new()))
+            })?;
+        }
         self.request_set_status(card_id, "set", Some(&actor.stamp()), Some(&out.meta.id), &actor.stamp())?;
         let reference = crate::refs::VaultRef {
             scope_kind: scope.kind,
@@ -4179,6 +4386,7 @@ fn read_request_raw(r: &Row<'_>) -> Result<(SecretRequest, Vec<u8>)> {
         created_at: r.get("created_at")?,
         answered_at: r.get("answered_at")?,
         inject: None,
+        once: false,
     };
     Ok((req, r.get("row_mac")?))
 }

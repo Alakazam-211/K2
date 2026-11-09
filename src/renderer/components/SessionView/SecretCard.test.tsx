@@ -144,6 +144,16 @@ describe('SecretCard: the simple view', () => {
 })
 
 describe('SecretCard: Advanced', () => {
+  it('a one-time code says so and offers no other way to keep it (the daemon only saves it as offered)', () => {
+    const { unmount } = card({ once: true, delivery: 'file', scope: 'session' }, vi.fn(async () => {}))
+    expect(screen.getByTestId('thread-secret-once').textContent).toBe('Used once, then deleted.')
+    expect(screen.queryByTestId('thread-secret-advanced-toggle')).toBeNull()
+    unmount()
+    card({ delivery: 'file', scope: 'session' }, vi.fn(async () => {}))
+    expect(screen.queryByTestId('thread-secret-once')).toBeNull()
+    expect(screen.getByTestId('thread-secret-advanced-toggle')).not.toBeNull()
+  })
+
   it('is closed by default; opening it shows the old controls', () => {
     card({ hosts: ['https://api.stripe.com:443'] }, async () => {})
     const toggle = screen.getByTestId('thread-secret-advanced-toggle')

@@ -104,6 +104,7 @@ fn card(id: &str, name: &str, inject: Option<Inject>) -> SecretRequest {
         created_at: String::new(),
         answered_at: None,
         inject,
+        once: false,
     }
 }
 
@@ -757,4 +758,158 @@ fn a_session_card_after_its_names_secret_ran_out_saves_a_fresh_secret() {
     v.request_create(again).expect("card");
     let e = v.request_answer("card-over-ws-again-01234", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).expect_err("a destroyed workspace name stays retired");
     assert_eq!(e.code, "secret_destroyed");
+}
+
+/// A `--once` card (§3.5): kept for one session as a file.
+fn once_card(id: &str, name: &str) -> SecretRequest {
+    let mut c = card(id, name, None);
+    c.proposed_scope = "session".into();
+    c.proposed_hosts = vec![];
+    c.proposed_delivery = Delivery::File;
+    c.ttl_secs = Some(3600);
+    c.once = true;
+    c
+}
+
+fn readable() -> CardAnswer {
+    CardAnswer { readable_disclosed: true, ..Default::default() }
+}
+
+/// §3.5: a one-time secret is never delivered and never resolves any other
+/// way; `take_once` reads it once, destroys it (audited system:once) and
+/// frees the name for the next card.
+#[test]
+fn a_one_time_secret_is_read_once_then_gone() {
+    let t = TestDir::new("ci-once");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    v.request_create(once_card("card-once-01234567890", "ONCE_CODE")).expect("card");
+    assert!(v.request_get("card-once-01234567890").expect("request").once, "the card keeps its mark");
+    let saved = v.request_answer("card-once-01234567890", SecretBytes::from_string(PW.to_string()), &readable(), &Actor::Owner).expect("saved").meta;
+    assert!(v.is_once(&saved.id));
+    let names: Vec<String> = v.spawn_items(&me).expect("items").into_iter().map(|i| i.name).collect();
+    assert!(!names.contains(&"ONCE_CODE".to_string()), "never delivered: {names:?}");
+
+    let sel = Selector::user(Scope::session("sess-1"), "ONCE_CODE");
+    let e = v.resolve(&sel, Use::File, &me).err().expect("only take_once reads it");
+    assert_eq!(e.code, "once_only");
+
+    let got = v.take_once(&sel, &me, |r| Ok(r.value.expose().to_vec())).expect("first read");
+    assert_eq!(got, PW.as_bytes());
+    let e = v.take_once(&sel, &me, |r| Ok(r.value.expose().to_vec())).expect_err("gone after the first read");
+    assert_eq!(e.status, 404, "{e:?}");
+
+    let gone = v.meta(&Selector::Id(saved.id.clone()), &Actor::Owner).expect("the old row keeps its history");
+    assert_eq!(gone.status, SecretStatus::Destroyed);
+    assert_eq!(gone.name, format!("ONCE_CODE~{}", saved.id));
+    let audit = v.audit(&AuditQuery { secret_id: Some(saved.id.clone()), ..Default::default() }, &Actor::Owner).expect("audit");
+    assert!(audit.iter().any(|r| r.actor == "system:once"), "{audit:?}");
+
+    // A normal card for that name afterwards is an ordinary secret.
+    v.request_create(once_card("card-once-next-0123456", "ONCE_CODE")).expect("a new card for the name");
+    v.request_answer("card-once-next-0123456", SecretBytes::from_string(PW.to_string()), &readable(), &Actor::Owner).expect("the name is free again");
+}
+
+/// A failed write leaves the one-time secret for another try.
+#[test]
+fn a_one_time_secret_survives_a_failed_write() {
+    let t = TestDir::new("ci-once-fail");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    v.request_create(once_card("card-once-fail-0123456", "ONCE_FAIL")).expect("card");
+    v.request_answer("card-once-fail-0123456", SecretBytes::from_string(PW.to_string()), &readable(), &Actor::Owner).expect("saved");
+    let sel = Selector::user(Scope::session("sess-1"), "ONCE_FAIL");
+    let e = v.take_once::<()>(&sel, &me, |_| Err(VaultError::internal("disk full"))).expect_err("write failed");
+    assert_eq!(e.code, "vault_internal");
+    assert_eq!(v.take_once(&sel, &me, |r| Ok(r.value.expose().to_vec())).expect("still there"), PW.as_bytes());
+}
+
+/// §3.5: `--once` needs session scope and file delivery at ask time, and a
+/// person can't save the card as anything else (it would stop being one-time).
+#[test]
+fn a_once_card_is_session_and_file_only() {
+    let t = TestDir::new("ci-once-terms");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let mut c = once_card("card-once-ws-0123456789", "ONCE_WS");
+    c.proposed_scope = "workspace".into();
+    assert_eq!(v.request_create(c).expect_err("workspace").code, "once_needs_session_file");
+    let mut c = once_card("card-once-fetch-012345", "ONCE_FETCH");
+    c.proposed_delivery = Delivery::Fetch;
+    c.proposed_hosts = vec!["robot-ws.your-server.de".into()];
+    assert_eq!(v.request_create(c).expect_err("fetch").code, "once_needs_session_file");
+
+    v.request_create(once_card("card-once-keep-0123456", "ONCE_KEEP")).expect("card");
+    let as_workspace = CardAnswer { scope: Some("workspace".into()), readable_disclosed: true, ..Default::default() };
+    let e = v.request_answer("card-once-keep-0123456", SecretBytes::from_string(PW.to_string()), &as_workspace, &Actor::Owner).expect_err("kept for the workspace");
+    assert_eq!(e.code, "card_once_terms");
+    assert_eq!(v.request_get("card-once-keep-0123456").expect("request").status, "pending", "nothing was saved");
+}
+
+/// A later normal card for the name clears the mark, so a value a person
+/// meant to keep isn't deleted by one read.
+#[test]
+fn a_normal_card_clears_the_one_time_mark() {
+    let t = TestDir::new("ci-once-clear");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    v.request_create(once_card("card-once-mark-0123456", "ONCE_MARK")).expect("card");
+    let first = v.request_answer("card-once-mark-0123456", SecretBytes::from_string(PW.to_string()), &readable(), &Actor::Owner).expect("saved").meta;
+    let mut normal = once_card("card-once-norm-0123456", "ONCE_MARK");
+    normal.once = false;
+    v.request_create(normal).expect("card");
+    let second = v.request_answer("card-once-norm-0123456", SecretBytes::from_string(PW.to_string()), &readable(), &Actor::Owner).expect("replaced").meta;
+    assert_eq!(second.id, first.id);
+    assert!(!v.is_once(&second.id));
+    v.resolve(&Selector::Id(second.id), Use::File, &me).expect("an ordinary session secret now");
+}
+
+/// A rekey re-MACs the one-time marks: a marked secret keeps working through
+/// it, and a still-open card stays one-time.
+#[test]
+fn one_time_marks_survive_a_rekey() {
+    let t = TestDir::new("ci-once-rekey");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    v.request_create(once_card("card-once-rk-012345678", "ONCE_RK")).expect("card");
+    v.request_answer("card-once-rk-012345678", SecretBytes::from_string(PW.to_string()), &readable(), &Actor::Owner).expect("saved");
+    v.request_create(once_card("card-once-open-0123456", "ONCE_OPEN")).expect("card");
+    v.rekey(&Actor::Owner, &HumanProof::Confirmed { method: "t".into() }).expect("rekey");
+    let sel = Selector::user(Scope::session("sess-1"), "ONCE_RK");
+    assert_eq!(v.take_once(&sel, &me, |r| Ok(r.value.expose().to_vec())).expect("marks re-MACed"), PW.as_bytes());
+    assert!(v.request_get("card-once-open-0123456").expect("request").once);
+}
+
+/// §3.4: the notifier wakes a waiter on a card change, and a timeout returns
+/// the unchanged generation.
+#[test]
+fn a_card_change_wakes_a_waiter() {
+    let t = TestDir::new("ci-wait");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = Arc::new(open(&t, &ks));
+    let seen = v.card_generation();
+    assert_eq!(v.wait_card_change(seen, std::time::Duration::from_millis(20)), seen, "no change, the timeout ends it");
+
+    v.request_create(once_card("card-wait-0123456789012", "WAIT_ME")).expect("card");
+    let after_create = v.card_generation();
+    let v2 = v.clone();
+    let waiter = std::thread::spawn(move || v2.wait_card_change(after_create, std::time::Duration::from_secs(2)));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    v.request_answer("card-wait-0123456789012", SecretBytes::from_string(PW.to_string()), &readable(), &Actor::Owner).expect("saved");
+    assert!(waiter.join().expect("join") > after_create, "a saved card wakes the waiter");
+
+    v.request_create(once_card("card-wait-void-01234567", "WAIT_VOID")).expect("card");
+    let g = v.card_generation();
+    v.request_void("card-wait-void-01234567", &Actor::Owner).expect("void");
+    assert!(v.card_generation() > g, "a dismissed card counts");
+
+    v.request_create(once_card("card-wait-old-012345678", "WAIT_OLD")).expect("card");
+    v.backdate_request_for_tests("card-wait-old-012345678", 8).expect("backdate");
+    let g = v.card_generation();
+    v.tick().expect("tick");
+    assert!(v.card_generation() > g, "an expired card counts");
 }

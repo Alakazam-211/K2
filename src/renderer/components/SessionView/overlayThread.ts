@@ -201,6 +201,8 @@ export interface OverlaySecret {
   envName?: string | null
   /** A secret by this name already exists; Save replaces it. */
   replaces?: boolean
+  /** A one-time code: read once with `k2 vault file`, then deleted. */
+  once?: boolean
 }
 
 /** How K2 sends a secret: `dst` is `basic`, `header:<Name>` or
@@ -1479,6 +1481,7 @@ function coerceSecret(raw: unknown): OverlaySecret | null {
   }
   if (typeof s.envName === 'string') out.envName = s.envName
   if (s.replaces === true) out.replaces = true
+  if (s.once === true) out.once = true
   Object.assign(out, closedExtras(s))
   return out
 }

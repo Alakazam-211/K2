@@ -332,6 +332,10 @@ struct EnvFileBody {
     ttl_secs: Option<u64>,
     /// Remove a file made earlier.
     done: Option<String>,
+    /// `k2 vault env-file --wait`: as typed (`"10m"`) or seconds.
+    wait: Option<Value>,
+    /// The card an earlier `--wait` call is following.
+    wait_card: Option<String>,
 }
 
 /// A use-file's life from `ttl` (`k2_vault::duration`) or the older
@@ -371,27 +375,143 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
         return Err(VaultError::bad_request("secret_required", "name the secrets: --secret NAME"));
     }
     let who = c.requester()?;
-    let mut lines = String::new();
-    for n in &b.secrets {
-        let sel = use_selector(vault, c, &Sel { name: Some(n.clone()), scope: b.scope.clone(), ..Default::default() })?;
-        let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::Env))?;
-        k2_vault::delivery::validate_env_file_value(r.value.expose())?;
-        let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
-        k2_vault::delivery::validate_env_name(&name)?;
-        lines.push_str(&name);
-        lines.push('=');
-        lines.push_str(std::str::from_utf8(r.value.expose()).map_err(|_| VaultError::bad_request("not_text", "env values must be text"))?);
-        lines.push('\n');
+    with_wait(vault, c, b.wait.as_ref(), b.wait_card.as_deref(), &b.secrets, || {
+        let mut lines = String::new();
+        for n in &b.secrets {
+            let sel = use_selector(vault, c, &Sel { name: Some(n.clone()), scope: b.scope.clone(), ..Default::default() })?;
+            let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::Env))?;
+            k2_vault::delivery::validate_env_file_value(r.value.expose())?;
+            let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
+            k2_vault::delivery::validate_env_name(&name)?;
+            lines.push_str(&name);
+            lines.push('=');
+            lines.push_str(std::str::from_utf8(r.value.expose()).map_err(|_| VaultError::bad_request("not_text", "env values must be text"))?);
+            lines.push('\n');
+        }
+        let p = dir.join(format!("{}.env", k2_vault::crypto::base62(16)));
+        crate::vault::spawn::write_secret_file(&dir, p.file_name().and_then(|f| f.to_str()).unwrap_or("x.env"), lines.as_bytes())
+            .map_err(|e| VaultError::internal(format!("env file: {}", e.kind())))?;
+        let p2 = p.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(ttl));
+            let _ = crate::vault::adopt::remove_old_copy(&p2);
+        });
+        Ok(json!({ "ok": true, "path": p.display().to_string(), "ttlSecs": ttl }))
+    })
+}
+
+/// `--wait` waits this many callers per session at most; one more is
+/// refused rather than parked.
+const MAX_WAITERS_PER_SESSION: usize = 8;
+
+static WAITERS: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, usize>>> = std::sync::LazyLock::new(Default::default);
+
+/// One `--wait` slot in a session; given back on drop.
+struct WaitSlot(String);
+
+fn wait_slot(session_id: &str) -> Result<WaitSlot, VaultError> {
+    let mut w = WAITERS.lock();
+    let n = w.entry(session_id.to_string()).or_insert(0);
+    if *n >= MAX_WAITERS_PER_SESSION {
+        return Err(VaultError::conflict("too_many_waits", "this session already has 8 --wait calls waiting; let one finish"));
     }
-    let p = dir.join(format!("{}.env", k2_vault::crypto::base62(16)));
-    crate::vault::spawn::write_secret_file(&dir, p.file_name().and_then(|f| f.to_str()).unwrap_or("x.env"), lines.as_bytes())
-        .map_err(|e| VaultError::internal(format!("env file: {}", e.kind())))?;
-    let p2 = p.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(ttl));
-        let _ = crate::vault::adopt::remove_old_copy(&p2);
-    });
-    Ok(json!({ "ok": true, "path": p.display().to_string(), "ttlSecs": ttl }))
+    *n += 1;
+    Ok(WaitSlot(session_id.to_string()))
+}
+
+impl Drop for WaitSlot {
+    fn drop(&mut self) {
+        let mut w = WAITERS.lock();
+        if let Some(n) = w.get_mut(&self.0) {
+            *n -= 1;
+            if *n == 0 {
+                w.remove(&self.0);
+            }
+        }
+    }
+}
+
+/// Tests: hold `n` of a session's `--wait` slots until dropped.
+#[cfg(test)]
+pub(crate) fn hold_wait_slots_for_tests(session_id: &str, n: usize) -> Vec<impl Drop> {
+    (0..n).map(|_| wait_slot(session_id).expect("slot")).collect()
+}
+
+/// A refusal a pending card could still end: the secret isn't there yet,
+/// isn't granted yet, or an earlier one of that name ran out.
+fn waitable(e: &VaultError) -> bool {
+    e.status == 404 || matches!(e.code, "delivery_not_granted" | "not_granted" | "secret_expired" | "secret_not_active" | "secret_destroyed")
+}
+
+/// `--wait` (prd-vault-for-agents-v1 §3.4, V7): try `use_` as today; if the
+/// refusal is one a pending card could end and a card for this session or
+/// its chat is open, block (at most 50 s per call, on the vault's card
+/// notifier, holding no lock) and try again when it changes. A timeout
+/// answers `{waiting, card, waitSecs}`, and the CLI calls again until its own
+/// deadline. No card is exit 4 at once; a card that a person dismissed or
+/// that ran out is exit 3.
+fn with_wait(
+    vault: &Arc<LocalVault>,
+    c: &VaultCaller,
+    wait: Option<&Value>,
+    wait_card: Option<&str>,
+    names: &[String],
+    mut use_: impl FnMut() -> Result<Value, VaultError>,
+) -> Result<Value, VaultError> {
+    let Some(wait_secs) = k2_vault::duration::body_ttl(wait, None)? else { return use_() };
+    if wait_secs > k2_vault::vault::CARD_WAIT_MAX_SECS {
+        return Err(VaultError::bad_request("bad_wait", "--wait is at most 24h"));
+    }
+    let who = c.requester()?;
+    let Requester::Session { workspace_id, session_id: Some(sid) } = &who else {
+        return Err(VaultError::forbidden("wait_needs_session", "--wait is for a K2 session; run it in one"));
+    };
+    if sid.is_empty() {
+        return Err(VaultError::forbidden("wait_needs_session", "--wait is for a K2 session; run it in one"));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(u64::try_from(wait_secs).unwrap_or(0).min(k2_vault::vault::CARD_WAIT_MAX_PER_CALL_SECS));
+    let mut card: Option<String> = wait_card.map(str::to_string);
+    let mut slot: Option<WaitSlot> = None;
+    loop {
+        // Read before looking, so a change right after the look isn't missed.
+        let seen = vault.card_generation();
+        let refusal = match use_() {
+            Ok(v) => return Ok(v),
+            Err(e) if waitable(&e) => e,
+            Err(e) => return Err(e),
+        };
+        let req = match card.as_deref() {
+            Some(id) => match vault.request_get(id) {
+                Ok(r) if crate::overlay_routes::card_is_for_session(&r, workspace_id, sid) => r,
+                _ => return Err(VaultError::new("no_card", 404, "no such card for this session")),
+            },
+            None => match crate::overlay_routes::pending_card_for(vault, workspace_id, sid, names) {
+                Some(r) => r,
+                None => {
+                    let list = names.join(", ");
+                    return Err(VaultError::new("no_card", 404, format!("no card asks for {list}; ask a person with k2 thread secret <addr> --name {list}")));
+                }
+            },
+        };
+        match req.status.as_str() {
+            "pending" => {}
+            // Only a person closes a secret card (`handle_void`).
+            "void" => return Err(VaultError::forbidden("card_declined", "a person declined; nothing was saved")),
+            "expired" => return Err(VaultError::forbidden("card_expired", "the card expired before anyone saved it; nothing was saved")),
+            // Saved, and still refused: the answer says why (its delivery,
+            // its scope). Nothing more will change while we wait.
+            _ => return Err(refusal),
+        }
+        card = Some(req.card_id.clone());
+        if slot.is_none() {
+            slot = Some(wait_slot(sid)?);
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Ok(json!({ "ok": true, "waiting": true, "card": req.card_id, "waitSecs": wait_secs }));
+        }
+        vault.wait_card_change(seen, left);
+    }
 }
 
 /// Papercut 8 and the 2026-10-28 handoff fixes: a `delivery_not_granted`
@@ -531,6 +651,10 @@ struct FileBody {
     ttl_secs: Option<u64>,
     /// Remove a file made earlier.
     done: Option<String>,
+    /// `k2 vault file --wait`: as typed (`"10m"`) or seconds.
+    wait: Option<Value>,
+    /// The card an earlier `--wait` call is following.
+    wait_card: Option<String>,
 }
 
 fn use_files_dir() -> Result<PathBuf, VaultError> {
@@ -563,18 +687,35 @@ fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     }
     let n = b.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("secret_required", "name the secret: --secret NAME"))?;
     let who = c.requester()?;
-    let sel = use_selector(vault, c, &Sel { name: Some(n.to_string()), scope: b.scope.clone(), ..Default::default() })?;
-    let r = vault.resolve(&sel, Use::File, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File))?;
-    let tag: String = r.meta.name.chars().filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')).take(40).collect();
-    let file = format!("{}-{tag}", k2_vault::crypto::base62(16));
-    crate::vault::spawn::write_secret_file(&dir, &file, r.value.expose()).map_err(|e| VaultError::internal(format!("secret file: {}", e.kind())))?;
-    let p = dir.join(&file);
-    let p2 = p.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(ttl));
-        let _ = crate::vault::adopt::remove_old_copy(&p2);
-    });
-    Ok(json!({ "ok": true, "path": p.display().to_string(), "name": r.meta.name, "ttlSecs": ttl }))
+    let names = [n.to_string()];
+    // The usual 0600 file; a one-time secret is destroyed right after it's written.
+    let write = |r: &k2_vault::Resolved| -> Result<Value, VaultError> {
+        let tag: String = r.meta.name.chars().filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')).take(40).collect();
+        let file = format!("{}-{tag}", k2_vault::crypto::base62(16));
+        crate::vault::spawn::write_secret_file(&dir, &file, r.value.expose()).map_err(|e| VaultError::internal(format!("secret file: {}", e.kind())))?;
+        let p = dir.join(&file);
+        let p2 = p.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(ttl));
+            let _ = crate::vault::adopt::remove_old_copy(&p2);
+        });
+        Ok(json!({ "ok": true, "path": p.display().to_string(), "name": r.meta.name, "ttlSecs": ttl }))
+    };
+    with_wait(vault, c, b.wait.as_ref(), b.wait_card.as_deref(), &names, || {
+        let sel = use_selector(vault, c, &Sel { name: Some(n.to_string()), scope: b.scope.clone(), ..Default::default() })?;
+        if vault.meta(&sel, &c.actor).is_ok_and(|m| vault.is_once(&m.id)) {
+            return vault.take_once(&sel, &who, &write).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File));
+        }
+        let r = vault.resolve(&sel, Use::File, &who).map_err(|e| {
+            // GH#81: a not_found here is what the field report showed. Which
+            // passport asked, by id, settles it next time.
+            if e.status == 404 {
+                k2_core::log_debug!("[vault] k2 vault file {n}: not_found for passport session {:?}", c.session_id);
+            }
+            use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File)
+        })?;
+        write(&r)
+    })
 }
 
 /// `POST /cli/vault/sync` (`k2 vault sync`, papercut 8): the caller's own
@@ -1618,6 +1759,7 @@ mod tests {
                     created_at: String::new(),
                     answered_at: None,
                     inject: Some(inject.clone()),
+                    once: false,
                 })
                 .expect("card");
                 let ans = CardAnswer { inject: Some(inject), ..Default::default() };
@@ -1675,6 +1817,7 @@ mod tests {
                 created_at: String::new(),
                 answered_at: None,
                 inject: None,
+                once: false,
             };
             let workspace_secret = |name: &str, delivery: Delivery| {
                 let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws), name, Kind::ApiKey);

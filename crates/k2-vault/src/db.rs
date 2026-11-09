@@ -279,6 +279,26 @@ CREATE TABLE IF NOT EXISTS secret_request_inject (
 );
 "#;
 
+/// One-time secrets (prd-vault-for-agents-v1 §3.5): `secret_request_once`
+/// marks a card asked with `--once` (one row per such card, gone once the
+/// card closes), and `secret_once` marks the secret saved from it, which is
+/// never delivered anywhere and is destroyed by its first `k2 vault file`.
+/// Additive (H22): `user_version` stays 1, and an older daemon never reads
+/// them (there the secret is a normal session secret and still expires).
+/// MACs under the row key.
+pub const ONCE_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS secret_request_once (
+    card_id TEXT PRIMARY KEY,
+    row_mac BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS secret_once (
+    secret_id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL,
+    row_mac BLOB NOT NULL
+);
+"#;
+
 /// The columns a table has (empty when it doesn't exist).
 fn columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
     let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -337,5 +357,6 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     rebuild_old_agent_tables(conn)?;
     conn.execute_batch(AGENT_TABLES)?;
     conn.execute_batch(CARD_INJECT_TABLES)?;
+    conn.execute_batch(ONCE_TABLES)?;
     Ok(())
 }

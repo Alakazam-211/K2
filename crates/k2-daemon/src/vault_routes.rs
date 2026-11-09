@@ -739,7 +739,13 @@ pub(crate) fn sel_from_params(params: &HashMap<String, String>) -> Sel {
 
 fn show(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -> Result<Value, VaultError> {
     let sel = selector(c, &sel_from_params(params))?;
-    let m = vault.meta(&sel, &c.actor)?;
+    let m = vault.meta(&sel, &c.actor).inspect_err(|e| {
+        // GH#81: a not_found here is what the field report showed. Which
+        // passport asked, by id, settles it next time.
+        if e.status == 404 {
+            k2_core::log_debug!("[vault] show refused not_found for passport session {:?}", c.session_id);
+        }
+    })?;
     let grants = vault.grants(&sel, &c.actor)?;
     let audit = vault
         .audit(&AuditQuery { secret_id: Some(m.id.clone()), limit: Some(20), ..Default::default() }, &c.actor)
@@ -1436,8 +1442,11 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
         _ => PutMode::Upsert,
     };
     let ttl = k2_vault::duration::body_ttl(b.ttl.as_ref(), b.ttl_secs)?;
+    let mut ttl_cut = false;
     if scope.kind == ScopeKind::Session {
-        let ttl = ttl.unwrap_or(24 * 3600).clamp(60, 30 * 24 * 3600);
+        let wanted = ttl.unwrap_or(24 * 3600);
+        ttl_cut = wanted > k2_vault::vault::SESSION_TTL_MAX_SECS;
+        let ttl = wanted.clamp(60, k2_vault::vault::SESSION_TTL_MAX_SECS);
         req.expires_at = Some((chrono::Utc::now() + chrono::Duration::seconds(ttl)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
     let out = vault.put(req, value, &c.actor)?;
@@ -1463,6 +1472,8 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
         "secret": meta_json(&out.meta),
         "use": use_hint(&out.meta),
         "replaced": placed,
+        "ttlCut": ttl_cut,
+        "ttlNote": ttl_cut.then_some("kept for 7 d (the most for one session)"),
     }))
 }
 

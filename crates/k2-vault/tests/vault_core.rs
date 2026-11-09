@@ -637,6 +637,7 @@ fn secret_cards_are_for_people() {
         created_at: String::new(),
         answered_at: None,
         inject: None,
+        once: false,
     };
     v.request_create(mk("card-0123456789abcdef")).expect("card");
     let ans = CardAnswer::default();

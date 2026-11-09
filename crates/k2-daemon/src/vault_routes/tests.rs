@@ -1625,6 +1625,23 @@ fn set_takes_a_session_ttl_as_typed() {
     }
 }
 
+/// §3.3 (V6): `set --scope session --ttl` is cut to 7 days, as cards are,
+/// and the answer says so.
+#[test]
+fn a_session_secrets_ttl_is_cut_at_seven_days() {
+    let t = vault();
+    let a = agent("ws1", false);
+    let now = chrono::Utc::now();
+    let (s, v) = call(&t, SET, &a, json!({ "name": "CODE_LONG", "scope": "session", "ttl": "30d", "valueB64": b64("k2test-long") }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ttlCut"], true, "{v}");
+    assert_eq!(v["ttlNote"], "kept for 7 d (the most for one session)", "{v}");
+    about(&v["secret"]["expiresAt"], now, 7 * 24 * 3600);
+    let (s, v) = call(&t, SET, &a, json!({ "name": "CODE_SHORT", "scope": "session", "ttl": "2h", "valueB64": b64("k2test-short") }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ttlCut"], false, "{v}");
+}
+
 /// X4: `k2 vault file` and `env-file` take `ttl` as typed; a bad one is
 /// refused before anything is written (it used to be dropped for the 60 s
 /// default, and `file` refused non-digits in the CLI only).

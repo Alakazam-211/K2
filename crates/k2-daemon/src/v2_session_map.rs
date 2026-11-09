@@ -67,6 +67,8 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
 }
 
 fn register_inner(key: String, session: Arc<DaemonPtySession>) {
+    // GH#81: the session's secrets dir lives while this process lives.
+    crate::vault::spawn::note_process(&session.session_id.to_string(), session.child_pid());
     // prd-daemon-activity-and-thread-working-v1 DA2: the activity row
     // exists before the session is findable, so the first hook from this
     // pane (accepted only once the map holds it) always has a row.

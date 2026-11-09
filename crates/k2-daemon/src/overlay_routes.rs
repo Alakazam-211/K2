@@ -2350,8 +2350,15 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
+    // §3.5: a one-time code is kept for one session as a file: anything else
+    // is refused before the card goes up.
+    if proposal.once && (proposal.scope.as_deref() != Some("session") || proposal.delivery.as_deref() != Some("file")) {
+        return error_json("400 Bad Request", "once_needs_session_file", k2_vault::vault::ONCE_USAGE);
+    }
     if proposal.scope.as_deref() == Some("session") {
-        if let Some(r) = session_card_refused_to_ask(session_id.as_deref(), proposal.delivery.as_deref()) {
+        // A one-time code never needs the session's dir (it is never copied).
+        let delivery = if proposal.once { None } else { proposal.delivery.as_deref() };
+        if let Some(r) = session_card_refused_to_ask(session_id.as_deref(), delivery) {
             return r;
         }
     }
@@ -2459,6 +2466,7 @@ fn create_secret_card(
             Some(Ok(i)) => i,
             Some(Err(e)) => return Err(error_json("400 Bad Request", e.code, e.hint)),
         },
+        once: proposal.once,
     };
     if let Err(e) = vault.request_create(req) {
         // The card was committed, so its withdrawn state is a Thread change
@@ -2655,7 +2663,8 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
         (_, d) => d,
     };
     let inject = inject.map(|i| overlay::SecretInject { dst: i.dst.render(), fmt: i.fmt });
-    Ok(overlay::SecretProposal { scope, hosts, delivery, kind, inject, ..Default::default() })
+    let once = bool_param(params, "once");
+    Ok(overlay::SecretProposal { scope, hosts, delivery, kind, inject, once, ..Default::default() })
 }
 
 /// X3 (prd-vault-for-agents-v1 §5.1): a card's `--scope ws:<name>` (the
@@ -2767,23 +2776,28 @@ pub(crate) fn follow_session_cards(vault: &k2_vault::LocalVault) -> usize {
             continue;
         }
         // The card's Thread may have moved with a re-pin.
-        let conversation = match pinned_chat_of(&req.workspace_id) {
-            Some(pin) if overlay::card_is_secret(&pin, &req.card_id).unwrap_or(false) => pin,
-            _ => req.conversation.clone(),
-        };
-        let chat = ResolvedOverlay {
-            conversation_id: conversation,
-            project_id: req.workspace_id.clone(),
-            addr: String::new(),
-            requested_addr: String::new(),
-            canonical_alias: false,
-        };
+        let chat = chat_of_card(&req);
         let Some(sid) = chat_running_session(&chat) else { continue };
         if sid == m.scope.id {
             continue;
         }
         let Ok(grants) = vault.grants(&sel, &system) else { continue };
-        if grants.iter().any(|g| g.consumer.kind == ConsumerKind::Session && g.consumer.id == sid) {
+        let to_sid = |g: &&k2_vault::Grant| g.consumer.kind == ConsumerKind::Session && g.consumer.id == sid;
+        // Already shared with this session for the secret's own time and
+        // delivery: nothing to do.
+        if grants.iter().filter(to_sid).any(|g| g.delivery == m.default_delivery && g.expires_at == m.expires_at) {
+            continue;
+        }
+        // A live share someone else made stays as they set it. A follow share
+        // goes further: one made before a second card moved the secret's time
+        // (or that ran out) is replaced below, so this session keeps it
+        // until the secret itself ends and an expired one doesn't block a
+        // new one (`vault.grant` replaces the same (secret, consumer,
+        // delivery)).
+        let unexpired_share = |g: &&k2_vault::Grant| {
+            g.expires_at.as_deref().is_none_or(|x| chrono::DateTime::parse_from_rfc3339(x).is_ok_and(|x| x > now))
+        };
+        if grants.iter().filter(to_sid).filter(unexpired_share).any(|g| g.granted_by != "system:card-follows-chat") {
             continue;
         }
         // A person removed it from this session: it stays removed.
@@ -2810,7 +2824,39 @@ pub(crate) fn follow_session_cards(vault: &k2_vault::LocalVault) -> usize {
             Err(e) => k2_core::log_debug!("[vault] a session card's secret couldn't follow its chat: {}", e.code),
         }
     }
+    if made > 0 {
+        vault.notify_cards();
+    }
     made
+}
+
+/// The chat a card belongs to now (its Thread may have moved with a re-pin).
+fn chat_of_card(req: &k2_vault::vault::SecretRequest) -> ResolvedOverlay {
+    let conversation = match pinned_chat_of(&req.workspace_id) {
+        Some(pin) if overlay::card_is_secret(&pin, &req.card_id).unwrap_or(false) => pin,
+        _ => req.conversation.clone(),
+    };
+    ResolvedOverlay {
+        conversation_id: conversation,
+        project_id: req.workspace_id.clone(),
+        addr: String::new(),
+        requested_addr: String::new(),
+        canonical_alias: false,
+    }
+}
+
+/// `k2 vault file --wait` (prd-vault-for-agents-v1 §3.4): may this session
+/// wait on this card? It asked, or the card is in the chat this session is
+/// running now.
+pub(crate) fn card_is_for_session(req: &k2_vault::vault::SecretRequest, workspace_id: &str, session_id: &str) -> bool {
+    req.workspace_id == workspace_id && (req.session_id.as_deref() == Some(session_id) || chat_running_session(&chat_of_card(req)).as_deref() == Some(session_id))
+}
+
+/// The newest pending card asking for any of `names` from this session or
+/// this session's chat. The vault's lock is not held after this returns.
+pub(crate) fn pending_card_for(vault: &k2_vault::LocalVault, workspace_id: &str, session_id: &str, names: &[String]) -> Option<k2_vault::vault::SecretRequest> {
+    let requests = vault.requests(Some(workspace_id)).ok()?;
+    requests.into_iter().find(|r| r.status == "pending" && names.iter().any(|n| n == &r.name) && card_is_for_session(r, workspace_id, session_id))
 }
 
 /// Who an answer to a card reaches: the session that asked while it runs,
@@ -2824,11 +2870,11 @@ fn card_receiver(req: &k2_vault::vault::SecretRequest, resolved: &ResolvedOverla
 /// Save on a card kept for one session: refused while the card is still open
 /// when no running session can receive it. The value isn't kept. A guest can't
 /// choose where it is kept, so a guest only hears what a guest can do.
-fn session_card_refused_to_save(receiver: Option<&str>, delivery: k2_vault::Delivery, guest: bool) -> Option<CliResponse> {
+fn session_card_refused_to_save(receiver: Option<&str>, delivery: k2_vault::Delivery, guest: bool, once: bool) -> Option<CliResponse> {
     let hint = match receiver {
         None if guest => "The agent isn't running right now, so it can't receive this. Nothing was saved. K2 is waking it: try Save again in a minute. If this comes back, send the agent a message.",
         None => "This agent isn't running right now, so it can't receive this. Nothing was saved. K2 is waking it: try Save again in a minute, or keep it for this workspace in the card's options.",
-        Some(sid) if delivery == k2_vault::Delivery::File && crate::vault::spawn::kept_dir(sid).is_none() => {
+        Some(sid) if delivery == k2_vault::Delivery::File && !once && crate::vault::spawn::kept_dir(sid).is_none() => {
             "The running session can't hold files. Nothing was saved. You can keep it for this workspace in the card's options: the file arrives when the session restarts."
         }
         Some(_) => return None,
@@ -2941,6 +2987,7 @@ fn card_summary(s: &overlay::SecretBody) -> String {
     let sites = k2_vault::vault::sites_words(&s.hosts);
     let to = if sites.is_empty() { " (no site yet: the person must add one)".to_string() } else { format!(" to {sites}") };
     let mut line = match s.delivery.as_deref().unwrap_or("fetch") {
+        _ if s.once => format!("{0} goes to you once: read it with k2 vault file {0} (used once, then deleted)", s.name),
         "env" => format!("{} goes to you as ${} (you can read it)", s.name, s.env_name.as_deref().unwrap_or(&s.name)),
         "file" => format!("{} goes to you as the file $K2_SECRETS_DIR/{} (you can read it)", s.name, s.name),
         "agent" => format!("ssh and git sign with {} on $SSH_AUTH_SOCK in your new sessions (you never see the key)", s.name),
@@ -3078,7 +3125,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     let delivery_word = ans.delivery.unwrap_or(req.proposed_delivery);
     // A guest's non-fetch answer gets the vault's own refusal: no wake for it.
     if req.status == "pending" && scope_word == "session" && !(guest && delivery_word != k2_vault::Delivery::Fetch) {
-        if let Some(r) = session_card_refused_to_save(receiver.as_deref(), delivery_word, guest) {
+        if let Some(r) = session_card_refused_to_save(receiver.as_deref(), delivery_word, guest, req.once) {
             if receiver.is_none() {
                 wake_for_card(params, &chat_now, card_id, &req.name, session_author);
             }
@@ -3128,7 +3175,8 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         (true, Some(was)) => format!(" It replaced the earlier {} (that one was sent {was}).", m.name),
         (true, None) => format!(" It replaced the earlier {}.", m.name),
     };
-    let file_delivery = card_file_delivery(&vault, receiver.as_deref(), &req.workspace_id, m);
+    // A one-time secret is never put in the folder (§3.5): no delivery to report.
+    let file_delivery = if req.once { None } else { card_file_delivery(&vault, receiver.as_deref(), &req.workspace_id, m) };
     let session_only = if m.scope.kind == k2_vault::ScopeKind::Session {
         " It stays with this chat until it expires: after a restart or --resume, the chat's next session gets it within a minute, or at once with k2 vault sync. To keep it for good, ask again: k2 thread secret --scope workspace."
     } else {
@@ -3156,7 +3204,13 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         sends,
         if sites.is_empty() { String::new() } else { format!("; {}", sites.join(", ")) },
         // The outcome is known: never "within a minute" beside it.
-        if file_delivery.is_some() { format!("k2 vault file --secret {} for a 0600 copy", m.name) } else { crate::vault_routes::use_hint(m) },
+        if req.once {
+            format!("k2 vault file {} (once; then it is deleted)", m.name)
+        } else if file_delivery.is_some() {
+            format!("k2 vault file --secret {} for a 0600 copy", m.name)
+        } else {
+            crate::vault_routes::use_hint(m)
+        },
         if replaced.is_empty() && !told.is_empty() { "." } else { "" },
         replaced,
         told,

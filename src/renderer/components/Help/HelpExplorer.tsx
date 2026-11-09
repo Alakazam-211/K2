@@ -5,6 +5,7 @@
 // all of it (⌘K / Ctrl+K focuses it).
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { DialogScrim, Input, Surface } from '@/components/ui'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -489,7 +490,8 @@ export default function HelpExplorer({
         }}
       />
       <Surface
-        role2="surface" material="tile"
+        role2="surface"
+        {...floatMaterial('dialog')}
         elevation={5}
         className="no-drag"
         role="dialog"

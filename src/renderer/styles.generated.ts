@@ -382,12 +382,12 @@ export const STYLES: readonly StyleMeta[] = [
           "light"
         ],
         "swatch": {
-          "bg": "#ececf1",
+          "bg": "#fafafa",
           "surface": "#ffffff",
-          "elevated": "#f2f2f7",
+          "elevated": "#f7f7f8",
           "accent": "var(--glass-accent)",
           "textPrimary": "#000000",
-          "border": "#d8d8de"
+          "border": "#eaeaea"
         },
         "terminal": {
           "foreground": 1842206,

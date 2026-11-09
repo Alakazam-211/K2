@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { Segmented, Slider, Toggle } from '@/components/ui'
+import { Button, ProgressiveHeaderBlur, Segmented, Slider, Toggle } from '@/components/ui'
 
 afterEach(cleanup)
 
@@ -64,6 +64,21 @@ describe('Segmented', () => {
     rect.mockRestore()
   })
 
+  it('places the thumb from the computed border, so a hairline border lands exactly', () => {
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return { left: this.getAttribute('role') === 'radio' ? 40 : 10, width: 30 } as DOMRect
+    })
+    const real = window.getComputedStyle
+    const style = vi.spyOn(window, 'getComputedStyle').mockImplementation((el, p) => {
+      const cs = real(el, p)
+      return new Proxy(cs, { get: (t, k) => (k === 'borderLeftWidth' ? '0.5px' : Reflect.get(t, k)) })
+    })
+    const { container } = render(<Segmented aria-label="Pick" value="c" onChange={() => {}} options={options} />)
+    expect(container.querySelector<HTMLElement>('.k2-segment-thumb')!.style.transform).toBe('translateX(29.5px)')
+    style.mockRestore()
+    rect.mockRestore()
+  })
+
   it('arrow keys skip disabled segments and wrap', () => {
     const onChange = vi.fn()
     render(<Segmented aria-label="Pick" value="a" onChange={onChange} options={options} />)
@@ -71,5 +86,108 @@ describe('Segmented', () => {
     expect(onChange).toHaveBeenLastCalledWith('c')
     fireEvent.keyDown(screen.getByRole('radio', { name: 'A' }), { key: 'ArrowLeft' })
     expect(onChange).toHaveBeenLastCalledWith('c')
+  })
+})
+
+describe('press spring', () => {
+  const frames: FrameRequestCallback[] = []
+  const settle = (): void => {
+    let t = 0
+    for (let i = 0; i < 400 && frames.length; i++) frames.shift()!((t += 16))
+  }
+  const reduced = (on: boolean): void => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: on && q.includes('reduced-motion') }))
+  }
+
+  beforeEach(() => {
+    frames.length = 0
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb))
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    reduced(false)
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  const button = (): HTMLElement => {
+    render(<Button>Save</Button>)
+    return screen.getByRole('button', { name: 'Save' })
+  }
+
+  it('grows to the press scale while held and returns after release', () => {
+    const el = button()
+    el.style.setProperty('--motion-press-scale', '1.045')
+    fireEvent.pointerDown(el)
+    settle()
+    expect(Number(el.style.getPropertyValue('scale'))).toBeCloseTo(1.045, 3)
+    fireEvent.pointerUp(el)
+    settle()
+    expect(el.style.getPropertyValue('scale')).toBe('')
+  })
+
+  it('does nothing when the style has no press scale (Terminal)', () => {
+    const el = button()
+    el.style.setProperty('--motion-press-scale', '1')
+    fireEvent.pointerDown(el)
+    settle()
+    expect(el.style.getPropertyValue('scale')).toBe('')
+  })
+
+  it('does nothing under reduced motion', () => {
+    reduced(true)
+    const el = button()
+    el.style.setProperty('--motion-press-scale', '1.045')
+    fireEvent.pointerDown(el)
+    settle()
+    expect(el.style.getPropertyValue('scale')).toBe('')
+  })
+
+  it('reaches the Toggle and Segmented segments, and skips a disabled control', () => {
+    render(<Toggle checked={false} onChange={() => {}} aria-label="Sw" />)
+    render(<Segmented aria-label="P" value="a" onChange={() => {}} options={[{ value: 'a', label: 'A' }]} />)
+    render(<Button disabled>Off</Button>)
+    const sw = screen.getByRole('switch', { name: 'Sw' })
+    const seg = screen.getByRole('radio', { name: 'A' })
+    const off = screen.getByRole('button', { name: 'Off' })
+    for (const el of [sw, seg, off]) {
+      el.style.setProperty('--motion-press-scale', '1.045')
+      fireEvent.pointerDown(el)
+    }
+    settle()
+    expect(Number(sw.style.getPropertyValue('scale'))).toBeGreaterThan(1)
+    expect(Number(seg.style.getPropertyValue('scale'))).toBeGreaterThan(1)
+    expect(off.style.getPropertyValue('scale')).toBe('')
+  })
+})
+
+describe('ProgressiveHeaderBlur', () => {
+  const setup = (): { band: HTMLElement; list: HTMLElement } => {
+    const { container } = render(
+      <div>
+        <ProgressiveHeaderBlur />
+        <div data-list="" />
+      </div>
+    )
+    const list = container.querySelector<HTMLElement>('[data-list]')!
+    Object.defineProperty(list, 'scrollHeight', { value: 500, configurable: true })
+    Object.defineProperty(list, 'clientHeight', { value: 100, configurable: true })
+    return { band: container.querySelector<HTMLElement>('.k2-header-blur')!, list }
+  }
+
+  it('is hidden from readers and marks itself once the list has scrolled', () => {
+    const { band, list } = setup()
+    expect(band.getAttribute('aria-hidden')).toBe('true')
+    expect(band.dataset.scrolled).toBeUndefined()
+    list.scrollTop = 40
+    fireEvent.scroll(list)
+    expect(band.dataset.scrolled).toBe('1')
+    list.scrollTop = 0
+    fireEvent.scroll(list)
+    expect(band.dataset.scrolled).toBe('0')
+  })
+
+  it('ignores a scroller that does not scroll vertically', () => {
+    const { band, list } = setup()
+    Object.defineProperty(list, 'scrollHeight', { value: 100 })
+    fireEvent.scroll(list)
+    expect(band.dataset.scrolled).toBeUndefined()
   })
 })

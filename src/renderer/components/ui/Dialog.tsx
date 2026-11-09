@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { cx } from './cx'
 import { Surface } from './Surface'
@@ -18,6 +19,7 @@ export function DialogScrim({ zIndex = 99998, className, style, ...rest }: Dialo
   return (
     <div
       ref={ref}
+      data-scrim=""
       className={cx('fixed inset-0 bg-[var(--color-scrim)]', className)}
       style={{ zIndex, ...style }}
       {...rest}
@@ -42,7 +44,7 @@ export function DialogFrame({ zIndex = 99999, className, style, ...rest }: Dialo
       className="no-drag fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
       style={{ zIndex }}
     >
-      <Surface elevation={5} chamfer material="tile" className={className} style={style} {...rest} />
+      <Surface elevation={5} chamfer className={className} style={style} {...floatMaterial('dialog')} {...rest} />
     </div>
   )
 }

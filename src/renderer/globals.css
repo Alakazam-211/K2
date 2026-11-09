@@ -1600,6 +1600,158 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
 .k2-segment[aria-checked="true"]:focus-visible { outline-color: var(--color-on-accent); }
 .k2-segment:disabled { cursor: default; opacity: 0.45; }
 
+/* Glass: a dialog scrim is plain dim, because Frost is only for floating
+   chrome. !important beats the inline blur the dialogs carry for other styles. */
+html[data-style="glass-next"] [data-scrim]:not([data-zen-root] *) {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Glass: menus grow from their anchor in 180ms (G4). Uses the individual
+   `scale` so a menu positioned with a transform stays put. !important because
+   the context menu carries its own inline fade. */
+@keyframes k2-menu-grow {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+html[data-style="glass-next"] [data-material="frost"]:not([data-frost-shape], [data-frost-static]):not([data-zen-root] *) {
+  animation: k2-menu-grow var(--motion-duration-medium) var(--motion-ease-standard) backwards !important;
+  transform-origin: var(--k2-menu-origin, top left);
+}
+html[data-style="glass-next"] [data-material="frost"][class~="right-0"]:not([data-zen-root] *) { --k2-menu-origin: top right; }
+@media (prefers-reduced-motion: reduce) {
+  html[data-style="glass-next"] [data-material="frost"]:not([data-zen-root] *) { animation: none !important; }
+}
+
+/* Glass: segmented motion off under reduced motion (the slide lives in the
+   style package, which can't hold a media query). */
+@media (prefers-reduced-motion: reduce) {
+  html[data-style="glass-next"] .k2-segment-thumb[data-ready]:not([data-zen-root] *),
+  html[data-style="glass-next"] .k2-segment:not([data-zen-root] *) { transition: none; }
+}
+
+/* Glass rims at 1x: the 0.5px edge rounds up to a whole pixel on top of the 1px
+   highlight, so it reads heavy. Lower the edge there. Obsidian only: Veil's rim
+   is the gradient ring. */
+@media (max-resolution: 1.5dppx) {
+  html[data-style="glass-next"][data-palette="obsidian"] [data-material="frost"]:not([data-zen-root] *) {
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+}
+
+/* The bands: the header stack from the phone, carried over verbatim (layer
+   order, masks, tint). Four stacked backdrop blurs, each masked to its own band
+   so the blur ramps instead of stepping, with the dark tint on top; the tint
+   carries legibility more than the blur. Glass only. At most two on screen.
+   Also meant for: the agent/inbox list header and the Tickets board header. */
+.k2-header-blur { display: none; }
+html[data-style="glass-next"] .k2-header-blur:not([data-zen-root] *) {
+  display: block;
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 40px;
+  /* The phone's is 0; on desktop the list's own positioned rows would paint over it. */
+  z-index: 1;
+  pointer-events: none;
+}
+/* At rest nothing is under the header, so nothing is drawn. visibility, not an
+   opacity fade: a blur must never animate (the WebKit stale-layer rule). */
+html[data-style="glass-next"] .k2-header-blur:not([data-scrolled="1"]):not([data-zen-root] *) { visibility: hidden; }
+.k2-header-blur > span {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.k2-header-blur-1 {
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
+}
+.k2-header-blur-2 {
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 40%, transparent 80%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 40%, transparent 80%);
+}
+.k2-header-blur-3 {
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 25%, transparent 60%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 25%, transparent 60%);
+}
+.k2-header-blur-4 {
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 12%, transparent 40%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 12%, transparent 40%);
+}
+.k2-header-tint {
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.55) 45%, rgba(0, 0, 0, 0) 100%);
+}
+html[data-style="glass-next"][data-palette="veil"] .k2-header-tint {
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--color-bg) 85%, transparent) 0%, color-mix(in srgb, var(--color-bg) 55%, transparent) 45%, transparent 100%);
+}
+/* Softens rows before they reach the header, once the list has scrolled. */
+.k2-header-blur--early { --k2-blur-early: 0px; height: calc(40px + var(--k2-blur-early)) !important; }
+.k2-header-blur--early[data-scrolled="1"] { --k2-blur-early: 22px; }
+.k2-header-blur--early > .k2-header-blur-1 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - var(--k2-blur-early) - 20px), transparent 100%); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - var(--k2-blur-early) - 20px), transparent 100%); }
+.k2-header-blur--early > .k2-header-blur-2 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.4), transparent calc((100% - var(--k2-blur-early)) * 0.8)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.4), transparent calc((100% - var(--k2-blur-early)) * 0.8)); }
+.k2-header-blur--early > .k2-header-blur-3 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.25), transparent calc((100% - var(--k2-blur-early)) * 0.6)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.25), transparent calc((100% - var(--k2-blur-early)) * 0.6)); }
+.k2-header-blur--early > .k2-header-blur-4 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.12), transparent calc((100% - var(--k2-blur-early)) * 0.4)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.12), transparent calc((100% - var(--k2-blur-early)) * 0.4)); }
+.k2-header-blur--early > .k2-header-tint { background: linear-gradient(to bottom, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.55) calc((100% - var(--k2-blur-early)) * 0.45), rgba(0, 0, 0, 0.12) calc(100% - var(--k2-blur-early) - 20px), rgba(0, 0, 0, 0) 100%); }
+/* Full strength through a tall header, then a strip below it once scrolled. */
+.k2-header-blur--heavy { --k2-blur-heavy: 0px; --k2-blur-h: calc(100% - var(--k2-blur-heavy)); height: calc(40px + var(--k2-blur-heavy)) !important; }
+.k2-header-blur--heavy[data-scrolled="1"] { --k2-blur-heavy: 18px; }
+.k2-header-blur--heavy > .k2-header-blur-1 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.9), transparent 100%); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.9), transparent 100%); }
+.k2-header-blur--heavy > .k2-header-blur-2 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.8), transparent calc(var(--k2-blur-h) + var(--k2-blur-heavy) * 0.5)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.8), transparent calc(var(--k2-blur-h) + var(--k2-blur-heavy) * 0.5)); }
+.k2-header-blur--heavy > .k2-header-blur-3 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.7), transparent var(--k2-blur-h)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.7), transparent var(--k2-blur-h)); }
+.k2-header-blur--heavy > .k2-header-blur-4 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.62), transparent calc(var(--k2-blur-h) * 0.95)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.62), transparent calc(var(--k2-blur-h) * 0.95)); }
+.k2-header-blur--heavy > .k2-header-tint { background: linear-gradient(to bottom, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.85) calc(var(--k2-blur-h) * 0.6), rgba(0, 0, 0, 0.4) calc(var(--k2-blur-h) * 0.85), rgba(0, 0, 0, 0.1) var(--k2-blur-h), rgba(0, 0, 0, 0) 100%); }
+
+/* The bottom band: the same stack flipped, on the Thread's footer strip. The
+   Thread kit draws the strip; Glass replaces its layers with the phone's. */
+html[data-style="glass-next"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-1:not([data-zen-root] *) { -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); -webkit-mask-image: linear-gradient(to top, #000 0%, #000 55%, transparent 100%); mask-image: linear-gradient(to top, #000 0%, #000 55%, transparent 100%); }
+html[data-style="glass-next"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-2:not([data-zen-root] *) { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); -webkit-mask-image: linear-gradient(to top, #000 0%, #000 40%, transparent 80%); mask-image: linear-gradient(to top, #000 0%, #000 40%, transparent 80%); }
+html[data-style="glass-next"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-3:not([data-zen-root] *) { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); -webkit-mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 60%); mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 60%); }
+html[data-style="glass-next"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-4:not([data-zen-root] *) { -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); -webkit-mask-image: linear-gradient(to top, #000 0%, #000 12%, transparent 40%); mask-image: linear-gradient(to top, #000 0%, #000 12%, transparent 40%); }
+html[data-style="glass-next"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.55) 45%, rgba(0, 0, 0, 0) 100%); }
+html[data-style="glass-next"][data-palette="veil"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to top, color-mix(in srgb, var(--color-bg) 85%, transparent) 0%, color-mix(in srgb, var(--color-bg) 55%, transparent) 45%, transparent 100%); }
+
+/* The phone's band starts 24px above its bar; the kit's strip stops at 6px. */
+html[data-style="glass-next"] [data-k2-thread-zen] .thread-footer-fade:not([data-zen-root] *) { margin-top: -18px; }
+
+/* Fallback: no blur. The layers go, and a heavier ramp keeps text off the rows. */
+html[data-style="glass-next"][data-frost="tile"] :is(.k2-header-blur-1, .k2-header-blur-2, .k2-header-blur-3, .k2-header-blur-4):not([data-zen-root] *),
+html[data-style="glass-next"][data-frost="tile"] [data-k2-thread-zen] .thread-footer-fade > [class^="thread-footer-blur-"]:not([data-zen-root] *) { display: none; }
+html[data-style="glass-next"][data-frost="tile"] .k2-header-tint:not([data-zen-root] *) {
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.88) 60%, rgba(0, 0, 0, 0) 100%);
+}
+html[data-style="glass-next"][data-frost="tile"][data-palette="veil"] .k2-header-tint:not([data-zen-root] *) {
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--color-bg) 96%, transparent) 0%, color-mix(in srgb, var(--color-bg) 88%, transparent) 60%, transparent 100%);
+}
+html[data-style="glass-next"][data-frost="tile"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) {
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.88) 60%, rgba(0, 0, 0, 0) 100%);
+}
+html[data-style="glass-next"][data-frost="tile"][data-palette="veil"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) {
+  background: linear-gradient(to top, color-mix(in srgb, var(--color-bg) 96%, transparent) 0%, color-mix(in srgb, var(--color-bg) 88%, transparent) 60%, transparent 100%);
+}
+
+/* The Thread composer's field and Send are tile (the phone's GlassComposer).
+   !important because the Thread kit's see-through wash is. */
+html[data-style="glass-next"] [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]:not([data-zen-root] *) {
+  background: var(--tile-fill) !important;
+  --ch-fill: var(--tile-fill) !important;
+  border: 1px solid var(--tile-edge);
+  box-shadow: var(--tile-sheen), var(--tile-shadow);
+}
+html[data-style="glass-next"] [data-k2-thread-zen] [data-zen-send]:not([data-zen-root] *) {
+  border: 1px solid var(--tile-edge);
+  box-shadow: var(--tile-sheen), var(--tile-shadow);
+}
+
 /* Braille spinner */
 @keyframes braille-spin {
   0%   { content: '⠋'; }

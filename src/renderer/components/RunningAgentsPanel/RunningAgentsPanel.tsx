@@ -340,6 +340,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-start justify-center pt-[15vh] no-drag"
+      data-scrim=""
       style={{ background: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(8px)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) close()

@@ -3,6 +3,7 @@
 // Not Admin Access (Connect users) and not Cores → Apps.
 
 import React, { useCallback, useEffect, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
@@ -569,7 +570,7 @@ export function PeopleSection(): React.JSX.Element {
                   <div
                     role="menu"
                     aria-label={`Password actions for ${row.username}`}
-                    data-material="frost" className="absolute right-1 top-full z-20 min-w-[10rem] py-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-lg"
+                    {...floatMaterial('menu')} className="absolute right-1 top-full z-20 min-w-[10rem] py-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-lg"
                     onKeyDown={(e) => {
                       if (e.key === 'Escape') setMenuFor(null)
                     }}

@@ -6,7 +6,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
-import { Toggle } from '@/components/ui'
+import { ProgressiveHeaderBlur, Toggle } from '@/components/ui'
 import { restartHostConfirmCopy } from './restart-host'
 import { hostActionGate, refusalCopy } from './host-role'
 import { useActiveHostRole } from './useActiveHostRole'
@@ -206,7 +206,9 @@ export function GeneralSection(): React.JSX.Element {
       </div>
 
       {/* Tab body: half-width forms */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-8 [scrollbar-gutter:stable] w-full max-w-xl">
+      <div className="relative flex-1 min-h-0 w-full max-w-xl">
+      <ProgressiveHeaderBlur />
+      <div className="h-full overflow-y-auto px-6 pt-4 pb-8 [scrollbar-gutter:stable] w-full">
       {tab === 'general' && (
       <div className="space-y-4">
         {/* Version & Update */}
@@ -442,6 +444,7 @@ export function GeneralSection(): React.JSX.Element {
         </div>
       )}
 
+      </div>
       </div>
     </div>
   )

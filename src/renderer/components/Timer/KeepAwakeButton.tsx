@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useKeepAwakeStore, type KeepAwakeTarget } from '@/stores/keep-awake'
 import {
@@ -173,7 +174,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
             role="dialog"
             aria-label="Keep awake"
             data-testid="keep-awake-menu"
-            data-material="frost" className="absolute right-0 top-full z-50 mt-1 w-[280px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
+            {...floatMaterial('popover')} className="absolute right-0 top-full z-50 mt-1 w-[280px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
             style={noDrag}
           >
             <header className="text-[12px] text-[var(--color-text-primary)]">Keep awake</header>
@@ -242,7 +243,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
           role="dialog"
           aria-label="Keep awake"
           data-testid="keep-awake-menu"
-          data-material="frost" className="absolute right-0 top-full z-50 mt-1 w-[280px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
+          {...floatMaterial('popover')} className="absolute right-0 top-full z-50 mt-1 w-[280px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
           style={noDrag}
         >
           <header className="text-[12px] text-[var(--color-text-primary)]">Keep awake</header>

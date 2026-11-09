@@ -13,6 +13,7 @@
 // phase, before the page's own Esc (clear the note / close the wiki).
 
 import React, { useEffect, useMemo, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
@@ -190,7 +191,7 @@ export function WikiWorkspacePicker({
             style={menu.style}
             data-wiki-picker-menu=""
             data-placement={menu.placement}
-            data-material="frost" className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl flex flex-col"
+            {...floatMaterial('menu')} className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl flex flex-col"
           >
             <SearchableAgentList
               sections={sections}

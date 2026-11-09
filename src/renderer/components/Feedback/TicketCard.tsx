@@ -9,6 +9,7 @@
 // because it has nothing else to tell it apart.
 
 import React, { useEffect, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -155,7 +156,7 @@ export function CardStatusDropdown({
           data-testid="ticket-status-menu"
           data-placement={menu.placement}
           style={menu.style}
-          data-material="frost" className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
+          {...floatMaterial('menu')} className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
         >
           {/* Answered shows as the current state but is not offered. */}
           {row.status === 'answered' && (

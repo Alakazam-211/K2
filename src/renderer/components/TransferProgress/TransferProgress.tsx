@@ -7,6 +7,7 @@
 // <Toast /> at each app root.
 
 import { useRef } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
 import type { Transfer } from '@/stores/transfer-progress'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
@@ -23,7 +24,7 @@ function TransferItem({ transfer }: { transfer: Transfer }): React.JSX.Element {
   const pct = transfer.fraction === null ? null : Math.round(transfer.fraction * 100)
 
   return (
-    <div data-material="frost" className="bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[260px] max-w-[360px] overflow-hidden border border-[var(--color-border)]">
+    <div {...floatMaterial('toast')} className="bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[260px] max-w-[360px] overflow-hidden border border-[var(--color-border)]">
       <div className="px-3 py-2 flex items-center gap-2">
         <span className="flex-1 truncate leading-relaxed" title={transfer.label}>
           <span className="text-[var(--color-text-muted)]">

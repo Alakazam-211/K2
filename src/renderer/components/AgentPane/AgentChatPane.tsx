@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { terminalExists } from '@/lib/terminal-daemon'
@@ -410,7 +411,7 @@ function ChatHeader({
         </svg>
       </button>
       {historyOpen && (
-        <div ref={historyMenuRef} data-material="frost" className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
+        <div ref={historyMenuRef} {...floatMaterial('menu')} className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
           <button
             type="button"
             data-testid="pinned-continue-new-chat"

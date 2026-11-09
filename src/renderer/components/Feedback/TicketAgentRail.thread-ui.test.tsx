@@ -156,7 +156,7 @@ describe('a ticket’s discussion in the Thread look', () => {
       const root = rail()
       const thread = screen.getByTestId('ticket-rail-thread')
       expect(thread.hasAttribute('data-k2-thread-zen')).toBe(true)
-      expect(thread.style.getPropertyValue('--zen-bubble-agent')).toBe('var(--color-bg-elevated)')
+      expect(thread.style.getPropertyValue('--zen-bubble-agent')).toBe('var(--color-bubble-agent, var(--color-bg-elevated))')
       const [agent, mine] = Array.from(root.querySelectorAll('[data-zen-message]')) as HTMLElement[]
       expect(agent.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-bubble')).toBe('agent')
       expect(agent.querySelector('[data-thread-author]')?.textContent).toBe('scout')

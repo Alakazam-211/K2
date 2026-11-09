@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { startUsageCachePoll, useSubscriptionUsageStore } from '@/stores/subscription-usage'
@@ -181,7 +182,7 @@ export default function UsageButton(): React.JSX.Element {
           role="dialog"
           aria-label="Subscription usage"
           data-testid="subscription-usage-menu"
-          data-material="frost" className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
+          {...floatMaterial('popover')} className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
           style={noDrag}
         >
           {whose !== null && (

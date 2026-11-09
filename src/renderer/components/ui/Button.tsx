@@ -1,5 +1,6 @@
-import { forwardRef } from 'react'
+import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react'
 import { cx } from './cx'
+import { usePressSpring } from './usePressSpring'
 
 /** Variants bound to Terminal's dominant button idioms — converting a call
  *  site to a variant must be rendering-identical under Charcoal. */
@@ -40,9 +41,19 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   { variant = 'default', size = 'sm', className, type = 'button', ...rest },
   ref
 ) {
+  const press = usePressSpring<HTMLButtonElement>()
+  const node = useRef<HTMLButtonElement | null>(null)
+  useImperativeHandle(ref, () => node.current as HTMLButtonElement, [])
+  const attach = useCallback(
+    (el: HTMLButtonElement | null) => {
+      node.current = el
+      press(el)
+    },
+    [press]
+  )
   return (
     <button
-      ref={ref}
+      ref={attach}
       type={type}
       data-k2-chamfer="control"
       className={cx(

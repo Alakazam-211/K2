@@ -42,6 +42,7 @@
 // of that user).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { Button, DialogScrim, Surface } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { windowTopBarTarget } from './top-bar-scope'
@@ -664,7 +665,8 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
       />
       <Surface
         ref={dialogRef}
-        role2="surface" material="tile"
+        role2="surface"
+        {...floatMaterial('dialog')}
         elevation={5}
         className="no-drag"
         role="dialog"

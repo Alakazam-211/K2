@@ -32,6 +32,7 @@
 // stays only for tests of the retired path until 0.47.0.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { SettingDropdown } from '../controls/SettingControls'
 import { ZenGardenSyncControls, useZenSyncLive } from './ZenGardenSyncControls'
@@ -623,7 +624,7 @@ function AddAgent({
           <div
             ref={menu.menuRef}
             data-garden-add-agent-picker=""
-            data-material="frost" className="no-drag border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-2"
+            {...floatMaterial('menu')} className="no-drag border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-2"
             style={menu.style}
           >
             {error ? (
@@ -682,7 +683,7 @@ function GardenMenu({ onDelete, name }: { onDelete(): void; name: string }): Rea
           <div
             ref={menu.menuRef}
             role="menu"
-            data-material="frost" className="no-drag flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-1"
+            {...floatMaterial('menu')} className="no-drag flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-1"
             style={menu.style}
           >
             <button

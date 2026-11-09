@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { DialogScrim, Surface } from '@/components/ui'
 import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useProjectsStore } from '../../stores/projects'
@@ -269,9 +270,9 @@ export default function CommandPalette(): React.JSX.Element | null {
     >
       <Surface
         role2="surface"
-        data-material="frost"
-        className="w-[560px] max-h-[60vh] flex flex-col overflow-hidden"
-        style={{ boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
+        {...floatMaterial('palette')}
+        className="w-[560px] max-h-[60vh] flex flex-col overflow-hidden [box-shadow:0_24px_48px_rgba(0,0,0,0.5)]"
+        style={{ '--k2-menu-origin': 'top center' } as React.CSSProperties}
       >
         {/* Search input */}
         <div className="flex items-center border-b border-[var(--color-border)] px-4 py-3">

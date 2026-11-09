@@ -6,6 +6,7 @@ import { ThreadOverlayPane, threadZenScopeProps } from './ThreadOverlayPane'
 import type { ThreadTurn } from './overlayThread'
 import { ThreadComposeDrawerContext, type ThreadComposeDrawer } from './threadComposeDrawer'
 import { FOOTER_FADE_TARGETS, ThreadFooterFade, threadFadeTop } from '@/components/Thread/ThreadZenKit'
+import { ProgressiveHeaderBlur } from '@/components/ui'
 
 /**
  * Thread list + Message-the-agent bar. The bar floats over the list's
@@ -100,6 +101,7 @@ export function ThreadOverlayColumn({
         className="absolute inset-0 overflow-hidden flex flex-col"
         data-testid="agent-session-thread-list-slot"
       >
+        <ProgressiveHeaderBlur />
         <SelectableRegion className="h-full min-h-0 flex flex-col overflow-hidden">
           <ThreadOverlayPane
             addr={addr}

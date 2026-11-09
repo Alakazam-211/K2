@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useLayoutEffect, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { KeyCombo } from '@/components/KeySymbol'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import {
@@ -233,7 +234,7 @@ function Submenu({
       ref={ref}
       role="menu"
       data-context-submenu=""
-      data-material="frost"
+      {...floatMaterial('menu')}
       className={PANEL_CLASS}
       style={{ ...PANEL_STYLE, position: 'absolute', left: '100%', top: -4, zIndex: 1 }}
       onMouseDown={(e) => e.stopPropagation()}
@@ -423,7 +424,7 @@ export default function ContextMenu(): React.JSX.Element | null {
       <div
         ref={menuRef}
         data-context-menu=""
-        data-material="frost"
+        {...floatMaterial('menu')}
         className={`no-drag ${PANEL_CLASS}`}
         style={{
           ...PANEL_STYLE,

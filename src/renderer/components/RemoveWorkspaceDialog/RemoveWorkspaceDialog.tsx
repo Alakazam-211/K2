@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { invoke } from '@tauri-apps/api/core'
 import { Callout, DialogScrim, Radio } from '@/components/ui'
 import {
@@ -128,7 +129,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
       onClick={isPending ? undefined : close}
     >
       <div
-        data-material="tile" data-floating="" className="w-[560px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[560px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

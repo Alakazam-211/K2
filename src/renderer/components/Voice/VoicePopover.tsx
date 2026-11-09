@@ -4,6 +4,7 @@
 // (S5). Every action goes to THAT server with its own login.
 
 import { useEffect, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
 import type { PresenceRole } from '@/components/Presence/PresenceChip'
 import { roomFailureActions } from '@/components/Home/room/RoomFailure'
@@ -404,7 +405,7 @@ export default function VoicePopover({
       role="dialog"
       aria-label="Voice rooms"
       data-testid="voice-popover"
-      data-material="frost" className="absolute right-0 top-full z-50 mt-1 w-[320px] max-h-[70vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
+      {...floatMaterial('popover')} className="absolute right-0 top-full z-50 mt-1 w-[320px] max-h-[70vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
       style={noDrag}
     >
       <header className="mb-1 text-[12px] text-[var(--color-text-primary)]">Voice rooms</header>

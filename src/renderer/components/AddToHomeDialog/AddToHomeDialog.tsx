@@ -8,6 +8,7 @@
 // straight away there.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { DialogScrim, Checkbox } from '@/components/ui'
 import { useAddToHomeDialogStore } from '@/stores/add-to-home-dialog'
 import { useHomesStore } from '@/stores/homes'
@@ -98,7 +99,7 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
       <div
         role="dialog"
         aria-label="Add to Home"
-        data-material="tile" data-floating="" className="w-[360px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[360px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 pt-5 pb-3">

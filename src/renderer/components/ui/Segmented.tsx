@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import { cx } from './cx'
+import { usePressSpring } from './usePressSpring'
 
 export interface SegmentedOption<T extends string> {
   value: T
@@ -49,7 +50,11 @@ export function Segmented<T extends string>({
       // Rects, not offsetLeft: labels land on fractions of a pixel.
       const box = on.getBoundingClientRect()
       indicator.style.width = `${box.width}px`
-      indicator.style.transform = `translateX(${box.left - root.getBoundingClientRect().left - root.clientLeft}px)`
+      // The thumb is placed from the padding box. clientLeft is a whole number,
+      // so a hairline border (0.5px on Glass's track) has to come from the
+      // computed width for the thumb to land exactly.
+      const border = parseFloat(getComputedStyle(root).borderLeftWidth) || 0
+      indicator.style.transform = `translateX(${box.left - root.getBoundingClientRect().left - border}px)`
     }
     place()
     const frame = requestAnimationFrame(() => {
@@ -79,6 +84,8 @@ export function Segmented<T extends string>({
       role="radiogroup"
       aria-label={ariaLabel}
       data-k2-chamfer="control"
+      data-material="frost"
+      data-frost-shape="pill"
       data-testid={testId}
       data-disabled={disabled ? '' : undefined}
       className={cx('k2-segmented', className)}
@@ -88,7 +95,7 @@ export function Segmented<T extends string>({
         const on = o.value === value
         const off = disabled || o.disabled
         return (
-          <button
+          <SegmentButton
             key={o.value}
             type="button"
             role="radio"
@@ -110,9 +117,15 @@ export function Segmented<T extends string>({
             className={cx('k2-segment no-drag', o.buttonProps?.className)}
           >
             {o.label}
-          </button>
+          </SegmentButton>
         )
       })}
     </div>
   )
+}
+
+/** One segment. A component of its own so each gets the press spring. */
+function SegmentButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
+  const press = usePressSpring<HTMLButtonElement>()
+  return <button ref={press} {...props} />
 }

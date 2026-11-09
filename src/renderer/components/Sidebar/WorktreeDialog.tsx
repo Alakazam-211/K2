@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 // Plan B — git branch list + worktree create are host-aware daemon data:
 // route them through the `/cli/git/*` HTTP layer (local OR remote) instead
 // of the localhost-pinned Tauri `git_*` invoke proxy. GET params snake_case
@@ -167,7 +168,7 @@ export default function WorktreeDialog({
       <DialogScrim zIndex={0} className="backdrop-blur-sm" />
 
       {/* Dialog */}
-      <div data-material="tile" data-floating="" className="relative w-[350px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
+      <div {...floatMaterial('dialog')} className="relative w-[350px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">

@@ -25,6 +25,7 @@
 // "Local" is the no-op default and behaves byte-identically to today.
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import {
   useConnectHostStore,
   type ConnectHost,
@@ -465,7 +466,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
       {open && (
         <div
           ref={popoverRef}
-          data-material="frost" className="absolute left-0 top-7 z-50 w-[260px] rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
+          {...floatMaterial('menu')} className="absolute left-0 top-7 z-50 w-[260px] rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
         >
           {roomServer !== null && (
             <div

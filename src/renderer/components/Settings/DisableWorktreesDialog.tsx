@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { emit } from '@tauri-apps/api/event'
 // Plan B — projects_update / workspaces_delete AND the git cluster
 // (git_changes read + git_remove_worktree mutation) are host-aware daemon
@@ -165,7 +166,7 @@ export default function DisableWorktreesDialog({
         role="dialog"
         aria-modal="true"
         aria-label="Disable Worktrees"
-        data-material="tile" data-floating="" className="w-[520px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[520px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 // Plan B — git branch/diff/merge/worktree ops are host-aware daemon data:
 // route them through the `/cli/git/*` HTTP layer (local OR remote) instead
 // of the localhost-pinned Tauri `git_*` invoke proxy. GET params are
@@ -160,7 +161,7 @@ export default function MergeDialog(): React.JSX.Element | null {
   return (
     <DialogScrim zIndex={50} className="flex items-center justify-center" onClick={close}>
       <div
-        data-material="tile" data-floating="" className="bg-[var(--color-bg-surface)] border border-[var(--color-border)] w-[520px] max-h-[80vh] flex flex-col shadow-2xl"
+        {...floatMaterial('dialog')} className="bg-[var(--color-bg-surface)] border border-[var(--color-border)] w-[520px] max-h-[80vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

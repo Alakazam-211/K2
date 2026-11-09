@@ -13,6 +13,7 @@
 // page-level Esc-to-pane handler sees it.
 
 import React, { useEffect, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { requestPreset } from './dashboard-dnd'
 import type { PresetShape } from './dashboard-layout'
@@ -124,7 +125,7 @@ export default function DashboardPresetsMenu(): React.JSX.Element | null {
       </button>
 
       {open && (
-        <div data-material="frost" className="absolute right-0 top-full mt-1 z-40 w-44 border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl py-1">
+        <div {...floatMaterial('menu')} className="absolute right-0 top-full mt-1 z-40 w-44 border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl py-1">
           {PRESETS.map((p) => (
             <button
               key={p.shape}

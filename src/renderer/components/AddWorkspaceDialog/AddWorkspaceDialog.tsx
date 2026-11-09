@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { Callout, DialogScrim, Checkbox } from '@/components/ui'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
@@ -64,7 +65,7 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
       onClick={isPending ? undefined : close}
     >
       <div
-        data-material="tile" data-floating="" className="w-[520px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[520px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

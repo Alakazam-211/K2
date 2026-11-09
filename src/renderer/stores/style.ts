@@ -29,6 +29,7 @@ import {
   type StyleSelection,
 } from '@/lib/style-resolve'
 import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
+import { installFrostSupport } from '@/lib/frost-support'
 import { migrateRetiredStyleKeys } from '@/lib/style-id-migration'
 import {
   clampTextGamma,
@@ -565,6 +566,7 @@ if (typeof window !== 'undefined') {
   // is only consulted once via migrateStyleFromDaemon on first settings
   // load when the pre-boot mirror was empty.
   useStyleStore.getState().applyStyle({})
+  installFrostSupport()
 
   // Live OS-appearance listener: only acts when the MODE is 'auto'
   // (explicit dark/light selections must not move with the OS).

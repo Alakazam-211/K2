@@ -1,6 +1,7 @@
 // Settings is about the window's server: heartbeats open in the primary
 // room's tabs.
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useTabsStore } from '@/stores/tabs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -263,7 +264,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 no-drag" role="dialog" aria-modal="true" aria-label={isEdit ? 'Edit schedule' : 'Add heartbeat'}>
-      <div data-material="tile" data-floating="" className="w-[520px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] p-5 shadow-2xl">
+      <div {...floatMaterial('dialog')} className="w-[520px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] p-5 shadow-2xl">
         <div className="text-sm font-medium text-[var(--color-text-primary)] mb-4">
           {isEdit ? `Edit schedule: ${initial?.name}` : 'Add heartbeat'}
         </div>

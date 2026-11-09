@@ -1,4 +1,5 @@
 import React from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useEffect, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { AgentContextDiagram } from './AgentContextDiagram'
@@ -106,6 +107,7 @@ export function FanoutConfirmModal({
 
   return (
     <div
+      data-scrim=""
       className="fixed inset-0 z-50 flex items-center justify-center no-drag"
       style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
       onClick={busy === null ? onCancel : undefined}
@@ -114,7 +116,7 @@ export function FanoutConfirmModal({
         role="dialog"
         aria-modal="true"
         aria-label="Set up canonical harness fan-out"
-        data-material="tile" data-floating="" className="w-[820px] max-w-[92vw] max-h-[90vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[820px] max-w-[92vw] max-h-[90vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

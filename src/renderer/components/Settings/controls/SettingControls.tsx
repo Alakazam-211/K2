@@ -1,4 +1,5 @@
 import React from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
@@ -328,7 +329,8 @@ export function SettingDropdown({
         >
           <div
             data-k2-chamfer={menuBox.chamfer ? 'surface' : undefined}
-            data-material="frost" className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+            {...floatMaterial('menu')} className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+            style={{ '--k2-menu-origin': `${menuBox.bottom !== undefined ? 'bottom' : 'top'} ${menuBox.right !== undefined ? 'right' : 'left'}` } as React.CSSProperties}
           >
           <div className="max-h-60 overflow-y-auto">
           {options.map((option, i) => {

@@ -2,6 +2,7 @@
 // shown read-only and never changes here. See stores/rename-agent-dialog.ts.
 
 import React, { useEffect, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { Callout, DialogScrim } from '@/components/ui'
 import { useRenameAgentDialogStore, validateAgentDisplayName } from '@/stores/rename-agent-dialog'
 import { useProjectsStore } from '@/stores/projects'
@@ -92,7 +93,7 @@ export default function RenameAgentDialog(): React.JSX.Element | null {
       <div
         role="dialog"
         aria-label="Rename agent"
-        data-material="tile" data-floating="" className="w-[420px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[420px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 pt-5 pb-3">

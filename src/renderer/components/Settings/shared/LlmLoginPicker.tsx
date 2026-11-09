@@ -20,6 +20,7 @@
 // primary server; chat header / tab menu: the room's server).
 
 import React from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useEffect, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -453,7 +454,7 @@ export function SessionTokenPicker({
         </svg>
       </button>
       {open && (
-        <div data-material="frost" className="absolute right-0 top-full mt-1 z-30 w-[40ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-2">
+        <div {...floatMaterial('menu')} className="absolute right-0 top-full mt-1 z-30 w-[40ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-2">
           <SessionTokenMenu scope={scope} doc={doc} tool={tool} target={target} />
         </div>
       )}

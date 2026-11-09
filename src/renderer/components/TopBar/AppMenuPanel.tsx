@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useZenShown } from '@/lib/zen/zen-view'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { desktopOsFromNavigator } from '@/lib/desktop-chrome'
@@ -90,7 +91,7 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
     <div
       ref={panelRef}
       role="menu"
-      data-material="frost" className="absolute left-0 top-full z-[100] mt-0.5 min-w-[200px] border border-[var(--color-border)] bg-[var(--color-bg)] py-1 shadow-lg"
+      {...floatMaterial('menu')} className="absolute left-0 top-full z-[100] mt-0.5 min-w-[200px] border border-[var(--color-border)] bg-[var(--color-bg)] py-1 shadow-lg"
     >
       {MENU_SECTIONS.map((section, si) => (
         <div key={section.title}>

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { PickerOptionLabel, PickerTriggerLabel } from './picker-label'
 
@@ -121,7 +122,7 @@ export default function FocusGroupDropdown({
           data-focus-group-menu=""
           data-placement={menu.placement}
           {...menuAttributes}
-          data-material="frost" className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+          {...floatMaterial('menu')} className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
         >
           {/* Search input */}
           <div className="p-1.5 border-b border-[var(--color-border)]">

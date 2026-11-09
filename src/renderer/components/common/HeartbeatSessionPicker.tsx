@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { createPortal } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -242,7 +243,7 @@ export function HeartbeatSessionPicker({
             left: menuBox.left,
             zIndex: menuBox.zIndex,
           }}
-          data-material="frost" className="w-[36ch] max-h-[40vh] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
+          {...floatMaterial('menu')} className="w-[36ch] max-h-[40vh] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
         >
           {/* 1 — Pinned chat: the prominent, visually-distinct first
               entry (accent + pin mark, separated from the rest). */}

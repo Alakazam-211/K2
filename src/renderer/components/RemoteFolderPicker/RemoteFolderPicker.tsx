@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
@@ -186,12 +187,13 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
       // Above the Settings overlay: this picker is opened from Settings
       // (agent image Upload, New Workspace on a remote server). At z-60 it
       // opened hidden behind Settings (z-200).
+      data-scrim=""
       style={{ zIndex: HOST_PICKER_Z, backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
       onClick={cancel}
     >
       <BrowserOverlayClaim />
       <div
-        data-material="tile" data-floating="" className="w-[560px] max-h-[80vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[560px] max-h-[80vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

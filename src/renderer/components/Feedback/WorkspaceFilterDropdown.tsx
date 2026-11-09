@@ -24,6 +24,7 @@
 // the popover, its close rules and the store reads.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useFocusGroupsStore, type FocusGroup } from '@/stores/focus-groups'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
@@ -292,7 +293,7 @@ export function WorkspaceFilterDropdown({
       </button>
 
       {open && (
-        <div data-material="frost" className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col">
+        <div {...floatMaterial('menu')} className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col">
           {/* Search + rows: the shared list (search, sections, keyboard). */}
           <SearchableAgentList
             sections={listSections}

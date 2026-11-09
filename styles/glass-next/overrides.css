@@ -13,8 +13,9 @@
  * No aurora and no wash on the canvas: the phone's look comes from content
  * moving behind glass, not a coloured background.
  *
- * Not here yet (later half of S4): the press spring, the progressive header
- * blur, and the reduced-transparency / no-backdrop-filter fallback.
+ * The press spring lives in ui/usePressSpring.ts and reads
+ * --motion-press-scale; the progressive header blur and the keyframes are in
+ * globals.css.
  */
 
 /* ── The accent ──────────────────────────────────────────────────────────
@@ -35,13 +36,78 @@
   backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
   border: 0.5px solid var(--material-edge);
   border-radius: var(--radius-box);
-  box-shadow: var(--material-sheen), var(--shadow-3);
+  box-shadow: var(--material-sheen);
 }
-/* Small floating pieces sit in the chrome: no drop shadow of their own. */
-[data-style="glass-next"] [data-material="frost"][data-frost-shape]:not([data-zen-root] *) { box-shadow: var(--material-sheen); }
 [data-style="glass-next"] [data-frost-shape="pill"]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
 [data-style="glass-next"] [data-frost-shape="round"]:not([data-zen-root] *) { border-radius: var(--radius-selector); }
 [data-style="glass-next"] [data-frost-shape="field"]:not([data-zen-root] *) { border-radius: var(--radius-field); }
+/* Frost inside frost would double the blur. */
+[data-style="glass-next"] [data-material="frost"] [data-material="frost"]:not([data-zen-root] *) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ── Floating surfaces: menus, popovers, the command palette ─────────────
+   Which of them is Frost is one line: FLOAT_MATERIAL in
+   components/ui/float-material.ts. When frosted, a menu gets the phone's
+   denser fill so its text stays legible over busy content; as a tile it
+   takes the raised tile rule below. */
+[data-style="glass-next"] [data-material="frost"][data-float]:not([data-zen-root] *) {
+  background: rgba(36, 36, 40, 0.62);
+  box-shadow: var(--material-sheen), var(--shadow-3);
+}
+/* A menu's rows stay inside its rounded corners. Excludes menus with flyouts
+   outside the box and panels that scroll on their own (those already clip). */
+[data-style="glass-next"] [data-float]:not([data-context-menu], [data-context-submenu], [class*="overflow-"]):not([data-zen-root] *) {
+  overflow: hidden;
+}
+
+/* ── Veil: the light glass recipe ─────────────────────────────────────── */
+[data-style="glass-next"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 5px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+[data-style="glass-next"][data-palette="veil"] [data-material="frost"][data-float]:not([data-zen-root] *) { background: var(--material-tint); }
+/* The ring needs a positioned frost box; a menu placed absolute or fixed
+   already is one. */
+[data-style="glass-next"][data-palette="veil"] [data-material="frost"]:not([class~="absolute"], [class~="fixed"]):not([data-zen-root] *) { position: relative; }
+/* The 1px gradient ring that follows the corners: dark down the sides, bright
+   at top and bottom. */
+[data-style="glass-next"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.95) 0%, rgba(0, 0, 0, 0.2) 32%, rgba(0, 0, 0, 0.2) 68%, rgba(255, 255, 255, 0.95) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+/* Tiles: white, soft shadow, no inner sheen. Raised controls keep the rim. */
+[data-style="glass-next"][data-palette="veil"] :is([data-material="tile"], [data-material="raised"]):not([data-floating]):not([data-zen-root] *) {
+  border-color: var(--color-border);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08), 0 1px 1px rgba(0, 0, 0, 0.06);
+}
+/* Small accent text: #0a84ff is under 4.5:1 here, so text darkens. Fills and
+   icons drawn with --color-accent are untouched. */
+[data-style="glass-next"][data-palette="veil"] :is([class~="text-[var(--color-accent)]"], .markdown-content a, .markdown-content .k2-file-link, .docx-body a):not([data-zen-root] *) {
+  color: color-mix(in srgb, var(--color-accent) 80%, black);
+}
+
+/* ── Fallback (G5): Frost becomes a tile ────────────────────────────────
+   lib/frost-support.ts stamps data-frost="tile" on <html> for reduced
+   transparency, no working backdrop-filter, or a platform forced tile-only. */
+[data-style="glass-next"][data-frost="tile"] [data-material="frost"]:not([data-zen-root] *) {
+  background: var(--tile-raised);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid var(--tile-edge);
+  box-shadow: var(--tile-sheen), var(--shadow-3);
+}
+[data-style="glass-next"][data-frost="tile"] [data-material="frost"][data-frost-shape]:not([data-zen-root] *) { box-shadow: var(--tile-sheen); }
+[data-style="glass-next"][data-frost="tile"] [data-material="frost"]:not([data-zen-root] *)::before { content: none; }
 
 /* ── TILE: solid fill, the edge is the glass ────────────────────────────── */
 [data-style="glass-next"] [data-material="tile"]:not([data-zen-root] *),
@@ -58,6 +124,10 @@
 /* A dialog or sheet floats above the app: tile rim, dialog drop shadow. */
 [data-style="glass-next"] [data-material][data-floating]:not([data-zen-root] *) {
   box-shadow: var(--tile-sheen), var(--shadow-5);
+}
+/* A menu or toast sits closer to the page than a dialog does. */
+[data-style="glass-next"] [data-material][data-floating="menu"]:not([data-zen-root] *) {
+  box-shadow: var(--tile-sheen), var(--shadow-3);
 }
 
 /* ── Window chrome ──────────────────────────────────────────────────────
@@ -85,6 +155,13 @@
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), 0 1px 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
+/* Light glass inverts the selected pill: a dark wash, normal ink. */
+[data-style="glass-next"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *) {
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--color-text-primary);
+  box-shadow: none;
+}
+
 /* ── Controls still written by hand ─────────────────────────────────────
    Many buttons, inputs and dropdown triggers don't use the primitives yet.
    They read the field radius here, so Glass has no square controls. */
@@ -92,8 +169,28 @@
   border-radius: var(--radius-field);
 }
 
-/* The Settings page: nav tile, content tile, cards inside. */
+/* Filled controls, not outlines. A field or select inside a tile sits one step
+   lighter than the tile (the phone's raised tile), and a secondary button is a
+   filled tile rather than a bare outline. */
+[data-style="glass-next"] [data-material] :is(button, input, select, textarea)[class~="bg-[var(--color-bg)]"]:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  background: var(--tile-raised);
+}
+[data-style="glass-next"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
+  background: var(--tile-raised);
+  border-color: var(--tile-edge);
+}
+[data-style="glass-next"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
+  background: color-mix(in srgb, var(--tile-raised) 90%, var(--color-text-primary));
+}
+
+/* The Settings page: a nav tile and small cards on the near-black page, as on
+   the phone. The content pane is the page, not one more big tile. */
 [data-style="glass-next"] [data-settings-shell]:not([data-zen-root] *) { gap: var(--gap-pane); }
+[data-style="glass-next"] [data-settings-shell] > [data-material="tile"]:not([data-clip]):not([data-zen-root] *) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
 [data-style="glass-next"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
 [data-style="glass-next"] [data-mode-toggle]:not([data-zen-root] *) { border-radius: var(--radius-pill); overflow: hidden; }
 
@@ -135,23 +232,40 @@
   box-shadow: 0 0 0 2px var(--color-accent);
   transform: none;
 }
-/* Segmented: a recessed pill with the selected thumb inset, blue as on the
-   phone's Home | Agents toggle. */
-[data-style="glass-next"] .k2-segmented:not([data-zen-root] *) {
-  padding: 2px;
-  gap: 2px;
-  border-color: transparent;
-  background: var(--color-control-track-off);
-}
-[data-style="glass-next"] .k2-segment:not([data-zen-root] *) {
-  padding: 3px 12px;
-  border-radius: var(--radius-pill);
-  transition: background-color var(--motion-duration-medium) var(--motion-ease-standard),
-    color var(--motion-duration-medium) var(--motion-ease-standard);
-}
-[data-style="glass-next"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) {
+/* Segmented: a Frost pill with a blue thumb that slides inside it, inset 3px,
+   the phone's Home | Agents toggle. Segmented.tsx places the thumb from the
+   padding box, so its top, bottom and the track's padding move together. */
+[data-style="glass-next"] .k2-segmented:not([data-zen-root] *) { padding: 3px; }
+[data-style="glass-next"] .k2-segment-thumb:not([data-zen-root] *) {
+  top: 3px;
+  bottom: 3px;
+  background: color-mix(in srgb, var(--color-accent) 92%, transparent);
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), 0 1px 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
-[data-style="glass-next"] .k2-segment:hover:not(:disabled):not([aria-checked="true"]):not([data-zen-root] *) {
-  background: var(--color-wash-2);
+[data-style="glass-next"] .k2-segment-thumb[data-ready]:not([data-zen-root] *) {
+  transition: transform 180ms cubic-bezier(0.25, 0.8, 0.25, 1), width 180ms cubic-bezier(0.25, 0.8, 0.25, 1);
 }
+[data-style="glass-next"] .k2-segment:not([data-zen-root] *) {
+  padding: 2px 12px;
+  border-radius: var(--radius-pill);
+  color: rgba(235, 235, 245, 0.55);
+  transition: color 180ms ease;
+}
+[data-style="glass-next"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #ffffff; }
+/* Veil's picker: a white pill on a pale track, ink for the label. Frost would
+   vanish on a white tile, so the track is a plain wash and drops the ring. */
+[data-style="glass-next"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *) {
+  background: #f5f5f5;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+[data-style="glass-next"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *)::before { content: none; }
+[data-style="glass-next"][data-palette="veil"] .k2-segment-thumb:not([data-zen-root] *) {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+}
+[data-style="glass-next"][data-palette="veil"] .k2-segment:not([data-zen-root] *) { color: #666666; }
+[data-style="glass-next"][data-palette="veil"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #000000; }
+[data-style="glass-next"][data-palette="veil"] .k2-segment[aria-checked="true"]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-accent); }

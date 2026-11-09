@@ -1,4 +1,5 @@
 import { cx } from './cx'
+import { usePressSpring } from './usePressSpring'
 
 export interface ToggleProps
   extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'children' | 'type' | 'role' | 'aria-checked'> {
@@ -12,8 +13,10 @@ export interface ToggleProps
  *  (globals.css, shared form controls). `onClick` runs before `onChange`, for
  *  a caller that has to stop the click reaching a clickable row. */
 export function Toggle({ checked, onChange, onClick, disabled, className, size = 'md', ...rest }: ToggleProps): React.JSX.Element {
+  const press = usePressSpring<HTMLButtonElement>()
   return (
     <button
+      ref={press}
       type="button"
       role="switch"
       aria-checked={checked}

@@ -7,6 +7,7 @@
 // and delete live in the same menu. The last Home cannot be deleted.
 
 import { useEffect, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useHomesStore, selectedHome, HOME_NAME_MAX } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -89,7 +90,7 @@ export default function HomePicker(): React.JSX.Element {
           data-home-picker-menu=""
           data-placement={menu.placement}
           style={menu.style}
-          data-material="frost" className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+          {...floatMaterial('menu')} className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
         >
           {mode === 'menu' ? (
             <>

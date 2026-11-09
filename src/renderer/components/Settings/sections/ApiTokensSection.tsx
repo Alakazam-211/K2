@@ -2,6 +2,7 @@
 // Owner-tier routes (/cli/api-keys/*). Secret shown once on create only.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { floatMaterial } from '@/components/ui/float-material'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { useProjectsStore } from '@/stores/projects'
@@ -699,7 +700,7 @@ function CreateKeyModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Create API key">
-      <div data-material="tile" data-floating="" className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
+      <div {...floatMaterial('dialog')} className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
         <h3 className="text-sm font-medium text-[var(--color-text-primary)]">Create API key</h3>
         <label className="block text-[11px] text-[var(--color-text-muted)]">
           Label
@@ -942,7 +943,7 @@ function EditCeilingModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="App access">
-      <div data-material="tile" data-floating="" className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl" data-testid="edit-app-access">
+      <div {...floatMaterial('dialog')} className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl" data-testid="edit-app-access">
         <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
           App access for {keyRow.label || keyRow.id}
         </h3>

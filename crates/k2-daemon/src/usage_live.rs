@@ -471,6 +471,9 @@ fn login_json(row: &HarnessUsage) -> serde_json::Map<String, Value> {
 /// then idle. `kick` = start a background re-check for windows past their
 /// reset (the GET does; tests don't).
 pub fn limits_doc(now: DateTime<Utc>, kick: bool) -> Value {
+    if crate::usage_store::single_record_on() {
+        return limits_doc_single(now, kick);
+    }
     let airgap = k2_core::airgap::enabled();
     let shared = su::cached_rows();
     let mut tools = Vec::new();
@@ -592,6 +595,59 @@ pub fn limits_doc(now: DateTime<Utc>, kick: bool) -> Value {
         if !idle_past_reset.is_empty() {
             kick_idle_recheck(idle_past_reset);
         }
+    }
+    json!({ "generatedAt": now.to_rfc3339(), "airgap": airgap, "tools": tools })
+}
+
+/// The limits document with the switch on: each login's one record plus
+/// its row fields. A window past its reset kicks one background re-check of
+/// that token (each token's own 60 s gate keeps this cheap).
+fn limits_doc_single(now: DateTime<Utc>, kick: bool) -> Value {
+    let airgap = su::airgap_on();
+    let db = k2_core::db::try_shared();
+    let mut tools = Vec::new();
+    for tool in Tool::ALL {
+        let supported = tool.subscription_supported();
+        let (entries, active, live, pins) = match &db {
+            Some(db) => {
+                let conn = db.lock();
+                let entries = wallet::list_for(&conn, tool).unwrap_or_default();
+                let active = wallet::active_id(&conn, tool).ok().flatten();
+                let live = wallet::live_owner(&conn, tool).ok().flatten();
+                let pins: Vec<(String, Value)> = wallet::pins::list_pins(&conn)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|p| p.tool == tool.as_str())
+                    .map(|p| (p.account_id.clone(), crate::llm_accounts_routes::pin_json(&conn, &p)))
+                    .collect();
+                (entries, active, live, pins)
+            }
+            None => (Vec::new(), None, None, Vec::new()),
+        };
+        let mut logins: Vec<(i64, Value)> = Vec::new();
+        for e in &entries {
+            let mut rec = crate::usage_store::login_record(e, now, supported);
+            let pinned: Vec<Value> = pins.iter().filter(|(id, _)| id == &e.id).map(|(_, v)| v.clone()).collect();
+            let is_default = active.as_deref() == Some(e.id.as_str());
+            let is_live = live.as_deref() == Some(e.id.as_str());
+            let _ = kick;
+            let o = rec.as_object_mut().expect("record is an object");
+            o.insert("label".into(), json!(e.label));
+            o.insert("email".into(), json!(e.email));
+            o.insert("kind".into(), json!(e.kind));
+            o.insert("isDefault".into(), json!(is_default));
+            o.insert("isLive".into(), json!(is_live));
+            let rank = if is_default { 0 } else if !pinned.is_empty() { 1 } else { 2 };
+            o.insert("pinned".into(), Value::Array(pinned));
+            logins.push((rank * 1_000_000 + e.position, rec));
+        }
+        logins.sort_by_key(|(rank, _)| *rank);
+        tools.push(json!({
+            "tool": tool.as_str(),
+            "display": tool.display(),
+            "supported": supported,
+            "logins": logins.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+        }));
     }
     json!({ "generatedAt": now.to_rfc3339(), "airgap": airgap, "tools": tools })
 }

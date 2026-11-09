@@ -21,6 +21,9 @@ use std::time::Instant;
 
 use chrono::{DateTime, Duration, Utc};
 
+use k2_core::llm_accounts::{Entry, Tool};
+use serde_json::{json, Value};
+
 use crate::subscription_usage::{self as su, HarnessUsage, UsageWindow};
 
 /// Two `resetsAt` values this close are the same window. Exact equality
@@ -476,7 +479,188 @@ pub fn accept(account_id: &str, reading: Reading) -> Outcome {
         (entry.tool.clone(), changed)
     };
     announce(&tool, account_id, &reading.source, &reading.measured.to_rfc3339(), changed);
+    view_after_accept(&tool, account_id);
     Outcome::Accepted { changed }
+}
+
+// ── The file, as a view (D-1) ───────────────────────────────────────
+
+/// `subscriptions.json` stays for one release as a view of the live token's
+/// record: nothing reads it for truth, and it is the way back if a daemon
+/// is rolled back. Rebuilt from the current record (U29), outside the
+/// database lock, under `cache_lock` (inside `update_cache_row`).
+fn view_after_accept(tool: &str, account_id: &str) {
+    let Some(t) = k2_core::llm_accounts::Tool::parse(tool) else { return };
+    let live = {
+        let Some(db) = k2_core::db::try_shared() else { return };
+        let conn = db.lock();
+        k2_core::llm_accounts::live_owner(&conn, t).ok().flatten().as_deref() == Some(account_id)
+    };
+    if live {
+        su::update_cache_row(tool, |_| live_record(t));
+    }
+}
+
+/// The live token's stored record, as the view holds it.
+fn live_record(tool: k2_core::llm_accounts::Tool) -> Option<HarnessUsage> {
+    let db = k2_core::db::try_shared()?;
+    let conn = db.lock();
+    let owner = k2_core::llm_accounts::live_owner(&conn, tool).ok()??;
+    let e = k2_core::llm_accounts::get(&conn, &owner).ok()??;
+    serde_json::from_str(e.usage_json.as_deref()?).ok()
+}
+
+// ── The one served shape (§4.5) ─────────────────────────────────────
+
+fn chip_window(row: &HarnessUsage, now: DateTime<Utc>) -> Option<&UsageWindow> {
+    su::chip_percent(row, now)?;
+    let mut best: Option<(&UsageWindow, i64, Option<DateTime<Utc>>)> = None;
+    for w in row.windows.iter().filter(|w| w.used.is_finite() && su::chip_window(&row.harness, w)) {
+        let (percent, time) = (su::window_percent(w, now), observed(w));
+        let better = match &best {
+            None => true,
+            // Highest percent, then the most recently measured, then the
+            // first listed.
+            Some((_, p, t)) => percent > *p || (percent == *p && time > *t),
+        };
+        if better {
+            best = Some((w, percent, time));
+        }
+    }
+    best.map(|(w, _, _)| w)
+}
+
+/// The record every route serves for one row. `account_id` is the token it
+/// belongs to (`None` = no token, no reading).
+pub fn record_value(mut row: HarnessUsage, account_id: Option<&str>, now: DateTime<Utc>) -> Value {
+    let key = account_id.map(|id| format!("acct:{id}")).unwrap_or_default();
+    row.account_id = account_id.map(str::to_string);
+    let harness = row.harness.clone();
+    let plan = normalize_plan(&harness, &row.plan);
+    let row = su::decorate_row(materialise_served(row), now, &key);
+    let row = HarnessUsage { plan, ..row };
+    let chip = chip_window(&row, now).cloned();
+    let newest_window = row.windows.iter().filter_map(observed).max();
+    let as_of = match (&chip, newest_window) {
+        (Some(w), _) => w.observed_at.clone(),
+        (None, Some(t)) => Some(t.to_rfc3339()),
+        (None, None) if !row.checked_at.is_empty() => Some(row.checked_at.clone()),
+        (None, None) => None,
+    };
+    let source = match &chip {
+        Some(w) => w.source.clone().unwrap_or_else(|| row.source.clone()),
+        None => row.source.clone(),
+    };
+    let mut v = su::served_row_json(&row, now);
+    let o = v.as_object_mut().expect("served row is an object");
+    o.insert("accountId".into(), json!(account_id));
+    o.insert("harness".into(), json!(harness));
+    o.insert("asOf".into(), json!(as_of));
+    o.insert("source".into(), json!(source));
+    o.insert("error".into(), json!(row.error));
+    o.insert("attemptedAt".into(), json!(row.attempted_at));
+    o.insert("nextProbeAt".into(), json!(row.next_probe_at));
+    o.insert(
+        "chipWindow".into(),
+        match &chip {
+            Some(w) => json!({
+                "id": w.id,
+                "label": w.label,
+                "percent": su::window_percent(w, now),
+                "observedAt": w.observed_at,
+            }),
+            None => Value::Null,
+        },
+    );
+    v
+}
+
+/// An old row's windows read as the row's time and source, on every route.
+fn materialise_served(row: HarnessUsage) -> HarnessUsage {
+    materialise(&row)
+}
+
+/// One token's record, or `None` (no row or an unparseable row, or an API
+/// token: no reading). Under air-gap the record has no windows and says so.
+pub fn served(e: &Entry, now: DateTime<Utc>) -> Option<Value> {
+    if e.is_api_key() {
+        return None;
+    }
+    let row: HarnessUsage = serde_json::from_str(e.usage_json.as_deref()?).ok()?;
+    Some(record_for(row, e, now))
+}
+
+fn record_for(mut row: HarnessUsage, e: &Entry, now: DateTime<Utc>) -> Value {
+    if row.harness.is_empty() {
+        row.harness = e.tool.clone();
+    }
+    if su::airgap_on() {
+        row.windows.clear();
+        row.status = su::STATUS_AIRGAP.to_string();
+        row.error = None;
+    }
+    record_value(row, Some(&e.id), now)
+}
+
+/// The record for a token with no readable row: no numbers.
+fn blank_record(e: &Entry, now: DateTime<Utc>) -> Value {
+    let mut row = HarnessUsage { harness: e.tool.clone(), ..Default::default() };
+    if su::airgap_on() {
+        row.status = su::STATUS_AIRGAP.to_string();
+    }
+    record_value(row, Some(&e.id), now)
+}
+
+/// `GET /cli/usage/subscriptions`, the single-record answer: the record of
+/// each tool's live token, in the tools' order. A tool with no live token
+/// answers `Not signed in`. Air-gap stays the route's own check.
+pub fn subscriptions_doc(now: DateTime<Utc>) -> Value {
+    let db = k2_core::db::try_shared();
+    let harnesses: Vec<Value> = su::PROBED_NAMES
+        .iter()
+        .map(|name| {
+            let Some(tool) = Tool::parse(name) else { return not_signed_in(name, now) };
+            let entry = db.as_ref().and_then(|db| {
+                let conn = db.lock();
+                let owner = k2_core::llm_accounts::live_owner(&conn, tool).ok().flatten()?;
+                k2_core::llm_accounts::get(&conn, &owner).ok().flatten()
+            });
+            match entry {
+                Some(e) => served(&e, now).unwrap_or_else(|| blank_record(&e, now)),
+                None => not_signed_in(name, now),
+            }
+        })
+        .collect();
+    json!({ "harnesses": harnesses })
+}
+
+fn not_signed_in(name: &str, now: DateTime<Utc>) -> Value {
+    record_value(
+        HarnessUsage { harness: name.to_string(), status: su::STATUS_NOT_SIGNED_IN.to_string(), ..Default::default() },
+        None,
+        now,
+    )
+}
+
+/// `GET /cli/usage/limits`, one login's record plus the row's own fields.
+/// API tokens and tools with no limits API read as `Not supported`.
+pub fn login_record(e: &Entry, now: DateTime<Utc>, supported: bool) -> Value {
+    let mut rec = match served(e, now) {
+        Some(v) if !e.is_api_key() && supported => v,
+        _ => {
+            let row = HarnessUsage { harness: e.tool.clone(), status: su::STATUS_NOT_SUPPORTED.to_string(), ..Default::default() };
+            if e.is_api_key() || !supported {
+                record_for(row, e, now)
+            } else {
+                blank_record(e, now)
+            }
+        }
+    };
+    let o = rec.as_object_mut().expect("record is an object");
+    if o.get("plan").and_then(Value::as_str).unwrap_or("").is_empty() {
+        o.insert("plan".into(), json!(normalize_plan(&e.tool, e.plan.as_deref().unwrap_or(""))));
+    }
+    rec
 }
 
 // ── Claude's statusLine: when a reading was measured ─────────────────

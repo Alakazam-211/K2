@@ -638,3 +638,365 @@ fn the_new_window_fields_are_absent_from_old_path_serialisation() {
     let h = HarnessUsage::default();
     assert!(serde_json::to_value(&h).expect("json").get("vendorCheckedAt").is_none());
 }
+
+// ── S3: the one served shape (§4.5, U17, U27) ───────────────────────
+
+fn seed_row(id: &str, row: &HarnessUsage) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::llm_accounts::update_meta(
+        &conn,
+        id,
+        &k2_core::llm_accounts::MetaUpdate { usage_json: Some(serde_json::to_string(row).expect("json")), ..Default::default() },
+    )
+    .expect("seed");
+}
+
+fn get_entry(id: &str) -> Entry {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::llm_accounts::get(&conn, id).expect("get").expect("row")
+}
+
+fn add_live(tool: Tool, label: &str) -> String {
+    let id = seed_token(tool, label);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT OR REPLACE INTO llm_active (tool, account_id, switched_at, switched_by, live_account_id) VALUES (?1, ?2, 1000, NULL, NULL)",
+        rusqlite::params![tool.as_str(), id],
+    )
+    .expect("active");
+    id
+}
+
+/// One fixture token: three windows, one model-scoped, one past its reset,
+/// a tie for the chip.
+fn parity_row(n: DateTime<Utc>) -> HarnessUsage {
+    let future = (n + Duration::days(3)).to_rfc3339();
+    let past = (n - Duration::hours(1)).to_rfc3339();
+    let mut session = su::window("five_hour", "Session", "session", 0.42, future.clone(), Some(18_000));
+    session.observed_at = Some((n - Duration::minutes(2)).to_rfc3339());
+    session.source = Some("live_statusline".into());
+    let mut weekly = su::window("seven_day", "Weekly", "weekly", 0.42, future.clone(), Some(604_800));
+    weekly.observed_at = Some((n - Duration::minutes(1)).to_rfc3339());
+    weekly.source = Some("probe".into());
+    let mut scoped = su::window("model:fable:weekly", "Fable Weekly", "weekly", 0.99, future, Some(604_800));
+    scoped.observed_at = Some((n - Duration::minutes(5)).to_rfc3339());
+    scoped.source = Some("probe".into());
+    let mut passed = su::window("seven_day_oauth_apps", "Apps Weekly", "weekly", 0.9, past, Some(604_800));
+    passed.observed_at = Some((n - Duration::hours(2)).to_rfc3339());
+    passed.source = Some("probe".into());
+    HarnessUsage {
+        harness: "claude".into(),
+        plan: "max".into(),
+        windows: vec![session, weekly, scoped, passed],
+        checked_at: (n - Duration::minutes(1)).to_rfc3339(),
+        source: "probe".into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_record_names_the_chip_window_its_age_and_source() {
+    let n = Utc::now();
+    let v = record_value(parity_row(n), Some("acct-1"), n);
+    assert_eq!(v["accountId"], "acct-1");
+    assert_eq!(v["harness"], "claude");
+    assert_eq!(v["plan"], "Max", "normalised when served (U27)");
+    assert_eq!(v["maxPercent"], 42);
+    let chip = &v["chipWindow"];
+    assert_eq!((chip["id"].as_str(), chip["percent"].as_i64()), (Some("seven_day"), Some(42)), "the tie goes to the most recently measured");
+    assert_eq!(v["asOf"], chip["observedAt"], "as of when the driving window was measured");
+    assert_eq!(v["source"], "probe", "the chip window's source");
+    let windows = v["windows"].as_array().expect("windows");
+    assert_eq!(windows.len(), 4);
+    assert!(windows.iter().all(|w| w["observedAt"].is_string() && w["source"].is_string()), "{v}");
+    assert_eq!(windows[2]["chip"], false, "model-scoped never drives the chip");
+    assert_eq!(windows[3]["resetPassed"], true);
+    for key in ["state", "status", "checkedAt", "attemptedAt", "nextProbeAt", "error"] {
+        assert!(v.get(key).is_some(), "the record has {key}: {v}");
+    }
+}
+
+#[test]
+fn the_chip_tie_falls_back_to_first_listed() {
+    let n = Utc::now();
+    let future = (n + Duration::days(3)).to_rfc3339();
+    let at = (n - Duration::minutes(1)).to_rfc3339();
+    let mut a = su::window("five_hour", "Session", "session", 0.42, future.clone(), None);
+    a.observed_at = Some(at.clone());
+    let mut b = su::window("seven_day", "Weekly", "weekly", 0.42, future, None);
+    b.observed_at = Some(at);
+    let row = HarnessUsage { harness: "claude".into(), windows: vec![a, b], checked_at: n.to_rfc3339(), ..Default::default() };
+    assert_eq!(record_value(row, Some("a"), n)["chipWindow"]["id"], "five_hour");
+}
+
+#[test]
+fn no_chip_window_as_of_falls_back_to_the_newest_window_then_checked_at() {
+    let n = Utc::now();
+    let mut scoped = su::window("model:x", "X", "weekly", 0.5, (n + Duration::days(1)).to_rfc3339(), None);
+    scoped.observed_at = Some((n - Duration::minutes(3)).to_rfc3339());
+    let row = HarnessUsage { harness: "claude".into(), windows: vec![scoped.clone()], status: su::STATUS_SIGN_IN_EXPIRED.into(), checked_at: (n - Duration::hours(2)).to_rfc3339(), ..Default::default() };
+    let v = record_value(row, Some("a"), n);
+    assert_eq!(v["chipWindow"], Value::Null, "an expired token shows no chip");
+    assert_eq!(v["asOf"], scoped.observed_at.clone().expect("t").as_str());
+
+    let bare = HarnessUsage { harness: "claude".into(), checked_at: n.to_rfc3339(), status: su::STATUS_NO_WINDOW.into(), ..Default::default() };
+    assert_eq!(record_value(bare, Some("a"), n)["asOf"], n.to_rfc3339());
+
+    let never = HarnessUsage { harness: "claude".into(), ..Default::default() };
+    assert_eq!(record_value(never, Some("a"), n)["asOf"], Value::Null, "never read: null, not an invented time");
+}
+
+#[test]
+fn served_is_none_for_no_row_an_unparseable_row_or_an_api_token() {
+    let id = seed_token(Tool::Claude, "srv-none");
+    assert!(served(&get_entry(&id), Utc::now()).is_none(), "no row");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::llm_accounts::update_meta(
+            &conn,
+            &id,
+            &k2_core::llm_accounts::MetaUpdate { usage_json: Some("{not json".into()), ..Default::default() },
+        )
+        .expect("store");
+    }
+    assert!(served(&get_entry(&id), Utc::now()).is_none(), "unparseable");
+
+    let mut api = get_entry(&id);
+    api.kind = "api_key".into();
+    api.usage_json = Some(serde_json::to_string(&parity_row(Utc::now())).expect("json"));
+    assert!(api.is_api_key());
+    assert!(served(&api, Utc::now()).is_none(), "an API token has no reading");
+}
+
+#[test]
+fn air_gap_serves_the_record_with_no_windows_on_every_route() {
+    su::tests::with_isolated(|| {
+        let _on = pin(true);
+        su::tests::set_airgap(true);
+        let n = Utc::now();
+        let id = add_live(Tool::Claude, "gap");
+        seed_row(&id, &parity_row(n));
+        let v = served(&get_entry(&id), n).expect("a record");
+        assert_eq!(v["windows"].as_array().map(Vec::len), Some(0), "{v}");
+        assert_eq!(v["status"], su::STATUS_AIRGAP);
+        assert_eq!(v["maxPercent"], Value::Null);
+        assert_eq!(v["state"], "airgap");
+
+        let doc = limits_doc_for_tests(n);
+        let login = doc["tools"][0]["logins"][0].clone();
+        assert_eq!(login["windows"].as_array().map(Vec::len), Some(0), "{login}");
+        assert_eq!(login["status"], su::STATUS_AIRGAP);
+
+        // `GET /cli/usage/subscriptions` keeps its own air-gap answer.
+        let resp = su::handle_get();
+        let body: Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(body["airgap"], true, "{body}");
+        su::tests::set_airgap(false);
+    });
+}
+
+fn limits_doc_for_tests(n: DateTime<Utc>) -> Value {
+    crate::usage_live::limits_doc(n, false)
+}
+
+#[test]
+fn every_route_serves_the_same_numbers_for_one_token() {
+    su::tests::with_isolated(|| {
+        let _on = pin(true);
+        let n = Utc::now();
+        let id = add_live(Tool::Claude, "parity");
+        seed_row(&id, &parity_row(n));
+        let entry = get_entry(&id);
+
+        let list = crate::llm_accounts_routes::account_json_for_tests(&entry, n);
+        let usage = &list["usage"];
+
+        let doc = crate::usage_store::subscriptions_doc(n);
+        let chip_row = doc["harnesses"].as_array().expect("harnesses").iter().find(|h| h["harness"] == "claude").expect("claude").clone();
+
+        let limits = limits_doc_for_tests(n);
+        let login = limits["tools"].as_array().expect("tools").iter().find(|t| t["tool"] == "claude").expect("claude")["logins"]
+            .as_array()
+            .expect("logins")
+            .iter()
+            .find(|l| l["accountId"] == json!(id))
+            .expect("login")
+            .clone();
+
+        let (target, resolved) = for_fixture(&id);
+        let for_doc = crate::llm_account_for::answer_json(&target, Some(&resolved), n);
+        let nested = &for_doc["usage"];
+
+        for rec in [usage, &chip_row, &login, nested] {
+            assert_eq!(rec["maxPercent"], 42, "{rec}");
+            assert_eq!(rec["accountId"], json!(id));
+            assert_eq!(rec["plan"], "Max");
+            assert_eq!(rec["asOf"], usage["asOf"]);
+            assert_eq!(rec["chipWindow"], usage["chipWindow"]);
+            let wins = rec["windows"].as_array().expect("windows");
+            assert_eq!(wins.len(), 4, "{rec}");
+            for (w, u) in wins.iter().zip(usage["windows"].as_array().expect("windows")) {
+                for key in ["usedPercent", "resetPassed", "chip", "observedAt", "source"] {
+                    assert_eq!(w[key], u[key], "{key}: {rec}");
+                }
+            }
+        }
+
+        // `/for` nests the record; its top-level `source` stays the pin source.
+        assert_eq!(for_doc["source"], "default", "{for_doc}");
+        assert_eq!(for_doc["usage"]["source"], "probe");
+        assert_eq!(for_doc["maxPercent"], 42);
+        assert_eq!(for_doc["updatedAt"], for_doc["usage"]["asOf"], "updatedAt equals asOf");
+    });
+}
+
+fn for_fixture(id: &str) -> (crate::llm_account_for::Target, crate::llm_account_for::Resolved) {
+    (
+        crate::llm_account_for::Target {
+            address: "ws".into(),
+            workspace_id: "w".into(),
+            session_key: "w".into(),
+            sidecar: false,
+            program: Some("claude".into()),
+            args: Vec::new(),
+            conversation: None,
+            live: false,
+        },
+        crate::llm_account_for::Resolved {
+            tool: Tool::Claude,
+            source: "default",
+            pin_scope: None,
+            account_id: Some(id.to_string()),
+            label: "Default".into(),
+            kind: Some("subscription".into()),
+            shared: true,
+            unavailable: None,
+            next_start: None,
+        },
+    )
+}
+
+#[test]
+fn for_an_api_token_is_no_reading() {
+    su::tests::with_isolated(|| {
+        let _on = pin(true);
+        let n = Utc::now();
+        let live = add_live(Tool::Claude, "api-live");
+        seed_row(&live, &parity_row(n));
+        // The server default is an API token, with a subscription in the
+        // live store: `/for` must not serve that subscription's number.
+        let api = seed_token(Tool::Claude, "api-token");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE llm_accounts SET kind = 'api_key', usage_json = NULL WHERE id = ?1", rusqlite::params![api]).expect("kind");
+        }
+        let (t, mut r) = for_fixture(&api);
+        r.shared = true;
+        let v = crate::llm_account_for::answer_json(&t, Some(&r), n);
+        assert_eq!(v["usage"], Value::Null, "{v}");
+        assert_eq!(v["maxPercent"], Value::Null);
+        assert_eq!(v["windows"], json!([]));
+    });
+}
+
+#[test]
+fn a_tool_with_no_live_token_serves_not_signed_in() {
+    su::tests::with_isolated(|| {
+        let _on = pin(true);
+        let doc = subscriptions_doc(Utc::now());
+        let grok = doc["harnesses"].as_array().expect("harnesses").iter().find(|h| h["harness"] == "grok").expect("grok").clone();
+        assert_eq!(grok["status"], su::STATUS_NOT_SIGNED_IN);
+        assert_eq!(grok["windows"], json!([]));
+        assert_eq!(grok["state"], "not_signed_in");
+    });
+}
+
+#[test]
+fn the_file_is_a_view_of_the_live_tokens_record() {
+    su::tests::with_isolated(|| {
+        let _on = pin(true);
+        let n = Utc::now();
+        let id = add_live(Tool::Claude, "view");
+        let resets = (n + Duration::hours(3)).to_rfc3339();
+        accept(&id, Reading {
+            kind: Kind::Feed,
+            measured: n - Duration::seconds(10),
+            source: "live_statusline".into(),
+            plan: String::new(),
+            body: Body::Windows(vec![su::window("five_hour", "Session", "session", 0.4, resets, Some(18_000))]),
+        });
+        let rows = su::cached_rows();
+        let claude = rows.iter().find(|h| h.harness == "claude").expect("the view has the live token's row");
+        assert_eq!(claude.account_id.as_deref(), Some(id.as_str()));
+        assert_eq!(claude.windows[0].used, 0.4);
+        assert_eq!(claude.checked_at, stored_row(&id).checked_at);
+
+        // A reading of another token does not touch the view.
+        let other = seed_token(Tool::Claude, "view-other");
+        accept(&other, wall_feed(1, 0.9));
+        let rows = su::cached_rows();
+        assert_eq!(rows.iter().find(|h| h.harness == "claude").expect("row").windows[0].used, 0.4);
+    });
+}
+
+// U3: switch off, every served shape is today's.
+
+#[test]
+fn switch_off_for_keeps_the_flat_answer_with_no_usage_key() {
+    su::tests::with_isolated(|| {
+        let _off = pin(false);
+        let n = Utc::now();
+        let id = add_live(Tool::Claude, "off-for");
+        let row = HarnessUsage {
+            harness: "claude".into(),
+            plan: "Max".into(),
+            windows: vec![su::window("five_hour", "Session", "session", 0.5, (n + Duration::hours(1)).to_rfc3339(), Some(18_000))],
+            checked_at: n.to_rfc3339(),
+            ..Default::default()
+        };
+        seed_row(&id, &row);
+        let (t, mut r) = for_fixture(&id);
+        r.shared = false;
+        let v = crate::llm_account_for::answer_json(&t, Some(&r), n);
+        assert!(v.get("usage").is_none(), "no nested record with the switch off: {v}");
+        assert_eq!(v["maxPercent"], 50);
+        assert_eq!(v["updatedAt"], json!(n.to_rfc3339()), "updatedAt is still checkedAt");
+    });
+}
+
+#[test]
+fn switch_off_list_serves_the_raw_plan_and_no_as_of() {
+    su::tests::with_isolated(|| {
+        let _off = pin(false);
+        let id = seed_token(Tool::Claude, "off-list");
+        let n = Utc::now();
+        seed_row(&id, &parity_row(n));
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE llm_accounts SET plan = 'max' WHERE id = ?1", rusqlite::params![id]).expect("plan");
+        }
+        let v = crate::llm_accounts_routes::account_json_for_tests(&get_entry(&id), n);
+        assert_eq!(v["plan"], "max", "off = today's raw plan");
+        assert_eq!(v["usage"]["plan"], "max", "off = no normalisation of the stored row");
+        assert!(v["usage"].get("asOf").is_none() && v["usage"].get("chipWindow").is_none(), "{v}");
+    });
+}
+
+#[test]
+fn switch_off_subscriptions_reads_the_file_not_the_row() {
+    su::tests::with_isolated(|| {
+        let _off = pin(false);
+        let id = add_live(Tool::Claude, "off-sub");
+        let n = Utc::now();
+        seed_row(&id, &parity_row(n));
+        let resp = su::handle_get();
+        let body: Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(body["harnesses"].as_array().map(Vec::len), Some(0), "no file, no rows, as today: {body}");
+    });
+}

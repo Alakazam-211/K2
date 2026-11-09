@@ -404,6 +404,25 @@ pub fn reading_for(r: &Resolved, now: DateTime<Utc>) -> Option<HarnessUsage> {
     Some(su::decorate_row(row, now, &format!("acct:{id}")))
 }
 
+/// The record of the token a chat resolved to, or `None`: an API token, a
+/// person's item, a removed token, or no reading (U17). `/for` nests this
+/// and never merges it (`source` at the top is the pin source).
+fn served_for(r: &Resolved, now: DateTime<Utc>) -> Option<Value> {
+    if r.unavailable.is_some() {
+        return None;
+    }
+    let id = r.account_id.as_deref()?;
+    if k2_core::person_wallet::is_item_id(id) {
+        return None;
+    }
+    let entry = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        wallet_core::get(&conn, id).ok().flatten()?
+    };
+    crate::usage_store::served(&entry, now)
+}
+
 /// The `/for` answer.
 pub fn answer_json(t: &Target, r: Option<&Resolved>, now: DateTime<Utc>) -> Value {
     let mut v = json!({
@@ -425,8 +444,14 @@ pub fn answer_json(t: &Target, r: Option<&Resolved>, now: DateTime<Utc>) -> Valu
         "state": Value::Null,
         "airgap": k2_core::airgap::enabled(),
     });
-    let Some(r) = r else { return v };
-    let reading = reading_for(r, now);
+    let Some(r) = r else {
+        if crate::usage_store::single_record_on() {
+            v.as_object_mut().expect("object").insert("usage".into(), Value::Null);
+        }
+        return v;
+    };
+    let single = crate::usage_store::single_record_on();
+    let reading = if single { None } else { reading_for(r, now) };
     let o = v.as_object_mut().expect("object");
     o.insert("tool".into(), json!(r.tool.as_str()));
     o.insert("accountId".into(), json!(r.account_id));
@@ -440,6 +465,18 @@ pub fn answer_json(t: &Target, r: Option<&Resolved>, now: DateTime<Utc>) -> Valu
     }
     if let Some((next, src)) = &r.next_start {
         o.insert("nextStart".into(), json!({"accountId": next, "source": src}));
+    }
+    if single {
+        let record = served_for(r, now);
+        if let Some(rec) = &record {
+            for key in ["windows", "maxPercent", "state", "error"] {
+                if let Some(value) = rec.get(key) {
+                    o.insert(key.into(), value.clone());
+                }
+            }
+            o.insert("updatedAt".into(), rec.get("asOf").cloned().unwrap_or(Value::Null));
+        }
+        o.insert("usage".into(), record.unwrap_or(Value::Null));
     }
     if let Some(row) = reading {
         let served = su::served_row_json(&row, now);

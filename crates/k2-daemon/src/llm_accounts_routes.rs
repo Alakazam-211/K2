@@ -221,6 +221,9 @@ fn usage_for(e: &Entry) -> Value {
 
 fn usage_for_at(e: &Entry, now: chrono::DateTime<chrono::Utc>) -> Value {
     use crate::subscription_usage as su;
+    if crate::usage_store::single_record_on() {
+        return crate::usage_store::served(e, now).unwrap_or(Value::Null);
+    }
     let Some(row) = e.usage_json.as_deref().and_then(|s| serde_json::from_str::<su::HarnessUsage>(s).ok()) else {
         return Value::Null;
     };
@@ -438,6 +441,14 @@ fn pinned_to(e: &Entry) -> Value {
     })
 }
 
+/// The token's plan as served: the one plan name with the switch on (U27).
+fn plan_for(e: &Entry) -> Option<String> {
+    if !crate::usage_store::single_record_on() {
+        return e.plan.clone();
+    }
+    e.plan.as_deref().map(|p| crate::usage_store::normalize_plan(&e.tool, p))
+}
+
 fn account_json(e: &Entry, active: bool, human: bool) -> Value {
     let api = e.is_api_key();
     json!({
@@ -453,7 +464,7 @@ fn account_json(e: &Entry, active: bool, human: bool) -> Value {
         "detail": e.detail,
         "email": if human { json!(e.email) } else { Value::Null },
         "org": if human { json!(e.org) } else { Value::Null },
-        "plan": e.plan,
+        "plan": plan_for(e),
         "expiresAt": e.expires_at,
         "refreshedAt": e.refreshed_at,
         "lastUsedAt": e.last_used_at,
@@ -463,6 +474,12 @@ fn account_json(e: &Entry, active: bool, human: bool) -> Value {
         "usage": usage_for(e),
         "usageCheckedAt": e.usage_checked_at,
     })
+}
+
+/// A token's JSON as list and status serve it (tests).
+#[cfg(test)]
+pub(crate) fn account_json_for_tests(e: &Entry, _now: chrono::DateTime<chrono::Utc>) -> Value {
+    account_json(e, false, true)
 }
 
 fn with_conn<T>(f: impl FnOnce(&rusqlite::Connection) -> T) -> T {

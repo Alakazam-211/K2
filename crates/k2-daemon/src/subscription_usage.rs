@@ -47,6 +47,8 @@ const HARNESS_CLAUDE: &str = "claude";
 const HARNESS_CODEX: &str = "codex";
 const HARNESS_GROK: &str = "grok";
 const PROBED_HARNESSES: [&str; 3] = [HARNESS_CLAUDE, HARNESS_CODEX, HARNESS_GROK];
+/// The tools with a usage reading, in the order the routes list them.
+pub(crate) const PROBED_NAMES: [&str; 3] = PROBED_HARNESSES;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -212,7 +214,7 @@ fn test_airgap_slot() -> &'static Mutex<Option<bool>> {
 
 /// Air-gap gate for every probe path. Tests pin it through
 /// `test_airgap_slot` so a parallel test that sets `K2_AIRGAP` cannot flip it.
-fn airgap_on() -> bool {
+pub(crate) fn airgap_on() -> bool {
     #[cfg(test)]
     if let Some(on) = *test_airgap_slot().lock().unwrap_or_else(|p| p.into_inner()) {
         return on;
@@ -277,6 +279,9 @@ pub fn cache_path() -> PathBuf {
 pub fn handle_get() -> CliResponse {
     if airgap_on() {
         return airgap_response();
+    }
+    if crate::usage_store::single_record_on() {
+        return ok_value(&crate::usage_store::subscriptions_doc(Utc::now()));
     }
     let path = cache_path();
     if !path.is_file() {
@@ -716,6 +721,10 @@ fn io_for_probe() -> Arc<dyn UsageIo> {
         return io;
     }
     Arc::new(LiveIo)
+}
+
+fn ok_value(v: &Value) -> CliResponse {
+    CliResponse::ok_json(v.to_string())
 }
 
 fn ok_doc(doc: &SubscriptionFile) -> CliResponse {
@@ -2458,7 +2467,7 @@ fn percent_left(used: f64) -> i64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Guards the module's probe state (`probe_hits`, the test IO and
@@ -2536,7 +2545,7 @@ mod tests {
         }
     }
 
-    fn with_isolated(f: impl FnOnce()) {
+    pub(crate) fn with_isolated(f: impl FnOnce()) {
         // Env lock (TempHome) first, then the module probe lock.
         let _home = crate::test_support::TempHome::new();
         let _probe = probe_lock();
@@ -2564,7 +2573,7 @@ mod tests {
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(io);
     }
 
-    fn set_airgap(on: bool) {
+    pub(crate) fn set_airgap(on: bool) {
         *test_airgap_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(on);
     }
 

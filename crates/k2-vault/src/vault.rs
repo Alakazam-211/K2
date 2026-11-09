@@ -3531,9 +3531,23 @@ impl LocalVault {
                 Err(e) => return Err(e),
             }
         };
+        // GH#81: a session's secret of that name whose time ran out (the
+        // minute tick may not have destroyed it yet) or that is destroyed is
+        // over. It steps aside and this card keeps a fresh secret: a new
+        // value saved into an expired row went with the next tick, and a
+        // destroyed one refused the card ("pick a new name"). A session
+        // name is that session's only; a workspace or server name a person
+        // destroyed stays retired, as before.
+        let existing = match existing {
+            Some(row) if scope.kind == ScopeKind::Session && Self::session_row_is_over(&row.meta) => {
+                self.retire_session_row(row)?;
+                None
+            }
+            other => other,
+        };
         let (out, replaced, inject_was, shares_removed) = match existing {
             Some(row) => {
-                let (out, was, shares) = self.card_replace(row, value, hosts, delivery, inject, guest, actor)?;
+                let (out, was, shares) = self.card_replace(row, value, hosts, delivery, inject, guest, expires_at, actor)?;
                 (out, true, was, shares)
             }
             None => {
@@ -3562,6 +3576,48 @@ impl LocalVault {
         Ok(CardResult { meta: out.meta, reference, trimmed: out.trimmed, replaced, inject_was, shares_removed })
     }
 
+    /// A session secret that is over: destroyed, or past its time (the
+    /// minute tick destroys those; a card can come in before it does).
+    fn session_row_is_over(m: &SecretMeta) -> bool {
+        m.status == SecretStatus::Destroyed || m.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x <= now())
+    }
+
+    /// GH#81: a session secret that is over steps aside for a new card of
+    /// the same name. One past its time is destroyed first, as the tick
+    /// would (its value versions and shares go, audited `system:expiry`).
+    /// The destroyed row keeps its id, history and audit under the name
+    /// `<name>~<id>`, so the name is free for the new secret (a new id: a
+    /// person's earlier "removed from this session" never carries over).
+    fn retire_session_row(&self, row: SecretRow) -> Result<()> {
+        if row.meta.scope.kind != ScopeKind::Session || !Self::session_row_is_over(&row.meta) {
+            return Err(VaultError::conflict("secret_exists", format!("{} already exists", row.meta.name)));
+        }
+        let id = row.meta.id.clone();
+        if row.meta.status != SecretStatus::Destroyed {
+            self.set_status(&Selector::Id(id.clone()), &Actor::System("expiry".into()), SecretStatus::Destroyed)?;
+        }
+        let row = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            self.find_row(&conn, &keys, &Selector::Id(id))?
+        };
+        let mut m = row.meta.clone();
+        m.name = format!("{}~{}", m.name, m.id);
+        m.updated_at = ts(now());
+        let ext = row.external_ref.clone();
+        self.mutate(true, |tx, keys| {
+            let smac = hmac(&keys.row, &secret_mac_input(&m, &ext));
+            let n = tx.execute(
+                "UPDATE secret SET name = ?2, updated_at = ?3, row_mac = ?4 WHERE id = ?1 AND status = 'destroyed'",
+                params![m.id, m.name, m.updated_at, smac.to_vec()],
+            )?;
+            if n != 1 {
+                return Err(VaultError::conflict("secret_changed", "that secret changed while the card was saved; save again"));
+            }
+            Ok(((), vec![Entry::new("rescope", "system:card", "ok:name-freed").secret(&m.id, None)]))
+        })
+    }
+
     /// A secret card answered for a name that already exists (SC-A1). The
     /// card's terms are the sites, the delivery (the ceiling rises only as
     /// far as that delivery needs) and how it is sent (kept as stored when
@@ -3586,6 +3642,7 @@ impl LocalVault {
         delivery: Delivery,
         inject: Option<Inject>,
         guest: bool,
+        expires_at: Option<String>,
         actor: &Actor,
     ) -> Result<(PutOutcome, Option<String>, usize)> {
         if *self.rollback.lock() {
@@ -3631,6 +3688,13 @@ impl LocalVault {
         } else {
             None
         };
+        // GH#81: a session card's secret lasts the NEW card's time (its
+        // --ttl, from now); before, it kept the first card's, and a second
+        // card saved near that time lost its value at the next tick.
+        if let Some(x) = expires_at.filter(|x| old.expires_at.as_deref() != Some(x.as_str())) {
+            let (m, l) = meta.take().unwrap_or_else(|| (old.clone(), false));
+            meta = Some((SecretMeta { expires_at: Some(x), ..m }, l));
+        }
         // The value is now a person's (§3.3): the stricter rule for agents.
         if !old.human_given {
             let (m, l) = meta.take().unwrap_or_else(|| (old.clone(), false));

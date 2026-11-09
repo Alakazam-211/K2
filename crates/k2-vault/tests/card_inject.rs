@@ -662,3 +662,99 @@ fn a_session_card_lasts_at_most_seven_days() {
         assert!((got - want).abs() < 0.1, "{name}: {got} h left, want {want}");
     }
 }
+
+/// A session file card for `name` with `ttl_secs`, saved by the owner with
+/// `value`. Returns the outcome (or the vault's refusal).
+fn save_session_card(v: &LocalVault, id: &str, name: &str, ttl_secs: i64, value: &str) -> Result<k2_vault::vault::CardResult> {
+    let mut c = card(id, name, None);
+    c.proposed_scope = "session".into();
+    c.proposed_hosts = vec![];
+    c.proposed_delivery = Delivery::File;
+    c.ttl_secs = Some(ttl_secs);
+    v.request_create(c).expect("card");
+    let readable = CardAnswer { readable_disclosed: true, ..Default::default() };
+    v.request_answer(id, SecretBytes::from_string(value.to_string()), &readable, &Actor::Owner)
+}
+
+fn secs_left(m: &SecretMeta) -> i64 {
+    let at = chrono::DateTime::parse_from_rfc3339(m.expires_at.as_deref().expect("a session secret has an expiry")).expect("rfc3339");
+    (at.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds()
+}
+
+/// GH#81: a second card for a name already saved for that session lasts the
+/// NEW card's --ttl. It kept the first card's time, so a second card saved
+/// near that time lost its value at the next minute tick.
+#[test]
+fn a_second_session_card_for_a_name_takes_the_new_cards_time() {
+    let t = TestDir::new("ci-ttl2");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    let first = save_session_card(&v, "card-ttl2-first-01234567", "GH81_CODE", 120, "first-code").expect("first card").meta;
+    assert!((60..=120).contains(&secs_left(&first)), "first card: 2 minutes, {}", secs_left(&first));
+
+    let second = save_session_card(&v, "card-ttl2-second-0123456", "GH81_CODE", 7200, PW).expect("second card");
+    assert!(second.replaced, "the same live secret got the new value");
+    assert_eq!(second.meta.id, first.id);
+    assert!(secs_left(&second.meta) > 7000, "GH#81: the second card's 2 h, not the first card's 2 min: {} s left", secs_left(&second.meta));
+    let stored = v.meta(&Selector::Id(first.id.clone()), &Actor::Owner).expect("meta");
+    assert_eq!(stored.expires_at, second.meta.expires_at, "the new time is what the vault keeps");
+    assert_eq!(v.resolve(&Selector::Id(first.id), Use::File, &me).expect("resolves").value.expose(), PW.as_bytes());
+}
+
+/// GH#81: a session secret of that name whose time ran out is over. A new
+/// card keeps a fresh secret (a new id, the new card's time) whether the
+/// minute tick had already destroyed the old one ("pick a new name" before)
+/// or not yet (the value went with the next tick before). The tick leaves
+/// the new one alone. A workspace name a person destroyed stays retired.
+#[test]
+fn a_session_card_after_its_names_secret_ran_out_saves_a_fresh_secret() {
+    let t = TestDir::new("ci-ttl-over");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+
+    // Ran out, and the tick already destroyed it.
+    let old = save_session_card(&v, "card-over-swept-0123456", "GH81_SWEPT", 120, "old-code").expect("first card").meta;
+    v.expire_secret_for_tests(&old.id).expect("backdate");
+    v.tick().expect("tick");
+    assert_eq!(v.meta(&Selector::Id(old.id.clone()), &Actor::Owner).expect("old row").status, SecretStatus::Destroyed);
+    let new = save_session_card(&v, "card-over-swept-new-0123", "GH81_SWEPT", 7200, PW).expect("GH#81: a new card after the old one was destroyed saves");
+    assert!(!new.replaced, "a fresh secret, not the destroyed one");
+    assert_ne!(new.meta.id, old.id);
+    assert_eq!(new.meta.name, "GH81_SWEPT");
+    assert!(secs_left(&new.meta) > 7000, "{} s left", secs_left(&new.meta));
+    let gone = v.meta(&Selector::Id(old.id.clone()), &Actor::Owner).expect("the old row keeps its history");
+    assert_eq!(gone.status, SecretStatus::Destroyed);
+    assert_eq!(gone.name, format!("GH81_SWEPT~{}", old.id));
+
+    // Ran out, and the tick hasn't come yet.
+    let old2 = save_session_card(&v, "card-over-due-012345678", "GH81_DUE", 120, "old-code").expect("first card").meta;
+    v.expire_secret_for_tests(&old2.id).expect("backdate");
+    let new2 = save_session_card(&v, "card-over-due-new-012345", "GH81_DUE", 7200, PW).expect("a new card for an expired name saves");
+    assert!(!new2.replaced);
+    assert_ne!(new2.meta.id, old2.id);
+    assert_eq!(v.meta(&Selector::Id(old2.id.clone()), &Actor::Owner).expect("old row").status, SecretStatus::Destroyed, "the expired one is destroyed, as the tick would");
+    v.tick().expect("tick");
+    for (sel, what) in [(Selector::Id(new2.meta.id.clone()), "by id"), (Selector::user(Scope::session("sess-1"), "GH81_DUE"), "by name")] {
+        let r = v.resolve(&sel, Use::File, &me).unwrap_or_else(|e| panic!("GH#81: the new value is there after the tick ({what}): {}", e.code));
+        assert_eq!(r.value.expose(), PW.as_bytes());
+    }
+    let items: Vec<String> = v.spawn_items(&me).expect("items").into_iter().map(|i| i.name).collect();
+    assert!(items.contains(&"GH81_DUE".to_string()) && items.contains(&"GH81_SWEPT".to_string()), "{items:?}");
+
+    // A workspace name a person destroyed is still retired (unchanged).
+    let mut ws = card("card-over-ws-0123456789", "GH81_WS", None);
+    ws.proposed_hosts = vec![];
+    ws.proposed_delivery = Delivery::File;
+    v.request_create(ws).expect("card");
+    let readable = CardAnswer { readable_disclosed: true, ..Default::default() };
+    let w = v.request_answer("card-over-ws-0123456789", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).expect("saved").meta;
+    v.destroy(&Selector::Id(w.id), &Actor::Owner).expect("destroy");
+    let mut again = card("card-over-ws-again-01234", "GH81_WS", None);
+    again.proposed_hosts = vec![];
+    again.proposed_delivery = Delivery::File;
+    v.request_create(again).expect("card");
+    let e = v.request_answer("card-over-ws-again-01234", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).expect_err("a destroyed workspace name stays retired");
+    assert_eq!(e.code, "secret_destroyed");
+}

@@ -992,6 +992,14 @@ pub(crate) fn set_nodelay_switch_for_test(on: bool) {
     NODELAY.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// Tests that turn the process-wide switch off take this first, so two of
+/// them never see each other's setting.
+#[cfg(test)]
+pub(crate) fn nodelay_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Dial a same-host splice backend with the H2 connect timeout applied.
 /// Used for the daemon path (`(host, port)` tuple). Nested targets go
 /// through [`crate::upstream_dial::dial_target`] instead (localhost rule +
@@ -2255,6 +2263,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn every_daemon_socket_on_the_tunnel_path_has_nagle_off_unless_switched_off() {
+        let _nodelay = nodelay_test_lock();
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let _home = crate::test_support::TempHome::new();
         // The switch is process-wide: put it back on even if this panics.

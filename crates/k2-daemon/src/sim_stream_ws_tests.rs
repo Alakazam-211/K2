@@ -241,6 +241,31 @@ fn the_hub_asks_for_points_and_retunes_to_the_fastest_viewer() {
     shut_down(b);
 }
 
+/// TCP_NODELAY on the stream socket (M-1): a loopback socket through the
+/// stream's setup has Nagle off; with the switch forced off it keeps Nagle
+/// on, as before.
+#[test]
+fn the_stream_socket_has_nagle_off_unless_switched_off() {
+    use crate::tunnel_tls_listener::{nodelay_test_lock, set_nodelay_switch_for_test};
+    let _nodelay = nodelay_test_lock();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    rt.block_on(async {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = l.local_addr().expect("addr");
+        let _client = TcpStream::connect(addr).await.expect("connect");
+        let (s, _) = l.accept().await.expect("accept");
+        assert!(!s.nodelay().expect("read"), "the main listener's sockets start with Nagle on");
+        set_nodelay_switch_for_test(true);
+        stream_socket_setup(&s);
+        assert!(s.nodelay().expect("read"), "switch on: Nagle off");
+        s.set_nodelay(false).expect("reset");
+        set_nodelay_switch_for_test(false);
+        stream_socket_setup(&s);
+        assert!(!s.nodelay().expect("read"), "switch off: Nagle stays on");
+        set_nodelay_switch_for_test(true);
+    });
+}
+
 type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Serve one viewer on a real loopback socket (as the dispatcher would,

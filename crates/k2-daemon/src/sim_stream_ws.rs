@@ -499,9 +499,19 @@ fn cpu_window_ms(last: &mut u64, now: u64) -> f32 {
     ms
 }
 
+/// The stream socket before the upgrade: Nagle off, so acks, hold and
+/// error messages and a frame's tail never wait on a delayed ACK. Loopback
+/// and LAN sockets come from the main listener without it; Connect sockets
+/// already have it (M-1), so this is a no-op there. `K2_TUNNEL_NODELAY=0`
+/// (the existing switch) leaves Nagle on.
+fn stream_socket_setup(stream: &TcpStream) {
+    crate::tunnel_tls_listener::no_nagle(stream);
+}
+
 /// Serve one viewer. The dispatcher has refused app passes, agents and bad
 /// tokens before the upgrade.
 pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, viewer: Viewer, owner_token: String) {
+    stream_socket_setup(stream);
     let token = params.get("workspace").cloned().unwrap_or_default();
     let ws = {
         let caller = viewer.caller.clone();

@@ -163,6 +163,26 @@ describe('switching the server default', () => {
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
   })
+
+  // 0.46.10 freeze: the daemon now answers `busy` at once (409) when
+  // another Claude task holds the lock; the page says so and stays usable.
+  it('a busy answer shows the daemon hint and the page stays usable', async () => {
+    const hint = 'Another Claude account task is running; try again in a moment.'
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'llm/accounts/switch') {
+        throw new Error(JSON.stringify({ error: { code: 'busy', hint, retryAfterSecs: 3 } }))
+      }
+      if (route.startsWith('llm/accounts/')) return {}
+      throw new Error(`unexpected POST ${route}`)
+    })
+    await renderColumn()
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }))
+    expect(await screen.findByText(hint)).toBeTruthy()
+    // Still usable: another switch asks again.
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_lumon')).getByRole('button', { name: 'Use this token' }))
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_lumon' }))
+  })
 })
 
 describe('the server default is Admin and above (Rosson 2026-10-20)', () => {

@@ -54,6 +54,10 @@ pub struct Carry {
     pub session_id: String,
     #[serde(default)]
     pub model: String,
+    /// When a Codex session began (its `session_meta` line's time, unix
+    /// ms; 0 = unknown).
+    #[serde(default)]
+    pub started_ms: i64,
 }
 
 /// Grok reports cost in integer ticks: 1 USD = 10^10 ticks.
@@ -164,6 +168,11 @@ pub fn codex(v: &Value, carry: &mut Carry, offset: u64, file_key: &str) -> (Opti
                 if carry.cwd.is_empty() {
                     if let Some(cwd) = p.get("cwd").and_then(|s| s.as_str()) {
                         carry.cwd = cwd.to_string();
+                    }
+                }
+                if carry.started_ms == 0 {
+                    if let Some(ms) = super::epoch_ms(&timestamp_of(v)) {
+                        carry.started_ms = ms;
                     }
                 }
             }

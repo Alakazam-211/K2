@@ -2544,6 +2544,9 @@ mod tests {
         // another test's rows in the shared DB must not change this one.
         let _db = k2_core::db::scoped_for_test();
         probe_hits().store(0, Ordering::SeqCst);
+        // These tests are the old path; keep them there after any default
+        // flip (U19).
+        let _single_record = crate::usage_store::pin(false);
         // Back-off and single-flight state are process-wide: start clean.
         backoffs().lock().unwrap_or_else(|p| p.into_inner()).clear();
         *flight_last().lock().unwrap_or_else(|p| p.into_inner()) = None;

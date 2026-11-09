@@ -175,7 +175,7 @@ pub fn ingest(headers: &HookHeaders, body: &[u8]) -> IngestVerdict {
     // reading, not a lifecycle event: it never touches the pane's owner
     // claim or activity rows.
     if is_statusline(headers) {
-        crate::usage_live::ingest_statusline_hook(body);
+        crate::usage_live::ingest_statusline(&headers.pane, body);
         return IngestVerdict::Accepted;
     }
     ingest_with(

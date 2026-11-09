@@ -479,6 +479,88 @@ pub fn accept(account_id: &str, reading: Reading) -> Outcome {
     Outcome::Accepted { changed }
 }
 
+// ── Claude's statusLine: when a reading was measured ─────────────────
+
+/// How far back from the end of a transcript the reader looks (64 KB
+/// steps, up to 1 MB). The newest assistant line is near the end; a file
+/// that hides it deeper drops the reading and the probe covers the token.
+const TRANSCRIPT_STEP: u64 = 64 * 1024;
+const TRANSCRIPT_MAX: u64 = 1024 * 1024;
+
+/// `transcript_path` when it is a `.jsonl` under `<config_dir>/projects`,
+/// canonicalised (U20): a `..` prefix doesn't pass a prefix check, and the
+/// session supplies this path. Only its last assistant timestamp is read.
+pub fn transcript_under_config(raw: &str, config_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(raw.trim());
+    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return None;
+    }
+    let canon = dunce::canonicalize(path).ok()?;
+    let projects = dunce::canonicalize(config_dir.join("projects")).ok()?;
+    if canon.starts_with(&projects) {
+        Some(canon)
+    } else {
+        None
+    }
+}
+
+/// The timestamp of the last real `assistant` line in `path`, or `None`
+/// (the reading is then dropped). Read backwards in 64 KB steps, no lock
+/// held; each step's first line may be partial and is discarded (U20).
+pub fn transcript_measured_at(path: &std::path::Path) -> Option<DateTime<Utc>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let limit = len.min(TRANSCRIPT_MAX);
+    let mut read_to = len;
+    let mut buf: Vec<u8> = Vec::new();
+    while len - read_to < limit {
+        let start = read_to.saturating_sub(TRANSCRIPT_STEP).max(len - limit);
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut chunk = vec![0u8; (read_to - start) as usize];
+        file.read_exact(&mut chunk).ok()?;
+        chunk.extend_from_slice(&buf);
+        buf = chunk;
+        read_to = start;
+        let body = if start == 0 {
+            buf.as_slice()
+        } else {
+            // A partial first line (a real line can be over 1 MB).
+            let nl = buf.iter().position(|b| *b == b'\n')?;
+            &buf[nl + 1..]
+        };
+        for line in body.rsplit(|b| *b == b'\n') {
+            if let Some(t) = assistant_time(line) {
+                return Some(t);
+            }
+        }
+        if start == 0 {
+            return None;
+        }
+    }
+    None
+}
+
+/// A line's timestamp when it is a real assistant message: not an API
+/// error stub and not K2's or Claude's `<synthetic>` line (U20).
+fn assistant_time(line: &[u8]) -> Option<DateTime<Utc>> {
+    if line.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(line).ok()?;
+    if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return None;
+    }
+    if v.get("isApiErrorMessage").and_then(|b| b.as_bool()) == Some(true) {
+        return None;
+    }
+    if v.pointer("/message/model").and_then(|m| m.as_str()) == Some("<synthetic>") {
+        return None;
+    }
+    let ts = v.get("timestamp").and_then(|t| t.as_str())?;
+    parse_time(ts)
+}
+
 #[cfg(test)]
 #[path = "usage_store_tests.rs"]
 mod tests;

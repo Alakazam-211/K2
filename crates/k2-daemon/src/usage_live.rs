@@ -198,6 +198,19 @@ pub fn apply_live(
 /// The transport already proved the session passport for this pane.
 /// Returns whether a reading was written.
 pub fn ingest_statusline_hook(body: &[u8]) -> bool {
+    ingest_statusline_legacy(body)
+}
+
+/// One `StatusLine` hook. `pane` is the hook's pane (`K2_PANE_ID`); the
+/// single-record path needs it to know when the session started.
+pub fn ingest_statusline(pane: &str, body: &[u8]) -> bool {
+    if crate::usage_store::single_record_on() {
+        return ingest_statusline_single(pane, body, Utc::now(), &pane_started_at);
+    }
+    ingest_statusline_legacy(body)
+}
+
+fn ingest_statusline_legacy(body: &[u8]) -> bool {
     let Ok(v) = serde_json::from_slice::<Value>(body) else { return false };
     let Some(limits) = v.pointer("/statusline/rate_limits").filter(|r| r.is_object()) else { return false };
     let windows = claude_statusline_windows(limits);
@@ -210,6 +223,9 @@ pub fn ingest_statusline_hook(body: &[u8]) -> bool {
 
 /// The newest Codex `rate_limits` a ledger scan saw for one login.
 pub fn ingest_codex_rollout(seen: &k2_core::token_usage::CodexLimitsSeen) -> bool {
+    if crate::usage_store::single_record_on() {
+        return ingest_codex_single(seen, Utc::now());
+    }
     let Some(observed) = DateTime::<Utc>::from_timestamp_millis(seen.recorded_ms) else { return false };
     // An old session log is history, not a live reading.
     if Utc::now().signed_duration_since(observed) > chrono::Duration::hours(6) {
@@ -218,6 +234,221 @@ pub fn ingest_codex_rollout(seen: &k2_core::token_usage::CodexLimitsSeen) -> boo
     let (plan, windows) = su::codex_windows(&seen.snapshot, Some(seen.recorded_ms));
     let account = (!seen.account_id.is_empty()).then(|| seen.account_id.clone());
     apply_live(Tool::Codex, account, windows, &plan, observed, SOURCE_ROLLOUT)
+}
+
+// ── The single-record feed path (prd-usage-single-source-v1 §4.3) ───
+//
+// Who a reading is credited to, and whether it counts at all. S0 (does a
+// running session keep its old credentials after a switch?) has not been
+// run; see `s0_live_session_credit` for the conservative answer used here.
+
+/// A session's home, by its config folder.
+#[derive(Debug, Clone, PartialEq)]
+enum Home {
+    Slot(String),
+    LiveHome,
+    Other,
+}
+
+fn classify_home(tool: Tool, dir: &str) -> Home {
+    let dir = dir.trim();
+    if dir.is_empty() {
+        return Home::LiveHome;
+    }
+    if let Some(id) = slot_account(tool, dir) {
+        return Home::Slot(id);
+    }
+    let canon = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if canon(Path::new(dir)) == canon(&store::live_home(tool).0) {
+        return Home::LiveHome;
+    }
+    Home::Other
+}
+
+/// A live-home reading measured this soon after a switch may be the old
+/// token's. Compared with the measured time, not arrival.
+const LIVE_SWITCH_GUARD_SECS: i64 = 120;
+
+/// **S0, unanswered.** Does a running session keep the credential it
+/// started with after a switch? S0 needs a spare box with two real
+/// subscription logins and hasn't run. This is the one place that decides
+/// and the conservative choice under every answer in PRD §4.3:
+///
+/// - dropped when measured within 120 s of the switch (answer 1, and all
+///   of them);
+/// - dropped when the session started before the switch (answers 2 and 3,
+///   and harmless under answer 1: the vendor check covers the token and no
+///   reading is ever credited to the wrong token);
+/// - dropped when K2 doesn't know when the session started.
+///
+/// Under answer 1 this costs a running session its feed until it restarts;
+/// S0's result can relax it here without touching anything else.
+fn s0_live_session_credit(measured: DateTime<Utc>, switched_at: i64, session_started: Option<i64>) -> Result<(), String> {
+    if measured.timestamp() < switched_at.saturating_add(LIVE_SWITCH_GUARD_SECS) {
+        return Err("measured within two minutes of a switch".into());
+    }
+    match session_started {
+        None => Err("the session's start time is unknown".into()),
+        Some(started) if started <= switched_at => Err("the session started before the last switch".into()),
+        Some(_) => Ok(()),
+    }
+}
+
+/// The tool's live token, when a live-home reading may be credited to it.
+fn credit_live_home(tool: Tool, measured: DateTime<Utc>, session_started: Option<i64>) -> Result<String, String> {
+    let (owner, switched_at) = {
+        let Some(db) = k2_core::db::try_shared() else { return Err("no database".into()) };
+        let conn = db.lock();
+        let owner = wallet::live_owner(&conn, tool).ok().flatten();
+        let switched_at = wallet::active_info(&conn, tool).ok().flatten().map(|i| i.switched_at);
+        (owner, switched_at)
+    };
+    let Some(owner) = owner else { return Err("no live token".into()) };
+    if wallet::wallet::live_is_other_account(tool) {
+        return Err("the live sign-in is another account".into());
+    }
+    s0_live_session_credit(measured, switched_at.unwrap_or(0), session_started)?;
+    Ok(owner)
+}
+
+fn credit_slot(id: String) -> Result<String, String> {
+    if wallet_known(&id) {
+        Ok(id)
+    } else {
+        Err("unknown or removed token".into())
+    }
+}
+
+/// When `pane`'s process started (unix seconds), from the OS, so it holds
+/// across a daemon restart. `None` when K2 can't tell.
+fn pane_started_at(pane: &str) -> Option<i64> {
+    let sid = k2_core::session::SessionId::parse(pane)?;
+    let session = crate::v2_session_map::lookup_by_session_id(&sid)?;
+    crate::vault::server_refs::process_start_unix(session.child_pid()? as i64)
+}
+
+/// A dropped feed reading, logged once per pane and reason so a busy
+/// session can't fill the log.
+fn log_dropped_once(pane: &str, why: &str) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let key = format!("{pane}|{why}");
+    let mut set = seen.lock().unwrap_or_else(|p| p.into_inner());
+    if set.len() > 2048 {
+        set.clear();
+    }
+    if set.insert(key) {
+        k2_core::log_debug!("[usage] live reading dropped (pane {pane}): {why}");
+    }
+}
+
+/// `ingest_statusline` with the switch on. Credited once it is measured
+/// (from the transcript's last assistant line) and attributed; the merge
+/// decides the rest. No lock is held while reading the transcript.
+pub(crate) fn ingest_statusline_single(
+    pane: &str,
+    body: &[u8],
+    arrival: DateTime<Utc>,
+    session_started: &dyn Fn(&str) -> Option<i64>,
+) -> bool {
+    if k2_core::airgap::enabled() {
+        return false;
+    }
+    let Ok(v) = serde_json::from_slice::<Value>(body) else { return false };
+    let Some(limits) = v.pointer("/statusline/rate_limits").filter(|r| r.is_object()) else { return false };
+    let windows = claude_statusline_windows(limits);
+    if windows.is_empty() {
+        return false;
+    }
+    let dir = v.get("k2_config_dir").and_then(|d| d.as_str()).unwrap_or("");
+    let home = classify_home(Tool::Claude, dir);
+    let config_dir = match &home {
+        Home::Slot(id) => store::slot_dir(Tool::Claude, id),
+        Home::LiveHome => store::live_home(Tool::Claude).0,
+        Home::Other => {
+            log_dropped_once(pane, "a session in an unknown config folder");
+            return false;
+        }
+    };
+    let transcript = v.pointer("/statusline/transcript_path").and_then(|p| p.as_str()).and_then(|p| crate::usage_store::transcript_under_config(p, &config_dir));
+    let Some(path) = transcript else {
+        log_dropped_once(pane, "no transcript under the session's projects folder");
+        return false;
+    };
+    let Some(claimed) = crate::usage_store::transcript_measured_at(&path) else {
+        log_dropped_once(pane, "no assistant timestamp in the transcript");
+        return false;
+    };
+    let reading = match crate::usage_store::Reading::feed(claimed, arrival, SOURCE_STATUSLINE, "", windows) {
+        Ok(r) => r,
+        Err(why) => {
+            log_dropped_once(pane, &why);
+            return false;
+        }
+    };
+    let credited = match home {
+        Home::Slot(id) => credit_slot(id),
+        Home::LiveHome => credit_live_home(Tool::Claude, reading.measured, session_started(pane)),
+        Home::Other => unreachable!("handled above"),
+    };
+    let id = match credited {
+        Ok(id) => id,
+        Err(why) => {
+            log_dropped_once(pane, &why);
+            return false;
+        }
+    };
+    matches!(crate::usage_store::accept(&id, reading), crate::usage_store::Outcome::Accepted { .. })
+}
+
+/// Codex's newest `rate_limits` with the switch on. A slot home's reading
+/// is that slot's; a default-home line with a recorded conversation stays
+/// on its recorded token (U16), only while that token is still live, and
+/// any other default-home line is credited to the live token with the same
+/// guards as Claude's live home.
+pub(crate) fn ingest_codex_single(seen: &k2_core::token_usage::CodexLimitsSeen, arrival: DateTime<Utc>) -> bool {
+    if k2_core::airgap::enabled() {
+        return false;
+    }
+    let Some(claimed) = DateTime::<Utc>::from_timestamp_millis(seen.recorded_ms) else { return false };
+    if arrival.signed_duration_since(claimed) > chrono::Duration::hours(6) {
+        return false;
+    }
+    let (plan, windows) = su::codex_windows(&seen.snapshot, Some(seen.recorded_ms));
+    if windows.is_empty() {
+        return false;
+    }
+    let reading = match crate::usage_store::Reading::feed(claimed, arrival, SOURCE_ROLLOUT, &plan, windows) {
+        Ok(r) => r,
+        Err(why) => {
+            log_dropped_once("codex", &why);
+            return false;
+        }
+    };
+    let credited = if seen.from_live_home {
+        credit_live_home(Tool::Codex, reading.measured, seen.session_started_ms.map(|ms| ms / 1000))
+    } else if seen.account_id.is_empty() {
+        Err("no token for this reading".to_string())
+    } else if seen.default_home_recorded {
+        // A recorded token in the default home: only while it's still the
+        // live one (S0 unanswered for Codex too, U16).
+        match live_owner(Tool::Codex) {
+            Some(owner) if owner == seen.account_id => credit_slot(seen.account_id.clone()),
+            _ => Err("the recorded token is no longer the live one".to_string()),
+        }
+    } else {
+        credit_slot(seen.account_id.clone())
+    };
+    let id = match credited {
+        Ok(id) => id,
+        Err(why) => {
+            log_dropped_once("codex", &why);
+            return false;
+        }
+    };
+    matches!(crate::usage_store::accept(&id, reading), crate::usage_store::Outcome::Accepted { .. })
 }
 
 // ── The every-login document (§3.3) ─────────────────────────────────
@@ -430,6 +661,10 @@ pub fn refresh(tool: Option<&str>, account_id: Option<&str>) -> Result<Value, (u
 }
 
 #[cfg(test)]
+#[path = "usage_live_single_tests.rs"]
+mod single_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -448,6 +683,12 @@ mod tests {
         assert!(claude_statusline_windows(&json!({"five_hour": {"resets_at": 1}})).is_empty(), "no percent, no window");
     }
 
+    // These tests are the old path; pin it so a later default flip is clean
+    // (U19). Every test below starts with this.
+    fn old_path() -> crate::usage_store::PinGuard {
+        crate::usage_store::pin(false)
+    }
+
     fn statusline_body(dir: &str, pct: f64) -> Vec<u8> {
         let resets = (Utc::now() + chrono::Duration::hours(3)).timestamp();
         json!({"k2_config_dir": dir, "statusline": {"session_id": "s", "rate_limits": {"five_hour": {"used_percentage": pct, "resets_at": resets}}}})
@@ -457,6 +698,7 @@ mod tests {
 
     #[test]
     fn a_statusline_reading_lands_on_its_login_and_the_default_row() {
+        let _old = old_path();
         let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
         let _airgap = k2_core::test_env::EnvVar::set("K2_AIRGAP", "0");
@@ -515,6 +757,7 @@ mod tests {
 
     #[test]
     fn a_codex_session_log_snapshot_becomes_a_live_reading() {
+        let _old = old_path();
         let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
         let _airgap = k2_core::test_env::EnvVar::set("K2_AIRGAP", "0");
@@ -523,6 +766,9 @@ mod tests {
             account_id: String::new(),
             recorded_ms: now_ms,
             snapshot: json!({"primary": {"used_percent": 22.0, "window_minutes": 300, "resets_in_seconds": 3600}, "secondary": {"used_percent": 5.0, "window_minutes": 10080, "resets_in_seconds": 86400}, "plan_type": "pro"}),
+            from_live_home: false,
+            default_home_recorded: false,
+            session_started_ms: None,
         };
         assert!(ingest_codex_rollout(&seen));
         let row = su::cached_rows().into_iter().find(|h| h.harness == "codex").expect("codex row");

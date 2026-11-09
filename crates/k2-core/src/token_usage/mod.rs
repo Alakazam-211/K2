@@ -172,6 +172,14 @@ pub struct CodexLimitsSeen {
     pub account_id: String,
     pub recorded_ms: i64,
     pub snapshot: Value,
+    /// Default home and no recorded conversation: credited to the live
+    /// token now, not this scan's `account_id` (single-record path, U16).
+    pub from_live_home: bool,
+    /// Default home, with a recorded conversation: `account_id` is the
+    /// recorded token.
+    pub default_home_recorded: bool,
+    /// When the session started (its `session_meta` line), when known.
+    pub session_started_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -700,6 +708,7 @@ fn initial_carry(root: &Root, path: &Path) -> Carry {
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             model: String::new(),
+            started_ms: 0,
         },
         _ => Carry::default(),
     }
@@ -779,11 +788,20 @@ fn ingest_file(conn: &Connection, root: &Root, path: &Path, ctx: &mut ScanCtx<'_
                     drafts.extend(d);
                     if let Some(l) = limits {
                         let acct = codex_login(root, &carry.session_id, &mut codex_account, ctx);
+                        let default_home = matches!(root.home, Home::Default);
+                        let recorded = default_home && ctx.accounts.conversation_login("codex", &carry.session_id).is_some();
                         let newer = ctx.codex_limits.get(&acct).map_or(true, |seen| l.recorded_ms >= seen.recorded_ms);
                         if newer {
                             ctx.codex_limits.insert(
                                 acct.clone(),
-                                CodexLimitsSeen { account_id: acct, recorded_ms: l.recorded_ms, snapshot: l.snapshot },
+                                CodexLimitsSeen {
+                                    account_id: acct,
+                                    recorded_ms: l.recorded_ms,
+                                    snapshot: l.snapshot,
+                                    from_live_home: default_home && !recorded,
+                                    default_home_recorded: default_home && recorded,
+                                    session_started_ms: (carry.started_ms > 0).then_some(carry.started_ms),
+                                },
                             );
                         }
                     }

@@ -535,6 +535,13 @@ fn note_live_verdict(tool: Tool, mismatch: bool) {
     LAST_LIVE_MISMATCH.lock().unwrap_or_else(|e| e.into_inner())[tool_index(tool)] = mismatch;
 }
 
+/// Test hook: set the last live verdict (the "another account" guards).
+/// Never used by the product.
+#[doc(hidden)]
+pub fn set_live_verdict_for_test(tool: Tool, mismatch: bool) {
+    note_live_verdict(tool, mismatch);
+}
+
 /// Is the live sign-in known to be another account than the default's
 /// (last reconcile)? Then usage readings of the live store are not the
 /// default's.
@@ -894,6 +901,21 @@ fn import_live_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &s
     let Some(bytes) = store::read_live(tool)? else {
         return Ok(None);
     };
+    import_bytes_locked(conn, tool, by, label, bytes)
+}
+
+/// Adopt `bytes` (the tool's live sign-in, read beforehand with no lock
+/// held) as the active wallet entry when nothing is active. The tool's
+/// lock and the database are taken for the write only.
+pub fn import_live_bytes(conn: &Connection, tool: Tool, by: Option<&str>, bytes: Vec<u8>) -> Result<Option<Entry>, WalletError> {
+    let _lock = store::lock_tool(tool, LOCK_WAIT)?;
+    if active_id(conn, tool)?.is_some() {
+        return Ok(None);
+    }
+    import_bytes_locked(conn, tool, by, "Default", bytes)
+}
+
+fn import_bytes_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &str, bytes: Vec<u8>) -> Result<Option<Entry>, WalletError> {
     if let Err(why) = store::validate_cred(tool, &bytes) {
         // Never copy a broken live store into the wallet.
         crate::log_debug!("[llm-accounts] {}: live login not imported ({why})", tool.as_str());

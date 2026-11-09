@@ -49727,7 +49727,8 @@ CORES
   it should be live, ask your human (k2 thread): only a person switches a
   core (k2 doc cores on|off is people only; there is no permission card).
   Which core: .md/.markdown need markdown; any other text (code, config,
-  .txt, logs, .csv) needs text; everything else needs any-file. A text
+  .txt, logs, .csv) needs text; everything else (PSD, CAD, 3D and .blend
+  files, images, PDFs, office files) needs any-file. A text
   file too large or too odd to edit live (it is then an any-file doc)
   still needs its own core: a big .md needs markdown, not any-file.
   Turning a core off writes every live change to the file first, then
@@ -92883,7 +92884,8 @@ Which core a file needs, by its name:
   markdown    .md and .markdown
   text        any other text: code, config, HTML/XML/SVG, diagram sources,
               .txt, logs, .csv/.tsv, and names without an extension
-  any-file    everything else (images, PDFs, office files, archives, binaries)
+  any-file    everything else: PSD, CAD, 3D and .blend files, images, PDFs,
+              office files, archives, binaries
   A text file too large or too odd to edit live (it is then an any-file doc)
   still needs its own core: a big .md needs markdown, not any-file.
 

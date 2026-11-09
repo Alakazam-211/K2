@@ -618,6 +618,9 @@ pub(crate) mod tests {
         assert_eq!(core_of_path("data.csv"), "text");
         assert_eq!(core_of_path("photo.png"), "any-file");
         assert_eq!(core_of_path("deck.pptx"), "any-file");
+        for p in ["art/poster.psd", "scene.blend", "part.dwg", "gear.step", "print.stl", "model.fbx"] {
+            assert_eq!(core_of_path(p), "any-file", "{p}");
+        }
     }
 
     #[test]
@@ -812,6 +815,7 @@ pub(crate) mod tests {
             assert_eq!(file("/nowhere/notes.md"), json!({"core": "markdown", "on": true, "liveView": true}));
             assert_eq!(file("src/main.rs"), json!({"core": "text", "on": false, "liveView": true}));
             assert_eq!(file("photo.png"), json!({"core": "any-file", "on": false, "liveView": false}));
+            assert_eq!(file("cad/part.dwg"), json!({"core": "any-file", "on": false, "liveView": false}));
             for board in ["plan.k5board", "a/b/X.K5BOARD", "Makefile.k5board", ".env.k5board"] {
                 assert_eq!(file(board), json!({"core": "board", "on": false, "liveView": false}), "{board}");
             }

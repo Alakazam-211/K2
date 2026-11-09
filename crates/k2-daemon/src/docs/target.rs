@@ -44,6 +44,30 @@ pub fn is_board_file(rel: &str) -> bool {
     b.len() >= EXT.len() && b[b.len() - EXT.len()..].eq_ignore_ascii_case(EXT)
 }
 
+/// Design, CAD and 3D files, by extension: any-file docs (K2's list, beside
+/// the text pack's `NOT_TEXT`, which has only `psd`, `blend`, `glb` and
+/// `3mf`). The pack calls an extension it doesn't know text if the bytes pass
+/// its guard, so without this a binary `.dwg` went to the Live editor to be
+/// refused, and an ASCII `.step` or `.obj` got line merges that break the
+/// model. None of these is in the pack's table (a test checks).
+const DESIGN_EXTENSIONS: &[&str] = &[
+    // layered images and vector art
+    "psb", "ai", "indd", "xcf", "kra", "sketch", "afdesign", "afphoto",
+    // CAD
+    "dwg", "dxf", "dgn", "step", "stp", "iges", "igs", "sat", "sldprt", "sldasm", "slddrw", "ipt", "iam", "idw", "f3d", "f3z",
+    "3dm", "skp", "fcstd", "catpart", "catproduct", "x_t", "x_b", "rvt", "rfa", "ifc",
+    // 3D models and scenes
+    "stl", "obj", "ply", "gltf", "fbx", "dae", "usd", "usda", "usdc", "usdz", "abc", "3ds", "c4d", "max", "ma", "mb", "lwo",
+    "blend1",
+];
+
+/// A design, CAD or 3D file, by its name alone (any case).
+pub fn is_design_file(rel: &str) -> bool {
+    let name = rel.rsplit(['/', '\\']).next().unwrap_or(rel);
+    name.rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && DESIGN_EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext)))
+}
+
 /// How much of the kit a file gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -61,7 +85,7 @@ impl Tier {
     pub fn of(rel: &str) -> Tier {
         // First: `.env.k5board` and `Makefile.k5board` match the text pack's
         // name prefixes, and a board is a zip, never text.
-        if is_board_file(rel) {
+        if is_board_file(rel) || is_design_file(rel) {
             Tier::Blob
         } else if k2_mpc_markdown::is_markdown_path(rel) {
             Tier::Markdown
@@ -660,6 +684,33 @@ mod tests {
         let prd = w(".k2/PROJECT.md", b"# p\n");
         assert_eq!(deny(".k2/PROJECT.md", &prd, &prd), Ok(()), "Markdown under .k2/ stays a doc");
         std::fs::remove_dir_all(&d).expect("cleanup");
+    }
+
+    /// Design, CAD and 3D files are any-file docs whatever the pack would
+    /// guess; the pack's near neighbours stay text.
+    #[test]
+    fn design_cad_and_3d_files_are_any_file_docs() {
+        for p in [
+            "art/poster.psd", "art/big.PSB", "scene.blend", "scene.blend1", "part.dwg", "plan.DXF", "gear.step", "gear.stp",
+            "gear.iges", "bracket.sldprt", "body.f3d", "house.skp", "print.stl", "mesh.obj", "mesh.ply", "model.fbx",
+            "model.glb", "model.gltf", "print.3mf", "stage.usdz",
+        ] {
+            assert_eq!(Tier::of(p), Tier::Blob, "{p}");
+        }
+        for p in ["profile.psd1", "step", "notes.step.txt", ".step", "obj"] {
+            assert_ne!(Tier::of(p), Tier::Blob, "{p}");
+        }
+        assert!(!is_design_file("a/.dwg"), "a dotfile named .dwg has no extension");
+    }
+
+    /// K2's list doesn't take a type away from the pack's table.
+    #[test]
+    fn the_design_list_takes_nothing_from_the_text_table() {
+        for e in DESIGN_EXTENSIONS {
+            assert_eq!(*e, e.to_ascii_lowercase(), "{e}");
+            let p = format!("file.{e}");
+            assert_eq!(k2_mpc_text::lookup(&p), k2_mpc_text::Lookup::Unknown, "{e} is in the pack's own table now: drop it here");
+        }
     }
 
     #[test]

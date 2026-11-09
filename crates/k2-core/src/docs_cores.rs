@@ -14,8 +14,8 @@
 pub enum CoreView {
     /// Files of this kind open in the multiplayer view while the core is on.
     Live,
-    /// No multiplayer view for people yet: they open the file the usual way;
-    /// agents use `k2 doc`.
+    /// No live editor: the file opens the usual way (for any-file, with the
+    /// presence, lock and versions panel beside it); agents use `k2 doc`.
     None,
     /// Opens as a Garden, not a file kind (the Board, 2026-11-01): the core
     /// switch shows or hides its built-in widget and gates its Garden data
@@ -76,8 +76,8 @@ pub const CORES: &[Core] = &[
         id: ANY_FILE,
         name: "Any other file",
         status: "beta",
-        description: "Images, PDFs, office files and the rest: presence, a lease, versions and restore. People still open these the usual way for now; agents use k2 doc.",
-        short: "presence, a lease, versions and restore (agents only for now)",
+        description: "PSD, CAD, 3D and .blend files, images, PDFs, office files and the rest. These open the usual way, with a panel beside them: who's here, a lock, versions and restore, conflict copies and approvals.",
+        short: "PSD, CAD, 3D and .blend files, images, PDFs and the rest: presence, a lock, versions",
         view: CoreView::None,
     },
     Core {
@@ -152,6 +152,20 @@ mod tests {
         assert_eq!(by_id("markdown").expect("markdown").view, CoreView::Live);
         assert!(by_id("word").is_none());
         assert_eq!(ids_list(), "markdown, text, any-file, board");
+    }
+
+    /// People look for these by file type (Settings and `k2 doc cores`).
+    #[test]
+    fn the_any_file_core_names_the_file_types_people_look_for() {
+        let c = by_id(ANY_FILE).expect("any-file");
+        for text in [c.description, c.short] {
+            for kind in ["PSD", "CAD", "3D", ".blend"] {
+                assert!(text.contains(kind), "{kind} is missing from: {text}");
+            }
+            assert!(!text.contains("agents only"), "{text}");
+            let lower = text.to_lowercase();
+            assert!(!lower.contains("photoshop") && !lower.contains("adobe") && !lower.contains("blender"), "file types only: {text}");
+        }
     }
 
     #[test]

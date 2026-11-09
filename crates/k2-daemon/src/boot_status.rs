@@ -216,10 +216,12 @@ pub const PING_GHOST: &str = "k2-daemon";
 /// removed). Loopback and authed callers only.
 fn full_body(settings: &k2_core::app_settings::AppSettings) -> serde_json::Value {
     let mut body = full_body_base(settings);
-    // A3: where the vault's loopback proxy listens, once it does.
-    if let Some(l) = crate::vault::proxy::listening() {
-        body["vaultProxy"] = serde_json::json!({ "port": l.port, "moved": l.moved });
-    }
+    // A3: where the vault's loopback proxy listens. The key is always here
+    // (null until it listens), so the body's shape doesn't race its start.
+    body["vaultProxy"] = match crate::vault::proxy::listening() {
+        Some(l) => serde_json::json!({ "port": l.port, "moved": l.moved }),
+        None => serde_json::Value::Null,
+    };
     // Voice rooms 0.46.8 (S9b): the voice lane and media path, only while
     // the voice tunnel preview is on (the body is unchanged otherwise).
     if k2_core::tunnel::voice_lane::preview_enabled() {

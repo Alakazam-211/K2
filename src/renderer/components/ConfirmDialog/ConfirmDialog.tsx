@@ -67,8 +67,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
           minWidth: 340,
           maxWidth: 480,
           padding: '20px 24px',
-          fontFamily:
-            "'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace"
+          fontFamily: 'var(--font-ui)'
         }}
       >
         {/* Title */}

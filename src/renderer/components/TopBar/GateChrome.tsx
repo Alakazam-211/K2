@@ -15,7 +15,7 @@ import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/d
 export default function GateChrome(): React.JSX.Element {
   return (
     <Surface
-      role2="surface"
+      role2="surface" data-chrome="bar"
       bordered={false}
       className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
       onMouseDown={titleBarDragOnMouseDown}

@@ -143,7 +143,7 @@ export function breakdownRows(report: UsageReport, tab: BreakdownTab, projects: 
 
 function Tile({ label, value, title, sub, testId }: { label: string; value: string; title?: string; sub?: React.ReactNode; testId: string }): React.JSX.Element {
   return (
-    <div className="border border-[var(--color-border)] px-3 py-2 min-w-0" data-testid={testId} title={title}>
+    <div data-settings-card="" className="border border-[var(--color-border)] px-3 py-2 min-w-0" data-testid={testId} title={title}>
       <div className="text-[11px] text-[var(--color-text-muted)]">{label}</div>
       <div className="text-base text-[var(--color-text-primary)] tabular-nums">{value}</div>
       {sub ? <div className="text-[10px] text-[var(--color-text-muted)]">{sub}</div> : null}

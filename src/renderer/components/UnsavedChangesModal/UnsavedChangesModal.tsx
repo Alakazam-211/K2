@@ -47,7 +47,7 @@ function UnsavedChangesModal({ onChoose }: UnsavedChangesModalProps): React.JSX.
         role="dialog"
         aria-modal="true"
         aria-label="Unsaved changes"
-        className="w-[440px] max-w-[92vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        data-material="tile" data-floating="" className="w-[440px] max-w-[92vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 pt-5 pb-2">

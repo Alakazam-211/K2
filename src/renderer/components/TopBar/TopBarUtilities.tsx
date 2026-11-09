@@ -44,7 +44,7 @@ export default function TopBarUtilities({
   const pageToggles = hasTopBarPageToggles(children)
   return (
     <TopBarFollowRoomContext.Provider value={followRoom}>
-    <div className="flex items-center gap-1 no-drag">
+    <div data-material="frost" data-frost-shape="pill" data-top-bar-cluster="" className="flex items-center gap-1 no-drag">
       {leading}
       {/* Voice rooms §4.1: avatars, headset, divider. The headset never
           follows a focused room (the call belongs to the app). */}

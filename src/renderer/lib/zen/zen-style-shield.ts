@@ -143,6 +143,13 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--tile-sheen': '0 0 #0000',
   '--tile-shadow': '0 0 #0000',
   '--material-edge': 'transparent',
+  '--color-frost-fill': mix('text', 10),
+  '--color-frost-edge': mix('text', 22),
+  '--color-frost-sheen': mix('text', 28),
+  '--color-bubble-agent': zen('bubble-agent'),
+  '--color-thread-raised': zen('surface-raised'),
+  '--color-shadow': 'transparent',
+  '--color-shadow-soft': 'transparent',
   '--material-sheen': '0 0 #0000',
   // Motion
   '--motion-ease-out-soft': 'ease-out',

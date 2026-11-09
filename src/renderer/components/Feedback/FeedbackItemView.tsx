@@ -583,7 +583,7 @@ export function HeaderStatusMenu({
         <div
           role="menu"
           data-testid="ticket-header-status-menu"
-          className="absolute left-0 top-full mt-1 z-30 min-w-[180px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
+          data-material="frost" className="absolute left-0 top-full mt-1 z-30 min-w-[180px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
         >
           {HEADER_STATUSES.map((s) => {
             const current = status === s
@@ -718,7 +718,7 @@ function ReassignMenu({
     <div
       ref={rootRef}
       data-testid="ticket-reassign-menu"
-      className="absolute left-0 top-full mt-1 z-30 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1"
+      data-material="frost" className="absolute left-0 top-full mt-1 z-30 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-1"
     >
       {all.map((name) => {
         const on = local.includes(name)

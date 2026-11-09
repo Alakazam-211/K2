@@ -56,7 +56,7 @@ function ToastItem({ toast }: { toast: ToastData }): React.JSX.Element {
   }, [toast.duration])
 
   return (
-    <div className="relative bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[240px] max-w-[360px] overflow-hidden">
+    <div data-material="frost" className="relative bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[240px] max-w-[360px] overflow-hidden">
       <CornerBrackets color={color} />
       <div className="px-3 py-2.5 flex flex-col gap-1.5">
         <div className="flex items-start gap-2">
@@ -261,7 +261,7 @@ export default function Toast(): React.JSX.Element | null {
     >
       {installNotice && (
         <div
-          className="relative bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[240px] max-w-[360px] px-3 py-2.5"
+          data-material="frost" className="relative bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[240px] max-w-[360px] px-3 py-2.5"
           data-cli-install-notice=""
         >
           {installNotice}

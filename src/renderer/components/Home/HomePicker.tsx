@@ -89,7 +89,7 @@ export default function HomePicker(): React.JSX.Element {
           data-home-picker-menu=""
           data-placement={menu.placement}
           style={menu.style}
-          className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+          data-material="frost" className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
         >
           {mode === 'menu' ? (
             <>

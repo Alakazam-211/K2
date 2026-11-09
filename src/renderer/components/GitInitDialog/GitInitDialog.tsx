@@ -92,7 +92,7 @@ export default function GitInitDialog(): React.JSX.Element | null {
       onClick={isPending ? undefined : close}
     >
       <div
-        className="w-[440px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        data-material="tile" data-floating="" className="w-[440px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

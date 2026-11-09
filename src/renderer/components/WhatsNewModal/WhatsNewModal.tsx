@@ -339,7 +339,7 @@ export default function WhatsNewModal({
         onMouseDown={(e) => e.stopPropagation()}
       >
       <Surface
-        role2="surface"
+        role2="surface" material="tile"
         className="no-drag"
         style={{
           position: 'relative',

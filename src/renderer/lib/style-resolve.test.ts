@@ -200,7 +200,7 @@ describe('retired style ids (the alias table)', () => {
 
   it('Bezel still compiles, hidden, but a selection can never resolve to it', () => {
     expect(getStyle('bezel')?.hidden).toBe(true)
-    expect(STYLES.filter((s) => s.hidden).map((s) => s.id)).toEqual(['bezel'])
+    expect(STYLES.filter((s) => s.hidden).map((s) => s.id)).toEqual(['bezel', 'glass-next'])
     expect(resolveStyleSelection(sel({ styleId: 'bezel' }), false).style.id).toBe('terminal')
   })
 })

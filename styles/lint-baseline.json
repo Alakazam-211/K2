@@ -139,7 +139,6 @@
     "src/renderer/components/CloneToDialog/CloneToDialog.tsx": 1,
     "src/renderer/components/CommandPalette/CommandPalette.tsx": 2,
     "src/renderer/components/ConnectionGate.tsx": 1,
-    "src/renderer/components/ContextMenu/ContextMenu.tsx": 1,
     "src/renderer/components/Design/NotePopover.tsx": 1,
     "src/renderer/components/Feedback/FeedbackItemView.tsx": 2,
     "src/renderer/components/Feedback/TicketCard.tsx": 1,

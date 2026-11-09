@@ -292,7 +292,7 @@ export function WorkspaceFilterDropdown({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col">
+        <div data-material="frost" className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col">
           {/* Search + rows: the shared list (search, sections, keyboard). */}
           <SearchableAgentList
             sections={listSections}

@@ -612,7 +612,7 @@ export default function WikiPage(): React.JSX.Element | null {
   return (
     <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
       <Surface
-        role2="surface"
+        role2="surface" data-chrome="bar"
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}

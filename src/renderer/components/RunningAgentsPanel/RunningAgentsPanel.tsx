@@ -348,7 +348,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     >
       <BrowserOverlayClaim />
       <Surface
-        role2="surface"
+        role2="surface" material="tile"
         className="w-[600px] max-h-[60vh] flex flex-col overflow-hidden"
         style={{ boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
       >

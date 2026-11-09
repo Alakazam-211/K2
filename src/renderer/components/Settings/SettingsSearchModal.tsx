@@ -98,7 +98,7 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
       onKeyDown={onKeyDown}
       tabIndex={-1}
     >
-      <div className="w-full max-w-xl mx-4 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl flex flex-col max-h-[70vh]">
+      <div data-material="tile" data-floating="" className="w-full max-w-xl mx-4 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl flex flex-col max-h-[70vh]">
         {/* Input */}
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
           <svg className="w-3.5 h-3.5 text-[var(--color-text-muted)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

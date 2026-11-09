@@ -623,7 +623,7 @@ function AddAgent({
           <div
             ref={menu.menuRef}
             data-garden-add-agent-picker=""
-            className="no-drag border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-2"
+            data-material="frost" className="no-drag border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-2"
             style={menu.style}
           >
             {error ? (
@@ -682,7 +682,7 @@ function GardenMenu({ onDelete, name }: { onDelete(): void; name: string }): Rea
           <div
             ref={menu.menuRef}
             role="menu"
-            className="no-drag flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-1"
+            data-material="frost" className="no-drag flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-1"
             style={menu.style}
           >
             <button

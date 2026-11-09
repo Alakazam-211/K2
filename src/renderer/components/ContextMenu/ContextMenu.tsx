@@ -8,17 +8,15 @@ import {
   type ContextMenuItemDef,
 } from '../../stores/context-menu'
 
-const MENU_FONT =
-  "'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace"
+/** Terminal's fill, edge and shadow, as classes so Frost can replace them
+ *  (a style can't beat an inline style). */
+const PANEL_CLASS =
+  "bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:0_4px_24px_rgba(0,0,0,0.5),0_1px_4px_rgba(0,0,0,0.3)] [font-family:var(--font-ui)]"
 
 const PANEL_STYLE: React.CSSProperties = {
   minWidth: 180,
   maxWidth: 320,
-  background: 'var(--color-bg)',
-  border: '1px solid var(--color-border)',
-  boxShadow: '0 4px 24px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3)',
   padding: '4px 0',
-  fontFamily: MENU_FONT,
   opacity: 1,
 }
 
@@ -235,6 +233,8 @@ function Submenu({
       ref={ref}
       role="menu"
       data-context-submenu=""
+      data-material="frost"
+      className={PANEL_CLASS}
       style={{ ...PANEL_STYLE, position: 'absolute', left: '100%', top: -4, zIndex: 1 }}
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -423,7 +423,8 @@ export default function ContextMenu(): React.JSX.Element | null {
       <div
         ref={menuRef}
         data-context-menu=""
-        className="no-drag"
+        data-material="frost"
+        className={`no-drag ${PANEL_CLASS}`}
         style={{
           ...PANEL_STYLE,
           position: 'fixed',

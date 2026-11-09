@@ -242,7 +242,7 @@ export function HeartbeatSessionPicker({
             left: menuBox.left,
             zIndex: menuBox.zIndex,
           }}
-          className="w-[36ch] max-h-[40vh] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
+          data-material="frost" className="w-[36ch] max-h-[40vh] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
         >
           {/* 1 — Pinned chat: the prominent, visually-distinct first
               entry (accent + pin mark, separated from the rest). */}

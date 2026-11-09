@@ -269,6 +269,7 @@ export default function CommandPalette(): React.JSX.Element | null {
     >
       <Surface
         role2="surface"
+        data-material="frost"
         className="w-[560px] max-h-[60vh] flex flex-col overflow-hidden"
         style={{ boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
       >

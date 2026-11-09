@@ -121,7 +121,7 @@ export default function FocusGroupDropdown({
           data-focus-group-menu=""
           data-placement={menu.placement}
           {...menuAttributes}
-          className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+          data-material="frost" className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
         >
           {/* Search input */}
           <div className="p-1.5 border-b border-[var(--color-border)]">

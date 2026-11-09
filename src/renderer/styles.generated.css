@@ -634,6 +634,396 @@
   }
 }
 
+/* ── Style: Glass (glass-next) v0.1.0 ── */
+[data-style="glass-next"] {
+  --radius-box: 16px;
+  --radius-field: 22px;
+  --radius-selector: 16px;
+  --radius-pill: 999px;
+  --chamfer-surface: 0px;
+  --chamfer-control: 0px;
+  --chamfer-chip: 0px;
+  --chamfer-send: 0px;
+  --control-check: 16px;
+  --control-switch-width: 38px;
+  --control-switch-height: 22px;
+  --control-switch-knob: 18px;
+  --control-switch-sm-width: 30px;
+  --control-switch-sm-height: 18px;
+  --control-switch-sm-knob: 14px;
+  --control-slider-track: 4px;
+  --control-slider-thumb: 16px;
+  --gap-pane: 8px;
+  --gap-tile: 4px;
+  --gap-section: 0px;
+  --inset-window: 8px;
+  --divider-width: 8px;
+  --divider-color: transparent;
+  --ring-surface: 0 0 #0000;
+  --ring-field: inset 0 1px 0 0 var(--color-ring-edge);
+  --ring-focus: 0 0 0 2px color-mix(in srgb, var(--color-accent) 40%, transparent);
+  --shadow-1: 0 1px 2px var(--color-shadow-soft);
+  --shadow-2: 0 4px 12px var(--color-shadow-soft);
+  --shadow-3: 0 8px 24px var(--color-shadow);
+  --shadow-4: 0 16px 40px var(--color-shadow);
+  --shadow-5: 0 24px 64px var(--color-shadow), 0 4px 16px var(--color-shadow-soft);
+  --material-blur: 28px;
+  --material-saturate: 180%;
+  --material-tint: var(--color-frost-fill);
+  --material-tint-opacity: 0.1;
+  --material-edge: var(--color-frost-edge);
+  --material-sheen: inset 0 1px 0 var(--color-frost-sheen);
+  --tile-fill: var(--color-bg-surface);
+  --tile-raised: var(--color-bg-elevated);
+  --tile-edge: color-mix(in srgb, var(--color-border) 55%, color-mix(in srgb, var(--color-text-primary) 14%, transparent));
+  --tile-sheen: inset 0 1px 0 var(--color-ring-edge-strong);
+  --tile-shadow: 0 10px 30px color-mix(in srgb, black 8%, transparent);
+  --density-scale: 1;
+  --motion-duration-fast: 140ms;
+  --motion-duration-medium: 180ms;
+  --motion-duration-slow: 320ms;
+  --motion-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-press-scale: 1.045;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Noto Sans', 'Helvetica Neue', Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Noto Sans', 'Helvetica Neue', Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-code: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --type-micro: 9px;
+  --type-xs: 10px;
+  --type-sm: 11px;
+  --type-md: 12px;
+  --type-lg: 13px;
+  --type-xl: 15px;
+}
+[data-style="glass-next"][data-palette="obsidian"] {
+  --color-bg: #0a0a0a;
+  --color-bg-surface: #1c1c1e;
+  --color-bg-elevated: #2c2c2e;
+  --color-bg-inset: #101012;
+  --color-bg-stripe: #1c1c1e;
+  --color-bg-canvas: #0a0a0a;
+  --color-bg-hover: rgba(255, 255, 255, 0.08);
+  --color-border: #333333;
+  --color-border-strong: rgba(255, 255, 255, 0.28);
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #c7c7cc;
+  --color-text-muted: #8e8e93;
+  --color-accent: var(--glass-accent);
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 82%, white);
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 58%, white);
+  --color-on-accent: #ffffff;
+  --color-status-working: var(--glass-accent);
+  --color-status-error: #ff453a;
+  --color-status-ok: #30d158;
+  --color-status-warn: #ff9f0a;
+  --color-status-ok-soft: #63e38a;
+  --color-status-warn-soft: #ffc35c;
+  --color-status-error-soft: #ff8078;
+  --color-neutral: #8e8e93;
+  --color-control-track-off: rgba(120, 120, 128, 0.32);
+  --color-status-error-bright: #ffb0aa;
+  --color-status-error-text: #ff6961;
+  --color-status-working-soft: #6cb6ff;
+  --color-status-warn-text: #ffc35c;
+  --color-status-needs-you: #ff9f0a;
+  --color-status-warn-amber: #ff9f0a;
+  --color-status-warn-amber-soft: #ffc35c;
+  --color-status-warn-amber-bright: #ffdc9e;
+  --color-status-ok-hover: #26b84d;
+  --color-danger: #ff453a;
+  --color-danger-active: #d70015;
+  --color-wash-1: rgba(255, 255, 255, 0.05);
+  --color-wash-2: rgba(255, 255, 255, 0.10);
+  --color-wash-3: rgba(255, 255, 255, 0.20);
+  --color-scrim: rgba(0, 0, 0, 0.6);
+  --color-danger-muted: #b3382f;
+  --color-diff-add-text: #7ee787;
+  --color-diff-remove-text: #ffb0aa;
+  --color-diff-modified-border: #30d158;
+  --color-code-inline: #ffd60a;
+  --color-danger-hover: #ff8078;
+  --color-overlay-soft-bg: rgba(255, 255, 255, 0.06);
+  --color-overlay-soft-border: rgba(255, 255, 255, 0.08);
+  --color-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
+  --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
+  --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
+  --color-ring-edge-strong: rgba(255, 255, 255, 0.22);
+  --color-ring-edge: rgba(255, 255, 255, 0.14);
+  --color-ring-hairline: rgba(255, 255, 255, 0.06);
+  --color-ring-hairline-soft: rgba(255, 255, 255, 0.05);
+  --color-frost-fill: rgba(255, 255, 255, 0.10);
+  --color-frost-edge: rgba(255, 255, 255, 0.22);
+  --color-frost-sheen: rgba(255, 255, 255, 0.28);
+  --color-bubble-agent: #3a3a3c;
+  --color-shadow: rgba(0, 0, 0, 0.5);
+  --color-shadow-soft: rgba(0, 0, 0, 0.3);
+  --color-thread-raised: var(--color-bg-surface);
+  --term-fg: #e5e5ea;
+  --term-bg: #0a0a0a;
+  --term-cursor: #e5e5ea;
+  --term-selection: #23395b;
+  --term-ansi-0: #1c1c1e;
+  --term-ansi-1: #ff453a;
+  --term-ansi-2: #30d158;
+  --term-ansi-3: #ff9f0a;
+  --term-ansi-4: #0a84ff;
+  --term-ansi-5: #bf5af2;
+  --term-ansi-6: #64d2ff;
+  --term-ansi-7: #c7c7cc;
+  --term-ansi-8: #636366;
+  --term-ansi-9: #ff6961;
+  --term-ansi-10: #63e38a;
+  --term-ansi-11: #ffc35c;
+  --term-ansi-12: #6cb6ff;
+  --term-ansi-13: #d68fff;
+  --term-ansi-14: #8fe1ff;
+  --term-ansi-15: #ffffff;
+}
+[data-style="glass-next"][data-palette="veil"] {
+  --color-bg: #ececf1;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #f2f2f7;
+  --color-bg-inset: #ececf1;
+  --color-bg-stripe: #ffffff;
+  --color-bg-canvas: #ececf1;
+  --color-bg-hover: rgba(60, 60, 67, 0.08);
+  --color-border: #d8d8de;
+  --color-border-strong: rgba(60, 60, 67, 0.35);
+  --color-text-primary: #000000;
+  --color-text-secondary: #3a3a3f;
+  --color-text-muted: #6e6e73;
+  --color-accent: var(--glass-accent);
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 85%, black);
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 60%, white);
+  --color-on-accent: #ffffff;
+  --color-status-working: var(--glass-accent);
+  --color-status-error: #ff3b30;
+  --color-status-ok: #34c759;
+  --color-status-warn: #ff9500;
+  --color-status-ok-soft: #248a3d;
+  --color-status-warn-soft: #c26b00;
+  --color-status-error-soft: #d70015;
+  --color-neutral: #6e6e73;
+  --color-control-track-off: rgba(120, 120, 128, 0.20);
+  --color-status-error-bright: #a50011;
+  --color-status-error-text: #d70015;
+  --color-status-working-soft: #0a6fd6;
+  --color-status-warn-text: #b25d00;
+  --color-status-needs-you: #ff9500;
+  --color-status-warn-amber: #c26b00;
+  --color-status-warn-amber-soft: #a85a00;
+  --color-status-warn-amber-bright: #8f4c00;
+  --color-status-ok-hover: #248a3d;
+  --color-danger: #ff3b30;
+  --color-danger-active: #d70015;
+  --color-wash-1: rgba(60, 60, 67, 0.05);
+  --color-wash-2: rgba(60, 60, 67, 0.09);
+  --color-wash-3: rgba(60, 60, 67, 0.16);
+  --color-scrim: rgba(30, 30, 35, 0.32);
+  --color-danger-muted: #c0392b;
+  --color-diff-add-text: #1a7f37;
+  --color-diff-remove-text: #c0392b;
+  --color-diff-modified-border: #34c759;
+  --color-code-inline: #9a5b00;
+  --color-danger-hover: #ff3b30;
+  --color-overlay-soft-bg: rgba(60, 60, 67, 0.05);
+  --color-overlay-soft-border: rgba(60, 60, 67, 0.08);
+  --color-scrollbar-thumb: rgba(60, 60, 67, 0.18);
+  --color-scrollbar-thumb-hover: rgba(60, 60, 67, 0.32);
+  --color-scrollbar-thumb-strong: rgba(60, 60, 67, 0.34);
+  --color-scrollbar-thumb-strong-hover: rgba(60, 60, 67, 0.5);
+  --color-ring-edge-strong: rgba(255, 255, 255, 0.85);
+  --color-ring-edge: rgba(255, 255, 255, 0.7);
+  --color-ring-hairline: rgba(60, 60, 67, 0.08);
+  --color-ring-hairline-soft: rgba(60, 60, 67, 0.06);
+  --color-frost-fill: rgba(255, 255, 255, 0.62);
+  --color-frost-edge: rgba(0, 0, 0, 0.12);
+  --color-frost-sheen: rgba(255, 255, 255, 0.85);
+  --color-bubble-agent: #e9e9eb;
+  --color-shadow: rgba(60, 60, 67, 0.16);
+  --color-shadow-soft: rgba(60, 60, 67, 0.1);
+  --color-thread-raised: var(--color-bg-surface);
+  --term-fg: #1c1c1e;
+  --term-bg: #ffffff;
+  --term-cursor: #1c1c1e;
+  --term-selection: #cfe3ff;
+  --term-ansi-0: #1c1c1e;
+  --term-ansi-1: #d70015;
+  --term-ansi-2: #248a3d;
+  --term-ansi-3: #b25d00;
+  --term-ansi-4: #0a6fd6;
+  --term-ansi-5: #8944ab;
+  --term-ansi-6: #0071a4;
+  --term-ansi-7: #6e6e73;
+  --term-ansi-8: #48484a;
+  --term-ansi-9: #ff3b30;
+  --term-ansi-10: #34c759;
+  --term-ansi-11: #c26b00;
+  --term-ansi-12: #0a84ff;
+  --term-ansi-13: #bf5af2;
+  --term-ansi-14: #32ade6;
+  --term-ansi-15: #000000;
+}
+/* ── glass-next/overrides.css (policy-checked: scoped, no !important/url/@import) ── */
+/* Glass: K2 Companion's look on the desktop. Two materials, kept strictly
+ * apart (prd-themes-terminal-glass-v1 §3.2):
+ *
+ *   FROST  floating chrome with content behind it (menus, popovers, the
+ *          command palette, floating pills, top-bar icon buttons, search
+ *          fields). See-through fill over a live blur. An element gets it
+ *          only by carrying data-material="frost".
+ *   TILE   content (panes, sidebars, Settings cards, dialogs, composer,
+ *          activity drawer). Solid; the glass is the edge. <Surface
+ *          material="tile"> (or "raised") or data-material="tile".
+ *   SOLID  Thread bubbles, terminals, editors, diffs. Never frosted.
+ *
+ * No aurora and no wash on the canvas: the phone's look comes from content
+ * moving behind glass, not a coloured background.
+ *
+ * Not here yet (later half of S4): the press spring, the progressive header
+ * blur, and the reduced-transparency / no-backdrop-filter fallback.
+ */
+
+/* ── The accent ──────────────────────────────────────────────────────────
+ * Change this one line to recolour Glass: every blue in both palettes
+ * (accent, its hover and soft mixes, the working status, Thread bubbles from
+ * me, focus rings, on-state switches and checkmarks) follows it. */
+[data-style="glass-next"] {
+  --glass-accent: #0a84ff;
+}
+
+/* Every rule below stops at a Garden root ([data-zen-root]): Gardens own
+ * their look, and Zen reuses a few app components. */
+
+/* ── FROST: only ever data-material="frost" ─────────────────────────────── */
+[data-style="glass-next"] [data-material="frost"]:not([data-zen-root] *) {
+  background: var(--material-tint);
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  border: 0.5px solid var(--material-edge);
+  border-radius: var(--radius-box);
+  box-shadow: var(--material-sheen), var(--shadow-3);
+}
+/* Small floating pieces sit in the chrome: no drop shadow of their own. */
+[data-style="glass-next"] [data-material="frost"][data-frost-shape]:not([data-zen-root] *) { box-shadow: var(--material-sheen); }
+[data-style="glass-next"] [data-frost-shape="pill"]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
+[data-style="glass-next"] [data-frost-shape="round"]:not([data-zen-root] *) { border-radius: var(--radius-selector); }
+[data-style="glass-next"] [data-frost-shape="field"]:not([data-zen-root] *) { border-radius: var(--radius-field); }
+
+/* ── TILE: solid fill, the edge is the glass ────────────────────────────── */
+[data-style="glass-next"] [data-material="tile"]:not([data-zen-root] *),
+[data-style="glass-next"] [data-material="raised"]:not([data-zen-root] *) {
+  border: 1px solid var(--tile-edge);
+  border-radius: var(--radius-box);
+  box-shadow: var(--tile-sheen), var(--tile-shadow);
+}
+[data-style="glass-next"] [data-material="tile"]:not([data-zen-root] *) { background: var(--tile-fill); }
+[data-style="glass-next"] [data-material="raised"]:not([data-zen-root] *) { background: var(--tile-raised); }
+/* A pane group holds a terminal or editor: keep its contents inside the
+   rounded rim. (Menus portal to <body>, so they aren't clipped.) */
+[data-style="glass-next"] [data-material="tile"][data-clip]:not([data-zen-root] *) { overflow: hidden; }
+/* A dialog or sheet floats above the app: tile rim, dialog drop shadow. */
+[data-style="glass-next"] [data-material][data-floating]:not([data-zen-root] *) {
+  box-shadow: var(--tile-sheen), var(--shadow-5);
+}
+
+/* ── Window chrome ──────────────────────────────────────────────────────
+   A title bar is not a tile: it sits straight on the canvas, as the phone's
+   header sits on the conversation. Its controls carry the frost. */
+[data-style="glass-next"] [data-chrome="bar"]:not([data-zen-root] *) {
+  background: transparent;
+  border-color: transparent;
+}
+/* Open canvas under every title bar. */
+[data-style="glass-next"] [data-chrome="bar"]:not([data-zen-root] *) { margin-bottom: var(--gap-pane); }
+[data-style="glass-next"] [data-top-bar-cluster]:not([data-zen-root] *),
+[data-style="glass-next"] [data-page-tabs]:not([data-zen-root] *) {
+  padding: 2px 8px;
+  gap: 4px;
+}
+/* Drawers are tiles of their own: no line between them and the room. */
+[data-style="glass-next"] [data-drawer-side]:not([data-zen-root] *) { border-color: transparent; }
+
+/* The selected page tab is the phone's Home | Agents thumb: a blue pill. */
+[data-style="glass-next"] [data-page-tab]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
+[data-style="glass-next"] [data-page-tab][data-selected]:not([data-zen-root] *) {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), 0 1px 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+/* ── Controls still written by hand ─────────────────────────────────────
+   Many buttons, inputs and dropdown triggers don't use the primitives yet.
+   They read the field radius here, so Glass has no square controls. */
+[data-style="glass-next"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
+  border-radius: var(--radius-field);
+}
+
+/* The Settings page: nav tile, content tile, cards inside. */
+[data-style="glass-next"] [data-settings-shell]:not([data-zen-root] *) { gap: var(--gap-pane); }
+[data-style="glass-next"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
+[data-style="glass-next"] [data-mode-toggle]:not([data-zen-root] *) { border-radius: var(--radius-pill); overflow: hidden; }
+
+/* Settings nav rows sit inside their tile, not edge to edge. */
+[data-style="glass-next"] [data-settings-nav]:not([data-zen-root] *) {
+  margin: 0 6px;
+  width: calc(100% - 12px);
+  border-radius: var(--radius-selector);
+}
+
+/* ── Form controls, tuned to the phone ────────────────────────────────── */
+[data-style="glass-next"] .k2-checkbox:not([data-zen-root] *),
+[data-style="glass-next"] .k2-radio:not([data-zen-root] *) { border-width: 1.5px; }
+[data-style="glass-next"] .k2-checkbox:checked:not([data-zen-root] *),
+[data-style="glass-next"] .k2-checkbox:indeterminate:not([data-zen-root] *),
+[data-style="glass-next"] .k2-radio:checked:not([data-zen-root] *) { border-color: transparent; }
+[data-style="glass-next"] .k2-radio:checked:not([data-zen-root] *) {
+  background-image: radial-gradient(circle, var(--color-on-accent) 0 34%, transparent 38%);
+}
+/* Switch: a soft track, a white knob that sits above it. */
+[data-style="glass-next"] .k2-switch:not([data-zen-root] *) { box-shadow: none; }
+[data-style="glass-next"] .k2-switch-knob:not([data-zen-root] *),
+[data-style="glass-next"] .k2-switch[aria-checked="true"] .k2-switch-knob:not([data-zen-root] *) {
+  background-color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+[data-style="glass-next"] .k2-switch:not([data-zen-root] *),
+[data-style="glass-next"] .k2-switch-knob:not([data-zen-root] *) {
+  transition: background-color var(--motion-duration-medium) var(--motion-ease-standard),
+    transform var(--motion-duration-medium) var(--motion-ease-standard);
+}
+/* Slider: a white round thumb on a pill track. */
+[data-style="glass-next"] .k2-slider:not([data-zen-root] *)::-webkit-slider-thumb {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+[data-style="glass-next"] .k2-slider:focus-visible:not([data-zen-root] *)::-webkit-slider-thumb {
+  background: #ffffff;
+  box-shadow: 0 0 0 2px var(--color-accent);
+  transform: none;
+}
+/* Segmented: a recessed pill with the selected thumb inset, blue as on the
+   phone's Home | Agents toggle. */
+[data-style="glass-next"] .k2-segmented:not([data-zen-root] *) {
+  padding: 2px;
+  gap: 2px;
+  border-color: transparent;
+  background: var(--color-control-track-off);
+}
+[data-style="glass-next"] .k2-segment:not([data-zen-root] *) {
+  padding: 3px 12px;
+  border-radius: var(--radius-pill);
+  transition: background-color var(--motion-duration-medium) var(--motion-ease-standard),
+    color var(--motion-duration-medium) var(--motion-ease-standard);
+}
+[data-style="glass-next"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) {
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), 0 1px 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+[data-style="glass-next"] .k2-segment:hover:not(:disabled):not([aria-checked="true"]):not([data-zen-root] *) {
+  background: var(--color-wash-2);
+}
+
 /* ── Style: Terminal (terminal) v1.0.0 ── */
 [data-style="terminal"] {
   --radius-box: 0px;

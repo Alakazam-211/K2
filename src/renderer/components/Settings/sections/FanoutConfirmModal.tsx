@@ -114,7 +114,7 @@ export function FanoutConfirmModal({
         role="dialog"
         aria-modal="true"
         aria-label="Set up canonical harness fan-out"
-        className="w-[820px] max-w-[92vw] max-h-[90vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        data-material="tile" data-floating="" className="w-[820px] max-w-[92vw] max-h-[90vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

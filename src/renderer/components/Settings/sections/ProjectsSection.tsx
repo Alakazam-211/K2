@@ -3025,7 +3025,7 @@ function AgentKebabMenu({ onSettings, onDelete }: { onSettings: () => void; onDe
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg min-w-[140px]">
+        <div data-material="frost" className="absolute right-0 top-full mt-1 z-50 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg min-w-[140px]">
           <button
             onClick={() => { setOpen(false); onSettings() }}
             className="w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"

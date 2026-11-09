@@ -346,7 +346,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
           light spacer + wordmark + SERVER DROPDOWN + the page switcher
           (§6.0: both visible on every page), draggable. */}
       <Surface
-        role2="surface"
+        role2="surface" data-chrome="bar"
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}

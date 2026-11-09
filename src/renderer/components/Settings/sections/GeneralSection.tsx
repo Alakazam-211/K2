@@ -368,7 +368,7 @@ export function GeneralSection(): React.JSX.Element {
 
         {/* App font (0.45.7): the same setting as Editors / Fonts → Code.
             Sits below the app and CLI versions (Rosson 2026-10-16). */}
-        <div className="border border-[var(--color-border)]" data-settings-id="general.font">
+        <div data-settings-card="" className="border border-[var(--color-border)]" data-settings-id="general.font">
           <AppFontRows where="general" lastHasBorder={false} />
         </div>
 

@@ -155,7 +155,7 @@ function PaneChrome({
 }): React.JSX.Element {
   return (
     <Surface
-      role2="surface"
+      role2="surface" material="tile"
       bordered={false}
       className={`flex flex-col h-full min-w-0 min-h-0 border transition-colors ${
         focused ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'

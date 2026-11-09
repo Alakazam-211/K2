@@ -140,7 +140,7 @@ export default function TabbedPanel({
 
   return (
     <Surface
-      role2="surface"
+      role2="surface" material="tile"
       bordered={false}
       className="relative flex flex-col h-full min-h-0 overflow-hidden"
       style={{ width }}

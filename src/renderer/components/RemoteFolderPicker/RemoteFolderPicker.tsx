@@ -191,7 +191,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
     >
       <BrowserOverlayClaim />
       <div
-        className="w-[560px] max-h-[80vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        data-material="tile" data-floating="" className="w-[560px] max-h-[80vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -410,7 +410,7 @@ function ChatHeader({
         </svg>
       </button>
       {historyOpen && (
-        <div ref={historyMenuRef} className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
+        <div ref={historyMenuRef} data-material="frost" className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
           <button
             type="button"
             data-testid="pinned-continue-new-chat"

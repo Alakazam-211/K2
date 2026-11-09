@@ -128,7 +128,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
       onClick={isPending ? undefined : close}
     >
       <div
-        className="w-[560px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        data-material="tile" data-floating="" className="w-[560px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

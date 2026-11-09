@@ -98,7 +98,7 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
       <div
         role="dialog"
         aria-label="Add to Home"
-        className="w-[360px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        data-material="tile" data-floating="" className="w-[360px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 pt-5 pb-3">

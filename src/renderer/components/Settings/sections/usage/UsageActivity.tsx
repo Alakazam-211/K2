@@ -168,7 +168,7 @@ export function UsageActivity({
       <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
         Every counted request, newest first, for the filters and range above. Updates as transcripts are scanned.
       </p>
-      <div className="border border-[var(--color-border)] max-h-[60vh] overflow-auto">
+      <div data-settings-card="" className="border border-[var(--color-border)] max-h-[60vh] overflow-auto">
         {loading ? (
           <p className="text-xs text-[var(--color-text-muted)] p-3">Loading…</p>
         ) : error ? (

@@ -179,7 +179,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
     <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
       {/* Top bar — traffic-light spacer + wordmark, draggable. */}
       <Surface
-        role2="surface"
+        role2="surface" data-chrome="bar"
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}

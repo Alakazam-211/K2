@@ -69,7 +69,7 @@ export default function TopBar({
 
   return (
     <Surface
-      role2="surface"
+      role2="surface" data-chrome="bar"
       bordered={false}
       className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none"
       onMouseDown={titleBarDragOnMouseDown}

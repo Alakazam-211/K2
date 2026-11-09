@@ -131,6 +131,8 @@ export function PageTab({
   return (
     <button
       onClick={onSelect}
+      data-page-tab=""
+      data-selected={selected ? '' : undefined}
       className={`relative flex h-6 items-center justify-center px-2 text-[11px] font-medium transition-colors ${
         selected
           ? 'text-[var(--color-text-primary)] bg-white/[0.08] shadow-[inset_0_-2px_0_var(--color-accent)]'
@@ -213,7 +215,7 @@ export default function PageTabs(): React.JSX.Element {
   }
 
   return (
-    <div className="no-drag flex items-center gap-0.5">
+    <div data-material="frost" data-frost-shape="pill" data-page-tabs="" className="no-drag flex items-center gap-0.5">
       {PAGE_TAB_ITEMS.map(({ page: p, Icon }) => {
         const badge =
           p === 'projects'

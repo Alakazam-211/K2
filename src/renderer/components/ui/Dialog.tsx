@@ -42,7 +42,7 @@ export function DialogFrame({ zIndex = 99999, className, style, ...rest }: Dialo
       className="no-drag fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
       style={{ zIndex }}
     >
-      <Surface elevation={5} chamfer className={className} style={style} {...rest} />
+      <Surface elevation={5} chamfer material="tile" className={className} style={style} {...rest} />
     </div>
   )
 }

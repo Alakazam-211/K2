@@ -155,7 +155,7 @@ export function CardStatusDropdown({
           data-testid="ticket-status-menu"
           data-placement={menu.placement}
           style={menu.style}
-          className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
+          data-material="frost" className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg py-0.5"
         >
           {/* Answered shows as the current state but is not offered. */}
           {row.status === 'answered' && (

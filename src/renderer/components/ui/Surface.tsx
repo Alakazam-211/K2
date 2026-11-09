@@ -35,6 +35,10 @@ export interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
   /** A card, tile or popover: cut corners in Terminal (and nothing elsewhere).
    *  Panes and other structure keep the default: square. */
   chamfer?: boolean
+  /** Glass's Tile material for content: a solid fill whose glass is its edge
+   *  (`raised` is the step above a tile). Does nothing in Terminal. Frost is
+   *  not a Surface option: floating chrome carries `data-material="frost"`. */
+  material?: 'tile' | 'raised'
 }
 
 /** The panel/card primitive: background role + radius.box + ring/shadow
@@ -43,13 +47,15 @@ export interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
  *  panel (radius 0, no-op ring/shadows). Other Styles restyle it through
  *  the contract without component changes. */
 export const Surface = forwardRef<HTMLDivElement, SurfaceProps>(function Surface(
-  { role2 = 'surface', bordered = true, elevation = 0, chamfer = false, className, ...rest },
+  { role2 = 'surface', bordered = true, elevation = 0, chamfer = false, material, className, ...rest },
   ref
 ) {
   return (
     <div
       ref={ref}
       data-surface={role2}
+      data-material={material}
+      data-floating={elevation >= 3 ? '' : undefined}
       data-k2-chamfer={chamfer ? 'surface' : undefined}
       className={cx(
         ROLE_BG[role2],

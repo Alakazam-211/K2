@@ -73,7 +73,7 @@ export {
 export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-canvas': 'var(--color-bg)',
   '--zen-surface': 'var(--color-bg-surface)',
-  '--zen-surface-raised': 'var(--color-bg-elevated)',
+  '--zen-surface-raised': 'var(--color-thread-raised, var(--color-bg-elevated))',
   '--zen-border': 'var(--color-border)',
   '--zen-text': 'var(--color-text-primary)',
   '--zen-text-muted': 'var(--color-text-muted)',
@@ -81,7 +81,7 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-accent-text': 'var(--color-on-accent)',
   '--zen-bubble-me': 'var(--color-accent)',
   '--zen-bubble-me-text': 'var(--color-on-accent)',
-  '--zen-bubble-agent': 'var(--color-bg-elevated)',
+  '--zen-bubble-agent': 'var(--color-bubble-agent, var(--color-bg-elevated))',
   '--zen-bubble-agent-text': 'var(--color-text-primary)',
   '--zen-working': 'var(--color-status-working)',
   '--zen-idle': 'var(--color-text-muted)',

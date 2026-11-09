@@ -489,7 +489,7 @@ export default function HelpExplorer({
         }}
       />
       <Surface
-        role2="surface"
+        role2="surface" material="tile"
         elevation={5}
         className="no-drag"
         role="dialog"
@@ -543,7 +543,7 @@ export default function HelpExplorer({
             />
             {showResults ? (
               <Surface
-                role2="elevated"
+                role2="elevated" material="raised"
                 elevation={4}
                 id={listId}
                 role="listbox"

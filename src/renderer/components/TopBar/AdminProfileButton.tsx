@@ -664,7 +664,7 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
       />
       <Surface
         ref={dialogRef}
-        role2="surface"
+        role2="surface" material="tile"
         elevation={5}
         className="no-drag"
         role="dialog"

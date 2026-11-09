@@ -479,7 +479,7 @@ export default function Settings(): React.JSX.Element {
           Projects / Tickets stay reachable (settings cog is the
           selected tab). */}
       <Surface
-        role2="surface"
+        role2="surface" data-chrome="bar"
         bordered={false}
         className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
@@ -502,9 +502,9 @@ export default function Settings(): React.JSX.Element {
         </DesktopChromeRight>
       </Surface>
 
-      <div className="flex flex-1 w-full min-h-0">
+      <div data-settings-shell="" className="flex flex-1 w-full min-h-0">
       {/* Left nav */}
-      <div className="w-48 flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-surface)] flex flex-col min-h-0">
+      <div data-material="tile" data-clip="" className="w-48 flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-surface)] flex flex-col min-h-0">
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-shrink-0">
           <span className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wider">
             Settings
@@ -587,6 +587,7 @@ export default function Settings(): React.JSX.Element {
 
       {/* Content area */}
       <div
+        data-material="tile"
         className={`flex-1 min-h-0 relative ${
           activeSection === 'general' ||
           activeSection === 'styles' ||

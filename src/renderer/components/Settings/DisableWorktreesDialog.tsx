@@ -165,7 +165,7 @@ export default function DisableWorktreesDialog({
         role="dialog"
         aria-modal="true"
         aria-label="Disable Worktrees"
-        className="w-[520px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        data-material="tile" data-floating="" className="w-[520px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

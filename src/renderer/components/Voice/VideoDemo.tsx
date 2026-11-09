@@ -54,7 +54,7 @@ function NoEncoderNote({ onClose }: { onClose: () => void }): React.JSX.Element 
   const ref = useRef<HTMLDivElement>(null)
   useBrowserOverlay({ active: true, ref, kind: 'popover' })
   return (
-    <div ref={ref} data-testid="video-demo-unsupported" className="fixed bottom-3 right-3 z-40 border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[11px] text-[var(--color-text-secondary)] shadow-lg">
+    <div ref={ref} data-testid="video-demo-unsupported" data-material="tile" data-floating="" className="fixed bottom-3 right-3 z-40 border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[11px] text-[var(--color-text-secondary)] shadow-lg">
       This webview has no VideoEncoder, so the demo can't make video.{' '}
       <button type="button" className="underline" onClick={onClose}>
         Close

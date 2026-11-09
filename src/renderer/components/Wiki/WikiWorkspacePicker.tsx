@@ -190,7 +190,7 @@ export function WikiWorkspacePicker({
             style={menu.style}
             data-wiki-picker-menu=""
             data-placement={menu.placement}
-            className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl flex flex-col"
+            data-material="frost" className="no-drag bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl flex flex-col"
           >
             <SearchableAgentList
               sections={sections}

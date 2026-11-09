@@ -323,7 +323,7 @@ export function PaneTabBar({
       style={{
         height: '24px',
         minHeight: '24px',
-        fontFamily: "'MesloLGM Nerd Font', Menlo, Monaco, monospace",
+        fontFamily: 'var(--font-ui)',
         fontSize: '11px'
       }}
     >

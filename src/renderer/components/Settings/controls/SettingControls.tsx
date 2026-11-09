@@ -328,7 +328,7 @@ export function SettingDropdown({
         >
           <div
             data-k2-chamfer={menuBox.chamfer ? 'surface' : undefined}
-            className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+            data-material="frost" className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
           >
           <div className="max-h-60 overflow-y-auto">
           {options.map((option, i) => {

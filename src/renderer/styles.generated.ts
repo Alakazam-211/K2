@@ -299,6 +299,131 @@ export const STYLES: readonly StyleMeta[] = [
     ]
   },
   {
+    "id": "glass-next",
+    "name": "Glass",
+    "author": "Alakazam Labs",
+    "description": "K2 Companion's look on the desktop: solid tiles on a near-black canvas, frost only on floating chrome.",
+    "defaultPalette": "obsidian",
+    "defaultPalettes": {
+      "dark": "obsidian",
+      "light": "veil"
+    },
+    "capabilities": {
+      "gaps": false,
+      "backdrop": true,
+      "schemes": [
+        "dark",
+        "light"
+      ]
+    },
+    "gapPresets": [],
+    "dials": [
+      {
+        "id": "frost",
+        "label": "Frost",
+        "token": "--material-blur",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "unit": "px",
+        "default": 28
+      }
+    ],
+    "palettes": [
+      {
+        "id": "obsidian",
+        "name": "Obsidian",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#0a0a0a",
+          "surface": "#1c1c1e",
+          "elevated": "#2c2c2e",
+          "accent": "var(--glass-accent)",
+          "textPrimary": "#ffffff",
+          "border": "#333333"
+        },
+        "terminal": {
+          "foreground": 15066602,
+          "background": 657930,
+          "palette": [
+            1842206,
+            16729402,
+            3199320,
+            16752394,
+            689407,
+            12540658,
+            6607615,
+            13092812,
+            6513510,
+            16738657,
+            6546314,
+            16761692,
+            7124735,
+            14061567,
+            9429503,
+            16777215
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 15066602
+          },
+          "selection": {
+            "text": null,
+            "background": 2308443
+          }
+        }
+      },
+      {
+        "id": "veil",
+        "name": "Veil",
+        "schemes": [
+          "light"
+        ],
+        "swatch": {
+          "bg": "#ececf1",
+          "surface": "#ffffff",
+          "elevated": "#f2f2f7",
+          "accent": "var(--glass-accent)",
+          "textPrimary": "#000000",
+          "border": "#d8d8de"
+        },
+        "terminal": {
+          "foreground": 1842206,
+          "background": 16777215,
+          "palette": [
+            1842206,
+            14090261,
+            2394685,
+            11689216,
+            683990,
+            8996011,
+            29092,
+            7237235,
+            4737098,
+            16726832,
+            3458905,
+            12741376,
+            689407,
+            12540658,
+            3321318,
+            0
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 1842206
+          },
+          "selection": {
+            "text": null,
+            "background": 13624319
+          }
+        }
+      }
+    ],
+    "hidden": true
+  },
+  {
     "id": "terminal",
     "name": "Terminal",
     "author": "Alakazam Labs",

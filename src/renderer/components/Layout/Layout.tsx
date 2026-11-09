@@ -64,7 +64,7 @@ export default function Layout({
                 transparent; this wrapper is the chrome container Glass
                 will paint with material. */}
             <Surface
-              role2="surface"
+              role2="surface" material="tile"
               bordered={false}
               className="relative flex-shrink-0 overflow-y-auto border-r border-[var(--color-border)]"
               style={{ width: sidebarWidth }}

@@ -48,7 +48,7 @@ export default function MemoDialog(): React.JSX.Element | null {
 
   return (
     <DialogScrim zIndex={50} className="flex items-center justify-center backdrop-blur-sm">
-      <Surface elevation={5} className="w-[380px] p-6">
+      <Surface material="tile" elevation={5} className="w-[380px] p-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-1">
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">

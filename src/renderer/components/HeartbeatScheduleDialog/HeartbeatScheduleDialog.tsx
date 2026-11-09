@@ -214,7 +214,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
     >
       <DialogScrim zIndex={0} className="backdrop-blur-sm" />
 
-      <div className="relative w-[380px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
+      <div data-material="tile" data-floating="" className="relative w-[380px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Heartbeat Schedule</h2>

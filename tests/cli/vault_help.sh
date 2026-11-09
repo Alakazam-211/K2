@@ -62,20 +62,16 @@ ok "every k2 vault verb has its own --help with an example"
 for guess in exec env inject run frobnicate; do
     set +e
     err="$(k2n vault "$guess" --help 2>&1)"; rc=$?
-    err_bare="$(k2n vault "$guess" 2>&1)"; rc_bare=$?
     set -e
     [ "$rc" = 2 ] || fail "vault $guess --help: exit $rc ($err)"
-    [ "$rc_bare" = 2 ] || fail "vault $guess: exit $rc_bare ($err_bare)"
-    for e in "$err" "$err_bare"; do
-        printf '%s\n' "$e" | head -1 | grep -Fqx "usage: unknown vault verb '$guess' (k2 vault --help)" || fail "vault $guess: $e"
-        if printf '%s' "$e" | grep -Fq "k2 vault — secrets for agents"; then fail "vault $guess printed the top help: $e"; fi
-    done
+    printf '%s\n' "$err" | head -1 | grep -Fqx "usage: unknown vault verb '$guess' (k2 vault --help)" || fail "vault $guess --help: $err"
+    if printf '%s' "$err" | grep -Fq "k2 vault — secrets for agents"; then fail "vault $guess --help printed the top help: $err"; fi
     case "$guess" in
         exec|env|inject) printf '%s' "$err" | grep -Fq "did you mean env-file? (k2 vault env-file --help)" || fail "vault $guess: no did-you-mean: $err" ;;
         *) if printf '%s' "$err" | grep -Fq "did you mean"; then fail "vault $guess: a did-you-mean for no reason: $err"; fi ;;
     esac
 done
-ok "an unknown vault verb exits 2 with or without --help; exec/env/inject say did you mean"
+ok "an unknown vault verb with --help exits 2, no daemon needed; exec/env/inject say did you mean"
 
 # K2 Cores field report (2026-10-28): `k2 publish secret --help` is its own
 # page with the flags and an example (it used to be a usage error).
@@ -281,6 +277,19 @@ python3 "$WORK/stub.py" "$PORT" "$WORK/posts.log" &
 STUB_PID=$!
 for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.05; done
 k2s() { env HOME="$WORK" K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=stub-token K2_PROJECT_PATH="$WORK" "$K2_CLI" "$@"; }
+
+# X9 without --help (a daemon is up): the same unknown-verb line, exit 2,
+# and nothing is sent.
+: >"$WORK/posts.log"
+for guess in exec frobnicate; do
+    set +e
+    err="$(k2s vault "$guess" X 2>&1)"; rc=$?
+    set -e
+    [ "$rc" = 2 ] || fail "vault $guess: exit $rc ($err)"
+    printf '%s\n' "$err" | head -1 | grep -Fqx "usage: unknown vault verb '$guess' (k2 vault --help)" || fail "vault $guess: $err"
+done
+[ ! -s "$WORK/posts.log" ] || fail "an unknown verb sent something: $(cat "$WORK/posts.log")"
+ok "an unknown vault verb with a daemon up: exit 2, nothing sent"
 
 out="$(k2s vault list --system)" || fail "list --system: $out"
 printf '%s' "$out" | grep -Fq "44 K2 system secrets hidden from you: K2's own secrets are used by the daemon only" || fail "list --system: $out"

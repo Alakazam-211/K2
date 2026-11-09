@@ -25,6 +25,25 @@
 //! - **Values:** the secret's NAME only; never a value. The workspace
 //!   comes from the passport.
 //!
+//! `vault.use secret= from= as= for=` (0.46.11, prd-vault-for-agents-v1
+//! A6): "let me use X for 2 h". A secret on the server, or in another
+//! workspace, that the agent can't see at all.
+//!
+//! - **Who asks:** any agent. The request is always accepted and the card
+//!   always posted, whatever the name, so asking tells it nothing about what
+//!   exists ([`check_use`] never reads the vault).
+//! - **Who answers:** the owner token, an Owner or an Admin login, never an
+//!   agent. Only they are told when the secret isn't there, and then only
+//!   Deny is offered ([`use_missing`]).
+//! - **Proof:** a click for `fetch` and `agent`, which the grantee can never
+//!   read. For `file` and `env` the same request-bound confirm
+//!   `vault.share-service` takes, turned into the route's `grant-read`.
+//! - **On Allow:** `/cli/vault/grant`'s own entry, as the person who clicked,
+//!   to the asking workspace (or its session) with an `expiresAt`. The route
+//!   checks the ceiling and who may share again at the click.
+//! - **Ends by itself:** an expired grant stops resolving and the minute pass
+//!   takes back its files.
+//!
 //! `vault.share-service secret= service= as=file|env` (Rosson 2026-10-30):
 //! the same for a secret the agent wants to give its own published service
 //! or App. `k2 publish secret add` / `k2 vault grant --to service:`
@@ -319,6 +338,9 @@ fn share_of(ctx: &Ctx) -> Result<Share<'_>, String> {
 
 /// The card's words K2 computes from the stored values (`{how}`, `{where}`).
 pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
+    if action == USE_ACTION {
+        return Some(use_computed(ctx));
+    }
     if action != SHARE_ACTION {
         return None;
     }
@@ -336,13 +358,14 @@ pub(crate) fn confirm_reason(action: &str, request: Option<&str>) -> Option<Resu
     if action != SHARE_CONFIRM {
         return None;
     }
-    let found = request.and_then(|id| crate::permission::store::get(id).ok().flatten()).filter(|r| r.action == SHARE_ACTION && r.is_answerable());
+    let found = request.and_then(|id| crate::permission::store::get(id).ok().flatten()).filter(|r| (r.action == SHARE_ACTION || r.action == USE_ACTION) && r.is_answerable());
     Some(match found {
         None => Err("that card isn't waiting for an answer".to_string()),
         Some(r) => {
             let ctx = crate::permission::present::ctx_of(&r);
-            let ctx = with_computed(SHARE_ACTION, &ctx).unwrap_or(ctx);
-            Ok(crate::permission::present::fill("share {secret} with {service} as {how}", &ctx))
+            let words = if r.action == USE_ACTION { "let {ws} read {secret} ({from}) as {as} {lasts}" } else { "share {secret} with {service} as {how}" };
+            let ctx = with_computed(&r.action, &ctx).unwrap_or(ctx);
+            Ok(crate::permission::present::fill(words, &ctx))
         }
     })
 }
@@ -493,8 +516,289 @@ fn apply_share(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     Applied::Done { message: format!("{} gets {} as {how} ({}) from its next start: {restart}.", svc.name, share.secret, share.place()) }
 }
 
+// ── vault.use ───────────────────────────────────────────────────────
+
+/// The time-boxed use card's id.
+pub(crate) const USE_ACTION: &str = "vault.use";
+/// The card ends in `/cli/vault/grant`, as the person who clicked.
+pub(crate) const USE_ROUTE: &str = crate::vault_routes::GRANT;
+/// How the secret reaches the agent. `api` stays a Settings act.
+pub(crate) const USE_HOWS: [&str; 4] = ["fetch", "agent", "file", "env"];
+/// How long. Anything longer stays a standing grant a person makes in
+/// Settings (PRD Q5); `session` is the agent's own session (decision 4).
+pub(crate) const USE_FOR: [&str; 5] = ["1h", "2h", "8h", "24h", "session"];
+/// `for=session` still has an end: the most a session-scoped thing lives
+/// in this vault (`vault::SESSION_CARD_TTL_MAX_SECS`), for a session whose
+/// id outlives its process.
+const SESSION_USE_CAP: &str = "7d";
+
+pub(crate) static USE: ActionSpec = ActionSpec {
+    id: USE_ACTION,
+    area: Area::Vault,
+    params: &[
+        ParamSpec { key: "secret", kind: ParamKind::OtherSecret, required: true, list: false, choices: &[] },
+        ParamSpec { key: "from", kind: ParamKind::SecretFrom, required: true, list: false, choices: &[] },
+        ParamSpec { key: "as", kind: ParamKind::Choice, required: true, list: false, choices: &USE_HOWS },
+        ParamSpec { key: "for", kind: ParamKind::Choice, required: true, list: false, choices: &USE_FOR },
+    ],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    // The strict answer, for a value that reads as anything unexpected;
+    // `use_proof` lowers it to a click for a delivery that can't be read.
+    proof: Proof::SettingsConfirm { action: ConfirmAction::VaultShareService },
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "{secret} ({from}) for {ws}",
+        what_changes: "Let {ws} use {secret} ({from}) as {as} {lasts}",
+        consequences: "{effect}",
+        scope: "{secret} ({from}), for {ws}",
+        duration: "{lasts}",
+        retry: "run your command again",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "vault", path: "Settings → Vault" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::vault_use_routes::OUT_OF_REACH },
+        route_prefix: "/cli/vault/",
+        method: WallMethod::Post,
+        params: &[("secret", ParamFrom::Response("/error/secret")), ("from", ParamFrom::Response("/error/from")), ("as", ParamFrom::Response("/error/as"))],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// One `vault.use` request's stored values, checked.
+struct UseAsk<'a> {
+    secret: &'a str,
+    from: &'a str,
+    how: Delivery,
+    span: &'a str,
+}
+
+fn use_of(ctx: &Ctx) -> Result<UseAsk<'_>, String> {
+    let secret = secret_of(ctx)?;
+    let from = text_param(ctx, "from").ok_or("say where it lives: from=server or from=ws:<workspace>")?;
+    if from != "server" && from.strip_prefix("ws:").is_none_or(str::is_empty) {
+        return Err(format!("from={from}: it is server or ws:<workspace>"));
+    }
+    let word = text_param(ctx, "as").ok_or("say how you'd use it: as=fetch, agent, file or env")?;
+    if !USE_HOWS.contains(&word) {
+        return Err(format!("as={word}: a card gives fetch, agent, file or env"));
+    }
+    let how = Delivery::parse(word).map_err(|e| e.hint)?;
+    let span = text_param(ctx, "for").ok_or("say how long: for=1h, 2h, 8h, 24h or session")?;
+    if !USE_FOR.contains(&span) {
+        return Err(format!("for={span}: it is 1h, 2h, 8h, 24h or session"));
+    }
+    Ok(UseAsk { secret, from, how, span })
+}
+
+/// `from=` names the asking workspace itself: those secrets are its own to
+/// use, and widening one is what `vault.delivery` is for.
+fn is_own_workspace(ctx: &Ctx, from: &str) -> bool {
+    from.strip_prefix("ws:").is_some_and(|w| w == ctx.workspace_handle || crate::vault::workspace_id(w).as_deref() == Some(ctx.workspace_id.as_str()))
+}
+
+/// Only what the values say, never what the vault holds: a name the agent
+/// can't see must get the same answer whether or not it exists, so the
+/// request is always accepted and only `apply` looks it up (V20).
+fn check_use(ctx: &Ctx) -> Check {
+    let ask = match use_of(ctx) {
+        Ok(a) => a,
+        Err(e) => return Check::Moved(e),
+    };
+    if is_own_workspace(ctx, ask.from) {
+        return Check::Moved(format!(
+            "{} is your own workspace: you already use its secrets. To read one that a person gave it: k2 permission request vault.delivery secret={} delivery=file",
+            ask.from, ask.secret
+        ));
+    }
+    Check::Needed
+}
+
+/// `Some(proof)` for `vault.use` when the answer is a click: a grant its
+/// grantee can never read. Anything else stays the catalog's confirm.
+pub(crate) fn use_proof(action: &str, ctx: &Ctx) -> Option<Proof> {
+    (action == USE_ACTION && matches!(text_param(ctx, "as"), Some("fetch" | "agent"))).then_some(Proof::Click)
+}
+
+/// The wording of `for=` (`{lasts}`).
+fn lasts_words(span: &str) -> String {
+    if span == "session" {
+        "until this session ends".to_string()
+    } else {
+        format!("for {span}")
+    }
+}
+
+/// The card's computed words. They never depend on the vault, so the text
+/// hash is the same at the ask and the click, and the card says the same
+/// thing whether or not the secret exists.
+fn use_computed(ctx: &Ctx) -> Ctx {
+    let mut out = ctx.clone();
+    let span = text_param(ctx, "for").unwrap_or("");
+    let ws = &ctx.workspace_handle;
+    let ends = if span == "session" {
+        "It ends by itself when this session ends, or 7 days after you allow it at the latest.".to_string()
+    } else {
+        format!("It ends by itself {span} after you allow it.")
+    };
+    let reads = match text_param(ctx, "as") {
+        Some("file" | "env") => format!("{ws} can read the value until then, and so can anything it runs."),
+        Some("agent") => format!("{ws} can't read the value: K2's ssh agent signs with it."),
+        _ => format!("{ws} can't read the value: K2 adds it to {ws}'s calls."),
+    };
+    out.params.insert("lasts".into(), json!(lasts_words(span)));
+    out.params.insert("effect".into(), json!(format!("{ends} {reads} To end it sooner: Settings → Vault.")));
+    out
+}
+
+/// The secret `from` names, or why it can't be reached.
+fn use_source(from: &str, name: &str) -> Result<Selector, String> {
+    let scope = match from.strip_prefix("ws:") {
+        None => Scope::server(),
+        Some(w) => match crate::vault::workspace_id(w) {
+            Some(id) => Scope::workspace(id),
+            None => return Err(format!("K2 has no workspace named {w}, so no secret {name} there; nothing to allow.")),
+        },
+    };
+    Ok(Selector::Name { namespace: Namespace::User, scope, name: name.to_string() })
+}
+
+/// What an approver is told when the named secret isn't there.
+fn missing_line(from: &str, name: &str) -> String {
+    match from.strip_prefix("ws:") {
+        None => format!("K2 has no server secret {name}; nothing to allow."),
+        Some(w) => format!("K2 has no secret {name} in {w}; nothing to allow."),
+    }
+}
+
+/// The secret a `vault.use` card names is usable, or the line an approver
+/// reads instead. A vault fault isn't "missing": the click decides then.
+fn use_target(vault: &k2_vault::LocalVault, from: &str, name: &str) -> Result<k2_vault::SecretMeta, Option<String>> {
+    let sel = use_source(from, name).map_err(Some)?;
+    match vault.meta(&sel, &Actor::System("permission-card".into())) {
+        Ok(m) if m.status == SecretStatus::Active => Ok(m),
+        Ok(_) => Err(Some(format!("{name} is disabled; nothing to allow."))),
+        Err(e) if e.code == "not_found" => Err(Some(missing_line(from, name))),
+        Err(_) => Err(None),
+    }
+}
+
+/// For a person who can answer the card, and only them: the line that
+/// replaces the card's consequences when the secret isn't there (with only
+/// Deny offered). `None` for every other action, and when it's there.
+pub(crate) fn use_missing(action: &str, request_id: &str) -> Option<String> {
+    if action != USE_ACTION {
+        return None;
+    }
+    let req = crate::permission::store::get_by_display_id(request_id).ok().flatten()?;
+    let ctx = crate::permission::present::ctx_of(&req);
+    let ask = use_of(&ctx).ok()?;
+    let vault = crate::vault::get().ok()?;
+    use_target(&vault, ask.from, ask.secret).err().flatten()
+}
+
+/// Through `/cli/vault/grant`'s own entry, as the person who clicked, to
+/// the asking workspace (or its session) only: the agent names neither the
+/// grantee nor anything else the route decides. The route checks the ceiling
+/// and who may share again here.
+fn apply_use(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
+    let refused = |code: &str, message: String| Applied::Refused { code: code.into(), message };
+    let ask = match use_of(ctx) {
+        Ok(a) => a,
+        Err(e) => return refused("bad_params", e),
+    };
+    if let Err(r) = route_floor(USE_ROUTE, who) {
+        return r;
+    }
+    let Some(request) = super::super::answer::current_request() else {
+        return refused("failed", "no request is being answered".into());
+    };
+    let vault = match crate::vault::get() {
+        Ok(v) => v,
+        Err(e) => return refused(e.code, e.hint),
+    };
+    let m = match use_target(&vault, ask.from, ask.secret) {
+        Ok(m) => m,
+        Err(line) => return refused("not_found", line.unwrap_or_else(|| "the vault can't answer right now; try again".into())),
+    };
+    let stamp = who.stamp();
+    // A readable grant: the card's confirm, bound to this request.
+    let proved = if ask.how.readable() {
+        let Some(token) = token else {
+            return refused("vault_confirm_required", "confirm it's you first".into());
+        };
+        match vault.confirm.take(token, SHARE_CONFIRM, Some(&request), &stamp) {
+            Ok(HumanProof::Confirmed { method }) => Some(method),
+            Ok(HumanProof::None) => return refused("vault_confirm_required", "confirm again".into()),
+            Err(e) => return refused(e.code, e.hint),
+        }
+    } else {
+        None
+    };
+    // The grantee: exactly the asking workspace, or its session.
+    let (to, consumer) = if ask.span == "session" {
+        let Some(sid) = crate::permission::store::get_by_display_id(&request).ok().flatten().and_then(|r| r.session_id) else {
+            return refused("no_session", "this card was asked outside a session; ask again with a time (for=1h)".into());
+        };
+        (format!("session:{sid}"), k2_vault::Consumer::session(sid))
+    } else {
+        if crate::vault::workspace_id(&ctx.workspace_handle).as_deref() != Some(ctx.workspace_id.as_str()) {
+            return refused("not_found", format!("K2 can't find the workspace {} any more", ctx.workspace_handle));
+        }
+        (format!("ws:{}", ctx.workspace_handle), k2_vault::Consumer::workspace(ctx.workspace_id.clone()))
+    };
+    let secs = match k2_vault::duration::parse(if ask.span == "session" { SESSION_USE_CAP } else { ask.span }) {
+        Ok(s) => s,
+        Err(e) => return refused(e.code, e.hint),
+    };
+    let ends = chrono::Utc::now() + chrono::Duration::seconds(secs);
+    let until = ends.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    // A card never shortens access someone already gave.
+    let system = Actor::System("permission-card".into());
+    let existing = match vault.grants(&Selector::Id(m.id.clone()), &system) {
+        Ok(g) => g,
+        Err(e) => return refused(e.code, e.hint),
+    };
+    let longer = existing.iter().find(|g| {
+        g.consumer == consumer
+            && g.delivery == ask.how
+            && g.expires_at.as_deref().is_none_or(|x| chrono::DateTime::parse_from_rfc3339(x).is_ok_and(|t| t.with_timezone(&chrono::Utc) >= ends))
+    });
+    if let Some(g) = longer {
+        let until = g.expires_at.as_deref().map(|x| format!("until {x}")).unwrap_or_else(|| "until someone removes it".to_string());
+        return Applied::Done { message: format!("{} already has {} as {}, {until}, so nothing changed.", ctx.workspace_handle, ask.secret, ask.how.as_str()) };
+    }
+    let mut body = json!({ "id": m.id, "to": to, "as": ask.how.as_str(), "expiresAt": until });
+    if let (Some(method), Answerer::OwnerToken) = (&proved, who) {
+        body["confirmToken"] = json!(vault.confirm.mint(crate::vault_routes::GRANT_READ_CONFIRM_ACTION, Some(&m.id), &stamp, method));
+    }
+    let r = crate::vault_routes::handle_on(&vault, USE_ROUTE, Ok(caller_of(who)), body.to_string().as_bytes(), &HashMap::new(), "permission-card", None);
+    let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+    if !r.status.starts_with("200") {
+        let (code, message) = error_of(&v, "vault_refused");
+        return Applied::Refused { code, message };
+    }
+    let name = ask.secret;
+    let scope = ask.from;
+    let how = match ask.how {
+        Delivery::Fetch => format!("k2 vault fetch --secret {name} --scope {scope} <url> (K2 adds it; you never see it)"),
+        Delivery::Agent => "ssh and git sign with it on $SSH_AUTH_SOCK in new sessions".to_string(),
+        Delivery::File => format!("k2 vault file {name} --scope {scope} (a short-lived 0600 file)"),
+        _ => format!("k2 vault env-file {name} --scope {scope}, or ${} in new sessions", k2_vault::delivery::default_env_name(name)),
+    };
+    let ending = if ask.span == "session" { format!("until this session ends (at the latest {until})") } else { format!("until {until}") };
+    Applied::Done { message: format!("You can use {name} ({scope}) as {} {ending}: {how}.", ask.how.as_str()) }
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
-    vec![Registered { spec: &DELIVERY, check, apply }, Registered { spec: &SHARE_SERVICE, check: check_share, apply: apply_share }]
+    vec![
+        Registered { spec: &DELIVERY, check, apply },
+        Registered { spec: &SHARE_SERVICE, check: check_share, apply: apply_share },
+        Registered { spec: &USE, check: check_use, apply: apply_use },
+    ]
 }
 
 pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {

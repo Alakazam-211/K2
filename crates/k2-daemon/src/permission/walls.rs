@@ -156,7 +156,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 59] = [
+pub(crate) const V1_ACTIONS: [&str; 60] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -257,6 +257,9 @@ pub(crate) const V1_ACTIONS: [&str; 59] = [
     "compute.git-access-setup",
     // 0.46.11 (prd-compute-gpu-jobs-v1 S1): GPU jobs on one node.
     "compute.gpu",
+    // 0.46.11 (prd-vault-for-agents-v1 A6): use a server's or another
+    // workspace's secret for a while.
+    "vault.use",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -671,6 +674,18 @@ pub(crate) const ROWS: &[Row] = &[
         ],
         optional: &["env_name", "file_name"],
         ..row(ask("vault.share-service", Floor::Admin), code(403, "vault_owner_confirm_required"), "/cli/vault/grant", POST)
+    },
+    // `k2 vault fetch|file|env-file --scope server|ws:<name>` on a secret the
+    // agent can't see: the same refusal whether or not the name exists
+    // (`vault_use_routes::out_of_reach`). `for=` starts at the shortest.
+    Row {
+        params: &[
+            ("secret", &[ParamFrom::Response("/error/secret")]),
+            ("from", &[ParamFrom::Response("/error/from")]),
+            ("as", &[ParamFrom::Response("/error/as")]),
+        ],
+        fixed: &[("for", "1h")],
+        ..row(ask("vault.use", Floor::Admin), code(403, crate::vault_use_routes::OUT_OF_REACH), "/cli/vault/", POST)
     },
     // ── Gardens and sources ────────────────────────────────────────────
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/sources/", ANY),
@@ -1322,6 +1337,8 @@ mod tests {
             (403, "POST", "/cli/skin/grants", vec![], Some(json!({"subjectKind":"principal","subjectId":"dana","kind":"app","targetId":"jobs","roleId":"viewer"})), json!({"error":{"code":"owner_only","hint":"x"}}), "app.login-grant"),
             // `k2 publish secret add svc NAME` on a secret a person gave.
             (403, "POST", "/cli/vault/grant", vec![], Some(json!({"name":"PIN","to":"service:svc","as":"file"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"PIN","service":"svc","as":"file"}}), "vault.share-service"),
+            // 0.46.11: a secret on the server or in another workspace it can't see.
+            (403, "POST", "/cli/vault/fetch", vec![], None, json!({"error":{"code":"secret_out_of_reach","hint":"x","secret":"STRIPE","from":"server","as":"fetch"}}), "vault.use"),
             // 0.46.7: an agent turning its own App's chat key on (cards on), and switching a Space's governance.
             (403, "POST", "/cli/app/chat-key", vec![], Some(json!({"app":"jobs"})), json!({"error":{"code":"owner_only","hint":"x","app":"jobs"}}), "apps.chat-key"),
             (403, "POST", "/cli/sew/app-spaces/governance", vec![], Some(json!({"app":"jobs","spaceId":"5101","governance":"app"})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.space-governance"),
@@ -1865,7 +1882,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 59);
+        assert_eq!(V1_ACTIONS.len(), 60);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

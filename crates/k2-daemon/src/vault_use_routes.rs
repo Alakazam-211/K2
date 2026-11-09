@@ -88,7 +88,53 @@ pub fn handle(
     };
     match r {
         Ok(v) => CliResponse::ok_json(v.to_string()),
+        Err(e) if e.code == OUT_OF_REACH => refuse_out_of_reach(&e),
         Err(e) => refuse(&e),
+    }
+}
+
+/// The refusal for a secret outside the caller's own scope it can't see
+/// (`k2 vault fetch|file|env-file --scope server|ws:<name>`). The card
+/// `vault.use` answers it.
+pub const OUT_OF_REACH: &str = "secret_out_of_reach";
+
+thread_local! {
+    /// What [`out_of_reach`] names for the refusal `handle` writes.
+    static OUT_OF_REACH_NAMES: std::cell::RefCell<Option<(String, String, &'static str)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A resolve refused for a name in another scope the caller can't see: one
+/// answer whether or not the name exists, so the fetch, file and env-file
+/// routes can't be used to guess names (V20). Everything else (the
+/// caller's own secrets, one it was granted and can see, a person's call,
+/// a vault fault) is unchanged.
+fn out_of_reach(vault: &LocalVault, c: &VaultCaller, sel: &Selector, name: &str, want: k2_vault::Delivery, e: VaultError) -> VaultError {
+    let Some(agent) = c.actor.agent() else { return e };
+    let Selector::Name { namespace: Namespace::User, scope, .. } = sel else { return e };
+    let from = match scope.kind {
+        k2_vault::ScopeKind::Server => "server".to_string(),
+        k2_vault::ScopeKind::Workspace if scope.id != agent.workspace_id => format!("ws:{}", crate::vault::workspace_label(&scope.id)),
+        _ => return e,
+    };
+    match vault.meta(sel, &c.actor) {
+        Err(seen) if seen.code == "not_found" => {}
+        _ => return e,
+    }
+    let hint = format!("you can't use {name} from {from}: it wasn't shared with you, or there is no secret by that name. A person can let you use it for a while");
+    OUT_OF_REACH_NAMES.with(|n| *n.borrow_mut() = Some((name.to_string(), from, want.as_str())));
+    VaultError::forbidden(OUT_OF_REACH, hint)
+}
+
+/// [`refuse`], with the names the permission-card wrapper needs to teach
+/// `k2 permission request vault.use …`.
+fn refuse_out_of_reach(e: &VaultError) -> CliResponse {
+    let Some((secret, from, how)) = OUT_OF_REACH_NAMES.with(|n| n.borrow_mut().take()) else {
+        return refuse(e);
+    };
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: json!({ "error": { "code": e.code, "hint": e.hint, "secret": secret, "from": from, "as": how } }).to_string(),
     }
 }
 
@@ -254,7 +300,8 @@ pub(crate) fn fetch_with(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], 
     let mut sign_ins: Vec<(usize, String)> = vec![];
     for w in &wanted {
         let sel = use_selector(vault, c, &w.sel)?;
-        let r = vault.resolve(&sel, Use::Fetch(&origin), &who)?;
+        let wanted_name = w.sel.name.as_deref().unwrap_or_default();
+        let r = vault.resolve(&sel, Use::Fetch(&origin), &who).map_err(|e| out_of_reach(vault, c, &sel, wanted_name, k2_vault::Delivery::Fetch, e))?;
         let (dst, fmt) = r.inject.choose(w.dst.as_deref(), w.fmt.as_deref())?;
         let allowed: Vec<OriginPattern> = k2_vault::hosts::parse_stored(&r.meta.hosts);
         let (value, sign) = if crate::vault::oauth_refresh::is_oauth(&r.inject) {
@@ -384,6 +431,9 @@ struct EnvFileBody {
     secrets: Vec<String>,
     /// `session`: this session's own secret of that name.
     scope: Option<String>,
+    /// With `workspace`: the workspace that holds a secret shared with this
+    /// one (`--scope ws:<name>`).
+    workspace: Option<String>,
     /// How long the file stays, as typed (`"90s"`) or seconds.
     ttl: Option<Value>,
     /// The older CLI's number of seconds.
@@ -436,8 +486,10 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     with_wait(vault, c, b.wait.as_ref(), b.wait_card.as_deref(), &b.secrets, || {
         let mut lines = String::new();
         for n in &b.secrets {
-            let sel = use_selector(vault, c, &Sel { name: Some(n.clone()), scope: b.scope.clone(), ..Default::default() })?;
-            let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::Env))?;
+            let sel = use_selector(vault, c, &Sel { name: Some(n.clone()), scope: b.scope.clone(), workspace: b.workspace.clone(), ..Default::default() })?;
+            let r = vault
+                .resolve(&sel, Use::Env, &who)
+                .map_err(|e| out_of_reach(vault, c, &sel, n, k2_vault::Delivery::Env, use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::Env)))?;
             k2_vault::delivery::validate_env_file_value(r.value.expose())?;
             let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
             k2_vault::delivery::validate_env_name(&name)?;
@@ -498,7 +550,7 @@ pub(crate) fn hold_wait_slots_for_tests(session_id: &str, n: usize) -> Vec<impl 
 /// A refusal a pending card could still end: the secret isn't there yet,
 /// isn't granted yet, or an earlier one of that name ran out.
 fn waitable(e: &VaultError) -> bool {
-    e.status == 404 || matches!(e.code, "delivery_not_granted" | "not_granted" | "secret_expired" | "secret_not_active" | "secret_destroyed")
+    e.status == 404 || matches!(e.code, OUT_OF_REACH | "delivery_not_granted" | "not_granted" | "secret_expired" | "secret_not_active" | "secret_destroyed")
 }
 
 /// `--wait` (prd-vault-for-agents-v1 §3.4, V7): try `use_` as today; if the
@@ -545,6 +597,9 @@ fn with_wait(
             },
             None => match crate::overlay_routes::pending_card_for(vault, workspace_id, sid, names) {
                 Some(r) => r,
+                // Not this session's card to wait on: the `vault.use` refusal
+                // teaches what to do instead.
+                None if refusal.code == OUT_OF_REACH => return Err(refusal),
                 None => {
                     let list = names.join(", ");
                     return Err(VaultError::new("no_card", 404, format!("no card asks for {list}; ask a person with k2 thread secret <addr> --name {list}")));
@@ -703,6 +758,9 @@ struct FileBody {
     secret: Option<String>,
     /// `session`: this session's own secret of that name.
     scope: Option<String>,
+    /// With `workspace`: the workspace that holds a secret shared with this
+    /// one (`--scope ws:<name>`).
+    workspace: Option<String>,
     /// How long the file stays, as typed (`"90s"`) or seconds.
     ttl: Option<Value>,
     /// The older CLI's number of seconds.
@@ -760,7 +818,7 @@ fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
         Ok(json!({ "ok": true, "path": p.display().to_string(), "name": r.meta.name, "ttlSecs": ttl }))
     };
     with_wait(vault, c, b.wait.as_ref(), b.wait_card.as_deref(), &names, || {
-        let sel = use_selector(vault, c, &Sel { name: Some(n.to_string()), scope: b.scope.clone(), ..Default::default() })?;
+        let sel = use_selector(vault, c, &Sel { name: Some(n.to_string()), scope: b.scope.clone(), workspace: b.workspace.clone(), ..Default::default() })?;
         if vault.meta(&sel, &c.actor).is_ok_and(|m| vault.is_once(&m.id)) {
             return vault.take_once(&sel, &who, &write).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File));
         }
@@ -770,7 +828,7 @@ fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
             if e.status == 404 {
                 k2_core::log_debug!("[vault] k2 vault file {n}: not_found for passport session {:?}", c.session_id);
             }
-            use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File)
+            out_of_reach(vault, c, &sel, n, k2_vault::Delivery::File, use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File))
         })?;
         write(&r)
     })

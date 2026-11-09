@@ -76,6 +76,13 @@ pub(crate) fn ctx_of(req: &PermissionRequest) -> Ctx {
 
 // ── words (§5.1; daemon-known names only, never the agent's --why) ──
 
+/// The proof this request's answer needs: the catalog's, except for the one
+/// action where it follows the values (`vault.use`: a click unless the
+/// grantee could read the value).
+pub(crate) fn proof_for(spec: &ActionSpec, ctx: &Ctx) -> Proof {
+    super::actions::vault::use_proof(spec.id, ctx).unwrap_or(spec.proof)
+}
+
 /// The K2-written words of one request, rendered from the catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Words {
@@ -171,7 +178,7 @@ fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
         what_changes: sentence(&what),
         consequences: fill(spec.words.consequences, ctx),
         scope: fill(spec.words.scope, ctx),
-        duration: spec.words.duration.to_string(),
+        duration: fill(spec.words.duration, ctx),
         settings_page: fill(spec.settings.page, ctx),
         settings_path: fill(spec.settings.path, ctx),
     }
@@ -339,7 +346,7 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
         }
         _ => None,
     };
-    let proof = match spec.proof {
+    let proof = match proof_for(spec, &ctx) {
         Proof::Click => ViewProof::Click,
         Proof::SettingsConfirm { action } => ViewProof::Confirm { action, secret_id: req.display_id().to_string() },
     };

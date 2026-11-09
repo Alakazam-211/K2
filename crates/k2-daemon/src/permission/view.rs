@@ -463,12 +463,23 @@ fn project_one(doc: &OverlayDoc, view: PermissionView, viewer: &Viewer, cards: u
     let can = meets_item(&view.item, &f);
     let agent = agent_of(&view.item, doc);
     let is_asker = f.person && view.item.asked_for.as_deref() == Some(f.login.as_str());
+    // `vault.use` names a secret the agent can't see. Only someone who can
+    // answer is told it isn't there, and then only Deny is offered (V20).
+    let missing = if can && state == RequestState::Pending { super::actions::vault::use_missing(&view.item.action, &view.item.request_id) } else { None };
+    let view = match &missing {
+        Some(line) => PermissionView { item: ItemView { consequences: line.clone(), ..view.item }, ..view },
+        None => view,
+    };
 
     if cards == CARDS_CONTRACT && f.person {
         let mut d = doc.clone();
         let c = d.choice.as_mut().expect("choice");
         let a = c.action.as_mut().expect("action");
-        c.options = if can { approver_options(state, choice.answer.as_deref(), &view.item) } else { Vec::new() };
+        c.options = match (can, &missing) {
+            (false, _) => Vec::new(),
+            (true, Some(_)) => labels(&[label::DENY]),
+            (true, None) => approver_options(state, choice.answer.as_deref(), &view.item),
+        };
         if !can && state == RequestState::Approved {
             // The approver's result names the Settings path; the asker and
             // other people get who allowed it (§17.11.6).
@@ -509,8 +520,11 @@ fn project_one(doc: &OverlayDoc, view: PermissionView, viewer: &Viewer, cards: u
                 }
                 let mut d = doc.clone();
                 let c = d.choice.as_mut().expect("choice");
-                c.prompt = prompt;
-                c.options = answer_labels();
+                c.prompt = match &missing {
+                    Some(line) => format!("{prompt}\n{line}"),
+                    None => prompt,
+                };
+                c.options = if missing.is_some() { labels(&[label::DENY]) } else { answer_labels() };
                 c.action = Some(CardAction {
                     id: action.id.clone(),
                     params: action.params.clone(),

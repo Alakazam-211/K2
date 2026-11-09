@@ -33076,11 +33076,17 @@ _vault_confirm_token() {
 # creator said; you never see the value. Echoes come back as [k2v:NAME].
 _vault_fetch() {
     local url="" method="" max_bytes="" timeout="" include=0 out="" body_inline="" body_file="" ctype="" as_json=0
-    local secrets=() headers=() dst="" fmt="" use_scope=""
+    local secrets=() headers=() dst="" fmt="" use_scope="" use_ws=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --secret|-s) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; secrets+=("$2"); shift 2 ;;
-            --scope) [ "${2:-}" = "session" ] || { echo "usage: --scope session (this session's own secret of that name)" >&2; exit 2; }; use_scope="session"; shift 2 ;;
+            --scope)
+                case "${2:-}" in
+                    session|server) use_scope="$2" ;;
+                    ws:?*) use_scope="workspace"; use_ws="${2#ws:}" ;;
+                    *) echo "usage: --scope session|server|ws:<name> (this session's own secret of that name, or one shared with you from there)" >&2; exit 2 ;;
+                esac
+                shift 2 ;;
             -X|--method) [ -n "${2:-}" ] || { echo "usage: -X METHOD" >&2; exit 2; }; method="$2"; shift 2 ;;
             -H|--header) [ -n "${2:-}" ] || { echo "usage: -H 'Name: value'" >&2; exit 2; }; headers+=("$2"); shift 2 ;;
             -d|--data)
@@ -33100,7 +33106,7 @@ _vault_fetch() {
             --json-out) as_json=1; shift ;;
             --help|-h)
                 cat <<'EOF'
-k2 vault fetch --secret NAME [--scope session] [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file]
+k2 vault fetch --secret NAME [--scope session|server|ws:<name>] [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file]
                [--max-bytes N] [--timeout S] [--include-headers] [-o file] [--json-out] URL
 
 K2 makes the call and adds the secret (header and format fixed by whoever
@@ -33138,7 +33144,7 @@ EOF
     [ -z "$body_file" ] || body_file="$(cli_abs_path "$body_file")"
     [ -z "$out" ] || out="$(cli_abs_path "$out")"
     local req
-    req="$(printf '%s' "$body_inline" | V_USE_SCOPE="$use_scope" python3 -c '
+    req="$(printf '%s' "$body_inline" | V_USE_SCOPE="$use_scope" V_USE_WS="$use_ws" python3 -c '
 import base64, json, os, sys
 url, method, mb, to, inc, out, bfile, dst, fmt = sys.argv[1:10]
 rest = sys.argv[10:]
@@ -33150,6 +33156,7 @@ for s in secrets:
     if dst: e["dst"] = dst
     if fmt: e["fmt"] = fmt
     if os.environ.get("V_USE_SCOPE"): e["scope"] = os.environ["V_USE_SCOPE"]
+    if os.environ.get("V_USE_WS"): e["workspace"] = os.environ["V_USE_WS"]
     o["secrets"].append(e)
 for h in headers:
     if ":" not in h:

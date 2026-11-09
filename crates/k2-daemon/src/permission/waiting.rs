@@ -58,7 +58,7 @@ fn row(r: &PermissionRequest) -> Option<Value> {
     let (setting, what, proof) = match present::find_action(&r.action) {
         Some(reg) => {
             let w = present::words(reg.spec, &present::ctx_of(r));
-            let proof = match reg.spec.proof {
+            let proof = match present::proof_for(reg.spec, &present::ctx_of(r)) {
                 Proof::Click => "click",
                 Proof::SettingsConfirm { .. } => "confirm",
             };

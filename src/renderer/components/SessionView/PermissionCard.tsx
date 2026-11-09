@@ -315,6 +315,7 @@ function AnswerControls({
   actions,
   batchItem,
   always,
+  denyOnly = false,
   onReveal,
 }: {
   item: PermissionItem
@@ -322,6 +323,8 @@ function AnswerControls({
   batchItem: boolean
   /** The "from now on" answer the daemon offers on this card, if any. */
   always?: string
+  /** The daemon offers only Deny: there is nothing to allow. */
+  denyOnly?: boolean
   /** A card that shows its approver a secret: hand it to the card. */
   onReveal?: (r: RevealedSecret) => void
 }): JSX.Element {
@@ -474,15 +477,17 @@ function AnswerControls({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap gap-1.5">
-        <CardButton
-          label={confirm ? 'Allow (needs your confirm)' : PERMISSION_LABEL.allow}
-          testId="permission-allow"
-          primary
-          disabled={busy || (confirm && !canConfirmHere)}
-          onClick={() =>
-            confirm ? setStep({ kind: 'confirm', answer: PERMISSION_LABEL.allow }) : void send({ answer: PERMISSION_LABEL.allow })
-          }
-        />
+        {!denyOnly && (
+          <CardButton
+            label={confirm ? 'Allow (needs your confirm)' : PERMISSION_LABEL.allow}
+            testId="permission-allow"
+            primary
+            disabled={busy || (confirm && !canConfirmHere)}
+            onClick={() =>
+              confirm ? setStep({ kind: 'confirm', answer: PERMISSION_LABEL.allow }) : void send({ answer: PERMISSION_LABEL.allow })
+            }
+          />
+        )}
         {always && (
           <CardButton
             label={always}
@@ -572,9 +577,11 @@ function ItemOutcome({
   batchItem,
   offered = true,
   always,
+  denyOnly = false,
   onReveal,
 }: {
   always?: string
+  denyOnly?: boolean
   onReveal?: (r: RevealedSecret) => void
   item: PermissionItem
   viewer: PermissionViewer
@@ -606,7 +613,7 @@ function ItemOutcome({
     }
     if (!offered) return null
     return actions ? (
-      <AnswerControls item={item} actions={actions} batchItem={batchItem} always={always} onReveal={onReveal} />
+      <AnswerControls item={item} actions={actions} batchItem={batchItem} always={always} denyOnly={denyOnly} onReveal={onReveal} />
     ) : (
       <Muted testId="permission-answer-elsewhere">Answer this in the agent’s Thread.</Muted>
     )
@@ -706,6 +713,7 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         batchItem={false}
         offered={offered}
         always={options?.find((o) => o.label === PERMISSION_LABEL.always || o.label === PERMISSION_LABEL.alwaysChatRefresh)?.label}
+        denyOnly={options !== undefined && options.length > 0 && !options.some((o) => o.label === PERMISSION_LABEL.allow)}
         onReveal={view.reveal ? setRevealed : undefined}
       />
       {revealed && <PermissionReveal secret={revealed} onGone={forget} />}

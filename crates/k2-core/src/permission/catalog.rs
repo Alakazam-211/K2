@@ -193,6 +193,14 @@ pub enum ParamKind {
     /// again at the click; the card names the Space by its slug where K2
     /// knows it.
     SewSpace,
+    /// A vault secret outside the asking workspace, by name (never a value):
+    /// `vault.use secret=` (0.46.11). It may not exist, and the request says
+    /// nothing either way: the agent can't probe for names (V20). Only the
+    /// card's approver is told, and only `apply` looks it up.
+    OtherSecret,
+    /// Where an [`ParamKind::OtherSecret`] lives: `server` or
+    /// `ws:<workspace>`: `vault.use from=` (0.46.11).
+    SecretFrom,
     /// Chat caps for an App's chat key, a list from `chat:read chat:post
     /// chat:respond voice:join voice:video`: `apps.chat-key caps=` (0.46.7).
     ChatCaps,
@@ -757,6 +765,8 @@ mod tests {
         assert_eq!(serde_json::to_value(ParamKind::SewSpace).unwrap(), serde_json::json!("sew-space"));
         assert_eq!(serde_json::to_value(ParamKind::ChatCaps).unwrap(), serde_json::json!("chat-caps"));
         assert_eq!(serde_json::to_value(ParamKind::ChatScope).unwrap(), serde_json::json!("chat-scope"));
+        assert_eq!(serde_json::to_value(ParamKind::OtherSecret).unwrap(), serde_json::json!("other-secret"));
+        assert_eq!(serde_json::to_value(ParamKind::SecretFrom).unwrap(), serde_json::json!("secret-from"));
         let mut s = USE;
         s.params = &[
             ParamSpec { key: "app", kind: ParamKind::App, required: true, list: false, choices: &[] },

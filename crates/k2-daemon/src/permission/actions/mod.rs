@@ -15,7 +15,7 @@
 //! | `compute.rs` | E2 | `compute.admin-approve` (cut if late) |
 //! | `sew.rs` | Sew (Rosson 2026-10-28) | `sew.owner-handoff`, `sew.rollback-data-loss` |
 //! | `harness.rs` | 0.46.6 | `agent.harness-switch` (move the pinned chat to another harness) |
-//! | `vault.rs` | 0.46.6 | `vault.delivery` (let the agent read one of its secrets as file or env), `vault.share-service` (give its own service or App one) |
+//! | `vault.rs` | 0.46.6 | `vault.delivery` (let the agent read one of its secrets as file or env), `vault.share-service` (give its own service or App one), `vault.use` (0.46.11: use a server's or another workspace's secret for a while) |
 //! | `heartbeats.rs` | 0.46.6 | `heartbeat.pause-other`, `heartbeat.resume-other` (another workspace's heartbeat) |
 //! | `app_login.rs` | 0.46.7 | `app.login-grant` (add or remove a login on the agent's own App) |
 //! | `password_reset.rs` | 0.46.6 | `apps.user-password-reset` (reset an App user's password; the secret goes to the approver only) |

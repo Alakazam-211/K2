@@ -407,7 +407,7 @@ fn decide_one(
     }
 
     // A confirm action needs its Settings confirm before anything moves.
-    let confirm = registered.as_ref().is_some_and(|r| matches!(r.spec.proof, Proof::SettingsConfirm { .. }));
+    let confirm = registered.as_ref().is_some_and(|r| matches!(present::proof_for(r.spec, &present::ctx_of(req)), Proof::SettingsConfirm { .. }));
     if matches!(d, Decision::Allow | Decision::Always) && confirm && token.is_none() {
         return Err(err(403, code::VAULT_CONFIRM_REQUIRED, "this action takes the same confirm as Settings: confirm, then answer with confirmToken"));
     }

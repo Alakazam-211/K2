@@ -425,6 +425,12 @@ describe('A3’s real projection details', () => {
     expect(screen.queryByTestId('permission-deny')).toBeNull()
   })
 
+  it('only Deny offered (nothing to allow): no Allow button, Deny still works', () => {
+    draw(permissionDoc({ options: ['Deny'] }))
+    expect(screen.queryByTestId('permission-allow')).toBeNull()
+    expect(screen.getByTestId('permission-deny')).toBeTruthy()
+  })
+
   it('a batch item’s note and Turn off again name the item', async () => {
     const actions = actionsMock()
     const waiting = batchDoc({ viewer: { ...VIEWERS.lee, canAnswerAll: false } })

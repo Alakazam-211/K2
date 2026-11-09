@@ -536,9 +536,22 @@ for route in file env-file fetch; do
     grep -F "/cli/vault/$route {" "$WORK/posts.log" | grep -Fq '"scope": "session"' || fail "$route --scope session isn't sent: $(cat "$WORK/posts.log")"
 done
 set +e
-err_scope="$(k2s vault fetch --secret SAME --scope server https://h.example/x 2>&1)"; rc_scope=$?
+err_scope="$(k2s vault fetch --secret SAME --scope engine:sew https://h.example/x 2>&1)"; rc_scope=$?
 set -e
-[ "$rc_scope" = 2 ] || fail "fetch --scope takes session only: $rc_scope: $err_scope"
+[ "$rc_scope" = 2 ] || fail "fetch --scope is session, server or ws:<name>: $rc_scope: $err_scope"
 ok "fetch, file and env-file send --scope session"
+
+# A secret shared from the server or another workspace (vault.use): all three
+# name where it lives.
+: > "$WORK/posts.log"
+k2s vault fetch --secret SHARED --scope server https://h.example/x >/dev/null 2>&1 || true
+k2s vault file --secret SHARED --scope ws:sales >/dev/null 2>&1 || true
+k2s vault env-file --secret SHARED --scope ws:sales >/dev/null 2>&1 || true
+k2s vault fetch --secret SHARED --scope ws:sales https://h.example/x >/dev/null 2>&1 || true
+grep -F "/cli/vault/fetch {" "$WORK/posts.log" | grep -Fq "\"scope\": \"server\"" || fail "fetch --scope server: $(cat "$WORK/posts.log")"
+for route in file env-file fetch; do
+    grep -F "/cli/vault/$route {" "$WORK/posts.log" | grep -F "\"workspace\": \"sales\"" | grep -Fq "\"scope\": \"workspace\"" || fail "$route --scope ws:sales: $(cat "$WORK/posts.log")"
+done
+ok "fetch, file and env-file send --scope server and ws:<name>"
 
 echo "PASS: vault help ($pass checks)"

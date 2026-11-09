@@ -12,6 +12,7 @@ import {
 } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from './SessionViewMenu'
 import { ThreadViewIdentity } from './ThreadViewIdentity'
+import { ThreadTerminalToggle } from './ThreadTerminalToggle'
 import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
@@ -77,7 +78,12 @@ export function AgentSessionChrome({
     splitRight,
     setSplitLeft,
     setSplitRight,
+    terminalRevealed,
+    setTerminalRevealed,
+    terminalRevealKey,
   } = useSessionViewTab(sessionKey, room.scope)
+  // Reported by the TerminalPane below (its phase).
+  const [terminalLive, setTerminalLive] = useState(false)
   // The harness picks the Token control's provider below.
   const tokenProvider = chatHarnessName({ command, commandHint, provider })
   const [refreshing, setRefreshing] = useState(false)
@@ -134,12 +140,18 @@ export function AgentSessionChrome({
         conversationId,
         agentName,
         displayName: title,
+        terminalRevealed,
+        terminalRevealKey,
+        reportTerminalLive: setTerminalLive,
       }}
     >
       <div className="h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
         <SidecarSessionHeader
           title={title}
           addr={addr}
+          terminalRevealed={terminalRevealed}
+          onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
+          terminalAvailable={terminalLive}
           viewTab={viewTab}
           splitLeft={splitLeft}
           splitRight={splitRight}
@@ -186,6 +198,9 @@ function Remount({ children }: { children: ReactNode }): JSX.Element {
 export function SidecarSessionHeader({
   title,
   addr,
+  terminalRevealed,
+  onToggleTerminal,
+  terminalAvailable,
   viewTab,
   splitLeft,
   splitRight,
@@ -201,6 +216,9 @@ export function SidecarSessionHeader({
   title: string
   /** The Thread's address: Thread view's header reads the picture by it. */
   addr: string
+  terminalRevealed: boolean
+  onToggleTerminal: () => void
+  terminalAvailable: boolean
   viewTab: SessionViewTab
   splitLeft: SplitPaneView
   splitRight: SplitPaneView
@@ -232,6 +250,13 @@ export function SidecarSessionHeader({
           threadConversationId={threadConversationId}
           threadScope={threadScope}
         />
+        {viewTab === 'thread' ? (
+          <ThreadTerminalToggle
+            revealed={terminalRevealed}
+            disabled={!terminalAvailable}
+            onToggle={onToggleTerminal}
+          />
+        ) : null}
         </div>
         {viewTab === 'thread' ? (
           <ThreadViewIdentity name={title} addr={addr} />
@@ -285,6 +310,8 @@ export function PinnedSessionBody({
   conversationId,
   agentName,
   displayName,
+  terminalRevealed,
+  terminalRevealKey,
   children,
 }: {
   viewTab: SessionViewTab
@@ -295,6 +322,9 @@ export function PinnedSessionBody({
   agentName?: string
   /** AGENT.md display name — the Thread empty state names the agent. */
   displayName?: string
+  /** Thread view's revealed terminal (`useSessionViewTab`). */
+  terminalRevealed: boolean
+  terminalRevealKey: string | null
   children: ReactNode
 }): JSX.Element {
   return (
@@ -307,6 +337,8 @@ export function PinnedSessionBody({
         conversationId,
         agentName: agentName ?? '',
         displayName,
+        terminalRevealed,
+        terminalRevealKey,
       }}
     >
       <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">

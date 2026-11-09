@@ -12,6 +12,15 @@ export interface SessionViewChromeValue {
   agentName: string
   /** Human name for the agent (AGENT.md display name or sidecar handle). */
   displayName?: string
+  /** Thread view's revealed terminal (the conversation's remembered state).
+   *  Undefined: this chrome has no reveal (the Design tab's Thread). */
+  terminalRevealed?: boolean
+  /** The memory `terminalRevealed` was read from. A change of it (another
+   *  conversation) never animates. */
+  terminalRevealKey?: string | null
+  /** A sidecar's header has no phase of its own to read: the pane reports
+   *  whether it has a live terminal. */
+  reportTerminalLive?: (live: boolean) => void
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

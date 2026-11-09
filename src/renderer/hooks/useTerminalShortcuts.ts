@@ -9,6 +9,7 @@ import { resolveAgentPreset, readProjectDefaultAgent } from '@/lib/agent-resolve
 import { isFocusedRoom } from '@/stores/window-room'
 import { zenShownNow } from '@/lib/zen/zen-view'
 import { keyEventMatchesCombo } from '@/lib/page-shortcuts'
+import { toggleRevealForFocus } from '@/components/SessionView/threadReveal'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { effectiveKeybinding } from '@shared/hotkeys'
 import { roomActiveProject, type Room } from '@/stores/room'
@@ -40,6 +41,7 @@ import type { TerminalPane } from '@/stores/tabs'
  * - Cmd+K         — Clear active terminal (sends clear sequence)
  * - Ctrl+1-9      — Launch preset by position
  * - Cmd+Shift+M   — Mobile tab (rebindable `openMobile`)
+ * - Ctrl+`        — Thread view's terminal (rebindable `toggleThreadTerminal`)
  */
 export function useTerminalShortcuts(room: Room, cwd: string): void {
   useEffect(() => {
@@ -76,6 +78,16 @@ export function useTerminalShortcuts(room: Room, cwd: string): void {
         e.preventDefault()
         const st = tabs.getState()
         st.openMobileTab(st.activeGroupIndex)
+        return
+      }
+
+      // Ctrl+` (rebindable): Thread view's terminal, on the focused pane or
+      // the active column's. Nothing to act on: the key is left alone.
+      if (
+        !e.repeat &&
+        keyEventMatchesCombo(e, effectiveKeybinding(useSettingsStore.getState().keybindings, 'toggleThreadTerminal', isMacPlatform()))
+      ) {
+        if (toggleRevealForFocus(room, tabs.getState().activeGroupIndex)) e.preventDefault()
         return
       }
 

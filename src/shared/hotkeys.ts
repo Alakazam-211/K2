@@ -81,6 +81,13 @@ export const HOTKEYS: HotkeyDefinition[] = [
   { id: 'goToWiki', label: 'Go to Wiki', defaultKey: 'Ctrl+Meta+5', defaultKeyOther: 'Ctrl+Alt+5', category: 'Navigation' },
   { id: 'goToSettings', label: 'Go to Settings', defaultKey: 'Ctrl+Meta+6', defaultKeyOther: 'Ctrl+Alt+6', category: 'Navigation' },
 
+  // Thread view's terminal (prd-thread-view-focus-v1 §6). Ctrl+` was free
+  // (checked against this list, the native menu's accelerators and every
+  // renderer key handler); macOS keeps ⌘` for windows, so Control it is on
+  // every platform. Handled by `useTerminalShortcuts`; TerminalPane keeps it
+  // from the PTY in Thread view.
+  { id: 'toggleThreadTerminal', label: 'Reveal Terminal in Thread View', defaultKey: 'Ctrl+`', category: 'Terminal' },
+
   // ── App ──────────────────────────────────────────────────────────────
   { id: 'openSettings', label: 'Open Settings', defaultKey: 'Meta+,', category: 'App' },
   { id: 'newWindow', label: 'New Window', defaultKey: 'Meta+Shift+N', category: 'App' },
@@ -173,4 +180,35 @@ export function keyEventToCombo(e: KeyEventLike): string {
  */
 export function isReservedKey(combo: string): boolean {
   return (RESERVED_KEYS as readonly string[]).includes(combo)
+}
+
+export interface KeyComboEventLike {
+  key: string
+  code: string
+  metaKey: boolean
+  ctrlKey: boolean
+  altKey: boolean
+  shiftKey: boolean
+  getModifierState?(key: string): boolean
+}
+
+/** Does a keydown match `combo` (`@shared/hotkeys` form, e.g.
+ *  `Ctrl+Meta+1`)? Modifiers must match exactly. A digit key is read from
+ *  `e.code` (Option and AltGr change `e.key`; AZERTY's unshifted digit row
+ *  types `&é"'`). */
+export function keyEventMatchesCombo(e: KeyComboEventLike, combo: string): boolean {
+  if (!combo) return false
+  const parts = combo.split('+')
+  const key = parts[parts.length - 1]
+  const mods = new Set(parts.slice(0, -1))
+  if (
+    e.ctrlKey !== mods.has('Ctrl') ||
+    e.metaKey !== mods.has('Meta') ||
+    e.altKey !== mods.has('Alt') ||
+    e.shiftKey !== mods.has('Shift')
+  ) {
+    return false
+  }
+  if (/^[0-9]$/.test(key)) return e.code === `Digit${key}`
+  return (e.key.length === 1 ? e.key.toUpperCase() : e.key) === key
 }

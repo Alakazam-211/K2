@@ -6,10 +6,13 @@ import {
   type SessionSplitSides,
   type SessionViewTab,
   type SplitPaneView,
+  readSessionTerminalRevealed,
   resolveSessionView,
   sessionViewSplitStorageKey,
   sessionViewTabStorageKey,
+  sessionViewTerminalStorageKey,
   writeSessionSplitSides,
+  writeSessionTerminalRevealed,
   writeSessionViewTab,
 } from './sessionViewTab'
 
@@ -20,6 +23,11 @@ export interface SessionViewChoice {
   splitRight: SplitPaneView
   setSplitLeft: (view: SplitPaneView) => void
   setSplitRight: (view: SplitPaneView) => void
+  /** Thread view's terminal is revealed in this conversation. */
+  terminalRevealed: boolean
+  setTerminalRevealed: (next: boolean) => void
+  /** Which conversation's memory `terminalRevealed` is. */
+  terminalRevealKey: string | null
 }
 
 /** Which server's view memory a room reads and writes: the ROOM's server.
@@ -45,6 +53,7 @@ export function useSessionViewTab(
   const hostKey = sessionViewHostKey(scope, windowHostKey)
   const storageKey = sessionKey ? sessionViewTabStorageKey(hostKey, sessionKey) : null
   const splitKey = sessionKey ? sessionViewSplitStorageKey(hostKey, sessionKey) : null
+  const terminalKey = sessionKey ? sessionViewTerminalStorageKey(hostKey, sessionKey) : null
   // A conversation this client has never shown opens in the
   // "New agents open in" choice (Settings → Workspaces / Agents → Workspace settings); one with
   // a remembered view keeps it.
@@ -54,6 +63,16 @@ export function useSessionViewTab(
   const [sides, setSides] = useState<SessionSplitSides>(
     () => resolveSessionView(storageKey, splitKey).sides,
   )
+
+  // Keyed during render, so a change of conversation lands in one commit
+  // with its own memory (and never reads as a toggle: no animation).
+  const [revealMemo, setRevealMemo] = useState(() => ({
+    key: terminalKey,
+    revealed: readSessionTerminalRevealed(terminalKey),
+  }))
+  if (revealMemo.key !== terminalKey) {
+    setRevealMemo({ key: terminalKey, revealed: readSessionTerminalRevealed(terminalKey) })
+  }
 
   useEffect(() => {
     const resolved = resolveSessionView(storageKey, splitKey)
@@ -98,6 +117,14 @@ export function useSessionViewTab(
     [splitKey],
   )
 
+  const setTerminalRevealed = useCallback(
+    (revealed: boolean) => {
+      setRevealMemo({ key: terminalKey, revealed })
+      if (terminalKey) writeSessionTerminalRevealed(terminalKey, revealed)
+    },
+    [terminalKey],
+  )
+
   return {
     viewTab,
     setViewTab,
@@ -105,5 +132,8 @@ export function useSessionViewTab(
     splitRight: sides.right,
     setSplitLeft,
     setSplitRight,
+    terminalRevealed: revealMemo.revealed,
+    setTerminalRevealed,
+    terminalRevealKey: terminalKey,
   }
 }

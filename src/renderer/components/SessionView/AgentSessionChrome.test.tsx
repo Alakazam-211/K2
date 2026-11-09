@@ -102,6 +102,7 @@ function ProbeTerminal() {
       {chrome && viewer.thread ? <div data-testid="thread-overlay-pane" /> : null}
       {chrome && viewer.chatter ? <div data-testid="chatter-overlay-pane" /> : null}
       {viewer.hidePty ? null : <div data-testid="pty-visible" />}
+      <button type="button" data-testid="fake-report-live" onClick={() => chrome?.reportTerminalLive?.(true)} />
       {chrome?.viewTab === 'split' ? (
         <>
           <div data-testid="message-compose" data-compose-bar="" data-compose-destination="pty">
@@ -122,6 +123,33 @@ function ProbeTerminal() {
 
 describe('Thread view header (S2)', () => {
   afterEach(() => cleanup())
+
+  it('shows the Terminal toggle only in Thread view', async () => {
+    renderIn('terminal')
+    await waitFor(() => expect(screen.queryByTestId('sidecar-session-title')).not.toBeNull())
+    expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
+    cleanup()
+    renderIn('thread')
+    await waitFor(() => expect(screen.queryByTestId('thread-terminal-toggle')).not.toBeNull())
+  })
+
+  it('the toggle waits for a live terminal, then remembers the conversation', async () => {
+    renderIn('thread')
+    const toggle = await waitFor(() => {
+      const el = screen.queryByTestId('thread-terminal-toggle') as HTMLButtonElement | null
+      if (!el) throw new Error('no toggle')
+      return el
+    })
+    expect(toggle.disabled).toBe(true)
+    act(() => {
+      fireEvent.click(screen.getByTestId('fake-report-live'))
+    })
+    expect(toggle.disabled).toBe(false)
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(localStorage.getItem('local|k2:session-view-terminal:conv-r')).toBe('1')
+  })
 
   function renderIn(view: string) {
     localStorage.clear()

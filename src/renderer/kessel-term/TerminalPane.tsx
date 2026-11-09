@@ -97,6 +97,9 @@ import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColum
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
+import { useTerminalRevealPresence } from '@/components/SessionView/threadReveal'
+import { isMacPlatform } from '@/lib/desktop-chrome'
+import { effectiveKeybinding, keyEventMatchesCombo } from '@shared/hotkeys'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import {
   DEFAULT_SPLIT_LEFT,
@@ -614,6 +617,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const showThreadOnly = viewTab === 'thread'
   // Thread view only: the `single` path below passes it; Split doesn't.
   const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
+  // Thread view's revealed terminal (`threadReveal.ts`). `revealOpen` is what
+  // the person asked for; the column stays laid out (`revealShown`) while it
+  // slides shut. Keyed during render so the commit that closes it still has
+  // it on screen.
+  const revealOpen = showThreadOnly && !!sessionChrome?.terminalRevealed
+  const { shown: revealShown, onClosed: onRevealClosed } = useTerminalRevealPresence(revealOpen, showThreadOnly)
+  // Read by the key handler, which doesn't re-bind on a view change.
+  const showThreadOnlyRef = useRef(showThreadOnly)
+  showThreadOnlyRef.current = showThreadOnly
+  // A sidecar's header shows the toggle before this pane knows of a PTY.
+  // Reported in the effect below (phase is declared later in this body).
+  const reportTerminalLive = sessionChrome?.reportTerminalLive
   const showChatterOnly = viewTab === 'chatter'
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
@@ -655,6 +670,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const [selectionVersion, setSelectionVersion] = useState(0)
 
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
+  const terminalLive = phase.kind === 'ready' || phase.kind === 'connecting'
+  useEffect(() => {
+    reportTerminalLive?.(terminalLive)
+  }, [reportTerminalLive, terminalLive])
   // Issue #5: mid-flight WS drops (TCP reset, WebKit Networking
   // throttling, brief process pressure) used to leave the terminal
   // silently frozen on its last frame — `ws.onclose` was a no-op so
@@ -2908,11 +2927,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // `webgl-context-lost-unrestored` demotion. Dispose cleanly when hidden
   // and remount on show instead.
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
-  const webglSurfaceActive = useWebgl && isTabVisible && !settingsOpen
+  // Also only while its column is on screen: Thread view (and a Split with no
+  // Terminal side) keeps the grid in a display:none column with the tab
+  // still visible, which would otherwise leave the context for WKWebView to
+  // reclaim. `terminalOnScreen` flips in the same commit as a reveal, so the
+  // painter is rebuilt before the first frame of the slide.
+  const terminalOnScreen = !hidePty || revealShown
+  const webglSurfaceActive = useWebgl && isTabVisible && !settingsOpen && terminalOnScreen
 
   // Coming back visible after a demotion from unrestored context loss:
   // give WebGL another chance (common after workspace switch / Settings).
-  const surfaceWanted = isTabVisible && !settingsOpen
+  const surfaceWanted = isTabVisible && !settingsOpen && terminalOnScreen
   const wasSurfaceWantedRef = useRef(surfaceWanted)
   useEffect(() => {
     const becameWanted = surfaceWanted && !wasSurfaceWantedRef.current
@@ -3555,6 +3580,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // absorbs them; compositionend commits the final string in one
       // sendInput call.
       if (composingRef.current) return
+      // Thread view's reveal chord (rebindable) is the shortcut listener's
+      // on window; it must not also reach the PTY. Terminal view keeps it.
+      if (
+        showThreadOnlyRef.current &&
+        keyEventMatchesCombo(
+          e,
+          effectiveKeybinding(useSettingsStore.getState().keybindings, 'toggleThreadTerminal', isMacPlatform()),
+        )
+      ) {
+        return
+      }
       // Windows: Ctrl+Shift+C copies, Ctrl+Shift+V pastes (Windows
       // Terminal's chords); never sent to the PTY.
       const chord = terminalClipboardChord(e, desktopOsFromNavigator(navigator))
@@ -5766,6 +5802,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       hidePty={hidePty}
       left={splitLeft}
       right={splitRight}
+      reveal={
+        showThreadOnly && sessionChrome?.terminalRevealed !== undefined
+          ? {
+              open: revealOpen,
+              shown: revealShown,
+              motionKey: sessionChrome.terminalRevealKey ?? null,
+              onClosed: onRevealClosed,
+            }
+          : null
+      }
       terminal={
         <>
           {grid}

@@ -1,10 +1,15 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useRef, type CSSProperties, type ReactNode } from 'react'
 import type { SplitPaneView } from './sessionViewTab'
+import { useTerminalRevealLayout, type TerminalReveal } from './threadReveal'
 
 /**
  * Split columns around one terminal node. That node stays the first child
  * so the PTY grid does not remount when the sides change. A second Terminal
  * side cannot host another canvas, so it renders `sharedTerminal`.
+ *
+ * `reveal` is Thread view's terminal reveal (`threadReveal.ts`): the same
+ * node, hidden until asked for, then beside or below the Thread. The Thread
+ * stays in `single`, so neither side remounts on a toggle.
  */
 export function SplitSessionColumns({
   showSplit,
@@ -15,6 +20,7 @@ export function SplitSessionColumns({
   sharedTerminal,
   renderView,
   single,
+  reveal,
 }: {
   showSplit: boolean
   hidePty: boolean
@@ -24,7 +30,18 @@ export function SplitSessionColumns({
   sharedTerminal: ReactNode
   renderView: (view: Exclude<SplitPaneView, 'terminal'>) => ReactNode
   single: ReactNode
+  /** Thread view only. Everywhere else the columns stay as they were. */
+  reveal?: TerminalReveal | null
 }): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<HTMLDivElement>(null)
+  const singleRef = useRef<HTMLDivElement>(null)
+  const revealLayout = useTerminalRevealLayout(reveal, {
+    container: containerRef,
+    terminal: terminalRef,
+    thread: singleRef,
+  })
+  const revealShown = !!reveal?.shown
   const terminalSide: 'left' | 'right' | null = !showSplit
     ? null
     : left === 'terminal'
@@ -34,7 +51,7 @@ export function SplitSessionColumns({
         : null
   const terminalShown = showSplit ? terminalSide !== null : !hidePty
   const terminalStyle: CSSProperties = {
-    display: terminalShown ? 'flex' : 'none',
+    display: terminalShown || revealShown ? 'flex' : 'none',
     flexDirection: 'column',
     minWidth: 0,
     minHeight: 0,
@@ -46,12 +63,25 @@ export function SplitSessionColumns({
             ? { borderLeft: '1px solid var(--color-border)' }
             : {}),
         }
-      : { flex: hidePty ? undefined : 1 }),
+      : revealShown
+        ? {
+            position: 'relative',
+            zIndex: 1,
+            flex: '0 0 auto',
+            // Solid in every theme; never frosted.
+            background: 'var(--color-bg)',
+            ...(revealLayout.placement === 'left'
+              ? { width: revealLayout.sizePx, borderRight: '1px solid var(--color-border)' }
+              : { height: revealLayout.sizePx, borderTop: '1px solid var(--color-border)' }),
+          }
+        : { flex: hidePty ? undefined : 1 }),
   }
 
   return (
     <div
+      ref={containerRef}
       data-testid="session-split-columns"
+      data-reveal-placement={revealShown ? revealLayout.placement : undefined}
       style={{
         flex: 1,
         minHeight: 0,
@@ -60,12 +90,21 @@ export function SplitSessionColumns({
         display: showSplit ? 'grid' : 'flex',
         gridTemplateColumns: showSplit ? '1fr 1fr' : undefined,
         gridTemplateRows: showSplit ? 'minmax(0, 1fr)' : undefined,
-        flexDirection: showSplit ? undefined : 'column',
+        // The terminal stays the first child; column-reverse puts it below.
+        flexDirection: showSplit
+          ? undefined
+          : revealShown
+            ? revealLayout.placement === 'left'
+              ? 'row'
+              : 'column-reverse'
+            : 'column',
+        overflow: reveal ? 'hidden' : undefined,
       }}
     >
       <div
+        ref={terminalRef}
         style={terminalStyle}
-        data-testid={terminalSide ? `session-split-${terminalSide}` : undefined}
+        data-testid={terminalSide ? `session-split-${terminalSide}` : reveal ? 'session-reveal-terminal' : undefined}
         data-split-view={terminalSide ? 'terminal' : undefined}
       >
         {terminal}
@@ -100,7 +139,21 @@ export function SplitSessionColumns({
           {sharedTerminal}
         </div>
       ) : null}
-      {showSplit ? null : single}
+      {showSplit ? null : (
+        // Always this wrapper, so a toggle never remounts the Thread. No box
+        // of its own unless Thread view's reveal needs one to move.
+        <div
+          ref={singleRef}
+          data-testid="session-single-slot"
+          style={
+            reveal
+              ? { position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }
+              : { display: 'contents' }
+          }
+        >
+          {single}
+        </div>
+      )}
     </div>
   )
 }

@@ -4,7 +4,7 @@
 // I/O boundaries are mocked (same set as TerminalPane.spawn.test.tsx).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, act } from '@testing-library/react'
+import { act, cleanup, waitFor } from '@testing-library/react'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import {
   SessionViewChromeContext,
@@ -16,6 +16,47 @@ const h = vi.hoisted(() => ({
   painter: 'dom',
   threadProps: [] as Array<Record<string, unknown>>,
   threadMounts: 0,
+  sockets: [] as Array<{ sent: string[]; onmessage: ((e: { data: string }) => void) | null }>,
+  painters: { mounts: 0, disposes: 0, fatal: null as ((reason: string) => void) | null },
+}))
+
+vi.mock('@/lib/grid-dial-queue', () => ({
+  gridDialBackoffRemainingMs: () => 0,
+  openQueuedGridWebSocket: vi.fn(async () => {
+    const socket = {
+      readyState: 1,
+      binaryType: 'blob',
+      sent: [] as string[],
+      onmessage: null as ((e: { data: string }) => void) | null,
+      onopen: null,
+      onerror: null,
+      onclose: null,
+      send(data: string) {
+        this.sent.push(data)
+      },
+      close() {
+        this.readyState = 3
+      },
+    }
+    h.sockets.push(socket)
+    return socket
+  }),
+}))
+
+vi.mock('./webgl/webglPainter', () => ({
+  createWebglPainter: () => ({
+    mount: () => {
+      h.painters.mounts += 1
+    },
+    setMetrics: () => {},
+    render: () => {},
+    onFatal: (cb: (reason: string) => void) => {
+      h.painters.fatal = cb
+    },
+    dispose: () => {
+      h.painters.disposes += 1
+    },
+  }),
 }))
 
 vi.mock('@/components/SessionView/ThreadOverlayColumn', async () => {
@@ -75,7 +116,7 @@ vi.mock('@/stores/terminal-settings', () => {
   const state = {
     fontSize: 13,
     linkClickMode: 'click',
-    painter: h.painter,
+    get painter() { return h.painter },
     openLinksInSplitPane: false,
   }
   return {
@@ -129,7 +170,7 @@ vi.mock('@/stores/connect-host', () => ({
 
 
 import { TerminalPane } from './TerminalPane'
-import { fixedStore, renderInRoom, testRoom } from '@/test-utils/room'
+import { fixedStore, inRoom, renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -140,9 +181,26 @@ const room = testRoom({
 })
 
 class StubResizeObserver {
-  observe(): void {}
+  static all: StubResizeObserver[] = []
+  el: Element | null = null
+  constructor(public cb: ResizeObserverCallback) {
+    StubResizeObserver.all.push(this)
+  }
+  observe(el: Element): void {
+    this.el = el
+  }
   unobserve(): void {}
-  disconnect(): void {}
+  disconnect(): void {
+    StubResizeObserver.all = StubResizeObserver.all.filter((o) => o !== this)
+  }
+}
+
+/** Fire the terminal container's observer (TerminalPane's PTY-resize one). */
+function fireTerminalRO(width: number, height: number): void {
+  const entries = [{ contentRect: { width, height } }] as unknown as ResizeObserverEntry[]
+  for (const o of StubResizeObserver.all.slice()) {
+    if (o.el?.hasAttribute('data-terminal-container')) o.cb(entries, o as unknown as ResizeObserver)
+  }
 }
 
 class StubWebSocket {
@@ -197,14 +255,77 @@ beforeEach(() => {
   h.painter = 'dom'
   h.threadProps = []
   h.threadMounts = 0
+  h.sockets = []
+  h.painters = { mounts: 0, disposes: 0, fatal: null }
+  StubResizeObserver.all = []
+  installCellProbe()
   useSettingsStore.setState({ threadTextWidth: THREAD_TEXT_WIDTH_DEFAULT, settingsOpen: false })
 })
 
 afterEach(() => {
+  restoreCellProbe()
   cleanup()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
+
+// Cell probe: 8×16 cells, so measurePaneFit gives real cols/rows.
+const CELL_W = 8
+const CELL_H = 16
+const realRect = HTMLElement.prototype.getBoundingClientRect
+function installCellProbe(): void {
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this.tagName === 'SPAN' && this.textContent === 'W' && this.style?.visibility === 'hidden') {
+      return new DOMRect(0, 0, CELL_W, CELL_H)
+    }
+    return new DOMRect(0, 0, 0, 0)
+  }
+}
+function restoreCellProbe(): void {
+  HTMLElement.prototype.getBoundingClientRect = realRect
+}
+
+const SPAWN = (): number =>
+  vi.mocked(globalThis.fetch).mock.calls.filter(([u]) => String(u).includes('/cli/sessions/v2/spawn')).length
+
+/** Feed a snapshot so the pane reaches `ready`. */
+async function goReady(): Promise<void> {
+  await waitFor(() => expect(h.sockets.length).toBe(1))
+  await waitFor(() => expect(h.sockets[0].onmessage).toBeTruthy())
+  act(() => {
+    h.sockets[0].onmessage?.({
+      data: JSON.stringify({
+        event: 'snapshot',
+        payload: {
+          paneId: 'p',
+          cols: 80,
+          rows: 24,
+          grid: [],
+          scrollback: [],
+          cursor: { row: 0, col: 0, visible: true },
+          version: 1,
+          displayOffset: 0,
+          mouseReport: false,
+          sgrMouse: false,
+          altScreen: false,
+        },
+      }),
+    })
+  })
+  await waitFor(() => expect(document.querySelector('textarea')).toBeTruthy())
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
+const sends = (kind: string): Array<Record<string, unknown>> =>
+  h.sockets[0].sent.map((x) => JSON.parse(x) as Record<string, unknown>).filter((m) => m.action === kind)
+
+async function waitDebounce(): Promise<void> {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 130))
+  })
+}
 
 describe('Thread text limit in TerminalPane', () => {
   it('Thread view passes the limit', () => {
@@ -228,5 +349,118 @@ describe('Thread text limit in TerminalPane', () => {
     renderInRoom(room, pane(chrome({ viewTab: 'split' })))
     expect(h.threadProps.length).toBeGreaterThan(0)
     expect(h.threadProps.at(-1)?.textCapPx).toBeUndefined()
+  })
+})
+
+describe('Revealing the terminal from Thread view', () => {
+  const thread = (over: Partial<SessionViewChromeValue> = {}): SessionViewChromeValue =>
+    chrome({ viewTab: 'thread', terminalRevealed: false, terminalRevealKey: 'key-1', ...over })
+
+  it('no remount, no second spawn, no new socket across toggles', async () => {
+    const { rerender } = renderInRoom(room, pane(thread()))
+    await goReady()
+    const container = document.querySelector('[data-terminal-container]')
+    expect(container).toBeTruthy()
+    for (const open of [true, false, true, false]) {
+      rerender(pane(thread({ terminalRevealed: open })))
+      await act(async () => {})
+    }
+    expect(document.querySelector('[data-terminal-container]')).toBe(container)
+    expect(SPAWN()).toBe(1)
+    expect(h.sockets).toHaveLength(1)
+    expect(h.sockets[0].sent.filter((s) => s.includes('close'))).toHaveLength(0)
+    expect(h.threadMounts).toBe(1)
+  })
+
+  it('hidden: 0×0 measures send no resize; reveal sends one, then none at the same size', async () => {
+    const { rerender } = renderInRoom(room, pane(thread()))
+    await goReady()
+    const before = sends('resize').length
+    fireTerminalRO(0, 0)
+    await waitDebounce()
+    expect(sends('resize').length).toBe(before)
+
+    rerender(pane(thread({ terminalRevealed: true })))
+    fireTerminalRO(800, 480)
+    await waitDebounce()
+    const after = sends('resize')
+    expect(after.length).toBe(before + 1)
+    expect(Number(after.at(-1)?.cols)).toBeGreaterThan(0)
+    expect(Number(after.at(-1)?.rows)).toBeGreaterThan(0)
+
+    // Hide, reveal again at the same size: the daemon hears nothing.
+    rerender(pane(thread({ terminalRevealed: false })))
+    fireTerminalRO(0, 0)
+    await waitDebounce()
+    rerender(pane(thread({ terminalRevealed: true })))
+    fireTerminalRO(800, 480)
+    await waitDebounce()
+    expect(sends('resize').length).toBe(before + 1)
+  })
+
+  it('holds no WebGL surface while hidden, and rebuilds it on reveal', async () => {
+    h.painter = 'webgl'
+    const { rerender } = renderInRoom(room, pane(thread()))
+    await goReady()
+    expect(h.painters.mounts).toBe(0)
+
+    rerender(pane(thread({ terminalRevealed: true })))
+    expect(h.painters.mounts).toBe(1)
+    expect(h.painters.disposes).toBe(0)
+
+    rerender(pane(thread({ terminalRevealed: false })))
+    await act(async () => {})
+    expect(h.painters.disposes).toBe(1)
+  })
+
+  it('a lost context while revealed gets its retry on the next reveal', async () => {
+    h.painter = 'webgl'
+    const { rerender } = renderInRoom(room, pane(thread({ terminalRevealed: true })))
+    await goReady()
+    expect(h.painters.mounts).toBe(1)
+    act(() => h.painters.fatal?.('webgl-context-lost-unrestored'))
+    rerender(pane(thread({ terminalRevealed: false })))
+    await act(async () => {})
+    rerender(pane(thread({ terminalRevealed: true })))
+    await act(async () => {})
+    expect(h.painters.mounts).toBe(2)
+  })
+
+  it('Terminal view keeps its WebGL surface', async () => {
+    h.painter = 'webgl'
+    renderInRoom(room, pane(chrome({ viewTab: 'terminal', terminalRevealed: false, terminalRevealKey: 'key-1' })))
+    await goReady()
+    expect(h.painters.mounts).toBe(1)
+    expect(h.painters.disposes).toBe(0)
+  })
+
+  it('A Split with no Terminal side holds no WebGL surface', async () => {
+    h.painter = 'webgl'
+    renderInRoom(room, pane(chrome({ viewTab: 'split', splitLeft: 'thread', splitRight: 'chatter' })))
+    await goReady()
+    expect(h.painters.mounts).toBe(0)
+  })
+
+  it('the chord never reaches the PTY in Thread view, rebound or not; Terminal view keeps the key', async () => {
+    // Bound to a chord the PTY would otherwise type (^K), so the guard is
+    // what stops it, not an unmapped key.
+    useSettingsStore.setState({ keybindings: { toggleThreadTerminal: 'Ctrl+K' } })
+    const { unmount } = renderInRoom(room, pane(thread({ terminalRevealed: true })))
+    await goReady()
+    const press = (): void => {
+      const input = document.querySelector<HTMLTextAreaElement>('textarea')
+      if (!input) throw new Error('no shadow input')
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK', ctrlKey: true, bubbles: true }))
+    }
+    press()
+    expect(sends('input')).toHaveLength(0)
+    unmount()
+
+    h.sockets = []
+    useSettingsStore.setState({ keybindings: { toggleThreadTerminal: 'Ctrl+K' } })
+    renderInRoom(room, pane(chrome({ viewTab: 'terminal', terminalRevealed: false, terminalRevealKey: 'key-1' })))
+    await goReady()
+    press()
+    expect(sends('input').length).toBeGreaterThan(0)
   })
 })

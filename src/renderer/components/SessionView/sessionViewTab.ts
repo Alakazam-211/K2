@@ -34,6 +34,7 @@ export const DEFAULT_SPLIT_SIDES: SessionSplitSides = {
 
 const STORAGE_PREFIX = 'k2:session-view-tab:'
 const SPLIT_PREFIX = 'k2:session-view-split:'
+const TERMINAL_REVEAL_PREFIX = 'k2:session-view-terminal:'
 
 /** `hostKey` is the server's host key (`lib/host-key.ts`); the stored key
  *  is `<hostKey>|k2:session-view-tab:<sessionKey>` (Home M1, MS6). */
@@ -43,6 +44,30 @@ export function sessionViewTabStorageKey(hostKey: string, sessionKey: string): s
 
 export function sessionViewSplitStorageKey(hostKey: string, sessionKey: string): string {
   return hostScopedKey(hostKey, `${SPLIT_PREFIX}${sessionKey}`)
+}
+
+/** Thread view's revealed terminal, per conversation, per server, on this
+ *  client (prd-thread-view-focus-v1 §7). Default hidden. */
+export function sessionViewTerminalStorageKey(hostKey: string, sessionKey: string): string {
+  return hostScopedKey(hostKey, `${TERMINAL_REVEAL_PREFIX}${sessionKey}`)
+}
+
+export function readSessionTerminalRevealed(storageKey: string | null): boolean {
+  if (!storageKey || typeof localStorage === 'undefined') return false
+  try {
+    return localStorage.getItem(storageKey) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writeSessionTerminalRevealed(storageKey: string, revealed: boolean): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(storageKey, revealed ? '1' : '0')
+  } catch {
+    /* quota / private mode */
+  }
 }
 
 export function parseSplitPaneView(raw: unknown, fallback: SplitPaneView): SplitPaneView {

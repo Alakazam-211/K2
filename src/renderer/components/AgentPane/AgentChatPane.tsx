@@ -35,6 +35,7 @@ import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
+import { ThreadTerminalToggle } from '@/components/SessionView/ThreadTerminalToggle'
 import { useSettingsStore } from '@/stores/settings'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import {
@@ -203,6 +204,11 @@ interface ChatHeaderProps {
   onViewTabChange: (tab: SessionViewTab) => void
   onSplitLeft: (view: SplitPaneView) => void
   onSplitRight: (view: SplitPaneView) => void
+  /** Thread view's terminal toggle. */
+  terminalRevealed: boolean
+  onToggleTerminal: () => void
+  /** A terminal is running (ready); the toggle waits for one. */
+  terminalAvailable: boolean
   /** Live pinned harness, including non-v1 (pi, cursor, hermes). */
   pinnedProvider: string | null
   /** Opens the shared continue dialog. Does not switch sessions. */
@@ -235,6 +241,9 @@ function ChatHeader({
   onViewTabChange,
   onSplitLeft,
   onSplitRight,
+  terminalRevealed,
+  onToggleTerminal,
+  terminalAvailable,
   pinnedProvider,
   onContinueNewChat,
   projectId,
@@ -356,6 +365,13 @@ function ChatHeader({
         threadConversationId={currentSessionId}
         threadScope={room.scope}
       />
+      {viewTab === 'thread' ? (
+        <ThreadTerminalToggle
+          revealed={terminalRevealed}
+          disabled={!terminalAvailable}
+          onToggle={onToggleTerminal}
+        />
+      ) : null}
       </div>
       {viewTab === 'thread' ? (
         <ThreadViewIdentity name={displayName} addr={overlayAddr} />
@@ -763,6 +779,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     splitRight,
     setSplitLeft,
     setSplitRight,
+    terminalRevealed,
+    setTerminalRevealed,
+    terminalRevealKey,
   } = useSessionViewTab(overlayConv, room.scope)
   // research-remote-thread-load-v1 Fix 1: the pinned Chat's Thread answers
   // at the workspace handle, which the room's project list (the list a Home
@@ -1123,6 +1142,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       onViewTabChange={setViewTab}
       onSplitLeft={setSplitLeft}
       onSplitRight={setSplitRight}
+      terminalRevealed={terminalRevealed}
+      onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
+      terminalAvailable={phase.kind === 'ready'}
       pinnedProvider={liveProvider}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
@@ -1234,6 +1256,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         conversationId={overlayConv}
         agentName={projectId}
         displayName={displayName}
+        terminalRevealed={terminalRevealed}
+        terminalRevealKey={terminalRevealKey}
       >
         <TerminalPane
           // Remount on each daemon respawn so TerminalPane re-attaches to
@@ -1452,6 +1476,9 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     splitRight,
     setSplitLeft,
     setSplitRight,
+    terminalRevealed,
+    setTerminalRevealed,
+    terminalRevealKey,
   } = useSessionViewTab(overlayConv, room.scope)
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
@@ -1756,6 +1783,9 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       onViewTabChange={setViewTab}
       onSplitLeft={setSplitLeft}
       onSplitRight={setSplitRight}
+      terminalRevealed={terminalRevealed}
+      onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
+      terminalAvailable={ready && !breakerTripped}
       pinnedProvider={providerKeyForCommand(launchConfig?.command)}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
@@ -1817,6 +1847,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         conversationId={overlayConv}
         agentName={projectId}
         displayName={displayName}
+        terminalRevealed={terminalRevealed}
+        terminalRevealKey={terminalRevealKey}
       >
         <TerminalPane
           key={refreshNonce}

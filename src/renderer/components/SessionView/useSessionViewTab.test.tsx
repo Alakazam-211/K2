@@ -17,6 +17,46 @@ describe('useSessionViewTab', () => {
     localStorage.clear()
   })
 
+  it('remembers the revealed terminal per conversation, hidden by default', () => {
+    const a = renderHook(() => useSessionViewTab('conv-a', PRIMARY))
+    expect(a.result.current.terminalRevealed).toBe(false)
+    act(() => a.result.current.setTerminalRevealed(true))
+    expect(a.result.current.terminalRevealed).toBe(true)
+    expect(localStorage.getItem('local|k2:session-view-terminal:conv-a')).toBe('1')
+    a.unmount()
+
+    const again = renderHook(() => useSessionViewTab('conv-a', PRIMARY))
+    expect(again.result.current.terminalRevealed).toBe(true)
+    const other = renderHook(() => useSessionViewTab('conv-b', PRIMARY))
+    expect(other.result.current.terminalRevealed).toBe(false)
+  })
+
+  it('moving to another conversation reads its memory in the same render', () => {
+    localStorage.setItem('local|k2:session-view-terminal:conv-a', '1')
+    const seen: Array<[string, boolean]> = []
+    const hook = renderHook(
+      ({ key }: { key: string }) => {
+        const v = useSessionViewTab(key, PRIMARY)
+        seen.push([key, v.terminalRevealed])
+        return v
+      },
+      { initialProps: { key: 'conv-a' } },
+    )
+    expect(hook.result.current.terminalRevealKey).toBe('local|k2:session-view-terminal:conv-a')
+    hook.rerender({ key: 'conv-b' })
+    expect(hook.result.current.terminalRevealed).toBe(false)
+    expect(hook.result.current.terminalRevealKey).toBe('local|k2:session-view-terminal:conv-b')
+    // The commit for conv-b never carried conv-a's open state.
+    expect(seen.at(-1)).toEqual(['conv-b', false])
+  })
+
+  it('keeps the memory per server', () => {
+    const a = renderHook(() => useSessionViewTab('conv-a', { isPrimary: false, hostKey: 'box.k2.dev' }))
+    act(() => a.result.current.setTerminalRevealed(true))
+    expect(localStorage.getItem('box.k2.dev|k2:session-view-terminal:conv-a')).toBe('1')
+    expect(localStorage.getItem('local|k2:session-view-terminal:conv-a')).toBeNull()
+  })
+
   it('remembers the view and both split sides per session', () => {
     localStorage.setItem('local|k2:session-view-tab:conv-2', 'split')
     const first = renderHook(() => useSessionViewTab('conv-2', PRIMARY))

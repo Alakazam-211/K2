@@ -39,7 +39,7 @@
 
 import { useSettingsStore } from '@/stores/settings'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
-import { effectiveKeybinding, formatKeyCombo, getDefaultKeybindings } from '@shared/hotkeys'
+import { effectiveKeybinding, formatKeyCombo, getDefaultKeybindings, keyEventMatchesCombo, type KeyComboEventLike as PageKeyEventLike } from '@shared/hotkeys'
 import type { ZenRailView } from '@/lib/zen/zen-window'
 import type { ZenPageKeys } from '@/lib/zen/zen-theme-switch'
 import { exitZen, zenOnNow, zenShownNow, zenSwitchView } from '@/lib/zen/zen-view'
@@ -72,36 +72,8 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
 /** The chords that switch the Zen rail's view (⌃⌘1–4). */
 const RAIL_SHORTCUTS = PAGE_SHORTCUTS.filter((s) => s.zenView !== null)
 
-export interface PageKeyEventLike {
-  key: string
-  code: string
-  metaKey: boolean
-  ctrlKey: boolean
-  altKey: boolean
-  shiftKey: boolean
-  getModifierState?(key: string): boolean
-}
-
-/** Does a keydown match `combo` (`@shared/hotkeys` form, e.g.
- *  `Ctrl+Meta+1`)? Modifiers must match exactly. A digit key is read from
- *  `e.code` (Option and AltGr change `e.key`; AZERTY's unshifted digit row
- *  types `&é"'`). */
-export function keyEventMatchesCombo(e: PageKeyEventLike, combo: string): boolean {
-  if (!combo) return false
-  const parts = combo.split('+')
-  const key = parts[parts.length - 1]
-  const mods = new Set(parts.slice(0, -1))
-  if (
-    e.ctrlKey !== mods.has('Ctrl') ||
-    e.metaKey !== mods.has('Meta') ||
-    e.altKey !== mods.has('Alt') ||
-    e.shiftKey !== mods.has('Shift')
-  ) {
-    return false
-  }
-  if (/^[0-9]$/.test(key)) return e.code === `Digit${key}`
-  return (e.key.length === 1 ? e.key.toUpperCase() : e.key) === key
-}
+export { keyEventMatchesCombo } from '@shared/hotkeys'
+export type { KeyComboEventLike as PageKeyEventLike } from '@shared/hotkeys'
 
 /** The page shortcut a keydown stands for, or null. */
 export function pageShortcutForEvent(

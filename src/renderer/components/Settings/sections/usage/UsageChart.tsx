@@ -13,6 +13,7 @@ import {
   usageChart,
   type ChartMeasure,
 } from './usage-page'
+import { Segmented } from '@/components/ui'
 
 export interface ChartSeries {
   harness: string
@@ -45,24 +46,18 @@ export function UsageChart({
 
   return (
     <div className="mb-4" data-testid="usage-chart">
-      <div className="flex flex-wrap items-center gap-1 mb-2" role="radiogroup" aria-label="Chart measure">
-        {CHART_MEASURES.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            role="radio"
-            aria-checked={measure === m.id}
-            data-testid={`usage-measure-${m.id}`}
-            onClick={() => onMeasure(m.id)}
-            className={`px-2 py-0.5 text-[11px] border ${
-              measure === m.id
-                ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-            }`}
-          >
-            {m.label}
-          </button>
-        ))}
+      <div className="mb-2 flex">
+        <Segmented
+          aria-label="Chart measure"
+          className="flex-wrap max-w-full"
+          value={measure}
+          onChange={onMeasure}
+          options={CHART_MEASURES.map((m) => ({
+            value: m.id,
+            label: m.label,
+            buttonProps: { 'data-testid': `usage-measure-${m.id}` },
+          }))}
+        />
       </div>
       {error ? (
         <p className="text-xs text-amber-400 border border-[var(--color-border)] p-3" data-testid="usage-chart-error" role="alert">

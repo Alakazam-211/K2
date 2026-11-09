@@ -14,6 +14,7 @@ import type { LinkClickMode, TerminalPainterKind, TerminalRenderer } from '@/sto
 import { SettingRow } from '../controls/SettingControls'
 import { SettingDropdown } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { Slider, Toggle } from '@/components/ui'
 
 export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.font-family', section: 'terminal', label: 'Font Family', description: 'Typeface for terminal text', keywords: ['font', 'typeface'] },
@@ -63,14 +64,13 @@ export function TerminalSection(): React.JSX.Element {
         {/* Font Size */}
         <SettingRow settingId="terminal.font-size" label="Font Size">
           <div className="flex items-center gap-3">
-            <input
-              type="range"
+            <Slider
               min={10}
               max={24}
               step={1}
               value={terminal.fontSize}
               onChange={(e) => updateTerminalSettings({ fontSize: parseInt(e.target.value, 10) })}
-              className="w-40 no-drag k2so-slider"
+              className="w-40"
             />
             <input
               type="number"
@@ -93,14 +93,13 @@ export function TerminalSection(): React.JSX.Element {
           </span>
         }>
           <div className="flex items-center gap-3 flex-wrap">
-            <input
-              type="range"
+            <Slider
               min={LINE_HEIGHT_MULT_MIN}
               max={LINE_HEIGHT_MULT_MAX}
               step={0.02}
               value={lineHeightMultiplier}
               onChange={(e) => setLineHeightMultiplier(parseFloat(e.target.value))}
-              className="w-40 no-drag k2so-slider"
+              className="w-40"
               disabled={painter !== 'webgl'}
             />
             <input
@@ -139,14 +138,13 @@ export function TerminalSection(): React.JSX.Element {
           </span>
         }>
           <div className="flex items-center gap-3 flex-wrap">
-            <input
-              type="range"
+            <Slider
               min={CHAR_TRACKING_MIN}
               max={CHAR_TRACKING_MAX}
               step={0.01}
               value={charTracking}
               onChange={(e) => setCharTracking(parseFloat(e.target.value))}
-              className="w-40 no-drag k2so-slider"
+              className="w-40"
               disabled={painter !== 'webgl'}
             />
             <input
@@ -213,18 +211,12 @@ export function TerminalSection(): React.JSX.Element {
             Natural Text Editing
           </span>
         }>
-          <button
-            onClick={() => updateTerminalSettings({ naturalTextEditing: !terminal.naturalTextEditing })}
-            className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-              terminal.naturalTextEditing ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-            }`}
-          >
-            <span
-              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                terminal.naturalTextEditing ? 'translate-x-3.5' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
+          <Toggle
+            size="sm"
+            checked={terminal.naturalTextEditing}
+            aria-label="Natural Text Editing"
+            onChange={() => updateTerminalSettings({ naturalTextEditing: !terminal.naturalTextEditing })}
+          />
         </SettingRow>
 
         {/* Link Click Mode */}
@@ -293,18 +285,12 @@ export function TerminalSection(): React.JSX.Element {
             Open Links in Split Pane
           </span>
         }>
-          <button
-            onClick={() => setOpenLinksInSplitPane(!openLinksInSplitPane)}
-            className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-              openLinksInSplitPane ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-            }`}
-          >
-            <span
-              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                openLinksInSplitPane ? 'translate-x-3.5' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
+          <Toggle
+            size="sm"
+            checked={openLinksInSplitPane}
+            aria-label="Open Links in Split Pane"
+            onChange={() => setOpenLinksInSplitPane(!openLinksInSplitPane)}
+          />
         </SettingRow>
 
       </div>

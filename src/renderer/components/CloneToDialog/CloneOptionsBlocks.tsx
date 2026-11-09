@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Button, Input, SquareCheckbox, SquareRadio } from '@/components/ui'
+import { Button, Input, Checkbox, Radio } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { targetOf, useCloneToDialogStore } from '../../stores/clone-to-dialog'
 import type { CloneUnpackResult } from '../../lib/clone-to'
@@ -22,7 +22,7 @@ import { touchIdOrVaultPassword } from '@/lib/desktop-words'
 // `.env` files option (D4, needs a person confirm) and the password field a
 // confirm asks for. All state lives in the clone-to-dialog store.
 
-/** A ticked option: the app's SquareCheckbox with its label (the shared
+/** A ticked option: the app's Checkbox with its label (the shared
  *  control Settings uses, not a one-off). */
 export function Tick({ checked, onChange, children, testId, disabled }: {
   checked: boolean
@@ -33,7 +33,7 @@ export function Tick({ checked, onChange, children, testId, disabled }: {
 }): React.JSX.Element {
   return (
     <label className={`flex items-start gap-2 select-none no-drag ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
-      <SquareCheckbox
+      <Checkbox
         checked={checked}
         disabled={disabled}
         data-testid={testId}
@@ -130,7 +130,7 @@ export function SecretsBlock({ pull }: { pull: boolean }): React.JSX.Element | n
               const disabled = c.value === 'copy' && !canCopyRow(row, callerCanCopy)
               return (
                 <label key={c.value} className={`flex items-center gap-1.5 no-drag ${disabled ? 'opacity-40' : 'cursor-pointer'}`}>
-                  <SquareRadio
+                  <Radio
                     name={`clone-secret-${row.name}`}
                     value={c.value}
                     data-testid={`clone-secret-${row.name}-${c.value}`}

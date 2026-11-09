@@ -12,6 +12,7 @@ import {
   type HeartbeatEntry,
 } from '@/stores/heartbeat-sessions'
 import { useToastStore } from '@/stores/toast'
+import { Toggle } from '@/components/ui'
 
 /**
  * One row in the Workspace panel's Heartbeats section.
@@ -83,8 +84,7 @@ export function HeartbeatEntryRow({
     }
   }, [busy, projectPath, entry.row.name, entry.state])
 
-  const handleToggle = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleToggle = useCallback(async () => {
     if (busy || needsAdmin || !projectPath || entry.state === 'archived') return
     // Home M4/M5: `heartbeat/enable` is a GET that writes: held to the
     // room's write rules.
@@ -167,15 +167,11 @@ export function HeartbeatEntryRow({
       )}
       {!archived && (
         <div className="flex items-center justify-between gap-2 pt-1">
-          <button
-            type="button"
-            onClick={handleToggle}
-            role="switch"
-            aria-checked={entry.row.enabled}
+          <Toggle size="sm"
+            checked={entry.row.enabled}
+            onChange={() => void handleToggle()}
+            onClick={(e) => e.stopPropagation()}
             disabled={busy || needsAdmin}
-            className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
-              entry.row.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-            }`}
             title={
               needsAdmin
                 ? adminHint(entry.row.enabled)
@@ -183,13 +179,7 @@ export function HeartbeatEntryRow({
                   ? 'Enabled — click to disable'
                   : 'Disabled — click to enable'
             }
-          >
-            <span
-              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                entry.row.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
+          />
           {needsAdmin && (
             <span data-heartbeat-admin-hint="" className="text-[9px] text-[var(--color-text-muted)] truncate flex-1">
               {adminHint(entry.row.enabled)}

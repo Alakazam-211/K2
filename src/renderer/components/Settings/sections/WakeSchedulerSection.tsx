@@ -20,7 +20,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { spanLabel } from '@/lib/heartbeat-wait'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox, Toggle } from '@/components/ui'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -580,23 +580,14 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   </p>
                 )}
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={on}
+              <Toggle size="sm"
+                checked={on}
+                onChange={() => void handleSetWake(!on)}
                 aria-label="Wake this computer for heartbeats"
                 disabled={wakeSaving}
-                onClick={() => void handleSetWake(!on)}
-                className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-40 disabled:cursor-wait ${
-                  on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-                }`}
-              >
-                <span
-                  className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                    on ? 'translate-x-3.5' : 'translate-x-0.5'
-                  }`}
-                />
-              </button>
+                className="mt-0.5"
+                style={wakeSaving ? { cursor: 'wait' } : undefined}
+              />
             </div>
 
             {on && (
@@ -604,7 +595,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 data-settings-id="wake-scheduler.battery"
                 className="flex items-start gap-2 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag"
               >
-                <SquareCheckbox
+                <Checkbox
                   checked={onBattery}
                   disabled={wakeSaving}
                   onChange={(e) => void handleSetWake(true, e.target.checked)}
@@ -743,22 +734,11 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 Edit Wakeup
               </button>
               {/* Enable toggle */}
-              <button
-                type="button"
-                role="switch"
-                aria-checked={row.enabled}
-                onClick={() => handleToggleEnabled(row, !row.enabled)}
+              <Toggle size="sm"
+                checked={row.enabled}
+                onChange={() => handleToggleEnabled(row, !row.enabled)}
                 title={row.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
-                className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-                  row.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-                }`}
-              >
-                <span
-                  className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                    row.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-                  }`}
-                />
-              </button>
+              />
             </div>
           ))}
         </div>

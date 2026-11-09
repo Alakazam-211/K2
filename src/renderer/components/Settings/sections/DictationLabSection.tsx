@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox } from '@/components/ui'
 
 // Web Speech API types — not in lib.dom.d.ts because the spec is
 // non-standard. WebKit ships `webkitSpeechRecognition`; we declare
@@ -720,7 +720,7 @@ export function DictationLabSection(): React.JSX.Element {
           </div>
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
-              <SquareCheckbox
+              <Checkbox
                 checked={autoScroll}
                 onChange={(e) => setAutoScroll(e.target.checked)}
                 className="cursor-pointer"

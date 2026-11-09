@@ -28,6 +28,7 @@ import {
   type StyleScheme,
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
+import { Slider } from '@/components/ui'
 
 /** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
 const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
@@ -412,14 +413,13 @@ export function StylesSection(): React.JSX.Element {
                 return (
                   <div key={dial.id} className="flex items-center gap-3">
                     <span className="w-20 text-[11px] text-[var(--color-text-secondary)]">{dial.label}</span>
-                    <input
-                      type="range"
+                    <Slider
                       min={dial.min}
                       max={dial.max}
                       step={dial.step ?? 1}
                       value={value}
                       onChange={(e) => handleDialInput(dial, Number(e.target.value))}
-                      className="w-40 no-drag k2so-slider"
+                      className="w-40"
                     />
                     <span className="w-12 text-[11px] text-[var(--color-text-muted)] tabular-nums">
                       {formatDialValue(dial, value)}
@@ -450,14 +450,13 @@ export function StylesSection(): React.JSX.Element {
               Terminal text weight (WebGL)
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              <input
-                type="range"
+              <Slider
                 min={TEXT_GAMMA_MIN}
                 max={TEXT_GAMMA_MAX}
                 step={0.05}
                 value={textGamma}
                 onChange={(e) => setTextGamma(parseFloat(e.target.value))}
-                className="w-40 no-drag k2so-slider"
+                className="w-40"
               />
               <input
                 type="number"

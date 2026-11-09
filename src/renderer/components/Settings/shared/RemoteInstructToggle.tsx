@@ -3,6 +3,7 @@ import { daemonCliPostQuery } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
+import { Toggle } from '@/components/ui'
 
 /** Per-agent switch label (Rosson 2026-10-16). */
 export const AGENT_SWITCH_LABEL = 'Let agents on other servers message this agent'
@@ -67,28 +68,19 @@ export function RemoteInstructToggle({
   return (
     <div className={compact ? 'px-3 py-1.5' : 'border border-[var(--color-border)] p-3'}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label={AGENT_SWITCH_LABEL}
           disabled={busy || readOnly}
           data-settings-id="projects.allow-remote-instruct"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'Agents on connected servers can message this agent'
               : "Agents on connected servers can't message this agent"
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">{AGENT_SWITCH_LABEL}</div>
           <div className={compact ? 'hidden' : 'text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed'}>

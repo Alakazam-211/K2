@@ -19,7 +19,7 @@
 // a change from another client (or `k2 app access`) shows here.
 
 import React, { useEffect, useState } from 'react'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox, Toggle } from '@/components/ui'
 import { APP_USERS_SWITCH_COVERS } from '@/components/SessionView/permissionCardView'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { emit } from '@tauri-apps/api/event'
@@ -71,24 +71,16 @@ function Switch({
   onFlip: () => void
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onFlip}
-      role="switch"
-      aria-checked={on}
+    <Toggle size="sm"
+      checked={on}
+      onChange={onFlip}
       aria-label={label}
       disabled={disabled}
       title={title}
       data-testid={testId}
       data-settings-id={settingsId}
-      className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
-        on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-      }`}
-    >
-      <span
-        className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`}
-      />
-    </button>
+      className="mt-0.5"
+    />
   )
 }
 
@@ -261,7 +253,7 @@ export function AgentAppsAccess({
               className={`flex items-start gap-2 text-xs no-drag ${disabled ? 'cursor-default' : 'cursor-pointer'}`}
               title={lockedReason(role, on) ?? undefined}
             >
-              <SquareCheckbox
+              <Checkbox
                 checked={on}
                 disabled={disabled}
                 onChange={() => flipCore(c.id)}

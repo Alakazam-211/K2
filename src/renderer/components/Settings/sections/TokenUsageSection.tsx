@@ -60,6 +60,7 @@ import {
   type UsageFilters,
   type UsageRange,
 } from './usage/usage-page'
+import { Segmented } from '@/components/ui'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -420,28 +421,19 @@ export function TokenUsageSection(): React.JSX.Element {
           Usage on {serverName}
         </h2>
         {roomTarget ? (
-          <div className="flex gap-1 text-[11px]" role="radiogroup" aria-label="Server">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={!onRoom}
-              data-testid="usage-server-window"
-              onClick={() => setOnRoom(false)}
-              className={`px-2 py-0.5 border ${!onRoom ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}
-            >
-              {windowName}
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={onRoom}
-              data-testid="usage-server-room"
-              onClick={() => setOnRoom(true)}
-              className={`px-2 py-0.5 border ${onRoom ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}
-            >
-              {roomTarget.label} (focused room)
-            </button>
-          </div>
+          <Segmented
+            aria-label="Server"
+            value={onRoom ? 'room' : 'window'}
+            onChange={(next) => setOnRoom(next === 'room')}
+            options={[
+              { value: 'window', label: windowName, buttonProps: { 'data-testid': 'usage-server-window' } },
+              {
+                value: 'room',
+                label: `${roomTarget.label} (focused room)`,
+                buttonProps: { 'data-testid': 'usage-server-room' },
+              },
+            ]}
+          />
         ) : null}
       </div>
       <p className="text-xs text-[var(--color-text-muted)] mb-4">
@@ -459,25 +451,16 @@ export function TokenUsageSection(): React.JSX.Element {
           <section data-testid="usage-tokens">
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <h3 className="text-sm font-medium text-[var(--color-text-primary)] mr-2">Tokens</h3>
-              <div className="flex gap-1" role="radiogroup" aria-label="Range">
-                {USAGE_RANGES.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={range === r.id}
-                    data-testid={`usage-range-${r.id}`}
-                    onClick={() => setRange(r.id)}
-                    className={`px-2 py-0.5 text-[11px] border ${
-                      range === r.id
-                        ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                        : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-                    }`}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                aria-label="Range"
+                value={range}
+                onChange={setRange}
+                options={USAGE_RANGES.map((r) => ({
+                  value: r.id,
+                  label: r.label,
+                  buttonProps: { 'data-testid': `usage-range-${r.id}` },
+                }))}
+              />
             </div>
             <div className="flex flex-wrap items-center gap-1.5 mb-3" data-testid="usage-filters">
               {thisWorkspace ? (

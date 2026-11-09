@@ -1,10 +1,10 @@
 // Settings uses K2's square controls. A native <input type="checkbox|radio">
 // paints the browser's rounded control, so this source walk fails with
-// file:line on any that is not SquareCheckbox / SquareRadio. The only
+// file:line on any that is not Checkbox / Radio. The only
 // exception is a custom-drawn square: an `sr-only` peer input whose visible
 // box is a sibling span.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 function tsxFiles(dir: string): string[] {
@@ -46,7 +46,7 @@ describe('Settings square controls', () => {
       '<input type="checkbox" checked={a} />',
       '<input\n  type="radio"\n  name="x"\n/>',
       '<input type="checkbox" className="peer sr-only" />',
-      '<SquareCheckbox checked={b} />',
+      '<Checkbox checked={b} />',
     ].join('\n')
     expect(nativeChoiceInputs('sample.tsx', sample)).toEqual([
       'sample.tsx:1 native checkbox',
@@ -59,12 +59,12 @@ describe('Settings square controls', () => {
     expect(hits).toEqual([])
   })
 
-  it('Wake Scheduler "Also on battery" is a SquareCheckbox', () => {
+  it('Wake Scheduler "Also on battery" is a Checkbox', () => {
     const src = readFileSync(join(ROOT, 'sections', 'WakeSchedulerSection.tsx'), 'utf8')
     const at = src.indexOf('Also on battery')
     expect(at).toBeGreaterThan(-1)
     const before = src.slice(0, at)
-    const lastSquare = before.lastIndexOf('<SquareCheckbox')
+    const lastSquare = before.lastIndexOf('<Checkbox')
     expect(lastSquare).toBeGreaterThan(-1)
     expect(before.slice(lastSquare)).toContain('handleSetWake(true, e.target.checked)')
     expect(before.lastIndexOf('<input')).toBeLessThan(lastSquare)
@@ -73,13 +73,13 @@ describe('Settings square controls', () => {
 
 // Rosson 2026-10-18: a raw radio anywhere in the app's components paints
 // the browser's round control. Every `type="radio"` must be the shared
-// SquareRadio (components/ui/SquareRadio.tsx), the one file allowed to
+// Radio (components/ui/Radio.tsx), the one file allowed to
 // spell it. Tests are skipped; no sr-only exception for radios.
 const COMPONENTS = join(__dirname, '..')
 
 /** Every raw radio under `src/renderer/components`, as `file:line`. */
 function rawRadios(): string[] {
-  const allowed = join(COMPONENTS, 'ui', 'SquareRadio.tsx')
+  const allowed = join(COMPONENTS, 'ui', 'Radio.tsx')
   const hits: string[] = []
   for (const f of tsxFiles(COMPONENTS)) {
     if (f === allowed) continue
@@ -98,7 +98,53 @@ describe('square radios across the app', () => {
     expect(files).toEqual(expect.arrayContaining([join('OwnerAccountPrompt', 'OwnerAccountPrompt.tsx'), join('CloneToDialog', 'CloneOptionsBlocks.tsx')]))
   })
 
-  it('has no raw type="radio" outside ui/SquareRadio.tsx', () => {
+  it('has no raw type="radio" outside ui/Radio.tsx', () => {
     expect(rawRadios()).toEqual([])
+  })
+})
+
+// A style can only restyle a control that uses the shared set, so every
+// `role="switch"` and `type="range"` under components/ must be Toggle / Slider
+// (components/ui/). Gardens (components/Zen/) own their look. The bell buttons
+// below are icon buttons announced as switches, with no track to restyle; each
+// file may hold only that many.
+const ICON_SWITCHES: Record<string, number> = {
+  [join('common', 'UnreadBadge.tsx')]: 1,
+  [join('WorkspacePanel', 'WorkspaceCompletionSoundToggle.tsx')]: 1,
+  [join('WorkspacePanel', 'WorkspacePhonePushToggle.tsx')]: 1,
+}
+
+/** Hand-built switches and sliders in `src`, as `file:line <kind>`. */
+function handBuiltControls(file: string, src: string, iconSwitches = 0): string[] {
+  const at = (index: number): string => `${file}:${src.slice(0, index).split('\n').length}`
+  const switches = [...src.matchAll(/\brole=["'{]+switch\b/g)].map((m) => `${at(m.index)} switch`)
+  const sliders = [...src.matchAll(/\btype=["'{]+range\b/g)].map((m) => `${at(m.index)} slider`)
+  // A drawn track and sliding knob with no switch role.
+  const drawn = [...src.matchAll(/translate-x-(?:3\.5|4\.5)\b/g)].map((m) => `${at(m.index)} switch`)
+  return [...(switches.length > iconSwitches ? switches : []), ...drawn, ...sliders]
+}
+
+describe('shared switches and sliders across the app', () => {
+  const inScope = (rel: string): boolean => !rel.startsWith(`ui${sep}`) && !rel.startsWith(`Zen${sep}`)
+
+  it('the guard catches a hand-built switch and slider, and allows a file its icon switches', () => {
+    const sample = '<button role="switch" />\n<input\n  type="range"\n/>\n<Toggle checked={a} />'
+    expect(handBuiltControls('sample.tsx', sample)).toEqual(['sample.tsx:1 switch', 'sample.tsx:3 slider'])
+    expect(handBuiltControls('sample.tsx', sample, 1)).toEqual(['sample.tsx:3 slider'])
+    expect(handBuiltControls('sample.tsx', '<a role="switch" /><a role="switch" />', 1)).toHaveLength(2)
+  })
+
+  it('has every listed icon switch still in place', () => {
+    for (const [rel, count] of Object.entries(ICON_SWITCHES)) {
+      expect([rel, handBuiltControls(rel, readFileSync(join(COMPONENTS, rel), 'utf8')).length]).toEqual([rel, count])
+    }
+  })
+
+  it('has no hand-built role="switch" or type="range" outside components/ui', () => {
+    const hits = tsxFiles(COMPONENTS)
+      .map((f) => relative(COMPONENTS, f))
+      .filter(inScope)
+      .flatMap((rel) => handBuiltControls(rel, readFileSync(join(COMPONENTS, rel), 'utf8'), ICON_SWITCHES[rel] ?? 0))
+    expect(hits).toEqual([])
   })
 })

@@ -41,6 +41,7 @@ import { isWebClient } from '@/lib/is-web'
 import GateChrome from './TopBar/GateChrome'
 import { PasswordRotationStep } from './PasswordRotationStep'
 import { useToastStore } from '@/stores/toast'
+import { Checkbox } from '@/components/ui'
 
 /** Shown when the host says "remember" but the keychain has no password
  *  (GH #42) — instead of a checked box over a silently empty field. */
@@ -325,23 +326,11 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
         </label>
 
         <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)] cursor-pointer select-none">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={remember}
             disabled={busy}
             onChange={(e) => setRemember(e.target.checked)}
-            className="peer sr-only"
           />
-          <span
-            aria-hidden="true"
-            className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]"
-          >
-            {remember && (
-              <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-              </svg>
-            )}
-          </span>
           {web
             ? 'Remember password (this browser)'
             : 'Remember password (stored in your OS keychain)'}

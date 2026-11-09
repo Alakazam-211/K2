@@ -6,6 +6,7 @@
 
 import { useState } from 'react'
 import { readStartPage, writeStartPage, type StartPage } from '@/stores/page-view'
+import { Segmented } from '@/components/ui'
 
 const OPTIONS: Array<{ id: StartPage; label: string }> = [
   { id: 'home', label: 'Home' },
@@ -25,31 +26,20 @@ export function StartPageRow(): React.JSX.Element {
           The page K2 opens on when it starts or after you sign in. On this computer only.
         </p>
       </div>
-      <div role="radiogroup" aria-label="Start page" className="inline-flex flex-shrink-0 border border-[var(--color-border)]" data-testid="start-page">
-        {OPTIONS.map((opt) => {
-          const on = value === opt.id
-          return (
-            <button
-              key={opt.id}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              data-start-page={opt.id}
-              onClick={() => {
-                writeStartPage(opt.id)
-                setValue(opt.id)
-              }}
-              className={`px-3 py-1 text-[11px] no-drag transition-colors ${
-                on
-                  ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
-                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer'
-              }`}
-            >
-              {opt.label}
-            </button>
-          )
-        })}
-      </div>
+      <Segmented
+        aria-label="Start page"
+        data-testid="start-page"
+        value={value}
+        onChange={(next) => {
+          writeStartPage(next)
+          setValue(next)
+        }}
+        options={OPTIONS.map((opt) => ({
+          value: opt.id,
+          label: opt.label,
+          buttonProps: { 'data-start-page': opt.id },
+        }))}
+      />
     </div>
   )
 }

@@ -21,7 +21,7 @@
 // Lock's caption shown beside it and sync named "Get K2's design updates".
 
 import React, { useEffect, useRef, useState } from 'react'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox } from '@/components/ui'
 import { useZenSettingsStore, zenTemplateLabel } from '@/lib/zen/zen-settings'
 import { useZenTemplatesStore } from '@/lib/zen/zen-templates'
 import { useToastStore } from '@/stores/toast'
@@ -121,7 +121,7 @@ function Check({
       }`}
       {...dataAttr}
     >
-      <SquareCheckbox
+      <Checkbox
         ref={ref}
         checked={checked === true}
         aria-checked={mixed ? 'mixed' : checked}

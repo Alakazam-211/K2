@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
-import { DialogFrame, DialogScrim } from '@/components/ui'
+import { DialogFrame, DialogScrim, Toggle } from '@/components/ui'
 import {
   addContextLayer,
   contextErrorMessage,
@@ -1049,26 +1049,13 @@ function SystemRow({
               : 'hover:bg-[var(--color-bg-elevated)]/50'
       }`}
     >
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onToggle()
-        }}
-        role="switch"
-        aria-checked={enabled}
+      <Toggle size="sm"
+        checked={enabled}
+        onChange={onToggle}
+        onClick={(e) => e.stopPropagation()}
         disabled={busy}
-        className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-          enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-        }`}
         title={enabled ? 'Exclude from AGENTS.md' : 'Include in AGENTS.md'}
-      >
-        <span
-          className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-            enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-          }`}
-        />
-      </button>
+      />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5 min-w-0">
           <span className="text-[11px] font-medium text-[var(--color-text-primary)] flex-shrink-0">
@@ -1143,26 +1130,13 @@ function OptionalRow({
               : 'hover:bg-[var(--color-bg-elevated)]/50'
       }`}
     >
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onToggle()
-        }}
-        role="switch"
-        aria-checked={layer.enabled}
+      <Toggle size="sm"
+        checked={layer.enabled}
+        onChange={onToggle}
+        onClick={(e) => e.stopPropagation()}
         disabled={busy}
-        className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-          layer.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-        }`}
         title={layer.enabled ? 'Disable layer' : 'Enable layer'}
-      >
-        <span
-          className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-            layer.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-          }`}
-        />
-      </button>
+      />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5 min-w-0">

@@ -16,6 +16,7 @@ import {
   type PinnedTabKind,
 } from '@/lib/workspace-tab-settings'
 import { writePinnedTab, type PatchProjects } from './pinned-tab-settings'
+import { Toggle } from '@/components/ui'
 
 export type PinnedTabProject = {
   id: string
@@ -74,24 +75,14 @@ export function PinnedTabSettingRow({
   return (
     <div className="border border-[var(--color-border)] p-3">
       <div className="flex items-start gap-3">
-        <button
-          type="button"
-          onClick={() => void toggle()}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={() => void toggle()}
           aria-label={copy.label}
           disabled={busy || unavailable}
           data-settings-id={`projects.${kind}-tab`}
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-default ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">{copy.label}</div>
           <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">

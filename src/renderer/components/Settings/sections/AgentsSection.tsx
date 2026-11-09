@@ -27,6 +27,7 @@ import { SettingDropdown } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
+import { Checkbox, Toggle } from '@/components/ui'
 
 /** "Launched with ⇧⌘T …" with the chord this platform really uses. */
 export function defaultAgentLaunchCopy(os?: DesktopOs): string {
@@ -560,22 +561,10 @@ export function AgentsSection(): React.JSX.Element {
           className="flex items-center gap-2 border border-[var(--color-border)] px-3 py-2.5 text-xs text-[var(--color-text-secondary)] cursor-pointer select-none"
           data-settings-id="agents.show-launch-bar"
         >
-          <input
-            type="checkbox"
-            className="peer sr-only"
+          <Checkbox
             checked={showPresetsBar}
             onChange={(e) => setShowLaunchBar(e.target.checked)}
           />
-          <span
-            aria-hidden
-            className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg-surface)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]"
-          >
-            {showPresetsBar ? (
-              <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-              </svg>
-            ) : null}
-          </span>
           Show launch bar
         </label>
 
@@ -655,22 +644,13 @@ export function AgentsSection(): React.JSX.Element {
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void handleTogglePreset(preset.id, preset.enabled)
-                  }}
-                  className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-                    preset.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-                  }`}
-                >
-                  <span
-                    className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                      preset.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-                    }`}
-                  />
-                </button>
+                <Toggle
+                  size="sm"
+                  checked={Boolean(preset.enabled)}
+                  aria-label={`Enable ${preset.label}`}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => void handleTogglePreset(preset.id, preset.enabled)}
+                />
               </div>
             ))}
           </div>

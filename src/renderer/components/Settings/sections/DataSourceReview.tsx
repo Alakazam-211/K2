@@ -29,7 +29,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { ConfirmStep } from './DataSourceConfirm'
 import { DataSourceTryTree, TrySummary } from './DataSourceTryTree'
 import { btn, btnPrimary, danger, every, makerLabel, maskQuery, muted, sourcesErrorOf, sourcesErrorText } from './data-sources-ui'
-import { SquareRadio } from '@/components/ui'
+import { Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 
 /** Does a vault secret's site list include this origin? */
@@ -83,7 +83,7 @@ function Choice<T extends string>({
       <legend className={muted}>{label}</legend>
       {options.map((o) => (
         <label key={o.value} className="flex items-center gap-1.5 text-[var(--color-text-secondary)]">
-          <SquareRadio checked={value === o.value} onChange={() => onChange(o.value)} />
+          <Radio checked={value === o.value} onChange={() => onChange(o.value)} />
           {o.label}
         </label>
       ))}

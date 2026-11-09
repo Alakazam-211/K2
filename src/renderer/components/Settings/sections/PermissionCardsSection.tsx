@@ -309,16 +309,12 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
   return (
     <div className="py-2 border-t border-[var(--color-border)]">
       <div className="flex items-start gap-3">
-        <button
-          onClick={() => void toggle()}
-          role="switch"
-          aria-checked={checked}
+        <Toggle size="sm"
+          checked={checked}
+          onChange={() => void toggle()}
           aria-label="Can ask for permission cards"
           disabled={busy || !canFlip || on === null}
           data-settings-id="projects.agents-can-request-permissions"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             !canFlip
               ? 'Checking that you are the owner or an admin of this server'
@@ -326,13 +322,8 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
                 ? 'This agent may ask you for setting changes with a card in its Thread'
                 : 'This agent asks the usual way, in its own words'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              checked ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Can ask for permission cards{' '}

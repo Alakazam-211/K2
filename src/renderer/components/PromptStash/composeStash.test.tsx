@@ -495,7 +495,7 @@ describe('the drawer (Rosson 2026-10-30)', () => {
     const css = drawer.querySelector('style[data-stash-styles]')?.textContent ?? ''
     expect(css).toContain('html[data-style="terminal"] [data-k2-thread-zen] [data-stash-row] { border-radius: 0 !important; clip-path: polygon(')
     const check = screen.getByTestId('stash-remove-after-use')
-    expect(check.className).toContain('k2-square-check')
+    expect(check.className).toContain('k2-checkbox')
   })
 })
 

@@ -30,6 +30,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 import { useDialogEscape } from '../settings-esc'
+import { Toggle } from '@/components/ui'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -1301,21 +1302,11 @@ export function HeartbeatsPanel({
                 </button>
                 </div>
                 <div className="flex items-center justify-between gap-2 pt-2">
-                  <button
-                    onClick={() => handleToggle(r)}
-                    role="switch"
-                    aria-checked={r.enabled}
-                    className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-                      r.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-                    }`}
+                  <Toggle size="sm"
+                    checked={r.enabled}
+                    onChange={() => handleToggle(r)}
                     title={r.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
-                  >
-                    <span
-                      className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                        r.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
+                  />
                   <button
                     type="button"
                     onClick={() => { void handleLaunch(r) }}

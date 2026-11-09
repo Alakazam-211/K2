@@ -22,7 +22,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { useProjectsStore } from '@/stores/projects'
-import { SquareRadio } from '@/components/ui'
+import { Radio } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { siteLabel } from '@/components/SessionView/SecretCard'
 import {
@@ -1248,7 +1248,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
       <fieldset className="text-[11px] space-y-1">
         <legend className={muted}>Keep it for</legend>
         <label className="flex items-center gap-1.5 text-[var(--color-text-secondary)] cursor-pointer">
-          <SquareRadio checked={scope === 'workspace'} onChange={() => setScope('workspace')} />
+          <Radio checked={scope === 'workspace'} onChange={() => setScope('workspace')} />
           one workspace
         </label>
         {scope === 'workspace' && (
@@ -1262,7 +1262,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           />
         )}
         <label className="flex items-center gap-1.5 text-[var(--color-text-secondary)] cursor-pointer">
-          <SquareRadio checked={scope === 'server'} onChange={() => setScope('server')} />
+          <Radio checked={scope === 'server'} onChange={() => setScope('server')} />
           all my agents
         </label>
       </fieldset>

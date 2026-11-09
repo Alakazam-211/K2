@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { keepAwakeEntryFor, resetKeepAwakeForTests } from '@/stores/keep-awake'
 import { primaryScope } from '@/kessel/server-scope'
 import { KEEP_AWAKE_MODES, keepAwakeTone, parseKeepAwakeBody, type KeepAwakeStatus } from '@/lib/keep-awake'
-import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
+import { CHECKBOX_CLASS, RADIO_CLASS } from '@/components/ui'
 import {
   K2_ICON_PX,
   K2_ICON_STROKE,
@@ -275,15 +275,15 @@ describe('KeepAwakeButton', () => {
       expect(group.contains(radio)).toBe(true)
       expect(radio.type).toBe('radio')
       expect(radio.name).toBe('keep-awake-mode')
-      expect(radio.classList.contains(SQUARE_RADIO_CLASS)).toBe(true)
-      expect(radio.style.borderRadius).toBe('0px')
+      expect(radio.classList.contains(RADIO_CLASS)).toBe(true)
+      expect(radio.classList.contains('k2-radio')).toBe(true)
       expect(screen.getByRole('radio', { name: m.label })).toBe(radio)
     }
     expect(screen.getByRole('radio', { checked: true })).toBe(screen.getByTestId('keep-awake-mode-always'))
     const battery = screen.getByTestId('keep-awake-battery') as HTMLInputElement
     expect(battery.type).toBe('checkbox')
-    expect(battery.classList.contains(SQUARE_CHECK_CLASS)).toBe(true)
-    expect(battery.style.borderRadius).toBe('0px')
+    expect(battery.classList.contains(CHECKBOX_CLASS)).toBe(true)
+    expect(battery.classList.contains('k2-checkbox')).toBe(true)
     expect(menu.querySelector('.rounded-full')).toBeNull()
   })
 
@@ -416,8 +416,8 @@ describe('KeepAwakeButton', () => {
     fireEvent.click(button)
     const lid = (await screen.findByTestId('keep-awake-lid')) as HTMLInputElement
     expect(lid.type).toBe('checkbox')
-    expect(lid.classList.contains(SQUARE_CHECK_CLASS)).toBe(true)
-    expect(lid.style.borderRadius).toBe('0px')
+    expect(lid.classList.contains(CHECKBOX_CLASS)).toBe(true)
+    expect(lid.classList.contains('k2-checkbox')).toBe(true)
     expect(lid.checked).toBe(false)
     expect(screen.getByTestId('keep-awake-lid-note').textContent).toBe(
       'Off: Keep awake holds with the lid open only. Lid closed will still sleep.',

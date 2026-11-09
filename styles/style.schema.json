@@ -71,9 +71,10 @@
     "tokens": {
       "type": "object",
       "description": "Non-color slots. Every group listed in required must be present with every slot the generator's REQUIRED_TOKEN_SLOTS lists — missing slots fail the build loudly.",
-      "required": ["radius", "chamfer", "gap", "inset", "divider", "ring", "shadow", "material", "tile", "density", "motion", "font", "type"],
+      "required": ["radius", "chamfer", "control", "gap", "inset", "divider", "ring", "shadow", "material", "tile", "density", "motion", "font", "type"],
       "properties": {
         "radius": { "$ref": "#/$defs/tokenGroup" },
+        "control": { "$ref": "#/$defs/tokenGroup", "description": "Sizes for the shared form controls: checkbox, radio, switch, slider." },
         "chamfer": { "$ref": "#/$defs/tokenGroup", "description": "45-degree corner cuts: surface, control, chip, send. 0px is a plain corner." },
         "gap": { "$ref": "#/$defs/tokenGroup" },
         "inset": { "$ref": "#/$defs/tokenGroup" },

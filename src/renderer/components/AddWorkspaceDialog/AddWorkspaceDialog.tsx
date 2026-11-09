@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Callout, DialogScrim } from '@/components/ui'
+import { Callout, DialogScrim, Checkbox } from '@/components/ui'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
 import { ADD_WORKSPACE_Z } from '@/lib/overlay-layers'
@@ -101,23 +101,12 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
 
         <div className="px-5 pb-3">
           <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={seedWiki}
               onChange={(e) => setSeedWiki(e.target.checked)}
-              className="peer sr-only"
               disabled={isPending}
+              className="mt-0.5"
             />
-            <span
-              aria-hidden="true"
-              className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-            >
-              {seedWiki && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                </svg>
-              )}
-            </span>
             <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
               Seed the wiki
               <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">
@@ -128,23 +117,12 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
             </span>
           </label>
           <label className="flex items-start gap-2 cursor-pointer select-none no-drag mt-2">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={seedAgentsMd}
               onChange={(e) => setSeedAgentsMd(e.target.checked)}
-              className="peer sr-only"
               disabled={isPending}
+              className="mt-0.5"
             />
-            <span
-              aria-hidden="true"
-              className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-            >
-              {seedAgentsMd && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                </svg>
-              )}
-            </span>
             <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
               Write cwd AGENTS.md
               <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">
@@ -154,23 +132,12 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
             </span>
           </label>
           <label className="flex items-start gap-2 cursor-pointer select-none no-drag mt-2">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={fanout}
               onChange={(e) => setFanout(e.target.checked)}
-              className="peer sr-only"
               disabled={isPending}
+              className="mt-0.5"
             />
-            <span
-              aria-hidden="true"
-              className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-            >
-              {fanout && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                </svg>
-              )}
-            </span>
             <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
               Also symlink leftover harness files
               <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">

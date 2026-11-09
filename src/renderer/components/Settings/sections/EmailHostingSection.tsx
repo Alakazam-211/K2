@@ -83,7 +83,7 @@ import {
   type RotatedMailboxPassword,
 } from './email-api'
 import { SettingDropdown } from '../controls/SettingControls'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox } from '@/components/ui'
 
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
   { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting'] },
@@ -619,7 +619,7 @@ function ServerPanel({
                 </button>
               </div>
               <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-                <SquareCheckbox
+                <Checkbox
                   checked={purge}
                   disabled={!canMutate || busy}
                   onChange={(e) => setPurge(e.target.checked)}
@@ -1070,7 +1070,7 @@ function DomainPanel({
             </button>
           </div>
           <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-            <SquareCheckbox
+            <Checkbox
               checked={purgeMail}
               disabled={!canMutate || busy}
               onChange={(e) => setPurgeMail(e.target.checked)}

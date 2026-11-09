@@ -14,11 +14,11 @@
 // only where it will work (`resumeRule` mirrors the daemon's check).
 //
 // STYLES: built from the ui primitives (Surface, Button, Input,
-// SquareCheckbox, Callout) and theme tokens only, so Square (chamfered),
+// Checkbox, Callout) and theme tokens only, so Square (chamfered),
 // Glass restyles it through the style contract.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Callout, Input, SquareCheckbox, Surface } from '@/components/ui'
+import { Button, Callout, Input, Checkbox, Surface } from '@/components/ui'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -110,7 +110,7 @@ function SetForm({
         )}
       </div>
       <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-        <SquareCheckbox
+        <Checkbox
           aria-label="Keep a copy in this mailbox"
           checked={shownKeep}
           onChange={(e) => setKeep(e.target.checked)}

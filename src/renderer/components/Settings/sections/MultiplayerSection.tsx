@@ -26,6 +26,7 @@ import {
   type DocCore,
   type DocCores,
 } from './multiplayer-cores-api'
+import { Toggle } from '@/components/ui'
 
 export const MULTIPLAYER_INTRO =
   "People and agents work in the same file at the same time, with presence, history and everyone's own undo. " +
@@ -195,21 +196,13 @@ function PreviewRow({
   return (
     <div className="border border-[var(--color-border)] p-3" data-settings-id="multiplayer.board-file-preview">
       <div className="flex items-start gap-3">
-        <button
-          type="button"
-          onClick={onFlip}
-          role="switch"
-          aria-checked={on}
+        <Toggle size="sm"
+          checked={on}
+          onChange={onFlip}
           aria-label={BOARD_FILE_PREVIEW_LABEL}
           disabled={!canChange || busy}
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-default ${
-            on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">{BOARD_FILE_PREVIEW_LABEL}</div>
           <div className={`text-[10px] ${muted} mt-0.5 leading-relaxed`}>{BOARD_FILE_PREVIEW_LINE}</div>
@@ -242,23 +235,13 @@ function CoreRow({
   return (
     <div className="border border-[var(--color-border)] p-3" data-settings-id={`multiplayer.${core.id}`}>
       <div className="flex items-start gap-3">
-        <button
-          type="button"
-          onClick={onFlip}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={onFlip}
           aria-label={core.name}
           disabled={!canChange || busy}
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-default ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)] flex items-center gap-2">
             <span>{core.name}</span>

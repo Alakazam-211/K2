@@ -1,4 +1,5 @@
 import React from 'react'
+import { Toggle } from '@/components/ui'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import {
@@ -123,18 +124,12 @@ export function TimerSection(): React.JSX.Element {
           <div className="text-xs text-[var(--color-text-primary)]">Show timer button</div>
           <div className="text-[10px] text-[var(--color-text-muted)]">Display the timer icon in the top bar</div>
         </div>
-        <button
-          onClick={() => updateTimerSetting('visible', !visible)}
-          className={`w-8 h-4 flex items-center transition-colors no-drag cursor-pointer ${
-            visible ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-3 h-3 bg-[var(--color-on-accent)] block transition-transform ${
-              visible ? 'translate-x-4.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+        <Toggle
+          size="sm"
+          checked={visible}
+          aria-label="Show timer in the top bar"
+          onChange={() => updateTimerSetting('visible', !visible)}
+        />
       </div>
 
       {/* Skip memo */}
@@ -143,18 +138,12 @@ export function TimerSection(): React.JSX.Element {
           <div className="text-xs text-[var(--color-text-primary)]">Skip memo on stop</div>
           <div className="text-[10px] text-[var(--color-text-muted)]">Save time entries without asking for a note</div>
         </div>
-        <button
-          onClick={() => updateTimerSetting('skipMemo', !skipMemo)}
-          className={`w-8 h-4 flex items-center transition-colors no-drag cursor-pointer ${
-            skipMemo ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-3 h-3 bg-[var(--color-on-accent)] block transition-transform ${
-              skipMemo ? 'translate-x-4.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+        <Toggle
+          size="sm"
+          checked={skipMemo}
+          aria-label="Skip memo"
+          onChange={() => updateTimerSetting('skipMemo', !skipMemo)}
+        />
       </div>
 
       {/* Timezone */}

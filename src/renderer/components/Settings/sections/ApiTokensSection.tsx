@@ -33,7 +33,7 @@ import {
   type HireForm,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox } from '@/components/ui'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import { isAirgap } from '@/lib/airgap'
 import { useDialogEscape } from '../settings-esc'
@@ -508,7 +508,7 @@ function AppAccessLimit({
   }
   const roomBox = (r: CeilingRoom) => (
     <label key={r.id} className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-      <SquareCheckbox
+      <Checkbox
         checked={form.rooms.includes(r.id)}
         onChange={(e) => toggleRoom(r.id, e.target.checked)}
         aria-label={`Room ${r.handle || r.id}`}
@@ -713,7 +713,7 @@ function CreateKeyModal({
         <div className="space-y-1">
           <p className="text-[11px] text-[var(--color-text-muted)]">Workspace grant</p>
           <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-            <SquareCheckbox checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
+            <Checkbox checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
             All workspaces (*)
           </label>
           {!allWs && (
@@ -726,7 +726,7 @@ function CreateKeyModal({
                     key={slug}
                     className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
                   >
-                    <SquareCheckbox
+                    <Checkbox
                       checked={selected.has(slug)}
                       onChange={(e) => {
                         setSelected((prev) => {
@@ -764,14 +764,14 @@ function CreateKeyModal({
               key={key}
               className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
             >
-              <SquareCheckbox checked={val} onChange={(e) => set(e.target.checked)} />
+              <Checkbox checked={val} onChange={(e) => set(e.target.checked)} />
               {lab}
             </label>
           ))}
         </div>
         <div className="space-y-1" data-testid="hire-scope">
           <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-            <SquareCheckbox checked={hire} onChange={(e) => setHire(e.target.checked)} aria-label="Allow hiring agents" />
+            <Checkbox checked={hire} onChange={(e) => setHire(e.target.checked)} aria-label="Allow hiring agents" />
             Allow hiring agents (POST /v1/agents/hire)
           </label>
           {hire && (
@@ -839,11 +839,11 @@ function CreateKeyModal({
                 />
               </label>
               <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-                <SquareCheckbox checked={hireForm.link} onChange={(e) => setHireField('link', e.target.checked)} aria-label="May link teams" />
+                <Checkbox checked={hireForm.link} onChange={(e) => setHireField('link', e.target.checked)} aria-label="May link teams" />
                 May link teams (only to agents this key hired)
               </label>
               <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
-                <SquareCheckbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
+                <Checkbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
                 May retire the agents it hired
               </label>
               <AppAccessLimit form={ceiling} onChange={setCeiling} opts={ceilingOpts} optsError={ceilingOptsError} />

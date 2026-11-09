@@ -8,7 +8,7 @@
 // straight away there.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { DialogScrim, SquareCheckbox } from '@/components/ui'
+import { DialogScrim, Checkbox } from '@/components/ui'
 import { useAddToHomeDialogStore } from '@/stores/add-to-home-dialog'
 import { useHomesStore } from '@/stores/homes'
 import { useToastStore } from '@/stores/toast'
@@ -122,7 +122,7 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
                         : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] cursor-pointer'
                     }`}
                   >
-                    <SquareCheckbox
+                    <Checkbox
                       id={id}
                       ref={ref}
                       checked={has || picked.has(h.id)}

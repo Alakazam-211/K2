@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { Button, Callout, SquareCheckbox } from '@/components/ui'
+import { Button, Callout, Checkbox } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { errorMessage } from '@/lib/daemon-http-error'
 import { fetchVoiceRooms, fetchVoiceStatus, renameVoiceRoom, setVoiceRoomCount } from '@/lib/voice/voice-api'
@@ -199,7 +199,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
               <p>Removed rooms close when empty; people in them stay until they leave.</p>
               {occupiedDropped ? (
                 <label className="mt-1 flex items-center gap-2 text-[var(--color-text-secondary)]">
-                  <SquareCheckbox data-testid="voice-rooms-close-now" checked={closeNow} onChange={(e) => setCloseNow(e.currentTarget.checked)} />
+                  <Checkbox data-testid="voice-rooms-close-now" checked={closeNow} onChange={(e) => setCloseNow(e.currentTarget.checked)} />
                   Close now: a 10 s notice, then everyone in them is disconnected
                 </label>
               ) : null}
@@ -253,7 +253,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
       <section className="flex flex-col gap-1 border-t border-[var(--color-border)] pt-3">
         <h3 className="text-[12px] text-[var(--color-text-primary)]">On this computer</h3>
         <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
-          <SquareCheckbox data-testid="voice-join-muted" checked={joinMuted} onChange={(e) => voice.setPrefs({ joinMuted: e.currentTarget.checked })} />
+          <Checkbox data-testid="voice-join-muted" checked={joinMuted} onChange={(e) => voice.setPrefs({ joinMuted: e.currentTarget.checked })} />
           Join voice rooms with my microphone off
         </label>
       </section>

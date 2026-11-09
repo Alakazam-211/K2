@@ -90,6 +90,7 @@ import {
 } from './update-host'
 import { useToastStore } from '@/stores/toast'
 import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
+import { Checkbox } from '@/components/ui'
 
 // Shared small-button styles for the per-host tile controls — matching the
 // Save/Add/Cancel buttons in this file and K2ConnectSection.tsx (bordered/
@@ -467,22 +468,10 @@ export function ConnectionsSection(): React.JSX.Element {
             onChange={(e) => setDraft({ ...draft, password: e.target.value })}
           />
           <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer select-none" data-settings-id="connections.remember-password">
-            <input
-              type="checkbox"
-              className="peer sr-only"
+            <Checkbox
               checked={draft.remember}
               onChange={(e) => setDraft({ ...draft, remember: e.target.checked })}
             />
-            <span
-              aria-hidden
-              className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg-surface)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]"
-            >
-              {draft.remember && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                </svg>
-              )}
-            </span>
             Remember password (OS keychain)
           </label>
           {error && <div className="text-[10px] text-[var(--color-status-error-soft)]">{error}</div>}

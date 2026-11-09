@@ -66,7 +66,7 @@ import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox, Toggle } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
@@ -598,18 +598,12 @@ export function ProjectsSection(): React.JSX.Element {
           <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
             Focus Groups
           </span>
-          <button
-            onClick={() => setFocusGroupsEnabled(!focusGroupsEnabled)}
-            className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-              focusGroupsEnabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-            }`}
-          >
-            <span
-              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                focusGroupsEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
+          <Toggle
+            size="sm"
+            checked={focusGroupsEnabled}
+            aria-label="Focus Groups"
+            onChange={() => setFocusGroupsEnabled(!focusGroupsEnabled)}
+          />
         </div>
 
         {/* Alphabetize buttons */}
@@ -1782,22 +1776,13 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
   return (
     <div className="border border-[var(--color-border)] p-3">
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           disabled={busy}
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={enabled ? 'Heartbeat fires open background tabs' : 'Heartbeat fires run silently'}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Show heartbeat sessions in tabs
@@ -1874,23 +1859,14 @@ export function DnsManageToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           disabled={busy || readOnly}
           data-settings-id="projects.dns-manage-enabled"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={enabled ? 'Agents may manage DNS for this workspace' : 'Agents cannot manage DNS for this workspace'}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to manage DNS for this workspace
@@ -1966,27 +1942,18 @@ export function AgentsManageAgentsToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-agents"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'This workspace\'s main agent may open and stop sidecars'
               : 'This workspace\'s agent cannot open or stop sidecars'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow hiring and managing agents
@@ -2053,27 +2020,18 @@ export function AgentsManageVaultToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-vault"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'This workspace\'s main agent may manage server-wide secrets'
               : 'This workspace\'s agent cannot manage server-wide secrets'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow managing server-wide secrets
@@ -2154,28 +2112,19 @@ export function AgentsUseComputeToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label="Allow compute nodes"
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-use-compute"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'This workspace\'s agents may run jobs on your compute machines'
               : 'This workspace\'s agents cannot use compute machines'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow compute nodes
@@ -2279,16 +2228,12 @@ export function AgentsOperateComputeToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label="Allow this agent to operate compute nodes"
           disabled={busy || !canFlip || readOnly}
           data-settings-id="projects.agents-can-operate-compute"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             !canFlip
               ? 'Checking that you are the owner or an admin of this server'
@@ -2296,13 +2241,8 @@ export function AgentsOperateComputeToggle({
                 ? 'This workspace\'s agent may operate your compute machines; root actions still wait for you'
                 : 'This workspace\'s agent cannot operate compute machines'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow this agent to operate compute nodes{' '}
@@ -2403,16 +2343,12 @@ export function AgentsManageComputeToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label="Allow managing compute nodes"
           disabled={busy || !canFlip || readOnly}
           data-settings-id="projects.agents-can-manage-compute"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             role === null
               ? 'Checking that you are the owner of this server'
@@ -2422,13 +2358,8 @@ export function AgentsManageComputeToggle({
                   ? 'This workspace\'s agent manages your compute machines (logged)'
                   : 'This workspace\'s agent cannot manage your compute machines'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow managing compute nodes{' '}
@@ -2531,16 +2462,12 @@ export function AgentsManagePostgresToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label="Allow this agent to manage Postgres versions"
           disabled={busy || !canFlip || readOnly}
           data-settings-id="projects.agents-can-upgrade-postgres"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             role === null
               ? 'Checking your role on this server'
@@ -2550,13 +2477,8 @@ export function AgentsManagePostgresToggle({
                   ? 'This workspace\'s agent manages its databases\' Postgres versions (logged)'
                   : 'This workspace\'s agent cannot change Postgres versions'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow this agent to manage Postgres versions
@@ -2633,28 +2555,19 @@ export function AgentsManageProjectsToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label="Manage K2 projects"
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-projects"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'This workspace\'s agent may create and change K2 projects and their members'
               : 'This workspace\'s agent can read projects and post in its project chat, but not change them'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Manage K2 projects
@@ -2728,24 +2641,15 @@ export function AgentsRefreshChatToggle({
   return (
     <div className="border border-[var(--color-border)] p-3">
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label="Can refresh its own pinned chat"
           disabled={busy}
           data-settings-id="projects.agents-can-refresh-chat"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={enabled ? 'This agent starts a new pinned chat itself' : 'This agent asks before it starts a new pinned chat'}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="min-w-0">
           <div className="text-xs text-[var(--color-text-secondary)]">Can refresh its own pinned chat</div>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
@@ -2804,16 +2708,12 @@ export function AgentsManageGardensToggle({
   return (
     <div className="border border-[var(--color-border)] p-3">
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           aria-label={label}
           disabled={busy}
           data-settings-id="projects.agents-can-manage-gardens"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             accessOn
               ? enabled
@@ -2823,13 +2723,8 @@ export function AgentsManageGardensToggle({
                 ? 'This workspace\'s agent approves data sources and edits Gardens itself (logged)'
                 : 'This workspace\'s agent proposes data sources and Garden changes; you approve'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             {label}
@@ -2909,27 +2804,18 @@ export function MailManageToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           disabled={busy || readOnly}
           data-settings-id="projects.mail-manage-enabled"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'This agent may manage hosted mail on this host'
               : 'This agent cannot manage hosted mail'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to manage hosted mail on this host
@@ -2993,27 +2879,18 @@ export function DbAgentCreateToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           disabled={busy || readOnly}
           data-settings-id="projects.db-agent-create"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'This agent may run k2 db create'
               : 'This agent cannot run k2 db create'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow this agent to create databases
@@ -3073,27 +2950,18 @@ export function AgentsCreateConnectionsToggle({
   return (
     <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
+        <Toggle size="sm"
+          checked={enabled}
+          onChange={toggle}
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-create-connections"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
           title={
             enabled
               ? 'Agents may add/remove connections for this workspace'
               : 'Agents cannot add/remove connections for this workspace'
           }
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to create connections for this workspace
@@ -3462,7 +3330,7 @@ function DefaultModelControls({
         }`}
         data-settings-id="projects.force-model-on-resume"
       >
-        <SquareCheckbox
+        <Checkbox
           checked={force && !empty}
           disabled={empty}
           onChange={(e) => handleForce(e.target.checked)}

@@ -10,7 +10,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import type { SimulateState, SourceSimulated } from '@/lib/sources/sources-types'
 import { simulateSource } from '@/lib/sources/sources-api'
 import { btn, btnPrimary, danger, hhmm, muted, sourcesErrorText } from './data-sources-ui'
-import { SquareRadio } from '@/components/ui'
+import { Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 
 const STATES: Array<{ state: SimulateState; label: string }> = [
@@ -73,7 +73,7 @@ export function SimulateDialog({
       <fieldset className="space-y-0.5">
         {STATES.map((s) => (
           <label key={s.state} className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
-            <SquareRadio name={`sim-${name}`} checked={state === s.state} onChange={() => setState(s.state)} />
+            <Radio name={`sim-${name}`} checked={state === s.state} onChange={() => setState(s.state)} />
             {s.label}
           </label>
         ))}

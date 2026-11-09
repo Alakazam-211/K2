@@ -6,6 +6,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
 import { BellIcon, BellOffIcon } from '@/components/common/BellIcons'
+import { Toggle } from '@/components/ui'
 
 type SoundProject = { id: string; path: string; completionSoundEnabled?: number }
 
@@ -57,28 +58,18 @@ export function WorkspaceCompletionSoundToggle({
   return (
     <div className="border border-[var(--color-border)] p-3">
     <div className="flex items-start gap-3">
-      <button
-        type="button"
-        onClick={() => void toggle()}
-        role="switch"
-        aria-checked={enabled}
+      <Toggle size="sm"
+        checked={enabled}
+        onChange={() => void toggle()}
         disabled={busy}
         data-settings-id="projects.completion-sound"
-        className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-          enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-        }`}
         title={
           enabled
             ? 'Chime when an agent in this workspace finishes unwatched'
             : 'Muted — this workspace will not chime'
         }
-      >
-        <span
-          className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-            enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-          }`}
-        />
-      </button>
+        className="mt-0.5"
+      />
       <div className="flex-1 min-w-0">
         <div className="text-xs font-medium text-[var(--color-text-primary)]">
           Completion sound

@@ -35,7 +35,7 @@
 
 import { useRef, useState, type JSX, type ReactNode } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
-import { SquareRadio } from '@/components/ui'
+import { Radio } from '@/components/ui'
 import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
 import {
   cardExpiryLabel,
@@ -573,7 +573,7 @@ export function SecretCard({
                 <legend className={`mb-0.5 ${muted}`}>How {agent} uses it</legend>
                 {deliveryChoices.map((d) => (
                   <label key={d} className="flex items-start gap-1 cursor-pointer">
-                    <SquareRadio
+                    <Radio
                       className="mt-0.5"
                       name={`secret-delivery-${secret.name}`}
                       value={d}
@@ -600,7 +600,7 @@ export function SecretCard({
                   <legend className={`mb-0.5 ${muted}`}>How K2 sends it</legend>
                   {injectModes.map((m) => (
                     <label key={m} className="flex items-start gap-1 cursor-pointer">
-                      <SquareRadio
+                      <Radio
                         className="mt-0.5"
                         name={`secret-inject-${secret.name}`}
                         value={m}
@@ -723,7 +723,7 @@ export function SecretCard({
                 <div className="flex flex-wrap gap-x-3 gap-y-1">
                   {(['workspace', 'server', 'session'] as const).map((s) => (
                     <label key={s} className="flex items-center gap-1 cursor-pointer">
-                      <SquareRadio
+                      <Radio
                         name={`secret-scope-${secret.name}`}
                         value={s}
                         checked={scope === s}

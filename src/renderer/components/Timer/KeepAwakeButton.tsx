@@ -8,7 +8,7 @@ import {
   type KeepAwakeStatus,
   type KeepAwakeTone,
 } from '@/lib/keep-awake'
-import { SquareCheckbox, SquareRadio } from '@/components/ui'
+import { Checkbox, Radio } from '@/components/ui'
 import {
   keepAwakeMayChange,
   roomServerState,
@@ -268,7 +268,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
                 key={m.mode}
                 className="flex cursor-pointer items-center gap-2 py-0.5 text-[12px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
               >
-                <SquareRadio
+                <Radio
                   name="keep-awake-mode"
                   value={m.mode}
                   data-testid={`keep-awake-mode-${m.mode}`}
@@ -306,7 +306,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
           {status.lidSwitch ? (
             <div className="mt-2">
               <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-                <SquareCheckbox
+                <Checkbox
                   data-testid="keep-awake-lid"
                   checked={status.lidClosed}
                   disabled={controlsDisabled}
@@ -334,7 +334,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
           ) : null}
           {status.platform === 'macos' ? (
             <label className="mt-2 flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-              <SquareCheckbox
+              <Checkbox
                 data-testid="keep-awake-battery"
                 checked={status.alsoOnBattery}
                 disabled={controlsDisabled}

@@ -15,7 +15,7 @@
 //     owns: "Shared by …", this server's share and the Queue; no admin.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Callout, Input, SquareCheckbox, SquareRadio, Toggle } from '@/components/ui'
+import { Button, Callout, Input, Checkbox, Radio, Toggle } from '@/components/ui'
 import {
   addNodeServer,
   changeNodeOwner,
@@ -522,11 +522,11 @@ function RevokeConfirm({
       <div className={`text-[11px] font-medium ${primary}`}>Revoke {label}?</div>
       <p className={`text-[11px] ${secondary}`}>Its queued jobs are cancelled and it takes no new work here. Its files are wiped in 24 hours.</p>
       <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
-        <SquareCheckbox checked={now} onChange={(e) => setNow(e.target.checked)} aria-label="Stop running jobs now" />
+        <Checkbox checked={now} onChange={(e) => setNow(e.target.checked)} aria-label="Stop running jobs now" />
         Stop its running jobs now (else they finish)
       </label>
       <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
-        <SquareCheckbox checked={wipe} onChange={(e) => setWipe(e.target.checked)} aria-label="Wipe its files now" />
+        <Checkbox checked={wipe} onChange={(e) => setWipe(e.target.checked)} aria-label="Wipe its files now" />
         Wipe its files now (else in 24 hours)
       </label>
       <div className="flex gap-2">
@@ -572,15 +572,15 @@ function OwnerConfirm({
         <span className="font-mono">k2 compute nodes --json</span> there) before you approve.
       </p>
       <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
-        <SquareCheckbox checked={leave} onChange={(e) => setLeave(e.target.checked)} aria-label="Remove this server from the node" />
+        <Checkbox checked={leave} onChange={(e) => setLeave(e.target.checked)} aria-label="Remove this server from the node" />
         Remove this server from the node (else it stays as one of your servers)
       </label>
       <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
-        <SquareCheckbox checked={wipe} onChange={(e) => setWipe(e.target.checked)} aria-label="Wipe the build caches" />
+        <Checkbox checked={wipe} onChange={(e) => setWipe(e.target.checked)} aria-label="Wipe the build caches" />
         Wipe both servers&apos; build caches (else they move with their server)
       </label>
       <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
-        <SquareCheckbox checked={now} onChange={(e) => setNow(e.target.checked)} aria-label="Stop running jobs now" />
+        <Checkbox checked={now} onChange={(e) => setNow(e.target.checked)} aria-label="Stop running jobs now" />
         Stop running jobs now (else they finish first)
       </label>
       <div className="flex gap-2">
@@ -638,10 +638,10 @@ function AddServerForm({
       </label>
       <div className={`text-[11px] ${secondary} flex items-center gap-3`}>
         <label className="flex items-center gap-1">
-          <SquareRadio name="trust" checked={trust === 'own'} onChange={() => setTrust('own')} aria-label="One of your own servers" /> Yours
+          <Radio name="trust" checked={trust === 'own'} onChange={() => setTrust('own')} aria-label="One of your own servers" /> Yours
         </label>
         <label className="flex items-center gap-1" title={team.ok ? undefined : (team.why ?? undefined)}>
-          <SquareRadio name="trust" checked={trust === 'team'} disabled={!team.ok} onChange={() => setTrust('team')} aria-label="Another person’s server" />{' '}
+          <Radio name="trust" checked={trust === 'team'} disabled={!team.ok} onChange={() => setTrust('team')} aria-label="Another person’s server" />{' '}
           Another person&apos;s
         </label>
         {!team.ok ? <span className={muted}>({team.why})</span> : null}

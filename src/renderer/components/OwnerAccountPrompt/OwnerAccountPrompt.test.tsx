@@ -49,7 +49,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import OwnerAccountPrompt, { CREATE_TITLE, PROMPT_TITLE, PROMPT_WHY, parsePromptView } from './OwnerAccountPrompt'
-import { SQUARE_RADIO_CLASS } from '@/components/ui'
+import { RADIO_CLASS } from '@/components/ui'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -90,8 +90,8 @@ function radio(username: string): HTMLInputElement {
   const row = screen.getByTestId(`owner-account-option-${username}`)
   const input = row.querySelector('input[type="radio"]')
   if (!(input instanceof HTMLInputElement)) throw new Error(`no radio for ${username}`)
-  // The shared square radio (components/ui/SquareRadio), not the browser's round one.
-  if (!input.classList.contains(SQUARE_RADIO_CLASS)) throw new Error(`${username}: not a SquareRadio`)
+  // The shared square radio (components/ui/Radio), not the browser's round one.
+  if (!input.classList.contains(RADIO_CLASS)) throw new Error(`${username}: not a Radio`)
   return input
 }
 
@@ -173,7 +173,7 @@ describe('owner account prompt: pre-select', () => {
     await shown()
     const group = screen.getByRole('radiogroup', { name: 'Your account' })
     const radios = Array.from(group.querySelectorAll('input[type="radio"]')) as HTMLInputElement[]
-    expect(radios.map((r) => [r.name, r.value, r.classList.contains(SQUARE_RADIO_CLASS)])).toEqual([
+    expect(radios.map((r) => [r.name, r.value, r.classList.contains(RADIO_CLASS)])).toEqual([
       ['owner-account', 'z3thon', true],
       ['owner-account', 'julie', true],
     ])

@@ -19,6 +19,7 @@ import {
   SetPasswordDialog,
   type AddedUser,
 } from './AppUserDialogs'
+import { Toggle } from '@/components/ui'
 
 export const PEOPLE_MANIFEST: SettingEntry[] = [
   {
@@ -228,23 +229,12 @@ function AccessSwitch({
   onToggle: () => void
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
+    <Toggle size="sm"
+      checked={on}
+      onChange={onToggle}
       aria-label={label}
       disabled={disabled}
-      onClick={onToggle}
-      className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-40 ${
-        on ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-      }`}
-    >
-      <span
-        className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-          on ? 'translate-x-3.5' : 'translate-x-0.5'
-        }`}
-      />
-    </button>
+    />
   )
 }
 

@@ -21,7 +21,7 @@ import { useStashSyncStatus } from '@/lib/prompt-stash/sync-runner'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { ZEN_DRAWER_EAR_FILL } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferPolygon, chamferVars } from '@/components/Thread/chamfer'
-import { SquareCheckbox } from '@/components/ui/SquareCheckbox'
+import { Checkbox } from '@/components/ui/Checkbox'
 
 /** Open: slide + fade in (ms). */
 export const STASH_DRAWER_MS = 200
@@ -471,7 +471,7 @@ export function StashDrawer({
         className="flex cursor-pointer items-center"
         style={{ gap: 6, padding: '5px 12px 7px', fontSize: 11, color: muted, borderTop: `1px solid ${zen ? 'var(--zen-border)' : 'var(--color-border)'}` }}
       >
-        <SquareCheckbox
+        <Checkbox
           data-testid="stash-remove-after-use"
           checked={removeAfterUse}
           onChange={(e) => onRemoveAfterUseChange(e.target.checked)}

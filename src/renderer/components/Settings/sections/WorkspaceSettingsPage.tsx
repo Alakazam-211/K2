@@ -1,6 +1,6 @@
 import React from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Toggle } from '@/components/ui'
+import { Toggle, Slider } from '@/components/ui'
 import { useSettingsStore, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
 import { SettingDropdown } from '../controls/SettingControls'
 import { previewCompletionSound } from '@/lib/completion-sound'
@@ -223,15 +223,14 @@ function CompletionSoundRow(): React.JSX.Element {
         >
           <span className="text-[11px] text-[var(--color-text-muted)]">Volume</span>
           <div className="flex items-center gap-3">
-            <input
-              type="range"
+            <Slider
               min={0}
               max={100}
               step={1}
               value={volume}
               aria-label="Completion sound volume"
               onChange={(e) => setCompletionSoundVolume(parseInt(e.target.value, 10))}
-              className="w-40 no-drag k2so-slider"
+              className="w-40"
             />
             <span className="w-9 text-right text-[11px] tabular-nums text-[var(--color-text-secondary)]">
               {volume}%

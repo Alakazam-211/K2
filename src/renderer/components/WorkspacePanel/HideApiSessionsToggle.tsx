@@ -3,6 +3,7 @@ import { emit } from '@tauri-apps/api/event'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useRoom } from '@/components/Room/RoomContext'
+import { Toggle } from '@/components/ui'
 
 /** Per-workspace hide-sessions: do not auto-surface API tabs. */
 export function HideApiSessionsToggle({
@@ -50,27 +51,17 @@ export function HideApiSessionsToggle({
 
   return (
     <div className="flex items-start gap-3">
-      <button
-        type="button"
-        onClick={() => void toggle()}
-        role="switch"
-        aria-checked={enabled}
+      <Toggle size="sm"
+        checked={enabled}
+        onChange={() => void toggle()}
         disabled={busy}
-        className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-          enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-        }`}
         title={
           enabled
             ? 'API sessions stay off the tab strip. Open them from Chat history → API.'
             : 'API sessions appear as tabs. Closing a tab minimizes it (does not kill the session).'
         }
-      >
-        <span
-          className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-            enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-          }`}
-        />
-      </button>
+        className="mt-0.5"
+      />
       <div className="text-[11px] font-medium text-[var(--color-text-primary)]">Hide sessions</div>
     </div>
   )

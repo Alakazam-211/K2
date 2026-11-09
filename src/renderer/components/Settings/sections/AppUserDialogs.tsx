@@ -17,7 +17,7 @@
 
 import React, { useEffect, useId, useState } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
-import { DialogFrame, DialogScrim, SquareRadio } from '@/components/ui'
+import { DialogFrame, DialogScrim, Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 import { settingMenuOpen } from '../settings-esc'
 import type { PersonRow } from './PeopleSection'
@@ -258,14 +258,14 @@ export function ResetPasswordDialog({
           {tie ? <p className={NOTE}>{tie}</p> : null}
           <div role="radiogroup" aria-label="How to reset" className="space-y-1.5">
             <label className="flex items-start gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
-              <SquareRadio name="reset-mode" checked={mode === 'link'} onChange={() => setMode('link')} />
+              <Radio name="reset-mode" checked={mode === 'link'} onChange={() => setMode('link')} />
               <span>
                 Get a one-time link (recommended: no email involved)
                 <span className={`block ${MUTED}`}>You give it to them yourself. K2 shows it once.</span>
               </span>
             </label>
             <label className="flex items-start gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
-              <SquareRadio name="reset-mode" checked={mode === 'email'} onChange={() => setMode('email')} />
+              <Radio name="reset-mode" checked={mode === 'email'} onChange={() => setMode('email')} />
               <span>
                 Email them the link
                 <span className={`block ${MUTED}`}>K2 sends it to an address you give.</span>
@@ -595,17 +595,17 @@ export function AddUserDialog({
         <div role="radiogroup" aria-label="Password" className="space-y-1.5">
           <span className={MUTED}>Password</span>
           <label className="flex items-center gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
-            <SquareRadio name="add-mode" checked={mode === 'type'} onChange={() => setMode('type')} />
+            <Radio name="add-mode" checked={mode === 'type'} onChange={() => setMode('type')} />
             Type one
           </label>
           <label className="flex items-center gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
-            <SquareRadio name="add-mode" checked={mode === 'generate'} onChange={() => setMode('generate')} />
+            <Radio name="add-mode" checked={mode === 'generate'} onChange={() => setMode('generate')} />
             Let K2 generate one (shown once, after you add them)
           </label>
           <label
             className={`flex items-start gap-2 text-xs cursor-pointer ${hasEmail ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}
           >
-            <SquareRadio
+            <Radio
               name="add-mode"
               checked={mode === 'invite'}
               disabled={!hasEmail}

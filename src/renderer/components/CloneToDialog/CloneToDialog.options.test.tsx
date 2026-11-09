@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
+import { CHECKBOX_CLASS, RADIO_CLASS } from '@/components/ui'
 
 vi.mock('@/stores/projects', () => ({
   useProjectsStore: { getState: () => ({ projects: [], fetchProjects: vi.fn(), setActiveProject: vi.fn() }) },
@@ -151,16 +151,16 @@ describe('CloneToDialog options (0.46.0)', () => {
 })
 
 describe('CloneToDialog uses the app\'s shared form controls', () => {
-  it('checkboxes are SquareCheckbox, secret choices are SquareRadio, actions are Button, the frame is DialogFrame', async () => {
+  it('checkboxes are Checkbox, secret choices are Radio, actions are Button, the frame is DialogFrame', async () => {
     await open(preview(true))
     render(<CloneToDialog />)
     for (const id of ['clone-bring-thread', 'clone-own-box', 'clone-env-files', 'clone-all-history']) {
       const el = screen.getByTestId(id) as HTMLInputElement
-      expect([id, el.type, el.classList.contains(SQUARE_CHECK_CLASS)]).toEqual([id, 'checkbox', true])
+      expect([id, el.type, el.classList.contains(CHECKBOX_CLASS)]).toEqual([id, 'checkbox', true])
     }
     for (const c of ['copy', 'blank', 'skip']) {
       const el = screen.getByTestId(`clone-secret-STRIPE_KEY-${c}`) as HTMLInputElement
-      expect([c, el.type, el.classList.contains(SQUARE_RADIO_CLASS)]).toEqual([c, 'radio', true])
+      expect([c, el.type, el.classList.contains(RADIO_CLASS)]).toEqual([c, 'radio', true])
     }
     // Button primitive: the themed field radius + ring, primary = accent.
     const primary = screen.getByTestId('clone-confirm-button')

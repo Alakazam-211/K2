@@ -19,7 +19,7 @@ import { batchApproveSources, pendingSources } from '@/lib/sources/sources-api'
 import { registerZenSourcesBatchReview } from '@/lib/zen/zen-sources-review'
 import { ConfirmStep } from './DataSourceConfirm'
 import { batchHash, btn, btnPrimary, danger, every, makerLabel, muted, onLabel, scopeForHostKey, sourcesErrorText } from './data-sources-ui'
-import { SquareCheckbox } from '@/components/ui'
+import { Checkbox } from '@/components/ui'
 import { useDialogEscape } from '../settings-esc'
 
 export interface SourcesBatchArgs {
@@ -120,7 +120,7 @@ function ServerBlock({
             const key = `s:${s.name}`
             return (
               <label key={key} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
-                <SquareCheckbox
+                <Checkbox
                   disabled={s.approval === 'owner_only'}
                   checked={picked[key] ?? false}
                   onChange={(e) => {
@@ -142,7 +142,7 @@ function ServerBlock({
             const key = `t:${t.id}`
             return (
               <label key={key} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
-                <SquareCheckbox
+                <Checkbox
                   checked={picked[key] ?? false}
                   onChange={(e) => {
                     const on = e.currentTarget.checked

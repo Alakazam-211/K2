@@ -4,6 +4,7 @@ import { type RoleSkill, roleSkillLabel } from './canonicalAgentSeeds'
 import { type HarnessProbe, anyHarnessUnified } from './canonicalState'
 import { FanoutConfirmModal } from './FanoutConfirmModal'
 import { primaryScope } from '@/kessel/server-scope'
+import { Toggle } from '@/components/ui'
 
 // The value-pitch WHY copy relocated VERBATIM from the removed consent page
 // (AddWorkspaceDialog:147-164) into the canonical button subtitle + the skill
@@ -197,28 +198,18 @@ export function CanonicalAgentButton({
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={generateEnabled}
+        <Toggle size="sm"
+          checked={generateEnabled}
+          onChange={() => void toggleGenerate()}
           aria-label="Generate cwd AGENTS.md"
           disabled={generateBusy}
-          onClick={() => void toggleGenerate()}
           title={
             generateEnabled
               ? 'Generate on — refresh cwd AGENTS.md on compose'
               : 'Generate off — compose stays under .k2/AGENTS.md only'
           }
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            generateEnabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              generateEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
       </div>
 
       {/* Fan-out toggle row — label left, switch right (stack-row alignment) */}
@@ -240,28 +231,18 @@ export function CanonicalAgentButton({
             for projects that already have harness notes.
           </p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={fanoutEnabled}
+        <Toggle size="sm"
+          checked={fanoutEnabled}
+          onChange={() => void toggleFanout()}
           aria-label="Programmatic harness fan-out"
           disabled={fanoutBusy}
-          onClick={() => void toggleFanout()}
           title={
             fanoutEnabled
               ? 'Fan-out on — harness files symlink to .k2/AGENTS.md'
               : 'Fan-out off — enable to auto-symlink CLAUDE.md / GEMINI.md / …'
           }
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            fanoutEnabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              fanoutEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          className="mt-0.5"
+        />
       </div>
 
       {skillHint ? (

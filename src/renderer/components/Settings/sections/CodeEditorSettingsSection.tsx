@@ -1,4 +1,5 @@
 import React from 'react'
+import { Toggle } from '@/components/ui'
 import { useCallback, useMemo, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { useCustomThemesStore } from '@/stores/custom-themes'
@@ -80,16 +81,13 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
         <div className="text-xs text-[var(--color-text-secondary)]">{label}</div>
         <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{description}</div>
       </div>
-      <button
-        onClick={() => { if (!disabled) updateEditorSettings({ [key]: !editor[key] }) }}
-        className={`w-7 h-3.5 flex items-center transition-colors flex-shrink-0 ${disabled ? 'cursor-default' : 'no-drag cursor-pointer'} ${
-          editor[key] && !disabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-        }`}
-      >
-        <span className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-          editor[key] && !disabled ? 'translate-x-3.5' : 'translate-x-0.5'
-        }`} />
-      </button>
+      <Toggle
+        size="sm"
+        checked={Boolean(editor[key]) && !disabled}
+        disabled={disabled}
+        aria-label={label}
+        onChange={() => updateEditorSettings({ [key]: !editor[key] })}
+      />
     </div>
   )
 

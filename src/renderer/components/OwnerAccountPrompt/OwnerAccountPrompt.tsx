@@ -24,7 +24,7 @@
 // focus.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, DialogFrame, DialogScrim, SquareRadio } from '@/components/ui'
+import { Button, DialogFrame, DialogScrim, Radio } from '@/components/ui'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 import { getWindowLabel } from '@/lib/window-chrome'
@@ -356,7 +356,7 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
                     data-testid={`owner-account-option-${c.username}`}
                     className="flex items-center gap-3 py-2 border-b border-[var(--color-border)] cursor-pointer"
                   >
-                    <SquareRadio
+                    <Radio
                       name="owner-account"
                       value={c.username}
                       checked={on}

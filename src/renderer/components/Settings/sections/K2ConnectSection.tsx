@@ -59,7 +59,7 @@ import {
 } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
 import { SewAdminAccessState } from './SewAccessParts'
-import { Toggle } from '@/components/ui'
+import { Toggle, Checkbox } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
@@ -1765,22 +1765,10 @@ export function K2ConnectSection({
             above the Advanced/manual config ──────────────────────────── */}
         <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.start-stop">
           <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={autoStart}
               onChange={(e) => void toggleAutoStart(e.target.checked)}
-              className="peer sr-only"
             />
-            <span
-              aria-hidden="true"
-              className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-            >
-              {autoStart && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                </svg>
-              )}
-            </span>
             <span className="text-xs text-[var(--color-text-secondary)]">Re-launch this tunnel on restart</span>
           </label>
           {running ? (
@@ -1973,22 +1961,10 @@ export function K2ConnectSection({
                   ['uppercase letter', policyRequireUppercase, setPolicyRequireUppercase],
                 ] as [string, boolean, (v: boolean) => void][]).map(([label, checked, setVal]) => (
                   <label key={label} className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={checked}
                       onChange={(e) => setVal(e.target.checked)}
-                      className="peer sr-only"
                     />
-                    <span
-                      aria-hidden="true"
-                      className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-                    >
-                      {checked && (
-                        <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                        </svg>
-                      )}
-                    </span>
                     <span className="text-[10px] text-[var(--color-text-secondary)]">Require {label}</span>
                   </label>
                 ))}
@@ -2116,23 +2092,12 @@ export function K2ConnectSection({
               )}
               <label className="flex items-start gap-1.5 cursor-pointer select-none no-drag" data-testid="new-user-temporary">
                 {/* Square peer-checked checkbox (matches "Enabled" below). */}
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={newTemporary}
                   onChange={(e) => setNewTemporary(e.target.checked)}
                   aria-label="Temporary password"
-                  className="peer sr-only"
+                  className="mt-0.5"
                 />
-                <span
-                  aria-hidden="true"
-                  className="mt-0.5 w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-                >
-                  {newTemporary && (
-                    <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                    </svg>
-                  )}
-                </span>
                 <span className="text-[10px] text-[var(--color-text-secondary)]">
                   Temporary password
                   <span className="text-[var(--color-text-muted)]">
@@ -2251,22 +2216,10 @@ export function K2ConnectSection({
                         />
                         {/* Disable / Enable — peer-checked checkbox (matches auto-start) */}
                         <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={!u.disabled}
                             onChange={(e) => void toggleDisabled(u.username, !e.target.checked)}
-                            className="peer sr-only"
                           />
-                          <span
-                            aria-hidden="true"
-                            className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-                          >
-                            {!u.disabled && (
-                              <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                              </svg>
-                            )}
-                          </span>
                           <span className="text-[10px] text-[var(--color-text-secondary)]">Enabled</span>
                         </label>
                         <button

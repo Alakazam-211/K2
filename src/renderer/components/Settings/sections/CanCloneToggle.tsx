@@ -1,4 +1,5 @@
 import React from 'react'
+import { Checkbox } from '@/components/ui'
 
 // Settings → Admin Access → per person "Can clone" (prd-clone-carries-
 // threads-and-vault-v1 §4.2, CL23; D2: default ON). Owner-role rows are
@@ -44,25 +45,14 @@ export function CanCloneToggle({
       className={`flex items-center gap-1.5 select-none no-drag ${st.locked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
       title={st.title}
     >
-      <input
-        type="checkbox"
+      <Checkbox
         checked={st.checked}
         disabled={st.locked}
         aria-label={`${username} can clone`}
         data-testid={`can-clone-${username}`}
         onChange={(e) => onChange(e.target.checked)}
-        className="peer sr-only"
+        style={st.locked ? { opacity: 1, cursor: 'not-allowed' } : undefined}
       />
-      <span
-        aria-hidden="true"
-        className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-      >
-        {st.checked && (
-          <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-          </svg>
-        )}
-      </span>
       <span className="text-[10px] text-[var(--color-text-secondary)]">Can clone</span>
     </label>
   )

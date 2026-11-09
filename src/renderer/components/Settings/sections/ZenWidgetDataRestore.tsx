@@ -15,7 +15,7 @@ import {
   type GardenRestored,
 } from '@/lib/garden-data/garden-data-api'
 import { zipStore, type ZipEntry } from '@/lib/zip-store'
-import { SquareRadio } from '@/components/ui'
+import { Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 
 const BTN =
@@ -174,7 +174,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
             const can = i.rev - 1 >= oldest
             return (
               <label key={`${i.rev}/${i.key}`} className={`flex items-center gap-2 text-[11px] ${can ? '' : 'opacity-40'}`}>
-                <SquareRadio
+                <Radio
                   name={`restore-${widget}`}
                   disabled={!can || busy}
                   checked={toRev === i.rev - 1}

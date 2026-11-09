@@ -27,7 +27,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { SettingsGroup, SettingDropdown } from '../controls/SettingControls'
-import { Button, Callout, Input, SquareCheckbox, Toggle } from '@/components/ui'
+import { Button, Callout, Input, Checkbox, Toggle, Slider } from '@/components/ui'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -1375,7 +1375,7 @@ function EnableSheet({
           <p className="text-[11px] text-[var(--color-text-muted)]">This K2 doesn&apos;t report a home folder check.</p>
         )}
         <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-          <SquareCheckbox checked={privateHome} onChange={(e) => setPrivateHome(e.target.checked)} aria-label="Make my home folder private (chmod 700)" />
+          <Checkbox checked={privateHome} onChange={(e) => setPrivateHome(e.target.checked)} aria-label="Make my home folder private (chmod 700)" />
           Make my home folder private (chmod 700)
         </label>
       </div>
@@ -1620,8 +1620,7 @@ function PolicyEditor({
       <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">How much of this computer</div>
       <label className="flex items-center gap-3 text-[11px] text-[var(--color-text-secondary)]">
         <span className="w-28">CPU cap</span>
-        <input
-          type="range"
+        <Slider
           min={1}
           max={100}
           value={Number(draft.cpu_cap_percent) || 100}

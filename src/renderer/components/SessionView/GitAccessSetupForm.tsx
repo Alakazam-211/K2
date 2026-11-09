@@ -15,7 +15,7 @@
 import { useRef, useState, type JSX } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
-import { SquareRadio } from '@/components/ui'
+import { Radio } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 
 /** The setup route, relative to `/cli/`. */
@@ -116,11 +116,11 @@ export function GitAccessSetupForm({
       </div>
       <div role="radiogroup" aria-label="Credential" className="flex flex-col gap-1">
         <label className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-primary)]">
-          <SquareRadio data-testid="git-access-kind-app" name="git-access-kind" checked={kind === 'app'} onChange={() => setKind('app')} />
+          <Radio data-testid="git-access-kind-app" name="git-access-kind" checked={kind === 'app'} onChange={() => setKind('app')} />
           A GitHub App (preferred: 1-hour tokens, one repo each)
         </label>
         <label className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-primary)]">
-          <SquareRadio data-testid="git-access-kind-token" name="git-access-kind" checked={kind === 'token'} onChange={() => setKind('token')} />
+          <Radio data-testid="git-access-kind-token" name="git-access-kind" checked={kind === 'token'} onChange={() => setKind('token')} />
           A fine-grained token, read-only
         </label>
       </div>

@@ -1,6 +1,10 @@
 //! Wallet operations: import the live login, finish a sign-in, switch,
 //! remove, keep idle logins warm. Every operation that moves token bytes
-//! holds the per-tool [`store::lock_tool`].
+//! holds the per-tool [`store::lock_tool`] (taken before the database,
+//! never waited for under it). No vendor call runs under the tool lock or
+//! the database: refreshes and account checks run under the login's slot
+//! lock only, and write in a short step after ([`keep_warm_with`],
+//! [`resolve_unverified_with`], [`precheck`]).
 
 use std::time::Duration;
 
@@ -618,97 +622,193 @@ fn reconcile_live_locked(
 /// and recorded, with the notice. After 24 h with no answer it says K2
 /// couldn't check; it is never merged blind.
 pub fn resolve_unverified(conn: &Connection, tool: Tool, refresher: &dyn Refresher, now_secs: i64) -> Result<Vec<Adopted>, WalletError> {
-    let _lock = store::lock_tool(tool, LOCK_WAIT)?;
+    resolve_unverified_with(conn, tool, refresher, now_secs)
+}
+
+/// Waits for the tool lock in the write step of a two-phase task (keep
+/// warm, naming a checking token). Never under the database.
+const COMMIT_WAIT: Duration = Duration::from_secs(5);
+
+/// How long a switch waits for the incoming login's slot (a refresh of it
+/// may be running) before it answers `busy`. Never under the database.
+pub const SWITCH_SLOT_WAIT: Duration = Duration::from_secs(3);
+
+/// [`resolve_unverified`] in three phases, so no vendor call runs while
+/// the database or the tool lock is held:
+/// 1. the database: which checking tokens to look at;
+/// 2. that token's slot lock only: refresh it when about to expire, ask
+///    the vendor whose it is;
+/// 3. the tool lock (taken first), then the database: check nothing
+///    changed (the row, its slot's bytes) and merge or rename. A stale
+///    answer is dropped and the token is looked at again next time.
+pub fn resolve_unverified_with(db: &dyn DbAccess, tool: Tool, refresher: &dyn Refresher, now_secs: i64) -> Result<Vec<Adopted>, WalletError> {
+    let candidates = with_db(db, |conn| -> Result<Vec<Entry>, WalletError> {
+        let owner = live_owner(conn, tool)?;
+        let mut v = Vec::new();
+        for e in list_for(conn, tool)? {
+            if e.state != state::UNKNOWN || e.is_api_key() || identity::read_record(tool, &e.id).is_some() {
+                continue;
+            }
+            if owner.as_deref() == Some(e.id.as_str()) || slot_busy(conn, &e.id)? || identity::shares_live_grant(tool, &e.id) {
+                continue;
+            }
+            v.push(e);
+        }
+        Ok(v)
+    })?;
     let mut out = Vec::new();
-    let owner = live_owner(conn, tool)?;
-    for e in list_for(conn, tool)? {
-        if e.state != state::UNKNOWN || e.is_api_key() || identity::read_record(tool, &e.id).is_some() {
-            continue;
-        }
-        if owner.as_deref() == Some(e.id.as_str()) || slot_busy(conn, &e.id)? || identity::shares_live_grant(tool, &e.id) {
-            continue;
-        }
+    for e in candidates {
         let Ok(mut slot) = store::lock_slot(tool, &e.id, Duration::from_secs(5)) else { continue };
+        let t0 = std::time::Instant::now();
+        crate::log_debug!("[llm-accounts] {}: checking token {}: start", tool.as_str(), e.id);
         let meta = slots::slot_meta(tool, &e.id);
-        if meta.has_refresh && meta.expires_at.is_some_and(|x| x <= now_secs + 300) && !crate::airgap::enabled() {
+        if meta.has_refresh && meta.expires_at.is_some_and(|x| x <= now_secs + 300) && !crate::airgap::enabled() && !identity::shares_live_grant(tool, &e.id) {
             if let Err(err) = refresher.refresh(tool, &e.id) {
                 crate::log_debug!("[llm-accounts] {}: checking token {} not refreshed ({})", tool.as_str(), e.id, if super::looks_like_secret(&err) { "refresh failed" } else { &err });
             }
         }
         let Some(bytes) = slots::read_slot(tool, &e.id)? else { continue };
         let ident = |t: Tool, b: &[u8]| refresher.identify(t, b);
-        let Some(who) = identity::actual_identity(tool, &bytes, Some(&ident), false) else {
-            if now_secs - e.created_at > 24 * 3600 {
-                update_meta(conn, &e.id, &MetaUpdate {
-                    detail: Some(Some("K2 couldn't check which account this sign-in belongs to. Keep it, or Remove it.".into())),
-                    ..Default::default()
-                })?;
-            }
+        let who = identity::actual_identity(tool, &bytes, Some(&ident), false);
+        let asked = t0.elapsed();
+        let Ok(tl) = store::lock_tool(tool, COMMIT_WAIT) else {
+            crate::log_debug!("[llm-accounts] {}: checking token {}: busy, next time", tool.as_str(), e.id);
             continue;
         };
-        let eligible = list_for(conn, tool)?.into_iter().find(|x| {
-            x.id != e.id
-                && !x.is_api_key()
-                && x.state != state::SIGNING_IN
-                && identity::read_record(tool, &x.id).is_some_and(|r| r.identity().same_account(&who.0) == Some(true))
-        });
-        if let Some(x) = eligible.filter(|x| !slot_busy(conn, &x.id).unwrap_or(true)) {
-            let _xslot = store::lock_slot(tool, &x.id, LOCK_WAIT)?;
-            let newer = match slots::read_slot(tool, &x.id)? {
-                None => true,
-                Some(old) => expires_of(tool, &bytes) > expires_of(tool, &old),
-            };
-            if newer {
-                if let Some(old) = slots::read_slot(tool, &x.id)?.filter(|o| !identity::same_grant(tool, o, &bytes)) {
-                    store::set_aside_slot_cred(tool, &x.id, &old, "replaced")?;
-                }
-                file_bytes(tool, &x.id, Some(&x), &bytes, Incoming::Known(&who.0, who.1), identity::origin::IMPORT)?;
-                let m = store::parse_meta(tool, &bytes);
-                update_meta(conn, &x.id, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), detail: Some(None), ..Default::default() })?;
-            }
-            store::set_aside_slot_cred(tool, &e.id, &bytes, "merged")?;
-            let dir = store::slot_dir(tool, &e.id);
-            if dir.exists() {
-                let dest = store::removed_root().join(format!("{}-{}-{}", tool.as_str(), e.id, now()));
-                store::rename_locked_slot_dir(&mut slot, &dir, &dest).map_err(|err| WalletError::Io(err.to_string()))?;
-            }
-            conn.execute("DELETE FROM llm_accounts WHERE id = ?1", rusqlite::params![e.id])?;
-            out.push(Adopted {
-                tool: tool.as_str().into(),
-                id: x.id.clone(),
-                label: x.label.clone(),
-                account: who.0.describe(),
-                created: false,
-                notify: false,
-                found_in: "checking".into(),
-                found_under: e.label.clone(),
-                same_account_as: None,
-            });
-            continue;
+        let done = with_db(db, |conn| resolve_one(conn, tool, &e, &mut slot, &bytes, who, now_secs))?;
+        crate::log_debug!(
+            "[llm-accounts] {}: checking token {}: end ({}), vendor {} ms, tool lock {} ms",
+            tool.as_str(),
+            e.id,
+            match &done {
+                Some(_) => "named",
+                None => "not named",
+            },
+            asked.as_millis(),
+            tl.held_for().as_millis()
+        );
+        out.extend(done);
+    }
+    Ok(out)
+}
+
+/// Phase 3 of [`resolve_unverified_with`] for one checking token: under
+/// the tool lock and the database, with its slot lock held. `bytes`: what
+/// phase 2 identified; `who`: the answer for them.
+fn resolve_one(
+    conn: &Connection,
+    tool: Tool,
+    e: &Entry,
+    slot: &mut store::SlotLock,
+    bytes: &[u8],
+    who: Option<(AccountIdentity, Source)>,
+    now_secs: i64,
+) -> Result<Option<Adopted>, WalletError> {
+    // Nothing moved meanwhile: still a checking token, not live, not
+    // busy, and its slot still holds the bytes that were identified.
+    let still = get(conn, &e.id)?.is_some_and(|x| x.state == state::UNKNOWN && x.removed_at.is_none())
+        && identity::read_record(tool, &e.id).is_none()
+        && live_owner(conn, tool)?.as_deref() != Some(e.id.as_str())
+        && !slot_busy(conn, &e.id)?
+        && slots::read_slot(tool, &e.id)?.as_deref() == Some(bytes);
+    if !still {
+        crate::log_debug!("[llm-accounts] {}: checking token {} changed while K2 asked; answer dropped", tool.as_str(), e.id);
+        return Ok(None);
+    }
+    let Some(who) = who else {
+        if now_secs - e.created_at > 24 * 3600 {
+            update_meta(conn, &e.id, &MetaUpdate {
+                detail: Some(Some("K2 couldn't check which account this sign-in belongs to. Keep it, or Remove it.".into())),
+                ..Default::default()
+            })?;
         }
-        let label = account_label(conn, tool, &who.0)?;
-        super::rename(conn, &e.id, &label)?;
-        identity::write_record(tool, &e.id, &who.0, who.1, identity::origin::OUTSIDE_K2)?;
-        if tool == Tool::Claude {
-            let _ = identity::save_slot_profile(&e.id, &who.0.to_oauth_account());
+        return Ok(None);
+    };
+    let eligible = list_for(conn, tool)?.into_iter().find(|x| {
+        x.id != e.id
+            && !x.is_api_key()
+            && x.state != state::SIGNING_IN
+            && identity::read_record(tool, &x.id).is_some_and(|r| r.identity().same_account(&who.0) == Some(true))
+    });
+    if let Some(x) = eligible.filter(|x| !slot_busy(conn, &x.id).unwrap_or(true)) {
+        let Ok(_xslot) = store::lock_slot(tool, &x.id, LOCK_WAIT) else { return Ok(None) };
+        let newer = match slots::read_slot(tool, &x.id)? {
+            None => true,
+            Some(old) => expires_of(tool, bytes) > expires_of(tool, &old),
+        };
+        if newer {
+            if let Some(old) = slots::read_slot(tool, &x.id)?.filter(|o| !identity::same_grant(tool, o, bytes)) {
+                store::set_aside_slot_cred(tool, &x.id, &old, "replaced")?;
+            }
+            file_bytes(tool, &x.id, Some(&x), bytes, Incoming::Known(&who.0, who.1), identity::origin::IMPORT)?;
+            let m = store::parse_meta(tool, bytes);
+            update_meta(conn, &x.id, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), detail: Some(None), ..Default::default() })?;
         }
-        let mut u = MetaUpdate { state: Some(state::SIGNED_IN.into()), detail: Some(None), ..Default::default() };
-        u.email = who.0.email.clone();
-        update_meta(conn, &e.id, &u)?;
-        conn.execute("UPDATE llm_accounts SET created_by = ?2 WHERE id = ?1", rusqlite::params![e.id, OUTSIDE_K2])?;
-        out.push(Adopted {
+        store::set_aside_slot_cred(tool, &e.id, bytes, "merged")?;
+        let dir = store::slot_dir(tool, &e.id);
+        if dir.exists() {
+            let dest = store::removed_root().join(format!("{}-{}-{}", tool.as_str(), e.id, now()));
+            store::rename_locked_slot_dir(slot, &dir, &dest).map_err(|err| WalletError::Io(err.to_string()))?;
+        }
+        conn.execute("DELETE FROM llm_accounts WHERE id = ?1", rusqlite::params![e.id])?;
+        return Ok(Some(Adopted {
             tool: tool.as_str().into(),
-            id: e.id.clone(),
-            label,
+            id: x.id.clone(),
+            label: x.label.clone(),
             account: who.0.describe(),
-            created: true,
-            notify: first_notice(tool, &who.0),
+            created: false,
+            notify: false,
             found_in: "checking".into(),
             found_under: e.label.clone(),
             same_account_as: None,
-        });
+        }));
     }
-    Ok(out)
+    let label = account_label(conn, tool, &who.0)?;
+    super::rename(conn, &e.id, &label)?;
+    identity::write_record(tool, &e.id, &who.0, who.1, identity::origin::OUTSIDE_K2)?;
+    if tool == Tool::Claude {
+        let _ = identity::save_slot_profile(&e.id, &who.0.to_oauth_account());
+    }
+    let mut u = MetaUpdate { state: Some(state::SIGNED_IN.into()), detail: Some(None), ..Default::default() };
+    u.email = who.0.email.clone();
+    update_meta(conn, &e.id, &u)?;
+    conn.execute("UPDATE llm_accounts SET created_by = ?2 WHERE id = ?1", rusqlite::params![e.id, OUTSIDE_K2])?;
+    Ok(Some(Adopted {
+        tool: tool.as_str().into(),
+        id: e.id.clone(),
+        label,
+        account: who.0.describe(),
+        created: true,
+        notify: first_notice(tool, &who.0),
+        found_in: "checking".into(),
+        found_under: e.label.clone(),
+        same_account_as: None,
+    }))
+}
+
+/// Database access for a task that must not hold the database across its
+/// vendor calls: `run` holds it only for the closure. A plain
+/// [`Connection`] (core tests) runs it directly; the daemon passes its
+/// shared, locked connection.
+pub trait DbAccess {
+    fn run(&self, f: &mut dyn FnMut(&Connection));
+}
+
+impl DbAccess for Connection {
+    fn run(&self, f: &mut dyn FnMut(&Connection)) {
+        f(self)
+    }
+}
+
+fn with_db<T>(db: &dyn DbAccess, f: impl FnOnce(&Connection) -> T) -> T {
+    let mut f = Some(f);
+    let mut out = None;
+    db.run(&mut |c| {
+        if let Some(f) = f.take() {
+            out = Some(f(c));
+        }
+    });
+    out.expect("DbAccess::run calls its closure")
 }
 
 /// The refusal when a token's saved sign-in is not its account. Never
@@ -1080,7 +1180,9 @@ pub fn precheck(tool: Tool, target: &Entry, gen: Generation, refresher: Option<&
         return Ok(pre);
     }
     {
-        let _slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
+        // A keep-warm refresh of this very slot may be running: answer
+        // `busy` soon rather than wait it out.
+        let _slot = store::lock_slot(tool, &target.id, SWITCH_SLOT_WAIT)?;
         let meta = slots::slot_meta(tool, &target.id);
         let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
         // Never refresh a copy of the live sign-in (LT-A10).
@@ -1883,7 +1985,7 @@ pub fn refresh_error_is_permanent(e: &str) -> bool {
 }
 
 /// Refresh every idle slot that is due. Never the active login, never
-/// under air-gap. Each refresh holds the tool lock.
+/// under air-gap.
 /// Refresh ownership: the CLI refreshes the login in the live store and
 /// any pinned slot a running session uses (`in_use`); K2 refreshes every
 /// other subscription slot. API keys never refresh.
@@ -1893,80 +1995,151 @@ pub fn keep_warm(
     now_secs: i64,
     in_use: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<WarmResult>, WalletError> {
+    keep_warm_with(conn, refresher, now_secs, in_use)
+}
+
+/// [`keep_warm`] in three phases per slot, so no vendor call runs while
+/// the database or the tool lock is held:
+/// 1. the database: the idle slots that are due;
+/// 2. that slot's lock only (a switch to it answers `busy`, a session
+///    waits): the refresh, then the vendor's answer about whose sign-in
+///    the refreshed slot holds (the drift check);
+/// 3. the tool lock (taken first), then the database: check the token is
+///    still idle and the same (not removed, not signing in, not live) and
+///    record the result; a stale result is dropped.
+pub fn keep_warm_with(
+    db: &dyn DbAccess,
+    refresher: &dyn Refresher,
+    now_secs: i64,
+    in_use: &dyn Fn(&str) -> bool,
+) -> Result<Vec<WarmResult>, WalletError> {
     if crate::airgap::enabled() {
         return Ok(Vec::new());
     }
-    let mut out = Vec::new();
-    for tool in Tool::SUBSCRIPTION {
-        let owner = live_owner(conn, tool)?;
-        for e in list_for(conn, tool)? {
-            if owner.as_deref() == Some(e.id.as_str())
-                || e.state == state::SIGNING_IN
-                || e.is_api_key()
-                || in_use(&e.id)
-            {
-                continue;
-            }
-            let meta = slots::slot_meta(tool, &e.id);
-            if !warm_due(tool, &meta, &e, now_secs) {
-                continue;
-            }
-            let _lock = match store::lock_tool(tool, Duration::from_secs(5)) {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            // The slot lock also blocks a pinned session from starting on
-            // this login mid-refresh.
-            let _slot = match store::lock_slot(tool, &e.id, Duration::from_secs(5)) {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            // Re-check under the locks: a switch may have made it live, or
-            // a pinned session may have started on it.
-            if live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()) || in_use(&e.id) {
-                continue;
-            }
-            // Never refresh a copy of the live sign-in: the refresh would
-            // revoke the live CLI's token (LT-A10).
-            if identity::shares_live_grant(tool, &e.id) {
-                continue;
-            }
-            match refresher.refresh(tool, &e.id) {
-                Ok(()) => {
-                    // The access token is fresh now, so the vendor can say
-                    // whose it is: the drift check (LT-A9).
-                    let ident = |t: Tool, b: &[u8]| refresher.identify(t, b);
-                    if let Some(moved) = heal_drift(conn, tool, &e, Some(&ident), None, Some(&e.id))? {
-                        out.push(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: true, error: None, adopted: Some(moved) });
-                        continue;
-                    }
-                    let m = slots::slot_meta(tool, &e.id);
-                    let mut u = meta_update_from(&m, state::SIGNED_IN);
-                    u.refreshed_at = Some(now_secs);
-                    u.detail = Some(None);
-                    if let (Some(shown), Some((rec, _))) =
-                        (m.email.as_deref().and_then(|x| AccountIdentity::from_email(Some(x))), identity::recorded_identity(tool, &e))
-                    {
-                        if rec.same_account(&shown) == Some(false) {
-                            u.email = None;
-                            u.org = None;
-                        }
-                    }
-                    update_meta(conn, &e.id, &u)?;
-                    out.push(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: true, error: None, adopted: None });
+    let due = with_db(db, |conn| -> Result<Vec<(Tool, Entry)>, WalletError> {
+        let mut v = Vec::new();
+        for tool in Tool::SUBSCRIPTION {
+            let owner = live_owner(conn, tool)?;
+            for e in list_for(conn, tool)? {
+                if owner.as_deref() == Some(e.id.as_str()) || e.state == state::SIGNING_IN || e.is_api_key() || in_use(&e.id) {
+                    continue;
                 }
-                Err(err) => {
-                    let detail = if super::looks_like_secret(&err) { "refresh failed".to_string() } else { err.clone() };
-                    let mut u = MetaUpdate { detail: Some(Some(detail.clone())), ..Default::default() };
-                    if refresh_error_is_permanent(&err) {
-                        u.state = Some(state::NEEDS_LOGIN.into());
-                    }
-                    update_meta(conn, &e.id, &u)?;
-                    out.push(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: false, error: Some(detail), adopted: None });
+                let meta = slots::slot_meta(tool, &e.id);
+                if warm_due(tool, &meta, &e, now_secs) {
+                    v.push((tool, e));
                 }
             }
         }
+        Ok(v)
+    })?;
+    let mut out = Vec::new();
+    for (tool, e) in due {
+        if let Some(r) = warm_one(db, tool, &e, refresher, now_secs, in_use)? {
+            out.push(r);
+        }
     }
+    Ok(out)
+}
+
+/// The token is still the idle one keep-warm looked at: not removed, not
+/// signing in, not live, not in use.
+fn still_idle(conn: &Connection, tool: Tool, id: &str, in_use: &dyn Fn(&str) -> bool) -> Result<Option<Entry>, WalletError> {
+    let Some(e) = get(conn, id)? else { return Ok(None) };
+    if e.removed_at.is_some() || e.state == state::SIGNING_IN || live_owner(conn, tool)?.as_deref() == Some(id) || in_use(id) {
+        return Ok(None);
+    }
+    Ok(Some(e))
+}
+
+fn warm_one(
+    db: &dyn DbAccess,
+    tool: Tool,
+    e: &Entry,
+    refresher: &dyn Refresher,
+    now_secs: i64,
+    in_use: &dyn Fn(&str) -> bool,
+) -> Result<Option<WarmResult>, WalletError> {
+    // Phase 2: this login's slot lock only. It also blocks a pinned
+    // session from starting on this login mid-refresh, and a switch to it.
+    let Ok(_slot) = store::lock_slot(tool, &e.id, Duration::from_secs(5)) else { return Ok(None) };
+    // Re-check under it: a switch may have made it live, or a pinned
+    // session may have started on it.
+    if with_db(db, |conn| still_idle(conn, tool, &e.id, in_use))?.is_none() {
+        return Ok(None);
+    }
+    // Never refresh a copy of the live sign-in: the refresh would revoke
+    // the live CLI's token (LT-A10).
+    if identity::shares_live_grant(tool, &e.id) {
+        return Ok(None);
+    }
+    let t0 = std::time::Instant::now();
+    crate::log_debug!("[llm-accounts] keep-warm {}/{}: start", tool.as_str(), e.id);
+    let res = refresher.refresh(tool, &e.id);
+    // Whose sign-in the refreshed slot holds (the access token is fresh,
+    // so the vendor can say): asked here, with no lock but the slot's;
+    // phase 3 uses the answer for exactly these bytes.
+    let answer = match &res {
+        Ok(()) => slots::read_slot(tool, &e.id).ok().flatten().map(|b| (fingerprint(&b), refresher.identify(tool, &b))),
+        Err(_) => None,
+    };
+    let vendor_ms = t0.elapsed().as_millis();
+    // Phase 3: the tool lock, then the database, briefly.
+    let tl = match store::lock_tool(tool, COMMIT_WAIT) {
+        Ok(l) => l,
+        Err(err) => {
+            crate::log_debug!("[llm-accounts] keep-warm {}/{}: end (not recorded: {}), vendor {vendor_ms} ms", tool.as_str(), e.id, err.code());
+            return Ok(None);
+        }
+    };
+    let ident = |_: Tool, b: &[u8]| answer.as_ref().filter(|(fp, _)| *fp == fingerprint(b)).and_then(|(_, who)| who.clone());
+    let out = with_db(db, |conn| -> Result<Option<WarmResult>, WalletError> {
+        let Some(e) = still_idle(conn, tool, &e.id, in_use)? else {
+            crate::log_debug!("[llm-accounts] keep-warm {}/{}: the token changed meanwhile; result dropped", tool.as_str(), e.id);
+            return Ok(None);
+        };
+        match &res {
+            Ok(()) => {
+                // The drift check (LT-A9).
+                if let Some(moved) = heal_drift(conn, tool, &e, Some(&ident), None, Some(&e.id))? {
+                    return Ok(Some(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: true, error: None, adopted: Some(moved) }));
+                }
+                let m = slots::slot_meta(tool, &e.id);
+                let mut u = meta_update_from(&m, state::SIGNED_IN);
+                u.refreshed_at = Some(now_secs);
+                u.detail = Some(None);
+                if let (Some(shown), Some((rec, _))) =
+                    (m.email.as_deref().and_then(|x| AccountIdentity::from_email(Some(x))), identity::recorded_identity(tool, &e))
+                {
+                    if rec.same_account(&shown) == Some(false) {
+                        u.email = None;
+                        u.org = None;
+                    }
+                }
+                update_meta(conn, &e.id, &u)?;
+                Ok(Some(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: true, error: None, adopted: None }))
+            }
+            Err(err) => {
+                let detail = if super::looks_like_secret(err) { "refresh failed".to_string() } else { err.clone() };
+                let mut u = MetaUpdate { detail: Some(Some(detail.clone())), ..Default::default() };
+                if refresh_error_is_permanent(err) {
+                    u.state = Some(state::NEEDS_LOGIN.into());
+                }
+                update_meta(conn, &e.id, &u)?;
+                Ok(Some(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: false, error: Some(detail), adopted: None }))
+            }
+        }
+    })?;
+    crate::log_debug!(
+        "[llm-accounts] keep-warm {}/{}: end ({}), vendor {vendor_ms} ms, tool lock {} ms",
+        tool.as_str(),
+        e.id,
+        match &out {
+            Some(r) if r.refreshed => "refreshed",
+            Some(_) => "refresh failed",
+            None => "dropped",
+        },
+        tl.held_for().as_millis()
+    );
     Ok(out)
 }
 
@@ -2025,17 +2198,35 @@ pub(crate) fn claude_apply_refresh(slot: &[u8], resp: &serde_json::Value, now_ms
 
 /// Refresh an idle Claude slot with the OAuth refresh grant. `post` does
 /// the HTTP (JSON body → JSON response, or an error string with the
-/// status); tests pass a fake. The caller holds the tool lock and has
-/// checked the slot is not active and air-gap is off.
+/// status); tests pass a fake. The caller holds THIS SLOT's lock (never
+/// the database) and has checked the slot is not active and air-gap is
+/// off. Two phases: the vendor call runs with no tool lock; the write
+/// takes the tool lock briefly and is dropped when the slot's bytes
+/// changed meanwhile (a stale result).
 pub fn claude_refresh_slot(
     id: &str,
     post: &dyn Fn(&str, &serde_json::Value) -> Result<serde_json::Value, String>,
 ) -> Result<(), String> {
+    debug_assert!(!store::db_held_here(), "a Claude refresh ran while holding the database");
     let bytes = slots::read_slot(Tool::Claude, id).map_err(|e| e.to_string())?.ok_or("no saved sign-in")?;
     let body = claude_refresh_body(&bytes)?;
     let resp = post(CLAUDE_TOKEN_URL, &body)?;
     let now_ms = now() * 1000;
     let updated = claude_apply_refresh(&bytes, &resp, now_ms)?;
+    // The write: under the tool lock. The caller's slot lock already keeps
+    // every other writer off this slot, so when the tool lock can't be had
+    // the rotated sign-in is still written (never lost) under the slot lock.
+    let _tl = match store::lock_tool(Tool::Claude, COMMIT_WAIT) {
+        Ok(l) => Some(l),
+        Err(_) => {
+            crate::log_debug!("[llm-accounts] WARN claude: refresh of {id} written under its slot lock only (tool lock busy)");
+            None
+        }
+    };
+    if slots::read_slot(Tool::Claude, id).ok().flatten().as_deref() != Some(bytes.as_slice()) {
+        crate::log_debug!("[llm-accounts] claude: {id} changed while K2 refreshed it; refresh dropped");
+        return Err("the saved sign-in changed while K2 refreshed it; nothing was written".into());
+    }
     // Refreshed from the slot's own bytes: the same sign-in (LT-A4).
     file_bytes(Tool::Claude, id, None, &updated, Incoming::OwnRefresh, identity::origin::K2_SIGN_IN).map_err(|e| e.to_string())
 }

@@ -728,11 +728,7 @@ pub fn start_login(
     store::ensure_private_dir(&slot).map_err(|e| WalletError::Io(e.to_string()))?;
 
     let ticket = if method == wallet::LoginMethod::LiveSwap {
-        let t = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            wallet::begin_live_swap(&conn, tool, &entry.id, Some(started_by))?
-        };
+        let t = with_tool_db(tool, ROUTE_TOOL_WAIT, |conn| wallet::begin_live_swap(conn, tool, &entry.id, Some(started_by)))?;
         notice_adopted(&t.adopted);
         Some(t)
     } else {
@@ -765,9 +761,7 @@ pub fn start_login(
         Ok(p) => p,
         Err(e) => {
             if let Some(t) = &ticket {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                let _ = wallet::live_swap_abort(&conn, t);
+                let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
             } else if new_entry {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
@@ -977,11 +971,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
         // Live-swap: the live store changed → capture + restore.
         if let Some(t) = &ticket {
             if let Ok(Some(bytes)) = wallet::live_swap_poll(t) {
-                let res = {
-                    let db = k2_core::db::shared();
-                    let conn = db.lock();
-                    wallet::live_swap_complete(&conn, t, &bytes, None)
-                };
+                let res = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_complete(conn, t, &bytes, None));
                 drop(bytes);
                 match res {
                     Ok(_) => {
@@ -989,10 +979,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                         finish(&id, "signed_in", None, offer);
                     }
                     Err(e) => {
-                        let db = k2_core::db::shared();
-                        let conn = db.lock();
-                        let _ = wallet::live_swap_abort(&conn, t);
-                        drop(conn);
+                        let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
                         finish(&id, "failed", Some(e.to_string()), false);
                     }
                 }
@@ -1023,9 +1010,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
         if let Some((st, err)) = give_up {
             pty.kill();
             if let Some(t) = &ticket {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                let _ = wallet::live_swap_abort(&conn, t);
+                let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
             } else {
                 restore_entry_state(&account_id, tool, &prev_state, new_entry);
             }
@@ -1047,11 +1032,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                     let res = wallet::live_swap_poll(t);
                     match res {
                         Ok(Some(bytes)) => {
-                            let r = {
-                                let db = k2_core::db::shared();
-                                let conn = db.lock();
-                                wallet::live_swap_complete(&conn, t, &bytes, None)
-                            };
+                            let r = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_complete(conn, t, &bytes, None));
                             match r {
                                 Ok(_) => {
                                     let offer = !active_is(tool, &account_id);
@@ -1061,20 +1042,13 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                             }
                         }
                         _ => {
-                            let db = k2_core::db::shared();
-                            let conn = db.lock();
-                            let _ = wallet::live_swap_abort(&conn, t);
-                            drop(conn);
+                            let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
                             finish(&id, "failed", Some("the sign-in did not finish".into()), false);
                         }
                     }
                 }
                 (None, _) => {
-                    let res = {
-                        let db = k2_core::db::shared();
-                        let conn = db.lock();
-                        wallet::finalize_login(&conn, &account_id, None)
-                    };
+                    let res = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::finalize_login(conn, &account_id, None));
                     match res {
                         Ok(_) => {
                             let offer = !active_is(tool, &account_id);
@@ -1466,9 +1440,20 @@ impl wallet::Refresher for DaemonRefresher {
 
 // ── Usage of idle slots ─────────────────────────────────────────────
 
-/// Probe usage for one idle login and store the snapshot. Holds the tool
-/// lock; never runs for the active login (its row is the shared cache)
-/// and never under air-gap.
+/// Probe usage for one idle login and store the snapshot. Never runs for
+/// the active login (its row is the shared cache) and never under
+/// air-gap. Never holds the tool lock or the database across a vendor
+/// call (the 0.46.10 freeze: this held the Claude tool lock across its
+/// refresh and usage GET, then asked for the database while holding it,
+/// while a switch held the database and waited for that lock):
+/// - Claude: an expired idle slot is refreshed under its slot lock only
+///   (the write takes the tool lock briefly); the usage GET only reads,
+///   with the access token, and holds no lock;
+/// - Codex / Grok: their CLI runs in the slot and may renew its own token
+///   there, so the check holds the slot lock (a switch to that token
+///   answers `busy` meanwhile; nothing else waits);
+/// - the reading is stored under the database briefly, and dropped when
+///   the token went live meanwhile.
 pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
     probe_idle_usage_with(entry, &|t| crate::subscription_usage::claude_usage_get(t))
 }
@@ -1482,23 +1467,43 @@ pub(crate) fn probe_idle_usage_with(entry: &Entry, claude_get: &dyn Fn(&str) -> 
     if live_or_default(tool, &entry.id) || !slots::has_cred(tool, &entry.id) {
         return Ok(());
     }
-    let _lock = store::lock_tool(tool, Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    if live_or_default(tool, &entry.id) {
+    let t0 = Instant::now();
+    k2_core::log_debug!("[llm-accounts] usage {}/{}: start", tool.as_str(), entry.id);
+    let slot = store::slot_dir(tool, &entry.id);
+    // Codex / Grok: the slot lock for the whole check (see above).
+    let slot_lock = if tool == Tool::Claude {
+        None
+    } else {
+        match store::lock_slot(tool, &entry.id, Duration::from_secs(5)) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                k2_core::log_debug!("[llm-accounts] usage {}/{}: end (skipped: {})", tool.as_str(), entry.id, e.code());
+                return Ok(());
+            }
+        }
+    };
+    if slot_lock.is_some() && live_or_default(tool, &entry.id) {
         return Ok(());
     }
-    let slot = store::slot_dir(tool, &entry.id);
     let claude_token = if tool == Tool::Claude {
         let meta = slots::slot_meta(tool, &entry.id);
         let expired = meta.expires_at.map(|x| x <= chrono::Utc::now().timestamp() + 60).unwrap_or(false);
         // Never refresh a slot a running CLI owns, or a copy of the live
         // sign-in: either refresh would revoke that CLI's token (LT-A16,
         // LT-A10). The reading then uses the token as it is.
-        if expired
-            && meta.has_refresh
-            && !slot_in_use(&entry.id)
-            && !k2_core::llm_accounts::identity::shares_live_grant(tool, &entry.id)
-        {
-            let _ = wallet::claude_refresh_slot(&entry.id, &post_json);
+        let may_refresh = || !slot_in_use(&entry.id) && !k2_core::llm_accounts::identity::shares_live_grant(tool, &entry.id);
+        if expired && meta.has_refresh && may_refresh() {
+            match store::lock_slot(tool, &entry.id, Duration::from_secs(5)) {
+                // Again under the slot lock: a switch may have made it live.
+                Ok(_slot) if !live_or_default(tool, &entry.id) && may_refresh() => {
+                    if let Err(err) = wallet::claude_refresh_slot(&entry.id, &post_json) {
+                        let err = if wallet_core::looks_like_secret(&err) { "refresh failed".to_string() } else { err };
+                        k2_core::log_debug!("[llm-accounts] usage claude/{}: not refreshed ({err})", entry.id);
+                    }
+                }
+                Ok(_) => return Ok(()),
+                Err(e) => k2_core::log_debug!("[llm-accounts] usage claude/{}: refresh skipped ({})", entry.id, e.code()),
+            }
         }
         let meta = slots::slot_meta(tool, &entry.id);
         slots::claude_access_token(&entry.id).map(|t| (t, meta.expires_at.map(|s| s * 1000), meta.plan.unwrap_or_default()))
@@ -1517,15 +1522,18 @@ pub(crate) fn probe_idle_usage_with(entry: &Entry, claude_get: &dyn Fn(&str) -> 
             .and_then(|s| serde_json::from_str(&s).ok())
     };
     let mut row = crate::subscription_usage::probe_wallet_slot_with(tool.as_str(), &slot, claude_token, prev.as_ref(), claude_get);
+    drop(slot_lock);
     row.source = "probe".into();
     crate::subscription_usage::note_outcome(&format!("acct:{}", entry.id), &row, chrono::Utc::now());
     let text = serde_json::to_string(&row).map_err(|e| e.to_string())?;
+    let ok = row.error.is_none();
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         // A switch may have made it live while the check ran: then the shared
         // probe owns its row.
         if live_or_default(tool, &entry.id) {
+            k2_core::log_debug!("[llm-accounts] usage {}/{}: end (went live meanwhile; reading dropped)", tool.as_str(), entry.id);
             return Ok(());
         }
         wallet_core::update_meta(
@@ -1533,12 +1541,19 @@ pub(crate) fn probe_idle_usage_with(entry: &Entry, claude_get: &dyn Fn(&str) -> 
             &entry.id,
             &wallet_core::MetaUpdate {
                 usage_json: Some(text),
-                usage_checked_at: if row.error.is_none() { Some(chrono::Utc::now().timestamp()) } else { None },
+                usage_checked_at: if ok { Some(chrono::Utc::now().timestamp()) } else { None },
                 ..Default::default()
             },
         )
         .map_err(|e| e.to_string())?;
     }
+    k2_core::log_debug!(
+        "[llm-accounts] usage {}/{}: end ({}), {} ms, no tool lock held",
+        tool.as_str(),
+        entry.id,
+        if ok { "ok" } else { "check failed" },
+        t0.elapsed().as_millis()
+    );
     crate::session_events::emit_subscription_usage_changed(Some(tool.as_str()), Some(&entry.id), "probe");
     Ok(())
 }
@@ -1579,6 +1594,51 @@ pub fn probe_idle_stale(max_age: Duration) {
 
 // ── Boot + loop ─────────────────────────────────────────────────────
 
+// ── Lock order: the tool lock, then the database ───────────────────
+//
+// The 0.46.10 freeze: the switch and reconcile took the database, then
+// waited up to 20 s for the Claude tool lock, which a usage check held
+// across its vendor calls (and which then wanted the database itself).
+// Every route stalled. Now the tool lock is taken first, outside the
+// database ([`with_tool_db`]), and `store::lock_tool` never waits while
+// the database is held. No vendor call runs under either lock.
+
+/// How long a person's request (switch, remove, …) waits for a tool lock
+/// before answering `busy` (409, try again in a moment). Outside the
+/// database, so nothing else waits meanwhile.
+pub const ROUTE_TOOL_WAIT: Duration = Duration::from_secs(3);
+/// How long background work (reconcile, boot import) waits for it.
+pub const BG_TOOL_WAIT: Duration = Duration::from_secs(5);
+/// A sign-in's last step (save the new login, put the old one back)
+/// waits longer: giving up would leave the live store swapped.
+pub const LOGIN_TOOL_WAIT: Duration = Duration::from_secs(20);
+
+/// The daemon's shared database for the wallet's multi-phase tasks: held
+/// only for each step's closure.
+pub struct SharedDb;
+
+impl wallet::DbAccess for SharedDb {
+    fn run(&self, f: &mut dyn FnMut(&rusqlite::Connection)) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        f(&conn)
+    }
+}
+
+/// `tool`'s lock (waited for up to `wait`, outside the database), then
+/// the database for `f`. The wallet code `f` calls takes the tool lock
+/// again for free (re-entrant). A hold over 2 s logs a warning.
+pub fn with_tool_db<T>(
+    tool: Tool,
+    wait: Duration,
+    f: impl FnOnce(&rusqlite::Connection) -> Result<T, WalletError>,
+) -> Result<T, WalletError> {
+    let _tool_lock = store::lock_tool(tool, wait)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    f(&conn)
+}
+
 /// Settle who is live for `tool` now (LT-A5): the vendor is asked with no
 /// lock held, then the wallet commits under its locks. A sign-in made
 /// outside K2 becomes its own token (notice + audit). `mirror`: copy a
@@ -1587,17 +1647,30 @@ pub fn reconcile_tool(tool: Tool, mirror: bool) -> Vec<wallet::Adopted> {
     reconcile_tool_with(tool, mirror, Some(&DaemonRefresher))
 }
 
+/// [`reconcile_tool`] that says why it didn't run (`busy`: another task
+/// holds the tool's lock longer than `wait`). Its notices go out here.
+pub fn try_reconcile_tool(
+    tool: Tool,
+    mirror: bool,
+    vendor: Option<&dyn wallet::Refresher>,
+    wait: Duration,
+) -> Result<Vec<wallet::Adopted>, WalletError> {
+    if !tool.subscription_supported() {
+        return Ok(Vec::new());
+    }
+    let answer = wallet::LiveAnswer::ask(tool, vendor);
+    let a = with_tool_db(tool, wait, |conn| wallet::reconcile_live(conn, tool, answer.as_ref(), mirror))?;
+    notice_adopted(&a);
+    Ok(a)
+}
+
 /// [`reconcile_tool`] with a given vendor client (a switch passes its own).
 pub fn reconcile_tool_with(tool: Tool, mirror: bool, vendor: Option<&dyn wallet::Refresher>) -> Vec<wallet::Adopted> {
     if !tool.subscription_supported() {
         return Vec::new();
     }
     let answer = wallet::LiveAnswer::ask(tool, vendor);
-    let res = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        wallet::reconcile_live(&conn, tool, answer.as_ref(), mirror)
-    };
+    let res = with_tool_db(tool, BG_TOOL_WAIT, |conn| wallet::reconcile_live(conn, tool, answer.as_ref(), mirror));
     match res {
         Ok(a) => {
             notice_adopted(&a);
@@ -1616,11 +1689,9 @@ pub fn resolve_checking(tool: Tool) {
     if !tool.subscription_supported() || !vendor_calls_allowed() {
         return;
     }
-    let res = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        wallet::resolve_unverified(&conn, tool, &DaemonRefresher, chrono::Utc::now().timestamp())
-    };
+    // Refresh and vendor check under the token's slot lock only; the
+    // database and the tool lock only for each write.
+    let res = wallet::resolve_unverified_with(&SharedDb, tool, &DaemonRefresher, chrono::Utc::now().timestamp());
     match res {
         Ok(a) => notice_adopted(&a),
         Err(e) => k2_core::log_debug!("[llm-accounts] checking tokens {}: {}", tool.as_str(), e.code()),
@@ -1642,11 +1713,7 @@ pub fn boot_import() {
         }
     }
     for tool in Tool::ALL {
-        let r = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            wallet::import_live(&conn, tool, Some("boot"))
-        };
+        let r = with_tool_db(tool, BG_TOOL_WAIT, |conn| wallet::import_live(conn, tool, Some("boot")));
         match r {
             Ok(Some(_)) => emit(Some(tool)),
             Ok(None) => {}
@@ -1721,11 +1788,11 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
     res
 }
 
-/// The keep-warm refreshes of one pass (idle slots that are due).
+/// The keep-warm refreshes of one pass (idle slots that are due). Each
+/// refresh runs under its slot's lock only; the tool lock and the
+/// database are held just to record it.
 pub(crate) fn keep_warm_pass(refresher: &dyn wallet::Refresher) -> Result<Vec<wallet::WarmResult>, WalletError> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    wallet::keep_warm(&conn, refresher, chrono::Utc::now().timestamp(), &|id| slot_in_use(id))
+    wallet::keep_warm_with(&SharedDb, refresher, chrono::Utc::now().timestamp(), &|id| slot_in_use(id))
 }
 
 /// Boot import, then the keep-warm loop (first pass after two minutes,

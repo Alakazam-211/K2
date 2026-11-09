@@ -243,7 +243,7 @@ impl std::fmt::Display for WalletError {
             WalletError::LiveStoreUnavailable(why) => write!(f, "{why}"),
             WalletError::AirGap => write!(f, "{}", crate::airgap::TEACHING),
             WalletError::LockBusy(t) => {
-                write!(f, "another change to the {t} tokens is in progress; try again")
+                write!(f, "Another {t} account task is running; try again in a moment.")
             }
             WalletError::VaultUnavailable(why) => write!(f, "{why}"),
             WalletError::Conflict(_, hint) | WalletError::Moved(hint, _) => write!(f, "{hint}"),

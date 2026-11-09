@@ -718,15 +718,109 @@ fn mutex_for(tool: Tool) -> &'static Mutex<()> {
 }
 
 /// The per-tool lock: an in-process mutex plus a flock on
-/// `~/.k2/llm-accounts/<tool>/.lock`. Every swap, import, refresh and
-/// login finalize for that tool holds it.
+/// `~/.k2/llm-accounts/<tool>/.lock`. Every swap, import and login
+/// finalize for that tool holds it, and every refresh holds it to write.
+///
+/// Lock order (the 0.46.10 subscription-switch freeze): the tool lock is
+/// taken BEFORE the daemon's database lock, and never waited for while
+/// the database is held. A thread that holds the database and asks for a
+/// tool lock it doesn't hold yet gets one try and then `busy`
+/// ([`WalletError::LockBusy`], 409): waiting there stalled every route.
+/// The lock is re-entrant per thread, so the daemon takes it first and
+/// the wallet code it then calls under the database takes it again for
+/// free. No vendor call (refresh, usage check, profile check) runs while
+/// it is held: a refresh holds the login's [`SlotLock`] for its network
+/// call and this lock only for the write. A hold over
+/// [`TOOL_LOCK_WARN_AFTER`] is logged with the thread's name.
 pub struct ToolLock {
     pub tool: Tool,
-    _guard: MutexGuard<'static, ()>,
-    _file: FileLock,
+    /// `None`: this thread already held it (re-entrant).
+    held: Option<(MutexGuard<'static, ()>, FileLock)>,
+    since: Instant,
+}
+
+/// A tool lock held longer than this logs a warning when it is released.
+pub const TOOL_LOCK_WARN_AFTER: Duration = Duration::from_secs(2);
+
+/// The longest a slot lock is waited for while the database is held.
+pub const SLOT_WAIT_UNDER_DB: Duration = Duration::from_millis(250);
+
+thread_local! {
+    /// Tool locks this thread holds (per tool), for re-entry.
+    static HELD_HERE: std::cell::Cell<[u32; 4]> = const { std::cell::Cell::new([0; 4]) };
+}
+
+fn tool_index(tool: Tool) -> usize {
+    match tool {
+        Tool::Claude => 0,
+        Tool::Codex => 1,
+        Tool::Grok => 2,
+        Tool::Gemini => 3,
+    }
+}
+
+fn held_here(tool: Tool) -> u32 {
+    HELD_HERE.with(|h| h.get()[tool_index(tool)])
+}
+
+fn note_held(tool: Tool, taken: bool) {
+    HELD_HERE.with(|h| {
+        let mut v = h.get();
+        let i = tool_index(tool);
+        v[i] = if taken { v[i] + 1 } else { v[i].saturating_sub(1) };
+        h.set(v);
+    });
+}
+
+/// Does this thread hold the daemon's database lock right now?
+pub fn db_held_here() -> bool {
+    crate::db::try_shared().is_some_and(|h| h.is_owned_by_current_thread())
+}
+
+/// Does this thread hold `tool`'s lock?
+pub fn tool_lock_held_here(tool: Tool) -> bool {
+    held_here(tool) > 0
+}
+
+impl ToolLock {
+    /// How long it has been held.
+    pub fn held_for(&self) -> Duration {
+        self.since.elapsed()
+    }
+}
+
+impl Drop for ToolLock {
+    fn drop(&mut self) {
+        note_held(self.tool, false);
+        if self.held.is_some() {
+            let held = self.since.elapsed();
+            if held > TOOL_LOCK_WARN_AFTER {
+                let thread = std::thread::current();
+                crate::log_debug!(
+                    "[llm-accounts] WARN {} lock held {} ms by thread {}",
+                    self.tool.as_str(),
+                    held.as_millis(),
+                    thread.name().unwrap_or("unnamed")
+                );
+            }
+        }
+    }
 }
 
 pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError> {
+    if held_here(tool) > 0 {
+        note_held(tool, true);
+        return Ok(ToolLock { tool, held: None, since: Instant::now() });
+    }
+    // Never wait for it while holding the database: one try, then busy.
+    let under_db = db_held_here();
+    let timeout = if under_db { Duration::ZERO } else { timeout };
+    let busy = || {
+        if under_db {
+            crate::log_debug!("[llm-accounts] {}: busy (its lock is taken; not waiting while holding the database)", tool.as_str());
+        }
+        WalletError::LockBusy(tool.display().into())
+    };
     let deadline = Instant::now() + timeout;
     let guard = loop {
         match mutex_for(tool).try_lock() {
@@ -734,8 +828,9 @@ pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError>
             Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => {
                 if Instant::now() >= deadline {
-                    return Err(WalletError::LockBusy(tool.display().into()));
+                    return Err(busy());
                 }
+                debug_assert!(!under_db, "waited for the {} lock while holding the database", tool.as_str());
                 std::thread::sleep(Duration::from_millis(25));
             }
         }
@@ -743,14 +838,16 @@ pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError>
     let dir = tool_dir(tool);
     ensure_private_dir(&dir).map_err(|e| WalletError::Io(e.to_string()))?;
     let left = deadline.saturating_duration_since(Instant::now());
-    let file = FileLock::acquire(&dir.join(".lock"), left)
-        .map_err(|_| WalletError::LockBusy(tool.display().into()))?;
-    Ok(ToolLock { tool, _guard: guard, _file: file })
+    let file = FileLock::acquire(&dir.join(".lock"), left).map_err(|_| busy())?;
+    note_held(tool, true);
+    Ok(ToolLock { tool, held: Some((guard, file)), since: Instant::now() })
 }
 
 /// The per-slot lock: one login's credential is never swapped, refreshed
 /// and handed to a spawning session at the same time. An in-process
-/// mutex per slot plus a flock on `<slot>/.lock`.
+/// mutex per slot plus a flock on `<slot>/.lock`. A refresh holds it for
+/// its vendor call (never the tool lock or the database). While the
+/// database is held it is waited for at most [`SLOT_WAIT_UNDER_DB`].
 pub struct SlotLock {
     _guard: std::sync::MutexGuard<'static, ()>,
     _file: Option<FileLock>,
@@ -781,6 +878,7 @@ fn slot_mutex(tool: Tool, id: &str) -> &'static Mutex<()> {
 }
 
 pub fn lock_slot(tool: Tool, id: &str, timeout: Duration) -> Result<SlotLock, WalletError> {
+    let timeout = if db_held_here() { timeout.min(SLOT_WAIT_UNDER_DB) } else { timeout };
     let deadline = Instant::now() + timeout;
     let m = slot_mutex(tool, id);
     let guard = loop {

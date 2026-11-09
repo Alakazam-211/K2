@@ -165,8 +165,20 @@ fn refuse(code: u16, err_code: &str, hint: impl Into<String>) -> CliResponse {
 
 fn wallet_err(e: WalletError) -> CliResponse {
     let code: u16 = e.http_status()[..3].parse().unwrap_or(500);
+    if let WalletError::LockBusy(_) = e {
+        // Another task for that tool holds its lock for a moment (a
+        // refresh's write, a sign-in): try again shortly.
+        return CliResponse {
+            status: status_line(code),
+            content_type: "application/json",
+            body: json!({"error": {"code": e.code(), "hint": e.to_string(), "retryAfterSecs": BUSY_RETRY_AFTER_SECS}}).to_string(),
+        };
+    }
     refuse(code, e.code(), e.to_string())
 }
+
+/// The retry hint on a `busy` answer.
+pub const BUSY_RETRY_AFTER_SECS: u64 = 3;
 
 pub fn too_large() -> CliResponse {
     refuse(413, "body_too_large", "request bodies here are at most 16 KiB")
@@ -303,7 +315,19 @@ fn switch_two_phase(
     // outside K2 is its own token before the generation is read (phase 2
     // then doesn't answer `changed` for it). One only the vendor can name
     // is adopted in phase 2 with phase 1's answers. Its notices go out here.
-    let phase0 = rt::reconcile_tool_with(tool, false, None);
+    //
+    // Every step that needs the tool lock takes it BEFORE the database and
+    // waits at most `ROUTE_TOOL_WAIT` (outside the database), then answers
+    // `busy` (409, try again in a moment): another task (a refresh's
+    // write, a sign-in) is running. Nothing waits on the database meanwhile.
+    let phase0 = match rt::try_reconcile_tool(tool, false, None, rt::ROUTE_TOOL_WAIT) {
+        Ok(a) => a,
+        Err(e @ WalletError::LockBusy(_)) => return Err(e),
+        Err(e) => {
+            k2_core::log_debug!("[llm-accounts] reconcile {}: {}", tool.as_str(), e.code());
+            Vec::new()
+        }
+    };
     let gen = with_conn(|conn| wallet::generation(conn, tool))?;
     let target = with_conn(|conn| wallet_core::lookup(conn, Some(tool), &target.id))?;
     // A sign-in rewriting that slot must finish first.
@@ -314,7 +338,7 @@ fn switch_two_phase(
         ));
     }
     let pre = wallet::precheck(tool, &target, gen, Some(vendor))?;
-    let (mut out, warnings) = with_conn(|conn| -> Result<_, WalletError> {
+    let (mut out, warnings) = rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, |conn| -> Result<_, WalletError> {
         // A warning, never a refusal: the person may still want it.
         let warnings = wallet_core::get(conn, &target.id)?.map(|e| exhausted_warnings(&e)).unwrap_or_default();
         Ok((wallet::switch_prechecked(conn, tool, &target.id, Some(key), &pre)?, warnings))
@@ -445,6 +469,15 @@ fn with_conn<T>(f: impl FnOnce(&rusqlite::Connection) -> T) -> T {
     let db = k2_core::db::shared();
     let conn = db.lock();
     f(&conn)
+}
+
+/// A wallet change to one token: its tool's lock first (outside the
+/// database, `busy` after a short wait), then the database.
+fn with_token_tool<T>(id: &str, f: impl FnOnce(&rusqlite::Connection) -> Result<T, WalletError>) -> Result<T, WalletError> {
+    match with_conn(|conn| wallet_core::lookup(conn, None, id))?.tool() {
+        Some(tool) => rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, f),
+        None => with_conn(f),
+    }
 }
 
 fn list_doc(human: bool, who_key: Option<&str>, default_blocked: Option<&str>) -> Result<Value, WalletError> {
@@ -813,7 +846,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
             };
             // Re-adding a token whose sign-in got swapped outside K2 always
             // works: that outside sign-in is saved as its own token first.
-            let entry = match with_conn(|conn| wallet::begin_relogin_settled(conn, &id, Some(&key))) {
+            let entry = match with_token_tool(&id, |conn| wallet::begin_relogin_settled(conn, &id, Some(&key))) {
                 Ok((e, adopted)) => {
                     rt::notice_adopted(&adopted);
                     e
@@ -1011,9 +1044,9 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
             // default API token, leaving no default (Admin and above,
             // checked in `handle`).
             let res = if b.clear_default == Some(true) {
-                with_conn(|conn| wallet::remove_clearing_default(conn, &id, Some(&key)))
+                with_token_tool(&id, |conn| wallet::remove_clearing_default(conn, &id, Some(&key)))
             } else {
-                with_conn(|conn| wallet::remove(conn, &id))
+                with_token_tool(&id, |conn| wallet::remove(conn, &id))
             };
             match res {
                 Ok(out) => {
@@ -1029,7 +1062,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Ok(t) => t,
                 Err(r) => return r,
             };
-            match with_conn(|conn| wallet::clear_default(conn, tool, Some(&key))) {
+            match rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, |conn| wallet::clear_default(conn, tool, Some(&key))) {
                 Ok(out) => {
                     if out.cleared.is_some() {
                         let line = format!(

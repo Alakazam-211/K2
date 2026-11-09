@@ -107,12 +107,6 @@ id = "RUSTSEC-2026-0221"
 ignoreUntil = 2026-12-05T00:00:00Z
 reason = "Unsound Send bound on tags; reached through zbus/async-* on Linux desktop only, which pass no !Send tags. Fix: event-listener 5.4.2 (lockfile bump)."
 
-# generational-arena 0.2.9
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0014"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained (no known vulnerability); via ngrok -> muxado -> awaitdrop. Revisit when ngrok is updated or dropped."
-
 # git2 0.19.0
 [[IgnoredVulns]]
 id = "GHSA-j39j-6gw9-jw6h"
@@ -333,7 +327,7 @@ reason = "Brotli certificate decompression (RFC 8879), which rustls added in 0.2
 [[IgnoredVulns]]
 id = "RUSTSEC-2025-0134"
 ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained (functionality moved into rustls-pki-types); used to read local PEM files (k2-core, k2-daemon, ngrok, native-certs). No known vulnerability. Replace with rustls-pki-types' PEM API."
+reason = "Unmaintained (functionality moved into rustls-pki-types); used to read local PEM files (k2-core, k2-daemon, native-certs). No known vulnerability. Replace with rustls-pki-types' PEM API."
 
 # rustls-webpki 0.102.8
 [[IgnoredVulns]]

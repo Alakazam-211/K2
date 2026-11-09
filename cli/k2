@@ -22435,7 +22435,7 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
-      [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|file|env]
+      [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|file|env|agent]
       [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]
       [--inject-dst basic|header:Name|query:param] [--inject-format 'user:{}']
       The value goes into the K2 vault; you get a k2v:// reference and use it with
@@ -22498,13 +22498,17 @@ says them in one plain sentence, and the person can change them under Advanced.
 WHERE IT GOES
   --for HOST[,HOST]          the exact sites K2 may send it to: host names only,
                              no https:// or path (api.example.com)
-  --delivery fetch|file|env  fetch (default): K2 makes the HTTPS call and adds the
+  --delivery fetch|file|env|agent  fetch (default): K2 makes the HTTPS call and adds the
                              secret; you never see it. Use it with
                              k2 vault fetch --secret NAME https://HOST/path
                              (GET by default; k2 vault fetch --help)
                              file: $K2_SECRETS_DIR/NAME. env: $NAME (upper case,
                              - and . become _) in new sessions. You can read both.
-  --scope workspace|server|session  who keeps it (default workspace). session: one
+                             agent (an ssh key, with --kind ssh_key, workspace
+                             scope): ssh and git sign with it on $SSH_AUTH_SOCK
+                             in new sessions; you never see the key.
+  --scope workspace|server|session  who keeps it (default workspace; ws:<this
+                             workspace> means the same). session: one
                              running K2 session, with fetch or file (env never
                              arrives): the one that asks, or this chat's running
                              session if that one ended before Save. It stays with
@@ -22517,7 +22521,8 @@ WHERE IT GOES
                              keeps the workspace one: use it with --scope session.
   --kind api_key|password|generic|…  what it is, so the card names it (default
                              api_key; password for a password)
-  --ttl 24h                  session scope only: how long it lasts. Default 24h;
+  --ttl 24h                  session scope only: how long it lasts (90s, 10m, 2h,
+                             7d or seconds). Default 24h;
                              longer than 7d is cut to 7d, and to 24h when a guest
                              answers. Other scopes ignore it.
   --prompt "…"               your note, shown on the card beside its sentence
@@ -32690,7 +32695,7 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault public-key NAME                 an ssh key's .pub line (never the private key)
   k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded|--no-forwarded]
                                            an ssh key's agent signing limits (agent delivery)
-  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node>|compute:<ws>/lane:<owner>/<lane> [--as <d>] [--env-name X]
+  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node>|compute:<ws>/lane:<owner>/<lane> [--as <d>] [--env-name X] [--ttl 2h]
   k2 vault revoke NAME --from <who>        (or --grant <id>)
   k2 vault disable|enable NAME             destroy NAME --yes
   k2 vault fetch --secret NAME [-X M] [-H 'N: v'] [-d @file] URL
@@ -32699,10 +32704,10 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault audit [NAME] [--since <rfc3339>]
   k2 vault requests                        Thread secret cards (pending / set / declined)
   k2 vault presets                         known key formats (Stripe, OpenAI, Anthropic, …)
-  k2 vault env-file --secret NAME [--ttl 60]   a short-lived 0600 file for docker/podman --env-file
-  k2 vault file --secret NAME [--ttl 60]   a short-lived 0600 file holding one secret delivered to you
+  k2 vault env-file NAME [--ttl 90s]       a short-lived 0600 file for docker/podman --env-file
+  k2 vault file NAME [--ttl 90s]           a short-lived 0600 file holding one secret delivered to you
                                            as file (or env): pass the file, never the value
-                                           (tool --code - < "$(k2 vault file --secret NAME)")
+                                           (tool --code - < "$(k2 vault file NAME)")
   k2 vault sync                            files granted since this session started, into $K2_SECRETS_DIR now
   k2 vault import .env [--scope <s>] [--remove-original]   move a .env in; writes .env.k2 (references)
   k2 vault service <service> [clean|legacy] [--env-file .env.k2]   a published service's environment
@@ -32751,7 +32756,10 @@ set options:
   --delivery fetch|agent|file|env|api   how agents get it (default fetch for keys;
                               agent: ssh keys sign on $SSH_AUTH_SOCK, never shown)
   --ceiling fetch|agent|file|env|api    the loosest delivery allowed later
-  --describe <text>  --rotate-every <days>  --ttl <secs> (session scope)
+  --describe <text>  --rotate-every <days>  --ttl 2h (session scope)
+
+Times (--ttl on set, grant, file, env-file and secret cards): 90s, 10m, 2h,
+7d, or plain seconds (3600).
 
 Where the key goes is fixed by whoever creates the secret (header and
 format); agents name the secret and K2 adds it. The presets fill this in
@@ -33625,7 +33633,9 @@ apply when NAME is created.
                            at most one {ts} (default '{sig}')
   Change it later with k2 vault sign (k2 vault sign --help).
 
-  --describe <text>  --rotate-every <days>  --ttl <secs> (session scope)
+  --describe <text>  --rotate-every <days>
+  --ttl 2h                 session scope: how long it lasts (90s, 10m, 2h, 7d
+                           or seconds; default 24h, 60s to 30d)
 
 Examples:
   k2 vault set STRIPE_KEY --preset stripe < key.txt
@@ -33696,7 +33706,7 @@ Example: k2 vault delivery DEPLOY_KEY agent
 EOF
             ;;
         grant) cat <<'EOF'
-k2 vault grant NAME --to <who> [--as <d>] [--env-name X] [--file-name F] [--scope <s>]
+k2 vault grant NAME --to <who> [--as <d>] [--env-name X] [--file-name F] [--ttl 2h] [--scope <s>]
 
 Share NAME, or set how one consumer gets it (one grant per consumer and
 delivery; a new one replaces the old).
@@ -33723,6 +33733,9 @@ delivery; a new one replaces the old).
                      (PATH, LD_*, GIT_*, SSH_*, K2_*, *_BASE_URL…) are
                      refused.
   --file-name F      the file in $K2_SECRETS_DIR (default NAME)
+  --ttl 2h           the share ends by itself that long from now (90s, 10m,
+                     2h, 7d or seconds); k2 vault show lists "until <time>".
+                     Without it the share stays until revoked.
 A file grant also reaches running sessions: K2 writes it into their
 $K2_SECRETS_DIR at once (or within a minute; k2 vault sync in a session
 does it now). Env and ssh-key grants reach new sessions only: restart
@@ -33843,20 +33856,21 @@ Example: k2 vault doctor
 EOF
             ;;
         env-file) cat <<'EOF'
-k2 vault env-file --secret NAME [--secret NAME2 …] [--scope session] [--ttl <secs>]
+k2 vault env-file NAME [NAME2 …] [--scope session] [--ttl 90s]
 k2 vault env-file --done <path>
 
 From a K2 terminal: a short-lived 0600 file of NAME=value lines for
 docker/podman --env-file, in a memory-backed folder. Removed after --ttl
-seconds (default 60, 5 to 3600) or with --done. Each secret needs env
-delivery for you; a value with a line break is refused (use file delivery).
-One value for a tool's stdin or a file flag: k2 vault file --secret NAME.
+(90s, 10m or seconds; default 60s, 5s to 1h) or with --done. Each secret
+needs env delivery for you; a value with a line break is refused (use file
+delivery). --secret NAME works too. One value for a tool's stdin or a file
+flag: k2 vault file NAME.
 
-Example: docker run --env-file "$(k2 vault env-file --secret DATABASE_URL)" myapp
+Example: docker run --env-file "$(k2 vault env-file DATABASE_URL)" myapp
 EOF
             ;;
         file) cat <<'EOF'
-k2 vault file --secret NAME [--scope session] [--ttl <secs>] [--json]
+k2 vault file NAME [--scope session] [--ttl 90s] [--json]
 k2 vault file --done <path>
 
 From a K2 terminal: the value of NAME, as is, in a short-lived 0600 file
@@ -33864,13 +33878,13 @@ in a memory-backed folder; prints the path. For a secret delivered to you
 as a file (or env), e.g. one another agent handed you: a tool reads it
 from the file or its stdin, so the value never goes on a command line
 (ps shows command lines to every user) or into your transcript.
-Removed after --ttl seconds (default 60, 5 to 3600) or with --done; a
-`< file` redirect opens it at once, so a sudo prompt after that is fine.
-Fetch-only secrets are refused (use k2 vault fetch); the refusal says who
-can widen it.
+Removed after --ttl (90s, 10m or seconds; default 60s, 5s to 1h) or with
+--done; a `< file` redirect opens it at once, so a sudo prompt after that
+is fine. --secret NAME works too. Fetch-only secrets are refused (use k2
+vault fetch); the refusal says who can widen it.
 
-Example: sudo k2-node servers add --url URL --code - < "$(k2 vault file --secret ENROLL_CODE)"
-Example: some-cli login --token-stdin < "$(k2 vault file --secret API_TOKEN)"
+Example: sudo k2-node servers add --url URL --code - < "$(k2 vault file ENROLL_CODE)"
+Example: some-cli login --token-stdin < "$(k2 vault file API_TOKEN)"
 EOF
             ;;
         sync) cat <<'EOF'
@@ -35421,12 +35435,35 @@ cmd_migrate() {
     esac
 }
 
+# Every verb `k2 vault` knows (cmd_vault and the dispatchers it calls). A
+# new verb goes here too: a word not listed is an unknown verb, with or
+# without --help (prd-vault-for-agents-v1 X9: `k2 vault exec --help` used to
+# print the top help and exit 0, so an agent took the guess as real).
+_VAULT_VERBS=" status list ls show set rotate hosts sign public-key agent-limit delivery grant revoke open disable enable destroy get audit requests presets doctor env-file file sync import service reveal recovery confirm-password kek rekey rollback recipient carry backup restore systemd-cred placement placements fetch send incoming sent accept-from ask asks unsend "
+
+_vault_unknown_verb() {
+    local sub="$1" try=""
+    case "$sub" in
+        # A command that needs its secrets: `run` once it exists (S2),
+        # else the env file a container reads.
+        exec|env|inject)
+            case "$_VAULT_VERBS" in *" run "*) try="run" ;; *) try="env-file" ;; esac ;;
+    esac
+    echo "usage: unknown vault verb '$sub' (k2 vault --help)" >&2
+    [ -z "$try" ] || echo "did you mean $try? (k2 vault $try --help)" >&2
+    exit 2
+}
+
 cmd_vault() {
     local sub="${1:-}"
     case "$sub" in
         ""|help|--help|-h) _vault_usage; return 0 ;;
     esac
     shift
+    case "$_VAULT_VERBS" in
+        *" $sub "*) ;;
+        *) _vault_unknown_verb "$sub" ;;
+    esac
     if [ "$sub" = "fetch" ]; then
         _vault_fetch "$@"
         return
@@ -35572,7 +35609,7 @@ ap = v.get("agentPolicy")
 if ap:
     print("agent:     at most %s signatures a second, %s a minute per session; forwarded agents %s" % (ap.get("burst"), ap.get("perMinute"), "allowed" if ap.get("allowForwarded") else "refused"))
 for g in v.get("grants") or []:
-    print("shared:    %s as %s%s" % (g.get("consumerLabel"), g.get("delivery"), (" env " + g["envName"]) if g.get("envName") else ""))
+    print("shared:    %s as %s%s%s" % (g.get("consumerLabel"), g.get("delivery"), (" env " + g["envName"]) if g.get("envName") else "", (" until " + g["expiresAt"]) if g.get("expiresAt") else ""))
 for p in v.get("placements") or []:
     where = ("systemd credential %s on %s" % (p.get("credName"), p.get("unit"))) if p.get("target") == "systemd_cred" else (p.get("where") or "")
     st = p.get("state")
@@ -35604,7 +35641,8 @@ if delivery: o["delivery"] = delivery
 if ceiling: o["ceiling"] = ceiling
 if describe: o["description"] = describe
 if rot: o["rotateEveryDays"] = int(rot)
-if ttl: o["ttlSecs"] = int(ttl)
+# As typed (90s, 10m, 2h, 7d or seconds): the daemon parses it (k2_vault::duration).
+if ttl: o["ttl"] = ttl
 if ih or iformat or idst:
     o["inject"] = {"dst": idst or ("header:" + (ih or "Authorization")), "fmt": iformat or "{}"}
 if sign:
@@ -35712,12 +35750,14 @@ print(json.dumps(o))' "${pos[1]}" "$ceiling")"
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; m=json.load(sys.stdin).get("secret") or {}; print("%s: %s (at most %s)" % (m.get("name"), m.get("defaultDelivery"), m.get("deliveryCeiling")))'
             ;;
         grant)
-            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node> [--as <d>]" >&2; exit 2; }
+            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node> [--as <d>] [--ttl 2h]" >&2; exit 2; }
             local gj
+            # --ttl goes as typed (90s, 10m, 2h, 7d); the daemon turns it
+            # into the share's end (V9: it used to be dropped here).
             gj="$(python3 -c 'import json,sys; o={"to": sys.argv[1]}
-for k,v in (("as",sys.argv[2]),("envName",sys.argv[3]),("fileName",sys.argv[4])):
+for k,v in (("as",sys.argv[2]),("envName",sys.argv[3]),("fileName",sys.argv[4]),("ttl",sys.argv[5])):
     if v: o[k]=v
-print(json.dumps(o))' "$to" "$as_d" "$env_name" "$file_name")"
+print(json.dumps(o))' "$to" "$as_d" "$env_name" "$file_name" "$ttl")"
             _sidecar_split "$(_sidecar_send POST /cli/vault/grant "$(_vault_merge "$sj" "$nj" "$gj")")"
             # VC-B2: a grant they can read (file, env, api) from the owner
             # token needs a person's confirm, like reveal. From your own
@@ -35736,8 +35776,19 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
                 _vault_sock_call POST grant "$(_vault_merge "$sj" "$nj" "$gj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$gtok")")"
             fi
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            # --ttl asked for an end: a server older than 0.46.11 drops it
+            # and makes a share that never ends. Say so, never "shared".
+            if [ -n "$ttl" ] && ! printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if (json.load(sys.stdin).get("grant") or {}).get("expiresAt") else 1)'; then
+                local ngid
+                ngid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("grant") or {}).get("id") or "")')"
+                echo "grant_ttl_ignored: this K2 server made the share WITHOUT an end time (it is older than 0.46.11 and drops --ttl). Take it back when you're done: k2 vault revoke --grant ${ngid}" >&2
+                exit 1
+            fi
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
-            echo "shared ${name} with ${to}"
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+g = json.load(sys.stdin).get("grant") or {}
+print("shared %s with %s%s" % (sys.argv[1], sys.argv[2], (" until " + g["expiresAt"]) if g.get("expiresAt") else ""))' "$name" "$to"
             # A compute: grant to a node another K2 server owns.
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
@@ -35840,12 +35891,15 @@ sys.exit(0 if v.get("ok") else 1)'
             ;;
         env-file)
             local ej
+            # X5: env-file NAME [NAME2 …] like file NAME; --secret stays.
+            local efs=("${pos[@]+"${pos[@]}"}" "${use_secrets[@]+"${use_secrets[@]}"}")
+            [ "${#efs[@]}" -gt 0 ] || [ -n "$done_path" ] || { echo "usage: k2 vault env-file NAME [NAME2 …] [--ttl 90s] | --done <path>" >&2; exit 2; }
             ej="$(python3 -c 'import json,sys
 o={}
 if sys.argv[1]: o["done"]=sys.argv[1]
-if sys.argv[2]: o["ttlSecs"]=int(sys.argv[2])
+if sys.argv[2]: o["ttl"]=sys.argv[2]
 o["secrets"]=[x for x in sys.argv[3:] if x]
-print(json.dumps(o))' "$done_path" "$ttl" "${use_secrets[@]+"${use_secrets[@]}"}")"
+print(json.dumps(o))' "$done_path" "$ttl" "${efs[@]+"${efs[@]}"}")"
             _vault_call POST env-file "$(_vault_merge "$ej" "$sj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
@@ -35853,14 +35907,14 @@ print(json.dumps(o))' "$done_path" "$ttl" "${use_secrets[@]+"${use_secrets[@]}"}
         file)
             # 2026-10-28: one secret delivered as file (or env), as a 0600 file.
             local fsecret="${use_secrets[0]:-$name}"
-            [ "${#use_secrets[@]}" -le 1 ] || { echo "usage: k2 vault file --secret NAME [--ttl <secs>]  (one secret per file)" >&2; exit 2; }
-            [ -n "$fsecret" ] || [ -n "$done_path" ] || { echo "usage: k2 vault file --secret NAME [--ttl <secs>] | --done <path>" >&2; exit 2; }
-            case "$ttl" in ""|*[!0-9]*) [ -z "$ttl" ] || { echo "usage: --ttl <seconds>" >&2; exit 2; } ;; esac
+            [ "${#use_secrets[@]}" -le 1 ] || { echo "usage: k2 vault file NAME [--ttl 90s]  (one secret per file)" >&2; exit 2; }
+            [ -n "$fsecret" ] || [ -n "$done_path" ] || { echo "usage: k2 vault file NAME [--ttl 90s] | --done <path>" >&2; exit 2; }
             local fj
+            # --ttl goes as typed (90s, 10m, 2h or seconds); the daemon parses it.
             fj="$(python3 -c 'import json,sys
 o={}
 if sys.argv[1]: o["done"]=sys.argv[1]
-if sys.argv[2]: o["ttlSecs"]=int(sys.argv[2])
+if sys.argv[2]: o["ttl"]=sys.argv[2]
 if sys.argv[3] and not sys.argv[1]: o["secret"]=sys.argv[3]
 print(json.dumps(o))' "$done_path" "$ttl" "$fsecret")"
             _vault_call POST file "$(_vault_merge "$fj" "$sj")"
@@ -36178,10 +36232,7 @@ if v.get("dryRun"):
 else:
     print("restored vault %s (%d secret(s)). The previous vault file is kept at %s" % (v["vaultId"], v["secrets"], v["previous"]))'
             ;;
-        *)
-            echo "usage: unknown vault verb '$sub' (k2 vault --help)" >&2
-            exit 2
-            ;;
+        *) _vault_unknown_verb "$sub" ;;
     esac
 }
 

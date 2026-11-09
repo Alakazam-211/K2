@@ -2331,6 +2331,13 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Some(raw) = proposal.scope.clone() {
+        let own_label = crate::vault::workspace_label(&resolved.project_id);
+        match card_scope_word(&raw, &resolved.project_id, &own_label, crate::vault::workspace_id) {
+            Ok(word) => proposal.scope = Some(word),
+            Err(e) => return error_json("400 Bad Request", e.code, e.hint),
+        }
+    }
     // The hook token's session (set by the server): who asks, and who a
     // session-scope secret is kept for.
     let session_id = params.get("cell_session_id").cloned();
@@ -2360,9 +2367,10 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Ok(_) => {}
         Err(e) => return error_json("500 Internal Server Error", e.code, e.hint),
     }
-    let ttl_secs = match opt_param(params, "ttl").as_deref().map(parse_ttl) {
+    // One duration grammar for every vault time box (k2_vault::duration).
+    let ttl_secs = match opt_param(params, "ttl").as_deref().map(k2_vault::duration::parse) {
         Some(Ok(t)) => Some(t),
-        Some(Err(h)) => return usage(h),
+        Some(Err(e)) => return error_json("400 Bad Request", e.code, format!("--ttl: {}", e.hint)),
         None => None,
     };
     match create_secret_card(&vault, &resolved, &from, name.trim(), prompt.as_deref(), proposal, session_id, ttl_secs, false) {
@@ -2604,8 +2612,11 @@ pub(crate) fn post_changes_card(addr: &str, changes: overlay::ThreadChanges) -> 
 fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretProposal, k2_vault::VaultError> {
     let scope = opt_param(params, "scope").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     if let Some(s) = &scope {
-        if !matches!(s.as_str(), "workspace" | "server" | "session") {
-            return Err(k2_vault::VaultError::bad_request("bad_scope", "--scope is workspace, server or session"));
+        // X3: `ws:<name>` is the vault's own spelling; [`card_scope_word`]
+        // checks it names this workspace once the address is resolved.
+        let ws_form = s.strip_prefix("ws:").or_else(|| s.strip_prefix("workspace:")).is_some_and(|w| !w.trim().is_empty());
+        if !ws_form && !matches!(s.as_str(), "workspace" | "server" | "session") {
+            return Err(k2_vault::VaultError::bad_request("bad_scope", "--scope is workspace (or ws:<this workspace>), server or session"));
         }
     }
     let raw_hosts = opt_param(params, "for").or_else(|| opt_param(params, "hosts")).unwrap_or_default();
@@ -2617,13 +2628,18 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
     let hosts = k2_vault::hosts::normalise_list(&list, false)?;
     let delivery = opt_param(params, "delivery").map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
     if let Some(d) = &delivery {
-        if !matches!(d.as_str(), "fetch" | "file" | "env") {
-            return Err(k2_vault::VaultError::bad_request("bad_delivery", "--delivery is fetch, file or env"));
+        // X13: `agent` (an ssh key K2 signs with on $SSH_AUTH_SOCK) too.
+        if !matches!(d.as_str(), "fetch" | "file" | "env" | "agent") {
+            return Err(k2_vault::VaultError::bad_request("bad_delivery", "--delivery is fetch, file, env or agent (ssh keys)"));
         }
     }
     let kind = opt_param(params, "kind").map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-    if let Some(k) = &kind {
-        k2_vault::Kind::parse(k)?;
+    let parsed_kind = kind.as_deref().map(k2_vault::Kind::parse).transpose()?;
+    if delivery.as_deref() == Some("agent") && parsed_kind != Some(k2_vault::Kind::SshKey) {
+        return Err(k2_vault::VaultError::bad_request(
+            "delivery_not_for_kind",
+            "--delivery agent is for ssh keys: add --kind ssh_key (K2 signs with it on $SSH_AUTH_SOCK; you never see the key)",
+        ));
     }
     // How K2 sends it (prd-secret-card-injection-v1 §1): `inject: {dst, fmt}`,
     // the same names and checks as `k2 vault set`. Fetch only (SC-A5).
@@ -2640,6 +2656,27 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
     };
     let inject = inject.map(|i| overlay::SecretInject { dst: i.dst.render(), fmt: i.fmt });
     Ok(overlay::SecretProposal { scope, hosts, delivery, kind, inject, ..Default::default() })
+}
+
+/// X3 (prd-vault-for-agents-v1 §5.1): a card's `--scope ws:<name>` (the
+/// vault's spelling) is `workspace` when it names this workspace, by its
+/// handle, its id or anything `resolve` turns into its id. A card keeps a
+/// secret in the vault of the workspace whose Thread it is on, so another
+/// workspace's name is refused (the words never say whether it exists).
+/// Any other scope word passes through as is.
+fn card_scope_word(raw: &str, own_id: &str, own_label: &str, resolve: impl Fn(&str) -> Option<String>) -> Result<String, k2_vault::VaultError> {
+    let Some(w) = raw.strip_prefix("ws:").or_else(|| raw.strip_prefix("workspace:")).map(str::trim) else {
+        return Ok(raw.to_string());
+    };
+    if w == own_id || w == own_label || resolve(w).as_deref() == Some(own_id) {
+        return Ok("workspace".to_string());
+    }
+    Err(k2_vault::VaultError::bad_request(
+        "bad_scope",
+        format!(
+            "a card keeps the secret for the workspace whose Thread it is on ({own_label}): use --scope workspace (or ws:{own_label}), server or session. To give it to {w}, save it here, then k2 vault send NAME --to {w}"
+        ),
+    ))
 }
 
 /// `inject` (`{dst, fmt}`, JSON text) on a secret card post or answer, as
@@ -2685,6 +2722,10 @@ fn session_card_refused_to_ask(session_id: Option<&str>, delivery: Option<&str>)
         Some("env") => refused(
             "session_env_unreachable",
             "--delivery env reaches new sessions only, and a --scope session secret ends with its session, so it would never arrive; use --delivery file, or --scope workspace",
+        ),
+        Some("agent") => refused(
+            "session_agent_unreachable",
+            "--delivery agent serves an ssh key on $SSH_AUTH_SOCK to new sessions only, and a --scope session key ends with its session, so it would never arrive; use --scope workspace",
         ),
         Some("file") if crate::vault::spawn::kept_dir(sid).is_none() => refused(
             "session_has_no_secrets_dir",
@@ -2902,6 +2943,7 @@ fn card_summary(s: &overlay::SecretBody) -> String {
     let mut line = match s.delivery.as_deref().unwrap_or("fetch") {
         "env" => format!("{} goes to you as ${} (you can read it)", s.name, s.env_name.as_deref().unwrap_or(&s.name)),
         "file" => format!("{} goes to you as the file $K2_SECRETS_DIR/{} (you can read it)", s.name, s.name),
+        "agent" => format!("ssh and git sign with {} on $SSH_AUTH_SOCK in your new sessions (you never see the key)", s.name),
         _ => match s.inject.as_ref().and_then(|i| k2_vault::inject::card_inject(Some(&i.dst), Some(&i.fmt)).ok().flatten()) {
             Some(i) => format!("K2 will send {} {}{to}", s.name, i.words()),
             None => format!("K2 will send {}{to} in the format it knows for that key, else as a Bearer token", s.name),
@@ -2911,23 +2953,6 @@ fn card_summary(s: &overlay::SecretBody) -> String {
         line.push_str(&format!("; this replaces the {} already saved", s.name));
     }
     line
-}
-
-/// `--ttl 24h` / `90m` / `3600` → seconds (chat secrets).
-fn parse_ttl(s: &str) -> Result<i64, &'static str> {
-    let s = s.trim();
-    let (num, mult) = match s.chars().last() {
-        Some('h') => (&s[..s.len() - 1], 3600),
-        Some('m') => (&s[..s.len() - 1], 60),
-        Some('d') => (&s[..s.len() - 1], 86400),
-        Some('s') => (&s[..s.len() - 1], 1),
-        _ => (s, 1),
-    };
-    let n: i64 = num.parse().map_err(|_| "--ttl is like 24h, 90m or 3600")?;
-    if n <= 0 {
-        return Err("--ttl must be positive");
-    }
-    Ok(n * mult)
 }
 
 fn card_id_of(params: &HashMap<String, String>) -> String {
@@ -4167,7 +4192,7 @@ fn choice_card_expiry(params: &HashMap<String, String>, now: i64) -> Result<Opti
         None => Ok(Some(now + overlay::DEFAULT_CARD_EXPIRY_SECS)),
         Some(s) if s.is_empty() => Ok(Some(now + overlay::DEFAULT_CARD_EXPIRY_SECS)),
         Some(s) if matches!(s.as_str(), "never" | "none" | "off") => Ok(None),
-        Some(s) => parse_ttl(&s)
+        Some(s) => k2_vault::duration::parse(&s)
             .map(|secs| Some(now + secs))
             .map_err(|_| usage("--expires is like 2h, 3d, 90m or 3600 seconds (or --no-expiry)")),
     }

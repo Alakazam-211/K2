@@ -326,9 +326,21 @@ struct EnvFileBody {
     secrets: Vec<String>,
     /// `session`: this session's own secret of that name.
     scope: Option<String>,
+    /// How long the file stays, as typed (`"90s"`) or seconds.
+    ttl: Option<Value>,
+    /// The older CLI's number of seconds.
     ttl_secs: Option<u64>,
     /// Remove a file made earlier.
     done: Option<String>,
+}
+
+/// A use-file's life from `ttl` (`k2_vault::duration`) or the older
+/// `ttlSecs`: default 60 s, kept within 5 s to 1 h. Parsed before anything
+/// is written, so a bad `--ttl` is refused, never ignored.
+fn use_file_ttl(ttl: Option<&Value>, legacy_secs: Option<u64>) -> Result<u64, VaultError> {
+    let legacy = legacy_secs.map(|s| i64::try_from(s).unwrap_or(i64::MAX));
+    let secs = k2_vault::duration::body_ttl(ttl, legacy)?.unwrap_or(60);
+    Ok(u64::try_from(secs.clamp(5, 3600)).expect("clamped to 5..=3600"))
 }
 
 fn env_files_dir() -> Result<PathBuf, VaultError> {
@@ -345,6 +357,7 @@ fn env_files_dir() -> Result<PathBuf, VaultError> {
 fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     c.actor.agent().ok_or_else(|| VaultError::forbidden("use_env_file_as_agent", "env-file runs for an agent session"))?;
     let b: EnvFileBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let ttl = use_file_ttl(b.ttl.as_ref(), b.ttl_secs)?;
     let dir = env_files_dir()?;
     if let Some(done) = b.done.as_deref() {
         let p = Path::new(done);
@@ -373,7 +386,6 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     let p = dir.join(format!("{}.env", k2_vault::crypto::base62(16)));
     crate::vault::spawn::write_secret_file(&dir, p.file_name().and_then(|f| f.to_str()).unwrap_or("x.env"), lines.as_bytes())
         .map_err(|e| VaultError::internal(format!("env file: {}", e.kind())))?;
-    let ttl = b.ttl_secs.unwrap_or(60).clamp(5, 3600);
     let p2 = p.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(ttl));
@@ -513,6 +525,9 @@ struct FileBody {
     secret: Option<String>,
     /// `session`: this session's own secret of that name.
     scope: Option<String>,
+    /// How long the file stays, as typed (`"90s"`) or seconds.
+    ttl: Option<Value>,
+    /// The older CLI's number of seconds.
     ttl_secs: Option<u64>,
     /// Remove a file made earlier.
     done: Option<String>,
@@ -536,6 +551,7 @@ fn use_files_dir() -> Result<PathBuf, VaultError> {
 fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     c.actor.agent().ok_or_else(|| VaultError::forbidden("use_file_as_agent", "k2 vault file runs for an agent session; people use k2 vault reveal"))?;
     let b: FileBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let ttl = use_file_ttl(b.ttl.as_ref(), b.ttl_secs)?;
     let dir = use_files_dir()?;
     if let Some(done) = b.done.as_deref() {
         let p = Path::new(done);
@@ -553,7 +569,6 @@ fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     let file = format!("{}-{tag}", k2_vault::crypto::base62(16));
     crate::vault::spawn::write_secret_file(&dir, &file, r.value.expose()).map_err(|e| VaultError::internal(format!("secret file: {}", e.kind())))?;
     let p = dir.join(&file);
-    let ttl = b.ttl_secs.unwrap_or(60).clamp(5, 3600);
     let p2 = p.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(ttl));
@@ -1443,6 +1458,22 @@ pub fn published_service_id(c: &VaultCaller, label: &str) -> Result<String, Vaul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X4: a use-file's life from `ttl` as typed, or the older `ttlSecs`;
+    /// kept within 5 s to 1 h, 60 s by default; bad words are refused.
+    #[test]
+    fn use_file_ttl_takes_the_shared_grammar() {
+        assert_eq!(use_file_ttl(Some(&json!("2m")), None).expect("2m"), 120);
+        assert_eq!(use_file_ttl(Some(&json!("90s")), None).expect("90s"), 90);
+        assert_eq!(use_file_ttl(Some(&json!(300)), None).expect("300"), 300);
+        assert_eq!(use_file_ttl(Some(&json!("2h")), None).expect("2h"), 3600, "kept within 1 h");
+        assert_eq!(use_file_ttl(Some(&json!("1s")), None).expect("1s"), 5, "at least 5 s");
+        assert_eq!(use_file_ttl(None, Some(90)).expect("legacy"), 90);
+        assert_eq!(use_file_ttl(None, Some(u64::MAX)).expect("legacy max"), 3600);
+        assert_eq!(use_file_ttl(None, None).expect("default"), 60);
+        assert_eq!(use_file_ttl(Some(&json!("soon")), None).expect_err("soon").code, "bad_ttl");
+        assert_eq!(use_file_ttl(Some(&json!("2m")), Some(60)).expect_err("both").code, "bad_ttl");
+    }
 
     /// End to end through the route: the agent names the secret, the
     /// upstream gets it in the sealed header, the echo comes back

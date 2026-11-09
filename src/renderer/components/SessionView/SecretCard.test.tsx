@@ -121,6 +121,26 @@ describe('SecretCard: the simple view', () => {
       'K2 will add this to calls to api.stripe.com and files.stripe.com, for this session only; sales never sees it.',
     )
   })
+
+  // prd-vault-for-agents-v1 X13: an agent may ask for an ssh key with
+  // `--kind ssh_key --delivery agent`; the card used to call it fetch and
+  // wanted a site before Save.
+  it('an ssh key for agent delivery: said as signing, no site needed, saves as proposed in one click', async () => {
+    const { calls, onSubmit } = recorder()
+    card({ name: 'DEPLOY_KEY', delivery: 'agent', scope: 'workspace', secretKind: 'ssh_key', hosts: [] }, onSubmit)
+    expect(plan()).toBe(
+      'K2 will sign with this ssh key for sales (ssh and git, from its next session), for this workspace; sales never sees it.',
+    )
+    expect(screen.getByTestId('thread-secret-plan').getAttribute('data-delivery')).toBe('agent')
+    openAdvanced()
+    expect(screen.getByLabelText(/K2 signs with it \(ssh and git\)/)).toBeTruthy()
+    expect(screen.queryByLabelText(/K2 adds it to calls/)).toBeNull()
+    expect(screen.queryByTestId('thread-secret-readable')).toBeNull()
+    paste(VALUE)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(field().value).toBe(''))
+    expect(calls).toEqual([{ secret: VALUE, disclosed: true }])
+  })
 })
 
 describe('SecretCard: Advanced', () => {

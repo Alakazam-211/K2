@@ -321,3 +321,21 @@ async fn expiry_and_a_late_look_close_or_restore_the_card() {
     let _ = crate::vault_handoff_routes::handle(&v, crate::vault_handoff_routes::INCOMING, &caller, b"", &HashMap::new(), "test");
     assert_eq!(open_for(&ws.id, &late).len(), 1);
 }
+
+/// X15 (prd-vault-for-agents-v1 §5.1): `k2 permission list` shows the
+/// action with no delivery id. It used to read "Accept delivery  into k2's
+/// vault." (an empty id); now it says what the action does. A card whose id
+/// K2 can't read keeps naming that id.
+#[test]
+fn the_listing_without_an_id_says_what_it_accepts() {
+    let spec = super::super::find(ACTION).expect("registered").spec;
+    let listed = Ctx { workspace_id: "w-1".into(), workspace_handle: "k2".into(), params: serde_json::Map::new() };
+    let w = crate::permission::present::words(spec, &listed);
+    assert_eq!(w.what_changes, "Accept a secret another agent sent into k2's vault.", "{}", w.what_changes);
+    assert!(!w.what_changes.contains("  ") && !w.consequences.contains("  "), "no empty id: {} / {}", w.what_changes, w.consequences);
+    assert!(w.consequences.contains("nothing is applied until a person allows that card"), "{}", w.consequences);
+    let mut one = listed.clone();
+    one.params.insert("id".into(), json!("hd_gone"));
+    let computed = with_computed(ACTION, &one).expect("words");
+    assert_eq!(computed.params["accept"], json!("Accept delivery hd_gone into k2's vault"), "{:?}", computed.params);
+}

@@ -20,6 +20,7 @@ pub mod confirm;
 pub mod crypto;
 pub mod db;
 pub mod delivery;
+pub mod duration;
 pub mod engine;
 pub mod error;
 pub mod fetch;

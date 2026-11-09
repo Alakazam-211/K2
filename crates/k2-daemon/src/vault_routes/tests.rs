@@ -1537,3 +1537,106 @@ fn the_sew_launch_key_reveals_by_engine_scope_to_the_owner_only() {
         assert_eq!((s, code(&v)), (400, "bad_scope"), "{bad}: {v}");
     }
 }
+
+/// `t` from now, give or take a minute (the route stamps its own now).
+fn about(at: &Value, from: chrono::DateTime<chrono::Utc>, secs: i64) {
+    let s = at.as_str().unwrap_or_else(|| panic!("no time: {at}"));
+    let got = chrono::DateTime::parse_from_rfc3339(s).unwrap_or_else(|e| panic!("{s}: {e}")).with_timezone(&chrono::Utc);
+    let want = from + chrono::Duration::seconds(secs);
+    assert!((got - want).num_seconds().abs() <= 60, "ends {got}, want about {want}");
+}
+
+fn shown_grants(t: &T, name: &str) -> Vec<Value> {
+    let mut p = HashMap::new();
+    p.insert("name".to_string(), name.to_string());
+    let (s, v) = call_p(t, SHOW, &owner(), Value::Null, p);
+    assert_eq!(s, 200, "{v}");
+    v["grants"].as_array().expect("grants").clone()
+}
+
+/// V9 (prd-vault-for-agents-v1 §7.1): `k2 vault grant --ttl 2h` ends the
+/// share by itself. Before 0.46.11 the CLI parsed --ttl and never sent it,
+/// and the route had no `ttl`: a share the agent thought was time-boxed
+/// stayed for good. Now `ttl` (as typed, `k2_vault::duration`) becomes the
+/// grant's `expiresAt`; bad words, or `ttl` with `expiresAt`, are refused
+/// and nothing is shared.
+#[test]
+fn a_grant_with_a_ttl_ends_by_itself() {
+    let t = vault();
+    let a = agent("ws1", false);
+    let (s, v) = call(&t, SET, &a, json!({ "name": "OVH_KEY", "hosts": ["eu.api.ovh.com"], "valueB64": b64("k2test-ovh-key") }));
+    assert_eq!(s, 200, "{v}");
+    let now = chrono::Utc::now();
+    let (s, v) = call(&t, GRANT, &a, json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch", "ttl": "2h" }));
+    assert_eq!(s, 200, "{v}");
+    about(&v["grant"]["expiresAt"], now, 2 * 3600);
+    let g = shown_grants(&t, "OVH_KEY");
+    assert_eq!(g.len(), 1, "{g:?}");
+    about(&g[0]["expiresAt"], now, 2 * 3600);
+    // Seconds as a number work too (an older script's form).
+    let (s, v) = call(&t, GRANT, &a, json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch", "ttl": 90 }));
+    assert_eq!(s, 200, "{v}");
+    about(&v["grant"]["expiresAt"], now, 90);
+    // Refused, and the share stays as it was (90 s from now).
+    for body in [
+        json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch", "ttl": "soon" }),
+        json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch", "ttl": "0" }),
+        json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch", "ttl": "2w" }),
+        json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch", "ttl": "2h", "expiresAt": "2030-01-01T00:00:00Z" }),
+    ] {
+        let (s, v) = call(&t, GRANT, &a, body.clone());
+        assert_eq!((s, code(&v)), (400, "bad_ttl"), "{body}: {v}");
+    }
+    let g = shown_grants(&t, "OVH_KEY");
+    assert_eq!(g.len(), 1, "{g:?}");
+    about(&g[0]["expiresAt"], now, 90);
+    // No ttl: no end, as before; expiresAt alone still works.
+    let (s, v) = call(&t, GRANT, &a, json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch" }));
+    assert_eq!(s, 200, "{v}");
+    assert!(v["grant"]["expiresAt"].is_null(), "{v}");
+    let (s, v) = call(&t, GRANT, &a, json!({ "name": "OVH_KEY", "to": "session:sess-9", "as": "fetch", "expiresAt": "2030-01-01T00:00:00Z" }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["grant"]["expiresAt"], "2030-01-01T00:00:00Z", "{v}");
+}
+
+/// X4: `k2 vault set --scope session --ttl 2h` sends the words as typed
+/// (the CLI used to crash in Python `int()`); the daemon parses them. The
+/// older CLI's `ttlSecs` still works; a bad `ttl` is refused, not ignored.
+#[test]
+fn set_takes_a_session_ttl_as_typed() {
+    let t = vault();
+    let a = agent("ws1", false);
+    let now = chrono::Utc::now();
+    let (s, v) = call(&t, SET, &a, json!({ "name": "CODE_A", "scope": "session", "ttl": "2h", "valueB64": b64("k2test-a") }));
+    assert_eq!(s, 200, "{v}");
+    about(&v["secret"]["expiresAt"], now, 2 * 3600);
+    let (s, v) = call(&t, SET, &a, json!({ "name": "CODE_B", "scope": "session", "ttlSecs": 600, "valueB64": b64("k2test-b") }));
+    assert_eq!(s, 200, "{v}");
+    about(&v["secret"]["expiresAt"], now, 600);
+    for bad in [json!({ "ttl": "soon" }), json!({ "ttl": "2h", "ttlSecs": 60 })] {
+        let mut body = json!({ "name": "CODE_C", "scope": "session", "valueB64": b64("k2test-c") });
+        for (k, val) in bad.as_object().expect("object") {
+            body[k] = val.clone();
+        }
+        let (s, v) = call(&t, SET, &a, body);
+        assert_eq!((s, code(&v)), (400, "bad_ttl"), "{bad}: {v}");
+    }
+}
+
+/// X4: `k2 vault file` and `env-file` take `ttl` as typed; a bad one is
+/// refused before anything is written (it used to be dropped for the 60 s
+/// default, and `file` refused non-digits in the CLI only).
+#[test]
+fn use_files_refuse_a_bad_ttl_before_writing() {
+    let t = vault();
+    let a = agent("ws1", false);
+    for path in [crate::vault_use_routes::FILE, crate::vault_use_routes::ENV_FILE] {
+        let body = if path == crate::vault_use_routes::FILE {
+            json!({ "secret": "NOPE", "ttl": "soon" })
+        } else {
+            json!({ "secrets": ["NOPE"], "ttl": "soon" })
+        };
+        let (s, v) = call(&t, path, &a, body);
+        assert_eq!((s, code(&v)), (400, "bad_ttl"), "{path}: {v}");
+    }
+}

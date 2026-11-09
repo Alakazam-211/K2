@@ -1366,6 +1366,9 @@ struct SetBody {
     ceiling: Option<String>,
     description: Option<String>,
     rotate_every_days: Option<u32>,
+    /// Session scope: how long it lasts, as typed (`"2h"`) or seconds
+    /// (`k2_vault::duration`). `ttlSecs` is the older CLI's number.
+    ttl: Option<Value>,
     ttl_secs: Option<i64>,
     value_b64: Option<String>,
     /// `create` | `rotate` | `upsert` (default upsert)
@@ -1432,8 +1435,9 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
         Some("rotate") => PutMode::Rotate,
         _ => PutMode::Upsert,
     };
+    let ttl = k2_vault::duration::body_ttl(b.ttl.as_ref(), b.ttl_secs)?;
     if scope.kind == ScopeKind::Session {
-        let ttl = b.ttl_secs.unwrap_or(24 * 3600).clamp(60, 30 * 24 * 3600);
+        let ttl = ttl.unwrap_or(24 * 3600).clamp(60, 30 * 24 * 3600);
         req.expires_at = Some((chrono::Utc::now() + chrono::Duration::seconds(ttl)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
     let out = vault.put(req, value, &c.actor)?;
@@ -1603,10 +1607,28 @@ struct GrantBody {
     file_name: Option<String>,
     hosts: Option<Vec<String>>,
     expires_at: Option<String>,
+    /// `k2 vault grant --ttl 2h` (V9): the share ends that long from now.
+    /// As typed or seconds (`k2_vault::duration`); not with `expiresAt`.
+    ttl: Option<Value>,
     version: Option<u32>,
     /// VC-B2: a `grant-read` confirm, for a readable grant from the owner
     /// token.
     confirm_token: Option<String>,
+}
+
+/// When a grant ends: `expiresAt` as given, or `ttl` from now (V9: before
+/// 0.46.11 the CLI parsed `--ttl` on grant and never sent it, so a share
+/// the agent thought was time-boxed never ended). Both is refused.
+fn grant_expiry(b: &GrantBody) -> Result<Option<String>, VaultError> {
+    match (b.expires_at.as_deref(), b.ttl.as_ref().filter(|v| !v.is_null())) {
+        (Some(_), Some(_)) => Err(err(k2_vault::duration::BAD_TTL, 400, "give --ttl or expiresAt, not both")),
+        (Some(x), None) => Ok(Some(x.to_string())),
+        (None, Some(v)) => {
+            let secs = k2_vault::duration::from_json(v)?;
+            Ok(Some((chrono::Utc::now() + chrono::Duration::seconds(secs)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)))
+        }
+        (None, None) => Ok(None),
+    }
 }
 
 /// VC-B2: the confirm action for a grant that lets the grantee read the
@@ -1670,6 +1692,7 @@ fn consumer_label(c: &VaultCaller, consumer: &Consumer) -> String {
 
 fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     let b: GrantBody = parse(body)?;
+    let expires_at = grant_expiry(&b)?;
     let sel = selector(c, &b.sel)?;
     let to = b.to.as_deref().ok_or_else(|| err("consumer_required", 400, "who gets it? --to ws:<name>"))?;
     let consumer = consumer_for(c, to)?;
@@ -1717,7 +1740,7 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
                 env_name: b.env_name.clone(),
                 file_name: b.file_name.clone(),
                 hosts_narrowed: b.hosts.clone(),
-                expires_at: b.expires_at.clone(),
+                expires_at,
                 version: b.version,
             },
             &c.actor,

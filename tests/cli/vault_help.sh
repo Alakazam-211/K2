@@ -57,6 +57,26 @@ for verb in status list show set rotate hosts delivery grant revoke disable enab
 done
 ok "every k2 vault verb has its own --help with an example"
 
+# prd-vault-for-agents-v1 X9: a guessed verb with --help is an unknown verb
+# (exit 2), not the top help with exit 0. `run` is unknown until S2 adds it.
+for guess in exec env inject run frobnicate; do
+    set +e
+    err="$(k2n vault "$guess" --help 2>&1)"; rc=$?
+    err_bare="$(k2n vault "$guess" 2>&1)"; rc_bare=$?
+    set -e
+    [ "$rc" = 2 ] || fail "vault $guess --help: exit $rc ($err)"
+    [ "$rc_bare" = 2 ] || fail "vault $guess: exit $rc_bare ($err_bare)"
+    for e in "$err" "$err_bare"; do
+        printf '%s\n' "$e" | head -1 | grep -Fqx "usage: unknown vault verb '$guess' (k2 vault --help)" || fail "vault $guess: $e"
+        if printf '%s' "$e" | grep -Fq "k2 vault — secrets for agents"; then fail "vault $guess printed the top help: $e"; fi
+    done
+    case "$guess" in
+        exec|env|inject) printf '%s' "$err" | grep -Fq "did you mean env-file? (k2 vault env-file --help)" || fail "vault $guess: no did-you-mean: $err" ;;
+        *) if printf '%s' "$err" | grep -Fq "did you mean"; then fail "vault $guess: a did-you-mean for no reason: $err"; fi ;;
+    esac
+done
+ok "an unknown vault verb exits 2 with or without --help; exec/env/inject say did you mean"
+
 # K2 Cores field report (2026-10-28): `k2 publish secret --help` is its own
 # page with the flags and an example (it used to be a usage error).
 for args in "publish secret --help" "publish secret add --help" "publish secret help" "publish secret add mpc NAME -h"; do
@@ -225,13 +245,33 @@ class H(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            # --ttl (V9): a current daemon answers with the share's end; an
+            # older one (OLD_SERVER) drops ttl and the share has none.
+            if b.get("ttl"):
+                g = {"id": "g-" + b["name"], "delivery": "fetch"}
+                if b["name"] != "OLD_SERVER":
+                    g["expiresAt"] = "2026-11-09T14:00:00Z"
+                return self.reply({"ok": True, "grant": g})
+        # The daemon parses every --ttl (k2_vault::duration): its 400 is
+        # what the CLI prints.
+        if json.loads(body or "{}").get("ttl") == "soon":
+            data = json.dumps({"error": {"code": "bad_ttl", "hint": "a duration is like 90s, 10m, 2h or 7d (or seconds: 3600), not 'soon'"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.split("?")[0] in ("/cli/vault/revoke", "/cli/vault/destroy", "/cli/vault/disable"):
             return self.reply({"ok": True, "filesRemoved": 2, "recall": "K2 removed its file from 2 running sessions."})
+        if self.path.startswith("/cli/vault/env-file"):
+            b = json.loads(body or "{}")
+            return self.reply({"ok": True, "path": "/run/k2-secrets/env-files/abc.env", "ttlSecs": 60})
         if self.path.startswith("/cli/vault/file"):
             b = json.loads(body or "{}")
             if b.get("done"):
                 return self.reply({"ok": True, "removed": b["done"]})
-            return self.reply({"ok": True, "path": "/run/k2-secrets/use-files/abc-" + b["secret"], "name": b["secret"], "ttlSecs": b.get("ttlSecs", 60)})
+            return self.reply({"ok": True, "path": "/run/k2-secrets/use-files/abc-" + b["secret"], "name": b["secret"], "ttlSecs": 60})
         self.reply({"ok": True, "created": True, "ref": "k2v://ws/w/X", "secret": {"name": "X", "latestVersion": 1}, "use": "k2 vault fetch --secret X https://h/…"})
     def log_message(self, *a):
         pass
@@ -333,13 +373,16 @@ out="$(k2s vault file --secret ENROLL_CODE --ttl 120)" || fail "file: $out"
 out="$(k2s vault file ENROLL_CODE)" || fail "file NAME: $out"
 out="$(k2s vault file --done /run/k2-secrets/use-files/abc-ENROLL_CODE)" || fail "file --done: $out"
 [ "$out" = "removed /run/k2-secrets/use-files/abc-ENROLL_CODE" ] || fail "file --done printed: $out"
+out="$(k2s vault file ENROLL_CODE --ttl 2m)" || fail "file --ttl 2m: $out"
 python3 - "$WORK/posts.log" <<'PY2' || fail "file bodies: $(cat "$WORK/posts.log")"
 import json, sys
 rows = [(p, json.loads(b)) for p, b in (l.split(" ", 1) for l in open(sys.argv[1]).read().splitlines())]
-assert [p for p, _ in rows] == ["/cli/vault/file"] * 3, rows
-assert rows[0][1] == {"secret": "ENROLL_CODE", "ttlSecs": 120}, rows
+assert [p for p, _ in rows] == ["/cli/vault/file"] * 4, rows
+# --ttl goes as typed; the daemon parses it (prd-vault-for-agents-v1 X4).
+assert rows[0][1] == {"secret": "ENROLL_CODE", "ttl": "120"}, rows
 assert rows[1][1] == {"secret": "ENROLL_CODE"}, rows
 assert rows[2][1] == {"done": "/run/k2-secrets/use-files/abc-ENROLL_CODE"}, rows
+assert rows[3][1] == {"secret": "ENROLL_CODE", "ttl": "2m"}, rows
 PY2
 set +e
 err="$(k2s vault file --secret A --secret B 2>&1)"; rc1=$?
@@ -347,9 +390,54 @@ err2="$(k2s vault file --secret A --ttl soon 2>&1)"; rc2=$?
 err3="$(k2s vault file 2>&1)"; rc3=$?
 set -e
 [ "$rc1" = 2 ] && printf '%s' "$err" | grep -Fq "one secret per file" || fail "two secrets: exit $rc1 ($err)"
-[ "$rc2" = 2 ] || fail "--ttl soon: exit $rc2 ($err2)"
+[ "$rc2" = 2 ] && printf '%s' "$err2" | grep -Fq "bad_ttl: a duration is like 90s, 10m, 2h or 7d" || fail "--ttl soon: exit $rc2 ($err2)"
 [ "$rc3" = 2 ] || fail "no secret: exit $rc3 ($err3)"
-ok "file posts one secret by name (--ttl, --done) and prints only the path"
+ok "file posts one secret by name (--ttl as typed, --done) and prints only the path"
+
+# X4/X5: env-file NAME works like file NAME (--secret stays), --ttl as typed;
+# set --ttl 2h no longer crashes in the CLI and goes as typed.
+: >"$WORK/posts.log"
+out="$(k2s vault env-file DATABASE_URL)" || fail "env-file NAME: $out"
+[ "$out" = "/run/k2-secrets/env-files/abc.env" ] || fail "env-file printed: $out"
+k2s vault env-file DATABASE_URL --secret REDIS_URL --ttl 2m >/dev/null || fail "env-file NAME --secret --ttl"
+k2s vault env-file --secret DATABASE_URL --ttl 90s >/dev/null || fail "env-file --secret"
+printf 'k2test-value' | k2s vault set SESSION_TOKEN --scope session --ttl 2h >/dev/null || fail "set --ttl 2h"
+python3 - "$WORK/posts.log" <<'PY2' || fail "env-file/set bodies: $(cat "$WORK/posts.log")"
+import json, sys
+rows = [(p, json.loads(b)) for p, b in (l.split(" ", 1) for l in open(sys.argv[1]).read().splitlines())]
+assert [p for p, _ in rows] == ["/cli/vault/env-file"] * 3 + ["/cli/vault/set"], rows
+assert rows[0][1] == {"secrets": ["DATABASE_URL"]}, rows
+assert rows[1][1] == {"secrets": ["DATABASE_URL", "REDIS_URL"], "ttl": "2m"}, rows
+assert rows[2][1] == {"secrets": ["DATABASE_URL"], "ttl": "90s"}, rows
+s = rows[3][1]
+assert s["ttl"] == "2h" and "ttlSecs" not in s and s["scope"] == "session", s
+PY2
+set +e
+err="$(k2s vault env-file 2>&1)"; rc=$?
+err2="$(k2s vault env-file DATABASE_URL --ttl soon 2>&1)"; rc2=$?
+err3="$(printf 'k2test-value' | k2s vault set S --scope session --ttl soon 2>&1)"; rc3=$?
+set -e
+[ "$rc" = 2 ] && printf '%s' "$err" | grep -Fq "usage: k2 vault env-file NAME" || fail "env-file with no name: exit $rc ($err)"
+[ "$rc2" = 2 ] && printf '%s' "$err2" | grep -Fq "bad_ttl" || fail "env-file --ttl soon: exit $rc2 ($err2)"
+[ "$rc3" = 2 ] && printf '%s' "$err3" | grep -Fq "bad_ttl" || fail "set --ttl soon: exit $rc3 ($err3)"
+if printf '%s' "$err3" | grep -Fq "Traceback"; then fail "set --ttl soon: a Python traceback: $err3"; fi
+ok "env-file NAME (and --secret), --ttl as typed on env-file and set; bad --ttl is the daemon's bad_ttl (exit 2)"
+
+# V9: grant --ttl is sent (it used to be parsed and dropped), the end is
+# printed, and a server that drops it is a loud failure, never "shared".
+: >"$WORK/posts.log"
+out="$(k2s vault grant OVH_KEY --to ws:billing --as fetch --ttl 2h)" || fail "grant --ttl: $out"
+[ "$out" = "shared OVH_KEY with ws:billing until 2026-11-09T14:00:00Z" ] || fail "grant --ttl printed: $out"
+grep -F '/cli/vault/grant {' "$WORK/posts.log" | grep -F '"OVH_KEY"' | grep -Fq '"ttl": "2h"' || fail "grant --ttl isn't sent: $(cat "$WORK/posts.log")"
+set +e
+err="$(k2s vault grant OLD_SERVER --to ws:billing --as fetch --ttl 2h 2>&1)"; rc=$?
+set -e
+[ "$rc" = 1 ] || fail "grant --ttl on a server that drops it: exit $rc ($err)"
+printf '%s' "$err" | grep -Fq "grant_ttl_ignored: this K2 server made the share WITHOUT an end time" || fail "grant --ttl dropped: $err"
+printf '%s' "$err" | grep -Fq "k2 vault revoke --grant g-OLD_SERVER" || fail "grant --ttl dropped, no revoke line: $err"
+if printf '%s' "$err" | grep -Fq "shared OLD_SERVER"; then fail "grant --ttl dropped but said shared: $err"; fi
+printf '%s' "$(k2n vault grant --help)" | grep -Fq -- "--ttl 2h           the share ends by itself" || fail "grant --help lacks --ttl"
+ok "grant --ttl is sent, the end is printed, and a server that drops it fails loudly"
 
 # K2 Cores field report (2026-10-28): a vault refusal ends with the
 # permission closing line when the daemon sends one (cards on), and with

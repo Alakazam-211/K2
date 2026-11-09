@@ -247,8 +247,9 @@ export interface OverlayHandoff {
 
 /** Where a secret card's answer is kept (the vault's scope). */
 export type SecretScope = 'workspace' | 'server' | 'session'
-/** How the agent gets a secret card's answer. */
-export type SecretDelivery = 'fetch' | 'file' | 'env'
+/** How the agent gets a secret card's answer. `agent`: an ssh key K2 signs
+ *  with on $SSH_AUTH_SOCK (workspace scope; the agent proposes it). */
+export type SecretDelivery = 'fetch' | 'file' | 'env' | 'agent'
 
 /** A custom Garden widget's mark on a post or card answer it sends for the
  *  person (prd-zen-user-widgets-v2 UWB12a). `placement` + `hash` (0.46.1)

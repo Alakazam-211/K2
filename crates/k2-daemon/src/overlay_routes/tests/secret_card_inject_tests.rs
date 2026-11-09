@@ -962,3 +962,91 @@ fn a_session_card_follows_only_its_own_chat() {
     assert!(vault.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "another workspace's chat gets nothing");
     drop(elsewhere);
 }
+
+/// X3 (prd-vault-for-agents-v1 §5.1): `ws:<name>` on a card is this
+/// workspace's scope when it names this workspace (handle, id, or a name
+/// that resolves to it); any other name is refused in words that don't say
+/// whether it exists; the other scope words pass through.
+#[test]
+fn card_scope_word_takes_this_workspace_only() {
+    let resolve = |w: &str| (w == "ops-folder").then(|| "p-1".to_string());
+    for raw in ["ws:ops", "ws:p-1", "workspace:ops", "ws: ops ", "ws:ops-folder"] {
+        assert_eq!(super::super::card_scope_word(raw, "p-1", "ops", resolve).expect(raw), "workspace", "{raw}");
+    }
+    for raw in ["workspace", "server", "session"] {
+        assert_eq!(super::super::card_scope_word(raw, "p-1", "ops", resolve).expect(raw), raw);
+    }
+    let e = super::super::card_scope_word("ws:sales", "p-1", "ops", resolve).expect_err("another workspace");
+    assert_eq!((e.code, e.status), ("bad_scope", 400), "{e}");
+    assert!(e.hint.contains("(ops)") && e.hint.contains("k2 vault send NAME --to sales"), "{}", e.hint);
+}
+
+/// X3 + X13 through the route: a card asks with `--scope ws:<this
+/// workspace>` and `--kind ssh_key --delivery agent`; the request keeps
+/// `workspace` and `agent`, the agent's line says ssh and git sign with it,
+/// and Save stores an ssh key K2 serves on $SSH_AUTH_SOCK. Another
+/// workspace's name, and agent for a key that isn't an ssh key, are refused
+/// when the agent asks.
+#[test]
+fn a_card_takes_ws_scope_and_asks_for_an_ssh_key_by_agent_delivery() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlx3");
+    let (other_handle, _other_project) = ws("ovlx3o");
+    let ask = serde_json::json!({ "for": "", "kind": "ssh_key", "delivery": "agent", "scope": format!("ws:{handle}") });
+    let posted = post_card(&handle, "DEPLOY_KEY", ask);
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let body = json_body(&posted);
+    assert_eq!(
+        body["sends"], "ssh and git sign with DEPLOY_KEY on $SSH_AUTH_SOCK in your new sessions (you never see the key)",
+        "{body}"
+    );
+    let id = body["id"].as_str().expect("id").to_string();
+    let req = vault.request_get(&id).expect("request");
+    assert_eq!((req.proposed_scope.as_str(), req.proposed_delivery), ("workspace", k2_vault::Delivery::Agent));
+    let doc = card_doc(&handle, &id);
+    assert_eq!((doc["delivery"].as_str(), doc["scope"].as_str()), (Some("agent"), Some("workspace")), "{doc}");
+    let key = k2_vault::ssh_agent::testkeys::ed25519();
+    let saved = answer(&handle, &id, &key, serde_json::json!({}));
+    assert_eq!(saved.status, "200 OK", "{}", saved.body);
+    assert!(!saved.body.contains("PRIVATE KEY"), "{}", saved.body);
+    let m = vault.meta(&sel(&project_id, "DEPLOY_KEY"), &k2_vault::Actor::Owner).expect("saved");
+    assert_eq!((m.kind, m.default_delivery), (k2_vault::Kind::SshKey, k2_vault::Delivery::Agent));
+
+    let other = post_card(&handle, "K2", serde_json::json!({ "scope": format!("ws:{other_handle}") }));
+    assert_error_code(&other, "400 Bad Request", "bad_scope");
+    let not_a_key = post_card(&handle, "K3", serde_json::json!({ "for": "", "delivery": "agent" }));
+    assert_error_code(&not_a_key, "400 Bad Request", "delivery_not_for_kind");
+    let bad = post_card(&handle, "K4", serde_json::json!({ "delivery": "proxy" }));
+    assert_error_code(&bad, "400 Bad Request", "bad_delivery");
+}
+
+/// X13: an ssh key by agent delivery can't be kept for one session (it
+/// reaches new sessions only); the agent hears so when it asks.
+#[cfg(unix)]
+#[test]
+fn an_agent_delivery_card_for_one_session_is_refused_when_asked() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlx13");
+    let chat = RunningChat::start(&project_id);
+    let posted = post_json(
+        "/cli/thread/secret",
+        &params_of(&[("cell_session_id", &chat.sid())]),
+        serde_json::json!({ "addr": handle, "name": "SESS_KEY", "scope": "session", "kind": "ssh_key", "delivery": "agent", "from": "k2" }),
+    );
+    assert_error_code(&posted, "400 Bad Request", "session_agent_unreachable");
+    drop(chat);
+}
+
+/// X4: a card's `--ttl` is the shared duration grammar (k2_vault::duration):
+/// a bad one is the vault's `bad_ttl`, and nothing is posted.
+#[test]
+fn a_card_ttl_uses_the_shared_grammar() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (handle, _project_id) = ws("ovlttl");
+    let posted = post_card(&handle, "TTL_KEY", serde_json::json!({ "scope": "workspace", "ttl": "2w" }));
+    assert_error_code(&posted, "400 Bad Request", "bad_ttl");
+    assert!(json_body(&posted)["error"]["hint"].as_str().expect("hint").starts_with("--ttl: a duration is like 90s, 10m, 2h or 7d"), "{}", posted.body);
+}

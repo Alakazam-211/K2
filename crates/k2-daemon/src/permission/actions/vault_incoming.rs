@@ -212,8 +212,15 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     }
     let mut out = ctx.clone();
     let id = text_param(ctx, "id").unwrap_or("");
-    let rec = crate::vault::get().ok().and_then(|v| delivery(&v, ctx, id));
     let ws = &ctx.workspace_handle;
+    // X15: no id is the catalog's own view (`k2 permission list`), not a
+    // card: say what the action does. An id K2 can't read stays as it was.
+    if id.trim().is_empty() {
+        out.params.insert("accept".into(), json!(format!("Accept a secret another agent sent into {ws}'s vault")));
+        out.params.insert("effect".into(), json!("Each card names the secret, who sent it and how it lands; nothing is applied until a person allows that card."));
+        return Some(out);
+    }
+    let rec = crate::vault::get().ok().and_then(|v| delivery(&v, ctx, id));
     let Some(rec) = rec else {
         out.params.insert("accept".into(), json!(format!("Accept delivery {id} into {ws}'s vault")));
         out.params.insert("effect".into(), json!(format!("K2 can't read delivery {id} now; nothing is applied until it can.")));

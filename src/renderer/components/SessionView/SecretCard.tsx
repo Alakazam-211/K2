@@ -91,11 +91,13 @@ function normalScope(s: string | null | undefined): SecretScope {
 }
 
 function normalDelivery(d: string | null | undefined): SecretDelivery {
-  return d === 'file' || d === 'env' ? d : 'fetch'
+  return d === 'file' || d === 'env' || d === 'agent' ? d : 'fetch'
 }
 
+/** `agent` (an ssh key K2 signs with on $SSH_AUTH_SOCK) is never shown to
+ *  the agent either, so only file and env are readable. */
 export function isReadableDelivery(d: SecretDelivery): boolean {
-  return d !== 'fetch'
+  return d === 'file' || d === 'env'
 }
 
 /** Kinds where "use a restricted key" makes sense. */
@@ -208,6 +210,13 @@ export function SecretPlan({
           </>
         ) : null}
         , for {b(where)}.
+      </>
+    )
+  } else if (delivery === 'agent') {
+    body = (
+      <>
+        K2 will sign with this {b('ssh key')} for {b(agent)} (ssh and git, from its next session), for {b(where)};{' '}
+        {b(agent)} never sees it.
       </>
     )
   } else if (sites.length > 0) {
@@ -426,7 +435,11 @@ export function SecretCard({
     fetch: 'K2 adds it to calls',
     file: `a file ${agent} can read`,
     env: `an environment variable ${agent} can read`,
+    agent: `K2 signs with it (ssh and git); ${agent} never sees it`,
   }
+  // `agent` is for ssh keys only: offered when the agent proposed it.
+  const deliveryChoices: readonly SecretDelivery[] =
+    proposedDelivery === 'agent' ? ['agent', 'file', 'env'] : ['fetch', 'file', 'env']
   const mode = injectMode(inject)
   const modeLabel: Record<InjectMode, string> = {
     default: 'The format K2 knows for this key (else a Bearer token)',
@@ -558,7 +571,7 @@ export function SecretCard({
             <div data-testid="thread-secret-advanced" className={`flex flex-col gap-2 border-t ${border} pt-2`}>
               <fieldset className="flex flex-col gap-1" data-testid="thread-secret-delivery">
                 <legend className={`mb-0.5 ${muted}`}>How {agent} uses it</legend>
-                {(['fetch', 'file', 'env'] as const).map((d) => (
+                {deliveryChoices.map((d) => (
                   <label key={d} className="flex items-start gap-1 cursor-pointer">
                     <SquareRadio
                       className="mt-0.5"

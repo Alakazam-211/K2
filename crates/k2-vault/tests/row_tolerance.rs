@@ -161,3 +161,40 @@ fn a_newer_optional_inject_field_is_ignored() {
     let got = v.meta(&Selector::Id(m.id.clone()), &Actor::Owner).expect("meta");
     assert_eq!(got.inject.expect("inject").fmt, "Bearer {}");
 }
+
+/// An older K2 meeting a refreshing sign-in (prd-vault-for-agents-v1 §6.1,
+/// V17): the signer scheme is one it doesn't know, so the row is skipped and
+/// counted. It must never fall back to sending the JSON value (which holds
+/// the refresh token) as a bearer token. A scheme unknown to this build
+/// stands in for what `oauth-refresh` is to an older one.
+#[test]
+fn a_newer_signer_scheme_is_skipped_not_sent() {
+    use k2_vault::inject::{ClientAuth, Inject, Sign};
+    // What an older daemon reads: the tag it doesn't know.
+    let stored = serde_json::to_value(Inject {
+        sign: Some(Sign::OauthRefresh { token_url: "https://login.example.com/token".into(), client_auth: ClientAuth::Post }),
+        ..Inject::bearer()
+    })
+    .expect("inject");
+    assert_eq!(stored["sign"]["scheme"], "oauth-refresh");
+
+    let t = TestDir::new("r2-oauth");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    put(&v, "KEEP", Kind::ApiKey, Delivery::Fetch);
+    let row = put(&v, "SIGN_IN", Kind::OauthToken, Delivery::Fetch);
+    drop(v);
+    let c = db(&t);
+    let mut newer = stored.clone();
+    newer["sign"]["scheme"] = serde_json::json!("zz-newer-scheme");
+    c.execute("UPDATE secret SET inject = ?2 WHERE id = ?1", [row.id.as_str(), newer.to_string().as_str()]).expect("inject");
+    drop(c);
+
+    let v = open(&t, &ks);
+    assert_eq!(names(&v), vec!["KEEP".to_string()], "skipped");
+    assert_eq!(v.status().counts.newer_secrets, 1, "counted");
+    assert_eq!(v.status().tamper, "ok", "not tamper");
+    let o = k2_vault::hosts::Origin::parse_url("https://api.example.com/x").expect("origin").1;
+    let e = v.resolve(&Selector::Id(row.id.clone()), Use::Fetch(&o), &session("ws1")).err().expect("no use of a newer row");
+    assert_eq!(e.code, "vault_needs_newer_k2");
+}

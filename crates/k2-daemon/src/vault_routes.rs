@@ -374,6 +374,12 @@ pub fn meta_json(m: &SecretMeta) -> Value {
             })
             .collect();
         o.insert("hostsDisplay".into(), Value::Array(hosts));
+        // A refreshing sign-in: whether it still works (§6.2).
+        if m.inject.as_ref().and_then(|i| i.sign.as_ref()).is_some_and(Sign::is_oauth_refresh) {
+            if let Ok(v) = crate::vault::get() {
+                o.insert("oauth".into(), oauth_json(v.oauth_status(&m.id)));
+            }
+        }
         // A copy another agent sent (prd-agent-secret-handoff-v1 §6.3):
         // who, from where, when, and the delivery id.
         if let Some(id) = m.origin.strip_prefix(k2_vault::handoff::ORIGIN_PREFIX) {
@@ -391,6 +397,16 @@ pub fn meta_json(m: &SecretMeta) -> Value {
         }
     }
     v
+}
+
+/// A sign-in's state for `list` and `show`. Never a token.
+pub(crate) fn oauth_json(status: Result<Option<k2_vault::vault::OauthStatus>, VaultError>) -> Value {
+    match status {
+        Ok(Some(s)) if s.is_expired() => json!({ "state": "expired", "message": "expired: sign in again", "lastError": s.last_error, "updatedAt": s.updated_at }),
+        Ok(Some(s)) => json!({ "state": "ok", "expiresAt": s.expires_at, "updatedAt": s.updated_at }),
+        Ok(None) => json!({ "state": "ok" }),
+        Err(e) => json!({ "state": "unreadable", "message": e.hint }),
+    }
 }
 
 fn status_json(st: &VaultStatus) -> Value {
@@ -960,6 +976,9 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
                 findings.push(json!({ "level": "warning", "code": "rotation_due", "message": format!("{} is due for rotation", m.name), "secret": m.id }));
             }
         }
+        if m.inject.as_ref().and_then(|i| i.sign.as_ref()).is_some_and(Sign::is_oauth_refresh) && vault.oauth_status(&m.id).is_ok_and(|s| s.is_some_and(|s| s.is_expired())) {
+            findings.push(json!({ "level": "warning", "code": "oauth_expired", "message": format!("{}: expired: sign in again (k2 vault rotate {} < sign-in.json, or the reconnect card in its Thread)", m.name, m.name), "secret": m.id }));
+        }
     }
     for (name, notice) in legacy_env_services(c) {
         findings.push(json!({
@@ -1297,6 +1316,8 @@ pub struct SignBody {
     ts_header: Option<String>,
     template: Option<String>,
     value_fmt: Option<String>,
+    token_url: Option<String>,
+    client_auth: Option<String>,
 }
 
 impl SignBody {
@@ -1312,7 +1333,25 @@ impl SignBody {
                 Ok(())
             }
         };
+        if self.scheme != "oauth-refresh" {
+            unused("a token URL or client auth", self.token_url.is_some() || self.client_auth.is_some())?;
+        }
         let s = match self.scheme.as_str() {
+            "oauth-refresh" => {
+                unused("a header", self.header.is_some())?;
+                unused("an encoding", self.encoding.is_some())?;
+                unused("a prefix", self.prefix.is_some())?;
+                unused("a timestamp header", self.ts_header.is_some())?;
+                unused("a template", self.template.is_some() || self.value_fmt.is_some())?;
+                Sign::OauthRefresh {
+                    token_url: self
+                        .token_url
+                        .clone()
+                        .filter(|u| !u.is_empty())
+                        .ok_or_else(|| err("bad_inject", 400, "a refreshing sign-in needs its token URL (--oauth-token-url)"))?,
+                    client_auth: self.client_auth.as_deref().map(k2_vault::inject::ClientAuth::parse).transpose()?.unwrap_or_default(),
+                }
+            }
             "ovh" => {
                 unused("a header", self.header.is_some())?;
                 unused("an encoding", self.encoding.is_some())?;
@@ -1336,7 +1375,7 @@ impl SignBody {
                     encoding: enc,
                 }
             }
-            other => return Err(err("bad_inject", 400, format!("no signer {other}; use ovh, hmac-sha256 or hmac-sha256-ts"))),
+            other => return Err(err("bad_inject", 400, format!("no signer {other}; use ovh, hmac-sha256, hmac-sha256-ts or oauth-refresh"))),
         };
         s.normalised()
     }
@@ -1424,6 +1463,7 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
     // generic (api_key would trim), an HMAC key is hmac_key.
     let default_kind = match inj.as_ref().and_then(|i| i.sign.as_ref()) {
         Some(Sign::Ovh) => Kind::Generic,
+        Some(Sign::OauthRefresh { .. }) => Kind::OauthToken,
         Some(_) => Kind::HmacKey,
         None => Kind::ApiKey,
     };

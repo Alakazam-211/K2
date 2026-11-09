@@ -299,6 +299,25 @@ CREATE TABLE IF NOT EXISTS secret_once (
 );
 "#;
 
+/// The current tokens of an `oauth-refresh` secret (prd-vault-for-agents-v1
+/// §6.1, V18): refreshes land here, not as new versions, so hourly tokens
+/// don't pile up under version retention. No row = the person's value is
+/// still current. `access_ct` and `refresh_ct` are sealed under the VDK
+/// (nonce ‖ ciphertext), and both are NULL once `state` is `expired`.
+/// Additive (H22): `user_version` stays 1. Rows carry a MAC under the row key.
+pub const OAUTH_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS oauth_state (
+    secret_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    access_ct BLOB,
+    refresh_ct BLOB,
+    expires_at TEXT,
+    last_error TEXT,
+    updated_at TEXT NOT NULL,
+    row_mac BLOB NOT NULL
+);
+"#;
+
 /// The columns a table has (empty when it doesn't exist).
 fn columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
     let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -358,5 +377,6 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(AGENT_TABLES)?;
     conn.execute_batch(CARD_INJECT_TABLES)?;
     conn.execute_batch(ONCE_TABLES)?;
+    conn.execute_batch(OAUTH_TABLES)?;
     Ok(())
 }

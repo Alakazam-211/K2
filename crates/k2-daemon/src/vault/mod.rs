@@ -20,6 +20,7 @@ pub mod keeper_client;
 #[cfg(target_os = "macos")]
 pub mod local_auth;
 pub mod mainrefs;
+pub mod oauth_refresh;
 pub mod proxy;
 pub mod publish_env;
 pub mod refstore;

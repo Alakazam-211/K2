@@ -2569,6 +2569,26 @@ pub(crate) fn post_clone_secret_card(
         .map_err(|r| r.body)
 }
 
+/// The card that restarts a refreshing sign-in the provider has stopped
+/// accepting (prd-vault-for-agents-v1 §6.2): a secret card for the same name
+/// on `workspace`'s Thread. Saving it goes through `card_replace`, which keeps
+/// the sealed token URL and resets the stored tokens. Names only.
+pub(crate) fn post_oauth_reconnect_card(workspace: &str, scope_word: &str, m: &k2_vault::SecretMeta) -> Result<(), String> {
+    let vault = crate::vault::get().map_err(|e| e.code.to_string())?;
+    let resolved = resolve_addr(workspace).map_err(|r| r.body)?;
+    let mut proposal = overlay::SecretProposal {
+        scope: Some(scope_word.to_string()),
+        hosts: m.hosts.clone(),
+        delivery: Some("fetch".into()),
+        kind: Some(m.kind.as_str().to_string()),
+        ..Default::default()
+    };
+    card_names(&vault, &resolved, None, &m.name, &mut proposal);
+    const PROMPT: &str = "This sign-in stopped working, so agents can't use it. Paste a new one: JSON with access_token, refresh_token and client_id.";
+    let from = resolved.addr.clone();
+    create_secret_card(&vault, &resolved, &from, &m.name, Some(PROMPT), proposal, None, None, false).map(|_| ()).map_err(|r| r.body)
+}
+
 /// One plain Thread line on a clone's Thread (the leave-blank overflow).
 pub(crate) fn post_clone_text_line(conversation_id: &str, project_id: &str, addr: &str, body: &str) {
     let db = k2_core::db::shared();

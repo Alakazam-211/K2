@@ -353,6 +353,26 @@ set -e
 [ "$rc3" = 2 ] || fail "sign none with options: exit $rc3 ($err3)"
 ok "set --sign sends inject.sign; k2 vault sign posts the signer or none; mixed flags refused"
 
+# A refreshing sign-in (prd-vault-for-agents-v1 §6): the flags reach the body,
+# and the value stays on stdin, never in argv.
+printf '{"k2test":"value"}' | k2s vault set GMAIL --sign oauth-refresh --oauth-token-url https://oauth2.example.test/token --oauth-client-auth basic >/dev/null || fail "set --sign oauth-refresh"
+k2s vault sign GMAIL oauth-refresh --oauth-token-url https://oauth2.example.test/token >/dev/null || fail "sign oauth-refresh"
+python3 - "$WORK/posts.log" <<'PY3' || fail "oauth bodies: $(cat "$WORK/posts.log")"
+import json, sys
+rows = [(p, json.loads(b)) for p, b in (l.split(" ", 1) for l in open(sys.argv[1]).read().splitlines())]
+s = [b for p, b in rows if p == "/cli/vault/set" and b["name"] == "GMAIL"][-1]
+assert s["inject"] == {"sign": {"scheme": "oauth-refresh", "tokenUrl": "https://oauth2.example.test/token", "clientAuth": "basic"}}, s
+p = [b for q, b in rows if q == "/cli/vault/policy" and b["name"] == "GMAIL"][-1]
+assert p["sign"] == {"scheme": "oauth-refresh", "tokenUrl": "https://oauth2.example.test/token"}, p
+PY3
+set +e
+err="$(printf 'k2test-value' | k2s vault set B --oauth-token-url https://oauth2.example.test/token 2>&1)"; rc=$?
+set -e
+[ "$rc" = 2 ] && printf '%s' "$err" | grep -Fq "need --sign" || fail "--oauth-token-url alone: exit $rc ($err)"
+k2n vault set --help | grep -Fq -- "--oauth-token-url" || fail "set --help names --oauth-token-url"
+k2n vault sign --help | grep -Fq "oauth-refresh" || fail "sign --help names oauth-refresh"
+ok "set --sign oauth-refresh sends the token URL and client auth; the flags need --sign; help names them"
+
 # Item 3: agent-limit posts the settings; public-key prints the .pub line.
 : >"$WORK/posts.log"
 k2s vault agent-limit DEPLOY_KEY --burst 10 --per-minute 60 --no-forwarded >/dev/null || fail "agent-limit"

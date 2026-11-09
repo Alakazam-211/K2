@@ -32963,6 +32963,7 @@ for m in items:
     st = "" if m.get("status") == "active" else " [" + m.get("status","") + "]"
     sg = (m.get("inject") or {}).get("sign")
     st += (" [signs: " + sg.get("scheme", "") + "]") if sg else ""
+    st += " [expired: sign in again]" if (m.get("oauth") or {}).get("state") == "expired" else ""
     print("%-28s %-18s %-10s %-8s v%-3s %s%s%s%s" % (m.get("name"), where, m.get("kind"), m.get("defaultDelivery"), m.get("latestVersion"), hosts, see, ns, st))
 if hidden:
     print("%s K2 system secrets hidden from you: %s" % (hidden.get("count"), hidden.get("why")))
@@ -32975,12 +32976,14 @@ if hidden:
 _vault_sign_json() {
     python3 -c '
 import json, sys
-scheme, header, enc, prefix, prefix_set, tsh, tpl, tpl_set, val, val_set = sys.argv[1:11]
+scheme, header, enc, prefix, prefix_set, tsh, tpl, tpl_set, val, val_set, token_url, client_auth = sys.argv[1:13]
 if not scheme:
-    if header or enc or tsh or prefix_set == "1" or tpl_set == "1" or val_set == "1":
-        print("usage: --sign-* options need --sign ovh|hmac-sha256|hmac-sha256-ts", file=sys.stderr); sys.exit(2)
+    if header or enc or tsh or prefix_set == "1" or tpl_set == "1" or val_set == "1" or token_url or client_auth:
+        print("usage: --sign-* and --oauth-* options need --sign ovh|hmac-sha256|hmac-sha256-ts|oauth-refresh", file=sys.stderr); sys.exit(2)
     print(""); sys.exit(0)
 o = {"scheme": scheme}
+if token_url: o["tokenUrl"] = token_url
+if client_auth: o["clientAuth"] = client_auth
 if header: o["header"] = header
 if enc: o["encoding"] = enc
 if prefix_set == "1": o["prefix"] = prefix
@@ -33635,6 +33638,17 @@ apply when NAME is created.
                            {body} (default '{ts}.{body}')
   --sign-value '<v>'       hmac-sha256-ts: the header value, one {sig},
                            at most one {ts} (default '{sig}')
+  --sign oauth-refresh     A sign-in K2 keeps fresh. The value is one JSON
+                           object: {"access_token":…,"refresh_token":…,
+                            "client_id":…, optional "expires_at" (Unix seconds
+                            or RFC 3339), "client_secret", "scope"}; kind
+                           defaults to oauth_token. Sent as Authorization:
+                           Bearer unless --inject-* says otherwise. Used
+                           through k2 vault fetch only: never env, file or api.
+  --oauth-token-url <url>  oauth-refresh: the provider's token URL (https)
+  --oauth-client-auth basic|post|none
+                           oauth-refresh: how the client proves itself
+                           (default post; none = a public client)
   Change it later with k2 vault sign (k2 vault sign --help).
 
   --describe <text>  --rotate-every <days>
@@ -33649,6 +33663,7 @@ Examples:
   k2 vault set OVH_EU --sign ovh --preset ovh-eu < ovh-keys.json
   k2 vault set HOOK_KEY --sign hmac-sha256 --sign-header X-Hub-Signature-256 --sign-prefix 'sha256=' --for hooks.example.com < key
   k2 vault set OPS_INGEST --sign hmac-sha256-ts --sign-header X-K2-Ops-Sig --sign-ts-header X-K2-Ops-Ts --for ingest.example.com < key
+  k2 vault set GMAIL_API --sign oauth-refresh --oauth-token-url https://oauth2.googleapis.com/token --for gmail.googleapis.com < sign-in.json
 Better than set: ask a person, so the value never passes through you:
   k2 thread secret <addr> --name STRIPE_KEY --for api.stripe.com
 EOF
@@ -33678,6 +33693,7 @@ EOF
         sign) cat <<'EOF'
 k2 vault sign NAME ovh | hmac-sha256 --sign-header <Name> [--sign-encoding hex|base64] [--sign-prefix '<p>']
 k2 vault sign NAME hmac-sha256-ts --sign-header <Name> [--sign-ts-header <Name>] [--sign-template '<t>'] [--sign-value '<v>']
+k2 vault sign NAME oauth-refresh --oauth-token-url <url> [--oauth-client-auth basic|post|none]
 k2 vault sign NAME none
 
 Set or remove how K2 signs requests made with NAME (k2 vault set --help:
@@ -33685,6 +33701,11 @@ Signers). k2 vault fetch then adds the signer's headers on every request,
 redirects included; --dst/--fmt are refused. Changing the signer of a
 secret a person gave you is the owner's call. ovh checks that the stored
 value is the OVH JSON. none goes back to pasting the value as set.
+oauth-refresh checks that the stored value is the sign-in JSON (k2 vault set
+--help). Once set it can't be removed, and NAME stays at fetch: K2 refreshes the
+token and the refresh token never leaves K2. If the provider stops accepting
+it, NAME reads "expired: sign in again" and uses exit 3 (oauth_expired); a card
+goes to the Thread, or a person runs k2 vault rotate NAME < sign-in.json.
 
 Examples:
   k2 vault sign OVH_EU ovh
@@ -35607,6 +35628,7 @@ cmd_vault() {
     local inject_header="" inject_format="" inject_dst="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
     local sign_scheme="" sign_header="" sign_encoding="" sign_prefix="" sign_ts_header="" sign_template="" sign_value=""
     local sign_prefix_set=0 sign_template_set=0 sign_value_set=0
+    local oauth_token_url="" oauth_client_auth=""
     local agent_burst="" agent_per_minute="" allow_fwd=0 no_fwd=0
     local remove_original=0 env_file_opt="" done_path="" ttl_secs="" wait_for=""
     local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0 accept_agent=0
@@ -35638,11 +35660,12 @@ cmd_vault() {
                 esac
                 shift 2 ;;
             --secret) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; use_secrets+=("$2"); shift 2 ;;
-            --sign|--sign-header|--sign-encoding|--sign-ts-header)
+            --sign|--sign-header|--sign-encoding|--sign-ts-header|--oauth-token-url|--oauth-client-auth)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
                     --sign) sign_scheme="$2" ;; --sign-header) sign_header="$2" ;;
                     --sign-encoding) sign_encoding="$2" ;; --sign-ts-header) sign_ts_header="$2" ;;
+                    --oauth-token-url) oauth_token_url="$2" ;; --oauth-client-auth) oauth_client_auth="$2" ;;
                 esac
                 shift 2 ;;
             --sign-prefix|--sign-template|--sign-value)
@@ -35717,6 +35740,10 @@ if sg:
     sch = sg.get("scheme")
     if sch == "ovh":
         print("signs:     ovh (X-Ovh-Application, X-Ovh-Consumer, X-Ovh-Timestamp, X-Ovh-Signature; OVH clock)")
+    elif sch == "oauth-refresh":
+        print("signs:     oauth-refresh (K2 refreshes the token at %s; client auth %s)" % (sg.get("tokenUrl"), sg.get("clientAuth", "post")))
+        oa = m.get("oauth") or {}
+        print("sign-in:   %s" % (oa.get("message") or ("ok, token good until " + oa["expiresAt"] if oa.get("expiresAt") else "ok")))
     elif sch == "hmac-sha256":
         print("signs:     hmac-sha256 over the body → %s: %s<%s>" % (sg.get("header"), sg.get("prefix",""), sg.get("encoding","hex")))
     else:
@@ -35749,7 +35776,7 @@ for a in (v.get("audit") or [])[:10]:
             [ -n "$name" ] || { echo "usage: k2 vault set NAME [options] < value" >&2; exit 2; }
             [ "${#pos[@]}" -eq 1 ] || { echo "value_on_argv: values are read from stdin, never an argument (k2 vault set NAME < file)" >&2; exit 2; }
             local opts sjson
-            sjson="$(_vault_sign_json "$sign_scheme" "$sign_header" "$sign_encoding" "$sign_prefix" "$sign_prefix_set" "$sign_ts_header" "$sign_template" "$sign_template_set" "$sign_value" "$sign_value_set")" || exit 2
+            sjson="$(_vault_sign_json "$sign_scheme" "$sign_header" "$sign_encoding" "$sign_prefix" "$sign_prefix_set" "$sign_ts_header" "$sign_template" "$sign_template_set" "$sign_value" "$sign_value_set" "$oauth_token_url" "$oauth_client_auth")" || exit 2
             opts="$(python3 -c '
 import json, sys
 kind, hosts, preset, delivery, ceiling, describe, rot, ttl, ih, iformat, idst, sign = sys.argv[1:13]
@@ -35820,12 +35847,12 @@ for r in v.get("replaced") or []:
             [ -z "$sign_scheme" ] || { echo "usage: the scheme is the second word: k2 vault sign NAME ${sign_scheme}" >&2; exit 2; }
             local gj
             if [ "${pos[1]}" = "none" ]; then
-                if [ -n "$sign_header$sign_encoding$sign_ts_header" ] || [ "$sign_prefix_set$sign_template_set$sign_value_set" != "000" ]; then
+                if [ -n "$sign_header$sign_encoding$sign_ts_header$oauth_token_url$oauth_client_auth" ] || [ "$sign_prefix_set$sign_template_set$sign_value_set" != "000" ]; then
                     echo "usage: k2 vault sign NAME none takes no --sign-* options" >&2; exit 2
                 fi
                 gj='{"sign": "none"}'
             else
-                gj="$(_vault_sign_json "${pos[1]}" "$sign_header" "$sign_encoding" "$sign_prefix" "$sign_prefix_set" "$sign_ts_header" "$sign_template" "$sign_template_set" "$sign_value" "$sign_value_set")" || exit 2
+                gj="$(_vault_sign_json "${pos[1]}" "$sign_header" "$sign_encoding" "$sign_prefix" "$sign_prefix_set" "$sign_ts_header" "$sign_template" "$sign_template_set" "$sign_value" "$sign_value_set" "$oauth_token_url" "$oauth_client_auth")" || exit 2
                 gj="$(python3 -c 'import json,sys; print(json.dumps({"sign": json.loads(sys.argv[1])}))' "$gj")"
             fi
             _vault_call POST policy "$(_vault_merge "$sj" "$nj" "$gj")"

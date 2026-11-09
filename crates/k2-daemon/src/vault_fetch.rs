@@ -136,6 +136,20 @@ pub struct Injection {
     pub sign: Option<Sign>,
 }
 
+impl Injection {
+    /// An explicit copy (for the one retry after a 401).
+    pub fn duplicate(&self) -> Injection {
+        Injection {
+            name: self.name.clone(),
+            value: self.value.duplicate(),
+            dst: self.dst.clone(),
+            fmt: self.fmt.clone(),
+            allowed: self.allowed.clone(),
+            sign: self.sign.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchResult {
     pub status: u16,
@@ -194,6 +208,11 @@ pub fn execute(
     let mut signer_headers: Vec<String> = Vec::new();
     for inj in injections.iter() {
         if let Some(sg) = &inj.sign {
+            // The caller swaps this for the access token and clears `sign`
+            // (`vault::oauth_refresh`); one that didn't has no token to send.
+            if sg.is_oauth_refresh() {
+                return Err(VaultError::internal("a refreshing sign-in reached fetch without its access token"));
+            }
             if let Sign::Ovh = sg {
                 // Check the value's shape before any connection.
                 Sign::ovh_keys(inj.value.expose())?;

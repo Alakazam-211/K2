@@ -39,9 +39,11 @@ use crate::store::*;
 
 mod agent_store;
 mod handoff_store;
+mod oauth_store;
 mod placement_store;
 
 pub use agent_store::{AgentIdentity, AgentPolicy, AgentPolicyPatch, AgentSocket, DowngradeBlockers};
+pub use oauth_store::{OauthCurrent, OauthStatus};
 pub use placement_store::{NewPlacement, Placement, PlacementTarget, Placements};
 
 pub const FORMAT: &str = "k2-vault/1";
@@ -1288,6 +1290,7 @@ impl LocalVault {
                 if default_delivery.level() > ceiling.level() {
                     return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
                 }
+                oauth_store::check_terms(req.namespace, inject.as_ref(), &[default_delivery, ceiling])?;
                 agent_store::check_agent_delivery(req.kind, &[default_delivery, ceiling], Some(value.expose()))?;
                 if req.kind == Kind::SshKey && !req.landed_copy {
                     crate::ssh_agent::check_ssh_key_value(value.expose())?;
@@ -1401,6 +1404,8 @@ impl LocalVault {
             self.insert_version(tx, keys, &m2, new_v, &value, &version_stamp)?;
             self.revoke_older(tx, keys, &m2.id, new_v)?;
             self.write_secret(tx, keys, &m2, &ext, false)?;
+            // A new sign-in restarts from the new value (§6.1).
+            oauth_store::forget(tx, &m2.id)?;
             let outcome = if owner_notice { "ok:owner-notice" } else { "ok" };
             let mut entries = Vec::with_capacity(2);
             if let Some(p) = policy_outcome {
@@ -1526,6 +1531,7 @@ impl LocalVault {
         if let Some(r) = p.rotate_every_days {
             m.rotate_every_days = if r == 0 { None } else { Some(r) };
         }
+        oauth_store::check_policy_change(&old, &m)?;
         let loosens = hosts::widens(&old.hosts, &m.hosts)
             || m.default_delivery.level() > old.default_delivery.level()
             || m.delivery_ceiling.level() > old.delivery_ceiling.level()
@@ -1595,6 +1601,7 @@ impl LocalVault {
                 tx.execute("DELETE FROM secret_version WHERE secret_id = ?1", params![m.id])?;
                 tx.execute("DELETE FROM grants WHERE secret_id = ?1", params![m.id])?;
                 tx.execute("DELETE FROM placeholder WHERE secret_id = ?1", params![m.id])?;
+                oauth_store::forget(tx, &m.id)?;
             }
             self.write_secret(tx, keys, &m, &ext, false)?;
             Ok(((), vec![Entry::new(to_action(to), &stamp, "ok").secret(&m.id, None)]))
@@ -2057,6 +2064,13 @@ impl LocalVault {
                 VaultError::forbidden("ssh_key_not_sent", "an ssh key is never put in a request; use agent (or file) delivery"),
             ));
         }
+        // A refreshing sign-in is used through K2 only (§6.1).
+        let oauth = oauth_store::is_oauth_refresh(&m);
+        if oauth && !matches!(use_, Use::Fetch(_) | Use::Proxy(_)) {
+            drop(conn);
+            drop(keys);
+            return Err(self.deny(deny_entry, oauth_store::fetch_only()));
+        }
         // System namespace: daemon subsystems and engines only.
         if m.namespace == Namespace::System {
             let ok = match who {
@@ -2169,6 +2183,9 @@ impl LocalVault {
             Ok(v) => v,
             Err(e) => return fail(e),
         };
+        // The bundle holds the refresh token: no caller gets it from here,
+        // so one that forgets the refresh path sends nothing rather than it.
+        let v = if oauth { SecretBytes::new(Vec::new()) } else { v };
         drop(conn);
         drop(keys);
         // Item 2: a signed fetch says which scheme signed it.
@@ -3140,6 +3157,7 @@ impl LocalVault {
         self.rekey_once(&tx, &keys, &new_keys)?;
         self.rekey_handoff_tables(&tx, &keys, &new_keys)?;
         self.rekey_agent_tables(&tx, &keys, &new_keys)?;
+        self.rekey_oauth_state(&tx, &keys, &new_keys)?;
         // Placeholders hash under the old key: drop them (sessions re-mint).
         tx.execute("DELETE FROM placeholder", [])?;
         // Audit chain under the new key.
@@ -3233,6 +3251,7 @@ impl LocalVault {
                         continue;
                     }
                     if let Ok(v) = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version) {
+                        vals.extend(self.oauth_redact_parts(&conn, &keys, &row.meta, &v));
                         if v.len() >= SURFACE_MIN_LEN {
                             vals.push((row.meta.name.clone(), v));
                         }

@@ -174,7 +174,7 @@ impl CarryPayload {
             source_public_key: String::new(),
             own_box_move,
             target_workspace_id: None,
-            items: items.into_iter().filter(|i| !never_carried_kind(&i.kind) && i.scope_kind != "session").collect(),
+            items: items.into_iter().filter(|i| !never_carried_kind(&i.kind) && !refreshes_itself(i) && i.scope_kind != "session").collect(),
             clone_id: (!clone_id.is_empty()).then(|| clone_id.to_string()),
             expires_at: None,
             source_workspace_id: Some(source_workspace_id.to_string()),
@@ -359,9 +359,15 @@ impl LocalVault {
     }
 }
 
+/// A refreshing sign-in stays on its server: two copies would each rotate
+/// the same refresh token and revoke each other.
+fn refreshes_itself(i: &CarryItem) -> bool {
+    i.inject.as_ref().and_then(|x| x.sign.as_ref()).is_some_and(|s| s.is_oauth_refresh())
+}
+
 /// CL13: a seal never holds a never-carried kind or a chat's own secret.
 fn refuse_never_carried(items: &[CarryItem]) -> Result<()> {
-    if let Some(i) = items.iter().find(|i| never_carried_kind(&i.kind) || i.scope_kind == "session") {
+    if let Some(i) = items.iter().find(|i| never_carried_kind(&i.kind) || refreshes_itself(i) || i.scope_kind == "session") {
         return Err(VaultError::forbidden(
             "never_carried",
             format!("{} ({}) never travels in a carry; it is made again on the target", i.name, i.kind),

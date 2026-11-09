@@ -181,6 +181,9 @@ pub fn sign_edit(sign: &Sign, value: &SecretBytes, method: &str, url: &str, body
         m.finalize().into_bytes().to_vec()
     };
     match sign {
+        // The stored value is the sign-in bundle, not something to sign with:
+        // the caller gets the access token from the daemon's refresh path.
+        Sign::OauthRefresh { .. } => Err(VaultError::internal("a refreshing sign-in can't be used here yet")),
         Sign::Ovh => {
             let body = std::str::from_utf8(body).map_err(|_| VaultError::bad_request("body_not_text", "OVH signs text bodies only"))?;
             let k = Sign::ovh_keys(value.expose())?;

@@ -121,6 +121,9 @@ pub fn check_sendable(m: &SecretMeta) -> Result<()> {
     if m.namespace != Namespace::User {
         return Err(never("K2's own secrets never leave this server"));
     }
+    if m.inject.as_ref().and_then(|i| i.sign.as_ref()).is_some_and(|s| s.is_oauth_refresh()) {
+        return Err(never(format!("{} is a refreshing sign-in; its refresh token stays on this server (the other agent signs in itself)", m.name)));
+    }
     if never_sendable_kind(m.kind.as_str()) {
         return Err(never(format!(
             "{} is a {}; K2 logins, App passes and engine credentials are never sent (they are made again where needed)",

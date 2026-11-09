@@ -45,6 +45,7 @@
 
 use crate::mail::secrets::SecretStore;
 use base64::Engine as _;
+use k2_vault::inject::ClientAuth;
 use parking_lot::Mutex as PlMutex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -434,6 +435,9 @@ pub enum OauthError {
     Vault(String),
     /// `state` mismatch on a loopback redirect (CSRF guard).
     State,
+    /// The egress gate refused the endpoint (a user-set token URL). `hint`
+    /// names only the host.
+    Egress { code: &'static str, status: u16, hint: String },
 }
 
 impl std::fmt::Display for OauthError {
@@ -448,6 +452,7 @@ impl std::fmt::Display for OauthError {
             OauthError::Config(e) => write!(f, "oauth config error: {e}"),
             OauthError::Vault(e) => write!(f, "oauth vault error: {e}"),
             OauthError::State => write!(f, "oauth state mismatch (possible CSRF)"),
+            OauthError::Egress { code, hint, .. } => write!(f, "oauth endpoint refused ({code}): {hint}"),
         }
     }
 }
@@ -475,6 +480,13 @@ pub struct HttpResponse {
 /// body regardless of status.
 pub trait HttpClient: Send + Sync {
     fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<HttpResponse, OauthError>;
+
+    /// The same POST with `Authorization: Basic` client authentication
+    /// (RFC 6749 §2.3.1). The default refuses, so a client that can't do
+    /// it fails loudly instead of sending the secret some other way.
+    fn post_form_basic(&self, url: &str, _form: &[(&str, &str)], _client_id: &str, _client_secret: &str) -> Result<HttpResponse, OauthError> {
+        Err(OauthError::Config(format!("this HTTP client cannot use Basic auth for {url}")))
+    }
 
     /// One Bearer-authed JSON GET (MCS1 account check: Graph `/me`, the
     /// Gmail profile). The token rides only the Authorization header. The
@@ -560,6 +572,66 @@ impl HttpClient for ReqwestHttp {
         let status = resp.status().as_u16();
         let body = resp.text().unwrap_or_default();
         Ok(HttpResponse { status, body })
+    }
+}
+
+/// A token response larger than this is not a token response.
+const MAX_TOKEN_RESPONSE: u64 = 64 * 1024;
+
+/// The HTTP client for a token URL someone typed (a refreshing vault
+/// secret): every POST goes through the egress gate, which [`ReqwestHttp`]
+/// skips because it only ever talks to fixed Google and Microsoft URLs.
+pub struct EgressHttp {
+    timeout: std::time::Duration,
+}
+
+impl Default for EgressHttp {
+    fn default() -> Self {
+        Self { timeout: std::time::Duration::from_secs(15) }
+    }
+}
+
+impl EgressHttp {
+    fn post(&self, url: &str, form: &[(&str, &str)], basic: Option<(&str, &str)>) -> Result<HttpResponse, OauthError> {
+        use crate::egress::{self, Destination, Purpose};
+        use std::io::Read;
+        let refuse = |e: egress::EgressError| OauthError::Egress { code: e.code, status: e.status, hint: e.hint };
+        let parsed = url::Url::parse(url).map_err(|_| OauthError::Config("the token URL isn't a URL".to_string()))?;
+        if parsed.scheme() != "https" {
+            return Err(OauthError::Config("the token URL must be https".to_string()));
+        }
+        let host = parsed.host_str().unwrap_or("the token endpoint").to_string();
+        let dest = Destination::vet(&parsed, false).map_err(refuse)?;
+        let client = egress::client(Purpose::VaultFetch, &dest, self.timeout).map_err(refuse)?;
+        let mut req = client
+            .post(parsed)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json");
+        if let Some((id, secret)) = basic {
+            let raw = format!("{}:{}", form_encode(id), form_encode(secret));
+            let mut value = reqwest::header::HeaderValue::from_str(&format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(raw)))
+                .map_err(|_| OauthError::Config("the client details can't be sent as a header".to_string()))?;
+            value.set_sensitive(true);
+            req = req.header(reqwest::header::AUTHORIZATION, value);
+        }
+        // Fixed words: reqwest's error text can quote the URL.
+        let resp = req.body(encode_form(form)).send().map_err(|e| {
+            OauthError::Http(format!("{host}: {}", if e.is_timeout() { "timed out" } else if e.is_connect() { "couldn't connect" } else { "request failed" }))
+        })?;
+        let status = resp.status().as_u16();
+        let mut body = String::new();
+        resp.take(MAX_TOKEN_RESPONSE).read_to_string(&mut body).map_err(|_| OauthError::Http(format!("{host}: the reply couldn't be read")))?;
+        Ok(HttpResponse { status, body })
+    }
+}
+
+impl HttpClient for EgressHttp {
+    fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<HttpResponse, OauthError> {
+        self.post(url, form, None)
+    }
+
+    fn post_form_basic(&self, url: &str, form: &[(&str, &str)], client_id: &str, client_secret: &str) -> Result<HttpResponse, OauthError> {
+        self.post(url, form, Some((client_id, client_secret)))
     }
 }
 
@@ -993,20 +1065,42 @@ pub fn refresh(
     http: &dyn HttpClient,
 ) -> Result<Tokens, OauthError> {
     let cid = client_id(provider, client_id_override);
-    // Hoisted so the owned secret String outlives `form` (never logged).
-    let secret = client_secret(provider, client_secret_override);
-    let mut form: Vec<(&str, &str)> = vec![
-        ("client_id", cid.as_str()),
-        ("refresh_token", refresh_token),
-        ("grant_type", "refresh_token"),
-    ];
     // Google requires the `client_secret` on refresh too (same
     // `invalid_client` failure without it). Microsoft → `None` → OMITTED,
     // so its refresh form is unchanged.
-    if let Some(secret) = secret.as_deref() {
-        form.push(("client_secret", secret));
+    let secret = client_secret(provider, client_secret_override);
+    refresh_with(&token_url(provider), &cid, secret.as_deref(), ClientAuth::Post, refresh_token, http)
+}
+
+/// Refresh against any token URL (`grant_type=refresh_token`): the mail
+/// providers through [`refresh`], and a vault secret's own sealed URL with
+/// its client authentication. `client_secret` is sent only for `post` (when
+/// there is one) and `basic`; a `basic` client without one is refused.
+pub fn refresh_with(
+    token_url: &str,
+    client_id: &str,
+    client_secret: Option<&str>,
+    client_auth: ClientAuth,
+    refresh_token: &str,
+    http: &dyn HttpClient,
+) -> Result<Tokens, OauthError> {
+    let mut form: Vec<(&str, &str)> = Vec::with_capacity(4);
+    if client_auth != ClientAuth::Basic {
+        form.push(("client_id", client_id));
     }
-    let resp = http.post_form(&token_url(provider), &form)?;
+    form.push(("refresh_token", refresh_token));
+    form.push(("grant_type", "refresh_token"));
+    if client_auth == ClientAuth::Post {
+        if let Some(secret) = client_secret {
+            form.push(("client_secret", secret));
+        }
+    }
+    let resp = if client_auth == ClientAuth::Basic {
+        let secret = client_secret.ok_or_else(|| OauthError::Config("Basic client auth needs a client_secret".to_string()))?;
+        http.post_form_basic(token_url, &form, client_id, secret)?
+    } else {
+        http.post_form(token_url, &form)?
+    };
     tokens_or_error(&resp)
 }
 
@@ -1192,7 +1286,7 @@ static REFRESH_LOCKS: LazyLock<PlMutex<HashMap<String, Arc<PlMutex<()>>>>> =
 
 /// Clone out the single-flight refresh lock for `row_id`, creating it on
 /// first use. The map lock is short-lived — held only for the insert/clone.
-fn refresh_lock_for(row_id: &str) -> Arc<PlMutex<()>> {
+pub(crate) fn refresh_lock_for(row_id: &str) -> Arc<PlMutex<()>> {
     let mut map = REFRESH_LOCKS.lock();
     map.entry(row_id.to_string())
         .or_insert_with(|| Arc::new(PlMutex::new(())))

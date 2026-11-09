@@ -225,6 +225,14 @@ fn proxy_url(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Va
 }
 
 fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    use crate::vault::oauth_refresh::{post_live_card, Deps};
+    let workspace = c.actor.agent().map(|a| a.workspace_id.clone()).unwrap_or_default();
+    let http = crate::mail::oauth::EgressHttp::default();
+    fetch_with(vault, c, body, &Deps { http: &http, asker_workspace: &workspace, post_card: &post_live_card })
+}
+
+/// `deps`: where a refreshing sign-in gets its tokens (a stub in tests).
+pub(crate) fn fetch_with(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], deps: &crate::vault::oauth_refresh::Deps<'_>) -> Result<Value, VaultError> {
     let a = c.actor.agent().ok_or_else(|| {
         VaultError::forbidden("use_fetch_as_agent", "k2 vault fetch runs for an agent session; people call the site themselves")
     })?;
@@ -242,12 +250,20 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
     }
     let who = c.requester()?;
     let mut injections = vec![];
+    // (position in `injections`, secret id) of each refreshing sign-in.
+    let mut sign_ins: Vec<(usize, String)> = vec![];
     for w in &wanted {
         let sel = use_selector(vault, c, &w.sel)?;
         let r = vault.resolve(&sel, Use::Fetch(&origin), &who)?;
         let (dst, fmt) = r.inject.choose(w.dst.as_deref(), w.fmt.as_deref())?;
         let allowed: Vec<OriginPattern> = k2_vault::hosts::parse_stored(&r.meta.hosts);
-        injections.push(crate::vault_fetch::Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed, sign: r.inject.sign.clone() });
+        let (value, sign) = if crate::vault::oauth_refresh::is_oauth(&r.inject) {
+            sign_ins.push((injections.len(), r.meta.id.clone()));
+            (crate::vault::oauth_refresh::access_token(vault, &r.meta.id, deps)?, None)
+        } else {
+            (r.value, r.inject.sign.clone())
+        };
+        injections.push(crate::vault_fetch::Injection { name: r.meta.name.clone(), value, dst, fmt, allowed, sign });
     }
     let ws_root = crate::vault::workspace_path(&a.workspace_id).map(PathBuf::from);
     let req_body = match (&b.body_b64, &b.body_file) {
@@ -284,7 +300,21 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
     };
     let redactor = vault.redactor();
     let allow = crate::vault_fetch::Allowlist::from_injections(&injections);
-    let res = crate::vault_fetch::execute(spec, &allow, injections, &redactor)?;
+    let retry = (!sign_ins.is_empty()).then(|| injections.iter().map(crate::vault_fetch::Injection::duplicate).collect::<Vec<_>>());
+    let mut res = crate::vault_fetch::execute(spec.clone(), &allow, injections, &redactor)?;
+    // A 401 on a sign-in: one refresh, one retry (§6.2).
+    if let (401, Some(mut again)) = (res.status, retry) {
+        let mut renewed = false;
+        for (i, id) in &sign_ins {
+            if let Some(t) = crate::vault::oauth_refresh::refresh_after_401(vault, id, &again[*i].value, deps)? {
+                again[*i].value = t;
+                renewed = true;
+            }
+        }
+        if renewed {
+            res = crate::vault_fetch::execute(spec, &allow, again, &vault.redactor())?;
+        }
+    }
     let headers: Vec<Value> = res.headers.iter().map(|(k, v)| json!([k, v])).collect();
     if let Some(out) = b.out.as_deref() {
         let root = ws_root.as_ref().ok_or_else(|| VaultError::not_found("workspace folder not found"))?;

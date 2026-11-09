@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VaultError};
+use crate::secret::SecretBytes;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Dst {
@@ -112,6 +113,38 @@ impl Enc {
     }
 }
 
+/// How a client proves itself to a token endpoint (RFC 6749 §2.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClientAuth {
+    /// `Authorization: Basic`. The value must hold a `client_secret`.
+    Basic,
+    /// `client_id` and, when the value holds one, `client_secret` in the form.
+    #[default]
+    Post,
+    /// A public client: only `client_id` is sent.
+    None,
+}
+
+impl ClientAuth {
+    pub fn parse(s: &str) -> Result<ClientAuth> {
+        match s.trim() {
+            "basic" => Ok(ClientAuth::Basic),
+            "post" => Ok(ClientAuth::Post),
+            "none" => Ok(ClientAuth::None),
+            _ => Err(VaultError::bad_request("bad_inject", "client auth is basic, post or none")),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ClientAuth::Basic => "basic",
+            ClientAuth::Post => "post",
+            ClientAuth::None => "none",
+        }
+    }
+}
+
 pub const DEFAULT_TS_TEMPLATE: &str = "{ts}.{body}";
 pub const DEFAULT_SIG_VALUE: &str = "{sig}";
 
@@ -146,6 +179,87 @@ pub enum Sign {
         #[serde(default)]
         encoding: Enc,
     },
+    /// An OAuth sign-in K2 keeps fresh (prd-vault-for-agents-v1 §6). The
+    /// value is the JSON [`OauthBundle`]; the current tokens live in the
+    /// `oauth_state` table. K2 sends the access token where `dst`/`fmt` say.
+    /// The refresh token never leaves K2: the ceiling is fetch. A daemon
+    /// that doesn't know this scheme skips the row (needs_newer) instead of
+    /// sending the bundle as a bearer token.
+    #[serde(rename = "oauth-refresh")]
+    OauthRefresh {
+        /// Set by the secret's creator; agents can't change it. `https://`
+        /// only; every refresh also goes through the egress gate.
+        #[serde(rename = "tokenUrl")]
+        token_url: String,
+        #[serde(default, rename = "clientAuth")]
+        client_auth: ClientAuth,
+    },
+}
+
+/// Longest token K2 stores or sends (they go in a request header).
+pub const MAX_OAUTH_TOKEN_LEN: usize = 16 * 1024;
+
+/// The JSON value of an `oauth-refresh` secret. Tokens stay in
+/// [`SecretBytes`], so this type has no way to print them.
+pub struct OauthBundle {
+    pub access_token: SecretBytes,
+    pub refresh_token: SecretBytes,
+    /// Unix seconds. `None`: unknown, so the first use refreshes.
+    pub expires_at: Option<i64>,
+    pub client_id: String,
+    pub client_secret: Option<SecretBytes>,
+    pub scope: Option<String>,
+}
+
+/// Is this a token K2 may store and put in a request header? Visible ASCII
+/// only: a line break here would split the header.
+pub fn oauth_token_ok(t: &[u8]) -> bool {
+    !t.is_empty() && t.len() <= MAX_OAUTH_TOKEN_LEN && t.iter().all(|b| (0x21..0x7f).contains(b))
+}
+
+impl OauthBundle {
+    /// Parse and check a value. Errors name the field, never its content.
+    pub fn parse(value: &[u8], auth: ClientAuth) -> Result<OauthBundle> {
+        let bad = |what: &str| {
+            VaultError::bad_request(
+                "bad_value",
+                format!(
+                    "a refreshing sign-in is JSON {{\"access_token\",\"refresh_token\",\"client_id\", optional \"expires_at\",\"client_secret\",\"scope\"}}: {what}"
+                ),
+            )
+        };
+        let v: serde_json::Value = serde_json::from_slice(value).map_err(|_| bad("this isn't JSON"))?;
+        let token = |name: &str| -> Result<SecretBytes> {
+            let s = v.get(name).and_then(|x| x.as_str()).ok_or_else(|| bad(&format!("{name} is missing")))?;
+            if !oauth_token_ok(s.as_bytes()) {
+                return Err(bad(&format!("{name} is empty, too long or has spaces or line breaks")));
+            }
+            Ok(SecretBytes::from_slice(s.as_bytes()))
+        };
+        let access_token = token("access_token")?;
+        let refresh_token = token("refresh_token")?;
+        let client_id = v.get("client_id").and_then(|x| x.as_str()).ok_or_else(|| bad("client_id is missing"))?;
+        if client_id.is_empty() || client_id.len() > 512 || !client_id.bytes().all(|b| (0x21..0x7f).contains(&b)) {
+            return Err(bad("client_id is empty, too long or has spaces or line breaks"));
+        }
+        let client_secret = match v.get("client_secret") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(_) => Some(token("client_secret")?),
+        };
+        if auth == ClientAuth::Basic && client_secret.is_none() {
+            return Err(bad("client_secret is missing, and this sign-in sends one as Basic"));
+        }
+        let expires_at = match v.get("expires_at") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::Number(n)) => Some(n.as_i64().ok_or_else(|| bad("expires_at isn't a whole number of Unix seconds"))?),
+            Some(serde_json::Value::String(s)) => Some(
+                chrono::DateTime::parse_from_rfc3339(s).map_err(|_| bad("expires_at is Unix seconds or RFC 3339"))?.timestamp(),
+            ),
+            Some(_) => return Err(bad("expires_at is Unix seconds or RFC 3339")),
+        };
+        let scope = v.get("scope").and_then(|x| x.as_str()).map(str::to_string);
+        Ok(OauthBundle { access_token, refresh_token, expires_at, client_id: client_id.to_string(), client_secret, scope })
+    }
 }
 
 /// The headers OVH signing sets.
@@ -164,7 +278,12 @@ impl Sign {
             Sign::Ovh => "ovh",
             Sign::HmacSha256 { .. } => "hmac-sha256",
             Sign::HmacSha256Ts { .. } => "hmac-sha256-ts",
+            Sign::OauthRefresh { .. } => "oauth-refresh",
         }
+    }
+
+    pub fn is_oauth_refresh(&self) -> bool {
+        matches!(self, Sign::OauthRefresh { .. })
     }
 
     /// Every header this signer sets (canonical case).
@@ -175,6 +294,8 @@ impl Sign {
             Sign::HmacSha256Ts { header, ts_header, .. } => {
                 std::iter::once(header.clone()).chain(ts_header.clone()).collect()
             }
+            // The access token goes where `dst`/`fmt` say, like a plain key.
+            Sign::OauthRefresh { .. } => vec![],
         }
     }
 
@@ -216,6 +337,7 @@ impl Sign {
                     return Err(VaultError::bad_request("bad_inject", "the signature value format needs exactly one {sig} and at most one {ts}"));
                 }
             }
+            Sign::OauthRefresh { token_url, .. } => *token_url = checked_token_url(token_url)?,
         }
         Ok(self)
     }
@@ -226,6 +348,7 @@ impl Sign {
     pub fn check_value(&self, value: &[u8]) -> Result<()> {
         match self {
             Sign::Ovh => Self::ovh_keys(value).map(|_| ()),
+            Sign::OauthRefresh { client_auth, .. } => OauthBundle::parse(value, *client_auth).map(|_| ()),
             _ => Ok(()),
         }
     }
@@ -251,6 +374,33 @@ impl Sign {
             consumer_key: field("consumerKey")?,
         })
     }
+}
+
+/// A token URL as stored: `https://` with a host, no user name, password or
+/// fragment, and never an IP literal in a private range. A host name that
+/// resolves somewhere private is refused by the egress gate at refresh time.
+fn checked_token_url(raw: &str) -> Result<String> {
+    let bad = |what: &str| VaultError::bad_request("bad_token_url", format!("the token URL {what}"));
+    if raw.len() > 512 || raw.bytes().any(|b| !(0x21..0x7f).contains(&b)) {
+        return Err(bad("is at most 512 printable characters, with no spaces"));
+    }
+    let u = url::Url::parse(raw).map_err(|_| bad("isn't a URL"))?;
+    if u.scheme() != "https" {
+        return Err(bad("must be https://"));
+    }
+    if !u.username().is_empty() || u.password().is_some() || u.fragment().is_some() {
+        return Err(bad("can't hold a user name, password or #fragment"));
+    }
+    let literal = match u.host() {
+        None => return Err(bad("has no host")),
+        Some(url::Host::Domain(_)) => None,
+        Some(url::Host::Ipv4(ip)) => Some(std::net::IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => Some(crate::hosts::canonical_ip(std::net::IpAddr::V6(ip))),
+    };
+    if literal.is_some_and(crate::hosts::is_blocked_ip) {
+        return Err(bad("points at a private or local address"));
+    }
+    Ok(u.to_string())
 }
 
 impl Default for Inject {

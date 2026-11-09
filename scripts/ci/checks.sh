@@ -84,8 +84,8 @@ part_rust_check() {
 # or drop an entry.
 # cargo audit fails on vulnerabilities, unmaintained and unsound crates, not
 # on yanked versions: a yanked version has no advisory ID to allow-list. It
-# still prints them (2026-10-24: chacha20 0.10.0 via ngrok, clipboard-win
-# 5.4.1 via arboard on Windows); bump those with the dependency PRD.
+# still prints them (2026-10-24: clipboard-win 5.4.1 via arboard on
+# Windows); bump those with the dependency PRD.
 part_audit() {
     step "advisory allow-list rules";              python3 scripts/ci/audit-ignores.py check
     step "install cargo-audit (pinned)";           cargo install cargo-audit --locked --version =0.22.2 --root target/audit-tools

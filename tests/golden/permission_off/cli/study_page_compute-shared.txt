@@ -87,7 +87,8 @@ CODES (exit 3 with a JSON code)
 SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
   What you may install: the node's owner sets a package policy for each
   server on it. Another person's server gets `profiles` by default: every
-  K2 profile (build-base, tauri-linux, rust-gui-ci, k2-workspace) and the
+  K2 profile (build-base, tauri-linux, rust-gui-ci, k2-workspace,
+  gpu-headless) and the
   names on the node's approved list. The owner may narrow or widen it.
   See yours: k2 compute node packages <node>.
   Anything else, the NODE'S OWNER approves, never you or your own server's

@@ -32,6 +32,10 @@ pub const ENV_VENDOR: &str = "K2_GPU_VENDOR";
 pub const ENV_PCI: &str = "K2_GPU_PCI";
 pub const ENV_RENDER: &str = "K2_GPU_RENDER";
 pub const ENV_KEYS: &[&str] = &[ENV_VENDOR, ENV_PCI, ENV_RENDER];
+/// GPU jobs S3: a GPU job's own runtime dir (Wayland sockets), set by root
+/// to [`RUNTIME_DIR`] in the job's folder and made 0700 by the job's uid.
+pub const ENV_RUNTIME_DIR: &str = "XDG_RUNTIME_DIR";
+pub const RUNTIME_DIR: &str = "run";
 
 /// Codes every side says the same way.
 pub mod codes {

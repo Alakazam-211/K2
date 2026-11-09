@@ -290,9 +290,39 @@ pub fn write_exec_spec(root: &Path, spec: &ExecSpec) -> Result<PathBuf, String> 
     Ok(p)
 }
 
-/// The `K2_GPU_*` pairs `get` has (the shim's own env, set by root).
+/// The `K2_GPU_*` pairs `get` has (the shim's own env, set by root), and
+/// for a GPU job root's `XDG_RUNTIME_DIR` (GPU jobs S3).
 pub fn gpu_env_from(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
-    k2_node_proto::gpu::ENV_KEYS.iter().filter_map(|k| get(k).map(|v| (*k, v))).collect()
+    let mut v: Vec<(&'static str, String)> = k2_node_proto::gpu::ENV_KEYS.iter().filter_map(|k| get(k).map(|v| (*k, v))).collect();
+    if v.iter().any(|(k, _)| *k == k2_node_proto::gpu::ENV_RENDER) {
+        if let Some(d) = get(k2_node_proto::gpu::ENV_RUNTIME_DIR) {
+            v.push((k2_node_proto::gpu::ENV_RUNTIME_DIR, d));
+        }
+    }
+    v
+}
+
+/// A GPU job's own `XDG_RUNTIME_DIR` (GPU jobs S3): made by the job's own
+/// uid inside its unit, mode 0700, so `weston --backend=headless` can put
+/// its socket there. An existing one must be a plain folder of this uid
+/// (never a link); it is set back to 0700.
+pub fn ensure_runtime_dir(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) => {
+            // SAFETY: plain getter.
+            let me = unsafe { libc::geteuid() };
+            if !m.is_dir() || m.file_type().is_symlink() || m.uid() != me {
+                return Err(format!("{} is not a folder of this job's user", dir.display()));
+            }
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("{}: {e}", dir.display()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::DirBuilder::new().mode(0o700).create(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("{}: {e}", dir.display()))
+        }
+        Err(e) => Err(format!("{}: {e}", dir.display())),
+    }
 }
 
 /// The shim: read + delete the spec, then exec the job with exactly its
@@ -321,6 +351,11 @@ pub fn job_exec(spec_path: &Path) -> String {
     // --setenv`, from its lease); they win over anything in the spec. A
     // job's own `--env` can never name a `K2_` variable.
     for (k, v) in gpu_env_from(|k| std::env::var(k).ok()) {
+        if k == k2_node_proto::gpu::ENV_RUNTIME_DIR {
+            if let Err(e) = ensure_runtime_dir(Path::new(&v)) {
+                return format!("k2-node job-exec: XDG_RUNTIME_DIR: {e}");
+            }
+        }
         cmd.env(k, v);
     }
     if spec.stdin_env {
@@ -1109,6 +1144,34 @@ pub fn probe(read: &[String], list: &[String], connect: &[String]) -> serde_json
 
 #[cfg(test)]
 mod tests {
+    /// GPU jobs S3: a GPU job's runtime dir is the job's own, 0700; a link
+    /// or a file there is refused; a job without a GPU never gets one.
+    #[test]
+    fn a_gpu_job_gets_a_private_runtime_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = crate::util::temp_dir("xdg-run");
+        let run = d.join("run");
+        super::ensure_runtime_dir(&run).unwrap();
+        assert_eq!(std::fs::metadata(&run).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o755)).unwrap();
+        super::ensure_runtime_dir(&run).unwrap();
+        assert_eq!(std::fs::metadata(&run).unwrap().permissions().mode() & 0o777, 0o700, "set back to 0700");
+        let link = d.join("link");
+        std::os::unix::fs::symlink(&run, &link).unwrap();
+        assert!(super::ensure_runtime_dir(&link).is_err(), "a link is refused");
+        std::fs::write(d.join("file"), b"x").unwrap();
+        assert!(super::ensure_runtime_dir(&d.join("file")).is_err());
+        let env = |gpu: bool| {
+            move |k: &str| match k {
+                "K2_GPU_RENDER" if gpu => Some("/dev/dri/renderD128".to_string()),
+                "XDG_RUNTIME_DIR" => Some("/j/run".to_string()),
+                _ => None,
+            }
+        };
+        assert!(super::gpu_env_from(env(true)).contains(&("XDG_RUNTIME_DIR", "/j/run".to_string())));
+        assert!(super::gpu_env_from(env(false)).is_empty(), "no GPU: the shim keeps no XDG_RUNTIME_DIR of its own");
+    }
+
     use super::*;
 
     #[test]

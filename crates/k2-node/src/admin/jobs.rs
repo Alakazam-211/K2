@@ -703,6 +703,10 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         for (k, v) in super::gpu::gpu_env(g) {
             a.push(format!("--setenv={k}={v}"));
         }
+        // GPU jobs S3: the job's own runtime dir (the shim makes it 0700),
+        // so a headless compositor can make its socket. It goes with the
+        // job root.
+        a.push(format!("--setenv={}={}", k2_node_proto::gpu::ENV_RUNTIME_DIR, p.root.join(k2_node_proto::gpu::RUNTIME_DIR).display()));
     }
     let mut prop = |s: String| {
         a.push("-p".into());
@@ -1774,7 +1778,15 @@ mod tests {
         let mut p = plan();
         p.gpu = Some(gpu_unit(DeviceMode::BindPaths));
         let a = systemd_run_argv(&p);
-        for want in ["BindPaths=/dev/dri/renderD128", "DeviceAllow=/dev/dri/renderD128 rw", "PrivateDevices=yes", "--setenv=K2_GPU_RENDER=/dev/dri/renderD128", "--setenv=K2_GPU_VENDOR=amd", "--setenv=K2_GPU_PCI=0000:c4:00.0"] {
+        for want in [
+            "BindPaths=/dev/dri/renderD128",
+            "DeviceAllow=/dev/dri/renderD128 rw",
+            "PrivateDevices=yes",
+            "--setenv=K2_GPU_RENDER=/dev/dri/renderD128",
+            "--setenv=K2_GPU_VENDOR=amd",
+            "--setenv=K2_GPU_PCI=0000:c4:00.0",
+            "--setenv=XDG_RUNTIME_DIR=/var/lib/k2node/jobs/j1-g1/run",
+        ] {
             assert!(a.iter().any(|x| x == want), "{want} missing: {a:?}");
         }
         let devs: Vec<&String> = a.iter().filter(|x| x.contains("/dev/")).filter(|x| !x.starts_with("TemporaryFileSystem=/dev/shm")).collect();
@@ -1782,7 +1794,7 @@ mod tests {
         let i = a.iter().position(|x| x == "--").unwrap();
         assert!(a.iter().position(|x| x.starts_with("--setenv=")).unwrap() < i, "systemd-run's own flags come before the command");
         let mut b = a.clone();
-        b.retain(|x| !x.starts_with("--setenv=K2_GPU_") && !x.starts_with("BindPaths=/dev/") && !x.starts_with("DeviceAllow=") && x != "-p");
+        b.retain(|x| !x.starts_with("--setenv=K2_GPU_") && !x.starts_with("--setenv=XDG_RUNTIME_DIR=") && !x.starts_with("BindPaths=/dev/") && !x.starts_with("DeviceAllow=") && x != "-p");
         let mut c = plain.clone();
         c.retain(|x| x != "-p");
         assert_eq!(b, c, "only the GPU lines differ");

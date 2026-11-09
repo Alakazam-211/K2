@@ -42,7 +42,7 @@ Install (root, once; the installers are inside this binary):
   sudo k2-node packages policy <own|server> [level=list|profiles|official] [profiles=a,b] [max_install_mb=N]
                  which packages each server's jobs may install here without asking you:
                  list = only the approved list; profiles = plus K2's profiles you name
-                 (tauri-linux, rust-gui-ci, build-base, k2-workspace); official = anything
+                 (tauri-linux, rust-gui-ci, build-base, k2-workspace, gpu-headless); official = anything
                  from the distro's signed repos except K2's deny list. Anything else
                  reaches you as a request in K2 (Settings → Compute → Approvals).
   k2-node status [--home DIR] [--json]

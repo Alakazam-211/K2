@@ -25468,7 +25468,8 @@ Agents:
                   system packages (Linux): sys:<debian-name> (sys:libssl-dev; K2
                   maps it to each distro's own name), sys:<apt|pacman|dnf|zypper>:<name>
                   (that manager's nodes only), or profile:<name>[@N], a bundle
-                  K2 ships (build-base, tauri-linux, rust-gui-ci, k2-workspace).
+                  K2 ships (build-base, tauri-linux, rust-gui-ci, k2-workspace,
+                  gpu-headless).
                   A package the node's owner hasn't approved: package_not_approved,
                   exit 3, and a request for it is filed (k2 compute node packages);
                   anything else is refused: tool_unsupported, exit 2)
@@ -28218,7 +28219,7 @@ k2 compute node packages — system packages on a compute node (0.46.9)
         change it for <server>: own (this server, the default), or another
         server's label as k2 compute node servers <node> shows it. The
         node's owner only. profiles= takes bare K2 profile names
-        (build-base, tauri-linux, rust-gui-ci, k2-workspace) and replaces
+        (build-base, tauri-linux, rust-gui-ci, k2-workspace, gpu-headless) and replaces
         the server's list. Narrowing applies at once; widening is held for
         the owner's approval (exit 2). Every server's policy, at the
         machine: k2-node packages list
@@ -55426,9 +55427,27 @@ GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
   (in a pipe, sh -ec sees only the last command's status: add
   set -o pipefail with bash, or check each tool on its own line)
   Not given: a display (no /dev/dri/card*, no X or Wayland server; run a
-  headless compositor yourself), ROCm compute (/dev/kfd), another job's
-  GPU, NVIDIA GPUs (not supported yet). Xvfb is CPU-only (llvmpipe): it
-  never tests a GPU path.
+  headless compositor yourself, below), ROCm compute (/dev/kfd), another
+  job's GPU, NVIDIA GPUs (not supported yet). Xvfb is CPU-only (llvmpipe):
+  it never tests a GPU path.
+  Everything a headless GPU test needs, as one need: --needs
+  profile:gpu-headless (EGL and GBM, the Vulkan loader and Mesa's GPU
+  Vulkan drivers, eglinfo, vulkaninfo, Weston with Xwayland, and Xvfb).
+  Recipes (in the job, with --gpu):
+    EGL without a window: use the surfaceless platform (EGL_PLATFORM=surfaceless
+      for Mesa apps; eglinfo -B -p surfaceless shows the renderer). No
+      compositor needed.
+    Vulkan offscreen: nothing extra (vulkaninfo --summary names the GPU).
+    A Wayland or X11 app: start a headless Weston on the GPU first, in the
+      same job ($XDG_RUNTIME_DIR is the job's own folder, made for you):
+        bash -ec 'set -o pipefail
+          weston --backend=headless --renderer=gl --xwayland --socket=k2-$$ &
+          for i in $(seq 50); do [ -S "$XDG_RUNTIME_DIR/k2-$$" ] && break; sleep 0.2; done
+          WAYLAND_DISPLAY=k2-$$ ./my-gpu-tests'
+      (an X11 app also needs DISPLAY: usually :0, since each job has its
+      own /tmp; Weston's log names it). Leftover compositors end with the job.
+    Shader cache between runs: add --cache NAME and start the command with
+      export MESA_SHADER_CACHE_DIR=$K2_JOB_CACHE/mesa
   Where: K2 places a --gpu job only on a node that runs GPU jobs for this
   server (k2 compute nodes --json: host.gpus[] with jobs: true; the node
   sets the labels gpu=<vendor> and gpu_jobs=yes itself). Use --gpu, not
@@ -56112,7 +56131,8 @@ COMMON ERRORS
   pkg_signing_off        the package manager's signature check is off there; the
                          node installs nothing until its owner turns it on
   profile_unknown        not a K2 profile, or a version that node doesn't know:
-                         build-base, tauri-linux, rust-gui-ci, k2-workspace
+                         build-base, tauri-linux, rust-gui-ci, k2-workspace,
+                         gpu-headless
   index_stale            the node's package database is out of date (Arch: its
                          owner runs a full upgrade first); infrastructure
   package_busy           the package manager stayed locked (unattended upgrades);
@@ -56239,7 +56259,8 @@ CODES (exit 3 with a JSON code)
 SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
   What you may install: the node's owner sets a package policy for each
   server on it. Another person's server gets `profiles` by default: every
-  K2 profile (build-base, tauri-linux, rust-gui-ci, k2-workspace) and the
+  K2 profile (build-base, tauri-linux, rust-gui-ci, k2-workspace,
+  gpu-headless) and the
   names on the node's approved list. The owner may narrow or widen it.
   See yours: k2 compute node packages <node>.
   Anything else, the NODE'S OWNER approves, never you or your own server's

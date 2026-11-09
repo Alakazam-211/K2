@@ -224,6 +224,8 @@ pub const ROWS: &[(&str, &str, &str, &str, &str)] = &[
     ("libuv1-dev", "=", "libuv", "libuv-devel", "libuv-devel"),
     ("libvpx-dev", "=", "libvpx", "libvpx-devel", "libvpx-devel"),
     ("libvulkan-dev", "=", "vulkan-icd-loader vulkan-headers", "vulkan-loader-devel", "vulkan-devel"),
+    // GPU jobs S3 (0.46.11): the Vulkan loader alone.
+    ("libvulkan1", "=", "vulkan-icd-loader", "vulkan-loader", "libvulkan1"),
     ("libwayland-dev", "=", "wayland", "wayland-devel", "wayland-devel"),
     ("libwebkit2gtk-4.1-0", "=", "webkit2gtk-4.1", "webkit2gtk4.1", "libwebkit2gtk-4_1-0"),
     ("libwebkit2gtk-4.1-dev", "=", "webkit2gtk-4.1", "webkit2gtk4.1-devel", "webkit2gtk3-devel"),
@@ -260,7 +262,12 @@ pub const ROWS: &[(&str, &str, &str, &str, &str)] = &[
     // `eglinfo` / `glxinfo` (GPU jobs, 0.46.11): Arch splits the Mesa
     // demos into `mesa-utils`; Fedora and openSUSE keep the old name.
     ("mesa-utils", "=", "mesa-utils", "mesa-demos", "Mesa-demo-x"),
-    ("mesa-vulkan-drivers", "=", "vulkan-swrast", "mesa-vulkan-drivers", "libvulkan_lvp"),
+    // Debian's package holds every Mesa Vulkan driver (RADV for AMD, ANV
+    // for Intel, lavapipe on the CPU). Arch splits them: vulkan-swrast
+    // alone is the CPU one, so a GPU job would never see its GPU (GPU jobs
+    // S3, 0.46.11). openSUSE's lavapipe-only name stays as it was
+    // (unchecked column).
+    ("mesa-vulkan-drivers", "=", "vulkan-swrast vulkan-radeon vulkan-intel", "mesa-vulkan-drivers", "libvulkan_lvp"),
     ("mold", "=", "mold", "mold", "mold"),
     ("nasm", "=", "nasm", "nasm", "nasm"),
     ("ninja-build", "=", "ninja", "ninja-build", "ninja"),
@@ -283,10 +290,14 @@ pub const ROWS: &[(&str, &str, &str, &str, &str)] = &[
     ("valgrind", "=", "valgrind", "valgrind", "valgrind"),
     ("vulkan-tools", "=", "vulkan-tools", "vulkan-tools", "vulkan-tools"),
     ("wayland-protocols", "=", "wayland-protocols", "wayland-protocols-devel", "wayland-protocols-devel"),
+    // GPU jobs S3: a headless Wayland compositor (`weston --backend=headless`).
+    ("weston", "=", "weston", "weston", "weston"),
     ("wget", "=", "wget", "wget", "wget"),
     ("xauth", "=", "xorg-xauth", "xorg-x11-xauth", "xauth"),
     ("xdg-utils", "=", "xdg-utils", "xdg-utils", "xdg-utils"),
     ("xvfb", "=", "xorg-server-xvfb", "xorg-x11-server-Xvfb", "xorg-x11-server-Xvfb"),
+    // GPU jobs S3: X11 apps on that compositor.
+    ("xwayland", "=", "xorg-xwayland", "xorg-x11-server-Xwayland", "xwayland"),
     ("xz-utils", "=", "xz", "xz", "xz"),
     ("yasm", "=", "yasm", "yasm", "yasm"),
     ("zip", "=", "zip", "zip", "zip"),
@@ -446,6 +457,19 @@ mod tests {
         assert_eq!(native("libasound2-dev", Mgr::Pacman, "arch", "rolling"), Some(vec!["alsa-lib".into()]));
         assert_eq!(native("build-essential", Mgr::Dnf, "fedora", "41"), Some(vec!["gcc".into(), "gcc-c++".into(), "make".into()]));
         assert_eq!(native("build-essential", Mgr::Apt, "ubuntu", "24.04"), Some(vec!["build-essential".into()]));
+    }
+
+    /// GPU jobs S3 (0.46.11): the headless GPU set maps on Arch, and Arch's
+    /// Mesa Vulkan drivers include the real GPU ones (RADV, ANV), not only
+    /// the CPU one.
+    #[test]
+    fn the_headless_gpu_set_maps_on_arch_with_real_vulkan_drivers() {
+        let arch = |n: &str| native(n, Mgr::Pacman, "arch", "rolling");
+        assert_eq!(arch("mesa-vulkan-drivers"), Some(vec!["vulkan-swrast".into(), "vulkan-radeon".into(), "vulkan-intel".into()]));
+        assert_eq!(arch("weston"), Some(vec!["weston".into()]));
+        assert_eq!(arch("xwayland"), Some(vec!["xorg-xwayland".into()]));
+        assert_eq!(arch("libvulkan1"), Some(vec!["vulkan-icd-loader".into()]));
+        assert_eq!(native("xwayland", Mgr::Apt, "ubuntu", "24.04"), Some(vec!["xwayland".into()]));
     }
 
     /// GPU jobs (0.46.11): `sys:mesa-utils` (`eglinfo`) installs on Arch,

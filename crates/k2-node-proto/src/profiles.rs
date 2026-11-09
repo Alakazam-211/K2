@@ -118,6 +118,14 @@ pub const PROFILES: &[Profile] = &[
         about: "build-base plus the X11/Wayland/GL/font/audio dev set, Rust with clippy and rustfmt, and nextest",
     },
     Profile {
+        name: "gpu-headless",
+        version: 1,
+        includes: &[],
+        sys: &["mesa-utils", "vulkan-tools", "mesa-vulkan-drivers", "libvulkan1", "libegl1", "libgbm1", "weston", "xwayland", "xvfb"],
+        tools: &[],
+        about: "GPU tests without a display (with --gpu): EGL and GBM, the Vulkan loader and Mesa's GPU drivers, eglinfo and vulkaninfo, a headless Weston with Xwayland, and Xvfb (CPU-only)",
+    },
+    Profile {
         name: "k2-workspace",
         version: 1,
         includes: &["build-base"],
@@ -244,6 +252,22 @@ mod tests {
             }
             assert!(p.all_sys().len() <= MAX_PLAN_PACKAGES);
         }
+    }
+
+    /// GPU jobs S3 (0.46.11): `profile:gpu-headless@1` is the PRD's set,
+    /// and on Arch it installs the GPU Vulkan drivers, not only lavapipe.
+    #[test]
+    fn gpu_headless_is_the_headless_gpu_set() {
+        let p = resolve("gpu-headless@1").unwrap();
+        assert_eq!(
+            p.all_sys(),
+            vec!["libegl1", "libgbm1", "libvulkan1", "mesa-utils", "mesa-vulkan-drivers", "vulkan-tools", "weston", "xvfb", "xwayland"]
+        );
+        let arch: Vec<String> = p.all_sys().iter().flat_map(|s| crate::pkgmap::native(s, crate::pkgmap::Mgr::Pacman, "arch", "rolling").unwrap()).collect();
+        for want in ["vulkan-radeon", "vulkan-intel", "mesa-utils", "vulkan-tools", "weston", "xorg-xwayland", "vulkan-icd-loader"] {
+            assert!(arch.iter().any(|n| n == want), "Arch lacks {want}: {arch:?}");
+        }
+        assert!(names().contains(&"gpu-headless"));
     }
 
     #[test]

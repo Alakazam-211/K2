@@ -17,6 +17,14 @@
 //  - The screen size in points comes from each frame's header (it changes
 //    when the device rotates); `hello` / `hold` / `state` / `fps` text
 //    messages keep the rest current.
+//  - Fix 4: decode and draw run in a worker on an OffscreenCanvas where the
+//    webview allows it (`sim-player.ts`): the socket stays here and each
+//    frame's buffer is transferred. Until the worker answers its probe the
+//    socket waits; a worker with no VideoDecoder means JPEG only; a worker
+//    that fails falls back to this thread on the same socket, and the pane
+//    re-keys its <canvas> (`canvasKey`) since a canvas hands over control
+//    once. `localStorage['k2.mobile.streamPlayer'] = 'main'` forces this
+//    thread. jsdom has no OffscreenCanvas, so tests take this thread.
 //  - M0 (the latency readout only): `stats` asks the daemon for its stage
 //    times (`onStats`), and `onFrameStage` gets each frame's socket,
 //    decoded and drawn times on this side.
@@ -45,6 +53,8 @@ import {
 } from './sim-stream'
 import { browserWebCodecs, H264Sink, type VideoFrameLike } from './sim-video'
 import type { FrameStage, SimStreamStats } from './sim-latency'
+import { blobDataUrl, canUseWorkerPlayer, PROBE_TIMEOUT_MS, SimPlayer, startPlayerWorker, type PlayerHandlers, type WorkerLike } from './sim-player'
+import type { PixelRgb } from './sim-player.worker'
 
 export interface UseSimStreamArgs {
   scope: ServerScope
@@ -57,8 +67,13 @@ export interface UseSimStreamArgs {
   canvasRef: React.RefObject<HTMLCanvasElement | null>
   /** Keep the last frame (frames are still acked). */
   hold: boolean
-  /** Each frame once it is on the canvas (the latency readout). */
-  onFrameDrawn?: (seq: number) => void
+  /** Each frame once it is on the canvas (the latency readout), with its
+   *  centre pixel from the worker player while `samplePixels`. */
+  onFrameDrawn?: (seq: number, px: PixelRgb | null) => void
+  /** M0's photon probe: the worker samples each drawn frame's centre. */
+  samplePixels?: boolean
+  /** The worker player's worker (tests inject a fake). */
+  startWorker?: () => WorkerLike
   /** M0: ask the daemon for `stats` (reconnects when it changes). */
   stats?: boolean
   onStats?: (s: SimStreamStats) => void
@@ -90,8 +105,39 @@ export interface SimStreamView {
   codec: SimCodec | null
   /** From `hello` (fix 2); null before hello or from an older daemon. */
   path: SimViewerPath | null
+  /** Where frames are drawn (fix 4): a worker, this thread, or not yet
+   *  known (the worker hasn't answered its probe). */
+  player: 'pending' | 'worker' | 'main'
+  /** The pane keys its <canvas> with this: it changes when the worker
+   *  player gives up its (transferred) canvas. */
+  canvasKey: number
+  /** The canvas as a small JPEG data URL (the screenshot toast), or null. */
+  thumb(): Promise<string | null>
+  /** The centre pixel of what is on screen (M0's photon probe), or null. */
+  centrePixel(): PixelRgb | null
   send(input: SimInput): void
   setFps(fps: number): void
+}
+
+/** A small JPEG of what the canvas shows, or null when it can't export
+ *  (no frame, jsdom). */
+export function canvasThumb(canvas: HTMLCanvasElement | null): string | null {
+  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
+  try {
+    const url = canvas.toDataURL('image/jpeg', 0.6)
+    return typeof url === 'string' && url.startsWith('data:image/') ? url : null
+  } catch {
+    return null
+  }
+}
+
+/** The canvas's centre pixel, or null without a 2d context (jsdom). */
+function readCentre(canvas: HTMLCanvasElement | null): PixelRgb | null {
+  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return null
+  const d = ctx.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data
+  return [d[0], d[1], d[2]]
 }
 
 /** Painted size for a stub frame: 2× points so text stays crisp. */
@@ -134,7 +180,21 @@ function drawVideoFrame(canvas: HTMLCanvasElement, frame: VideoFrameLike, widthP
   return true
 }
 
-export function useSimStream({ scope, workspace, visible, fps, connector, canvasRef, hold, onFrameDrawn, stats = false, onStats, onFrameStage }: UseSimStreamArgs): SimStreamView {
+export function useSimStream({
+  scope,
+  workspace,
+  visible,
+  fps,
+  connector,
+  canvasRef,
+  hold,
+  onFrameDrawn,
+  stats = false,
+  onStats,
+  onFrameStage,
+  samplePixels = false,
+  startWorker,
+}: UseSimStreamArgs): SimStreamView {
   const [conn, setConn] = useState<SimConnState | 'idle'>('idle')
   const [reason, setReason] = useState<string | null>(null)
   const [screen, setScreen] = useState<ScreenPt | null>(null)
@@ -143,6 +203,13 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
   const [fpsGiven, setFpsGiven] = useState<number | null>(null)
   const [isolation, setIsolation] = useState<string | null>(null)
   const [inputError, setInputError] = useState<string | null>(null)
+  // M-17: `send` clears the error only when one is shown (no React work
+  // per input otherwise).
+  const inputErrorRef = useRef<string | null>(null)
+  const showInputError = useCallback((e: string | null) => {
+    inputErrorRef.current = e
+    setInputError(e)
+  }, [])
   const [hasFrame, setHasFrame] = useState(false)
   const [inputCaps, setInputCaps] = useState<SimInputCaps | null>(null)
   const drawnRef = useRef(onFrameDrawn)
@@ -164,12 +231,99 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
   // The person picked a rate (keep it; don't raise it for video).
   const pickedRef = useRef(false)
 
+  // ── The player (fix 4) ──────────────────────────────────────────────
+  const [player, setPlayer] = useState<'pending' | 'worker' | 'main'>(() => (canUseWorkerPlayer() ? 'pending' : 'main'))
+  const [canvasKey, setCanvasKey] = useState(0)
+  const playerRef = useRef<SimPlayer | null>(null)
+  // The worker can decode H.264 (its probe); the socket offers video only then.
+  const playerVideoRef = useRef(true)
+  const sampleRef = useRef(samplePixels)
+  sampleRef.current = samplePixels
+  const startWorkerRef = useRef(startWorker ?? startPlayerWorker)
+  const lostWarnedRef = useRef(false)
+  const wantPlayer = player === 'pending' && !!workspace && visible
+  useEffect(() => {
+    if (!wantPlayer || playerRef.current) return
+    const toMain = (why: string): void => {
+      if (!lostWarnedRef.current) {
+        lostWarnedRef.current = true
+        console.warn('[mobile] drawing on the main thread; the worker player is off here:', why)
+      }
+      playerRef.current?.close()
+      playerRef.current = null
+      setPlayer('main')
+      // The old canvas may have handed its control to the worker.
+      setCanvasKey((k) => k + 1)
+    }
+    const canvas = canvasRef.current
+    if (!canvas) {
+      toMain('no canvas yet')
+      return
+    }
+    const handlers: PlayerHandlers = {
+      drawn: (seq, decodedAt, drawnAt, px) => {
+        setHasFrame(true)
+        stageRef.current?.(seq, 'decoded', decodedAt)
+        stageRef.current?.(seq, 'drawn', drawnAt)
+        drawnRef.current?.(seq, px)
+      },
+      ack: (seq) => connRef.current?.ack(seq),
+      keyframe: () => connRef.current?.requestKeyframe(),
+      videoFailed: (why) => {
+        console.warn('[mobile] video failed in the player worker; reconnecting with JPEG:', why)
+        setJpegOnly(true)
+      },
+      lost: (why) => toMain(why),
+    }
+    let p: SimPlayer
+    try {
+      const off = canvas.transferControlToOffscreen()
+      p = new SimPlayer(startWorkerRef.current(), off, handlers, { sample: sampleRef.current })
+    } catch (err) {
+      toMain(err instanceof Error ? err.message : String(err))
+      return
+    }
+    playerRef.current = p
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled && playerRef.current === p) toMain('the worker did not answer its probe')
+    }, PROBE_TIMEOUT_MS)
+    void p.ready.then((probe) => {
+      settled = true
+      clearTimeout(timer)
+      if (playerRef.current !== p) return
+      if (!probe.canvas2d) {
+        toMain('no OffscreenCanvas 2D context in the worker')
+        return
+      }
+      playerVideoRef.current = probe.video
+      setPlayer('worker')
+    })
+  }, [wantPlayer, canvasRef])
+  useEffect(() => {
+    playerRef.current?.hold(hold)
+  }, [hold, player])
+  useEffect(() => {
+    playerRef.current?.sample(samplePixels)
+  }, [samplePixels, player])
+  useEffect(
+    () => () => {
+      playerRef.current?.close()
+      playerRef.current = null
+    },
+    [],
+  )
+  const settled = player !== 'pending'
+
   useEffect(() => {
     if (!workspace || !visible) {
       setConn('idle')
       setHasFrame(false)
       return
     }
+    // The worker player answers its probe first (it says what to offer).
+    if (!settled) return
+    playerRef.current?.reset()
     let live = true
     let c: SimStreamConnection | null = null
     // JPEG frames draw strictly in order; one newer than the frame being
@@ -210,7 +364,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
           if (drawVideoFrame(canvas, frame, widthPx, heightPx)) {
             setHasFrame(true)
             stageRef.current?.(frame.timestamp, 'drawn', performance.now())
-            drawnRef.current?.(frame.timestamp)
+            drawnRef.current?.(frame.timestamp, null)
           } else if (!warnedRef.current) {
             warnedRef.current = true
             console.warn('[mobile] the device canvas has no 2d context; frames are acked but not drawn')
@@ -223,7 +377,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
       scope,
       workspace,
       fps: fpsRef.current,
-      offer: { video: !jpegOnly, window: STREAM_WINDOW },
+      offer: { video: !jpegOnly && (playerRef.current ? playerVideoRef.current : true), window: STREAM_WINDOW },
       ...(stats ? { stats: true } : {}),
       handlers: {
         onConn(s, why) {
@@ -260,11 +414,14 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
             case 'codec':
               console.warn('[mobile] the stream switched to', m.codec, m.message ?? '')
               setCodec(m.codec)
-              if (m.codec === 'jpeg') dropSink(true)
+              if (m.codec === 'jpeg') {
+                dropSink(true)
+                playerRef.current?.dropVideo()
+              }
               return
             case 'error':
               console.warn('[mobile] input refused:', m.code, m.message)
-              setInputError(m.message)
+              showInputError(m.message)
               return
             case 'stats':
               statsRef.current?.(m.stats)
@@ -279,6 +436,12 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
               ? prev
               : { widthPt: frame.widthPt, heightPt: frame.heightPt },
           )
+          // The worker player takes the frame's buffer (fix 4).
+          const p = playerRef.current
+          if (p) {
+            if (!p.frame(frame)) c?.ack(frame.seq)
+            return
+          }
           if (frame.source.kind === 'h264') {
             const s = videoSink()
             if (!s) {
@@ -301,7 +464,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
                 if (drawn) {
                   if (live) setHasFrame(true)
                   stageRef.current?.(frame.seq, 'drawn', performance.now())
-                  drawnRef.current?.(frame.seq)
+                  drawnRef.current?.(frame.seq, null)
                 } else if (!warnedRef.current) {
                   warnedRef.current = true
                   console.warn('[mobile] the device canvas has no 2d context; frames are acked but not drawn')
@@ -325,7 +488,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
       mine.close()
       if (connRef.current === mine) connRef.current = null
     }
-  }, [scope, workspace, visible, connector, canvasRef, jpegOnly, stats])
+  }, [scope, workspace, visible, connector, canvasRef, jpegOnly, stats, settled, showInputError])
 
   const send = useCallback((input: SimInput) => {
     const c = connRef.current
@@ -333,9 +496,9 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
       console.warn('[mobile] input with no stream open:', input.t)
       return
     }
-    setInputError(null)
+    if (inputErrorRef.current !== null) showInputError(null)
     c.send(input)
-  }, [])
+  }, [showInputError])
 
   const setFps = useCallback((n: number) => {
     fpsRef.current = n
@@ -343,5 +506,38 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
     connRef.current?.setFps(n)
   }, [])
 
-  return { conn, reason, screen, deviceHold, state, fps: fpsGiven, isolation, inputError, hasFrame, inputCaps, codec, path, send, setFps }
+  const thumb = useCallback(async (): Promise<string | null> => {
+    const p = playerRef.current
+    if (p) {
+      const b = await p.thumb()
+      return b ? blobDataUrl(b) : null
+    }
+    return canvasThumb(canvasRef.current)
+  }, [canvasRef])
+
+  const centrePixel = useCallback((): PixelRgb | null => {
+    const p = playerRef.current
+    return p ? p.lastPx : readCentre(canvasRef.current)
+  }, [canvasRef])
+
+  return {
+    conn,
+    reason,
+    screen,
+    deviceHold,
+    state,
+    fps: fpsGiven,
+    isolation,
+    inputError,
+    hasFrame,
+    inputCaps,
+    codec,
+    path,
+    player,
+    canvasKey,
+    thumb,
+    centrePixel,
+    send,
+    setFps,
+  }
 }

@@ -15,6 +15,7 @@
 //  - Rotate / Home / Back / Take over send stream messages; Stop and
 //    Screenshot go through their routes; a sim_state event re-reads status.
 
+import { Profiler } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 
@@ -617,6 +618,43 @@ describe('the running device', () => {
     fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
     fireEvent.pointerUp(el, { clientX: 151, clientY: 101, button: 0, pointerId: 1 })
     expect(stub.inputs[3]).toEqual({ t: 'tap', x: 100, y: 100 })
+  })
+
+  it('fix 4: a drag re-renders nothing (the touch dot and the moves stay out of React)', async () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const stub = createStubSimStream()
+    let renders = 0
+    seedTabs()
+    renderInPrimaryRoom(
+      <Profiler id="mobile" onRender={() => (renders += 1)}>
+        {pane(stub, true)}
+      </Profiler>,
+    )
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    const el = screenEl()
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
+    now = 16
+    fireEvent.pointerMove(el, { clientX: 150, clientY: 110, pointerId: 1 })
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(stub.inputs.at(-1)).toMatchObject({ t: 'touch', phase: 'move' })
+    const before = renders
+    for (let i = 2; i <= 21; i++) {
+      now = 16 * i
+      fireEvent.pointerMove(el, { clientX: 150, clientY: 100 + 10 * i, pointerId: 1 })
+      await act(async () => {
+        await new Promise((r) => requestAnimationFrame(() => r(null)))
+      })
+    }
+    expect(stub.inputs.filter((m) => m.t === 'touch' && m.phase === 'move').length).toBeGreaterThanOrEqual(20)
+    expect(document.querySelector('[data-mobile-touch-dot]')?.getAttribute('data-mobile-touch-dot')).toBe('down')
+    expect(renders - before).toBe(0)
+    fireEvent.pointerUp(el, { clientX: 150, clientY: 310, button: 0, pointerId: 1 })
   })
 
   it('live touch: a flick lifts with its release velocity (points per second) so the device coasts', async () => {

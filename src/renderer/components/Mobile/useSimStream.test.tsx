@@ -12,6 +12,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 
 import type { SimFrame, SimServerMsg, SimStreamConnector, SimStreamHandlers, SimStreamOffer, SimViewerPath } from './sim-stream'
 import { useSimStream } from './useSimStream'
+import type { WorkerLike } from './sim-player'
+import { encodeFrame } from './sim-stream'
 
 /** One scope for every render (a new one would reconnect, as in the pane). */
 const SCOPE = {} as never
@@ -252,5 +254,115 @@ describe('useSimStream', () => {
     // What the closed decoder held is acked (the socket stays open).
     expect(c2.acks).toEqual([50])
     warn.mockRestore()
+  })
+
+  // ── Fix 4: which player, and the fallbacks ──────────────────────────
+
+  it('jsdom has no transferControlToOffscreen: frames draw on this thread', () => {
+    const { connector } = fakeConnector()
+    const { canvasRef } = fakeCanvas()
+    const { result } = renderHook(() => useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false }))
+    expect(result.current.player).toBe('main')
+    expect(result.current.canvasKey).toBe(0)
+  })
+
+  describe('with a worker player', () => {
+    let restore: (() => void) | null = null
+    beforeEach(() => {
+      const proto = HTMLCanvasElement.prototype as unknown as { transferControlToOffscreen?: unknown }
+      const had = Object.prototype.hasOwnProperty.call(proto, 'transferControlToOffscreen')
+      proto.transferControlToOffscreen = () => ({})
+      vi.stubGlobal('Worker', function Worker() {})
+      restore = () => {
+        if (!had) delete proto.transferControlToOffscreen
+      }
+    })
+    afterEach(() => {
+      restore?.()
+    })
+
+    function fakeWorker(probe: { canvas2d: boolean; video: boolean }) {
+      const posted: { msg: { t: string; [k: string]: unknown }; transfer: Transferable[] }[] = []
+      const w: WorkerLike = {
+        onmessage: null,
+        onerror: null,
+        postMessage(msg, transfer) {
+          const m = msg as { t: string }
+          posted.push({ msg: m, transfer: transfer ?? [] })
+          if (m.t === 'probe') queueMicrotask(() => w.onmessage?.({ data: { t: 'probe', ...probe } }))
+        },
+        terminate() {},
+      }
+      return { w, posted }
+    }
+
+    function workerCanvas() {
+      const c = fakeCanvas()
+      ;(c.canvas as unknown as { transferControlToOffscreen: () => unknown }).transferControlToOffscreen = () => ({ offscreen: true })
+      return c
+    }
+
+    it('waits for the probe; a worker without VideoDecoder means JPEG only; frames go to it transferred', async () => {
+      const { connector, conns } = fakeConnector()
+      const { canvasRef, drawImage } = workerCanvas()
+      const fw = fakeWorker({ canvas2d: true, video: false })
+      const { result } = renderHook(() =>
+        useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false, startWorker: () => fw.w }),
+      )
+      await waitFor(() => expect(conns).toHaveLength(1))
+      expect(result.current.player).toBe('worker')
+      expect(conns[0].offer).toEqual({ video: false, window: 3 })
+      expect(fw.posted[0].msg).toMatchObject({ t: 'init', canvas: { offscreen: true } })
+      const raw = encodeFrame({ seq: 1, widthPx: 4, heightPx: 2, widthPt: 4, heightPt: 2 }, new Uint8Array([0xff, 0xd8]))
+      act(() => conns[0].handlers.onFrame({ seq: 1, widthPt: 4, heightPt: 2, source: { kind: 'jpeg', data: new Blob([]) }, raw }))
+      const sent = fw.posted.find((p) => p.msg.t === 'frame')
+      expect(sent?.msg).toMatchObject({ t: 'frame', kind: 'jpeg', seq: 1, offset: 16 })
+      expect(sent?.transfer).toEqual([raw])
+      expect(drawImage).not.toHaveBeenCalled()
+      act(() => fw.w.onmessage?.({ data: { t: 'drawn', seq: 1, decodedAt: 0, drawnAt: 0, px: null } }))
+      act(() => fw.w.onmessage?.({ data: { t: 'ack', seq: 1 } }))
+      expect(conns[0].acks).toEqual([1])
+      expect(result.current.hasFrame).toBe(true)
+    })
+
+    it('a worker that fails falls back to this thread on the same socket, with a fresh canvas key', async () => {
+      const { connector, conns } = fakeConnector()
+      const { canvasRef, drawImage } = workerCanvas()
+      const fw = fakeWorker({ canvas2d: true, video: true })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { result } = renderHook(() =>
+        useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false, startWorker: () => fw.w }),
+      )
+      await waitFor(() => expect(conns).toHaveLength(1))
+      expect(conns[0].offer).toEqual({ video: true, window: 3 })
+      act(() => fw.w.onerror?.({ message: 'worker crashed' }))
+      expect(result.current.player).toBe('main')
+      expect(result.current.canvasKey).toBe(1)
+      expect(conns).toHaveLength(1)
+      const raw = encodeFrame({ seq: 2, widthPx: 4, heightPx: 2, widthPt: 4, heightPt: 2 }, new Uint8Array([0xff, 0xd8]))
+      await act(async () => {
+        conns[0].handlers.onFrame({ seq: 2, widthPt: 4, heightPt: 2, source: { kind: 'jpeg', data: new Blob([]) }, raw })
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      expect(drawImage).toHaveBeenCalledTimes(1)
+      expect(conns[0].acks).toEqual([2])
+      expect(warn).toHaveBeenCalledTimes(1)
+      warn.mockRestore()
+    })
+
+    it('a worker with no OffscreenCanvas 2D context: the main thread from the start', async () => {
+      const { connector, conns } = fakeConnector()
+      const { canvasRef } = workerCanvas()
+      const fw = fakeWorker({ canvas2d: false, video: true })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { result } = renderHook(() =>
+        useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false, startWorker: () => fw.w }),
+      )
+      await waitFor(() => expect(conns).toHaveLength(1))
+      expect(result.current.player).toBe('main')
+      expect(result.current.canvasKey).toBe(1)
+      expect(conns[0].offer).toEqual({ video: true, window: 3 })
+      warn.mockRestore()
+    })
   })
 })

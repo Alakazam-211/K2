@@ -143,6 +143,9 @@ export interface SimFrame {
   widthPt: number
   heightPt: number
   source: SimFrameSource
+  /** The whole binary message, for the worker player to take over (fix 4;
+   *  absent for the stub's painted frames). */
+  raw?: ArrayBuffer
 }
 
 /** `stream::InputCaps` from `hello` (absent from older daemons). */
@@ -466,6 +469,7 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
             widthPt: v.widthPt,
             heightPt: v.heightPt,
             source: { kind: 'h264', key: v.key, data: v.data, widthPx: v.widthPx, heightPx: v.heightPx },
+            raw: ev.data,
           })
           return
         }
@@ -479,6 +483,7 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
           widthPt: f.widthPt,
           heightPt: f.heightPt,
           source: { kind: 'jpeg', data: new Blob([f.jpeg], { type: 'image/jpeg' }) },
+          raw: ev.data as ArrayBuffer,
         })
       }
       sock.onerror = () => {

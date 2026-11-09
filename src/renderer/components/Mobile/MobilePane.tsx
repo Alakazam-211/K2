@@ -126,28 +126,7 @@ import {
 import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
-
-/** A small JPEG of what the canvas shows (the screenshot toast's
- *  thumbnail), or null when the canvas can't export (no frame, jsdom). */
-function canvasThumb(canvas: HTMLCanvasElement | null): string | null {
-  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
-  try {
-    const url = canvas.toDataURL('image/jpeg', 0.6)
-    return typeof url === 'string' && url.startsWith('data:image/') ? url : null
-  } catch {
-    return null
-  }
-}
-
-/** The canvas's centre pixel (M0's photon probe; only while the latency
- *  readout is on), or null when the canvas has no 2d context (jsdom). */
-function centrePixel(canvas: HTMLCanvasElement | null): Rgb | null {
-  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return null
-  const d = ctx.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data
-  return [d[0], d[1], d[2]]
-}
+import { TouchDot } from './touch-dot'
 
 /** Below this pane width the Thread and the device switch instead of split. */
 const NARROW_PX = 720
@@ -572,13 +551,15 @@ function MobileDevice({
       await stopSim(scope, workspaceRef)
     })
   }, [act, scope, workspaceRef])
+  // The stream's thumbnail reader (the worker player has the canvas, M-9).
+  const thumbRef = useRef<() => Promise<string | null>>(async () => null)
   const onScreenshot = useCallback(() => {
     if (!workspaceRef) return
     // The toast's thumbnail: the frame on screen as the shot was taken.
-    const thumb = canvasThumb(canvasRef.current)
+    const thumb = thumbRef.current()
     void act('screenshot', async () => {
       const path = await screenshotSim(scope, workspaceRef)
-      setNotice({ text: `Saved ${path}`, tone: 'success', shot: { path, thumb } })
+      setNotice({ text: `Saved ${path}`, tone: 'success', shot: { path, thumb: await thumb } })
     })
   }, [act, scope, workspaceRef])
   // Attach to Thread: the Thread message box beside the device takes the
@@ -622,11 +603,13 @@ function MobileDevice({
     stageClockRef.current?.reset()
     daemonStatsRef.current = null
   }, [])
-  const onFrameDrawn = useCallback((seq: number) => {
+  // The centre pixel on screen (the worker's sample, or this canvas).
+  const centreRef = useRef<() => Rgb | null>(() => null)
+  const onFrameDrawn = useCallback((seq: number, px: Rgb | null) => {
     const now = performance.now()
     meterRef.current?.frame(seq, now)
     const p = photonRef.current
-    if (p?.waiting) p.frame(now, centrePixel(canvasRef.current))
+    if (p?.waiting) p.frame(now, px ?? centreRef.current())
   }, [])
   const onStats = useCallback((st: SimStreamStats) => {
     daemonStatsRef.current = st
@@ -643,8 +626,11 @@ function MobileDevice({
     hold: holdFrame,
     onFrameDrawn,
     stats: latencyHud,
+    samplePixels: latencyHud,
     ...(latencyHud ? { onStats, onFrameStage } : {}),
   })
+  thumbRef.current = stream.thumb
+  centreRef.current = stream.centrePixel
   const live = stream.conn === 'open'
   const screen: ScreenPt | null =
     stream.screen ?? (session?.profile ? { widthPt: session.profile.widthPt, heightPt: session.profile.heightPt } : null)
@@ -725,7 +711,7 @@ function MobileDevice({
     if (m.t === 'touch' || m.t === 'tap' || m.t === 'swipe') meterRef.current?.input(at)
     if (latencyHud) {
       // M0: arm tap → photon on a finger landing; probe every touch's time.
-      if ((m.t === 'touch' && m.phase === 'down') || m.t === 'tap') photonRef.current?.arm(at, centrePixel(canvasRef.current))
+      if ((m.t === 'touch' && m.phase === 'down') || m.t === 'tap') photonRef.current?.arm(at, stream.centrePixel())
       if (m.t === 'touch') {
         probeIdRef.current += 1
         stream.send({ ...m, id: probeIdRef.current })
@@ -742,17 +728,16 @@ function MobileDevice({
   const holdTimerRef = useRef<number | null>(null)
   const pendingMoveRef = useRef<PointerSample | null>(null)
   const moveFrameRef = useRef<number | null>(null)
-  // The touch dot: where the person's finger is, fading on release.
-  const [dot, setDot] = useState<{ x: number; y: number; down: boolean } | null>(null)
-  const dotTimerRef = useRef<number | null>(null)
+  // The touch dot: where the person's finger is, fading on release. Set
+  // directly on its span (fix 4), so a drag never re-renders the pane.
+  const dotRef = useRef<TouchDot | null>(null)
+  if (dotRef.current === null) dotRef.current = new TouchDot()
+  const dotEl = useCallback((el: HTMLSpanElement | null) => dotRef.current?.attach(el), [])
   const sample = (e: { clientX: number; clientY: number }): PointerSample => ({ clientX: e.clientX, clientY: e.clientY, at: performance.now() })
   const placeDot = (e: { clientX: number; clientY: number }, down: boolean): void => {
     const r = screenRef.current?.getBoundingClientRect()
     if (!r) return
-    if (dotTimerRef.current !== null) window.clearTimeout(dotTimerRef.current)
-    dotTimerRef.current = null
-    setDot({ x: e.clientX - r.left, y: e.clientY - r.top, down })
-    if (!down) dotTimerRef.current = window.setTimeout(() => setDot(null), 200)
+    dotRef.current?.place(e.clientX - r.left, e.clientY - r.top, down)
   }
   const clearHold = (): void => {
     if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current)
@@ -778,7 +763,7 @@ function MobileDevice({
   useEffect(
     () => () => {
       if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current)
-      if (dotTimerRef.current !== null) window.clearTimeout(dotTimerRef.current)
+      dotRef.current?.dispose()
       if (moveFrameRef.current !== null) cancelAnimationFrame(moveFrameRef.current)
     },
     [],
@@ -1239,6 +1224,7 @@ function MobileDevice({
               data-mobile-screen={interactive ? 'interactive' : 'watching'}
             >
               <canvas
+                key={stream.canvasKey}
                 ref={canvasRef}
                 className="block h-full w-full transition-opacity duration-150"
                 style={{ opacity: stream.hasFrame || hadFrame ? 1 : 0 }}
@@ -1263,17 +1249,12 @@ function MobileDevice({
                 </div>
               ) : null}
               {overlayBox && screen && renderOverlay ? renderOverlay({ box: overlayBox, screen }) : null}
-              {dot && interactive ? (
+              {interactive ? (
+                // Placed by TouchDot: no style or data attribute from React.
                 <span
+                  ref={dotEl}
                   aria-hidden
-                  className="pointer-events-none absolute h-7 w-7 rounded-full border border-white/70 bg-white/35 shadow-[0_0_0_1px_rgba(0,0,0,.25)] transition-[opacity,transform] duration-200 ease-out"
-                  style={{
-                    left: dot.x,
-                    top: dot.y,
-                    opacity: dot.down ? 1 : 0,
-                    transform: `translate(-50%, -50%) scale(${dot.down ? 1 : 1.5})`,
-                  }}
-                  data-mobile-touch-dot={dot.down ? 'down' : 'up'}
+                  className="pointer-events-none absolute left-0 top-0 h-7 w-7 rounded-full border border-white/70 bg-white/35 shadow-[0_0_0_1px_rgba(0,0,0,.25)] transition-[opacity,scale] duration-200 ease-out"
                 />
               ) : null}
               {keyboard.overlay}

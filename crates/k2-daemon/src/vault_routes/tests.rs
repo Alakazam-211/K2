@@ -1546,10 +1546,12 @@ fn about(at: &Value, from: chrono::DateTime<chrono::Utc>, secs: i64) {
     assert!((got - want).num_seconds().abs() <= 60, "ends {got}, want about {want}");
 }
 
+/// The secret's grants as `k2 vault show` lists them, asked by the agent
+/// whose workspace holds it.
 fn shown_grants(t: &T, name: &str) -> Vec<Value> {
     let mut p = HashMap::new();
     p.insert("name".to_string(), name.to_string());
-    let (s, v) = call_p(t, SHOW, &owner(), Value::Null, p);
+    let (s, v) = call_p(t, SHOW, &agent("ws1", false), Value::Null, p);
     assert_eq!(s, 200, "{v}");
     v["grants"].as_array().expect("grants").clone()
 }

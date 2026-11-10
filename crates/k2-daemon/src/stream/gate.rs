@@ -91,10 +91,13 @@ impl ViewerGate {
     }
 
     /// The wire seq (K2SF / K2SV header, acks) for a unit being sent; call
-    /// once per sent unit, in order.
+    /// once per sent unit, in order. A source whose seqs start over (a
+    /// protocol-4 source on a new display, or restarted) is rebased too, so
+    /// wire seqs only rise.
     pub fn wire_seq(&mut self, u: &EncodedUnit) -> u32 {
         let seq = u.seq as u32;
-        if self.rebase {
+        let behind = self.last_wire.is_some_and(|l| (seq.wrapping_add(self.offset).wrapping_sub(l) as i32) <= 0);
+        if self.rebase || behind {
             self.offset = self.last_wire.map_or(0, |w| w.wrapping_add(1)).wrapping_sub(seq);
             self.rebase = false;
         }
@@ -177,5 +180,23 @@ mod tests {
         assert!(matches!(g.offer(b.clone(), true), Took::Send(_)));
         assert_eq!(g.wire_seq(&b), 41, "rebased past the last one sent");
         assert_eq!(g.wire_seq(&unit(2, 4, false)), 42);
+    }
+
+    /// A source that starts its seqs over on the same layer (a new display)
+    /// starts on a key unit; the chain follows it and wire seqs keep rising.
+    #[test]
+    fn a_source_that_starts_over_keeps_wire_seqs_rising() {
+        let mut g = ViewerGate::new(0);
+        for (seq, key) in [(90, true), (91, false)] {
+            let u = unit(0, seq, key);
+            assert!(matches!(g.offer(u.clone(), true), Took::Send(_)));
+            assert_eq!(g.wire_seq(&u), seq as u32);
+        }
+        let restart = EncodedUnit { source_start: true, ..unit(0, 1, true) };
+        assert!(matches!(g.offer(restart.clone(), true), Took::Send(_)));
+        assert_eq!(g.wire_seq(&restart), 92);
+        let next = unit(0, 2, false);
+        assert!(matches!(g.offer(next.clone(), true), Took::Send(_)), "the chain follows the new seqs");
+        assert_eq!(g.wire_seq(&next), 93);
     }
 }

@@ -41,6 +41,13 @@
 //! back to 30. A layer runs at the viewer's rate rounded up to a tier
 //! (60, 30, 15, 8).
 //!
+//! **Engine (S5).** The viewer loop is the stream engine's
+//! ([`crate::stream::serve`]); this route gives it the sim's hooks: the
+//! token re-check (4401), the login floor per frame, watch-only for Member
+//! logins, the keyboard caps and budget, the input sink (`person_input_on`
+//! on the viewer's input thread), the sim's coalescing rule
+//! ([`SimRule`]), the sim's `hello` fields and its hold changes.
+//!
 //! **Stats (M0).** `&stats=1` adds a `stats` message once a second with
 //! this viewer's per-stage frame times (the encode stage is its layer's
 //! encode), its probed inputs and the hub's and its layer's encode CPU
@@ -48,27 +55,33 @@
 //! the hub samples its CPU time only while one does.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use futures_util::{SinkExt, StreamExt};
+use serde_json::{Map, Value};
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
-use tokio_tungstenite::tungstenite::Message;
 
-use k2_core::log_debug;
 use k2_core::sim::hold::HoldView;
 use k2_core::sim::lane::{Action, FrameOpts, FrameSize, KeyMods, Point, TouchPhase};
 use k2_core::sim::manager::{self, Ws};
+use k2_core::sim::store::SimRow;
 use k2_core::sim::stream::*;
-use k2_core::sim::video::flow::{AckWindow, ACK_EXPIRY};
 use k2_core::sim::video;
-use k2_core::stream::{Codec as UnitCodec, EncodedSource, EncodedUnit, SourceKey, SourceKind};
+use k2_core::stream::{EncodedSource, SourceKey, SourceKind};
 
 use crate::sidecar_routes::Caller;
-use crate::stream::{rates, HubEvent, JoinError, Subscription, Took, ViewerGate, Want};
+use crate::stream::viewer::WsFrame;
+use crate::stream::{Auth, Coalesce, EngineMsg, Hooks, InputSink, JoinError, Negotiated, Offer, Push, Refusal, ServeError, Source, StreamMsg, Subscription, Verdict, Want, AUTH_TICK};
+#[cfg(test)]
+use crate::stream::rates;
+#[cfg(test)]
+use crate::stream::viewer::{stream_socket_setup, unit_codec};
+#[cfg(test)]
+use futures_util::{SinkExt, StreamExt};
+#[cfg(test)]
+use k2_core::stream::{Codec as UnitCodec, EncodedUnit};
+#[cfg(test)]
+use tokio_tungstenite::tungstenite::Message;
 
 /// The size the hub asks lanes for: points, unless `K2_SIM_FRAME_SIZE=native`
 /// (read once at the first stream; the fix 1a rollback).
@@ -85,24 +98,19 @@ fn hub_opts(fps: u32) -> FrameOpts {
     FrameOpts { max_fps: fps, size: hub_frame_size(), max_width_px: None }
 }
 
-/// The stream engine's codec for a viewer's.
-fn unit_codec(c: Codec) -> UnitCodec {
-    match c {
-        Codec::Jpeg => UnitCodec::Jpeg,
-        Codec::H264 => UnitCodec::H264,
-    }
+/// Opens a running device as the hub's encoded source. S3b: the lane picks
+/// (iOS on protocol 4 relays the helper's own units; every other lane goes
+/// through `PixelLayers`).
+fn open_source(row: SimRow) -> impl FnOnce() -> Result<Box<dyn EncodedSource>, manager::SimError> + Send + 'static {
+    move || manager::manager().stream_source(&row, hub_opts(LOCAL_MAX_FPS), hub_frame_size())
 }
 
 /// Join (or start) the hub for a running device: subscribed before this
 /// returns, so the hub can't end while the socket upgrades.
 pub fn join(ws: &Ws, want: Want) -> Result<(i64, Subscription), manager::SimError> {
-    let m = manager::manager();
-    let row = m.running(ws)?;
+    let row = manager::manager().running(ws)?;
     let sim_id = row.id;
-    // S3b: the lane picks (iOS on protocol 4 relays the helper's own units;
-    // every other lane goes through `PixelLayers`).
-    let open = || -> Result<Box<dyn EncodedSource>, manager::SimError> { m.stream_source(&row, hub_opts(LOCAL_MAX_FPS), hub_frame_size()) };
-    match crate::stream::join(SourceKey::Sim(sim_id), want, open) {
+    match crate::stream::join(SourceKey::Sim(sim_id), want, open_source(row)) {
         Ok(sub) => Ok((sim_id, sub)),
         Err(JoinError::Open(e)) => Err(e),
         Err(JoinError::Thread(e)) => Err(manager::SimError::new(500, "sim_io", e)),
@@ -118,12 +126,15 @@ pub struct Viewer {
     pub path: ViewerPath,
 }
 
-/// The sim row of the rate table (fix 2). `video_max` is the local and LAN
+/// The sim row of the rate table (fix 2; the engine clamps with it,
+/// `crate::stream::viewer::negotiate`). `video_max` is the local and LAN
 /// H.264 cap (`rates::video_max_fps`).
+#[cfg(test)]
 fn clamp_fps_with(codec: Codec, path: ViewerPath, asked: Option<u32>, video_max: u32) -> u32 {
     rates::clamp_fps_with(SourceKind::Sim, unit_codec(codec), path, asked, video_max)
 }
 
+#[cfg(test)]
 fn clamp_fps(codec: Codec, path: ViewerPath, asked: Option<u32>) -> u32 {
     clamp_fps_with(codec, path, asked, rates::video_max_fps())
 }
@@ -170,103 +181,85 @@ fn to_action(m: &ViewerMsg) -> Option<Action> {
     })
 }
 
-async fn close(write: &mut (impl SinkExt<Message> + Unpin), code: u16, reason: &str) {
-    let _ = write
-        .send(Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: std::borrow::Cow::Owned(reason.to_string()) })))
-        .await;
-}
-
-fn text(m: &ServerMsg) -> Message {
-    Message::Text(serde_json::to_string(m).unwrap_or_default())
-}
-
-fn u16_of(n: u32) -> u16 {
-    n.min(u16::MAX as u32) as u16
-}
-
-/// A unit as this viewer's K2SF (JPEG) or K2SV (H.264) message, with its
-/// wire `seq`. `ts` counts from `started` (this viewer's stream). `None`
-/// for a codec the sim wire doesn't carry.
-fn unit_message(u: &EncodedUnit, seq: u32, started: Instant) -> Option<Vec<u8>> {
-    let (width_px, height_px, width_pt, height_pt) = (u16_of(u.width), u16_of(u.height), u16_of(u.width_pt), u16_of(u.height_pt));
-    match u.codec {
-        UnitCodec::Jpeg => Some(FrameHeader { seq, width_px, height_px, width_pt, height_pt }.encode(&u.data)),
-        UnitCodec::H264 => {
-            let age_ms = u.captured_at.elapsed().as_millis().min(u16::MAX as u128) as u16;
-            let ts_ms = u.captured_at.saturating_duration_since(started).as_millis().min(u32::MAX as u128) as u32;
-            Some(VideoHeader { seq, width_px, height_px, width_pt, height_pt, codec: VIDEO_CODEC_H264, key: u.key, age_ms, ts_ms }.encode(&u.data))
-        }
-        UnitCodec::Vp8 => None,
-    }
-}
-
-/// One sent unit's stages into the viewer's stats window (M0). The hub
-/// gate is the layer's schedule (pulled → its encode began); the queue is
-/// encode done → this viewer's write (fan-out, its queue, its window).
-fn record_unit(st: &mut StatsWindow, u: &EncodedUnit, send_start: Instant, sent: Instant) {
-    let ms = |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
-    if let Some(e) = u.stamps.emitted_at {
-        st.stage(Stage::CaptureEmit, ms(u.captured_at, e));
-        if let Some(rcv) = u.stamps.received_at {
-            st.stage(Stage::EmitReceive, ms(e, rcv));
+/// The sim's viewer messages on the engine: `ack`, `fps` and `keyframe`
+/// are the engine's; a `touch` with an `id` is a stats probe.
+impl StreamMsg for ViewerMsg {
+    fn engine(&self) -> Option<EngineMsg> {
+        match self {
+            ViewerMsg::Ack { seq } => Some(EngineMsg::Ack { seq: *seq }),
+            ViewerMsg::Fps { fps } => Some(EngineMsg::Fps { fps: *fps }),
+            ViewerMsg::Keyframe => Some(EngineMsg::Keyframe),
+            _ => None,
         }
     }
-    st.stage(Stage::ReceiveHub, ms(u.stamps.received_at.unwrap_or(u.captured_at), u.pulled_at));
-    match u.encode {
-        Some(e) => {
-            st.stage(Stage::HubGate, ms(u.pulled_at, e.start));
-            st.stage(Stage::Encode, ms(e.start, e.end));
-            st.stage(Stage::Queue, ms(e.end, send_start));
+
+    fn probe(&self) -> Option<u32> {
+        match self {
+            ViewerMsg::Touch { id, .. } => *id,
+            _ => None,
         }
-        None => st.stage(Stage::Queue, ms(u.pulled_at, send_start)),
     }
-    st.stage(Stage::Send, ms(send_start, sent));
-    st.stage(Stage::Total, ms(u.captured_at, sent));
-    st.frame_sent();
 }
 
-/// Send one unit; false when the socket is gone. The caller marks it in
-/// flight.
-async fn send_unit(write: &mut (impl SinkExt<Message> + Unpin), u: &EncodedUnit, seq: u32, started: Instant, stats: Option<&mut StatsWindow>) -> bool {
-    let Some(msg) = unit_message(u, seq, started) else { return true };
-    let send_start = Instant::now();
-    if write.send(Message::Binary(msg)).await.is_err() {
-        return false;
+/// The sim's coalescing rule (fix 3): backed-up moves collapse to the
+/// newest ([`coalesce_keep`]); nothing else merges.
+pub struct SimRule;
+
+impl Coalesce<ViewerMsg> for SimRule {
+    fn coalesce(&self, batch: Vec<ViewerMsg>) -> Vec<(usize, ViewerMsg)> {
+        let keep = coalesce_keep(&batch);
+        batch.into_iter().zip(keep).enumerate().filter_map(|(i, (m, k))| k.then_some((i, m))).collect()
     }
-    if let Some(st) = stats {
-        record_unit(st, u, send_start, Instant::now());
+}
+
+/// A viewer's input into the device, as `k2 sim` would send it.
+struct SimSink {
+    sim_id: i64,
+    ws: Ws,
+    who: String,
+    caller: Caller,
+}
+
+impl InputSink<ViewerMsg> for SimSink {
+    fn send(&mut self, vm: ViewerMsg) -> Result<(), Refusal> {
+        person_input_on(Some(self.sim_id), &self.ws, &self.who, &self.caller, vm).map_err(|e| Refusal::new(e.code, e.message))
     }
-    true
 }
 
-/// CPU ms between two cumulative readings (0 for the first, which has no
-/// start).
-fn cpu_window_ms(last: &mut u64, now: u64) -> f32 {
-    let ms = if *last == 0 { 0.0 } else { now.saturating_sub(*last) as f32 / 1e6 };
-    *last = now;
-    ms
+/// Hold changes (a tap from another viewer, take-over expiry), polled as
+/// before (every 250 ms) and pushed to the viewer while it stays.
+fn hold_changes(sim_id: i64, mut last: HoldView) -> tokio::sync::mpsc::UnboundedReceiver<Push> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        while !tx.is_closed() {
+            tick.tick().await;
+            let h = manager::manager().hold_view(sim_id);
+            let changed_kind = std::mem::discriminant(&h) != std::mem::discriminant(&last)
+                || matches!((&h, &last), (HoldView::Takeover { by: a, .. }, HoldView::Takeover { by: b, .. }) if a != b);
+            if changed_kind {
+                last = h.clone();
+                if tx.send(Push::Text(serde_json::to_string(&ServerMsg::Hold { hold: h }).unwrap_or_default())).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    rx
 }
 
-/// The stream socket before the upgrade: Nagle off, so acks, hold and
-/// error messages and a frame's tail never wait on a delayed ACK. Loopback
-/// and LAN sockets come from the main listener without it; Connect sockets
-/// already have it (M-1), so this is a no-op there. `K2_TUNNEL_NODELAY=0`
-/// (the existing switch) leaves Nagle on.
-fn stream_socket_setup(stream: &TcpStream) {
-    crate::tunnel_tls_listener::no_nagle(stream);
-}
-
-/// May this viewer put one more unit in flight? (The window's delay-based
-/// cap: a layer is paced at its source, so a delta that fits the window
-/// goes; the round-trip limit would only drop it and cost a keyframe.)
-fn room(w: &AckWindow) -> bool {
-    (w.in_flight() as u32) < w.cap()
+/// A server message's fields (for the engine's `hello`).
+fn fields(m: &ServerMsg) -> Map<String, Value> {
+    match serde_json::to_value(m) {
+        Ok(Value::Object(o)) => o,
+        _ => Map::new(),
+    }
 }
 
 /// Serve one viewer. The dispatcher has refused app passes, agents and bad
 /// tokens before the upgrade.
 pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, viewer: Viewer, owner_token: String) {
-    stream_socket_setup(stream);
     let token = params.get("workspace").cloned().unwrap_or_default();
     let ws = {
         let caller = viewer.caller.clone();
@@ -284,23 +277,21 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
         }
     };
     // Codec + window (0.46.7). A viewer that offers nothing gets JPEG with
-    // one frame in flight: the wire as it was.
-    let offer = parse_offer(params.get("codecs").map(String::as_str));
-    let window_max = negotiate_window(params.get("win").map(String::as_str));
-    let host_h264 = offer.contains(&Codec::H264) && tokio::task::spawn_blocking(video::h264_available).await.unwrap_or(false);
-    let mut codec = negotiate(&offer, host_h264);
-    let remote = viewer.path.remote();
-    let mut fps = clamp_fps(codec, viewer.path, params.get("fps").and_then(|f| f.parse().ok()));
-    // The pane width in device pixels: the layer goes up to it (clamped to
-    // the device's own width). Absent: points, as before.
-    let pw = params.get("pw").and_then(|v| v.trim().parse::<u32>().ok()).filter(|w| *w > 0);
-    let stats_on = params.get("stats").map(String::as_str) == Some("1");
-    let want = Want { codec: unit_codec(codec), fps, path: viewer.path, pw, stats: stats_on };
-    let joined = {
+    // one frame in flight: the wire as it was. A sim gives H.264 when this
+    // host encodes it, never VP8.
+    let offer = Offer::from_params(&params);
+    let host_h264 = offer.codecs.contains(&Codec::H264) && tokio::task::spawn_blocking(video::h264_available).await.unwrap_or(false);
+    let gives = if host_h264 { vec![Codec::H264] } else { Vec::new() };
+    let running = {
         let ws2 = ws.clone();
-        tokio::task::spawn_blocking(move || join(&ws2, want)).await
+        tokio::task::spawn_blocking(move || {
+            let m = manager::manager();
+            let row = m.running(&ws2)?;
+            Ok::<_, manager::SimError>((row, m.status(&ws2, false).ok().and_then(|s| s.sim)))
+        })
+        .await
     };
-    let (sim_id, mut sub) = match joined {
+    let (row, view) = match running {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => {
             crate::routes::http::send_response(&mut *stream, "409 Conflict", "application/json", &e.body().to_string()).await;
@@ -311,265 +302,76 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
             return;
         }
     };
-    let ws_conn = match tokio_tungstenite::accept_async(stream).await {
-        Ok(w) => w,
-        Err(e) => {
-            log_debug!("[sim] stream handshake failed: {e}");
+    let sim_id = row.id;
+    let m = manager::manager();
+    let hold = m.hold_view(sim_id);
+    let input_caps = view.as_ref().map(|v| m.input_caps(v.lane));
+    let can_control = crate::sim_routes::can_control(&viewer.caller);
+    let mut incoming = crate::socket_access::IncomingCheck::new(&viewer.token, &owner_token);
+    let mut budget = InputBudget::new(Instant::now());
+    let (tok, owner) = (viewer.token.clone(), owner_token.clone());
+    let hello_hold = hold.clone();
+    let hooks = Hooks {
+        auth: Auth {
+            every: AUTH_TICK,
+            recheck: Box::new(move || {
+                if crate::routes::http::token_still_valid(&tok, &owner) {
+                    Verdict::Keep
+                } else {
+                    Verdict::Close { code: CLOSE_AUTH_REVOKED, reason: "token revoked".into() }
+                }
+            }),
+            // Security review L7: a client frame from a login is acted on
+            // only while the login still clears this socket's floor (a
+            // downgrade to Voice & Chat only closes it here, not on the tick).
+            frame: Box::new(move |f: &WsFrame| {
+                if incoming.frame_ok(f) {
+                    Verdict::Keep
+                } else {
+                    Verdict::Close { code: crate::presence::WS_CLOSE_ACCESS_LOST, reason: "access_lost".into() }
+                }
+            }),
+            may_input: Box::new(move |_: &ViewerMsg| if can_control { Ok(()) } else { Err(Refusal::new("sim_watch_only", "You can watch this device but not use it.")) }),
+        },
+        limits: Box::new(move |m: &ViewerMsg, now: Instant| check_input(m).and_then(|_| budget.take(m, now)).map_err(|r| Refusal::new(r.code, r.message))),
+        sink: Box::new(SimSink { sim_id, ws: ws.clone(), who: who_name(&viewer.caller), caller: viewer.caller.clone() }),
+        coalesce: Box::new(SimRule),
+        hello: Box::new(move |n: &Negotiated| {
+            fields(&ServerMsg::Hello {
+                sim: format!("s{sim_id}"),
+                lane: view.as_ref().map(|v| v.lane).unwrap_or(k2_core::sim::LaneKind::Android),
+                state: view.as_ref().map(|v| v.state).unwrap_or(SimState::Running),
+                profile: view.as_ref().and_then(|v| v.profile.clone()),
+                fps: n.fps,
+                remote: n.path.remote(),
+                path: Some(n.path),
+                hold: hello_hold,
+                isolation: k2_core::sim::ISOLATION_NOTE.to_string(),
+                input: input_caps,
+                codec: n.codec,
+                window: n.window,
+            })
+        }),
+        push: Some(hold_changes(sim_id, hold)),
+        busy: Refusal::new("sim_busy", "Too much input at once; slow down."),
+        ended: Box::new(|why: &str| serde_json::to_string(&ServerMsg::State { state: SimState::Stopped, message: Some(why.to_string()) }).ok()),
+        ended_reason: "device stopped".into(),
+        tag: "sim",
+    };
+    let source = Source { key: SourceKey::Sim(sim_id), kind: SourceKind::Sim, open: Box::new(open_source(row)), gives };
+    m.viewer_joined(sim_id);
+    let served = crate::stream::serve(stream, source, offer, viewer.path, hooks).await;
+    m.viewer_left(sim_id);
+    let refused = match served {
+        Ok(()) => return,
+        Err(ServeError::Join(JoinError::Open(e))) => e,
+        Err(ServeError::Join(JoinError::Thread(e))) => manager::SimError::new(500, "sim_io", e),
+        Err(ServeError::Task(e)) => {
+            crate::routes::http::send_response(&mut *stream, "500 Internal Server Error", "application/json", &format!("{{\"error\":\"{e}\"}}")).await;
             return;
         }
     };
-    let (mut write, mut read) = ws_conn.split();
-    let m = manager::manager();
-    m.viewer_joined(sim_id);
-    // M0: stage times once a second, only when asked.
-    let mut stats = stats_on.then(StatsWindow::default);
-    let mut hub_cpu_last = 0u64;
-    let mut enc_cpu_ns = 0u64;
-    let mut stats_tick = tokio::time::interval(Duration::from_secs(1));
-    stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let can_control = crate::sim_routes::can_control(&viewer.caller);
-    let who = who_name(&viewer.caller);
-    let status = {
-        let ws2 = ws.clone();
-        tokio::task::spawn_blocking(move || manager::manager().status(&ws2, false)).await.ok().and_then(|r| r.ok())
-    };
-    let view = status.and_then(|s| s.sim);
-    let hello = ServerMsg::Hello {
-        sim: format!("s{sim_id}"),
-        lane: view.as_ref().map(|v| v.lane).unwrap_or(k2_core::sim::LaneKind::Android),
-        state: view.as_ref().map(|v| v.state).unwrap_or(SimState::Running),
-        profile: view.as_ref().and_then(|v| v.profile.clone()),
-        fps,
-        remote,
-        path: Some(viewer.path),
-        hold: m.hold_view(sim_id),
-        isolation: k2_core::sim::ISOLATION_NOTE.to_string(),
-        input: view.as_ref().map(|v| m.input_caps(v.lane)),
-        codec,
-        window: window_max,
-    };
-    let mut window = AckWindow::new(window_max);
-    let mut congested = false;
-    let started = Instant::now();
-    let mut gate = ViewerGate::new(sub.layer());
-    let mut last_hold = m.hold_view(sim_id);
-    if write.send(text(&hello)).await.is_err() {
-        drop(sub);
-        m.viewer_left(sim_id);
-        return;
-    }
-    // People's input runs in order on this viewer's own thread (fix 3), so
-    // a long swipe never stalls its frames and no move waits for a thread
-    // pool; refusals come back on `err_rx`. A probed touch (stats) carries
-    // its id and read time, and its timing comes back on `timing_rx`.
-    let (in_tx, in_rx) = std::sync::mpsc::sync_channel::<QueuedInput>(INPUT_QUEUE);
-    let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<(String, String)>(16);
-    let (timing_tx, mut timing_rx) = tokio::sync::mpsc::channel::<InputTiming>(64);
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let me = NEXT.fetch_add(1, Ordering::SeqCst);
-    let input = InputThread { sim_id, ws: ws.clone(), who: who.clone(), caller: viewer.caller.clone(), err_tx, timing_tx, started };
-    if let Err(e) = std::thread::Builder::new().name(format!("k2-sim-input-{me}")).spawn(move || input.run(in_rx)) {
-        log_debug!("[sim] input thread for viewer {me}: {e}");
-    }
-    let mut budget = InputBudget::new(Instant::now());
-    let mut auth = tokio::time::interval(Duration::from_secs(5));
-    auth.tick().await;
-    // Hold changes (a tap from another viewer, take-over expiry).
-    let mut hold_tick = tokio::time::interval(Duration::from_millis(250));
-    hold_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut incoming = crate::socket_access::IncomingCheck::new(&viewer.token, &owner_token);
-    'serve: loop {
-        if window.expire(Instant::now(), ACK_EXPIRY) > 0 {
-            log_debug!("[sim] viewer {me}: acks lost for {ACK_EXPIRY:?}; freeing the window");
-        }
-        // A keyframe that waited for room goes first.
-        if let Some(u) = gate.take_held(room(&window)) {
-            let seq = gate.wire_seq(&u);
-            if !send_unit(&mut write, &u, seq, started, stats.as_mut()).await {
-                break 'serve;
-            }
-            window.sent(seq, Instant::now());
-        }
-        tokio::select! {
-            _ = auth.tick() => {
-                if !crate::routes::http::token_still_valid(&viewer.token, &owner_token) {
-                    log_debug!("[sim] stream token revoked; closing s{sim_id}");
-                    close(&mut write, CLOSE_AUTH_REVOKED, "token revoked").await;
-                    break 'serve;
-                }
-            }
-            unit = sub.units.recv() => {
-                let Some(u) = unit else {
-                    close(&mut write, CLOSE_DEVICE_STOPPED, "device stopped").await;
-                    break 'serve;
-                };
-                if let Some(e) = &u.encode {
-                    enc_cpu_ns += e.cpu_ns;
-                }
-                match gate.offer(u, room(&window)) {
-                    Took::Send(u) => {
-                        let seq = gate.wire_seq(&u);
-                        if !send_unit(&mut write, &u, seq, started, stats.as_mut()).await {
-                            break 'serve;
-                        }
-                        window.sent(seq, Instant::now());
-                    }
-                    Took::Dropped => {
-                        sub.catch_up();
-                    }
-                    Took::Held | Took::Stale => {}
-                }
-            }
-            Some(ev) = sub.events.recv() => match ev {
-                HubEvent::Moved { layer, fps: f, why, .. } => {
-                    log_debug!("[sim] H.264 for viewer {me} on s{sim_id} failed ({why}); falling back to JPEG");
-                    gate.moved(layer);
-                    codec = Codec::Jpeg;
-                    fps = f;
-                    let msg = ServerMsg::Codec { codec, message: Some(format!("The video encoder stopped ({why}); this stream is JPEG now.")) };
-                    if write.send(text(&msg)).await.is_err() || write.send(text(&ServerMsg::Fps { fps })).await.is_err() {
-                        break 'serve;
-                    }
-                }
-                HubEvent::Ended(why) => {
-                    let _ = write.send(text(&ServerMsg::State { state: SimState::Stopped, message: Some(why) })).await;
-                    close(&mut write, CLOSE_DEVICE_STOPPED, "device stopped").await;
-                    break 'serve;
-                }
-            },
-            _ = hold_tick.tick() => {
-                let h = m.hold_view(sim_id);
-                let changed_kind = std::mem::discriminant(&h) != std::mem::discriminant(&last_hold)
-                    || matches!((&h, &last_hold), (HoldView::Takeover { by: a, .. }, HoldView::Takeover { by: b, .. }) if a != b);
-                if changed_kind {
-                    last_hold = h.clone();
-                    if write.send(text(&ServerMsg::Hold { hold: h })).await.is_err() {
-                        break 'serve;
-                    }
-                }
-            }
-            Some((code, message)) = err_rx.recv() => {
-                if write.send(text(&ServerMsg::Error { code, message })).await.is_err() {
-                    break 'serve;
-                }
-            }
-            Some(t) = timing_rx.recv() => {
-                if let Some(st) = stats.as_mut() {
-                    st.input(t);
-                }
-            }
-            _ = stats_tick.tick(), if stats.is_some() => {
-                let hub_ms = cpu_window_ms(&mut hub_cpu_last, sub.hub().cpu_ns());
-                let enc_ms = std::mem::take(&mut enc_cpu_ns) as f32 / 1e6;
-                if let Some(st) = stats.as_mut() {
-                    if write.send(text(&ServerMsg::Stats { stats: st.take(hub_ms, enc_ms) })).await.is_err() {
-                        break 'serve;
-                    }
-                }
-            }
-            msg = read.next() => {
-                // Security review L7: a client frame from a login is acted on
-                // only while the login still clears this socket's floor (a
-                // downgrade to Voice & Chat only closes it here, not on the tick).
-                if !incoming.frame_ok(&msg) {
-                    let _ = write.send(crate::presence::access_lost_close_message()).await;
-                    break 'serve;
-                }
-                let Some(Ok(msg)) = msg else { break 'serve };
-                let Message::Text(t) = msg else {
-                    if matches!(msg, Message::Close(_)) { break 'serve; }
-                    continue 'serve;
-                };
-                let Ok(vm) = serde_json::from_str::<ViewerMsg>(&t) else {
-                    let _ = write.send(text(&ServerMsg::Error { code: "bad_message".into(), message: "unknown message".into() })).await;
-                    continue 'serve;
-                };
-                match vm {
-                    ViewerMsg::Ack { seq } => {
-                        window.ack(seq, Instant::now());
-                        // The layer's bitrate follows its most congested viewer.
-                        if codec == Codec::H264 && window.congested() != congested {
-                            congested = !congested;
-                            sub.set_congested(congested);
-                        }
-                    }
-                    ViewerMsg::Fps { fps: f } => {
-                        fps = clamp_fps(codec, viewer.path, Some(f));
-                        gate.moved(sub.set_fps(fps));
-                        let _ = write.send(text(&ServerMsg::Fps { fps })).await;
-                    }
-                    ViewerMsg::Keyframe => {
-                        if codec == Codec::H264 {
-                            sub.ask_keyframe();
-                        }
-                    }
-                    other => {
-                        if !can_control {
-                            let _ = write.send(text(&ServerMsg::Error { code: "sim_watch_only".into(), message: "You can watch this device but not use it.".into() })).await;
-                            continue 'serve;
-                        }
-                        if let Err(r) = check_input(&other).and_then(|_| budget.take(&other, Instant::now())) {
-                            let _ = write.send(text(&ServerMsg::Error { code: r.code.into(), message: r.message })).await;
-                            continue 'serve;
-                        }
-                        let probe = match (&other, stats.is_some()) {
-                            (ViewerMsg::Touch { id: Some(id), .. }, true) => Some((*id, Instant::now())),
-                            _ => None,
-                        };
-                        if in_tx.try_send((other, probe)).is_err() {
-                            let _ = write.send(text(&ServerMsg::Error { code: "sim_busy".into(), message: "Too much input at once; slow down.".into() })).await;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    drop(in_tx); // the input thread ends after what it is doing
-    drop(sub); // leaves the hub: its layer pauses if this was the last viewer
-    m.viewer_left(sim_id);
-}
-
-/// Inputs a viewer may have queued; one more is refused with `sim_busy`.
-const INPUT_QUEUE: usize = 64;
-
-/// One queued input and its stats probe (id, read time).
-type QueuedInput = (ViewerMsg, Option<(u32, Instant)>);
-
-/// A viewer's input thread (`k2-sim-input-<n>`, fix 3; K2 Q3: one per
-/// viewer). It takes what is queued, collapses backed-up moves to the
-/// newest (`coalesce_keep`), and sends each in order. Per viewer, not per
-/// device, so today's ordering and lifetime rules hold; a per-device input
-/// thread belongs to the shared engine.
-struct InputThread {
-    sim_id: i64,
-    ws: Ws,
-    who: String,
-    caller: Caller,
-    err_tx: tokio::sync::mpsc::Sender<(String, String)>,
-    timing_tx: tokio::sync::mpsc::Sender<InputTiming>,
-    started: Instant,
-}
-
-impl InputThread {
-    fn run(self, rx: std::sync::mpsc::Receiver<QueuedInput>) {
-        while let Ok(first) = rx.recv() {
-            let mut batch = vec![first];
-            batch.extend(rx.try_iter());
-            let keep = coalesce_keep(&batch.iter().map(|(m, _)| m.clone()).collect::<Vec<_>>());
-            for ((vm, probe), _) in batch.into_iter().zip(keep).filter(|(_, k)| *k) {
-                let r = person_input_on(Some(self.sim_id), &self.ws, &self.who, &self.caller, vm);
-                if let Some((id, recv)) = probe {
-                    let recv_ms = recv.saturating_duration_since(self.started).as_secs_f32() * 1000.0;
-                    let _ = self.timing_tx.try_send(InputTiming { id, recv_ms, lane_ms: recv.elapsed().as_secs_f32() * 1000.0 });
-                }
-                if let Err(e) = r {
-                    if self.err_tx.blocking_send((e.code.to_string(), e.message)).is_err() {
-                        return; // the viewer left
-                    }
-                }
-            }
-        }
-    }
+    crate::routes::http::send_response(&mut *stream, "409 Conflict", "application/json", &refused.body().to_string()).await;
 }
 
 /// One person input from the stream (blocking), the way `k2 sim` would

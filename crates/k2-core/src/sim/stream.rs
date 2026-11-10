@@ -38,7 +38,8 @@
 //! 10..12 height u16 LE
 //! 12..14 wpt    u16 LE  screen width in points
 //! 14..16 hpt    u16 LE
-//! 16     codec  u8      1 = H.264
+//! 16     codec  u8      1 = H.264, 2 = VP8 (one VP8 frame; the remote
+//!                       desktop on Linux, PRD remote desktop §6)
 //! 17     flags  u8      bit 0 = keyframe
 //! 18..20 age    u16 LE  ms from capture to send on the daemon (saturating)
 //! 20..24 ts     u32 LE  capture time, ms since the viewer's stream began
@@ -124,6 +125,9 @@ pub const VIDEO_MAGIC: [u8; 4] = *b"K2SV";
 pub const VIDEO_HEADER_LEN: usize = 24;
 /// [`VideoHeader::codec`] for H.264.
 pub const VIDEO_CODEC_H264: u8 = 1;
+/// [`VideoHeader::codec`] for VP8 (one frame, key or inter). The same byte
+/// as protocol 4's unit codec (`k2_simvideo::link::Codec::Vp8`).
+pub const VIDEO_CODEC_VP8: u8 = 2;
 /// [`VideoHeader`] flags bit: an IDR access unit with SPS + PPS.
 pub const VIDEO_FLAG_KEY: u8 = 1;
 
@@ -239,6 +243,9 @@ pub enum Codec {
     Jpeg,
     /// K2SV frames, Annex B H.264.
     H264,
+    /// K2SV frames with codec byte 2, one VP8 frame each. Only a source
+    /// that encodes VP8 gives it (k2-deskd on Linux); a simulator never.
+    Vp8,
 }
 
 impl Codec {
@@ -246,14 +253,20 @@ impl Codec {
         match self {
             Codec::Jpeg => "jpeg",
             Codec::H264 => "h264",
+            Codec::Vp8 => "vp8",
         }
     }
     pub fn parse(s: &str) -> Option<Codec> {
         match s.trim() {
             "jpeg" => Some(Codec::Jpeg),
             "h264" => Some(Codec::H264),
+            "vp8" => Some(Codec::Vp8),
             _ => None,
         }
+    }
+    /// A video codec (K2SV; deltas need the frames before them).
+    pub fn is_video(self) -> bool {
+        self != Codec::Jpeg
     }
 }
 
@@ -272,11 +285,15 @@ pub fn parse_offer(q: Option<&str>) -> Vec<Codec> {
 /// H.264 when the viewer offered it and this host can encode it; JPEG
 /// otherwise (every viewer can draw JPEG, offered or not).
 pub fn negotiate(offer: &[Codec], host_h264: bool) -> Codec {
-    if host_h264 && offer.contains(&Codec::H264) {
-        Codec::H264
-    } else {
-        Codec::Jpeg
-    }
+    negotiate_with(offer, if host_h264 { &[Codec::H264] } else { &[] })
+}
+
+/// The first video codec in the viewer's offer (its order of preference)
+/// that the source can give (`gives`: a protocol-4 source's
+/// `hello.codecs`; a simulator gives H.264 at most, never VP8); JPEG when
+/// none matches (every viewer can draw JPEG, offered or not).
+pub fn negotiate_with(offer: &[Codec], gives: &[Codec]) -> Codec {
+    offer.iter().copied().find(|c| c.is_video() && gives.contains(c)).unwrap_or(Codec::Jpeg)
 }
 
 /// The viewer's `win=`: 1 (the old one-in-flight wire) when absent or
@@ -794,6 +811,31 @@ mod tests {
         assert_eq!(negotiate_window(Some("99")), MAX_WINDOW);
         assert_eq!(negotiate_window(Some("0")), 1);
         assert_eq!(negotiate_window(Some("lots")), 1);
+    }
+
+    /// PRD remote desktop §6: K2SV codec byte 2 is VP8, the same byte as
+    /// protocol 4's unit codec. A viewer's offer order picks among what the
+    /// source gives; a simulator never gives VP8, so a sim offer of `vp8`
+    /// is negotiated away.
+    #[test]
+    fn vp8_is_k2sv_codec_2_and_is_negotiated_only_when_the_source_gives_it() {
+        assert_eq!(VIDEO_CODEC_VP8, k2_simvideo::link::Codec::Vp8 as u8);
+        assert_eq!(VIDEO_CODEC_H264, k2_simvideo::link::Codec::H264 as u8);
+        let h = VideoHeader { seq: 3, width_px: 1280, height_px: 720, width_pt: 1280, height_pt: 720, codec: VIDEO_CODEC_VP8, key: true, age_ms: 0, ts_ms: 0 };
+        let msg = h.encode(b"vp8");
+        assert_eq!(msg[16], 2);
+        assert_eq!(VideoHeader::decode(&msg).expect("decodes").0, h);
+        assert_eq!(parse_offer(Some("h264,vp8,jpeg")), vec![Codec::H264, Codec::Vp8, Codec::Jpeg]);
+        assert_eq!(serde_json::to_value(Codec::Vp8).unwrap(), serde_json::json!("vp8"));
+        let desktop_linux = [Codec::Vp8];
+        let desktop_mac = [Codec::H264];
+        let offer = parse_offer(Some("h264,vp8,jpeg"));
+        assert_eq!(negotiate_with(&offer, &desktop_linux), Codec::Vp8);
+        assert_eq!(negotiate_with(&offer, &desktop_mac), Codec::H264);
+        assert_eq!(negotiate_with(&[Codec::Vp8, Codec::H264], &[Codec::H264, Codec::Vp8]), Codec::Vp8, "the viewer's order");
+        assert_eq!(negotiate_with(&[Codec::H264, Codec::Jpeg], &desktop_linux), Codec::Jpeg, "an H.264-only viewer of a VP8 source");
+        assert_eq!(negotiate(&[Codec::Vp8, Codec::Jpeg], true), Codec::Jpeg, "a sim never gives VP8");
+        assert_eq!(negotiate_with(&[Codec::Jpeg], &[Codec::Jpeg]), Codec::Jpeg);
     }
 
     #[test]

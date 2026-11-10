@@ -1,7 +1,8 @@
 //! The device stream engine, hub side (fix 10, S2; PRD remote desktop §3.4
 //! E2–E4, E6). Source-neutral: the sim route (`sim_stream_ws`) feeds it a
-//! [`k2_core::stream::pixel::PixelLayers`]; the desktop route (S5) will feed
-//! it k2-deskd's protocol-4 units.
+//! [`k2_core::stream::pixel::PixelLayers`]; the desktop route (D6) will feed
+//! it k2-deskd's protocol-4 units ([`k2_core::stream::link_source`]).
+//! [`viewer::serve`] is the viewer loop both routes run (S5).
 //!
 //! **One hub per [`SourceKey`], one encode per layer, never per viewer.** A
 //! hub's capture thread owns the [`EncodedSource`], pulls `next_unit` and
@@ -32,12 +33,18 @@
 //! ([`KEYFRAME_MIN_GAP`]); a catching-up viewer's ([`Subscription::catch_up`])
 //! to one per [`CATCH_UP_GAP`] per layer.
 //!
+//! **Codecs.** H.264, VP8 and JPEG layers are alike to the hub. A pixel
+//! source never encodes VP8: a VP8 layer on one fails at once and its
+//! viewers move to JPEG, as on any encoder failure (routes negotiate VP8
+//! only with a source that gives it, `negotiate_with`).
+//!
 //! **Failure.** A layer whose encoder fails moves its viewers to a JPEG
 //! layer ([`HubEvent::Moved`]); a source that ends tells every viewer
 //! ([`HubEvent::Ended`]) and the hub goes away.
 
 mod gate;
 pub mod rates;
+pub mod viewer;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -52,6 +59,7 @@ use k2_core::stream::{thread_cpu_ns, Codec, EncodedSource, EncodedUnit, LayerSpe
 use tokio::sync::mpsc;
 
 pub use gate::{Took, ViewerGate};
+pub use viewer::{serve, Auth, Coalesce, DesktopRule, EngineMsg, Hooks, InputSink, Negotiated, Offer, PointerWheel, Push, Refusal, ServeError, Source, StreamMsg, Verdict, Wheel, AUTH_TICK};
 
 /// Layer rates. A viewer's fps rounds up to the nearest.
 pub const TIERS: [u32; 4] = [60, 30, 15, 8];
@@ -84,6 +92,13 @@ pub struct LayerKey {
     /// The tier.
     pub fps: u32,
     pub remote: bool,
+}
+
+/// A video layer's target bitrate: [`bitrate_for`] of its size, tier and
+/// remote-ness. A VP8 layer (k2-deskd on Linux, PRD §3.5) is capped at the
+/// remote 4 Mb/s on every path: one software encode on one core.
+pub fn layer_bitrate(key: &LayerKey, width: u32, height: u32) -> u32 {
+    bitrate_for(width, height, key.fps, key.remote || key.codec == Codec::Vp8)
 }
 
 /// What a viewer wants from a hub.
@@ -289,7 +304,7 @@ impl Hub {
         }
         st.next_id = id.wrapping_add(1);
         let (w, h) = GUESS_SIZE;
-        let rate = RateCtl::new(if key.codec.is_video() { bitrate_for(w, h, key.fps, remote) } else { 0 });
+        let rate = RateCtl::new(if key.codec.is_video() { layer_bitrate(&key, w, h) } else { 0 });
         st.layers.push(Layer { id, key, max_width: None, size: None, rate, last_key_ask: None, last_catch_up: None });
         st.dirty = true;
         id
@@ -339,7 +354,7 @@ impl Hub {
         if let Some(l) = st.layers.iter_mut().find(|l| l.id == u.layer) {
             if u.codec.is_video() && l.size != Some((u.width, u.height)) {
                 l.size = Some((u.width, u.height));
-                let target = bitrate_for(u.width, u.height, l.key.fps, l.key.remote);
+                let target = layer_bitrate(&l.key, u.width, u.height);
                 if target != l.rate.target() {
                     l.rate.retarget(target);
                     retuned = true;

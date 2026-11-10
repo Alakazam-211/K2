@@ -10,6 +10,8 @@
 //!   [`FrameSource`](crate::sim::lane::FrameSource)s (Android, the fake lane,
 //!   iOS until the helper encodes, S3). A protocol-4 source (S3's helper,
 //!   deskd) implements [`EncodedSource`] by relaying the link's units.
+//! - [`link_source::LinkSource`]: that relay (S5): units off a protocol-4
+//!   frames pipe, requests through the caller's own link.
 //!
 //! **Units.** A layer's first unit, and the first after a size or source
 //! change, is a key unit with `source_start`. Keyframes otherwise come only
@@ -17,6 +19,7 @@
 //! is per layer, +1 per unit, so a viewer that sees a gap knows its decoder
 //! chain broke and waits for the next key unit.
 
+pub mod link_source;
 pub mod pixel;
 
 use std::fmt;

@@ -1,6 +1,6 @@
 //! The Mobile tab's device stream as video (0.46.7, `k2/mobile-video-stream`).
 //!
-//! - [`VideoEncoder`]: one H.264 encoder per viewer. On macOS it is
+//! - [`VideoEncoder`]: one H.264 encoder per layer (`k2_core::stream`). On macOS it is
 //!   VideoToolbox ([`open_h264`]); elsewhere there is none and the stream
 //!   stays JPEG (`k2_core::sim::stream::negotiate`).
 //! - [`annexb`]: AVCC → Annex B, NAL splitting, the WebCodecs codec string.

@@ -45,14 +45,21 @@
 //! 24..   Annex B
 //! ```
 //!
-//! With a window of N the daemon keeps up to N frames unacked (fewer when
-//! the round trip doesn't need them, `k2_simvideo::flow::AckWindow`) and
-//! always sends the newest frame, so stale frames are skipped, not queued.
-//! An H.264 viewer gets its own encoder: frames are skipped *before*
-//! encoding, so the reference chain never breaks. Keyframes come on join,
-//! on a size change (rotation) and on [`ViewerMsg::Keyframe`]. If the
-//! encoder fails the daemon falls back to JPEG on the same socket and says
-//! so with [`ServerMsg::Codec`]; a viewer reads either magic at any time.
+//! With a window of N the daemon keeps up to N frames unacked
+//! (`k2_simvideo::flow::AckWindow`) and
+//! sends each frame as it comes while the window has room. Viewers at the
+//! same codec and rate share one encode (a layer, fix 10): a delta a viewer
+//! can't take is dropped and the viewer skips to the next keyframe, so a
+//! delta never follows a gap (its `seq` is always the last one + 1).
+//! Keyframes come on join, on a size change (rotation, a wider `pw`), on a
+//! skip and on [`ViewerMsg::Keyframe`]. If the encoder fails the daemon
+//! falls back to JPEG on the same socket and says so with
+//! [`ServerMsg::Codec`]; a viewer reads either magic at any time.
+//!
+//! **Pane width (fix 10, optional).** `&pw=<device px>`: the viewer's pane
+//! width. The daemon then streams native pixels up to the widest pane on
+//! the layer (never past the device's own width); without it, points as
+//! before. The header's `wpt` / `hpt` stay the screen in points.
 //!
 //! **Daemon → viewer, text:** JSON [`ServerMsg`] (`{"t": "hello", …}`).
 //!
@@ -60,7 +67,7 @@
 //! [`ServerMsg::Stats`] once a second: where its frames' time went (helper
 //! capture → emit → daemon receive → hub → encode → send), the daemon-side
 //! time of each `touch` that carried an `id`, and the CPU time of the hub's
-//! capture thread and this viewer's encoder. Measurement only; no viewer
+//! capture thread and its layer's encodes. Measurement only; no viewer
 //! asks for it unless its latency readout is on.
 //!
 //! **Viewer → daemon, text:** JSON [`ViewerMsg`]. Input is in points.
@@ -443,8 +450,8 @@ pub struct StreamStats {
     /// Stages with at least one sample, in [`Stage::ALL`] order.
     pub stages: Vec<StageSummary>,
     pub inputs: Vec<InputTiming>,
-    /// CPU time in the window: the hub's capture thread, and this viewer's
-    /// H.264 encoder thread (0 for JPEG).
+    /// CPU time in the window: the hub's capture thread (which runs the
+    /// encodes for a pixel source), and the encodes of this viewer's layer.
     pub hub_cpu_ms: f32,
     pub encoder_cpu_ms: f32,
 }

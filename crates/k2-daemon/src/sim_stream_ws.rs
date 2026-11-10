@@ -2,32 +2,30 @@
 //! the live device over a WebSocket, plus people's input. Wire format:
 //! `k2_core::sim::stream`.
 //!
-//! **One capture per device, many viewers.** A [`Hub`] per sim session
-//! runs one capture thread: it pulls the lane's [`FrameSource`] at the
-//! fastest viewer's rate and publishes a [`Shared`] frame into a `watch`
-//! channel, which keeps only the newest. It never sleeps: it blocks in the
-//! source's `next_frame`, which waits for a new frame (fix 2), and the
-//! wanted rate only retunes the source. It asks the lane for points-sized
-//! frames (fix 1a: the iOS helper then sends a JPEG that streams as it is)
-//! and retunes the source to the fastest viewer's rate whenever that
-//! changes. `K2_SIM_FRAME_SIZE=native` (read once) asks for native frames,
-//! as before. JPEG viewers share one JPEG
-//! encode per frame, done lazily by the first viewer that sends it, so a
-//! frame no viewer sends is never encoded. An H.264 viewer (0.46.7, negotiated in `hello`) has its own
-//! encoder thread ([`video_worker`]): VideoToolbox on a Mac, nothing
-//! elsewhere (the stream stays JPEG).
+//! **One capture per device, one encode per layer.** The device's frames go
+//! through the stream engine (`crate::stream`, fix 10): one hub per sim
+//! session (`SourceKey::Sim`), whose capture thread pulls the lane's
+//! [`FrameSource`] through a [`PixelLayers`] adapter and encodes each frame
+//! once per layer (codec, fps tier, local or remote), never per viewer:
+//! H.264 through VideoToolbox on a Mac, JPEG elsewhere (a lane JPEG that
+//! fits streams as it is). Each layer keeps its own fixed schedule; the
+//! lane is retuned to the fastest layer. It asks the lane for points-sized
+//! frames (fix 1a) until a viewer sends its pane width (`&pw=<device px>`),
+//! then for native pixels capped at the widest pane on the layer.
+//! `K2_SIM_FRAME_SIZE=native` (read once) asks for native frames, as before.
 //!
-//! **Flow.** Each viewer task sends the newest frame when its ack window
-//! has room (`k2_simvideo::flow::AckWindow`: up to the negotiated `win`,
-//! only as many as the round trip needs) and its schedule allows
-//! (`k2_simvideo::flow::Pacer`, the only pacing point: a steady schedule
-//! that never beats against the source's clock). A viewer
-//! that offers nothing gets one frame in flight, as before. Frames a viewer
-//! can't take yet are skipped, never queued, and for H.264 they are
-//! skipped before encoding, so the reference chain never breaks. H.264
-//! keyframes come on join, on a size change (rotation) and when the viewer
-//! asks (`{"t":"keyframe"}`); the bitrate follows the frame size and fps
-//! and steps down while acks show a queue building.
+//! **Flow.** Each viewer task sends its layer's units as they come while
+//! its ack window has room (`k2_simvideo::flow::AckWindow`: up to the
+//! negotiated `win`). A viewer that offers nothing gets one frame in
+//! flight, as before: a JPEG unit is always a keyframe, so the newest is
+//! held and goes on the ack. **Never a delta after a gap:** an H.264 delta
+//! a viewer can't take (no room, or its queue lost units) is dropped and
+//! the viewer waits for the next keyframe, asking the hub for one (once a
+//! second per layer). Keyframes come on a layer's start, on a size change
+//! (rotation, a wider pane), for a viewer joining a running layer (never
+//! throttled) and when a viewer asks (`{"t":"keyframe"}`, 250 ms apart per
+//! layer). A layer's bitrate follows its size and fps and steps down while
+//! its most congested viewer's acks show a queue building.
 //!
 //! **Auth.** People only: the owner token or a Connect login (re-checked
 //! every 5 s, like `/cli/sessions/bytes`; a revoked login is closed with
@@ -35,133 +33,43 @@
 //! read the tree and take screenshots instead). Input needs control: the
 //! owner and Owner/Admin logins; Member logins watch only.
 //!
-//! **Rates** ([`clamp_fps`], by codec and [`ViewerPath`]): JPEG up to 30
-//! fps on this machine, 2–15 on the LAN or over Connect (default 8); H.264
-//! up to 60 on this machine, 2–60 on the LAN (default 60), 2–30 over
-//! Connect (default 24). `K2_SIM_VIDEO_MAX_FPS=30` (read once) puts the
-//! local and LAN H.264 caps back to 30.
+//! **Rates** ([`clamp_fps`], `crate::stream::rates`, by codec and
+//! [`ViewerPath`]): JPEG up to 30 fps on this machine, 2–15 on the LAN or
+//! over Connect (default 8); H.264 up to 60 on this machine, 2–60 on the
+//! LAN (default 60), 2–30 over Connect (default 24).
+//! `K2_SIM_VIDEO_MAX_FPS=30` (read once) puts the local and LAN H.264 caps
+//! back to 30. A layer runs at the viewer's rate rounded up to a tier
+//! (60, 30, 15, 8).
 //!
 //! **Stats (M0).** `&stats=1` adds a `stats` message once a second with
-//! this viewer's per-stage frame times, its probed inputs and the hub's and
-//! encoder's CPU time (`k2_core::sim::stream::StatsWindow`). Off unless a
-//! viewer asks; the hub samples its CPU time only while one does.
+//! this viewer's per-stage frame times (the encode stage is its layer's
+//! encode), its probed inputs and the hub's and its layer's encode CPU
+//! time (`k2_core::sim::stream::StatsWindow`). Off unless a viewer asks;
+//! the hub samples its CPU time only while one does.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
 
 use k2_core::log_debug;
-use k2_core::sim::encode;
 use k2_core::sim::hold::HoldView;
-use k2_core::sim::lane::{Action, Frame, FrameOpts, FrameSize, KeyMods, Point, TouchPhase};
+use k2_core::sim::lane::{Action, FrameOpts, FrameSize, FrameSource, KeyMods, Point, TouchPhase};
 use k2_core::sim::manager::{self, Ws};
 use k2_core::sim::stream::*;
-use k2_core::sim::video::flow::{AckWindow, Pacer, RateCtl, ACK_EXPIRY};
-use k2_core::sim::video::{self, EncoderConfig, VideoEncoder};
+use k2_core::sim::video::flow::{AckWindow, ACK_EXPIRY};
+use k2_core::sim::video;
+use k2_core::stream::pixel::PixelLayers;
+use k2_core::stream::{Codec as UnitCodec, EncodedSource, EncodedUnit, SourceKey, SourceKind};
 
 use crate::sidecar_routes::Caller;
-
-/// One captured frame, shared by every viewer.
-pub struct Shared {
-    /// Per device (the K2SF / K2SV header's seq).
-    pub seq: u32,
-    pub frame: Frame,
-    /// The screen in points for this frame's orientation.
-    pub width_pt: u16,
-    pub height_pt: u16,
-    /// When the hub pulled it from the lane.
-    pub pulled_at: Instant,
-    /// Header + JPEG, encoded once by whoever needs it first.
-    jpeg: OnceLock<Result<Vec<u8>, String>>,
-    /// That encode's start and end (the stats readout).
-    jpeg_span: OnceLock<(Instant, Instant)>,
-}
-
-impl Shared {
-    pub fn new(seq: u32, frame: Frame) -> Shared {
-        // Points: the frame is points-sized (scale 1) unless the lane says
-        // otherwise.
-        let (wpt, hpt) =
-            if (frame.scale - 1.0).abs() < 1e-3 { (frame.width_px, frame.height_px) } else { encode::points_size(&frame) };
-        Shared { seq, frame, width_pt: wpt as u16, height_pt: hpt as u16, pulled_at: Instant::now(), jpeg: OnceLock::new(), jpeg_span: OnceLock::new() }
-    }
-
-    /// The K2SF message (header + JPEG), encoding it on first use.
-    pub fn jpeg_message(&self, encodes: &AtomicU64) -> Result<&[u8], String> {
-        self.jpeg
-            .get_or_init(|| {
-                let t0 = Instant::now();
-                let (jpeg, w, h) = encode::frame_jpeg(&self.frame, encode::JPEG_QUALITY)?;
-                let _ = self.jpeg_span.set((t0, Instant::now()));
-                encodes.fetch_add(1, Ordering::SeqCst);
-                let header = FrameHeader { seq: self.seq, width_px: w as u16, height_px: h as u16, width_pt: self.width_pt, height_pt: self.height_pt };
-                Ok(header.encode(&jpeg))
-            })
-            .as_deref()
-            .map_err(Clone::clone)
-    }
-
-    fn jpeg_ready(&self) -> Option<Result<Vec<u8>, String>> {
-        self.jpeg.get().map(|r| r.clone())
-    }
-}
-
-/// What the capture thread publishes.
-#[derive(Clone)]
-pub enum Pub {
-    Starting,
-    Frame(Arc<Shared>),
-    /// The device stopped or the capture failed for good.
-    Ended(String),
-}
-
-/// One device's capture.
-pub struct Hub {
-    gen: u64,
-    rx: watch::Receiver<Pub>,
-    /// Highest fps any viewer asked for (the capture's pace).
-    want_fps: Arc<Mutex<HashMap<u64, u32>>>,
-    encodes: Arc<AtomicU64>,
-    /// Viewers that asked for `stats=1`: while any do, the capture thread
-    /// keeps its CPU time in `cpu_ns`.
-    stats_viewers: Arc<AtomicUsize>,
-    cpu_ns: Arc<AtomicU64>,
-}
-
-/// This thread's CPU time in ns (the stats readout); 0 where unknown.
-#[cfg(unix)]
-pub fn thread_cpu_ns() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: `ts` is a valid out-pointer and the clock exists on Linux and macOS.
-    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } != 0 {
-        return 0;
-    }
-    (ts.tv_sec as u64).saturating_mul(1_000_000_000).saturating_add(ts.tv_nsec as u64)
-}
-
-#[cfg(not(unix))]
-pub fn thread_cpu_ns() -> u64 {
-    0
-}
-
-fn hubs() -> &'static Mutex<HashMap<i64, Arc<Hub>>> {
-    static H: OnceLock<Mutex<HashMap<i64, Arc<Hub>>>> = OnceLock::new();
-    H.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// How many JPEG encodes a device's hub has done (tests: one encode per
-/// frame however many viewers).
-pub fn encodes(sim_id: i64) -> Option<u64> {
-    hubs().lock().ok()?.get(&sim_id).map(|h| h.encodes.load(Ordering::SeqCst))
-}
+use crate::stream::{rates, HubEvent, JoinError, Subscription, Took, ViewerGate, Want};
 
 /// The size the hub asks lanes for: points, unless `K2_SIM_FRAME_SIZE=native`
 /// (read once at the first stream; the fix 1a rollback).
@@ -173,211 +81,34 @@ fn hub_frame_size() -> FrameSize {
     })
 }
 
-/// What the hub asks its source for at `fps`.
+/// What the hub opens its source with at `fps`.
 fn hub_opts(fps: u32) -> FrameOpts {
     FrameOpts { max_fps: fps, size: hub_frame_size(), max_width_px: None }
 }
 
-/// Join (or start) the hub for a running device.
-pub fn join(ws: &Ws) -> Result<(i64, Arc<Hub>), manager::SimError> {
+/// The stream engine's codec for a viewer's.
+fn unit_codec(c: Codec) -> UnitCodec {
+    match c {
+        Codec::Jpeg => UnitCodec::Jpeg,
+        Codec::H264 => UnitCodec::H264,
+    }
+}
+
+/// Join (or start) the hub for a running device: subscribed before this
+/// returns, so the hub can't end while the socket upgrades.
+pub fn join(ws: &Ws, want: Want) -> Result<(i64, Subscription), manager::SimError> {
     let m = manager::manager();
     let row = m.running(ws)?;
-    let mut map = hubs().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(h) = map.get(&row.id) {
-        if !matches!(&*h.rx.borrow(), Pub::Ended(_)) {
-            return Ok((row.id, h.clone()));
-        }
-    }
-    let source = m.frames(&row, hub_opts(LOCAL_MAX_FPS))?;
-    let (tx, rx) = watch::channel(Pub::Starting);
-    let want_fps = Arc::new(Mutex::new(HashMap::new()));
-    let encodes = Arc::new(AtomicU64::new(0));
-    let stats_viewers = Arc::new(AtomicUsize::new(0));
-    let cpu_ns = Arc::new(AtomicU64::new(0));
-    static GEN: AtomicU64 = AtomicU64::new(1);
-    let gen = GEN.fetch_add(1, Ordering::SeqCst);
-    let hub = Arc::new(Hub {
-        gen,
-        rx,
-        want_fps: want_fps.clone(),
-        encodes: encodes.clone(),
-        stats_viewers: stats_viewers.clone(),
-        cpu_ns: cpu_ns.clone(),
-    });
-    map.insert(row.id, hub.clone());
     let sim_id = row.id;
-    let watch = CpuWatch { viewers: stats_viewers, cpu_ns };
-    std::thread::Builder::new()
-        .name(format!("k2-sim-encode-{sim_id}"))
-        .spawn(move || capture(sim_id, gen, source, tx, want_fps, watch))
-        .map_err(|e| manager::SimError::new(500, "sim_io", format!("encoder thread: {e}")))?;
-    Ok((sim_id, hub))
-}
-
-/// The capture thread's CPU time, kept while a stats viewer watches.
-struct CpuWatch {
-    viewers: Arc<AtomicUsize>,
-    cpu_ns: Arc<AtomicU64>,
-}
-
-impl CpuWatch {
-    fn sample(&self) {
-        if self.viewers.load(Ordering::Relaxed) > 0 {
-            self.cpu_ns.store(thread_cpu_ns(), Ordering::Relaxed);
-        }
-    }
-}
-
-/// The highest H.264 rate on this machine and the LAN: 60, or what
-/// `K2_SIM_VIDEO_MAX_FPS` says (read once; the fix 2 rollback is 30).
-fn video_max_fps() -> u32 {
-    static MAX: OnceLock<u32> = OnceLock::new();
-    *MAX.get_or_init(|| {
-        std::env::var("K2_SIM_VIDEO_MAX_FPS").ok().and_then(|v| v.trim().parse::<u32>().ok()).map_or(LOCAL_VIDEO_MAX_FPS, |n| n.clamp(REMOTE_MIN_FPS, LOCAL_VIDEO_MAX_FPS))
-    })
-}
-
-/// The capture loop. It never sleeps: `next_frame` blocks until the source
-/// has a new frame (iOS: the helper's slot; Android: the gRPC stream; the
-/// fake: its own 60 Hz clock), so a frame is published as soon as it
-/// exists, and each viewer paces itself. It doesn't encode either: a JPEG
-/// is made by the first viewer that sends the frame (`Shared::jpeg_message`).
-fn capture(sim_id: i64, gen: u64, mut source: Box<dyn k2_core::sim::lane::FrameSource>, tx: watch::Sender<Pub>, want_fps: Arc<Mutex<HashMap<u64, u32>>>, cpu: CpuWatch) {
-    let mut seq: u32 = 0;
-    let born = Instant::now();
-    // The rate the source was opened with (`join`), then retuned to.
-    let mut tuned = LOCAL_MAX_FPS;
-    loop {
-        // Only the hub's own receiver is left: nobody watches (after a
-        // grace for the first viewer to attach).
-        if tx.receiver_count() <= 1 && born.elapsed() > Duration::from_secs(5) {
-            break;
-        }
-        let wanted = want_fps.lock().ok().and_then(|m| m.values().copied().max()).map(|f| f.clamp(1, video_max_fps().max(LOCAL_MAX_FPS)));
-        // The source follows the fastest viewer (a viewer joined, left or
-        // asked another rate): one retune per change.
-        if let Some(w) = wanted.filter(|w| *w != tuned) {
-            source.retune(hub_opts(w));
-            tuned = w;
-        }
-        match source.next_frame(Duration::from_millis(500)) {
-            Ok(None) => continue, // a still screen costs nothing
-            Ok(Some(f)) => {
-                seq = seq.wrapping_add(1);
-                let _ = tx.send(Pub::Frame(Arc::new(Shared::new(seq, f))));
-                cpu.sample();
-            }
-            Err(e) => {
-                log_debug!("[sim] frame source ended on s{sim_id}: {}", e.message());
-                let _ = tx.send(Pub::Ended(e.message().to_string()));
-                break;
-            }
-        }
-    }
-    if let Ok(mut map) = hubs().lock() {
-        if map.get(&sim_id).is_some_and(|h| h.gen == gen) {
-            map.remove(&sim_id);
-        }
-    }
-}
-
-// ── H.264, one encoder per viewer ─────────────────────────────────────
-
-/// One frame for a viewer's encoder.
-pub struct VideoJob {
-    pub shared: Arc<Shared>,
-    pub force_key: bool,
-    pub fps: u32,
-    pub bitrate: u32,
-    /// Capture time, ms since this viewer's stream began.
-    pub ts_ms: u32,
-    /// The viewer wants stats: report the encoder thread's CPU time.
-    pub stats: bool,
-}
-
-#[derive(Debug)]
-pub enum VideoOut {
-    /// A K2SV message ready to send, with the encode's start and end and
-    /// (stats) the encoder thread's CPU time so far.
-    Frame { seq: u32, key: bool, message: Vec<u8>, encode: (Instant, Instant), cpu_ns: u64 },
-    /// Rate control dropped it: free its slot.
-    Dropped { seq: u32 },
-    /// The encoder can't go on: fall back to JPEG.
-    Failed { seq: u32, why: String },
-}
-
-/// Encode one job with `enc` (opened, or reopened on a size change, which
-/// starts with a keyframe). Returns the K2SV message, or None when rate
-/// control dropped the frame.
-pub fn encode_job(enc: &mut Option<Box<dyn VideoEncoder>>, job: &VideoJob) -> Result<Option<(bool, Vec<u8>)>, String> {
-    let rgb = encode::frame_rgb_points(&job.shared.frame)?;
-    let (w, h) = rgb.dimensions();
-    let reopen = enc.as_ref().is_none_or(|e| {
-        let c = e.config();
-        (c.width, c.height) != (w, h)
-    });
-    if reopen {
-        drop(enc.take()); // free the old session first
-        *enc = Some(video::open_h264(&EncoderConfig { width: w, height: h, fps: job.fps, bitrate_bps: job.bitrate })?);
-    }
-    let e = enc.as_mut().ok_or("no encoder")?;
-    let c = e.config();
-    if c.fps != job.fps || c.bitrate_bps != job.bitrate {
-        e.set_rate(job.fps, job.bitrate);
-    }
-    let Some(chunk) = e.encode_rgb(rgb.as_raw(), job.force_key || reopen, job.ts_ms)? else {
-        return Ok(None);
+    let open = || -> Result<Box<dyn EncodedSource>, manager::SimError> {
+        let source: Box<dyn FrameSource> = m.frames(&row, hub_opts(LOCAL_MAX_FPS))?;
+        Ok(Box::new(PixelLayers::new(source, hub_opts(LOCAL_MAX_FPS), hub_frame_size())))
     };
-    let age = job.shared.frame.captured_at.elapsed().as_millis().min(u16::MAX as u128) as u16;
-    let header = VideoHeader {
-        seq: job.shared.seq,
-        width_px: w as u16,
-        height_px: h as u16,
-        width_pt: job.shared.width_pt,
-        height_pt: job.shared.height_pt,
-        codec: VIDEO_CODEC_H264,
-        key: chunk.key,
-        age_ms: age,
-        ts_ms: job.ts_ms,
-    };
-    Ok(Some((chunk.key, header.encode(&chunk.data))))
-}
-
-/// The viewer's encoder thread: one job at a time (the viewer only hands
-/// over a frame when the last one is out), until the viewer leaves.
-pub fn video_worker(jobs: std::sync::mpsc::Receiver<VideoJob>, out: tokio::sync::mpsc::Sender<VideoOut>) {
-    let mut enc: Option<Box<dyn VideoEncoder>> = None;
-    while let Ok(job) = jobs.recv() {
-        let seq = job.shared.seq;
-        let t0 = Instant::now();
-        let o = match encode_job(&mut enc, &job) {
-            Ok(Some((key, message))) => {
-                let encode = (t0, Instant::now());
-                VideoOut::Frame { seq, key, message, encode, cpu_ns: if job.stats { thread_cpu_ns() } else { 0 } }
-            }
-            Ok(None) => VideoOut::Dropped { seq },
-            Err(why) => VideoOut::Failed { seq, why },
-        };
-        let failed = matches!(o, VideoOut::Failed { .. });
-        if out.blocking_send(o).is_err() || failed {
-            break;
-        }
+    match crate::stream::join(SourceKey::Sim(sim_id), want, open) {
+        Ok(sub) => Ok((sim_id, sub)),
+        Err(JoinError::Open(e)) => Err(e),
+        Err(JoinError::Thread(e)) => Err(manager::SimError::new(500, "sim_io", e)),
     }
-}
-
-struct VideoPipe {
-    jobs: std::sync::mpsc::SyncSender<VideoJob>,
-    out: tokio::sync::mpsc::Receiver<VideoOut>,
-}
-
-fn spawn_video_pipe(viewer: u64) -> Result<VideoPipe, String> {
-    let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<VideoJob>(1);
-    let (out_tx, out_rx) = tokio::sync::mpsc::channel::<VideoOut>(2);
-    std::thread::Builder::new()
-        .name(format!("k2-sim-h264-{viewer}"))
-        .spawn(move || video_worker(jobs_rx, out_tx))
-        .map_err(|e| format!("H.264 thread: {e}"))?;
-    Ok(VideoPipe { jobs: jobs_tx, out: out_rx })
 }
 
 /// Who is watching (decided by the dispatcher from the credential), and
@@ -389,20 +120,14 @@ pub struct Viewer {
     pub path: ViewerPath,
 }
 
-/// The rate table (fix 2). `video_max` is the local and LAN H.264 cap
-/// ([`video_max_fps`]).
+/// The sim row of the rate table (fix 2). `video_max` is the local and LAN
+/// H.264 cap (`rates::video_max_fps`).
 fn clamp_fps_with(codec: Codec, path: ViewerPath, asked: Option<u32>, video_max: u32) -> u32 {
-    match (codec, path) {
-        (Codec::Jpeg, ViewerPath::Local) => asked.unwrap_or(LOCAL_MAX_FPS).clamp(1, LOCAL_MAX_FPS),
-        (Codec::Jpeg, _) => asked.unwrap_or(REMOTE_DEFAULT_FPS).clamp(REMOTE_MIN_FPS, REMOTE_MAX_FPS),
-        (Codec::H264, ViewerPath::Local) => asked.unwrap_or(video_max).clamp(1, video_max),
-        (Codec::H264, ViewerPath::Lan) => asked.unwrap_or(video_max).clamp(REMOTE_MIN_FPS, video_max),
-        (Codec::H264, ViewerPath::Tunnel) => asked.unwrap_or(REMOTE_VIDEO_DEFAULT_FPS).clamp(REMOTE_MIN_FPS, REMOTE_VIDEO_MAX_FPS),
-    }
+    rates::clamp_fps_with(SourceKind::Sim, unit_codec(codec), path, asked, video_max)
 }
 
 fn clamp_fps(codec: Codec, path: ViewerPath, asked: Option<u32>) -> u32 {
-    clamp_fps_with(codec, path, asked, video_max_fps())
+    clamp_fps_with(codec, path, asked, rates::video_max_fps())
 }
 
 fn who_name(c: &Caller) -> String {
@@ -457,38 +182,63 @@ fn text(m: &ServerMsg) -> Message {
     Message::Text(serde_json::to_string(m).unwrap_or_default())
 }
 
-/// The newest frame's JPEG message: ready (another viewer made it) or
-/// encoded now off the async runtime, once for every viewer.
-async fn jpeg_for(f: &Arc<Shared>, encodes: &Arc<AtomicU64>) -> Result<Vec<u8>, String> {
-    if let Some(r) = f.jpeg_ready() {
-        return r;
-    }
-    let (f2, e2) = (f.clone(), encodes.clone());
-    tokio::task::spawn_blocking(move || f2.jpeg_message(&e2).map(<[u8]>::to_vec)).await.map_err(|e| e.to_string())?
+fn u16_of(n: u32) -> u16 {
+    n.min(u16::MAX as u32) as u16
 }
 
-/// Keyframe requests closer together than this are merged.
-const KEYFRAME_MIN_GAP: Duration = Duration::from_millis(250);
+/// A unit as this viewer's K2SF (JPEG) or K2SV (H.264) message, with its
+/// wire `seq`. `ts` counts from `started` (this viewer's stream). `None`
+/// for a codec the sim wire doesn't carry.
+fn unit_message(u: &EncodedUnit, seq: u32, started: Instant) -> Option<Vec<u8>> {
+    let (width_px, height_px, width_pt, height_pt) = (u16_of(u.width), u16_of(u.height), u16_of(u.width_pt), u16_of(u.height_pt));
+    match u.codec {
+        UnitCodec::Jpeg => Some(FrameHeader { seq, width_px, height_px, width_pt, height_pt }.encode(&u.data)),
+        UnitCodec::H264 => {
+            let age_ms = u.captured_at.elapsed().as_millis().min(u16::MAX as u128) as u16;
+            let ts_ms = u.captured_at.saturating_duration_since(started).as_millis().min(u32::MAX as u128) as u32;
+            Some(VideoHeader { seq, width_px, height_px, width_pt, height_pt, codec: VIDEO_CODEC_H264, key: u.key, age_ms, ts_ms }.encode(&u.data))
+        }
+        UnitCodec::Vp8 => None,
+    }
+}
 
-/// One sent frame's stages into the viewer's stats window (M0).
-fn record_frame(st: &mut StatsWindow, f: &Shared, gate_at: Instant, encode: Option<(Instant, Instant)>, send_start: Instant, sent: Instant) {
+/// One sent unit's stages into the viewer's stats window (M0). The hub
+/// gate is the layer's schedule (pulled → its encode began); the queue is
+/// encode done → this viewer's write (fan-out, its queue, its window).
+fn record_unit(st: &mut StatsWindow, u: &EncodedUnit, send_start: Instant, sent: Instant) {
     let ms = |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
-    let fr = &f.frame;
-    if let Some(e) = fr.stamps.emitted_at {
-        st.stage(Stage::CaptureEmit, ms(fr.captured_at, e));
-        if let Some(rcv) = fr.stamps.received_at {
+    if let Some(e) = u.stamps.emitted_at {
+        st.stage(Stage::CaptureEmit, ms(u.captured_at, e));
+        if let Some(rcv) = u.stamps.received_at {
             st.stage(Stage::EmitReceive, ms(e, rcv));
         }
     }
-    st.stage(Stage::ReceiveHub, ms(fr.stamps.received_at.unwrap_or(fr.captured_at), f.pulled_at));
-    st.stage(Stage::HubGate, ms(f.pulled_at, gate_at));
-    if let Some((a, b)) = encode {
-        st.stage(Stage::Encode, ms(a, b));
-        st.stage(Stage::Queue, ms(b.max(gate_at), send_start));
+    st.stage(Stage::ReceiveHub, ms(u.stamps.received_at.unwrap_or(u.captured_at), u.pulled_at));
+    match u.encode {
+        Some(e) => {
+            st.stage(Stage::HubGate, ms(u.pulled_at, e.start));
+            st.stage(Stage::Encode, ms(e.start, e.end));
+            st.stage(Stage::Queue, ms(e.end, send_start));
+        }
+        None => st.stage(Stage::Queue, ms(u.pulled_at, send_start)),
     }
     st.stage(Stage::Send, ms(send_start, sent));
-    st.stage(Stage::Total, ms(fr.captured_at, sent));
+    st.stage(Stage::Total, ms(u.captured_at, sent));
     st.frame_sent();
+}
+
+/// Send one unit; false when the socket is gone. The caller marks it in
+/// flight.
+async fn send_unit(write: &mut (impl SinkExt<Message> + Unpin), u: &EncodedUnit, seq: u32, started: Instant, stats: Option<&mut StatsWindow>) -> bool {
+    let Some(msg) = unit_message(u, seq, started) else { return true };
+    let send_start = Instant::now();
+    if write.send(Message::Binary(msg)).await.is_err() {
+        return false;
+    }
+    if let Some(st) = stats {
+        record_unit(st, u, send_start, Instant::now());
+    }
+    true
 }
 
 /// CPU ms between two cumulative readings (0 for the first, which has no
@@ -506,6 +256,13 @@ fn cpu_window_ms(last: &mut u64, now: u64) -> f32 {
 /// (the existing switch) leaves Nagle on.
 fn stream_socket_setup(stream: &TcpStream) {
     crate::tunnel_tls_listener::no_nagle(stream);
+}
+
+/// May this viewer put one more unit in flight? (The window's delay-based
+/// cap: a layer is paced at its source, so a delta that fits the window
+/// goes; the round-trip limit would only drop it and cost a keyframe.)
+fn room(w: &AckWindow) -> bool {
+    (w.in_flight() as u32) < w.cap()
 }
 
 /// Serve one viewer. The dispatcher has refused app passes, agents and bad
@@ -528,11 +285,24 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
             }
         }
     };
+    // Codec + window (0.46.7). A viewer that offers nothing gets JPEG with
+    // one frame in flight: the wire as it was.
+    let offer = parse_offer(params.get("codecs").map(String::as_str));
+    let window_max = negotiate_window(params.get("win").map(String::as_str));
+    let host_h264 = offer.contains(&Codec::H264) && tokio::task::spawn_blocking(video::h264_available).await.unwrap_or(false);
+    let mut codec = negotiate(&offer, host_h264);
+    let remote = viewer.path.remote();
+    let mut fps = clamp_fps(codec, viewer.path, params.get("fps").and_then(|f| f.parse().ok()));
+    // The pane width in device pixels: the layer goes up to it (clamped to
+    // the device's own width). Absent: points, as before.
+    let pw = params.get("pw").and_then(|v| v.trim().parse::<u32>().ok()).filter(|w| *w > 0);
+    let stats_on = params.get("stats").map(String::as_str) == Some("1");
+    let want = Want { codec: unit_codec(codec), fps, path: viewer.path, pw, stats: stats_on };
     let joined = {
         let ws2 = ws.clone();
-        tokio::task::spawn_blocking(move || join(&ws2)).await
+        tokio::task::spawn_blocking(move || join(&ws2, want)).await
     };
-    let (sim_id, hub) = match joined {
+    let (sim_id, mut sub) = match joined {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => {
             crate::routes::http::send_response(&mut *stream, "409 Conflict", "application/json", &e.body().to_string()).await;
@@ -543,24 +313,6 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
             return;
         }
     };
-    // Codec + window (0.46.7). A viewer that offers nothing gets JPEG with
-    // one frame in flight: the wire as it was.
-    let offer = parse_offer(params.get("codecs").map(String::as_str));
-    let window_max = negotiate_window(params.get("win").map(String::as_str));
-    let host_h264 = offer.contains(&Codec::H264) && tokio::task::spawn_blocking(video::h264_available).await.unwrap_or(false);
-    let mut codec = negotiate(&offer, host_h264);
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let me = NEXT.fetch_add(1, Ordering::SeqCst);
-    let mut vpipe: Option<VideoPipe> = None;
-    if codec == Codec::H264 {
-        match spawn_video_pipe(me) {
-            Ok(p) => vpipe = Some(p),
-            Err(e) => {
-                log_debug!("[sim] {e}; viewer {me} stays on JPEG");
-                codec = Codec::Jpeg;
-            }
-        }
-    }
     let ws_conn = match tokio_tungstenite::accept_async(stream).await {
         Ok(w) => w,
         Err(e) => {
@@ -572,21 +324,11 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
     let m = manager::manager();
     m.viewer_joined(sim_id);
     // M0: stage times once a second, only when asked.
-    let mut stats = (params.get("stats").map(String::as_str) == Some("1")).then(StatsWindow::default);
-    if stats.is_some() {
-        hub.stats_viewers.fetch_add(1, Ordering::SeqCst);
-    }
+    let mut stats = stats_on.then(StatsWindow::default);
     let mut hub_cpu_last = 0u64;
-    let (mut enc_cpu_last, mut enc_cpu_now) = (0u64, 0u64);
+    let mut enc_cpu_ns = 0u64;
     let mut stats_tick = tokio::time::interval(Duration::from_secs(1));
     stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // The frame on the encoder thread and when its gate opened (stats).
-    let mut video_in_flight: Option<(Arc<Shared>, Instant)> = None;
-    let remote = viewer.path.remote();
-    let mut fps = clamp_fps(codec, viewer.path, params.get("fps").and_then(|f| f.parse().ok()));
-    if let Ok(mut w) = hub.want_fps.lock() {
-        w.insert(me, fps);
-    }
     let can_control = crate::sim_routes::can_control(&viewer.caller);
     let who = who_name(&viewer.caller);
     let status = {
@@ -608,22 +350,13 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
         codec,
         window: window_max,
     };
-    let mut rx = hub.rx.clone();
     let mut window = AckWindow::new(window_max);
-    let mut rate = RateCtl::new(video::bitrate_for(400, 900, fps, remote));
+    let mut congested = false;
     let started = Instant::now();
-    let mut pacer = Pacer::new(fps);
-    // When the newest frame reached this viewer (the pacer's "arrived").
-    let mut pending_since = Instant::now();
-    let mut last_sent_seq: Option<u32> = None;
-    let mut video_busy = false;
-    let mut want_key = true;
-    let mut last_key_ask = Instant::now() - Duration::from_secs(1);
+    let mut gate = ViewerGate::new(sub.layer());
     let mut last_hold = m.hold_view(sim_id);
     if write.send(text(&hello)).await.is_err() {
-        if stats.is_some() {
-            hub.stats_viewers.fetch_sub(1, Ordering::SeqCst);
-        }
+        drop(sub);
         m.viewer_left(sim_id);
         return;
     }
@@ -634,6 +367,8 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
     let (in_tx, in_rx) = std::sync::mpsc::sync_channel::<QueuedInput>(INPUT_QUEUE);
     let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<(String, String)>(16);
     let (timing_tx, mut timing_rx) = tokio::sync::mpsc::channel::<InputTiming>(64);
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let me = NEXT.fetch_add(1, Ordering::SeqCst);
     let input = InputThread { sim_id, ws: ws.clone(), who: who.clone(), caller: viewer.caller.clone(), err_tx, timing_tx, started };
     if let Err(e) = std::thread::Builder::new().name(format!("k2-sim-input-{me}")).spawn(move || input.run(in_rx)) {
         log_debug!("[sim] input thread for viewer {me}: {e}");
@@ -641,83 +376,22 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
     let mut budget = InputBudget::new(Instant::now());
     let mut auth = tokio::time::interval(Duration::from_secs(5));
     auth.tick().await;
-    let mut pending = true; // send the newest frame as soon as we may
+    // Hold changes (a tap from another viewer, take-over expiry).
+    let mut hold_tick = tokio::time::interval(Duration::from_millis(250));
+    hold_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut incoming = crate::socket_access::IncomingCheck::new(&viewer.token, &owner_token);
     'serve: loop {
         if window.expire(Instant::now(), ACK_EXPIRY) > 0 {
             log_debug!("[sim] viewer {me}: acks lost for {ACK_EXPIRY:?}; freeing the window");
         }
-        // Send the newest frame when allowed (window, schedule, encoder free).
-        if pending && !video_busy && window.can_send(fps) && pacer.ready(pending_since, Instant::now()) {
-            let gate_at = Instant::now();
-            let p = rx.borrow_and_update().clone();
-            match p {
-                Pub::Frame(f) => {
-                    pending = false;
-                    match codec {
-                        Codec::Jpeg => match jpeg_for(&f, &hub.encodes).await {
-                            Ok(msg) => {
-                                let send_start = Instant::now();
-                                if write.send(Message::Binary(msg)).await.is_err() {
-                                    break 'serve;
-                                }
-                                if let Some(st) = stats.as_mut() {
-                                    record_frame(st, &f, gate_at, f.jpeg_span.get().copied(), send_start, Instant::now());
-                                }
-                                window.sent(f.seq, Instant::now());
-                                pacer.sent(gate_at);
-                                last_sent_seq = Some(f.seq);
-                            }
-                            Err(e) => log_debug!("[sim] encode failed on s{sim_id}: {e}"),
-                        },
-                        Codec::H264 => {
-                            // Same frame again only for a keyframe ask (a
-                            // still screen sends nothing new).
-                            if last_sent_seq == Some(f.seq) && !want_key {
-                                continue 'serve;
-                            }
-                            window.cancel(f.seq);
-                            let target = video::bitrate_for(f.width_pt as u32, f.height_pt as u32, fps, remote);
-                            if target != rate.target() {
-                                rate.retarget(target);
-                            }
-                            let ts_ms = f.frame.captured_at.saturating_duration_since(started).as_millis().min(u32::MAX as u128) as u32;
-                            let job = VideoJob { shared: f.clone(), force_key: want_key, fps, bitrate: rate.current(), ts_ms, stats: stats.is_some() };
-                            let sent = vpipe.as_ref().is_some_and(|p| p.jobs.try_send(job).is_ok());
-                            if sent {
-                                want_key = false;
-                                video_busy = true;
-                                video_in_flight = Some((f.clone(), gate_at));
-                                window.sent(f.seq, Instant::now());
-                                pacer.sent(gate_at);
-                                last_sent_seq = Some(f.seq);
-                            } else {
-                                // The encoder thread is gone.
-                                fall_back_to_jpeg(&mut codec, &mut vpipe, &hub, &mut fps, viewer.path, me);
-                                pacer.set_fps(fps);
-                                pending = true;
-                                let msg = ServerMsg::Codec { codec, message: Some("The video encoder stopped; this stream is JPEG now.".into()) };
-                                if write.send(text(&msg)).await.is_err() || write.send(text(&ServerMsg::Fps { fps })).await.is_err() {
-                                    break 'serve;
-                                }
-                            }
-                        }
-                    }
-                }
-                Pub::Ended(why) => {
-                    let _ = write.send(text(&ServerMsg::State { state: SimState::Stopped, message: Some(why) })).await;
-                    close(&mut write, CLOSE_DEVICE_STOPPED, "device stopped").await;
-                    break 'serve;
-                }
-                Pub::Starting => pending = false,
+        // A keyframe that waited for room goes first.
+        if let Some(u) = gate.take_held(room(&window)) {
+            let seq = gate.wire_seq(&u);
+            if !send_unit(&mut write, &u, seq, started, stats.as_mut()).await {
+                break 'serve;
             }
+            window.sent(seq, Instant::now());
         }
-        let video_out = async {
-            match vpipe.as_mut() {
-                Some(p) => p.out.recv().await,
-                None => std::future::pending().await,
-            }
-        };
         tokio::select! {
             _ = auth.tick() => {
                 if !crate::routes::http::token_still_valid(&viewer.token, &owner_token) {
@@ -726,59 +400,46 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                     break 'serve;
                 }
             }
-            changed = rx.changed() => {
-                if changed.is_err() {
+            unit = sub.units.recv() => {
+                let Some(u) = unit else {
+                    close(&mut write, CLOSE_DEVICE_STOPPED, "device stopped").await;
+                    break 'serve;
+                };
+                if let Some(e) = &u.encode {
+                    enc_cpu_ns += e.cpu_ns;
+                }
+                match gate.offer(u, room(&window)) {
+                    Took::Send(u) => {
+                        let seq = gate.wire_seq(&u);
+                        if !send_unit(&mut write, &u, seq, started, stats.as_mut()).await {
+                            break 'serve;
+                        }
+                        window.sent(seq, Instant::now());
+                    }
+                    Took::Dropped => {
+                        sub.catch_up();
+                    }
+                    Took::Held | Took::Stale => {}
+                }
+            }
+            Some(ev) = sub.events.recv() => match ev {
+                HubEvent::Moved { layer, fps: f, why, .. } => {
+                    log_debug!("[sim] H.264 for viewer {me} on s{sim_id} failed ({why}); falling back to JPEG");
+                    gate.moved(layer);
+                    codec = Codec::Jpeg;
+                    fps = f;
+                    let msg = ServerMsg::Codec { codec, message: Some(format!("The video encoder stopped ({why}); this stream is JPEG now.")) };
+                    if write.send(text(&msg)).await.is_err() || write.send(text(&ServerMsg::Fps { fps })).await.is_err() {
+                        break 'serve;
+                    }
+                }
+                HubEvent::Ended(why) => {
+                    let _ = write.send(text(&ServerMsg::State { state: SimState::Stopped, message: Some(why) })).await;
                     close(&mut write, CLOSE_DEVICE_STOPPED, "device stopped").await;
                     break 'serve;
                 }
-                pending = true;
-                pending_since = Instant::now();
-            }
-            out = video_out => {
-                video_busy = false;
-                let in_flight = video_in_flight.take();
-                match out {
-                    Some(VideoOut::Frame { message, encode, cpu_ns, .. }) => {
-                        let send_start = Instant::now();
-                        if write.send(Message::Binary(message)).await.is_err() {
-                            break 'serve;
-                        }
-                        if let (Some(st), Some((f, gate_at))) = (stats.as_mut(), in_flight) {
-                            record_frame(st, &f, gate_at, Some(encode), send_start, Instant::now());
-                            enc_cpu_now = cpu_ns;
-                        }
-                    }
-                    Some(VideoOut::Dropped { seq }) => {
-                        window.cancel(seq);
-                        last_sent_seq = None;
-                        pending = true;
-                    }
-                    failed => {
-                        let why = match failed {
-                            Some(VideoOut::Failed { seq, why }) => {
-                                window.cancel(seq);
-                                why
-                            }
-                            _ => "the encoder thread ended".to_string(),
-                        };
-                        log_debug!("[sim] H.264 for viewer {me} on s{sim_id} failed ({why}); falling back to JPEG");
-                        fall_back_to_jpeg(&mut codec, &mut vpipe, &hub, &mut fps, viewer.path, me);
-                        pacer.set_fps(fps);
-                        last_sent_seq = None;
-                        pending = true;
-                        let msg = ServerMsg::Codec { codec, message: Some(format!("The video encoder stopped ({why}); this stream is JPEG now.")) };
-                        if write.send(text(&msg)).await.is_err() || write.send(text(&ServerMsg::Fps { fps })).await.is_err() {
-                            break 'serve;
-                        }
-                    }
-                }
-            }
-            _ = tokio::time::sleep(if pending && !video_busy && window.can_send(fps) {
-                pacer.wait(pending_since, Instant::now()).max(Duration::from_millis(2))
-            } else {
-                Duration::from_millis(250)
-            }) => {
-                // Hold changes (a tap from another viewer, take-over expiry).
+            },
+            _ = hold_tick.tick() => {
                 let h = m.hold_view(sim_id);
                 let changed_kind = std::mem::discriminant(&h) != std::mem::discriminant(&last_hold)
                     || matches!((&h, &last_hold), (HoldView::Takeover { by: a, .. }, HoldView::Takeover { by: b, .. }) if a != b);
@@ -800,8 +461,8 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                 }
             }
             _ = stats_tick.tick(), if stats.is_some() => {
-                let hub_ms = cpu_window_ms(&mut hub_cpu_last, hub.cpu_ns.load(Ordering::Relaxed));
-                let enc_ms = cpu_window_ms(&mut enc_cpu_last, enc_cpu_now);
+                let hub_ms = cpu_window_ms(&mut hub_cpu_last, sub.hub().cpu_ns());
+                let enc_ms = std::mem::take(&mut enc_cpu_ns) as f32 / 1e6;
                 if let Some(st) = stats.as_mut() {
                     if write.send(text(&ServerMsg::Stats { stats: st.take(hub_ms, enc_ms) })).await.is_err() {
                         break 'serve;
@@ -827,24 +488,21 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                 };
                 match vm {
                     ViewerMsg::Ack { seq } => {
-                        let now = Instant::now();
-                        window.ack(seq, now);
-                        if codec == Codec::H264 {
-                            // The next job carries the new rate.
-                            let _ = rate.update(window.congested(), now);
+                        window.ack(seq, Instant::now());
+                        // The layer's bitrate follows its most congested viewer.
+                        if codec == Codec::H264 && window.congested() != congested {
+                            congested = !congested;
+                            sub.set_congested(congested);
                         }
                     }
                     ViewerMsg::Fps { fps: f } => {
                         fps = clamp_fps(codec, viewer.path, Some(f));
-                        pacer.set_fps(fps);
-                        if let Ok(mut w) = hub.want_fps.lock() { w.insert(me, fps); }
+                        gate.moved(sub.set_fps(fps));
                         let _ = write.send(text(&ServerMsg::Fps { fps })).await;
                     }
                     ViewerMsg::Keyframe => {
-                        if codec == Codec::H264 && last_key_ask.elapsed() >= KEYFRAME_MIN_GAP {
-                            last_key_ask = Instant::now();
-                            want_key = true;
-                            pending = true;
+                        if codec == Codec::H264 {
+                            sub.ask_keyframe();
                         }
                     }
                     other => {
@@ -869,25 +527,8 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
         }
     }
     drop(in_tx); // the input thread ends after what it is doing
-    drop(vpipe);
-    if stats.is_some() {
-        hub.stats_viewers.fetch_sub(1, Ordering::SeqCst);
-    }
-    if let Ok(mut w) = hub.want_fps.lock() {
-        w.remove(&me);
-    }
-    drop(rx);
+    drop(sub); // leaves the hub: its layer pauses if this was the last viewer
     m.viewer_left(sim_id);
-}
-
-/// Switch a viewer from H.264 to JPEG on the same socket.
-fn fall_back_to_jpeg(codec: &mut Codec, vpipe: &mut Option<VideoPipe>, hub: &Hub, fps: &mut u32, path: ViewerPath, me: u64) {
-    *codec = Codec::Jpeg;
-    *vpipe = None;
-    *fps = clamp_fps(Codec::Jpeg, path, Some(*fps));
-    if let Ok(mut w) = hub.want_fps.lock() {
-        w.insert(me, *fps);
-    }
 }
 
 /// Inputs a viewer may have queued; one more is refused with `sim_busy`.

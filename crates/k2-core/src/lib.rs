@@ -215,6 +215,9 @@ pub mod disk_guard;
 /// Mobile dev: sim sessions, the `SimLane` trait, tree format, control
 /// hold, stream wire format (prd-mobile-dev-v1, 0.46.6).
 pub mod sim;
+/// The device stream engine's source side (fix 10, S2): encoded sources,
+/// layers and the pixel adapter, shared by the sim and the remote desktop.
+pub mod stream;
 // 0.46.4 box usage trends (disk guard Slice B, migration 0217).
 pub mod resource_samples;
 pub use k2_client::migration_home;

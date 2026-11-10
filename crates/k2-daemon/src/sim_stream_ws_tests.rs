@@ -1,12 +1,15 @@
-//! `/cli/sim/stream` tests: the shared hub, the per-viewer H.264 pipe
-//! (with the fake encoder, so they run on Linux), and real sockets for the
-//! old JPEG wire, the negotiated video wire, keyframes, the ack window and
-//! the JPEG fallback.
+//! `/cli/sim/stream` tests: the stream engine's hub on the fake lane
+//! (layers, keyframes, pane widths; the fake H.264 encoder, so they run on
+//! Linux), and real sockets for the old JPEG wire, the negotiated video
+//! wire, keyframes, the ack window, skips to keyframes and the JPEG
+//! fallback. The pixel adapter's own tests (schedule, sizes, encoder keys
+//! and failure) are in `k2_core::stream::pixel`.
 
 use super::*;
-use k2_core::sim::lane::{FrameData, Orientation};
-use k2_core::sim::video::annexb::{codec_string, is_keyframe};
+use k2_core::sim::video::annexb::is_keyframe;
 use k2_core::sim::video::fake;
+use k2_core::sim::video::{EncoderConfig, VideoEncoder};
+use std::sync::Arc;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 /// The rate table, by codec and path (fix 2, M-4): JPEG ≤ 30 here and
@@ -49,77 +52,6 @@ fn viewer_messages_map_to_point_actions_and_bad_ones_are_dropped() {
     assert!(to_action(&ViewerMsg::Keyframe).is_none(), "a keyframe ask is not device input");
 }
 
-fn frame(w: u32, h: u32, shade: u8) -> Frame {
-    Frame {
-        width_px: w,
-        height_px: h,
-        scale: 1.0,
-        orientation: Orientation::Portrait,
-        seq: 1,
-        captured_at: Instant::now(),
-        stamps: Default::default(),
-        data: FrameData::Rgb888(vec![shade; (w * h * 3) as usize]),
-    }
-}
-
-fn job(seq: u32, f: Frame, force_key: bool) -> VideoJob {
-    VideoJob { shared: Arc::new(Shared::new(seq, f)), force_key, fps: 30, bitrate: 500_000, ts_ms: seq * 33, stats: false }
-}
-
-/// The pipe opens an encoder on the first frame (a keyframe), sends deltas,
-/// forces a keyframe on request, and reopens (keyframe) when the size
-/// changes, as a rotation does. Every message is a K2SV header + Annex B.
-#[test]
-fn the_video_pipe_keys_on_join_on_request_and_on_rotation() {
-    let _serial = crate::sim_routes::sim_test_lock();
-    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let log = fake::install();
-    let mut enc: Option<Box<dyn VideoEncoder>> = None;
-    let mut out = Vec::new();
-    for (i, (w, h, key)) in [(4, 8, false), (4, 8, false), (4, 8, true), (4, 8, false), (8, 4, false), (8, 4, false)].into_iter().enumerate() {
-        let (k, msg) = encode_job(&mut enc, &job(i as u32 + 1, frame(w, h, i as u8), key)).expect("encode").expect("not dropped");
-        let (hd, au) = VideoHeader::decode(&msg).expect("a K2SV message");
-        assert_eq!(hd.key, k);
-        assert_eq!(hd.key, is_keyframe(au), "the flag matches the bitstream");
-        assert_eq!((hd.seq, hd.width_px, hd.height_px, hd.width_pt, hd.height_pt), (i as u32 + 1, w as u16, h as u16, w as u16, h as u16));
-        assert_eq!(hd.codec, VIDEO_CODEC_H264);
-        assert_eq!(hd.ts_ms, (i as u32 + 1) * 33);
-        if hd.key {
-            assert_eq!(codec_string(au).as_deref(), Some("avc1.42E01F"), "SPS in band");
-        }
-        out.push(hd.key);
-    }
-    fake::uninstall();
-    assert_eq!(out, vec![true, false, true, false, true, false], "join, request, rotation");
-    assert_eq!(log.lock().expect("log").opened, vec![(4, 8), (8, 4)], "one encoder per size");
-}
-
-/// A failing encoder ends the worker after one `Failed` (the viewer falls
-/// back to JPEG); rate-control drops come back as `Dropped`.
-#[test]
-fn the_video_worker_reports_failure_once_and_stops() {
-    let _serial = crate::sim_routes::sim_test_lock();
-    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    fn failing(_: &EncoderConfig) -> Result<Box<dyn VideoEncoder>, String> {
-        Err("no encoder here (test)".into())
-    }
-    video::set_h264_factory(Some(failing));
-    let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<VideoJob>(1);
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<VideoOut>(2);
-    let worker = std::thread::spawn(move || video_worker(jobs_rx, out_tx));
-    jobs_tx.send(job(7, frame(4, 8, 1), false)).expect("job");
-    match out_rx.blocking_recv() {
-        Some(VideoOut::Failed { seq, why }) => {
-            assert_eq!(seq, 7);
-            assert!(why.contains("no encoder here"), "{why}");
-        }
-        other => panic!("expected Failed, got {other:?}"),
-    }
-    worker.join().expect("worker ends after a failure");
-    assert!(out_rx.blocking_recv().is_none(), "nothing after the failure");
-    video::set_h264_factory(None);
-}
-
 struct Booted {
     ws: Ws,
     tmp: std::path::PathBuf,
@@ -154,93 +86,383 @@ fn shut_down(b: Booted) {
     let _ = std::fs::remove_dir_all(&b.tmp);
 }
 
-/// Two viewers share one hub. JPEG is encoded lazily (fix 2, M-3): the hub
-/// encodes nothing; the first viewer that sends a frame encodes it, and a
-/// second viewer sending the same frame reuses it (one encode per frame
-/// however many viewers); a frame no viewer sends is never encoded. A
-/// viewer that never reads holds nobody back (the channel keeps only the
-/// newest).
+fn want(codec: UnitCodec, fps: u32) -> Want {
+    Want { codec, fps, path: ViewerPath::Local, pw: None, stats: false }
+}
+
+/// The next unit off a subscription (5 s at most).
+fn next_unit(sub: &mut Subscription) -> EncodedUnit {
+    let t0 = Instant::now();
+    loop {
+        match sub.units.try_recv() {
+            Ok(u) => return u,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                assert!(t0.elapsed() < Duration::from_secs(5), "a unit within 5 s");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+}
+
+/// The next key unit, skipping deltas.
+fn next_key(sub: &mut Subscription) -> EncodedUnit {
+    loop {
+        let u = next_unit(sub);
+        if u.key {
+            return u;
+        }
+    }
+}
+
+fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
+    let t0 = Instant::now();
+    while !f() {
+        assert!(t0.elapsed() < Duration::from_secs(5), "{what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Two JPEG viewers at one rate share one hub and one layer: each unit is
+/// encoded once and both get the same bytes (one shared buffer). A viewer
+/// that never reads holds nobody back (its own queue just fills).
 #[test]
-fn one_encoder_serves_every_viewer() {
+fn one_encode_per_layer_serves_every_viewer() {
     let _serial = crate::sim_routes::sim_test_lock();
     let b = boot_fake("hub");
-    let (sim_a, hub_a) = join(&b.ws).expect("join a");
-    let (sim_b, hub_b) = join(&b.ws).expect("join b");
+    let (sim_a, mut a) = join(&b.ws, want(UnitCodec::Jpeg, 30)).expect("join a");
+    let (sim_b, mut c) = join(&b.ws, want(UnitCodec::Jpeg, 30)).expect("join b");
     assert_eq!(sim_a, sim_b);
-    assert!(Arc::ptr_eq(&hub_a, &hub_b), "one hub per device");
-    hub_a.want_fps.lock().expect("fps").insert(1, 30);
-    let mut fast = hub_a.rx.clone();
-    let _slow = hub_b.rx.clone(); // never reads
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
-    let mut got: Vec<Arc<Shared>> = Vec::new();
-    rt.block_on(async {
-        while got.len() < 5 {
-            tokio::time::timeout(Duration::from_secs(5), fast.changed()).await.expect("a frame within 5 s").expect("hub alive");
-            if let Pub::Frame(f) = &*fast.borrow_and_update() {
-                got.push(f.clone());
-            }
+    assert!(Arc::ptr_eq(a.hub(), c.hub()), "one hub per device");
+    assert_eq!(a.layer(), c.layer(), "one layer");
+    let got: Vec<EncodedUnit> = (0..20).map(|_| next_unit(&mut a)).collect();
+    assert!(got.windows(2).all(|w| w[1].seq == w[0].seq + 1), "a reader gets every unit");
+    assert!(got.iter().all(|u| u.key && u.codec == UnitCodec::Jpeg && (u.width, u.height, u.width_pt, u.height_pt) == (4, 8, 4, 8)));
+    assert_eq!(&got[0].data[..2], &[0xff, 0xd8]);
+    // The other viewer never read: its queue holds the first units only.
+    let mut theirs = Vec::new();
+    while let Ok(u) = c.units.try_recv() {
+        theirs.push(u);
+    }
+    assert!(!theirs.is_empty() && theirs.len() <= crate::stream::VIEWER_QUEUE, "{}", theirs.len());
+    let mut shared = 0;
+    for u in &theirs {
+        if let Some(m) = got.iter().find(|g| g.seq == u.seq) {
+            assert_eq!(m.data.as_ptr(), u.data.as_ptr(), "the same encode, not a copy");
+            shared += 1;
         }
-    });
-    let seqs: Vec<u32> = got.iter().map(|f| f.seq).collect();
-    assert!(seqs.windows(2).all(|w| w[1] > w[0]), "{seqs:?}");
-    assert!(got.iter().all(|f| f.jpeg_ready().is_none()), "the hub encodes nothing itself");
-    assert_eq!(encodes(sim_a), Some(0));
-    // Two viewers send the same frame: one encode, the same bytes.
-    let first = got[2].jpeg_message(&hub_a.encodes).expect("encode").to_vec();
-    let second = got[2].jpeg_message(&hub_b.encodes).expect("reuse").to_vec();
-    assert_eq!(first, second);
-    let (h, jpeg) = FrameHeader::decode(&first).expect("header");
-    assert_eq!((h.width_px, h.height_px, h.width_pt, h.height_pt), (4, 8, 4, 8));
-    assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
-    assert_eq!(encodes(sim_a), Some(1), "one encode for two viewers");
-    // The frames nobody sent were never encoded.
-    assert!(got.iter().enumerate().all(|(i, f)| i == 2 || f.jpeg_ready().is_none()), "a frame no viewer sends is never encoded");
-    assert_eq!(encodes(sim_a), Some(1));
-    drop(fast);
-    drop(_slow);
-    drop(hub_a);
-    drop(hub_b);
+    }
+    assert!(shared > 0);
+    assert_eq!(a.hub().layer_specs().len(), 1);
+    drop((a, c));
     shut_down(b);
 }
 
 /// Fix 1a: the hub asks the lane for points-sized frames, and retunes the
-/// source once each time the fastest viewer's rate changes: up when a
+/// source once each time the fastest layer's rate changes: up when a
 /// faster viewer joins, back down when it leaves.
 #[test]
-fn the_hub_asks_for_points_and_retunes_to_the_fastest_viewer() {
+fn the_hub_asks_for_points_and_retunes_to_the_fastest_layer() {
     let _serial = crate::sim_routes::sim_test_lock();
     let b = boot_fake("retune");
-    let (_, hub) = join(&b.ws).expect("join");
     let opts = b.fake.frame_opts.clone();
-    let rx = hub.rx.clone(); // a viewer, so the hub keeps running
-    let wait_for = |n: usize| {
-        let t0 = Instant::now();
-        while opts.lock().len() < n {
-            assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", opts.lock());
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    };
-    wait_for(1);
-    assert_eq!(opts.lock()[0], ("open", FrameOpts::points(LOCAL_MAX_FPS)), "opened at points");
-    hub.want_fps.lock().expect("fps").insert(1, 15);
+    let wait_for = |n: usize| wait_until("retunes", || opts.lock().len() >= n);
+    let (_, slow) = join(&b.ws, want(UnitCodec::Jpeg, 15)).expect("join");
     wait_for(2);
-    hub.want_fps.lock().expect("fps").insert(2, 30);
+    assert_eq!(opts.lock()[0], ("open", FrameOpts::points(LOCAL_MAX_FPS)), "opened at points");
+    let (_, fast) = join(&b.ws, want(UnitCodec::Jpeg, 30)).expect("join");
     wait_for(3);
     std::thread::sleep(Duration::from_millis(200));
-    hub.want_fps.lock().expect("fps").remove(&2);
+    drop(fast);
     wait_for(4);
     std::thread::sleep(Duration::from_millis(200));
     let got: Vec<(&str, u32, FrameSize)> = opts.lock().iter().map(|(k, o)| (*k, o.max_fps, o.size)).collect();
     assert_eq!(
         got,
         vec![("open", 30, FrameSize::Points), ("retune", 15, FrameSize::Points), ("retune", 30, FrameSize::Points), ("retune", 15, FrameSize::Points)],
-        "one retune per change of the fastest viewer"
+        "one retune per change of the fastest layer"
     );
-    drop(rx);
-    drop(hub);
+    drop(slow);
     shut_down(b);
 }
 
+/// (a) A viewer joining a running layer gets a key unit first, and its
+/// keyframe ask is never throttled, even right after another viewer's
+/// ask (which is: a second ask inside 250 ms is merged).
+#[test]
+fn a_joiner_gets_a_key_first_and_its_ask_is_never_throttled() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _log = fake::install();
+    let b = boot_fake("joiner");
+    let (_, mut a) = join(&b.ws, want(UnitCodec::H264, 30)).expect("join a");
+    let first = next_unit(&mut a);
+    assert!(first.key && first.source_start, "a new layer starts with a key unit");
+    assert!(!next_unit(&mut a).key && !next_unit(&mut a).key, "then deltas");
+    let hub = a.hub().clone();
+    let asks = hub.key_asks();
+    assert!(a.ask_keyframe(), "a viewer's ask");
+    assert!(!a.ask_keyframe(), "a second ask inside 250 ms is merged");
+    let (_, mut j) = join(&b.ws, want(UnitCodec::H264, 30)).expect("join mid-stream");
+    assert_eq!(j.layer(), a.layer(), "the running layer");
+    assert_eq!(hub.key_asks(), asks + 2, "the joiner's ask went through right after the other one");
+    // Units already on their way may come first (the viewer's gate drops
+    // them); the key is the next encode once the ask reaches the source.
+    let mut before = 0;
+    let mine = loop {
+        let u = next_unit(&mut j);
+        if u.key {
+            break u;
+        }
+        before += 1;
+    };
+    assert!(before <= 2, "{before} deltas before the joiner's key");
+    // The viewer already there gets that key too, in its order.
+    let k = next_key(&mut a);
+    assert!(k.seq <= mine.seq, "{} > {}", k.seq, mine.seq);
+    fake::uninstall();
+    drop((a, j));
+    shut_down(b);
+}
+
+/// Count what a socket viewer gets for `dur`, acking each frame at once.
+async fn take_video(c: &mut Client, dur: Duration) -> Vec<VideoHeader> {
+    let deadline = tokio::time::Instant::now() + dur;
+    let mut heads = Vec::new();
+    loop {
+        let m = match tokio::time::timeout_at(deadline, c.next()).await {
+            Err(_) => return heads,
+            Ok(m) => m.expect("open").expect("ok"),
+        };
+        if let Message::Binary(bin) = m {
+            let (h, au) = VideoHeader::decode(&bin).expect("K2SV");
+            assert_eq!(h.key, is_keyframe(au));
+            ack(c, h.seq).await;
+            heads.push(h);
+        }
+    }
+}
+
+/// (b) Two H.264 viewers at 60 and 15 fps: two layers, two encoders, each
+/// viewer at about its tier. Three viewers at 60: one encoder.
+#[test]
+fn two_rates_are_two_layers_and_three_viewers_at_one_rate_are_one_encoder() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let log = fake::install();
+    let b = boot_fake("tiers");
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut fast, s1) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "60")]).await;
+        let (mut slow, s2) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "15")]).await;
+        assert_eq!(next_text(&mut fast).await["fps"], 60);
+        assert_eq!(next_text(&mut slow).await["fps"], 15);
+        let (f, s) = tokio::join!(take_video(&mut fast, Duration::from_secs(2)), take_video(&mut slow, Duration::from_secs(2)));
+        assert!((90..=130).contains(&f.len()), "60 fps viewer: {} in 2 s", f.len());
+        assert!((22..=36).contains(&s.len()), "15 fps viewer: {} in 2 s", s.len());
+        for hs in [&f, &s] {
+            assert!(hs[0].key, "each starts on a key unit");
+            assert!(hs.windows(2).all(|w| w[1].key || w[1].seq == w[0].seq + 1), "no delta after a gap");
+        }
+        drop((fast, slow));
+        for s in [s1, s2] {
+            tokio::time::timeout(Duration::from_secs(5), s).await.expect("server ends").expect("join");
+        }
+    });
+    assert_eq!(log.lock().expect("log").opened, vec![(4, 8), (4, 8)], "one encoder per layer");
+    let log = fake::install();
+    let mut subs: Vec<Subscription> = (0..3).map(|_| join(&b.ws, want(UnitCodec::H264, 60)).expect("join").1).collect();
+    assert!(subs.windows(2).all(|w| w[0].layer() == w[1].layer()));
+    for s in subs.iter_mut() {
+        let _ = next_key(s);
+    }
+    assert_eq!(log.lock().expect("log").opened.len(), 1, "three viewers at 60: one encoder");
+    fake::uninstall();
+    drop(subs);
+    shut_down(b);
+}
+
+/// (c) A JPEG viewer and an H.264 viewer at once: two layers, K2SF to one
+/// and K2SV to the other.
+#[test]
+fn a_jpeg_viewer_and_a_video_viewer_watch_at_once() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _log = fake::install();
+    let b = boot_fake("mixed");
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut v, s1) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3")]).await;
+        let (mut j, s2) = open(&b, &[]).await;
+        let hello = next_text(&mut v).await;
+        assert_eq!(hello["codec"], "h264");
+        assert_eq!(next_text(&mut j).await["codec"], "jpeg");
+        for _ in 0..3 {
+            let m = next_binary(&mut v, Duration::from_secs(5)).await.expect("video");
+            let (h, _) = VideoHeader::decode(&m).expect("K2SV");
+            ack(&mut v, h.seq).await;
+            let m = next_binary(&mut j, Duration::from_secs(5)).await.expect("jpeg");
+            let (h, jpeg) = FrameHeader::decode(&m).expect("K2SF");
+            assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
+            ack(&mut j, h.seq).await;
+        }
+        let id: i64 = hello["sim"].as_str().and_then(|s| s.strip_prefix('s')).and_then(|n| n.parse().ok()).expect("sim id");
+        let hub = crate::stream::hub_for(&SourceKey::Sim(id)).expect("hub");
+        let mut codecs: Vec<UnitCodec> = hub.layer_specs().iter().map(|l| l.codec).collect();
+        codecs.sort_by_key(|c| *c as u8);
+        assert_eq!(codecs, vec![UnitCodec::H264, UnitCodec::Jpeg]);
+        drop((v, j));
+        for s in [s1, s2] {
+            tokio::time::timeout(Duration::from_secs(5), s).await.expect("server ends").expect("join");
+        }
+    });
+    fake::uninstall();
+    shut_down(b);
+}
+
+/// (d) A viewer leaving pauses its layer: the list the source gets drops it.
+#[test]
+fn a_viewer_leaving_pauses_its_layer() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _log = fake::install();
+    let b = boot_fake("pause");
+    let (_, mut a) = join(&b.ws, want(UnitCodec::H264, 60)).expect("join a");
+    let (_, mut c) = join(&b.ws, want(UnitCodec::H264, 15)).expect("join b");
+    let _ = (next_unit(&mut a), next_unit(&mut c));
+    let hub = a.hub().clone();
+    wait_until("two layers", || hub.layer_specs().len() == 2);
+    let gone = c.layer();
+    drop(c);
+    wait_until("the layer leaves the list", || hub.layer_specs().len() == 1);
+    let left = hub.layer_specs();
+    assert_eq!((left[0].id, left[0].fps), (a.layer(), 60));
+    assert!(left.iter().all(|l| l.id != gone));
+    // Nothing more is encoded for it: every unit now is the 60 fps layer's.
+    for _ in 0..10 {
+        assert_eq!(next_unit(&mut a).layer, a.layer());
+    }
+    fake::uninstall();
+    drop(a);
+    shut_down(b);
+}
+
+/// (e) Per layer, every delta a viewer gets is the one after the unit it
+/// got before, else a key unit: a viewer that acks slowly now and then
+/// skips to keyframes, and a fast one on the same layer keeps its rate.
+#[test]
+fn a_slow_acker_skips_to_keyframes_and_never_gets_a_delta_after_a_gap() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _log = fake::install();
+    let b = boot_fake("skips");
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut slow, s1) = open(&b, &[("codecs", "h264,jpeg"), ("win", "1"), ("fps", "60")]).await;
+        let (mut fast, s2) = open(&b, &[("codecs", "h264,jpeg"), ("win", "3"), ("fps", "60")]).await;
+        let _ = (next_text(&mut slow).await, next_text(&mut fast).await);
+        let slow_run = async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            let mut heads = Vec::new();
+            let delays = [5u64, 5, 5, 60];
+            while let Ok(m) = tokio::time::timeout_at(deadline, slow.next()).await {
+                if let Message::Binary(bin) = m.expect("open").expect("ok") {
+                    let (h, _) = VideoHeader::decode(&bin).expect("K2SV");
+                    tokio::time::sleep(Duration::from_millis(delays[heads.len() % delays.len()])).await;
+                    ack(&mut slow, h.seq).await;
+                    heads.push(h);
+                }
+            }
+            heads
+        };
+        let (s, f) = tokio::join!(slow_run, take_video(&mut fast, Duration::from_secs(3)));
+        for (who, hs) in [("slow", &s), ("fast", &f)] {
+            assert!(hs[0].key, "{who} starts on a key unit");
+            for w in hs.windows(2) {
+                assert!(w[1].key || w[1].seq == w[0].seq + 1, "{who}: delta {} after {}", w[1].seq, w[0].seq);
+            }
+        }
+        assert!(s.iter().skip(1).any(|h| h.key), "the slow viewer skipped to a keyframe at least once");
+        assert!(s.windows(2).any(|w| !w[1].key), "and took deltas while it kept up");
+        assert!(f.len() >= 120, "the fast viewer keeps its rate: {} in 3 s", f.len());
+        drop((slow, fast));
+        for s in [s1, s2] {
+            tokio::time::timeout(Duration::from_secs(5), s).await.expect("server ends").expect("join");
+        }
+    });
+    fake::uninstall();
+    shut_down(b);
+}
+
+/// (f) At most three layers: a fourth rate joins the nearest higher-fps
+/// layer of its codec and remote-ness. Only a codec with no layer at all
+/// opens one past the cap.
+#[test]
+fn a_source_runs_at_most_three_layers() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _log = fake::install();
+    let b = boot_fake("cap");
+    let subs: Vec<Subscription> = [60, 30, 15].iter().map(|f| join(&b.ws, want(UnitCodec::H264, *f)).expect("join").1).collect();
+    let hub = subs[0].hub().clone();
+    let fps_of = |s: &Subscription| s.layer_spec().expect("spec").fps;
+    assert_eq!(subs.iter().map(fps_of).collect::<Vec<_>>(), vec![60, 30, 15]);
+    let (_, eight) = join(&b.ws, want(UnitCodec::H264, 8)).expect("join 8");
+    assert_eq!(eight.layer(), subs[2].layer(), "8 fps joins the 15 fps layer");
+    let (_, twenty) = join(&b.ws, want(UnitCodec::H264, 20)).expect("join 20");
+    assert_eq!(twenty.layer(), subs[1].layer(), "20 rounds up to 30, which runs");
+    wait_until("three layers", || hub.layer_specs().len() == 3);
+    let (_, jpeg) = join(&b.ws, want(UnitCodec::Jpeg, 30)).expect("join jpeg");
+    assert_eq!(jpeg.layer_spec().map(|l| l.codec), Some(UnitCodec::Jpeg), "never a codec it didn't negotiate");
+    wait_until("a JPEG layer past the cap", || hub.layer_specs().len() == 4);
+    fake::uninstall();
+    drop((subs, eight, twenty, jpeg));
+    shut_down(b);
+}
+
+/// (g) `pw`: a viewer's pane width makes its layer native pixels up to that
+/// width, clamped to the device's own width (here 8 px; points are 4), with
+/// a key + source start at the new size. A narrower pane on another layer
+/// is scaled down. On the wire, K2SF keeps the points size beside it.
+#[test]
+fn a_pane_width_sizes_the_layer_up_to_native() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let b = boot_fake("pw");
+    let (_, mut a) = join(&b.ws, want(UnitCodec::Jpeg, 30)).expect("join");
+    assert_eq!((next_unit(&mut a).width, a.layer_spec().map(|l| l.max_width)), (4, Some(4)), "the points width until a viewer says");
+    let (_, wide) = join(&b.ws, Want { pw: Some(99), ..want(UnitCodec::Jpeg, 30) }).expect("join pw");
+    assert_eq!(wide.layer(), a.layer());
+    let u = loop {
+        let u = next_unit(&mut a);
+        if u.width != 4 {
+            break u;
+        }
+    };
+    assert_eq!((u.width, u.height, u.width_pt, u.height_pt), (8, 16, 4, 8), "native, never past it");
+    assert!(u.key && u.source_start, "a new size starts with a source start");
+    let hub = a.hub().clone();
+    wait_until("pw clamped to the native width", || hub.layer_specs().iter().any(|l| l.max_width == 8));
+    let (_, mut narrow) = join(&b.ws, Want { pw: Some(6), ..want(UnitCodec::Jpeg, 15) }).expect("join narrow");
+    let n = next_unit(&mut narrow);
+    assert_eq!((n.width, n.height, n.source_start), (6, 12, true), "scaled down to its pane");
+    drop((a, wide, narrow));
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+    rt.block_on(async {
+        let (mut c, server) = open(&b, &[("pw", "99")]).await;
+        let _hello = next_text(&mut c).await;
+        let mut sizes = Vec::new();
+        for _ in 0..6 {
+            let m = next_binary(&mut c, Duration::from_secs(5)).await.expect("a frame");
+            let (h, _) = FrameHeader::decode(&m).expect("K2SF");
+            sizes.push((h.width_px, h.width_pt));
+            ack(&mut c, h.seq).await;
+        }
+        assert_eq!(sizes.last(), Some(&(8, 4)), "pixels and points side by side: {sizes:?}");
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+    });
+    shut_down(b);
+}
 /// TCP_NODELAY on the stream socket (M-1): a loopback socket through the
 /// stream's setup has Nagle off; with the switch forced off it keeps Nagle
 /// on, as before.
@@ -408,7 +630,9 @@ fn a_stats_viewer_gets_stage_times_and_its_probed_touches() {
 
 /// A viewer that offers H.264 on a host that has it: hello says h264 and the
 /// window; frames are K2SV, the first a keyframe with SPS + PPS; up to 3 go
-/// out before an ack; a keyframe ask brings one.
+/// out before an ack. A delta that finds the window full is dropped (the
+/// layer is shared, so it can't wait), and the viewer skips to a keyframe:
+/// the next frame after the ack is one. A keyframe ask brings one.
 #[test]
 fn a_video_viewer_gets_keyframe_first_a_window_and_keyframes_on_request() {
     let _serial = crate::sim_routes::sim_test_lock();
@@ -425,27 +649,36 @@ fn a_video_viewer_gets_keyframe_first_a_window_and_keyframes_on_request() {
             let m = next_binary(&mut c, Duration::from_secs(5)).await.expect("a frame inside the window");
             let (h, au) = VideoHeader::decode(&m).expect("K2SV");
             assert_eq!(h.key, is_keyframe(au));
+            if h.key {
+                assert_eq!(k2_core::sim::video::annexb::codec_string(au).as_deref(), Some("avc1.42E01F"), "SPS in band");
+            }
             heads.push(h);
         }
         assert!(heads[0].key, "the first frame is a keyframe");
         assert!(!heads[1].key && !heads[2].key, "then deltas");
-        assert!(heads.windows(2).all(|w| w[1].seq > w[0].seq));
+        assert!(heads.windows(2).all(|w| w[1].seq == w[0].seq + 1));
         assert!(next_binary(&mut c, Duration::from_millis(400)).await.is_none(), "the window is full: nothing until an ack");
-        // One cumulative ack frees the window.
+        // One cumulative ack frees the window: the deltas it missed are
+        // gone, so it goes on from a keyframe.
         ack(&mut c, heads[2].seq).await;
         let m = next_binary(&mut c, Duration::from_secs(5)).await.expect("a frame after the ack");
         let (h4, _) = VideoHeader::decode(&m).expect("K2SV");
-        assert!(!h4.key);
+        assert!(h4.key, "a keyframe after the skip");
+        assert!(h4.seq > heads[2].seq + 1, "the wire seq shows the gap");
         ack(&mut c, h4.seq).await;
-        c.send(Message::Text(r#"{"t":"keyframe"}"#.into())).await.expect("ask");
         let mut keyed = false;
-        for _ in 0..10 {
+        let mut asked = false;
+        for _ in 0..40 {
             let m = next_binary(&mut c, Duration::from_secs(5)).await.expect("frames keep coming");
             let (h, _) = VideoHeader::decode(&m).expect("K2SV");
             ack(&mut c, h.seq).await;
-            if h.key {
+            if asked && h.key {
                 keyed = true;
                 break;
+            }
+            if !asked && !h.key {
+                c.send(Message::Text(r#"{"t":"keyframe"}"#.into())).await.expect("ask");
+                asked = true;
             }
         }
         assert!(keyed, "a keyframe after the ask");
@@ -454,8 +687,8 @@ fn a_video_viewer_gets_keyframe_first_a_window_and_keyframes_on_request() {
     });
     fake::uninstall();
     let l = log.lock().expect("log").clone();
-    assert_eq!(l.opened, vec![(4, 8)], "one encoder for this viewer");
-    assert_eq!(l.frames.iter().filter(|(_, k)| *k).count(), 2, "join + ask: {:?}", l.frames);
+    assert_eq!(l.opened, vec![(4, 8)], "one encoder for this layer");
+    assert!(l.frames.iter().filter(|(_, k)| *k).count() >= 3, "start + skip + ask: {:?}", l.frames);
     shut_down(b);
 }
 

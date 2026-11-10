@@ -407,6 +407,10 @@ pub mod llm_accounts_routes;
 pub mod sim_routes;
 /// Mobile dev S3: `/cli/sim/stream` (JPEG frames + people's input).
 pub mod sim_stream_ws;
+/// The device stream engine's hub (fix 10, S2): one capture and one encode
+/// per layer per source, fanned out to viewers; the sim and desktop routes
+/// sit on it.
+pub mod stream;
 pub mod llm_accounts_runtime;
 pub mod person_wallet_routes;
 pub mod person_wallet_runtime;

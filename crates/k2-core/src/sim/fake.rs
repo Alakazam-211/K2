@@ -291,7 +291,7 @@ impl SimLane for FakeLane {
         self.check_running(dev)?;
         self.frame_opts.lock().push(("open", opts));
         let period = Duration::from_secs_f64(1.0 / self.source_hz.load(Ordering::SeqCst).max(1) as f64);
-        Ok(Box::new(FakeFrames { seq: 0, opts: self.frame_opts.clone(), period, next_due: None }))
+        Ok(Box::new(FakeFrames { seq: 0, opts: self.frame_opts.clone(), now: opts, period, next_due: None }))
     }
 
     fn logs(&self, dev: &DeviceRef, q: &LogQuery) -> Result<Vec<String>, LaneError> {
@@ -305,13 +305,16 @@ impl SimLane for FakeLane {
     }
 }
 
-/// A 4x8 px gray frame, a new one every `period` (the fake screen's own
-/// clock): `next_frame` waits for it, or returns `Ok(None)` when none is
-/// due within `wait`. A puller that fell behind gets the next frame a
-/// period on, never a burst.
+/// A gray frame, a new one every `period` (the fake screen's own clock):
+/// `next_frame` waits for it, or returns `Ok(None)` when none is due within
+/// `wait`. A puller that fell behind gets the next frame a period on, never
+/// a burst. Points-sized it is 4x8 px at scale 1; native (as the iOS lane
+/// does after `retune`) 8x16 at scale 2, scaled down to `max_width_px`.
 pub struct FakeFrames {
     seq: u64,
     opts: Arc<Mutex<Vec<(&'static str, FrameOpts)>>>,
+    /// What it was opened or last retuned with.
+    now: FrameOpts,
     period: Duration,
     next_due: Option<Instant>,
 }
@@ -330,19 +333,28 @@ impl FrameSource for FakeFrames {
         let at = Instant::now();
         self.next_due = Some(if at.saturating_duration_since(due) > self.period { at + self.period } else { due + self.period });
         self.seq += 1;
+        let (w, scale) = match self.now.size {
+            FrameSize::Points => (4, 1.0),
+            FrameSize::Native => {
+                let w = self.now.max_width_px.map_or(8, |c| c.clamp(1, 8));
+                (w, w as f32 / 4.0)
+            }
+        };
+        let h = w * 2;
         Ok(Some(Frame {
-            width_px: 4,
-            height_px: 8,
-            scale: 1.0,
+            width_px: w,
+            height_px: h,
+            scale,
             orientation: Orientation::Portrait,
             seq: self.seq,
             captured_at: Instant::now(),
             stamps: Default::default(),
-            data: FrameData::Rgb888(vec![(self.seq % 255) as u8; 4 * 8 * 3]),
+            data: FrameData::Rgb888(vec![(self.seq % 255) as u8; (w * h * 3) as usize]),
         }))
     }
 
     fn retune(&mut self, opts: FrameOpts) {
         self.opts.lock().push(("retune", opts));
+        self.now = opts;
     }
 }
